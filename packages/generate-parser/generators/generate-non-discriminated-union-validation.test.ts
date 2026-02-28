@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'bun:test'
 import { generateNonDiscriminatedUnionValidation } from './generate-non-discriminated-union-validation'
 
 describe('generate-non-discriminated-union-validation', () => {

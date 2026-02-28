@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'bun:test'
 import { extractRefs } from './extract-refs'
 
 describe('extract-refs', () => {

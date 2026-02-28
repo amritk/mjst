@@ -1,5 +1,5 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { hasConst, hasEnum, hasProperties, isObjectSchema, isSchemaObject } from '@/type-guards/schema-guards'
+import { hasConst, hasEnum, hasProperties, isObjectSchema, isSchemaObject } from '#parser/type-guards/schema-guards'
 
 /**
  * Attempts to find a discriminator property that can be used to distinguish between union types.

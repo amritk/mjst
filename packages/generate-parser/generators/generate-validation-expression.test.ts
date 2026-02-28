@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'bun:test'
 import { generateValidationExpression } from './generate-validation-expression'
 
 describe('generate-validation-expression', () => {

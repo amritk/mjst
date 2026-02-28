@@ -1,8 +1,8 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { type ObjectDocumentation, parseDocumentation } from '@/helpers/parse-documentation'
-import { refToName } from '@/helpers/ref-to-name'
-import { safeKey } from '@/helpers/safe-accessor'
-import { isObjectSchema, isSchemaObject } from '@/type-guards/schema-guards'
+import { type ObjectDocumentation, parseDocumentation } from '#parser/helpers/parse-documentation'
+import { refToName } from '#parser/helpers/ref-to-name'
+import { safeKey } from '#parser/helpers/safe-accessor'
+import { isObjectSchema, isSchemaObject } from '#parser/type-guards/schema-guards'
 
 const getConditionalObjectSchema = (schema: JSONSchema): JSONSchema.Object | null => {
   if (!isSchemaObject(schema)) {

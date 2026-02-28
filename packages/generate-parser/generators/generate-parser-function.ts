@@ -1,7 +1,7 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { getDefaultValue } from '@/helpers/get-default-value'
-import { refToName } from '@/helpers/ref-to-name'
-import { safeAccessor, safeKey } from '@/helpers/safe-accessor'
+import { getDefaultValue } from '#parser/helpers/get-default-value'
+import { refToName } from '#parser/helpers/ref-to-name'
+import { safeAccessor, safeKey } from '#parser/helpers/safe-accessor'
 import {
   hasAllOf,
   hasAnyOf,
@@ -26,7 +26,7 @@ import {
   hasUniqueItems,
   isObjectSchema,
   isSchemaObject,
-} from '@/type-guards/schema-guards'
+} from '#parser/type-guards/schema-guards'
 import { generateValidationExpression } from './generate-validation-expression'
 
 /**

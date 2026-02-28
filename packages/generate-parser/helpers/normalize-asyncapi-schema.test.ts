@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'bun:test'
 import { normalizeAsyncApiSchema } from './normalize-asyncapi-schema'
 
 describe('normalize-asyncapi-schema', () => {

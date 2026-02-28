@@ -1,5 +1,5 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import type { SchemaExtensions } from '@/types/schema-extensions'
+import type { SchemaExtensions } from '#parser/types/schema-extensions'
 
 /**
  * Merges custom extension properties into a schema's properties based on the

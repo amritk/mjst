@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
@@ -195,10 +194,10 @@ export const buildSchema = async (
     const isObjectPath = join(__dirname, '../helpers/is-object.ts')
     const schemaTemplatePath = join(__dirname, '../templates/schema.ts')
 
-    const validateArrayContent = await readFile(validateArrayPath, 'utf-8')
-    const validateRecordContent = await readFile(validateRecordPath, 'utf-8')
-    const isObjectContent = await readFile(isObjectPath, 'utf-8')
-    const schemaTemplateContent = await readFile(schemaTemplatePath, 'utf-8')
+    const validateArrayContent = await Bun.file(validateArrayPath).text()
+    const validateRecordContent = await Bun.file(validateRecordPath).text()
+    const isObjectContent = await Bun.file(isObjectPath).text()
+    const schemaTemplateContent = await Bun.file(schemaTemplatePath).text()
 
     files.push({
       filename: 'validators/validate-array.ts',

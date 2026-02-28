@@ -1,4 +1,4 @@
-import { isObject } from '@/helpers/is-object'
+import { isObject } from '#parser/helpers/is-object'
 
 /**
  * Parses the values of a record with a parser function.

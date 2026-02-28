@@ -1,9 +1,8 @@
-import { readFile } from 'node:fs/promises'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'bun:test'
 import { generateTypeDefinition } from './generate-type-definition'
 
-const markdownDocumentation = await readFile(new URL('../../fixtures/3.1.0.md', import.meta.url), 'utf-8')
+const markdownDocumentation = await Bun.file(new URL('../../../fixtures/3.1.0.md', import.meta.url)).text()
 
 describe('generateTypeDefinition', () => {
   it('generates type for deeply nested objects', () => {

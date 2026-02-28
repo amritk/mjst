@@ -1,4 +1,4 @@
-import type { CliConfig } from '@/cli/cli-config'
+import type { CliConfig } from '#cli/cli-config'
 
 /**
  * Parses command-line arguments into a partial CLI config.

@@ -3,11 +3,9 @@
   "module": "index.ts",
   "type": "module",
   "imports": {
-    "#cli": "./packages/cli/*",
-    "#json": "./packages/generate-json-schema/*",
-    "#markdown": "./packages/generate-markdown/*",
-    "#parser": "./packages/generate-parser/*",
-    "#helpers": "./shared/helpers/*"
+    "#cli/*": "./packages/cli/*.ts",
+    "#markdown/*": "./packages/generate-markdown/*.ts",
+    "#parser/*": "./packages/generate-parser/*.ts"
   },
   "keywords": [
     "json",

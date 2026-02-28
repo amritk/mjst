@@ -1,5 +1,5 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { generateDefaultFromPattern } from '@/generators/generate-default-from-pattern'
+import { generateDefaultFromPattern } from '#parser/generators/generate-default-from-pattern'
 import {
   hasAllOf,
   hasAnyOf,
@@ -10,7 +10,7 @@ import {
   hasPattern,
   hasType,
   isSchemaObject,
-} from '@/type-guards/schema-guards'
+} from '#parser/type-guards/schema-guards'
 
 /**
  * Returns the default value for a JSON Schema property.

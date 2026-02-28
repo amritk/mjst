@@ -1,9 +1,9 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { loadConfig } from '@/cli/load-config'
-import { parseCliArgs } from '@/cli/parse-cli-args'
+import { loadConfig } from '#cli/load-config'
+import { parseCliArgs } from '#cli/parse-cli-args'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { buildSchema } from '@/generators/build-schema'
+import { buildSchema } from '#parser/generators/build-schema'
 
 /**
  * Extracts the --config flag value from process args before full parsing.

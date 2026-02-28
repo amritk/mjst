@@ -1,5 +1,5 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from '@/type-guards/schema-guards'
+import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from '#parser/type-guards/schema-guards'
 import { refToFilename } from './ref-to-filename'
 import { refToName } from './ref-to-name'
 

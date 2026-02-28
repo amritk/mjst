@@ -18,7 +18,7 @@ import {
   hasRequired,
   hasType,
   hasUniqueItems,
-} from '@/type-guards/schema-guards'
+} from '#parser/type-guards/schema-guards'
 import { generateEnumCheck } from './generate-enum-check'
 
 /**

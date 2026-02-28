@@ -1,7 +1,7 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { findDiscriminator } from '@/helpers/find-discriminator'
-import { resolveRef } from '@/helpers/resolve-ref'
-import { safeAccessor } from '@/helpers/safe-accessor'
+import { findDiscriminator } from '#parser/helpers/find-discriminator'
+import { resolveRef } from '#parser/helpers/resolve-ref'
+import { safeAccessor } from '#parser/helpers/safe-accessor'
 import {
   hasAdditionalProperties,
   hasAllOf,
@@ -26,7 +26,7 @@ import {
   hasType,
   hasUniqueItems,
   isSchemaObject,
-} from '@/type-guards/schema-guards'
+} from '#parser/type-guards/schema-guards'
 import { generateDiscriminatedUnionValidation } from './generate-discriminated-union-validation'
 import { generateEnumCheck } from './generate-enum-check'
 import { generateNonDiscriminatedUnionValidation } from './generate-non-discriminated-union-validation'

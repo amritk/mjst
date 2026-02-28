@@ -1,6 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { collectHelpers } from '@/helpers/collect-helpers'
-import { collectImports } from '@/helpers/collect-imports'
+import { collectHelpers } from '#parser/helpers/collect-helpers'
+import { collectImports } from '#parser/helpers/collect-imports'
 
 import { generateParserFunction } from './generate-parser-function'
 import { generateTypeDefinition } from './generate-type-definition'

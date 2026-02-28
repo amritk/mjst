@@ -1,5 +1,5 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'bun:test'
 import { collectImports } from './collect-imports'
 
 describe('collect-imports', () => {

@@ -1,6 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { getDefaultValue } from '@/helpers/get-default-value'
-import { getDiscriminatorValue } from '@/helpers/get-discriminator-value'
+import { getDefaultValue } from '#parser/helpers/get-default-value'
+import { getDiscriminatorValue } from '#parser/helpers/get-discriminator-value'
 import { generateSchemaChecks } from './generate-schema-checks'
 
 /**
