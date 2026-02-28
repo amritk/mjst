@@ -1,0 +1,57 @@
+{
+  "title": "My API Documentation",
+  "slug": "my-api-docs",
+  "theme": "purple",
+  "darkMode": true,
+  "layout": "classic",
+  "url": "https://api.example.com/openapi.json",
+  "baseServerURL": "https://api.example.com",
+  "proxyUrl": "https://proxy.example.com",
+  "authentication": {
+    "preferredSecurityScheme": "bearerAuth",
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Bearer token authentication"
+      },
+      "apiKeyAuth": {
+        "type": "apiKey",
+        "name": "X-API-Key",
+        "in": "header",
+        "description": "API Key authentication"
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "https://api.example.com/v1",
+      "description": "Production server"
+    },
+    {
+      "url": "https://staging.example.com/v1",
+      "description": "Staging server"
+    }
+  ],
+  "showSidebar": true,
+  "showDeveloperTools": "always",
+  "hideModels": false,
+  "hideExamples": false,
+  "hideDarkModeToggle": false,
+  "hideTestRequestButton": false,
+  "searchHotKey": "k",
+  "customCss": ".api-reference { font-family: 'Inter', sans-serif; }",
+  "metaData": {
+    "title": "My API Documentation",
+    "description": "Comprehensive API documentation for developers",
+    "ogTitle": "My API - Developer Documentation",
+    "ogDescription": "Build amazing applications with our API",
+    "ogImage": "https://example.com/og-image.png"
+  },
+  "tagsSorter": "alpha",
+  "operationsSorter": "method",
+  "defaultOpenAllTags": true,
+  "persistAuth": true,
+  "telemetry": false
+}

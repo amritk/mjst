@@ -1,0 +1,37 @@
+{
+  "name": "mjst",
+  "module": "index.ts",
+  "type": "module",
+  "imports": {
+    "#cli": "./packages/cli/*",
+    "#json": "./packages/generate-json-schema/*",
+    "#markdown": "./packages/generate-markdown/*",
+    "#parser": "./packages/generate-parser/*",
+    "#helpers": "./shared/helpers/*"
+  },
+  "keywords": [
+    "json",
+    "validation",
+    "parsing",
+    "validation",
+    "parser",
+    "schema",
+    "typescript",
+    "validator"
+  ],
+  "author": "amritk",
+  "license": "MIT",
+  "scripts": {
+    "bench": "bun test --bench",
+    "check": "bun run biome check .",
+    "format": "bun run biome format --write .",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.4",
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}

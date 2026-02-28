@@ -1,0 +1,8 @@
+{
+  "url": "https://petstore3.swagger.io/api/v3/openapi.json",
+  "proxyUrl": "https://proxy.scalar.com",
+  "theme": "default",
+  "darkMode": false,
+  "layout": "modern",
+  "showSidebar": true
+}
