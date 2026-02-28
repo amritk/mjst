@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { extractRefs } from './extract-refs'
+import { extractRefs } from '#parser/helpers/extract-refs'
 
 describe('extract-refs', () => {
   it('extracts refs from a simple schema', () => {

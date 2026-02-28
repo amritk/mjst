@@ -2,7 +2,7 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'bun:test'
-import { loadConfig } from './load-config'
+import { loadConfig } from '#cli/load-config'
 
 describe('load-config', () => {
   it('loads schema and outDir from a JSON config file', async () => {

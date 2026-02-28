@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { generateNonDiscriminatedUnionValidation } from './generate-non-discriminated-union-validation'
+import { generateNonDiscriminatedUnionValidation } from '#parser/generators/generate-non-discriminated-union-validation'
 
 describe('generate-non-discriminated-union-validation', () => {
   it('generates OR chain for multiple schema checks', () => {

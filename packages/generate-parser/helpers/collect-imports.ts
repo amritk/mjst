@@ -1,7 +1,7 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from '#parser/type-guards/schema-guards'
-import { refToFilename } from './ref-to-filename'
-import { refToName } from './ref-to-name'
+import { refToFilename } from '#parser/helpers/ref-to-filename'
+import { refToName } from '#parser/helpers/ref-to-name'
 
 const getImportPathForFilename = (filename: string): string => `./${filename}`
 
@@ -43,15 +43,15 @@ type CollectImportsOptions = {
  * }
  * const imports = collectImports(schema)
  * // imports = [
- * //   "import { type Contact, parseContact } from './contact';",
- * //   "import { type Server, parseServer } from './server';"
+ * //   "import { type Contact, parseContact } from '#parser/helpers/contact';",
+ * //   "import { type Server, parseServer } from '#parser/helpers/server';"
  * // ]
  *
  * // With typesOnly, only type imports are generated:
  * const typeImports = collectImports(schema, { typesOnly: true })
  * // typeImports = [
- * //   "import type { Contact } from './contact';",
- * //   "import type { Server } from './server';"
+ * //   "import type { Contact } from '#parser/helpers/contact';",
+ * //   "import type { Server } from '#parser/helpers/server';"
  * // ]
  * ```
  */

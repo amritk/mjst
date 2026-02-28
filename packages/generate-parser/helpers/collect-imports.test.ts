@@ -1,6 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'bun:test'
-import { collectImports } from './collect-imports'
+import { collectImports } from '#parser/helpers/collect-imports'
 
 describe('collect-imports', () => {
   it('collects imports from properties with $ref', () => {

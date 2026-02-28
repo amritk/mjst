@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { getDefaultValue } from './get-default-value'
+import { getDefaultValue } from '#parser/helpers/get-default-value'
 
 describe('get-default-value', () => {
   it('returns undefined for boolean schema', () => {

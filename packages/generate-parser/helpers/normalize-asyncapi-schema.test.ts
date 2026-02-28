@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { normalizeAsyncApiSchema } from './normalize-asyncapi-schema'
+import { normalizeAsyncApiSchema } from '#parser/helpers/normalize-asyncapi-schema'
 
 describe('normalize-asyncapi-schema', () => {
   it('converts definitions to $defs with kebab-case keys', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { getDiscriminatorValue } from './get-discriminator-value'
+import { getDiscriminatorValue } from '#parser/helpers/get-discriminator-value'
 
 describe('get-discriminator-value', () => {
   it('returns const value from discriminator property', () => {

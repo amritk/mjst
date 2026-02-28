@@ -1,7 +1,7 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { getDefaultValue } from '#parser/helpers/get-default-value'
 import { getDiscriminatorValue } from '#parser/helpers/get-discriminator-value'
-import { generateSchemaChecks } from './generate-schema-checks'
+import { generateSchemaChecks } from '#parser/generators/generate-schema-checks'
 
 /**
  * Generates a discriminated union validation expression.

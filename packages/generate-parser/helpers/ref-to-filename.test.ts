@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { refToFilename } from './ref-to-filename'
+import { refToFilename } from '#parser/helpers/ref-to-filename'
 
 describe('ref-to-filename', () => {
   it('extracts filename from simple ref', () => {

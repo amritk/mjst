@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { generateValidationExpression } from './generate-validation-expression'
+import { generateValidationExpression } from '#parser/generators/generate-validation-expression'
 
 describe('generate-validation-expression', () => {
   it('returns accessor with nullish coalescing for non-schema objects when required', () => {

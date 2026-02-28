@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { buildDynamicRefMap } from './build-dynamic-ref-map'
+import { buildDynamicRefMap } from '#parser/helpers/build-dynamic-ref-map'
 
 describe('build-dynamic-ref-map', () => {
   it('maps $dynamicAnchor values to $ref paths', () => {

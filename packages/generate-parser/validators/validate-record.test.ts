@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { validateRecord } from './validate-record'
+import { validateRecord } from '#parser/validators/validate-record'
 
 describe('validate-record', () => {
   it('validates all values in a record using the parser function', () => {

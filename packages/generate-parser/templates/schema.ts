@@ -1,5 +1,5 @@
-import { isObject } from '../helpers/is-object'
-import type { ReferenceObject } from './reference'
+import { isObject } from '#parser/helpers/is-object'
+import type { ReferenceObject } from '#parser/templates/reference'
 
 /**
  * Represents an OpenAPI Reference Object.

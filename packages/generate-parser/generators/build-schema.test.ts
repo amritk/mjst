@@ -1,6 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it, spyOn } from 'bun:test'
-import { buildSchema } from './build-schema'
+import { buildSchema } from '#parser/generators/build-schema'
 
 describe('build-schema', () => {
   it('does not generate schema.ts for #/$defs/schema references', async () => {

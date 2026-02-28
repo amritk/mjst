@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { parseSchemaObject } from './schema'
+import { parseSchemaObject } from '#parser/templates/schema'
 
 describe('schema', () => {
   it('returns empty object for non-object and non-boolean input', () => {

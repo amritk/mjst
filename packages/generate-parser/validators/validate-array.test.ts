@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { validateArray } from './validate-array'
+import { validateArray } from '#parser/validators/validate-array'
 
 describe('validate-array', () => {
   it('validates and transforms array items with parser function', () => {

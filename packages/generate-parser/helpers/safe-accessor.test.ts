@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { safeAccessor, safeKey } from './safe-accessor'
+import { safeAccessor, safeKey } from '#parser/helpers/safe-accessor'
 
 describe('safe-accessor', () => {
   it('uses dot notation for simple identifiers', () => {

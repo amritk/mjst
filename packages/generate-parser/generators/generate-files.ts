@@ -2,8 +2,8 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { collectHelpers } from '#parser/helpers/collect-helpers'
 import { collectImports } from '#parser/helpers/collect-imports'
 
-import { generateParserFunction } from './generate-parser-function'
-import { generateTypeDefinition } from './generate-type-definition'
+import { generateParserFunction } from '#parser/generators/generate-parser-function'
+import { generateTypeDefinition } from '#parser/generators/generate-type-definition'
 
 /**
  * Options for controlling what gets generated in a file.

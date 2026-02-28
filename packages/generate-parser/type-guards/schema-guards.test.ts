@@ -30,7 +30,7 @@ import {
   hasMinProperties,
   hasMaxProperties,
   hasRef,
-} from './schema-guards'
+} from '#parser/type-guards/schema-guards'
 
 describe('schema-guards', () => {
   // isSchemaObject

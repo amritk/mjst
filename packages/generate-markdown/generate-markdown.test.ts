@@ -1,6 +1,6 @@
 import { describe, expect, it, mock } from 'bun:test'
 import { writeFile } from 'node:fs/promises'
-import { generateMarkdown } from './index'
+import { generateMarkdown } from '#markdown/index'
 
 /**
  * Test data representing a minimal valid schema.

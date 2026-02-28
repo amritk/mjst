@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { generateEnumCheck } from './generate-enum-check'
+import { generateEnumCheck } from '#parser/generators/generate-enum-check'
 
 describe('generate-enum-check', () => {
   it('generates an includes check for string enum values', () => {

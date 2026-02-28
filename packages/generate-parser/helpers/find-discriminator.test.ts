@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { findDiscriminator } from './find-discriminator'
+import { findDiscriminator } from '#parser/helpers/find-discriminator'
 
 describe('find-discriminator', () => {
   it('finds discriminator when each schema has a unique const value', () => {

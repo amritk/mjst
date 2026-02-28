@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { isObject } from './is-object'
+import { isObject } from '#parser/helpers/is-object'
 
 describe('is-object', () => {
   it('returns true for plain object', () => {

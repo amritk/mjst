@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { parseDocumentation } from './parse-documentation'
+import { parseDocumentation } from '#parser/helpers/parse-documentation'
 
 describe('parse-documentation', () => {
   const markdown = `

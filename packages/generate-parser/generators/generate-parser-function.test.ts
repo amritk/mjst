@@ -1,6 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'bun:test'
-import { generateParserFunction } from './generate-parser-function'
+import { generateParserFunction } from '#parser/generators/generate-parser-function'
 
 describe('generate-parser-function', () => {
   it('generates parser function for simple object schema', () => {

@@ -27,7 +27,7 @@ import {
   isObjectSchema,
   isSchemaObject,
 } from '#parser/type-guards/schema-guards'
-import { generateValidationExpression } from './generate-validation-expression'
+import { generateValidationExpression } from '#parser/generators/generate-validation-expression'
 
 /**
  * Options for controlling parser function generation behavior.

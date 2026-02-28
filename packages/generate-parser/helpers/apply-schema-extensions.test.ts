@@ -1,6 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'bun:test'
-import { applySchemaExtensions } from './apply-schema-extensions'
+import { applySchemaExtensions } from '#parser/helpers/apply-schema-extensions'
 
 describe('apply-schema-extensions', () => {
   it('merges extension properties into schema properties', () => {

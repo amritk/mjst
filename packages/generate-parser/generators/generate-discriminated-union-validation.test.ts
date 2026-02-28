@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { generateDiscriminatedUnionValidation } from './generate-discriminated-union-validation'
+import { generateDiscriminatedUnionValidation } from '#parser/generators/generate-discriminated-union-validation'
 
 describe('generate-discriminated-union-validation', () => {
   it('generates ternary chain for schemas with discriminator values', () => {

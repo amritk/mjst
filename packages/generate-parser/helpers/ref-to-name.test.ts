@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { refToName } from './ref-to-name'
+import { refToName } from '#parser/helpers/ref-to-name'
 
 describe('ref-to-name', () => {
   it('converts simple ref to PascalCase', () => {

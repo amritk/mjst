@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { resolveDynamicRefs } from './resolve-dynamic-refs'
+import { resolveDynamicRefs } from '#parser/helpers/resolve-dynamic-refs'
 
 describe('resolve-dynamic-refs', () => {
   it('replaces $dynamicRef with $ref in properties', () => {

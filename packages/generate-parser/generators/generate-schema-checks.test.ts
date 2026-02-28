@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { generateSchemaChecks } from './generate-schema-checks'
+import { generateSchemaChecks } from '#parser/generators/generate-schema-checks'
 
 describe('generate-schema-checks', () => {
   it('returns empty checks for a schema without type', () => {

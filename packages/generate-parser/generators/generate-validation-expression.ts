@@ -27,10 +27,10 @@ import {
   hasUniqueItems,
   isSchemaObject,
 } from '#parser/type-guards/schema-guards'
-import { generateDiscriminatedUnionValidation } from './generate-discriminated-union-validation'
-import { generateEnumCheck } from './generate-enum-check'
-import { generateNonDiscriminatedUnionValidation } from './generate-non-discriminated-union-validation'
-import { generateSchemaChecks } from './generate-schema-checks'
+import { generateDiscriminatedUnionValidation } from '#parser/generators/generate-discriminated-union-validation'
+import { generateEnumCheck } from '#parser/generators/generate-enum-check'
+import { generateNonDiscriminatedUnionValidation } from '#parser/generators/generate-non-discriminated-union-validation'
+import { generateSchemaChecks } from '#parser/generators/generate-schema-checks'
 
 /**
  * Generates a type coercion expression for converting a value to the expected type.

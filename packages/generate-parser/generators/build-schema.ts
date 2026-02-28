@@ -1,15 +1,15 @@
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { applySchemaExtensions } from '../helpers/apply-schema-extensions'
-import { buildDynamicRefMap } from '../helpers/build-dynamic-ref-map'
-import { extractRefs } from '../helpers/extract-refs'
-import { refToFilename } from '../helpers/ref-to-filename'
-import { refToName } from '../helpers/ref-to-name'
-import { resolveDynamicRefs } from '../helpers/resolve-dynamic-refs'
-import { resolveRef } from '../helpers/resolve-ref'
-import type { SchemaExtensions } from '../types/schema-extensions'
-import { generateFile } from './generate-files'
+import { applySchemaExtensions } from '#parser/helpers/apply-schema-extensions'
+import { buildDynamicRefMap } from '#parser/helpers/build-dynamic-ref-map'
+import { extractRefs } from '#parser/helpers/extract-refs'
+import { refToFilename } from '#parser/helpers/ref-to-filename'
+import { refToName } from '#parser/helpers/ref-to-name'
+import { resolveDynamicRefs } from '#parser/helpers/resolve-dynamic-refs'
+import { resolveRef } from '#parser/helpers/resolve-ref'
+import type { SchemaExtensions } from '#parser/types/schema-extensions'
+import { generateFile } from '#parser/generators/generate-files'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -216,7 +216,7 @@ export const buildSchema = async (
 
     // Fix import paths in schema template for output directory structure
     const adjustedSchemaContent = schemaTemplateContent.replace(
-      "import { isObject } from '../helpers/is-object'",
+      "import { isObject } from '#parser/helpers/is-object'",
       "import { isObject } from './helpers/is-object'",
     )
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { resolveRef } from './resolve-ref'
+import { resolveRef } from '#parser/helpers/resolve-ref'
 
 describe('resolveRef', () => {
   it('resolves a simple $ref to $defs', () => {

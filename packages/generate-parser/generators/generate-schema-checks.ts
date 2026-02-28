@@ -19,7 +19,7 @@ import {
   hasType,
   hasUniqueItems,
 } from '#parser/type-guards/schema-guards'
-import { generateEnumCheck } from './generate-enum-check'
+import { generateEnumCheck } from '#parser/generators/generate-enum-check'
 
 /**
  * Generates validation checks for a single schema (used in union validation).

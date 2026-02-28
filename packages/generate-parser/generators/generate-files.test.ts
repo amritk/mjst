@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { generateFile } from './generate-files'
+import { generateFile } from '#parser/generators/generate-files'
 
 describe('generate-files', () => {
   it('generates combined import for $ref property', () => {

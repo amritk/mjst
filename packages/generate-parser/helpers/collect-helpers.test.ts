@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { collectHelpers } from './collect-helpers'
+import { collectHelpers } from '#parser/helpers/collect-helpers'
 
 describe('collect-helpers', () => {
   it('returns validateArray import when parser contains validateArray', () => {

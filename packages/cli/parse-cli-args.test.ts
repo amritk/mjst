@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { parseCliArgs } from './parse-cli-args'
+import { parseCliArgs } from '#cli/parse-cli-args'
 
 describe('parse-cli-args', () => {
   it('parses --schema and --outDir with space-separated values', () => {
