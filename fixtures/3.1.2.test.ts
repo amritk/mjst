@@ -2,7 +2,7 @@ import { exec } from 'node:child_process'
 import { rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 
 const execAsync = promisify(exec)
 
@@ -11,7 +11,7 @@ describe('3.1.2', () => {
   let parseDocument: (input: unknown) => unknown
 
   beforeAll(async () => {
-    await execAsync('pnpm tsx src/cli/cli.ts --schema fixtures/3.1.2-2025-09-15.json --outDir ./tmp', {
+    await execAsync('bun packages/cli/cli.ts --schema fixtures/3.1.2-2025-09-15.json --outDir ./tmp', {
       cwd: resolve(__dirname, '..'),
     })
     parseDocument = (await import(`${tmpDir}/document.ts`)).parseDocument

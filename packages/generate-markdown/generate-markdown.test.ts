@@ -1,6 +1,12 @@
-import { describe, expect, it, mock } from 'bun:test'
-import { writeFile } from 'node:fs/promises'
+import { afterAll, describe, expect, it, mock } from 'bun:test'
+import { readFile, writeFile } from 'node:fs/promises'
 import { generateMarkdown } from './index'
+
+// Save the real fs functions before any mocking so we can restore them after.
+// mock.module does not restore on its own — without this cleanup the mocked module
+// leaks into other test files that also use node:fs/promises (e.g. load-config, build-schema).
+const realReadFile = readFile
+const realWriteFile = writeFile
 
 /**
  * Test data representing a minimal valid schema.
@@ -29,6 +35,15 @@ const minimalPackage = {
 }
 
 describe('generate-readme', () => {
+  // Restore the real node:fs/promises after the suite completes so that other test files
+  // (e.g. load-config, build-schema) are not affected by the module mock.
+  afterAll(() => {
+    mock.module('node:fs/promises', () => ({
+      readFile: realReadFile,
+      writeFile: realWriteFile,
+    }))
+  })
+
   it('generates README with minimal schema and package data', async () => {
     mock.module('node:fs/promises', () => ({
       readFile: mock(async (path: string) => {

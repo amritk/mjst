@@ -1,0 +1,8 @@
+{
+  "name": "@mjst/generate-markdown",
+  "module": "index.ts",
+  "type": "module",
+  "imports": {
+    "#markdown/*": "./*"
+  }
+}

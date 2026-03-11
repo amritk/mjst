@@ -1,0 +1,16 @@
+{
+  "name": "@mjst/generate-parsers",
+  "module": "index.ts",
+  "type": "module",
+  "imports": {
+    "#generators/*": "./generators/*.ts",
+    "#helpers/*": "./helpers/*.ts",
+    "#type-guards/*": "./type-guards/*.ts",
+    "#types/*": "./types/*.ts",
+    "#validators/*": "./validators/*.ts",
+    "#templates/*": "./templates/*.ts"
+  },
+  "dependencies": {
+    "json-schema-typed": "^8.0.1"
+  }
+}

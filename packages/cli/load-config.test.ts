@@ -1,7 +1,7 @@
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'bun:test'
 import { loadConfig } from './load-config'
 
 describe('load-config', () => {

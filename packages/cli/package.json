@@ -1,0 +1,15 @@
+{
+  "name": "@mjst/cli",
+  "module": "cli.ts",
+  "type": "module",
+  "bin": {
+    "mjst": "./cli.ts"
+  },
+  "imports": {
+    "#cli/*": "./*.ts"
+  },
+  "dependencies": {
+    "@mjst/generate-parsers": "workspace:*",
+    "json-schema-typed": "^8.0.1"
+  }
+}

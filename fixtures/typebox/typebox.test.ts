@@ -1,5 +1,6 @@
-import { coerceValue } from '@scalar/workspace-store/schemas/typebox-coerce'
-import { describe, expect, it } from 'vitest'
+// @scalar/workspace-store is not installed — this test suite is skipped entirely
+// import { coerceValue } from '@scalar/workspace-store/schemas/typebox-coerce'
+import { describe, expect, it } from 'bun:test'
 // import { parseDocument } from '../../src/3.1.2/document'
 import stripe from '../cloudinary.json'
 import { OpenAPIDocumentSchema } from './openapi-document'
@@ -7,7 +8,7 @@ import { OpenAPIDocumentSchema } from './openapi-document'
 describe.skip('stripe test', () => {
   const parseDocument = (input: unknown) => input
   const amrit = parseDocument(stripe)
-  const typebox = coerceValue(OpenAPIDocumentSchema, stripe) as any
+  const typebox = (null as any) // coerceValue(OpenAPIDocumentSchema, stripe) as any
 
   it('servers should match', () => {
     expect(amrit.servers).toEqual(typebox.servers)

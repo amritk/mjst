@@ -1,19 +1,12 @@
 {
   "name": "mjst",
-  "module": "index.ts",
+  "private": true,
+  "workspaces": ["packages/*"],
   "type": "module",
-  "imports": {
-    "#cli": "./packages/cli/*",
-    "#json": "./packages/generate-json-schema/*",
-    "#markdown": "./packages/generate-markdown/*",
-    "#parser": "./packages/generate-parser/*",
-    "#helpers": "./shared/helpers/*"
-  },
   "keywords": [
     "json",
     "validation",
     "parsing",
-    "validation",
     "parser",
     "schema",
     "typescript",
