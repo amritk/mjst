@@ -1,0 +1,41 @@
+{
+  "name": "mjst",
+  "description": "Generate TypeScript parsers and type definitions from JSON Schemas.",
+  "usage": "mjst [options]",
+  "options": [
+    {
+      "flag": "--schema",
+      "configKey": "schema",
+      "type": "string",
+      "required": true,
+      "description": "Path to the JSON Schema file to process."
+    },
+    {
+      "flag": "--outDir",
+      "configKey": "outDir",
+      "type": "string",
+      "required": true,
+      "description": "Output directory for generated TypeScript files."
+    },
+    {
+      "flag": "--types-only",
+      "configKey": "typesOnly",
+      "type": "boolean",
+      "required": false,
+      "description": "Generate only TypeScript type definitions without parser functions. Useful when you only need the type shapes and do not need runtime validation."
+    },
+    {
+      "flag": "--config",
+      "configKey": "config",
+      "type": "string",
+      "required": false,
+      "description": "Path to a JSON config file. Keys match CLI flag names (schema, outDir, typesOnly). CLI flags take precedence over config file values."
+    },
+    {
+      "flag": "--generate-readme",
+      "type": "boolean",
+      "required": false,
+      "description": "Generate a README.md in the current directory from the CLI config definition and exit."
+    }
+  ]
+}
