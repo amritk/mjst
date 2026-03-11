@@ -1,0 +1,17 @@
+{
+  "name": "@mjst/generate-markdown",
+  "module": "./dist/index.js",
+  "type": "module",
+  "files": ["dist"],
+  "scripts": {
+    "build": "bun run build:code && bun run build:types",
+    "build:code": "bun build ./src/index.ts --outdir=dist",
+    "build:types": "tsc -p ."
+  },
+  "exports": {
+    ".": {
+      "default": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  }
+}

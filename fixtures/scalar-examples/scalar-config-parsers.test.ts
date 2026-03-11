@@ -2,7 +2,7 @@ import { exec } from 'node:child_process'
 import { readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 
 const execAsync = promisify(exec)
 
@@ -20,7 +20,7 @@ describe('scalar-config-parsers', () => {
   let parseSourceConfigurationObject: (input: unknown) => any
 
   beforeAll(async () => {
-    await execAsync('pnpm tsx src/cli/cli.ts --schema fixtures/scalar-api-reference-config.json --outDir ./tmp', {
+    await execAsync('bun packages/cli/cli.ts --schema fixtures/scalar-api-reference-config.json --outDir ./tmp', {
       cwd: resolve(__dirname, '../..'),
     })
 

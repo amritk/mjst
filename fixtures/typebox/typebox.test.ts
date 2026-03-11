@@ -1,5 +1,6 @@
 import { coerceValue } from '@scalar/workspace-store/schemas/typebox-coerce'
 import { describe, expect, it } from 'vitest'
+
 // import { parseDocument } from '../../src/3.1.2/document'
 import stripe from '../cloudinary.json'
 import { OpenAPIDocumentSchema } from './openapi-document'
