@@ -3,10 +3,10 @@ import { dirname, join, resolve } from 'node:path'
 import { buildSchema } from '@mjst/generate-parsers'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { generateMarkdown } from '@mjst/generate-markdown'
+
 import { loadConfig } from './load-config'
 import { parseCliArgs } from './parse-cli-args'
-import { generateReadme } from './generate-readme'
-import type { CliConfigDefinition } from './generate-readme'
 
 /**
  * Extracts the --config flag value from process args before full parsing.
@@ -32,15 +32,10 @@ const run = async (): Promise<void> => {
   // Skip the first two args (node executable and script path)
   const args = process.argv.slice(2)
 
-  // Handle --generate-readme before any other processing so we exit early
+  // Handle --generate-readme before any other processing so we exit early.
+  // generateMarkdown reads fixtures/config.schema.json and package.json from cwd.
   if (args.includes('--generate-readme')) {
-    const configDefPath = resolve(import.meta.dirname, '../config.mjst.json')
-    const raw = await readFile(configDefPath, 'utf-8')
-    const configDef = JSON.parse(raw) as CliConfigDefinition
-    const readme = generateReadme(configDef)
-    const outPath = resolve('README.md')
-    await writeFile(outPath, readme, 'utf-8')
-    console.log(`Generated: ${outPath}`)
+    await generateMarkdown()
     return
   }
 

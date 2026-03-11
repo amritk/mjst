@@ -18,6 +18,7 @@
         "mjst": "./src/cli.ts",
       },
       "dependencies": {
+        "@mjst/generate-markdown": "workspace:*",
         "@mjst/generate-parsers": "workspace:*",
       },
       "devDependencies": {
