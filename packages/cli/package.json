@@ -5,6 +5,10 @@
   "bin": {
     "mjst": "./src/cli.ts"
   },
+  "scripts": {
+    "dev": "bun run --conditions=development ./src/cli.ts",
+    "start": "bun run ./src/cli.ts"
+  },
   "dependencies": {
     "@mjst/generate-parsers": "workspace:*"
   },

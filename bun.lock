@@ -15,10 +15,12 @@
     "packages/cli": {
       "name": "@mjst/cli",
       "bin": {
-        "mjst": "./cli.ts",
+        "mjst": "./src/cli.ts",
       },
       "dependencies": {
         "@mjst/generate-parsers": "workspace:*",
+      },
+      "devDependencies": {
         "json-schema-typed": "^8.0.1",
       },
     },

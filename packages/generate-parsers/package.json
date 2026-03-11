@@ -1,14 +1,26 @@
 {
   "name": "@mjst/generate-parsers",
-  "module": "index.ts",
+  "module": "./dist/index.js",
   "type": "module",
+  "files": ["dist"],
+  "scripts": {
+    "build": "bun run build:code && bun run build:types",
+    "build:code": "bun build ./src/index.ts --outdir=dist",
+    "build:types": "tsc -p ."
+  },
   "imports": {
-    "#generators/*": "./generators/*.ts",
-    "#helpers/*": "./helpers/*.ts",
-    "#type-guards/*": "./type-guards/*.ts",
-    "#types/*": "./types/*.ts",
-    "#validators/*": "./validators/*.ts",
-    "#templates/*": "./templates/*.ts"
+    "#generators/*": "./src/generators/*.ts",
+    "#helpers/*": "./src/helpers/*.ts",
+    "#type-guards/*": "./src/type-guards/*.ts",
+    "#types/*": "./src/types/*.ts",
+    "#validators/*": "./src/validators/*.ts",
+    "#templates/*": "./src/templates/*.ts"
+  },
+  "exports": {
+    ".": {
+      "default": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
   },
   "dependencies": {
     "json-schema-typed": "^8.0.1"

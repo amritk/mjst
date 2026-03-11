@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { buildSchema } from '@mjst/generate-parsers/generators/build-schema'
+import { buildSchema } from '@mjst/generate-parsers'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { loadConfig } from './load-config'

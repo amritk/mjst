@@ -1,6 +1,4 @@
-import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { applySchemaExtensions } from '#helpers/apply-schema-extensions'
 import { buildDynamicRefMap } from '#helpers/build-dynamic-ref-map'
@@ -10,9 +8,8 @@ import { refToName } from '#helpers/ref-to-name'
 import { resolveDynamicRefs } from '#helpers/resolve-dynamic-refs'
 import { resolveRef } from '#helpers/resolve-ref'
 import type { SchemaExtensions } from '#types/schema-extensions'
-import { generateFile } from './generate-files'
 
-const __dirname = fileURLToPath(new URL('.', import.meta.url))
+import { generateFile } from './generate-files'
 
 /**
  * Represents a generated file with its filename and content.
@@ -126,7 +123,7 @@ export const buildSchema = async (
   const extendedRootSchema = extensions
     ? applySchemaExtensions(processedRootSchema, rootTypeName.toLowerCase(), extensions)
     : processedRootSchema
-  const rootContent = generateFile(extendedRootSchema, rootTypeName, markdownDocumentation, { typesOnly })
+  const rootContent = generateFile(extendedRootSchema, rootTypeName, markdownDocumentation, { typesOnly: typesOnly ?? false })
   const rootFilename = rootTypeName.toLowerCase()
 
   if (rootFilename !== 'schema') {
@@ -169,7 +166,7 @@ export const buildSchema = async (
     const filename = refToFilename(ref)
     const processedSchema = resolveDynamicRefs(resolvedSchema as JSONSchema, dynamicRefMap)
     const extendedSchema = extensions ? applySchemaExtensions(processedSchema, filename, extensions) : processedSchema
-    const content = generateFile(extendedSchema, typeName, markdownDocumentation, { typesOnly })
+    const content = generateFile(extendedSchema, typeName, markdownDocumentation, { typesOnly: typesOnly ?? false })
 
     if (filename !== 'schema') {
       files.push({
@@ -190,15 +187,15 @@ export const buildSchema = async (
   // Runtime helper files are only needed when parsers are generated.
   // In types-only mode, skip them entirely since there is no runtime validation code.
   if (!typesOnly) {
-    const validateArrayPath = join(__dirname, '../validators/validate-array.ts')
-    const validateRecordPath = join(__dirname, '../validators/validate-record.ts')
-    const isObjectPath = join(__dirname, '../helpers/is-object.ts')
-    const schemaTemplatePath = join(__dirname, '../templates/schema.ts')
+    const validateArrayPath = join(import.meta.dir, '../validators/validate-array.ts')
+    const validateRecordPath = join(import.meta.dir, '../validators/validate-record.ts')
+    const isObjectPath = join(import.meta.dir, '../helpers/is-object.ts')
+    const schemaTemplatePath = join(import.meta.dir, '../templates/schema.ts')
 
-    const validateArrayContent = await readFile(validateArrayPath, 'utf-8')
-    const validateRecordContent = await readFile(validateRecordPath, 'utf-8')
-    const isObjectContent = await readFile(isObjectPath, 'utf-8')
-    const schemaTemplateContent = await readFile(schemaTemplatePath, 'utf-8')
+    const validateArrayContent = await Bun.file(validateArrayPath).text()
+    const validateRecordContent = await Bun.file(validateRecordPath).text()
+    const isObjectContent = await Bun.file(isObjectPath).text()
+    const schemaTemplateContent = await Bun.file(schemaTemplatePath).text()
 
     files.push({
       filename: 'validators/validate-array.ts',
