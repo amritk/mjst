@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it, mock } from 'bun:test'
 import { readFile, writeFile } from 'node:fs/promises'
+
 import { generateMarkdown } from '.'
 
 // Save the real fs functions before any mocking so we can restore them after.
@@ -1530,7 +1531,10 @@ describe('generate-readme', () => {
 
     const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
     const howItWorksIdx = content.indexOf('## How It Works')
-    const propLine = content.slice(howItWorksIdx).split('\n').find((line: string) => line.includes('optProp'))
+    const propLine = content
+      .slice(howItWorksIdx)
+      .split('\n')
+      .find((line: string) => line.includes('optProp'))
     expect(propLine).toContain('_(optional)_')
   })
 
