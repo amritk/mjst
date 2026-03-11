@@ -1,4 +1,4 @@
-import type { CliConfig } from '#cli/cli-config'
+import type { CliConfig } from './cli-config'
 
 /**
  * Parses command-line arguments into a partial CLI config.
@@ -7,7 +7,7 @@ import type { CliConfig } from '#cli/cli-config'
  */
 export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
   // Use a mutable local type for building, then return as Partial<CliConfig>
-  const config: { schema?: string; outDir?: string } = {}
+  const config: { schema?: string; outDir?: string; typesOnly?: boolean } = {}
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]

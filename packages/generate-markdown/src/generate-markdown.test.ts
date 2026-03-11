@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it, mock } from 'bun:test'
 import { readFile, writeFile } from 'node:fs/promises'
-import { generateMarkdown } from './index'
+import { generateMarkdown } from '.'
 
 // Save the real fs functions before any mocking so we can restore them after.
 // mock.module does not restore on its own — without this cleanup the mocked module

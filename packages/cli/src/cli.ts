@@ -1,9 +1,10 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { loadConfig } from '#cli/load-config'
-import { parseCliArgs } from '#cli/parse-cli-args'
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { buildSchema } from '@mjst/generate-parsers/generators/build-schema'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
+import { loadConfig } from './load-config'
+import { parseCliArgs } from './parse-cli-args'
 
 /**
  * Extracts the --config flag value from process args before full parsing.

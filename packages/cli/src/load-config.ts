@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import type { CliConfig } from '#cli/cli-config'
+
+import type { CliConfig } from './cli-config'
 
 /**
  * Loads a JSON config file and returns the relevant CLI config properties.

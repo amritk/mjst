@@ -3,13 +3,12 @@
   "module": "cli.ts",
   "type": "module",
   "bin": {
-    "mjst": "./cli.ts"
-  },
-  "imports": {
-    "#cli/*": "./*.ts"
+    "mjst": "./src/cli.ts"
   },
   "dependencies": {
-    "@mjst/generate-parsers": "workspace:*",
+    "@mjst/generate-parsers": "workspace:*"
+  },
+  "devDependencies": {
     "json-schema-typed": "^8.0.1"
   }
 }

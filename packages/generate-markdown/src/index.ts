@@ -1,4 +1,3 @@
-import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
 /**
@@ -210,8 +209,8 @@ export const generateMarkdown = async (): Promise<void> => {
   const root = process.cwd()
 
   const [schemaRaw, pkgRaw] = await Promise.all([
-    readFile(resolve(root, 'fixtures', 'config.schema.json'), 'utf-8'),
-    readFile(resolve(root, 'package.json'), 'utf-8'),
+    Bun.file(resolve(root, 'fixtures', 'config.schema.json')).text(),
+    Bun.file(resolve(root, 'package.json')).text(),
   ])
 
   const schema = JSON.parse(schemaRaw) as ConfigSchema
@@ -310,6 +309,6 @@ README generated from [\`config.schema.json\`](./fixtures/config.schema.json) &n
 </div>
 `
 
-  await writeFile(resolve(root, 'README.md'), readme, 'utf-8')
+  await Bun.write(resolve(root, 'README.md'), readme)
   console.log('README.md generated successfully.')
 }
