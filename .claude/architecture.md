@@ -19,7 +19,7 @@ mjst/
 │       ├── types/             # Internal type definitions
 │       └── validators/        # Runtime validators (also copied to generated output)
 ├── fixtures/                  # Real-world schemas used for integration tests
-├── CLAUDE.md                  # Developer guidelines
+├── .claude/                   # Developer guidelines and rules
 └── package.json               # Workspace root (private, no exports)
 ```
 
