@@ -34,7 +34,7 @@ const run = async (): Promise<void> => {
 
   // Handle --generate-readme before any other processing so we exit early.
   // generateMarkdown reads fixtures/config.schema.json and package.json from cwd.
-  if (args.includes('--generate-readme')) {
+  if (args.includes('--markdown')) {
     await generateMarkdown()
     return
   }

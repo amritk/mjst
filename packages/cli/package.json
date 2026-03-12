@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "bun run --conditions=development ./src/cli.ts",
     "start": "bun run ./src/cli.ts",
-    "generate-readme": "bun run ./src/cli.ts --generate-readme"
+    "generate-readme": "bun run ./src/cli.ts --markdown"
   },
   "dependencies": {
     "@mjst/generate-parsers": "workspace:*",

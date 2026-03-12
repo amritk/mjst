@@ -94,7 +94,7 @@ mjst --config ./@mjst/cli.config.json
 |:---|:---|
 | `bun run dev` | `bun run --conditions=development ./src/cli.ts` |
 | `bun run start` | `bun run ./src/cli.ts` |
-| `bun run generate-readme` | `bun run ./src/cli.ts --generate-readme` |
+| `bun run generate-readme` | `bun run ./src/cli.ts --markdown` |
 
 ---
 
