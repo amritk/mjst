@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mjst CLI config",
+  "description": "Generate TypeScript parsers and type definitions from JSON Schemas.\n\nYou can supply options via CLI flags or a JSON config file. CLI flags always take precedence over config file values.",
+  "$comment": "Supply options either via CLI flags or a JSON config file — both approaches are shown below.",
+  "type": "object",
+  "required": ["schema", "outDir"],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "x-cli-flag": "--schema <path>",
+      "x-icon": "📄",
+      "description": "Path to the JSON Schema file to process. The schema is read, parsed, and used to generate TypeScript source files.",
+      "examples": ["./schema.json"]
+    },
+    "outDir": {
+      "type": "string",
+      "x-cli-flag": "--outDir <dir>",
+      "x-icon": "📁",
+      "description": "Output directory for generated TypeScript files. The directory is created automatically if it does not exist. Subdirectories are created as needed when a generated file includes a nested path.",
+      "examples": ["./generated"]
+    },
+    "typesOnly": {
+      "type": "boolean",
+      "x-cli-flag": "--types-only",
+      "x-icon": "🏷️",
+      "default": false,
+      "description": "Generate only TypeScript type definitions without parser functions. Useful when you only need the type shapes and do not need runtime validation."
+    },
+    "config": {
+      "type": "string",
+      "x-cli-flag": "--config <path>",
+      "x-icon": "⚙️",
+      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, outDir, typesOnly). CLI flags take precedence over config file values.",
+      "examples": ["./mjst.config.json"]
+    }
+  },
+  "examples": [
+    {
+      "schema": "./schema.json",
+      "outDir": "./generated"
+    },
+    {
+      "schema": "./schema.json",
+      "outDir": "./generated",
+      "typesOnly": true
+    }
+  ],
+  "x-example-titles": [
+    "Minimal — generate parsers and types",
+    "Types only — skip parser functions"
+  ]
+}

@@ -3,6 +3,8 @@ import { dirname, join, resolve } from 'node:path'
 import { buildSchema } from '@mjst/generate-parsers'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { generateMarkdown } from '@mjst/generate-markdown'
+
 import { loadConfig } from './load-config'
 import { parseCliArgs } from './parse-cli-args'
 
@@ -29,6 +31,14 @@ const extractConfigPath = (args: readonly string[]): string | undefined => {
 const run = async (): Promise<void> => {
   // Skip the first two args (node executable and script path)
   const args = process.argv.slice(2)
+
+  // Handle --generate-readme before any other processing so we exit early.
+  // generateMarkdown reads fixtures/config.schema.json and package.json from cwd.
+  if (args.includes('--markdown')) {
+    await generateMarkdown()
+    return
+  }
+
   const configPath = extractConfigPath(args)
 
   // Start with config file values if provided, then overlay CLI flags on top

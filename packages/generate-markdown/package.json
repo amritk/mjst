@@ -5,11 +5,12 @@
   "files": ["dist"],
   "scripts": {
     "build": "bun run build:code && bun run build:types",
-    "build:code": "bun build ./src/index.ts --outdir=dist",
+    "build:code": "bun build ./src/index.ts --outdir=dist --target=bun",
     "build:types": "tsc -p ."
   },
   "exports": {
     ".": {
+      "bun": "./src/index.ts",
       "default": "./dist/index.js",
       "types": "./dist/index.d.ts"
     }
