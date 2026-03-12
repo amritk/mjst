@@ -104,4 +104,66 @@ Then, run index.ts
 bun --hot ./index.ts
 ```
 
+## Workspaces and Catalogs
+
+Use Bun's built-in workspace and catalog support to manage monorepos.
+
+Define shared dependency versions in the root `package.json` under `"catalog"`:
+
+```json#package.json (root)
+{
+  "workspaces": ["packages/*"],
+  "catalog": {
+    "zod": "^3.22.0",
+    "typescript": "^5.0.0"
+  }
+}
+```
+
+Reference catalog entries in workspace packages with `"catalog:"`:
+
+```json#packages/my-package/package.json
+{
+  "dependencies": {
+    "zod": "catalog:"
+  }
+}
+```
+
+Named catalogs are also supported for grouping related dependencies:
+
+```json#package.json (root)
+{
+  "catalogs": {
+    "react18": {
+      "react": "^18.0.0",
+      "react-dom": "^18.0.0"
+    }
+  }
+}
+```
+
+Reference named catalogs with `"catalog:<name>"`:
+
+```json#packages/my-package/package.json
+{
+  "dependencies": {
+    "react": "catalog:react18",
+    "react-dom": "catalog:react18"
+  }
+}
+```
+
+## Other Bun APIs
+
+- `Bun.password.hash(password)` / `Bun.password.verify(password, hash)` for password hashing (uses bcrypt or argon2)
+- `Bun.TOML.parse(str)` to parse TOML strings
+- `Bun.Glob` for glob pattern matching: `new Bun.Glob("**/*.ts").scan(".")`
+- `Bun.hash(data)` for fast non-cryptographic hashing
+- `Bun.sleep(ms)` / `Bun.sleepSync(ms)` for async/sync delays
+- `Bun.mmap(path)` for memory-mapped files
+- `Bun.inspect(value)` like `util.inspect` but Bun-native
+- `Bun.escapeHTML(str)` to escape HTML entities
+- `Bun.readableStreamToText(stream)` / `Bun.readableStreamToArrayBuffer(stream)` for stream consumption
+
 For more information, read the Bun API docs in `node_modules/bun-types/docs/**.mdx`.
