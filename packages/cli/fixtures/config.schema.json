@@ -1,10 +1,104 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "mjst CLI config",
-  "description": "Generate TypeScript parsers and type definitions from JSON Schemas.\n\nYou can supply options via CLI flags or a JSON config file. CLI flags always take precedence over config file values.",
+  "title": "mjst config",
+  "description": "Generate TypeScript parsers and type definitions from JSON Schemas, with optional README generation.\n\nYou can supply options via CLI flags or a JSON config file. CLI flags always take precedence over config file values.",
   "$comment": "Supply options either via CLI flags or a JSON config file — both approaches are shown below.",
   "type": "object",
   "required": ["schema", "outDir"],
+  "$defs": {
+    "Badge": {
+      "title": "Badge",
+      "description": "A shields.io badge rendered in the README header.",
+      "type": "object",
+      "required": ["label", "message", "color"],
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "Left-hand label text of the badge.",
+          "examples": ["version", "license", "coverage"]
+        },
+        "message": {
+          "type": "string",
+          "description": "Right-hand message text of the badge.",
+          "examples": ["v1.0.0", "MIT", "100%"]
+        },
+        "color": {
+          "type": "string",
+          "description": "Hex color (without #) or named color for the message half of the badge.",
+          "examples": ["6366f1", "22c55e", "blue"]
+        },
+        "logo": {
+          "type": "string",
+          "description": "Simple Icons slug for an icon shown on the left of the badge.",
+          "examples": ["npm", "typescript", "github"]
+        },
+        "logoColor": {
+          "type": "string",
+          "description": "Color of the logo. Only applied when logo is set.",
+          "examples": ["white", "black"]
+        },
+        "link": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL the badge links to when clicked.",
+          "examples": ["https://npmjs.com/package/my-pkg"]
+        }
+      }
+    },
+    "InstallStep": {
+      "title": "InstallStep",
+      "description": "A single installation step rendered as an optional heading followed by a code block.",
+      "type": "object",
+      "required": ["command"],
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Optional heading shown above the code block.",
+          "examples": ["Install dependencies", "Install globally"]
+        },
+        "command": {
+          "type": "string",
+          "description": "Shell command displayed inside the code block.",
+          "examples": ["bun install", "npm install -g mjst"]
+        },
+        "language": {
+          "type": "string",
+          "description": "Syntax-highlighting language identifier for the fenced code block.",
+          "default": "zsh",
+          "examples": ["zsh", "bash", "sh", "powershell"]
+        }
+      }
+    },
+    "UsageExample": {
+      "title": "UsageExample",
+      "description": "A named usage example rendered as a heading, optional description, and code block.",
+      "type": "object",
+      "required": ["title", "command"],
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Heading for this example block.",
+          "examples": ["Generate parsers and types", "Types only — skip parser functions"]
+        },
+        "command": {
+          "type": "string",
+          "description": "Command or code snippet displayed inside the code block.",
+          "examples": ["mjst --schema ./schema.json --outDir ./generated"]
+        },
+        "language": {
+          "type": "string",
+          "description": "Syntax-highlighting language identifier for the fenced code block.",
+          "default": "bash",
+          "examples": ["bash", "zsh", "sh"]
+        },
+        "description": {
+          "type": "string",
+          "description": "Explanatory text rendered below the code block.",
+          "examples": ["Generates both runtime parsers and TypeScript type definitions."]
+        }
+      }
+    }
+  },
   "properties": {
     "schema": {
       "type": "string",
@@ -33,6 +127,51 @@
       "x-icon": "⚙️",
       "description": "Path to a JSON config file. Keys match the option names in this schema (schema, outDir, typesOnly). CLI flags take precedence over config file values.",
       "examples": ["./mjst.config.json"]
+    },
+    "installation": {
+      "type": "object",
+      "x-icon": "📦",
+      "description": "Controls the Installation section of the generated README.\n\nProvide one or more ordered steps — each renders as an optional heading and a fenced code block. Omit this property entirely to fall back to the auto-detected package manager install command.",
+      "properties": {
+        "steps": {
+          "type": "array",
+          "description": "Ordered installation steps. Each step becomes a code block under the Installation heading.",
+          "items": { "$ref": "#/$defs/InstallStep" },
+          "minItems": 1
+        },
+        "notes": {
+          "type": "string",
+          "description": "Optional markdown text rendered after all installation steps. Use this for prerequisites, platform notes, or post-install instructions.",
+          "examples": ["Requires Bun v1.1 or later.", "See [docs](https://example.com) for advanced setup."]
+        }
+      }
+    },
+    "badges": {
+      "type": "array",
+      "x-icon": "🎖️",
+      "description": "Extra shields.io badges appended after the auto-generated version, license, and TypeScript badges in the README header.",
+      "items": { "$ref": "#/$defs/Badge" },
+      "examples": [
+        [{ "label": "coverage", "message": "100%", "color": "22c55e" }]
+      ]
+    },
+    "usage": {
+      "type": "object",
+      "x-icon": "🚀",
+      "description": "Controls the Usage section of the generated README.\n\nProvide named examples — each renders as a heading, optional description, and fenced code block. Omit this property to auto-derive an example from the required schema properties that carry x-cli-flag annotations.",
+      "properties": {
+        "examples": {
+          "type": "array",
+          "description": "Ordered usage examples shown under the Usage heading.",
+          "items": { "$ref": "#/$defs/UsageExample" },
+          "minItems": 1
+        },
+        "notes": {
+          "type": "string",
+          "description": "Optional markdown text rendered after all usage examples.",
+          "examples": ["Run `mjst --help` to see all available flags."]
+        }
+      }
     }
   },
   "examples": [
@@ -44,10 +183,35 @@
       "schema": "./schema.json",
       "outDir": "./generated",
       "typesOnly": true
+    },
+    {
+      "schema": "./schema.json",
+      "outDir": "./generated",
+      "installation": {
+        "steps": [
+          { "command": "bun add mjst" }
+        ],
+        "notes": "Requires Bun v1.1 or later."
+      },
+      "usage": {
+        "examples": [
+          {
+            "title": "Generate parsers and types",
+            "command": "mjst --schema ./schema.json --outDir ./generated"
+          },
+          {
+            "title": "Types only — skip parser functions",
+            "command": "mjst --schema ./schema.json --outDir ./generated --types-only",
+            "description": "Emits only TypeScript type definitions without runtime validation code."
+          }
+        ],
+        "notes": "Run `mjst --help` to see all available flags."
+      }
     }
   ],
   "x-example-titles": [
     "Minimal — generate parsers and types",
-    "Types only — skip parser functions"
+    "Types only — skip parser functions",
+    "Full — with installation and usage documentation"
   ]
 }
