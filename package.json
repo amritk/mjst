@@ -2,6 +2,9 @@
   "name": "mjst",
   "private": true,
   "workspaces": ["packages/*"],
+  "catalog": {
+    "json-schema-typed": "^8.0.1"
+  },
   "type": "module",
   "keywords": [
     "json",

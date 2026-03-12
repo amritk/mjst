@@ -17,6 +17,6 @@
     "@mjst/generate-markdown": "workspace:*"
   },
   "devDependencies": {
-    "json-schema-typed": "^8.0.1"
+    "json-schema-typed": "catalog:"
   }
 }
