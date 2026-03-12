@@ -6,6 +6,30 @@
   "type": "object",
   "required": ["schema", "outDir"],
   "$defs": {
+    "Requirement": {
+      "title": "Requirement",
+      "description": "A runtime or toolchain prerequisite listed under the Requirements section.",
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Display name of the required tool or runtime.",
+          "examples": ["Bun", "Node.js", "Git"]
+        },
+        "version": {
+          "type": "string",
+          "description": "Minimum version constraint shown alongside the name.",
+          "examples": [">=1.1.0", ">=18", ">=2.39"]
+        },
+        "link": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL to the tool's download or documentation page.",
+          "examples": ["https://bun.sh", "https://nodejs.org"]
+        }
+      }
+    },
     "Badge": {
       "title": "Badge",
       "description": "A shields.io badge rendered in the README header.",
@@ -172,6 +196,81 @@
           "examples": ["Run `mjst --help` to see all available flags."]
         }
       }
+    },
+    "features": {
+      "type": "array",
+      "x-icon": "✨",
+      "description": "Bullet-pointed feature highlights rendered in a Features section between the Overview and Installation sections.\n\nKeep each item to one sentence — readers scan this list to decide whether the tool suits their needs.",
+      "items": {
+        "type": "string",
+        "description": "A single feature statement.",
+        "examples": [
+          "Generates fully type-safe parsers from any JSON Schema 2020-12 document",
+          "Zero runtime dependencies — emits plain TypeScript"
+        ]
+      },
+      "minItems": 1
+    },
+    "requirements": {
+      "type": "array",
+      "x-icon": "📋",
+      "description": "Runtime or toolchain prerequisites listed in a Requirements section above Installation.\n\nEach entry renders as a linked name and optional version constraint so readers know what to install before they begin.",
+      "items": { "$ref": "#/$defs/Requirement" },
+      "minItems": 1
+    },
+    "contributing": {
+      "type": "object",
+      "x-icon": "🤝",
+      "description": "Controls the Contributing section at the bottom of the generated README.\n\nProvide either a file path to link to or inline markdown text, or both.",
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "Relative path to a CONTRIBUTING file. Rendered as a link: 'See CONTRIBUTING.md for guidelines.'",
+          "default": "./CONTRIBUTING.md",
+          "examples": ["./CONTRIBUTING.md", "./docs/contributing.md"]
+        },
+        "text": {
+          "type": "string",
+          "description": "Inline markdown text rendered below the file link. Use this for a short summary so readers get the gist without clicking through.",
+          "examples": ["PRs are welcome. Please open an issue first to discuss what you would like to change."]
+        }
+      }
+    },
+    "changelog": {
+      "type": "object",
+      "x-icon": "📝",
+      "description": "Controls the Changelog section at the bottom of the generated README.",
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "Relative path to a CHANGELOG file. Rendered as a link beneath the section heading.",
+          "default": "./CHANGELOG.md",
+          "examples": ["./CHANGELOG.md", "./RELEASES.md"]
+        },
+        "text": {
+          "type": "string",
+          "description": "Inline markdown text shown in the Changelog section. Use this when you link to GitHub Releases instead of a local file.",
+          "examples": ["See [GitHub Releases](https://github.com/org/repo/releases) for the full history."]
+        }
+      }
+    },
+    "license": {
+      "type": "object",
+      "x-icon": "⚖️",
+      "description": "Controls the License section at the bottom of the generated README. The license identifier is taken from package.json; this property lets you customise the file path and add a notice.",
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "Relative path to the LICENSE file. Rendered as a link alongside the SPDX identifier from package.json.",
+          "default": "./LICENSE",
+          "examples": ["./LICENSE", "./LICENSE.md"]
+        },
+        "notice": {
+          "type": "string",
+          "description": "Short additional notice rendered below the license link, e.g. for dual-licensing or attribution requirements.",
+          "examples": ["Copyright © 2025 Amrit Kochar. All rights reserved."]
+        }
+      }
     }
   },
   "examples": [
@@ -187,6 +286,15 @@
     {
       "schema": "./schema.json",
       "outDir": "./generated",
+      "features": [
+        "Generates fully type-safe parsers from any JSON Schema 2020-12 document",
+        "Supports $ref, $dynamicRef, and recursive schema definitions",
+        "Types-only mode for projects that do not need runtime validation",
+        "Zero runtime dependencies — emits plain TypeScript"
+      ],
+      "requirements": [
+        { "name": "Bun", "version": ">=1.1.0", "link": "https://bun.sh" }
+      ],
       "installation": {
         "steps": [
           { "command": "bun add mjst" }
@@ -206,6 +314,17 @@
           }
         ],
         "notes": "Run `mjst --help` to see all available flags."
+      },
+      "contributing": {
+        "file": "./CONTRIBUTING.md",
+        "text": "PRs are welcome. Please open an issue first to discuss what you would like to change."
+      },
+      "changelog": {
+        "text": "See [GitHub Releases](https://github.com/amritk/mjst/releases) for the full history."
+      },
+      "license": {
+        "file": "./LICENSE",
+        "notice": "Copyright © 2025 Amrit Kochar."
       }
     }
   ],
