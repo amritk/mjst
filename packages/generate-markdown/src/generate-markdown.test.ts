@@ -811,7 +811,7 @@ describe('generate-readme', () => {
 
     const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
     expect(content).toContain('logo=npm')
-    expect(content).toContain('logo=typescript')
+    expect(content).toContain('logo=bun')
   })
 
   it('includes logoColor parameter in badge when logo is provided', async () => {
@@ -922,11 +922,11 @@ describe('generate-readme', () => {
     await generateMarkdown()
 
     const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    expect(content).toContain('status-pre--alpha')
     expect(content).toContain('version-v1.0.0')
     expect(content).toContain('license-MIT')
-    expect(content).toContain('TypeScript-5.x')
     expect(content).toContain('JSON%20Schema-2020--12')
-    expect(content).toContain('pnpm-required')
+    expect(content).toContain('bun-required')
   })
 
   it('separates badges with non-breaking spaces', async () => {

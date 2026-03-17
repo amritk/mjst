@@ -231,11 +231,11 @@ export const generateMarkdown = async (): Promise<void> => {
   const configFileExplanation = descParagraphs.length > 1 ? descParagraphs.slice(1).join('\n\n') : (schema.$comment ?? '')
 
   const badges = [
+    shieldsBadge('status', 'pre-alpha', 'ef4444'),
     shieldsBadge('version', `v${pkg.version}`, '6366f1', { logo: 'npm', logoColor: 'white' }),
     shieldsBadge('license', pkg.license ?? 'MIT', '22c55e'),
-    shieldsBadge('TypeScript', '5.x', '3178C6', { logo: 'typescript', logoColor: 'white' }),
     shieldsBadge('JSON Schema', '2020-12', 'f97316'),
-    shieldsBadge('pnpm', 'required', 'F69220', { logo: 'pnpm', logoColor: 'white' }),
+    shieldsBadge('bun', 'required', 'FBF0DF', { logo: 'bun', logoColor: '000000' }),
   ].join('&nbsp; ')
 
   const readme = `<div align="center">
