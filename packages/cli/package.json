@@ -1,7 +1,7 @@
 {
   "name": "mjst-cli",
   "version": "0.1.0",
-  "description": "[pre-alpha] Generate TypeScript parsers and type definitions from JSON Schemas.",
+  "description": "Generate TypeScript parsers and type definitions from JSON Schemas.",
   "module": "cli.ts",
   "type": "module",
   "bin": {
