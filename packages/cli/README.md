@@ -4,7 +4,7 @@
 
 **[pre-alpha] Generate TypeScript parsers and type definitions from JSON Schemas.**
 
-![status](https://img.shields.io/badge/status-pre--alpha-ef4444?style=flat-square)&nbsp; ![version](https://img.shields.io/badge/version-v0.1.0-6366f1?style=flat-square&logo=npm&logoColor=white)&nbsp; ![license](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)&nbsp; ![JSON Schema](https://img.shields.io/badge/JSON%20Schema-2020--12-f97316?style=flat-square)
+![status](https://img.shields.io/badge/status-pre--alpha-ef4444?style=flat-square)&nbsp; ![version](https://img.shields.io/badge/version-v0.1.0-6366f1?style=flat-square&logo=npm&logoColor=white)&nbsp; ![license](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)&nbsp; ![JSON Schema](https://img.shields.io/badge/JSON%20Schema-2020--12-f97316?style=flat-square)&nbsp; ![bun](https://img.shields.io/badge/bun-required-FBF0DF?style=flat-square&logo=bun&logoColor=000000)
 
 </div>
 

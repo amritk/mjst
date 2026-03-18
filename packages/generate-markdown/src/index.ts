@@ -235,6 +235,7 @@ export const generateMarkdown = async (): Promise<void> => {
     shieldsBadge('version', `v${pkg.version}`, '6366f1', { logo: 'npm', logoColor: 'white' }),
     shieldsBadge('license', pkg.license ?? 'MIT', '22c55e'),
     shieldsBadge('JSON Schema', '2020-12', 'f97316'),
+    shieldsBadge('bun', 'required', 'FBF0DF', { logo: 'bun', logoColor: '000000' }),
   ].join('&nbsp; ')
 
   const readme = `<div align="center">
