@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.4",
+    "@changesets/cli": "^2.30.0",
     "@types/bun": "latest"
   },
   "peerDependencies": {
