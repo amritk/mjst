@@ -1,9 +1,9 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { buildSchema } from '@mjst/generate-parsers'
+import { buildSchema } from 'generate-parsers'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
-import { generateMarkdown } from '@mjst/generate-markdown'
+import { generateMarkdown } from 'generate-markdown'
 
 import { loadConfig } from './load-config'
 import { parseCliArgs } from './parse-cli-args'

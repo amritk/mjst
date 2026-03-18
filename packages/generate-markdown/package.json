@@ -1,5 +1,5 @@
 {
-  "name": "@mjst/generate-markdown",
+  "name": "generate-markdown",
   "version": "0.1.0",
   "description": "[pre-alpha] Generate markdown documentation from JSON Schemas.",
   "module": "./dist/index.js",

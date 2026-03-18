@@ -1,7 +1,7 @@
 {
-  "name": "@mjst/generate-parsers",
+  "name": "generate-parsers",
   "version": "0.1.0",
-  "description": "[pre-alpha] Generate TypeScript parsers and type definitions from JSON Schemas.",
+  "description": "Generate TypeScript parsers and type definitions from JSON Schemas.",
   "module": "./dist/index.js",
   "type": "module",
   "files": ["dist"],

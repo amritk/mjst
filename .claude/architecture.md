@@ -9,9 +9,9 @@
 ```
 mjst/
 ├── packages/
-│   ├── cli/                   # @mjst/cli — command-line interface
-│   ├── generate-markdown/     # @mjst/generate-markdown — README generation
-│   └── generate-parsers/      # @mjst/generate-parsers — core code generator
+│   ├── cli/                   # mjst-cli — command-line interface
+│   ├── generate-markdown/     # generate-markdown — README generation
+│   └── generate-parsers/      # generate-parsers — core code generator
 │       ├── generators/        # Code generation functions
 │       ├── helpers/           # Schema traversal utilities
 │       ├── templates/         # Files copied verbatim into generated output
@@ -25,15 +25,15 @@ mjst/
 
 ## Packages
 
-### `@mjst/cli`
+### `mjst-cli`
 
 Entry point for the CLI tool. Reads a JSON Schema file, runs the generator, and writes TypeScript files to the output directory.
 
-- **Depends on:** `@mjst/generate-parsers`
+- **Depends on:** `generate-parsers`
 - **Subpath imports:** `#cli/*` → `./*.ts`
 - **Bin:** `mjst` → `cli.ts`
 
-### `@mjst/generate-parsers`
+### `generate-parsers`
 
 Core code generation engine. Accepts a JSON Schema and produces TypeScript source files — both type definitions and (optionally) runtime parser functions.
 
@@ -49,7 +49,7 @@ Core code generation engine. Accepts a JSON Schema and produces TypeScript sourc
 
 **Template files** (`validators/validate-array.ts`, `validators/validate-record.ts`, `helpers/is-object.ts`, `templates/schema.ts`) are read at runtime and copied verbatim into the user's output directory. They must use relative imports that work in the output context, not `#` subpath imports.
 
-### `@mjst/generate-markdown`
+### `generate-markdown`
 
 Generates a `README.md` from a `config.schema.json` file and the project's `package.json`. Used internally to keep the project README in sync with the schema.
 
@@ -58,7 +58,7 @@ Generates a `README.md` from a `config.schema.json` file and the project's `pack
 ## Import Conventions
 
 - **Within a package:** use `#` subpath imports (e.g. `import { foo } from '#helpers/foo'`)
-- **Cross-package:** use the workspace package name (e.g. `import { buildSchema } from '@mjst/generate-parsers/generators/build-schema'`)
+- **Cross-package:** use the workspace package name (e.g. `import { buildSchema } from 'generate-parsers/generators/build-schema'`)
 - **Same directory:** use relative `./` imports
 
 **Exception:** template files that are copied into user output directories must use relative `../` imports so the paths remain valid after being written to a different location.
@@ -69,7 +69,7 @@ Generates a `README.md` from a `config.schema.json` file and the project's `pack
 JSON Schema file
        │
        ▼
-  @mjst/cli (cli.ts)
+  mjst-cli (cli.ts)
        │  reads schema, parses CLI args
        ▼
   buildSchema()                    ← generators/build-schema.ts

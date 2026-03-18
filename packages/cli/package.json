@@ -1,5 +1,5 @@
 {
-  "name": "@mjst/cli",
+  "name": "mjst-cli",
   "version": "0.1.0",
   "description": "[pre-alpha] Generate TypeScript parsers and type definitions from JSON Schemas.",
   "module": "cli.ts",
@@ -13,8 +13,8 @@
     "generate-readme": "bun run ./src/cli.ts --markdown"
   },
   "dependencies": {
-    "@mjst/generate-parsers": "workspace:*",
-    "@mjst/generate-markdown": "workspace:*"
+    "generate-parsers": "workspace:*",
+    "generate-markdown": "workspace:*"
   },
   "devDependencies": {
     "json-schema-typed": "catalog:"

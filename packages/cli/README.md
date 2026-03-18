@@ -1,6 +1,6 @@
 <div align="center">
 
-# @mjst/cli
+# mjst-cli
 
 **[pre-alpha] Generate TypeScript parsers and type definitions from JSON Schemas.**
 
@@ -39,7 +39,7 @@ mjst --schema ./schema.json --outDir ./generated
 You can supply options via CLI flags or a JSON config file. CLI flags always take precedence over config file values.
 
 ```bash
-mjst --config ./@mjst/cli.config.json
+mjst --config ./mjst-cli.config.json
 ```
 
 > [!NOTE]
