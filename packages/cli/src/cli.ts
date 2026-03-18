@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { buildSchema } from 'generate-parsers'
