@@ -9,7 +9,9 @@ import { resolve } from 'node:path'
 type SchemaProperty = {
   readonly type: string
   readonly description?: string
+  readonly $comment?: string
   readonly default?: unknown
+  readonly examples?: readonly unknown[]
   readonly 'x-cli-flag'?: string
   readonly 'x-icon'?: string
 }
@@ -19,8 +21,10 @@ type SchemaProperty = {
  */
 type ConfigSchema = {
   readonly title: string
+  readonly $comment?: string
   readonly required?: readonly string[]
   readonly properties: Readonly<Record<string, SchemaProperty>>
+  readonly examples?: readonly unknown[]
 }
 
 /**
