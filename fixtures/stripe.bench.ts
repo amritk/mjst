@@ -1,5 +1,5 @@
 import { coerceValue } from '@scalar/workspace-store/schemas/typebox-coerce'
-import { validate } from '@scalar/validation'
+import { coerce } from '@scalar/validation'
 import { bench, describe } from 'vitest'
 import stripe from '../fixtures/stripe.json'
 import { OpenAPIDocumentSchema } from '../fixtures/typebox/openapi-document'
@@ -16,7 +16,7 @@ describe('stripe bench', () => {
   })
 
   bench('@scalar/validation', () => {
-    validate(openApiDocumentSchema, stripe)
+    coerce(openApiDocumentSchema, stripe)
   })
 
   // bench('indexOf', () => {

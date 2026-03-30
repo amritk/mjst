@@ -32,6 +32,8 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@scalar/validation": "^0.1.0"
+    "@scalar/typebox": "^0.1.3",
+    "@scalar/validation": "^0.1.0",
+    "@scalar/workspace-store": "^0.41.2"
   }
 }
