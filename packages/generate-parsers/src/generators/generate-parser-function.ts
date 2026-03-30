@@ -962,10 +962,17 @@ const generateConditionalParser = (schema: JSONSchema.Object, typeName: string):
   const elseSchema = schema.else
 
   // Check if branches are defined and have $ref
-  if (!thenSchema || !isSchemaObject(thenSchema) || !hasRef(thenSchema)) {
-    return generateEmptyObjectParser(typeName)
-  }
-  if (!elseSchema || !isSchemaObject(elseSchema) || !hasRef(elseSchema)) {
+  const thenHasRef = thenSchema && isSchemaObject(thenSchema) && hasRef(thenSchema)
+  const elseHasRef = elseSchema && isSchemaObject(elseSchema) && hasRef(elseSchema)
+
+  if (!thenHasRef || !elseHasRef) {
+    // Non-$ref branches (e.g. if/then/else providing defaults for properties).
+    // Flatten all three branches into a single object schema and generate a
+    // regular object parser from the merged property set.
+    const mergedSchema = getConditionalObjectSchema(schema)
+    if (mergedSchema) {
+      return generateObjectParser(mergedSchema, typeName, false)
+    }
     return generateEmptyObjectParser(typeName)
   }
 
@@ -978,6 +985,11 @@ const generateConditionalParser = (schema: JSONSchema.Object, typeName: string):
     ifSchema.required.includes('$ref')
 
   if (!isRefCondition) {
+    // Condition is not a $ref check — flatten into an object parser
+    const mergedSchema = getConditionalObjectSchema(schema)
+    if (mergedSchema) {
+      return generateObjectParser(mergedSchema, typeName, false)
+    }
     return generateEmptyObjectParser(typeName)
   }
 
@@ -1009,6 +1021,7 @@ const getConditionalObjectSchema = (schema: JSONSchema): JSONSchema.Object | nul
 
   const ifSchema = schema.if
   const thenSchema = schema.then
+  const elseSchema = 'else' in schema ? schema.else : undefined
 
   if (!isSchemaObject(ifSchema) || !isSchemaObject(thenSchema)) {
     return null
@@ -1016,10 +1029,12 @@ const getConditionalObjectSchema = (schema: JSONSchema): JSONSchema.Object | nul
 
   const ifProperties = ifSchema.properties
   const thenProperties = thenSchema.properties
+  const elseProperties = elseSchema && isSchemaObject(elseSchema) ? elseSchema.properties : undefined
   const hasIfProperties = ifProperties && typeof ifProperties === 'object'
   const hasThenProperties = thenProperties && typeof thenProperties === 'object'
+  const hasElseProperties = elseProperties && typeof elseProperties === 'object'
 
-  if (!hasIfProperties && !hasThenProperties) {
+  if (!hasIfProperties && !hasThenProperties && !hasElseProperties) {
     return null
   }
 
@@ -1040,6 +1055,8 @@ const getConditionalObjectSchema = (schema: JSONSchema): JSONSchema.Object | nul
   return {
     type: 'object',
     properties: {
+      // else properties first so then properties take precedence on overlap
+      ...(hasElseProperties ? elseProperties : {}),
       ...(hasIfProperties ? ifProperties : {}),
       ...(hasThenProperties ? thenProperties : {}),
     },
@@ -1211,10 +1228,32 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
     }
   }
 
-  // Handle conditional schemas (if/then/else) before checking if it is an object schema
-  // because conditional schemas may not have type: 'object'
+  const isObjectLikeSchema =
+    isObjectSchema(schema) ||
+    (isSchemaObject(schema) && ('patternProperties' in schema || 'additionalProperties' in schema))
+
+  // Handle non-object schemas with type-appropriate validation
+  if (!isObjectLikeSchema && !isSchemaObject(schema)) {
+    return generateNonObjectParser(typeName, schema)
+  }
+
+  // Handle schemas with both properties AND patternProperties.
+  // This generates a parser that handles known properties and also iterates
+  // pattern-matched keys (e.g. responses with "default" + "200", "4XX").
+  if (hasProperties(schema) && isSchemaObject(schema) && 'patternProperties' in schema) {
+    return generateCombinedObjectParser(schema, typeName, useRefImports)
+  }
+
+  // Handle schemas that have explicit properties — generate a full object parser.
+  // This intentionally runs before if/then checks so that schemas with both
+  // properties AND conditional keywords (e.g. OpenAPI's parameter schema) use
+  // all declared properties rather than only the if/then fragment.
+  if (hasProperties(schema)) {
+    return generateObjectParser(schema, typeName, useRefImports)
+  }
+
+  // Handle conditional schemas (if/then/else) for schemas without explicit properties.
   if (isSchemaObject(schema) && 'if' in schema && 'then' in schema && 'else' in schema) {
-    // Cast to JSONSchema.Object since we know it has the required properties
     return generateConditionalParser(schema as JSONSchema.Object, typeName)
   }
 
@@ -1225,25 +1264,9 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
     return generateObjectParser(conditionalObjectSchema, typeName, useRefImports)
   }
 
-  const isObjectLikeSchema =
-    isObjectSchema(schema) ||
-    (isSchemaObject(schema) && ('patternProperties' in schema || 'additionalProperties' in schema))
-
-  // Handle non-object schemas with type-appropriate validation
+  // Handle non-object schemas with type-appropriate validation (no properties, no conditionals)
   if (!isObjectLikeSchema) {
     return generateNonObjectParser(typeName, schema)
-  }
-
-  // Handle schemas with both properties AND patternProperties
-  // This generates a parser that handles known properties and also iterates
-  // pattern-matched keys (e.g. responses with "default" + "200", "4XX")
-  if (hasProperties(schema) && isSchemaObject(schema) && 'patternProperties' in schema) {
-    return generateCombinedObjectParser(schema, typeName, useRefImports)
-  }
-
-  // Handle schemas with properties only (or implicit object schemas)
-  if (hasProperties(schema)) {
-    return generateObjectParser(schema, typeName, useRefImports)
   }
 
   // Handle schemas with patternProperties (but no properties)
