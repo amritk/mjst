@@ -2,9 +2,142 @@ import { describe, expect, it } from 'bun:test'
 import { generateSchemaChecks } from './generate-schema-checks'
 
 describe('generate-schema-checks', () => {
-  it('returns empty checks for a schema without type', () => {
+  it('returns empty checks for a schema without type and no inferrable keywords', () => {
     const result = generateSchemaChecks('value', { description: 'no type' })
     expect(result).toEqual([])
+  })
+
+  it('infers object type from properties keyword', () => {
+    const result = generateSchemaChecks('value', {
+      properties: { id: { type: 'string' } },
+    })
+    expect(result).toEqual([
+      'typeof value === "object" && value !== null && !Array.isArray(value)',
+    ])
+  })
+
+  it('infers object type from required keyword', () => {
+    const result = generateSchemaChecks('value', {
+      required: ['id', 'name'],
+    })
+    expect(result).toEqual([
+      'typeof value === "object" && value !== null && !Array.isArray(value)',
+      '"id" in value',
+      '"name" in value',
+    ])
+  })
+
+  it('infers array type from items keyword', () => {
+    const result = generateSchemaChecks('value', {
+      items: { type: 'string' },
+    })
+    expect(result).toEqual(['Array.isArray(value)'])
+  })
+
+  it('infers array type from minItems/maxItems keywords', () => {
+    const result = generateSchemaChecks('value', {
+      minItems: 1,
+      maxItems: 10,
+    })
+    expect(result).toEqual([
+      'Array.isArray(value)',
+      'value.length >= 1',
+      'value.length <= 10',
+    ])
+  })
+
+  it('infers string type from minLength keyword', () => {
+    const result = generateSchemaChecks('value', {
+      minLength: 1,
+    })
+    expect(result).toEqual([
+      'typeof value === "string"',
+      'value.length >= 1',
+    ])
+  })
+
+  it('infers string type from pattern keyword', () => {
+    const result = generateSchemaChecks('value', {
+      pattern: '^[a-z]+$',
+    })
+    expect(result).toEqual([
+      'typeof value === "string"',
+      '/^[a-z]+$/.test(value)',
+    ])
+  })
+
+  it('infers number type from minimum keyword', () => {
+    const result = generateSchemaChecks('value', {
+      minimum: 0,
+    })
+    expect(result).toEqual([
+      'typeof value === "number"',
+      'value >= 0',
+    ])
+  })
+
+  it('infers number type from multipleOf keyword', () => {
+    const result = generateSchemaChecks('value', {
+      multipleOf: 5,
+    })
+    expect(result).toEqual([
+      'typeof value === "number"',
+      'value % 5 === 0',
+    ])
+  })
+
+  it('infers boolean type from const boolean value', () => {
+    const result = generateSchemaChecks('value', {
+      const: true,
+    })
+    expect(result).toEqual(['typeof value === "boolean"'])
+  })
+
+  it('infers null type from const null value', () => {
+    const result = generateSchemaChecks('value', {
+      const: null,
+    })
+    expect(result).toEqual(['value === null'])
+  })
+
+  it('infers null type from all-null enum', () => {
+    const result = generateSchemaChecks('value', {
+      enum: [null, null],
+    })
+    expect(result).toEqual(['[null,null].includes(value)'])
+  })
+
+  // When object and array keywords tie, object wins (matches inferSchemaType priority)
+  it('prefers object over array when keyword scores tie', () => {
+    const result = generateSchemaChecks('value', {
+      minProperties: 1,
+      minItems: 1,
+    })
+    expect(result).toContain('typeof value === "object" && value !== null && !Array.isArray(value)')
+    expect(result).not.toContain('Array.isArray(value)')
+  })
+
+  // Array keywords outnumber string keywords so array wins
+  it('selects highest scoring type when multiple keyword categories present', () => {
+    const result = generateSchemaChecks('value', {
+      minItems: 1,
+      maxItems: 3,
+      minLength: 2,
+    })
+    expect(result).toContain('Array.isArray(value)')
+    expect(result).not.toContain('typeof value === "string"')
+  })
+
+  it('applies inferred type constraints alongside explicit enum check', () => {
+    const result = generateSchemaChecks('value', {
+      minimum: 0,
+      maximum: 10,
+      enum: [0, 5, 10],
+    })
+    expect(result).toContain('typeof value === "number"')
+    expect(result).toContain('value >= 0')
+    expect(result).toContain('value <= 10')
+    expect(result).toContain('[0,5,10].includes(value)')
   })
 
   it('returns empty checks for a boolean schema', () => {
