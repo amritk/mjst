@@ -296,7 +296,7 @@ describe('generate-parser-function', () => {
   if ((_contacts === undefined || Array.isArray(_contacts))) return input as UserObject;
   return {
     ...input,
-    ...(_contacts !== undefined && { contacts: Array.isArray(_contacts) ? _contacts : Array.isArray(_contacts) ? _contacts : [] }),
+    ...(_contacts !== undefined && { contacts: Array.isArray(_contacts) ? _contacts : [] }),
   };
 }`,
     )
@@ -389,7 +389,7 @@ describe('generate-parser-function', () => {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? Number(_id) : 0),
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
-    ...(_tags !== undefined && { tags: Array.isArray(_tags) ? _tags : Array.isArray(_tags) ? _tags : [] }),
+    ...(_tags !== undefined && { tags: Array.isArray(_tags) ? _tags : [] }),
     ...(_metadata !== undefined && { metadata: isObject(_metadata) ? _metadata : typeof _metadata === "object" && _metadata !== null ? _metadata : {} }),
     ...(_isActive !== undefined && { isActive: typeof _isActive === "boolean" ? _isActive : Boolean(_isActive) }),
   };
@@ -500,7 +500,7 @@ describe('generate-parser-function', () => {
   if ((_tags === undefined || Array.isArray(_tags))) return input as TaggedObject;
   return {
     ...input,
-    ...(_tags !== undefined && { tags: Array.isArray(_tags) ? _tags : Array.isArray(_tags) ? _tags : [] }),
+    ...(_tags !== undefined && { tags: Array.isArray(_tags) ? _tags : [] }),
   };
 }`,
     )
@@ -525,7 +525,7 @@ describe('generate-parser-function', () => {
   if ((_items === undefined || Array.isArray(_items))) return input as ItemsContainerObject;
   return {
     ...input,
-    ...(_items !== undefined && { items: Array.isArray(_items) ? _items : Array.isArray(_items) ? _items : [] }),
+    ...(_items !== undefined && { items: Array.isArray(_items) ? _items : [] }),
   };
 }`,
     )
@@ -729,7 +729,7 @@ describe('generate-parser-function', () => {
   if ((_data === undefined || Array.isArray(_data))) return input as ContainerObject;
   return {
     ...input,
-    ...(_data !== undefined && { data: Array.isArray(_data) ? _data : Array.isArray(_data) ? _data : [] }),
+    ...(_data !== undefined && { data: Array.isArray(_data) ? _data : [] }),
   };
 }`,
     )
