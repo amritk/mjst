@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { buildSchema } from 'generate-parsers'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
@@ -76,7 +76,48 @@ const run = async (): Promise<void> => {
     console.log(`Generated: ${file.filename}`)
   }
 
-  console.log(`\nTotal files generated: ${files.length}`)
+  if (config.build) {
+    // Write a minimal tsconfig so tsc can compile the generated files without
+    // inheriting settings like allowImportingTsExtensions that block emission.
+    const tsconfigContent = JSON.stringify(
+      {
+        compilerOptions: {
+          target: 'ESNext',
+          module: 'ESNext',
+          moduleResolution: 'bundler',
+          declaration: true,
+          skipLibCheck: true,
+        },
+        include: ['./**/*.ts'],
+      },
+      null,
+      2,
+    )
+
+    const tsconfigPath = join(outputDir, '.tsconfig-mjst-build.json')
+    await writeFile(tsconfigPath, tsconfigContent, 'utf-8')
+
+    try {
+      await Bun.$`bunx tsc --project ${tsconfigPath}`.quiet()
+    } catch {
+      throw new Error('TypeScript compilation failed. Check the generated files for errors.')
+    } finally {
+      await unlink(tsconfigPath)
+    }
+
+    // Remove the intermediate .ts files now that .js and .d.ts have been produced
+    for (const file of files) {
+      await unlink(join(outputDir, file.filename))
+      const jsFilename = file.filename.replace(/\.ts$/, '.js')
+      const dtsFilename = file.filename.replace(/\.ts$/, '.d.ts')
+      console.log(`Built: ${jsFilename}`)
+      console.log(`Built: ${dtsFilename}`)
+    }
+
+    console.log(`\nTotal files built: ${files.length * 2}`)
+  } else {
+    console.log(`\nTotal files generated: ${files.length}`)
+  }
 }
 
 run().catch((error: unknown) => {

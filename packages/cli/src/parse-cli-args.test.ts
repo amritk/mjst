@@ -100,4 +100,38 @@ describe('parse-cli-args', () => {
       typesOnly: true,
     })
   })
+
+  it('parses --build boolean flag', () => {
+    const result = parseCliArgs(['--build'])
+
+    expect(result).toEqual({
+      build: true,
+    })
+  })
+
+  it('parses --build=true with equals syntax', () => {
+    const result = parseCliArgs(['--build=true'])
+
+    expect(result).toEqual({
+      build: true,
+    })
+  })
+
+  it('parses --build=false with equals syntax', () => {
+    const result = parseCliArgs(['--build=false'])
+
+    expect(result).toEqual({
+      build: false,
+    })
+  })
+
+  it('parses --build alongside other flags', () => {
+    const result = parseCliArgs(['--schema', 'schema.json', '--outDir', 'dist', '--build'])
+
+    expect(result).toEqual({
+      schema: 'schema.json',
+      outDir: 'dist',
+      build: true,
+    })
+  })
 })
