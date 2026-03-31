@@ -12,4 +12,6 @@ export type CliConfig = {
    * Useful when you only need the type shapes and do not need runtime validation.
    */
   readonly typesOnly?: boolean
+  /** Path to a markdown documentation file used to enrich generated comments. */
+  readonly docs?: string
 }

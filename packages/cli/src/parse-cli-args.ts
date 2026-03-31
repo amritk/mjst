@@ -2,12 +2,12 @@ import type { CliConfig } from './cli-config'
 
 /**
  * Parses command-line arguments into a partial CLI config.
- * Supports --schema and --outDir flags with either `--flag value` or `--flag=value` syntax.
+ * Supports --schema, --outDir, --docs, and --types-only flags with either `--flag value` or `--flag=value` syntax.
  * Only returns the flags that were explicitly provided so we can layer them on top of config file values.
  */
 export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
   // Use a mutable local type for building, then return as Partial<CliConfig>
-  const config: { schema?: string; outDir?: string; typesOnly?: boolean } = {}
+  const config: { schema?: string; outDir?: string; typesOnly?: boolean; docs?: string } = {}
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -26,6 +26,8 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
         config.schema = value
       } else if (key === 'outDir') {
         config.outDir = value
+      } else if (key === 'docs') {
+        config.docs = value
       } else if (key === 'types-only') {
         // Accept --types-only=false to explicitly opt out, otherwise treat as true
         config.typesOnly = value !== 'false'
@@ -47,6 +49,13 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
 
       if (value && !value.startsWith('--')) {
         config.outDir = value
+        i++
+      }
+    } else if (arg === '--docs') {
+      const value = args[i + 1]
+
+      if (value && !value.startsWith('--')) {
+        config.docs = value
         i++
       }
     } else if (arg === '--types-only') {
