@@ -1602,4 +1602,126 @@ describe('generate-parser-function', () => {
     expect(result).toContain('const _simple')
     expect(result).toContain('const _complex')
   })
+
+  it('generates parser for product schema with required fields, minimum constraint, boolean, and array', () => {
+    const schema: JSONSchema = {
+      description: 'A product available for purchase in the catalog.',
+      type: 'object',
+      properties: {
+        id: { description: 'Unique product identifier (UUID).', type: 'string' },
+        name: { description: 'Display name shown to customers.', type: 'string' },
+        price: { description: 'Unit price in USD cents (must be non-negative).', type: 'number', minimum: 0 },
+        inStock: { description: 'Whether the product is currently available for purchase.', type: 'boolean' },
+        tags: { description: 'Searchable labels associated with the product.', type: 'array', items: { type: 'string' } },
+      },
+      required: ['id', 'name', 'price'],
+    }
+
+    const result = generateParserFunction(schema, 'Product')
+
+    expect(result).toBe(
+      `export const parseProduct = (input: unknown): Product => {
+  if (!isObject(input)) return {
+        id: "",
+        name: "",
+        price: 0,
+      };
+  const _id = input.id;
+  const _name = input.name;
+  const _price = input.price;
+  const _inStock = input.inStock;
+  const _tags = input.tags;
+  if (typeof _id === "string" && typeof _name === "string" && typeof _price === "number" && _price >= 0 && (_inStock === undefined || typeof _inStock === "boolean") && (_tags === undefined || Array.isArray(_tags))) return input as Product;
+  return {
+    ...input,
+    id: typeof _id === "string" ? _id : (_id !== undefined ? String(_id) : ""),
+    name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
+    price: typeof _price === "number" && _price >= 0 ? _price : (_price !== undefined ? Number(_price) : 0),
+    ...(_inStock !== undefined && { inStock: typeof _inStock === "boolean" ? _inStock : Boolean(_inStock) }),
+    ...(_tags !== undefined && { tags: Array.isArray(_tags) ? _tags : [] }),
+  };
+}`,
+    )
+  })
+
+  it('generates parser for pagination params with integer minimum/maximum constraints', () => {
+    const schema: JSONSchema = {
+      description: 'Query parameters for paginated list endpoints.',
+      type: 'object',
+      properties: {
+        page: { description: 'The 1-based page number to retrieve.', type: 'integer', minimum: 1 },
+        perPage: { description: 'Number of items per page.', type: 'integer', minimum: 1, maximum: 100 },
+        search: { description: 'Optional full-text search query.', type: 'string' },
+      },
+    }
+
+    const result = generateParserFunction(schema, 'PageParams')
+
+    expect(result).toBe(
+      `export const parsePageParams = (input: unknown): PageParams => {
+  if (!isObject(input)) return {};
+  const _page = input.page;
+  const _perPage = input.perPage;
+  const _search = input.search;
+  if ((_page === undefined || typeof _page === "number" && _page >= 1) && (_perPage === undefined || typeof _perPage === "number" && _perPage >= 1 && _perPage <= 100) && (_search === undefined || typeof _search === "string")) return input as PageParams;
+  return {
+    ...input,
+    ...(_page !== undefined && { page: typeof _page === "number" && _page >= 1 ? _page : Number(_page) }),
+    ...(_perPage !== undefined && { perPage: typeof _perPage === "number" && _perPage >= 1 && _perPage <= 100 ? _perPage : Number(_perPage) }),
+    ...(_search !== undefined && { search: typeof _search === "string" ? _search : String(_search) }),
+  };
+}`,
+    )
+  })
+
+  it('generates parser for string enum schema', () => {
+    const schema: JSONSchema = {
+      description: 'One of the supported theme colors.',
+      type: 'string',
+      enum: ['red', 'green', 'blue', 'yellow', 'purple'],
+    }
+
+    const result = generateParserFunction(schema, 'ThemeColor')
+
+    expect(result).toBe(
+      'export const parseThemeColor = (input: unknown): ThemeColor => typeof input === "string" ? input as ThemeColor : "" as ThemeColor;',
+    )
+  })
+
+  it('generates parser for geo coordinate with min/max on required and optional number fields', () => {
+    const schema: JSONSchema = {
+      description: 'A geographic coordinate pair.',
+      type: 'object',
+      properties: {
+        latitude: { description: 'Degrees latitude, from -90 to 90.', type: 'number', minimum: -90, maximum: 90 },
+        longitude: { description: 'Degrees longitude, from -180 to 180.', type: 'number', minimum: -180, maximum: 180 },
+        altitude: { description: 'Elevation in metres above sea level.', type: 'number' },
+        label: { description: 'Human-readable name for this location.', type: 'string' },
+      },
+      required: ['latitude', 'longitude'],
+    }
+
+    const result = generateParserFunction(schema, 'GeoCoordinate')
+
+    expect(result).toBe(
+      `export const parseGeoCoordinate = (input: unknown): GeoCoordinate => {
+  if (!isObject(input)) return {
+        latitude: 0,
+        longitude: 0,
+      };
+  const _latitude = input.latitude;
+  const _longitude = input.longitude;
+  const _altitude = input.altitude;
+  const _label = input.label;
+  if (typeof _latitude === "number" && _latitude >= -90 && _latitude <= 90 && typeof _longitude === "number" && _longitude >= -180 && _longitude <= 180 && (_altitude === undefined || typeof _altitude === "number") && (_label === undefined || typeof _label === "string")) return input as GeoCoordinate;
+  return {
+    ...input,
+    latitude: typeof _latitude === "number" && _latitude >= -90 && _latitude <= 90 ? _latitude : (_latitude !== undefined ? Number(_latitude) : 0),
+    longitude: typeof _longitude === "number" && _longitude >= -180 && _longitude <= 180 ? _longitude : (_longitude !== undefined ? Number(_longitude) : 0),
+    ...(_altitude !== undefined && { altitude: typeof _altitude === "number" ? _altitude : Number(_altitude) }),
+    ...(_label !== undefined && { label: typeof _label === "string" ? _label : String(_label) }),
+  };
+}`,
+    )
+  })
 })

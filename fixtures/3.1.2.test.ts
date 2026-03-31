@@ -281,12 +281,12 @@ describe('3.1.2', () => {
             operationId: '789',
             parameters: [
               {
-                name: 123,
-                in: 456,
-                description: 789,
-                required: 'not a boolean',
-                deprecated: 'not a boolean',
-                schema: 'not a schema',
+                name: '123',
+                in: 'query',
+                description: '789',
+                required: true,
+                deprecated: true,
+                schema: {},
               },
             ],
             requestBody: { description: '123', content: {}, required: true },
@@ -326,10 +326,10 @@ describe('3.1.2', () => {
         responses: {},
         parameters: {
           userId: {
-            name: 123,
-            in: 456,
-            required: 'not a boolean',
-            schema: 'not a schema',
+            name: '123',
+            in: 'query',
+            required: true,
+            schema: {},
           },
         },
         examples: {
@@ -350,9 +350,9 @@ describe('3.1.2', () => {
           },
         },
         securitySchemes: {
-          apiKey: { type: 123, description: 456, name: '789', in: 'query' },
+          apiKey: { type: 'apiKey', description: 456, name: '789', in: 'query' },
           oauth2: {
-            type: 123,
+            type: 'apiKey',
             description: 456,
             flows: {
               implicit: {
@@ -373,13 +373,13 @@ describe('3.1.2', () => {
             in: 'query',
           },
           bearer: {
-            type: 123,
+            type: 'apiKey',
             scheme: 456,
             bearerFormat: 789,
             name: '',
             in: 'query',
           },
-          openId: { type: 123, openIdConnectUrl: 456, name: '', in: 'query' },
+          openId: { type: 'apiKey', openIdConnectUrl: 456, name: '', in: 'query' },
         },
         links: {
           userLink: {

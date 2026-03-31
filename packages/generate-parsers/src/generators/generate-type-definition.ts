@@ -458,8 +458,10 @@ export const generateTypeDefinition = (
 
       // Add JSDoc comment if documentation is available
       const propDoc = documentation?.properties[key]
-      if (propDoc) {
-        properties += '  /** ' + propDoc.description + ' */\n  ' + quotedKey + optional + ': ' + propType + ';'
+      const inlineDescription = isSchemaObject(propSchema) && typeof propSchema.description === 'string' ? propSchema.description : undefined
+      const jsDocText = propDoc?.description ?? inlineDescription
+      if (jsDocText) {
+        properties += '  /** ' + jsDocText + ' */\n  ' + quotedKey + optional + ': ' + propType + ';'
       } else {
         properties += '  ' + quotedKey + optional + ': ' + propType + ';'
       }
