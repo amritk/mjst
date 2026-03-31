@@ -1,7 +1,9 @@
 {
   "name": "mjst",
   "private": true,
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "catalog": {
     "json-schema-typed": "^8.0.1"
   },
@@ -19,6 +21,7 @@
   "license": "MIT",
   "scripts": {
     "bench": "bun test --bench",
+    "generate:fixtures": "bun run ./packages/cli/src/cli.ts --schema fixtures/3.1.2-2025-09-15.json --docs fixtures/3.1.0.md --outDir fixtures/generate-parsers",
     "check": "bun run biome check .",
     "format": "bun run biome format --write .",
     "test": "bun test"
