@@ -1198,4 +1198,68 @@ export type SecuritySchemeObject = TypeApikeyObject | TypeHttpObject | TypeHttpB
     expect(result).toContain('* @see')
     expect(result).toContain('[key: string]: PathItemObject')
   })
+
+  it('generates type for product schema with required, optional, and array fields', () => {
+    const schema: JSONSchema = {
+      description: 'A product available for purchase in the catalog.',
+      type: 'object',
+      properties: {
+        id: { description: 'Unique product identifier (UUID).', type: 'string' },
+        name: { description: 'Display name shown to customers.', type: 'string' },
+        price: { description: 'Unit price in USD cents (must be non-negative).', type: 'number', minimum: 0 },
+        inStock: { description: 'Whether the product is currently available for purchase.', type: 'boolean' },
+        tags: { description: 'Searchable labels associated with the product.', type: 'array', items: { type: 'string' } },
+      },
+      required: ['id', 'name', 'price'],
+    }
+
+    const result = generateTypeDefinition(schema, 'Product')
+
+    expect(result).toBe(
+      'export type Product = {\n' +
+        '  id: string;\n' +
+        '  name: string;\n' +
+        '  price: number;\n' +
+        '  inStock?: boolean;\n' +
+        '  tags?: string[];\n' +
+        '};',
+    )
+  })
+
+  it('generates type for string enum schema', () => {
+    const schema: JSONSchema = {
+      description: 'One of the supported theme colors.',
+      type: 'string',
+      enum: ['red', 'green', 'blue', 'yellow', 'purple'],
+    }
+
+    const result = generateTypeDefinition(schema, 'ThemeColor')
+
+    expect(result).toBe('export type ThemeColor = "red" | "green" | "blue" | "yellow" | "purple";')
+  })
+
+  it('generates type for geo coordinate with min/max constraints on required number fields', () => {
+    const schema: JSONSchema = {
+      description: 'A geographic coordinate pair.',
+      type: 'object',
+      properties: {
+        latitude: { description: 'Degrees latitude, from -90 to 90.', type: 'number', minimum: -90, maximum: 90 },
+        longitude: { description: 'Degrees longitude, from -180 to 180.', type: 'number', minimum: -180, maximum: 180 },
+        altitude: { description: 'Elevation in metres above sea level.', type: 'number' },
+        label: { description: 'Human-readable name for this location.', type: 'string' },
+      },
+      required: ['latitude', 'longitude'],
+    }
+
+    const result = generateTypeDefinition(schema, 'GeoCoordinate')
+
+    expect(result).toBe(
+      'export type GeoCoordinate = {\n' +
+        '  latitude: number;\n' +
+        '  longitude: number;\n' +
+        '  altitude?: number;\n' +
+        '  label?: string;\n' +
+        '};',
+    )
+  })
 })
