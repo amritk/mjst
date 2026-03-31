@@ -1217,10 +1217,15 @@ export type SecuritySchemeObject = TypeApikeyObject | TypeHttpObject | TypeHttpB
 
     expect(result).toBe(
       'export type Product = {\n' +
+        '  /** Unique product identifier (UUID). */\n' +
         '  id: string;\n' +
+        '  /** Display name shown to customers. */\n' +
         '  name: string;\n' +
+        '  /** Unit price in USD cents (must be non-negative). */\n' +
         '  price: number;\n' +
+        '  /** Whether the product is currently available for purchase. */\n' +
         '  inStock?: boolean;\n' +
+        '  /** Searchable labels associated with the product. */\n' +
         '  tags?: string[];\n' +
         '};',
     )
@@ -1255,9 +1260,13 @@ export type SecuritySchemeObject = TypeApikeyObject | TypeHttpObject | TypeHttpB
 
     expect(result).toBe(
       'export type GeoCoordinate = {\n' +
+        '  /** Degrees latitude, from -90 to 90. */\n' +
         '  latitude: number;\n' +
+        '  /** Degrees longitude, from -180 to 180. */\n' +
         '  longitude: number;\n' +
+        '  /** Elevation in metres above sea level. */\n' +
         '  altitude?: number;\n' +
+        '  /** Human-readable name for this location. */\n' +
         '  label?: string;\n' +
         '};',
     )
