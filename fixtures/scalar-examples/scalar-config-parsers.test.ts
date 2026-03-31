@@ -20,7 +20,7 @@ describe('scalar-config-parsers', () => {
   let parseSourceConfigurationObject: (input: unknown) => any
 
   beforeAll(async () => {
-    await execAsync('bun packages/cli/cli.ts --schema fixtures/scalar-api-reference-config.json --outDir ./tmp', {
+    await execAsync('bun packages/cli/src/cli.ts --schema fixtures/scalar-api-reference-config.json --outDir ./tmp', {
       cwd: resolve(__dirname, '../..'),
     })
 

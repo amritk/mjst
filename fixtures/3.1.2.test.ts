@@ -11,7 +11,7 @@ describe('3.1.2', () => {
   let parseDocument: (input: unknown) => unknown
 
   beforeAll(async () => {
-    await execAsync('bun packages/cli/cli.ts --schema fixtures/3.1.2-2025-09-15.json --outDir ./tmp', {
+    await execAsync('bun packages/cli/src/cli.ts --schema fixtures/3.1.2-2025-09-15.json --outDir ./tmp', {
       cwd: resolve(__dirname, '..'),
     })
     parseDocument = (await import(`${tmpDir}/document.ts`)).parseDocument

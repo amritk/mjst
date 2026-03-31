@@ -1,8 +1,10 @@
 import { coerceValue } from '@scalar/workspace-store/schemas/typebox-coerce'
+import { coerce } from '@scalar/validation'
 import { bench, describe } from 'vitest'
 import stripe from '../fixtures/stripe.json'
 import { OpenAPIDocumentSchema } from '../fixtures/typebox/openapi-document'
 import { parseDocument } from '../src/3.1.2/document'
+import { openApiDocumentSchema } from './scalar-validation-schema'
 
 describe('stripe bench', () => {
   bench('amrit parser', () => {
@@ -11,6 +13,10 @@ describe('stripe bench', () => {
 
   bench('typebox', () => {
     coerceValue(OpenAPIDocumentSchema, stripe)
+  })
+
+  bench('@scalar/validation', () => {
+    coerce(openApiDocumentSchema, stripe)
   })
 
   // bench('indexOf', () => {

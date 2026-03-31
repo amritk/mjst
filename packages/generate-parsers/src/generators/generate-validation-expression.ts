@@ -6,6 +6,7 @@ import {
   hasAdditionalProperties,
   hasAllOf,
   hasAnyOf,
+  hasConst,
   hasEnum,
   hasExclusiveMaximum,
   hasExclusiveMinimum,
@@ -49,7 +50,7 @@ const getTypeCoercion = (accessor: string, schema: JSONSchema): string | null =>
     case 'boolean':
       return `Boolean(${accessor})`
     case 'array':
-      return `Array.isArray(${accessor}) ? ${accessor} : []`
+      return `[]`
     case 'object':
       return `typeof ${accessor} === "object" && ${accessor} !== null ? ${accessor} : {}`
     default:
@@ -142,6 +143,14 @@ export const generateValidationExpression = (
       }
       return `!(${combinedNotCheck}) ? ${accessor} : ${defaultValue}`
     }
+  }
+
+  // Handle const — single exact value that must match
+  if (hasConst(schema)) {
+    const constLiteral = JSON.stringify(schema.const)
+    return isRequired
+      ? `${accessor} === ${constLiteral} ? ${accessor} : ${constLiteral}`
+      : `${accessor} === ${constLiteral} ? ${accessor} : (${accessor} !== undefined ? ${constLiteral} : undefined)`
   }
 
   if (!hasType(schema) && !hasEnum(schema)) {

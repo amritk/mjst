@@ -120,8 +120,8 @@ describe('generate-validation-expression', () => {
     const schema = { type: 'array' as const }
     const result = generateValidationExpression('tags', schema, '[]', true)
 
-    expect(result).toContain('Array.isArray(input?.tags)')
-    expect(result).toContain('Array.isArray(input?.tags) ? input?.tags : []')
+    expect(result).toContain('Array.isArray(input?.tags) ? input?.tags :')
+    expect(result).not.toContain('Array.isArray(input?.tags) ? input?.tags : Array.isArray')
   })
 
   it('generates array validation with minItems', () => {
@@ -401,7 +401,8 @@ describe('generate-validation-expression', () => {
     const schema = { type: 'array' as const }
     const result = generateValidationExpression('tags', schema, '[]', true)
 
-    expect(result).toContain('Array.isArray(input?.tags) ? input?.tags : []')
+    expect(result).toContain('Array.isArray(input?.tags) ? input?.tags :')
+    expect(result).not.toContain('Array.isArray(input?.tags) ? input?.tags : Array.isArray')
   })
 
   it('includes type coercion for required object field', () => {
