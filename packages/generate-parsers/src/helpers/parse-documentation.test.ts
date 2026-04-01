@@ -126,6 +126,21 @@ name | All | string | The field name description.
     expect(result).toBeNull()
   })
 
+  it('returns empty description when section has no description before Fixed Fields', () => {
+    const mdNoDesc = `
+#### No Desc Object
+
+##### Fixed Fields
+
+Field Name | Type | Description
+---|---|---
+name | string | A name field.
+`
+    const result = parseDocumentation(mdNoDesc, 'https://example.com#no-desc-object')
+    expect(result?.description).toBe('')
+    expect(result?.properties).toHaveProperty('name')
+  })
+
   it('handles HTML tags in field names', () => {
     const mdWithHtml = `
 #### Html Object
@@ -140,5 +155,82 @@ Field Name | Type | Description
 `
     const result = parseDocumentation(mdWithHtml, 'https://example.com#html-object')
     expect(result?.properties).toHaveProperty('name')
+  })
+
+  it('inherits properties from fallback section when primary has no Fixed Fields table', () => {
+    const mdWithFallback = `
+#### Header Object
+
+The Header Object follows the structure of the Parameter Object.
+
+#### Parameter Object
+
+Parameter description.
+
+##### Fixed Fields
+
+Field Name | Type | Description
+---|---|---
+description | string | A brief description.
+required | boolean | Whether the parameter is mandatory.
+`
+    const result = parseDocumentation(
+      mdWithFallback,
+      'https://example.com#header-object',
+      'https://example.com#parameter-object',
+    )
+    expect(result?.title).toBe('Header object')
+    expect(result?.description).toContain('follows the structure')
+    expect(result?.properties).toHaveProperty('description')
+    expect(result?.properties).toHaveProperty('required')
+  })
+
+  it('does not use fallback when primary section has its own Fixed Fields table', () => {
+    const mdWithBoth = `
+#### Header Object
+
+Header description.
+
+##### Fixed Fields
+
+Field Name | Type | Description
+---|---|---
+ownField | string | A field unique to header.
+
+#### Parameter Object
+
+Parameter description.
+
+##### Fixed Fields
+
+Field Name | Type | Description
+---|---|---
+description | string | A brief description.
+`
+    const result = parseDocumentation(
+      mdWithBoth,
+      'https://example.com#header-object',
+      'https://example.com#parameter-object',
+    )
+    expect(result?.properties).toHaveProperty('ownField')
+    expect(result?.properties).not.toHaveProperty('description')
+  })
+
+  it('ignores fallback when fallback section also has no properties', () => {
+    const mdNoProperties = `
+#### Header Object
+
+Header description.
+
+#### Parameter Object
+
+Parameter description with no table.
+`
+    const result = parseDocumentation(
+      mdNoProperties,
+      'https://example.com#header-object',
+      'https://example.com#parameter-object',
+    )
+    expect(result?.properties).toEqual({})
   })
 })

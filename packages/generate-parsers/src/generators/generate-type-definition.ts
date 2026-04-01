@@ -4,6 +4,18 @@ import { refToName } from '#helpers/ref-to-name'
 import { safeKey } from '#helpers/safe-accessor'
 import { isObjectSchema, isSchemaObject } from '#type-guards/schema-guards'
 
+/**
+ * Some OpenAPI sections delegate their field definitions to another section
+ * rather than repeating them. This map provides the fallback fragment ID so
+ * property-level JSDoc can still be resolved.
+ *
+ * Key: fragment ID of the delegating section (e.g. "header-object")
+ * Value: fragment ID of the section that owns the Fixed Fields table
+ */
+const DOCUMENTATION_FALLBACKS: Record<string, string> = {
+  'header-object': 'parameter-object',
+}
+
 const getConditionalObjectSchema = (schema: JSONSchema): JSONSchema.Object | null => {
   if (!isSchemaObject(schema)) {
     return null
@@ -377,7 +389,11 @@ export const generateTypeDefinition = (
 
     // Fetch documentation if $comment contains an OpenAPI spec URL
     if (markdownDocumentation && schema.$comment && typeof schema.$comment === 'string') {
-      documentation = parseDocumentation(markdownDocumentation, schema.$comment)
+      const fragmentId = schema.$comment.split('#')[1]
+      const fallbackFragment = fragmentId ? DOCUMENTATION_FALLBACKS[fragmentId] : undefined
+      const baseUrl = schema.$comment.split('#')[0]
+      const fallbackCommentUrl = fallbackFragment ? `${baseUrl}#${fallbackFragment}` : undefined
+      documentation = parseDocumentation(markdownDocumentation, schema.$comment, fallbackCommentUrl)
     }
 
     const hasProperties = normalizedSchema.properties && Object.keys(normalizedSchema.properties).length > 0

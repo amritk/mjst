@@ -11,8 +11,15 @@ export type ObjectDocumentation = {
 
 /**
  * Fetches and parses OpenAPI specification documentation from the markdown source.
+ *
+ * When a section has no Fixed Fields table (e.g. Header Object delegates to Parameter Object),
+ * pass `fallbackCommentUrl` to inherit property documentation from another section.
  */
-export const parseDocumentation = (markdownDocumentation: string, commentUrl: string): ObjectDocumentation | null => {
+export const parseDocumentation = (
+  markdownDocumentation: string,
+  commentUrl: string,
+  fallbackCommentUrl?: string,
+): ObjectDocumentation | null => {
   try {
     const markdown = markdownDocumentation
 
@@ -50,7 +57,9 @@ export const parseDocumentation = (markdownDocumentation: string, commentUrl: st
     }
 
     // Extract the description (paragraphs before "##### Fixed Fields")
-    const descriptionMatch = sectionContent.match(/^([\s\S]*?)(?=\n#####|$)/)
+    // \n? handles the case where sectionContent starts directly with "#####" (no leading newline),
+    // which happens when the section heading is followed by a blank line consumed by \s* in sectionRegex.
+    const descriptionMatch = sectionContent.match(/^([\s\S]*?)(?=\n?#####|$)/)
     const description = descriptionMatch?.[1]?.trim().replace(/\n/g, ' ') || ''
 
     // Extract the Fixed Fields table
@@ -108,6 +117,18 @@ export const parseDocumentation = (markdownDocumentation: string, commentUrl: st
 
     // Format title as "Info object" instead of "Info Object"
     const title = sectionTitle.replace(/\sObject$/, ' object')
+
+    // If no properties were found and a fallback URL is provided, inherit properties from it
+    if (Object.keys(properties).length === 0 && fallbackCommentUrl) {
+      const fallback = parseDocumentation(markdownDocumentation, fallbackCommentUrl)
+      if (fallback && Object.keys(fallback.properties).length > 0) {
+        return {
+          title,
+          description,
+          properties: fallback.properties,
+        }
+      }
+    }
 
     return {
       title,
