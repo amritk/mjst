@@ -1271,4 +1271,99 @@ export type SecuritySchemeObject = TypeApikeyObject | TypeHttpObject | TypeHttpB
         '};',
     )
   })
+
+  it('generates JSDoc for oauth-flows schema when $comment points to oauth-flows-object', () => {
+    // The oauth-flows fixture is missing JSDoc because its source schema has no $comment.
+    // The markdown does have a matching "#### OAuth Flows Object" section, so adding
+    // $comment would produce JSDoc with property descriptions for all four flow types.
+    const schema: JSONSchema.Object = {
+      $comment: 'https://spec.openapis.org/oas/v3.1#oauth-flows-object',
+      type: 'object',
+      properties: {
+        implicit: { $ref: '#/$defs/oauth-flows/$defs/implicit' },
+        password: { $ref: '#/$defs/oauth-flows/$defs/password' },
+        clientCredentials: { $ref: '#/$defs/oauth-flows/$defs/client-credentials' },
+        authorizationCode: { $ref: '#/$defs/oauth-flows/$defs/authorization-code' },
+      },
+    }
+
+    const result = generateTypeDefinition(schema, 'OauthFlowsObject', markdownDocumentation)
+
+    expect(result).toContain('/**')
+    expect(result).toContain('* Oauth Flows object')
+    expect(result).toContain('* Allows configuration of the supported OAuth Flows.')
+    expect(result).toContain('* @see {@link https://spec.openapis.org/oas/v3.1#oauth-flows-object}')
+    expect(result).toContain('/** Configuration for the OAuth Implicit flow */')
+    expect(result).toContain('/** Configuration for the OAuth Resource Owner Password flow */')
+    expect(result).toContain('implicit?: ImplicitObject')
+    expect(result).toContain('authorizationCode?: AuthorizationCodeObject')
+  })
+
+  it('generates JSDoc for oauth-flow sub-type schema when $comment points to oauth-flow-object', () => {
+    // The authorization-code, client-credentials, implicit, and password fixtures are all
+    // missing JSDoc because they are nested defs inside oauth-flows with no $comment field.
+    // All four map to the same "#### OAuth Flow Object" section in the markdown.
+    // The table uses an "Applies To" column, so parseDocumentation reads from column index 3.
+    const schema: JSONSchema.Object = {
+      $comment: 'https://spec.openapis.org/oas/v3.1#oauth-flow-object',
+      type: 'object',
+      properties: {
+        authorizationUrl: { type: 'string', format: 'uri-reference' },
+        tokenUrl: { type: 'string', format: 'uri-reference' },
+        refreshUrl: { type: 'string', format: 'uri-reference' },
+        scopes: { $ref: '#/$defs/map-of-strings' },
+      },
+      required: ['authorizationUrl', 'tokenUrl', 'scopes'],
+    }
+
+    const result = generateTypeDefinition(schema, 'AuthorizationCodeObject', markdownDocumentation)
+
+    expect(result).toContain('/**')
+    expect(result).toContain('* Oauth Flow object')
+    expect(result).toContain('* Configuration details for a supported OAuth Flow')
+    expect(result).toContain('* @see {@link https://spec.openapis.org/oas/v3.1#oauth-flow-object}')
+    expect(result).toContain('/** **REQUIRED**. The authorization URL to be used for this flow.')
+    expect(result).toContain('/** **REQUIRED**. The token URL to be used for this flow.')
+    expect(result).toContain('/** **REQUIRED**. The available scopes for the OAuth2 security scheme.')
+    expect(result).toContain('authorizationUrl: string')
+    expect(result).toContain('tokenUrl: string')
+    expect(result).toContain('scopes: MapOfStringsObject')
+  })
+
+  it('omits JSDoc for specification-extensions schema because $comment fragment has no matching section heading', () => {
+    // The specification-extensions fixture has $comment "...#specification-extensions".
+    // parseDocumentation converts the fragment to "Specification Extensions" and looks
+    // for "#### Specification Extensions" — a heading that does not exist in the markdown.
+    // As a result, parseDocumentation returns null and no JSDoc block is emitted.
+    const schema: JSONSchema = {
+      $comment: 'https://spec.openapis.org/oas/v3.1#specification-extensions',
+      patternProperties: {
+        '^x-': true,
+      },
+    }
+
+    const result = generateTypeDefinition(schema, 'SpecificationExtensionsObject', markdownDocumentation)
+
+    expect(result).not.toContain('/**')
+    expect(result).toBe('export type SpecificationExtensionsObject = Record<string, unknown>;')
+  })
+
+  it('omits JSDoc for content schema because $comment fragment fixed-fields-10 has no matching section heading', () => {
+    // The content fixture has $comment "...#fixed-fields-10". parseDocumentation converts
+    // that fragment to "Fixed Fields 10" and searches for "#### Fixed Fields 10", which
+    // does not exist as a top-level section in the markdown. parseDocumentation returns
+    // null, so no JSDoc block is emitted even though a $comment is present.
+    const schema: JSONSchema.Object = {
+      $comment: 'https://spec.openapis.org/oas/v3.1#fixed-fields-10',
+      type: 'object',
+      additionalProperties: {
+        $ref: '#/$defs/media-type',
+      },
+    }
+
+    const result = generateTypeDefinition(schema, 'ContentObject', markdownDocumentation)
+
+    expect(result).not.toContain('/**')
+    expect(result).toContain('[key: string]: MediaTypeObject')
+  })
 })

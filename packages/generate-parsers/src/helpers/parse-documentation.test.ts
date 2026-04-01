@@ -1,5 +1,8 @@
+import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'bun:test'
 import { parseDocumentation } from './parse-documentation'
+
+const markdownDocumentation = await readFile(new URL('../../../../fixtures/3.1.0.md', import.meta.url), 'utf-8')
 
 describe('parse-documentation', () => {
   const markdown = `
@@ -140,5 +143,59 @@ Field Name | Type | Description
 `
     const result = parseDocumentation(mdWithHtml, 'https://example.com#html-object')
     expect(result?.properties).toHaveProperty('name')
+  })
+})
+
+describe('parse-documentation (real OpenAPI markdown)', () => {
+  it('parses the OAuth Flows Object section', () => {
+    // Verifies that the "#### OAuth Flows Object" heading is present and parseable.
+    // The oauth-flows fixture is missing JSDoc only because the source schema lacks $comment —
+    // not because the documentation section is absent from the markdown.
+    const result = parseDocumentation(markdownDocumentation, 'https://spec.openapis.org/oas/v3.1#oauth-flows-object')
+
+    expect(result).not.toBeNull()
+    expect(result?.title).toBe('Oauth Flows object')
+    expect(result?.description).toContain('Allows configuration of the supported OAuth Flows')
+    expect(result?.properties).toHaveProperty('implicit')
+    expect(result?.properties).toHaveProperty('password')
+    expect(result?.properties).toHaveProperty('clientCredentials')
+    expect(result?.properties).toHaveProperty('authorizationCode')
+  })
+
+  it('parses the OAuth Flow Object section including the Applies To column', () => {
+    // The OAuth Flow Object table has four columns (Field Name | Type | Applies To | Description).
+    // parseDocumentation must pick the last column (index 3) as the description.
+    // All four sub-type fixtures (authorization-code, client-credentials, implicit, password)
+    // would receive these property docs if their source schemas had a $comment.
+    const result = parseDocumentation(markdownDocumentation, 'https://spec.openapis.org/oas/v3.1#oauth-flow-object')
+
+    expect(result).not.toBeNull()
+    expect(result?.title).toBe('Oauth Flow object')
+    expect(result?.description).toContain('Configuration details for a supported OAuth Flow')
+    expect(result?.properties['authorizationUrl']?.description).toContain('**REQUIRED**. The authorization URL')
+    expect(result?.properties['tokenUrl']?.description).toContain('**REQUIRED**. The token URL')
+    expect(result?.properties['refreshUrl']?.description).toContain('obtaining refresh tokens')
+    expect(result?.properties['scopes']?.description).toContain('**REQUIRED**. The available scopes')
+  })
+
+  it('returns null for the specification-extensions fragment', () => {
+    // The specification-extensions fixture has $comment "...#specification-extensions",
+    // but there is no "#### Specification Extensions" heading in the markdown.
+    // parseDocumentation therefore returns null, and no JSDoc is emitted.
+    const result = parseDocumentation(
+      markdownDocumentation,
+      'https://spec.openapis.org/oas/v3.1#specification-extensions',
+    )
+
+    expect(result).toBeNull()
+  })
+
+  it('returns null for the fixed-fields-10 fragment', () => {
+    // The content fixture has $comment "...#fixed-fields-10".
+    // parseDocumentation converts the fragment to "Fixed Fields 10" and looks for
+    // "#### Fixed Fields 10", which does not exist as a section heading.
+    const result = parseDocumentation(markdownDocumentation, 'https://spec.openapis.org/oas/v3.1#fixed-fields-10')
+
+    expect(result).toBeNull()
   })
 })
