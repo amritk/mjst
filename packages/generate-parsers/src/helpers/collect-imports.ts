@@ -73,9 +73,12 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
 
     const record = value as Record<string, unknown>
 
-    // If this is a $ref, add it
+    // If this is a $ref, add it — but skip specification-extensions since it has
+    // no generated file; its semantics are inlined as Record<`x-${string}`, unknown>.
     if (hasRef(record)) {
-      refs.add(record.$ref)
+      if (record.$ref !== '#/$defs/specification-extensions') {
+        refs.add(record.$ref)
+      }
       return // Don't traverse further into a $ref
     }
 
@@ -149,7 +152,8 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
     }
   }
 
-  // Collect refs from root-level $ref (e.g., specification-extensions)
+  // Collect refs from root-level $ref, skipping specification-extensions since
+  // it has no generated file — its semantics are inlined as Record<`x-${string}`, unknown>.
   if (
     typeof schema === 'object' &&
     schema !== null &&

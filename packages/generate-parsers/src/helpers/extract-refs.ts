@@ -38,7 +38,14 @@ export const extractRefs = (schema: JSONSchema): Set<string> => {
     const record = obj as Record<string, unknown>
 
     // Check if this object has a $ref property
-    if ('$ref' in record && typeof record['$ref'] === 'string' && (record['$ref'] as string).startsWith('#')) {
+    // Skip specification-extensions — it is not a standalone type; its semantics
+    // (Record<`x-${string}`, unknown>) are inlined directly into the generated type.
+    if (
+      '$ref' in record &&
+      typeof record['$ref'] === 'string' &&
+      (record['$ref'] as string).startsWith('#') &&
+      record['$ref'] !== '#/$defs/specification-extensions'
+    ) {
       refs.add(record['$ref'] as string)
     }
 
