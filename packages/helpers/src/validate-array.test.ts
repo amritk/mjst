@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+
 import { validateArray } from './validate-array'
 
 describe('validate-array', () => {

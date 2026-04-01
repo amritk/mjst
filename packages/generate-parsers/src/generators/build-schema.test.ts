@@ -1,5 +1,6 @@
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it, spyOn } from 'bun:test'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
 import { buildSchema } from './build-schema'
 
 describe('build-schema', () => {
@@ -134,9 +135,6 @@ describe('build-schema', () => {
     expect(result).toHaveLength(5)
     const filenames = result.map((file) => file.filename)
     expect(filenames).toContain('document.ts')
-    expect(filenames).toContain('validators/validate-array.ts')
-    expect(filenames).toContain('validators/validate-record.ts')
-    expect(filenames).toContain('helpers/is-object.ts')
     expect(filenames).toContain('schema.ts')
   })
 
@@ -151,9 +149,6 @@ describe('build-schema', () => {
     const result = await buildSchema(schema, 'Document', undefined, undefined, true)
     const filenames = result.map((file) => file.filename)
 
-    expect(filenames).not.toContain('validators/validate-array.ts')
-    expect(filenames).not.toContain('validators/validate-record.ts')
-    expect(filenames).not.toContain('helpers/is-object.ts')
     expect(filenames).not.toContain('schema.ts')
   })
 

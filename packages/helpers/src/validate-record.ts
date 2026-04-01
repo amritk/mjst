@@ -1,7 +1,4 @@
-// This file is used as a template — it gets copied to user output directories.
-// The relative path below must reflect the output structure (validators/ → ../helpers/),
-// not the source package structure.
-import { isObject } from '../helpers/is-object'
+import { isObject } from './is-object'
 
 /**
  * Parses the values of a record with a parser function.

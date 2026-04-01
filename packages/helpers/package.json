@@ -1,0 +1,31 @@
+{
+  "name": "mjst-helpers",
+  "version": "0.1.0",
+  "description": "Generate TypeScript parsers and type definitions from JSON Schemas.",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "bun run build:code && bun run build:types",
+    "build:code": "bun build ./src/**/*.ts --outdir=dist",
+    "build:types": "tsc -p ."
+  },
+  "exports": {
+    "./is-object": {
+      "bun": "./src/is-object.ts",
+      "default": "./dist/is-object.js",
+      "types": "./dist/is-object.d.ts"
+    },
+    "./validate-array": {
+      "bun": "./src/validate-array.ts",
+      "default": "./dist/validate-array.js",
+      "types": "./dist/validate-array.d.ts"
+    },
+    "./validate-record": {
+      "bun": "./src/validate-record.ts",
+      "default": "./dist/validate-record.js",
+      "types": "./dist/validate-record.d.ts"
+    }
+  }
+}

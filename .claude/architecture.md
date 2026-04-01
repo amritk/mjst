@@ -47,7 +47,7 @@ Core code generation engine. Accepts a JSON Schema and produces TypeScript sourc
 
 **Key entry point:** `generators/build-schema.ts` — traverses the root schema and all `$ref` references recursively, produces an array of `GeneratedFile` objects.
 
-**Template files** (`validators/validate-array.ts`, `validators/validate-record.ts`, `helpers/is-object.ts`, `templates/schema.ts`) are read at runtime and copied verbatim into the user's output directory. They must use relative imports that work in the output context, not `#` subpath imports.
+**Template files** ( `templates/schema.ts`) are read at runtime and copied verbatim into the user's output directory. They must use relative imports that work in the output context, not `#` subpath imports.
 
 ### `generate-markdown`
 
@@ -100,11 +100,13 @@ JSON Schema file
 - **No mocking** except where necessary (e.g. `generate-markdown` tests mock `node:fs/promises`)
 
 Run all tests:
+
 ```sh
 bun test
 ```
 
 Run tests for a specific package:
+
 ```sh
 bun test ./packages/generate-parsers/
 ```

@@ -1,4 +1,5 @@
-import { isObject } from '../helpers/is-object'
+import { isObject } from 'mjst-helpers/is-object'
+
 import type { ReferenceObject } from './reference'
 
 /**

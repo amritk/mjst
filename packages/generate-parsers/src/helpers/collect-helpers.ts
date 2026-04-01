@@ -15,7 +15,7 @@ export const collectHelpers = (parserFunction: string): string[] => {
 
   /** Find all isObject imports */
   if (parserFunction.includes('isObject')) {
-    imports.push("import { isObject } from './helpers/is-object';")
+    imports.push("import { isObject } from 'mjst-helpers/is-object';")
   }
 
   return imports

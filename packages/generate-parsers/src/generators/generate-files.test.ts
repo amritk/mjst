@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+
 import { generateFile } from './generate-files'
 
 describe('generate-files', () => {
@@ -87,9 +88,9 @@ describe('generate-files', () => {
     const result = generateFile(schema, 'Simple')
 
     // Should still import isObject helper
-    expect(result).toContain("import { isObject } from './helpers/is-object';")
+    expect(result).toContain("import { isObject } from 'mjst-helpers/is-object';")
     // But should not import any ref types (check for type imports specifically)
-    expect(result).not.toContain("import { type")
+    expect(result).not.toContain('import { type')
   })
 
   it('still validates non-ref properties inline', () => {
@@ -173,7 +174,7 @@ describe('generate-files', () => {
     // Check for required imports
     expect(result).toContain("import { type ServerObject, parseServerObject } from './server';")
     expect(result).toContain("import { validateArray } from './validators/validate-array';")
-    expect(result).toContain("import { isObject } from './helpers/is-object';")
+    expect(result).toContain("import { isObject } from 'mjst-helpers/is-object';")
 
     // Check for required array validation using cached variable
     expect(result).toContain('servers: validateArray(_servers, parseServerObject),')
@@ -263,9 +264,9 @@ describe('generate-files', () => {
     const result = generateFile(schema, 'Simple', undefined, { typesOnly: true })
 
     // No parser helpers should be imported since there is no parser function
-    expect(result).not.toContain("import { isObject }")
-    expect(result).not.toContain("import { validateArray }")
-    expect(result).not.toContain("import { validateRecord }")
+    expect(result).not.toContain('import { isObject }')
+    expect(result).not.toContain('import { validateArray }')
+    expect(result).not.toContain('import { validateRecord }')
   })
 
   it('still generates the type definition in types-only mode', () => {

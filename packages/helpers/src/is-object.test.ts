@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+
 import { isObject } from './is-object'
 
 describe('is-object', () => {

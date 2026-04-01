@@ -123,7 +123,9 @@ export const buildSchema = async (
   const extendedRootSchema = extensions
     ? applySchemaExtensions(processedRootSchema, rootTypeName.toLowerCase(), extensions)
     : processedRootSchema
-  const rootContent = generateFile(extendedRootSchema, rootTypeName, markdownDocumentation, { typesOnly: typesOnly ?? false })
+  const rootContent = generateFile(extendedRootSchema, rootTypeName, markdownDocumentation, {
+    typesOnly: typesOnly ?? false,
+  })
   const rootFilename = rootTypeName.toLowerCase()
 
   if (rootFilename !== 'schema') {
@@ -187,40 +189,12 @@ export const buildSchema = async (
   // Runtime helper files are only needed when parsers are generated.
   // In types-only mode, skip them entirely since there is no runtime validation code.
   if (!typesOnly) {
-    const validateArrayPath = join(import.meta.dir, '../validators/validate-array.ts')
-    const validateRecordPath = join(import.meta.dir, '../validators/validate-record.ts')
-    const isObjectPath = join(import.meta.dir, '../helpers/is-object.ts')
     const schemaTemplatePath = join(import.meta.dir, '../templates/schema.ts')
-
-    const validateArrayContent = await Bun.file(validateArrayPath).text()
-    const validateRecordContent = await Bun.file(validateRecordPath).text()
-    const isObjectContent = await Bun.file(isObjectPath).text()
     const schemaTemplateContent = await Bun.file(schemaTemplatePath).text()
 
     files.push({
-      filename: 'validators/validate-array.ts',
-      content: validateArrayContent,
-    })
-
-    files.push({
-      filename: 'helpers/is-object.ts',
-      content: isObjectContent,
-    })
-
-    files.push({
-      filename: 'validators/validate-record.ts',
-      content: validateRecordContent,
-    })
-
-    // Fix import paths in schema template for output directory structure
-    const adjustedSchemaContent = schemaTemplateContent.replace(
-      "import { isObject } from '../helpers/is-object'",
-      "import { isObject } from './helpers/is-object'",
-    )
-
-    files.push({
       filename: 'schema.ts',
-      content: adjustedSchemaContent,
+      content: schemaTemplateContent,
     })
   }
 
