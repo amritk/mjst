@@ -5,12 +5,12 @@ export const collectHelpers = (parserFunction: string): string[] => {
 
   /** Find all validateArray imports */
   if (parserFunction.includes('validateArray')) {
-    imports.push("import { validateArray } from './validators/validate-array';")
+    imports.push("import { validateArray } from 'mjst-helpers/validate-array';")
   }
 
   /** Find all validateRecord imports */
   if (parserFunction.includes('validateRecord')) {
-    imports.push("import { validateRecord } from './validators/validate-record';")
+    imports.push("import { validateRecord } from 'mjst-helpers/validate-record';")
   }
 
   /** Find all isObject imports */

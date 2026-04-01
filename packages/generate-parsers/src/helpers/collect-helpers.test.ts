@@ -5,12 +5,12 @@ import { collectHelpers } from './collect-helpers'
 describe('collect-helpers', () => {
   it('returns validateArray import when parser contains validateArray', () => {
     const result = collectHelpers('const items = validateArray(input, parseItem)')
-    expect(result).toEqual(["import { validateArray } from './validators/validate-array';"])
+    expect(result).toEqual(["import { validateArray } from 'mjst-helpers/validate-array';"])
   })
 
   it('returns validateRecord import when parser contains validateRecord', () => {
     const result = collectHelpers('const record = validateRecord(input, parseValue)')
-    expect(result).toEqual(["import { validateRecord } from './validators/validate-record';"])
+    expect(result).toEqual(["import { validateRecord } from 'mjst-helpers/validate-record';"])
   })
 
   it('returns isObject import when parser contains isObject', () => {
@@ -26,8 +26,8 @@ describe('collect-helpers', () => {
     `
     const result = collectHelpers(parser)
     expect(result).toHaveLength(3)
-    expect(result).toContain("import { validateArray } from './validators/validate-array';")
-    expect(result).toContain("import { validateRecord } from './validators/validate-record';")
+    expect(result).toContain("import { validateArray } from 'mjst-helpers/validate-array';")
+    expect(result).toContain("import { validateRecord } from 'mjst-helpers/validate-record';")
     expect(result).toContain("import { isObject } from 'mjst-helpers/is-object';")
   })
 

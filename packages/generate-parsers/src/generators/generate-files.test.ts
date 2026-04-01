@@ -173,7 +173,7 @@ describe('generate-files', () => {
 
     // Check for required imports
     expect(result).toContain("import { type ServerObject, parseServerObject } from './server';")
-    expect(result).toContain("import { validateArray } from './validators/validate-array';")
+    expect(result).toContain("import { validateArray } from 'mjst-helpers/validate-array';")
     expect(result).toContain("import { isObject } from 'mjst-helpers/is-object';")
 
     // Check for required array validation using cached variable
