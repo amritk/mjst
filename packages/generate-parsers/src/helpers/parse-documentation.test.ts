@@ -216,6 +216,44 @@ description | string | A brief description.
     expect(result?.properties).not.toHaveProperty('description')
   })
 
+  it('excludes non-field rows from adjacent tables within the Fixed Fields section', () => {
+    // The Encoding Object has a "default contentType" table between its two Fixed Fields
+    // sub-tables. Rows like `\`string\`` and `[_absent_]` must not be treated as field names.
+    const mdWithAdjacentTable = `
+#### Encoding Object
+
+Encoding description.
+
+##### Fixed Fields
+
+###### Common Fixed Fields
+
+| Field Name | Type | Description |
+| ---- | :----: | ---- |
+| contentType | \`string\` | The content type. |
+
+This object MAY be extended with Specification Extensions.
+
+| \`type\` | \`contentEncoding\` | Default |
+| ---- | ---- | ---- |
+| \`string\` | present | \`application/octet-stream\` |
+| [_absent_](#foo) | n/a | \`application/octet-stream\` |
+
+###### RFC6570 Fields
+
+| Field Name | Type | Description |
+| ---- | :----: | ---- |
+| style | \`string\` | The style. |
+`
+    const result = parseDocumentation(mdWithAdjacentTable, 'https://example.com#encoding-object')
+    expect(result?.properties).toHaveProperty('contentType')
+    expect(result?.properties).toHaveProperty('style')
+    // Rows from the non-field table should be excluded
+    expect(result?.properties).not.toHaveProperty('`string`')
+    expect(result?.properties).not.toHaveProperty('`type`')
+    expect(Object.keys(result?.properties ?? {}).some((k) => k.startsWith('['))).toBe(false)
+  })
+
   it('collects properties from multiple sub-tables within a single Fixed Fields section', () => {
     const mdMultiTable = `
 #### Encoding Object

@@ -456,6 +456,114 @@ describe('build-schema', () => {
     expect(documentFile?.content).not.toContain('SpecificationExtensionsObject')
   })
 
+  it('injects $comment fallback for schemas missing one when markdown is provided', async () => {
+    // Simulates the oauth-flows pattern: nested $defs without $comment that share a
+    // single spec section (e.g. all four OAuth flow types point to "oauth-flow-object").
+    const markdown = `
+#### Oauth Flow Object
+
+Configuration details for a supported OAuth Flow
+
+##### Fixed Fields
+
+| Field Name | Type | Description |
+| ---- | :----: | ---- |
+| tokenUrl | \`string\` | **REQUIRED**. The token URL. |
+| scopes | Map | **REQUIRED**. The available scopes. |
+`
+
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: {
+        flows: { $ref: '#/$defs/oauth-flows' },
+      },
+      $defs: {
+        'oauth-flows': {
+          type: 'object',
+          properties: {
+            password: { $ref: '#/$defs/oauth-flows/$defs/password' },
+          },
+          $defs: {
+            password: {
+              // No $comment — relies on COMMENT_FALLBACKS
+              type: 'object',
+              properties: {
+                tokenUrl: { type: 'string' },
+                scopes: { type: 'object' },
+              },
+              required: ['tokenUrl', 'scopes'],
+            },
+          },
+        },
+      },
+    }
+
+    const result = await buildSchema(schema, 'Document', markdown)
+    const passwordFile = result.find((file) => file.filename === 'password.ts')
+
+    expect(passwordFile).toBeDefined()
+    // JSDoc should be present because the fallback $comment points to the markdown section
+    expect(passwordFile?.content).toContain('The token URL.')
+    expect(passwordFile?.content).toContain('The available scopes.')
+  })
+
+  it('does not inject $comment fallback when schema already has one', async () => {
+    const markdown = `
+#### Oauth Flow Object
+
+Configuration details for a supported OAuth Flow
+
+##### Fixed Fields
+
+| Field Name | Type | Description |
+| ---- | :----: | ---- |
+| tokenUrl | \`string\` | The token URL from fallback. |
+
+#### Custom Flow Object
+
+Custom flow description.
+
+##### Fixed Fields
+
+| Field Name | Type | Description |
+| ---- | :----: | ---- |
+| tokenUrl | \`string\` | The token URL from own comment. |
+`
+
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: {
+        flows: { $ref: '#/$defs/oauth-flows' },
+      },
+      $defs: {
+        'oauth-flows': {
+          type: 'object',
+          properties: {
+            password: { $ref: '#/$defs/oauth-flows/$defs/password' },
+          },
+          $defs: {
+            password: {
+              // Has its own $comment — fallback should NOT override it
+              $comment: 'https://example.com#custom-flow-object',
+              type: 'object',
+              properties: {
+                tokenUrl: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+    }
+
+    const result = await buildSchema(schema, 'Document', markdown)
+    const passwordFile = result.find((file) => file.filename === 'password.ts')
+
+    expect(passwordFile).toBeDefined()
+    // Should use own $comment, not the fallback
+    expect(passwordFile?.content).toContain('The token URL from own comment.')
+    expect(passwordFile?.content).not.toContain('The token URL from fallback.')
+  })
+
   it('skips adding a nested ref to the queue when it was already processed', async () => {
     // When "common" appears first in the root properties it gets processed before "item".
     // Later, when "item" is processed and its nested refs are extracted, "common" is
