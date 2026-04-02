@@ -487,6 +487,20 @@ export const generateTypeDefinition = (
     const hasSpecificationExtensions =
       isSchemaObject(schema) && '$ref' in schema && schema.$ref === '#/$defs/specification-extensions'
 
+    // Collect allOf $ref intersections (excluding specification-extensions, which is handled separately)
+    const allOfIntersections: string[] = []
+    if (isSchemaObject(schema) && Array.isArray(schema.allOf)) {
+      for (const entry of schema.allOf) {
+        if (
+          isSchemaObject(entry) &&
+          entry.$ref &&
+          entry.$ref !== '#/$defs/specification-extensions'
+        ) {
+          allOfIntersections.push(refToName(entry.$ref))
+        }
+      }
+    }
+
     // Build the type definition with JSDoc header if documentation is available
     let result = ''
     if (documentation) {
@@ -499,13 +513,19 @@ export const generateTypeDefinition = (
       result += `*/\n`
     }
 
-    // If specification-extensions is referenced, create an intersection type
+    let typeBody = '{\n' + properties + '\n}'
+
+    for (const intersectionType of allOfIntersections) {
+      typeBody += ' & ' + intersectionType
+    }
+
+    // If specification-extensions is referenced, append the x-extension intersection
     if (hasSpecificationExtensions) {
       // biome-ignore lint/suspicious/noTemplateCurlyInString: We want the template string to write the type
-      result += 'export type ' + typeName + ' = {\n' + properties + '\n} & Record<`x-${string}`, unknown>;'
-    } else {
-      result += 'export type ' + typeName + ' = {\n' + properties + '\n};'
+      typeBody += ' & Record<`x-${string}`, unknown>'
     }
+
+    result += 'export type ' + typeName + ' = ' + typeBody + ';'
 
     return result
   }

@@ -595,7 +595,20 @@ const generateObjectParser = (schema: JSONSchema, typeName: string, useRefImport
     readonly propSchema: JSONSchema
   }[] = []
 
-  let canFastPath = true
+  // Disable fast path when allOf $ref parsers need to be spread — the fast path
+  // returns input as-is and would skip those coercions.
+  const hasAllOfRefParsers =
+    useRefImports &&
+    isSchemaObject(schema) &&
+    hasAllOf(schema) &&
+    schema.allOf.some(
+      (entry) =>
+        isSchemaObject(entry) &&
+        hasRef(entry) &&
+        entry.$ref !== '#/$defs/specification-extensions',
+    )
+
+  let canFastPath = !hasAllOfRefParsers
   const fastPathChecks: string[] = []
 
   for (const [key, propSchema] of properties) {
@@ -645,6 +658,21 @@ const generateObjectParser = (schema: JSONSchema, typeName: string, useRefImport
   // Generate slow-path object construction
   const objectLines: string[] = []
   objectLines.push('    ...input,')
+
+  // Spread allOf $ref parsers (excluding specification-extensions) so their
+  // field coercions are applied before the explicit property validations below.
+  if (useRefImports && isSchemaObject(schema) && hasAllOf(schema)) {
+    for (const entry of schema.allOf) {
+      if (
+        isSchemaObject(entry) &&
+        hasRef(entry) &&
+        entry.$ref !== '#/$defs/specification-extensions'
+      ) {
+        const parserName = generateParserName(refToName(entry.$ref))
+        objectLines.push(`    ...${parserName}(input),`)
+      }
+    }
+  }
 
   for (const { key, varName, isRequired, propSchema } of propInfo) {
     const shouldCache = shouldCacheVariable(propSchema, canFastPath, useRefImports)

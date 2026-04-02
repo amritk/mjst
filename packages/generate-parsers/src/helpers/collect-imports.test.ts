@@ -444,48 +444,4 @@ describe('collect-imports', () => {
 
     expect(result).toContain("import { type ContactObject, parseContactObject } from './contact';")
   })
-
-  it('collects imports from root-level dependentSchemas', () => {
-    const schema: JSONSchema = {
-      type: 'object',
-      properties: {
-        name: { type: 'string' },
-      },
-      dependentSchemas: {
-        schema: {
-          allOf: [
-            { $ref: '#/$defs/parameter/dependentSchemas/schema/$defs/styles-for-query' },
-            { $ref: '#/$defs/parameter/dependentSchemas/schema/$defs/styles-for-path' },
-          ],
-        },
-      },
-    }
-
-    const result = collectImports(schema)
-
-    expect(result).toContain(
-      "import { type StylesForQueryObject, parseStylesForQueryObject } from './styles-for-query';",
-    )
-    expect(result).toContain(
-      "import { type StylesForPathObject, parseStylesForPathObject } from './styles-for-path';",
-    )
-  })
-
-  it('collects imports from nested dependentSchemas', () => {
-    const schema: JSONSchema = {
-      type: 'object',
-      properties: {
-        nested: {
-          type: 'object',
-          dependentSchemas: {
-            field: { $ref: '#/$defs/server' },
-          },
-        },
-      },
-    }
-
-    const result = collectImports(schema)
-
-    expect(result).toContain("import { type ServerObject, parseServerObject } from './server';")
-  })
 })

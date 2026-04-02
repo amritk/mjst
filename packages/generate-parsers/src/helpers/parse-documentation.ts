@@ -62,23 +62,33 @@ export const parseDocumentation = (
     const descriptionMatch = sectionContent.match(/^([\s\S]*?)(?=\n?#####|$)/)
     const description = descriptionMatch?.[1]?.trim().replace(/\n/g, ' ') || ''
 
-    // Extract the Fixed Fields table
-    const tableRegex = /##### Fixed Fields\s*\n([\s\S]*?)(?=\n#####|This object MAY be extended|$)/
-    const tableMatch = sectionContent.match(tableRegex)
+    // Extract all Fixed Fields tables within the section (some objects like Encoding Object
+    // split their fields across multiple sub-tables under different ###### headings).
+    // Capture everything from the first "##### Fixed Fields" to the end of the section —
+    // the section content is already bounded by the outer #### regex so we don't need
+    // a stop condition here.
+    const fixedFieldsRegex = /##### Fixed Fields\s*\n([\s\S]*)/
+    const fixedFieldsMatch = sectionContent.match(fixedFieldsRegex)
 
     const properties: Record<string, PropertyDocumentation> = {}
 
-    if (tableMatch?.[1]) {
-      const tableContent = tableMatch[1]
+    if (fixedFieldsMatch?.[1]) {
+      const fixedFieldsContent = fixedFieldsMatch[1]
 
-      // Parse markdown table rows
-      const lines = tableContent.split('\n')
+      // Parse all markdown table rows across all sub-tables within the Fixed Fields section
+      const lines = fixedFieldsContent.split('\n')
       let inTable = false
 
       for (const line of lines) {
         // Skip the header row and separator row
         if (line.includes('Field Name') || line.includes('---|')) {
           inTable = true
+          continue
+        }
+
+        // A ###### sub-heading resets inTable so we re-enter on the next header row
+        if (line.startsWith('#')) {
+          inTable = false
           continue
         }
 
@@ -105,7 +115,17 @@ export const parseDocumentation = (
           // Replace relative anchor links with full URLs using the base URL
           fieldDescription = fieldDescription.replace(/\(#([^)]+)\)/g, `(${baseUrl}#$1)`)
 
-          if (fieldName && !fieldName.includes('Field Name')) {
+          // Only accept field names that look like valid identifiers (camelCase or plain words).
+          // This filters out rows from non-field tables (e.g. type/contentType default tables)
+          // where the "field name" column contains type annotations like `string` or [_absent_].
+          const isValidFieldName =
+            fieldName &&
+            !fieldName.includes('Field Name') &&
+            !fieldName.startsWith('`') &&
+            !fieldName.startsWith('[') &&
+            /^[a-zA-Z]/.test(fieldName)
+
+          if (isValidFieldName) {
             properties[fieldName] = {
               description: fieldDescription,
               isRequired,

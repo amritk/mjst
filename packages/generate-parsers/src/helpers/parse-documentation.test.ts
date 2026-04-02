@@ -216,6 +216,44 @@ description | string | A brief description.
     expect(result?.properties).not.toHaveProperty('description')
   })
 
+  it('collects properties from multiple sub-tables within a single Fixed Fields section', () => {
+    const mdMultiTable = `
+#### Encoding Object
+
+Encoding description.
+
+##### Fixed Fields
+
+###### Common Fixed Fields
+
+| Field Name | Type | Description |
+| ---- | :----: | ---- |
+| contentType | \`string\` | The content type. |
+| headers | Map | A map of headers. |
+
+This object MAY be extended with Specification Extensions.
+
+###### Fixed Fields for RFC6570-style Serialization
+
+| Field Name | Type | Description |
+| ---- | :----: | ---- |
+| style | \`string\` | The style. |
+| explode | \`boolean\` | Whether to explode. |
+| allowReserved | \`boolean\` | Whether to allow reserved. |
+
+#### Next Object
+
+Next description.
+`
+    const result = parseDocumentation(mdMultiTable, 'https://example.com#encoding-object')
+    expect(result?.properties).toHaveProperty('contentType')
+    expect(result?.properties).toHaveProperty('headers')
+    expect(result?.properties).toHaveProperty('style')
+    expect(result?.properties).toHaveProperty('explode')
+    expect(result?.properties).toHaveProperty('allowReserved')
+    expect(result?.properties['style']?.description).toBe('The style.')
+  })
+
   it('ignores fallback when fallback section also has no properties', () => {
     const mdNoProperties = `
 #### Header Object
