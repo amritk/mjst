@@ -12,6 +12,79 @@ import type { SchemaExtensions } from '#types/schema-extensions'
 import { generateFile } from './generate-files'
 
 /**
+ * Checks whether a resolved schema is a pure property-mixin: it only contributes
+ * `properties` (and optionally `not`/`required`) with no structural keywords like
+ * `type`, `if`, `then`, `else`, `additionalProperties`, `$ref`, or `allOf`.
+ * These schemas are safe to inline into the parent's `properties` rather than
+ * being referenced as a typed field.
+ */
+const isPropertyMixin = (schema: Record<string, unknown>): boolean => {
+  const structuralKeys = ['type', 'if', 'then', 'else', 'additionalProperties', '$ref', 'allOf', 'oneOf', 'anyOf']
+  for (const key of structuralKeys) {
+    if (key in schema) return false
+  }
+  return 'properties' in schema
+}
+
+/**
+ * Merges properties from `allOf` $ref entries that are pure property-mixin schemas
+ * into the schema's own `properties`. This handles the OpenAPI pattern where shared
+ * fields (e.g. `example`/`examples`) are factored out into a helper definition and
+ * included via `allOf` rather than being declared directly on the object.
+ *
+ * Only refs that resolve to a property-mixin (no structural keywords) are merged.
+ * Refs like `specification-extensions` are skipped since they are already inlined
+ * as `Record<\`x-\${string}\`, unknown>` by the type generator.
+ */
+const mergeAllOfMixins = (schema: JSONSchema, rootSchema: Record<string, unknown>): JSONSchema => {
+  if (typeof schema !== 'object' || schema === null) return schema
+  if (!('allOf' in schema) || !Array.isArray(schema.allOf)) return schema
+
+  const mixinProperties: Record<string, JSONSchema> = {}
+
+  for (const entry of schema.allOf) {
+    if (typeof entry !== 'object' || entry === null || !('$ref' in entry)) continue
+    const ref = (entry as { $ref: string }).$ref
+    if (ref === '#/$defs/specification-extensions') continue
+
+    const resolved = resolveRef(ref, rootSchema)
+    if (!resolved || !isPropertyMixin(resolved)) continue
+
+    const props = resolved.properties as Record<string, JSONSchema> | undefined
+    if (!props) continue
+
+    for (const key in props) {
+      mixinProperties[key] = props[key] as JSONSchema
+    }
+  }
+
+  if (Object.keys(mixinProperties).length === 0) return schema
+
+  const existingProperties =
+    'properties' in schema && typeof schema.properties === 'object' && schema.properties !== null
+      ? (schema.properties as Record<string, JSONSchema>)
+      : {}
+
+  // Remove merged mixin refs from allOf so collectImports doesn't emit dead imports for them
+  const remainingAllOf = (schema.allOf as JSONSchema[]).filter((entry) => {
+    if (typeof entry !== 'object' || entry === null || !('$ref' in entry)) return true
+    const ref = (entry as { $ref: string }).$ref
+    if (ref === '#/$defs/specification-extensions') return true
+    const resolved = resolveRef(ref, rootSchema)
+    return !resolved || !isPropertyMixin(resolved)
+  })
+
+  return {
+    ...schema,
+    ...(remainingAllOf.length > 0 ? { allOf: remainingAllOf } : { allOf: undefined }),
+    properties: {
+      ...mixinProperties,
+      ...existingProperties,
+    },
+  }
+}
+
+/**
  * Represents a generated file with its filename and content.
  */
 export type GeneratedFile = {
@@ -120,9 +193,10 @@ export const buildSchema = async (
 
   // Generate file for the root schema, applying any matching extensions
   const processedRootSchema = resolveDynamicRefs(rootSchema, dynamicRefMap)
+  const mixinMergedRootSchema = mergeAllOfMixins(processedRootSchema, rootSchema as Record<string, unknown>)
   const extendedRootSchema = extensions
-    ? applySchemaExtensions(processedRootSchema, rootTypeName.toLowerCase(), extensions)
-    : processedRootSchema
+    ? applySchemaExtensions(mixinMergedRootSchema, rootTypeName.toLowerCase(), extensions)
+    : mixinMergedRootSchema
   const rootContent = generateFile(extendedRootSchema, rootTypeName, markdownDocumentation, {
     typesOnly: typesOnly ?? false,
   })
@@ -167,7 +241,8 @@ export const buildSchema = async (
     const typeName = refToName(ref)
     const filename = refToFilename(ref)
     const processedSchema = resolveDynamicRefs(resolvedSchema as JSONSchema, dynamicRefMap)
-    const extendedSchema = extensions ? applySchemaExtensions(processedSchema, filename, extensions) : processedSchema
+    const mixinMergedSchema = mergeAllOfMixins(processedSchema, rootSchema as Record<string, unknown>)
+    const extendedSchema = extensions ? applySchemaExtensions(mixinMergedSchema, filename, extensions) : mixinMergedSchema
     const content = generateFile(extendedSchema, typeName, markdownDocumentation, { typesOnly: typesOnly ?? false })
 
     if (filename !== 'schema') {
@@ -186,9 +261,18 @@ export const buildSchema = async (
     }
   }
 
-  // Runtime helper files are only needed when parsers are generated.
-  // In types-only mode, skip them entirely since there is no runtime validation code.
-  if (!typesOnly) {
+  // In types-only mode, emit a lightweight schema.ts with only the SchemaObject type
+  // definitions (no runtime parser code or mjst-helpers imports). The full template
+  // is only needed when parsers are generated.
+  if (typesOnly) {
+    const schemaTypesTemplatePath = join(import.meta.dir, '../templates/schema-types.ts')
+    const schemaTypesTemplateContent = await Bun.file(schemaTypesTemplatePath).text()
+
+    files.push({
+      filename: 'schema.ts',
+      content: schemaTypesTemplateContent,
+    })
+  } else {
     const schemaTemplatePath = join(import.meta.dir, '../templates/schema.ts')
     const schemaTemplateContent = await Bun.file(schemaTemplatePath).text()
 

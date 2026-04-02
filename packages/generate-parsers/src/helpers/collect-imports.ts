@@ -150,6 +150,18 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
     if ('else' in record) {
       collectRefsFromValue(record.else)
     }
+
+    // Traverse into dependentSchemas values
+    if (
+      'dependentSchemas' in record &&
+      typeof record.dependentSchemas === 'object' &&
+      record.dependentSchemas !== null
+    ) {
+      const depSchemas = record.dependentSchemas as Record<string, unknown>
+      for (const key in depSchemas) {
+        collectRefsFromValue(depSchemas[key])
+      }
+    }
   }
 
   // Collect refs from root-level $ref, skipping specification-extensions since
@@ -212,6 +224,18 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
   }
   if (typeof schema === 'object' && schema !== null && 'else' in schema) {
     collectRefsFromValue(schema.else)
+  }
+
+  // Collect refs from root-level dependentSchemas.
+  // OpenAPI uses dependentSchemas in parameter to conditionally apply style constraints
+  // (e.g. styles-for-query, styles-for-path) that have their own generated files.
+  if (typeof schema === 'object' && schema !== null && 'dependentSchemas' in schema) {
+    const depSchemas = (schema as Record<string, unknown>).dependentSchemas
+    if (typeof depSchemas === 'object' && depSchemas !== null) {
+      for (const key in depSchemas as Record<string, unknown>) {
+        collectRefsFromValue((depSchemas as Record<string, unknown>)[key])
+      }
+    }
   }
 
   // Convert refs to combined import statements, deduplicating by filename
