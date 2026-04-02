@@ -7,7 +7,7 @@ import type { CliConfig } from './cli-config'
  */
 export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
   // Use a mutable local type for building, then return as Partial<CliConfig>
-  const config: { schema?: string; outDir?: string; typesOnly?: boolean; docs?: string } = {}
+  const config: { schema?: string; outDir?: string; typesOnly?: boolean; docs?: string; build?: boolean } = {}
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -31,6 +31,8 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
       } else if (key === 'types-only') {
         // Accept --types-only=false to explicitly opt out, otherwise treat as true
         config.typesOnly = value !== 'false'
+      } else if (key === 'build') {
+        config.build = value !== 'false'
       }
 
       continue
@@ -61,6 +63,8 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
     } else if (arg === '--types-only') {
       // Boolean flag: presence alone enables it, no value needed
       config.typesOnly = true
+    } else if (arg === '--build') {
+      config.build = true
     }
   }
 

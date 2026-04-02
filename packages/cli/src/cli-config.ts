@@ -14,4 +14,9 @@ export type CliConfig = {
   readonly typesOnly?: boolean
   /** Path to a markdown documentation file used to enrich generated comments. */
   readonly docs?: string
+  /**
+   * When true, compile the generated TypeScript files to .js and .d.ts output.
+   * The .ts source files are removed after compilation.
+   */
+  readonly build?: boolean
 }
