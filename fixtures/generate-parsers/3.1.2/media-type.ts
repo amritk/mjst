@@ -1,5 +1,6 @@
+import type { ReferenceObject } from './reference';
 import { type EncodingObject, parseEncodingObject } from './encoding';
-import { type ExamplesObject, parseExamplesObject } from './examples';
+import { type ExampleObject, parseExampleObject } from './example';
 import { type SchemaObject, parseSchemaObject } from './schema';
 import { validateRecord } from 'mjst-helpers/validate-record';
 import { isObject } from 'mjst-helpers/is-object';
@@ -12,6 +13,10 @@ import { isObject } from 'mjst-helpers/is-object';
 * @see {@link https://spec.openapis.org/oas/v3.1#media-type-object}
 */
 export type MediaTypeObject = {
+  /** Example of the media type; see [Working With Examples](https://spec.openapis.org/oas/v3.1#working-with-examples). */
+  example?: boolean;
+  /** Examples of the media type; see [Working With Examples](https://spec.openapis.org/oas/v3.1#working-with-examples). */
+  examples?: Record<string, ExampleObject | ReferenceObject>;
   /** The schema defining the content of the request, response, parameter, or header. */
   schema?: SchemaObject;
   /** A map between a property name and its encoding information. The key, being the property name, MUST exist in the schema as a property. The `encoding` field SHALL only apply to [Request Body Objects](https://spec.openapis.org/oas/v3.1#request-body-object), and only when the media type is `multipart` or `application/x-www-form-urlencoded`. If no Encoding Object is provided for a property, the behavior is determined by the default values documented for the Encoding Object. */
@@ -20,10 +25,12 @@ export type MediaTypeObject = {
 
 export const parseMediaTypeObject = (input: unknown): MediaTypeObject => {
   if (!isObject(input)) return {};
+  const _examples = input.examples;
   const _schema = input.schema;
   const _encoding = input.encoding;
   return {
     ...input,
+    ...(_examples !== undefined && { examples: validateRecord(_examples, parseExampleObject) }),
     ...(_schema !== undefined && { schema: parseSchemaObject(_schema) }),
     ...(_encoding !== undefined && { encoding: validateRecord(_encoding, parseEncodingObject) }),
   };

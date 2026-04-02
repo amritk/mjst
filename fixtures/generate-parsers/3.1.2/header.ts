@@ -16,7 +16,9 @@ export type HeaderObject = {
   required?: boolean;
   /** Specifies that the header is deprecated and SHOULD be transitioned out of usage. Default value is `false`. */
   deprecated?: boolean;
+  /** The schema defining the type used for the header. */
   schema?: SchemaObject;
+  /** A map containing the representations for the header. The key is the media type and the value describes it. The map MUST only contain one entry. */
   content?: ContentObject;
 } & Record<`x-${string}`, unknown>;
 

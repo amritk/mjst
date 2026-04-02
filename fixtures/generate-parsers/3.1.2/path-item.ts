@@ -13,7 +13,6 @@ import { isObject } from 'mjst-helpers/is-object';
 * @see {@link https://spec.openapis.org/oas/v3.1#path-item-object}
 */
 export type PathItemObject = {
-  /** Allows for a referenced definition of this path item. The value MUST be in the form of a URI, and the referenced structure MUST be in the form of a [Path Item Object](https://spec.openapis.org/oas/v3.1#path-item-object). In case a Path Item Object field appears both in the defined object and the referenced object, the behavior is undefined. See the rules for resolving [Relative References](https://spec.openapis.org/oas/v3.1#relative-references-in-api-description-uris). <br><br>_**Note:** The behavior of `$ref` with adjacent properties is likely to change in future versions of this specification to bring it into closer alignment with the behavior of the [Reference Object](https://spec.openapis.org/oas/v3.1#reference-object)._ */
   $ref?: string;
   /** An optional string summary, intended to apply to all operations in this path. */
   summary?: string;
