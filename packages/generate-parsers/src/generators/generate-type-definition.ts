@@ -137,6 +137,10 @@ const getTypeScriptType = (schema: JSONSchema): string => {
 
   // Handle $ref
   if (schema.$ref) {
+    // External refs (e.g. http://json-schema.org/...) cannot be resolved locally — treat as unknown
+    if (!schema.$ref.startsWith('#')) {
+      return 'unknown'
+    }
     // Extract the type name from the $ref (e.g., "#/$defs/contact" -> "Contact")
     const typeName = refToName(schema.$ref)
     // Check if this is a -or-reference ref and add the union type
@@ -230,7 +234,18 @@ const getTypeScriptType = (schema: JSONSchema): string => {
     }
 
     if (schema.patternProperties && typeof schema.patternProperties === 'object') {
-      // Get the first pattern property value without allocating an array
+      // Skip ^x- vendor extension patterns; use the first non-extension pattern
+      for (const patternKey in schema.patternProperties) {
+        if (patternKey.startsWith('^x-') || patternKey === '^x-') continue
+        const value = schema.patternProperties[patternKey]
+        if (value !== undefined) {
+          if (typeof value === 'boolean') {
+            return `Record<string, ${getBooleanSubSchemaType(value)}>`
+          }
+          return `Record<string, ${getTypeScriptType(value)}>`
+        }
+      }
+      // Fall back to first pattern if all are extension patterns
       for (const patternKey in schema.patternProperties) {
         const value = schema.patternProperties[patternKey]
         if (value !== undefined) {
@@ -332,14 +347,20 @@ const getTypeScriptType = (schema: JSONSchema): string => {
         const additionalPropType = getTypeScriptType(schema.additionalProperties)
         return `Record<string, ${additionalPropType}>`
       }
-      // Handle patternProperties as a Record type
+      // Handle patternProperties as a Record type, skipping ^x- vendor extension patterns
       if (schema.patternProperties && typeof schema.patternProperties === 'object') {
-        // Get the first pattern property value without allocating an array
         for (const patternKey in schema.patternProperties) {
-          const firstPatternVal = schema.patternProperties[patternKey]
-          if (firstPatternVal) {
-            const patternPropType = getTypeScriptType(firstPatternVal)
-            return `Record<string, ${patternPropType}>`
+          if (patternKey.startsWith('^x-') || patternKey === '^x-') continue
+          const patternVal = schema.patternProperties[patternKey]
+          if (patternVal) {
+            return `Record<string, ${getTypeScriptType(patternVal)}>`
+          }
+        }
+        // Fall back to first pattern if all are extension patterns
+        for (const patternKey in schema.patternProperties) {
+          const patternVal = schema.patternProperties[patternKey]
+          if (patternVal) {
+            return `Record<string, ${getTypeScriptType(patternVal)}>`
           }
           break
         }
@@ -457,11 +478,20 @@ export const generateTypeDefinition = (
 
     // Handle objects with only patternProperties (no fixed properties)
     if (!hasProperties && hasPatternProperties && normalizedSchema.patternProperties) {
-      // Get the first pattern property value without allocating an array
+      // Find the first non-extension pattern property (skip ^x- vendor extension patterns,
+      // which are inlined as Record<`x-${string}`, unknown> and don't represent the primary type)
       let firstPatternProperty: JSONSchema | undefined
       for (const ppKey in normalizedSchema.patternProperties) {
+        if (ppKey.startsWith('^x-') || ppKey === '^x-') continue
         firstPatternProperty = normalizedSchema.patternProperties[ppKey]
         break
+      }
+      // Fall back to the first pattern property if all are extension patterns
+      if (firstPatternProperty === undefined) {
+        for (const ppKey in normalizedSchema.patternProperties) {
+          firstPatternProperty = normalizedSchema.patternProperties[ppKey]
+          break
+        }
       }
       if (firstPatternProperty === undefined) {
         return `export type ${typeName} = Record<string, unknown>;`

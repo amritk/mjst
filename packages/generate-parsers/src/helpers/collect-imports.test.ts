@@ -52,10 +52,38 @@ describe('collect-imports', () => {
     expect(result).toEqual(["import { type PathItemObject, parsePathItemObject } from './path-item';"])
   })
 
-  it('collects imports from patternProperties with $ref', () => {
+  it('collects imports from non-extension patternProperties with $ref', () => {
     const schema: JSONSchema = {
       type: 'object',
       patternProperties: {
+        '^/': { $ref: '#/$defs/path-item' },
+      },
+    }
+
+    const result = collectImports(schema)
+
+    expect(result).toEqual(["import { type PathItemObject, parsePathItemObject } from './path-item';"])
+  })
+
+  it('does not collect imports from ^x- vendor extension patternProperties', () => {
+    // ^x- patterns are inlined as Record<`x-${string}`, unknown> and produce no named import.
+    const schema: JSONSchema = {
+      type: 'object',
+      patternProperties: {
+        '^x-': { $ref: '#/$defs/vendor-extension' },
+      },
+    }
+
+    const result = collectImports(schema)
+
+    expect(result).toEqual([])
+  })
+
+  it('collects imports only from non-extension patterns when mixed patternProperties are present', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      patternProperties: {
+        '^x-': { $ref: '#/$defs/vendor-extension' },
         '^/': { $ref: '#/$defs/path-item' },
       },
     }
@@ -518,6 +546,21 @@ describe('collect-imports', () => {
     const result = collectImports(schema, { selfRef: '#/$defs/encoding' })
 
     expect(result).not.toContain("'./encoding'")
+  })
+
+  it('does not collect imports for external $refs', () => {
+    // External refs (e.g. from draft-04 schemas) cannot be resolved locally and have no generated file.
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: {
+        maximum: { $ref: 'http://json-schema.org/draft-04/schema#/properties/maximum' },
+        name: { type: 'string' },
+      },
+    }
+
+    const result = collectImports(schema)
+
+    expect(result).toEqual([])
   })
 
   it('does not generate a self-import in types-only mode', () => {

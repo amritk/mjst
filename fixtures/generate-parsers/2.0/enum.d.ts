@@ -1,1 +1,1 @@
-export type EnumObject = EnumObject;
+export type EnumObject = unknown;

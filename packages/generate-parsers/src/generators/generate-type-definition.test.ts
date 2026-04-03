@@ -1311,6 +1311,17 @@ export type SecuritySchemeObject = TypeApikeyObject | TypeHttpObject | TypeHttpB
     expect(result).toContain('export type Parameters = (ParameterObject | ReferenceObject)[];')
   })
 
+  it('generates unknown for external $ref', () => {
+    // External refs (e.g. from draft-04 schemas) cannot be resolved locally — treated as unknown.
+    const schema: JSONSchema = {
+      $ref: 'http://json-schema.org/draft-04/schema#/properties/maximum',
+    }
+
+    const result = generateTypeDefinition(schema, 'MaximumObject')
+
+    expect(result).toBe('export type MaximumObject = unknown;')
+  })
+
   it('does not emit a trailing blank line in JSDoc when there is no @see link', () => {
     const schema: JSONSchema = {
       $comment: 'A plain-text description with no URL.',

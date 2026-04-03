@@ -27,6 +27,7 @@
     "generate:fixtures:3.1.2:types": "bun run ./packages/cli/src/cli.ts --schema fixtures/3.1.2-2025-09-15.json --docs fixtures/3.1.2.md --outDir fixtures/generate-parsers/3.1.2 --types-only --build",
     "generate:fixtures:3.2.0:types": "bun run ./packages/cli/src/cli.ts --schema fixtures/3.2.0-2025-11-23.json --docs fixtures/3.2.0.md --outDir fixtures/generate-parsers/3.2.0 --types-only --build",
     "generate:fixtures:async:3.1.0:types": "bun run ./packages/cli/src/cli.ts --schema fixtures/asyncapi-3.1.0.json --docs fixtures/asyncapi-3.1.0.md --outDir fixtures/generate-parsers/asyncapi/3.1.0 --types-only --build",
+    "generate:all:types": "bun run generate:fixtures:2.0:types && bun run generate:fixtures:3.0.4:types && bun run generate:fixtures:3.1.2:types && bun run generate:fixtures:3.2.0:types && bun run generate:fixtures:async:3.1.0:types",
     "check": "bun run biome check .",
     "format": "bun run biome format --write .",
     "test": "bun test"

@@ -1,1 +1,1 @@
-export type UniqueItemsObject = UniqueItemsObject;
+export type UniqueItemsObject = unknown;

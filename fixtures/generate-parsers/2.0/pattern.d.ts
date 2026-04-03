@@ -1,1 +1,1 @@
-export type PatternObject = PatternObject;
+export type PatternObject = unknown;

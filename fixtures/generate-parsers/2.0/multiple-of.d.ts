@@ -1,1 +1,1 @@
-export type MultipleOfObject = MultipleOfObject;
+export type MultipleOfObject = unknown;

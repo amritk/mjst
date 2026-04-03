@@ -278,6 +278,18 @@ export const buildSchema = async (
     }
   }
 
+  // The schema-types template imports ReferenceObject from './reference'. When the schema
+  // uses a different name for its reference type (e.g. Swagger 2.0 uses jsonReference),
+  // emit a reference.ts shim so the template import resolves correctly.
+  const hasReferenceFile = files.some((f) => f.filename === 'reference.ts')
+  const hasJsonReferenceFile = files.some((f) => f.filename === 'json-reference.ts')
+  if (!hasReferenceFile && hasJsonReferenceFile) {
+    files.push({
+      filename: 'reference.ts',
+      content: "export type { JsonReferenceObject as ReferenceObject } from './json-reference';\n",
+    })
+  }
+
   // In types-only mode, emit a lightweight schema.ts with only the SchemaObject type
   // definitions (no runtime parser code or mjst-helpers imports). The full template
   // is only needed when parsers are generated.

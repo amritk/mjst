@@ -1,1 +1,1 @@
-export type ExclusiveMaximumObject = ExclusiveMaximumObject;
+export type ExclusiveMaximumObject = unknown;

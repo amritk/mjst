@@ -1,1 +1,1 @@
-export type ExclusiveMinimumObject = ExclusiveMinimumObject;
+export type ExclusiveMinimumObject = unknown;

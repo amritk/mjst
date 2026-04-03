@@ -1,2 +1,2 @@
-import type { VendorExtensionObject } from './vendor-extension';
-export type PathsObject = Record<string, VendorExtensionObject>;
+import type { PathItemObject } from './path-item';
+export type PathsObject = Record<string, PathItemObject>;

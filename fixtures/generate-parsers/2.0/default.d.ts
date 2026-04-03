@@ -1,1 +1,1 @@
-export type DefaultObject = DefaultObject;
+export type DefaultObject = unknown;

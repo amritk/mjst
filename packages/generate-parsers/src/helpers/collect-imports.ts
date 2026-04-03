@@ -80,10 +80,11 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
 
     const record = value as Record<string, unknown>
 
-    // If this is a $ref, add it — but skip specification-extensions since it has
-    // no generated file; its semantics are inlined as Record<`x-${string}`, unknown>.
+    // If this is a $ref, add it — but skip:
+    // - External refs (e.g. http://json-schema.org/...) which have no generated file
+    // - specification-extensions, whose semantics are inlined as Record<`x-${string}`, unknown>
     if (hasRef(record)) {
-      if (record.$ref !== '#/$defs/specification-extensions') {
+      if (record.$ref.startsWith('#') && record.$ref !== '#/$defs/specification-extensions') {
         refs.add(record.$ref)
       }
       return // Don't traverse further into a $ref
@@ -138,7 +139,8 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
       collectRefsFromValue(record.additionalProperties)
     }
 
-    // Traverse into patternProperties values
+    // Traverse non-extension patternProperties. The ^x- vendor extension pattern is
+    // inlined as Record<`x-${string}`, unknown> and does not produce a named import.
     if (
       'patternProperties' in record &&
       typeof record.patternProperties === 'object' &&
@@ -146,6 +148,7 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
     ) {
       const patternProps = record.patternProperties as Record<string, unknown>
       for (const key in patternProps) {
+        if (key.startsWith('^x-') || key === '^x-') continue
         collectRefsFromValue(patternProps[key])
       }
     }
@@ -159,12 +162,14 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
     }
   }
 
-  // Collect refs from root-level $ref, skipping specification-extensions since
-  // it has no generated file — its semantics are inlined as Record<`x-${string}`, unknown>.
+  // Collect refs from root-level $ref, skipping:
+  // - External refs (e.g. http://json-schema.org/...) which have no generated file
+  // - specification-extensions, whose semantics are inlined as Record<`x-${string}`, unknown>
   if (
     typeof schema === 'object' &&
     schema !== null &&
     hasRef(schema) &&
+    schema.$ref.startsWith('#') &&
     schema.$ref !== '#/$defs/specification-extensions'
   ) {
     refs.add(schema.$ref)
@@ -183,10 +188,12 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
     collectRefsFromValue(schema.additionalProperties)
   }
 
-  // Collect refs from root-level patternProperties
+  // Collect refs from root-level non-extension patternProperties.
+  // The ^x- vendor extension pattern is inlined and does not produce a named import.
   if (typeof schema === 'object' && schema !== null && 'patternProperties' in schema) {
     const patternProps = schema.patternProperties as Record<string, unknown>
     for (const key in patternProps) {
+      if (key.startsWith('^x-') || key === '^x-') continue
       collectRefsFromValue(patternProps[key])
     }
   }
