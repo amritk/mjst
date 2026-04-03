@@ -85,6 +85,7 @@
   },
   "definitions": {
     "info": {
+      "$comment": "https://swagger.io/specification/v2/#info-object",
       "type": "object",
       "description": "General information about the API.",
       "required": [
@@ -123,6 +124,7 @@
       }
     },
     "contact": {
+      "$comment": "https://swagger.io/specification/v2/#contact-object",
       "type": "object",
       "description": "Contact information for the owners of the API.",
       "additionalProperties": false,
@@ -149,6 +151,7 @@
       }
     },
     "license": {
+      "$comment": "https://swagger.io/specification/v2/#license-object",
       "type": "object",
       "required": [
         "name"
@@ -172,6 +175,7 @@
       }
     },
     "paths": {
+      "$comment": "https://swagger.io/specification/v2/#paths-object",
       "type": "object",
       "description": "Relative paths to the individual endpoints. They must be relative to the 'basePath'.",
       "patternProperties": {
@@ -185,6 +189,7 @@
       "additionalProperties": false
     },
     "definitions": {
+      "$comment": "https://swagger.io/specification/v2/#definitions-object",
       "type": "object",
       "additionalProperties": {
         "$ref": "#/definitions/schema"
@@ -192,6 +197,7 @@
       "description": "One or more JSON objects describing the schemas being consumed and produced by the API."
     },
     "parameterDefinitions": {
+      "$comment": "https://swagger.io/specification/v2/#parameters-definitions-object",
       "type": "object",
       "additionalProperties": {
         "$ref": "#/definitions/parameter"
@@ -199,6 +205,7 @@
       "description": "One or more JSON representations for parameters"
     },
     "responseDefinitions": {
+      "$comment": "https://swagger.io/specification/v2/#responses-definitions-object",
       "type": "object",
       "additionalProperties": {
         "$ref": "#/definitions/response"
@@ -206,6 +213,7 @@
       "description": "One or more JSON representations for responses"
     },
     "externalDocs": {
+      "$comment": "https://swagger.io/specification/v2/#external-documentation-object",
       "type": "object",
       "additionalProperties": false,
       "description": "information about external documentation",
@@ -228,6 +236,7 @@
       }
     },
     "examples": {
+      "$comment": "https://swagger.io/specification/v2/#example-object",
       "type": "object",
       "additionalProperties": true
     },
@@ -236,6 +245,7 @@
       "description": "The MIME type of the HTTP message."
     },
     "operation": {
+      "$comment": "https://swagger.io/specification/v2/#operation-object",
       "type": "object",
       "required": [
         "responses"
@@ -304,6 +314,7 @@
       }
     },
     "pathItem": {
+      "$comment": "https://swagger.io/specification/v2/#path-item-object",
       "type": "object",
       "additionalProperties": false,
       "patternProperties": {
@@ -342,6 +353,7 @@
       }
     },
     "responses": {
+      "$comment": "https://swagger.io/specification/v2/#responses-object",
       "type": "object",
       "description": "Response objects names can either be any valid HTTP status code or 'default'.",
       "minProperties": 1,
@@ -365,6 +377,7 @@
       }
     },
     "responseValue": {
+      "$comment": "https://swagger.io/specification/v2/#response-object",
       "oneOf": [
         {
           "$ref": "#/definitions/response"
@@ -375,6 +388,7 @@
       ]
     },
     "response": {
+      "$comment": "https://swagger.io/specification/v2/#response-object",
       "type": "object",
       "required": [
         "description"
@@ -408,12 +422,14 @@
       }
     },
     "headers": {
+      "$comment": "https://swagger.io/specification/v2/#headers-object",
       "type": "object",
       "additionalProperties": {
         "$ref": "#/definitions/header"
       }
     },
     "header": {
+      "$comment": "https://swagger.io/specification/v2/#header-object",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -494,6 +510,7 @@
       "additionalItems": true
     },
     "bodyParameter": {
+      "$comment": "https://swagger.io/specification/v2/#parameter-object",
       "type": "object",
       "required": [
         "name",
@@ -533,6 +550,7 @@
       "additionalProperties": false
     },
     "headerParameterSubSchema": {
+      "$comment": "https://swagger.io/specification/v2/#parameter-object",
       "additionalProperties": false,
       "patternProperties": {
         "^x-": {
@@ -621,6 +639,7 @@
       }
     },
     "queryParameterSubSchema": {
+      "$comment": "https://swagger.io/specification/v2/#parameter-object",
       "additionalProperties": false,
       "patternProperties": {
         "^x-": {
@@ -714,6 +733,7 @@
       }
     },
     "formDataParameterSubSchema": {
+      "$comment": "https://swagger.io/specification/v2/#parameter-object",
       "additionalProperties": false,
       "patternProperties": {
         "^x-": {
@@ -808,6 +828,7 @@
       }
     },
     "pathParameterSubSchema": {
+      "$comment": "https://swagger.io/specification/v2/#parameter-object",
       "additionalProperties": false,
       "patternProperties": {
         "^x-": {
@@ -901,6 +922,7 @@
       }
     },
     "nonBodyParameter": {
+      "$comment": "https://swagger.io/specification/v2/#parameter-object",
       "type": "object",
       "required": [
         "name",
@@ -923,6 +945,7 @@
       ]
     },
     "parameter": {
+      "$comment": "https://swagger.io/specification/v2/#parameter-object",
       "oneOf": [
         {
           "$ref": "#/definitions/bodyParameter"
@@ -933,6 +956,7 @@
       ]
     },
     "schema": {
+      "$comment": "https://swagger.io/specification/v2/#schema-object",
       "type": "object",
       "description": "A deterministic version of a JSON Schema object.",
       "patternProperties": {
@@ -1182,6 +1206,7 @@
       "uniqueItems": true
     },
     "securityRequirement": {
+      "$comment": "https://swagger.io/specification/v2/#security-requirement-object",
       "type": "object",
       "additionalProperties": {
         "type": "array",
@@ -1192,6 +1217,7 @@
       }
     },
     "xml": {
+      "$comment": "https://swagger.io/specification/v2/#xml-object",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -1220,6 +1246,7 @@
       }
     },
     "tag": {
+      "$comment": "https://swagger.io/specification/v2/#tag-object",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1243,6 +1270,7 @@
       }
     },
     "securityDefinitions": {
+      "$comment": "https://swagger.io/specification/v2/#security-definitions-object",
       "type": "object",
       "additionalProperties": {
         "oneOf": [
@@ -1268,6 +1296,7 @@
       }
     },
     "basicAuthenticationSecurity": {
+      "$comment": "https://swagger.io/specification/v2/#security-scheme-object",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1291,6 +1320,7 @@
       }
     },
     "apiKeySecurity": {
+      "$comment": "https://swagger.io/specification/v2/#security-scheme-object",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1326,6 +1356,7 @@
       }
     },
     "oauth2ImplicitSecurity": {
+      "$comment": "https://swagger.io/specification/v2/#security-scheme-object",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1364,6 +1395,7 @@
       }
     },
     "oauth2PasswordSecurity": {
+      "$comment": "https://swagger.io/specification/v2/#security-scheme-object",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1402,6 +1434,7 @@
       }
     },
     "oauth2ApplicationSecurity": {
+      "$comment": "https://swagger.io/specification/v2/#security-scheme-object",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1440,6 +1473,7 @@
       }
     },
     "oauth2AccessCodeSecurity": {
+      "$comment": "https://swagger.io/specification/v2/#security-scheme-object",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1483,6 +1517,7 @@
       }
     },
     "oauth2Scopes": {
+      "$comment": "https://swagger.io/specification/v2/#scopes-object",
       "type": "object",
       "additionalProperties": {
         "type": "string"
@@ -1592,6 +1627,7 @@
       "$ref": "http://json-schema.org/draft-04/schema#/properties/enum"
     },
     "jsonReference": {
+      "$comment": "https://swagger.io/specification/v2/#reference-object",
       "type": "object",
       "required": [
         "$ref"
@@ -1603,5 +1639,6 @@
         }
       }
     }
-  }
+  },
+  "$comment": "https://swagger.io/specification/v2/#swagger-object"
 }
