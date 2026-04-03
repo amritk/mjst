@@ -41,9 +41,19 @@ export const parseDocumentation = (
       sectionTitle += word.charAt(0).toUpperCase() + word.slice(1)
     }
 
+    // Detect the heading level used for object sections in this markdown file.
+    // OAS 3.1 uses #### while OAS 3.2 uses ###, so we probe for both.
+    const headingLevelMatch = markdown.match(/^(#{2,5})\s+\S.*Object\s*$/m)
+    const headingHashes = headingLevelMatch?.[1] ?? '####'
+    const subHeadingHashes = headingHashes + '#'
+
     // Find the section in the markdown
-    // Match the section heading and capture everything until the next #### heading or end of file
-    const sectionRegex = new RegExp(`####\\s+${sectionTitle}\\s*\\n([\\s\\S]*?)(?=\\n####\\s|$)`, 'i')
+    // Match the section heading and capture everything until the next same-level heading or end of file
+    const escapedHashes = headingHashes.replace(/#/g, '\\#')
+    const sectionRegex = new RegExp(
+      `${escapedHashes}\\s+${sectionTitle}\\s*\\n([\\s\\S]*?)(?=\\n${escapedHashes}\\s|$)`,
+      'i',
+    )
     const sectionMatch = markdown.match(sectionRegex)
 
     if (!sectionMatch) {
@@ -56,18 +66,19 @@ export const parseDocumentation = (
       return null
     }
 
-    // Extract the description (paragraphs before "##### Fixed Fields")
-    // \n? handles the case where sectionContent starts directly with "#####" (no leading newline),
+    // Extract the description (paragraphs before the "Fixed Fields" sub-heading)
+    // \n? handles the case where sectionContent starts directly with the sub-heading (no leading newline),
     // which happens when the section heading is followed by a blank line consumed by \s* in sectionRegex.
-    const descriptionMatch = sectionContent.match(/^([\s\S]*?)(?=\n?#####|$)/)
+    const escapedSubHashes = subHeadingHashes.replace(/#/g, '\\#')
+    const descriptionMatch = sectionContent.match(new RegExp(`^([\\s\\S]*?)(?=\\n?${escapedSubHashes}|$)`))
     const description = descriptionMatch?.[1]?.trim().replace(/\n/g, ' ') || ''
 
     // Extract all Fixed Fields tables within the section (some objects like Encoding Object
-    // split their fields across multiple sub-tables under different ###### headings).
-    // Capture everything from the first "##### Fixed Fields" to the end of the section —
-    // the section content is already bounded by the outer #### regex so we don't need
+    // split their fields across multiple sub-tables under different sub-sub-headings).
+    // Capture everything from the first "Fixed Fields" sub-heading to the end of the section —
+    // the section content is already bounded by the outer section regex so we don't need
     // a stop condition here.
-    const fixedFieldsRegex = /##### Fixed Fields\s*\n([\s\S]*)/
+    const fixedFieldsRegex = new RegExp(`${escapedSubHashes} Fixed Fields\\s*\\n([\\s\\S]*)`)
     const fixedFieldsMatch = sectionContent.match(fixedFieldsRegex)
 
     const properties: Record<string, PropertyDocumentation> = {}

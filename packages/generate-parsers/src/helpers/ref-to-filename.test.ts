@@ -37,4 +37,20 @@ describe('ref-to-filename', () => {
   it('removes -or-reference suffix from single word refs', () => {
     expect(refToFilename('#/$defs/example-or-reference')).toBe('example')
   })
+
+  it('converts PascalCase definitions keys to kebab-case', () => {
+    expect(refToFilename('#/definitions/ServerVariable')).toBe('server-variable')
+    expect(refToFilename('#/definitions/Contact')).toBe('contact')
+    expect(refToFilename('#/definitions/ExternalDocumentation')).toBe('external-documentation')
+  })
+
+  it('converts consecutive uppercase acronyms correctly', () => {
+    expect(refToFilename('#/definitions/APIKeySecurityScheme')).toBe('api-key-security-scheme')
+  })
+
+  it('handles OAuth mixed-case acronym correctly', () => {
+    expect(refToFilename('#/definitions/OAuthFlows')).toBe('oauth-flows')
+    expect(refToFilename('#/definitions/ImplicitOAuthFlow')).toBe('implicit-oauth-flow')
+    expect(refToFilename('#/definitions/OAuth2SecurityScheme')).toBe('oauth2-security-scheme')
+  })
 })
