@@ -1,10 +1,9 @@
 #!/usr/bin/env bun
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
+import { generateMarkdown } from 'generate-markdown'
 import { buildSchema } from 'generate-parsers'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-
-import { generateMarkdown } from 'generate-markdown'
 
 import { loadConfig } from './load-config'
 import { parseCliArgs } from './parse-cli-args'
@@ -86,6 +85,7 @@ const run = async (): Promise<void> => {
           module: 'ESNext',
           moduleResolution: 'bundler',
           declaration: true,
+          emitDeclarationOnly: config.typesOnly,
           skipLibCheck: true,
         },
         include: ['./**/*.ts'],

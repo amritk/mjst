@@ -262,6 +262,20 @@ export const buildSchema = async (
       continue
     }
 
+    // Skip -or-reference defs — they are if/then/else unions (e.g. Parameter | Reference)
+    // that are inlined at usage sites. Generating a file for them would collide with the
+    // canonical def that shares the same filename after the suffix is stripped.
+    if (ref.endsWith('-or-reference')) {
+      // Still extract nested refs so the canonical def (e.g. #/$defs/parameter) gets queued
+      const nestedRefs = extractRefs(resolvedSchema as JSONSchema)
+      for (const nestedRef of nestedRefs) {
+        if (!processedRefs.has(nestedRef)) {
+          refsToProcess.push(nestedRef)
+        }
+      }
+      continue
+    }
+
     // Generate file for this ref, resolving any $dynamicRef to $ref first
     // and applying any matching extensions for this definition
     const typeName = refToName(ref)

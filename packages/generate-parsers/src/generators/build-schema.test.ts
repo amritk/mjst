@@ -564,6 +564,51 @@ Custom flow description.
     expect(passwordFile?.content).not.toContain('The token URL from fallback.')
   })
 
+  it('does not generate a file for -or-reference defs', async () => {
+    // #/$defs/parameter-or-reference and #/$defs/parameter both map to the filename
+    // "parameter" via refToFilename. The -or-reference def is just an if/then/else
+    // union (Parameter | Reference) that is inlined at usage sites — it should not
+    // produce its own file, which would collide with and overwrite the real parameter.ts.
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: {
+        param: { $ref: '#/$defs/parameter-or-reference' },
+      },
+      $defs: {
+        reference: {
+          type: 'object',
+          properties: { $ref: { type: 'string' } },
+          required: ['$ref'],
+        },
+        parameter: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            in: { type: 'string' },
+          },
+          required: ['name', 'in'],
+        },
+        'parameter-or-reference': {
+          if: { type: 'object', required: ['$ref'] },
+          then: { $ref: '#/$defs/reference' },
+          else: { $ref: '#/$defs/parameter' },
+        },
+      },
+    }
+
+    const result = await buildSchema(schema, 'Document')
+    const filenames = result.map((f) => f.filename)
+
+    // Only one parameter.ts — from #/$defs/parameter, not from #/$defs/parameter-or-reference
+    expect(filenames.filter((f) => f === 'parameter.ts')).toHaveLength(1)
+    // The parameter.ts should contain the real ParameterObject type, not an empty shell
+    const parameterFile = result.find((f) => f.filename === 'parameter.ts')
+    expect(parameterFile?.content).toContain('name')
+    expect(parameterFile?.content).toContain('in')
+    // No file should be generated for the -or-reference def itself
+    expect(filenames).not.toContain('parameter-or-reference.ts')
+  })
+
   it('skips adding a nested ref to the queue when it was already processed', async () => {
     // When "common" appears first in the root properties it gets processed before "item".
     // Later, when "item" is processed and its nested refs are extracted, "common" is
