@@ -59,9 +59,11 @@ export const resolveRef = (ref: string, rootSchema: Record<string, unknown>): Re
   }
 
   // URI ref: may have a fragment (e.g. "http://foo.com/bar.json#/definitions/baz")
+  // A trailing bare "#" (e.g. "http://foo.com/schema#") means "the whole document" — treat as no fragment
   const hashIndex = ref.indexOf('#')
   const baseUri = hashIndex === -1 ? ref : ref.slice(0, hashIndex)
-  const fragment = hashIndex === -1 ? '' : ref.slice(hashIndex + 1)
+  const rawFragment = hashIndex === -1 ? '' : ref.slice(hashIndex + 1)
+  const fragment = rawFragment === '' || rawFragment === '/' ? '' : rawFragment
 
   // Look up the base URI as a key in $defs
   const defs = rootSchema['$defs']
@@ -74,6 +76,10 @@ export const resolveRef = (ref: string, rootSchema: Record<string, unknown>): Re
   // No fragment — return the definition directly
   if (!fragment) return base as Record<string, unknown>
 
+  // Normalize the fragment: draft-07 schemas use `/definitions/` but after
+  // upgradeDraft07Schema the key is renamed to `/$defs/`
+  const normalizedFragment = fragment.replace(/^\/definitions\//, '/$defs/')
+
   // Navigate the fragment within the resolved definition
-  return navigatePointer(fragment, base as Record<string, unknown>)
+  return navigatePointer(normalizedFragment, base as Record<string, unknown>)
 }

@@ -191,6 +191,7 @@ export const buildSchema = async (
 
   const files: GeneratedFile[] = []
   const processedRefs = new Set<string>()
+  const processedFilenames = new Set<string>()
   const refsToProcess: string[] = []
 
   // Build a map of $dynamicRef anchors to their $ref paths so we can
@@ -205,10 +206,12 @@ export const buildSchema = async (
     : mixinMergedRootSchema
   const rootContent = generateFile(extendedRootSchema, rootTypeName, markdownDocumentation, {
     typesOnly: typesOnly ?? false,
+    rootSchema: rootSchema as Record<string, unknown>,
   })
   const rootFilename = rootTypeName.toLowerCase()
 
   if (rootFilename !== 'schema') {
+    processedFilenames.add(rootFilename)
     files.push({
       filename: `${rootFilename}.ts`,
       content: rootContent,
@@ -268,9 +271,11 @@ export const buildSchema = async (
     const content = generateFile(extendedSchema, typeName, markdownDocumentation, {
       typesOnly: typesOnly ?? false,
       selfRef: ref,
+      rootSchema: rootSchema as Record<string, unknown>,
     })
 
-    if (filename !== 'schema') {
+    if (filename !== 'schema' && !processedFilenames.has(filename)) {
+      processedFilenames.add(filename)
       files.push({
         filename: `${filename}.ts`,
         content,

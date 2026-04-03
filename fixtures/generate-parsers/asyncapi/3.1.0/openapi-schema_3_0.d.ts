@@ -1,5 +1,7 @@
-import type { #Object } from './#';
-import type { ReferenceObject } from './reference';
+import type { OpenapiSchema_3_0DiscriminatorObject } from './openapi-schema_3_0-discriminator';
+import type { OpenapiSchema_3_0ExternalDocumentationObject } from './openapi-schema_3_0-external-documentation';
+import type { OpenapiSchema_3_0ReferenceObject } from './openapi-schema_3_0-reference';
+import type { OpenapiSchema_3_0XmlObject } from './openapi-schema_3_0-xml';
 export type OpenapiSchema_3_0Object = {
     title?: string;
     multipleOf?: number;
@@ -18,10 +20,22 @@ export type OpenapiSchema_3_0Object = {
     required?: string[];
     enum?: boolean[];
     type?: "array" | "boolean" | "integer" | "number" | "object" | "string";
-    not?: #Object | ReferenceObject;
-    allOf?: (#Object | ReferenceObject)[];
-    oneOf?: (#Object | ReferenceObject)[];
-    anyOf?: (#Object | ReferenceObject)[];
-    items?: #Object | ReferenceObject;
-    properties?: Record<string>;
+    not?: OpenapiSchema_3_0Object | OpenapiSchema_3_0ReferenceObject;
+    allOf?: (OpenapiSchema_3_0Object | OpenapiSchema_3_0ReferenceObject)[];
+    oneOf?: (OpenapiSchema_3_0Object | OpenapiSchema_3_0ReferenceObject)[];
+    anyOf?: (OpenapiSchema_3_0Object | OpenapiSchema_3_0ReferenceObject)[];
+    items?: OpenapiSchema_3_0Object | OpenapiSchema_3_0ReferenceObject;
+    properties?: Record<string, OpenapiSchema_3_0Object | OpenapiSchema_3_0ReferenceObject>;
+    additionalProperties?: OpenapiSchema_3_0Object | OpenapiSchema_3_0ReferenceObject | boolean;
+    description?: string;
+    format?: string;
+    default?: boolean;
+    nullable?: boolean;
+    discriminator?: OpenapiSchema_3_0DiscriminatorObject;
+    readOnly?: boolean;
+    writeOnly?: boolean;
+    example?: boolean;
+    externalDocs?: OpenapiSchema_3_0ExternalDocumentationObject;
+    deprecated?: boolean;
+    xml?: OpenapiSchema_3_0XmlObject;
 };

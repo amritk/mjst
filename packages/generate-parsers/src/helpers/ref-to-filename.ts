@@ -45,19 +45,30 @@ const uriRefToFilename = (uri: string): string => {
   const withoutProtocol = baseUri.replace(/^https?:\/\/[^/]+\//, '')
   const withoutExt = withoutProtocol.replace(/\.json$/, '')
 
-  // Drop structural/noise segments: version numbers (e.g. "3.1.0"), "definitions", "$defs"
-  const SKIP_SEGMENTS = new Set(['definitions', '$defs'])
-  const segments = withoutExt
-    .split('/')
-    .filter((s) => !SKIP_SEGMENTS.has(s) && !/^\d+\.\d+/.test(s))
+  // Drop structural/noise segments:
+  // - "definitions" and "$defs" container keys
+  // - Version numbers that immediately follow "definitions" (e.g. "3.1.0" in "definitions/3.1.0/channel")
+  //   but NOT version numbers in other positions (e.g. "0.5.0" in "bindings/kafka/0.5.0/channel")
+  //   since those are needed to disambiguate multiple versions of the same binding
+  const rawSegments = withoutExt.split('/')
+  const SKIP_KEYS = new Set(['definitions', '$defs'])
+  const segments: string[] = []
+  for (let i = 0; i < rawSegments.length; i++) {
+    const s = rawSegments[i] as string
+    if (SKIP_KEYS.has(s)) continue
+    // Skip a version segment only if the previous (non-skipped) segment was "definitions"
+    const prevRaw = rawSegments[i - 1]
+    if (/^\d+\.\d+/.test(s) && prevRaw !== undefined && SKIP_KEYS.has(prevRaw)) continue
+    segments.push(s)
+  }
 
-  // Join remaining segments and convert to kebab-case
-  const baseName = segments.map(toKebabCase).join('-')
+  // Join remaining segments, converting to kebab-case and replacing dots with dashes
+  const baseName = segments.map((s) => toKebabCase(s).replace(/\./g, '-')).join('-')
 
   if (!fragment) return baseName
 
   // Append the last meaningful segment of the fragment, skipping structural keys
-  const fragSegments = fragment.split('/').filter((s) => s && !SKIP_SEGMENTS.has(s) && s !== 'properties')
+  const fragSegments = fragment.split('/').filter((s) => s && !SKIP_KEYS.has(s) && s !== 'properties')
   const fragLast = fragSegments[fragSegments.length - 1]
   if (!fragLast) return baseName
 

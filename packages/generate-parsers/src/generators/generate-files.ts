@@ -20,6 +20,11 @@ type GenerateFileOptions = {
    * the import list, preventing a file from importing itself.
    */
   readonly selfRef?: string
+  /**
+   * The root schema document. When provided, URI refs that cannot be resolved
+   * within the root schema's $defs are excluded from the import list.
+   */
+  readonly rootSchema?: Record<string, unknown>
 }
 
 /**
@@ -60,11 +65,12 @@ export const generateFile = (
 ): string => {
   const typesOnly = options?.typesOnly === true
   const selfRef = options?.selfRef
+  const rootSchema = options?.rootSchema
   const typeDefinition = generateTypeDefinition(schema, typeName, markdownDocumentation)
 
   if (typesOnly) {
     // In types-only mode, skip the parser function and use type-only imports
-    const imports = collectImports(schema, { typesOnly: true, selfRef })
+    const imports = collectImports(schema, { typesOnly: true, selfRef, rootSchema })
     let result = ''
 
     if (imports.length > 0) {
@@ -79,7 +85,7 @@ export const generateFile = (
   }
 
   const parserFunction = generateParserFunction(schema, typeName, { useRefImports: true })
-  const imports = [...collectImports(schema, { selfRef }), ...collectHelpers(parserFunction)]
+  const imports = [...collectImports(schema, { selfRef, rootSchema }), ...collectHelpers(parserFunction)]
 
   // Build file output using string concatenation instead of array join for performance
   let result = ''

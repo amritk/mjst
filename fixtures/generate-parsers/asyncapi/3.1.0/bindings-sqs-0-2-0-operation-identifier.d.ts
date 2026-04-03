@@ -1,0 +1,6 @@
+export type BindingsSqs020OperationIdentifierObject = {
+    /** The target is an ARN. For example, for SQS, the identifier may be an ARN, which will be of the form: arn:aws:sqs:{region}:{account-id}:{queueName} */
+    arn?: string;
+    /** The endpoint is identified by a name, which corresponds to an identifying field called 'name' of a binding for that protocol on this publish Operation Object. For example, if the protocol is 'sqs' then the name refers to the name field sqs binding. */
+    name?: string;
+};

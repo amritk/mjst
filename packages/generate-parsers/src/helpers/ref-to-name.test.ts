@@ -49,7 +49,7 @@ describe('ref-to-name', () => {
 
   it('derives type name from a URI ref with a fragment', () => {
     expect(refToName('http://asyncapi.com/bindings/sns/0.1.0/channel.json#/definitions/queue')).toBe(
-      'BindingsSnsChannelQueueObject',
+      'BindingsSns010ChannelQueueObject',
     )
   })
 

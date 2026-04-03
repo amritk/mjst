@@ -59,13 +59,13 @@ describe('ref-to-filename', () => {
     expect(refToFilename('http://asyncapi.com/definitions/3.1.0/info.json')).toBe('info')
   })
 
-  it('derives filename from a URI binding ref', () => {
-    expect(refToFilename('http://asyncapi.com/bindings/kafka/0.5.0/channel.json')).toBe('bindings-kafka-channel')
+  it('derives filename from a URI binding ref including version for disambiguation', () => {
+    expect(refToFilename('http://asyncapi.com/bindings/kafka/0.5.0/channel.json')).toBe('bindings-kafka-0-5-0-channel')
   })
 
   it('derives filename from a URI ref with a fragment', () => {
     expect(refToFilename('http://asyncapi.com/bindings/sns/0.1.0/channel.json#/definitions/queue')).toBe(
-      'bindings-sns-channel-queue',
+      'bindings-sns-0-1-0-channel-queue',
     )
   })
 

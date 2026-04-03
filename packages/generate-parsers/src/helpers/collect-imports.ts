@@ -2,6 +2,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from '#type-guards/schema-guards'
 import { refToFilename } from './ref-to-filename'
 import { refToName } from './ref-to-name'
+import { resolveRef } from './resolve-ref'
 
 const getImportPathForFilename = (filename: string): string => `./${filename}`
 
@@ -20,6 +21,12 @@ type CollectImportsOptions = {
    * the import list, preventing a file from importing itself.
    */
   readonly selfRef?: string
+  /**
+   * The root schema document. When provided, URI refs that cannot be resolved
+   * within the root schema's $defs are excluded from the import list, preventing
+   * imports for external schemas that were never generated as files.
+   */
+  readonly rootSchema?: Record<string, unknown>
 }
 
 /**
@@ -64,6 +71,7 @@ type CollectImportsOptions = {
 export const collectImports = (schema: JSONSchema, options?: CollectImportsOptions): string[] => {
   const typesOnly = options?.typesOnly === true
   const selfFilename = options?.selfRef ? refToFilename(options.selfRef) : undefined
+  const rootSchema = options?.rootSchema
   const refs = new Set<string>()
 
   const collectRefsFromValue = (value: unknown): void => {
@@ -81,11 +89,16 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
     const record = value as Record<string, unknown>
 
     // If this is a $ref, add it — but skip:
-    // - External refs (e.g. http://json-schema.org/...) which have no generated file
     // - specification-extensions, whose semantics are inlined as Record<`x-${string}`, unknown>
+    // - Relative path refs (e.g. /components/messages/foo) which point into example data
+    // - URI refs with fragments pointing into `properties` (not standalone definitions)
     if (hasRef(record)) {
-      if (record.$ref.startsWith('#') && record.$ref !== '#/$defs/specification-extensions') {
-        refs.add(record.$ref)
+      const ref = record.$ref
+      const isInternal = ref.startsWith('#') && ref !== '#/$defs/specification-extensions'
+      const isUri = ref.startsWith('http://') || ref.startsWith('https://')
+      const isPropertyFragment = isUri && ref.includes('#/properties/')
+      if (isInternal || (isUri && !isPropertyFragment)) {
+        refs.add(ref)
       }
       return // Don't traverse further into a $ref
     }
@@ -163,16 +176,16 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
   }
 
   // Collect refs from root-level $ref, skipping:
-  // - External refs (e.g. http://json-schema.org/...) which have no generated file
   // - specification-extensions, whose semantics are inlined as Record<`x-${string}`, unknown>
-  if (
-    typeof schema === 'object' &&
-    schema !== null &&
-    hasRef(schema) &&
-    schema.$ref.startsWith('#') &&
-    schema.$ref !== '#/$defs/specification-extensions'
-  ) {
-    refs.add(schema.$ref)
+  // - Relative path refs (e.g. /components/messages/foo) which point into example data
+  if (typeof schema === 'object' && schema !== null && hasRef(schema)) {
+    const ref = schema.$ref
+    const isInternal = ref.startsWith('#') && ref !== '#/$defs/specification-extensions'
+    const isUri = ref.startsWith('http://') || ref.startsWith('https://')
+    const isPropertyFragment = isUri && ref.includes('#/properties/')
+    if (isInternal || (isUri && !isPropertyFragment)) {
+      refs.add(ref)
+    }
   }
 
   // Collect refs from properties
@@ -238,6 +251,12 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
   let needsReferenceImport = false
 
   for (const ref of refs) {
+    // For URI refs, skip if the base URI is not resolvable in the root schema.
+    // This prevents generating imports for external schemas that were never generated as files.
+    if (rootSchema !== undefined && (ref.startsWith('http://') || ref.startsWith('https://'))) {
+      if (!resolveRef(ref, rootSchema)) continue
+    }
+
     const typeName = refToName(ref)
     const filename = refToFilename(ref)
 
