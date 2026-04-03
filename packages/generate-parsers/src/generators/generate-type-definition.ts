@@ -112,8 +112,8 @@ const buildJsDocBlock = (documentation: ObjectDocumentation, commentUrl: string 
   block += `* ${documentation.title}\n`
   block += `*\n`
   block += `* ${documentation.description}\n`
-  block += `* \n`
   if (commentUrl?.startsWith('http')) {
+    block += `* \n`
     block += `* @see {@link ${commentUrl}}\n`
   }
   block += `*/\n`

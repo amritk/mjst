@@ -1627,7 +1627,8 @@
             "scopes"
           ],
           "$ref": "#/$defs/specification-extensions",
-          "unevaluatedProperties": false
+          "unevaluatedProperties": false,
+          "$comment": "https://spec.openapis.org/oas/v3.2#oauth-flow-object"
         }
       },
       "$comment": "https://spec.openapis.org/oas/v3.2#oauth-flows-object"

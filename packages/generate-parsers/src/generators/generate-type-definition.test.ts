@@ -1310,4 +1310,19 @@ export type SecuritySchemeObject = TypeApikeyObject | TypeHttpObject | TypeHttpB
     expect(result).toContain('A list of parameters applicable to the operation.')
     expect(result).toContain('export type Parameters = (ParameterObject | ReferenceObject)[];')
   })
+
+  it('does not emit a trailing blank line in JSDoc when there is no @see link', () => {
+    const schema: JSONSchema = {
+      $comment: 'A plain-text description with no URL.',
+      type: 'object',
+      properties: {
+        value: { type: 'string' },
+      },
+    }
+
+    const result = generateTypeDefinition(schema, 'PlainCommentObject')
+
+    expect(result).toMatch(/\* A plain-text description with no URL\.\n\*\//)
+    expect(result).not.toContain('* \n*/')
+  })
 })
