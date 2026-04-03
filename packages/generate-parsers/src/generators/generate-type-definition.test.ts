@@ -1282,4 +1282,32 @@ export type SecuritySchemeObject = TypeApikeyObject | TypeHttpObject | TypeHttpB
 
     expect(result).toBe('export type Parameters = (ParameterObject | ReferenceObject)[];')
   })
+
+  it('emits JSDoc for non-object schemas with a $comment URL', () => {
+    const schema: JSONSchema = {
+      $comment: 'https://spec.openapis.org/oas/v3.1#contact-object',
+      type: 'array',
+      items: { $ref: '#/$defs/server' },
+    }
+
+    const result = generateTypeDefinition(schema, 'Contacts', markdownDocumentation)
+
+    expect(result).toContain('/**')
+    expect(result).toContain('@see {@link https://spec.openapis.org/oas/v3.1#contact-object}')
+    expect(result).toContain('export type Contacts = ServerObject[];')
+  })
+
+  it('emits JSDoc for non-object schemas with a plain-text $comment', () => {
+    const schema: JSONSchema = {
+      $comment: 'A list of parameters applicable to the operation.',
+      type: 'array',
+      items: { $ref: '#/$defs/parameter-or-reference' },
+    }
+
+    const result = generateTypeDefinition(schema, 'Parameters')
+
+    expect(result).toContain('/**')
+    expect(result).toContain('A list of parameters applicable to the operation.')
+    expect(result).toContain('export type Parameters = (ParameterObject | ReferenceObject)[];')
+  })
 })

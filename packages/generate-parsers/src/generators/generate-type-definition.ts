@@ -107,6 +107,19 @@ const getBooleanSubSchemaType = (schema: boolean): string => {
   return schema ? 'unknown' : 'never'
 }
 
+const buildJsDocBlock = (documentation: ObjectDocumentation, commentUrl: string | undefined): string => {
+  let block = `/**\n`
+  block += `* ${documentation.title}\n`
+  block += `*\n`
+  block += `* ${documentation.description}\n`
+  block += `* \n`
+  if (commentUrl?.startsWith('http')) {
+    block += `* @see {@link ${commentUrl}}\n`
+  }
+  block += `*/\n`
+  return block
+}
+
 /**
  * Converts a JSON Schema type to its TypeScript equivalent.
  * Recursively handles nested objects and arrays.
@@ -377,13 +390,7 @@ export const generateTypeDefinition = (
     if (isSchemaObject(schema) && markdownDocumentation && schema.$comment && typeof schema.$comment === 'string') {
       const documentation = parseDocumentation(markdownDocumentation, schema.$comment)
       if (documentation) {
-        result += `/**\n`
-        result += `* ${documentation.title}\n`
-        result += `*\n`
-        result += `* ${documentation.description}\n`
-        result += `* \n`
-        result += `* @see {@link ${schema.$comment}}\n`
-        result += `*/\n`
+        result += buildJsDocBlock(documentation, schema.$comment)
       }
     }
 
@@ -398,7 +405,24 @@ export const generateTypeDefinition = (
   // Handle non-object schemas first
   if (!isObjectLikeSchema(schema)) {
     const tsType = getTypeScriptType(schema)
-    return `export type ${typeName} = ${tsType};`
+    let result = ''
+
+    if (isSchemaObject(schema) && schema.$comment && typeof schema.$comment === 'string') {
+      let documentation: ObjectDocumentation | null = null
+      if (schema.$comment.startsWith('http')) {
+        if (markdownDocumentation) {
+          documentation = parseDocumentation(markdownDocumentation, schema.$comment)
+        }
+      } else {
+        documentation = { title: typeName, description: schema.$comment, properties: {} }
+      }
+      if (documentation) {
+        result += buildJsDocBlock(documentation, schema.$comment)
+      }
+    }
+
+    result += `export type ${typeName} = ${tsType};`
+    return result
   }
 
   if (isObjectLikeSchema(schema)) {
@@ -451,13 +475,7 @@ export const generateTypeDefinition = (
         // Build the type definition with JSDoc header if documentation is available
         let result = ''
         if (documentation) {
-          result += `/**\n`
-          result += `* ${documentation.title}\n`
-          result += `*\n`
-          result += `* ${documentation.description}\n`
-          result += `* \n`
-          result += `* @see {@link ${schema.$comment}}\n`
-          result += `*/\n`
+          result += buildJsDocBlock(documentation, typeof schema.$comment === 'string' ? schema.$comment : undefined)
         }
         result += `export type ${typeName} = Record<string, ${patternPropType}>;`
 
@@ -472,13 +490,7 @@ export const generateTypeDefinition = (
       // Build the type definition with JSDoc header if documentation is available
       let result = ''
       if (documentation) {
-        result += `/**\n`
-        result += `* ${documentation.title}\n`
-        result += `*\n`
-        result += `* ${documentation.description}\n`
-        result += `* \n`
-        result += `* @see {@link ${schema.$comment}}\n`
-        result += `*/\n`
+        result += buildJsDocBlock(documentation, typeof schema.$comment === 'string' ? schema.$comment : undefined)
       }
       result += `export type ${typeName} = {\n  [key: string]: ${additionalPropType};\n};`
 
@@ -531,13 +543,7 @@ export const generateTypeDefinition = (
     // Build the type definition with JSDoc header if documentation is available
     let result = ''
     if (documentation) {
-      result += `/**\n`
-      result += `* ${documentation.title}\n`
-      result += `*\n`
-      result += `* ${documentation.description}\n`
-      result += `* \n`
-      result += `* @see {@link ${schema.$comment}}\n`
-      result += `*/\n`
+      result += buildJsDocBlock(documentation, typeof schema.$comment === 'string' ? schema.$comment : undefined)
     }
 
     let typeBody = '{\n' + properties + '\n}'
