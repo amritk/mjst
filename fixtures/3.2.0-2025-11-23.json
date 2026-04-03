@@ -630,6 +630,7 @@
           ],
           "$defs": {
             "styles-for-path": {
+              "$comment": "https://spec.openapis.org/oas/v3.1#style-values",
               "if": {
                 "properties": {
                   "in": {
@@ -667,6 +668,7 @@
               }
             },
             "styles-for-header": {
+              "$comment": "https://spec.openapis.org/oas/v3.1#style-values",
               "if": {
                 "properties": {
                   "in": {
@@ -687,6 +689,7 @@
               }
             },
             "styles-for-query": {
+              "$comment": "https://spec.openapis.org/oas/v3.1#style-values",
               "if": {
                 "properties": {
                   "in": {
@@ -714,6 +717,7 @@
               }
             },
             "styles-for-cookie": {
+              "$comment": "https://spec.openapis.org/oas/v3.1#style-values",
               "if": {
                 "properties": {
                   "in": {
