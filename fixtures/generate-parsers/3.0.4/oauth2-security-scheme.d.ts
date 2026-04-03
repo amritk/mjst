@@ -1,4 +1,4 @@
-import type { OAuthFlowsObject } from './oauth-flows';
+import type { OauthFlowsObject } from './oauth-flows';
 /**
 * Security Scheme object
 *
@@ -6,11 +6,11 @@ import type { OAuthFlowsObject } from './oauth-flows';
 *
 * @see {@link https://spec.openapis.org/oas/v3.0.4#security-scheme-object}
 */
-export type OAuth2SecuritySchemeObject = {
+export type Oauth2SecuritySchemeObject = {
     /** **REQUIRED**. The type of the security scheme. Valid values are `"apiKey"`, `"http"`, `"oauth2"`, `"openIdConnect"`. */
     type: "oauth2";
     /** **REQUIRED**. An object containing configuration information for the flow types supported. */
-    flows: OAuthFlowsObject;
+    flows: OauthFlowsObject;
     /** A description for security scheme. [CommonMark syntax](https://spec.commonmark.org/) MAY be used for rich text representation. */
     description?: string;
 };

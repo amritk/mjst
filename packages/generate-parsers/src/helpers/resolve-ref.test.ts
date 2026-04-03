@@ -64,7 +64,7 @@ describe('resolveRef', () => {
     expect(result).toBeUndefined()
   })
 
-  it('returns undefined for external $refs', () => {
+  it('returns undefined for URI refs not present in $defs', () => {
     const schema = {
       $defs: {
         contact: { type: 'object' },
@@ -74,6 +74,35 @@ describe('resolveRef', () => {
     const result = resolveRef('http://example.com/schema.json', schema)
 
     expect(result).toBeUndefined()
+  })
+
+  it('resolves a URI ref that is a $defs key', () => {
+    const schema = {
+      $defs: {
+        'http://example.com/channel.json': { type: 'object', properties: { name: { type: 'string' } } },
+      },
+    }
+
+    const result = resolveRef('http://example.com/channel.json', schema)
+
+    expect(result).toEqual({ type: 'object', properties: { name: { type: 'string' } } })
+  })
+
+  it('resolves a URI ref with a fragment into a nested definition', () => {
+    const schema = {
+      $defs: {
+        'http://example.com/channel.json': {
+          type: 'object',
+          $defs: {
+            queue: { type: 'object', properties: { name: { type: 'string' } } },
+          },
+        },
+      },
+    }
+
+    const result = resolveRef('http://example.com/channel.json#/$defs/queue', schema)
+
+    expect(result).toEqual({ type: 'object', properties: { name: { type: 'string' } } })
   })
 
   it('handles URI-encoded characters in $ref', () => {

@@ -1,8 +1,30 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 /**
+ * Returns true if a $ref value should be queued for processing.
+ *
+ * Accepted forms:
+ * - Internal: `#/$defs/foo` or `#/definitions/foo`
+ * - URI key: `http://example.com/foo.json` (no fragment, or empty fragment)
+ * - URI with fragment: `http://example.com/foo.json#/definitions/bar`
+ *
+ * Excluded:
+ * - `#` alone (self-reference, not a standalone definition)
+ * - `#/$defs/specification-extensions` (inlined as `x-*` pattern, not a type)
+ * - Relative path refs (e.g. `/components/messages/foo`) — these point into
+ *   example data in the schema document, not into type definitions
+ */
+const isResolvableRef = (ref: string): boolean => {
+  if (ref === '#' || ref === '#/$defs/specification-extensions') return false
+  if (ref.startsWith('#')) return true
+  if (ref.startsWith('http://') || ref.startsWith('https://')) return true
+  return false
+}
+
+/**
  * Extracts all $ref values from a JSON Schema recursively.
- * Only returns internal references (starting with #).
+ * Returns both internal (`#`-prefixed) and URI refs so the build pipeline
+ * can resolve and generate files for all referenced definitions.
  *
  * @param schema - The JSON Schema to extract refs from
  * @returns A Set of unique ref strings found in the schema
@@ -13,11 +35,11 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
  *   type: 'object',
  *   properties: {
  *     contact: { $ref: '#/$defs/contact' },
- *     server: { $ref: '#/$defs/server' }
+ *     channel: { $ref: 'http://example.com/channel.json' },
  *   }
  * }
  * const refs = extractRefs(schema)
- * // refs = Set(['#/$defs/contact', '#/$defs/server'])
+ * // refs = Set(['#/$defs/contact', 'http://example.com/channel.json'])
  * ```
  */
 export const extractRefs = (schema: JSONSchema): Set<string> => {
@@ -37,15 +59,7 @@ export const extractRefs = (schema: JSONSchema): Set<string> => {
 
     const record = obj as Record<string, unknown>
 
-    // Check if this object has a $ref property
-    // Skip specification-extensions — it is not a standalone type; its semantics
-    // (Record<`x-${string}`, unknown>) are inlined directly into the generated type.
-    if (
-      '$ref' in record &&
-      typeof record['$ref'] === 'string' &&
-      (record['$ref'] as string).startsWith('#') &&
-      record['$ref'] !== '#/$defs/specification-extensions'
-    ) {
+    if ('$ref' in record && typeof record['$ref'] === 'string' && isResolvableRef(record['$ref'] as string)) {
       refs.add(record['$ref'] as string)
     }
 

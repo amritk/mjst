@@ -5,7 +5,7 @@
 *
 * @see {@link https://spec.openapis.org/oas/v3.0.4#security-scheme-object}
 */
-export type APIKeySecuritySchemeObject = {
+export type ApiKeySecuritySchemeObject = {
     /** **REQUIRED**. The type of the security scheme. Valid values are `"apiKey"`, `"http"`, `"oauth2"`, `"openIdConnect"`. */
     type: "apiKey";
     /** **REQUIRED**. The name of the header, query or cookie parameter to be used. */

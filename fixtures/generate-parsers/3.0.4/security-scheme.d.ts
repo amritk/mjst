@@ -1,6 +1,6 @@
-import type { APIKeySecuritySchemeObject } from './api-key-security-scheme';
-import type { HTTPSecuritySchemeObject } from './http-security-scheme';
-import type { OAuth2SecuritySchemeObject } from './oauth2-security-scheme';
+import type { ApiKeySecuritySchemeObject } from './api-key-security-scheme';
+import type { HttpSecuritySchemeObject } from './http-security-scheme';
+import type { Oauth2SecuritySchemeObject } from './oauth2-security-scheme';
 import type { OpenIdConnectSecuritySchemeObject } from './open-id-connect-security-scheme';
 /**
 * Security Scheme object
@@ -9,4 +9,4 @@ import type { OpenIdConnectSecuritySchemeObject } from './open-id-connect-securi
 *
 * @see {@link https://spec.openapis.org/oas/v3.0.4#security-scheme-object}
 */
-export type SecuritySchemeObject = APIKeySecuritySchemeObject | HTTPSecuritySchemeObject | OAuth2SecuritySchemeObject | OpenIdConnectSecuritySchemeObject;
+export type SecuritySchemeObject = ApiKeySecuritySchemeObject | HttpSecuritySchemeObject | Oauth2SecuritySchemeObject | OpenIdConnectSecuritySchemeObject;

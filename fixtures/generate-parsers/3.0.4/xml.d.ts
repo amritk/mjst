@@ -5,7 +5,7 @@
 *
 * @see {@link https://spec.openapis.org/oas/v3.0.4#xml-object}
 */
-export type XMLObject = {
+export type XmlObject = {
     /** Replaces the name of the element/attribute used for the described schema property. When defined within `items`, it will affect the name of the individual XML elements within the list. When defined alongside `type` being `"array"` (outside the `items`), it will affect the wrapping element if and only if `wrapped` is `true`. If `wrapped` is `false`, it will be ignored. */
     name?: string;
     /** The URI of the namespace definition. Value MUST be in the form of a non-relative URI. */

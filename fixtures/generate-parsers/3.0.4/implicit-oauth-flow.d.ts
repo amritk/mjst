@@ -5,7 +5,7 @@
 *
 * @see {@link https://spec.openapis.org/oas/v3.0.4#oauth-flow-object}
 */
-export type ImplicitOAuthFlowObject = {
+export type ImplicitOauthFlowObject = {
     /** **REQUIRED**. The authorization URL to be used for this flow. This MUST be in the form of a URL. The OAuth2 standard requires the use of TLS. */
     authorizationUrl: string;
     /** The URL to be used for obtaining refresh tokens. This MUST be in the form of a URL. The OAuth2 standard requires the use of TLS. */

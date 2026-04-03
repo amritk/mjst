@@ -7,6 +7,7 @@ import { refToFilename } from '#helpers/ref-to-filename'
 import { refToName } from '#helpers/ref-to-name'
 import { resolveDynamicRefs } from '#helpers/resolve-dynamic-refs'
 import { resolveRef } from '#helpers/resolve-ref'
+import { upgradeDraft07Schema } from '#helpers/upgrade-draft07-schema'
 import type { SchemaExtensions } from '#types/schema-extensions'
 
 import { generateFile } from './generate-files'
@@ -183,6 +184,11 @@ export const buildSchema = async (
   extensions?: SchemaExtensions,
   typesOnly?: boolean,
 ): Promise<GeneratedFile[]> => {
+  // Upgrade draft-07 schemas to 2020-12 conventions before processing.
+  // This renames `definitions` → `$defs` recursively so the rest of the
+  // pipeline can resolve both short-name and URI-keyed refs uniformly.
+  rootSchema = upgradeDraft07Schema(rootSchema as Record<string, unknown>) as JSONSchema
+
   const files: GeneratedFile[] = []
   const processedRefs = new Set<string>()
   const refsToProcess: string[] = []

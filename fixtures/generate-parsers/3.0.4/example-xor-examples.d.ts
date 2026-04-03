@@ -1,1 +1,1 @@
-export type ExampleXORExamplesObject = unknown;
+export type ExampleXorExamplesObject = unknown;

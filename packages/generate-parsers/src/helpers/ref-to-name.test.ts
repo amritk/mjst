@@ -26,8 +26,8 @@ describe('ref-to-name', () => {
     expect(refToName('#/$defs/oauth2-flow')).toBe('Oauth2FlowObject')
   })
 
-  it('preserves existing PascalCase', () => {
-    expect(refToName('#/$defs/APIKey')).toBe('APIKeyObject')
+  it('converts uppercase acronym keys to PascalCase via kebab normalization', () => {
+    expect(refToName('#/$defs/APIKey')).toBe('ApiKeyObject')
   })
 
   it('removes -or-reference suffix', () => {
@@ -40,5 +40,20 @@ describe('ref-to-name', () => {
 
   it('removes -or-reference suffix from single word refs', () => {
     expect(refToName('#/$defs/example-or-reference')).toBe('ExampleObject')
+  })
+
+  it('derives type name from a URI ref', () => {
+    expect(refToName('http://asyncapi.com/definitions/3.1.0/channel.json')).toBe('ChannelObject')
+    expect(refToName('http://asyncapi.com/definitions/3.1.0/info.json')).toBe('InfoObject')
+  })
+
+  it('derives type name from a URI ref with a fragment', () => {
+    expect(refToName('http://asyncapi.com/bindings/sns/0.1.0/channel.json#/definitions/queue')).toBe(
+      'BindingsSnsChannelQueueObject',
+    )
+  })
+
+  it('handles draft-07 schema URI', () => {
+    expect(refToName('http://json-schema.org/draft-07/schema')).toBe('Draft07SchemaObject')
   })
 })

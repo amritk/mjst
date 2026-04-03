@@ -1,0 +1,27 @@
+import type { #Object } from './#';
+import type { ReferenceObject } from './reference';
+export type OpenapiSchema_3_0Object = {
+    title?: string;
+    multipleOf?: number;
+    maximum?: number;
+    exclusiveMaximum?: boolean;
+    minimum?: number;
+    exclusiveMinimum?: boolean;
+    maxLength?: number;
+    minLength?: number;
+    pattern?: string;
+    maxItems?: number;
+    minItems?: number;
+    uniqueItems?: boolean;
+    maxProperties?: number;
+    minProperties?: number;
+    required?: string[];
+    enum?: boolean[];
+    type?: "array" | "boolean" | "integer" | "number" | "object" | "string";
+    not?: #Object | ReferenceObject;
+    allOf?: (#Object | ReferenceObject)[];
+    oneOf?: (#Object | ReferenceObject)[];
+    anyOf?: (#Object | ReferenceObject)[];
+    items?: #Object | ReferenceObject;
+    properties?: Record<string>;
+};

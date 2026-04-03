@@ -75,7 +75,7 @@ describe('extract-refs', () => {
     expect(refs).toEqual(new Set(['#/$defs/value']))
   })
 
-  it('ignores external refs', () => {
+  it('includes URI refs (http/https)', () => {
     const schema = {
       type: 'object',
       properties: {
@@ -86,7 +86,48 @@ describe('extract-refs', () => {
 
     const refs = extractRefs(schema)
 
-    expect(refs).toEqual(new Set(['#/$defs/internal']))
+    expect(refs).toEqual(new Set(['#/$defs/internal', 'https://example.com/schema.json']))
+  })
+
+  it('includes URI refs with fragments', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        queue: { $ref: 'http://example.com/channel.json#/definitions/queue' },
+      },
+    }
+
+    const refs = extractRefs(schema)
+
+    expect(refs).toEqual(new Set(['http://example.com/channel.json#/definitions/queue']))
+  })
+
+  it('ignores bare # self-references', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        self: { $ref: '#' },
+        contact: { $ref: '#/$defs/contact' },
+      },
+    }
+
+    const refs = extractRefs(schema)
+
+    expect(refs).toEqual(new Set(['#/$defs/contact']))
+  })
+
+  it('ignores relative path refs', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        msg: { $ref: '/components/messages/userSignedUp' },
+        contact: { $ref: '#/$defs/contact' },
+      },
+    }
+
+    const refs = extractRefs(schema)
+
+    expect(refs).toEqual(new Set(['#/$defs/contact']))
   })
 
   it('returns empty set when no refs exist', () => {

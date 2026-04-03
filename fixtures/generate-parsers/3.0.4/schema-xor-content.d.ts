@@ -1,1 +1,1 @@
-export type SchemaXORContentObject = unknown | unknown & unknown & unknown & unknown & unknown;
+export type SchemaXorContentObject = unknown | unknown & unknown & unknown & unknown & unknown;

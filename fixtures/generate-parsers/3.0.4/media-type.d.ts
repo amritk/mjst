@@ -1,6 +1,6 @@
 import type { EncodingObject } from './encoding';
 import type { ExampleObject } from './example';
-import type { ExampleXORExamplesObject } from './example-xor-examples';
+import type { ExampleXorExamplesObject } from './example-xor-examples';
 import type { ReferenceObject } from './reference';
 import type { SchemaObject } from './schema';
 /**
@@ -19,4 +19,4 @@ export type MediaTypeObject = {
     examples?: Record<string, ExampleObject | ReferenceObject>;
     /** A map between a property name and its encoding information. The key, being the property name, MUST exist in the schema as a property. The `encoding` field SHALL only apply to [Request Body Objects](https://spec.openapis.org/oas/v3.0.4#request-body-object), and only when the media type is `multipart` or `application/x-www-form-urlencoded`. If no Encoding Object is provided for a property, the behavior is determined by the default values documented for the Encoding Object. */
     encoding?: Record<string, EncodingObject>;
-} & ExampleXORExamplesObject;
+} & ExampleXorExamplesObject;

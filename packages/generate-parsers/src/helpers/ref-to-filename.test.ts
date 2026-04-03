@@ -53,4 +53,23 @@ describe('ref-to-filename', () => {
     expect(refToFilename('#/definitions/ImplicitOAuthFlow')).toBe('implicit-oauth-flow')
     expect(refToFilename('#/definitions/OAuth2SecurityScheme')).toBe('oauth2-security-scheme')
   })
+
+  it('derives filename from a plain URI ref', () => {
+    expect(refToFilename('http://asyncapi.com/definitions/3.1.0/channel.json')).toBe('channel')
+    expect(refToFilename('http://asyncapi.com/definitions/3.1.0/info.json')).toBe('info')
+  })
+
+  it('derives filename from a URI binding ref', () => {
+    expect(refToFilename('http://asyncapi.com/bindings/kafka/0.5.0/channel.json')).toBe('bindings-kafka-channel')
+  })
+
+  it('derives filename from a URI ref with a fragment', () => {
+    expect(refToFilename('http://asyncapi.com/bindings/sns/0.1.0/channel.json#/definitions/queue')).toBe(
+      'bindings-sns-channel-queue',
+    )
+  })
+
+  it('handles URI ref with empty fragment (trailing #)', () => {
+    expect(refToFilename('http://json-schema.org/draft-07/schema#')).toBe('draft-07-schema')
+  })
 })
