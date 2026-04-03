@@ -1,5 +1,4 @@
 import type { ReferenceObject } from './reference';
-import type { EncodingObject } from './encoding';
 import type { HeaderObject } from './header';
 
 /**

@@ -14,6 +14,12 @@ type CollectImportsOptions = {
    * Use this when generating types-only files that do not include parser functions.
    */
   readonly typesOnly?: boolean
+  /**
+   * The $ref path of the schema being generated (e.g. `#/$defs/encoding`).
+   * When provided, any $ref that resolves to the same filename is excluded from
+   * the import list, preventing a file from importing itself.
+   */
+  readonly selfRef?: string
 }
 
 /**
@@ -57,6 +63,7 @@ type CollectImportsOptions = {
  */
 export const collectImports = (schema: JSONSchema, options?: CollectImportsOptions): string[] => {
   const typesOnly = options?.typesOnly === true
+  const selfFilename = options?.selfRef ? refToFilename(options.selfRef) : undefined
   const refs = new Set<string>()
 
   const collectRefsFromValue = (value: unknown): void => {
@@ -226,6 +233,12 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
   for (const ref of refs) {
     const typeName = refToName(ref)
     const filename = refToFilename(ref)
+
+    // Skip self-referential imports — a file must not import from itself
+    if (selfFilename !== undefined && filename === selfFilename) {
+      continue
+    }
+
     const importPath = getImportPathForFilename(filename)
 
     // Check if this is a -or-reference ref

@@ -363,4 +363,57 @@ describe('generate-files', () => {
     expect(defaultResult).toContain("import { type ContactObject, parseContactObject } from './contact';")
     expect(defaultResult).toContain('export const parseDocument')
   })
+
+  it('does not generate a self-import for recursive schemas in types-only mode', () => {
+    // Mirrors the 3.2.0 encoding schema: EncodingObject has properties itemEncoding, prefixEncoding,
+    // and encoding that all $ref back to #/$defs/encoding. The generated encoding.ts must not
+    // import EncodingObject from itself.
+    const schema = {
+      type: 'object',
+      properties: {
+        itemEncoding: { $ref: '#/$defs/encoding' },
+        prefixEncoding: {
+          type: 'array',
+          items: { $ref: '#/$defs/encoding' },
+        },
+        encoding: {
+          type: 'object',
+          additionalProperties: { $ref: '#/$defs/encoding' },
+        },
+        headers: {
+          type: 'object',
+          additionalProperties: { $ref: '#/$defs/header-or-reference' },
+        },
+      },
+    }
+
+    const result = generateFile(schema, 'EncodingObject', undefined, {
+      typesOnly: true,
+      selfRef: '#/$defs/encoding',
+    })
+
+    expect(result).not.toContain("import type { EncodingObject } from './encoding';")
+    expect(result).toContain("import type { ReferenceObject } from './reference';")
+    expect(result).toContain("import type { HeaderObject } from './header';")
+    expect(result).toContain('export type EncodingObject')
+  })
+
+  it('does not generate a self-import for recursive schemas in full parser mode', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        itemEncoding: { $ref: '#/$defs/encoding' },
+        headers: {
+          type: 'object',
+          additionalProperties: { $ref: '#/$defs/header-or-reference' },
+        },
+      },
+    }
+
+    const result = generateFile(schema, 'EncodingObject', undefined, { selfRef: '#/$defs/encoding' })
+
+    expect(result).not.toContain("import { type EncodingObject, parseEncodingObject } from './encoding';")
+    expect(result).toContain("import type { ReferenceObject } from './reference';")
+    expect(result).toContain("import { type HeaderObject, parseHeaderObject } from './header';")
+  })
 })

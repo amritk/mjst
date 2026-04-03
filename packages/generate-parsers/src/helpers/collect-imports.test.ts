@@ -469,4 +469,69 @@ describe('collect-imports', () => {
 
     expect(result).toContain("import { type ContactObject, parseContactObject } from './contact';")
   })
+
+  it('does not generate a self-import when a schema references its own $defs key via a property', () => {
+    // Mirrors the encoding schema: encoding.ts has a property `itemEncoding` that is a direct
+    // $ref back to #/$defs/encoding. Generating `import ... from './encoding'` inside encoding.ts
+    // would be a circular self-import that crashes at runtime.
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: {
+        itemEncoding: { $ref: '#/$defs/encoding' },
+        header: { $ref: '#/$defs/header' },
+      },
+    }
+
+    const result = collectImports(schema, { selfRef: '#/$defs/encoding' })
+
+    expect(result).not.toContain("'./encoding'")
+    expect(result).toContain("import { type HeaderObject, parseHeaderObject } from './header';")
+  })
+
+  it('does not generate a self-import when a schema references its own $defs key via additionalProperties', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: {
+        encoding: {
+          type: 'object',
+          additionalProperties: { $ref: '#/$defs/encoding' },
+        },
+      },
+    }
+
+    const result = collectImports(schema, { selfRef: '#/$defs/encoding' })
+
+    expect(result).not.toContain("'./encoding'")
+  })
+
+  it('does not generate a self-import when a schema references its own $defs key via array items', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: {
+        prefixEncoding: {
+          type: 'array',
+          items: { $ref: '#/$defs/encoding' },
+        },
+      },
+    }
+
+    const result = collectImports(schema, { selfRef: '#/$defs/encoding' })
+
+    expect(result).not.toContain("'./encoding'")
+  })
+
+  it('does not generate a self-import in types-only mode', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: {
+        itemEncoding: { $ref: '#/$defs/encoding' },
+        header: { $ref: '#/$defs/header' },
+      },
+    }
+
+    const result = collectImports(schema, { typesOnly: true, selfRef: '#/$defs/encoding' })
+
+    expect(result).not.toContain("'./encoding'")
+    expect(result).toContain("import type { HeaderObject } from './header';")
+  })
 })

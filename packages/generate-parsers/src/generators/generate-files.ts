@@ -14,6 +14,12 @@ type GenerateFileOptions = {
    * Imports will be type-only as well, since there are no parsers to call.
    */
   readonly typesOnly?: boolean
+  /**
+   * The $ref path of the schema being generated (e.g. `#/$defs/encoding`).
+   * When provided, any $ref that resolves to the same filename is excluded from
+   * the import list, preventing a file from importing itself.
+   */
+  readonly selfRef?: string
 }
 
 /**
@@ -53,11 +59,12 @@ export const generateFile = (
   options?: GenerateFileOptions,
 ): string => {
   const typesOnly = options?.typesOnly === true
+  const selfRef = options?.selfRef
   const typeDefinition = generateTypeDefinition(schema, typeName, markdownDocumentation)
 
   if (typesOnly) {
     // In types-only mode, skip the parser function and use type-only imports
-    const imports = collectImports(schema, { typesOnly: true })
+    const imports = collectImports(schema, { typesOnly: true, selfRef })
     let result = ''
 
     if (imports.length > 0) {
@@ -72,7 +79,7 @@ export const generateFile = (
   }
 
   const parserFunction = generateParserFunction(schema, typeName, { useRefImports: true })
-  const imports = [...collectImports(schema), ...collectHelpers(parserFunction)]
+  const imports = [...collectImports(schema, { selfRef }), ...collectHelpers(parserFunction)]
 
   // Build file output using string concatenation instead of array join for performance
   let result = ''

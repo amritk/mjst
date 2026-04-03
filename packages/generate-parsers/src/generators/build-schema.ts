@@ -257,7 +257,10 @@ export const buildSchema = async (
     const processedSchema = resolveDynamicRefs(resolvedSchema as JSONSchema, dynamicRefMap)
     const mixinMergedSchema = mergeAllOfMixins(processedSchema, rootSchema as Record<string, unknown>)
     const extendedSchema = extensions ? applySchemaExtensions(mixinMergedSchema, filename, extensions) : mixinMergedSchema
-    const content = generateFile(extendedSchema, typeName, markdownDocumentation, { typesOnly: typesOnly ?? false })
+    const content = generateFile(extendedSchema, typeName, markdownDocumentation, {
+      typesOnly: typesOnly ?? false,
+      selfRef: ref,
+    })
 
     if (filename !== 'schema') {
       files.push({
