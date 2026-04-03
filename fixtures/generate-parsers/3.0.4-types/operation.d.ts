@@ -1,0 +1,22 @@
+import type { CallbackObject } from './callback';
+import type { ExternalDocumentationObject } from './external-documentation';
+import type { ParameterObject } from './parameter';
+import type { ReferenceObject } from './reference';
+import type { RequestBodyObject } from './request-body';
+import type { ResponsesObject } from './responses';
+import type { SecurityRequirementObject } from './security-requirement';
+import type { ServerObject } from './server';
+export type OperationObject = {
+    tags?: string[];
+    summary?: string;
+    description?: string;
+    externalDocs?: ExternalDocumentationObject;
+    operationId?: string;
+    parameters?: (ParameterObject | ReferenceObject)[];
+    requestBody?: RequestBodyObject | ReferenceObject;
+    responses: ResponsesObject;
+    callbacks?: Record<string, CallbackObject | ReferenceObject>;
+    deprecated?: boolean;
+    security?: SecurityRequirementObject[];
+    servers?: ServerObject[];
+};

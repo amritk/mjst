@@ -1,0 +1,21 @@
+import type { CallbackObject } from './callback';
+import type { ExampleObject } from './example';
+import type { HeaderObject } from './header';
+import type { LinkObject } from './link';
+import type { ParameterObject } from './parameter';
+import type { ReferenceObject } from './reference';
+import type { RequestBodyObject } from './request-body';
+import type { ResponseObject } from './response';
+import type { SchemaObject } from './schema';
+import type { SecuritySchemeObject } from './security-scheme';
+export type ComponentsObject = {
+    schemas?: Record<string, SchemaObject | ReferenceObject>;
+    responses?: Record<string, ReferenceObject | ResponseObject>;
+    parameters?: Record<string, ReferenceObject | ParameterObject>;
+    examples?: Record<string, ReferenceObject | ExampleObject>;
+    requestBodies?: Record<string, ReferenceObject | RequestBodyObject>;
+    headers?: Record<string, ReferenceObject | HeaderObject>;
+    securitySchemes?: Record<string, ReferenceObject | SecuritySchemeObject>;
+    links?: Record<string, ReferenceObject | LinkObject>;
+    callbacks?: Record<string, ReferenceObject | CallbackObject>;
+};

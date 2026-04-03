@@ -1,0 +1,21 @@
+import type { ExampleObject } from './example';
+import type { ExampleXORExamplesObject } from './example-xor-examples';
+import type { MediaTypeObject } from './media-type';
+import type { ReferenceObject } from './reference';
+import type { SchemaObject } from './schema';
+import type { SchemaXORContentObject } from './schema-xor-content';
+export type ParameterObject = {
+    name: string;
+    in: string;
+    description?: string;
+    required?: boolean;
+    deprecated?: boolean;
+    allowEmptyValue?: boolean;
+    style?: string;
+    explode?: boolean;
+    allowReserved?: boolean;
+    schema?: SchemaObject | ReferenceObject;
+    content?: Record<string, MediaTypeObject>;
+    example?: unknown;
+    examples?: Record<string, ExampleObject | ReferenceObject>;
+} & ExampleXORExamplesObject & SchemaXORContentObject;

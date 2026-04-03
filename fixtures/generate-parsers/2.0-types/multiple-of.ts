@@ -1,0 +1,1 @@
+export type MultipleOfObject = MultipleOfObject;
