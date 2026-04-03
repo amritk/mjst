@@ -256,7 +256,9 @@ export const buildSchema = async (
     const filename = refToFilename(ref)
     const processedSchema = resolveDynamicRefs(resolvedSchema as JSONSchema, dynamicRefMap)
     const mixinMergedSchema = mergeAllOfMixins(processedSchema, rootSchema as Record<string, unknown>)
-    const extendedSchema = extensions ? applySchemaExtensions(mixinMergedSchema, filename, extensions) : mixinMergedSchema
+    const extendedSchema = extensions
+      ? applySchemaExtensions(mixinMergedSchema, filename, extensions)
+      : mixinMergedSchema
     const content = generateFile(extendedSchema, typeName, markdownDocumentation, {
       typesOnly: typesOnly ?? false,
       selfRef: ref,
@@ -310,6 +312,42 @@ export const buildSchema = async (
       content: schemaTemplateContent,
     })
   }
+
+  // Generate index.ts with named re-exports extracted from each generated file's content.
+  // Regex matches `export type Foo` and `export const foo` declarations.
+  const TYPE_EXPORT_RE = /^export type (\w+)/gm
+  const CONST_EXPORT_RE = /^export const (\w+)/gm
+
+  const sortedFiles = [...files].sort((a, b) => a.filename.localeCompare(b.filename))
+
+  let indexContent = ''
+  for (const file of sortedFiles) {
+    const moduleName = file.filename.replace(/\.ts$/, '')
+    const typeNames: string[] = []
+    const constNames: string[] = []
+
+    for (const match of file.content.matchAll(TYPE_EXPORT_RE)) {
+      typeNames.push(match[1] as string)
+    }
+    for (const match of file.content.matchAll(CONST_EXPORT_RE)) {
+      constNames.push(match[1] as string)
+    }
+
+    if (typeNames.length === 0 && constNames.length === 0) continue
+
+    if (typesOnly) {
+      indexContent += `export type { ${typeNames.join(', ')} } from './${moduleName}';\n`
+    } else {
+      const typeExports = typeNames.map((n) => `type ${n}`)
+      const allExports = [...typeExports, ...constNames]
+      indexContent += `export { ${allExports.join(', ')} } from './${moduleName}';\n`
+    }
+  }
+
+  files.push({
+    filename: 'index.ts',
+    content: indexContent,
+  })
 
   return files
 }

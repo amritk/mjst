@@ -165,11 +165,12 @@ describe('build-schema', () => {
 
     const result = await buildSchema(schema, 'Document', undefined, undefined, true)
 
-    // document.ts plus the types-only schema.ts — no other runtime helpers
-    expect(result).toHaveLength(2)
+    // document.ts plus the types-only schema.ts plus index.ts — no other runtime helpers
+    expect(result).toHaveLength(3)
     const filenames = result.map((f) => f.filename)
     expect(filenames).toContain('document.ts')
     expect(filenames).toContain('schema.ts')
+    expect(filenames).toContain('index.ts')
   })
 
   it('does not include parser functions in types-only mode', async () => {
@@ -239,7 +240,8 @@ describe('build-schema', () => {
     expect(filenames).toContain('server.ts')
     // Types-only schema.ts is included; no other runtime helpers
     expect(filenames).toContain('schema.ts')
-    expect(result).toHaveLength(4)
+    expect(filenames).toContain('index.ts')
+    expect(result).toHaveLength(5)
   })
 
   it('generated ref files in types-only mode also omit parsers', async () => {
@@ -607,6 +609,82 @@ Custom flow description.
     expect(parameterFile?.content).toContain('in')
     // No file should be generated for the -or-reference def itself
     expect(filenames).not.toContain('parameter-or-reference.ts')
+  })
+
+  it('generates an index.ts with named re-exports from all generated files', async () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: {
+        contact: { $ref: '#/$defs/contact' },
+      },
+      $defs: {
+        contact: {
+          type: 'object',
+          properties: { email: { type: 'string' } },
+        },
+      },
+    }
+
+    const result = await buildSchema(schema, 'Document')
+    const indexFile = result.find((f) => f.filename === 'index.ts')
+
+    expect(indexFile).toBeDefined()
+    // Named type + parser exports for each file
+    expect(indexFile?.content).toContain("export { type ContactObject, parseContactObject } from './contact';")
+    expect(indexFile?.content).toContain("export { type Document, parseDocument } from './document';")
+    // No wildcard exports
+    expect(indexFile?.content).not.toContain('export *')
+    expect(indexFile?.content).not.toContain('export type *')
+  })
+
+  it('generates an index.ts with named type-only re-exports in types-only mode', async () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: {
+        contact: { $ref: '#/$defs/contact' },
+      },
+      $defs: {
+        contact: {
+          type: 'object',
+          properties: { email: { type: 'string' } },
+        },
+      },
+    }
+
+    const result = await buildSchema(schema, 'Document', undefined, undefined, true)
+    const indexFile = result.find((f) => f.filename === 'index.ts')
+
+    expect(indexFile).toBeDefined()
+    // Types-only: export type { ... } syntax, no parsers
+    expect(indexFile?.content).toContain("export type { ContactObject } from './contact';")
+    expect(indexFile?.content).toContain("export type { Document } from './document';")
+    expect(indexFile?.content).not.toContain('parseContactObject')
+    expect(indexFile?.content).not.toContain('parseDocument')
+    // No wildcard exports
+    expect(indexFile?.content).not.toContain('export *')
+    expect(indexFile?.content).not.toContain('export type *')
+  })
+
+  it('index.ts entries are sorted alphabetically', async () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: {
+        z: { $ref: '#/$defs/zebra' },
+        a: { $ref: '#/$defs/alpha' },
+      },
+      $defs: {
+        zebra: { type: 'object', properties: { name: { type: 'string' } } },
+        alpha: { type: 'object', properties: { name: { type: 'string' } } },
+      },
+    }
+
+    const result = await buildSchema(schema, 'Document')
+    const indexFile = result.find((f) => f.filename === 'index.ts')
+
+    expect(indexFile).toBeDefined()
+    const lines = indexFile!.content.trim().split('\n')
+    const sorted = [...lines].sort()
+    expect(lines).toEqual(sorted)
   })
 
   it('skips adding a nested ref to the queue when it was already processed', async () => {
