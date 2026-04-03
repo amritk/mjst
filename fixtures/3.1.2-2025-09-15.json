@@ -1129,7 +1129,8 @@
               "name",
               "in"
             ]
-          }
+          },
+          "$comment": "https://spec.openapis.org/oas/v3.1#security-scheme-object"
         },
         "type-http": {
           "if": {
@@ -1148,7 +1149,8 @@
             "required": [
               "scheme"
             ]
-          }
+          },
+          "$comment": "https://spec.openapis.org/oas/v3.1#security-scheme-object"
         },
         "type-http-bearer": {
           "if": {
@@ -1172,7 +1174,8 @@
                 "type": "string"
               }
             }
-          }
+          },
+          "$comment": "https://spec.openapis.org/oas/v3.1#security-scheme-object"
         },
         "type-oauth2": {
           "if": {
@@ -1191,7 +1194,8 @@
             "required": [
               "flows"
             ]
-          }
+          },
+          "$comment": "https://spec.openapis.org/oas/v3.1#security-scheme-object"
         },
         "type-oidc": {
           "if": {
@@ -1211,7 +1215,8 @@
             "required": [
               "openIdConnectUrl"
             ]
-          }
+          },
+          "$comment": "https://spec.openapis.org/oas/v3.1#security-scheme-object"
         }
       }
     },
@@ -1268,7 +1273,8 @@
             "scopes"
           ],
           "$ref": "#/$defs/specification-extensions",
-          "unevaluatedProperties": false
+          "unevaluatedProperties": false,
+          "$comment": "https://spec.openapis.org/oas/v3.1#oauth-flow-object"
         },
         "password": {
           "type": "object",
@@ -1290,7 +1296,8 @@
             "scopes"
           ],
           "$ref": "#/$defs/specification-extensions",
-          "unevaluatedProperties": false
+          "unevaluatedProperties": false,
+          "$comment": "https://spec.openapis.org/oas/v3.1#oauth-flow-object"
         },
         "client-credentials": {
           "type": "object",
@@ -1312,7 +1319,8 @@
             "scopes"
           ],
           "$ref": "#/$defs/specification-extensions",
-          "unevaluatedProperties": false
+          "unevaluatedProperties": false,
+          "$comment": "https://spec.openapis.org/oas/v3.1#oauth-flow-object"
         },
         "authorization-code": {
           "type": "object",
@@ -1339,9 +1347,11 @@
             "scopes"
           ],
           "$ref": "#/$defs/specification-extensions",
-          "unevaluatedProperties": false
+          "unevaluatedProperties": false,
+          "$comment": "https://spec.openapis.org/oas/v3.1#oauth-flow-object"
         }
-      }
+      },
+      "$comment": "https://spec.openapis.org/oas/v3.1#oauth-flows-object"
     },
     "security-requirement": {
       "$comment": "https://spec.openapis.org/oas/v3.1#security-requirement-object",

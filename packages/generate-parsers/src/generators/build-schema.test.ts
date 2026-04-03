@@ -456,9 +456,9 @@ describe('build-schema', () => {
     expect(documentFile?.content).not.toContain('SpecificationExtensionsObject')
   })
 
-  it('injects $comment fallback for schemas missing one when markdown is provided', async () => {
-    // Simulates the oauth-flows pattern: nested $defs without $comment that share a
-    // single spec section (e.g. all four OAuth flow types point to "oauth-flow-object").
+  it('generates JSDoc from $comment on nested $defs when markdown is provided', async () => {
+    // Simulates the oauth-flows pattern: nested $defs with their own $comment that share
+    // a single spec section (e.g. all four OAuth flow types point to "oauth-flow-object").
     const markdown = `
 #### Oauth Flow Object
 
@@ -485,7 +485,7 @@ Configuration details for a supported OAuth Flow
           },
           $defs: {
             password: {
-              // No $comment — relies on COMMENT_FALLBACKS
+              $comment: 'https://spec.openapis.org/oas/v3.1#oauth-flow-object',
               type: 'object',
               properties: {
                 tokenUrl: { type: 'string' },
@@ -502,12 +502,12 @@ Configuration details for a supported OAuth Flow
     const passwordFile = result.find((file) => file.filename === 'password.ts')
 
     expect(passwordFile).toBeDefined()
-    // JSDoc should be present because the fallback $comment points to the markdown section
+    // JSDoc should be present because $comment points to the markdown section
     expect(passwordFile?.content).toContain('The token URL.')
     expect(passwordFile?.content).toContain('The available scopes.')
   })
 
-  it('does not inject $comment fallback when schema already has one', async () => {
+  it('uses the $comment already present on the schema', async () => {
     const markdown = `
 #### Oauth Flow Object
 
@@ -543,7 +543,7 @@ Custom flow description.
           },
           $defs: {
             password: {
-              // Has its own $comment — fallback should NOT override it
+              // Has its own $comment
               $comment: 'https://example.com#custom-flow-object',
               type: 'object',
               properties: {
@@ -559,7 +559,7 @@ Custom flow description.
     const passwordFile = result.find((file) => file.filename === 'password.ts')
 
     expect(passwordFile).toBeDefined()
-    // Should use own $comment, not the fallback
+    // Should use own $comment
     expect(passwordFile?.content).toContain('The token URL from own comment.')
     expect(passwordFile?.content).not.toContain('The token URL from fallback.')
   })

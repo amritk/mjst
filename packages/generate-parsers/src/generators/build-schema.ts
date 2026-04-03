@@ -12,32 +12,6 @@ import type { SchemaExtensions } from '#types/schema-extensions'
 import { generateFile } from './generate-files'
 
 /**
- * Fallback $comment URLs for schemas that share a single spec section but are defined
- * as separate nested $defs without their own $comment (e.g. OAuth flow sub-types all
- * point to the OAuth Flow Object section).
- *
- * Keys are the definition filenames (as returned by refToFilename).
- */
-const COMMENT_FALLBACKS: Record<string, string> = {
-  implicit: 'https://spec.openapis.org/oas/v3.1#oauth-flow-object',
-  password: 'https://spec.openapis.org/oas/v3.1#oauth-flow-object',
-  'client-credentials': 'https://spec.openapis.org/oas/v3.1#oauth-flow-object',
-  'authorization-code': 'https://spec.openapis.org/oas/v3.1#oauth-flow-object',
-  'oauth-flows': 'https://spec.openapis.org/oas/v3.1#oauth-flows-object',
-}
-
-/**
- * Injects a $comment into a schema if it is missing one and a fallback URL is known.
- */
-const injectCommentFallback = (schema: JSONSchema, filename: string): JSONSchema => {
-  if (typeof schema !== 'object' || schema === null) return schema
-  if ('$comment' in schema) return schema
-  const fallback = COMMENT_FALLBACKS[filename]
-  if (!fallback) return schema
-  return { ...schema, $comment: fallback }
-}
-
-/**
  * Checks whether a resolved schema is a pure property-mixin: it only contributes
  * `properties` (and optionally `not`/`required`) with no structural keywords like
  * `type`, `if`, `then`, `else`, `additionalProperties`, `$ref`, or `allOf`.
@@ -282,8 +256,7 @@ export const buildSchema = async (
     const filename = refToFilename(ref)
     const processedSchema = resolveDynamicRefs(resolvedSchema as JSONSchema, dynamicRefMap)
     const mixinMergedSchema = mergeAllOfMixins(processedSchema, rootSchema as Record<string, unknown>)
-    const commentedSchema = injectCommentFallback(mixinMergedSchema, filename)
-    const extendedSchema = extensions ? applySchemaExtensions(commentedSchema, filename, extensions) : commentedSchema
+    const extendedSchema = extensions ? applySchemaExtensions(mixinMergedSchema, filename, extensions) : mixinMergedSchema
     const content = generateFile(extendedSchema, typeName, markdownDocumentation, { typesOnly: typesOnly ?? false })
 
     if (filename !== 'schema') {
