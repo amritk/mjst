@@ -3,7 +3,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'bun:test'
 import { generateTypeDefinition } from './generate-type-definition'
 
-const markdownDocumentation = await readFile(new URL('../../../../fixtures/3.1.0.md', import.meta.url), 'utf-8')
+const markdownDocumentation = await readFile(new URL('../../../../fixtures/3.1.2.md', import.meta.url), 'utf-8')
 
 describe('generateTypeDefinition', () => {
   it('generates type for deeply nested objects', () => {
@@ -1270,5 +1270,16 @@ export type SecuritySchemeObject = TypeApikeyObject | TypeHttpObject | TypeHttpB
         '  label?: string;\n' +
         '};',
     )
+  })
+
+  it('wraps union item types in parentheses for root-level array schema', () => {
+    const schema: JSONSchema = {
+      type: 'array',
+      items: { $ref: '#/$defs/parameter-or-reference' },
+    }
+
+    const result = generateTypeDefinition(schema, 'Parameters')
+
+    expect(result).toBe('export type Parameters = (ParameterObject | ReferenceObject)[];')
   })
 })

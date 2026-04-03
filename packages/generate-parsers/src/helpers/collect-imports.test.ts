@@ -388,6 +388,31 @@ describe('collect-imports', () => {
     expect(result).toEqual([])
   })
 
+  it('collects imports from root-level array items with $ref', () => {
+    const schema: JSONSchema = {
+      type: 'array',
+      items: { $ref: '#/$defs/server' },
+    }
+
+    const result = collectImports(schema)
+
+    expect(result).toEqual(["import { type ServerObject, parseServerObject } from './server';"])
+  })
+
+  it('collects imports from root-level array items with -or-reference $ref', () => {
+    const schema: JSONSchema = {
+      type: 'array',
+      items: { $ref: '#/$defs/parameter-or-reference' },
+    }
+
+    const result = collectImports(schema, { typesOnly: true })
+
+    expect(result).toEqual([
+      "import type { ReferenceObject } from './reference';",
+      "import type { ParameterObject } from './parameter';",
+    ])
+  })
+
   it('collects imports from root-level oneOf refs', () => {
     const schema: JSONSchema = {
       type: 'object',

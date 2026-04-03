@@ -184,6 +184,11 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
     }
   }
 
+  // Collect refs from root-level items (when the schema itself is an array type)
+  if (typeof schema === 'object' && schema !== null && hasItems(schema)) {
+    collectRefsFromValue(schema.items)
+  }
+
   // Collect refs from root-level composition keywords.
   if (typeof schema === 'object' && schema !== null && hasOneOf(schema)) {
     for (const item of schema.oneOf) {

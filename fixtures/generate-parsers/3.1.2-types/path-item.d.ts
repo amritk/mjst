@@ -18,7 +18,7 @@ export type PathItemObject = {
     /** An alternative `servers` array to service all operations in this path. If a `servers` array is specified at the [OpenAPI Object](https://spec.openapis.org/oas/v3.1#oas-servers) level, it will be overridden by this value. */
     servers?: ServerObject[];
     /** A list of parameters that are applicable for all the operations described under this path. These parameters can be overridden at the operation level, but cannot be removed there. The list MUST NOT include duplicated parameters. A unique parameter is defined by a combination of a [name](https://spec.openapis.org/oas/v3.1#parameter-name) and [location](https://spec.openapis.org/oas/v3.1#parameter-in). The list can use the [Reference Object](https://spec.openapis.org/oas/v3.1#reference-object) to link to parameters that are defined in the [OpenAPI Object's `components.parameters`](https://spec.openapis.org/oas/v3.1#components-parameters). */
-    parameters?: ParameterObject | ReferenceObject[];
+    parameters?: (ParameterObject | ReferenceObject)[];
     /** A definition of a GET operation on this path. */
     get?: OperationObject;
     /** A definition of a PUT operation on this path. */

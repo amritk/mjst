@@ -16,7 +16,12 @@ const DOCUMENTATION_FALLBACKS: Record<string, string> = {
   'header-object': 'parameter-object',
 }
 
-const getConditionalObjectSchema = (schema: JSONSchema): JSONSchema.Object | null => {
+type ConditionalObjectResult = {
+  schema: JSONSchema.Object
+  thenRef: string | null
+}
+
+const getConditionalObjectSchema = (schema: JSONSchema): ConditionalObjectResult | null => {
   if (!isSchemaObject(schema)) {
     return null
   }
@@ -72,10 +77,15 @@ const getConditionalObjectSchema = (schema: JSONSchema): JSONSchema.Object | nul
     }
   }
 
+  const thenRef = typeof thenSchema.$ref === 'string' ? thenSchema.$ref : null
+
   return {
-    type: 'object',
-    properties,
-    ...(required.size > 0 ? { required: Array.from(required) } : {}),
+    schema: {
+      type: 'object',
+      properties,
+      ...(required.size > 0 ? { required: Array.from(required) } : {}),
+    },
+    thenRef,
   }
 }
 
@@ -88,7 +98,9 @@ const isObjectLikeSchema = (schema: JSONSchema): schema is JSONSchema.Object => 
     return true
   }
 
-  return 'patternProperties' in schema || 'additionalProperties' in schema || ('if' in schema && 'then' in schema)
+  return (
+    'patternProperties' in schema || 'additionalProperties' in schema || ('if' in schema && 'then' in schema)
+  )
 }
 
 const getBooleanSubSchemaType = (schema: boolean): string => {
@@ -186,9 +198,13 @@ const getTypeScriptType = (schema: JSONSchema): string => {
   }
 
   // Handle object-like conditional schemas that use if/then without declaring type
-  const conditionalObjectSchema = getConditionalObjectSchema(schema)
-  if (conditionalObjectSchema) {
-    return getTypeScriptType(conditionalObjectSchema)
+  const conditionalResult = getConditionalObjectSchema(schema)
+  if (conditionalResult) {
+    const baseType = getTypeScriptType(conditionalResult.schema)
+    if (conditionalResult.thenRef) {
+      return `(${baseType}) & ${refToName(conditionalResult.thenRef)}`
+    }
+    return baseType
   }
 
   // No type so we return unknown
@@ -275,7 +291,9 @@ const getTypeScriptType = (schema: JSONSchema): string => {
     case 'array':
       if (schema.items) {
         const itemType = getTypeScriptType(schema.items)
-        return `${itemType}[]`
+        // Wrap union types in parentheses so `(A | B)[]` is not misread as `A | B[]`
+        const wrappedItemType = itemType.includes(' | ') ? `(${itemType})` : itemType
+        return `${wrappedItemType}[]`
       }
       return 'unknown[]'
 
@@ -384,16 +402,25 @@ export const generateTypeDefinition = (
   }
 
   if (isObjectLikeSchema(schema)) {
-    const normalizedSchema = getConditionalObjectSchema(schema) ?? schema
+    const conditionalResult = getConditionalObjectSchema(schema)
+    const normalizedSchema = conditionalResult?.schema ?? schema
+    const conditionalThenRef = conditionalResult?.thenRef ?? null
     let documentation: ObjectDocumentation | null = null
 
-    // Fetch documentation if $comment contains an OpenAPI spec URL
-    if (markdownDocumentation && schema.$comment && typeof schema.$comment === 'string') {
-      const fragmentId = schema.$comment.split('#')[1]
-      const fallbackFragment = fragmentId ? DOCUMENTATION_FALLBACKS[fragmentId] : undefined
-      const baseUrl = schema.$comment.split('#')[0]
-      const fallbackCommentUrl = fallbackFragment ? `${baseUrl}#${fallbackFragment}` : undefined
-      documentation = parseDocumentation(markdownDocumentation, schema.$comment, fallbackCommentUrl)
+    // Fetch documentation from $comment: URL comments look up the markdown spec,
+    // plain-text comments are used directly as the JSDoc description.
+    if (schema.$comment && typeof schema.$comment === 'string') {
+      if (schema.$comment.startsWith('http')) {
+        if (markdownDocumentation) {
+          const fragmentId = schema.$comment.split('#')[1]
+          const fallbackFragment = fragmentId ? DOCUMENTATION_FALLBACKS[fragmentId] : undefined
+          const baseUrl = schema.$comment.split('#')[0]
+          const fallbackCommentUrl = fallbackFragment ? `${baseUrl}#${fallbackFragment}` : undefined
+          documentation = parseDocumentation(markdownDocumentation, schema.$comment, fallbackCommentUrl)
+        }
+      } else {
+        documentation = { title: typeName, description: schema.$comment, properties: {} }
+      }
     }
 
     const hasProperties = normalizedSchema.properties && Object.keys(normalizedSchema.properties).length > 0
@@ -514,6 +541,10 @@ export const generateTypeDefinition = (
     }
 
     let typeBody = '{\n' + properties + '\n}'
+
+    if (conditionalThenRef) {
+      typeBody += ' & ' + refToName(conditionalThenRef)
+    }
 
     for (const intersectionType of allOfIntersections) {
       typeBody += ' & ' + intersectionType
