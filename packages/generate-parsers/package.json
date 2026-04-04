@@ -25,6 +25,18 @@
       "bun": "./src/index.ts",
       "default": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./generators/*": {
+      "bun": "./src/generators/*.ts",
+      "default": "./dist/generators/*.js"
+    },
+    "./helpers/*": {
+      "bun": "./src/helpers/*.ts",
+      "default": "./dist/helpers/*.js"
+    },
+    "./type-guards/*": {
+      "bun": "./src/type-guards/*.ts",
+      "default": "./dist/type-guards/*.js"
     }
   },
   "dependencies": {

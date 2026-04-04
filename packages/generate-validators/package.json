@@ -1,0 +1,30 @@
+{
+  "name": "generate-validators",
+  "version": "0.1.0",
+  "description": "Generate TypeScript validation functions from JSON Schemas.",
+  "module": "./dist/index.js",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "bun run build:code && bun run build:types",
+    "build:code": "bun build ./src/index.ts --outdir=dist",
+    "build:types": "tsc -p ."
+  },
+  "imports": {
+    "#generators/*": "./src/generators/*.ts",
+    "#templates/*": "./src/templates/*.ts"
+  },
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "dependencies": {
+    "generate-parsers": "workspace:*",
+    "json-schema-typed": "catalog:"
+  }
+}
