@@ -24,7 +24,7 @@
     }
   },
   "dependencies": {
-    "generate-parsers": "workspace:*",
-    "json-schema-typed": "catalog:"
+    "json-schema-typed": "catalog:",
+    "mjst-helpers": "workspace:*"
   }
 }

@@ -5,13 +5,7 @@
     "declaration": true,
     "emitDeclarationOnly": true,
     "outDir": "dist",
-    "rootDir": "src",
-    "paths": {
-      "mjst-helpers/*": ["../../packages/helpers/src/*"],
-      "generate-parsers/generators/*": ["../generate-parsers/src/generators/*"],
-      "generate-parsers/helpers/*": ["../generate-parsers/src/helpers/*"],
-      "generate-parsers/type-guards/*": ["../generate-parsers/src/type-guards/*"]
-    }
+    "rootDir": "src"
   },
   "include": ["src/**/*.ts"],
   "exclude": ["**/*.test.ts", "src/templates/*.ts"]

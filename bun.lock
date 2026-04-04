@@ -51,13 +51,16 @@
       "name": "generate-validators",
       "version": "0.1.0",
       "dependencies": {
-        "generate-parsers": "workspace:*",
         "json-schema-typed": "catalog:",
+        "mjst-helpers": "workspace:*",
       },
     },
     "packages/helpers": {
       "name": "mjst-helpers",
       "version": "0.1.0",
+      "dependencies": {
+        "json-schema-typed": "catalog:",
+      },
     },
   },
   "catalog": {

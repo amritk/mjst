@@ -18,7 +18,7 @@ import {
   hasRequired,
   hasType,
   hasUniqueItems,
-} from '#type-guards/schema-guards'
+} from 'mjst-helpers/schema-guards'
 import { generateEnumCheck } from './generate-enum-check'
 
 /**

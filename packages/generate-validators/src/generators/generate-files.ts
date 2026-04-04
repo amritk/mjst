@@ -1,5 +1,5 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { generateTypeDefinition } from 'generate-parsers/generators/generate-type-definition'
+import { generateTypeDefinition } from 'mjst-helpers/generate-type-definition'
 import { collectValidatorImports } from './collect-validator-imports'
 import { generateValidatorFunction } from './generate-validator-function'
 

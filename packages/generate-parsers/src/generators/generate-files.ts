@@ -2,8 +2,9 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { collectHelpers } from '#helpers/collect-helpers'
 import { collectImports } from '#helpers/collect-imports'
 
+import { generateTypeDefinition } from 'mjst-helpers/generate-type-definition'
+
 import { generateParserFunction } from './generate-parser-function'
-import { generateTypeDefinition } from './generate-type-definition'
 
 /**
  * Options for controlling what gets generated in a file.

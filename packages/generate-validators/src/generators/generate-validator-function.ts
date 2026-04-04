@@ -1,6 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { refToName } from 'generate-parsers/helpers/ref-to-name'
-import { safeKey } from 'generate-parsers/helpers/safe-accessor'
+import { refToName } from 'mjst-helpers/ref-to-name'
+import { safeKey } from 'mjst-helpers/safe-accessor'
 import {
   hasAdditionalProperties,
   hasEnum,
@@ -20,7 +20,7 @@ import {
   hasType,
   isObjectSchema,
   isSchemaObject,
-} from 'generate-parsers/type-guards/schema-guards'
+} from 'mjst-helpers/schema-guards'
 
 /**
  * Derives the validator function name from a type name.

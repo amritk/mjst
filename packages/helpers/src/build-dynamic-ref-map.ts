@@ -1,5 +1,5 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { isSchemaObject } from '#type-guards/schema-guards'
+import { isSchemaObject } from './schema-guards'
 
 /**
  * Builds a map of $dynamicRef anchor values to their corresponding $ref paths.

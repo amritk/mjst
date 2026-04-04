@@ -15,9 +15,7 @@
   "imports": {
     "#generators/*": "./src/generators/*.ts",
     "#helpers/*": "./src/helpers/*.ts",
-    "#type-guards/*": "./src/type-guards/*.ts",
     "#types/*": "./src/types/*.ts",
-    "#validators/*": "./src/validators/*.ts",
     "#templates/*": "./src/templates/*.ts"
   },
   "exports": {
@@ -25,18 +23,6 @@
       "bun": "./src/index.ts",
       "default": "./dist/index.js",
       "types": "./dist/index.d.ts"
-    },
-    "./generators/*": {
-      "bun": "./src/generators/*.ts",
-      "default": "./dist/generators/*.js"
-    },
-    "./helpers/*": {
-      "bun": "./src/helpers/*.ts",
-      "default": "./dist/helpers/*.js"
-    },
-    "./type-guards/*": {
-      "bun": "./src/type-guards/*.ts",
-      "default": "./dist/type-guards/*.js"
     }
   },
   "dependencies": {

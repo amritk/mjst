@@ -1,8 +1,8 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from 'generate-parsers/type-guards/schema-guards'
-import { refToFilename } from 'generate-parsers/helpers/ref-to-filename'
-import { refToName } from 'generate-parsers/helpers/ref-to-name'
-import { resolveRef } from 'generate-parsers/helpers/resolve-ref'
+import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from 'mjst-helpers/schema-guards'
+import { refToFilename } from 'mjst-helpers/ref-to-filename'
+import { refToName } from 'mjst-helpers/ref-to-name'
+import { resolveRef } from 'mjst-helpers/resolve-ref'
 
 /**
  * Options for controlling how validator imports are collected.

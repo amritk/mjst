@@ -29,10 +29,7 @@
 
     // Workspace package resolution (Bun doesn't symlink workspace packages)
     "paths": {
-      "mjst-helpers/*": ["./packages/helpers/src/*"],
-      "generate-parsers/generators/*": ["./packages/generate-parsers/src/generators/*"],
-      "generate-parsers/helpers/*": ["./packages/generate-parsers/src/helpers/*"],
-      "generate-parsers/type-guards/*": ["./packages/generate-parsers/src/type-guards/*"]
+      "mjst-helpers/*": ["./packages/helpers/src/*"]
     }
   }
 }
