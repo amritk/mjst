@@ -2,7 +2,7 @@
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { generateMarkdown } from 'generate-markdown'
-import { buildSchema, validateDocument } from 'generate-parsers'
+import { buildSchema } from 'generate-parsers'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { loadConfig } from './load-config'
@@ -51,29 +51,14 @@ const run = async (): Promise<void> => {
     process.exit(1)
   }
 
-  const schemaPath = resolve(config.schema)
-  const raw = await readFile(schemaPath, 'utf-8')
-  const schema: unknown = JSON.parse(raw)
-
-  if (config.validate) {
-    const result = await validateDocument(schema)
-
-    if (result === true) {
-      console.log('Valid')
-      return
-    }
-
-    console.error('Invalid document:')
-    for (const error of result.errors) {
-      console.error(`  ${error.path ? `${error.path}: ` : ''}${error.message}`)
-    }
-    process.exit(1)
-  }
-
   if (!config.outDir) {
     console.error('Error: --outDir is required. Provide an output directory for generated files.')
     process.exit(1)
   }
+
+  const schemaPath = resolve(config.schema)
+  const raw = await readFile(schemaPath, 'utf-8')
+  const schema: unknown = JSON.parse(raw)
 
   const markdownDocumentation = config.docs ? await readFile(resolve(config.docs), 'utf-8') : undefined
 
