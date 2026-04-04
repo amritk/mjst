@@ -134,4 +134,37 @@ describe('parse-cli-args', () => {
       build: true,
     })
   })
+
+  it('parses --validate boolean flag', () => {
+    const result = parseCliArgs(['--validate'])
+
+    expect(result).toEqual({
+      validate: true,
+    })
+  })
+
+  it('parses --validate=true with equals syntax', () => {
+    const result = parseCliArgs(['--validate=true'])
+
+    expect(result).toEqual({
+      validate: true,
+    })
+  })
+
+  it('parses --validate=false with equals syntax', () => {
+    const result = parseCliArgs(['--validate=false'])
+
+    expect(result).toEqual({
+      validate: false,
+    })
+  })
+
+  it('parses --validate alongside --schema', () => {
+    const result = parseCliArgs(['--schema', 'schema.json', '--validate'])
+
+    expect(result).toEqual({
+      schema: 'schema.json',
+      validate: true,
+    })
+  })
 })

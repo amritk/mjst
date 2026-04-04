@@ -19,4 +19,9 @@ export type CliConfig = {
    * The .ts source files are removed after compilation.
    */
   readonly build?: boolean
+  /**
+   * When true, validate the schema and print any errors without generating files.
+   * Exits with code 0 if valid, 1 if invalid.
+   */
+  readonly validate?: boolean
 }
