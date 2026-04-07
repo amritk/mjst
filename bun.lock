@@ -47,9 +47,20 @@
         "vitest": "^4.1.2",
       },
     },
+    "packages/generate-validators": {
+      "name": "generate-validators",
+      "version": "0.1.0",
+      "dependencies": {
+        "json-schema-typed": "catalog:",
+        "mjst-helpers": "workspace:*",
+      },
+    },
     "packages/helpers": {
       "name": "mjst-helpers",
       "version": "0.1.0",
+      "dependencies": {
+        "json-schema-typed": "catalog:",
+      },
     },
   },
   "catalog": {
@@ -343,6 +354,8 @@
     "generate-markdown": ["generate-markdown@workspace:packages/generate-markdown"],
 
     "generate-parsers": ["generate-parsers@workspace:packages/generate-parsers"],
+
+    "generate-validators": ["generate-validators@workspace:packages/generate-validators"],
 
     "get-own-enumerable-keys": ["get-own-enumerable-keys@1.0.0", "", {}, "sha512-PKsK2FSrQCyxcGHsGrLDcK0lx+0Ke+6e8KFFozA9/fIQLhQzPaRvJFdcz7+Axg3jUH/Mq+NI4xa5u/UT2tQskA=="],
 

@@ -1,7 +1,7 @@
 {
-  "name": "generate-parsers",
+  "name": "generate-validators",
   "version": "0.1.0",
-  "description": "Generate TypeScript parsers and type definitions from JSON Schemas.",
+  "description": "Generate TypeScript validation functions from JSON Schemas.",
   "module": "./dist/index.js",
   "type": "module",
   "files": [
@@ -14,8 +14,6 @@
   },
   "imports": {
     "#generators/*": "./src/generators/*.ts",
-    "#helpers/*": "./src/helpers/*.ts",
-    "#types/*": "./src/types/*.ts",
     "#templates/*": "./src/templates/*.ts"
   },
   "exports": {
@@ -26,9 +24,7 @@
     }
   },
   "dependencies": {
-    "@scalar/typebox": "^0.1.3",
     "json-schema-typed": "catalog:",
-    "mjst-helpers": "workspace:*",
-    "vitest": "^4.1.2"
+    "mjst-helpers": "workspace:*"
   }
 }

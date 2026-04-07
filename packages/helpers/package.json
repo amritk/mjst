@@ -1,7 +1,7 @@
 {
   "name": "mjst-helpers",
   "version": "0.1.0",
-  "description": "Generate TypeScript parsers and type definitions from JSON Schemas.",
+  "description": "Shared utilities for the mjst code generation ecosystem.",
   "type": "module",
   "files": [
     "dist"
@@ -11,11 +11,69 @@
     "build:code": "bun build ./src/**/*.ts --outdir=dist",
     "build:types": "tsc -p ."
   },
+  "dependencies": {
+    "json-schema-typed": "catalog:"
+  },
   "exports": {
+    "./build-dynamic-ref-map": {
+      "bun": "./src/build-dynamic-ref-map.ts",
+      "default": "./dist/build-dynamic-ref-map.js",
+      "types": "./dist/build-dynamic-ref-map.d.ts"
+    },
+    "./extract-refs": {
+      "bun": "./src/extract-refs.ts",
+      "default": "./dist/extract-refs.js",
+      "types": "./dist/extract-refs.d.ts"
+    },
+    "./generate-type-definition": {
+      "bun": "./src/generate-type-definition.ts",
+      "default": "./dist/generate-type-definition.js",
+      "types": "./dist/generate-type-definition.d.ts"
+    },
     "./is-object": {
       "bun": "./src/is-object.ts",
       "default": "./dist/is-object.js",
       "types": "./dist/is-object.d.ts"
+    },
+    "./parse-documentation": {
+      "bun": "./src/parse-documentation.ts",
+      "default": "./dist/parse-documentation.js",
+      "types": "./dist/parse-documentation.d.ts"
+    },
+    "./ref-to-filename": {
+      "bun": "./src/ref-to-filename.ts",
+      "default": "./dist/ref-to-filename.js",
+      "types": "./dist/ref-to-filename.d.ts"
+    },
+    "./ref-to-name": {
+      "bun": "./src/ref-to-name.ts",
+      "default": "./dist/ref-to-name.js",
+      "types": "./dist/ref-to-name.d.ts"
+    },
+    "./resolve-dynamic-refs": {
+      "bun": "./src/resolve-dynamic-refs.ts",
+      "default": "./dist/resolve-dynamic-refs.js",
+      "types": "./dist/resolve-dynamic-refs.d.ts"
+    },
+    "./resolve-ref": {
+      "bun": "./src/resolve-ref.ts",
+      "default": "./dist/resolve-ref.js",
+      "types": "./dist/resolve-ref.d.ts"
+    },
+    "./safe-accessor": {
+      "bun": "./src/safe-accessor.ts",
+      "default": "./dist/safe-accessor.js",
+      "types": "./dist/safe-accessor.d.ts"
+    },
+    "./schema-guards": {
+      "bun": "./src/schema-guards.ts",
+      "default": "./dist/schema-guards.js",
+      "types": "./dist/schema-guards.d.ts"
+    },
+    "./upgrade-draft07-schema": {
+      "bun": "./src/upgrade-draft07-schema.ts",
+      "default": "./dist/upgrade-draft07-schema.js",
+      "types": "./dist/upgrade-draft07-schema.d.ts"
     },
     "./validate-array": {
       "bun": "./src/validate-array.ts",

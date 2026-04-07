@@ -1,8 +1,8 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { type ObjectDocumentation, parseDocumentation } from '#helpers/parse-documentation'
-import { refToName } from '#helpers/ref-to-name'
-import { safeKey } from '#helpers/safe-accessor'
-import { isObjectSchema, isSchemaObject } from '#type-guards/schema-guards'
+import { type ObjectDocumentation, parseDocumentation } from './parse-documentation'
+import { refToName } from './ref-to-name'
+import { safeKey } from './safe-accessor'
+import { isObjectSchema, isSchemaObject } from './schema-guards'
 
 /**
  * Some OpenAPI sections delegate their field definitions to another section

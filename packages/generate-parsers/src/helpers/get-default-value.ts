@@ -10,7 +10,7 @@ import {
   hasPattern,
   hasType,
   isSchemaObject,
-} from '#type-guards/schema-guards'
+} from 'mjst-helpers/schema-guards'
 
 /**
  * Returns the default value for a JSON Schema property.

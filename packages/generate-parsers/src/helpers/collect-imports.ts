@@ -1,8 +1,8 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from '#type-guards/schema-guards'
-import { refToFilename } from './ref-to-filename'
-import { refToName } from './ref-to-name'
-import { resolveRef } from './resolve-ref'
+import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from 'mjst-helpers/schema-guards'
+import { refToFilename } from 'mjst-helpers/ref-to-filename'
+import { refToName } from 'mjst-helpers/ref-to-name'
+import { resolveRef } from 'mjst-helpers/resolve-ref'
 
 const getImportPathForFilename = (filename: string): string => `./${filename}`
 
