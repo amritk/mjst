@@ -138,4 +138,69 @@ describe('document', () => {
     })
     expect((result as Record<string, unknown>)['x-internal-id']).toBe('abc123')
   })
+
+  it('parsed document is a new object independent of the input', () => {
+    const input = { openapi: '3.1.0', info: { title: 'My API', version: '1.0' } }
+    const result = parseDocument(input)
+    result.openapi = '4.0.0'
+    expect(input.openapi).toBe('3.1.0')
+  })
+
+  it('parsed info object is independent of the input info', () => {
+    const input = { openapi: '3.1.0', info: { title: 'My API', version: '1.0' } }
+    const result = parseDocument(input)
+    result.info.title = 'modified'
+    expect(input.info.title).toBe('My API')
+  })
+
+  it('parsed info version is independent of the input info version', () => {
+    const input = { openapi: '3.1.0', info: { title: 'My API', version: '1.0' } }
+    const result = parseDocument(input)
+    result.info.version = 'modified'
+    expect(input.info.version).toBe('1.0')
+  })
+
+  it('modifying a parsed server does not affect the original servers array entry', () => {
+    const input = {
+      openapi: '3.1.0',
+      info: { title: 'My API', version: '1.0' },
+      servers: [{ url: 'https://api.example.com', description: 'Production' }],
+    }
+    const result = parseDocument(input)
+    result.servers![0].url = 'https://modified.com'
+    expect(input.servers![0].url).toBe('https://api.example.com')
+  })
+
+  it('pushing to the parsed servers array does not affect the original', () => {
+    const input = {
+      openapi: '3.1.0',
+      info: { title: 'My API', version: '1.0' },
+      servers: [{ url: 'https://api.example.com' }],
+    }
+    const result = parseDocument(input)
+    result.servers!.push({ url: 'https://new.example.com' })
+    expect(input.servers!.length).toBe(1)
+  })
+
+  it('modifying a parsed tag does not affect the original tags', () => {
+    const input = {
+      openapi: '3.1.0',
+      info: { title: 'My API', version: '1.0' },
+      tags: [{ name: 'pets', description: 'Pet operations' }],
+    }
+    const result = parseDocument(input)
+    result.tags![0].name = 'modified'
+    expect(input.tags![0].name).toBe('pets')
+  })
+
+  it('pushing to the parsed tags array does not affect the original', () => {
+    const input = {
+      openapi: '3.1.0',
+      info: { title: 'My API', version: '1.0' },
+      tags: [{ name: 'pets' }],
+    }
+    const result = parseDocument(input)
+    result.tags!.push({ name: 'new-tag' })
+    expect(input.tags!.length).toBe(1)
+  })
 })
