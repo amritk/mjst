@@ -239,12 +239,20 @@ describe('generateTypeDefinition', () => {
     expect(result).toStrictEqual('export type NoType = {\n' + '  field?: string;\n' + '};')
   })
 
-  it('generates type for boolean schema', () => {
+  it('generates type for boolean schema true (any value valid)', () => {
     const schema = true
 
     const result = generateTypeDefinition(schema, 'BooleanSchema')
 
-    expect(result).toStrictEqual('export type BooleanSchema = boolean;')
+    expect(result).toStrictEqual('export type BooleanSchema = unknown;')
+  })
+
+  it('generates type for boolean schema false (no value valid)', () => {
+    const schema = false
+
+    const result = generateTypeDefinition(schema, 'NeverSchema')
+
+    expect(result).toStrictEqual('export type NeverSchema = never;')
   })
 
   it('generates type for array of arrays of objects', () => {

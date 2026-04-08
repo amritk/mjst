@@ -4,7 +4,7 @@ import { validateRecord } from 'mjst-helpers/validate-record';
 import { isObject } from 'mjst-helpers/is-object';
 
 export type ExamplesObject = {
-  example?: boolean;
+  example?: unknown;
   examples?: Record<string, ExampleObject | ReferenceObject>;
 };
 

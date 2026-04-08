@@ -125,9 +125,9 @@ const buildJsDocBlock = (documentation: ObjectDocumentation, commentUrl: string 
  * Recursively handles nested objects and arrays.
  */
 const getTypeScriptType = (schema: JSONSchema): string => {
-  // Boolean
+  // Boolean schema: `true` means any value is valid (unknown), `false` means no value is valid (never)
   if (typeof schema === 'boolean') {
-    return 'boolean'
+    return getBooleanSubSchemaType(schema)
   }
 
   // Check if schema is an object (not a boolean schema)

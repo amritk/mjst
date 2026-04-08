@@ -14,7 +14,7 @@ import { isObject } from 'mjst-helpers/is-object';
 */
 export type MediaTypeObject = {
   /** Example of the media type; see [Working With Examples](https://spec.openapis.org/oas/v3.1#working-with-examples). */
-  example?: boolean;
+  example?: unknown;
   /** Examples of the media type; see [Working With Examples](https://spec.openapis.org/oas/v3.1#working-with-examples). */
   examples?: Record<string, ExampleObject | ReferenceObject>;
   /** The schema defining the content of the request, response, parameter, or header. */

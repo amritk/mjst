@@ -14,7 +14,7 @@ import { isObject } from 'mjst-helpers/is-object';
 */
 export type HeaderObject = {
   /** Example of the header's potential value; see [Working With Examples](https://spec.openapis.org/oas/v3.2#working-with-examples). */
-  example?: boolean;
+  example?: unknown;
   /** Examples of the header's potential value; see [Working With Examples](https://spec.openapis.org/oas/v3.2#working-with-examples). */
   examples?: Record<string, ExampleObject | ReferenceObject>;
   /** A brief description of the header. This could contain examples of use. [CommonMark syntax](https://spec.commonmark.org/) MAY be used for rich text representation. */

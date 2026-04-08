@@ -14,7 +14,7 @@ import { isObject } from 'mjst-helpers/is-object';
 */
 export type ParameterObject = {
   /** Example of the parameter's potential value; see [Working With Examples](https://spec.openapis.org/oas/v3.2#working-with-examples). */
-  example?: boolean;
+  example?: unknown;
   /** Examples of the parameter's potential value; see [Working With Examples](https://spec.openapis.org/oas/v3.2#working-with-examples). */
   examples?: Record<string, ExampleObject | ReferenceObject>;
   /** **REQUIRED**. The name of the parameter. Parameter names are _case-sensitive_. <ul><li>If [`in`](https://spec.openapis.org/oas/v3.2#parameter-in) is `"path"`, the `name` field MUST correspond to a single template expression occurring within the [path](https://spec.openapis.org/oas/v3.2#paths-path) field in the [Paths Object](https://spec.openapis.org/oas/v3.2#paths-object). See [Path Templating](https://spec.openapis.org/oas/v3.2#path-templating) for further information.<li>If [`in`](https://spec.openapis.org/oas/v3.2#parameter-in) is `"header"` and the `name` field is `"Accept"`, `"Content-Type"` or `"Authorization"`, the parameter definition SHALL be ignored.<li>If `in` is `"querystring"`, or for [certain combinations](https://spec.openapis.org/oas/v3.2#style-examples) of [`style`](https://spec.openapis.org/oas/v3.2#parameter-style) and [`explode`](https://spec.openapis.org/oas/v3.2#parameter-explode), the value of `name` is not used in the parameter serialization.<li>For all other cases, the `name` corresponds to the parameter name used by the [`in`](https://spec.openapis.org/oas/v3.2#parameter-in) field.</ul> */
