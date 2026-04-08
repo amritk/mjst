@@ -202,7 +202,7 @@ describe('generate-validation-expression', () => {
     const schema = { enum: ['red', 'green', 'blue'] }
     const result = generateValidationExpression('color', schema, '"red"', true)
 
-    expect(result).toContain('["red","green","blue"].includes(input?.color)')
+    expect(result).toContain('["red","green","blue"].includes(input?.color as never)')
   })
 
   it('generates enum validation with type', () => {
@@ -210,7 +210,7 @@ describe('generate-validation-expression', () => {
     const result = generateValidationExpression('status', schema, '"active"', true)
 
     expect(result).toContain('typeof input?.status === "string"')
-    expect(result).toContain('["active","inactive"].includes(input?.status)')
+    expect(result).toContain('["active","inactive"].includes(input?.status as never)')
   })
 
   it('handles $ref resolution', () => {

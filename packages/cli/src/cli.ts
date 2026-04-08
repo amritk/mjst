@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { generateMarkdown } from 'generate-markdown'
 import { buildSchema } from 'generate-parsers'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
@@ -78,6 +78,9 @@ const run = async (): Promise<void> => {
   if (config.build) {
     // Write a minimal tsconfig so tsc can compile the generated files without
     // inheriting settings like allowImportingTsExtensions that block emission.
+    // Add paths so tsc can resolve mjst-helpers from the output directory.
+    const helpersDir = resolve(import.meta.dir, '../../helpers/dist')
+    const helpersRelative = relative(outputDir, helpersDir)
     const tsconfigContent = JSON.stringify(
       {
         compilerOptions: {
@@ -87,6 +90,9 @@ const run = async (): Promise<void> => {
           declaration: true,
           emitDeclarationOnly: config.typesOnly,
           skipLibCheck: true,
+          paths: {
+            'mjst-helpers/*': [`${helpersRelative}/*`],
+          },
         },
         include: ['./**/*.ts'],
       },

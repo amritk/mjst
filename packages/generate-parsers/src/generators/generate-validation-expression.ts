@@ -163,7 +163,7 @@ export const generateValidationExpression = (
       case 'string': {
         checks.push(`typeof ${accessor} === "string"`)
         if (hasPattern(schema)) {
-          checks.push(`/${schema.pattern}/.test(${accessor})`)
+          checks.push(`/${schema.pattern.replace(/\//g, '\\/')}/.test(${accessor})`)
         }
         if (hasMinLength(schema)) {
           checks.push(`${accessor}.length >= ${schema.minLength}`)

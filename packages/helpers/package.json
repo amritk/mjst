@@ -8,7 +8,7 @@
   ],
   "scripts": {
     "build": "bun run build:code && bun run build:types",
-    "build:code": "bun build ./src/**/*.ts --outdir=dist",
+    "build:code": "bun build ./src/build-dynamic-ref-map.ts ./src/extract-refs.ts ./src/generate-type-definition.ts ./src/is-object.ts ./src/parse-documentation.ts ./src/ref-to-filename.ts ./src/ref-to-name.ts ./src/resolve-dynamic-refs.ts ./src/resolve-ref.ts ./src/safe-accessor.ts ./src/schema-guards.ts ./src/upgrade-draft07-schema.ts ./src/validate-array.ts ./src/validate-record.ts --outdir=dist --root=src",
     "build:types": "tsc -p ."
   },
   "dependencies": {

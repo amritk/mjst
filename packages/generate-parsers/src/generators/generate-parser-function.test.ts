@@ -26,7 +26,7 @@ describe('generate-parser-function', () => {
     ...input,
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
     ...(_age !== undefined && { age: typeof _age === "number" ? _age : Number(_age) }),
-  };
+  } as unknown as UserObject;
 }`,
     )
   })
@@ -42,13 +42,13 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'ProductObject')
     expect(result).toBe(
       `export const parseProductObject = (input: unknown): ProductObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as ProductObject;
   const _id = input.id;
   if ((_id === undefined || typeof _id === "number")) return input as ProductObject;
   return {
     ...input,
     ...(_id !== undefined && { id: typeof _id === "number" ? _id : Number(_id) }),
-  };
+  } as unknown as ProductObject;
 }`,
     )
   })
@@ -99,7 +99,7 @@ describe('generate-parser-function', () => {
     id: typeof _id === "number" ? _id : (_id !== undefined ? Number(_id) : 0),
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
     ...(_email !== undefined && { email: typeof _email === "string" ? _email : String(_email) }),
-  };
+  } as unknown as UserObject;
 }`,
     )
   })
@@ -128,7 +128,7 @@ describe('generate-parser-function', () => {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? Number(_id) : 0),
     ...(_description !== undefined && { description: typeof _description === "string" ? _description : String(_description) }),
-  };
+  } as unknown as ItemObject;
 }`,
     )
   })
@@ -146,11 +146,11 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parseMixedObject = (input: unknown): MixedObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as MixedObject;
   return {
     ...input,
     ...(input.validProp !== undefined && { validProp: typeof input?.validProp === "string" ? input?.validProp : String(input?.validProp) }),
-  };
+  } as unknown as MixedObject;
 }`,
     )
   })
@@ -167,11 +167,11 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parseUserObject = (input: unknown): UserObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as UserObject;
   return {
     ...input,
     ...(input.contact !== undefined && { contact: input?.contact ?? undefined }),
-  };
+  } as unknown as UserObject;
 }`,
     )
   })
@@ -196,7 +196,7 @@ describe('generate-parser-function', () => {
   return {
     ...input,
     contact: parseContactObject(_contact),
-  };
+  } as unknown as UserObject;
 }`,
     )
   })
@@ -213,12 +213,12 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parseUserObject = (input: unknown): UserObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as UserObject;
   const _contact = input.contact;
   return {
     ...input,
     ...(_contact !== undefined && { contact: parseContactObject(_contact) }),
-  };
+  } as unknown as UserObject;
 }`,
     )
   })
@@ -246,7 +246,7 @@ describe('generate-parser-function', () => {
   return {
     ...input,
     contacts: validateArray(_contacts, parseContactObject),
-  };
+  } as unknown as UserObject;
 }`,
     )
   })
@@ -266,12 +266,12 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parseUserObject = (input: unknown): UserObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as UserObject;
   const _contacts = input.contacts;
   return {
     ...input,
     ...(_contacts !== undefined && { contacts: validateArray(_contacts, parseContactObject) }),
-  };
+  } as unknown as UserObject;
 }`,
     )
   })
@@ -291,13 +291,13 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parseUserObject = (input: unknown): UserObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as UserObject;
   const _contacts = input.contacts;
   if ((_contacts === undefined || Array.isArray(_contacts))) return input as UserObject;
   return {
     ...input,
     ...(_contacts !== undefined && { contacts: Array.isArray(_contacts) ? _contacts : [] }),
-  };
+  } as unknown as UserObject;
 }`,
     )
   })
@@ -392,7 +392,7 @@ describe('generate-parser-function', () => {
     ...(_tags !== undefined && { tags: Array.isArray(_tags) ? _tags : [] }),
     ...(_metadata !== undefined && { metadata: isObject(_metadata) ? _metadata : typeof _metadata === "object" && _metadata !== null ? _metadata : {} }),
     ...(_isActive !== undefined && { isActive: typeof _isActive === "boolean" ? _isActive : Boolean(_isActive) }),
-  };
+  } as unknown as ComplexObject;
 }`,
     )
   })
@@ -409,12 +409,12 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parseApiSpecObject = (input: unknown): ApiSpecObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as ApiSpecObject;
   const _externalDoc = input.externalDoc;
   return {
     ...input,
     ...(_externalDoc !== undefined && { externalDoc: parseExternalDocumentationObject(_externalDoc) }),
-  };
+  } as unknown as ApiSpecObject;
 }`,
     )
   })
@@ -445,7 +445,7 @@ describe('generate-parser-function', () => {
     contact: parseContactObject(_contact),
     ...(_address !== undefined && { address: parseAddressObject(_address) }),
     ...(_company !== undefined && { company: parseCompanyObject(_company) }),
-  };
+  } as unknown as UserObject;
 }`,
     )
   })
@@ -475,7 +475,7 @@ describe('generate-parser-function', () => {
     id: typeof input?.id === "number" ? input?.id : (input?.id !== undefined ? Number(input?.id) : 0),
     ...(_contact !== undefined && { contact: parseContactObject(_contact) }),
     name: typeof input?.name === "string" ? input?.name : (input?.name !== undefined ? String(input?.name) : ""),
-  };
+  } as unknown as UserObject;
 }`,
     )
   })
@@ -495,13 +495,13 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parseTaggedObject = (input: unknown): TaggedObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as TaggedObject;
   const _tags = input.tags;
   if ((_tags === undefined || Array.isArray(_tags))) return input as TaggedObject;
   return {
     ...input,
     ...(_tags !== undefined && { tags: Array.isArray(_tags) ? _tags : [] }),
-  };
+  } as unknown as TaggedObject;
 }`,
     )
   })
@@ -520,13 +520,13 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parseItemsContainerObject = (input: unknown): ItemsContainerObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as ItemsContainerObject;
   const _items = input.items;
   if ((_items === undefined || Array.isArray(_items))) return input as ItemsContainerObject;
   return {
     ...input,
     ...(_items !== undefined && { items: Array.isArray(_items) ? _items : [] }),
-  };
+  } as unknown as ItemsContainerObject;
 }`,
     )
   })
@@ -544,13 +544,13 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parseUserObject = (input: unknown): UserObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as UserObject;
   const _contact = input.contact;
   return {
     ...input,
     ...(_contact !== undefined && { contact: parseContactObject(_contact) }),
     ...(input.age !== undefined && { age: typeof input?.age === "number" ? input?.age : Number(input?.age) }),
-  };
+  } as unknown as UserObject;
 }`,
     )
   })
@@ -565,10 +565,10 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parseEmptyObject = (input: unknown): EmptyObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as EmptyObject;
   return {
     ...input,
-  };
+  } as unknown as EmptyObject;
 }`,
     )
   })
@@ -587,10 +587,10 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parseAllInvalidObject = (input: unknown): AllInvalidObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as AllInvalidObject;
   return {
     ...input,
-  };
+  } as unknown as AllInvalidObject;
 }`,
     )
   })
@@ -607,13 +607,13 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parseMyCustomTypeObject = (input: unknown): MyCustomTypeObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as MyCustomTypeObject;
   const _id = input.id;
   if ((_id === undefined || typeof _id === "number")) return input as MyCustomTypeObject;
   return {
     ...input,
     ...(_id !== undefined && { id: typeof _id === "number" ? _id : Number(_id) }),
-  };
+  } as unknown as MyCustomTypeObject;
 }`,
     )
   })
@@ -630,13 +630,13 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parsemyCustomTypeObject = (input: unknown): myCustomTypeObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as myCustomTypeObject;
   const _id = input.id;
   if ((_id === undefined || typeof _id === "number")) return input as myCustomTypeObject;
   return {
     ...input,
     ...(_id !== undefined && { id: typeof _id === "number" ? _id : Number(_id) }),
-  };
+  } as unknown as myCustomTypeObject;
 }`,
     )
   })
@@ -652,13 +652,13 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parseImplicitObject = (input: unknown): ImplicitObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as ImplicitObject;
   const _name = input.name;
   if ((_name === undefined || typeof _name === "string")) return input as ImplicitObject;
   return {
     ...input,
     ...(_name !== undefined && { name: typeof _name === "string" ? _name : String(_name) }),
-  };
+  } as unknown as ImplicitObject;
 }`,
     )
   })
@@ -724,13 +724,13 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parseContainerObject = (input: unknown): ContainerObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as ContainerObject;
   const _data = input.data;
   if ((_data === undefined || Array.isArray(_data))) return input as ContainerObject;
   return {
     ...input,
     ...(_data !== undefined && { data: Array.isArray(_data) ? _data : [] }),
-  };
+  } as unknown as ContainerObject;
 }`,
     )
   })
@@ -747,12 +747,12 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parseUserObject = (input: unknown): UserObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as UserObject;
   const _nested = input.nested;
   return {
     ...input,
     ...(_nested !== undefined && { nested: parseTypeObject(_nested) }),
-  };
+  } as unknown as UserObject;
 }`,
     )
   })
@@ -776,14 +776,14 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parseUserObject = (input: unknown): UserObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as UserObject;
   const _contacts = input.contacts;
   const _addresses = input.addresses;
   return {
     ...input,
     ...(_contacts !== undefined && { contacts: validateArray(_contacts, parseContactObject) }),
     ...(_addresses !== undefined && { addresses: validateArray(_addresses, parseAddressObject) }),
-  };
+  } as unknown as UserObject;
 }`,
     )
   })
@@ -802,7 +802,7 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parseUserObject = (input: unknown): UserObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as UserObject;
   const _id = input.id;
   const _name = input.name;
   if ((_id === undefined || typeof _id === "number") && (_name === undefined || typeof _name === "string")) return input as UserObject;
@@ -810,7 +810,7 @@ describe('generate-parser-function', () => {
     ...input,
     ...(_id !== undefined && { id: typeof _id === "number" ? _id : Number(_id) }),
     ...(_name !== undefined && { name: typeof _name === "string" ? _name : String(_name) }),
-  };
+  } as unknown as UserObject;
 }`,
     )
   })
@@ -827,13 +827,13 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parseUserObject = (input: unknown): UserObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as UserObject;
   const _id = input.id;
   if ((_id === undefined || typeof _id === "number")) return input as UserObject;
   return {
     ...input,
     ...(_id !== undefined && { id: typeof _id === "number" ? _id : Number(_id) }),
-  };
+  } as unknown as UserObject;
 }`,
     )
   })
@@ -941,7 +941,7 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(components, 'ComponentsObject', { useRefImports: true })
     expect(result).toBe(
       `export const parseComponentsObject = (input: unknown): ComponentsObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as ComponentsObject;
   const _responses = input.responses;
   const _parameters = input.parameters;
   const _examples = input.examples;
@@ -962,7 +962,7 @@ describe('generate-parser-function', () => {
     ...(_links !== undefined && { links: validateRecord(_links, parseLinkObject) }),
     ...(_callbacks !== undefined && { callbacks: validateRecord(_callbacks, parseCallbacksObject) }),
     ...(_pathItems !== undefined && { pathItems: validateRecord(_pathItems, parsePathItemObject) }),
-  };
+  } as unknown as ComponentsObject;
 }`,
     )
   })
@@ -998,15 +998,15 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parsePathsObject = (input: unknown): PathsObject => {
   if (!isObject(input)) {
-    return {};
+    return {} as unknown as PathsObject;
   }
-  const result: PathsObject = {
+  const result = {
     ...input,
-  };
+  } as unknown as PathsObject;
   for (const key in input) {
     if (/^\\//.test(key)) {
       const value = input[key];
-      result[key] = parsePathItemObject(value);
+      (result as Record<string, unknown>)[key] = parsePathItemObject(value);
     }
   }
   return result;
@@ -1091,15 +1091,15 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseSimplePaths = (input: unknown): SimplePaths => {
   if (!isObject(input)) {
-    return {};
+    return {} as unknown as SimplePaths;
   }
-  const result: SimplePaths = {
+  const result = {
     ...input,
-  };
+  } as unknown as SimplePaths;
   for (const key in input) {
     if (/^\\//.test(key)) {
       const value = input[key];
-      result[key] = parsePathItemObject(value);
+      (result as Record<string, unknown>)[key] = parsePathItemObject(value);
     }
   }
   return result;
@@ -1150,7 +1150,7 @@ describe('generate-parser-function', () => {
     ...(_webhooks !== undefined && { webhooks: validateRecord(_webhooks, parsePathItemObject) }),
     ...(_components !== undefined && { components: parseComponentsObject(_components) }),
     ...(_externalDocs !== undefined && { externalDocs: parseExternalDocumentationObject(_externalDocs) }),
-  };
+  } as unknown as Document;
 }`)
   })
 
@@ -1237,7 +1237,7 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'ComponentsObject', { useRefImports: true })
     expect(result).toBe(
       `export const parseComponentsObject = (input: unknown): ComponentsObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as ComponentsObject;
   const _responses = input.responses;
   const _parameters = input.parameters;
   const _examples = input.examples;
@@ -1259,7 +1259,7 @@ describe('generate-parser-function', () => {
     ...(_links !== undefined && { links: validateRecord(_links, parseLinkObject) }),
     ...(_callbacks !== undefined && { callbacks: validateRecord(_callbacks, parseCallbacksObject) }),
     ...(_pathItems !== undefined && { pathItems: validateRecord(_pathItems, parsePathItemObject) }),
-  };
+  } as unknown as ComponentsObject;
 }`,
     )
   })
@@ -1282,16 +1282,16 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseResponsesObject = (input: unknown): ResponsesObject => {
   if (!isObject(input)) {
-    return {};
+    return {} as unknown as ResponsesObject;
   }
-  const result: ResponsesObject = {
+  const result = {
     ...input,
     ...(input.default && { default: isObject(input.default) && '$ref' in input.default ? input.default : parseResponseObject(input.default) }),
-  };
+  } as unknown as ResponsesObject;
   for (const key in input) {
     if (/^[1-5](?:[0-9]{2}|XX)$/.test(key)) {
       const value = input[key];
-      result[key] = isObject(value) && '$ref' in value ? value : parseResponseObject(value);
+      (result as Record<string, unknown>)[key] = isObject(value) && '$ref' in value ? value : parseResponseObject(value);
     }
   }
   return result;
@@ -1639,7 +1639,7 @@ describe('generate-parser-function', () => {
     price: typeof _price === "number" && _price >= 0 ? _price : (_price !== undefined ? Number(_price) : 0),
     ...(_inStock !== undefined && { inStock: typeof _inStock === "boolean" ? _inStock : Boolean(_inStock) }),
     ...(_tags !== undefined && { tags: Array.isArray(_tags) ? _tags : [] }),
-  };
+  } as unknown as Product;
 }`,
     )
   })
@@ -1659,7 +1659,7 @@ describe('generate-parser-function', () => {
 
     expect(result).toBe(
       `export const parsePageParams = (input: unknown): PageParams => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as PageParams;
   const _page = input.page;
   const _perPage = input.perPage;
   const _search = input.search;
@@ -1669,7 +1669,7 @@ describe('generate-parser-function', () => {
     ...(_page !== undefined && { page: typeof _page === "number" && _page >= 1 ? _page : Number(_page) }),
     ...(_perPage !== undefined && { perPage: typeof _perPage === "number" && _perPage >= 1 && _perPage <= 100 ? _perPage : Number(_perPage) }),
     ...(_search !== undefined && { search: typeof _search === "string" ? _search : String(_search) }),
-  };
+  } as unknown as PageParams;
 }`,
     )
   })
@@ -1720,7 +1720,7 @@ describe('generate-parser-function', () => {
     longitude: typeof _longitude === "number" && _longitude >= -180 && _longitude <= 180 ? _longitude : (_longitude !== undefined ? Number(_longitude) : 0),
     ...(_altitude !== undefined && { altitude: typeof _altitude === "number" ? _altitude : Number(_altitude) }),
     ...(_label !== undefined && { label: typeof _label === "string" ? _label : String(_label) }),
-  };
+  } as unknown as GeoCoordinate;
 }`,
     )
   })

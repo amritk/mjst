@@ -4,5 +4,5 @@
  */
 export const generateEnumCheck = (accessor: string, enumValues: readonly unknown[]): string => {
   const serializedEnum = JSON.stringify(enumValues)
-  return `${serializedEnum}.includes(${accessor})`
+  return `${serializedEnum}.includes(${accessor} as never)`
 }

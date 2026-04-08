@@ -5,6 +5,7 @@ import { safeAccessor, safeKey } from 'mjst-helpers/safe-accessor'
 import {
   hasAllOf,
   hasAnyOf,
+  hasConst,
   hasDefault,
   hasEnum,
   hasExamples,
@@ -182,6 +183,13 @@ const generateOptionalInlineProperty = (key: string, valueExpression: string): s
  */
 const shouldUseRefImport = (propSchema: JSONSchema, useRefImports: boolean): boolean => {
   if (!useRefImports || !hasRef(propSchema)) {
+    return false
+  }
+
+  const ref = (propSchema as { $ref: string }).$ref
+  // Skip external URI refs with property/definition fragments — these are not generated as files
+  const isUri = ref.startsWith('http://') || ref.startsWith('https://')
+  if (isUri && (ref.includes('#/properties/') || ref.includes('#/definitions/'))) {
     return false
   }
 
@@ -370,9 +378,16 @@ const generateFallbackValue = (_: string, propSchema: JSONSchema, useRefImports:
  * Generates a fallback object with required properties filled with default values.
  * This is used when input is not an object (undefined, null, etc.).
  */
-const generateFallbackObject = (schema: JSONSchema, useRefImports: boolean): string => {
+const generateFallbackObject = (schema: JSONSchema, useRefImports: boolean, typeName: string): string => {
   if (!hasProperties(schema)) {
-    return '{}'
+    return `{} as ${typeName}`
+  }
+
+  // For schemas with conditional branches (if/then/else), the merged properties
+  // may not fully represent all required fields. Use a simple cast to avoid
+  // generating incomplete fallback objects.
+  if (isSchemaObject(schema) && ('if' in schema || 'then' in schema || 'else' in schema)) {
+    return `{} as ${typeName}`
   }
 
   const requiredProps: string[] = []
@@ -381,12 +396,15 @@ const generateFallbackObject = (schema: JSONSchema, useRefImports: boolean): str
     const isRequired = isPropertyRequired(key, schema)
     if (isRequired) {
       const fallbackValue = generateFallbackValue(key, propSchema, useRefImports)
+      if (fallbackValue === 'undefined') {
+        return `{} as ${typeName}`
+      }
       requiredProps.push(`        ${safeKey(key)}: ${fallbackValue},`)
     }
   }
 
   if (requiredProps.length === 0) {
-    return '{}'
+    return `{} as ${typeName}`
   }
 
   let result = '{\n'
@@ -472,7 +490,7 @@ const generatePropertyTypeCheck = (varName: string, schema: JSONSchema): string 
   switch (schema.type) {
     case 'string': {
       checks.push(`typeof ${varName} === "string"`)
-      if (hasPattern(schema)) checks.push(`/${schema.pattern}/.test(${varName})`)
+      if (hasPattern(schema)) checks.push(`/${escapeRegexPattern(schema.pattern)}/.test(${varName})`)
       if (hasMinLength(schema)) checks.push(`${varName}.length >= ${schema.minLength}`)
       if (hasMaxLength(schema)) checks.push(`${varName}.length <= ${schema.maxLength}`)
       break
@@ -580,7 +598,7 @@ const generateObjectParser = (schema: JSONSchema, typeName: string, useRefImport
     return `export const ${functionName} = (input: unknown): ${typeName} => isObject(input) ? input as ${typeName} : {} as ${typeName};`
   }
 
-  const fallbackObject = generateFallbackObject(schema, useRefImports)
+  const fallbackObject = generateFallbackObject(schema, useRefImports, typeName)
   const properties = Object.entries((schema as { properties: Record<string, JSONSchema> }).properties)
 
   const lines: string[] = []
@@ -669,7 +687,7 @@ const generateObjectParser = (schema: JSONSchema, typeName: string, useRefImport
         entry.$ref !== '#/$defs/specification-extensions'
       ) {
         const parserName = generateParserName(refToName(entry.$ref))
-        objectLines.push(`    ...${parserName}(input),`)
+        objectLines.push(`    ...(${parserName}(input) as Record<string, unknown>),`)
       }
     }
   }
@@ -758,7 +776,7 @@ const generateObjectParser = (schema: JSONSchema, typeName: string, useRefImport
     objectBody += '\n' + objectLines[i]
   }
   lines.push(objectBody)
-  lines.push(`  };`)
+  lines.push(`  } as unknown as ${typeName};`)
   lines.push(`}`)
 
   // lines[0] is safe: lines is always non-empty (it always has the function declaration)
@@ -807,17 +825,26 @@ const generateCombinedObjectParser = (schema: JSONSchema, typeName: string, useR
   // Check if this is an -or-reference union type that needs conditional handling
   const isOrReference = ref.endsWith('-or-reference')
   
+  const isVendorExtension =
+    ref === '#/$defs/vendor-extension' ||
+    ref.endsWith('/vendor-extension') ||
+    ref === '#/definitions/vendorExtension' ||
+    ref.endsWith('/vendorExtension')
+
   let assignmentCode: string
-  if (isOrReference) {
+  if (isVendorExtension) {
+    // Vendor extensions are untyped — assign the value directly without parsing
+    assignmentCode = `(result as Record<string, unknown>)[key] = value;`
+  } else if (isOrReference) {
     // For -or-reference types, we need to check for $ref at runtime
     // If the value has $ref, it is a reference object and should not be parsed
     // Otherwise, parse it as the base type
     const baseRef = ref.replace('-or-reference', '')
     const baseParserName = generateParserName(refToName(baseRef))
-    assignmentCode = `result[key] = isObject(value) && '$ref' in value ? value : ${baseParserName}(value);`
+    assignmentCode = `(result as Record<string, unknown>)[key] = isObject(value) && '$ref' in value ? value : ${baseParserName}(value);`
   } else {
     const parserName = generateParserName(refToName(ref))
-    assignmentCode = `result[key] = ${parserName}(value);`
+    assignmentCode = `(result as Record<string, unknown>)[key] = ${parserName}(value);`
   }
   
   const escapedPattern = escapeRegexPattern(pattern)
@@ -832,11 +859,11 @@ const generateCombinedObjectParser = (schema: JSONSchema, typeName: string, useR
 
   return `export const ${functionName} = (input: unknown): ${typeName} => {
   if (!isObject(input)) {
-    return {};
+    return {} as unknown as ${typeName};
   }
-  const result: ${typeName} = {
+  const result = {
 ${objectProperties}
-  };
+  } as unknown as ${typeName};
   for (const key in input) {
     if (/${escapedPattern}/.test(key)) {
       const value = input[key];
@@ -943,13 +970,22 @@ const generatePatternPropertiesParser = (
   }
 
   const [pattern, patternSchema] = patterns[0] as [string, JSONSchema]
-  let patternAssignment = 'result[key] = value;'
+  let patternAssignment = '(result as Record<string, unknown>)[key] = value;'
 
   // Use imported parser when pattern schema points to a $ref.
   if (useRefImports && isSchemaObject(patternSchema) && hasRef(patternSchema)) {
     const ref = patternSchema.$ref
-    const parserName = generateParserName(refToName(ref))
-    patternAssignment = `result[key] = ${parserName}(value);`
+    const isVendorExtensionRef =
+      ref === '#/$defs/vendor-extension' ||
+      ref.endsWith('/vendor-extension') ||
+      ref === '#/definitions/vendorExtension' ||
+      ref.endsWith('/vendorExtension')
+    if (!isVendorExtensionRef) {
+      const parserName = generateParserName(refToName(ref))
+      patternAssignment = `(result as Record<string, unknown>)[key] = ${parserName}(value);`
+    } else {
+      patternAssignment = `(result as Record<string, unknown>)[key] = value;`
+    }
   } else if (patternSchema === false) {
     // `false` means no values are allowed for matching keys.
     patternAssignment = ''
@@ -961,11 +997,11 @@ const generatePatternPropertiesParser = (
   // Generate a parser that handles both pattern matching and x- extensions
   return `export const ${functionName} = (input: unknown): ${typeName} => {
   if (!isObject(input)) {
-    return {};
+    return {} as unknown as ${typeName};
   }
-  const result: ${typeName} = {
+  const result = {
     ...input,
-  };
+  } as unknown as ${typeName};
   for (const key in input) {
     if (/${escapedPattern}/.test(key)) {
       const value = input[key];
@@ -1071,6 +1107,16 @@ const getConditionalObjectSchema = (schema: JSONSchema): JSONSchema.Object | nul
   if (Array.isArray(ifSchema.required)) {
     for (const key of ifSchema.required) {
       required.add(key)
+    }
+  }
+
+  // If the `if` condition checks for a `const` value on a property, that property
+  // is effectively required (the schema only applies when the condition is true).
+  if (hasIfProperties && ifProperties && typeof ifProperties === 'object') {
+    for (const [key, propSchema] of Object.entries(ifProperties as Record<string, JSONSchema>)) {
+      if (isSchemaObject(propSchema) && hasConst(propSchema)) {
+        required.add(key)
+      }
     }
   }
 
