@@ -2,12 +2,6 @@ import { isObject } from 'mjst-helpers/is-object'
 
 import type { ReferenceObject } from './reference'
 
-/**
- * Represents an OpenAPI Reference Object.
- * Used to reference other schemas via the $ref keyword.
- */
-type ReferenceObject = { $ref: string }
-
 type PrimitiveSchemaType = 'null' | 'boolean' | 'string' | 'number' | 'integer' | 'object' | 'array'
 
 type StringFormat =

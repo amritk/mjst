@@ -6,14 +6,14 @@ import { validateRecord } from 'mjst-helpers/validate-record';
 import { isObject } from 'mjst-helpers/is-object';
 
 export type MediaTypeObject = {
-  example?: boolean;
+  example?: unknown;
   examples?: Record<string, ExampleObject | ReferenceObject>;
   schema?: SchemaObject;
   encoding?: Record<string, EncodingObject>;
 };
 
 export const parseMediaTypeObject = (input: unknown): MediaTypeObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as MediaTypeObject;
   const _examples = input.examples;
   const _schema = input.schema;
   const _encoding = input.encoding;
@@ -22,5 +22,5 @@ export const parseMediaTypeObject = (input: unknown): MediaTypeObject => {
     ...(_examples !== undefined && { examples: validateRecord(_examples, parseExampleObject) }),
     ...(_schema !== undefined && { schema: parseSchemaObject(_schema) }),
     ...(_encoding !== undefined && { encoding: validateRecord(_encoding, parseEncodingObject) }),
-  };
+  } as unknown as MediaTypeObject;
 }

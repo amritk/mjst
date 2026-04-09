@@ -21,7 +21,7 @@ describe('generate-parser-function', () => {
       };
   const _name = input.name;
   const _age = input.age;
-  if (typeof _name === "string" && (_age === undefined || typeof _age === "number")) return input as UserObject;
+  if (typeof _name === "string" && (_age === undefined || typeof _age === "number")) return { ...input } as UserObject;
   return {
     ...input,
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
@@ -44,7 +44,7 @@ describe('generate-parser-function', () => {
       `export const parseProductObject = (input: unknown): ProductObject => {
   if (!isObject(input)) return {} as ProductObject;
   const _id = input.id;
-  if ((_id === undefined || typeof _id === "number")) return input as ProductObject;
+  if ((_id === undefined || typeof _id === "number")) return { ...input } as ProductObject;
   return {
     ...input,
     ...(_id !== undefined && { id: typeof _id === "number" ? _id : Number(_id) }),
@@ -93,7 +93,7 @@ describe('generate-parser-function', () => {
   const _id = input.id;
   const _name = input.name;
   const _email = input.email;
-  if (typeof _id === "number" && typeof _name === "string" && (_email === undefined || typeof _email === "string")) return input as UserObject;
+  if (typeof _id === "number" && typeof _name === "string" && (_email === undefined || typeof _email === "string")) return { ...input } as UserObject;
   return {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? Number(_id) : 0),
@@ -123,7 +123,7 @@ describe('generate-parser-function', () => {
       };
   const _id = input.id;
   const _description = input.description;
-  if (typeof _id === "number" && (_description === undefined || typeof _description === "string")) return input as ItemObject;
+  if (typeof _id === "number" && (_description === undefined || typeof _description === "string")) return { ...input } as ItemObject;
   return {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? Number(_id) : 0),
@@ -293,7 +293,7 @@ describe('generate-parser-function', () => {
       `export const parseUserObject = (input: unknown): UserObject => {
   if (!isObject(input)) return {} as UserObject;
   const _contacts = input.contacts;
-  if ((_contacts === undefined || Array.isArray(_contacts))) return input as UserObject;
+  if ((_contacts === undefined || Array.isArray(_contacts))) return { ...input } as UserObject;
   return {
     ...input,
     ...(_contacts !== undefined && { contacts: Array.isArray(_contacts) ? _contacts : [] }),
@@ -384,7 +384,7 @@ describe('generate-parser-function', () => {
   const _tags = input.tags;
   const _metadata = input.metadata;
   const _isActive = input.isActive;
-  if (typeof _id === "number" && typeof _name === "string" && (_tags === undefined || Array.isArray(_tags)) && (_metadata === undefined || isObject(_metadata)) && (_isActive === undefined || typeof _isActive === "boolean")) return input as ComplexObject;
+  if (typeof _id === "number" && typeof _name === "string" && (_tags === undefined || Array.isArray(_tags)) && (_metadata === undefined || isObject(_metadata)) && (_isActive === undefined || typeof _isActive === "boolean")) return { ...input } as ComplexObject;
   return {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? Number(_id) : 0),
@@ -497,7 +497,7 @@ describe('generate-parser-function', () => {
       `export const parseTaggedObject = (input: unknown): TaggedObject => {
   if (!isObject(input)) return {} as TaggedObject;
   const _tags = input.tags;
-  if ((_tags === undefined || Array.isArray(_tags))) return input as TaggedObject;
+  if ((_tags === undefined || Array.isArray(_tags))) return { ...input } as TaggedObject;
   return {
     ...input,
     ...(_tags !== undefined && { tags: Array.isArray(_tags) ? _tags : [] }),
@@ -522,7 +522,7 @@ describe('generate-parser-function', () => {
       `export const parseItemsContainerObject = (input: unknown): ItemsContainerObject => {
   if (!isObject(input)) return {} as ItemsContainerObject;
   const _items = input.items;
-  if ((_items === undefined || Array.isArray(_items))) return input as ItemsContainerObject;
+  if ((_items === undefined || Array.isArray(_items))) return { ...input } as ItemsContainerObject;
   return {
     ...input,
     ...(_items !== undefined && { items: Array.isArray(_items) ? _items : [] }),
@@ -609,7 +609,7 @@ describe('generate-parser-function', () => {
       `export const parseMyCustomTypeObject = (input: unknown): MyCustomTypeObject => {
   if (!isObject(input)) return {} as MyCustomTypeObject;
   const _id = input.id;
-  if ((_id === undefined || typeof _id === "number")) return input as MyCustomTypeObject;
+  if ((_id === undefined || typeof _id === "number")) return { ...input } as MyCustomTypeObject;
   return {
     ...input,
     ...(_id !== undefined && { id: typeof _id === "number" ? _id : Number(_id) }),
@@ -632,7 +632,7 @@ describe('generate-parser-function', () => {
       `export const parsemyCustomTypeObject = (input: unknown): myCustomTypeObject => {
   if (!isObject(input)) return {} as myCustomTypeObject;
   const _id = input.id;
-  if ((_id === undefined || typeof _id === "number")) return input as myCustomTypeObject;
+  if ((_id === undefined || typeof _id === "number")) return { ...input } as myCustomTypeObject;
   return {
     ...input,
     ...(_id !== undefined && { id: typeof _id === "number" ? _id : Number(_id) }),
@@ -654,7 +654,7 @@ describe('generate-parser-function', () => {
       `export const parseImplicitObject = (input: unknown): ImplicitObject => {
   if (!isObject(input)) return {} as ImplicitObject;
   const _name = input.name;
-  if ((_name === undefined || typeof _name === "string")) return input as ImplicitObject;
+  if ((_name === undefined || typeof _name === "string")) return { ...input } as ImplicitObject;
   return {
     ...input,
     ...(_name !== undefined && { name: typeof _name === "string" ? _name : String(_name) }),
@@ -726,7 +726,7 @@ describe('generate-parser-function', () => {
       `export const parseContainerObject = (input: unknown): ContainerObject => {
   if (!isObject(input)) return {} as ContainerObject;
   const _data = input.data;
-  if ((_data === undefined || Array.isArray(_data))) return input as ContainerObject;
+  if ((_data === undefined || Array.isArray(_data))) return { ...input } as ContainerObject;
   return {
     ...input,
     ...(_data !== undefined && { data: Array.isArray(_data) ? _data : [] }),
@@ -805,7 +805,7 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {} as UserObject;
   const _id = input.id;
   const _name = input.name;
-  if ((_id === undefined || typeof _id === "number") && (_name === undefined || typeof _name === "string")) return input as UserObject;
+  if ((_id === undefined || typeof _id === "number") && (_name === undefined || typeof _name === "string")) return { ...input } as UserObject;
   return {
     ...input,
     ...(_id !== undefined && { id: typeof _id === "number" ? _id : Number(_id) }),
@@ -829,7 +829,7 @@ describe('generate-parser-function', () => {
       `export const parseUserObject = (input: unknown): UserObject => {
   if (!isObject(input)) return {} as UserObject;
   const _id = input.id;
-  if ((_id === undefined || typeof _id === "number")) return input as UserObject;
+  if ((_id === undefined || typeof _id === "number")) return { ...input } as UserObject;
   return {
     ...input,
     ...(_id !== undefined && { id: typeof _id === "number" ? _id : Number(_id) }),
@@ -1443,7 +1443,7 @@ describe('generate-parser-function', () => {
     expect(result).toContain('const _age = input.age')
     // Should have fast-path check
     expect(result).toContain('if (typeof _name === "string"')
-    expect(result).toContain('return input as UserObject')
+    expect(result).toContain('return { ...input } as UserObject')
   })
 
   it('optimization: removes redundant undefined checks in optional properties', () => {
@@ -1511,8 +1511,8 @@ describe('generate-parser-function', () => {
 
     const result = generateParserFunction(schema, 'ItemObject')
 
-    // Should have fast-path that returns input directly
-    expect(result).toContain('return input as ItemObject')
+    // Should have fast-path that returns a new shallow copy
+    expect(result).toContain('return { ...input } as ItemObject')
     // Fast-path check should exist
     expect(result).toContain('if (typeof _id')
     // Should have both fast and slow paths
@@ -1531,7 +1531,7 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'UserObject', { useRefImports: true })
 
     // Should NOT have fast-path because ref imports cannot be checked inline
-    expect(result).not.toContain('return input as UserObject')
+    expect(result).not.toContain('return { ...input } as UserObject')
     // Should still have the main return statement
     expect(result).toContain('return {')
   })
@@ -1549,7 +1549,7 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'OptionalObject')
 
     // Should have fast-path for all optional
-    expect(result).toContain('return input as OptionalObject')
+    expect(result).toContain('return { ...input } as OptionalObject')
     // Should use spread operators for optional properties
     const spreadCount = (result.match(/\.\.\./g) || []).length
     expect(spreadCount).toBeGreaterThan(0)
@@ -1573,7 +1573,7 @@ describe('generate-parser-function', () => {
     expect(result).toContain('const _name')
     expect(result).toContain('const _email')
     // Should have fast-path check
-    expect(result).toContain('return input as UserObject')
+    expect(result).toContain('return { ...input } as UserObject')
     // Fast-path should check required fields and optional fields
     expect(result).toContain('typeof _id === "number"')
     expect(result).toContain('typeof _name === "string"')
@@ -1631,7 +1631,7 @@ describe('generate-parser-function', () => {
   const _price = input.price;
   const _inStock = input.inStock;
   const _tags = input.tags;
-  if (typeof _id === "string" && typeof _name === "string" && typeof _price === "number" && _price >= 0 && (_inStock === undefined || typeof _inStock === "boolean") && (_tags === undefined || Array.isArray(_tags))) return input as Product;
+  if (typeof _id === "string" && typeof _name === "string" && typeof _price === "number" && _price >= 0 && (_inStock === undefined || typeof _inStock === "boolean") && (_tags === undefined || Array.isArray(_tags))) return { ...input } as Product;
   return {
     ...input,
     id: typeof _id === "string" ? _id : (_id !== undefined ? String(_id) : ""),
@@ -1663,7 +1663,7 @@ describe('generate-parser-function', () => {
   const _page = input.page;
   const _perPage = input.perPage;
   const _search = input.search;
-  if ((_page === undefined || typeof _page === "number" && _page >= 1) && (_perPage === undefined || typeof _perPage === "number" && _perPage >= 1 && _perPage <= 100) && (_search === undefined || typeof _search === "string")) return input as PageParams;
+  if ((_page === undefined || typeof _page === "number" && _page >= 1) && (_perPage === undefined || typeof _perPage === "number" && _perPage >= 1 && _perPage <= 100) && (_search === undefined || typeof _search === "string")) return { ...input } as PageParams;
   return {
     ...input,
     ...(_page !== undefined && { page: typeof _page === "number" && _page >= 1 ? _page : Number(_page) }),
@@ -1713,7 +1713,7 @@ describe('generate-parser-function', () => {
   const _longitude = input.longitude;
   const _altitude = input.altitude;
   const _label = input.label;
-  if (typeof _latitude === "number" && _latitude >= -90 && _latitude <= 90 && typeof _longitude === "number" && _longitude >= -180 && _longitude <= 180 && (_altitude === undefined || typeof _altitude === "number") && (_label === undefined || typeof _label === "string")) return input as GeoCoordinate;
+  if (typeof _latitude === "number" && _latitude >= -90 && _latitude <= 90 && typeof _longitude === "number" && _longitude >= -180 && _longitude <= 180 && (_altitude === undefined || typeof _altitude === "number") && (_label === undefined || typeof _label === "string")) return { ...input } as GeoCoordinate;
   return {
     ...input,
     latitude: typeof _latitude === "number" && _latitude >= -90 && _latitude <= 90 ? _latitude : (_latitude !== undefined ? Number(_latitude) : 0),

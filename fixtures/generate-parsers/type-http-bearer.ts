@@ -7,14 +7,11 @@ export type TypeHttpBearerObject = {
 };
 
 export const parseTypeHttpBearerObject = (input: unknown): TypeHttpBearerObject => {
-  if (!isObject(input)) return {
-        type: undefined,
-        scheme: "",
-      };
+  if (!isObject(input)) return {} as TypeHttpBearerObject;
   return {
     ...input,
     type: input?.type === "http" ? input?.type : "http",
     scheme: typeof input?.scheme === "string" && /^[Bb][Ee][Aa][Rr][Ee][Rr]$/.test(input?.scheme) ? input?.scheme : (input?.scheme !== undefined ? String(input?.scheme) : ""),
     ...(input.bearerFormat !== undefined && { bearerFormat: typeof input?.bearerFormat === "string" ? input?.bearerFormat : String(input?.bearerFormat) }),
-  };
+  } as unknown as TypeHttpBearerObject;
 }

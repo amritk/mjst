@@ -6,13 +6,13 @@ export type LinkObject = {
   operationRef?: string;
   operationId?: string;
   parameters?: MapOfStringsObject;
-  requestBody?: boolean;
+  requestBody?: unknown;
   description?: string;
   server?: ServerObject;
 } & Record<`x-${string}`, unknown>;
 
 export const parseLinkObject = (input: unknown): LinkObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as LinkObject;
   const _parameters = input.parameters;
   const _server = input.server;
   return {
@@ -22,5 +22,5 @@ export const parseLinkObject = (input: unknown): LinkObject => {
     ...(_parameters !== undefined && { parameters: parseMapOfStringsObject(_parameters) }),
     ...(input.description !== undefined && { description: typeof input?.description === "string" ? input?.description : String(input?.description) }),
     ...(_server !== undefined && { server: parseServerObject(_server) }),
-  };
+  } as unknown as LinkObject;
 }

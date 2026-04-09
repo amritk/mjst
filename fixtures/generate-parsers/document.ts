@@ -48,5 +48,5 @@ export const parseDocument = (input: unknown): Document => {
     ...(_security !== undefined && { security: validateArray(_security, parseSecurityRequirementObject) }),
     ...(_tags !== undefined && { tags: validateArray(_tags, parseTagObject) }),
     ...(_externalDocs !== undefined && { externalDocs: parseExternalDocumentationObject(_externalDocs) }),
-  };
+  } as unknown as Document;
 }

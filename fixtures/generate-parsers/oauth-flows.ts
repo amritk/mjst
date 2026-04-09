@@ -12,7 +12,7 @@ export type OauthFlowsObject = {
 } & Record<`x-${string}`, unknown>;
 
 export const parseOauthFlowsObject = (input: unknown): OauthFlowsObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as OauthFlowsObject;
   const _implicit = input.implicit;
   const _password = input.password;
   const _clientCredentials = input.clientCredentials;
@@ -23,5 +23,5 @@ export const parseOauthFlowsObject = (input: unknown): OauthFlowsObject => {
     ...(_password !== undefined && { password: parsePasswordObject(_password) }),
     ...(_clientCredentials !== undefined && { clientCredentials: parseClientCredentialsObject(_clientCredentials) }),
     ...(_authorizationCode !== undefined && { authorizationCode: parseAuthorizationCodeObject(_authorizationCode) }),
-  };
+  } as unknown as OauthFlowsObject;
 }

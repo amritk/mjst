@@ -6,12 +6,10 @@ export type TypeOidcObject = {
 };
 
 export const parseTypeOidcObject = (input: unknown): TypeOidcObject => {
-  if (!isObject(input)) return {
-        openIdConnectUrl: "",
-      };
+  if (!isObject(input)) return {} as TypeOidcObject;
   return {
     ...input,
-    ...(input.type !== undefined && { type: input?.type === "openIdConnect" ? input?.type : "openIdConnect" }),
+    type: input?.type === "openIdConnect" ? input?.type : "openIdConnect",
     openIdConnectUrl: typeof input?.openIdConnectUrl === "string" ? input?.openIdConnectUrl : (input?.openIdConnectUrl !== undefined ? String(input?.openIdConnectUrl) : ""),
-  };
+  } as unknown as TypeOidcObject;
 }

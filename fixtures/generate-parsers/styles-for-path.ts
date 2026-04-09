@@ -7,13 +7,11 @@ export type StylesForPathObject = {
 };
 
 export const parseStylesForPathObject = (input: unknown): StylesForPathObject => {
-  if (!isObject(input)) return {
-        required: undefined,
-      };
+  if (!isObject(input)) return {} as StylesForPathObject;
   return {
     ...input,
-    ...(input.in !== undefined && { in: input?.in === "path" ? input?.in : "path" }),
-    ...(input.style !== undefined && { style: ["matrix","label","simple"].includes(input?.style) ? input?.style : "simple" }),
+    in: input?.in === "path" ? input?.in : "path",
+    ...(input.style !== undefined && { style: ["matrix","label","simple"].includes(input?.style as never) ? input?.style : "simple" }),
     required: input?.required === true ? input?.required : true,
-  };
+  } as unknown as StylesForPathObject;
 }

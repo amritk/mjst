@@ -28,5 +28,5 @@ export const parseInfoObject = (input: unknown): InfoObject => {
     ...(_contact !== undefined && { contact: parseContactObject(_contact) }),
     ...(_license !== undefined && { license: parseLicenseObject(_license) }),
     version: typeof input?.version === "string" ? input?.version : (input?.version !== undefined ? String(input?.version) : ""),
-  };
+  } as unknown as InfoObject;
 }

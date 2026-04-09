@@ -26,7 +26,7 @@ export type OperationObject = {
 } & Record<`x-${string}`, unknown>;
 
 export const parseOperationObject = (input: unknown): OperationObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as OperationObject;
   const _externalDocs = input.externalDocs;
   const _parameters = input.parameters;
   const _requestBody = input.requestBody;
@@ -48,5 +48,5 @@ export const parseOperationObject = (input: unknown): OperationObject => {
     ...(input.deprecated !== undefined && { deprecated: typeof input?.deprecated === "boolean" ? input?.deprecated : Boolean(input?.deprecated) }),
     ...(_security !== undefined && { security: validateArray(_security, parseSecurityRequirementObject) }),
     ...(_servers !== undefined && { servers: validateArray(_servers, parseServerObject) }),
-  };
+  } as unknown as OperationObject;
 }

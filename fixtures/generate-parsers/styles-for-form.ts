@@ -6,12 +6,10 @@ export type StylesForFormObject = {
 };
 
 export const parseStylesForFormObject = (input: unknown): StylesForFormObject => {
-  if (!isObject(input)) return {
-        style: undefined,
-      };
+  if (!isObject(input)) return {} as StylesForFormObject;
   return {
     ...input,
     ...(input.explode !== undefined && { explode: input?.explode ?? true }),
     style: input?.style === "form" ? input?.style : "form",
-  };
+  } as unknown as StylesForFormObject;
 }

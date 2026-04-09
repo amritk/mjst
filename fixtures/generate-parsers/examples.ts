@@ -4,15 +4,15 @@ import { validateRecord } from 'mjst-helpers/validate-record';
 import { isObject } from 'mjst-helpers/is-object';
 
 export type ExamplesObject = {
-  example?: boolean;
+  example?: unknown;
   examples?: Record<string, ExampleObject | ReferenceObject>;
 };
 
 export const parseExamplesObject = (input: unknown): ExamplesObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as ExamplesObject;
   const _examples = input.examples;
   return {
     ...input,
     ...(_examples !== undefined && { examples: validateRecord(_examples, parseExampleObject) }),
-  };
+  } as unknown as ExamplesObject;
 }

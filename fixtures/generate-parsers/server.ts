@@ -18,5 +18,5 @@ export const parseServerObject = (input: unknown): ServerObject => {
     url: typeof input?.url === "string" ? input?.url : (input?.url !== undefined ? String(input?.url) : ""),
     ...(input.description !== undefined && { description: typeof input?.description === "string" ? input?.description : String(input?.description) }),
     ...(_variables !== undefined && { variables: validateRecord(_variables, parseServerVariableObject) }),
-  };
+  } as unknown as ServerObject;
 }

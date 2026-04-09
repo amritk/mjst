@@ -7,13 +7,11 @@ export type TypeOauth2Object = {
 };
 
 export const parseTypeOauth2Object = (input: unknown): TypeOauth2Object => {
-  if (!isObject(input)) return {
-        flows: parseOauthFlowsObject(undefined),
-      };
+  if (!isObject(input)) return {} as TypeOauth2Object;
   const _flows = input.flows;
   return {
     ...input,
-    ...(input.type !== undefined && { type: input?.type === "oauth2" ? input?.type : "oauth2" }),
+    type: input?.type === "oauth2" ? input?.type : "oauth2",
     flows: parseOauthFlowsObject(_flows),
-  };
+  } as unknown as TypeOauth2Object;
 }

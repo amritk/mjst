@@ -17,5 +17,5 @@ export const parseTagObject = (input: unknown): TagObject => {
     name: typeof input?.name === "string" ? input?.name : (input?.name !== undefined ? String(input?.name) : ""),
     ...(input.description !== undefined && { description: typeof input?.description === "string" ? input?.description : String(input?.description) }),
     ...(_externalDocs !== undefined && { externalDocs: parseExternalDocumentationObject(_externalDocs) }),
-  };
+  } as unknown as TagObject;
 }

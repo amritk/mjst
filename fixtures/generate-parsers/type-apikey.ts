@@ -7,14 +7,11 @@ export type TypeApikeyObject = {
 };
 
 export const parseTypeApikeyObject = (input: unknown): TypeApikeyObject => {
-  if (!isObject(input)) return {
-        name: "",
-        in: "query",
-      };
+  if (!isObject(input)) return {} as TypeApikeyObject;
   return {
     ...input,
-    ...(input.type !== undefined && { type: input?.type === "apiKey" ? input?.type : "apiKey" }),
+    type: input?.type === "apiKey" ? input?.type : "apiKey",
     name: typeof input?.name === "string" ? input?.name : (input?.name !== undefined ? String(input?.name) : ""),
-    in: ["query","header","cookie"].includes(input?.in) ? input?.in : "query",
-  };
+    in: ["query","header","cookie"].includes(input?.in as never) ? input?.in : "query",
+  } as unknown as TypeApikeyObject;
 }

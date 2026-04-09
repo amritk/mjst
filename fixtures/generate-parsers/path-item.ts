@@ -22,7 +22,7 @@ export type PathItemObject = {
 } & Record<`x-${string}`, unknown>;
 
 export const parsePathItemObject = (input: unknown): PathItemObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as PathItemObject;
   const _servers = input.servers;
   const _parameters = input.parameters;
   const _get = input.get;
@@ -48,5 +48,5 @@ export const parsePathItemObject = (input: unknown): PathItemObject => {
     ...(_head !== undefined && { head: parseOperationObject(_head) }),
     ...(_patch !== undefined && { patch: parseOperationObject(_patch) }),
     ...(_trace !== undefined && { trace: parseOperationObject(_trace) }),
-  };
+  } as unknown as PathItemObject;
 }

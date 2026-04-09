@@ -18,5 +18,5 @@ export const parseImplicitObject = (input: unknown): ImplicitObject => {
     authorizationUrl: typeof input?.authorizationUrl === "string" ? input?.authorizationUrl : (input?.authorizationUrl !== undefined ? String(input?.authorizationUrl) : ""),
     ...(input.refreshUrl !== undefined && { refreshUrl: typeof input?.refreshUrl === "string" ? input?.refreshUrl : String(input?.refreshUrl) }),
     scopes: parseMapOfStringsObject(_scopes),
-  };
+  } as unknown as ImplicitObject;
 }

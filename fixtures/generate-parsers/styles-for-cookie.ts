@@ -6,10 +6,10 @@ export type StylesForCookieObject = {
 };
 
 export const parseStylesForCookieObject = (input: unknown): StylesForCookieObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as StylesForCookieObject;
   return {
     ...input,
-    ...(input.in !== undefined && { in: input?.in === "cookie" ? input?.in : "cookie" }),
+    in: input?.in === "cookie" ? input?.in : "cookie",
     ...(input.style !== undefined && { style: input?.style === "form" ? input?.style : "form" }),
-  };
+  } as unknown as StylesForCookieObject;
 }

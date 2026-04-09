@@ -5,15 +5,15 @@ export type PathsObject = Record<string, PathItemObject>;
 
 export const parsePathsObject = (input: unknown): PathsObject => {
   if (!isObject(input)) {
-    return {};
+    return {} as unknown as PathsObject;
   }
-  const result: PathsObject = {
+  const result = {
     ...input,
-  };
+  } as unknown as PathsObject;
   for (const key in input) {
     if (/^\//.test(key)) {
       const value = input[key];
-      result[key] = parsePathItemObject(value);
+      (result as Record<string, unknown>)[key] = parsePathItemObject(value);
     }
   }
   return result;

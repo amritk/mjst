@@ -26,7 +26,7 @@ export type ComponentsObject = {
 } & Record<`x-${string}`, unknown>;
 
 export const parseComponentsObject = (input: unknown): ComponentsObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as ComponentsObject;
   const _schemas = input.schemas;
   const _responses = input.responses;
   const _parameters = input.parameters;
@@ -49,5 +49,5 @@ export const parseComponentsObject = (input: unknown): ComponentsObject => {
     ...(_links !== undefined && { links: validateRecord(_links, parseLinkObject) }),
     ...(_callbacks !== undefined && { callbacks: validateRecord(_callbacks, parseCallbacksObject) }),
     ...(_pathItems !== undefined && { pathItems: validateRecord(_pathItems, parsePathItemObject) }),
-  };
+  } as unknown as ComponentsObject;
 }

@@ -11,7 +11,7 @@ export type HeaderObject = {
 } & Record<`x-${string}`, unknown>;
 
 export const parseHeaderObject = (input: unknown): HeaderObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as HeaderObject;
   const _schema = input.schema;
   const _content = input.content;
   return {
@@ -21,5 +21,5 @@ export const parseHeaderObject = (input: unknown): HeaderObject => {
     ...(input.deprecated !== undefined && { deprecated: typeof input?.deprecated === "boolean" ? input?.deprecated : Boolean(input?.deprecated) }),
     ...(_schema !== undefined && { schema: parseSchemaObject(_schema) }),
     ...(_content !== undefined && { content: parseContentObject(_content) }),
-  };
+  } as unknown as HeaderObject;
 }

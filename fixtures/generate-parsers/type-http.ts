@@ -6,12 +6,10 @@ export type TypeHttpObject = {
 };
 
 export const parseTypeHttpObject = (input: unknown): TypeHttpObject => {
-  if (!isObject(input)) return {
-        scheme: "",
-      };
+  if (!isObject(input)) return {} as TypeHttpObject;
   return {
     ...input,
-    ...(input.type !== undefined && { type: input?.type === "http" ? input?.type : "http" }),
+    type: input?.type === "http" ? input?.type : "http",
     scheme: typeof input?.scheme === "string" ? input?.scheme : (input?.scheme !== undefined ? String(input?.scheme) : ""),
-  };
+  } as unknown as TypeHttpObject;
 }

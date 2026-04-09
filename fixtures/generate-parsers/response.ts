@@ -25,5 +25,5 @@ export const parseResponseObject = (input: unknown): ResponseObject => {
     ...(_headers !== undefined && { headers: validateRecord(_headers, parseHeaderObject) }),
     ...(_content !== undefined && { content: parseContentObject(_content) }),
     ...(_links !== undefined && { links: validateRecord(_links, parseLinkObject) }),
-  };
+  } as unknown as ResponseObject;
 }

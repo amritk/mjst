@@ -13,15 +13,15 @@ export type EncodingObject = {
 } & StylesForFormObject;
 
 export const parseEncodingObject = (input: unknown): EncodingObject => {
-  if (!isObject(input)) return {};
+  if (!isObject(input)) return {} as EncodingObject;
   const _headers = input.headers;
   return {
     ...input,
-    ...parseStylesForFormObject(input),
+    ...(parseStylesForFormObject(input) as Record<string, unknown>),
     ...(input.contentType !== undefined && { contentType: typeof input?.contentType === "string" ? input?.contentType : String(input?.contentType) }),
     ...(_headers !== undefined && { headers: validateRecord(_headers, parseHeaderObject) }),
-    ...(input.style !== undefined && { style: ["form","spaceDelimited","pipeDelimited","deepObject"].includes(input?.style) ? input?.style : "form" }),
+    ...(input.style !== undefined && { style: ["form","spaceDelimited","pipeDelimited","deepObject"].includes(input?.style as never) ? input?.style : "form" }),
     ...(input.explode !== undefined && { explode: typeof input?.explode === "boolean" ? input?.explode : Boolean(input?.explode) }),
     ...(input.allowReserved !== undefined && { allowReserved: typeof input?.allowReserved === "boolean" ? input?.allowReserved : Boolean(input?.allowReserved) }),
-  };
+  } as unknown as EncodingObject;
 }

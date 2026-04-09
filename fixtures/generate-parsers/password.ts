@@ -18,5 +18,5 @@ export const parsePasswordObject = (input: unknown): PasswordObject => {
     tokenUrl: typeof input?.tokenUrl === "string" ? input?.tokenUrl : (input?.tokenUrl !== undefined ? String(input?.tokenUrl) : ""),
     ...(input.refreshUrl !== undefined && { refreshUrl: typeof input?.refreshUrl === "string" ? input?.refreshUrl : String(input?.refreshUrl) }),
     scopes: parseMapOfStringsObject(_scopes),
-  };
+  } as unknown as PasswordObject;
 }

@@ -670,7 +670,7 @@ const generateObjectParser = (schema: JSONSchema, typeName: string, useRefImport
     for (let i = 1; i < fastPathChecks.length; i++) {
       fastPathExpr += ' && ' + fastPathChecks[i]
     }
-    lines.push(`  if (${fastPathExpr}) return input as ${typeName};`)
+    lines.push(`  if (${fastPathExpr}) return { ...input } as ${typeName};`)
   }
 
   // Generate slow-path object construction

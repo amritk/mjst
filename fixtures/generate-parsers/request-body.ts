@@ -17,5 +17,5 @@ export const parseRequestBodyObject = (input: unknown): RequestBodyObject => {
     ...(input.description !== undefined && { description: typeof input?.description === "string" ? input?.description : String(input?.description) }),
     content: parseContentObject(_content),
     ...(input.required !== undefined && { required: typeof input?.required === "boolean" ? input?.required : Boolean(input?.required) }),
-  };
+  } as unknown as RequestBodyObject;
 }
