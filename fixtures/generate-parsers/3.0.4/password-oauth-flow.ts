@@ -24,7 +24,7 @@ export const parsePasswordOauthFlowObject = (input: unknown): PasswordOauthFlowO
   const _tokenUrl = input.tokenUrl;
   const _refreshUrl = input.refreshUrl;
   const _scopes = input.scopes;
-  if (typeof _tokenUrl === "string" && (_refreshUrl === undefined || typeof _refreshUrl === "string") && isObject(_scopes)) return input as PasswordOauthFlowObject;
+  if (typeof _tokenUrl === "string" && (_refreshUrl === undefined || typeof _refreshUrl === "string") && isObject(_scopes)) return { ...input } as PasswordOauthFlowObject;
   return {
     ...input,
     tokenUrl: typeof _tokenUrl === "string" ? _tokenUrl : (_tokenUrl !== undefined ? String(_tokenUrl) : ""),

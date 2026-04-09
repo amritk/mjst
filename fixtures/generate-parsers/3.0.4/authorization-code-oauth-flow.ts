@@ -28,7 +28,7 @@ export const parseAuthorizationCodeOauthFlowObject = (input: unknown): Authoriza
   const _tokenUrl = input.tokenUrl;
   const _refreshUrl = input.refreshUrl;
   const _scopes = input.scopes;
-  if (typeof _authorizationUrl === "string" && typeof _tokenUrl === "string" && (_refreshUrl === undefined || typeof _refreshUrl === "string") && isObject(_scopes)) return input as AuthorizationCodeOauthFlowObject;
+  if (typeof _authorizationUrl === "string" && typeof _tokenUrl === "string" && (_refreshUrl === undefined || typeof _refreshUrl === "string") && isObject(_scopes)) return { ...input } as AuthorizationCodeOauthFlowObject;
   return {
     ...input,
     authorizationUrl: typeof _authorizationUrl === "string" ? _authorizationUrl : (_authorizationUrl !== undefined ? String(_authorizationUrl) : ""),

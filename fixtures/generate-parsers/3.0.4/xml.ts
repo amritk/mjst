@@ -27,7 +27,7 @@ export const parseXmlObject = (input: unknown): XmlObject => {
   const _prefix = input.prefix;
   const _attribute = input.attribute;
   const _wrapped = input.wrapped;
-  if ((_name === undefined || typeof _name === "string") && (_namespace === undefined || typeof _namespace === "string") && (_prefix === undefined || typeof _prefix === "string") && (_attribute === undefined || typeof _attribute === "boolean") && (_wrapped === undefined || typeof _wrapped === "boolean")) return input as XmlObject;
+  if ((_name === undefined || typeof _name === "string") && (_namespace === undefined || typeof _namespace === "string") && (_prefix === undefined || typeof _prefix === "string") && (_attribute === undefined || typeof _attribute === "boolean") && (_wrapped === undefined || typeof _wrapped === "boolean")) return { ...input } as XmlObject;
   return {
     ...input,
     ...(_name !== undefined && { name: typeof _name === "string" ? _name : String(_name) }),

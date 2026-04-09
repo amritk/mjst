@@ -24,7 +24,7 @@ export const parseImplicitOauthFlowObject = (input: unknown): ImplicitOauthFlowO
   const _authorizationUrl = input.authorizationUrl;
   const _refreshUrl = input.refreshUrl;
   const _scopes = input.scopes;
-  if (typeof _authorizationUrl === "string" && (_refreshUrl === undefined || typeof _refreshUrl === "string") && isObject(_scopes)) return input as ImplicitOauthFlowObject;
+  if (typeof _authorizationUrl === "string" && (_refreshUrl === undefined || typeof _refreshUrl === "string") && isObject(_scopes)) return { ...input } as ImplicitOauthFlowObject;
   return {
     ...input,
     authorizationUrl: typeof _authorizationUrl === "string" ? _authorizationUrl : (_authorizationUrl !== undefined ? String(_authorizationUrl) : ""),

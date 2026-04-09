@@ -49,7 +49,7 @@ export const parseComponentsObject = (input: unknown): ComponentsObject => {
   const _securitySchemes = input.securitySchemes;
   const _links = input.links;
   const _callbacks = input.callbacks;
-  if ((_schemas === undefined || isObject(_schemas)) && (_responses === undefined || isObject(_responses)) && (_parameters === undefined || isObject(_parameters)) && (_examples === undefined || isObject(_examples)) && (_requestBodies === undefined || isObject(_requestBodies)) && (_headers === undefined || isObject(_headers)) && (_securitySchemes === undefined || isObject(_securitySchemes)) && (_links === undefined || isObject(_links)) && (_callbacks === undefined || isObject(_callbacks))) return input as ComponentsObject;
+  if ((_schemas === undefined || isObject(_schemas)) && (_responses === undefined || isObject(_responses)) && (_parameters === undefined || isObject(_parameters)) && (_examples === undefined || isObject(_examples)) && (_requestBodies === undefined || isObject(_requestBodies)) && (_headers === undefined || isObject(_headers)) && (_securitySchemes === undefined || isObject(_securitySchemes)) && (_links === undefined || isObject(_links)) && (_callbacks === undefined || isObject(_callbacks))) return { ...input } as ComponentsObject;
   return {
     ...input,
     ...(_schemas !== undefined && { schemas: isObject(_schemas) ? _schemas : typeof _schemas === "object" && _schemas !== null ? _schemas : {} }),

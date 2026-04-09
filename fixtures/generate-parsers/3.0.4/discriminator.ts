@@ -20,7 +20,7 @@ export const parseDiscriminatorObject = (input: unknown): DiscriminatorObject =>
       };
   const _propertyName = input.propertyName;
   const _mapping = input.mapping;
-  if (typeof _propertyName === "string" && (_mapping === undefined || isObject(_mapping))) return input as DiscriminatorObject;
+  if (typeof _propertyName === "string" && (_mapping === undefined || isObject(_mapping))) return { ...input } as DiscriminatorObject;
   return {
     ...input,
     propertyName: typeof _propertyName === "string" ? _propertyName : (_propertyName !== undefined ? String(_propertyName) : ""),

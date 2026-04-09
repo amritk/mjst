@@ -16,7 +16,7 @@ export const parseJsonReferenceObject = (input: unknown): JsonReferenceObject =>
         $ref: "",
       };
   const _$ref = input.$ref;
-  if (typeof _$ref === "string") return input as JsonReferenceObject;
+  if (typeof _$ref === "string") return { ...input } as JsonReferenceObject;
   return {
     ...input,
     $ref: typeof _$ref === "string" ? _$ref : (_$ref !== undefined ? String(_$ref) : ""),

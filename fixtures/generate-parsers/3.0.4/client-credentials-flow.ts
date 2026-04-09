@@ -24,7 +24,7 @@ export const parseClientCredentialsFlowObject = (input: unknown): ClientCredenti
   const _tokenUrl = input.tokenUrl;
   const _refreshUrl = input.refreshUrl;
   const _scopes = input.scopes;
-  if (typeof _tokenUrl === "string" && (_refreshUrl === undefined || typeof _refreshUrl === "string") && isObject(_scopes)) return input as ClientCredentialsFlowObject;
+  if (typeof _tokenUrl === "string" && (_refreshUrl === undefined || typeof _refreshUrl === "string") && isObject(_scopes)) return { ...input } as ClientCredentialsFlowObject;
   return {
     ...input,
     tokenUrl: typeof _tokenUrl === "string" ? _tokenUrl : (_tokenUrl !== undefined ? String(_tokenUrl) : ""),

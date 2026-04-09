@@ -20,7 +20,7 @@ export const parseLicenseObject = (input: unknown): LicenseObject => {
       };
   const _name = input.name;
   const _url = input.url;
-  if (typeof _name === "string" && (_url === undefined || typeof _url === "string")) return input as LicenseObject;
+  if (typeof _name === "string" && (_url === undefined || typeof _url === "string")) return { ...input } as LicenseObject;
   return {
     ...input,
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
