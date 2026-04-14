@@ -2,4 +2,4 @@ import { type SecurityRequirementObject, parseSecurityRequirementObject } from '
 
 export type SecurityObject = SecurityRequirementObject[];
 
-export const parseSecurityObject = (input: unknown): SecurityObject => Array.isArray(input) ? input as SecurityObject : [] as SecurityObject;
+export const parseSecurityObject = (input: unknown): SecurityObject => Array.isArray(input) ? [...input] as SecurityObject : [] as SecurityObject;

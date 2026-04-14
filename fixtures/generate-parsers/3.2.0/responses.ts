@@ -20,12 +20,12 @@ export const parseResponsesObject = (input: unknown): ResponsesObject => {
   }
   const result = {
     ...input,
-    ...(input.default && { default: isObject(input.default) && '$ref' in input.default ? input.default : parseResponseObject(input.default) }),
+    ...(input.default && { default: isObject(input.default) && '$ref' in input.default ? { ...input.default } as ReferenceObject : parseResponseObject(input.default) }),
   } as unknown as ResponsesObject;
   for (const key in input) {
     if (/^[1-5](?:[0-9]{2}|XX)$/.test(key)) {
       const value = input[key];
-      (result as Record<string, unknown>)[key] = isObject(value) && '$ref' in value ? value : parseResponseObject(value);
+      (result as Record<string, unknown>)[key] = isObject(value) && '$ref' in value ? { ...value } as ReferenceObject : parseResponseObject(value);
     }
   }
   return result;

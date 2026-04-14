@@ -17,4 +17,4 @@ export type SecurityDefinitionsObject = {
   [key: string]: BasicAuthenticationSecurityObject | ApiKeySecurityObject | Oauth2ImplicitSecurityObject | Oauth2PasswordSecurityObject | Oauth2ApplicationSecurityObject | Oauth2AccessCodeSecurityObject;
 };
 
-export const parseSecurityDefinitionsObject = (input: unknown): SecurityDefinitionsObject => isObject(input) ? input as SecurityDefinitionsObject : {};
+export const parseSecurityDefinitionsObject = (input: unknown): SecurityDefinitionsObject => isObject(input) ? { ...input } as SecurityDefinitionsObject : {};

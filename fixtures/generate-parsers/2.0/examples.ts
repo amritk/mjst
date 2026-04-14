@@ -11,4 +11,4 @@ export type ExamplesObject = {
 
 };
 
-export const parseExamplesObject = (input: unknown): ExamplesObject => isObject(input) ? input as ExamplesObject : {} as ExamplesObject;
+export const parseExamplesObject = (input: unknown): ExamplesObject => isObject(input) ? { ...input } as ExamplesObject : {} as ExamplesObject;

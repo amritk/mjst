@@ -15,4 +15,4 @@ export type NonBodyParameterObject = {
 
 };
 
-export const parseNonBodyParameterObject = (input: unknown): NonBodyParameterObject => isObject(input) ? input as NonBodyParameterObject : {} as NonBodyParameterObject;
+export const parseNonBodyParameterObject = (input: unknown): NonBodyParameterObject => isObject(input) ? { ...input } as NonBodyParameterObject : {} as NonBodyParameterObject;

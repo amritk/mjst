@@ -59,7 +59,7 @@ describe('generate-parser-function', () => {
     }
 
     const result = generateParserFunction(schema, 'EmptyObject')
-    expect(result).toBe('export const parseEmptyObject = (input: unknown): EmptyObject => isObject(input) ? input as EmptyObject : {} as EmptyObject;')
+    expect(result).toBe('export const parseEmptyObject = (input: unknown): EmptyObject => isObject(input) ? { ...input } as EmptyObject : {} as EmptyObject;')
   })
 
   it('handles non-object schema with type validation', () => {
@@ -328,7 +328,7 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'ContactMapObject', { useRefImports: false })
 
     expect(result).toBe(
-      `export const parseContactMapObject = (input: unknown): ContactMapObject => isObject(input) ? input as ContactMapObject : {};`,
+      `export const parseContactMapObject = (input: unknown): ContactMapObject => isObject(input) ? { ...input } as ContactMapObject : {};`,
     )
   })
 
@@ -355,7 +355,7 @@ describe('generate-parser-function', () => {
 
     const result = generateParserFunction(schema, 'StrictObject')
 
-    expect(result).toBe('export const parseStrictObject = (input: unknown): StrictObject => isObject(input) ? input as StrictObject : {} as StrictObject;')
+    expect(result).toBe('export const parseStrictObject = (input: unknown): StrictObject => isObject(input) ? { ...input } as StrictObject : {} as StrictObject;')
   })
 
   it('handles complex object with multiple property types', () => {
@@ -672,7 +672,7 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'AnyAdditionalObject')
 
     expect(result).toBe(
-      'export const parseAnyAdditionalObject = (input: unknown): AnyAdditionalObject => isObject(input) ? input as AnyAdditionalObject : {} as AnyAdditionalObject;',
+      'export const parseAnyAdditionalObject = (input: unknown): AnyAdditionalObject => isObject(input) ? { ...input } as AnyAdditionalObject : {} as AnyAdditionalObject;',
     )
   })
 
@@ -1286,12 +1286,12 @@ describe('generate-parser-function', () => {
   }
   const result = {
     ...input,
-    ...(input.default && { default: isObject(input.default) && '$ref' in input.default ? input.default : parseResponseObject(input.default) }),
+    ...(input.default && { default: isObject(input.default) && '$ref' in input.default ? { ...input.default } as ReferenceObject : parseResponseObject(input.default) }),
   } as unknown as ResponsesObject;
   for (const key in input) {
     if (/^[1-5](?:[0-9]{2}|XX)$/.test(key)) {
       const value = input[key];
-      (result as Record<string, unknown>)[key] = isObject(value) && '$ref' in value ? value : parseResponseObject(value);
+      (result as Record<string, unknown>)[key] = isObject(value) && '$ref' in value ? { ...value } as ReferenceObject : parseResponseObject(value);
     }
   }
   return result;

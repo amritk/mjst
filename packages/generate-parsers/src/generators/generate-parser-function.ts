@@ -83,10 +83,10 @@ const generateRequiredRefCall = (key: string, ref: string): string => {
   // Check if this is an -or-reference union type
   if (ref.endsWith('-or-reference')) {
     // For -or-reference types, check if value has $ref property
-    // If it does, it is a reference object and should not be parsed
+    // If it does, it is a reference object — shallow copy to avoid aliasing input
     const baseRef = ref.replace('-or-reference', '')
     const baseParserName = generateParserName(refToName(baseRef))
-    return `isObject(${acc}) && '$ref' in ${acc} ? ${acc} : ${baseParserName}(${acc})`
+    return `isObject(${acc}) && '$ref' in ${acc} ? { ...${acc} } as ReferenceObject : ${baseParserName}(${acc})`
   }
   
   const parserName = generateParserName(refToName(ref))
@@ -104,9 +104,10 @@ const generateOptionalRefCall = (key: string, ref: string): string => {
   // Check if this is an -or-reference union type
   if (ref.endsWith('-or-reference')) {
     // For -or-reference types, check if value has $ref property
+    // If it does, it is a reference object — shallow copy to avoid aliasing input
     const baseRef = ref.replace('-or-reference', '')
     const baseParserName = generateParserName(refToName(baseRef))
-    return `...(${acc} && { ${safeKey(key)}: isObject(${acc}) && '$ref' in ${acc} ? ${acc} : ${baseParserName}(${acc}) })`
+    return `...(${acc} && { ${safeKey(key)}: isObject(${acc}) && '$ref' in ${acc} ? { ...${acc} } as ReferenceObject : ${baseParserName}(${acc}) })`
   }
   
   const parserName = generateParserName(refToName(ref))
@@ -142,9 +143,10 @@ const generateRequiredRecordRefCall = (key: string, ref: string): string => {
   
   // Check if this is an -or-reference union type
   if (ref.endsWith('-or-reference')) {
+    // Shallow copy reference objects to avoid aliasing input
     const baseRef = ref.replace('-or-reference', '')
     const baseParserName = generateParserName(refToName(baseRef))
-    return `validateRecord(${acc}, (v) => isObject(v) && '$ref' in v ? v : ${baseParserName}(v))`
+    return `validateRecord(${acc}, (v) => isObject(v) && '$ref' in v ? { ...v } as ReferenceObject : ${baseParserName}(v))`
   }
   
   const parserName = generateParserName(refToName(ref))
@@ -161,9 +163,10 @@ const generateOptionalRecordRefCall = (key: string, ref: string): string => {
   
   // Check if this is an -or-reference union type
   if (ref.endsWith('-or-reference')) {
+    // Shallow copy reference objects to avoid aliasing input
     const baseRef = ref.replace('-or-reference', '')
     const baseParserName = generateParserName(refToName(baseRef))
-    return `...(${acc} && { ${safeKey(key)}: validateRecord(${acc}, (v) => isObject(v) && '$ref' in v ? v : ${baseParserName}(v)) })`
+    return `...(${acc} && { ${safeKey(key)}: validateRecord(${acc}, (v) => isObject(v) && '$ref' in v ? { ...v } as ReferenceObject : ${baseParserName}(v)) })`
   }
   
   const parserName = generateParserName(refToName(ref))
@@ -439,7 +442,7 @@ const generateNonObjectParser = (typeName: string, schema: JSONSchema): string =
     case 'boolean':
       return `export const ${functionName} = (input: unknown): ${typeName} => typeof input === "boolean" ? input as ${typeName} : false as ${typeName};`
     case 'array':
-      return `export const ${functionName} = (input: unknown): ${typeName} => Array.isArray(input) ? input as ${typeName} : [] as ${typeName};`
+      return `export const ${functionName} = (input: unknown): ${typeName} => Array.isArray(input) ? [...input] as ${typeName} : [] as ${typeName};`
     default:
       return `export const ${functionName} = (input: unknown): ${typeName} => input as ${typeName};`
   }
@@ -448,10 +451,11 @@ const generateNonObjectParser = (typeName: string, schema: JSONSchema): string =
 /**
  * Generates a parser for empty object schemas or schemas with only additionalProperties.
  * Validates the input is an object before casting, falling back to an empty object.
+ * Returns a shallow copy to avoid mutating the original input.
  */
 const generateEmptyObjectParser = (typeName: string): string => {
   const functionName = generateParserName(typeName)
-  return `export const ${functionName} = (input: unknown): ${typeName} => isObject(input) ? input as ${typeName} : {} as ${typeName};`
+  return `export const ${functionName} = (input: unknown): ${typeName} => isObject(input) ? { ...input } as ${typeName} : {} as ${typeName};`
 }
 
 /**
@@ -837,11 +841,11 @@ const generateCombinedObjectParser = (schema: JSONSchema, typeName: string, useR
     assignmentCode = `(result as Record<string, unknown>)[key] = value;`
   } else if (isOrReference) {
     // For -or-reference types, we need to check for $ref at runtime
-    // If the value has $ref, it is a reference object and should not be parsed
+    // If the value has $ref, it is a reference object — shallow copy to avoid aliasing input
     // Otherwise, parse it as the base type
     const baseRef = ref.replace('-or-reference', '')
     const baseParserName = generateParserName(refToName(baseRef))
-    assignmentCode = `(result as Record<string, unknown>)[key] = isObject(value) && '$ref' in value ? value : ${baseParserName}(value);`
+    assignmentCode = `(result as Record<string, unknown>)[key] = isObject(value) && '$ref' in value ? { ...value } as ReferenceObject : ${baseParserName}(value);`
   } else {
     const parserName = generateParserName(refToName(ref))
     assignmentCode = `(result as Record<string, unknown>)[key] = ${parserName}(value);`
@@ -906,8 +910,8 @@ const generateAdditionalPropertiesParser = (
     }
   }
 
-  // Otherwise, just validate the input type and cast
-  return `export const ${functionName} = (input: unknown): ${typeName} => isObject(input) ? input as ${typeName} : {};`
+  // Otherwise, just validate the input type and shallow copy
+  return `export const ${functionName} = (input: unknown): ${typeName} => isObject(input) ? { ...input } as ${typeName} : {};`
 }
 
 /**
