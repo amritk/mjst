@@ -110,7 +110,8 @@ describe('generate-files', () => {
     expect(result).toContain('parseContactObject(_contact)')
   })
 
-  it('handles -or-reference suffix in $ref', () => {
+  it('generates a correct import for -or-reference style $ref names', () => {
+    // Without stripping, 'callbacks-or-reference' maps to the filename 'callbacks-or-reference'
     const schema = {
       type: 'object',
       properties: {
@@ -120,9 +121,10 @@ describe('generate-files', () => {
 
     const result = generateFile(schema, 'Document')
 
-    // Should strip -or-reference suffix
-    expect(result).toContain("import { type CallbacksObject, parseCallbacksObject } from './callbacks';")
-    expect(result).toContain('parseCallbacksObject(_callbacks)')
+    expect(result).toContain(
+      "import { type CallbacksOrReferenceObject, parseCallbacksOrReferenceObject } from './callbacks-or-reference';",
+    )
+    expect(result).toContain('parseCallbacksOrReferenceObject(_callbacks)')
   })
 
   it('generates arrow function parser', () => {
@@ -233,7 +235,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Simple', undefined, { typesOnly: true })
+    const result = generateFile(schema, 'Simple', { typesOnly: true })
 
     expect(result).toContain('export type Simple')
     expect(result).not.toContain('export const parseSimple')
@@ -247,7 +249,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Document', undefined, { typesOnly: true })
+    const result = generateFile(schema, 'Document', { typesOnly: true })
 
     expect(result).toContain("import type { ContactObject } from './contact';")
     expect(result).not.toContain('parseContactObject')
@@ -261,7 +263,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Simple', undefined, { typesOnly: true })
+    const result = generateFile(schema, 'Simple', { typesOnly: true })
 
     // No parser helpers should be imported since there is no parser function
     expect(result).not.toContain('import { isObject }')
@@ -279,7 +281,7 @@ describe('generate-files', () => {
       required: ['name'],
     }
 
-    const result = generateFile(schema, 'User', undefined, { typesOnly: true })
+    const result = generateFile(schema, 'User', { typesOnly: true })
 
     expect(result).toContain('export type User')
     expect(result).toContain('name: string')
@@ -297,7 +299,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Document', undefined, { typesOnly: true })
+    const result = generateFile(schema, 'Document', { typesOnly: true })
 
     expect(result).toContain("import type { ServerObject } from './server';")
     expect(result).not.toContain('parseServerObject')
@@ -310,7 +312,7 @@ describe('generate-files', () => {
       additionalProperties: { $ref: '#/$defs/path-item' },
     }
 
-    const result = generateFile(schema, 'Paths', undefined, { typesOnly: true })
+    const result = generateFile(schema, 'Paths', { typesOnly: true })
 
     expect(result).toContain("import type { PathItemObject } from './path-item';")
     expect(result).not.toContain('parsePathItemObject')
@@ -322,7 +324,7 @@ describe('generate-files', () => {
       oneOf: [{ $ref: '#/$defs/cat' }, { $ref: '#/$defs/dog' }],
     }
 
-    const result = generateFile(schema, 'Pet', undefined, { typesOnly: true })
+    const result = generateFile(schema, 'Pet', { typesOnly: true })
 
     expect(result).toContain("import type { CatObject } from './cat';")
     expect(result).toContain("import type { DogObject } from './dog';")
@@ -340,7 +342,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Wrapper', undefined, { typesOnly: true })
+    const result = generateFile(schema, 'Wrapper', { typesOnly: true })
 
     expect(result).toContain("import type { StringValueObject } from './string-value';")
     expect(result).toContain("import type { NumberValueObject } from './number-value';")
@@ -357,7 +359,7 @@ describe('generate-files', () => {
     }
 
     const defaultResult = generateFile(schema, 'Document')
-    const explicitFalseResult = generateFile(schema, 'Document', undefined, { typesOnly: false })
+    const explicitFalseResult = generateFile(schema, 'Document', { typesOnly: false })
 
     expect(defaultResult).toBe(explicitFalseResult)
     expect(defaultResult).toContain("import { type ContactObject, parseContactObject } from './contact';")
@@ -387,14 +389,13 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'EncodingObject', undefined, {
+    const result = generateFile(schema, 'EncodingObject', {
       typesOnly: true,
       selfRef: '#/$defs/encoding',
     })
 
     expect(result).not.toContain("import type { EncodingObject } from './encoding';")
-    expect(result).toContain("import type { ReferenceObject } from './reference';")
-    expect(result).toContain("import type { HeaderObject } from './header';")
+    expect(result).toContain("import type { HeaderOrReferenceObject } from './header-or-reference';")
     expect(result).toContain('export type EncodingObject')
   })
 
@@ -410,10 +411,11 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'EncodingObject', undefined, { selfRef: '#/$defs/encoding' })
+    const result = generateFile(schema, 'EncodingObject', { selfRef: '#/$defs/encoding' })
 
     expect(result).not.toContain("import { type EncodingObject, parseEncodingObject } from './encoding';")
-    expect(result).toContain("import type { ReferenceObject } from './reference';")
-    expect(result).toContain("import { type HeaderObject, parseHeaderObject } from './header';")
+    expect(result).toContain(
+      "import { type HeaderOrReferenceObject, parseHeaderOrReferenceObject } from './header-or-reference';",
+    )
   })
 })

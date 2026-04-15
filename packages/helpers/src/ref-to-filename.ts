@@ -84,8 +84,6 @@ const uriRefToFilename = (uri: string): string => {
  * - URI `http://example.com/definitions/3.1.0/channel.json` → `channel`
  * - URI with fragment `http://example.com/channel.json#/definitions/queue` → `channel-queue`
  *
- * Removes the "-or-reference" suffix if present.
- *
  * @param ref - The $ref string
  * @returns The filename without extension
  *
@@ -93,7 +91,6 @@ const uriRefToFilename = (uri: string): string => {
  * ```ts
  * refToFilename('#/$defs/contact') // 'contact'
  * refToFilename('#/$defs/server-variable') // 'server-variable'
- * refToFilename('#/$defs/callbacks-or-reference') // 'callbacks'
  * refToFilename('#/definitions/ServerVariable') // 'server-variable'
  * refToFilename('#/definitions/APIKeySecurityScheme') // 'api-key-security-scheme'
  * refToFilename('http://asyncapi.com/definitions/3.1.0/channel.json') // 'channel'
@@ -109,11 +106,6 @@ export const refToFilename = (ref: string): string => {
   const segments = ref.split('/')
   // Non-null assertion is safe here: split always returns at least one element
   let filename = segments[segments.length - 1] as string
-
-  // Remove "-or-reference" suffix if present
-  if (filename.endsWith('-or-reference')) {
-    filename = filename.slice(0, -13) // Remove "-or-reference" (13 characters)
-  }
 
   // Normalise PascalCase/camelCase keys (e.g. from draft-07 "definitions") to kebab-case
   if (/[A-Z]/.test(filename)) {

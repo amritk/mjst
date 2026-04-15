@@ -43,7 +43,6 @@ type GenerateValidatorFileOptions = {
 export const generateValidatorFile = (
   schema: JSONSchema,
   typeName: string,
-  markdownDocumentation?: string,
   options?: GenerateValidatorFileOptions,
 ): string => {
   const refImports = collectValidatorImports(schema, {
@@ -51,7 +50,7 @@ export const generateValidatorFile = (
     rootSchema: options?.rootSchema,
   })
 
-  const typeDefinition = generateTypeDefinition(schema, typeName, markdownDocumentation)
+  const typeDefinition = generateTypeDefinition(schema, typeName)
   const validatorFunction = generateValidatorFunction(schema, typeName)
 
   let result = `import type { ValidationResult, ValidationError } from './validation-result'\n`

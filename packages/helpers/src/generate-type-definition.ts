@@ -1,20 +1,7 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { type ObjectDocumentation, parseDocumentation } from './parse-documentation'
 import { refToName } from './ref-to-name'
 import { safeKey } from './safe-accessor'
 import { isObjectSchema, isSchemaObject } from './schema-guards'
-
-/**
- * Some OpenAPI sections delegate their field definitions to another section
- * rather than repeating them. This map provides the fallback fragment ID so
- * property-level JSDoc can still be resolved.
- *
- * Key: fragment ID of the delegating section (e.g. "header-object")
- * Value: fragment ID of the section that owns the Fixed Fields table
- */
-const DOCUMENTATION_FALLBACKS: Record<string, string> = {
-  'header-object': 'parameter-object',
-}
 
 type ConditionalObjectResult = {
   schema: JSONSchema.Object
@@ -107,11 +94,11 @@ const getBooleanSubSchemaType = (schema: boolean): string => {
   return schema ? 'unknown' : 'never'
 }
 
-const buildJsDocBlock = (documentation: ObjectDocumentation, commentUrl: string | undefined): string => {
+const buildJsDocBlock = (title: string, description: string, commentUrl?: string): string => {
   let block = `/**\n`
-  block += `* ${documentation.title}\n`
+  block += `* ${title}\n`
   block += `*\n`
-  block += `* ${documentation.description}\n`
+  block += `* ${description}\n`
   if (commentUrl?.startsWith('http')) {
     block += `* \n`
     block += `* @see {@link ${commentUrl}}\n`
@@ -141,22 +128,15 @@ const getTypeScriptType = (schema: JSONSchema): string => {
     if (!schema.$ref.startsWith('#')) {
       return 'unknown'
     }
-    // Extract the type name from the $ref (e.g., "#/$defs/contact" -> "Contact")
-    const typeName = refToName(schema.$ref)
-    // Check if this is a -or-reference ref and add the union type
-    if (schema.$ref.includes('-or-reference')) {
-      return `${typeName} | ReferenceObject`
-    }
-    return typeName
+    return refToName(schema.$ref)
   }
 
   // Handle $dynamicRef (used for recursive schemas)
   if (schema.$dynamicRef) {
-    // For #meta, this refers to the Schema type itself
+    // For #meta, this refers to the Schema type itself (JSON Schema 2020-12 $dynamicAnchor pattern)
     if (schema.$dynamicRef === '#meta') {
       return 'Schema'
     }
-    // Extract the type name from the $dynamicRef
     return refToName(schema.$dynamicRef)
   }
 
@@ -234,27 +214,15 @@ const getTypeScriptType = (schema: JSONSchema): string => {
     }
 
     if (schema.patternProperties && typeof schema.patternProperties === 'object') {
-      // Skip ^x- vendor extension patterns; use the first non-extension pattern
-      for (const patternKey in schema.patternProperties) {
-        if (patternKey.startsWith('^x-') || patternKey === '^x-') continue
-        const value = schema.patternProperties[patternKey]
+      const firstEntry = Object.entries(schema.patternProperties)[0]
+      if (firstEntry) {
+        const [, value] = firstEntry
         if (value !== undefined) {
           if (typeof value === 'boolean') {
             return `Record<string, ${getBooleanSubSchemaType(value)}>`
           }
           return `Record<string, ${getTypeScriptType(value)}>`
         }
-      }
-      // Fall back to first pattern if all are extension patterns
-      for (const patternKey in schema.patternProperties) {
-        const value = schema.patternProperties[patternKey]
-        if (value !== undefined) {
-          if (typeof value === 'boolean') {
-            return `Record<string, ${getBooleanSubSchemaType(value)}>`
-          }
-          return `Record<string, ${getTypeScriptType(value)}>`
-        }
-        break
       }
     }
 
@@ -347,22 +315,14 @@ const getTypeScriptType = (schema: JSONSchema): string => {
         const additionalPropType = getTypeScriptType(schema.additionalProperties)
         return `Record<string, ${additionalPropType}>`
       }
-      // Handle patternProperties as a Record type, skipping ^x- vendor extension patterns
+      // Handle patternProperties as a Record type
       if (schema.patternProperties && typeof schema.patternProperties === 'object') {
-        for (const patternKey in schema.patternProperties) {
-          if (patternKey.startsWith('^x-') || patternKey === '^x-') continue
-          const patternVal = schema.patternProperties[patternKey]
+        const firstEntry = Object.entries(schema.patternProperties)[0]
+        if (firstEntry) {
+          const [, patternVal] = firstEntry
           if (patternVal) {
             return `Record<string, ${getTypeScriptType(patternVal)}>`
           }
-        }
-        // Fall back to first pattern if all are extension patterns
-        for (const patternKey in schema.patternProperties) {
-          const patternVal = schema.patternProperties[patternKey]
-          if (patternVal) {
-            return `Record<string, ${getTypeScriptType(patternVal)}>`
-          }
-          break
         }
       }
       return 'object'
@@ -373,73 +333,22 @@ const getTypeScriptType = (schema: JSONSchema): string => {
   }
 }
 
-const getSecuritySchemeSubtypeNames = (schema: JSONSchema): string[] => {
-  if (!isSchemaObject(schema) || !Array.isArray(schema.allOf)) {
-    return []
-  }
-
-  const subtypeNames: string[] = []
-  for (const entry of schema.allOf) {
-    if (!isSchemaObject(entry) || !entry.$ref) {
-      continue
-    }
-
-    if (!entry.$ref.includes('/security-scheme/$defs/type-')) {
-      continue
-    }
-
-    subtypeNames.push(refToName(entry.$ref))
-  }
-
-  return subtypeNames
-}
-
 /**
  * Generates a TypeScript type definition from a JSON Schema.
  * Handles required vs optional properties based on the schema's required array.
- * Fetches JSDoc documentation from OpenAPI spec if a $comment URL is provided.
+ * Uses $comment as inline JSDoc description when present.
  */
 export const generateTypeDefinition = (
   schema: JSONSchema,
   typeName: string,
-  markdownDocumentation?: string,
 ): string => {
-  const securitySchemeSubtypeNames = getSecuritySchemeSubtypeNames(schema)
-  if (typeName === 'SecuritySchemeObject' && securitySchemeSubtypeNames.length > 0) {
-    let result = ''
-
-    if (isSchemaObject(schema) && markdownDocumentation && schema.$comment && typeof schema.$comment === 'string') {
-      const documentation = parseDocumentation(markdownDocumentation, schema.$comment)
-      if (documentation) {
-        result += buildJsDocBlock(documentation, schema.$comment)
-      }
-    }
-
-    let subtypeUnion = securitySchemeSubtypeNames[0]
-    for (let i = 1; i < securitySchemeSubtypeNames.length; i++) {
-      subtypeUnion += ' | ' + securitySchemeSubtypeNames[i]
-    }
-    result += 'export type ' + typeName + ' = ' + subtypeUnion + ';'
-    return result
-  }
-
   // Handle non-object schemas first
   if (!isObjectLikeSchema(schema)) {
     const tsType = getTypeScriptType(schema)
     let result = ''
 
     if (isSchemaObject(schema) && schema.$comment && typeof schema.$comment === 'string') {
-      let documentation: ObjectDocumentation | null = null
-      if (schema.$comment.startsWith('http')) {
-        if (markdownDocumentation) {
-          documentation = parseDocumentation(markdownDocumentation, schema.$comment)
-        }
-      } else {
-        documentation = { title: typeName, description: schema.$comment, properties: {} }
-      }
-      if (documentation) {
-        result += buildJsDocBlock(documentation, schema.$comment)
-      }
+      result += buildJsDocBlock(typeName, schema.$comment)
     }
 
     result += `export type ${typeName} = ${tsType};`
@@ -450,22 +359,12 @@ export const generateTypeDefinition = (
     const conditionalResult = getConditionalObjectSchema(schema)
     const normalizedSchema = conditionalResult?.schema ?? schema
     const conditionalThenRef = conditionalResult?.thenRef ?? null
-    let documentation: ObjectDocumentation | null = null
+    let jsDocTitle: string | undefined
+    let jsDocDescription: string | undefined
 
-    // Fetch documentation from $comment: URL comments look up the markdown spec,
-    // plain-text comments are used directly as the JSDoc description.
-    if (schema.$comment && typeof schema.$comment === 'string') {
-      if (schema.$comment.startsWith('http')) {
-        if (markdownDocumentation) {
-          const fragmentId = schema.$comment.split('#')[1]
-          const fallbackFragment = fragmentId ? DOCUMENTATION_FALLBACKS[fragmentId] : undefined
-          const baseUrl = schema.$comment.split('#')[0]
-          const fallbackCommentUrl = fallbackFragment ? `${baseUrl}#${fallbackFragment}` : undefined
-          documentation = parseDocumentation(markdownDocumentation, schema.$comment, fallbackCommentUrl)
-        }
-      } else {
-        documentation = { title: typeName, description: schema.$comment, properties: {} }
-      }
+    if (isSchemaObject(schema) && schema.$comment && typeof schema.$comment === 'string') {
+      jsDocTitle = typeName
+      jsDocDescription = schema.$comment
     }
 
     const hasProperties = normalizedSchema.properties && Object.keys(normalizedSchema.properties).length > 0
@@ -478,49 +377,34 @@ export const generateTypeDefinition = (
 
     // Handle objects with only patternProperties (no fixed properties)
     if (!hasProperties && hasPatternProperties && normalizedSchema.patternProperties) {
-      // Find the first non-extension pattern property (skip ^x- vendor extension patterns,
-      // which are inlined as Record<`x-${string}`, unknown> and don't represent the primary type)
-      let firstPatternProperty: JSONSchema | undefined
-      for (const ppKey in normalizedSchema.patternProperties) {
-        if (ppKey.startsWith('^x-') || ppKey === '^x-') continue
-        firstPatternProperty = normalizedSchema.patternProperties[ppKey]
-        break
-      }
-      // Fall back to the first pattern property if all are extension patterns
-      if (firstPatternProperty === undefined) {
-        for (const ppKey in normalizedSchema.patternProperties) {
-          firstPatternProperty = normalizedSchema.patternProperties[ppKey]
-          break
-        }
-      }
+      const firstEntry = Object.entries(normalizedSchema.patternProperties)[0]
+      const firstPatternProperty = firstEntry?.[1]
+
       if (firstPatternProperty === undefined) {
         return `export type ${typeName} = Record<string, unknown>;`
       }
-      if (firstPatternProperty !== undefined) {
-        const patternPropType =
-          typeof firstPatternProperty === 'boolean'
-            ? getBooleanSubSchemaType(firstPatternProperty)
-            : getTypeScriptType(firstPatternProperty)
 
-        // Build the type definition with JSDoc header if documentation is available
-        let result = ''
-        if (documentation) {
-          result += buildJsDocBlock(documentation, typeof schema.$comment === 'string' ? schema.$comment : undefined)
-        }
-        result += `export type ${typeName} = Record<string, ${patternPropType}>;`
+      const patternPropType =
+        typeof firstPatternProperty === 'boolean'
+          ? getBooleanSubSchemaType(firstPatternProperty)
+          : getTypeScriptType(firstPatternProperty)
 
-        return result
+      let result = ''
+      if (jsDocTitle && jsDocDescription) {
+        result += buildJsDocBlock(jsDocTitle, jsDocDescription)
       }
+      result += `export type ${typeName} = Record<string, ${patternPropType}>;`
+
+      return result
     }
 
     // Handle objects with only additionalProperties (no fixed properties)
     if (!hasProperties && hasAdditionalProperties && normalizedSchema.additionalProperties) {
       const additionalPropType = getTypeScriptType(normalizedSchema.additionalProperties)
 
-      // Build the type definition with JSDoc header if documentation is available
       let result = ''
-      if (documentation) {
-        result += buildJsDocBlock(documentation, typeof schema.$comment === 'string' ? schema.$comment : undefined)
+      if (jsDocTitle && jsDocDescription) {
+        result += buildJsDocBlock(jsDocTitle, jsDocDescription)
       }
       result += `export type ${typeName} = {\n  [key: string]: ${additionalPropType};\n};`
 
@@ -541,39 +425,33 @@ export const generateTypeDefinition = (
       if (!isFirstProp) properties += '\n'
       isFirstProp = false
 
-      // Add JSDoc comment if documentation is available
-      const propDoc = documentation?.properties[key]
-      const inlineDescription = isSchemaObject(propSchema) && typeof propSchema.description === 'string' ? propSchema.description : undefined
-      const jsDocText = propDoc?.description ?? inlineDescription
-      if (jsDocText) {
-        properties += '  /** ' + jsDocText + ' */\n  ' + quotedKey + optional + ': ' + propType + ';'
+      // Add JSDoc comment from $comment or description if available
+      const inlineDescription =
+        isSchemaObject(propSchema) && typeof propSchema.description === 'string'
+          ? propSchema.description
+          : isSchemaObject(propSchema) && typeof propSchema.$comment === 'string'
+            ? propSchema.$comment
+            : undefined
+      if (inlineDescription) {
+        properties += '  /** ' + inlineDescription + ' */\n  ' + quotedKey + optional + ': ' + propType + ';'
       } else {
         properties += '  ' + quotedKey + optional + ': ' + propType + ';'
       }
     }
 
-    // Check if schema has a root-level $ref to specification-extensions
-    const hasSpecificationExtensions =
-      isSchemaObject(schema) && '$ref' in schema && schema.$ref === '#/$defs/specification-extensions'
-
-    // Collect allOf $ref intersections (excluding specification-extensions, which is handled separately)
+    // Collect allOf $ref intersections
     const allOfIntersections: string[] = []
     if (isSchemaObject(schema) && Array.isArray(schema.allOf)) {
       for (const entry of schema.allOf) {
-        if (
-          isSchemaObject(entry) &&
-          entry.$ref &&
-          entry.$ref !== '#/$defs/specification-extensions'
-        ) {
+        if (isSchemaObject(entry) && entry.$ref) {
           allOfIntersections.push(refToName(entry.$ref))
         }
       }
     }
 
-    // Build the type definition with JSDoc header if documentation is available
     let result = ''
-    if (documentation) {
-      result += buildJsDocBlock(documentation, typeof schema.$comment === 'string' ? schema.$comment : undefined)
+    if (jsDocTitle && jsDocDescription) {
+      result += buildJsDocBlock(jsDocTitle, jsDocDescription)
     }
 
     let typeBody = '{\n' + properties + '\n}'
@@ -584,12 +462,6 @@ export const generateTypeDefinition = (
 
     for (const intersectionType of allOfIntersections) {
       typeBody += ' & ' + intersectionType
-    }
-
-    // If specification-extensions is referenced, append the x-extension intersection
-    if (hasSpecificationExtensions) {
-      // biome-ignore lint/suspicious/noTemplateCurlyInString: We want the template string to write the type
-      typeBody += ' & Record<`x-${string}`, unknown>'
     }
 
     result += 'export type ' + typeName + ' = ' + typeBody + ';'

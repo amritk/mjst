@@ -350,10 +350,10 @@ describe('3.1.2', () => {
           },
         },
         securitySchemes: {
-          apiKey: { type: 'apiKey', description: 456, name: '789', in: 'query' },
+          apiKey: { type: 'apiKey', description: '456', name: 789, in: 999, scheme: '', flows: {}, openIdConnectUrl: '' },
           oauth2: {
             type: 'apiKey',
-            description: 456,
+            description: '456',
             flows: {
               implicit: {
                 authorizationUrl: 123,
@@ -371,6 +371,8 @@ describe('3.1.2', () => {
             },
             name: '',
             in: 'query',
+            scheme: '',
+            openIdConnectUrl: '',
           },
           bearer: {
             type: 'apiKey',
@@ -378,8 +380,10 @@ describe('3.1.2', () => {
             bearerFormat: 789,
             name: '',
             in: 'query',
+            flows: {},
+            openIdConnectUrl: '',
           },
-          openId: { type: 'apiKey', openIdConnectUrl: 456, name: '', in: 'query' },
+          openId: { type: 'apiKey', openIdConnectUrl: '456', name: '', in: 'query', scheme: '', flows: {} },
         },
         links: {
           userLink: {

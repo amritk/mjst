@@ -26,18 +26,6 @@ describe('ref-to-filename', () => {
     expect(refToFilename('#/$defs/oauth2-flow')).toBe('oauth2-flow')
   })
 
-  it('removes -or-reference suffix', () => {
-    expect(refToFilename('#/$defs/callbacks-or-reference')).toBe('callbacks')
-  })
-
-  it('removes -or-reference suffix from multi-word refs', () => {
-    expect(refToFilename('#/$defs/request-body-or-reference')).toBe('request-body')
-  })
-
-  it('removes -or-reference suffix from single word refs', () => {
-    expect(refToFilename('#/$defs/example-or-reference')).toBe('example')
-  })
-
   it('converts PascalCase definitions keys to kebab-case', () => {
     expect(refToFilename('#/definitions/ServerVariable')).toBe('server-variable')
     expect(refToFilename('#/definitions/Contact')).toBe('contact')

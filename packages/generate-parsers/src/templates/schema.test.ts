@@ -137,34 +137,6 @@ describe('schema', () => {
     })
   })
 
-  it('converts OpenAPI 3.0 boolean exclusiveMinimum to numeric value', () => {
-    const result = parseSchemaObject({
-      type: 'integer',
-      minimum: 0,
-      exclusiveMinimum: true,
-    })
-
-    expect(result).toEqual({
-      type: 'integer',
-      minimum: 0,
-      exclusiveMinimum: 0,
-    })
-  })
-
-  it('converts OpenAPI 3.0 boolean exclusiveMaximum to numeric value', () => {
-    const result = parseSchemaObject({
-      type: 'number',
-      maximum: 100,
-      exclusiveMaximum: true,
-    })
-
-    expect(result).toEqual({
-      type: 'number',
-      maximum: 100,
-      exclusiveMaximum: 100,
-    })
-  })
-
   it('ignores boolean exclusiveMinimum when minimum is not present', () => {
     const result = parseSchemaObject({
       type: 'integer',

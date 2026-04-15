@@ -30,18 +30,6 @@ describe('ref-to-name', () => {
     expect(refToName('#/$defs/APIKey')).toBe('ApiKeyObject')
   })
 
-  it('removes -or-reference suffix', () => {
-    expect(refToName('#/$defs/callbacks-or-reference')).toBe('CallbacksObject')
-  })
-
-  it('removes -or-reference suffix from multi-word refs', () => {
-    expect(refToName('#/$defs/request-body-or-reference')).toBe('RequestBodyObject')
-  })
-
-  it('removes -or-reference suffix from single word refs', () => {
-    expect(refToName('#/$defs/example-or-reference')).toBe('ExampleObject')
-  })
-
   it('derives type name from a URI ref', () => {
     expect(refToName('http://asyncapi.com/definitions/3.1.0/channel.json')).toBe('ChannelObject')
     expect(refToName('http://asyncapi.com/definitions/3.1.0/info.json')).toBe('InfoObject')

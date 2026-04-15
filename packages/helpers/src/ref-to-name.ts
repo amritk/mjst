@@ -32,7 +32,6 @@ const kebabToPascal = (kebab: string): string => {
  * ```ts
  * refToName('#/$defs/contact') // 'ContactObject'
  * refToName('#/$defs/server-variable') // 'ServerVariableObject'
- * refToName('#/$defs/response-or-reference') // 'ResponseObject'
  * refToName('http://asyncapi.com/definitions/3.1.0/channel.json') // 'ChannelObject'
  * ```
  */

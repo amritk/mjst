@@ -1,9 +1,6 @@
-import { readFile } from 'node:fs/promises'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'bun:test'
 import { generateTypeDefinition } from './generate-type-definition'
-
-const markdownDocumentation = await readFile(new URL('../../../../fixtures/3.1.2.md', import.meta.url), 'utf-8')
 
 describe('generateTypeDefinition', () => {
   it('generates type for deeply nested objects', () => {
@@ -564,160 +561,63 @@ describe('generateTypeDefinition', () => {
     )
   })
 
-  it('generates type for schema with all fields required', () => {
+  it('generates type for info-like object schema with URL $comment as JSDoc description', () => {
     const info: JSONSchema.Object = {
       $comment: 'https://spec.openapis.org/oas/v3.1#info-object',
       type: 'object',
       properties: {
-        title: {
-          type: 'string',
-        },
-        summary: {
-          type: 'string',
-        },
-        description: {
-          type: 'string',
-        },
-        termsOfService: {
-          type: 'string',
-          format: 'uri-reference',
-        },
-        contact: {
-          $ref: '#/$defs/contact',
-        },
-        license: {
-          $ref: '#/$defs/license',
-        },
-        version: {
-          type: 'string',
-        },
+        title: { type: 'string' },
+        summary: { type: 'string' },
+        contact: { $ref: '#/$defs/contact' },
+        version: { type: 'string' },
       },
       required: ['title', 'version'],
-      $ref: '#/$defs/specification-extensions',
-      unevaluatedProperties: false,
     }
 
-    const result = generateTypeDefinition(info, 'InfoObject', markdownDocumentation)
+    const result = generateTypeDefinition(info, 'InfoObject')
 
     expect(result).toStrictEqual(
-      `/**
-* Info object
-*
-* The object provides metadata about the API. The metadata MAY be used by the clients if needed, and MAY be presented in editing or documentation generation tools for convenience.
-* 
-* @see {@link https://spec.openapis.org/oas/v3.1#info-object}
-*/
-export type InfoObject = {
-  /** **REQUIRED**. The title of the API. */
-  title: string;
-  /** A short summary of the API. */
-  summary?: string;
-  /** A description of the API. [CommonMark syntax](https://spec.commonmark.org/) MAY be used for rich text representation. */
-  description?: string;
-  /** A URL to the Terms of Service for the API. This MUST be in the form of a URL. */
-  termsOfService?: string;
-  /** The contact information for the exposed API. */
-  contact?: ContactObject;
-  /** The license information for the exposed API. */
-  license?: LicenseObject;
-  /** **REQUIRED**. The version of the OpenAPI document (which is distinct from the [OpenAPI Specification version](https://spec.openapis.org/oas/v3.1#oasVersion) or the API implementation version). */
-  version: string;
-} & ` + 'Record<`x-${string}`, unknown>;',
+      '/**\n' +
+        '* InfoObject\n' +
+        '*\n' +
+        '* https://spec.openapis.org/oas/v3.1#info-object\n' +
+        '*/\n' +
+        'export type InfoObject = {\n' +
+        '  title: string;\n' +
+        '  summary?: string;\n' +
+        '  contact?: ContactObject;\n' +
+        '  version: string;\n' +
+        '};',
     )
   })
 
-  it('generates type for the components object', () => {
+  it('generates type for object with additionalProperties refs as Record type', () => {
     const components: JSONSchema.Object = {
-      $comment: 'https://spec.openapis.org/oas/v3.1#components-object',
       type: 'object',
       properties: {
         responses: {
           type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/response-or-reference',
-          },
+          additionalProperties: { $ref: '#/$defs/response' },
         },
         parameters: {
           type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/parameter-or-reference',
-          },
-        },
-        examples: {
-          type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/example-or-reference',
-          },
-        },
-        requestBodies: {
-          type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/request-body-or-reference',
-          },
-        },
-        headers: {
-          type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/header-or-reference',
-          },
-        },
-        securitySchemes: {
-          type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/security-scheme-or-reference',
-          },
-        },
-        links: {
-          type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/link-or-reference',
-          },
-        },
-        callbacks: {
-          type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/callbacks-or-reference',
-          },
+          additionalProperties: { $ref: '#/$defs/parameter' },
         },
         pathItems: {
           type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/path-item',
-          },
+          additionalProperties: { $ref: '#/$defs/path-item' },
         },
       },
     }
 
-    const result = generateTypeDefinition(components, 'ComponentsObject', markdownDocumentation)
+    const result = generateTypeDefinition(components, 'ComponentsObject')
 
     expect(result).toStrictEqual(
-      `/**
-* Components object
-*
-* Holds a set of reusable objects for different aspects of the OAS. All objects defined within the components object will have no effect on the API unless they are explicitly referenced from properties outside the components object.
-* 
-* @see {@link https://spec.openapis.org/oas/v3.1#components-object}
-*/
-export type ComponentsObject = {
-  /** An object to hold reusable [Response Objects](https://spec.openapis.org/oas/v3.1#response-object). */
-  responses?: Record<string, ResponseObject | ReferenceObject>;
-  /** An object to hold reusable [Parameter Objects](https://spec.openapis.org/oas/v3.1#parameter-object). */
-  parameters?: Record<string, ParameterObject | ReferenceObject>;
-  /** An object to hold reusable [Example Objects](https://spec.openapis.org/oas/v3.1#example-object). */
-  examples?: Record<string, ExampleObject | ReferenceObject>;
-  /** An object to hold reusable [Request Body Objects](https://spec.openapis.org/oas/v3.1#request-body-object). */
-  requestBodies?: Record<string, RequestBodyObject | ReferenceObject>;
-  /** An object to hold reusable [Header Objects](https://spec.openapis.org/oas/v3.1#header-object). */
-  headers?: Record<string, HeaderObject | ReferenceObject>;
-  /** An object to hold reusable [Security Scheme Objects](https://spec.openapis.org/oas/v3.1#security-scheme-object). */
-  securitySchemes?: Record<string, SecuritySchemeObject | ReferenceObject>;
-  /** An object to hold reusable [Link Objects](https://spec.openapis.org/oas/v3.1#link-object). */
-  links?: Record<string, LinkObject | ReferenceObject>;
-  /** An object to hold reusable [Callback Objects](https://spec.openapis.org/oas/v3.1#callback-object). */
-  callbacks?: Record<string, CallbacksObject | ReferenceObject>;
-  /** An object to hold reusable [Path Item Object](https://spec.openapis.org/oas/v3.1#path-item-object). */
-  pathItems?: Record<string, PathItemObject>;
-};`,
+      'export type ComponentsObject = {\n' +
+        '  responses?: Record<string, ResponseObject>;\n' +
+        '  parameters?: Record<string, ParameterObject>;\n' +
+        '  pathItems?: Record<string, PathItemObject>;\n' +
+        '};',
     )
   })
 
@@ -726,40 +626,29 @@ export type ComponentsObject = {
       $comment: 'https://spec.openapis.org/oas/v3.1#openapi-object',
       type: 'object',
       properties: {
-        openapi: {
-          type: 'string',
-        },
-        info: {
-          $ref: '#/$defs/info',
-        },
+        openapi: { type: 'string' },
+        info: { $ref: '#/$defs/info' },
         paths: {
           type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/path-item',
-          },
+          additionalProperties: { $ref: '#/$defs/path-item' },
         },
       },
       required: ['openapi', 'info'],
     }
 
-    const result = generateTypeDefinition(document, 'Document', markdownDocumentation)
+    const result = generateTypeDefinition(document, 'Document')
 
     expect(result).toStrictEqual(
-      `/**
-* Openapi object
-*
-* This is the root object of the [OpenAPI document](#openapi-document).
-* 
-* @see {@link https://spec.openapis.org/oas/v3.1#openapi-object}
-*/
-export type Document = {
-  /** **REQUIRED**. This string MUST be the [version number](https://spec.openapis.org/oas/v3.1#versions) of the OpenAPI Specification that the OpenAPI document uses. The \`openapi\` field SHOULD be used by tooling to interpret the OpenAPI document. This is *not* related to the API [\`info.version\`](https://spec.openapis.org/oas/v3.1#infoVersion) string. */
-  openapi: string;
-  /** **REQUIRED**. Provides metadata about the API. The metadata MAY be used by tooling as required. */
-  info: InfoObject;
-  /** The available paths and operations for the API. */
-  paths?: Record<string, PathItemObject>;
-};`,
+      '/**\n' +
+        '* Document\n' +
+        '*\n' +
+        '* https://spec.openapis.org/oas/v3.1#openapi-object\n' +
+        '*/\n' +
+        'export type Document = {\n' +
+        '  openapi: string;\n' +
+        '  info: InfoObject;\n' +
+        '  paths?: Record<string, PathItemObject>;\n' +
+        '};',
     )
   })
 
@@ -802,32 +691,23 @@ export type Document = {
       required: ['openapi', 'info'],
     }
 
-    const result = generateTypeDefinition(document, 'Document', markdownDocumentation)
+    const result = generateTypeDefinition(document, 'Document')
 
     expect(result).toStrictEqual(
-      `/**
-* Openapi object
-*
-* This is the root object of the [OpenAPI document](#openapi-document).
-* 
-* @see {@link https://spec.openapis.org/oas/v3.1#openapi-object}
-*/
-export type Document = {
-  /** **REQUIRED**. This string MUST be the [version number](https://spec.openapis.org/oas/v3.1#versions) of the OpenAPI Specification that the OpenAPI document uses. The \`openapi\` field SHOULD be used by tooling to interpret the OpenAPI document. This is *not* related to the API [\`info.version\`](https://spec.openapis.org/oas/v3.1#infoVersion) string. */
-  openapi: string;
-  /** **REQUIRED**. Provides metadata about the API. The metadata MAY be used by tooling as required. */
-  info: InfoObject;
-  /** The default value for the \`$schema\` keyword within [Schema Objects](https://spec.openapis.org/oas/v3.1#schema-object) contained within this OAS document. This MUST be in the form of a URI. */
-  jsonSchemaDialect?: string;
-  /** An array of Server Objects, which provide connectivity information to a target server. If the \`servers\` property is not provided, or is an empty array, the default value would be a [Server Object](https://spec.openapis.org/oas/v3.1#server-object) with a [url](https://spec.openapis.org/oas/v3.1#serverUrl) value of \`/\`. */
-  servers?: ServerObject[];
-  /** The available paths and operations for the API. */
-  paths?: Record<string, PathItemObject>;
-  /** The incoming webhooks that MAY be received as part of this API and that the API consumer MAY choose to implement. Closely related to the \`callbacks\` feature, this section describes requests initiated other than by an API call, for example by an out of band registration. The key name is a unique string to refer to each webhook, while the (optionally referenced) Path Item Object describes a request that may be initiated by the API provider and the expected responses. An [example](../examples/v3.1/webhook-example.yaml) is available. */
-  webhooks?: Record<string, PathItemObject>;
-  /** An element to hold various schemas for the document. */
-  components?: ComponentsObject;
-};`,
+      '/**\n' +
+        '* Document\n' +
+        '*\n' +
+        '* https://spec.openapis.org/oas/v3.1#openapi-object\n' +
+        '*/\n' +
+        'export type Document = {\n' +
+        '  openapi: string;\n' +
+        '  info: InfoObject;\n' +
+        '  jsonSchemaDialect?: string;\n' +
+        '  servers?: ServerObject[];\n' +
+        '  paths?: Record<string, PathItemObject>;\n' +
+        '  webhooks?: Record<string, PathItemObject>;\n' +
+        '  components?: ComponentsObject;\n' +
+        '};',
     )
   })
 
@@ -842,17 +722,15 @@ export type Document = {
       },
     }
 
-    const result = generateTypeDefinition(paths, 'PathsObject', markdownDocumentation)
+    const result = generateTypeDefinition(paths, 'PathsObject')
 
     expect(result).toStrictEqual(
-      `/**
-* Paths object
-*
-* Holds the relative paths to the individual endpoints and their operations. The path is appended to the URL from the [\`Server Object\`](#server-object) in order to construct the full URL.  The Paths MAY be empty, due to [Access Control List (ACL) constraints](#security-filtering).
-* 
-* @see {@link https://spec.openapis.org/oas/v3.1#paths-object}
-*/
-export type PathsObject = Record<string, PathItemObject>;`,
+      '/**\n' +
+        '* PathsObject\n' +
+        '*\n' +
+        '* https://spec.openapis.org/oas/v3.1#paths-object\n' +
+        '*/\n' +
+        'export type PathsObject = Record<string, PathItemObject>;',
     )
   })
 
@@ -920,7 +798,7 @@ export type PathsObject = Record<string, PathItemObject>;`,
     )
   })
 
-  it('generates required discriminator and comments for conditional type-http schema', () => {
+  it('generates required discriminator for conditional type-http schema with $comment JSDoc', () => {
     const schema: JSONSchema = {
       $comment: 'https://spec.openapis.org/oas/v3.1#security-scheme-object',
       if: {
@@ -944,23 +822,21 @@ export type PathsObject = Record<string, PathItemObject>;`,
       },
     }
 
-    const result = generateTypeDefinition(schema, 'TypeHttpObject', markdownDocumentation)
+    const result = generateTypeDefinition(schema, 'TypeHttpObject')
 
-    expect(result).toContain('/** **REQUIRED**. The type of the security scheme.')
+    expect(result).toContain('* TypeHttpObject')
+    expect(result).toContain('* https://spec.openapis.org/oas/v3.1#security-scheme-object')
     expect(result).toContain('type: "http";')
-    expect(result).toContain('/** **REQUIRED**. The name of the HTTP Authorization scheme to be used')
     expect(result).toContain('scheme: string;')
-    expect(result).toContain('/** A hint to the client to identify how the bearer token is formatted.')
     expect(result).toContain('bearerFormat: string;')
   })
 
-  it('generates union type for security-scheme subtype refs', () => {
+  it('generates intersection type for schema with allOf $ref entries', () => {
     const securityScheme: JSONSchema.Object = {
-      $comment: 'https://spec.openapis.org/oas/v3.1#security-scheme-object',
       type: 'object',
       properties: {
         type: {
-          enum: ['apiKey', 'http', 'mutualTLS', 'oauth2', 'openIdConnect'],
+          enum: ['apiKey', 'http', 'oauth2'],
         },
         description: {
           type: 'string',
@@ -968,56 +844,41 @@ export type PathsObject = Record<string, PathItemObject>;`,
       },
       required: ['type'],
       allOf: [
-        { $ref: '#/$defs/specification-extensions' },
-        { $ref: '#/$defs/security-scheme/$defs/type-apikey' },
-        { $ref: '#/$defs/security-scheme/$defs/type-http' },
-        { $ref: '#/$defs/security-scheme/$defs/type-http-bearer' },
-        { $ref: '#/$defs/security-scheme/$defs/type-oauth2' },
-        { $ref: '#/$defs/security-scheme/$defs/type-oidc' },
+        { $ref: '#/$defs/type-apikey' },
+        { $ref: '#/$defs/type-http' },
+        { $ref: '#/$defs/type-oauth2' },
       ],
     }
 
     const result = generateTypeDefinition(securityScheme, 'SecuritySchemeObject')
 
     expect(result).toStrictEqual(
-      'export type SecuritySchemeObject = TypeApikeyObject | TypeHttpObject | TypeHttpBearerObject | TypeOauth2Object | TypeOidcObject;',
+      'export type SecuritySchemeObject = {\n' +
+        '  type: "apiKey" | "http" | "oauth2";\n' +
+        '  description?: string;\n' +
+        '} & TypeApikeyObject & TypeHttpObject & TypeOauth2Object;',
     )
   })
 
-  it('uses security-scheme documentation heading with subtype union type', () => {
+  it('generates JSDoc from $comment URL for schema with allOf intersections', () => {
     const securityScheme: JSONSchema.Object = {
       $comment: 'https://spec.openapis.org/oas/v3.1#security-scheme-object',
       type: 'object',
       properties: {
         type: {
-          enum: ['apiKey', 'http', 'mutualTLS', 'oauth2', 'openIdConnect'],
-        },
-        description: {
-          type: 'string',
+          enum: ['apiKey', 'http', 'oauth2'],
         },
       },
       required: ['type'],
-      allOf: [
-        { $ref: '#/$defs/specification-extensions' },
-        { $ref: '#/$defs/security-scheme/$defs/type-apikey' },
-        { $ref: '#/$defs/security-scheme/$defs/type-http' },
-        { $ref: '#/$defs/security-scheme/$defs/type-http-bearer' },
-        { $ref: '#/$defs/security-scheme/$defs/type-oauth2' },
-        { $ref: '#/$defs/security-scheme/$defs/type-oidc' },
-      ],
+      allOf: [{ $ref: '#/$defs/type-apikey' }, { $ref: '#/$defs/type-http' }],
     }
 
-    const result = generateTypeDefinition(securityScheme, 'SecuritySchemeObject', markdownDocumentation)
-    expect(result).toEqual(
-      `/**
-* Security Scheme object
-*
-* Defines a security scheme that can be used by the operations.  Supported schemes are HTTP authentication, an API key (either as a header, a cookie parameter or as a query parameter), mutual TLS (use of a client certificate), OAuth2's common flows (implicit, password, client credentials and authorization code) as defined in [RFC6749](https://tools.ietf.org/html/rfc6749), and [OpenID Connect Discovery](https://tools.ietf.org/html/draft-ietf-oauth-discovery-06). Please note that as of 2020, the implicit flow is about to be deprecated by [OAuth 2.0 Security Best Current Practice](https://tools.ietf.org/html/draft-ietf-oauth-security-topics). Recommended for most use case is Authorization Code Grant flow with PKCE.
-* 
-* @see {@link https://spec.openapis.org/oas/v3.1#security-scheme-object}
-*/
-export type SecuritySchemeObject = TypeApikeyObject | TypeHttpObject | TypeHttpBearerObject | TypeOauth2Object | TypeOidcObject;`,
-    )
+    const result = generateTypeDefinition(securityScheme, 'SecuritySchemeObject')
+
+    expect(result).toContain('* SecuritySchemeObject')
+    expect(result).toContain('* https://spec.openapis.org/oas/v3.1#security-scheme-object')
+    expect(result).toContain('type: "apiKey" | "http" | "oauth2";')
+    expect(result).toContain('} & TypeApikeyObject & TypeHttpObject;')
   })
 
   it('generates record type for patternProperties-only schema without explicit type', () => {
@@ -1199,11 +1060,11 @@ export type SecuritySchemeObject = TypeApikeyObject | TypeHttpObject | TypeHttpB
       },
     }
 
-    const result = generateTypeDefinition(schema, 'CallbackObject', markdownDocumentation)
+    const result = generateTypeDefinition(schema, 'CallbackObject')
 
     expect(result).toContain('/**')
-    expect(result).toContain('* Callback object')
-    expect(result).toContain('* @see')
+    expect(result).toContain('* CallbackObject')
+    expect(result).toContain('* https://spec.openapis.org/oas/v3.1#callback-object')
     expect(result).toContain('[key: string]: PathItemObject')
   })
 
@@ -1283,7 +1144,7 @@ export type SecuritySchemeObject = TypeApikeyObject | TypeHttpObject | TypeHttpB
   it('wraps union item types in parentheses for root-level array schema', () => {
     const schema: JSONSchema = {
       type: 'array',
-      items: { $ref: '#/$defs/parameter-or-reference' },
+      items: { anyOf: [{ $ref: '#/$defs/parameter' }, { $ref: '#/$defs/reference' }] },
     }
 
     const result = generateTypeDefinition(schema, 'Parameters')
@@ -1298,10 +1159,10 @@ export type SecuritySchemeObject = TypeApikeyObject | TypeHttpObject | TypeHttpB
       items: { $ref: '#/$defs/server' },
     }
 
-    const result = generateTypeDefinition(schema, 'Contacts', markdownDocumentation)
+    const result = generateTypeDefinition(schema, 'Contacts')
 
     expect(result).toContain('/**')
-    expect(result).toContain('@see {@link https://spec.openapis.org/oas/v3.1#contact-object}')
+    expect(result).toContain('* https://spec.openapis.org/oas/v3.1#contact-object')
     expect(result).toContain('export type Contacts = ServerObject[];')
   })
 
@@ -1309,14 +1170,14 @@ export type SecuritySchemeObject = TypeApikeyObject | TypeHttpObject | TypeHttpB
     const schema: JSONSchema = {
       $comment: 'A list of parameters applicable to the operation.',
       type: 'array',
-      items: { $ref: '#/$defs/parameter-or-reference' },
+      items: { $ref: '#/$defs/parameter' },
     }
 
     const result = generateTypeDefinition(schema, 'Parameters')
 
     expect(result).toContain('/**')
     expect(result).toContain('A list of parameters applicable to the operation.')
-    expect(result).toContain('export type Parameters = (ParameterObject | ReferenceObject)[];')
+    expect(result).toContain('export type Parameters = ParameterObject[];')
   })
 
   it('generates unknown for external $ref', () => {

@@ -1,7 +1,5 @@
 import { isObject } from 'mjst-helpers/is-object'
 
-import type { ReferenceObject } from './reference'
-
 type PrimitiveSchemaType = 'null' | 'boolean' | 'string' | 'number' | 'integer' | 'object' | 'array'
 
 type StringFormat =
@@ -57,8 +55,6 @@ type NumericFormat =
   | 'sf-integer'
   | 'sf-decimal'
 
-export type SchemaReferenceType<Value> = Value | ReferenceObject
-
 type Extensions = {
   [key: `x-${string}`]: unknown
 }
@@ -78,14 +74,14 @@ type SharedProperties = {
   writeOnly?: boolean
   xml?: Record<string, unknown>
   externalDocs?: Record<string, unknown>
-  allOf?: SchemaReferenceType<SchemaObject>[]
-  oneOf?: SchemaReferenceType<SchemaObject>[]
-  anyOf?: SchemaReferenceType<SchemaObject>[]
-  not?: SchemaReferenceType<SchemaObject>
-  if?: SchemaReferenceType<SchemaObject>
-  then?: SchemaReferenceType<SchemaObject>
-  else?: SchemaReferenceType<SchemaObject>
-  $defs?: Record<string, SchemaReferenceType<SchemaObject>>
+  allOf?: boolean | SchemaObject[]
+  oneOf?: boolean | SchemaObject[]
+  anyOf?: boolean | SchemaObject[]
+  not?: boolean | SchemaObject
+  if?: boolean | SchemaObject
+  then?: boolean | SchemaObject
+  else?: boolean | SchemaObject
+  $defs?: Record<string, boolean | SchemaObject>
 }
 
 type NumericKeywords = {
@@ -102,31 +98,31 @@ type StringKeywords = {
   pattern?: string
   contentMediaType?: string
   contentEncoding?: string
-  contentSchema?: SchemaReferenceType<SchemaObject>
+  contentSchema?: boolean | SchemaObject
 }
 
 type ArrayKeywords = {
-  items?: SchemaReferenceType<SchemaObject>
-  prefixItems?: SchemaReferenceType<SchemaObject>[]
+  items?: boolean | SchemaObject
+  prefixItems?: boolean | SchemaObject[]
   maxItems?: number
   minItems?: number
   uniqueItems?: boolean
-  contains?: SchemaReferenceType<SchemaObject>
+  contains?: boolean | SchemaObject
   maxContains?: number
   minContains?: number
-  unevaluatedItems?: boolean | SchemaReferenceType<SchemaObject>
+  unevaluatedItems?: boolean | boolean | SchemaObject
 }
 
 type ObjectKeywords = {
   maxProperties?: number
   minProperties?: number
   required?: string[]
-  properties?: Record<string, SchemaReferenceType<SchemaObject>>
-  additionalProperties?: boolean | SchemaReferenceType<SchemaObject>
-  patternProperties?: Record<string, SchemaReferenceType<SchemaObject>>
-  dependentSchemas?: Record<string, SchemaReferenceType<SchemaObject>>
-  propertyNames?: SchemaReferenceType<SchemaObject>
-  unevaluatedProperties?: boolean | SchemaReferenceType<SchemaObject>
+  properties?: Record<string, boolean | SchemaObject>
+  additionalProperties?: boolean | boolean | SchemaObject
+  patternProperties?: Record<string, boolean | SchemaObject>
+  dependentSchemas?: Record<string, boolean | SchemaObject>
+  propertyNames?: boolean | SchemaObject
+  unevaluatedProperties?: boolean | boolean | SchemaObject
 }
 
 type UntypedObject = SharedProperties & {
@@ -277,13 +273,13 @@ const isPrimitiveSchemaType = (value: unknown): value is PrimitiveSchemaType =>
  * For $ref objects, returns the original object directly to avoid allocation overhead.
  * This means the caller must not mutate returned reference objects.
  */
-const parseSchemaOrReference = (value: unknown): SchemaReferenceType<SchemaObject> | undefined => {
+const parseSchemaOrReference = (value: unknown): boolean | SchemaObject | undefined => {
   if (!isObject(value)) return undefined
 
   // Checking typeof directly is faster than 'in' operator + typeof.
   // For non-$ref objects (the common case), this is a single property access returning undefined.
   if (typeof value['$ref'] === 'string') {
-    return value as unknown as SchemaReferenceType<SchemaObject>
+    return value as unknown as boolean | SchemaObject
   }
 
   return parseSchemaNode(value)
@@ -292,10 +288,10 @@ const parseSchemaOrReference = (value: unknown): SchemaReferenceType<SchemaObjec
 /**
  * Parses an array of schema-or-reference values, filtering out invalid entries.
  */
-const parseSchemaArray = (value: unknown): SchemaReferenceType<SchemaObject>[] | undefined => {
+const parseSchemaArray = (value: unknown): boolean | SchemaObject[] | undefined => {
   if (!Array.isArray(value)) return undefined
 
-  const result: SchemaReferenceType<SchemaObject>[] = []
+  const result: boolean | SchemaObject[] = []
   for (let i = 0; i < value.length; i++) {
     const parsed = parseSchemaOrReference(value[i])
     if (parsed !== undefined) result.push(parsed)
@@ -309,8 +305,8 @@ const parseSchemaArray = (value: unknown): SchemaReferenceType<SchemaObject>[] |
  * Expects a pre-validated plain object (caller must verify with isObject).
  * Returns an empty object when the input is empty to preserve explicit empty properties.
  */
-const parseSchemaRecord = (value: Record<string, unknown>): Record<string, SchemaReferenceType<SchemaObject>> => {
-  const result: Record<string, SchemaReferenceType<SchemaObject>> = {}
+const parseSchemaRecord = (value: Record<string, unknown>): Record<string, boolean | SchemaObject> => {
+  const result: Record<string, boolean | SchemaObject> = {}
 
   for (const key in value) {
     if (!Object.hasOwn(value, key)) continue
@@ -477,23 +473,13 @@ const parseNumericKeywordsDirect = (value: Record<string, unknown>, result: Pars
   if (typeof maximum === 'number') result.maximum = maximum
 
   const exclusiveMaximum = value['exclusiveMaximum']
-  if (typeof exclusiveMaximum === 'number') {
-    result.exclusiveMaximum = exclusiveMaximum
-  } else if (exclusiveMaximum === true && typeof maximum === 'number') {
-    // OpenAPI 3.0 format: exclusiveMaximum is a boolean modifier for maximum
-    result.exclusiveMaximum = maximum
-  }
+  if (typeof exclusiveMaximum === 'number') result.exclusiveMaximum = exclusiveMaximum
 
   const minimum = value['minimum']
   if (typeof minimum === 'number') result.minimum = minimum
 
   const exclusiveMinimum = value['exclusiveMinimum']
-  if (typeof exclusiveMinimum === 'number') {
-    result.exclusiveMinimum = exclusiveMinimum
-  } else if (exclusiveMinimum === true && typeof minimum === 'number') {
-    // OpenAPI 3.0 format: exclusiveMinimum is a boolean modifier for minimum
-    result.exclusiveMinimum = minimum
-  }
+  if (typeof exclusiveMinimum === 'number') result.exclusiveMinimum = exclusiveMinimum
 }
 
 /**

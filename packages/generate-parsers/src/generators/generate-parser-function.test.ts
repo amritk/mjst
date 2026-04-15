@@ -853,87 +853,44 @@ describe('generate-parser-function', () => {
     )
   })
 
-  it('generates security-scheme parser dispatching to http-bearer when only type-http-bearer is in allOf', () => {
-    // When type-http is absent from allOf but type-http-bearer is present, the switch
-    // case for "http" should route directly to the bearer parser without the dual check.
+  it('generates a simple object pass-through parser for allOf-only schema', () => {
+    // A schema with only allOf refs and type: object but no properties generates
+    // a simple spread parser since there is nothing to specifically parse.
     const schema: JSONSchema = {
-      $comment: 'https://spec.openapis.org/oas/v3.1#security-scheme-object',
       type: 'object',
       allOf: [
-        { $ref: '#/$defs/specification-extensions' },
-        { $ref: '#/$defs/security-scheme/$defs/type-apikey' },
-        { $ref: '#/$defs/security-scheme/$defs/type-http-bearer' },
-        { $ref: '#/$defs/security-scheme/$defs/type-oauth2' },
-        { $ref: '#/$defs/security-scheme/$defs/type-oidc' },
+        { $ref: '#/$defs/type-apikey' },
+        { $ref: '#/$defs/type-http-bearer' },
+        { $ref: '#/$defs/type-oauth2' },
       ],
     }
 
     const result = generateParserFunction(schema, 'SecuritySchemeObject', { useRefImports: true })
 
-    expect(result).toContain('case "http"')
-    expect(result).toContain('parseTypeHttpBearerObject')
-    // Without type-http in allOf, there should be no separate http parser call
-    expect(result).not.toContain('parseTypeHttpObject')
+    expect(result).toBe(
+      `export const parseSecuritySchemeObject = (input: unknown): SecuritySchemeObject => isObject(input) ? { ...input } as SecuritySchemeObject : {} as SecuritySchemeObject;`,
+    )
   })
 
   it('generates a parser for the components object', () => {
     const components: JSONSchema.Object = {
-      $comment: 'https://spec.openapis.org/oas/v3.1#components-object',
       type: 'object',
       properties: {
         responses: {
           type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/response-or-reference',
-          },
+          additionalProperties: { $ref: '#/$defs/response' },
         },
         parameters: {
           type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/parameter-or-reference',
-          },
-        },
-        examples: {
-          type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/example-or-reference',
-          },
-        },
-        requestBodies: {
-          type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/request-body-or-reference',
-          },
+          additionalProperties: { $ref: '#/$defs/parameter' },
         },
         headers: {
           type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/header-or-reference',
-          },
-        },
-        securitySchemes: {
-          type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/security-scheme-or-reference',
-          },
-        },
-        links: {
-          type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/link-or-reference',
-          },
-        },
-        callbacks: {
-          type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/callbacks-or-reference',
-          },
+          additionalProperties: { $ref: '#/$defs/header' },
         },
         pathItems: {
           type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/path-item',
-          },
+          additionalProperties: { $ref: '#/$defs/path-item' },
         },
       },
     }
@@ -944,23 +901,13 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {} as ComponentsObject;
   const _responses = input.responses;
   const _parameters = input.parameters;
-  const _examples = input.examples;
-  const _requestBodies = input.requestBodies;
   const _headers = input.headers;
-  const _securitySchemes = input.securitySchemes;
-  const _links = input.links;
-  const _callbacks = input.callbacks;
   const _pathItems = input.pathItems;
   return {
     ...input,
     ...(_responses !== undefined && { responses: validateRecord(_responses, parseResponseObject) }),
     ...(_parameters !== undefined && { parameters: validateRecord(_parameters, parseParameterObject) }),
-    ...(_examples !== undefined && { examples: validateRecord(_examples, parseExampleObject) }),
-    ...(_requestBodies !== undefined && { requestBodies: validateRecord(_requestBodies, parseRequestBodyObject) }),
     ...(_headers !== undefined && { headers: validateRecord(_headers, parseHeaderObject) }),
-    ...(_securitySchemes !== undefined && { securitySchemes: validateRecord(_securitySchemes, parseSecuritySchemeObject) }),
-    ...(_links !== undefined && { links: validateRecord(_links, parseLinkObject) }),
-    ...(_callbacks !== undefined && { callbacks: validateRecord(_callbacks, parseCallbacksObject) }),
     ...(_pathItems !== undefined && { pathItems: validateRecord(_pathItems, parsePathItemObject) }),
   } as unknown as ComponentsObject;
 }`,
@@ -1014,51 +961,25 @@ describe('generate-parser-function', () => {
     )
   })
 
-  it('generates security-scheme parser as a subtype union dispatcher', () => {
+  it('generates a simple object pass-through parser for allOf-only schema with multiple subtypes', () => {
+    // With the OpenAPI SecuritySchemeObject dispatcher logic removed, a schema that only has
+    // allOf refs and no fixed properties generates a simple spread parser.
     const schema: JSONSchema = {
-      $comment: 'https://spec.openapis.org/oas/v3.1#security-scheme-object',
       type: 'object',
       allOf: [
-        { $ref: '#/$defs/specification-extensions' },
-        { $ref: '#/$defs/security-scheme/$defs/type-apikey' },
-        { $ref: '#/$defs/security-scheme/$defs/type-http' },
-        { $ref: '#/$defs/security-scheme/$defs/type-http-bearer' },
-        { $ref: '#/$defs/security-scheme/$defs/type-oauth2' },
-        { $ref: '#/$defs/security-scheme/$defs/type-oidc' },
+        { $ref: '#/$defs/type-apikey' },
+        { $ref: '#/$defs/type-http' },
+        { $ref: '#/$defs/type-http-bearer' },
+        { $ref: '#/$defs/type-oauth2' },
+        { $ref: '#/$defs/type-oidc' },
       ],
     }
 
     const result = generateParserFunction(schema, 'SecuritySchemeObject', { useRefImports: true })
 
-    expect(result).toBe(`export const parseSecuritySchemeObject = (input: unknown): SecuritySchemeObject => {
-  if (!isObject(input)) {
-    return parseTypeApikeyObject(input);
-  }
-
-  const parsedSubtype: SecuritySchemeObject = (() => {
-    switch (input["type"]) {
-    case "apiKey":
-      return parseTypeApikeyObject(input);
-    case "http":
-      if (typeof input["scheme"] === "string" && /^[Bb][Ee][Aa][Rr][Ee][Rr]$/.test(input["scheme"])) {
-        return parseTypeHttpBearerObject(input);
-      }
-      return parseTypeHttpObject(input);
-    case "oauth2":
-      return parseTypeOauth2Object(input);
-    case "openIdConnect":
-      return parseTypeOidcObject(input);
-    default:
-      return parseTypeApikeyObject(input);
-    }
-  })();
-
-  return {
-    ...input,
-    ...((value => value === undefined ? {} : { description: value })(typeof input?.["description"] === "string" ? input?.["description"] : (input?.["description"] !== undefined ? String(input?.["description"]) : undefined))),
-    ...parsedSubtype,
-  };
-};`)
+    expect(result).toBe(
+      `export const parseSecuritySchemeObject = (input: unknown): SecuritySchemeObject => isObject(input) ? { ...input } as SecuritySchemeObject : {} as SecuritySchemeObject;`,
+    )
   })
 
   it('documents the difference: webhooks uses additionalProperties and works correctly', () => {
@@ -1154,84 +1075,29 @@ describe('generate-parser-function', () => {
 }`)
   })
 
-  it('generates parser for OpenAPI 3.1.2 components schema with all properties', () => {
-    // This is the actual schema from OpenAPI 3.1.2 specification
+  it('generates parser for components-like schema with $dynamicRef and record properties', () => {
+    // Tests that $dynamicRef in additionalProperties generates the schema pass-through,
+    // while plain $ref properties generate proper validateRecord calls.
     const schema: JSONSchema = {
-      $comment: 'https://spec.openapis.org/oas/v3.1#components-object',
       type: 'object',
       properties: {
         schemas: {
           type: 'object',
-          additionalProperties: {
-            $dynamicRef: '#meta',
-          },
+          additionalProperties: { $dynamicRef: '#meta' },
         },
         responses: {
           type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/response-or-reference',
-          },
+          additionalProperties: { $ref: '#/$defs/response' },
         },
         parameters: {
           type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/parameter-or-reference',
-          },
-        },
-        examples: {
-          type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/example-or-reference',
-          },
-        },
-        requestBodies: {
-          type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/request-body-or-reference',
-          },
-        },
-        headers: {
-          type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/header-or-reference',
-          },
-        },
-        securitySchemes: {
-          type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/security-scheme-or-reference',
-          },
-        },
-        links: {
-          type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/link-or-reference',
-          },
-        },
-        callbacks: {
-          type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/callbacks-or-reference',
-          },
+          additionalProperties: { $ref: '#/$defs/parameter' },
         },
         pathItems: {
           type: 'object',
-          additionalProperties: {
-            $ref: '#/$defs/path-item',
-          },
+          additionalProperties: { $ref: '#/$defs/path-item' },
         },
       },
-      patternProperties: {
-        '^(?:schemas|responses|parameters|examples|requestBodies|headers|securitySchemes|links|callbacks|pathItems)$': {
-          $comment:
-            'Enumerating all of the property names in the regex above is necessary for unevaluatedProperties to work as expected',
-          propertyNames: {
-            pattern: '^[a-zA-Z0-9._-]+$',
-          },
-        },
-      },
-      $ref: '#/$defs/specification-extensions',
-      unevaluatedProperties: false,
     }
 
     const result = generateParserFunction(schema, 'ComponentsObject', { useRefImports: true })
@@ -1240,24 +1106,12 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {} as ComponentsObject;
   const _responses = input.responses;
   const _parameters = input.parameters;
-  const _examples = input.examples;
-  const _requestBodies = input.requestBodies;
-  const _headers = input.headers;
-  const _securitySchemes = input.securitySchemes;
-  const _links = input.links;
-  const _callbacks = input.callbacks;
   const _pathItems = input.pathItems;
   return {
     ...input,
     ...(input.schemas !== undefined && { schemas: isObject(input?.schemas) ? input?.schemas : typeof input?.schemas === "object" && input?.schemas !== null ? input?.schemas : {} }),
     ...(_responses !== undefined && { responses: validateRecord(_responses, parseResponseObject) }),
     ...(_parameters !== undefined && { parameters: validateRecord(_parameters, parseParameterObject) }),
-    ...(_examples !== undefined && { examples: validateRecord(_examples, parseExampleObject) }),
-    ...(_requestBodies !== undefined && { requestBodies: validateRecord(_requestBodies, parseRequestBodyObject) }),
-    ...(_headers !== undefined && { headers: validateRecord(_headers, parseHeaderObject) }),
-    ...(_securitySchemes !== undefined && { securitySchemes: validateRecord(_securitySchemes, parseSecuritySchemeObject) }),
-    ...(_links !== undefined && { links: validateRecord(_links, parseLinkObject) }),
-    ...(_callbacks !== undefined && { callbacks: validateRecord(_callbacks, parseCallbacksObject) }),
     ...(_pathItems !== undefined && { pathItems: validateRecord(_pathItems, parsePathItemObject) }),
   } as unknown as ComponentsObject;
 }`,
@@ -1265,15 +1119,14 @@ describe('generate-parser-function', () => {
   })
 
   it('generates combined parser for schema with both properties and patternProperties', () => {
-    // This is the OpenAPI responses object pattern: known "default" property
-    // plus patternProperties for HTTP status codes like "200", "4XX"
+    // A schema with a known property and patternProperties for dynamic keys
     const schema: JSONSchema = {
       type: 'object',
       properties: {
-        default: { $ref: '#/$defs/response-or-reference' },
+        default: { $ref: '#/$defs/response' },
       },
       patternProperties: {
-        '^[1-5](?:[0-9]{2}|XX)$': { $ref: '#/$defs/response-or-reference' },
+        '^[1-5](?:[0-9]{2}|XX)$': { $ref: '#/$defs/response' },
       },
     }
 
@@ -1286,12 +1139,12 @@ describe('generate-parser-function', () => {
   }
   const result = {
     ...input,
-    ...(input.default && { default: isObject(input.default) && '$ref' in input.default ? { ...input.default } as ReferenceObject : parseResponseObject(input.default) }),
+    ...(input.default && { default: parseResponseObject(input.default) }),
   } as unknown as ResponsesObject;
   for (const key in input) {
     if (/^[1-5](?:[0-9]{2}|XX)$/.test(key)) {
       const value = input[key];
-      (result as Record<string, unknown>)[key] = isObject(value) && '$ref' in value ? { ...value } as ReferenceObject : parseResponseObject(value);
+      (result as Record<string, unknown>)[key] = parseResponseObject(value);
     }
   }
   return result;

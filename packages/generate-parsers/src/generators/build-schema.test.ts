@@ -53,7 +53,7 @@ describe('build-schema', () => {
       },
     }
 
-    const result = await buildSchema(schema, 'Document', undefined, {
+    const result = await buildSchema(schema, 'Document', {
       parameter: {
         'x-enabled': { type: 'boolean' },
       },
@@ -90,7 +90,7 @@ describe('build-schema', () => {
       },
     }
 
-    const result = await buildSchema(schema, 'Document', undefined, {
+    const result = await buildSchema(schema, 'Document', {
       parameter: {
         'x-enabled': { type: 'boolean' },
       },
@@ -111,7 +111,7 @@ describe('build-schema', () => {
       required: ['openapi'],
     }
 
-    const result = await buildSchema(schema, 'Document', undefined, {
+    const result = await buildSchema(schema, 'Document', {
       document: {
         'x-generator': { type: 'string' },
       },
@@ -144,7 +144,7 @@ describe('build-schema', () => {
       },
     }
 
-    const result = await buildSchema(schema, 'Document', undefined, undefined, true)
+    const result = await buildSchema(schema, 'Document', undefined, true)
     const filenames = result.map((file) => file.filename)
     const schemaFile = result.find((file) => file.filename === 'schema.ts')
 
@@ -163,7 +163,7 @@ describe('build-schema', () => {
       },
     }
 
-    const result = await buildSchema(schema, 'Document', undefined, undefined, true)
+    const result = await buildSchema(schema, 'Document', undefined, true)
 
     // document.ts plus the types-only schema.ts plus index.ts — no other runtime helpers
     expect(result).toHaveLength(3)
@@ -183,7 +183,7 @@ describe('build-schema', () => {
       required: ['name'],
     }
 
-    const result = await buildSchema(schema, 'Document', undefined, undefined, true)
+    const result = await buildSchema(schema, 'Document', undefined, true)
     const documentFile = result.find((file) => file.filename === 'document.ts')
 
     expect(documentFile?.content).toContain('export type Document')
@@ -206,7 +206,7 @@ describe('build-schema', () => {
       },
     }
 
-    const result = await buildSchema(schema, 'Document', undefined, undefined, true)
+    const result = await buildSchema(schema, 'Document', undefined, true)
     const documentFile = result.find((file) => file.filename === 'document.ts')
 
     expect(documentFile?.content).toContain("import type { ContactObject } from './contact';")
@@ -232,7 +232,7 @@ describe('build-schema', () => {
       },
     }
 
-    const result = await buildSchema(schema, 'Document', undefined, undefined, true)
+    const result = await buildSchema(schema, 'Document', undefined, true)
     const filenames = result.map((file) => file.filename)
 
     expect(filenames).toContain('document.ts')
@@ -261,7 +261,7 @@ describe('build-schema', () => {
       },
     }
 
-    const result = await buildSchema(schema, 'Document', undefined, undefined, true)
+    const result = await buildSchema(schema, 'Document', undefined, true)
     const contactFile = result.find((file) => file.filename === 'contact.ts')
 
     expect(contactFile?.content).toContain('export type ContactObject')
@@ -288,7 +288,6 @@ describe('build-schema', () => {
     const result = await buildSchema(
       schema,
       'Document',
-      undefined,
       { parameter: { 'x-enabled': { type: 'boolean' } } },
       true,
     )
@@ -321,7 +320,7 @@ describe('build-schema', () => {
     warnSpy.mockRestore()
   })
 
-  it('merges allOf property-mixin ref properties into the type and parser', async () => {
+  it('generates intersection type for schema with allOf $ref', async () => {
     const schema: JSONSchema = {
       type: 'object',
       properties: {
@@ -340,16 +339,19 @@ describe('build-schema', () => {
       },
     }
 
-    const result = await buildSchema(schema, 'Document', undefined, undefined, true)
+    const result = await buildSchema(schema, 'Document')
     const documentFile = result.find((file) => file.filename === 'document.ts')
 
-    // Mixin property should appear in the generated type
-    expect(documentFile?.content).toContain('tags?:')
-    // Own property should still be present
+    // Own property should be present in the object literal
     expect(documentFile?.content).toContain('name?:')
+    // allOf ref generates an intersection type with the referenced type
+    expect(documentFile?.content).toContain('TaggableObject')
+    // The taggable definition should generate its own file
+    const filenames = result.map((f) => f.filename)
+    expect(filenames).toContain('taggable.ts')
   })
 
-  it('does not import the mixin ref itself — only imports from its resolved properties', async () => {
+  it('generates a separate file for allOf $ref definition and imports it via intersection type', async () => {
     const schema: JSONSchema = {
       type: 'object',
       properties: {
@@ -362,25 +364,27 @@ describe('build-schema', () => {
             example: true,
             examples: {
               type: 'object',
-              additionalProperties: { $ref: '#/$defs/example-or-reference' },
+              additionalProperties: { $ref: '#/$defs/example-item' },
             },
           },
         },
-        'example-or-reference': {
+        'example-item': {
           type: 'object',
           properties: { value: { type: 'string' } },
         },
       },
     }
 
-    const result = await buildSchema(schema, 'Document', undefined, undefined, true)
+    const result = await buildSchema(schema, 'Document')
     const documentFile = result.find((file) => file.filename === 'document.ts')
+    const filenames = result.map((f) => f.filename)
 
-    // Should NOT import ExamplesObject since it was merged as a mixin
-    expect(documentFile?.content).not.toContain('ExamplesObject')
-    // Should import ExampleObject (resolved from example-or-reference) since it is used
-    // by the merged `examples` property's additionalProperties
-    expect(documentFile?.content).toContain('ExampleObject')
+    // ExamplesObject IS imported since allOf generates an intersection type
+    expect(documentFile?.content).toContain('ExamplesObject')
+    // The examples definition generates its own file
+    expect(filenames).toContain('examples.ts')
+    // ExampleItemObject is also resolved from additionalProperties
+    expect(filenames).toContain('example-item.ts')
   })
 
   it('own properties take precedence over mixin properties with the same key', async () => {
@@ -400,7 +404,7 @@ describe('build-schema', () => {
       },
     }
 
-    const result = await buildSchema(schema, 'Document', undefined, undefined, true)
+    const result = await buildSchema(schema, 'Document', undefined, true)
     const documentFile = result.find((file) => file.filename === 'document.ts')
 
     // Own `tags: string` should win over mixin `tags: string[]`
@@ -425,7 +429,7 @@ describe('build-schema', () => {
       },
     }
 
-    const result = await buildSchema(schema, 'Document', undefined, undefined, true)
+    const result = await buildSchema(schema, 'Document', undefined, true)
     const documentFile = result.find((file) => file.filename === 'document.ts')
 
     // The conditional ref should NOT be merged — Document should only have `name`
@@ -433,7 +437,7 @@ describe('build-schema', () => {
     expect(documentFile?.content).not.toContain('explode?:')
   })
 
-  it('skips specification-extensions allOf ref without merging or importing it', async () => {
+  it('generates intersection type for allOf $ref including specification-extensions', async () => {
     const schema: JSONSchema = {
       type: 'object',
       properties: {
@@ -449,31 +453,19 @@ describe('build-schema', () => {
       },
     }
 
-    const result = await buildSchema(schema, 'Document', undefined, undefined, true)
+    const result = await buildSchema(schema, 'Document')
     const documentFile = result.find((file) => file.filename === 'document.ts')
+    const filenames = result.map((f) => f.filename)
 
-    // specification-extensions is handled separately by the type generator as
-    // Record<`x-${string}`, unknown> — it should not be merged as a mixin property
+    // specification-extensions is now treated like any other allOf ref
+    expect(documentFile?.content).toContain('SpecificationExtensionsObject')
+    // The specification-extensions definition generates its own file
+    expect(filenames).toContain('specification-extensions.ts')
+    // x-custom property is NOT inlined into document.ts — it's in specification-extensions.ts
     expect(documentFile?.content).not.toContain("'x-custom'")
-    expect(documentFile?.content).not.toContain('SpecificationExtensionsObject')
   })
 
-  it('generates JSDoc from $comment on nested $defs when markdown is provided', async () => {
-    // Simulates the oauth-flows pattern: nested $defs with their own $comment that share
-    // a single spec section (e.g. all four OAuth flow types point to "oauth-flow-object").
-    const markdown = `
-#### Oauth Flow Object
-
-Configuration details for a supported OAuth Flow
-
-##### Fixed Fields
-
-| Field Name | Type | Description |
-| ---- | :----: | ---- |
-| tokenUrl | \`string\` | **REQUIRED**. The token URL. |
-| scopes | Map | **REQUIRED**. The available scopes. |
-`
-
+  it('generates JSDoc from $comment plain text on nested $defs', async () => {
     const schema: JSONSchema = {
       type: 'object',
       properties: {
@@ -487,7 +479,7 @@ Configuration details for a supported OAuth Flow
           },
           $defs: {
             password: {
-              $comment: 'https://spec.openapis.org/oas/v3.1#oauth-flow-object',
+              $comment: 'Configuration details for a supported OAuth Flow.',
               type: 'object',
               properties: {
                 tokenUrl: { type: 'string' },
@@ -500,38 +492,15 @@ Configuration details for a supported OAuth Flow
       },
     }
 
-    const result = await buildSchema(schema, 'Document', markdown)
+    const result = await buildSchema(schema, 'Document')
     const passwordFile = result.find((file) => file.filename === 'password.ts')
 
     expect(passwordFile).toBeDefined()
-    // JSDoc should be present because $comment points to the markdown section
-    expect(passwordFile?.content).toContain('The token URL.')
-    expect(passwordFile?.content).toContain('The available scopes.')
+    // JSDoc should contain the plain-text $comment description
+    expect(passwordFile?.content).toContain('Configuration details for a supported OAuth Flow.')
   })
 
-  it('uses the $comment already present on the schema', async () => {
-    const markdown = `
-#### Oauth Flow Object
-
-Configuration details for a supported OAuth Flow
-
-##### Fixed Fields
-
-| Field Name | Type | Description |
-| ---- | :----: | ---- |
-| tokenUrl | \`string\` | The token URL from fallback. |
-
-#### Custom Flow Object
-
-Custom flow description.
-
-##### Fixed Fields
-
-| Field Name | Type | Description |
-| ---- | :----: | ---- |
-| tokenUrl | \`string\` | The token URL from own comment. |
-`
-
+  it('uses the $comment URL as plain-text JSDoc description', async () => {
     const schema: JSONSchema = {
       type: 'object',
       properties: {
@@ -545,7 +514,6 @@ Custom flow description.
           },
           $defs: {
             password: {
-              // Has its own $comment
               $comment: 'https://example.com#custom-flow-object',
               type: 'object',
               properties: {
@@ -557,20 +525,17 @@ Custom flow description.
       },
     }
 
-    const result = await buildSchema(schema, 'Document', markdown)
+    const result = await buildSchema(schema, 'Document')
     const passwordFile = result.find((file) => file.filename === 'password.ts')
 
     expect(passwordFile).toBeDefined()
-    // Should use own $comment
-    expect(passwordFile?.content).toContain('The token URL from own comment.')
-    expect(passwordFile?.content).not.toContain('The token URL from fallback.')
+    // URL $comment is emitted as the description in the JSDoc block
+    expect(passwordFile?.content).toContain('https://example.com#custom-flow-object')
   })
 
-  it('does not generate a file for -or-reference defs', async () => {
-    // #/$defs/parameter-or-reference and #/$defs/parameter both map to the filename
-    // "parameter" via refToFilename. The -or-reference def is just an if/then/else
-    // union (Parameter | Reference) that is inlined at usage sites — it should not
-    // produce its own file, which would collide with and overwrite the real parameter.ts.
+  it('generates a file for if/then/else conditional refs', async () => {
+    // With -or-reference stripping removed, a def named 'parameter-or-reference' now maps
+    // to its own filename 'parameter-or-reference' and gets its own file.
     const schema: JSONSchema = {
       type: 'object',
       properties: {
@@ -601,14 +566,13 @@ Custom flow description.
     const result = await buildSchema(schema, 'Document')
     const filenames = result.map((f) => f.filename)
 
-    // Only one parameter.ts — from #/$defs/parameter, not from #/$defs/parameter-or-reference
-    expect(filenames.filter((f) => f === 'parameter.ts')).toHaveLength(1)
-    // The parameter.ts should contain the real ParameterObject type, not an empty shell
+    // Both files are generated independently — they map to different filenames now
+    expect(filenames).toContain('parameter.ts')
+    expect(filenames).toContain('parameter-or-reference.ts')
+    // The parameter.ts should contain the real ParameterObject type
     const parameterFile = result.find((f) => f.filename === 'parameter.ts')
     expect(parameterFile?.content).toContain('name')
     expect(parameterFile?.content).toContain('in')
-    // No file should be generated for the -or-reference def itself
-    expect(filenames).not.toContain('parameter-or-reference.ts')
   })
 
   it('generates an index.ts with named re-exports from all generated files', async () => {
@@ -651,7 +615,7 @@ Custom flow description.
       },
     }
 
-    const result = await buildSchema(schema, 'Document', undefined, undefined, true)
+    const result = await buildSchema(schema, 'Document', undefined, true)
     const indexFile = result.find((f) => f.filename === 'index.ts')
 
     expect(indexFile).toBeDefined()

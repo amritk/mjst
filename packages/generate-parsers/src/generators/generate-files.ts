@@ -36,7 +36,6 @@ type GenerateFileOptions = {
  *
  * @param schema - The JSON Schema to generate code from
  * @param typeName - The name to use for the generated TypeScript type
- * @param markdownDocumentation - Optional markdown documentation to enhance type comments
  * @param options - Optional settings to control what gets generated
  * @returns The complete TypeScript code
  *
@@ -54,20 +53,19 @@ type GenerateFileOptions = {
  * const result = generateFile(schema, "User");
  * // result contains imports, type User, and parseUser function
  *
- * const typesOnly = generateFile(schema, "User", undefined, { typesOnly: true });
+ * const typesOnly = generateFile(schema, "User", { typesOnly: true });
  * // typesOnly contains only type-only imports and type User (no parser)
  * ```
  */
 export const generateFile = (
   schema: JSONSchema,
   typeName: string,
-  markdownDocumentation?: string,
   options?: GenerateFileOptions,
 ): string => {
   const typesOnly = options?.typesOnly === true
   const selfRef = options?.selfRef
   const rootSchema = options?.rootSchema
-  const typeDefinition = generateTypeDefinition(schema, typeName, markdownDocumentation)
+  const typeDefinition = generateTypeDefinition(schema, typeName)
 
   if (typesOnly) {
     // In types-only mode, skip the parser function and use type-only imports
