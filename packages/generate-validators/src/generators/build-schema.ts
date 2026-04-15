@@ -6,8 +6,6 @@ import { refToFilename } from 'mjst-helpers/ref-to-filename'
 import { refToName } from 'mjst-helpers/ref-to-name'
 import { resolveDynamicRefs } from 'mjst-helpers/resolve-dynamic-refs'
 import { resolveRef } from 'mjst-helpers/resolve-ref'
-import { upgradeDraft07Schema } from 'mjst-helpers/upgrade-draft07-schema'
-
 import { generateValidatorFile } from './generate-files'
 
 /**
@@ -45,8 +43,6 @@ export const buildValidatorSchema = async (
   rootTypeName: string,
   markdownDocumentation?: string,
 ): Promise<GeneratedFile[]> => {
-  rootSchema = upgradeDraft07Schema(rootSchema as Record<string, unknown>) as JSONSchema
-
   const files: GeneratedFile[] = []
   const processedRefs = new Set<string>()
   const processedFilenames = new Set<string>()
@@ -80,15 +76,6 @@ export const buildValidatorSchema = async (
     const resolvedSchema = resolveRef(ref, rootSchema as Record<string, unknown>)
     if (!resolvedSchema) {
       console.warn(`Warning: Could not resolve ref: ${ref}`)
-      continue
-    }
-
-    // -or-reference unions are inlined at usage sites; skip file generation
-    // but still queue nested refs so the canonical def gets processed.
-    if (ref.endsWith('-or-reference')) {
-      for (const nestedRef of extractRefs(resolvedSchema as JSONSchema)) {
-        if (!processedRefs.has(nestedRef)) refsToProcess.push(nestedRef)
-      }
       continue
     }
 

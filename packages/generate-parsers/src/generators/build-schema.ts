@@ -7,83 +7,9 @@ import { refToFilename } from 'mjst-helpers/ref-to-filename'
 import { refToName } from 'mjst-helpers/ref-to-name'
 import { resolveDynamicRefs } from 'mjst-helpers/resolve-dynamic-refs'
 import { resolveRef } from 'mjst-helpers/resolve-ref'
-import { upgradeDraft07Schema } from 'mjst-helpers/upgrade-draft07-schema'
 import type { SchemaExtensions } from '#types/schema-extensions'
 
 import { generateFile } from './generate-files'
-
-/**
- * Checks whether a resolved schema is a pure property-mixin: it only contributes
- * `properties` (and optionally `not`/`required`) with no structural keywords like
- * `type`, `if`, `then`, `else`, `additionalProperties`, `$ref`, or `allOf`.
- * These schemas are safe to inline into the parent's `properties` rather than
- * being referenced as a typed field.
- */
-const isPropertyMixin = (schema: Record<string, unknown>): boolean => {
-  const structuralKeys = ['type', 'if', 'then', 'else', 'additionalProperties', '$ref', 'allOf', 'oneOf', 'anyOf']
-  for (const key of structuralKeys) {
-    if (key in schema) return false
-  }
-  return 'properties' in schema
-}
-
-/**
- * Merges properties from `allOf` $ref entries that are pure property-mixin schemas
- * into the schema's own `properties`. This handles the OpenAPI pattern where shared
- * fields (e.g. `example`/`examples`) are factored out into a helper definition and
- * included via `allOf` rather than being declared directly on the object.
- *
- * Only refs that resolve to a property-mixin (no structural keywords) are merged.
- * Refs like `specification-extensions` are skipped since they are already inlined
- * as `Record<\`x-\${string}\`, unknown>` by the type generator.
- */
-const mergeAllOfMixins = (schema: JSONSchema, rootSchema: Record<string, unknown>): JSONSchema => {
-  if (typeof schema !== 'object' || schema === null) return schema
-  if (!('allOf' in schema) || !Array.isArray(schema.allOf)) return schema
-
-  const mixinProperties: Record<string, JSONSchema> = {}
-
-  for (const entry of schema.allOf) {
-    if (typeof entry !== 'object' || entry === null || !('$ref' in entry)) continue
-    const ref = (entry as { $ref: string }).$ref
-    if (ref === '#/$defs/specification-extensions') continue
-
-    const resolved = resolveRef(ref, rootSchema)
-    if (!resolved || !isPropertyMixin(resolved)) continue
-
-    const props = resolved.properties as Record<string, JSONSchema> | undefined
-    if (!props) continue
-
-    for (const key in props) {
-      mixinProperties[key] = props[key] as JSONSchema
-    }
-  }
-
-  if (Object.keys(mixinProperties).length === 0) return schema
-
-  const existingProperties =
-    'properties' in schema && typeof schema.properties === 'object' && schema.properties !== null
-      ? (schema.properties as Record<string, JSONSchema>)
-      : {}
-
-  // Remove merged mixin refs from allOf so collectImports doesn't emit dead imports for them
-  const remainingAllOf = (schema.allOf as JSONSchema[]).filter((entry) => {
-    if (typeof entry !== 'object' || entry === null || !('$ref' in entry)) return true
-    const ref = (entry as { $ref: string }).$ref
-    if (ref === '#/$defs/specification-extensions') return true
-    const resolved = resolveRef(ref, rootSchema)
-    return !resolved || !isPropertyMixin(resolved)
-  })
-
-  return {
-    ...schema,
-    ...(remainingAllOf.length > 0 ? { allOf: remainingAllOf } : { allOf: undefined }),
-    properties: {
-      ...mixinProperties,
-      ...existingProperties,
-    },
-  }
-}
 
 /**
  * Represents a generated file with its filename and content.
@@ -184,11 +110,6 @@ export const buildSchema = async (
   extensions?: SchemaExtensions,
   typesOnly?: boolean,
 ): Promise<GeneratedFile[]> => {
-  // Upgrade draft-07 schemas to 2020-12 conventions before processing.
-  // This renames `definitions` → `$defs` recursively so the rest of the
-  // pipeline can resolve both short-name and URI-keyed refs uniformly.
-  rootSchema = upgradeDraft07Schema(rootSchema as Record<string, unknown>) as JSONSchema
-
   const files: GeneratedFile[] = []
   const processedRefs = new Set<string>()
   const processedFilenames = new Set<string>()
@@ -200,10 +121,9 @@ export const buildSchema = async (
 
   // Generate file for the root schema, applying any matching extensions
   const processedRootSchema = resolveDynamicRefs(rootSchema, dynamicRefMap)
-  const mixinMergedRootSchema = mergeAllOfMixins(processedRootSchema, rootSchema as Record<string, unknown>)
   const extendedRootSchema = extensions
-    ? applySchemaExtensions(mixinMergedRootSchema, rootTypeName.toLowerCase(), extensions)
-    : mixinMergedRootSchema
+    ? applySchemaExtensions(processedRootSchema, rootTypeName.toLowerCase(), extensions)
+    : processedRootSchema
   const rootContent = generateFile(extendedRootSchema, rootTypeName, markdownDocumentation, {
     typesOnly: typesOnly ?? false,
     rootSchema: rootSchema as Record<string, unknown>,
@@ -245,29 +165,14 @@ export const buildSchema = async (
       continue
     }
 
-    // Skip -or-reference defs — they are if/then/else unions (e.g. Parameter | Reference)
-    // that are inlined at usage sites. Generating a file for them would collide with the
-    // canonical def that shares the same filename after the suffix is stripped.
-    if (ref.endsWith('-or-reference')) {
-      // Still extract nested refs so the canonical def (e.g. #/$defs/parameter) gets queued
-      const nestedRefs = extractRefs(resolvedSchema as JSONSchema)
-      for (const nestedRef of nestedRefs) {
-        if (!processedRefs.has(nestedRef)) {
-          refsToProcess.push(nestedRef)
-        }
-      }
-      continue
-    }
-
     // Generate file for this ref, resolving any $dynamicRef to $ref first
     // and applying any matching extensions for this definition
     const typeName = refToName(ref)
     const filename = refToFilename(ref)
     const processedSchema = resolveDynamicRefs(resolvedSchema as JSONSchema, dynamicRefMap)
-    const mixinMergedSchema = mergeAllOfMixins(processedSchema, rootSchema as Record<string, unknown>)
     const extendedSchema = extensions
-      ? applySchemaExtensions(mixinMergedSchema, filename, extensions)
-      : mixinMergedSchema
+      ? applySchemaExtensions(processedSchema, filename, extensions)
+      : processedSchema
     const content = generateFile(extendedSchema, typeName, markdownDocumentation, {
       typesOnly: typesOnly ?? false,
       selfRef: ref,
@@ -289,18 +194,6 @@ export const buildSchema = async (
         refsToProcess.push(nestedRef)
       }
     }
-  }
-
-  // The schema-types template imports ReferenceObject from './reference'. When the schema
-  // uses a different name for its reference type (e.g. Swagger 2.0 uses jsonReference),
-  // emit a reference.ts shim so the template import resolves correctly.
-  const hasReferenceFile = files.some((f) => f.filename === 'reference.ts')
-  const hasJsonReferenceFile = files.some((f) => f.filename === 'json-reference.ts')
-  if (!hasReferenceFile && hasJsonReferenceFile) {
-    files.push({
-      filename: 'reference.ts',
-      content: "export type { JsonReferenceObject as ReferenceObject } from './json-reference';\n",
-    })
   }
 
   // In types-only mode, emit a lightweight schema.ts with only the SchemaObject type

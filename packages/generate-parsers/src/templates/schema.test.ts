@@ -13,7 +13,6 @@ describe('schema', () => {
   it('parses primitive string fields and format', () => {
     const result = parseSchemaObject({
       type: 'string',
-      name: 'Pet',
       title: 'Pet title',
       description: 'A pet schema',
       contentMediaType: 'application/json',
@@ -25,7 +24,6 @@ describe('schema', () => {
 
     expect(result).toEqual({
       type: 'string',
-      name: 'Pet',
       title: 'Pet title',
       description: 'A pet schema',
       contentMediaType: 'application/json',
@@ -63,17 +61,15 @@ describe('schema', () => {
     expect(result).toEqual({})
   })
 
-  it('preserves default, const, and example values', () => {
+  it('preserves default and const values', () => {
     const result = parseSchemaObject({
       default: { enabled: true },
       const: 'fixed',
-      example: 42,
     })
 
     expect(result).toEqual({
       default: { enabled: true },
       const: 'fixed',
-      example: 42,
     })
   })
 
@@ -137,56 +133,6 @@ describe('schema', () => {
     })
   })
 
-  it('converts OpenAPI 3.0 boolean exclusiveMinimum to numeric value', () => {
-    const result = parseSchemaObject({
-      type: 'integer',
-      minimum: 0,
-      exclusiveMinimum: true,
-    })
-
-    expect(result).toEqual({
-      type: 'integer',
-      minimum: 0,
-      exclusiveMinimum: 0,
-    })
-  })
-
-  it('converts OpenAPI 3.0 boolean exclusiveMaximum to numeric value', () => {
-    const result = parseSchemaObject({
-      type: 'number',
-      maximum: 100,
-      exclusiveMaximum: true,
-    })
-
-    expect(result).toEqual({
-      type: 'number',
-      maximum: 100,
-      exclusiveMaximum: 100,
-    })
-  })
-
-  it('ignores boolean exclusiveMinimum when minimum is not present', () => {
-    const result = parseSchemaObject({
-      type: 'integer',
-      exclusiveMinimum: true,
-    })
-
-    expect(result).toEqual({
-      type: 'integer',
-    })
-  })
-
-  it('ignores boolean exclusiveMaximum when maximum is not present', () => {
-    const result = parseSchemaObject({
-      type: 'number',
-      exclusiveMaximum: true,
-    })
-
-    expect(result).toEqual({
-      type: 'number',
-    })
-  })
-
   it('ignores false value for exclusiveMinimum and exclusiveMaximum', () => {
     const result = parseSchemaObject({
       type: 'number',
@@ -215,7 +161,7 @@ describe('schema', () => {
     })
   })
 
-  it('parses object-only fields and rejects non-plain objects', () => {
+  it('ignores unrecognized fields', () => {
     const result = parseSchemaObject({
       discriminator: { propertyName: 'kind' },
       xml: { name: 'item' },
@@ -223,11 +169,7 @@ describe('schema', () => {
       invalidDiscriminator: new Date(),
     })
 
-    expect(result).toEqual({
-      discriminator: { propertyName: 'kind' },
-      xml: { name: 'item' },
-      externalDocs: { url: 'https://example.com' },
-    })
+    expect(result).toEqual({})
   })
 
   it('parses nested schema fields and $ref objects', () => {
@@ -547,16 +489,13 @@ describe('schema', () => {
     })
   })
 
-  it('preserves vendor extension keys only', () => {
+  it('ignores unrecognized keys including x-extension keys', () => {
     const result = parseSchemaObject({
       'x-internal': { enabled: true },
       'x-version': 2,
       internal: 'not-preserved',
     })
 
-    expect(result).toEqual({
-      'x-internal': { enabled: true },
-      'x-version': 2,
-    })
+    expect(result).toEqual({})
   })
 })

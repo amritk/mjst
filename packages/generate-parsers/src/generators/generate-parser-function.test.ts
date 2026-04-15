@@ -853,29 +853,6 @@ describe('generate-parser-function', () => {
     )
   })
 
-  it('generates security-scheme parser dispatching to http-bearer when only type-http-bearer is in allOf', () => {
-    // When type-http is absent from allOf but type-http-bearer is present, the switch
-    // case for "http" should route directly to the bearer parser without the dual check.
-    const schema: JSONSchema = {
-      $comment: 'https://spec.openapis.org/oas/v3.1#security-scheme-object',
-      type: 'object',
-      allOf: [
-        { $ref: '#/$defs/specification-extensions' },
-        { $ref: '#/$defs/security-scheme/$defs/type-apikey' },
-        { $ref: '#/$defs/security-scheme/$defs/type-http-bearer' },
-        { $ref: '#/$defs/security-scheme/$defs/type-oauth2' },
-        { $ref: '#/$defs/security-scheme/$defs/type-oidc' },
-      ],
-    }
-
-    const result = generateParserFunction(schema, 'SecuritySchemeObject', { useRefImports: true })
-
-    expect(result).toContain('case "http"')
-    expect(result).toContain('parseTypeHttpBearerObject')
-    // Without type-http in allOf, there should be no separate http parser call
-    expect(result).not.toContain('parseTypeHttpObject')
-  })
-
   it('generates a parser for the components object', () => {
     const components: JSONSchema.Object = {
       $comment: 'https://spec.openapis.org/oas/v3.1#components-object',
@@ -1012,53 +989,6 @@ describe('generate-parser-function', () => {
   return result;
 };`,
     )
-  })
-
-  it('generates security-scheme parser as a subtype union dispatcher', () => {
-    const schema: JSONSchema = {
-      $comment: 'https://spec.openapis.org/oas/v3.1#security-scheme-object',
-      type: 'object',
-      allOf: [
-        { $ref: '#/$defs/specification-extensions' },
-        { $ref: '#/$defs/security-scheme/$defs/type-apikey' },
-        { $ref: '#/$defs/security-scheme/$defs/type-http' },
-        { $ref: '#/$defs/security-scheme/$defs/type-http-bearer' },
-        { $ref: '#/$defs/security-scheme/$defs/type-oauth2' },
-        { $ref: '#/$defs/security-scheme/$defs/type-oidc' },
-      ],
-    }
-
-    const result = generateParserFunction(schema, 'SecuritySchemeObject', { useRefImports: true })
-
-    expect(result).toBe(`export const parseSecuritySchemeObject = (input: unknown): SecuritySchemeObject => {
-  if (!isObject(input)) {
-    return parseTypeApikeyObject(input);
-  }
-
-  const parsedSubtype: SecuritySchemeObject = (() => {
-    switch (input["type"]) {
-    case "apiKey":
-      return parseTypeApikeyObject(input);
-    case "http":
-      if (typeof input["scheme"] === "string" && /^[Bb][Ee][Aa][Rr][Ee][Rr]$/.test(input["scheme"])) {
-        return parseTypeHttpBearerObject(input);
-      }
-      return parseTypeHttpObject(input);
-    case "oauth2":
-      return parseTypeOauth2Object(input);
-    case "openIdConnect":
-      return parseTypeOidcObject(input);
-    default:
-      return parseTypeApikeyObject(input);
-    }
-  })();
-
-  return {
-    ...input,
-    ...((value => value === undefined ? {} : { description: value })(typeof input?.["description"] === "string" ? input?.["description"] : (input?.["description"] !== undefined ? String(input?.["description"]) : undefined))),
-    ...parsedSubtype,
-  };
-};`)
   })
 
   it('documents the difference: webhooks uses additionalProperties and works correctly', () => {

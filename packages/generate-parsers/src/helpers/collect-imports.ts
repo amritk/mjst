@@ -89,12 +89,11 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
     const record = value as Record<string, unknown>
 
     // If this is a $ref, add it — but skip:
-    // - specification-extensions, whose semantics are inlined as Record<`x-${string}`, unknown>
     // - Relative path refs (e.g. /components/messages/foo) which point into example data
     // - URI refs with fragments pointing into `properties` (not standalone definitions)
     if (hasRef(record)) {
       const ref = record.$ref
-      const isInternal = ref.startsWith('#') && ref !== '#/$defs/specification-extensions'
+      const isInternal = ref.startsWith('#')
       const isUri = ref.startsWith('http://') || ref.startsWith('https://')
       const isPropertyFragment = isUri && ref.includes('#/properties/')
       if (isInternal || (isUri && !isPropertyFragment)) {
@@ -152,8 +151,7 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
       collectRefsFromValue(record.additionalProperties)
     }
 
-    // Traverse non-extension patternProperties. The ^x- vendor extension pattern is
-    // inlined as Record<`x-${string}`, unknown> and does not produce a named import.
+    // Traverse patternProperties
     if (
       'patternProperties' in record &&
       typeof record.patternProperties === 'object' &&
@@ -161,7 +159,6 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
     ) {
       const patternProps = record.patternProperties as Record<string, unknown>
       for (const key in patternProps) {
-        if (key.startsWith('^x-') || key === '^x-') continue
         collectRefsFromValue(patternProps[key])
       }
     }
@@ -176,11 +173,10 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
   }
 
   // Collect refs from root-level $ref, skipping:
-  // - specification-extensions, whose semantics are inlined as Record<`x-${string}`, unknown>
   // - Relative path refs (e.g. /components/messages/foo) which point into example data
   if (typeof schema === 'object' && schema !== null && hasRef(schema)) {
     const ref = schema.$ref
-    const isInternal = ref.startsWith('#') && ref !== '#/$defs/specification-extensions'
+    const isInternal = ref.startsWith('#')
     const isUri = ref.startsWith('http://') || ref.startsWith('https://')
     const isPropertyFragment = isUri && ref.includes('#/properties/')
     if (isInternal || (isUri && !isPropertyFragment)) {
@@ -201,12 +197,10 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
     collectRefsFromValue(schema.additionalProperties)
   }
 
-  // Collect refs from root-level non-extension patternProperties.
-  // The ^x- vendor extension pattern is inlined and does not produce a named import.
+  // Collect refs from root-level patternProperties
   if (typeof schema === 'object' && schema !== null && 'patternProperties' in schema) {
     const patternProps = schema.patternProperties as Record<string, unknown>
     for (const key in patternProps) {
-      if (key.startsWith('^x-') || key === '^x-') continue
       collectRefsFromValue(patternProps[key])
     }
   }
@@ -234,8 +228,6 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
   }
 
   // Collect refs from root-level conditional branches.
-  // OpenAPI uses if/then fragments in several helper definitions (e.g. security-scheme variants),
-  // and those branches can contain $ref properties that the generated parser/type depends on.
   if (typeof schema === 'object' && schema !== null && 'if' in schema) {
     collectRefsFromValue(schema.if)
   }
@@ -248,7 +240,6 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
 
   // Convert refs to combined import statements, deduplicating by filename
   const importMap = new Map<string, string>()
-  let needsReferenceImport = false
 
   for (const ref of refs) {
     // For URI refs, skip if the base URI is not resolvable in the root schema.
@@ -267,25 +258,12 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
 
     const importPath = getImportPathForFilename(filename)
 
-    // Check if this is a -or-reference ref
-    if (ref.includes('-or-reference')) {
-      needsReferenceImport = true
-    }
-
     // In types-only mode, omit the parser function import since there is no parser to call
     const importStatement = typesOnly
       ? `import type { ${typeName} } from '${importPath}';`
       : `import { type ${typeName}, parse${typeName} } from '${importPath}';`
-    // Use filename as key to deduplicate (e.g., callbacks-or-reference and callbacks both map to callbacks)
     importMap.set(filename, importStatement)
   }
 
-  const imports = Array.from(importMap.values()).sort()
-
-  // Add Reference import at the beginning if needed
-  if (needsReferenceImport) {
-    imports.unshift("import type { ReferenceObject } from './reference';")
-  }
-
-  return imports
+  return Array.from(importMap.values()).sort()
 }

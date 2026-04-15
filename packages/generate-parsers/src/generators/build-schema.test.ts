@@ -433,31 +433,6 @@ describe('build-schema', () => {
     expect(documentFile?.content).not.toContain('explode?:')
   })
 
-  it('skips specification-extensions allOf ref without merging or importing it', async () => {
-    const schema: JSONSchema = {
-      type: 'object',
-      properties: {
-        name: { type: 'string' },
-      },
-      allOf: [{ $ref: '#/$defs/specification-extensions' }],
-      $defs: {
-        'specification-extensions': {
-          properties: {
-            'x-custom': { type: 'string' },
-          },
-        },
-      },
-    }
-
-    const result = await buildSchema(schema, 'Document', undefined, undefined, true)
-    const documentFile = result.find((file) => file.filename === 'document.ts')
-
-    // specification-extensions is handled separately by the type generator as
-    // Record<`x-${string}`, unknown> — it should not be merged as a mixin property
-    expect(documentFile?.content).not.toContain("'x-custom'")
-    expect(documentFile?.content).not.toContain('SpecificationExtensionsObject')
-  })
-
   it('generates JSDoc from $comment on nested $defs when markdown is provided', async () => {
     // Simulates the oauth-flows pattern: nested $defs with their own $comment that share
     // a single spec section (e.g. all four OAuth flow types point to "oauth-flow-object").

@@ -59,25 +59,16 @@ type NumericFormat =
 
 export type SchemaReferenceType<Value> = Value | ReferenceObject
 
-type Extensions = {
-  [key: `x-${string}`]: unknown
-}
-
 type SharedProperties = {
-  name?: string
   title?: string
   description?: string
   default?: unknown
   enum?: unknown[]
   const?: unknown
   examples?: unknown[]
-  example?: unknown
   deprecated?: boolean
-  discriminator?: Record<string, unknown>
   readOnly?: boolean
   writeOnly?: boolean
-  xml?: Record<string, unknown>
-  externalDocs?: Record<string, unknown>
   allOf?: SchemaReferenceType<SchemaObject>[]
   oneOf?: SchemaReferenceType<SchemaObject>[]
   anyOf?: SchemaReferenceType<SchemaObject>[]
@@ -132,33 +123,33 @@ type ObjectKeywords = {
 type UntypedObject = SharedProperties & {
   type?: undefined
   format?: StringFormat | NumericFormat
-} & Extensions
+}
 
 type OtherTypes = SharedProperties & {
   type: 'null' | 'boolean'
-} & Extensions
+}
 
 type NumericObject = SharedProperties &
   NumericKeywords & {
     type: 'number' | 'integer'
     format?: NumericFormat
-  } & Extensions
+  }
 
 type StringObject = SharedProperties &
   StringKeywords & {
     type: 'string'
     format?: StringFormat
-  } & Extensions
+  }
 
 type ArrayObject = SharedProperties &
   ArrayKeywords & {
     type: 'array'
-  } & Extensions
+  }
 
 type ObjectObject = SharedProperties &
   ObjectKeywords & {
     type: 'object'
-  } & Extensions
+  }
 
 type MultiTypeObject = SharedProperties &
   NumericKeywords &
@@ -167,7 +158,7 @@ type MultiTypeObject = SharedProperties &
   ObjectKeywords & {
     type: PrimitiveSchemaType[]
     format?: StringFormat | NumericFormat
-  } & Extensions
+  }
 
 type ParsedSchemaObject = SharedProperties &
   NumericKeywords &
@@ -176,7 +167,7 @@ type ParsedSchemaObject = SharedProperties &
   ObjectKeywords & {
     type?: PrimitiveSchemaType | PrimitiveSchemaType[]
     format?: StringFormat | NumericFormat
-  } & Extensions
+  }
 
 export type SchemaObject =
   | UntypedObject
@@ -477,23 +468,13 @@ const parseNumericKeywordsDirect = (value: Record<string, unknown>, result: Pars
   if (typeof maximum === 'number') result.maximum = maximum
 
   const exclusiveMaximum = value['exclusiveMaximum']
-  if (typeof exclusiveMaximum === 'number') {
-    result.exclusiveMaximum = exclusiveMaximum
-  } else if (exclusiveMaximum === true && typeof maximum === 'number') {
-    // OpenAPI 3.0 format: exclusiveMaximum is a boolean modifier for maximum
-    result.exclusiveMaximum = maximum
-  }
+  if (typeof exclusiveMaximum === 'number') result.exclusiveMaximum = exclusiveMaximum
 
   const minimum = value['minimum']
   if (typeof minimum === 'number') result.minimum = minimum
 
   const exclusiveMinimum = value['exclusiveMinimum']
-  if (typeof exclusiveMinimum === 'number') {
-    result.exclusiveMinimum = exclusiveMinimum
-  } else if (exclusiveMinimum === true && typeof minimum === 'number') {
-    // OpenAPI 3.0 format: exclusiveMinimum is a boolean modifier for minimum
-    result.exclusiveMinimum = minimum
-  }
+  if (typeof exclusiveMinimum === 'number') result.exclusiveMinimum = exclusiveMinimum
 }
 
 /**
@@ -618,7 +599,6 @@ const parseSchemaNode = (value: Record<string, unknown>): SchemaObject => {
 
     switch (key) {
       // --- Shared: string fields ---
-      case 'name':
       case 'title':
       case 'description':
         if (typeof v === 'string') result[key] = v
@@ -649,7 +629,6 @@ const parseSchemaNode = (value: Record<string, unknown>): SchemaObject => {
       // --- Shared: pass-through values ---
       case 'default':
       case 'const':
-      case 'example':
         result[key] = v
         break
 
@@ -664,13 +643,6 @@ const parseSchemaNode = (value: Record<string, unknown>): SchemaObject => {
       case 'readOnly':
       case 'writeOnly':
         if (typeof v === 'boolean') result[key] = v
-        break
-
-      // --- Shared: plain object values ---
-      case 'discriminator':
-      case 'xml':
-      case 'externalDocs':
-        if (isObject(v)) result[key] = v
         break
 
       // --- Shared: single schema-or-reference ---
@@ -774,13 +746,7 @@ const parseSchemaNode = (value: Record<string, unknown>): SchemaObject => {
         if (typeof v === 'number') numericCount++
         break
 
-      // --- Vendor extensions (x-*) and unrecognized keys ---
       default:
-        // charCode checks avoid string allocation from startsWith.
-        // 120 = 'x', 45 = '-'
-        if (key.charCodeAt(0) === 120 && key.charCodeAt(1) === 45) {
-          result[key as `x-${string}`] = v
-        }
         break
     }
   }

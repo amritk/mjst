@@ -261,7 +261,7 @@ describe('collect-imports', () => {
     ])
   })
 
-  it('does not import specification-extensions from root-level allOf', () => {
+  it('imports all allOf refs including ones with generic names', () => {
     const schema: JSONSchema = {
       type: 'object',
       properties: {
@@ -276,9 +276,9 @@ describe('collect-imports', () => {
     const result = collectImports(schema)
 
     expect(result).toEqual([
+      "import { type SpecificationExtensionsObject, parseSpecificationExtensionsObject } from './specification-extensions';",
       "import { type StylesForFormObject, parseStylesForFormObject } from './styles-for-form';",
     ])
-    expect(result.join('\n')).not.toContain('specification-extensions')
   })
 
   it('generates type-only imports when typesOnly is true', () => {

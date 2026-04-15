@@ -593,7 +593,6 @@ describe('generateTypeDefinition', () => {
         },
       },
       required: ['title', 'version'],
-      $ref: '#/$defs/specification-extensions',
       unevaluatedProperties: false,
     }
 
@@ -604,7 +603,7 @@ describe('generateTypeDefinition', () => {
 * Info object
 *
 * The object provides metadata about the API. The metadata MAY be used by the clients if needed, and MAY be presented in editing or documentation generation tools for convenience.
-* 
+*
 * @see {@link https://spec.openapis.org/oas/v3.1#info-object}
 */
 export type InfoObject = {
@@ -622,7 +621,7 @@ export type InfoObject = {
   license?: LicenseObject;
   /** **REQUIRED**. The version of the OpenAPI document (which is distinct from the [OpenAPI Specification version](https://spec.openapis.org/oas/v3.1#oasVersion) or the API implementation version). */
   version: string;
-} & ` + 'Record<`x-${string}`, unknown>;',
+};`,
     )
   })
 
@@ -695,26 +694,26 @@ export type InfoObject = {
 * Components object
 *
 * Holds a set of reusable objects for different aspects of the OAS. All objects defined within the components object will have no effect on the API unless they are explicitly referenced from properties outside the components object.
-* 
+*
 * @see {@link https://spec.openapis.org/oas/v3.1#components-object}
 */
 export type ComponentsObject = {
   /** An object to hold reusable [Response Objects](https://spec.openapis.org/oas/v3.1#response-object). */
-  responses?: Record<string, ResponseObject | ReferenceObject>;
+  responses?: Record<string, ResponseOrReferenceObject>;
   /** An object to hold reusable [Parameter Objects](https://spec.openapis.org/oas/v3.1#parameter-object). */
-  parameters?: Record<string, ParameterObject | ReferenceObject>;
+  parameters?: Record<string, ParameterOrReferenceObject>;
   /** An object to hold reusable [Example Objects](https://spec.openapis.org/oas/v3.1#example-object). */
-  examples?: Record<string, ExampleObject | ReferenceObject>;
+  examples?: Record<string, ExampleOrReferenceObject>;
   /** An object to hold reusable [Request Body Objects](https://spec.openapis.org/oas/v3.1#request-body-object). */
-  requestBodies?: Record<string, RequestBodyObject | ReferenceObject>;
+  requestBodies?: Record<string, RequestBodyOrReferenceObject>;
   /** An object to hold reusable [Header Objects](https://spec.openapis.org/oas/v3.1#header-object). */
-  headers?: Record<string, HeaderObject | ReferenceObject>;
+  headers?: Record<string, HeaderOrReferenceObject>;
   /** An object to hold reusable [Security Scheme Objects](https://spec.openapis.org/oas/v3.1#security-scheme-object). */
-  securitySchemes?: Record<string, SecuritySchemeObject | ReferenceObject>;
+  securitySchemes?: Record<string, SecuritySchemeOrReferenceObject>;
   /** An object to hold reusable [Link Objects](https://spec.openapis.org/oas/v3.1#link-object). */
-  links?: Record<string, LinkObject | ReferenceObject>;
+  links?: Record<string, LinkOrReferenceObject>;
   /** An object to hold reusable [Callback Objects](https://spec.openapis.org/oas/v3.1#callback-object). */
-  callbacks?: Record<string, CallbacksObject | ReferenceObject>;
+  callbacks?: Record<string, CallbacksOrReferenceObject>;
   /** An object to hold reusable [Path Item Object](https://spec.openapis.org/oas/v3.1#path-item-object). */
   pathItems?: Record<string, PathItemObject>;
 };`,
@@ -954,13 +953,12 @@ export type PathsObject = Record<string, PathItemObject>;`,
     expect(result).toContain('bearerFormat: string;')
   })
 
-  it('generates union type for security-scheme subtype refs', () => {
-    const securityScheme: JSONSchema.Object = {
-      $comment: 'https://spec.openapis.org/oas/v3.1#security-scheme-object',
+  it('generates intersections for allOf $ref entries in object schemas', () => {
+    const schema: JSONSchema.Object = {
       type: 'object',
       properties: {
         type: {
-          enum: ['apiKey', 'http', 'mutualTLS', 'oauth2', 'openIdConnect'],
+          enum: ['apiKey', 'http'],
         },
         description: {
           type: 'string',
@@ -968,55 +966,15 @@ export type PathsObject = Record<string, PathItemObject>;`,
       },
       required: ['type'],
       allOf: [
-        { $ref: '#/$defs/specification-extensions' },
-        { $ref: '#/$defs/security-scheme/$defs/type-apikey' },
-        { $ref: '#/$defs/security-scheme/$defs/type-http' },
-        { $ref: '#/$defs/security-scheme/$defs/type-http-bearer' },
-        { $ref: '#/$defs/security-scheme/$defs/type-oauth2' },
-        { $ref: '#/$defs/security-scheme/$defs/type-oidc' },
+        { $ref: '#/$defs/base-type-a' },
+        { $ref: '#/$defs/base-type-b' },
       ],
     }
 
-    const result = generateTypeDefinition(securityScheme, 'SecuritySchemeObject')
+    const result = generateTypeDefinition(schema, 'ComposedObject')
 
-    expect(result).toStrictEqual(
-      'export type SecuritySchemeObject = TypeApikeyObject | TypeHttpObject | TypeHttpBearerObject | TypeOauth2Object | TypeOidcObject;',
-    )
-  })
-
-  it('uses security-scheme documentation heading with subtype union type', () => {
-    const securityScheme: JSONSchema.Object = {
-      $comment: 'https://spec.openapis.org/oas/v3.1#security-scheme-object',
-      type: 'object',
-      properties: {
-        type: {
-          enum: ['apiKey', 'http', 'mutualTLS', 'oauth2', 'openIdConnect'],
-        },
-        description: {
-          type: 'string',
-        },
-      },
-      required: ['type'],
-      allOf: [
-        { $ref: '#/$defs/specification-extensions' },
-        { $ref: '#/$defs/security-scheme/$defs/type-apikey' },
-        { $ref: '#/$defs/security-scheme/$defs/type-http' },
-        { $ref: '#/$defs/security-scheme/$defs/type-http-bearer' },
-        { $ref: '#/$defs/security-scheme/$defs/type-oauth2' },
-        { $ref: '#/$defs/security-scheme/$defs/type-oidc' },
-      ],
-    }
-
-    const result = generateTypeDefinition(securityScheme, 'SecuritySchemeObject', markdownDocumentation)
-    expect(result).toEqual(
-      `/**
-* Security Scheme object
-*
-* Defines a security scheme that can be used by the operations.  Supported schemes are HTTP authentication, an API key (either as a header, a cookie parameter or as a query parameter), mutual TLS (use of a client certificate), OAuth2's common flows (implicit, password, client credentials and authorization code) as defined in [RFC6749](https://tools.ietf.org/html/rfc6749), and [OpenID Connect Discovery](https://tools.ietf.org/html/draft-ietf-oauth-discovery-06). Please note that as of 2020, the implicit flow is about to be deprecated by [OAuth 2.0 Security Best Current Practice](https://tools.ietf.org/html/draft-ietf-oauth-security-topics). Recommended for most use case is Authorization Code Grant flow with PKCE.
-* 
-* @see {@link https://spec.openapis.org/oas/v3.1#security-scheme-object}
-*/
-export type SecuritySchemeObject = TypeApikeyObject | TypeHttpObject | TypeHttpBearerObject | TypeOauth2Object | TypeOidcObject;`,
+    expect(result).toContain('& BaseTypeAObject')
+    expect(result).toContain('& BaseTypeBObject')
     )
   })
 

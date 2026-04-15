@@ -57,23 +57,16 @@ export type NumericFormat =
 
 export type SchemaReferenceType<Value> = Value | ReferenceObject
 
-export type Extensions = Record<`x-${string}`, unknown>
-
 type SharedProperties = {
-  name?: string
   title?: string
   description?: string
   default?: unknown
   enum?: unknown[]
   const?: unknown
   examples?: unknown[]
-  example?: unknown
   deprecated?: boolean
-  discriminator?: Record<string, unknown>
   readOnly?: boolean
   writeOnly?: boolean
-  xml?: Record<string, unknown>
-  externalDocs?: Record<string, unknown>
   allOf?: SchemaReferenceType<SchemaObject>[]
   oneOf?: SchemaReferenceType<SchemaObject>[]
   anyOf?: SchemaReferenceType<SchemaObject>[]
@@ -128,33 +121,33 @@ type ObjectKeywords = {
 type UntypedObject = SharedProperties & {
   type?: undefined
   format?: StringFormat | NumericFormat
-} & Extensions
+}
 
 type OtherTypes = SharedProperties & {
   type: 'null' | 'boolean'
-} & Extensions
+}
 
 type NumericObject = SharedProperties &
   NumericKeywords & {
     type: 'number' | 'integer'
     format?: NumericFormat
-  } & Extensions
+  }
 
 type StringObject = SharedProperties &
   StringKeywords & {
     type: 'string'
     format?: StringFormat
-  } & Extensions
+  }
 
 type ArrayObject = SharedProperties &
   ArrayKeywords & {
     type: 'array'
-  } & Extensions
+  }
 
 type ObjectObject = SharedProperties &
   ObjectKeywords & {
     type: 'object'
-  } & Extensions
+  }
 
 export type MultiTypeObject = SharedProperties &
   NumericKeywords &
@@ -163,7 +156,7 @@ export type MultiTypeObject = SharedProperties &
   ObjectKeywords & {
     type?: PrimitiveSchemaType | PrimitiveSchemaType[]
     format?: StringFormat | NumericFormat
-  } & Extensions
+  }
 
 export type SchemaObject =
   | UntypedObject
