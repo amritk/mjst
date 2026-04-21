@@ -75,20 +75,9 @@ const isPropertyRequired = (key: string, schema: JSONSchema): boolean => {
 /**
  * Generates a parser call expression for a required $ref property.
  * Example: parseContactObject(input.contact)
- * For -or-reference types, checks for $ref at runtime to avoid parsing reference objects.
  */
 const generateRequiredRefCall = (key: string, ref: string): string => {
   const acc = safeAccessor('input', key)
-  
-  // Check if this is an -or-reference union type
-  if (ref.endsWith('-or-reference')) {
-    // For -or-reference types, check if value has $ref property
-    // If it does, it is a reference object — shallow copy to avoid aliasing input
-    const baseRef = ref.replace('-or-reference', '')
-    const baseParserName = generateParserName(refToName(baseRef))
-    return `isObject(${acc}) && '$ref' in ${acc} ? { ...${acc} } as ReferenceObject : ${baseParserName}(${acc})`
-  }
-  
   const parserName = generateParserName(refToName(ref))
   return `${parserName}(${acc})`
 }
@@ -96,20 +85,9 @@ const generateRequiredRefCall = (key: string, ref: string): string => {
 /**
  * Generates a parser call expression for an optional $ref property.
  * Example: ...(input.contact && { contact: parseContactObject(input.contact) })
- * For -or-reference types, checks for $ref at runtime to avoid parsing reference objects.
  */
 const generateOptionalRefCall = (key: string, ref: string): string => {
   const acc = safeAccessor('input', key)
-  
-  // Check if this is an -or-reference union type
-  if (ref.endsWith('-or-reference')) {
-    // For -or-reference types, check if value has $ref property
-    // If it does, it is a reference object — shallow copy to avoid aliasing input
-    const baseRef = ref.replace('-or-reference', '')
-    const baseParserName = generateParserName(refToName(baseRef))
-    return `...(${acc} && { ${safeKey(key)}: isObject(${acc}) && '$ref' in ${acc} ? { ...${acc} } as ReferenceObject : ${baseParserName}(${acc}) })`
-  }
-  
   const parserName = generateParserName(refToName(ref))
   return `...(${acc} && { ${safeKey(key)}: ${parserName}(${acc}) })`
 }
@@ -136,19 +114,9 @@ const generateOptionalArrayRefCall = (key: string, ref: string): string => {
 /**
  * Generates a validateRecord call for required object properties with additionalProperties $ref.
  * Example: validateRecord(input.responses, parseResponseObject)
- * For -or-reference types, uses an inline function to check for $ref at runtime.
  */
 const generateRequiredRecordRefCall = (key: string, ref: string): string => {
   const acc = safeAccessor('input', key)
-  
-  // Check if this is an -or-reference union type
-  if (ref.endsWith('-or-reference')) {
-    // Shallow copy reference objects to avoid aliasing input
-    const baseRef = ref.replace('-or-reference', '')
-    const baseParserName = generateParserName(refToName(baseRef))
-    return `validateRecord(${acc}, (v) => isObject(v) && '$ref' in v ? { ...v } as ReferenceObject : ${baseParserName}(v))`
-  }
-  
   const parserName = generateParserName(refToName(ref))
   return `validateRecord(${acc}, ${parserName})`
 }
@@ -156,19 +124,9 @@ const generateRequiredRecordRefCall = (key: string, ref: string): string => {
 /**
  * Generates a validateRecord call for optional object properties with additionalProperties $ref.
  * Example: ...(input.responses && { responses: validateRecord(input.responses, parseResponseObject) })
- * For -or-reference types, uses an inline function to check for $ref at runtime.
  */
 const generateOptionalRecordRefCall = (key: string, ref: string): string => {
   const acc = safeAccessor('input', key)
-  
-  // Check if this is an -or-reference union type
-  if (ref.endsWith('-or-reference')) {
-    // Shallow copy reference objects to avoid aliasing input
-    const baseRef = ref.replace('-or-reference', '')
-    const baseParserName = generateParserName(refToName(baseRef))
-    return `...(${acc} && { ${safeKey(key)}: validateRecord(${acc}, (v) => isObject(v) && '$ref' in v ? { ...v } as ReferenceObject : ${baseParserName}(v)) })`
-  }
-  
   const parserName = generateParserName(refToName(ref))
   return `...(${acc} && { ${safeKey(key)}: validateRecord(${acc}, ${parserName}) })`
 }
@@ -626,8 +584,7 @@ const generateObjectParser = (schema: JSONSchema, typeName: string, useRefImport
     schema.allOf.some(
       (entry) =>
         isSchemaObject(entry) &&
-        hasRef(entry) &&
-        entry.$ref !== '#/$defs/specification-extensions',
+        hasRef(entry),
     )
 
   let canFastPath = !hasAllOfRefParsers
@@ -681,15 +638,11 @@ const generateObjectParser = (schema: JSONSchema, typeName: string, useRefImport
   const objectLines: string[] = []
   objectLines.push('    ...input,')
 
-  // Spread allOf $ref parsers (excluding specification-extensions) so their
-  // field coercions are applied before the explicit property validations below.
+  // Spread allOf $ref parsers so their field coercions are applied before
+  // the explicit property validations below.
   if (useRefImports && isSchemaObject(schema) && hasAllOf(schema)) {
     for (const entry of schema.allOf) {
-      if (
-        isSchemaObject(entry) &&
-        hasRef(entry) &&
-        entry.$ref !== '#/$defs/specification-extensions'
-      ) {
+      if (isSchemaObject(entry) && hasRef(entry)) {
         const parserName = generateParserName(refToName(entry.$ref))
         objectLines.push(`    ...(${parserName}(input) as Record<string, unknown>),`)
       }
@@ -794,9 +747,6 @@ const generateObjectParser = (schema: JSONSchema, typeName: string, useRefImport
 /**
  * Generates a parser for schemas that have both properties AND patternProperties.
  * Parses the known properties first, then iterates remaining keys to match patterns.
- *
- * This handles schemas like OpenAPI's responses object which has a `default` property
- * alongside patternProperties for HTTP status codes like "200", "4XX".
  */
 const generateCombinedObjectParser = (schema: JSONSchema, typeName: string, useRefImports: boolean): string => {
   const functionName = generateParserName(typeName)
@@ -825,31 +775,8 @@ const generateCombinedObjectParser = (schema: JSONSchema, typeName: string, useR
 
   const [pattern, patternSchema] = refPattern
   const ref = (patternSchema as { $ref: string }).$ref
-  
-  // Check if this is an -or-reference union type that needs conditional handling
-  const isOrReference = ref.endsWith('-or-reference')
-  
-  const isVendorExtension =
-    ref === '#/$defs/vendor-extension' ||
-    ref.endsWith('/vendor-extension') ||
-    ref === '#/definitions/vendorExtension' ||
-    ref.endsWith('/vendorExtension')
-
-  let assignmentCode: string
-  if (isVendorExtension) {
-    // Vendor extensions are untyped — assign the value directly without parsing
-    assignmentCode = `(result as Record<string, unknown>)[key] = value;`
-  } else if (isOrReference) {
-    // For -or-reference types, we need to check for $ref at runtime
-    // If the value has $ref, it is a reference object — shallow copy to avoid aliasing input
-    // Otherwise, parse it as the base type
-    const baseRef = ref.replace('-or-reference', '')
-    const baseParserName = generateParserName(refToName(baseRef))
-    assignmentCode = `(result as Record<string, unknown>)[key] = isObject(value) && '$ref' in value ? { ...value } as ReferenceObject : ${baseParserName}(value);`
-  } else {
-    const parserName = generateParserName(refToName(ref))
-    assignmentCode = `(result as Record<string, unknown>)[key] = ${parserName}(value);`
-  }
+  const parserName = generateParserName(refToName(ref))
+  const assignmentCode = `(result as Record<string, unknown>)[key] = ${parserName}(value);`
   
   const escapedPattern = escapeRegexPattern(pattern)
 
@@ -979,17 +906,8 @@ const generatePatternPropertiesParser = (
   // Use imported parser when pattern schema points to a $ref.
   if (useRefImports && isSchemaObject(patternSchema) && hasRef(patternSchema)) {
     const ref = patternSchema.$ref
-    const isVendorExtensionRef =
-      ref === '#/$defs/vendor-extension' ||
-      ref.endsWith('/vendor-extension') ||
-      ref === '#/definitions/vendorExtension' ||
-      ref.endsWith('/vendorExtension')
-    if (!isVendorExtensionRef) {
-      const parserName = generateParserName(refToName(ref))
-      patternAssignment = `(result as Record<string, unknown>)[key] = ${parserName}(value);`
-    } else {
-      patternAssignment = `(result as Record<string, unknown>)[key] = value;`
-    }
+    const parserName = generateParserName(refToName(ref))
+    patternAssignment = `(result as Record<string, unknown>)[key] = ${parserName}(value);`
   } else if (patternSchema === false) {
     // `false` means no values are allowed for matching keys.
     patternAssignment = ''
@@ -1075,8 +993,7 @@ const generateConditionalParser = (schema: JSONSchema.Object, typeName: string):
 
 /**
  * Builds an object schema from conditional if/then keywords when the schema does not
- * declare type: "object". This helps generate useful types/parsers for OpenAPI helper
- * definitions like type-http and style condition fragments.
+ * declare type: "object". Flattens if/then/else property sets into a single object schema.
  */
 const getConditionalObjectSchema = (schema: JSONSchema): JSONSchema.Object | null => {
   if (!isSchemaObject(schema)) {
@@ -1163,132 +1080,6 @@ const generateSchemaObjectParser = (typeName: string): string => {
 }
 
 /**
- * Extracts security scheme subtype information from the schema's allOf array.
- * Returns a map of type values to their corresponding parser names.
- */
-const getSecuritySchemeSubtypes = (
-  schema: JSONSchema,
-): Map<string, { parserName: string; refName: string }> | null => {
-  if (!isSchemaObject(schema) || !Array.isArray(schema.allOf)) {
-    return null
-  }
-
-  const subtypes = new Map<string, { parserName: string; refName: string }>()
-
-  for (const entry of schema.allOf) {
-    if (!isSchemaObject(entry) || !entry.$ref) {
-      continue
-    }
-
-    if (!entry.$ref.includes('/security-scheme/$defs/type-')) {
-      continue
-    }
-
-    const refName = refToName(entry.$ref)
-    const parserName = generateParserName(refName)
-
-    // Extract the type key from the ref name
-    // type-apikey -> apikey
-    // type-http -> http
-    // type-http-bearer -> http-bearer (special case, checked by scheme pattern)
-    // type-oauth2 -> oauth2
-    // type-oidc -> oidc
-    const typeMatch = entry.$ref.match(/type-([^/]+)$/)
-    if (!typeMatch || !typeMatch[1]) {
-      continue
-    }
-
-    const typeKey = typeMatch[1]
-
-    // Only include recognized security scheme types
-    const validTypes = ['apikey', 'http', 'http-bearer', 'oauth2', 'oidc']
-    if (!validTypes.includes(typeKey)) {
-      continue
-    }
-
-    subtypes.set(typeKey, { parserName, refName })
-  }
-
-  return subtypes.size > 0 ? subtypes : null
-}
-
-const generateSecuritySchemeParser = (schema: JSONSchema): string | null => {
-  const subtypes = getSecuritySchemeSubtypes(schema)
-  if (!subtypes) {
-    return null
-  }
-
-  // Find the default parser (apikey if available, otherwise first one)
-  const apikeySubtype = subtypes.get('apikey')
-  const firstSubtype = Array.from(subtypes.values())[0]
-  const defaultParser = apikeySubtype?.parserName || firstSubtype?.parserName
-
-  if (!defaultParser) {
-    return null
-  }
-
-  // Build switch cases
-  const switchCases: string[] = []
-
-  const apikeyParser = subtypes.get('apikey')
-  if (apikeyParser) {
-    switchCases.push(`    case "apiKey":
-      return ${apikeyParser.parserName}(input);`)
-  }
-
-  const httpParser = subtypes.get('http')
-  const httpBearerParser = subtypes.get('http-bearer')
-
-  if (httpParser || httpBearerParser) {
-    if (httpParser && httpBearerParser) {
-      switchCases.push(`    case "http":
-      if (typeof input["scheme"] === "string" && /^[Bb][Ee][Aa][Rr][Ee][Rr]$/.test(input["scheme"])) {
-        return ${httpBearerParser.parserName}(input);
-      }
-      return ${httpParser.parserName}(input);`)
-    } else if (httpParser) {
-      switchCases.push(`    case "http":
-      return ${httpParser.parserName}(input);`)
-    } else if (httpBearerParser) {
-      switchCases.push(`    case "http":
-      return ${httpBearerParser.parserName}(input);`)
-    }
-  }
-
-  const oauth2Parser = subtypes.get('oauth2')
-  if (oauth2Parser) {
-    switchCases.push(`    case "oauth2":
-      return ${oauth2Parser.parserName}(input);`)
-  }
-
-  const oidcParser = subtypes.get('oidc')
-  if (oidcParser) {
-    switchCases.push(`    case "openIdConnect":
-      return ${oidcParser.parserName}(input);`)
-  }
-
-  return `export const parseSecuritySchemeObject = (input: unknown): SecuritySchemeObject => {
-  if (!isObject(input)) {
-    return ${defaultParser}(input);
-  }
-
-  const parsedSubtype: SecuritySchemeObject = (() => {
-    switch (input["type"]) {
-${switchCases.reduce((acc, curr, idx) => idx === 0 ? curr : acc + '\n' + curr, '')}
-    default:
-      return ${defaultParser}(input);
-    }
-  })();
-
-  return {
-    ...input,
-    ...((value => value === undefined ? {} : { description: value })(typeof input?.["description"] === "string" ? input?.["description"] : (input?.["description"] !== undefined ? String(input?.["description"]) : undefined))),
-    ...parsedSubtype,
-  };
-};`
-}
-
-/**
  * Determines the appropriate parser generation strategy for a schema.
  */
 const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: GenerateParserOptions): string => {
@@ -1297,13 +1088,6 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   // Special case for SchemaObject - it can be any JSON Schema
   if (typeName === 'SchemaObject') {
     return generateSchemaObjectParser(typeName)
-  }
-
-  if (typeName === 'SecuritySchemeObject') {
-    const securitySchemeParser = generateSecuritySchemeParser(schema)
-    if (securitySchemeParser) {
-      return securitySchemeParser
-    }
   }
 
   const isObjectLikeSchema =
@@ -1324,8 +1108,8 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
 
   // Handle schemas that have explicit properties — generate a full object parser.
   // This intentionally runs before if/then checks so that schemas with both
-  // properties AND conditional keywords (e.g. OpenAPI's parameter schema) use
-  // all declared properties rather than only the if/then fragment.
+  // properties AND conditional keywords use all declared properties rather than
+  // only the if/then fragment.
   if (hasProperties(schema)) {
     return generateObjectParser(schema, typeName, useRefImports)
   }

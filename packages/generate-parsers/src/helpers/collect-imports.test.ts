@@ -65,25 +65,10 @@ describe('collect-imports', () => {
     expect(result).toEqual(["import { type PathItemObject, parsePathItemObject } from './path-item';"])
   })
 
-  it('does not collect imports from ^x- vendor extension patternProperties', () => {
-    // ^x- patterns are inlined as Record<`x-${string}`, unknown> and produce no named import.
+  it('collects imports from patternProperties with $ref', () => {
     const schema: JSONSchema = {
       type: 'object',
       patternProperties: {
-        '^x-': { $ref: '#/$defs/vendor-extension' },
-      },
-    }
-
-    const result = collectImports(schema)
-
-    expect(result).toEqual([])
-  })
-
-  it('collects imports only from non-extension patterns when mixed patternProperties are present', () => {
-    const schema: JSONSchema = {
-      type: 'object',
-      patternProperties: {
-        '^x-': { $ref: '#/$defs/vendor-extension' },
         '^/': { $ref: '#/$defs/path-item' },
       },
     }
@@ -161,20 +146,17 @@ describe('collect-imports', () => {
     expect(result).toEqual(["import { type ContactObject, parseContactObject } from './contact';"])
   })
 
-  it('adds ReferenceObject import for -or-reference refs', () => {
+  it('collects imports from $ref properties', () => {
     const schema: JSONSchema = {
       type: 'object',
       properties: {
-        response: { $ref: '#/$defs/response-or-reference' },
+        response: { $ref: '#/$defs/response' },
       },
     }
 
     const result = collectImports(schema)
 
-    expect(result).toEqual([
-      "import type { ReferenceObject } from './reference';",
-      "import { type ResponseObject, parseResponseObject } from './response';",
-    ])
+    expect(result).toEqual(["import { type ResponseObject, parseResponseObject } from './response';"])
   })
 
   it('handles nested refs in complex schemas', () => {
@@ -261,14 +243,14 @@ describe('collect-imports', () => {
     ])
   })
 
-  it('does not import specification-extensions from root-level allOf', () => {
+  it('collects imports from all allOf $ref entries', () => {
     const schema: JSONSchema = {
       type: 'object',
       properties: {
         contentType: { type: 'string' },
       },
       allOf: [
-        { $ref: '#/$defs/specification-extensions' },
+        { $ref: '#/$defs/base-schema' },
         { $ref: '#/$defs/styles-for-form' },
       ],
     }
@@ -276,9 +258,9 @@ describe('collect-imports', () => {
     const result = collectImports(schema)
 
     expect(result).toEqual([
+      "import { type BaseSchemaObject, parseBaseSchemaObject } from './base-schema';",
       "import { type StylesForFormObject, parseStylesForFormObject } from './styles-for-form';",
     ])
-    expect(result.join('\n')).not.toContain('specification-extensions')
   })
 
   it('generates type-only imports when typesOnly is true', () => {
@@ -312,21 +294,17 @@ describe('collect-imports', () => {
     expect(result[0]).not.toContain('parseContactObject')
   })
 
-  it('still adds ReferenceObject import for -or-reference refs in typesOnly mode', () => {
+  it('collects type-only imports from $ref properties in typesOnly mode', () => {
     const schema: JSONSchema = {
       type: 'object',
       properties: {
-        response: { $ref: '#/$defs/response-or-reference' },
+        response: { $ref: '#/$defs/response' },
       },
     }
 
     const result = collectImports(schema, { typesOnly: true })
 
-    // ReferenceObject is a type-only import in both modes
-    expect(result).toEqual([
-      "import type { ReferenceObject } from './reference';",
-      "import type { ResponseObject } from './response';",
-    ])
+    expect(result).toEqual(["import type { ResponseObject } from './response';"])
   })
 
   it('generates type-only imports from array items $ref in typesOnly mode', () => {
@@ -427,18 +405,15 @@ describe('collect-imports', () => {
     expect(result).toEqual(["import { type ServerObject, parseServerObject } from './server';"])
   })
 
-  it('collects imports from root-level array items with -or-reference $ref', () => {
+  it('collects imports from root-level array items $ref in typesOnly mode', () => {
     const schema: JSONSchema = {
       type: 'array',
-      items: { $ref: '#/$defs/parameter-or-reference' },
+      items: { $ref: '#/$defs/parameter' },
     }
 
     const result = collectImports(schema, { typesOnly: true })
 
-    expect(result).toEqual([
-      "import type { ReferenceObject } from './reference';",
-      "import type { ParameterObject } from './parameter';",
-    ])
+    expect(result).toEqual(["import type { ParameterObject } from './parameter';"])
   })
 
   it('collects imports from root-level oneOf refs', () => {

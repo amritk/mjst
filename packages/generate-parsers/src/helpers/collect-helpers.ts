@@ -18,5 +18,10 @@ export const collectHelpers = (parserFunction: string): string[] => {
     imports.push("import { isObject } from 'mjst-helpers/is-object';")
   }
 
+  /** Find all hasRef imports */
+  if (parserFunction.includes('hasRef(')) {
+    imports.push("import { hasRef } from 'mjst-helpers/schema-guards';")
+  }
+
   return imports
 }

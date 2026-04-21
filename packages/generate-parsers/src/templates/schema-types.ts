@@ -1,5 +1,3 @@
-import type { ReferenceObject } from './reference'
-
 export type PrimitiveSchemaType = 'null' | 'boolean' | 'string' | 'number' | 'integer' | 'object' | 'array'
 
 export type StringFormat =
@@ -55,8 +53,6 @@ export type NumericFormat =
   | 'sf-integer'
   | 'sf-decimal'
 
-export type SchemaReferenceType<Value> = Value | ReferenceObject
-
 export type Extensions = Record<`x-${string}`, unknown>
 
 type SharedProperties = {
@@ -74,14 +70,14 @@ type SharedProperties = {
   writeOnly?: boolean
   xml?: Record<string, unknown>
   externalDocs?: Record<string, unknown>
-  allOf?: SchemaReferenceType<SchemaObject>[]
-  oneOf?: SchemaReferenceType<SchemaObject>[]
-  anyOf?: SchemaReferenceType<SchemaObject>[]
-  not?: SchemaReferenceType<SchemaObject>
-  if?: SchemaReferenceType<SchemaObject>
-  then?: SchemaReferenceType<SchemaObject>
-  else?: SchemaReferenceType<SchemaObject>
-  $defs?: Record<string, SchemaReferenceType<SchemaObject>>
+  allOf?: (boolean | SchemaObject)[]
+  oneOf?: (boolean | SchemaObject)[]
+  anyOf?: (boolean | SchemaObject)[]
+  not?: boolean | SchemaObject
+  if?: boolean | SchemaObject
+  then?: boolean | SchemaObject
+  else?: boolean | SchemaObject
+  $defs?: Record<string, boolean | SchemaObject>
 }
 
 type NumericKeywords = {
@@ -98,31 +94,31 @@ type StringKeywords = {
   pattern?: string
   contentMediaType?: string
   contentEncoding?: string
-  contentSchema?: SchemaReferenceType<SchemaObject>
+  contentSchema?: boolean | SchemaObject
 }
 
 type ArrayKeywords = {
-  items?: SchemaReferenceType<SchemaObject>
-  prefixItems?: SchemaReferenceType<SchemaObject>[]
+  items?: boolean | SchemaObject
+  prefixItems?: (boolean | SchemaObject)[]
   maxItems?: number
   minItems?: number
   uniqueItems?: boolean
-  contains?: SchemaReferenceType<SchemaObject>
+  contains?: boolean | SchemaObject
   maxContains?: number
   minContains?: number
-  unevaluatedItems?: boolean | SchemaReferenceType<SchemaObject>
+  unevaluatedItems?: boolean | SchemaObject
 }
 
 type ObjectKeywords = {
   maxProperties?: number
   minProperties?: number
   required?: string[]
-  properties?: Record<string, SchemaReferenceType<SchemaObject>>
-  additionalProperties?: boolean | SchemaReferenceType<SchemaObject>
-  patternProperties?: Record<string, SchemaReferenceType<SchemaObject>>
-  dependentSchemas?: Record<string, SchemaReferenceType<SchemaObject>>
-  propertyNames?: SchemaReferenceType<SchemaObject>
-  unevaluatedProperties?: boolean | SchemaReferenceType<SchemaObject>
+  properties?: Record<string, boolean | SchemaObject>
+  additionalProperties?: boolean | SchemaObject
+  patternProperties?: Record<string, boolean | SchemaObject>
+  dependentSchemas?: Record<string, boolean | SchemaObject>
+  propertyNames?: boolean | SchemaObject
+  unevaluatedProperties?: boolean | SchemaObject
 }
 
 type UntypedObject = SharedProperties & {

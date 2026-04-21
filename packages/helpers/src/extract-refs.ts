@@ -10,12 +10,11 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
  *
  * Excluded:
  * - `#` alone (self-reference, not a standalone definition)
- * - `#/$defs/specification-extensions` (inlined as `x-*` pattern, not a type)
  * - Relative path refs (e.g. `/components/messages/foo`) — these point into
  *   example data in the schema document, not into type definitions
  */
 const isResolvableRef = (ref: string): boolean => {
-  if (ref === '#' || ref === '#/$defs/specification-extensions') return false
+  if (ref === '#') return false
   if (ref.startsWith('#')) return true
   if (ref.startsWith('http://') || ref.startsWith('https://')) return true
   return false

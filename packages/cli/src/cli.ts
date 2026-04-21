@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
-import { generateMarkdown } from 'generate-markdown'
 import { buildSchema } from 'generate-parsers'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
@@ -32,13 +31,6 @@ const run = async (): Promise<void> => {
   // Skip the first two args (node executable and script path)
   const args = process.argv.slice(2)
 
-  // Handle --generate-readme before any other processing so we exit early.
-  // generateMarkdown reads fixtures/config.schema.json and package.json from cwd.
-  if (args.includes('--markdown')) {
-    await generateMarkdown()
-    return
-  }
-
   const configPath = extractConfigPath(args)
 
   // Start with config file values if provided, then overlay CLI flags on top
@@ -60,9 +52,7 @@ const run = async (): Promise<void> => {
   const raw = await readFile(schemaPath, 'utf-8')
   const schema: unknown = JSON.parse(raw)
 
-  const markdownDocumentation = config.docs ? await readFile(resolve(config.docs), 'utf-8') : undefined
-
-  const files = await buildSchema(schema as JSONSchema, 'Document', markdownDocumentation, undefined, config.typesOnly)
+  const files = await buildSchema(schema as JSONSchema, 'Document', undefined, config.typesOnly)
 
   const outputDir = resolve(config.outDir)
   await mkdir(outputDir, { recursive: true })

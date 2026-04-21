@@ -31,7 +31,6 @@ export type GeneratedFile = {
  *
  * @param rootSchema - The root JSON Schema to build from
  * @param rootTypeName - The name for the root type (e.g. "Document")
- * @param markdownDocumentation - Optional markdown documentation for comments
  * @returns An array of generated TypeScript files
  *
  * @example
@@ -43,7 +42,6 @@ export type GeneratedFile = {
 export const buildValidatorSchema = async (
   rootSchema: JSONSchema,
   rootTypeName: string,
-  markdownDocumentation?: string,
 ): Promise<GeneratedFile[]> => {
   rootSchema = upgradeDraft07Schema(rootSchema as Record<string, unknown>) as JSONSchema
 
@@ -59,7 +57,6 @@ export const buildValidatorSchema = async (
   const rootContent = generateValidatorFile(
     processedRootSchema,
     rootTypeName,
-    markdownDocumentation,
     { rootSchema: rootSchema as Record<string, unknown> },
   )
   const rootFilename = rootTypeName.toLowerCase()
@@ -83,19 +80,10 @@ export const buildValidatorSchema = async (
       continue
     }
 
-    // -or-reference unions are inlined at usage sites; skip file generation
-    // but still queue nested refs so the canonical def gets processed.
-    if (ref.endsWith('-or-reference')) {
-      for (const nestedRef of extractRefs(resolvedSchema as JSONSchema)) {
-        if (!processedRefs.has(nestedRef)) refsToProcess.push(nestedRef)
-      }
-      continue
-    }
-
     const typeName = refToName(ref)
     const filename = refToFilename(ref)
     const processedSchema = resolveDynamicRefs(resolvedSchema as JSONSchema, dynamicRefMap)
-    const content = generateValidatorFile(processedSchema, typeName, markdownDocumentation, {
+    const content = generateValidatorFile(processedSchema, typeName, {
       selfRef: ref,
       rootSchema: rootSchema as Record<string, unknown>,
     })
