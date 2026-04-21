@@ -890,7 +890,7 @@ describe('generateTypeDefinition', () => {
 
     const result = generateTypeDefinition(schema, 'SpecificationExtensionsObject')
 
-    expect(result).toStrictEqual('export type SpecificationExtensionsObject = Record<string, unknown>;')
+    expect(result).toStrictEqual('export type SpecificationExtensionsObject = Record<`x-${string}`, unknown>;')
   })
 
   it('generates Record<string, never> for patternProperties-only schema with false boolean value', () => {
@@ -904,7 +904,7 @@ describe('generateTypeDefinition', () => {
 
     const result = generateTypeDefinition(schema, 'RestrictedObject')
 
-    expect(result).toStrictEqual('export type RestrictedObject = Record<string, never>;')
+    expect(result).toStrictEqual('export type RestrictedObject = Record<`x-${string}`, never>;')
   })
 
   it('generates Schema type for property with $dynamicRef pointing to #meta', () => {
@@ -993,8 +993,9 @@ describe('generateTypeDefinition', () => {
     expect(result).toContain('locked?: Record<string, never>')
   })
 
-  it('infers Record<string, unknown> for no-type property with boolean true patternProperties value', () => {
-    // A patternProperties value of true (boolean) means matching keys can hold any value.
+  it('infers Record<`x-${string}`, unknown> for no-type property with ^x- patternProperties', () => {
+    // The ^x- pattern is a common JSON Schema convention for vendor extensions that
+    // maps naturally to the TypeScript template literal `x-${string}`.
     const schema: JSONSchema.Object = {
       type: 'object',
       properties: {
@@ -1004,7 +1005,7 @@ describe('generateTypeDefinition', () => {
 
     const result = generateTypeDefinition(schema, 'Container')
 
-    expect(result).toContain('extensions?: Record<string, unknown>')
+    expect(result).toContain('extensions?: Record<`x-${string}`, unknown>')
   })
 
   it('infers string type for no-type property whose default is a string', () => {

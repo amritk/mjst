@@ -216,12 +216,16 @@ const getTypeScriptType = (schema: JSONSchema): string => {
     if (schema.patternProperties && typeof schema.patternProperties === 'object') {
       const firstEntry = Object.entries(schema.patternProperties)[0]
       if (firstEntry) {
-        const [, value] = firstEntry
+        const [pattern, value] = firstEntry
         if (value !== undefined) {
-          if (typeof value === 'boolean') {
-            return `Record<string, ${getBooleanSubSchemaType(value)}>`
+          const valueType =
+            typeof value === 'boolean' ? getBooleanSubSchemaType(value) : getTypeScriptType(value)
+          // The ^x- pattern is a common JSON Schema convention for vendor extensions
+          // that maps naturally to the TypeScript template literal `x-${string}`
+          if (pattern === '^x-') {
+            return `Record<\`x-\${string}\`, ${valueType}>`
           }
-          return `Record<string, ${getTypeScriptType(value)}>`
+          return `Record<string, ${valueType}>`
         }
       }
     }
@@ -319,9 +323,13 @@ const getTypeScriptType = (schema: JSONSchema): string => {
       if (schema.patternProperties && typeof schema.patternProperties === 'object') {
         const firstEntry = Object.entries(schema.patternProperties)[0]
         if (firstEntry) {
-          const [, patternVal] = firstEntry
+          const [pattern, patternVal] = firstEntry
           if (patternVal) {
-            return `Record<string, ${getTypeScriptType(patternVal)}>`
+            const valueType = getTypeScriptType(patternVal)
+            if (pattern === '^x-') {
+              return `Record<\`x-\${string}\`, ${valueType}>`
+            }
+            return `Record<string, ${valueType}>`
           }
         }
       }
@@ -378,6 +386,7 @@ export const generateTypeDefinition = (
     // Handle objects with only patternProperties (no fixed properties)
     if (!hasProperties && hasPatternProperties && normalizedSchema.patternProperties) {
       const firstEntry = Object.entries(normalizedSchema.patternProperties)[0]
+      const firstPattern = firstEntry?.[0]
       const firstPatternProperty = firstEntry?.[1]
 
       if (firstPatternProperty === undefined) {
@@ -389,11 +398,15 @@ export const generateTypeDefinition = (
           ? getBooleanSubSchemaType(firstPatternProperty)
           : getTypeScriptType(firstPatternProperty)
 
+      // The ^x- pattern is a common JSON Schema convention for vendor extensions
+      // that maps naturally to the TypeScript template literal `x-${string}`
+      const keyType = firstPattern === '^x-' ? '`x-${string}`' : 'string'
+
       let result = ''
       if (jsDocTitle && jsDocDescription) {
         result += buildJsDocBlock(jsDocTitle, jsDocDescription)
       }
-      result += `export type ${typeName} = Record<string, ${patternPropType}>;`
+      result += `export type ${typeName} = Record<${keyType}, ${patternPropType}>;`
 
       return result
     }
@@ -447,6 +460,12 @@ export const generateTypeDefinition = (
           allOfIntersections.push(refToName(entry.$ref))
         }
       }
+    }
+
+    // JSON Schema 2019-09+ allows $ref as a sibling to other keywords.
+    // Treat it as an additional intersection type (e.g. for specification-extensions).
+    if (isSchemaObject(schema) && typeof schema.$ref === 'string' && schema.$ref.startsWith('#')) {
+      allOfIntersections.push(refToName(schema.$ref))
     }
 
     let result = ''
