@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Order",
+  "type": "object",
+  "$defs": {
+    "Address": {
+      "type": "object",
+      "properties": {
+        "line1": { "type": "string" },
+        "line2": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "postalCode": { "type": "string" },
+        "country": { "type": "string" }
+      },
+      "required": ["line1", "city", "state", "postalCode", "country"]
+    },
+    "Customer": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" }
+      },
+      "required": ["id", "firstName", "lastName", "email"]
+    },
+    "Attribute": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "value": { "type": "string" }
+      },
+      "required": ["name", "value"]
+    },
+    "OrderItem": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "name": { "type": "string" },
+        "sku": { "type": "string" },
+        "quantity": { "type": "number" },
+        "unitPrice": { "type": "number" },
+        "discount": { "type": "number" },
+        "taxRate": { "type": "number" },
+        "attributes": { "type": "array", "items": { "$ref": "#/$defs/Attribute" } }
+      },
+      "required": ["id", "productId", "name", "sku", "quantity", "unitPrice", "taxRate", "attributes"]
+    },
+    "Payment": {
+      "type": "object",
+      "properties": {
+        "method": { "type": "string" },
+        "transactionId": { "type": "string" },
+        "status": { "type": "string" },
+        "paidAt": { "type": "string" }
+      },
+      "required": ["method", "transactionId", "status", "paidAt"]
+    },
+    "Shipping": {
+      "type": "object",
+      "properties": {
+        "carrier": { "type": "string" },
+        "trackingNumber": { "type": "string" },
+        "estimatedDelivery": { "type": "string" },
+        "actualDelivery": { "type": "string" }
+      },
+      "required": ["carrier", "trackingNumber", "estimatedDelivery"]
+    },
+    "Discount": {
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "type": { "type": "string" },
+        "amount": { "type": "number" }
+      },
+      "required": ["code", "type", "amount"]
+    },
+    "Metadata": {
+      "type": "object",
+      "properties": {
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "notes": { "type": "string" }
+      },
+      "required": ["tags"]
+    }
+  },
+  "properties": {
+    "id": { "type": "string" },
+    "orderNumber": { "type": "string" },
+    "status": { "type": "string" },
+    "currency": { "type": "string" },
+    "totalAmount": { "type": "number" },
+    "createdAt": { "type": "string" },
+    "updatedAt": { "type": "string" },
+    "customer": { "$ref": "#/$defs/Customer" },
+    "shippingAddress": { "$ref": "#/$defs/Address" },
+    "billingAddress": { "$ref": "#/$defs/Address" },
+    "items": { "type": "array", "items": { "$ref": "#/$defs/OrderItem" } },
+    "payment": { "$ref": "#/$defs/Payment" },
+    "shipping": { "$ref": "#/$defs/Shipping" },
+    "discounts": { "type": "array", "items": { "$ref": "#/$defs/Discount" } },
+    "metadata": { "$ref": "#/$defs/Metadata" }
+  },
+  "required": [
+    "id",
+    "orderNumber",
+    "status",
+    "currency",
+    "totalAmount",
+    "createdAt",
+    "updatedAt",
+    "customer",
+    "shippingAddress",
+    "billingAddress",
+    "items",
+    "payment",
+    "shipping",
+    "discounts",
+    "metadata"
+  ]
+}
