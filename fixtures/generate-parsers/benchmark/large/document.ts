@@ -58,7 +58,7 @@ export const parseDocument = (input: unknown): Document => {
     orderNumber: typeof input?.orderNumber === "string" ? input?.orderNumber : (input?.orderNumber !== undefined ? String(input?.orderNumber) : ""),
     status: typeof input?.status === "string" ? input?.status : (input?.status !== undefined ? String(input?.status) : ""),
     currency: typeof input?.currency === "string" ? input?.currency : (input?.currency !== undefined ? String(input?.currency) : ""),
-    totalAmount: typeof input?.totalAmount === "number" ? input?.totalAmount : (input?.totalAmount !== undefined ? Number(input?.totalAmount) : 0),
+    totalAmount: typeof input?.totalAmount === "number" ? input?.totalAmount : (input?.totalAmount !== undefined ? (Number.isFinite(Number(input?.totalAmount)) ? Number(input?.totalAmount) : 0) : 0),
     createdAt: typeof input?.createdAt === "string" ? input?.createdAt : (input?.createdAt !== undefined ? String(input?.createdAt) : ""),
     updatedAt: typeof input?.updatedAt === "string" ? input?.updatedAt : (input?.updatedAt !== undefined ? String(input?.updatedAt) : ""),
     customer: parseCustomerObject(_customer),

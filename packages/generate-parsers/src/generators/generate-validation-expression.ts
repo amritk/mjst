@@ -36,7 +36,7 @@ import { generateSchemaChecks } from './generate-schema-checks'
 /**
  * Generates a type coercion expression for converting a value to the expected type.
  */
-const getTypeCoercion = (accessor: string, schema: JSONSchema): string | null => {
+const getTypeCoercion = (accessor: string, schema: JSONSchema, defaultValue: string): string | null => {
   if (!hasType(schema)) {
     return null
   }
@@ -45,8 +45,12 @@ const getTypeCoercion = (accessor: string, schema: JSONSchema): string | null =>
     case 'string':
       return `String(${accessor})`
     case 'number':
-    case 'integer':
-      return `Number(${accessor})`
+    case 'integer': {
+      // Number() of a non-numeric string produces NaN, which silently poisons
+      // arithmetic. Guard with Number.isFinite and fall back to the default.
+      const n = `Number(${accessor})`
+      return `(Number.isFinite(${n}) ? ${n} : ${defaultValue})`
+    }
     case 'boolean':
       return `Boolean(${accessor})`
     case 'array':
@@ -254,7 +258,7 @@ export const generateValidationExpression = (
   // Generate the fallback value
   // If the value exists but fails validation, try to coerce it
   // If the value is missing and required, use the default
-  const typeCoercion = getTypeCoercion(accessor, schema)
+  const typeCoercion = getTypeCoercion(accessor, schema, defaultValue)
 
   if (isRequired) {
     // For required fields: valid ? use_value : (exists ? coerce : default)

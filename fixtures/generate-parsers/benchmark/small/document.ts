@@ -26,7 +26,7 @@ export const parseDocument = (input: unknown): Document => {
     id: typeof _id === "string" ? _id : (_id !== undefined ? String(_id) : ""),
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
     email: typeof _email === "string" ? _email : (_email !== undefined ? String(_email) : ""),
-    ...(_age !== undefined && { age: typeof _age === "number" ? _age : Number(_age) }),
+    ...(_age !== undefined && { age: typeof _age === "number" ? _age : (Number.isFinite(Number(_age)) ? Number(_age) : 0) }),
     isActive: typeof _isActive === "boolean" ? _isActive : (_isActive !== undefined ? Boolean(_isActive) : false),
   } as unknown as Document;
 }

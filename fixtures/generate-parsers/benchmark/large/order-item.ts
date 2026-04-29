@@ -32,10 +32,10 @@ export const parseOrderItemObject = (input: unknown): OrderItemObject => {
     productId: typeof input?.productId === "string" ? input?.productId : (input?.productId !== undefined ? String(input?.productId) : ""),
     name: typeof input?.name === "string" ? input?.name : (input?.name !== undefined ? String(input?.name) : ""),
     sku: typeof input?.sku === "string" ? input?.sku : (input?.sku !== undefined ? String(input?.sku) : ""),
-    quantity: typeof input?.quantity === "number" ? input?.quantity : (input?.quantity !== undefined ? Number(input?.quantity) : 0),
-    unitPrice: typeof input?.unitPrice === "number" ? input?.unitPrice : (input?.unitPrice !== undefined ? Number(input?.unitPrice) : 0),
-    ...(input.discount !== undefined && { discount: typeof input?.discount === "number" ? input?.discount : Number(input?.discount) }),
-    taxRate: typeof input?.taxRate === "number" ? input?.taxRate : (input?.taxRate !== undefined ? Number(input?.taxRate) : 0),
+    quantity: typeof input?.quantity === "number" ? input?.quantity : (input?.quantity !== undefined ? (Number.isFinite(Number(input?.quantity)) ? Number(input?.quantity) : 0) : 0),
+    unitPrice: typeof input?.unitPrice === "number" ? input?.unitPrice : (input?.unitPrice !== undefined ? (Number.isFinite(Number(input?.unitPrice)) ? Number(input?.unitPrice) : 0) : 0),
+    ...(input.discount !== undefined && { discount: typeof input?.discount === "number" ? input?.discount : (Number.isFinite(Number(input?.discount)) ? Number(input?.discount) : 0) }),
+    taxRate: typeof input?.taxRate === "number" ? input?.taxRate : (input?.taxRate !== undefined ? (Number.isFinite(Number(input?.taxRate)) ? Number(input?.taxRate) : 0) : 0),
     attributes: validateArray(_attributes, parseAttributeObject),
   } as unknown as OrderItemObject;
 }

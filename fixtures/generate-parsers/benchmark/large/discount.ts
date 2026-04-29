@@ -20,6 +20,6 @@ export const parseDiscountObject = (input: unknown): DiscountObject => {
     ...input,
     code: typeof _code === "string" ? _code : (_code !== undefined ? String(_code) : ""),
     type: typeof _type === "string" ? _type : (_type !== undefined ? String(_type) : ""),
-    amount: typeof _amount === "number" ? _amount : (_amount !== undefined ? Number(_amount) : 0),
+    amount: typeof _amount === "number" ? _amount : (_amount !== undefined ? (Number.isFinite(Number(_amount)) ? Number(_amount) : 0) : 0),
   } as unknown as DiscountObject;
 }

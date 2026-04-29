@@ -426,6 +426,44 @@ describe('generate-validation-expression', () => {
     expect(result).toContain('Number(input?.age)')
   })
 
+  // Number() of a non-numeric string produces NaN, which silently poisons arithmetic.
+  // The coercion must guard against it and fall back to the schema default instead.
+  it('generates NaN-safe coercion for required number field', () => {
+    const schema = { type: 'number' as const }
+    const result = generateValidationExpression('age', schema, '0', true)
+
+    expect(result).toBe(
+      'typeof input?.age === "number" ? input?.age : (input?.age !== undefined ? (Number.isFinite(Number(input?.age)) ? Number(input?.age) : 0) : 0)'
+    )
+  })
+
+  it('generates NaN-safe coercion for required integer field', () => {
+    const schema = { type: 'integer' as const }
+    const result = generateValidationExpression('count', schema, '0', true)
+
+    expect(result).toBe(
+      'typeof input?.count === "number" ? input?.count : (input?.count !== undefined ? (Number.isFinite(Number(input?.count)) ? Number(input?.count) : 0) : 0)'
+    )
+  })
+
+  it('generates NaN-safe coercion for optional number field', () => {
+    const schema = { type: 'number' as const }
+    const result = generateValidationExpression('age', schema, '0', false)
+
+    expect(result).toBe(
+      'typeof input?.age === "number" ? input?.age : (input?.age !== undefined ? (Number.isFinite(Number(input?.age)) ? Number(input?.age) : 0) : undefined)'
+    )
+  })
+
+  it('generates NaN-safe coercion for required number field when knownNotUndefined', () => {
+    const schema = { type: 'number' as const }
+    const result = generateValidationExpression('age', schema, '0', true, undefined, undefined, undefined, true)
+
+    expect(result).toBe(
+      'typeof input?.age === "number" ? input?.age : (Number.isFinite(Number(input?.age)) ? Number(input?.age) : 0)'
+    )
+  })
+
   it('handles empty oneOf array', () => {
     const schema = { oneOf: [] }
     const result = generateValidationExpression('value', schema, 'null', true)
