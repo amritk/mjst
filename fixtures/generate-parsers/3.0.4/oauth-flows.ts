@@ -2,7 +2,7 @@ import { type AuthorizationCodeOauthFlowObject, parseAuthorizationCodeOauthFlowO
 import { type ClientCredentialsFlowObject, parseClientCredentialsFlowObject } from './client-credentials-flow';
 import { type ImplicitOauthFlowObject, parseImplicitOauthFlowObject } from './implicit-oauth-flow';
 import { type PasswordOauthFlowObject, parsePasswordOauthFlowObject } from './password-oauth-flow';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Oauth Flows object

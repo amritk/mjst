@@ -2,9 +2,9 @@ import type { ReferenceObject } from './reference';
 import { type EncodingObject, parseEncodingObject } from './encoding';
 import { type ExampleObject, parseExampleObject } from './example';
 import { type SchemaObject, parseSchemaObject } from './schema';
-import { validateArray } from 'mjst-helpers/validate-array';
-import { validateRecord } from 'mjst-helpers/validate-record';
-import { isObject } from 'mjst-helpers/is-object';
+import { validateArray } from '@amritk/helpers/validate-array';
+import { validateRecord } from '@amritk/helpers/validate-record';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Media Type object

@@ -1,13 +1,13 @@
 import { join } from 'node:path'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { applySchemaExtensions } from '#helpers/apply-schema-extensions'
-import { buildDynamicRefMap } from 'mjst-helpers/build-dynamic-ref-map'
-import { extractRefs } from 'mjst-helpers/extract-refs'
-import { refToFilename } from 'mjst-helpers/ref-to-filename'
-import { refToName } from 'mjst-helpers/ref-to-name'
-import { resolveDynamicRefs } from 'mjst-helpers/resolve-dynamic-refs'
-import { resolveRef } from 'mjst-helpers/resolve-ref'
-import { upgradeDraft07Schema } from 'mjst-helpers/upgrade-draft07-schema'
+import { buildDynamicRefMap } from '@amritk/helpers/build-dynamic-ref-map'
+import { extractRefs } from '@amritk/helpers/extract-refs'
+import { refToFilename } from '@amritk/helpers/ref-to-filename'
+import { refToName } from '@amritk/helpers/ref-to-name'
+import { resolveDynamicRefs } from '@amritk/helpers/resolve-dynamic-refs'
+import { resolveRef } from '@amritk/helpers/resolve-ref'
+import { upgradeDraft07Schema } from '@amritk/helpers/upgrade-draft07-schema'
 import type { SchemaExtensions } from '#types/schema-extensions'
 
 import { generateFile } from './generate-files'
@@ -201,7 +201,7 @@ export const buildSchema = async (
   }
 
   // In types-only mode, emit a lightweight schema.ts with only the SchemaObject type
-  // definitions (no runtime parser code or mjst-helpers imports). The full template
+  // definitions (no runtime parser code or @amritk/helpers imports). The full template
   // is only needed when parsers are generated.
   if (typesOnly) {
     const schemaTypesTemplatePath = join(import.meta.dir, '../templates/schema-types.ts')

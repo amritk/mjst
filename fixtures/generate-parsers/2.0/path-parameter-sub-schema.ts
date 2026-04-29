@@ -13,7 +13,7 @@ import { type MultipleOfObject, parseMultipleOfObject } from './multiple-of';
 import { type PatternObject, parsePatternObject } from './pattern';
 import { type PrimitivesItemsObject, parsePrimitivesItemsObject } from './primitives-items';
 import { type UniqueItemsObject, parseUniqueItemsObject } from './unique-items';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Parameter object

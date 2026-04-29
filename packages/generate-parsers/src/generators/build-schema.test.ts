@@ -152,7 +152,7 @@ describe('build-schema', () => {
     // Types-only schema.ts should export SchemaObject but have no runtime parser code
     expect(schemaFile?.content).toContain('export type SchemaObject')
     expect(schemaFile?.content).not.toContain('parseSchemaObject')
-    expect(schemaFile?.content).not.toContain("from 'mjst-helpers/is-object'")
+    expect(schemaFile?.content).not.toContain("from '@amritk/helpers/is-object'")
   })
 
   it('only generates type files in types-only mode', async () => {

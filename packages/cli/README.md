@@ -1,6 +1,6 @@
 <div align="center">
 
-# mjst-cli
+# @amritk/cli
 
 **Generate TypeScript parsers and type definitions from JSON Schemas.**
 

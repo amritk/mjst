@@ -1,5 +1,5 @@
 import { type ResponseValueObject, parseResponseValueObject } from './response-value';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Responses object

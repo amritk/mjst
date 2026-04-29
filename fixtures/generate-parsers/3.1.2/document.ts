@@ -6,9 +6,9 @@ import { type PathsObject, parsePathsObject } from './paths';
 import { type SecurityRequirementObject, parseSecurityRequirementObject } from './security-requirement';
 import { type ServerObject, parseServerObject } from './server';
 import { type TagObject, parseTagObject } from './tag';
-import { validateArray } from 'mjst-helpers/validate-array';
-import { validateRecord } from 'mjst-helpers/validate-record';
-import { isObject } from 'mjst-helpers/is-object';
+import { validateArray } from '@amritk/helpers/validate-array';
+import { validateRecord } from '@amritk/helpers/validate-record';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Openapi object

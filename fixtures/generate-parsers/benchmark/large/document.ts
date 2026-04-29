@@ -5,8 +5,8 @@ import { type MetadataObject, parseMetadataObject } from './metadata';
 import { type OrderItemObject, parseOrderItemObject } from './order-item';
 import { type PaymentObject, parsePaymentObject } from './payment';
 import { type ShippingObject, parseShippingObject } from './shipping';
-import { validateArray } from 'mjst-helpers/validate-array';
-import { isObject } from 'mjst-helpers/is-object';
+import { validateArray } from '@amritk/helpers/validate-array';
+import { isObject } from '@amritk/helpers/is-object';
 
 export type Document = {
   id: string;

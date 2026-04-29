@@ -1,5 +1,5 @@
 import { type ExplodeForFormObject, parseExplodeForFormObject } from './explode-for-form';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Style Values

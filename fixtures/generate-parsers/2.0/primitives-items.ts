@@ -12,7 +12,7 @@ import { type MinimumObject, parseMinimumObject } from './minimum';
 import { type MultipleOfObject, parseMultipleOfObject } from './multiple-of';
 import { type PatternObject, parsePatternObject } from './pattern';
 import { type UniqueItemsObject, parseUniqueItemsObject } from './unique-items';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 export type PrimitivesItemsObject = {
   type?: "string" | "number" | "integer" | "boolean" | "array";

@@ -3,7 +3,7 @@ import { type TypeHttpBearerObject, parseTypeHttpBearerObject } from './type-htt
 import { type TypeHttpObject, parseTypeHttpObject } from './type-http';
 import { type TypeOauth2Object, parseTypeOauth2Object } from './type-oauth2';
 import { type TypeOidcObject, parseTypeOidcObject } from './type-oidc';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Security Scheme object

@@ -2,8 +2,8 @@ import { type OperationObject, parseOperationObject } from './operation';
 import { type ParameterObject, parseParameterObject } from './parameter';
 import { type ReferenceObject, parseReferenceObject } from './reference';
 import { type ServerObject, parseServerObject } from './server';
-import { validateArray } from 'mjst-helpers/validate-array';
-import { isObject } from 'mjst-helpers/is-object';
+import { validateArray } from '@amritk/helpers/validate-array';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Path Item object

@@ -2,7 +2,7 @@ import { type ExamplesObject, parseExamplesObject } from './examples';
 import { type FileSchemaObject, parseFileSchemaObject } from './file-schema';
 import { type HeadersObject, parseHeadersObject } from './headers';
 import { type SchemaObject, parseSchemaObject } from './schema';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Response object

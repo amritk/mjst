@@ -6,8 +6,8 @@ import { type RequestBodyObject, parseRequestBodyObject } from './request-body';
 import { type ResponsesObject, parseResponsesObject } from './responses';
 import { type SecurityRequirementObject, parseSecurityRequirementObject } from './security-requirement';
 import { type ServerObject, parseServerObject } from './server';
-import { validateArray } from 'mjst-helpers/validate-array';
-import { isObject } from 'mjst-helpers/is-object';
+import { validateArray } from '@amritk/helpers/validate-array';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Operation object

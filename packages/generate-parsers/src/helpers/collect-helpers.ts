@@ -5,22 +5,22 @@ export const collectHelpers = (parserFunction: string): string[] => {
 
   /** Find all validateArray imports */
   if (parserFunction.includes('validateArray')) {
-    imports.push("import { validateArray } from 'mjst-helpers/validate-array';")
+    imports.push("import { validateArray } from '@amritk/helpers/validate-array';")
   }
 
   /** Find all validateRecord imports */
   if (parserFunction.includes('validateRecord')) {
-    imports.push("import { validateRecord } from 'mjst-helpers/validate-record';")
+    imports.push("import { validateRecord } from '@amritk/helpers/validate-record';")
   }
 
   /** Find all isObject imports */
   if (parserFunction.includes('isObject')) {
-    imports.push("import { isObject } from 'mjst-helpers/is-object';")
+    imports.push("import { isObject } from '@amritk/helpers/is-object';")
   }
 
   /** Find all hasRef imports */
   if (parserFunction.includes('hasRef(')) {
-    imports.push("import { hasRef } from 'mjst-helpers/schema-guards';")
+    imports.push("import { hasRef } from '@amritk/helpers/schema-guards';")
   }
 
   return imports

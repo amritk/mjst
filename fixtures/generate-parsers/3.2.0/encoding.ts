@@ -1,8 +1,8 @@
 import type { ReferenceObject } from './reference';
 import { type HeaderObject, parseHeaderObject } from './header';
-import { validateArray } from 'mjst-helpers/validate-array';
-import { validateRecord } from 'mjst-helpers/validate-record';
-import { isObject } from 'mjst-helpers/is-object';
+import { validateArray } from '@amritk/helpers/validate-array';
+import { validateRecord } from '@amritk/helpers/validate-record';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Encoding object

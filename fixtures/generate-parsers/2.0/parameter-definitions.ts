@@ -1,5 +1,5 @@
 import { type ParameterObject, parseParameterObject } from './parameter';
-import { validateRecord } from 'mjst-helpers/validate-record';
+import { validateRecord } from '@amritk/helpers/validate-record';
 
 /**
 * Parameters Definitions object

@@ -8,7 +8,7 @@ import { type RequestBodyObject, parseRequestBodyObject } from './request-body';
 import { type ResponseObject, parseResponseObject } from './response';
 import { type SchemaObject, parseSchemaObject } from './schema';
 import { type SecuritySchemeObject, parseSecuritySchemeObject } from './security-scheme';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Components object

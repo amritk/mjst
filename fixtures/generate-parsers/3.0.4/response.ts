@@ -2,8 +2,8 @@ import { type HeaderObject, parseHeaderObject } from './header';
 import { type LinkObject, parseLinkObject } from './link';
 import { type MediaTypeObject, parseMediaTypeObject } from './media-type';
 import { type ReferenceObject, parseReferenceObject } from './reference';
-import { validateRecord } from 'mjst-helpers/validate-record';
-import { isObject } from 'mjst-helpers/is-object';
+import { validateRecord } from '@amritk/helpers/validate-record';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Response object

@@ -9,8 +9,8 @@ import { type SchemesListObject, parseSchemesListObject } from './schemes-list';
 import { type SecurityDefinitionsObject, parseSecurityDefinitionsObject } from './security-definitions';
 import { type SecurityObject, parseSecurityObject } from './security';
 import { type TagObject, parseTagObject } from './tag';
-import { validateArray } from 'mjst-helpers/validate-array';
-import { isObject } from 'mjst-helpers/is-object';
+import { validateArray } from '@amritk/helpers/validate-array';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Swagger object

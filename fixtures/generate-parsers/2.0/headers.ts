@@ -1,5 +1,5 @@
 import { type HeaderObject, parseHeaderObject } from './header';
-import { validateRecord } from 'mjst-helpers/validate-record';
+import { validateRecord } from '@amritk/helpers/validate-record';
 
 /**
 * Headers object

@@ -1,8 +1,8 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from 'mjst-helpers/schema-guards'
-import { refToFilename } from 'mjst-helpers/ref-to-filename'
-import { refToName } from 'mjst-helpers/ref-to-name'
-import { resolveRef } from 'mjst-helpers/resolve-ref'
+import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from '@amritk/helpers/schema-guards'
+import { refToFilename } from '@amritk/helpers/ref-to-filename'
+import { refToName } from '@amritk/helpers/ref-to-name'
+import { resolveRef } from '@amritk/helpers/resolve-ref'
 
 const getImportPathForFilename = (filename: string): string => `./${filename}`
 

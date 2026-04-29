@@ -1,4 +1,4 @@
-import { isObject } from 'mjst-helpers/is-object'
+import { isObject } from '@amritk/helpers/is-object'
 
 import type { ReferenceObject } from './reference'
 

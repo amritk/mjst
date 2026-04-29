@@ -1,6 +1,6 @@
 import type { ReferenceObject } from './reference';
 import { type ResponseObject, parseResponseObject } from './response';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Responses object

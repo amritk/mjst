@@ -1,6 +1,6 @@
 import { type AttributeObject, parseAttributeObject } from './attribute';
-import { validateArray } from 'mjst-helpers/validate-array';
-import { isObject } from 'mjst-helpers/is-object';
+import { validateArray } from '@amritk/helpers/validate-array';
+import { isObject } from '@amritk/helpers/is-object';
 
 export type OrderItemObject = {
   id: string;

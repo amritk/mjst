@@ -1,6 +1,6 @@
 import { type ReferenceObject, parseReferenceObject } from './reference';
 import { type ResponseObject, parseResponseObject } from './response';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 export type ResponsesObject = {
   default?: ResponseObject | ReferenceObject;

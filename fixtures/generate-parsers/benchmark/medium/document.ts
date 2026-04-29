@@ -1,7 +1,7 @@
 import { type AuthorObject, parseAuthorObject } from './author';
 import { type CommentObject, parseCommentObject } from './comment';
-import { validateArray } from 'mjst-helpers/validate-array';
-import { isObject } from 'mjst-helpers/is-object';
+import { validateArray } from '@amritk/helpers/validate-array';
+import { isObject } from '@amritk/helpers/is-object';
 
 export type Document = {
   id: string;

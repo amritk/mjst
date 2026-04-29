@@ -29,7 +29,7 @@
 
     // Workspace package resolution (Bun doesn't symlink workspace packages)
     "paths": {
-      "mjst-helpers/*": ["./packages/helpers/src/*"]
+      "@amritk/helpers/*": ["./packages/helpers/src/*"]
     }
   }
 }

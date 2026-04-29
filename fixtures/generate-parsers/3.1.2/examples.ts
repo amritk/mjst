@@ -1,7 +1,7 @@
 import type { ReferenceObject } from './reference';
 import { type ExampleObject, parseExampleObject } from './example';
-import { validateRecord } from 'mjst-helpers/validate-record';
-import { isObject } from 'mjst-helpers/is-object';
+import { validateRecord } from '@amritk/helpers/validate-record';
+import { isObject } from '@amritk/helpers/is-object';
 
 export type ExamplesObject = {
   example?: unknown;

@@ -2,8 +2,8 @@ import type { ReferenceObject } from './reference';
 import { type ContentObject, parseContentObject } from './content';
 import { type ExampleObject, parseExampleObject } from './example';
 import { type SchemaObject, parseSchemaObject } from './schema';
-import { validateRecord } from 'mjst-helpers/validate-record';
-import { isObject } from 'mjst-helpers/is-object';
+import { validateRecord } from '@amritk/helpers/validate-record';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Header object
