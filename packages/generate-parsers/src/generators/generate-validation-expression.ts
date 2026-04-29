@@ -1,5 +1,3 @@
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { findDiscriminator } from '#helpers/find-discriminator'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
@@ -28,6 +26,9 @@ import {
   hasUniqueItems,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+import { findDiscriminator } from '#helpers/find-discriminator'
+
 import { generateDiscriminatedUnionValidation } from './generate-discriminated-union-validation'
 import { generateEnumCheck } from './generate-enum-check'
 import { generateNonDiscriminatedUnionValidation } from './generate-non-discriminated-union-validation'

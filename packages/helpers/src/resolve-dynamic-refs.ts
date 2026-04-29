@@ -11,10 +11,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
  * to be infinitely deep because the build system generates separate files for each $def,
  * so each schema is relatively shallow.
  */
-export const resolveDynamicRefs = (
-  schema: JSONSchema,
-  dynamicRefMap: Record<string, string>,
-): JSONSchema => {
+export const resolveDynamicRefs = (schema: JSONSchema, dynamicRefMap: Record<string, string>): JSONSchema => {
   if (typeof schema !== 'object' || schema === null) {
     return schema
   }

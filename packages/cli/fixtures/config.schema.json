@@ -46,8 +46,5 @@
       "typesOnly": true
     }
   ],
-  "x-example-titles": [
-    "Minimal — generate parsers and types",
-    "Types only — skip parser functions"
-  ]
+  "x-example-titles": ["Minimal — generate parsers and types", "Types only — skip parser functions"]
 }

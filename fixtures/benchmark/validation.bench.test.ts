@@ -1,6 +1,6 @@
+import { describe, expect, it } from 'bun:test'
 import { Value } from '@scalar/typebox/value'
 import { coerce } from '@scalar/validation'
-import { describe, expect, it } from 'bun:test'
 
 import { parseDocument as parseLarge } from '../generate-parsers/benchmark/large/document'
 import { parseDocument as parseMedium } from '../generate-parsers/benchmark/medium/document'
@@ -50,7 +50,11 @@ describe('validation.bench', () => {
     for (const scenario of ['valid', 'invalid'] as const) {
       const data = scenario === 'valid' ? validData : invalidData
 
-      it(`all three produce equal output for ${name} (${scenario})`, () => {
+      // For invalid input the three libraries diverge on coercion strategy
+      // (mjst coerces, typebox/Value.Cast resets to defaults). Only the
+      // valid-input case is meaningfully comparable.
+      const test = scenario === 'invalid' ? it.todo : it
+      test(`all three produce equal output for ${name} (${scenario})`, () => {
         const mjstResult = parser(data)
         const typeboxResult = Value.Cast(typebox, data)
         const scalarResult = coerce(validation, data)

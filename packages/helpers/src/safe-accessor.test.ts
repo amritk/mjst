@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+
 import { safeAccessor, safeKey } from './safe-accessor'
 
 describe('safe-accessor', () => {

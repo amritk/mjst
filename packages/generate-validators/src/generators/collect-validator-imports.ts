@@ -1,8 +1,8 @@
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from '@amritk/helpers/schema-guards'
 import { refToFilename } from '@amritk/helpers/ref-to-filename'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
+import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from '@amritk/helpers/schema-guards'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 /**
  * Options for controlling how validator imports are collected.
@@ -12,12 +12,12 @@ type CollectValidatorImportsOptions = {
    * The $ref path of the schema being generated (e.g. `#/$defs/encoding`).
    * Prevents a file from importing itself.
    */
-  readonly selfRef?: string
+  readonly selfRef?: string | undefined
   /**
    * The root schema document. URI refs that cannot be resolved within it
    * are excluded from the import list (they were never generated as files).
    */
-  readonly rootSchema?: Record<string, unknown>
+  readonly rootSchema?: Record<string, unknown> | undefined
 }
 
 /**
@@ -97,10 +97,7 @@ const collectDirectRefs = (schema: JSONSchema): string[] => {
  * // ["import { type ContactObject, validateContactObject } from './contact-object'"]
  * ```
  */
-export const collectValidatorImports = (
-  schema: JSONSchema,
-  options?: CollectValidatorImportsOptions,
-): string[] => {
+export const collectValidatorImports = (schema: JSONSchema, options?: CollectValidatorImportsOptions): string[] => {
   const selfFilename = options?.selfRef ? refToFilename(options.selfRef) : null
   const rootSchema = options?.rootSchema
 

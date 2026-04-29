@@ -1,9 +1,8 @@
 import { Type } from '@scalar/typebox'
 
 import type { HeaderObject } from './header'
-import type { MediaTypeObject } from './media-type'
-
 import type { LinkObject } from './link'
+import type { MediaTypeObject } from './media-type'
 import { HeaderObjectRef, LinkObjectRef, MediaTypeObjectRef } from './ref-definitions'
 import { type ReferenceType, reference } from './reference'
 

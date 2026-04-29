@@ -71,7 +71,7 @@ export type OAuth2Object = Description & {
   type: 'oauth2'
   /** REQUIRED. An object containing configuration information for the flow types supported. */
   flows: OAuthFlowsObject
-} 
+}
 
 const OpenIdConnect = compose(
   DescriptionSchema,

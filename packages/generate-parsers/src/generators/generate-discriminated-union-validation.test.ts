@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+
 import { generateDiscriminatedUnionValidation } from './generate-discriminated-union-validation'
 
 describe('generate-discriminated-union-validation', () => {
@@ -19,17 +20,13 @@ describe('generate-discriminated-union-validation', () => {
   })
 
   it('returns fallback expression when no schemas have discriminator values', () => {
-    const schemas = [
-      { type: 'object' as const, properties: { name: { type: 'string' as const } } },
-    ]
+    const schemas = [{ type: 'object' as const, properties: { name: { type: 'string' as const } } }]
     const result = generateDiscriminatedUnionValidation('value', schemas, 'kind', '{}', true)
     expect(result).toBe('value ?? {}')
   })
 
   it('returns accessor when not required and no discriminator values', () => {
-    const schemas = [
-      { type: 'object' as const, properties: { name: { type: 'string' as const } } },
-    ]
+    const schemas = [{ type: 'object' as const, properties: { name: { type: 'string' as const } } }]
     const result = generateDiscriminatedUnionValidation('value', schemas, 'kind', '{}', false)
     expect(result).toBe('value')
   })

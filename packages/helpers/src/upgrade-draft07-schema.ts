@@ -82,9 +82,8 @@ const hoistNestedDefs = (defs: Record<string, unknown>): Record<string, unknown>
     }
 
     // Derive a short kebab-case prefix from the parent name (which may be a URI)
-    const parentPrefix = parentName.startsWith('http://') || parentName.startsWith('https://')
-      ? refToFilename(parentName)
-      : parentName
+    const parentPrefix =
+      parentName.startsWith('http://') || parentName.startsWith('https://') ? refToFilename(parentName) : parentName
 
     // Build a map from local ref → hoisted ref for every nested def
     const localToHoisted = new Map<string, string>()

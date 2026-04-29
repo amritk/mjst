@@ -1,5 +1,3 @@
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { generateDefaultFromPattern } from '#generators/generate-default-from-pattern'
 import {
   hasAllOf,
   hasAnyOf,
@@ -11,6 +9,8 @@ import {
   hasType,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+import { generateDefaultFromPattern } from '#generators/generate-default-from-pattern'
 
 /**
  * Returns the default value for a JSON Schema property.

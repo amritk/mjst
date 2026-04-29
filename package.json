@@ -50,6 +50,7 @@
     "@scalar/validation": "^0.1.0",
     "@scalar/workspace-store": "^0.41.2",
     "@types/bun": "latest",
+    "@amritk/helpers": "workspace:*",
     "tinybench": "^6.0.0",
     "typescript": "^5"
   }

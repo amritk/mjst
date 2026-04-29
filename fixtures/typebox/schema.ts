@@ -1,10 +1,8 @@
 import { Type } from '@scalar/typebox'
 
 import { compose } from './compose'
-import type { ExternalDocumentationObject } from './external-documentation'
-import type { XMLObject } from './xml'
-
 import type { DiscriminatorObject } from './discriminator'
+import type { ExternalDocumentationObject } from './external-documentation'
 import {
   DiscriminatorObjectRef,
   ExternalDocumentationObjectRef,
@@ -12,13 +10,11 @@ import {
   XMLObjectRef,
 } from './ref-definitions'
 import { type ReferenceObject, ReferenceObjectSchema } from './reference'
+import type { XMLObject } from './xml'
 
 export type SchemaReferenceType<Value> = Value | (ReferenceObject & { '$ref-value': unknown })
 
-const schemaOrReference = Type.Union([
-  SchemaObjectRef,
-  ReferenceObjectSchema
-])
+const schemaOrReference = Type.Union([SchemaObjectRef, ReferenceObjectSchema])
 
 /** We use this type to ensure that we are parsing a schema object as every property can be optional */
 type _InternalType = CoreProperties & {
@@ -55,7 +51,6 @@ type OtherType = 'boolean' | 'null' | ('string' | 'number' | 'boolean' | 'object
 type OtherTypes = CoreProperties & {
   type: OtherType
 }
-
 
 const CorePropertiesWithSchema = Type.Object({
   name: Type.Optional(Type.String()),
@@ -283,7 +278,7 @@ type StringObject = CoreProperties & {
   minLength?: number
   /** Regular expression pattern. */
   pattern?: string
-} 
+}
 
 const ArrayValidationPropertiesWithSchema = Type.Object({
   type: Type.Literal('array'),
@@ -311,7 +306,7 @@ type ArrayObject = CoreProperties & {
   items?: SchemaReferenceType<SchemaObject>
   /** Schema for tuple validation. */
   prefixItems?: SchemaReferenceType<SchemaObject>[]
-} 
+}
 
 const ObjectValidationPropertiesWithSchema = Type.Object({
   type: Type.Literal('object'),
@@ -343,7 +338,7 @@ type ObjectObject = CoreProperties & {
   additionalProperties?: boolean | SchemaReferenceType<SchemaObject>
   /** Properties matching regex patterns. */
   patternProperties?: Record<string, SchemaReferenceType<SchemaObject>>
-} 
+}
 
 /** Builds the recursive schema schema */
 export const SchemaObjectSchemaDefinition = Type.Union([

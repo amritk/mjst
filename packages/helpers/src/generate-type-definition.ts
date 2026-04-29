@@ -1,4 +1,5 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
 import { refToName } from './ref-to-name'
 import { safeKey } from './safe-accessor'
 import { isObjectSchema, isSchemaObject } from './schema-guards'
@@ -85,9 +86,7 @@ const isObjectLikeSchema = (schema: JSONSchema): schema is JSONSchema.Object => 
     return true
   }
 
-  return (
-    'patternProperties' in schema || 'additionalProperties' in schema || ('if' in schema && 'then' in schema)
-  )
+  return 'patternProperties' in schema || 'additionalProperties' in schema || ('if' in schema && 'then' in schema)
 }
 
 const getBooleanSubSchemaType = (schema: boolean): string => {
@@ -218,8 +217,7 @@ const getTypeScriptType = (schema: JSONSchema): string => {
       if (firstEntry) {
         const [pattern, value] = firstEntry
         if (value !== undefined) {
-          const valueType =
-            typeof value === 'boolean' ? getBooleanSubSchemaType(value) : getTypeScriptType(value)
+          const valueType = typeof value === 'boolean' ? getBooleanSubSchemaType(value) : getTypeScriptType(value)
           // The ^x- pattern is a common JSON Schema convention for vendor extensions
           // that maps naturally to the TypeScript template literal `x-${string}`
           if (pattern === '^x-') {
@@ -346,10 +344,7 @@ const getTypeScriptType = (schema: JSONSchema): string => {
  * Handles required vs optional properties based on the schema's required array.
  * Uses $comment as inline JSDoc description when present.
  */
-export const generateTypeDefinition = (
-  schema: JSONSchema,
-  typeName: string,
-): string => {
+export const generateTypeDefinition = (schema: JSONSchema, typeName: string): string => {
   // Handle non-object schemas first
   if (!isObjectLikeSchema(schema)) {
     const tsType = getTypeScriptType(schema)

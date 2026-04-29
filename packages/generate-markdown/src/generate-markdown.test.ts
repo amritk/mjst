@@ -413,7 +413,7 @@ describe('generate-readme', () => {
     await generateMarkdown()
 
     const calls = readFileSpy.mock.calls
-    expect(calls[0]![0]).toContain(process.cwd())
+    expect(calls[0]?.[0]).toContain(process.cwd())
   })
 
   it('writes README to correct path', async () => {

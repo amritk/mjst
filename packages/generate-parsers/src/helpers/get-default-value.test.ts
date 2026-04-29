@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+
 import { getDefaultValue } from './get-default-value'
 
 describe('get-default-value', () => {
@@ -37,38 +38,28 @@ describe('get-default-value', () => {
 
   it('returns default from first oneOf schema', () => {
     const schema = {
-      oneOf: [
-        { type: 'string' as const, default: 'from-oneof' },
-        { type: 'number' as const },
-      ],
+      oneOf: [{ type: 'string' as const, default: 'from-oneof' }, { type: 'number' as const }],
     }
     expect(getDefaultValue(schema)).toBe('"from-oneof"')
   })
 
   it('recurses into oneOf when first schema has no explicit default', () => {
     const schema = {
-      oneOf: [
-        { type: 'string' as const },
-        { type: 'number' as const },
-      ],
+      oneOf: [{ type: 'string' as const }, { type: 'number' as const }],
     }
     expect(getDefaultValue(schema)).toBe('""')
   })
 
   it('returns default from first anyOf schema', () => {
     const schema = {
-      anyOf: [
-        { type: 'number' as const },
-      ],
+      anyOf: [{ type: 'number' as const }],
     }
     expect(getDefaultValue(schema)).toBe('0')
   })
 
   it('returns default from first allOf schema', () => {
     const schema = {
-      allOf: [
-        { type: 'boolean' as const },
-      ],
+      allOf: [{ type: 'boolean' as const }],
     }
     expect(getDefaultValue(schema)).toBe('false')
   })

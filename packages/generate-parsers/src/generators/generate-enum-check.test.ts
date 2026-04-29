@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+
 import { generateEnumCheck } from './generate-enum-check'
 
 describe('generate-enum-check', () => {

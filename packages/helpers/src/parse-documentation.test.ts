@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+
 import { parseDocumentation } from './parse-documentation'
 
 describe('parse-documentation', () => {

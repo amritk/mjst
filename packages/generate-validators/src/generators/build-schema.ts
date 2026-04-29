@@ -1,5 +1,4 @@
 import { join } from 'node:path'
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { buildDynamicRefMap } from '@amritk/helpers/build-dynamic-ref-map'
 import { extractRefs } from '@amritk/helpers/extract-refs'
 import { refToFilename } from '@amritk/helpers/ref-to-filename'
@@ -7,6 +6,7 @@ import { refToName } from '@amritk/helpers/ref-to-name'
 import { resolveDynamicRefs } from '@amritk/helpers/resolve-dynamic-refs'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { upgradeDraft07Schema } from '@amritk/helpers/upgrade-draft07-schema'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { generateValidatorFile } from './generate-files'
 
@@ -39,10 +39,7 @@ export type GeneratedFile = {
  * // files → [{ filename: 'document.ts', content: '...' }, { filename: 'info.ts', ... }, ...]
  * ```
  */
-export const buildValidatorSchema = async (
-  rootSchema: JSONSchema,
-  rootTypeName: string,
-): Promise<GeneratedFile[]> => {
+export const buildValidatorSchema = async (rootSchema: JSONSchema, rootTypeName: string): Promise<GeneratedFile[]> => {
   rootSchema = upgradeDraft07Schema(rootSchema as Record<string, unknown>) as JSONSchema
 
   const files: GeneratedFile[] = []
@@ -54,11 +51,9 @@ export const buildValidatorSchema = async (
 
   // Root schema
   const processedRootSchema = resolveDynamicRefs(rootSchema, dynamicRefMap)
-  const rootContent = generateValidatorFile(
-    processedRootSchema,
-    rootTypeName,
-    { rootSchema: rootSchema as Record<string, unknown> },
-  )
+  const rootContent = generateValidatorFile(processedRootSchema, rootTypeName, {
+    rootSchema: rootSchema as Record<string, unknown>,
+  })
   const rootFilename = rootTypeName.toLowerCase()
 
   if (rootFilename !== 'validation-result') {

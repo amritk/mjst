@@ -285,12 +285,7 @@ describe('build-schema', () => {
       },
     }
 
-    const result = await buildSchema(
-      schema,
-      'Document',
-      { parameter: { 'x-enabled': { type: 'boolean' } } },
-      true,
-    )
+    const result = await buildSchema(schema, 'Document', { parameter: { 'x-enabled': { type: 'boolean' } } }, true)
 
     const parameterFile = result.find((file) => file.filename === 'parameter.ts')
     // Extension property should still appear in the type
@@ -646,7 +641,7 @@ describe('build-schema', () => {
     const indexFile = result.find((f) => f.filename === 'index.ts')
 
     expect(indexFile).toBeDefined()
-    const lines = indexFile!.content.trim().split('\n')
+    const lines = indexFile?.content.trim().split('\n')
     const sorted = [...lines].sort()
     expect(lines).toEqual(sorted)
   })

@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'bun:test'
+
 import { generateNonDiscriminatedUnionValidation } from './generate-non-discriminated-union-validation'
 
 describe('generate-non-discriminated-union-validation', () => {
   it('generates OR chain for multiple schema checks', () => {
-    const schemas = [
-      { type: 'string' as const },
-      { type: 'number' as const },
-    ]
+    const schemas = [{ type: 'string' as const }, { type: 'number' as const }]
     const result = generateNonDiscriminatedUnionValidation('value', schemas, '""', true)
     expect(result).toContain('typeof value === "string"')
     expect(result).toContain('typeof value === "number"')
@@ -38,9 +36,7 @@ describe('generate-non-discriminated-union-validation', () => {
   })
 
   it('handles schemas with multiple constraints combined with &&', () => {
-    const schemas = [
-      { type: 'string' as const, minLength: 1, maxLength: 100 },
-    ]
+    const schemas = [{ type: 'string' as const, minLength: 1, maxLength: 100 }]
     const result = generateNonDiscriminatedUnionValidation('value', schemas, '""', true)
     expect(result).toContain('typeof value === "string"')
     expect(result).toContain('value.length >= 1')
@@ -59,11 +55,7 @@ describe('generate-non-discriminated-union-validation', () => {
   })
 
   it('generates multiple OR groups for different types', () => {
-    const schemas = [
-      { type: 'string' as const },
-      { type: 'number' as const },
-      { type: 'boolean' as const },
-    ]
+    const schemas = [{ type: 'string' as const }, { type: 'number' as const }, { type: 'boolean' as const }]
     const result = generateNonDiscriminatedUnionValidation('value', schemas, 'null', true)
     expect(result).toContain('typeof value === "string"')
     expect(result).toContain('typeof value === "number"')

@@ -1,7 +1,6 @@
 import { Type } from '@scalar/typebox'
 
 import { compose } from './compose'
-
 import type { ContactObject } from './contact'
 import type { LicenseObject } from './license'
 import { ContactObjectRef, LicenseObjectRef } from './ref-definitions'

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+
 import { generateDefaultFromPattern } from './generate-default-from-pattern'
 
 describe('generate-default-from-pattern', () => {

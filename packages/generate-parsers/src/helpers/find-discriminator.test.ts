@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+
 import { findDiscriminator } from './find-discriminator'
 
 describe('find-discriminator', () => {
@@ -28,10 +29,7 @@ describe('find-discriminator', () => {
   })
 
   it('returns null when schemas have no properties', () => {
-    const schemas = [
-      { type: 'object' as const },
-      { type: 'object' as const },
-    ]
+    const schemas = [{ type: 'object' as const }, { type: 'object' as const }]
     expect(findDiscriminator(schemas)).toBeNull()
   })
 
@@ -79,18 +77,12 @@ describe('find-discriminator', () => {
   })
 
   it('ignores schemas without type object', () => {
-    const schemas = [
-      { type: 'string' as const },
-      { type: 'object' as const, properties: { kind: { const: 'a' } } },
-    ]
+    const schemas = [{ type: 'string' as const }, { type: 'object' as const, properties: { kind: { const: 'a' } } }]
     expect(findDiscriminator(schemas)).toBeNull()
   })
 
   it('handles schemas identified as objects by having properties without explicit type', () => {
-    const schemas = [
-      { properties: { kind: { const: 'a' } } },
-      { properties: { kind: { const: 'b' } } },
-    ]
+    const schemas = [{ properties: { kind: { const: 'a' } } }, { properties: { kind: { const: 'b' } } }]
     expect(findDiscriminator(schemas)).toBe('kind')
   })
 })

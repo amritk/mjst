@@ -1,7 +1,6 @@
 import { Type } from '@scalar/typebox'
 
 import { compose } from './compose'
-
 import type { ExternalDocumentationObject } from './external-documentation'
 import { ExternalDocumentationObjectRef } from './ref-definitions'
 
@@ -25,4 +24,4 @@ export type TagObject = {
   description?: string
   /** Additional external documentation for this tag. */
   externalDocs?: ExternalDocumentationObject
-} 
+}

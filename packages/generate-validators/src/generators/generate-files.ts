@@ -1,5 +1,6 @@
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { generateTypeDefinition } from '@amritk/helpers/generate-type-definition'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
 import { collectValidatorImports } from './collect-validator-imports'
 import { generateValidatorFunction } from './generate-validator-function'
 

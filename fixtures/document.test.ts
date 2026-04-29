@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 
-import { parseDocument } from './generate-parsers/document'
+import { parseDocument } from './generate-parsers/3.1.2/document'
 
 describe('document', () => {
   it('returns defaults when given a non-object', () => {

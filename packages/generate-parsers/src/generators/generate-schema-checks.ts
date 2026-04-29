@@ -1,4 +1,3 @@
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import {
   hasAdditionalProperties,
   hasEnum,
@@ -19,6 +18,8 @@ import {
   hasType,
   hasUniqueItems,
 } from '@amritk/helpers/schema-guards'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
 import { generateEnumCheck } from './generate-enum-check'
 
 /**

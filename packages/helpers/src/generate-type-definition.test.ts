@@ -1,5 +1,6 @@
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'bun:test'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
 import { generateTypeDefinition } from './generate-type-definition'
 
 describe('generateTypeDefinition', () => {
@@ -843,11 +844,7 @@ describe('generateTypeDefinition', () => {
         },
       },
       required: ['type'],
-      allOf: [
-        { $ref: '#/$defs/type-apikey' },
-        { $ref: '#/$defs/type-http' },
-        { $ref: '#/$defs/type-oauth2' },
-      ],
+      allOf: [{ $ref: '#/$defs/type-apikey' }, { $ref: '#/$defs/type-http' }, { $ref: '#/$defs/type-oauth2' }],
     }
 
     const result = generateTypeDefinition(securityScheme, 'SecuritySchemeObject')
@@ -1078,7 +1075,11 @@ describe('generateTypeDefinition', () => {
         name: { description: 'Display name shown to customers.', type: 'string' },
         price: { description: 'Unit price in USD cents (must be non-negative).', type: 'number', minimum: 0 },
         inStock: { description: 'Whether the product is currently available for purchase.', type: 'boolean' },
-        tags: { description: 'Searchable labels associated with the product.', type: 'array', items: { type: 'string' } },
+        tags: {
+          description: 'Searchable labels associated with the product.',
+          type: 'array',
+          items: { type: 'string' },
+        },
       },
       required: ['id', 'name', 'price'],
     }

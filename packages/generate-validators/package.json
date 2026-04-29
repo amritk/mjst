@@ -47,5 +47,8 @@
   "dependencies": {
     "json-schema-typed": "catalog:",
     "@amritk/helpers": "workspace:*"
+  },
+  "devDependencies": {
+    "@scalar/openapi-parser": "^0.26.1"
   }
 }

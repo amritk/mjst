@@ -1,8 +1,7 @@
+import { generateTypeDefinition } from '@amritk/helpers/generate-type-definition'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { collectHelpers } from '#helpers/collect-helpers'
 import { collectImports } from '#helpers/collect-imports'
-
-import { generateTypeDefinition } from '@amritk/helpers/generate-type-definition'
 
 import { generateParserFunction } from './generate-parser-function'
 
@@ -57,11 +56,7 @@ type GenerateFileOptions = {
  * // typesOnly contains only type-only imports and type User (no parser)
  * ```
  */
-export const generateFile = (
-  schema: JSONSchema,
-  typeName: string,
-  options?: GenerateFileOptions,
-): string => {
+export const generateFile = (schema: JSONSchema, typeName: string, options?: GenerateFileOptions): string => {
   const typesOnly = options?.typesOnly === true
   const selfRef = options?.selfRef
   const rootSchema = options?.rootSchema

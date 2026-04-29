@@ -4,7 +4,6 @@
  * without any Scalar-specific extensions.
  */
 import {
-  type Schema,
   any,
   array,
   boolean,
@@ -14,6 +13,7 @@ import {
   object,
   optional,
   record,
+  type Schema,
   string,
   union,
 } from '@scalar/validation'
@@ -127,10 +127,20 @@ const objectSchema: Schema = object({
   type: literal('object'),
   maxProperties: optional(number()),
   minProperties: optional(number()),
-  properties: optional(record(string(), lazy((): Schema => schema))),
+  properties: optional(
+    record(
+      string(),
+      lazy((): Schema => schema),
+    ),
+  ),
   required: optional(array(string())),
   additionalProperties: optional(union([boolean(), lazy((): Schema => schema)])),
-  patternProperties: optional(record(string(), lazy((): Schema => schema))),
+  patternProperties: optional(
+    record(
+      string(),
+      lazy((): Schema => schema),
+    ),
+  ),
   propertyNames: optional(lazy((): Schema => schema)),
 })
 
@@ -183,7 +193,12 @@ const headerWithContent: Schema = object({
   description: optional(string()),
   required: optional(boolean()),
   deprecated: optional(boolean()),
-  content: optional(record(string(), lazy((): Schema => mediaType))),
+  content: optional(
+    record(
+      string(),
+      lazy((): Schema => mediaType),
+    ),
+  ),
 })
 
 const header: Schema = union([headerWithSchema, headerWithContent])
@@ -223,14 +238,22 @@ const parameterWithContent: Schema = object({
   deprecated: optional(boolean()),
   allowEmptyValue: optional(boolean()),
   allowReserved: optional(boolean()),
-  content: optional(record(string(), lazy((): Schema => mediaType))),
+  content: optional(
+    record(
+      string(),
+      lazy((): Schema => mediaType),
+    ),
+  ),
 })
 
 const parameter: Schema = union([parameterWithSchema, parameterWithContent])
 
 const requestBody: Schema = object({
   description: optional(string()),
-  content: record(string(), lazy((): Schema => mediaType)),
+  content: record(
+    string(),
+    lazy((): Schema => mediaType),
+  ),
   required: optional(boolean()),
 })
 
@@ -246,13 +269,24 @@ const link = object({
 const response: Schema = object({
   description: string(),
   headers: optional(record(string(), header)),
-  content: optional(record(string(), lazy((): Schema => mediaType))),
+  content: optional(
+    record(
+      string(),
+      lazy((): Schema => mediaType),
+    ),
+  ),
   links: optional(record(string(), link)),
 })
 
-const responsesObject: Schema = record(string(), lazy((): Schema => response))
+const responsesObject: Schema = record(
+  string(),
+  lazy((): Schema => response),
+)
 
-const callback: Schema = record(string(), lazy((): Schema => pathItem))
+const callback: Schema = record(
+  string(),
+  lazy((): Schema => pathItem),
+)
 
 const oauthFlowImplicit = object({
   authorizationUrl: string(),
@@ -323,7 +357,12 @@ const operation: Schema = object({
   deprecated: optional(boolean()),
   security: optional(array(securityRequirement)),
   servers: optional(array(server)),
-  callbacks: optional(record(string(), lazy((): Schema => callback))),
+  callbacks: optional(
+    record(
+      string(),
+      lazy((): Schema => callback),
+    ),
+  ),
 })
 
 const pathItem: Schema = object({
@@ -344,16 +383,46 @@ const pathItem: Schema = object({
 })
 
 const components: Schema = object({
-  schemas: optional(record(string(), lazy((): Schema => schema))),
-  responses: optional(record(string(), lazy((): Schema => response))),
-  parameters: optional(record(string(), lazy((): Schema => parameter))),
+  schemas: optional(
+    record(
+      string(),
+      lazy((): Schema => schema),
+    ),
+  ),
+  responses: optional(
+    record(
+      string(),
+      lazy((): Schema => response),
+    ),
+  ),
+  parameters: optional(
+    record(
+      string(),
+      lazy((): Schema => parameter),
+    ),
+  ),
   examples: optional(record(string(), example)),
-  requestBodies: optional(record(string(), lazy((): Schema => requestBody))),
+  requestBodies: optional(
+    record(
+      string(),
+      lazy((): Schema => requestBody),
+    ),
+  ),
   headers: optional(record(string(), header)),
   securitySchemes: optional(record(string(), securityScheme)),
   links: optional(record(string(), link)),
-  callbacks: optional(record(string(), lazy((): Schema => callback))),
-  pathItems: optional(record(string(), lazy((): Schema => pathItem))),
+  callbacks: optional(
+    record(
+      string(),
+      lazy((): Schema => callback),
+    ),
+  ),
+  pathItems: optional(
+    record(
+      string(),
+      lazy((): Schema => pathItem),
+    ),
+  ),
 })
 
 export const openApiDocumentSchema: Schema = object({

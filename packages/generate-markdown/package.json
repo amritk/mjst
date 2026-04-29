@@ -23,7 +23,9 @@
   "bugs": {
     "url": "https://github.com/amritk/mjst/issues"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "bun run build:code && bun run build:types",
     "build:code": "bun build ./src/index.ts --outdir=dist --target=bun",

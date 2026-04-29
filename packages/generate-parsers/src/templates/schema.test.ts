@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+
 import { parseSchemaObject } from './schema'
 
 describe('schema', () => {
