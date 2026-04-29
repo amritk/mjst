@@ -4,6 +4,27 @@
   "description": "Generate TypeScript validation functions from JSON Schemas.",
   "module": "./dist/index.js",
   "type": "module",
+  "license": "MIT",
+  "author": "amritk",
+  "keywords": [
+    "json-schema",
+    "openapi",
+    "asyncapi",
+    "typescript",
+    "validator",
+    "validation",
+    "code-generation",
+    "mjst"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amritk/mjst.git",
+    "directory": "packages/generate-validators"
+  },
+  "homepage": "https://github.com/amritk/mjst/tree/main/packages/generate-validators#readme",
+  "bugs": {
+    "url": "https://github.com/amritk/mjst/issues"
+  },
   "files": [
     "dist"
   ],

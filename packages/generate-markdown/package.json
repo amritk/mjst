@@ -4,6 +4,25 @@
   "description": "Generate markdown documentation from JSON Schemas.",
   "module": "./dist/index.js",
   "type": "module",
+  "license": "MIT",
+  "author": "amritk",
+  "keywords": [
+    "json-schema",
+    "openapi",
+    "asyncapi",
+    "markdown",
+    "documentation",
+    "mjst"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amritk/mjst.git",
+    "directory": "packages/generate-markdown"
+  },
+  "homepage": "https://github.com/amritk/mjst/tree/main/packages/generate-markdown#readme",
+  "bugs": {
+    "url": "https://github.com/amritk/mjst/issues"
+  },
   "files": ["dist"],
   "scripts": {
     "build": "bun run build:code && bun run build:types",

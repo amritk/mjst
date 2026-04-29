@@ -2,14 +2,41 @@
   "name": "@amritk/cli",
   "version": "0.1.0",
   "description": "Generate TypeScript parsers and type definitions from JSON Schemas.",
-  "module": "cli.ts",
   "type": "module",
-  "bin": {
-    "mjst": "./src/cli.ts"
+  "license": "MIT",
+  "author": "amritk",
+  "keywords": [
+    "json-schema",
+    "openapi",
+    "asyncapi",
+    "typescript",
+    "parser",
+    "validator",
+    "code-generation",
+    "cli",
+    "mjst"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amritk/mjst.git",
+    "directory": "packages/cli"
   },
+  "homepage": "https://github.com/amritk/mjst/tree/main/packages/cli#readme",
+  "bugs": {
+    "url": "https://github.com/amritk/mjst/issues"
+  },
+  "bin": {
+    "mjst": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "bun run --conditions=development ./src/cli.ts",
     "start": "bun run ./src/cli.ts",
+    "build": "bun run build:code && bun run build:types",
+    "build:code": "bun build ./src/cli.ts --outdir=dist --target=bun --banner='#!/usr/bin/env bun'",
+    "build:types": "tsc -p .",
     "generate-readme": "bun run ./src/cli.ts --markdown"
   },
   "dependencies": {
