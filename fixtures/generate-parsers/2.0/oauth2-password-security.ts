@@ -1,5 +1,5 @@
 import { type Oauth2ScopesObject, parseOauth2ScopesObject } from './oauth2-scopes';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Security Scheme object

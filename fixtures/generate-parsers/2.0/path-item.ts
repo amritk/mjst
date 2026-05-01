@@ -1,6 +1,6 @@
 import { type OperationObject, parseOperationObject } from './operation';
 import { type ParametersListObject, parseParametersListObject } from './parameters-list';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Path Item object

@@ -1,4 +1,4 @@
-import { validateRecord } from 'mjst-helpers/validate-record';
+import { validateRecord } from '@amritk/helpers/validate-record';
 
 export type SecurityRequirementObject = {
   [key: string]: string[];

@@ -1,5 +1,5 @@
 import { type SchemaObject, parseSchemaObject } from './schema';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Parameter object

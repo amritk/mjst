@@ -1,5 +1,5 @@
 {
-  "name": "mjst-cli",
+  "name": "@amritk/cli",
   "version": "0.1.0",
   "description": "Generate TypeScript parsers and type definitions from JSON Schemas.",
   "module": "cli.ts",
@@ -13,8 +13,8 @@
     "generate-readme": "bun run ./src/cli.ts --markdown"
   },
   "dependencies": {
-    "generate-parsers": "workspace:*",
-    "generate-markdown": "workspace:*"
+    "@amritk/generate-parsers": "workspace:*",
+    "@amritk/generate-markdown": "workspace:*"
   },
   "devDependencies": {
     "json-schema-typed": "catalog:"

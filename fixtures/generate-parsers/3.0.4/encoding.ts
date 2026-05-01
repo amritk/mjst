@@ -1,6 +1,6 @@
 import { type HeaderObject, parseHeaderObject } from './header';
 import { type ReferenceObject, parseReferenceObject } from './reference';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Encoding object

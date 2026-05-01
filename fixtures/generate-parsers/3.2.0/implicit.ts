@@ -1,5 +1,5 @@
 import { type MapOfStringsObject, parseMapOfStringsObject } from './map-of-strings';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Oauth Flow object

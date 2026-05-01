@@ -1,5 +1,5 @@
 import { type OauthFlowsObject, parseOauthFlowsObject } from './oauth-flows';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Security Scheme object

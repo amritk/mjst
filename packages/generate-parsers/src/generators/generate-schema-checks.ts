@@ -18,7 +18,7 @@ import {
   hasRequired,
   hasType,
   hasUniqueItems,
-} from 'mjst-helpers/schema-guards'
+} from '@amritk/helpers/schema-guards'
 import { generateEnumCheck } from './generate-enum-check'
 
 /**

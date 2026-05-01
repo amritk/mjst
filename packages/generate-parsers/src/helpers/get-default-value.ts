@@ -10,7 +10,7 @@ import {
   hasPattern,
   hasType,
   isSchemaObject,
-} from 'mjst-helpers/schema-guards'
+} from '@amritk/helpers/schema-guards'
 
 /**
  * Returns the default value for a JSON Schema property.

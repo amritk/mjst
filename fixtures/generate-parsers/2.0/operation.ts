@@ -4,7 +4,7 @@ import { type ParametersListObject, parseParametersListObject } from './paramete
 import { type ResponsesObject, parseResponsesObject } from './responses';
 import { type SchemesListObject, parseSchemesListObject } from './schemes-list';
 import { type SecurityObject, parseSecurityObject } from './security';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Operation object

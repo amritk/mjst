@@ -1,5 +1,5 @@
 {
-  "name": "generate-validators",
+  "name": "@amritk/generate-validators",
   "version": "0.1.0",
   "description": "Generate TypeScript validation functions from JSON Schemas.",
   "module": "./dist/index.js",
@@ -25,6 +25,6 @@
   },
   "dependencies": {
     "json-schema-typed": "catalog:",
-    "mjst-helpers": "workspace:*"
+    "@amritk/helpers": "workspace:*"
   }
 }

@@ -1,5 +1,5 @@
 import { type ResponseObject, parseResponseObject } from './response';
-import { validateRecord } from 'mjst-helpers/validate-record';
+import { validateRecord } from '@amritk/helpers/validate-record';
 
 /**
 * Responses Definitions object

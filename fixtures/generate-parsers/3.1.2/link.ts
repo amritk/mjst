@@ -1,6 +1,6 @@
 import { type MapOfStringsObject, parseMapOfStringsObject } from './map-of-strings';
 import { type ServerObject, parseServerObject } from './server';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Link object

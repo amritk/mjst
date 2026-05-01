@@ -2,7 +2,7 @@ import { type FormDataParameterSubSchemaObject, parseFormDataParameterSubSchemaO
 import { type HeaderParameterSubSchemaObject, parseHeaderParameterSubSchemaObject } from './header-parameter-sub-schema';
 import { type PathParameterSubSchemaObject, parsePathParameterSubSchemaObject } from './path-parameter-sub-schema';
 import { type QueryParameterSubSchemaObject, parseQueryParameterSubSchemaObject } from './query-parameter-sub-schema';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Parameter object

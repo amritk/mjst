@@ -1,5 +1,5 @@
 import { type MediaTypeObject, parseMediaTypeObject } from './media-type';
-import { validateRecord } from 'mjst-helpers/validate-record';
+import { validateRecord } from '@amritk/helpers/validate-record';
 
 export type ContentObject = {
   [key: string]: MediaTypeObject;

@@ -1,4 +1,4 @@
-import { isObject } from 'mjst-helpers/is-object'
+import { isObject } from '@amritk/helpers/is-object'
 
 type PrimitiveSchemaType = 'null' | 'boolean' | 'string' | 'number' | 'integer' | 'object' | 'array'
 

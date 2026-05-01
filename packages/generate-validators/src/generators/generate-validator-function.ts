@@ -1,6 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { refToName } from 'mjst-helpers/ref-to-name'
-import { safeKey } from 'mjst-helpers/safe-accessor'
+import { refToName } from '@amritk/helpers/ref-to-name'
+import { safeKey } from '@amritk/helpers/safe-accessor'
 import {
   hasAdditionalProperties,
   hasEnum,
@@ -20,7 +20,7 @@ import {
   hasType,
   isObjectSchema,
   isSchemaObject,
-} from 'mjst-helpers/schema-guards'
+} from '@amritk/helpers/schema-guards'
 
 /**
  * Derives the validator function name from a type name.

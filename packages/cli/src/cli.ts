@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
-import { buildSchema } from 'generate-parsers'
+import { buildSchema } from '@amritk/generate-parsers'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { loadConfig } from './load-config'
@@ -68,7 +68,7 @@ const run = async (): Promise<void> => {
   if (config.build) {
     // Write a minimal tsconfig so tsc can compile the generated files without
     // inheriting settings like allowImportingTsExtensions that block emission.
-    // Add paths so tsc can resolve mjst-helpers from the output directory.
+    // Add paths so tsc can resolve @amritk/helpers from the output directory.
     const helpersDir = resolve(import.meta.dir, '../../helpers/dist')
     const helpersRelative = relative(outputDir, helpersDir)
     const tsconfigContent = JSON.stringify(
@@ -81,7 +81,7 @@ const run = async (): Promise<void> => {
           emitDeclarationOnly: config.typesOnly,
           skipLibCheck: true,
           paths: {
-            'mjst-helpers/*': [`${helpersRelative}/*`],
+            '@amritk/helpers/*': [`${helpersRelative}/*`],
           },
         },
         include: ['./**/*.ts'],

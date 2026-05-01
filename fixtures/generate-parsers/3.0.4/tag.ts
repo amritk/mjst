@@ -1,5 +1,5 @@
 import { type ExternalDocumentationObject, parseExternalDocumentationObject } from './external-documentation';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Tag object

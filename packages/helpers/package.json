@@ -1,5 +1,5 @@
 {
-  "name": "mjst-helpers",
+  "name": "@amritk/helpers",
   "version": "0.1.0",
   "description": "Shared utilities for the mjst code generation ecosystem.",
   "type": "module",

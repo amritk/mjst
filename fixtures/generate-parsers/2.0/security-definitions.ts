@@ -4,7 +4,7 @@ import { type Oauth2AccessCodeSecurityObject, parseOauth2AccessCodeSecurityObjec
 import { type Oauth2ApplicationSecurityObject, parseOauth2ApplicationSecurityObject } from './oauth2-application-security';
 import { type Oauth2ImplicitSecurityObject, parseOauth2ImplicitSecurityObject } from './oauth2-implicit-security';
 import { type Oauth2PasswordSecurityObject, parseOauth2PasswordSecurityObject } from './oauth2-password-security';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Security Definitions object

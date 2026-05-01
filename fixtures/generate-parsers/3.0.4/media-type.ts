@@ -3,8 +3,8 @@ import { type ExampleObject, parseExampleObject } from './example';
 import { type ExampleXorExamplesObject, parseExampleXorExamplesObject } from './example-xor-examples';
 import { type ReferenceObject, parseReferenceObject } from './reference';
 import { type SchemaObject, parseSchemaObject } from './schema';
-import { validateRecord } from 'mjst-helpers/validate-record';
-import { isObject } from 'mjst-helpers/is-object';
+import { validateRecord } from '@amritk/helpers/validate-record';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Media Type object

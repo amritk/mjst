@@ -1,5 +1,5 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { hasConst, hasEnum, hasProperties, isObjectSchema, isSchemaObject } from 'mjst-helpers/schema-guards'
+import { hasConst, hasEnum, hasProperties, isObjectSchema, isSchemaObject } from '@amritk/helpers/schema-guards'
 
 /**
  * Gets the discriminator value for a specific schema.

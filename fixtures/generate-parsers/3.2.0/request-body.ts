@@ -1,5 +1,5 @@
 import { type ContentObject, parseContentObject } from './content';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Request Body object

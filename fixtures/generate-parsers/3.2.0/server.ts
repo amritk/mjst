@@ -1,6 +1,6 @@
 import { type ServerVariableObject, parseServerVariableObject } from './server-variable';
-import { validateRecord } from 'mjst-helpers/validate-record';
-import { isObject } from 'mjst-helpers/is-object';
+import { validateRecord } from '@amritk/helpers/validate-record';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Server object

@@ -4,8 +4,8 @@ import { type MediaTypeObject, parseMediaTypeObject } from './media-type';
 import { type ReferenceObject, parseReferenceObject } from './reference';
 import { type SchemaObject, parseSchemaObject } from './schema';
 import { type SchemaXorContentObject, parseSchemaXorContentObject } from './schema-xor-content';
-import { validateRecord } from 'mjst-helpers/validate-record';
-import { isObject } from 'mjst-helpers/is-object';
+import { validateRecord } from '@amritk/helpers/validate-record';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Header object

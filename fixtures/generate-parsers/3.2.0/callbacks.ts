@@ -1,5 +1,5 @@
 import { type PathItemObject, parsePathItemObject } from './path-item';
-import { validateRecord } from 'mjst-helpers/validate-record';
+import { validateRecord } from '@amritk/helpers/validate-record';
 
 /**
 * Callback object

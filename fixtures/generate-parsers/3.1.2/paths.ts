@@ -1,5 +1,5 @@
 import { type PathItemObject, parsePathItemObject } from './path-item';
-import { isObject } from 'mjst-helpers/is-object';
+import { isObject } from '@amritk/helpers/is-object';
 
 /**
 * Paths object
