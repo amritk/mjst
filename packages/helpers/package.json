@@ -3,6 +3,24 @@
   "version": "0.1.0",
   "description": "Shared utilities for the mjst code generation ecosystem.",
   "type": "module",
+  "license": "MIT",
+  "author": "amritk",
+  "keywords": [
+    "json-schema",
+    "openapi",
+    "asyncapi",
+    "typescript",
+    "mjst"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amritk/mjst.git",
+    "directory": "packages/helpers"
+  },
+  "homepage": "https://github.com/amritk/mjst/tree/main/packages/helpers#readme",
+  "bugs": {
+    "url": "https://github.com/amritk/mjst/issues"
+  },
   "files": [
     "dist"
   ],

@@ -1,5 +1,6 @@
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'bun:test'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
 import { collectImports } from './collect-imports'
 
 describe('collect-imports', () => {
@@ -249,10 +250,7 @@ describe('collect-imports', () => {
       properties: {
         contentType: { type: 'string' },
       },
-      allOf: [
-        { $ref: '#/$defs/base-schema' },
-        { $ref: '#/$defs/styles-for-form' },
-      ],
+      allOf: [{ $ref: '#/$defs/base-schema' }, { $ref: '#/$defs/styles-for-form' }],
     }
 
     const result = collectImports(schema)

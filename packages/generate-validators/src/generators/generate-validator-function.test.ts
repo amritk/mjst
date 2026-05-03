@@ -4,8 +4,8 @@ import { generateValidatorFunction } from './generate-validator-function'
 
 // Eval helper: compiles a generated function string in context of a minimal
 // ValidationResult runtime so we can actually run the generated code.
-const evalValidator = (code: string): ((input: unknown, path?: string) => unknown) => {
-  const wrapped = `
+const _evalValidator = (code: string): ((input: unknown, path?: string) => unknown) => {
+  const _wrapped = `
     const ValidationResult = null // type-only
     ${code}
   `
@@ -25,11 +25,11 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Info')
 
-    expect(code).toContain("export const validateInfo")
+    expect(code).toContain('export const validateInfo')
     expect(code).toContain('"name" in obj')
     expect(code).toContain("must have required property 'name'")
-    expect(code).toContain("typeof obj[\"name\"] !== 'string'")
-    expect(code).toContain("must be string")
+    expect(code).toContain('typeof obj["name"] !== \'string\'')
+    expect(code).toContain('must be string')
   })
 
   it('generates a validator for an optional number property', () => {
@@ -39,9 +39,9 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Stats')
 
-    expect(code).toContain("obj[\"count\"] !== undefined")
-    expect(code).toContain("typeof obj[\"count\"] !== 'number'")
-    expect(code).toContain("must be number")
+    expect(code).toContain('obj["count"] !== undefined')
+    expect(code).toContain('typeof obj["count"] !== \'number\'')
+    expect(code).toContain('must be number')
   })
 
   it('generates a validator for a boolean property', () => {
@@ -52,8 +52,8 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Config')
 
-    expect(code).toContain("typeof obj[\"enabled\"] !== 'boolean'")
-    expect(code).toContain("must be boolean")
+    expect(code).toContain('typeof obj["enabled"] !== \'boolean\'')
+    expect(code).toContain('must be boolean')
   })
 
   it('generates required-property check at parent path', () => {

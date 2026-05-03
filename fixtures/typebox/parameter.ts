@@ -48,7 +48,7 @@ type ParameterObjectBase = {
    * for the entire workspace. When set, this parameter will be injected into every request automatically.
    */
   'x-global'?: boolean
-} 
+}
 
 const ParameterObjectWithSchemaSchema = compose(
   ParameterObjectBaseSchema,

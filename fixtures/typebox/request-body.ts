@@ -1,8 +1,6 @@
 import { Type } from '@scalar/typebox'
 
 import { compose } from './compose'
-
-
 import type { MediaTypeObject } from './media-type'
 import { MediaTypeObjectRef } from './ref-definitions'
 
@@ -26,4 +24,4 @@ export type RequestBodyObject = {
   content: Record<string, MediaTypeObject>
   /** Determines if the request body is required in the request. Defaults to false. */
   required?: boolean
-} 
+}

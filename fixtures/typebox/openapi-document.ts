@@ -1,10 +1,8 @@
-import { type TSchema, Type } from '@scalar/typebox'
-
-import { compose } from './compose'
-
+import { Type } from '@scalar/typebox'
 
 import { CallbackObjectSchemaDefinition } from './callback'
 import { type ComponentsObject, ComponentsObjectSchemaDefinition, SecuritySchemesSchemaDefinition } from './components'
+import { compose } from './compose'
 import { ContactObjectSchemaDefinition } from './contact'
 import { DiscriminatorObjectSchemaDefinition } from './discriminator'
 import { EncodingObjectSchemaDefinition } from './encoding'
@@ -41,8 +39,6 @@ import { type ServerObject, ServerObjectSchemaDefinition } from './server'
 import { ServerVariableObjectSchemaDefinition } from './server-variable'
 import { type TagObject, TagObjectSchemaDefinition } from './tag'
 import { XMLObjectSchemaDefinition } from './xml'
-
-
 
 const OpenApiDocumentSchemaDefinition = compose(
   Type.Object({
@@ -90,7 +86,7 @@ export type OpenApiDocument = {
   tags?: TagObject[]
   /** Additional external documentation. */
   externalDocs?: ExternalDocumentationObject
-} 
+}
 
 // ----- Module Definition ----
 const module = Type.Module({
@@ -128,7 +124,6 @@ const module = Type.Module({
   [REF_DEFINITIONS.OAuthFlowsObject]: OAuthFlowsObjectSchemaDefinition,
   [REF_DEFINITIONS.ServerVariableObject]: ServerVariableObjectSchemaDefinition,
   OpenApiDocument: OpenApiDocumentSchemaDefinition,
-
 
   // Enforces that all references are included in the module
 })
@@ -169,7 +164,6 @@ export const XMLObjectSchema = module.Import('XMLObject')
 export const DiscriminatorObjectSchema = module.Import('DiscriminatorObject')
 export const OAuthFlowsObjectSchema = module.Import('OAuthFlowsObject')
 export const ServerVariableObjectSchema = module.Import('ServerVariableObject')
-
 
 //  ----- Type re-exports ----
 export type { ExternalDocumentationObject }

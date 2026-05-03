@@ -1,8 +1,7 @@
 import { Type } from '@scalar/typebox'
 
-import { compose } from './compose'
-
 import type { CallbackObject } from './callback'
+import { compose } from './compose'
 import type { ExternalDocumentationObject } from './external-documentation'
 import type { ParameterObject } from './parameter'
 import {
@@ -74,4 +73,4 @@ export type OperationObject = {
   servers?: ServerObject[]
   /** A map of possible out-of band callbacks related to the parent operation. The key is a unique identifier for the Callback Object. Each value in the map is a Callback Object that describes a request that may be initiated by the API provider and the expected responses. */
   callbacks?: Record<string, ReferenceType<CallbackObject>>
-} 
+}

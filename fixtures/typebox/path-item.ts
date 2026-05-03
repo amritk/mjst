@@ -12,7 +12,7 @@ export const PathItemObjectSchemaDefinition = Type.Object({
    *
    * Note: The behavior of $ref with adjacent properties is likely to change in future versions of this specification to bring it into closer alignment with the behavior of the Reference Object.
    */
-  '$ref': Type.Optional(Type.String()),
+  $ref: Type.Optional(Type.String()),
   /** An optional string summary, intended to apply to all operations in this path. */
   summary: Type.Optional(Type.String()),
   /** An optional string description, intended to apply to all operations in this path. CommonMark syntax MAY be used for rich text representation. */
@@ -47,7 +47,7 @@ export type PathItemObject = {
    *
    * Note: The behavior of $ref with adjacent properties is likely to change in future versions of this specification to bring it into closer alignment with the behavior of the Reference Object.
    */
-  '$ref'?: string
+  $ref?: string
   /** An optional string summary, intended to apply to all operations in this path. */
   summary?: string
   /** An optional string description, intended to apply to all operations in this path. CommonMark syntax MAY be used for rich text representation. */

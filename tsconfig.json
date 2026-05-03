@@ -25,11 +25,6 @@
     // Some stricter flags (disabled by default)
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noPropertyAccessFromIndexSignature": true,
-
-    // Workspace package resolution (Bun doesn't symlink workspace packages)
-    "paths": {
-      "@amritk/helpers/*": ["./packages/helpers/src/*"]
-    }
+    "noPropertyAccessFromIndexSignature": true
   }
 }

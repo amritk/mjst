@@ -4,6 +4,26 @@
   "description": "Generate TypeScript parsers and type definitions from JSON Schemas.",
   "module": "./dist/index.js",
   "type": "module",
+  "license": "MIT",
+  "author": "amritk",
+  "keywords": [
+    "json-schema",
+    "openapi",
+    "asyncapi",
+    "typescript",
+    "parser",
+    "code-generation",
+    "mjst"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amritk/mjst.git",
+    "directory": "packages/generate-parsers"
+  },
+  "homepage": "https://github.com/amritk/mjst/tree/main/packages/generate-parsers#readme",
+  "bugs": {
+    "url": "https://github.com/amritk/mjst/issues"
+  },
   "files": [
     "dist"
   ],
@@ -28,7 +48,6 @@
   "dependencies": {
     "@scalar/typebox": "^0.1.3",
     "json-schema-typed": "catalog:",
-    "@amritk/helpers": "workspace:*",
-    "vitest": "^4.1.2"
+    "@amritk/helpers": "workspace:*"
   }
 }

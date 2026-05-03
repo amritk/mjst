@@ -1,5 +1,5 @@
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { hasConst, hasEnum, hasProperties, isObjectSchema, isSchemaObject } from '@amritk/helpers/schema-guards'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 /**
  * Attempts to find a discriminator property that can be used to distinguish between union types.

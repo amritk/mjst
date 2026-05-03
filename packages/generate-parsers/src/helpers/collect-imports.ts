@@ -1,8 +1,8 @@
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from '@amritk/helpers/schema-guards'
 import { refToFilename } from '@amritk/helpers/ref-to-filename'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
+import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from '@amritk/helpers/schema-guards'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 const getImportPathForFilename = (filename: string): string => `./${filename}`
 
@@ -20,13 +20,13 @@ type CollectImportsOptions = {
    * When provided, any $ref that resolves to the same filename is excluded from
    * the import list, preventing a file from importing itself.
    */
-  readonly selfRef?: string
+  readonly selfRef?: string | undefined
   /**
    * The root schema document. When provided, URI refs that cannot be resolved
    * within the root schema's $defs are excluded from the import list, preventing
    * imports for external schemas that were never generated as files.
    */
-  readonly rootSchema?: Record<string, unknown>
+  readonly rootSchema?: Record<string, unknown> | undefined
 }
 
 /**

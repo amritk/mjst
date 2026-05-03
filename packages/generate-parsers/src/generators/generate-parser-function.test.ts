@@ -1,5 +1,6 @@
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'bun:test'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
 import { generateParserFunction } from './generate-parser-function'
 
 describe('generate-parser-function', () => {
@@ -25,7 +26,7 @@ describe('generate-parser-function', () => {
   return {
     ...input,
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
-    ...(_age !== undefined && { age: typeof _age === "number" ? _age : Number(_age) }),
+    ...(_age !== undefined && { age: typeof _age === "number" ? _age : (Number.isFinite(Number(_age)) ? Number(_age) : 0) }),
   } as unknown as UserObject;
 }`,
     )
@@ -47,7 +48,7 @@ describe('generate-parser-function', () => {
   if ((_id === undefined || typeof _id === "number")) return { ...input } as ProductObject;
   return {
     ...input,
-    ...(_id !== undefined && { id: typeof _id === "number" ? _id : Number(_id) }),
+    ...(_id !== undefined && { id: typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0) }),
   } as unknown as ProductObject;
 }`,
     )
@@ -59,7 +60,9 @@ describe('generate-parser-function', () => {
     }
 
     const result = generateParserFunction(schema, 'EmptyObject')
-    expect(result).toBe('export const parseEmptyObject = (input: unknown): EmptyObject => isObject(input) ? { ...input } as EmptyObject : {} as EmptyObject;')
+    expect(result).toBe(
+      'export const parseEmptyObject = (input: unknown): EmptyObject => isObject(input) ? { ...input } as EmptyObject : {} as EmptyObject;',
+    )
   })
 
   it('handles non-object schema with type validation', () => {
@@ -68,7 +71,9 @@ describe('generate-parser-function', () => {
     }
 
     const result = generateParserFunction(schema, 'StringType')
-    expect(result).toBe('export const parseStringType = (input: unknown): StringType => typeof input === "string" ? input as StringType : "" as StringType;')
+    expect(result).toBe(
+      'export const parseStringType = (input: unknown): StringType => typeof input === "string" ? input as StringType : "" as StringType;',
+    )
   })
 
   it('handles schema with required fields', () => {
@@ -96,7 +101,7 @@ describe('generate-parser-function', () => {
   if (typeof _id === "number" && typeof _name === "string" && (_email === undefined || typeof _email === "string")) return { ...input } as UserObject;
   return {
     ...input,
-    id: typeof _id === "number" ? _id : (_id !== undefined ? Number(_id) : 0),
+    id: typeof _id === "number" ? _id : (_id !== undefined ? (Number.isFinite(Number(_id)) ? Number(_id) : 0) : 0),
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
     ...(_email !== undefined && { email: typeof _email === "string" ? _email : String(_email) }),
   } as unknown as UserObject;
@@ -126,7 +131,7 @@ describe('generate-parser-function', () => {
   if (typeof _id === "number" && (_description === undefined || typeof _description === "string")) return { ...input } as ItemObject;
   return {
     ...input,
-    id: typeof _id === "number" ? _id : (_id !== undefined ? Number(_id) : 0),
+    id: typeof _id === "number" ? _id : (_id !== undefined ? (Number.isFinite(Number(_id)) ? Number(_id) : 0) : 0),
     ...(_description !== undefined && { description: typeof _description === "string" ? _description : String(_description) }),
   } as unknown as ItemObject;
 }`,
@@ -355,7 +360,9 @@ describe('generate-parser-function', () => {
 
     const result = generateParserFunction(schema, 'StrictObject')
 
-    expect(result).toBe('export const parseStrictObject = (input: unknown): StrictObject => isObject(input) ? { ...input } as StrictObject : {} as StrictObject;')
+    expect(result).toBe(
+      'export const parseStrictObject = (input: unknown): StrictObject => isObject(input) ? { ...input } as StrictObject : {} as StrictObject;',
+    )
   })
 
   it('handles complex object with multiple property types', () => {
@@ -387,7 +394,7 @@ describe('generate-parser-function', () => {
   if (typeof _id === "number" && typeof _name === "string" && (_tags === undefined || Array.isArray(_tags)) && (_metadata === undefined || isObject(_metadata)) && (_isActive === undefined || typeof _isActive === "boolean")) return { ...input } as ComplexObject;
   return {
     ...input,
-    id: typeof _id === "number" ? _id : (_id !== undefined ? Number(_id) : 0),
+    id: typeof _id === "number" ? _id : (_id !== undefined ? (Number.isFinite(Number(_id)) ? Number(_id) : 0) : 0),
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
     ...(_tags !== undefined && { tags: Array.isArray(_tags) ? _tags : [] }),
     ...(_metadata !== undefined && { metadata: isObject(_metadata) ? _metadata : typeof _metadata === "object" && _metadata !== null ? _metadata : {} }),
@@ -472,7 +479,7 @@ describe('generate-parser-function', () => {
   const _contact = input.contact;
   return {
     ...input,
-    id: typeof input?.id === "number" ? input?.id : (input?.id !== undefined ? Number(input?.id) : 0),
+    id: typeof input?.id === "number" ? input?.id : (input?.id !== undefined ? (Number.isFinite(Number(input?.id)) ? Number(input?.id) : 0) : 0),
     ...(_contact !== undefined && { contact: parseContactObject(_contact) }),
     name: typeof input?.name === "string" ? input?.name : (input?.name !== undefined ? String(input?.name) : ""),
   } as unknown as UserObject;
@@ -549,7 +556,7 @@ describe('generate-parser-function', () => {
   return {
     ...input,
     ...(_contact !== undefined && { contact: parseContactObject(_contact) }),
-    ...(input.age !== undefined && { age: typeof input?.age === "number" ? input?.age : Number(input?.age) }),
+    ...(input.age !== undefined && { age: typeof input?.age === "number" ? input?.age : (Number.isFinite(Number(input?.age)) ? Number(input?.age) : 0) }),
   } as unknown as UserObject;
 }`,
     )
@@ -612,7 +619,7 @@ describe('generate-parser-function', () => {
   if ((_id === undefined || typeof _id === "number")) return { ...input } as MyCustomTypeObject;
   return {
     ...input,
-    ...(_id !== undefined && { id: typeof _id === "number" ? _id : Number(_id) }),
+    ...(_id !== undefined && { id: typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0) }),
   } as unknown as MyCustomTypeObject;
 }`,
     )
@@ -635,7 +642,7 @@ describe('generate-parser-function', () => {
   if ((_id === undefined || typeof _id === "number")) return { ...input } as myCustomTypeObject;
   return {
     ...input,
-    ...(_id !== undefined && { id: typeof _id === "number" ? _id : Number(_id) }),
+    ...(_id !== undefined && { id: typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0) }),
   } as unknown as myCustomTypeObject;
 }`,
     )
@@ -808,7 +815,7 @@ describe('generate-parser-function', () => {
   if ((_id === undefined || typeof _id === "number") && (_name === undefined || typeof _name === "string")) return { ...input } as UserObject;
   return {
     ...input,
-    ...(_id !== undefined && { id: typeof _id === "number" ? _id : Number(_id) }),
+    ...(_id !== undefined && { id: typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0) }),
     ...(_name !== undefined && { name: typeof _name === "string" ? _name : String(_name) }),
   } as unknown as UserObject;
 }`,
@@ -832,7 +839,7 @@ describe('generate-parser-function', () => {
   if ((_id === undefined || typeof _id === "number")) return { ...input } as UserObject;
   return {
     ...input,
-    ...(_id !== undefined && { id: typeof _id === "number" ? _id : Number(_id) }),
+    ...(_id !== undefined && { id: typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0) }),
   } as unknown as UserObject;
 }`,
     )
@@ -858,11 +865,7 @@ describe('generate-parser-function', () => {
     // a simple spread parser since there is nothing to specifically parse.
     const schema: JSONSchema = {
       type: 'object',
-      allOf: [
-        { $ref: '#/$defs/type-apikey' },
-        { $ref: '#/$defs/type-http-bearer' },
-        { $ref: '#/$defs/type-oauth2' },
-      ],
+      allOf: [{ $ref: '#/$defs/type-apikey' }, { $ref: '#/$defs/type-http-bearer' }, { $ref: '#/$defs/type-oauth2' }],
     }
 
     const result = generateParserFunction(schema, 'SecuritySchemeObject', { useRefImports: true })
@@ -1465,7 +1468,11 @@ describe('generate-parser-function', () => {
         name: { description: 'Display name shown to customers.', type: 'string' },
         price: { description: 'Unit price in USD cents (must be non-negative).', type: 'number', minimum: 0 },
         inStock: { description: 'Whether the product is currently available for purchase.', type: 'boolean' },
-        tags: { description: 'Searchable labels associated with the product.', type: 'array', items: { type: 'string' } },
+        tags: {
+          description: 'Searchable labels associated with the product.',
+          type: 'array',
+          items: { type: 'string' },
+        },
       },
       required: ['id', 'name', 'price'],
     }
@@ -1489,7 +1496,7 @@ describe('generate-parser-function', () => {
     ...input,
     id: typeof _id === "string" ? _id : (_id !== undefined ? String(_id) : ""),
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
-    price: typeof _price === "number" && _price >= 0 ? _price : (_price !== undefined ? Number(_price) : 0),
+    price: typeof _price === "number" && _price >= 0 ? _price : (_price !== undefined ? (Number.isFinite(Number(_price)) ? Number(_price) : 0) : 0),
     ...(_inStock !== undefined && { inStock: typeof _inStock === "boolean" ? _inStock : Boolean(_inStock) }),
     ...(_tags !== undefined && { tags: Array.isArray(_tags) ? _tags : [] }),
   } as unknown as Product;
@@ -1519,8 +1526,8 @@ describe('generate-parser-function', () => {
   if ((_page === undefined || typeof _page === "number" && _page >= 1) && (_perPage === undefined || typeof _perPage === "number" && _perPage >= 1 && _perPage <= 100) && (_search === undefined || typeof _search === "string")) return { ...input } as PageParams;
   return {
     ...input,
-    ...(_page !== undefined && { page: typeof _page === "number" && _page >= 1 ? _page : Number(_page) }),
-    ...(_perPage !== undefined && { perPage: typeof _perPage === "number" && _perPage >= 1 && _perPage <= 100 ? _perPage : Number(_perPage) }),
+    ...(_page !== undefined && { page: typeof _page === "number" && _page >= 1 ? _page : (Number.isFinite(Number(_page)) ? Number(_page) : 0) }),
+    ...(_perPage !== undefined && { perPage: typeof _perPage === "number" && _perPage >= 1 && _perPage <= 100 ? _perPage : (Number.isFinite(Number(_perPage)) ? Number(_perPage) : 0) }),
     ...(_search !== undefined && { search: typeof _search === "string" ? _search : String(_search) }),
   } as unknown as PageParams;
 }`,
@@ -1569,9 +1576,9 @@ describe('generate-parser-function', () => {
   if (typeof _latitude === "number" && _latitude >= -90 && _latitude <= 90 && typeof _longitude === "number" && _longitude >= -180 && _longitude <= 180 && (_altitude === undefined || typeof _altitude === "number") && (_label === undefined || typeof _label === "string")) return { ...input } as GeoCoordinate;
   return {
     ...input,
-    latitude: typeof _latitude === "number" && _latitude >= -90 && _latitude <= 90 ? _latitude : (_latitude !== undefined ? Number(_latitude) : 0),
-    longitude: typeof _longitude === "number" && _longitude >= -180 && _longitude <= 180 ? _longitude : (_longitude !== undefined ? Number(_longitude) : 0),
-    ...(_altitude !== undefined && { altitude: typeof _altitude === "number" ? _altitude : Number(_altitude) }),
+    latitude: typeof _latitude === "number" && _latitude >= -90 && _latitude <= 90 ? _latitude : (_latitude !== undefined ? (Number.isFinite(Number(_latitude)) ? Number(_latitude) : 0) : 0),
+    longitude: typeof _longitude === "number" && _longitude >= -180 && _longitude <= 180 ? _longitude : (_longitude !== undefined ? (Number.isFinite(Number(_longitude)) ? Number(_longitude) : 0) : 0),
+    ...(_altitude !== undefined && { altitude: typeof _altitude === "number" ? _altitude : (Number.isFinite(Number(_altitude)) ? Number(_altitude) : 0) }),
     ...(_label !== undefined && { label: typeof _label === "string" ? _label : String(_label) }),
   } as unknown as GeoCoordinate;
 }`,

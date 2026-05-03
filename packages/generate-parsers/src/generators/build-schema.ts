@@ -1,6 +1,4 @@
 import { join } from 'node:path'
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { applySchemaExtensions } from '#helpers/apply-schema-extensions'
 import { buildDynamicRefMap } from '@amritk/helpers/build-dynamic-ref-map'
 import { extractRefs } from '@amritk/helpers/extract-refs'
 import { refToFilename } from '@amritk/helpers/ref-to-filename'
@@ -8,6 +6,8 @@ import { refToName } from '@amritk/helpers/ref-to-name'
 import { resolveDynamicRefs } from '@amritk/helpers/resolve-dynamic-refs'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { upgradeDraft07Schema } from '@amritk/helpers/upgrade-draft07-schema'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+import { applySchemaExtensions } from '#helpers/apply-schema-extensions'
 import type { SchemaExtensions } from '#types/schema-extensions'
 
 import { generateFile } from './generate-files'
@@ -174,9 +174,7 @@ export const buildSchema = async (
     const typeName = refToName(ref)
     const filename = refToFilename(ref)
     const processedSchema = resolveDynamicRefs(resolvedSchema as JSONSchema, dynamicRefMap)
-    const extendedSchema = extensions
-      ? applySchemaExtensions(processedSchema, filename, extensions)
-      : processedSchema
+    const extendedSchema = extensions ? applySchemaExtensions(processedSchema, filename, extensions) : processedSchema
     const content = generateFile(extendedSchema, typeName, {
       typesOnly: typesOnly ?? false,
       selfRef: ref,

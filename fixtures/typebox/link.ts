@@ -1,7 +1,6 @@
 import { Type } from '@scalar/typebox'
 
 import { ServerObjectRef } from './ref-definitions'
-
 import type { ServerObject } from './server'
 
 /**

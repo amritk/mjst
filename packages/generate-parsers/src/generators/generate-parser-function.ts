@@ -1,5 +1,3 @@
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { getDefaultValue } from '#helpers/get-default-value'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { safeAccessor, safeKey } from '@amritk/helpers/safe-accessor'
 import {
@@ -28,6 +26,9 @@ import {
   isObjectSchema,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+import { getDefaultValue } from '#helpers/get-default-value'
+
 import { generateValidationExpression } from './generate-validation-expression'
 
 /**
@@ -501,11 +502,7 @@ const generatePropertyTypeCheck = (varName: string, schema: JSONSchema): string 
  * - Property is used in both fast-path and slow-path
  * - Property has complex validation that would benefit from caching
  */
-const shouldCacheVariable = (
-  propSchema: JSONSchema,
-  canFastPath: boolean,
-  useRefImports: boolean,
-): boolean => {
+const shouldCacheVariable = (propSchema: JSONSchema, canFastPath: boolean, useRefImports: boolean): boolean => {
   // Always cache if we have a fast path (used in both fast and slow paths)
   if (canFastPath) {
     return true
@@ -524,16 +521,17 @@ const shouldCacheVariable = (
   if (isSchemaObject(propSchema)) {
     const hasMultipleChecks =
       (hasPattern(propSchema) ? 1 : 0) +
-      (hasMinLength(propSchema) ? 1 : 0) +
-      (hasMaxLength(propSchema) ? 1 : 0) +
-      (hasMinimum(propSchema) ? 1 : 0) +
-      (hasMaximum(propSchema) ? 1 : 0) +
-      (hasExclusiveMinimum(propSchema) ? 1 : 0) +
-      (hasExclusiveMaximum(propSchema) ? 1 : 0) +
-      (hasMultipleOf(propSchema) ? 1 : 0) +
-      (hasMinItems(propSchema) ? 1 : 0) +
-      (hasMaxItems(propSchema) ? 1 : 0) +
-      (hasUniqueItems(propSchema) ? 1 : 0) > 1
+        (hasMinLength(propSchema) ? 1 : 0) +
+        (hasMaxLength(propSchema) ? 1 : 0) +
+        (hasMinimum(propSchema) ? 1 : 0) +
+        (hasMaximum(propSchema) ? 1 : 0) +
+        (hasExclusiveMinimum(propSchema) ? 1 : 0) +
+        (hasExclusiveMaximum(propSchema) ? 1 : 0) +
+        (hasMultipleOf(propSchema) ? 1 : 0) +
+        (hasMinItems(propSchema) ? 1 : 0) +
+        (hasMaxItems(propSchema) ? 1 : 0) +
+        (hasUniqueItems(propSchema) ? 1 : 0) >
+      1
 
     if (hasMultipleChecks) {
       return true
@@ -581,11 +579,7 @@ const generateObjectParser = (schema: JSONSchema, typeName: string, useRefImport
     useRefImports &&
     isSchemaObject(schema) &&
     hasAllOf(schema) &&
-    schema.allOf.some(
-      (entry) =>
-        isSchemaObject(entry) &&
-        hasRef(entry),
-    )
+    schema.allOf.some((entry) => isSchemaObject(entry) && hasRef(entry))
 
   let canFastPath = !hasAllOfRefParsers
   const fastPathChecks: string[] = []
@@ -777,7 +771,7 @@ const generateCombinedObjectParser = (schema: JSONSchema, typeName: string, useR
   const ref = (patternSchema as { $ref: string }).$ref
   const parserName = generateParserName(refToName(ref))
   const assignmentCode = `(result as Record<string, unknown>)[key] = ${parserName}(value);`
-  
+
   const escapedPattern = escapeRegexPattern(pattern)
 
   const inputSpread = '    ...input,'

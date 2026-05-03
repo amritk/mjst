@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+
 import { resolveDynamicRefs } from './resolve-dynamic-refs'
 
 describe('resolve-dynamic-refs', () => {

@@ -1,5 +1,6 @@
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'bun:test'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
 import { applySchemaExtensions } from './apply-schema-extensions'
 
 describe('apply-schema-extensions', () => {
@@ -180,7 +181,7 @@ describe('apply-schema-extensions', () => {
       },
     }
 
-    const originalProperties = { ...(schema as Record<string, unknown>)['properties'] as Record<string, unknown> }
+    const originalProperties = { ...((schema as Record<string, unknown>)['properties'] as Record<string, unknown>) }
 
     applySchemaExtensions(schema, 'parameter', {
       parameter: {

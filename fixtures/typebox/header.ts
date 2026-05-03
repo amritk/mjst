@@ -1,7 +1,6 @@
 import { Type } from '@scalar/typebox'
 
 import { compose } from './compose'
-
 import type { ExampleObject } from './example'
 import type { MediaTypeObject } from './media-type'
 import { ExampleObjectRef, MediaTypeObjectRef, SchemaObjectRef } from './ref-definitions'

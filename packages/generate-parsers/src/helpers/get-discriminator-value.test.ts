@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+
 import { getDiscriminatorValue } from './get-discriminator-value'
 
 describe('get-discriminator-value', () => {

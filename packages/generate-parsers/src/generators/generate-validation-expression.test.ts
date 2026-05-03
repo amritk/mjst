@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+
 import { generateValidationExpression } from './generate-validation-expression'
 
 describe('generate-validation-expression', () => {
@@ -433,7 +434,7 @@ describe('generate-validation-expression', () => {
     const result = generateValidationExpression('age', schema, '0', true)
 
     expect(result).toBe(
-      'typeof input?.age === "number" ? input?.age : (input?.age !== undefined ? (Number.isFinite(Number(input?.age)) ? Number(input?.age) : 0) : 0)'
+      'typeof input?.age === "number" ? input?.age : (input?.age !== undefined ? (Number.isFinite(Number(input?.age)) ? Number(input?.age) : 0) : 0)',
     )
   })
 
@@ -442,7 +443,7 @@ describe('generate-validation-expression', () => {
     const result = generateValidationExpression('count', schema, '0', true)
 
     expect(result).toBe(
-      'typeof input?.count === "number" ? input?.count : (input?.count !== undefined ? (Number.isFinite(Number(input?.count)) ? Number(input?.count) : 0) : 0)'
+      'typeof input?.count === "number" ? input?.count : (input?.count !== undefined ? (Number.isFinite(Number(input?.count)) ? Number(input?.count) : 0) : 0)',
     )
   })
 
@@ -451,7 +452,7 @@ describe('generate-validation-expression', () => {
     const result = generateValidationExpression('age', schema, '0', false)
 
     expect(result).toBe(
-      'typeof input?.age === "number" ? input?.age : (input?.age !== undefined ? (Number.isFinite(Number(input?.age)) ? Number(input?.age) : 0) : undefined)'
+      'typeof input?.age === "number" ? input?.age : (input?.age !== undefined ? (Number.isFinite(Number(input?.age)) ? Number(input?.age) : 0) : undefined)',
     )
   })
 
@@ -460,7 +461,7 @@ describe('generate-validation-expression', () => {
     const result = generateValidationExpression('age', schema, '0', true, undefined, undefined, undefined, true)
 
     expect(result).toBe(
-      'typeof input?.age === "number" ? input?.age : (Number.isFinite(Number(input?.age)) ? Number(input?.age) : 0)'
+      'typeof input?.age === "number" ? input?.age : (Number.isFinite(Number(input?.age)) ? Number(input?.age) : 0)',
     )
   })
 
@@ -699,7 +700,16 @@ describe('generate-validation-expression', () => {
 
   it('removes redundant check for boolean coercion when knownNotUndefined is true', () => {
     const schema = { type: 'boolean' as const }
-    const result = generateValidationExpression('isActive', schema, 'false', true, undefined, undefined, undefined, true)
+    const result = generateValidationExpression(
+      'isActive',
+      schema,
+      'false',
+      true,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    )
 
     // Should not have nested undefined check
     expect(result).not.toContain('!== undefined ? Boolean')

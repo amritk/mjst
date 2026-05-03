@@ -2,10 +2,7 @@
  * Navigates a JSON Pointer fragment (e.g. `/$defs/foo` or `/definitions/bar`)
  * through a schema object, returning the target or undefined if not found.
  */
-const navigatePointer = (
-  pointer: string,
-  schema: Record<string, unknown>,
-): Record<string, unknown> | undefined => {
+const navigatePointer = (pointer: string, schema: Record<string, unknown>): Record<string, unknown> | undefined => {
   const parts = pointer.split('/').filter(Boolean)
   let current = schema
 

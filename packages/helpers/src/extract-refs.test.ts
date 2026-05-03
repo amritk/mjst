@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+
 import { extractRefs } from './extract-refs'
 
 describe('extract-refs', () => {
@@ -59,9 +60,7 @@ describe('extract-refs', () => {
 
     const refs = extractRefs(schema)
 
-    expect(refs).toEqual(
-      new Set(['#/$defs/base', '#/$defs/option1', '#/$defs/option2', '#/$defs/choice1']),
-    )
+    expect(refs).toEqual(new Set(['#/$defs/base', '#/$defs/option1', '#/$defs/option2', '#/$defs/choice1']))
   })
 
   it('extracts refs from additionalProperties', () => {

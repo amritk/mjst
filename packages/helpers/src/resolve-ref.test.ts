@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+
 import { resolveRef } from './resolve-ref'
 
 describe('resolveRef', () => {

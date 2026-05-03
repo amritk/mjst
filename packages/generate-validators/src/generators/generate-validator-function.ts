@@ -1,16 +1,14 @@
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { refToName } from '@amritk/helpers/ref-to-name'
-import { safeKey } from '@amritk/helpers/safe-accessor'
 import {
   hasAdditionalProperties,
   hasEnum,
   hasExclusiveMaximum,
   hasExclusiveMinimum,
   hasItems,
-  hasMaxLength,
   hasMaximum,
-  hasMinLength,
+  hasMaxLength,
   hasMinimum,
+  hasMinLength,
   hasMultipleOf,
   hasOneOf,
   hasPattern,
@@ -21,6 +19,7 @@ import {
   isObjectSchema,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 /**
  * Derives the validator function name from a type name.
@@ -61,11 +60,7 @@ const wrongTypeCondition = (accessor: string, type: string): string => {
  * Generates validation lines for a single property in an object schema.
  * Handles $ref delegation, enum checks, type checks, and string/number constraints.
  */
-const generatePropertyChecks = (
-  key: string,
-  propSchema: JSONSchema,
-  isRequired: boolean,
-): string[] => {
+const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired: boolean): string[] => {
   if (!isSchemaObject(propSchema)) return []
 
   const raw = `obj[${JSON.stringify(key)}]`
@@ -141,12 +136,16 @@ const generatePropertyChecks = (
       }
       if (hasMinLength(propSchema)) {
         lines.push(`  if (typeof ${raw} === 'string' && ${raw}.length < ${propSchema.minLength}) {`)
-        lines.push(`    errors.push({ message: 'must have at least ${propSchema.minLength} characters', path: ${path} })`)
+        lines.push(
+          `    errors.push({ message: 'must have at least ${propSchema.minLength} characters', path: ${path} })`,
+        )
         lines.push(`  }`)
       }
       if (hasMaxLength(propSchema)) {
         lines.push(`  if (typeof ${raw} === 'string' && ${raw}.length > ${propSchema.maxLength}) {`)
-        lines.push(`    errors.push({ message: 'must have at most ${propSchema.maxLength} characters', path: ${path} })`)
+        lines.push(
+          `    errors.push({ message: 'must have at most ${propSchema.maxLength} characters', path: ${path} })`,
+        )
         lines.push(`  }`)
       }
     }
@@ -199,7 +198,9 @@ const generatePropertyChecks = (
           lines.push(`  if (Array.isArray(${raw})) {`)
           lines.push(`    for (let _i = 0; _i < ${raw}.length; _i++) {`)
           lines.push(`      const _item = ${raw}[_i]`)
-          lines.push(`      if (${itemWrong}) errors.push({ message: 'items must be ${itemLabel}', path: \`${path.slice(1, -1)}/${key}/\${_i}\` })`)
+          lines.push(
+            `      if (${itemWrong}) errors.push({ message: 'items must be ${itemLabel}', path: \`${path.slice(1, -1)}/${key}/\${_i}\` })`,
+          )
           lines.push(`    }`)
           lines.push(`  }`)
         }
@@ -229,7 +230,11 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string): string =
   }
 
   // additionalProperties with a $ref schema validates all extra keys
-  if (hasAdditionalProperties(schema) && isSchemaObject(schema.additionalProperties) && hasRef(schema.additionalProperties)) {
+  if (
+    hasAdditionalProperties(schema) &&
+    isSchemaObject(schema.additionalProperties) &&
+    hasRef(schema.additionalProperties)
+  ) {
     const vRefName = validatorName(refToName(schema.additionalProperties.$ref))
     propertyLines.push(`  for (const _key of Object.keys(obj)) {`)
     propertyLines.push(`    if (${JSON.stringify(Object.keys(properties))}.includes(_key)) continue`)
@@ -261,11 +266,9 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string): string =
   const vName = validatorName(typeName)
 
   if (!isSchemaObject(schema)) {
-    return [
-      `export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`,
-      `  return true`,
-      `}`,
-    ].join('\n')
+    return [`export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`, `  return true`, `}`].join(
+      '\n',
+    )
   }
 
   // Top-level $ref — delegate entirely
@@ -322,17 +325,23 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string): string =
     if (t === 'string') {
       if (hasPattern(schema)) {
         constraintLines.push(`  if (typeof input === 'string' && !/${schema.pattern}/.test(input)) {`)
-        constraintLines.push(`    return { valid: false, errors: [{ message: 'must match pattern ${schema.pattern}', path: _path }] }`)
+        constraintLines.push(
+          `    return { valid: false, errors: [{ message: 'must match pattern ${schema.pattern}', path: _path }] }`,
+        )
         constraintLines.push(`  }`)
       }
       if (hasMinLength(schema)) {
         constraintLines.push(`  if (typeof input === 'string' && input.length < ${schema.minLength}) {`)
-        constraintLines.push(`    return { valid: false, errors: [{ message: 'must have at least ${schema.minLength} characters', path: _path }] }`)
+        constraintLines.push(
+          `    return { valid: false, errors: [{ message: 'must have at least ${schema.minLength} characters', path: _path }] }`,
+        )
         constraintLines.push(`  }`)
       }
       if (hasMaxLength(schema)) {
         constraintLines.push(`  if (typeof input === 'string' && input.length > ${schema.maxLength}) {`)
-        constraintLines.push(`    return { valid: false, errors: [{ message: 'must have at most ${schema.maxLength} characters', path: _path }] }`)
+        constraintLines.push(
+          `    return { valid: false, errors: [{ message: 'must have at most ${schema.maxLength} characters', path: _path }] }`,
+        )
         constraintLines.push(`  }`)
       }
     }
@@ -349,18 +358,14 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string): string =
           `  return true`,
           `}`,
         ].join('\n')
-      : [
-          `export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`,
-          `  return true`,
-          `}`,
-        ].join('\n')
+      : [`export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`, `  return true`, `}`].join(
+          '\n',
+        )
   }
 
-  return [
-    `export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`,
-    `  return true`,
-    `}`,
-  ].join('\n')
+  return [`export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`, `  return true`, `}`].join(
+    '\n',
+  )
 }
 
 /**
