@@ -8,6 +8,7 @@
 ![license](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)
 ![JSON Schema](https://img.shields.io/badge/JSON%20Schema-2020--12-f97316?style=flat-square)
 ![bun](https://img.shields.io/badge/bun-required-FBF0DF?style=flat-square&logo=bun&logoColor=000000)
+![vibe coded](https://img.shields.io/badge/vibe%20coded-86%25-a855f7?style=flat-square)
 
 </div>
 
@@ -29,18 +30,18 @@ The CLI (`mjst`) is the primary entry point; the underlying generators are also 
 
 | Package | Description |
 |---|---|
-| [`mjst-cli`](./packages/cli) | Command-line interface — generates parsers, validators, and types from a schema |
-| [`generate-parsers`](./packages/generate-parsers) | Programmatic API for parser + type generation |
-| [`generate-validators`](./packages/generate-validators) | Programmatic API for validator generation |
-| [`generate-markdown`](./packages/generate-markdown) | Programmatic API for markdown documentation generation |
-| [`mjst-helpers`](./packages/helpers) | Shared runtime helpers used by generated code |
+| [`@amritk/cli`](./packages/cli) | Command-line interface — generates parsers, validators, and types from a schema |
+| [`@amritk/generate-parsers`](./packages/generate-parsers) | Programmatic API for parser + type generation |
+| [`@amritk/generate-validators`](./packages/generate-validators) | Programmatic API for validator generation |
+| [`@amritk/generate-markdown`](./packages/generate-markdown) | Programmatic API for markdown documentation generation |
+| [`@amritk/helpers`](./packages/helpers) | Shared runtime helpers used by generated code |
 
 ## Quick start
 
 Install the CLI:
 
 ```bash
-bun add -d mjst-cli
+bun add -d @amritk/cli
 ```
 
 Generate parsers and types from a schema:
