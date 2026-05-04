@@ -427,12 +427,29 @@ const toVarName = (key: string): string => {
 }
 
 /**
+ * Returns the shape-predicate function name for a given type name.
+ * The predicate is generated alongside each parser and tells callers
+ * whether `input` is already in the shape produced by the parser's fast path.
+ */
+const shapeValidatorName = (typeName: string): string => `validate${typeName}Shape`
+
+/**
  * Generates a fast-path type check expression for a property.
  * Returns null if the schema is too complex for a simple type check
- * (e.g. has unions, refs, enums that require more elaborate validation).
+ * (e.g. has unions, enums that require more elaborate validation).
+ *
+ * When `useRefImports` is true, $ref properties (and arrays of $refs) are
+ * checked by calling the imported shape predicate, allowing parent parsers
+ * to fast-path through nested ref types without recursing into their parsers.
  */
-const generatePropertyTypeCheck = (varName: string, schema: JSONSchema): string | null => {
+const generatePropertyTypeCheck = (varName: string, schema: JSONSchema, useRefImports: boolean): string | null => {
   if (!isSchemaObject(schema)) return null
+
+  // $ref via shape predicate (deep fast-path through nested types).
+  if (useRefImports && hasRef(schema)) {
+    const refName = refToName((schema as { $ref: string }).$ref)
+    return `${shapeValidatorName(refName)}(${varName})`
+  }
 
   // Skip fast path for complex schemas that need more elaborate validation
   if (
@@ -447,6 +464,18 @@ const generatePropertyTypeCheck = (varName: string, schema: JSONSchema): string 
   }
 
   if (!hasType(schema)) return null
+
+  // Array of $refs: each item must satisfy the imported shape predicate.
+  if (
+    useRefImports &&
+    schema.type === 'array' &&
+    hasItems(schema) &&
+    isSchemaObject(schema.items) &&
+    hasRef(schema.items)
+  ) {
+    const refName = refToName((schema.items as { $ref: string }).$ref)
+    return `Array.isArray(${varName}) && ${varName}.every(${shapeValidatorName(refName)})`
+  }
 
   const checks: string[] = []
 
@@ -498,48 +527,14 @@ const generatePropertyTypeCheck = (varName: string, schema: JSONSchema): string 
 
 /**
  * Determines if a property needs a local variable or can be inlined.
- * Variables are needed when:
- * - Property is used in both fast-path and slow-path
- * - Property has complex validation that would benefit from caching
+ * Schema-object properties are always cached: the slow-path ternary chain
+ * reads each value 3-4x (typeof check, valid branch, undefined check, coerce),
+ * so a single hoisted load is strictly cheaper than the inlined optional chain.
  */
-const shouldCacheVariable = (propSchema: JSONSchema, canFastPath: boolean, useRefImports: boolean): boolean => {
-  // Always cache if we have a fast path (used in both fast and slow paths)
-  if (canFastPath) {
-    return true
-  }
-
-  // Cache for ref imports (used multiple times in validation)
-  if (
-    shouldUseRefImport(propSchema, useRefImports) ||
-    shouldUseArrayRefImport(propSchema, useRefImports) ||
-    shouldUseRecordRefImport(propSchema, useRefImports)
-  ) {
-    return true
-  }
-
-  // Cache for complex schemas with multiple checks
-  if (isSchemaObject(propSchema)) {
-    const hasMultipleChecks =
-      (hasPattern(propSchema) ? 1 : 0) +
-        (hasMinLength(propSchema) ? 1 : 0) +
-        (hasMaxLength(propSchema) ? 1 : 0) +
-        (hasMinimum(propSchema) ? 1 : 0) +
-        (hasMaximum(propSchema) ? 1 : 0) +
-        (hasExclusiveMinimum(propSchema) ? 1 : 0) +
-        (hasExclusiveMaximum(propSchema) ? 1 : 0) +
-        (hasMultipleOf(propSchema) ? 1 : 0) +
-        (hasMinItems(propSchema) ? 1 : 0) +
-        (hasMaxItems(propSchema) ? 1 : 0) +
-        (hasUniqueItems(propSchema) ? 1 : 0) >
-      1
-
-    if (hasMultipleChecks) {
-      return true
-    }
-  }
-
-  // Otherwise, inline it
-  return false
+const shouldCacheVariable = (propSchema: JSONSchema, _canFastPath: boolean, _useRefImports: boolean): boolean => {
+  // Non-schema-object properties (true/false JSON Schema literals) generate
+  // `undefined` with no value access, so caching would be wasted.
+  return isSchemaObject(propSchema)
 }
 
 /**
@@ -591,14 +586,12 @@ const generateObjectParser = (schema: JSONSchema, typeName: string, useRefImport
 
     // Check if this property can participate in fast path
     if (canFastPath) {
-      if (
-        shouldUseRefImport(propSchema, useRefImports) ||
-        shouldUseArrayRefImport(propSchema, useRefImports) ||
-        shouldUseRecordRefImport(propSchema, useRefImports)
-      ) {
+      // Records of refs require iterating every value to check shape — too
+      // expensive to inline into the parser's fast path. Disable.
+      if (shouldUseRecordRefImport(propSchema, useRefImports)) {
         canFastPath = false
       } else {
-        const check = generatePropertyTypeCheck(varName, propSchema)
+        const check = generatePropertyTypeCheck(varName, propSchema, useRefImports)
         if (check === null) {
           canFastPath = false
         } else {
@@ -1167,4 +1160,82 @@ export const generateParserFunction = (
   options?: GenerateParserOptions,
 ): string => {
   return selectParserStrategy(schema, typeName, options)
+}
+
+/**
+ * Returns the predicate function name for a generated shape validator.
+ * @example shapeValidatorFunctionName('CustomerObject') // 'validateCustomerObjectShape'
+ */
+export const shapeValidatorFunctionName = (typeName: string): string => shapeValidatorName(typeName)
+
+/**
+ * Generates a `validate{TypeName}Shape(input)` predicate that returns true
+ * iff `input` already matches the shape produced by the parser's fast path —
+ * i.e. the parser would return `{ ...input } as TypeName` without coercion.
+ *
+ * Parents call this predicate to fast-path through nested ref properties
+ * (and arrays of refs) without recursing into their parser.
+ *
+ * Returns a stub that always returns `false` for schemas that cannot be
+ * predicated (composition, conditionals, pattern properties, complex refs
+ * in additionalProperties). The stub is safe: parents calling it will fall
+ * through to the slow path, matching the pre-deep-fast-path behavior.
+ */
+export const generateShapeValidator = (schema: JSONSchema, typeName: string, useRefImports: boolean): string => {
+  const fnName = shapeValidatorName(typeName)
+  const stub = `export const ${fnName} = (_input: unknown): boolean => false;`
+
+  if (!isSchemaObject(schema)) return stub
+  if (!hasProperties(schema)) return stub
+
+  // Composition / conditional schemas can match in many shapes — bail.
+  if (
+    hasOneOf(schema) ||
+    hasAnyOf(schema) ||
+    hasAllOf(schema) ||
+    'not' in schema ||
+    'patternProperties' in schema ||
+    'if' in schema ||
+    'then' in schema ||
+    'else' in schema
+  ) {
+    return stub
+  }
+
+  const properties = Object.entries((schema as { properties: Record<string, JSONSchema> }).properties)
+  const checks: string[] = []
+
+  for (const [key, propSchema] of properties) {
+    // Records of refs require iterating every value — too expensive for the fast path.
+    if (shouldUseRecordRefImport(propSchema, useRefImports)) {
+      return stub
+    }
+
+    const accessor = safeAccessor('input', key)
+    const isRequired = isPropertyRequired(key, schema)
+    const check = generatePropertyTypeCheck(accessor, propSchema, useRefImports)
+    if (check === null) {
+      return stub
+    }
+
+    if (isRequired) {
+      checks.push(check)
+    } else {
+      checks.push(`(${accessor} === undefined || ${check})`)
+    }
+  }
+
+  if (checks.length === 0) {
+    return `export const ${fnName} = (input: unknown): boolean => isObject(input);`
+  }
+
+  let body = checks[0] as string
+  for (let i = 1; i < checks.length; i++) {
+    body += '\n    && ' + checks[i]
+  }
+
+  return `export const ${fnName} = (input: unknown): boolean => {
+  if (!isObject(input)) return false;
+  return ${body};
+};`
 }

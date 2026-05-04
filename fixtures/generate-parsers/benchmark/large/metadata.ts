@@ -5,6 +5,12 @@ export type MetadataObject = {
   notes?: string;
 };
 
+export const validateMetadataObjectShape = (input: unknown): boolean => {
+  if (!isObject(input)) return false;
+  return Array.isArray(input.tags)
+    && (input.notes === undefined || typeof input.notes === "string");
+};
+
 export const parseMetadataObject = (input: unknown): MetadataObject => {
   if (!isObject(input)) return {
         tags: [],

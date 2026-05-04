@@ -3,7 +3,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { collectHelpers } from '#helpers/collect-helpers'
 import { collectImports } from '#helpers/collect-imports'
 
-import { generateParserFunction } from './generate-parser-function'
+import { generateParserFunction, generateShapeValidator } from './generate-parser-function'
 
 /**
  * Options for controlling what gets generated in a file.
@@ -79,7 +79,9 @@ export const generateFile = (schema: JSONSchema, typeName: string, options?: Gen
   }
 
   const parserFunction = generateParserFunction(schema, typeName, { useRefImports: true })
-  const imports = [...collectImports(schema, { selfRef, rootSchema }), ...collectHelpers(parserFunction)]
+  const shapeValidator = generateShapeValidator(schema, typeName, true)
+  const combinedFunctions = `${shapeValidator}\n\n${parserFunction}`
+  const imports = [...collectImports(schema, { selfRef, rootSchema }), ...collectHelpers(combinedFunctions)]
 
   // Build file output using string concatenation instead of array join for performance
   let result = ''
@@ -92,5 +94,5 @@ export const generateFile = (schema: JSONSchema, typeName: string, options?: Gen
     result += '\n\n'
   }
 
-  return result + typeDefinition + '\n\n' + parserFunction
+  return result + typeDefinition + '\n\n' + combinedFunctions
 }

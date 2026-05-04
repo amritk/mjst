@@ -5,6 +5,12 @@ export type AttributeObject = {
   value: string;
 };
 
+export const validateAttributeObjectShape = (input: unknown): boolean => {
+  if (!isObject(input)) return false;
+  return typeof input.name === "string"
+    && typeof input.value === "string";
+};
+
 export const parseAttributeObject = (input: unknown): AttributeObject => {
   if (!isObject(input)) return {
         name: "",

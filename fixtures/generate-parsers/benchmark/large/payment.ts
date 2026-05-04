@@ -7,6 +7,14 @@ export type PaymentObject = {
   paidAt: string;
 };
 
+export const validatePaymentObjectShape = (input: unknown): boolean => {
+  if (!isObject(input)) return false;
+  return typeof input.method === "string"
+    && typeof input.transactionId === "string"
+    && typeof input.status === "string"
+    && typeof input.paidAt === "string";
+};
+
 export const parsePaymentObject = (input: unknown): PaymentObject => {
   if (!isObject(input)) return {
         method: "",

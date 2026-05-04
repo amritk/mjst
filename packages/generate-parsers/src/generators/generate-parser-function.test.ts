@@ -152,9 +152,10 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseMixedObject = (input: unknown): MixedObject => {
   if (!isObject(input)) return {} as MixedObject;
+  const _validProp = input.validProp;
   return {
     ...input,
-    ...(input.validProp !== undefined && { validProp: typeof input?.validProp === "string" ? input?.validProp : String(input?.validProp) }),
+    ...(_validProp !== undefined && { validProp: typeof _validProp === "string" ? _validProp : String(_validProp) }),
   } as unknown as MixedObject;
 }`,
     )
@@ -173,9 +174,10 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseUserObject = (input: unknown): UserObject => {
   if (!isObject(input)) return {} as UserObject;
+  const _contact = input.contact;
   return {
     ...input,
-    ...(input.contact !== undefined && { contact: input?.contact ?? undefined }),
+    ...(_contact !== undefined && { contact: _contact ?? undefined }),
   } as unknown as UserObject;
 }`,
     )
@@ -198,6 +200,7 @@ describe('generate-parser-function', () => {
         contact: parseContactObject(undefined),
       };
   const _contact = input.contact;
+  if (validateContactObjectShape(_contact)) return { ...input } as UserObject;
   return {
     ...input,
     contact: parseContactObject(_contact),
@@ -220,6 +223,7 @@ describe('generate-parser-function', () => {
       `export const parseUserObject = (input: unknown): UserObject => {
   if (!isObject(input)) return {} as UserObject;
   const _contact = input.contact;
+  if ((_contact === undefined || validateContactObjectShape(_contact))) return { ...input } as UserObject;
   return {
     ...input,
     ...(_contact !== undefined && { contact: parseContactObject(_contact) }),
@@ -248,6 +252,7 @@ describe('generate-parser-function', () => {
         contacts: [],
       };
   const _contacts = input.contacts;
+  if (Array.isArray(_contacts) && _contacts.every(validateContactObjectShape)) return { ...input } as UserObject;
   return {
     ...input,
     contacts: validateArray(_contacts, parseContactObject),
@@ -273,6 +278,7 @@ describe('generate-parser-function', () => {
       `export const parseUserObject = (input: unknown): UserObject => {
   if (!isObject(input)) return {} as UserObject;
   const _contacts = input.contacts;
+  if ((_contacts === undefined || Array.isArray(_contacts) && _contacts.every(validateContactObjectShape))) return { ...input } as UserObject;
   return {
     ...input,
     ...(_contacts !== undefined && { contacts: validateArray(_contacts, parseContactObject) }),
@@ -418,6 +424,7 @@ describe('generate-parser-function', () => {
       `export const parseApiSpecObject = (input: unknown): ApiSpecObject => {
   if (!isObject(input)) return {} as ApiSpecObject;
   const _externalDoc = input.externalDoc;
+  if ((_externalDoc === undefined || validateExternalDocumentationObjectShape(_externalDoc))) return { ...input } as ApiSpecObject;
   return {
     ...input,
     ...(_externalDoc !== undefined && { externalDoc: parseExternalDocumentationObject(_externalDoc) }),
@@ -447,6 +454,7 @@ describe('generate-parser-function', () => {
   const _contact = input.contact;
   const _address = input.address;
   const _company = input.company;
+  if (validateContactObjectShape(_contact) && (_address === undefined || validateAddressObjectShape(_address)) && (_company === undefined || validateCompanyObjectShape(_company))) return { ...input } as UserObject;
   return {
     ...input,
     contact: parseContactObject(_contact),
@@ -476,12 +484,15 @@ describe('generate-parser-function', () => {
         id: 0,
         name: "",
       };
+  const _id = input.id;
   const _contact = input.contact;
+  const _name = input.name;
+  if (typeof _id === "number" && (_contact === undefined || validateContactObjectShape(_contact)) && typeof _name === "string") return { ...input } as UserObject;
   return {
     ...input,
-    id: typeof input?.id === "number" ? input?.id : (input?.id !== undefined ? (Number.isFinite(Number(input?.id)) ? Number(input?.id) : 0) : 0),
+    id: typeof _id === "number" ? _id : (_id !== undefined ? (Number.isFinite(Number(_id)) ? Number(_id) : 0) : 0),
     ...(_contact !== undefined && { contact: parseContactObject(_contact) }),
-    name: typeof input?.name === "string" ? input?.name : (input?.name !== undefined ? String(input?.name) : ""),
+    name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
   } as unknown as UserObject;
 }`,
     )
@@ -553,10 +564,12 @@ describe('generate-parser-function', () => {
       `export const parseUserObject = (input: unknown): UserObject => {
   if (!isObject(input)) return {} as UserObject;
   const _contact = input.contact;
+  const _age = input.age;
+  if ((_contact === undefined || validateContactObjectShape(_contact)) && (_age === undefined || typeof _age === "number")) return { ...input } as UserObject;
   return {
     ...input,
     ...(_contact !== undefined && { contact: parseContactObject(_contact) }),
-    ...(input.age !== undefined && { age: typeof input?.age === "number" ? input?.age : (Number.isFinite(Number(input?.age)) ? Number(input?.age) : 0) }),
+    ...(_age !== undefined && { age: typeof _age === "number" ? _age : (Number.isFinite(Number(_age)) ? Number(_age) : 0) }),
   } as unknown as UserObject;
 }`,
     )
@@ -756,6 +769,7 @@ describe('generate-parser-function', () => {
       `export const parseUserObject = (input: unknown): UserObject => {
   if (!isObject(input)) return {} as UserObject;
   const _nested = input.nested;
+  if ((_nested === undefined || validateTypeObjectShape(_nested))) return { ...input } as UserObject;
   return {
     ...input,
     ...(_nested !== undefined && { nested: parseTypeObject(_nested) }),
@@ -786,6 +800,7 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {} as UserObject;
   const _contacts = input.contacts;
   const _addresses = input.addresses;
+  if ((_contacts === undefined || Array.isArray(_contacts) && _contacts.every(validateContactObjectShape)) && (_addresses === undefined || Array.isArray(_addresses) && _addresses.every(validateAddressObjectShape))) return { ...input } as UserObject;
   return {
     ...input,
     ...(_contacts !== undefined && { contacts: validateArray(_contacts, parseContactObject) }),
@@ -1059,6 +1074,7 @@ describe('generate-parser-function', () => {
         openapi: "",
         info: parseInfoObject(undefined),
       };
+  const _openapi = input.openapi;
   const _info = input.info;
   const _servers = input.servers;
   const _paths = input.paths;
@@ -1067,7 +1083,7 @@ describe('generate-parser-function', () => {
   const _externalDocs = input.externalDocs;
   return {
     ...input,
-    openapi: typeof input?.openapi === "string" ? input?.openapi : (input?.openapi !== undefined ? String(input?.openapi) : ""),
+    openapi: typeof _openapi === "string" ? _openapi : (_openapi !== undefined ? String(_openapi) : ""),
     info: parseInfoObject(_info),
     ...(_servers !== undefined && { servers: validateArray(_servers, parseServerObject) }),
     ...(_paths !== undefined && { paths: parsePathsObject(_paths) }),
@@ -1107,12 +1123,13 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseComponentsObject = (input: unknown): ComponentsObject => {
   if (!isObject(input)) return {} as ComponentsObject;
+  const _schemas = input.schemas;
   const _responses = input.responses;
   const _parameters = input.parameters;
   const _pathItems = input.pathItems;
   return {
     ...input,
-    ...(input.schemas !== undefined && { schemas: isObject(input?.schemas) ? input?.schemas : typeof input?.schemas === "object" && input?.schemas !== null ? input?.schemas : {} }),
+    ...(_schemas !== undefined && { schemas: isObject(_schemas) ? _schemas : typeof _schemas === "object" && _schemas !== null ? _schemas : {} }),
     ...(_responses !== undefined && { responses: validateRecord(_responses, parseResponseObject) }),
     ...(_parameters !== undefined && { parameters: validateRecord(_parameters, parseParameterObject) }),
     ...(_pathItems !== undefined && { pathItems: validateRecord(_pathItems, parsePathItemObject) }),
@@ -1375,7 +1392,7 @@ describe('generate-parser-function', () => {
     expect(result).toContain('return {')
   })
 
-  it('optimization: no fast-path when properties use ref imports', () => {
+  it('optimization: ref properties participate in deep fast-path via shape predicate', () => {
     const schema: JSONSchema = {
       type: 'object',
       properties: {
@@ -1386,9 +1403,10 @@ describe('generate-parser-function', () => {
 
     const result = generateParserFunction(schema, 'UserObject', { useRefImports: true })
 
-    // Should NOT have fast-path because ref imports cannot be checked inline
-    expect(result).not.toContain('return { ...input } as UserObject')
-    // Should still have the main return statement
+    // Fast-path now handles refs by calling the imported shape predicate.
+    expect(result).toContain('validateContactObjectShape(_contact)')
+    expect(result).toContain('return { ...input } as UserObject')
+    // Slow path still exists for invalid input.
     expect(result).toContain('return {')
   })
 

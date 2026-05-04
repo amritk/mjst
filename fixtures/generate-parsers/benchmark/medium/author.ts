@@ -7,6 +7,14 @@ export type AuthorObject = {
   bio?: string;
 };
 
+export const validateAuthorObjectShape = (input: unknown): boolean => {
+  if (!isObject(input)) return false;
+  return typeof input.id === "string"
+    && typeof input.name === "string"
+    && typeof input.email === "string"
+    && (input.bio === undefined || typeof input.bio === "string");
+};
+
 export const parseAuthorObject = (input: unknown): AuthorObject => {
   if (!isObject(input)) return {
         id: "",

@@ -9,6 +9,16 @@ export type AddressObject = {
   country: string;
 };
 
+export const validateAddressObjectShape = (input: unknown): boolean => {
+  if (!isObject(input)) return false;
+  return typeof input.line1 === "string"
+    && (input.line2 === undefined || typeof input.line2 === "string")
+    && typeof input.city === "string"
+    && typeof input.state === "string"
+    && typeof input.postalCode === "string"
+    && typeof input.country === "string";
+};
+
 export const parseAddressObject = (input: unknown): AddressObject => {
   if (!isObject(input)) return {
         line1: "",

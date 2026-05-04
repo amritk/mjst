@@ -6,6 +6,13 @@ export type DiscountObject = {
   amount: number;
 };
 
+export const validateDiscountObjectShape = (input: unknown): boolean => {
+  if (!isObject(input)) return false;
+  return typeof input.code === "string"
+    && typeof input.type === "string"
+    && typeof input.amount === "number";
+};
+
 export const parseDiscountObject = (input: unknown): DiscountObject => {
   if (!isObject(input)) return {
         code: "",
