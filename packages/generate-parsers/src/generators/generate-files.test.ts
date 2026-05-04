@@ -13,7 +13,9 @@ describe('generate-files', () => {
 
     const result = generateFile(schema, 'Document')
 
-    expect(result).toContain("import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';")
+    expect(result).toContain(
+      "import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';",
+    )
   })
 
   it('calls imported parser for optional $ref property', () => {
@@ -56,8 +58,12 @@ describe('generate-files', () => {
 
     const result = generateFile(schema, 'Document')
 
-    expect(result).toContain("import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';")
-    expect(result).toContain("import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';")
+    expect(result).toContain(
+      "import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';",
+    )
+    expect(result).toContain(
+      "import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';",
+    )
   })
 
   it('generates correct parser name for multi-word $ref', () => {
@@ -154,7 +160,9 @@ describe('generate-files', () => {
 
     const result = generateFile(schema, 'Document')
 
-    expect(result).toContain("import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';")
+    expect(result).toContain(
+      "import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';",
+    )
     // With local variable caching, array validators use the cached variable
     expect(result).toContain('validateArray(_servers, parseServerObject)')
   })
@@ -174,7 +182,9 @@ describe('generate-files', () => {
     const result = generateFile(schema, 'Document')
 
     // Check for required imports
-    expect(result).toContain("import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';")
+    expect(result).toContain(
+      "import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';",
+    )
     expect(result).toContain("import { validateArray } from '@amritk/helpers/validate-array';")
     expect(result).toContain("import { isObject } from '@amritk/helpers/is-object';")
 
@@ -362,7 +372,9 @@ describe('generate-files', () => {
     const explicitFalseResult = generateFile(schema, 'Document', { typesOnly: false })
 
     expect(defaultResult).toBe(explicitFalseResult)
-    expect(defaultResult).toContain("import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';")
+    expect(defaultResult).toContain(
+      "import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';",
+    )
     expect(defaultResult).toContain('export const parseDocument')
   })
 
@@ -413,7 +425,9 @@ describe('generate-files', () => {
 
     const result = generateFile(schema, 'EncodingObject', { selfRef: '#/$defs/encoding' })
 
-    expect(result).not.toContain("import { type EncodingObject, parseEncodingObject, validateEncodingObjectShape } from './encoding';")
+    expect(result).not.toContain(
+      "import { type EncodingObject, parseEncodingObject, validateEncodingObjectShape } from './encoding';",
+    )
     expect(result).toContain(
       "import { type HeaderOrReferenceObject, parseHeaderOrReferenceObject, validateHeaderOrReferenceObjectShape } from './header-or-reference';",
     )

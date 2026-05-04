@@ -34,7 +34,9 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toEqual(["import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';"])
+    expect(result).toEqual([
+      "import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';",
+    ])
   })
 
   it('collects imports from additionalProperties with $ref', () => {
@@ -50,7 +52,9 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toEqual(["import { type PathItemObject, parsePathItemObject, validatePathItemObjectShape } from './path-item';"])
+    expect(result).toEqual([
+      "import { type PathItemObject, parsePathItemObject, validatePathItemObjectShape } from './path-item';",
+    ])
   })
 
   it('collects imports from non-extension patternProperties with $ref', () => {
@@ -63,7 +67,9 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toEqual(["import { type PathItemObject, parsePathItemObject, validatePathItemObjectShape } from './path-item';"])
+    expect(result).toEqual([
+      "import { type PathItemObject, parsePathItemObject, validatePathItemObjectShape } from './path-item';",
+    ])
   })
 
   it('collects imports from patternProperties with $ref', () => {
@@ -76,7 +82,9 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toEqual(["import { type PathItemObject, parsePathItemObject, validatePathItemObjectShape } from './path-item';"])
+    expect(result).toEqual([
+      "import { type PathItemObject, parsePathItemObject, validatePathItemObjectShape } from './path-item';",
+    ])
   })
 
   it('collects imports from oneOf with $ref', () => {
@@ -144,7 +152,9 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toEqual(["import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';"])
+    expect(result).toEqual([
+      "import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';",
+    ])
   })
 
   it('collects imports from $ref properties', () => {
@@ -157,7 +167,9 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toEqual(["import { type ResponseObject, parseResponseObject, validateResponseObjectShape } from './response';"])
+    expect(result).toEqual([
+      "import { type ResponseObject, parseResponseObject, validateResponseObjectShape } from './response';",
+    ])
   })
 
   it('handles nested refs in complex schemas', () => {
@@ -191,7 +203,9 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toEqual(["import { type PathItemObject, parsePathItemObject, validatePathItemObjectShape } from './path-item';"])
+    expect(result).toEqual([
+      "import { type PathItemObject, parsePathItemObject, validatePathItemObjectShape } from './path-item';",
+    ])
   })
 
   it('imports SchemaObject parser and type from template file', () => {
@@ -204,7 +218,9 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toEqual(["import { type SchemaObject, parseSchemaObject, validateSchemaObjectShape } from './schema';"])
+    expect(result).toEqual([
+      "import { type SchemaObject, parseSchemaObject, validateSchemaObjectShape } from './schema';",
+    ])
   })
 
   it('handles empty schema', () => {
@@ -400,7 +416,9 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toEqual(["import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';"])
+    expect(result).toEqual([
+      "import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';",
+    ])
   })
 
   it('collects imports from root-level array items $ref in typesOnly mode', () => {
@@ -422,8 +440,12 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toContain("import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';")
-    expect(result).toContain("import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';")
+    expect(result).toContain(
+      "import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';",
+    )
+    expect(result).toContain(
+      "import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';",
+    )
   })
 
   it('collects imports from root-level anyOf refs', () => {
@@ -434,8 +456,12 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toContain("import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';")
-    expect(result).toContain("import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';")
+    expect(result).toContain(
+      "import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';",
+    )
+    expect(result).toContain(
+      "import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';",
+    )
   })
 
   it('collects imports from root-level if branch', () => {
@@ -446,7 +472,9 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toContain("import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';")
+    expect(result).toContain(
+      "import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';",
+    )
   })
 
   it('collects imports from root-level then branch', () => {
@@ -457,7 +485,9 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toContain("import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';")
+    expect(result).toContain(
+      "import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';",
+    )
   })
 
   it('collects imports from root-level else branch', () => {
@@ -468,7 +498,9 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toContain("import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';")
+    expect(result).toContain(
+      "import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';",
+    )
   })
 
   it('does not generate a self-import when a schema references its own $defs key via a property', () => {
@@ -486,7 +518,9 @@ describe('collect-imports', () => {
     const result = collectImports(schema, { selfRef: '#/$defs/encoding' })
 
     expect(result).not.toContain("'./encoding'")
-    expect(result).toContain("import { type HeaderObject, parseHeaderObject, validateHeaderObjectShape } from './header';")
+    expect(result).toContain(
+      "import { type HeaderObject, parseHeaderObject, validateHeaderObjectShape } from './header';",
+    )
   })
 
   it('does not generate a self-import when a schema references its own $defs key via additionalProperties', () => {
