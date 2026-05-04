@@ -588,9 +588,13 @@ describe('build-schema', () => {
     const indexFile = result.find((f) => f.filename === 'index.ts')
 
     expect(indexFile).toBeDefined()
-    // Named type + parser exports for each file
-    expect(indexFile?.content).toContain("export { type ContactObject, parseContactObject } from './contact';")
-    expect(indexFile?.content).toContain("export { type Document, parseDocument } from './document';")
+    // Named type + parser + shape-validator exports for each file
+    expect(indexFile?.content).toContain(
+      "export { type ContactObject, validateContactObjectShape, parseContactObject } from './contact';",
+    )
+    expect(indexFile?.content).toContain(
+      "export { type Document, validateDocumentShape, parseDocument } from './document';",
+    )
     // No wildcard exports
     expect(indexFile?.content).not.toContain('export *')
     expect(indexFile?.content).not.toContain('export type *')

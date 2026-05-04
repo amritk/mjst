@@ -7,6 +7,14 @@ export type ShippingObject = {
   actualDelivery?: string;
 };
 
+export const validateShippingObjectShape = (input: unknown): boolean => {
+  if (!isObject(input)) return false;
+  return typeof input.carrier === "string"
+    && typeof input.trackingNumber === "string"
+    && typeof input.estimatedDelivery === "string"
+    && (input.actualDelivery === undefined || typeof input.actualDelivery === "string");
+};
+
 export const parseShippingObject = (input: unknown): ShippingObject => {
   if (!isObject(input)) return {
         carrier: "",

@@ -7,6 +7,14 @@ export type CommentObject = {
   createdAt: string;
 };
 
+export const validateCommentObjectShape = (input: unknown): boolean => {
+  if (!isObject(input)) return false;
+  return typeof input.id === "string"
+    && typeof input.text === "string"
+    && typeof input.authorId === "string"
+    && typeof input.createdAt === "string";
+};
+
 export const parseCommentObject = (input: unknown): CommentObject => {
   if (!isObject(input)) return {
         id: "",

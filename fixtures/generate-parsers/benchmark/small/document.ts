@@ -8,6 +8,15 @@ export type Document = {
   isActive: boolean;
 };
 
+export const validateDocumentShape = (input: unknown): boolean => {
+  if (!isObject(input)) return false;
+  return typeof input.id === "string"
+    && typeof input.name === "string"
+    && typeof input.email === "string"
+    && (input.age === undefined || typeof input.age === "number")
+    && typeof input.isActive === "boolean";
+};
+
 export const parseDocument = (input: unknown): Document => {
   if (!isObject(input)) return {
         id: "",

@@ -8,6 +8,15 @@ export type CustomerObject = {
   phone?: string;
 };
 
+export const validateCustomerObjectShape = (input: unknown): boolean => {
+  if (!isObject(input)) return false;
+  return typeof input.id === "string"
+    && typeof input.firstName === "string"
+    && typeof input.lastName === "string"
+    && typeof input.email === "string"
+    && (input.phone === undefined || typeof input.phone === "string");
+};
+
 export const parseCustomerObject = (input: unknown): CustomerObject => {
   if (!isObject(input)) return {
         id: "",

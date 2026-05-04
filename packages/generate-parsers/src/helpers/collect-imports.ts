@@ -260,7 +260,7 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
     // In types-only mode, omit the parser function import since there is no parser to call
     const importStatement = typesOnly
       ? `import type { ${typeName} } from '${importPath}';`
-      : `import { type ${typeName}, parse${typeName} } from '${importPath}';`
+      : `import { type ${typeName}, parse${typeName}, validate${typeName}Shape } from '${importPath}';`
     importMap.set(filename, importStatement)
   }
 
