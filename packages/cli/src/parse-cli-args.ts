@@ -7,7 +7,7 @@ import type { CliConfig } from './cli-config'
  */
 export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
   // Use a mutable local type for building, then return as Partial<CliConfig>
-  const config: { schema?: string; outDir?: string; typesOnly?: boolean; build?: boolean } = {}
+  const config: { schema?: string; outDir?: string; typesOnly?: boolean; build?: boolean; logWarnings?: boolean } = {}
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -31,6 +31,8 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
         config.typesOnly = value !== 'false'
       } else if (key === 'build') {
         config.build = value !== 'false'
+      } else if (key === 'log-warnings') {
+        config.logWarnings = value !== 'false'
       }
 
       continue
@@ -56,6 +58,8 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
       config.typesOnly = true
     } else if (arg === '--build') {
       config.build = true
+    } else if (arg === '--log-warnings') {
+      config.logWarnings = true
     }
   }
 

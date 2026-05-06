@@ -12,14 +12,14 @@ describe.skip('scalar-config-parsers', () => {
   const fixturesDir = join(process.cwd(), 'fixtures', 'scalar-examples')
   const tmpDir = resolve(__dirname, '../../tmp')
 
-  let parseApiReferenceConfigurationWithSourceObject: (input: unknown) => any
-  let parseApiReferenceConfigurationWithMultipleSourcesObject: (input: unknown) => any
-  let parseAuthenticationConfigurationObject: (input: unknown) => any
-  let parseServerObject: (input: unknown) => any
-  let parseHtmlRenderingConfigurationObject: (input: unknown) => any
-  let parseBaseConfigurationObject: (input: unknown) => any
-  let parseSecuritySchemeObject: (input: unknown) => any
-  let parseSourceConfigurationObject: (input: unknown) => any
+  let parseApiReferenceConfigurationWithSourceObject: (input: unknown) => unknown
+  let parseApiReferenceConfigurationWithMultipleSourcesObject: (input: unknown) => unknown
+  let parseAuthenticationConfigurationObject: (input: unknown) => unknown
+  let parseServerObject: (input: unknown) => unknown
+  let parseHtmlRenderingConfigurationObject: (input: unknown) => unknown
+  let parseBaseConfigurationObject: (input: unknown) => unknown
+  let parseSecuritySchemeObject: (input: unknown) => unknown
+  let parseSourceConfigurationObject: (input: unknown) => unknown
 
   beforeAll(async () => {
     await execAsync('bun packages/cli/src/cli.ts --schema fixtures/scalar-api-reference-config.json --outDir ./tmp', {

@@ -1602,4 +1602,65 @@ describe('generate-parser-function', () => {
 }`,
     )
   })
+
+  describe('logWarnings option', () => {
+    it('emits a console.warn loop for unknown properties when logWarnings is true', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          age: { type: 'number' },
+        },
+        required: ['name'],
+      }
+
+      const result = generateParserFunction(schema, 'UserObject', { logWarnings: true })
+      expect(result).toBe(
+        `export const parseUserObject = (input: unknown): UserObject => {
+  if (!isObject(input)) return {
+        name: "",
+      };
+  const _name = input.name;
+  const _age = input.age;
+  const _knownKeys = new Set(["name", "age"]);
+  for (const _k in input) {
+    if (!_knownKeys.has(_k)) {
+      console.warn(\`[UserObject] Unknown property "\${_k}"\`);
+    }
+  }
+  if (typeof _name === "string" && (_age === undefined || typeof _age === "number")) return { ...input } as UserObject;
+  return {
+    ...input,
+    name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
+    ...(_age !== undefined && { age: typeof _age === "number" ? _age : (Number.isFinite(Number(_age)) ? Number(_age) : 0) }),
+  } as unknown as UserObject;
+}`,
+      )
+    })
+
+    it('does not emit a console.warn loop when logWarnings is false', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+        },
+      }
+
+      const result = generateParserFunction(schema, 'UserObject', { logWarnings: false })
+      expect(result).not.toContain('console.warn')
+      expect(result).not.toContain('_knownKeys')
+    })
+
+    it('does not emit a console.warn loop when logWarnings is not set', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+        },
+      }
+
+      const result = generateParserFunction(schema, 'UserObject')
+      expect(result).not.toContain('console.warn')
+    })
+  })
 })

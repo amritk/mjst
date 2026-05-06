@@ -27,11 +27,25 @@
       "default": false,
       "description": "Generate only TypeScript type definitions without parser functions. Useful when you only need the type shapes and do not need runtime validation."
     },
+    "build": {
+      "type": "boolean",
+      "x-cli-flag": "--build",
+      "x-icon": "🔨",
+      "default": false,
+      "description": "Compile the generated TypeScript files to .js and .d.ts output. A temporary tsconfig is written to the output directory, tsc is invoked, and the intermediate .ts source files are removed when compilation succeeds."
+    },
+    "logWarnings": {
+      "type": "boolean",
+      "x-cli-flag": "--log-warnings",
+      "x-icon": "⚠️",
+      "default": false,
+      "description": "Emit a console.warn in the generated parsers for every input key that is not declared in the schema's properties. Useful for detecting schema drift or unexpected data shapes at runtime."
+    },
     "config": {
       "type": "string",
       "x-cli-flag": "--config <path>",
       "x-icon": "⚙️",
-      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, outDir, typesOnly). CLI flags take precedence over config file values.",
+      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, outDir, typesOnly, build, logWarnings). CLI flags take precedence over config file values.",
       "examples": ["./mjst.config.json"]
     }
   },
@@ -44,7 +58,22 @@
       "schema": "./schema.json",
       "outDir": "./generated",
       "typesOnly": true
+    },
+    {
+      "schema": "./schema.json",
+      "outDir": "./generated",
+      "build": true
+    },
+    {
+      "schema": "./schema.json",
+      "outDir": "./generated",
+      "logWarnings": true
     }
   ],
-  "x-example-titles": ["Minimal — generate parsers and types", "Types only — skip parser functions"]
+  "x-example-titles": [
+    "Minimal — generate parsers and types",
+    "Types only — skip parser functions",
+    "Build — emit .js and .d.ts",
+    "Log warnings — warn on unknown input properties"
+  ]
 }

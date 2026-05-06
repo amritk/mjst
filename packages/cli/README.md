@@ -52,29 +52,18 @@ bunx mjst --config ./mjst.config.json
 
 ---
 
-## Flags
-
-| Flag | Type | Required | Description |
-|:---|:---:|:---:|:---|
-| `--schema <path>` | `string` | ✅ | Path to the JSON Schema file to process. |
-| `--outDir <dir>` | `string` | ✅ | Output directory for generated files. Created automatically if it does not exist. |
-| `--types-only` | `boolean` | — | Generate only TypeScript type definitions without parser functions. |
-| `--docs <path>` | `string` | — | Path to a markdown documentation file used to enrich generated type comments. |
-| `--build` | `boolean` | — | Compile generated TypeScript to `.js` and `.d.ts` files. The intermediate `.ts` files are removed after compilation. |
-| `--config <path>` | `string` | — | Path to a JSON config file. Keys match option names. CLI flags take precedence. |
-
----
-
 ## Configuration reference
 
+<!-- config-table-start -->
 | | Property | CLI Flag | Type | Required | Default | Description |
 |:---:|:---|:---|:---:|:---:|:---:|:---|
 | 📄 | `schema` | `--schema <path>` | `string` | ✅ | — | Path to the JSON Schema file to process. The schema is read, parsed, and used to generate TypeScript source files. |
 | 📁 | `outDir` | `--outDir <dir>` | `string` | ✅ | — | Output directory for generated TypeScript files. The directory is created automatically if it does not exist. Subdirectories are created as needed when a generated file includes a nested path. |
 | 🏷️ | `typesOnly` | `--types-only` | `boolean` | — | `false` | Generate only TypeScript type definitions without parser functions. Useful when you only need the type shapes and do not need runtime validation. |
-| 📝 | `docs` | `--docs <path>` | `string` | — | — | Path to a markdown documentation file. When provided, the content is used to enrich comments on the generated TypeScript types. |
-| 🔨 | `build` | `--build` | `boolean` | — | `false` | Compile the generated TypeScript files to `.js` and `.d.ts` output. A temporary `tsconfig` is written to the output directory, `tsc` is invoked, and the intermediate `.ts` source files are removed when compilation succeeds. |
-| ⚙️ | `config` | `--config <path>` | `string` | — | — | Path to a JSON config file. Keys match the option names in this table (`schema`, `outDir`, `typesOnly`, `docs`, `build`). CLI flags take precedence over config file values. |
+| 🔨 | `build` | `--build` | `boolean` | — | `false` | Compile the generated TypeScript files to .js and .d.ts output. A temporary tsconfig is written to the output directory, tsc is invoked, and the intermediate .ts source files are removed when compilation succeeds. |
+| ⚠️ | `logWarnings` | `--log-warnings` | `boolean` | — | `false` | Emit a console.warn in the generated parsers for every input key that is not declared in the schema's properties. Useful for detecting schema drift or unexpected data shapes at runtime. |
+| ⚙️ | `config` | `--config <path>` | `string` | — | — | Path to a JSON config file. Keys match the option names in this schema (schema, outDir, typesOnly, build, logWarnings). CLI flags take precedence over config file values. |
+<!-- config-table-end -->
 
 ---
 
@@ -99,16 +88,6 @@ bunx mjst --config ./mjst.config.json
 }
 ```
 
-**With documentation — enrich type comments from markdown**
-
-```json
-{
-  "schema": "./schema.json",
-  "outDir": "./generated",
-  "docs": "./docs/schema.md"
-}
-```
-
 **Build — emit `.js` and `.d.ts` instead of `.ts`**
 
 ```json
@@ -116,6 +95,16 @@ bunx mjst --config ./mjst.config.json
   "schema": "./schema.json",
   "outDir": "./generated",
   "build": true
+}
+```
+
+**Log warnings — warn on unknown input properties**
+
+```json
+{
+  "schema": "./schema.json",
+  "outDir": "./generated",
+  "logWarnings": true
 }
 ```
 
@@ -128,6 +117,7 @@ bunx mjst --config ./mjst.config.json
 | `bun run dev` | `bun run --conditions=development ./src/cli.ts` |
 | `bun run start` | `bun run ./src/cli.ts` |
 | `bun run build` | `bun run build:code && bun run build:types` |
+| `bun run generate-readme` | `bun run generate-readme` |
 
 ---
 

@@ -74,7 +74,7 @@ export type ParameterWithSchemaObject = ParameterObjectBase & {
   /** The schema defining the type used for the header. */
   schema?: ReferenceType<SchemaObject>
   /** Example of the header's potential value; see Working With Examples. https://swagger.io/specification/#working-with-examples */
-  example?: any
+  example?: unknown
   /** Examples of the header's potential value; see Working With Examples. https://swagger.io/specification/#working-with-examples */
   examples?: Record<string, ReferenceType<ExampleObject>>
 }

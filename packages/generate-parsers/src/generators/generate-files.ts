@@ -25,6 +25,11 @@ type GenerateFileOptions = {
    * within the root schema's $defs are excluded from the import list.
    */
   readonly rootSchema?: Record<string, unknown>
+  /**
+   * When true, the generated parser emits a console.warn for every input key
+   * that is not declared in the schema's properties.
+   */
+  readonly logWarnings?: boolean
 }
 
 /**
@@ -78,7 +83,10 @@ export const generateFile = (schema: JSONSchema, typeName: string, options?: Gen
     return result + typeDefinition
   }
 
-  const parserFunction = generateParserFunction(schema, typeName, { useRefImports: true })
+  const parserFunction = generateParserFunction(schema, typeName, {
+    useRefImports: true,
+    ...(options?.logWarnings !== undefined ? { logWarnings: options.logWarnings } : {}),
+  })
   const shapeValidator = generateShapeValidator(schema, typeName, true)
   const combinedFunctions = `${shapeValidator}\n\n${parserFunction}`
   const imports = [...collectImports(schema, { selfRef, rootSchema }), ...collectHelpers(combinedFunctions)]

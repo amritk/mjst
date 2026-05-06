@@ -30,7 +30,8 @@
   "scripts": {
     "build": "bun run build:code && bun run build:types",
     "build:code": "bun build ./src/index.ts --outdir=dist",
-    "build:types": "tsc -p ."
+    "build:types": "tsc -p .",
+    "generate-readme": "bun run ./scripts/generate-readme.ts"
   },
   "imports": {
     "#generators/*": "./src/generators/*.ts",
@@ -48,6 +49,7 @@
   "dependencies": {
     "@scalar/typebox": "^0.1.3",
     "json-schema-typed": "catalog:",
-    "@amritk/helpers": "workspace:*"
+    "@amritk/helpers": "workspace:*",
+    "@amritk/generate-markdown": "workspace:*"
   }
 }

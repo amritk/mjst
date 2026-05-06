@@ -21,5 +21,8 @@ export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>
   return {
     ...(typeof obj['schema'] === 'string' && { schema: obj['schema'] }),
     ...(typeof obj['outDir'] === 'string' && { outDir: obj['outDir'] }),
+    ...(typeof obj['typesOnly'] === 'boolean' && { typesOnly: obj['typesOnly'] }),
+    ...(typeof obj['build'] === 'boolean' && { build: obj['build'] }),
+    ...(typeof obj['logWarnings'] === 'boolean' && { logWarnings: obj['logWarnings'] }),
   }
 }

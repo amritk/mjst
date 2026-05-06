@@ -135,4 +135,38 @@ describe('parse-cli-args', () => {
       build: true,
     })
   })
+
+  it('parses --log-warnings boolean flag', () => {
+    const result = parseCliArgs(['--log-warnings'])
+
+    expect(result).toEqual({
+      logWarnings: true,
+    })
+  })
+
+  it('parses --log-warnings=true with equals syntax', () => {
+    const result = parseCliArgs(['--log-warnings=true'])
+
+    expect(result).toEqual({
+      logWarnings: true,
+    })
+  })
+
+  it('parses --log-warnings=false with equals syntax', () => {
+    const result = parseCliArgs(['--log-warnings=false'])
+
+    expect(result).toEqual({
+      logWarnings: false,
+    })
+  })
+
+  it('parses --log-warnings alongside other flags', () => {
+    const result = parseCliArgs(['--schema', 'schema.json', '--outDir', 'dist', '--log-warnings'])
+
+    expect(result).toEqual({
+      schema: 'schema.json',
+      outDir: 'dist',
+      logWarnings: true,
+    })
+  })
 })

@@ -8,7 +8,7 @@ import { OpenAPIDocumentSchema } from './openapi-document'
 describe.skip('stripe test', () => {
   const parseDocument = (input: unknown) => input
   const amrit = parseDocument(stripe)
-  const typebox = coerceValue(OpenAPIDocumentSchema, stripe) as any
+  const typebox = coerceValue(OpenAPIDocumentSchema, stripe) as unknown
 
   it('servers should match', () => {
     expect(amrit.servers).toEqual(typebox.servers)
