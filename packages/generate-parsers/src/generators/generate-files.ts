@@ -85,7 +85,7 @@ export const generateFile = (schema: JSONSchema, typeName: string, options?: Gen
 
   const parserFunction = generateParserFunction(schema, typeName, {
     useRefImports: true,
-    logWarnings: options?.logWarnings,
+    ...(options?.logWarnings !== undefined ? { logWarnings: options.logWarnings } : {}),
   })
   const shapeValidator = generateShapeValidator(schema, typeName, true)
   const combinedFunctions = `${shapeValidator}\n\n${parserFunction}`

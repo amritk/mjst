@@ -134,7 +134,7 @@ export const buildSchema = async (
   const rootContent = generateFile(extendedRootSchema, rootTypeName, {
     typesOnly: typesOnly ?? false,
     rootSchema: rootSchema as Record<string, unknown>,
-    logWarnings,
+    ...(logWarnings !== undefined ? { logWarnings } : {}),
   })
   const rootFilename = rootTypeName.toLowerCase()
 
@@ -183,7 +183,7 @@ export const buildSchema = async (
       typesOnly: typesOnly ?? false,
       selfRef: ref,
       rootSchema: rootSchema as Record<string, unknown>,
-      logWarnings,
+      ...(logWarnings !== undefined ? { logWarnings } : {}),
     })
 
     if (filename !== 'schema' && !processedFilenames.has(filename)) {
