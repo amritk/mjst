@@ -31,6 +31,9 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "bun run --conditions=development ./src/cli.ts",
     "start": "bun run ./src/cli.ts",
