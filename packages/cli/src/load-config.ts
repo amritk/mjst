@@ -23,6 +23,6 @@ export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>
     ...(typeof obj['outDir'] === 'string' && { outDir: obj['outDir'] }),
     ...(typeof obj['typesOnly'] === 'boolean' && { typesOnly: obj['typesOnly'] }),
     ...(typeof obj['build'] === 'boolean' && { build: obj['build'] }),
-    ...(typeof obj['logUnmatched'] === 'boolean' && { logUnmatched: obj['logUnmatched'] }),
+    ...(typeof obj['logWarnings'] === 'boolean' && { logWarnings: obj['logWarnings'] }),
   }
 }

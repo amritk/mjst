@@ -21,5 +21,5 @@ export type CliConfig = {
    * When true, the generated parsers emit a console.warn for every input key
    * that is not declared in the schema's properties.
    */
-  readonly logUnmatched?: boolean
+  readonly logWarnings?: boolean
 }

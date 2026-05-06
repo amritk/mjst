@@ -29,7 +29,7 @@ type GenerateFileOptions = {
    * When true, the generated parser emits a console.warn for every input key
    * that is not declared in the schema's properties.
    */
-  readonly logUnmatched?: boolean
+  readonly logWarnings?: boolean
 }
 
 /**
@@ -85,7 +85,7 @@ export const generateFile = (schema: JSONSchema, typeName: string, options?: Gen
 
   const parserFunction = generateParserFunction(schema, typeName, {
     useRefImports: true,
-    logUnmatched: options?.logUnmatched,
+    logWarnings: options?.logWarnings,
   })
   const shapeValidator = generateShapeValidator(schema, typeName, true)
   const combinedFunctions = `${shapeValidator}\n\n${parserFunction}`

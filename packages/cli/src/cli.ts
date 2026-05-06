@@ -52,7 +52,7 @@ const run = async (): Promise<void> => {
   const raw = await readFile(schemaPath, 'utf-8')
   const schema: unknown = JSON.parse(raw)
 
-  const files = await buildSchema(schema as JSONSchema, 'Document', undefined, config.typesOnly, config.logUnmatched)
+  const files = await buildSchema(schema as JSONSchema, 'Document', undefined, config.typesOnly, config.logWarnings)
 
   const outputDir = resolve(config.outDir)
   await mkdir(outputDir, { recursive: true })

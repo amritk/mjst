@@ -45,7 +45,7 @@ type GenerateParserOptions = {
    * When true, the generated parser emits a console.warn for every input key
    * that is not declared in the schema's properties.
    */
-  readonly logUnmatched?: boolean
+  readonly logWarnings?: boolean
 }
 
 /**
@@ -555,7 +555,7 @@ const generateObjectParser = (
   schema: JSONSchema,
   typeName: string,
   useRefImports: boolean,
-  logUnmatched?: boolean,
+  logWarnings?: boolean,
 ): string => {
   const functionName = generateParserName(typeName)
 
@@ -623,7 +623,7 @@ const generateObjectParser = (
   }
 
   // Emit a warning for any input key not declared in the schema's properties
-  if (logUnmatched && propInfo.length > 0) {
+  if (logWarnings && propInfo.length > 0) {
     const keysList = propInfo.map(({ key }) => JSON.stringify(key)).join(', ')
     lines.push(`  const _knownKeys = new Set([${keysList}]);`)
     lines.push(`  for (const _k in input) {`)
@@ -760,7 +760,7 @@ const generateCombinedObjectParser = (
   schema: JSONSchema,
   typeName: string,
   useRefImports: boolean,
-  logUnmatched?: boolean,
+  logWarnings?: boolean,
 ): string => {
   const functionName = generateParserName(typeName)
   const entries = generatePropertyEntries(schema, useRefImports)
@@ -775,7 +775,7 @@ const generateCombinedObjectParser = (
 
   // Find the first pattern with a $ref for parser delegation
   if (!isSchemaObject(schema) || !('patternProperties' in schema)) {
-    return generateObjectParser(schema, typeName, useRefImports, logUnmatched)
+    return generateObjectParser(schema, typeName, useRefImports, logWarnings)
   }
 
   const patternProps = schema.patternProperties as Record<string, JSONSchema>
@@ -783,7 +783,7 @@ const generateCombinedObjectParser = (
   const refPattern = patterns.find(([, ps]) => isSchemaObject(ps) && hasRef(ps))
 
   if (!refPattern || !useRefImports) {
-    return generateObjectParser(schema, typeName, useRefImports, logUnmatched)
+    return generateObjectParser(schema, typeName, useRefImports, logWarnings)
   }
 
   const [pattern, patternSchema] = refPattern
@@ -1097,7 +1097,7 @@ const generateSchemaObjectParser = (typeName: string): string => {
  */
 const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: GenerateParserOptions): string => {
   const useRefImports = options?.useRefImports ?? false
-  const logUnmatched = options?.logUnmatched ?? false
+  const logWarnings = options?.logWarnings ?? false
 
   // Special case for SchemaObject - it can be any JSON Schema
   if (typeName === 'SchemaObject') {
@@ -1117,7 +1117,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   // This generates a parser that handles known properties and also iterates
   // pattern-matched keys (e.g. responses with "default" + "200", "4XX").
   if (hasProperties(schema) && isSchemaObject(schema) && 'patternProperties' in schema) {
-    return generateCombinedObjectParser(schema, typeName, useRefImports, logUnmatched)
+    return generateCombinedObjectParser(schema, typeName, useRefImports, logWarnings)
   }
 
   // Handle schemas that have explicit properties — generate a full object parser.
@@ -1125,7 +1125,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   // properties AND conditional keywords use all declared properties rather than
   // only the if/then fragment.
   if (hasProperties(schema)) {
-    return generateObjectParser(schema, typeName, useRefImports, logUnmatched)
+    return generateObjectParser(schema, typeName, useRefImports, logWarnings)
   }
 
   // Handle conditional schemas (if/then/else) for schemas without explicit properties.
@@ -1137,7 +1137,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   // We flatten the fragments into a regular object parser.
   const conditionalObjectSchema = getConditionalObjectSchema(schema)
   if (conditionalObjectSchema) {
-    return generateObjectParser(conditionalObjectSchema, typeName, useRefImports, logUnmatched)
+    return generateObjectParser(conditionalObjectSchema, typeName, useRefImports, logWarnings)
   }
 
   // Handle non-object schemas with type-appropriate validation (no properties, no conditionals)

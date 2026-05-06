@@ -136,37 +136,37 @@ describe('parse-cli-args', () => {
     })
   })
 
-  it('parses --log-unmatched boolean flag', () => {
-    const result = parseCliArgs(['--log-unmatched'])
+  it('parses --log-warnings boolean flag', () => {
+    const result = parseCliArgs(['--log-warnings'])
 
     expect(result).toEqual({
-      logUnmatched: true,
+      logWarnings: true,
     })
   })
 
-  it('parses --log-unmatched=true with equals syntax', () => {
-    const result = parseCliArgs(['--log-unmatched=true'])
+  it('parses --log-warnings=true with equals syntax', () => {
+    const result = parseCliArgs(['--log-warnings=true'])
 
     expect(result).toEqual({
-      logUnmatched: true,
+      logWarnings: true,
     })
   })
 
-  it('parses --log-unmatched=false with equals syntax', () => {
-    const result = parseCliArgs(['--log-unmatched=false'])
+  it('parses --log-warnings=false with equals syntax', () => {
+    const result = parseCliArgs(['--log-warnings=false'])
 
     expect(result).toEqual({
-      logUnmatched: false,
+      logWarnings: false,
     })
   })
 
-  it('parses --log-unmatched alongside other flags', () => {
-    const result = parseCliArgs(['--schema', 'schema.json', '--outDir', 'dist', '--log-unmatched'])
+  it('parses --log-warnings alongside other flags', () => {
+    const result = parseCliArgs(['--schema', 'schema.json', '--outDir', 'dist', '--log-warnings'])
 
     expect(result).toEqual({
       schema: 'schema.json',
       outDir: 'dist',
-      logUnmatched: true,
+      logWarnings: true,
     })
   })
 })

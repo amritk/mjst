@@ -1603,8 +1603,8 @@ describe('generate-parser-function', () => {
     )
   })
 
-  describe('logUnmatched option', () => {
-    it('emits a console.warn loop for unknown properties when logUnmatched is true', () => {
+  describe('logWarnings option', () => {
+    it('emits a console.warn loop for unknown properties when logWarnings is true', () => {
       const schema: JSONSchema = {
         type: 'object',
         properties: {
@@ -1614,7 +1614,7 @@ describe('generate-parser-function', () => {
         required: ['name'],
       }
 
-      const result = generateParserFunction(schema, 'UserObject', { logUnmatched: true })
+      const result = generateParserFunction(schema, 'UserObject', { logWarnings: true })
       expect(result).toBe(
         `export const parseUserObject = (input: unknown): UserObject => {
   if (!isObject(input)) return {
@@ -1638,7 +1638,7 @@ describe('generate-parser-function', () => {
       )
     })
 
-    it('does not emit a console.warn loop when logUnmatched is false', () => {
+    it('does not emit a console.warn loop when logWarnings is false', () => {
       const schema: JSONSchema = {
         type: 'object',
         properties: {
@@ -1646,12 +1646,12 @@ describe('generate-parser-function', () => {
         },
       }
 
-      const result = generateParserFunction(schema, 'UserObject', { logUnmatched: false })
+      const result = generateParserFunction(schema, 'UserObject', { logWarnings: false })
       expect(result).not.toContain('console.warn')
       expect(result).not.toContain('_knownKeys')
     })
 
-    it('does not emit a console.warn loop when logUnmatched is not set', () => {
+    it('does not emit a console.warn loop when logWarnings is not set', () => {
       const schema: JSONSchema = {
         type: 'object',
         properties: {
