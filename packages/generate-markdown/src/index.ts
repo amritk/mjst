@@ -93,12 +93,7 @@ export const generateMarkdown = async (): Promise<void> => {
     const startIdx = existing.indexOf(START_MARKER)
     const endIdx = existing.indexOf(END_MARKER)
     if (startIdx !== -1 && endIdx !== -1) {
-      content =
-        existing.slice(0, startIdx + START_MARKER.length) +
-        '\n' +
-        table +
-        '\n' +
-        existing.slice(endIdx)
+      content = existing.slice(0, startIdx + START_MARKER.length) + '\n' + table + '\n' + existing.slice(endIdx)
     } else {
       content = table
     }
@@ -109,4 +104,3 @@ export const generateMarkdown = async (): Promise<void> => {
   await writeFile(readmePath, content)
   console.log('README.md generated successfully.')
 }
-

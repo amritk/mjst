@@ -51,7 +51,7 @@ describe('generate-readme', () => {
     await generateMarkdown()
 
     expect(writeFile).toHaveBeenCalledTimes(1)
-    const [path, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [path, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     expect(path).toContain('README.md')
     expect(content).toContain('testProp')
   })
@@ -66,7 +66,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     expect(content).toContain('✅')
     expect(content).toContain('testProp')
   })
@@ -87,7 +87,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     const lines = content.split('\n')
     const optionalLine = lines.find((line: string) => line.includes('optionalProp'))
     expect(optionalLine).toBeDefined()
@@ -110,7 +110,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     expect(content).toContain('--test-flag')
   })
 
@@ -119,7 +119,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     const lines = content.split('\n')
     const propLine = lines.find((line: string) => line.includes('testProp'))
     expect(propLine).toContain('—')
@@ -141,7 +141,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     expect(content).toContain('🎯')
   })
 
@@ -150,7 +150,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     expect(content).toContain('🔧')
   })
 
@@ -170,7 +170,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     expect(content).toContain('"default-value"')
   })
 
@@ -190,7 +190,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     expect(content).toContain('`false`')
   })
 
@@ -210,7 +210,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     expect(content).toContain('`42`')
   })
 
@@ -230,7 +230,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     expect(content).toContain('{"key":"value"}')
   })
 
@@ -250,7 +250,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     expect(content).toContain('["item1","item2"]')
   })
 
@@ -259,7 +259,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     const lines = content.split('\n')
     const propLine = lines.find((line: string) => line.includes('testProp'))
     const cells = propLine?.split('|').map((cell: string) => cell.trim())
@@ -283,7 +283,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     const lines = content.split('\n')
     const propLine = lines.find((line: string) => line.includes('testProp'))
     const cells = propLine?.split('|').map((cell: string) => cell.trim())
@@ -306,7 +306,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     expect(content).toContain('First paragraph.')
     expect(content).not.toContain('Second paragraph.')
   })
@@ -326,7 +326,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     expect(content).toContain('Line one Line two Line three')
   })
 
@@ -344,7 +344,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     expect(content).toContain('testProp')
   })
 
@@ -353,7 +353,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     expect(content).toContain('| | Property | CLI Flag | Type | Required | Default | Description |')
   })
 
@@ -380,7 +380,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
     expect(content).toContain('prop1')
     expect(content).toContain('prop2')
     expect(content).toContain('prop3')
@@ -431,7 +431,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [path] = writeFileSpy.mock.calls[0]!
+    const [path] = writeFileSpy.mock.calls[0] ?? []
     expect(path).toContain('README.md')
     expect(path).toContain(process.cwd())
   })
@@ -470,7 +470,7 @@ describe('generate-readme', () => {
 
       await generateMarkdown()
 
-      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
       expect(content).toContain('# My Package')
       expect(content).toContain('<!-- config-table-start -->')
       expect(content).toContain('<!-- config-table-end -->')
@@ -493,7 +493,7 @@ describe('generate-readme', () => {
 
       await generateMarkdown()
 
-      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
       expect(content.startsWith('# Header\n\nSome intro.')).toBe(true)
     })
 
@@ -511,7 +511,7 @@ describe('generate-readme', () => {
 
       await generateMarkdown()
 
-      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
       expect(content).toContain('## License')
       expect(content).toContain('MIT')
     })
@@ -530,7 +530,7 @@ describe('generate-readme', () => {
 
       await generateMarkdown()
 
-      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
       expect(content).not.toContain('# My Package')
       expect(content).toContain('testProp')
     })
@@ -546,7 +546,7 @@ describe('generate-readme', () => {
 
       await generateMarkdown()
 
-      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
       expect(content).toContain('testProp')
     })
   })
