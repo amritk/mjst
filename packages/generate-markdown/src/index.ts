@@ -66,10 +66,17 @@ const renderConfigTable = (schema: ConfigSchema): string => {
   return [...header, ...rows].join('\n')
 }
 
+const START_MARKER = '<!-- config-table-start -->'
+const END_MARKER = '<!-- config-table-end -->'
+
 /**
  * Generates the properties table from the JSON Schema and writes it to README.md.
  * Every user-facing description comes from the schema so the two stay in sync —
  * update the schema, then run `bun run generate-readme`.
+ *
+ * If README.md already exists and contains <!-- config-table-start --> and
+ * <!-- config-table-end --> markers, only the content between those markers is
+ * replaced. Otherwise the whole file is overwritten with the table.
  */
 export const generateMarkdown = async (): Promise<void> => {
   const root = process.cwd()
@@ -77,6 +84,29 @@ export const generateMarkdown = async (): Promise<void> => {
   const schemaRaw = await readFile(resolve(root, 'fixtures', 'config.schema.json'), 'utf-8')
   const schema = JSON.parse(schemaRaw) as ConfigSchema
 
-  await writeFile(resolve(root, 'README.md'), renderConfigTable(schema))
+  const table = renderConfigTable(schema)
+  const readmePath = resolve(root, 'README.md')
+
+  let content: string
+  try {
+    const existing = await readFile(readmePath, 'utf-8')
+    const startIdx = existing.indexOf(START_MARKER)
+    const endIdx = existing.indexOf(END_MARKER)
+    if (startIdx !== -1 && endIdx !== -1) {
+      content =
+        existing.slice(0, startIdx + START_MARKER.length) +
+        '\n' +
+        table +
+        '\n' +
+        existing.slice(endIdx)
+    } else {
+      content = table
+    }
+  } catch {
+    content = table
+  }
+
+  await writeFile(readmePath, content)
   console.log('README.md generated successfully.')
 }
+

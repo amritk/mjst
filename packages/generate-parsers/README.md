@@ -69,7 +69,7 @@ Write them to disk however you like.
 
 ## API
 
-### `buildSchema(rootSchema, rootTypeName, extensions?, typesOnly?)`
+### `buildSchema(rootSchema, rootTypeName, extensions?, typesOnly?, logWarnings?)`
 
 | Parameter | Type | Description |
 |:---|:---|:---|
@@ -77,8 +77,20 @@ Write them to disk however you like.
 | `rootTypeName` | `string` | Name used for the root type (e.g. `"Document"`). |
 | `extensions` | `SchemaExtensions` _(optional)_ | Map of definition name → extra optional properties to merge in before generation. |
 | `typesOnly` | `boolean` _(optional)_ | When `true`, only emit `.ts` type definitions — skip parser functions and runtime helpers. |
+| `logWarnings` | `boolean` _(optional)_ | When `true`, generated parsers emit a `console.warn` for every input key not declared in the schema's properties. |
 
 Returns: `Promise<GeneratedFile[]>`.
+
+---
+
+## Options
+
+<!-- config-table-start -->
+| | Property | CLI Flag | Type | Required | Default | Description |
+|:---:|:---|:---|:---:|:---:|:---:|:---|
+| 🏷️ | `typesOnly` | — | `boolean` | — | `false` | Generate only TypeScript type definitions without parser functions. Runtime helper files (validators, isObject) are also omitted since they are only needed for parsers. |
+| ⚠️ | `logWarnings` | — | `boolean` | — | `false` | Emit a console.warn in the generated parsers for every input key that is not declared in the schema's properties. Useful for detecting schema drift or unexpected data shapes at runtime. |
+<!-- config-table-end -->
 
 The generator handles:
 

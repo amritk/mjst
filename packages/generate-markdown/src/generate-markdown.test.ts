@@ -436,12 +436,12 @@ describe('generate-readme', () => {
     expect(path).toContain(process.cwd())
   })
 
-  it('reads schema file once', async () => {
+  it('reads schema file and attempts to read README', async () => {
     const readFileSpy = mock(async (path: string) => {
       if (path.includes('config.schema.json')) {
         return JSON.stringify(minimalSchema)
       }
-      throw new Error('Unexpected file path')
+      throw new Error('ENOENT')
     })
 
     mock.module('node:fs/promises', () => ({
@@ -451,6 +451,103 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    expect(readFileSpy).toHaveBeenCalledTimes(1)
+    // Two reads: config.schema.json + README.md attempt
+    expect(readFileSpy).toHaveBeenCalledTimes(2)
+  })
+
+  describe('marker injection', () => {
+    it('injects table between markers when both markers are present', async () => {
+      const existingReadme = `# My Package\n\n<!-- config-table-start -->\nold content\n<!-- config-table-end -->\n\n---\n`
+
+      mock.module('node:fs/promises', () => ({
+        readFile: mock(async (path: string) => {
+          if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
+          if (path.includes('README.md')) return existingReadme
+          throw new Error('Unexpected file path')
+        }),
+        writeFile: mock(async () => {}),
+      }))
+
+      await generateMarkdown()
+
+      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+      expect(content).toContain('# My Package')
+      expect(content).toContain('<!-- config-table-start -->')
+      expect(content).toContain('<!-- config-table-end -->')
+      expect(content).toContain('testProp')
+      expect(content).not.toContain('old content')
+      expect(content).toContain('---')
+    })
+
+    it('preserves content before start marker', async () => {
+      const existingReadme = `# Header\n\nSome intro.\n\n<!-- config-table-start -->\n<!-- config-table-end -->\n`
+
+      mock.module('node:fs/promises', () => ({
+        readFile: mock(async (path: string) => {
+          if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
+          if (path.includes('README.md')) return existingReadme
+          throw new Error('Unexpected file path')
+        }),
+        writeFile: mock(async () => {}),
+      }))
+
+      await generateMarkdown()
+
+      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+      expect(content.startsWith('# Header\n\nSome intro.')).toBe(true)
+    })
+
+    it('preserves content after end marker', async () => {
+      const existingReadme = `<!-- config-table-start -->\n<!-- config-table-end -->\n\n## License\n\nMIT\n`
+
+      mock.module('node:fs/promises', () => ({
+        readFile: mock(async (path: string) => {
+          if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
+          if (path.includes('README.md')) return existingReadme
+          throw new Error('Unexpected file path')
+        }),
+        writeFile: mock(async () => {}),
+      }))
+
+      await generateMarkdown()
+
+      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+      expect(content).toContain('## License')
+      expect(content).toContain('MIT')
+    })
+
+    it('falls back to table-only when README has no markers', async () => {
+      const existingReadme = `# My Package\n\nNo markers here.\n`
+
+      mock.module('node:fs/promises', () => ({
+        readFile: mock(async (path: string) => {
+          if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
+          if (path.includes('README.md')) return existingReadme
+          throw new Error('Unexpected file path')
+        }),
+        writeFile: mock(async () => {}),
+      }))
+
+      await generateMarkdown()
+
+      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+      expect(content).not.toContain('# My Package')
+      expect(content).toContain('testProp')
+    })
+
+    it('falls back to table-only when README does not exist', async () => {
+      mock.module('node:fs/promises', () => ({
+        readFile: mock(async (path: string) => {
+          if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
+          throw new Error('ENOENT: no such file or directory')
+        }),
+        writeFile: mock(async () => {}),
+      }))
+
+      await generateMarkdown()
+
+      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0]!
+      expect(content).toContain('testProp')
+    })
   })
 })
