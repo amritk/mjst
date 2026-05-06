@@ -41,6 +41,11 @@ type GenerateParserOptions = {
    * files where each ref has its own separate file with a parser.
    */
   readonly useRefImports?: boolean
+  /**
+   * When true, the generated parser emits a console.warn for every input key
+   * that is not declared in the schema's properties.
+   */
+  readonly logUnmatched?: boolean
 }
 
 /**
@@ -546,7 +551,12 @@ const shouldCacheVariable = (propSchema: JSONSchema, _canFastPath: boolean, _use
  * - Fast path that returns input directly when all properties are already valid
  * - Slow path with optimized expressions
  */
-const generateObjectParser = (schema: JSONSchema, typeName: string, useRefImports: boolean): string => {
+const generateObjectParser = (
+  schema: JSONSchema,
+  typeName: string,
+  useRefImports: boolean,
+  logUnmatched?: boolean,
+): string => {
   const functionName = generateParserName(typeName)
 
   if (!hasProperties(schema)) {
@@ -610,6 +620,17 @@ const generateObjectParser = (schema: JSONSchema, typeName: string, useRefImport
     if (shouldCacheVariable(propSchema, canFastPath, useRefImports)) {
       lines.push(`  const ${varName} = ${safeAccessor('input', key)};`)
     }
+  }
+
+  // Emit a warning for any input key not declared in the schema's properties
+  if (logUnmatched && propInfo.length > 0) {
+    const keysList = propInfo.map(({ key }) => JSON.stringify(key)).join(', ')
+    lines.push(`  const _knownKeys = new Set([${keysList}]);`)
+    lines.push(`  for (const _k in input) {`)
+    lines.push(`    if (!_knownKeys.has(_k)) {`)
+    lines.push(`      console.warn(\`[${typeName}] Unknown property "\${_k}"\`);`)
+    lines.push(`    }`)
+    lines.push(`  }`)
   }
 
   // Generate fast-path check if possible
@@ -735,7 +756,12 @@ const generateObjectParser = (schema: JSONSchema, typeName: string, useRefImport
  * Generates a parser for schemas that have both properties AND patternProperties.
  * Parses the known properties first, then iterates remaining keys to match patterns.
  */
-const generateCombinedObjectParser = (schema: JSONSchema, typeName: string, useRefImports: boolean): string => {
+const generateCombinedObjectParser = (
+  schema: JSONSchema,
+  typeName: string,
+  useRefImports: boolean,
+  logUnmatched?: boolean,
+): string => {
   const functionName = generateParserName(typeName)
   const entries = generatePropertyEntries(schema, useRefImports)
 
@@ -749,7 +775,7 @@ const generateCombinedObjectParser = (schema: JSONSchema, typeName: string, useR
 
   // Find the first pattern with a $ref for parser delegation
   if (!isSchemaObject(schema) || !('patternProperties' in schema)) {
-    return generateObjectParser(schema, typeName, useRefImports)
+    return generateObjectParser(schema, typeName, useRefImports, logUnmatched)
   }
 
   const patternProps = schema.patternProperties as Record<string, JSONSchema>
@@ -757,7 +783,7 @@ const generateCombinedObjectParser = (schema: JSONSchema, typeName: string, useR
   const refPattern = patterns.find(([, ps]) => isSchemaObject(ps) && hasRef(ps))
 
   if (!refPattern || !useRefImports) {
-    return generateObjectParser(schema, typeName, useRefImports)
+    return generateObjectParser(schema, typeName, useRefImports, logUnmatched)
   }
 
   const [pattern, patternSchema] = refPattern
@@ -1071,6 +1097,7 @@ const generateSchemaObjectParser = (typeName: string): string => {
  */
 const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: GenerateParserOptions): string => {
   const useRefImports = options?.useRefImports ?? false
+  const logUnmatched = options?.logUnmatched ?? false
 
   // Special case for SchemaObject - it can be any JSON Schema
   if (typeName === 'SchemaObject') {
@@ -1090,7 +1117,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   // This generates a parser that handles known properties and also iterates
   // pattern-matched keys (e.g. responses with "default" + "200", "4XX").
   if (hasProperties(schema) && isSchemaObject(schema) && 'patternProperties' in schema) {
-    return generateCombinedObjectParser(schema, typeName, useRefImports)
+    return generateCombinedObjectParser(schema, typeName, useRefImports, logUnmatched)
   }
 
   // Handle schemas that have explicit properties — generate a full object parser.
@@ -1098,7 +1125,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   // properties AND conditional keywords use all declared properties rather than
   // only the if/then fragment.
   if (hasProperties(schema)) {
-    return generateObjectParser(schema, typeName, useRefImports)
+    return generateObjectParser(schema, typeName, useRefImports, logUnmatched)
   }
 
   // Handle conditional schemas (if/then/else) for schemas without explicit properties.
@@ -1110,7 +1137,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   // We flatten the fragments into a regular object parser.
   const conditionalObjectSchema = getConditionalObjectSchema(schema)
   if (conditionalObjectSchema) {
-    return generateObjectParser(conditionalObjectSchema, typeName, useRefImports)
+    return generateObjectParser(conditionalObjectSchema, typeName, useRefImports, logUnmatched)
   }
 
   // Handle non-object schemas with type-appropriate validation (no properties, no conditionals)

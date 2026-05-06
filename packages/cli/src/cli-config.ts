@@ -17,4 +17,9 @@ export type CliConfig = {
    * The .ts source files are removed after compilation.
    */
   readonly build?: boolean
+  /**
+   * When true, the generated parsers emit a console.warn for every input key
+   * that is not declared in the schema's properties.
+   */
+  readonly logUnmatched?: boolean
 }
