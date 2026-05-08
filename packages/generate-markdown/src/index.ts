@@ -81,7 +81,7 @@ const END_MARKER = '<!-- config-table-end -->'
 export const generateMarkdown = async (): Promise<void> => {
   const root = process.cwd()
 
-  const schemaRaw = await readFile(resolve(root, 'fixtures', 'config.schema.json'), 'utf-8')
+  const schemaRaw = await readFile(resolve(root, 'config.schema.json'), 'utf-8')
   const schema = JSON.parse(schemaRaw) as ConfigSchema
 
   const table = renderConfigTable(schema)

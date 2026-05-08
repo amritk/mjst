@@ -1,5 +1,5 @@
 {
-  "name": "@amritk/cli",
+  "name": "@amritk/mjst",
   "version": "0.1.0",
   "description": "Generate TypeScript parsers and type definitions from JSON Schemas.",
   "type": "module",
@@ -7,8 +7,6 @@
   "author": "amritk",
   "keywords": [
     "json-schema",
-    "openapi",
-    "asyncapi",
     "typescript",
     "parser",
     "validator",

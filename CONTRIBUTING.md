@@ -20,15 +20,11 @@ You'll need [Bun](https://bun.sh) ≥ 1.1.
 | `bun run check` | Lint with biome |
 | `bun run format` | Auto-format with biome |
 | `bun run build` | Build all publishable packages |
-| `bun run bench` | Run benchmarks |
-| `bun run generate:all` | Regenerate all parser fixtures from the schemas in `fixtures/` |
-
-The `generate:fixtures:*` scripts in the root `package.json` regenerate individual fixture sets — useful when you change codegen and need to refresh the snapshot output.
 
 ## Workflow
 
 1. Create a branch off `main`.
-2. Make your changes. Add tests for new behaviour and update fixtures (`bun run generate:all`) if your change affects generated output.
+2. Make your changes. Add tests for new behaviour.
 3. Run `bun run check`, `bun test`, and `bun run build` locally.
 4. Add a changeset describing your change:
    ```bash

@@ -19,7 +19,7 @@
 
 `@amritk/generate-parsers` is the core code-generation engine behind [mjst](../../README.md). Given a JSON Schema (Draft 2020-12), it produces an array of `{ filename, content }` records — TypeScript type definitions plus optional runtime parser functions that validate and coerce unknown input.
 
-If you want a CLI, use [`@amritk/cli`](../cli). Use this package directly when you want to embed schema-to-TypeScript generation inside another build step or tool.
+If you want a CLI, use [`@amritk/mjst`](../cli). Use this package directly when you want to embed schema-to-TypeScript generation inside another build step or tool.
 
 ---
 
@@ -104,7 +104,7 @@ The generator handles:
 
 ## Related packages
 
-- [`@amritk/cli`](../cli) — CLI wrapping this generator
+- [`@amritk/mjst`](../cli) — CLI wrapping this generator
 - [`@amritk/generate-validators`](../generate-validators) — predicate-style validators (sister package)
 - [`@amritk/generate-markdown`](../generate-markdown) — markdown documentation generator
 - [`@amritk/helpers`](../helpers) — shared schema-traversal utilities

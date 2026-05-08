@@ -7,8 +7,6 @@
   "author": "amritk",
   "keywords": [
     "json-schema",
-    "openapi",
-    "asyncapi",
     "typescript",
     "mjst"
   ],
