@@ -2,14 +2,14 @@
 
 ## Overview
 
-`mjst` is a **Bun monorepo** that generates TypeScript type definitions and runtime parser functions from JSON Schema. It targets JSON Schema 2020-12 and OpenAPI 3.x.
+`mjst` is a **Bun monorepo** that generates TypeScript type definitions and runtime parser functions from JSON Schema (Draft 2020-12).
 
 ## Monorepo Structure
 
 ```
 mjst/
 ├── packages/
-│   ├── cli/                   # @amritk/cli — command-line interface
+│   ├── cli/                   # @amritk/mjst — command-line interface
 │   ├── generate-markdown/     # @amritk/generate-markdown — README generation
 │   └── generate-parsers/      # @amritk/generate-parsers — core code generator
 │       ├── generators/        # Code generation functions
@@ -18,14 +18,13 @@ mjst/
 │       ├── type-guards/       # Runtime type guards for JSON Schema properties
 │       ├── types/             # Internal type definitions
 │       └── validators/        # Runtime validators (also copied to generated output)
-├── fixtures/                  # Real-world schemas used for integration tests
 ├── .claude/                   # Developer guidelines and rules
 └── package.json               # Workspace root (private, no exports)
 ```
 
 ## Packages
 
-### `@amritk/cli`
+### `@amritk/mjst`
 
 Entry point for the CLI tool. Reads a JSON Schema file, runs the generator, and writes TypeScript files to the output directory.
 
@@ -69,7 +68,7 @@ Generates a `README.md` from a `config.schema.json` file and the project's `pack
 JSON Schema file
        │
        ▼
-  @amritk/cli (cli.ts)
+  @amritk/mjst (cli.ts)
        │  reads schema, parses CLI args
        ▼
   buildSchema()                    ← generators/build-schema.ts
@@ -96,7 +95,6 @@ JSON Schema file
 
 - **Framework:** `bun test`
 - **Convention:** test files colocated with implementation, named `*.test.ts`
-- **Fixtures:** real-world OpenAPI and AsyncAPI schemas in `fixtures/` for integration tests
 - **No mocking** except where necessary (e.g. `generate-markdown` tests mock `node:fs/promises`)
 
 Run all tests:

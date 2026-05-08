@@ -89,7 +89,7 @@ Returns: `Promise<GeneratedFile[]>` where `GeneratedFile = { filename: string; c
 ## Related packages
 
 - [`@amritk/generate-parsers`](../generate-parsers) — type definitions plus parsers that coerce input
-- [`@amritk/cli`](../cli) — CLI wrapper around the generators
+- [`@amritk/mjst`](../cli) — CLI wrapper around the generators
 - [`@amritk/helpers`](../helpers) — shared schema-traversal utilities
 
 ---

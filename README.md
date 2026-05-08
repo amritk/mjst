@@ -17,7 +17,7 @@
 
 ## What is mjst?
 
-mjst is a monorepo of code-generation tools that turn a JSON Schema (Draft 2020-12, OpenAPI 2.0 / 3.0 / 3.1 / 3.2, AsyncAPI 3.1) into TypeScript:
+mjst is a monorepo of code-generation tools that turn a JSON Schema (Draft 2020-12) into TypeScript:
 
 - **Parsers** — runtime functions that validate and coerce unknown input into typed values
 - **Validators** — lightweight predicate-style validation functions
@@ -30,7 +30,7 @@ The CLI (`mjst`) is the primary entry point; the underlying generators are also 
 
 | Package | Description |
 |---|---|
-| [`@amritk/cli`](./packages/cli) | Command-line interface — generates parsers, validators, and types from a schema |
+| [`@amritk/mjst`](./packages/cli) | Command-line interface — generates parsers, validators, and types from a schema |
 | [`@amritk/generate-parsers`](./packages/generate-parsers) | Programmatic API for parser + type generation |
 | [`@amritk/generate-validators`](./packages/generate-validators) | Programmatic API for validator generation |
 | [`@amritk/generate-markdown`](./packages/generate-markdown) | Programmatic API for markdown documentation generation |
@@ -41,7 +41,7 @@ The CLI (`mjst`) is the primary entry point; the underlying generators are also 
 Install the CLI:
 
 ```bash
-bun add -d @amritk/cli
+bun add -d @amritk/mjst
 ```
 
 Generate parsers and types from a schema:
@@ -70,7 +70,6 @@ bun install
 bun test            # run the test suite
 bun run check       # lint with biome
 bun run build       # build all publishable packages
-bun run bench       # run benchmarks
 ```
 
 See [`.claude/architecture.md`](./.claude/architecture.md) for monorepo layout and design notes, and [`CONTRIBUTING.md`](./CONTRIBUTING.md) for contribution guidelines.

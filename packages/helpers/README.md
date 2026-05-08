@@ -85,7 +85,7 @@ Each helper has its own colocated test file (`*.test.ts`) — read those for can
 
 - [`@amritk/generate-parsers`](../generate-parsers) — primary consumer
 - [`@amritk/generate-validators`](../generate-validators) — primary consumer
-- [`@amritk/cli`](../cli) — the CLI surface
+- [`@amritk/mjst`](../cli) — the CLI surface
 
 ---
 

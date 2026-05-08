@@ -1,6 +1,6 @@
 <div align="center">
 
-# @amritk/cli
+# @amritk/mjst
 
 **Generate TypeScript parsers and type definitions from JSON Schemas.**
 
@@ -17,7 +17,7 @@
 
 ## Overview
 
-`@amritk/cli` is the command-line entry point for [mjst](../../README.md). Point it at a JSON Schema and it produces TypeScript parsers, validators, and type definitions in the directory of your choice.
+`@amritk/mjst` is the command-line entry point for [mjst](../../README.md). Point it at a JSON Schema and it produces TypeScript parsers, validators, and type definitions in the directory of your choice.
 
 Options can be supplied via CLI flags or a JSON config file. **CLI flags always take precedence over config file values.**
 
@@ -26,7 +26,7 @@ Options can be supplied via CLI flags or a JSON config file. **CLI flags always 
 ## Installation
 
 ```bash
-bun add -d @amritk/cli
+bun add -d @amritk/mjst
 ```
 
 The package ships a `mjst` bin, so you can invoke it via `bunx mjst` or as a script in `package.json`.
@@ -48,7 +48,7 @@ bunx mjst --config ./mjst.config.json
 ```
 
 > [!NOTE]
-> Validate your config against the bundled JSON Schema: [`config.schema.json`](./fixtures/config.schema.json)
+> Validate your config against the bundled JSON Schema: [`config.schema.json`](./config.schema.json)
 
 ---
 

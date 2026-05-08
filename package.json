@@ -20,24 +20,6 @@
   "author": "amritk",
   "license": "MIT",
   "scripts": {
-    "bench": "bun test --bench",
-    "generate:fixtures:2.0": "bun run ./packages/cli/src/cli.ts --schema fixtures/2.0-2017-08-27.json --docs fixtures/2.0.md --outDir fixtures/generate-parsers/2.0",
-    "generate:fixtures:3.0.4": "bun run ./packages/cli/src/cli.ts --schema fixtures/3.0.4-2024-10-18.json --docs fixtures/3.0.4.md --outDir fixtures/generate-parsers/3.0.4",
-    "generate:fixtures:3.1.2": "bun run ./packages/cli/src/cli.ts --schema fixtures/3.1.2-2025-09-15.json --docs fixtures/3.1.2.md --outDir fixtures/generate-parsers/3.1.2",
-    "generate:fixtures:3.2.0": "bun run ./packages/cli/src/cli.ts --schema fixtures/3.2.0-2025-11-23.json --docs fixtures/3.2.0.md --outDir fixtures/generate-parsers/3.2.0",
-    "generate:fixtures:async:3.1.0": "bun run ./packages/cli/src/cli.ts --schema fixtures/asyncapi-3.1.0.json --docs fixtures/asyncapi-3.1.0.md --outDir fixtures/generate-parsers/asyncapi/3.1.0 --build",
-    "generate:fixtures:bench:small": "bun run ./packages/cli/src/cli.ts --schema fixtures/benchmark/small.json --outDir fixtures/generate-parsers/benchmark/small",
-    "generate:fixtures:bench:medium": "bun run ./packages/cli/src/cli.ts --schema fixtures/benchmark/medium.json --outDir fixtures/generate-parsers/benchmark/medium",
-    "generate:fixtures:bench:large": "bun run ./packages/cli/src/cli.ts --schema fixtures/benchmark/large.json --outDir fixtures/generate-parsers/benchmark/large",
-    "generate:fixtures:bench": "bun run generate:fixtures:bench:small && bun run generate:fixtures:bench:medium && bun run generate:fixtures:bench:large",
-    "bench:validation": "bun run generate:fixtures:bench && bun run fixtures/benchmark/validation.bench.ts",
-    "generate:fixtures:2.0:types": "bun run ./packages/cli/src/cli.ts --schema fixtures/2.0-2017-08-27.json --docs fixtures/2.0.md --outDir fixtures/generate-parsers/2.0 --types-only --build",
-    "generate:fixtures:3.0.4:types": "bun run ./packages/cli/src/cli.ts --schema fixtures/3.0.4-2024-10-18.json --docs fixtures/3.0.4.md --outDir fixtures/generate-parsers/3.0.4 --types-only --build",
-    "generate:fixtures:3.1.2:types": "bun run ./packages/cli/src/cli.ts --schema fixtures/3.1.2-2025-09-15.json --docs fixtures/3.1.2.md --outDir fixtures/generate-parsers/3.1.2 --types-only --build",
-    "generate:fixtures:3.2.0:types": "bun run ./packages/cli/src/cli.ts --schema fixtures/3.2.0-2025-11-23.json --docs fixtures/3.2.0.md --outDir fixtures/generate-parsers/3.2.0 --types-only --build",
-    "generate:fixtures:async:3.1.0:types": "bun run ./packages/cli/src/cli.ts --schema fixtures/asyncapi-3.1.0.json --docs fixtures/asyncapi-3.1.0.md --outDir fixtures/generate-parsers/asyncapi/3.1.0 --types-only --build",
-    "generate:all": "bun run generate:fixtures:2.0 && bun run generate:fixtures:3.0.4 && bun run generate:fixtures:3.1.2 && bun run generate:fixtures:3.2.0",
-    "generate:all:types": "bun run generate:fixtures:2.0:types && bun run generate:fixtures:3.0.4:types && bun run generate:fixtures:3.1.2:types && bun run generate:fixtures:3.2.0:types && bun run generate:fixtures:async:3.1.0:types",
     "generate-readmes": "(cd packages/cli && bun run generate-readme) && (cd packages/generate-parsers && bun run generate-readme)",
     "check": "bun run biome check .",
     "format": "bun run biome format --write .",
@@ -47,12 +29,8 @@
   "devDependencies": {
     "@biomejs/biome": "2.4.4",
     "@changesets/cli": "^2.30.0",
-    "@scalar/typebox": "^0.1.3",
-    "@scalar/validation": "^0.1.0",
-    "@scalar/workspace-store": "^0.41.2",
     "@types/bun": "latest",
     "@amritk/helpers": "workspace:*",
-    "tinybench": "^6.0.0",
     "typescript": "^5"
   }
 }

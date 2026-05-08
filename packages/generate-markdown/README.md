@@ -40,13 +40,13 @@ bun add @amritk/generate-markdown
 import { generateMarkdown } from '@amritk/generate-markdown'
 
 await generateMarkdown()
-// Reads ./fixtures/config.schema.json from process.cwd()
+// Reads ./config.schema.json from process.cwd()
 // Writes ./README.md
 ```
 
 The generator currently expects:
 
-- `fixtures/config.schema.json` — the source schema, located relative to the current working directory
+- `config.schema.json` — the source schema, located relative to the current working directory
 - Each property may declare `description`, `default`, `x-cli-flag`, and `x-icon`
 
 The output is a single Markdown table with the columns: icon, property, CLI flag, type, required, default, description.
@@ -57,13 +57,13 @@ The output is a single Markdown table with the columns: icon, property, CLI flag
 
 ### `generateMarkdown(): Promise<void>`
 
-No arguments. Reads from `${cwd}/fixtures/config.schema.json` and writes to `${cwd}/README.md`.
+No arguments. Reads from `${cwd}/config.schema.json` and writes to `${cwd}/README.md`.
 
 ---
 
 ## Related packages
 
-- [`@amritk/cli`](../cli) — uses this package to keep its README's flag table in sync with `config.schema.json`
+- [`@amritk/mjst`](../cli) — uses this package to keep its README's flag table in sync with `config.schema.json`
 - [`@amritk/generate-parsers`](../generate-parsers) — sibling generator for TypeScript parsers and types
 - [`@amritk/generate-validators`](../generate-validators) — sibling generator for predicate validators
 
