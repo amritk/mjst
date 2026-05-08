@@ -38,10 +38,13 @@ The CLI (`mjst`) is the primary entry point; the underlying generators are also 
 
 ## Quick start
 
-Install the CLI:
+Install the CLI with any package manager:
 
 ```bash
-bun add -d @amritk/mjst
+bun add -d @amritk/mjst        # bun
+npm install -D @amritk/mjst    # npm
+pnpm add -D @amritk/mjst       # pnpm
+yarn add -D @amritk/mjst       # yarn
 ```
 
 Generate parsers and types from a schema:
@@ -60,7 +63,7 @@ See the [CLI README](./packages/cli/README.md) for the full flag reference.
 
 ## Requirements
 
-- [Bun](https://bun.sh) ≥ 1.1 (the CLI uses Bun's shell APIs at build time)
+- [Bun](https://bun.sh) ≥ 1.1 — required at runtime. Installation works via `npm`, `pnpm`, `yarn`, or `bun`, but the bin's shebang is `#!/usr/bin/env bun` and the `--build` flag uses Bun's shell APIs, so Bun must be on `PATH` to execute the CLI.
 - TypeScript ≥ 5 in your consuming project
 
 ## Development

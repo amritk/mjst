@@ -22,7 +22,8 @@
     "url": "https://github.com/amritk/mjst/issues"
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "scripts": {
     "build": "bun run build:code && bun run build:types",

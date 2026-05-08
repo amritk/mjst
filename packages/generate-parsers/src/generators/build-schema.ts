@@ -1,4 +1,3 @@
-import { join } from 'node:path'
 import { buildDynamicRefMap } from '@amritk/helpers/build-dynamic-ref-map'
 import { extractRefs } from '@amritk/helpers/extract-refs'
 import { refToFilename } from '@amritk/helpers/ref-to-filename'
@@ -8,9 +7,16 @@ import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { upgradeDraft07Schema } from '@amritk/helpers/upgrade-draft07-schema'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { applySchemaExtensions } from '#helpers/apply-schema-extensions'
+// Templates are read via a Bun macro so the file content is inlined into the
+// bundle at build time (no runtime filesystem lookup) while still working at
+// module-load time during development and tests.
+import { readTemplate } from '#helpers/read-template' with { type: 'macro' }
 import type { SchemaExtensions } from '#types/schema-extensions'
 
 import { generateFile } from './generate-files'
+
+const schemaTemplate = readTemplate('../templates/schema.ts')
+const schemaTypesTemplate = readTemplate('../templates/schema-types.ts')
 
 /**
  * Represents a generated file with its filename and content.
@@ -207,20 +213,14 @@ export const buildSchema = async (
   // definitions (no runtime parser code or @amritk/helpers imports). The full template
   // is only needed when parsers are generated.
   if (typesOnly) {
-    const schemaTypesTemplatePath = join(import.meta.dir, '../templates/schema-types.ts')
-    const schemaTypesTemplateContent = await Bun.file(schemaTypesTemplatePath).text()
-
     files.push({
       filename: 'schema.ts',
-      content: schemaTypesTemplateContent,
+      content: schemaTypesTemplate,
     })
   } else {
-    const schemaTemplatePath = join(import.meta.dir, '../templates/schema.ts')
-    const schemaTemplateContent = await Bun.file(schemaTemplatePath).text()
-
     files.push({
       filename: 'schema.ts',
-      content: schemaTemplateContent,
+      content: schemaTemplate,
     })
   }
 

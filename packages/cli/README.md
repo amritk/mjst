@@ -25,11 +25,16 @@ Options can be supplied via CLI flags or a JSON config file. **CLI flags always 
 
 ## Installation
 
+Install with the package manager of your choice:
+
 ```bash
-bun add -d @amritk/mjst
+bun add -d @amritk/mjst        # bun
+npm install -D @amritk/mjst    # npm
+pnpm add -D @amritk/mjst       # pnpm
+yarn add -D @amritk/mjst       # yarn
 ```
 
-The package ships a `mjst` bin, so you can invoke it via `bunx mjst` or as a script in `package.json`.
+The package ships a `mjst` bin, so you can invoke it via `bunx mjst` (or `npx mjst`) or as a script in `package.json`. The bin's shebang is `#!/usr/bin/env bun`, so [Bun](https://bun.sh) must be on `PATH` to execute it.
 
 ---
 

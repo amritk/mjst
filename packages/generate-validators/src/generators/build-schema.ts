@@ -1,4 +1,3 @@
-import { join } from 'node:path'
 import { buildDynamicRefMap } from '@amritk/helpers/build-dynamic-ref-map'
 import { extractRefs } from '@amritk/helpers/extract-refs'
 import { refToFilename } from '@amritk/helpers/ref-to-filename'
@@ -7,8 +6,14 @@ import { resolveDynamicRefs } from '@amritk/helpers/resolve-dynamic-refs'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { upgradeDraft07Schema } from '@amritk/helpers/upgrade-draft07-schema'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+// Template read via a Bun macro so the file content is inlined into the bundle
+// at build time (no runtime filesystem lookup) while still working at
+// module-load time during development and tests.
+import { readTemplate } from '#helpers/read-template' with { type: 'macro' }
 
 import { generateValidatorFile } from './generate-files'
+
+const validationResultTemplate = readTemplate('../templates/validation-result.ts')
 
 /**
  * Represents a generated TypeScript file with its filename and content.
@@ -94,9 +99,7 @@ export const buildValidatorSchema = async (rootSchema: JSONSchema, rootTypeName:
   }
 
   // Include the validation-result template
-  const templatePath = join(import.meta.dir, '../templates/validation-result.ts')
-  const templateContent = await Bun.file(templatePath).text()
-  files.push({ filename: 'validation-result.ts', content: templateContent })
+  files.push({ filename: 'validation-result.ts', content: validationResultTemplate })
 
   // Generate index.ts
   const TYPE_EXPORT_RE = /^export type (\w+)/gm

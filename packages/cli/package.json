@@ -39,7 +39,8 @@
   },
   "dependencies": {
     "@amritk/generate-parsers": "workspace:*",
-    "@amritk/generate-markdown": "workspace:*"
+    "@amritk/generate-markdown": "workspace:*",
+    "@amritk/helpers": "workspace:*"
   },
   "devDependencies": {
     "json-schema-typed": "catalog:"

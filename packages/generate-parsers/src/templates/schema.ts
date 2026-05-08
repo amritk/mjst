@@ -74,9 +74,9 @@ type SharedProperties = {
   writeOnly?: boolean
   xml?: Record<string, unknown>
   externalDocs?: Record<string, unknown>
-  allOf?: boolean | SchemaObject[]
-  oneOf?: boolean | SchemaObject[]
-  anyOf?: boolean | SchemaObject[]
+  allOf?: (boolean | SchemaObject)[]
+  oneOf?: (boolean | SchemaObject)[]
+  anyOf?: (boolean | SchemaObject)[]
   not?: boolean | SchemaObject
   if?: boolean | SchemaObject
   then?: boolean | SchemaObject
@@ -103,7 +103,7 @@ type StringKeywords = {
 
 type ArrayKeywords = {
   items?: boolean | SchemaObject
-  prefixItems?: boolean | SchemaObject[]
+  prefixItems?: (boolean | SchemaObject)[]
   maxItems?: number
   minItems?: number
   uniqueItems?: boolean
@@ -288,10 +288,10 @@ const parseSchemaOrReference = (value: unknown): boolean | SchemaObject | undefi
 /**
  * Parses an array of schema-or-reference values, filtering out invalid entries.
  */
-const parseSchemaArray = (value: unknown): boolean | SchemaObject[] | undefined => {
+const parseSchemaArray = (value: unknown): (boolean | SchemaObject)[] | undefined => {
   if (!Array.isArray(value)) return undefined
 
-  const result: boolean | SchemaObject[] = []
+  const result: (boolean | SchemaObject)[] = []
   for (let i = 0; i < value.length; i++) {
     const parsed = parseSchemaOrReference(value[i])
     if (parsed !== undefined) result.push(parsed)
