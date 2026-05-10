@@ -1,13 +1,15 @@
-import { afterAll, describe, expect, it, mock } from 'bun:test'
 import { readFile, writeFile } from 'node:fs/promises'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { generateMarkdown } from '.'
 
-// Save the real fs functions before any mocking so we can restore them after.
-// mock.module does not restore on its own — without this cleanup the mocked module
-// leaks into other test files that also use node:fs/promises (e.g. load-config, build-schema).
-const realReadFile = readFile
-const realWriteFile = writeFile
+vi.mock('node:fs/promises', () => ({
+  readFile: vi.fn(),
+  writeFile: vi.fn(),
+}))
+
+const readFileMock = vi.mocked(readFile)
+const writeFileMock = vi.mocked(writeFile)
 
 /**
  * Test data representing a minimal valid schema.
@@ -24,25 +26,20 @@ const minimalSchema = {
   },
 }
 
-const mockFs = (schema: unknown) =>
-  mock.module('node:fs/promises', () => ({
-    readFile: mock(async (path: string) => {
-      if (path.includes('config.schema.json')) {
-        return JSON.stringify(schema)
-      }
-      throw new Error('Unexpected file path')
-    }),
-    writeFile: mock(async () => {}),
-  }))
+const mockFs = (schema: unknown) => {
+  readFileMock.mockImplementation(async (path) => {
+    if (typeof path === 'string' && path.includes('config.schema.json')) {
+      return JSON.stringify(schema)
+    }
+    throw new Error('Unexpected file path')
+  })
+  writeFileMock.mockImplementation(async () => {})
+}
 
 describe('generate-readme', () => {
-  // Restore the real node:fs/promises after the suite completes so that other test files
-  // (e.g. load-config, build-schema) are not affected by the module mock.
-  afterAll(() => {
-    mock.module('node:fs/promises', () => ({
-      readFile: realReadFile,
-      writeFile: realWriteFile,
-    }))
+  beforeEach(() => {
+    readFileMock.mockReset()
+    writeFileMock.mockReset()
   })
 
   it('generates properties table from minimal schema', async () => {
@@ -50,8 +47,8 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    expect(writeFile).toHaveBeenCalledTimes(1)
-    const [path, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    expect(writeFileMock).toHaveBeenCalledTimes(1)
+    const [path, content] = writeFileMock.mock.calls[0] ?? []
     expect(path).toContain('README.md')
     expect(content).toContain('testProp')
   })
@@ -66,7 +63,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = writeFileMock.mock.calls[0] ?? []
     expect(content).toContain('✅')
     expect(content).toContain('testProp')
   })
@@ -87,8 +84,8 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
-    const lines = content.split('\n')
+    const [, content] = writeFileMock.mock.calls[0] ?? []
+    const lines = (content as string).split('\n')
     const optionalLine = lines.find((line: string) => line.includes('optionalProp'))
     expect(optionalLine).toBeDefined()
     expect(optionalLine).toContain('—')
@@ -110,7 +107,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = writeFileMock.mock.calls[0] ?? []
     expect(content).toContain('--test-flag')
   })
 
@@ -119,8 +116,8 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
-    const lines = content.split('\n')
+    const [, content] = writeFileMock.mock.calls[0] ?? []
+    const lines = (content as string).split('\n')
     const propLine = lines.find((line: string) => line.includes('testProp'))
     expect(propLine).toContain('—')
   })
@@ -141,7 +138,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = writeFileMock.mock.calls[0] ?? []
     expect(content).toContain('🎯')
   })
 
@@ -150,7 +147,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = writeFileMock.mock.calls[0] ?? []
     expect(content).toContain('🔧')
   })
 
@@ -170,7 +167,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = writeFileMock.mock.calls[0] ?? []
     expect(content).toContain('"default-value"')
   })
 
@@ -190,7 +187,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = writeFileMock.mock.calls[0] ?? []
     expect(content).toContain('`false`')
   })
 
@@ -210,7 +207,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = writeFileMock.mock.calls[0] ?? []
     expect(content).toContain('`42`')
   })
 
@@ -230,7 +227,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = writeFileMock.mock.calls[0] ?? []
     expect(content).toContain('{"key":"value"}')
   })
 
@@ -250,7 +247,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = writeFileMock.mock.calls[0] ?? []
     expect(content).toContain('["item1","item2"]')
   })
 
@@ -259,8 +256,8 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
-    const lines = content.split('\n')
+    const [, content] = writeFileMock.mock.calls[0] ?? []
+    const lines = (content as string).split('\n')
     const propLine = lines.find((line: string) => line.includes('testProp'))
     const cells = propLine?.split('|').map((cell: string) => cell.trim())
     const defaultCell = cells?.[6]
@@ -283,8 +280,8 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
-    const lines = content.split('\n')
+    const [, content] = writeFileMock.mock.calls[0] ?? []
+    const lines = (content as string).split('\n')
     const propLine = lines.find((line: string) => line.includes('testProp'))
     const cells = propLine?.split('|').map((cell: string) => cell.trim())
     const defaultCell = cells?.[6]
@@ -306,7 +303,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = writeFileMock.mock.calls[0] ?? []
     expect(content).toContain('First paragraph.')
     expect(content).not.toContain('Second paragraph.')
   })
@@ -326,7 +323,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = writeFileMock.mock.calls[0] ?? []
     expect(content).toContain('Line one Line two Line three')
   })
 
@@ -344,7 +341,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = writeFileMock.mock.calls[0] ?? []
     expect(content).toContain('testProp')
   })
 
@@ -353,7 +350,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = writeFileMock.mock.calls[0] ?? []
     expect(content).toContain('| | Property | CLI Flag | Type | Required | Default | Description |')
   })
 
@@ -380,97 +377,74 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = writeFileMock.mock.calls[0] ?? []
     expect(content).toContain('prop1')
     expect(content).toContain('prop2')
     expect(content).toContain('prop3')
   })
 
   it('logs success message to console', async () => {
-    const consoleSpy = mock(() => {})
-    console.log = consoleSpy
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined)
 
     mockFs(minimalSchema)
 
     await generateMarkdown()
 
     expect(consoleSpy).toHaveBeenCalledWith('README.md generated successfully.')
+
+    consoleSpy.mockRestore()
   })
 
   it('resolves schema file path from current working directory', async () => {
-    const readFileSpy = mock(async (path: string) => {
-      if (path.includes('config.schema.json')) {
-        return JSON.stringify(minimalSchema)
-      }
-      throw new Error('Unexpected file path')
-    })
-
-    mock.module('node:fs/promises', () => ({
-      readFile: readFileSpy,
-      writeFile: mock(async () => {}),
-    }))
+    mockFs(minimalSchema)
 
     await generateMarkdown()
 
-    const calls = readFileSpy.mock.calls
+    const calls = readFileMock.mock.calls
     expect(calls[0]?.[0]).toContain(process.cwd())
   })
 
   it('writes README to correct path', async () => {
-    const writeFileSpy = mock(async (_path: string, _content: string) => {})
-
-    mock.module('node:fs/promises', () => ({
-      readFile: mock(async (path: string) => {
-        if (path.includes('config.schema.json')) {
-          return JSON.stringify(minimalSchema)
-        }
-        throw new Error('Unexpected file path')
-      }),
-      writeFile: writeFileSpy,
-    }))
+    mockFs(minimalSchema)
 
     await generateMarkdown()
 
-    const [path] = writeFileSpy.mock.calls[0] ?? []
+    const [path] = writeFileMock.mock.calls[0] ?? []
     expect(path).toContain('README.md')
     expect(path).toContain(process.cwd())
   })
 
   it('reads schema file and attempts to read README', async () => {
-    const readFileSpy = mock(async (path: string) => {
-      if (path.includes('config.schema.json')) {
+    readFileMock.mockImplementation(async (path) => {
+      if (typeof path === 'string' && path.includes('config.schema.json')) {
         return JSON.stringify(minimalSchema)
       }
       throw new Error('ENOENT')
     })
-
-    mock.module('node:fs/promises', () => ({
-      readFile: readFileSpy,
-      writeFile: mock(async () => {}),
-    }))
+    writeFileMock.mockImplementation(async () => {})
 
     await generateMarkdown()
 
     // Two reads: config.schema.json + README.md attempt
-    expect(readFileSpy).toHaveBeenCalledTimes(2)
+    expect(readFileMock).toHaveBeenCalledTimes(2)
   })
 
   describe('marker injection', () => {
     it('injects table between markers when both markers are present', async () => {
       const existingReadme = `# My Package\n\n<!-- config-table-start -->\nold content\n<!-- config-table-end -->\n\n---\n`
 
-      mock.module('node:fs/promises', () => ({
-        readFile: mock(async (path: string) => {
+      readFileMock.mockImplementation(async (path) => {
+        if (typeof path === 'string') {
           if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
           if (path.includes('README.md')) return existingReadme
-          throw new Error('Unexpected file path')
-        }),
-        writeFile: mock(async () => {}),
-      }))
+        }
+        throw new Error('Unexpected file path')
+      })
+      writeFileMock.mockImplementation(async () => {})
 
       await generateMarkdown()
 
-      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+      const [, content] = writeFileMock.mock.calls[0] ?? []
       expect(content).toContain('# My Package')
       expect(content).toContain('<!-- config-table-start -->')
       expect(content).toContain('<!-- config-table-end -->')
@@ -482,36 +456,36 @@ describe('generate-readme', () => {
     it('preserves content before start marker', async () => {
       const existingReadme = `# Header\n\nSome intro.\n\n<!-- config-table-start -->\n<!-- config-table-end -->\n`
 
-      mock.module('node:fs/promises', () => ({
-        readFile: mock(async (path: string) => {
+      readFileMock.mockImplementation(async (path) => {
+        if (typeof path === 'string') {
           if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
           if (path.includes('README.md')) return existingReadme
-          throw new Error('Unexpected file path')
-        }),
-        writeFile: mock(async () => {}),
-      }))
+        }
+        throw new Error('Unexpected file path')
+      })
+      writeFileMock.mockImplementation(async () => {})
 
       await generateMarkdown()
 
-      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
-      expect(content.startsWith('# Header\n\nSome intro.')).toBe(true)
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect((content as string).startsWith('# Header\n\nSome intro.')).toBe(true)
     })
 
     it('preserves content after end marker', async () => {
       const existingReadme = `<!-- config-table-start -->\n<!-- config-table-end -->\n\n## License\n\nMIT\n`
 
-      mock.module('node:fs/promises', () => ({
-        readFile: mock(async (path: string) => {
+      readFileMock.mockImplementation(async (path) => {
+        if (typeof path === 'string') {
           if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
           if (path.includes('README.md')) return existingReadme
-          throw new Error('Unexpected file path')
-        }),
-        writeFile: mock(async () => {}),
-      }))
+        }
+        throw new Error('Unexpected file path')
+      })
+      writeFileMock.mockImplementation(async () => {})
 
       await generateMarkdown()
 
-      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+      const [, content] = writeFileMock.mock.calls[0] ?? []
       expect(content).toContain('## License')
       expect(content).toContain('MIT')
     })
@@ -519,34 +493,34 @@ describe('generate-readme', () => {
     it('falls back to table-only when README has no markers', async () => {
       const existingReadme = `# My Package\n\nNo markers here.\n`
 
-      mock.module('node:fs/promises', () => ({
-        readFile: mock(async (path: string) => {
+      readFileMock.mockImplementation(async (path) => {
+        if (typeof path === 'string') {
           if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
           if (path.includes('README.md')) return existingReadme
-          throw new Error('Unexpected file path')
-        }),
-        writeFile: mock(async () => {}),
-      }))
+        }
+        throw new Error('Unexpected file path')
+      })
+      writeFileMock.mockImplementation(async () => {})
 
       await generateMarkdown()
 
-      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+      const [, content] = writeFileMock.mock.calls[0] ?? []
       expect(content).not.toContain('# My Package')
       expect(content).toContain('testProp')
     })
 
     it('falls back to table-only when README does not exist', async () => {
-      mock.module('node:fs/promises', () => ({
-        readFile: mock(async (path: string) => {
-          if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
-          throw new Error('ENOENT: no such file or directory')
-        }),
-        writeFile: mock(async () => {}),
-      }))
+      readFileMock.mockImplementation(async (path) => {
+        if (typeof path === 'string' && path.includes('config.schema.json')) {
+          return JSON.stringify(minimalSchema)
+        }
+        throw new Error('ENOENT: no such file or directory')
+      })
+      writeFileMock.mockImplementation(async () => {})
 
       await generateMarkdown()
 
-      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+      const [, content] = writeFileMock.mock.calls[0] ?? []
       expect(content).toContain('testProp')
     })
   })

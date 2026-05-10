@@ -87,20 +87,20 @@ JSON Schema file
 
 ## Testing
 
-- **Framework:** `bun test`
+- **Framework:** `vitest`
 - **Convention:** test files colocated with implementation, named `*.test.ts`
 - **No mocking** except where necessary (e.g. `generate-markdown` tests mock `node:fs/promises`)
 
 Run all tests:
 
 ```sh
-bun test
+bun run test
 ```
 
 Run tests for a specific package:
 
 ```sh
-bun test ./packages/generate-parsers/
+bun run test ./packages/generate-parsers/
 ```
 
 ## Design Principles

@@ -1,8 +1,13 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
+import { execFile } from 'node:child_process'
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 import { buildSchema } from '@amritk/generate-parsers'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
+const execFileAsync = promisify(execFile)
 
 import { loadConfig } from './load-config'
 import { parseCliArgs } from './parse-cli-args'
@@ -69,7 +74,7 @@ const run = async (): Promise<void> => {
     // Write a minimal tsconfig so tsc can compile the generated files without
     // inheriting settings like allowImportingTsExtensions that block emission.
     // Add paths so tsc can resolve @amritk/helpers from the output directory.
-    const helpersDir = resolve(import.meta.dir, '../../helpers/dist')
+    const helpersDir = resolve(dirname(fileURLToPath(import.meta.url)), '../../helpers/dist')
     const helpersRelative = relative(outputDir, helpersDir)
     const tsconfigContent = JSON.stringify(
       {
@@ -94,7 +99,7 @@ const run = async (): Promise<void> => {
     await writeFile(tsconfigPath, tsconfigContent, 'utf-8')
 
     try {
-      await Bun.$`bunx tsc --project ${tsconfigPath}`.quiet()
+      await execFileAsync('npx', ['tsc', '--project', tsconfigPath])
     } catch {
       throw new Error('TypeScript compilation failed. Check the generated files for errors.')
     } finally {

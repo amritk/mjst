@@ -23,14 +23,15 @@
     "generate-readmes": "(cd packages/cli && bun run generate-readme) && (cd packages/generate-parsers && bun run generate-readme)",
     "check": "bun run biome check .",
     "format": "bun run biome format --write .",
-    "test": "bun test",
+    "test": "vitest run",
     "build": "bun run --filter='./packages/*' build"
   },
   "devDependencies": {
+    "@amritk/helpers": "workspace:*",
     "@biomejs/biome": "2.4.4",
     "@changesets/cli": "^2.30.0",
     "@types/bun": "latest",
-    "@amritk/helpers": "workspace:*",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.5"
   }
 }
