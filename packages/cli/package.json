@@ -33,7 +33,7 @@
     "dev": "bun run --conditions=development ./src/cli.ts",
     "start": "bun run ./src/cli.ts",
     "build": "bun run build:code && bun run build:types",
-    "build:code": "bun build ./src/cli.ts --outdir=dist --target=bun --banner='#!/usr/bin/env bun'",
+    "build:code": "bun build ./src/cli.ts --outdir=dist --target=node",
     "build:types": "tsc -p .",
     "generate-readme": "bun run ./scripts/generate-readme.ts"
   },
