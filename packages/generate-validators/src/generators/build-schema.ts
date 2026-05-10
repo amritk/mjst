@@ -1,4 +1,3 @@
-import { join } from 'node:path'
 import { buildDynamicRefMap } from '@amritk/helpers/build-dynamic-ref-map'
 import { extractRefs } from '@amritk/helpers/extract-refs'
 import { refToFilename } from '@amritk/helpers/ref-to-filename'
@@ -18,6 +17,23 @@ export type GeneratedFile = {
   content: string
 }
 
+const VALIDATION_RESULT_CONTENT = `/**
+ * A single validation error with a human-readable message and a JSON Pointer
+ * path indicating where in the document the error occurred.
+ */
+export type ValidationError = {
+  message: string
+  path: string
+}
+
+/**
+ * The result of a generated validator function.
+ * Returns \`true\` when the input is valid, or an object with \`valid: false\`
+ * and a list of errors when it is not.
+ */
+export type ValidationResult = true | { valid: false; errors: ValidationError[] }
+`
+
 /**
  * Builds all TypeScript validator files from a JSON Schema by traversing
  * all $ref references recursively, mirroring the generate-parsers pipeline.
@@ -26,8 +42,8 @@ export type GeneratedFile = {
  * - A TypeScript type definition
  * - A `validateFoo(input: unknown, _path?: string): ValidationResult` function
  *
- * A `validation-result.ts` template is always included. An `index.ts` re-exports
- * everything from all generated files.
+ * A `validation-result.ts` file containing the `ValidationResult` and `ValidationError`
+ * runtime contract is always emitted. An `index.ts` re-exports everything.
  *
  * @param rootSchema - The root JSON Schema to build from
  * @param rootTypeName - The name for the root type (e.g. "Document")
@@ -93,10 +109,9 @@ export const buildValidatorSchema = async (rootSchema: JSONSchema, rootTypeName:
     }
   }
 
-  // Include the validation-result template
-  const templatePath = join(import.meta.dir, '../templates/validation-result.ts')
-  const templateContent = await Bun.file(templatePath).text()
-  files.push({ filename: 'validation-result.ts', content: templateContent })
+  // Emit the runtime contract for validators. ValidationResult is mjst-defined
+  // (not derived from the input schema), so its content is fixed.
+  files.push({ filename: 'validation-result.ts', content: VALIDATION_RESULT_CONTENT })
 
   // Generate index.ts
   const TYPE_EXPORT_RE = /^export type (\w+)/gm

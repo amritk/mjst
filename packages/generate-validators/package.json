@@ -32,8 +32,7 @@
     "build:types": "tsc -p ."
   },
   "imports": {
-    "#generators/*": "./src/generators/*.ts",
-    "#templates/*": "./src/templates/*.ts"
+    "#generators/*": "./src/generators/*.ts"
   },
   "exports": {
     ".": {

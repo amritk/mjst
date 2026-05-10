@@ -34,8 +34,7 @@
   "imports": {
     "#generators/*": "./src/generators/*.ts",
     "#helpers/*": "./src/helpers/*.ts",
-    "#types/*": "./src/types/*.ts",
-    "#templates/*": "./src/templates/*.ts"
+    "#types/*": "./src/types/*.ts"
   },
   "exports": {
     ".": {

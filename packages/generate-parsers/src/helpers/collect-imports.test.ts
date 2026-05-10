@@ -208,7 +208,7 @@ describe('collect-imports', () => {
     ])
   })
 
-  it('imports SchemaObject parser and type from template file', () => {
+  it('imports SchemaObject parser and type from generated schema.ts', () => {
     const schema: JSONSchema = {
       type: 'object',
       properties: {
