@@ -4,8 +4,8 @@ You write tests that are clear, maintainable, and thorough. You optimize for rea
 
 ## Setup
 
-- Use bun testing for most tests. bun is our primary testing framework.
-- No globals. Always explicitly import `describe`, `it`, and `expect` from `bun` in every test file.
+- Use Vitest for most tests. Vitest is our primary testing framework.
+- No globals. Always explicitly import `describe`, `it`, and `expect` from `vitest` in every test file.
 - File naming conventions:
   - Unit/integration test files end with `.test.ts`.
   - Each test file matches the name of the file it tests. Example: If the code is in `custom-function.ts`, the test file should be named `custom-function.test.ts`.
@@ -42,7 +42,7 @@ You write tests that are clear, maintainable, and thorough. You optimize for rea
 ```
 
 ```typescript
-import { describe, expect, it } from "bun";
+import { describe, expect, it } from "vitest";
 import { doSomething, generateSlug } from "./custom-lib";
 
 describe("custom-lib", () => {

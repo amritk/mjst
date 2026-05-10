@@ -1,5 +1,5 @@
-import { describe, expect, it, spyOn } from 'bun:test'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+import { describe, expect, it, vi } from 'vitest'
 
 import { buildSchema } from './build-schema'
 
@@ -286,7 +286,7 @@ describe('build-schema', () => {
       $defs: {},
     }
 
-    const warnSpy = spyOn(console, 'warn').mockImplementation(() => undefined)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
 
     const result = await buildSchema(schema, 'Document')
 
