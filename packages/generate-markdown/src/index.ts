@@ -72,7 +72,7 @@ const END_MARKER = '<!-- config-table-end -->'
 /**
  * Generates the properties table from the JSON Schema and writes it to README.md.
  * Every user-facing description comes from the schema so the two stay in sync —
- * update the schema, then run `bun run generate-readme`.
+ * update the schema, then run `pnpm run generate-readme`.
  *
  * If README.md already exists and contains <!-- config-table-start --> and
  * <!-- config-table-end --> markers, only the content between those markers is

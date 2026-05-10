@@ -2,7 +2,7 @@
   "compilerOptions": {
     // Environment setup & latest features
     "lib": ["ESNext"],
-    "target": "ESNext",
+    "target": "ES2022",
     "module": "Preserve",
     "moduleDetection": "force",
 
@@ -15,6 +15,7 @@
     // Best practices
     "strict": true,
     "skipLibCheck": true,
+    "esModuleInterop": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,

@@ -10,11 +10,12 @@
 
 <!-- How did you verify this works? -->
 
-- [ ] `bun test` passes
-- [ ] `bun run check` passes
-- [ ] `bun run build` passes
-- [ ] Fixtures regenerated if codegen changed (`bun run generate:all`)
-- [ ] Changeset added (`bunx changeset`) if this affects a published package
+- [ ] `pnpm test` passes
+- [ ] `pnpm run check` passes
+- [ ] `pnpm run typecheck` passes
+- [ ] `pnpm run build` passes
+- [ ] Fixtures regenerated if codegen changed (`pnpm run generate:all`)
+- [ ] Changeset added (`pnpm changeset`) if this affects a published package
 
 ## Related issues
 

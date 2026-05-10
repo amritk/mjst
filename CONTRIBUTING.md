@@ -7,38 +7,38 @@ Thanks for your interest. mjst is pre-alpha; the surface area is still moving, s
 ```bash
 git clone https://github.com/amritk/mjst.git
 cd mjst
-bun install
+pnpm install
 ```
 
-You'll need [Bun](https://bun.sh) ≥ 1.1.
+You'll need [Node.js](https://nodejs.org) ≥ 20 and [pnpm](https://pnpm.io) ≥ 9.
 
 ## Common commands
 
 | Command | What it does |
 |---|---|
-| `bun test` | Run the full test suite |
-| `bun run check` | Lint with biome |
-| `bun run format` | Auto-format with biome |
-| `bun run build` | Build all publishable packages |
+| `pnpm test` | Run the full test suite (vitest) |
+| `pnpm run check` | Lint with biome |
+| `pnpm run format` | Auto-format with biome |
+| `pnpm run typecheck` | Type-check every package |
+| `pnpm run build` | Build all publishable packages |
 
 ## Workflow
 
 1. Create a branch off `main`.
 2. Make your changes. Add tests for new behaviour.
-3. Run `bun run check`, `bun test`, and `bun run build` locally.
+3. Run `pnpm run check`, `pnpm test`, and `pnpm run build` locally.
 4. Add a changeset describing your change:
    ```bash
-   bunx changeset
+   pnpm changeset
    ```
    Pick the affected packages and a semver bump. The release workflow turns this into a version PR + npm publish on merge to `main`.
 5. Open a pull request.
 
 ## Code style
 
-- TypeScript style, formatting, and conventions are enforced by [Biome](./biome.json) — run `bun run format` before pushing.
+- TypeScript style, formatting, and conventions are enforced by [Biome](./biome.json) — run `pnpm run format` before pushing.
 - Project-specific guidelines live in [`.claude/`](./.claude):
   - `typescript.md` — type-level conventions
-  - `bun.md` — Bun-specific APIs
   - `comments.md` — when (and when not) to write comments
   - `testing.md` — how tests are organized
   - `architecture.md` — monorepo layout and design

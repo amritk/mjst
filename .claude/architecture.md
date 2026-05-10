@@ -2,7 +2,7 @@
 
 ## Overview
 
-`mjst` is a **Bun monorepo** that generates TypeScript type definitions and runtime parser functions from JSON Schema (Draft 2020-12).
+`mjst` is a **pnpm monorepo** that generates TypeScript type definitions and runtime parser functions from JSON Schema (Draft 2020-12). It targets Node.js ≥ 20.
 
 ## Monorepo Structure
 
@@ -87,20 +87,29 @@ JSON Schema file
 
 ## Testing
 
-- **Framework:** `bun test`
+- **Framework:** [vitest](https://vitest.dev) (configured in `vitest.config.ts`)
 - **Convention:** test files colocated with implementation, named `*.test.ts`
-- **No mocking** except where necessary (e.g. `generate-markdown` tests mock `node:fs/promises`)
+- **No mocking** except where necessary (e.g. `generate-markdown` tests mock `node:fs/promises` via `vi.mock`)
 
 Run all tests:
 
 ```sh
-bun test
+pnpm test
 ```
 
-Run tests for a specific package:
+Run tests for a specific package or file:
 
 ```sh
-bun test ./packages/generate-parsers/
+pnpm test packages/generate-parsers
+pnpm test packages/generate-parsers/src/generators/build-schema.test.ts
+```
+
+## Build
+
+Each publishable package builds with [tsup](https://tsup.egoist.dev) (esbuild + a tsc DTS pass). Build scripts emit ESM JS + `.d.ts` to `dist/`. The CLI bin (`packages/cli/dist/cli.js`) is bundled with a `#!/usr/bin/env node` shebang so it works under `npx`/`pnpx`.
+
+```sh
+pnpm run build
 ```
 
 ## Design Principles

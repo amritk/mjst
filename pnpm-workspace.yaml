@@ -1,0 +1,5 @@
+packages:
+  - 'packages/*'
+
+catalog:
+  json-schema-typed: ^8.0.1

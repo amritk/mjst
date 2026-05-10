@@ -19,7 +19,7 @@ You write TypeScript code that is clear, predictable, and easy to maintain. The 
 - Use `satisfies` instead of `as`.
 - Always use arrow functions when possible.
 - Import using package.json `imports` (subpath imports), e.g. `import x from "#markdown/generate-markdown"`.
-- Use bun for packages.
+- Use pnpm for packages.
 - Use one function per file.
 - Do not use classes, use functional programming paradigms.
 

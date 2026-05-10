@@ -2,8 +2,10 @@
   "name": "@amritk/generate-validators",
   "version": "0.1.0",
   "description": "Generate TypeScript validation functions from JSON Schemas.",
-  "module": "./dist/index.js",
   "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "license": "MIT",
   "author": "amritk",
   "keywords": [
@@ -27,22 +29,21 @@
     "dist"
   ],
   "scripts": {
-    "build": "bun run build:code && bun run build:types",
-    "build:code": "bun build ./src/index.ts --outdir=dist",
-    "build:types": "tsc -p ."
+    "build": "tsup",
+    "typecheck": "tsc -p ."
   },
   "imports": {
     "#generators/*": "./src/generators/*.ts"
   },
   "exports": {
     ".": {
-      "bun": "./src/index.ts",
-      "default": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     }
   },
   "dependencies": {
-    "json-schema-typed": "catalog:",
+    "json-schema-typed": "^8.0.1",
     "@amritk/helpers": "workspace:*"
   },
   "devDependencies": {

@@ -30,18 +30,19 @@
     "dist"
   ],
   "scripts": {
-    "dev": "bun run --conditions=development ./src/cli.ts",
-    "start": "bun run ./src/cli.ts",
-    "build": "bun run build:code && bun run build:types",
-    "build:code": "bun build ./src/cli.ts --outdir=dist --target=bun --banner='#!/usr/bin/env bun'",
-    "build:types": "tsc -p .",
-    "generate-readme": "bun run ./scripts/generate-readme.ts"
+    "dev": "tsx ./src/cli.ts",
+    "start": "node ./dist/cli.js",
+    "build": "tsup",
+    "typecheck": "tsc -p .",
+    "generate-readme": "tsx ./scripts/generate-readme.ts"
   },
   "dependencies": {
     "@amritk/generate-parsers": "workspace:*",
-    "@amritk/generate-markdown": "workspace:*"
+    "@amritk/helpers": "workspace:*",
+    "typescript": "^5"
   },
   "devDependencies": {
-    "json-schema-typed": "catalog:"
+    "@amritk/generate-markdown": "workspace:*",
+    "json-schema-typed": "^8.0.1"
   }
 }

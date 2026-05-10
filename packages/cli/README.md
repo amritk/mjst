@@ -8,7 +8,7 @@
 ![version](https://img.shields.io/badge/version-v0.1.0-6366f1?style=flat-square&logo=npm&logoColor=white)&nbsp;
 ![license](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)&nbsp;
 ![JSON Schema](https://img.shields.io/badge/JSON%20Schema-2020--12-f97316?style=flat-square)&nbsp;
-![bun](https://img.shields.io/badge/bun-required-FBF0DF?style=flat-square&logo=bun&logoColor=000000)&nbsp;
+![node](https://img.shields.io/badge/node-%E2%89%A520-339933?style=flat-square&logo=node.js&logoColor=white)&nbsp;
 ![vibe coded](https://img.shields.io/badge/vibe%20coded-24%25-a855f7?style=flat-square)
 
 </div>
@@ -26,10 +26,10 @@ Options can be supplied via CLI flags or a JSON config file. **CLI flags always 
 ## Installation
 
 ```bash
-bun add -d @amritk/mjst
+pnpm add -D @amritk/mjst
 ```
 
-The package ships a `mjst` bin, so you can invoke it via `bunx mjst` or as a script in `package.json`.
+The package ships a `mjst` bin, so you can invoke it via `pnpm exec mjst` (or `npx mjst`) or as a script in `package.json`.
 
 ---
 
@@ -38,13 +38,13 @@ The package ships a `mjst` bin, so you can invoke it via `bunx mjst` or as a scr
 ### CLI
 
 ```bash
-bunx mjst --schema ./schema.json --outDir ./generated
+pnpm exec mjst --schema ./schema.json --outDir ./generated
 ```
 
 ### Config file
 
 ```bash
-bunx mjst --config ./mjst.config.json
+pnpm exec mjst --config ./mjst.config.json
 ```
 
 > [!NOTE]
@@ -114,10 +114,11 @@ bunx mjst --config ./mjst.config.json
 
 | Script | Command |
 |:---|:---|
-| `bun run dev` | `bun run --conditions=development ./src/cli.ts` |
-| `bun run start` | `bun run ./src/cli.ts` |
-| `bun run build` | `bun run build:code && bun run build:types` |
-| `bun run generate-readme` | `bun run generate-readme` |
+| `pnpm run dev` | `tsx ./src/cli.ts` |
+| `pnpm run start` | `node ./dist/cli.js` |
+| `pnpm run build` | `tsup` |
+| `pnpm run typecheck` | `tsc -p .` |
+| `pnpm run generate-readme` | `tsx ./scripts/generate-readme.ts` |
 
 ---
 

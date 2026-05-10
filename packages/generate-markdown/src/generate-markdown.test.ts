@@ -1,13 +1,12 @@
-import { afterAll, describe, expect, it, mock } from 'bun:test'
 import { readFile, writeFile } from 'node:fs/promises'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { generateMarkdown } from '.'
 
-// Save the real fs functions before any mocking so we can restore them after.
-// mock.module does not restore on its own — without this cleanup the mocked module
-// leaks into other test files that also use node:fs/promises (e.g. load-config, build-schema).
-const realReadFile = readFile
-const realWriteFile = writeFile
+vi.mock('node:fs/promises', () => ({
+  readFile: vi.fn(),
+  writeFile: vi.fn(),
+}))
 
 /**
  * Test data representing a minimal valid schema.
@@ -24,34 +23,28 @@ const minimalSchema = {
   },
 }
 
-const mockFs = (schema: unknown) =>
-  mock.module('node:fs/promises', () => ({
-    readFile: mock(async (path: string) => {
-      if (path.includes('config.schema.json')) {
-        return JSON.stringify(schema)
-      }
-      throw new Error('Unexpected file path')
-    }),
-    writeFile: mock(async () => {}),
-  }))
+const setupFs = (schema: unknown, readme?: string): void => {
+  vi.mocked(readFile).mockImplementation(async (path: Parameters<typeof readFile>[0]) => {
+    const p = String(path)
+    if (p.includes('config.schema.json')) return JSON.stringify(schema)
+    if (p.includes('README.md') && readme !== undefined) return readme
+    throw Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' })
+  })
+  vi.mocked(writeFile).mockResolvedValue(undefined)
+}
 
 describe('generate-readme', () => {
-  // Restore the real node:fs/promises after the suite completes so that other test files
-  // (e.g. load-config, build-schema) are not affected by the module mock.
-  afterAll(() => {
-    mock.module('node:fs/promises', () => ({
-      readFile: realReadFile,
-      writeFile: realWriteFile,
-    }))
+  beforeEach(() => {
+    vi.clearAllMocks()
   })
 
   it('generates properties table from minimal schema', async () => {
-    mockFs(minimalSchema)
+    setupFs(minimalSchema)
 
     await generateMarkdown()
 
     expect(writeFile).toHaveBeenCalledTimes(1)
-    const [path, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [path, content] = vi.mocked(writeFile).mock.calls[0] ?? []
     expect(path).toContain('README.md')
     expect(content).toContain('testProp')
   })
@@ -62,11 +55,11 @@ describe('generate-readme', () => {
       required: ['testProp'],
     }
 
-    mockFs(schemaWithRequired)
+    setupFs(schemaWithRequired)
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
     expect(content).toContain('✅')
     expect(content).toContain('testProp')
   })
@@ -83,13 +76,13 @@ describe('generate-readme', () => {
       },
     }
 
-    mockFs(schemaWithOptional)
+    setupFs(schemaWithOptional)
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
-    const lines = content.split('\n')
-    const optionalLine = lines.find((line: string) => line.includes('optionalProp'))
+    const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
+    const lines = String(content).split('\n')
+    const optionalLine = lines.find((line) => line.includes('optionalProp'))
     expect(optionalLine).toBeDefined()
     expect(optionalLine).toContain('—')
   })
@@ -106,22 +99,22 @@ describe('generate-readme', () => {
       },
     }
 
-    mockFs(schemaWithCliFlag)
+    setupFs(schemaWithCliFlag)
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
     expect(content).toContain('--test-flag')
   })
 
   it('renders em dash when CLI flag is not present', async () => {
-    mockFs(minimalSchema)
+    setupFs(minimalSchema)
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
-    const lines = content.split('\n')
-    const propLine = lines.find((line: string) => line.includes('testProp'))
+    const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
+    const lines = String(content).split('\n')
+    const propLine = lines.find((line) => line.includes('testProp'))
     expect(propLine).toContain('—')
   })
 
@@ -137,20 +130,20 @@ describe('generate-readme', () => {
       },
     }
 
-    mockFs(schemaWithIcon)
+    setupFs(schemaWithIcon)
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
     expect(content).toContain('🎯')
   })
 
   it('renders default icon when x-icon is not present', async () => {
-    mockFs(minimalSchema)
+    setupFs(minimalSchema)
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
     expect(content).toContain('🔧')
   })
 
@@ -166,11 +159,11 @@ describe('generate-readme', () => {
       },
     }
 
-    mockFs(schemaWithStringDefault)
+    setupFs(schemaWithStringDefault)
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
     expect(content).toContain('"default-value"')
   })
 
@@ -186,11 +179,11 @@ describe('generate-readme', () => {
       },
     }
 
-    mockFs(schemaWithBooleanDefault)
+    setupFs(schemaWithBooleanDefault)
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
     expect(content).toContain('`false`')
   })
 
@@ -206,11 +199,11 @@ describe('generate-readme', () => {
       },
     }
 
-    mockFs(schemaWithNumberDefault)
+    setupFs(schemaWithNumberDefault)
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
     expect(content).toContain('`42`')
   })
 
@@ -226,11 +219,11 @@ describe('generate-readme', () => {
       },
     }
 
-    mockFs(schemaWithObjectDefault)
+    setupFs(schemaWithObjectDefault)
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
     expect(content).toContain('{"key":"value"}')
   })
 
@@ -246,23 +239,23 @@ describe('generate-readme', () => {
       },
     }
 
-    mockFs(schemaWithArrayDefault)
+    setupFs(schemaWithArrayDefault)
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
     expect(content).toContain('["item1","item2"]')
   })
 
   it('renders em dash for undefined default values', async () => {
-    mockFs(minimalSchema)
+    setupFs(minimalSchema)
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
-    const lines = content.split('\n')
-    const propLine = lines.find((line: string) => line.includes('testProp'))
-    const cells = propLine?.split('|').map((cell: string) => cell.trim())
+    const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
+    const lines = String(content).split('\n')
+    const propLine = lines.find((line) => line.includes('testProp'))
+    const cells = propLine?.split('|').map((cell) => cell.trim())
     const defaultCell = cells?.[6]
     expect(defaultCell).toBe('—')
   })
@@ -279,14 +272,14 @@ describe('generate-readme', () => {
       },
     }
 
-    mockFs(schemaWithNullDefault)
+    setupFs(schemaWithNullDefault)
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
-    const lines = content.split('\n')
-    const propLine = lines.find((line: string) => line.includes('testProp'))
-    const cells = propLine?.split('|').map((cell: string) => cell.trim())
+    const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
+    const lines = String(content).split('\n')
+    const propLine = lines.find((line) => line.includes('testProp'))
+    const cells = propLine?.split('|').map((cell) => cell.trim())
     const defaultCell = cells?.[6]
     expect(defaultCell).toBe('—')
   })
@@ -302,11 +295,11 @@ describe('generate-readme', () => {
       },
     }
 
-    mockFs(schemaWithMultiParagraph)
+    setupFs(schemaWithMultiParagraph)
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
     expect(content).toContain('First paragraph.')
     expect(content).not.toContain('Second paragraph.')
   })
@@ -322,11 +315,11 @@ describe('generate-readme', () => {
       },
     }
 
-    mockFs(schemaWithNewlines)
+    setupFs(schemaWithNewlines)
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
     expect(content).toContain('Line one Line two Line three')
   })
 
@@ -340,20 +333,20 @@ describe('generate-readme', () => {
       },
     }
 
-    mockFs(schemaWithoutDescription)
+    setupFs(schemaWithoutDescription)
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
     expect(content).toContain('testProp')
   })
 
   it('includes table header with correct columns', async () => {
-    mockFs(minimalSchema)
+    setupFs(minimalSchema)
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
     expect(content).toContain('| | Property | CLI Flag | Type | Required | Default | Description |')
   })
 
@@ -376,101 +369,64 @@ describe('generate-readme', () => {
       },
     }
 
-    mockFs(schemaWithMultipleProps)
+    setupFs(schemaWithMultipleProps)
 
     await generateMarkdown()
 
-    const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+    const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
     expect(content).toContain('prop1')
     expect(content).toContain('prop2')
     expect(content).toContain('prop3')
   })
 
   it('logs success message to console', async () => {
-    const consoleSpy = mock(() => {})
-    console.log = consoleSpy
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined)
 
-    mockFs(minimalSchema)
+    setupFs(minimalSchema)
 
     await generateMarkdown()
 
     expect(consoleSpy).toHaveBeenCalledWith('README.md generated successfully.')
+    consoleSpy.mockRestore()
   })
 
   it('resolves schema file path from current working directory', async () => {
-    const readFileSpy = mock(async (path: string) => {
-      if (path.includes('config.schema.json')) {
-        return JSON.stringify(minimalSchema)
-      }
-      throw new Error('Unexpected file path')
-    })
-
-    mock.module('node:fs/promises', () => ({
-      readFile: readFileSpy,
-      writeFile: mock(async () => {}),
-    }))
+    setupFs(minimalSchema)
 
     await generateMarkdown()
 
-    const calls = readFileSpy.mock.calls
-    expect(calls[0]?.[0]).toContain(process.cwd())
+    const calls = vi.mocked(readFile).mock.calls
+    expect(String(calls[0]?.[0])).toContain(process.cwd())
   })
 
   it('writes README to correct path', async () => {
-    const writeFileSpy = mock(async (_path: string, _content: string) => {})
-
-    mock.module('node:fs/promises', () => ({
-      readFile: mock(async (path: string) => {
-        if (path.includes('config.schema.json')) {
-          return JSON.stringify(minimalSchema)
-        }
-        throw new Error('Unexpected file path')
-      }),
-      writeFile: writeFileSpy,
-    }))
+    setupFs(minimalSchema)
 
     await generateMarkdown()
 
-    const [path] = writeFileSpy.mock.calls[0] ?? []
-    expect(path).toContain('README.md')
-    expect(path).toContain(process.cwd())
+    const [path] = vi.mocked(writeFile).mock.calls[0] ?? []
+    expect(String(path)).toContain('README.md')
+    expect(String(path)).toContain(process.cwd())
   })
 
   it('reads schema file and attempts to read README', async () => {
-    const readFileSpy = mock(async (path: string) => {
-      if (path.includes('config.schema.json')) {
-        return JSON.stringify(minimalSchema)
-      }
-      throw new Error('ENOENT')
-    })
-
-    mock.module('node:fs/promises', () => ({
-      readFile: readFileSpy,
-      writeFile: mock(async () => {}),
-    }))
+    setupFs(minimalSchema)
 
     await generateMarkdown()
 
     // Two reads: config.schema.json + README.md attempt
-    expect(readFileSpy).toHaveBeenCalledTimes(2)
+    expect(readFile).toHaveBeenCalledTimes(2)
   })
 
   describe('marker injection', () => {
     it('injects table between markers when both markers are present', async () => {
       const existingReadme = `# My Package\n\n<!-- config-table-start -->\nold content\n<!-- config-table-end -->\n\n---\n`
 
-      mock.module('node:fs/promises', () => ({
-        readFile: mock(async (path: string) => {
-          if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
-          if (path.includes('README.md')) return existingReadme
-          throw new Error('Unexpected file path')
-        }),
-        writeFile: mock(async () => {}),
-      }))
+      setupFs(minimalSchema, existingReadme)
 
       await generateMarkdown()
 
-      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+      const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
       expect(content).toContain('# My Package')
       expect(content).toContain('<!-- config-table-start -->')
       expect(content).toContain('<!-- config-table-end -->')
@@ -482,36 +438,22 @@ describe('generate-readme', () => {
     it('preserves content before start marker', async () => {
       const existingReadme = `# Header\n\nSome intro.\n\n<!-- config-table-start -->\n<!-- config-table-end -->\n`
 
-      mock.module('node:fs/promises', () => ({
-        readFile: mock(async (path: string) => {
-          if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
-          if (path.includes('README.md')) return existingReadme
-          throw new Error('Unexpected file path')
-        }),
-        writeFile: mock(async () => {}),
-      }))
+      setupFs(minimalSchema, existingReadme)
 
       await generateMarkdown()
 
-      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
-      expect(content.startsWith('# Header\n\nSome intro.')).toBe(true)
+      const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
+      expect(String(content).startsWith('# Header\n\nSome intro.')).toBe(true)
     })
 
     it('preserves content after end marker', async () => {
       const existingReadme = `<!-- config-table-start -->\n<!-- config-table-end -->\n\n## License\n\nMIT\n`
 
-      mock.module('node:fs/promises', () => ({
-        readFile: mock(async (path: string) => {
-          if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
-          if (path.includes('README.md')) return existingReadme
-          throw new Error('Unexpected file path')
-        }),
-        writeFile: mock(async () => {}),
-      }))
+      setupFs(minimalSchema, existingReadme)
 
       await generateMarkdown()
 
-      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+      const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
       expect(content).toContain('## License')
       expect(content).toContain('MIT')
     })
@@ -519,34 +461,21 @@ describe('generate-readme', () => {
     it('falls back to table-only when README has no markers', async () => {
       const existingReadme = `# My Package\n\nNo markers here.\n`
 
-      mock.module('node:fs/promises', () => ({
-        readFile: mock(async (path: string) => {
-          if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
-          if (path.includes('README.md')) return existingReadme
-          throw new Error('Unexpected file path')
-        }),
-        writeFile: mock(async () => {}),
-      }))
+      setupFs(minimalSchema, existingReadme)
 
       await generateMarkdown()
 
-      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+      const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
       expect(content).not.toContain('# My Package')
       expect(content).toContain('testProp')
     })
 
     it('falls back to table-only when README does not exist', async () => {
-      mock.module('node:fs/promises', () => ({
-        readFile: mock(async (path: string) => {
-          if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
-          throw new Error('ENOENT: no such file or directory')
-        }),
-        writeFile: mock(async () => {}),
-      }))
+      setupFs(minimalSchema)
 
       await generateMarkdown()
 
-      const [, content] = (writeFile as ReturnType<typeof mock>).mock.calls[0] ?? []
+      const [, content] = vi.mocked(writeFile).mock.calls[0] ?? []
       expect(content).toContain('testProp')
     })
   })

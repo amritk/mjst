@@ -23,83 +23,82 @@
     "dist"
   ],
   "scripts": {
-    "build": "bun run build:code && bun run build:types",
-    "build:code": "bun build ./src/build-dynamic-ref-map.ts ./src/extract-refs.ts ./src/generate-type-definition.ts ./src/is-object.ts ./src/parse-documentation.ts ./src/ref-to-filename.ts ./src/ref-to-name.ts ./src/resolve-dynamic-refs.ts ./src/resolve-ref.ts ./src/safe-accessor.ts ./src/schema-guards.ts ./src/upgrade-draft07-schema.ts ./src/validate-array.ts ./src/validate-record.ts --outdir=dist --root=src",
-    "build:types": "tsc -p ."
+    "build": "tsup",
+    "typecheck": "tsc -p ."
   },
   "dependencies": {
-    "json-schema-typed": "catalog:"
+    "json-schema-typed": "^8.0.1"
   },
   "exports": {
     "./build-dynamic-ref-map": {
-      "bun": "./src/build-dynamic-ref-map.ts",
-      "default": "./dist/build-dynamic-ref-map.js",
-      "types": "./dist/build-dynamic-ref-map.d.ts"
+      "development": "./src/build-dynamic-ref-map.ts",
+      "types": "./dist/build-dynamic-ref-map.d.ts",
+      "default": "./dist/build-dynamic-ref-map.js"
     },
     "./extract-refs": {
-      "bun": "./src/extract-refs.ts",
-      "default": "./dist/extract-refs.js",
-      "types": "./dist/extract-refs.d.ts"
+      "development": "./src/extract-refs.ts",
+      "types": "./dist/extract-refs.d.ts",
+      "default": "./dist/extract-refs.js"
     },
     "./generate-type-definition": {
-      "bun": "./src/generate-type-definition.ts",
-      "default": "./dist/generate-type-definition.js",
-      "types": "./dist/generate-type-definition.d.ts"
+      "development": "./src/generate-type-definition.ts",
+      "types": "./dist/generate-type-definition.d.ts",
+      "default": "./dist/generate-type-definition.js"
     },
     "./is-object": {
-      "bun": "./src/is-object.ts",
-      "default": "./dist/is-object.js",
-      "types": "./dist/is-object.d.ts"
+      "development": "./src/is-object.ts",
+      "types": "./dist/is-object.d.ts",
+      "default": "./dist/is-object.js"
     },
     "./parse-documentation": {
-      "bun": "./src/parse-documentation.ts",
-      "default": "./dist/parse-documentation.js",
-      "types": "./dist/parse-documentation.d.ts"
+      "development": "./src/parse-documentation.ts",
+      "types": "./dist/parse-documentation.d.ts",
+      "default": "./dist/parse-documentation.js"
     },
     "./ref-to-filename": {
-      "bun": "./src/ref-to-filename.ts",
-      "default": "./dist/ref-to-filename.js",
-      "types": "./dist/ref-to-filename.d.ts"
+      "development": "./src/ref-to-filename.ts",
+      "types": "./dist/ref-to-filename.d.ts",
+      "default": "./dist/ref-to-filename.js"
     },
     "./ref-to-name": {
-      "bun": "./src/ref-to-name.ts",
-      "default": "./dist/ref-to-name.js",
-      "types": "./dist/ref-to-name.d.ts"
+      "development": "./src/ref-to-name.ts",
+      "types": "./dist/ref-to-name.d.ts",
+      "default": "./dist/ref-to-name.js"
     },
     "./resolve-dynamic-refs": {
-      "bun": "./src/resolve-dynamic-refs.ts",
-      "default": "./dist/resolve-dynamic-refs.js",
-      "types": "./dist/resolve-dynamic-refs.d.ts"
+      "development": "./src/resolve-dynamic-refs.ts",
+      "types": "./dist/resolve-dynamic-refs.d.ts",
+      "default": "./dist/resolve-dynamic-refs.js"
     },
     "./resolve-ref": {
-      "bun": "./src/resolve-ref.ts",
-      "default": "./dist/resolve-ref.js",
-      "types": "./dist/resolve-ref.d.ts"
+      "development": "./src/resolve-ref.ts",
+      "types": "./dist/resolve-ref.d.ts",
+      "default": "./dist/resolve-ref.js"
     },
     "./safe-accessor": {
-      "bun": "./src/safe-accessor.ts",
-      "default": "./dist/safe-accessor.js",
-      "types": "./dist/safe-accessor.d.ts"
+      "development": "./src/safe-accessor.ts",
+      "types": "./dist/safe-accessor.d.ts",
+      "default": "./dist/safe-accessor.js"
     },
     "./schema-guards": {
-      "bun": "./src/schema-guards.ts",
-      "default": "./dist/schema-guards.js",
-      "types": "./dist/schema-guards.d.ts"
+      "development": "./src/schema-guards.ts",
+      "types": "./dist/schema-guards.d.ts",
+      "default": "./dist/schema-guards.js"
     },
     "./upgrade-draft07-schema": {
-      "bun": "./src/upgrade-draft07-schema.ts",
-      "default": "./dist/upgrade-draft07-schema.js",
-      "types": "./dist/upgrade-draft07-schema.d.ts"
+      "development": "./src/upgrade-draft07-schema.ts",
+      "types": "./dist/upgrade-draft07-schema.d.ts",
+      "default": "./dist/upgrade-draft07-schema.js"
     },
     "./validate-array": {
-      "bun": "./src/validate-array.ts",
-      "default": "./dist/validate-array.js",
-      "types": "./dist/validate-array.d.ts"
+      "development": "./src/validate-array.ts",
+      "types": "./dist/validate-array.d.ts",
+      "default": "./dist/validate-array.js"
     },
     "./validate-record": {
-      "bun": "./src/validate-record.ts",
-      "default": "./dist/validate-record.js",
-      "types": "./dist/validate-record.d.ts"
+      "development": "./src/validate-record.ts",
+      "types": "./dist/validate-record.d.ts",
+      "default": "./dist/validate-record.js"
     }
   }
 }

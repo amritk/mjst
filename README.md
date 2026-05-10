@@ -7,7 +7,7 @@
 ![status](https://img.shields.io/badge/status-pre--alpha-ef4444?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)
 ![JSON Schema](https://img.shields.io/badge/JSON%20Schema-2020--12-f97316?style=flat-square)
-![bun](https://img.shields.io/badge/bun-required-FBF0DF?style=flat-square&logo=bun&logoColor=000000)
+![node](https://img.shields.io/badge/node-%E2%89%A520-339933?style=flat-square&logo=node.js&logoColor=white)
 ![vibe coded](https://img.shields.io/badge/vibe%20coded-86%25-a855f7?style=flat-square)
 
 </div>
@@ -38,38 +38,45 @@ The CLI (`mjst`) is the primary entry point; the underlying generators are also 
 
 ## Quick start
 
-Install the CLI:
+Run the CLI without installing:
 
 ```bash
-bun add -d @amritk/mjst
+npx @amritk/mjst --schema ./schema.json --outDir ./generated
+# or
+pnpx @amritk/mjst --schema ./schema.json --outDir ./generated
 ```
 
-Generate parsers and types from a schema:
+Or add it as a dev dependency:
 
 ```bash
-bunx mjst --schema ./schema.json --outDir ./generated
+npm install --save-dev @amritk/mjst
+# or
+pnpm add -D @amritk/mjst
 ```
 
-Or use a config file:
+Use a config file:
 
 ```bash
-bunx mjst --config ./mjst.config.json
+npx @amritk/mjst --config ./mjst.config.json
 ```
 
 See the [CLI README](./packages/cli/README.md) for the full flag reference.
 
 ## Requirements
 
-- [Bun](https://bun.sh) ≥ 1.1 (the CLI uses Bun's shell APIs at build time)
-- TypeScript ≥ 5 in your consuming project
+- [Node.js](https://nodejs.org) ≥ 20
+- TypeScript ≥ 5 in your consuming project (only required if you use `--build`)
 
 ## Development
 
+This repo uses [pnpm](https://pnpm.io) workspaces.
+
 ```bash
-bun install
-bun test            # run the test suite
-bun run check       # lint with biome
-bun run build       # build all publishable packages
+pnpm install
+pnpm test            # run the test suite (vitest)
+pnpm run check       # lint with biome
+pnpm run typecheck   # type-check every package
+pnpm run build       # build all publishable packages
 ```
 
 See [`.claude/architecture.md`](./.claude/architecture.md) for monorepo layout and design notes, and [`CONTRIBUTING.md`](./CONTRIBUTING.md) for contribution guidelines.

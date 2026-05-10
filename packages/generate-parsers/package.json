@@ -2,8 +2,10 @@
   "name": "@amritk/generate-parsers",
   "version": "0.1.0",
   "description": "Generate TypeScript parsers and type definitions from JSON Schemas.",
-  "module": "./dist/index.js",
   "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "license": "MIT",
   "author": "amritk",
   "keywords": [
@@ -26,10 +28,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "bun run build:code && bun run build:types",
-    "build:code": "bun build ./src/index.ts --outdir=dist",
-    "build:types": "tsc -p .",
-    "generate-readme": "bun run ./scripts/generate-readme.ts"
+    "build": "tsup",
+    "typecheck": "tsc -p .",
+    "generate-readme": "tsx ./scripts/generate-readme.ts"
   },
   "imports": {
     "#generators/*": "./src/generators/*.ts",
@@ -38,14 +39,16 @@
   },
   "exports": {
     ".": {
-      "bun": "./src/index.ts",
-      "default": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     }
   },
   "dependencies": {
-    "json-schema-typed": "catalog:",
-    "@amritk/helpers": "workspace:*",
+    "json-schema-typed": "^8.0.1",
+    "@amritk/helpers": "workspace:*"
+  },
+  "devDependencies": {
     "@amritk/generate-markdown": "workspace:*"
   }
 }

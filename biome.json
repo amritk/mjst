@@ -50,11 +50,7 @@
         "organizeImports": {
           "level": "on",
           "options": {
-            "groups": [
-              [":URL:", ":PACKAGE_WITH_PROTOCOL:", ":NODE:", ":BUN:", ":PACKAGE:", ":ALIAS:"],
-              ":BLANK_LINE:",
-              ":PATH:"
-            ]
+            "groups": [[":URL:", ":PACKAGE_WITH_PROTOCOL:", ":NODE:", ":PACKAGE:", ":ALIAS:"], ":BLANK_LINE:", ":PATH:"]
           }
         }
       }

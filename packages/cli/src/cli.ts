@@ -1,11 +1,16 @@
-#!/usr/bin/env bun
+import { execFile } from 'node:child_process'
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { dirname, join, relative, resolve } from 'node:path'
+import { promisify } from 'node:util'
 import { buildSchema } from '@amritk/generate-parsers'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { loadConfig } from './load-config'
 import { parseCliArgs } from './parse-cli-args'
+
+const execFileAsync = promisify(execFile)
+const require = createRequire(import.meta.url)
 
 /**
  * Extracts the --config flag value from process args before full parsing.
@@ -66,11 +71,16 @@ const run = async (): Promise<void> => {
   }
 
   if (config.build) {
+    // Resolve @amritk/helpers' dist directory via Node module resolution so the path
+    // is correct whether mjst is running from a published install (node_modules/@amritk/...)
+    // or from this repo's workspace symlinks.
+    const helpersEntry = require.resolve('@amritk/helpers/is-object')
+    const helpersDir = dirname(helpersEntry)
+    const helpersRelative = relative(outputDir, helpersDir)
+
     // Write a minimal tsconfig so tsc can compile the generated files without
     // inheriting settings like allowImportingTsExtensions that block emission.
     // Add paths so tsc can resolve @amritk/helpers from the output directory.
-    const helpersDir = resolve(import.meta.dir, '../../helpers/dist')
-    const helpersRelative = relative(outputDir, helpersDir)
     const tsconfigContent = JSON.stringify(
       {
         compilerOptions: {
@@ -93,8 +103,10 @@ const run = async (): Promise<void> => {
     const tsconfigPath = join(outputDir, '.tsconfig-mjst-build.json')
     await writeFile(tsconfigPath, tsconfigContent, 'utf-8')
 
+    const tscBin = require.resolve('typescript/bin/tsc')
+
     try {
-      await Bun.$`bunx tsc --project ${tsconfigPath}`.quiet()
+      await execFileAsync(process.execPath, [tscBin, '--project', tsconfigPath])
     } catch {
       throw new Error('TypeScript compilation failed. Check the generated files for errors.')
     } finally {

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'bun:test'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+import { describe, expect, it } from 'vitest'
 
 import { generateTypeDefinition } from './generate-type-definition'
 

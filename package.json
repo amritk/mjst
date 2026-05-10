@@ -1,13 +1,11 @@
 {
   "name": "mjst",
   "private": true,
-  "workspaces": [
-    "packages/*"
-  ],
-  "catalog": {
-    "json-schema-typed": "^8.0.1"
-  },
   "type": "module",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20"
+  },
   "keywords": [
     "json",
     "validation",
@@ -20,17 +18,21 @@
   "author": "amritk",
   "license": "MIT",
   "scripts": {
-    "generate-readmes": "(cd packages/cli && bun run generate-readme) && (cd packages/generate-parsers && bun run generate-readme)",
-    "check": "bun run biome check .",
-    "format": "bun run biome format --write .",
-    "test": "bun test",
-    "build": "bun run --filter='./packages/*' build"
+    "generate-readmes": "pnpm --filter @amritk/mjst run generate-readme && pnpm --filter @amritk/generate-parsers run generate-readme",
+    "check": "biome check .",
+    "format": "biome format --write .",
+    "test": "vitest run",
+    "build": "pnpm -r --filter './packages/*' run build",
+    "typecheck": "pnpm -r --filter './packages/*' run typecheck"
   },
   "devDependencies": {
+    "@amritk/helpers": "workspace:*",
     "@biomejs/biome": "2.4.4",
     "@changesets/cli": "^2.30.0",
-    "@types/bun": "latest",
-    "@amritk/helpers": "workspace:*",
-    "typescript": "^5"
+    "@types/node": "^22.10.0",
+    "tsup": "^8.3.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5",
+    "vitest": "^2.1.0"
   }
 }
