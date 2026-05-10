@@ -26,6 +26,10 @@ If you want a CLI, use [`@amritk/mjst`](../cli). Use this package directly when 
 ## Installation
 
 ```bash
+npm install @amritk/generate-parsers
+# or
+pnpm add @amritk/generate-parsers
+# or
 bun add @amritk/generate-parsers
 ```
 
