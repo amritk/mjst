@@ -1,4 +1,3 @@
-import { join } from 'node:path'
 import { buildDynamicRefMap } from '@amritk/helpers/build-dynamic-ref-map'
 import { extractRefs } from '@amritk/helpers/extract-refs'
 import { refToFilename } from '@amritk/helpers/ref-to-filename'
@@ -70,7 +69,6 @@ const extractDynamicAnchorDefs = (schema: JSONSchema): string[] => {
  *   names to their JSON Schema definitions. Extensions are merged as optional properties before
  *   type and parser generation.
  * @param typesOnly - When true, only generate TypeScript type definitions without parser functions.
- *   Runtime helper files (validators, isObject) are also omitted since they are only needed for parsers.
  * @param logWarnings - When true, the generated parsers emit a console.warn for every input key
  *   that is not declared in the schema's properties.
  * @returns An array of generated TypeScript files
@@ -138,13 +136,11 @@ export const buildSchema = async (
   })
   const rootFilename = rootTypeName.toLowerCase()
 
-  if (rootFilename !== 'schema') {
-    processedFilenames.add(rootFilename)
-    files.push({
-      filename: `${rootFilename}.ts`,
-      content: rootContent,
-    })
-  }
+  processedFilenames.add(rootFilename)
+  files.push({
+    filename: `${rootFilename}.ts`,
+    content: rootContent,
+  })
 
   // Extract all refs from the root schema
   const rootRefs = extractRefs(rootSchema)
@@ -186,7 +182,7 @@ export const buildSchema = async (
       ...(logWarnings !== undefined ? { logWarnings } : {}),
     })
 
-    if (filename !== 'schema' && !processedFilenames.has(filename)) {
+    if (!processedFilenames.has(filename)) {
       processedFilenames.add(filename)
       files.push({
         filename: `${filename}.ts`,
@@ -201,27 +197,6 @@ export const buildSchema = async (
         refsToProcess.push(nestedRef)
       }
     }
-  }
-
-  // In types-only mode, emit a lightweight schema.ts with only the SchemaObject type
-  // definitions (no runtime parser code or @amritk/helpers imports). The full template
-  // is only needed when parsers are generated.
-  if (typesOnly) {
-    const schemaTypesTemplatePath = join(import.meta.dir, '../templates/schema-types.ts')
-    const schemaTypesTemplateContent = await Bun.file(schemaTypesTemplatePath).text()
-
-    files.push({
-      filename: 'schema.ts',
-      content: schemaTypesTemplateContent,
-    })
-  } else {
-    const schemaTemplatePath = join(import.meta.dir, '../templates/schema.ts')
-    const schemaTemplateContent = await Bun.file(schemaTemplatePath).text()
-
-    files.push({
-      filename: 'schema.ts',
-      content: schemaTemplateContent,
-    })
   }
 
   // Generate index.ts with named re-exports extracted from each generated file's content.

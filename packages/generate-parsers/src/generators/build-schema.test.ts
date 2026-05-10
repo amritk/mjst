@@ -4,7 +4,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { buildSchema } from './build-schema'
 
 describe('build-schema', () => {
-  it('does not generate schema.ts for #/$defs/schema references', async () => {
+  it('generates schema.ts from #/$defs/schema like any other ref', async () => {
     const schema: JSONSchema = {
       type: 'object',
       properties: {
@@ -14,6 +14,9 @@ describe('build-schema', () => {
       $defs: {
         schema: {
           type: 'object',
+          properties: {
+            type: { type: 'string' },
+          },
         },
         contact: {
           type: 'object',
@@ -29,11 +32,11 @@ describe('build-schema', () => {
 
     expect(filenames).toContain('document.ts')
     expect(filenames).toContain('contact.ts')
-    // The schema.ts file should be the template file, not a generated file from #/$defs/schema
+    expect(filenames).toContain('schema.ts')
     const schemaFile = result.find((file) => file.filename === 'schema.ts')
-    expect(schemaFile).toBeDefined()
-    // Verify it's the template by checking for SchemaObject type export
+    // The generated schema.ts should declare SchemaObject and parseSchemaObject from the user's $defs/schema
     expect(schemaFile?.content).toContain('export type SchemaObject')
+    expect(schemaFile?.content).toContain('parseSchemaObject')
   })
 
   it('applies extensions to matching definitions during build', async () => {
@@ -133,26 +136,8 @@ describe('build-schema', () => {
     const result = await buildSchema(schema, 'Document')
     const filenames = result.map((file) => file.filename)
     expect(filenames).toContain('document.ts')
-    expect(filenames).toContain('schema.ts')
-  })
-
-  it('emits a types-only schema.ts (no runtime code) in types-only mode', async () => {
-    const schema: JSONSchema = {
-      type: 'object',
-      properties: {
-        name: { type: 'string' },
-      },
-    }
-
-    const result = await buildSchema(schema, 'Document', undefined, true)
-    const filenames = result.map((file) => file.filename)
-    const schemaFile = result.find((file) => file.filename === 'schema.ts')
-
-    expect(filenames).toContain('schema.ts')
-    // Types-only schema.ts should export SchemaObject but have no runtime parser code
-    expect(schemaFile?.content).toContain('export type SchemaObject')
-    expect(schemaFile?.content).not.toContain('parseSchemaObject')
-    expect(schemaFile?.content).not.toContain("from '@amritk/helpers/is-object'")
+    // No schema.ts unless the input defines #/$defs/schema
+    expect(filenames).not.toContain('schema.ts')
   })
 
   it('only generates type files in types-only mode', async () => {
@@ -165,11 +150,10 @@ describe('build-schema', () => {
 
     const result = await buildSchema(schema, 'Document', undefined, true)
 
-    // document.ts plus the types-only schema.ts plus index.ts — no other runtime helpers
-    expect(result).toHaveLength(3)
+    // document.ts plus index.ts — no schema.ts since input has no #/$defs/schema
+    expect(result).toHaveLength(2)
     const filenames = result.map((f) => f.filename)
     expect(filenames).toContain('document.ts')
-    expect(filenames).toContain('schema.ts')
     expect(filenames).toContain('index.ts')
   })
 
@@ -238,10 +222,8 @@ describe('build-schema', () => {
     expect(filenames).toContain('document.ts')
     expect(filenames).toContain('contact.ts')
     expect(filenames).toContain('server.ts')
-    // Types-only schema.ts is included; no other runtime helpers
-    expect(filenames).toContain('schema.ts')
     expect(filenames).toContain('index.ts')
-    expect(result).toHaveLength(5)
+    expect(result).toHaveLength(4)
   })
 
   it('generated ref files in types-only mode also omit parsers', async () => {

@@ -14,7 +14,6 @@ mjst/
 │   └── generate-parsers/      # @amritk/generate-parsers — core code generator
 │       ├── generators/        # Code generation functions
 │       ├── helpers/           # Schema traversal utilities
-│       ├── templates/         # Files copied verbatim into generated output
 │       ├── type-guards/       # Runtime type guards for JSON Schema properties
 │       ├── types/             # Internal type definitions
 │       └── validators/        # Runtime validators (also copied to generated output)
@@ -42,11 +41,8 @@ Core code generation engine. Accepts a JSON Schema and produces TypeScript sourc
   - `#type-guards/*` → `./type-guards/*.ts`
   - `#types/*` → `./types/*.ts`
   - `#validators/*` → `./validators/*.ts`
-  - `#templates/*` → `./templates/*.ts`
 
 **Key entry point:** `generators/build-schema.ts` — traverses the root schema and all `$ref` references recursively, produces an array of `GeneratedFile` objects.
-
-**Template files** ( `templates/schema.ts`) are read at runtime and copied verbatim into the user's output directory. They must use relative imports that work in the output context, not `#` subpath imports.
 
 ### `@amritk/generate-markdown`
 
@@ -59,8 +55,6 @@ Generates a `README.md` from a `config.schema.json` file and the project's `pack
 - **Within a package:** use `#` subpath imports (e.g. `import { foo } from '#helpers/foo'`)
 - **Cross-package:** use the workspace package name (e.g. `import { buildSchema } from '@amritk/generate-parsers/generators/build-schema'`)
 - **Same directory:** use relative `./` imports
-
-**Exception:** template files that are copied into user output directories must use relative `../` imports so the paths remain valid after being written to a different location.
 
 ## Generation Pipeline
 
@@ -88,7 +82,7 @@ JSON Schema file
        │
        ▼
   Written to --outDir
-  (including runtime helper copies: validators/, helpers/, schema.ts)
+  (including runtime helper copies: validators/, helpers/)
 ```
 
 ## Testing
@@ -113,5 +107,4 @@ bun test ./packages/generate-parsers/
 
 - **Functional programming:** one function per file, no classes
 - **Type safety:** strict TypeScript throughout, comprehensive type guards
-- **Template-based output:** runtime helper files are source files that get copied into user projects
 - **Extensible:** `SchemaExtensions` allows injecting additional properties into specific definitions before generation

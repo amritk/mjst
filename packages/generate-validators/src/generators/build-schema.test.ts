@@ -102,7 +102,7 @@ describe('build-schema', () => {
     }
 
     const files = await buildValidatorSchema(schema, 'Document')
-    // Should still have exactly one validation-result.ts (the template)
+    // Should still have exactly one validation-result.ts (the runtime contract)
     const vrFiles = files.filter((f) => f.filename === 'validation-result.ts')
     expect(vrFiles).toHaveLength(1)
     expect(vrFiles[0]?.content).toContain('export type ValidationResult')
@@ -150,7 +150,7 @@ describe('build-schema', () => {
     expect(refInvalid.errors.some((e) => e.message.includes('title'))).toBe(true)
   })
 
-  it('validation-result.ts template exports the right types', async () => {
+  it('emits a validation-result.ts with the runtime ValidationResult/ValidationError types', async () => {
     const schema: JSONSchema = { type: 'object' }
     const files = await buildValidatorSchema(schema, 'Doc')
     const vrFile = files.find((f) => f.filename === 'validation-result.ts')
