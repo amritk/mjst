@@ -7,7 +7,8 @@
 ![status](https://img.shields.io/badge/status-pre--alpha-ef4444?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)
 ![JSON Schema](https://img.shields.io/badge/JSON%20Schema-2020--12-f97316?style=flat-square)
-![bun](https://img.shields.io/badge/bun-required-FBF0DF?style=flat-square&logo=bun&logoColor=000000)
+![node](https://img.shields.io/badge/node-%E2%89%A520-339933?style=flat-square&logo=node.js&logoColor=white)
+![bun](https://img.shields.io/badge/bun-dev-FBF0DF?style=flat-square&logo=bun&logoColor=000000)
 ![vibe coded](https://img.shields.io/badge/vibe%20coded-86%25-a855f7?style=flat-square)
 
 </div>
@@ -74,7 +75,7 @@ Contributing? You'll need [Bun](https://bun.sh) ≥ 1.1 — it's the package man
 
 ```bash
 bun install
-bun test            # run the test suite
+bun run test        # run the test suite
 bun run check       # lint with biome
 bun run build       # build all publishable packages
 ```

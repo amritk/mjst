@@ -16,7 +16,7 @@ You'll need [Bun](https://bun.sh) ≥ 1.1.
 
 | Command | What it does |
 |---|---|
-| `bun test` | Run the full test suite |
+| `bun run test` | Run the full test suite (Vitest) |
 | `bun run check` | Lint with biome |
 | `bun run format` | Auto-format with biome |
 | `bun run build` | Build all publishable packages |
@@ -25,7 +25,7 @@ You'll need [Bun](https://bun.sh) ≥ 1.1.
 
 1. Create a branch off `main`.
 2. Make your changes. Add tests for new behaviour.
-3. Run `bun run check`, `bun test`, and `bun run build` locally.
+3. Run `bun run check`, `bun run test`, and `bun run build` locally.
 4. Add a changeset describing your change:
    ```bash
    bunx changeset
