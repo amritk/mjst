@@ -31,5 +31,5 @@ mjst --schema ./schema.json --outDir ./out
 ## Environment
 
 - mjst version:
-- Bun version:
+- Node version (or Bun version):
 - OS:

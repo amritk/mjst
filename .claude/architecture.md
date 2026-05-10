@@ -2,7 +2,7 @@
 
 ## Overview
 
-`mjst` is a **Bun monorepo** that generates TypeScript type definitions and runtime parser functions from JSON Schema (Draft 2020-12).
+`mjst` is a **Bun monorepo** that generates TypeScript type definitions, runtime parsers, and predicate validators from JSON Schema (Draft 2020-12). Generated CLI output runs under Node ≥ 20; the development toolchain (install, build, test) uses Bun.
 
 ## Monorepo Structure
 
@@ -10,51 +10,64 @@
 mjst/
 ├── packages/
 │   ├── cli/                   # @amritk/mjst — command-line interface
-│   ├── generate-markdown/     # @amritk/generate-markdown — README generation
-│   └── generate-parsers/      # @amritk/generate-parsers — core code generator
-│       ├── generators/        # Code generation functions
-│       ├── helpers/           # Schema traversal utilities
-│       ├── type-guards/       # Runtime type guards for JSON Schema properties
-│       ├── types/             # Internal type definitions
-│       └── validators/        # Runtime validators (also copied to generated output)
-├── .claude/                   # Developer guidelines and rules
-└── package.json               # Workspace root (private, no exports)
+│   ├── generate-parsers/      # @amritk/generate-parsers — parser + type generator
+│   ├── generate-validators/   # @amritk/generate-validators — predicate validator generator
+│   ├── generate-markdown/     # @amritk/generate-markdown — README table generator
+│   └── helpers/               # @amritk/helpers — shared schema utilities + runtime
+├── .claude/                   # Developer guidelines
+├── .changeset/                # Changesets config (release automation)
+├── .github/                   # CI, release, issue & PR templates
+└── package.json               # Workspace root (private)
 ```
 
 ## Packages
 
-### `@amritk/mjst`
+### `@amritk/mjst` (`packages/cli`)
 
-Entry point for the CLI tool. Reads a JSON Schema file, runs the generator, and writes TypeScript files to the output directory.
+Command-line entry point. Reads CLI flags and/or a JSON config file, loads a schema, runs the generator, and writes TypeScript output.
 
-- **Depends on:** `@amritk/generate-parsers`
-- **Subpath imports:** `#cli/*` → `./*.ts`
-- **Bin:** `mjst` → `cli.ts`
+- **Depends on:** `@amritk/generate-parsers`, `@amritk/generate-markdown`
+- **Bin:** `mjst` → `dist/cli.js` (built for the Node target)
+- **Config schema:** `config.schema.json` — also drives the CLI README table via `@amritk/generate-markdown`
 
-### `@amritk/generate-parsers`
+### `@amritk/generate-parsers` (`packages/generate-parsers`)
 
-Core code generation engine. Accepts a JSON Schema and produces TypeScript source files — both type definitions and (optionally) runtime parser functions.
+Core code generator. Given a `JSONSchema` and a root type name, produces an array of `GeneratedFile` objects — TypeScript type definitions plus optional runtime parser functions that validate and coerce unknown input.
 
+- **Depends on:** `@amritk/helpers`, `@amritk/generate-markdown`, `json-schema-typed`
 - **Subpath imports:**
-  - `#generators/*` → `./generators/*.ts`
-  - `#helpers/*` → `./helpers/*.ts`
-  - `#type-guards/*` → `./type-guards/*.ts`
-  - `#types/*` → `./types/*.ts`
-  - `#validators/*` → `./validators/*.ts`
+  - `#generators/*` → `./src/generators/*.ts`
+  - `#helpers/*` → `./src/helpers/*.ts`
+  - `#types/*` → `./src/types/*.ts`
+- **Key entry point:** `src/generators/build-schema.ts` — traverses the root schema and its `$ref` / `$dynamicRef` graph recursively.
 
-**Key entry point:** `generators/build-schema.ts` — traverses the root schema and all `$ref` references recursively, produces an array of `GeneratedFile` objects.
+### `@amritk/generate-validators` (`packages/generate-validators`)
 
-### `@amritk/generate-markdown`
+Generates lightweight predicate-style validators: each schema becomes a `validateFoo(input, _path?): ValidationResult` function. No coercion, just shape checks plus structured error paths.
 
-Generates a `README.md` from a `config.schema.json` file and the project's `package.json`. Used internally to keep the project README in sync with the schema.
+- **Depends on:** `@amritk/helpers`, `json-schema-typed`
+- **Subpath imports:** `#generators/*` → `./src/generators/*.ts`
+- **Key entry point:** `src/generators/build-schema.ts`
 
-- **Subpath imports:** `#markdown/*` → `./*.ts`
+### `@amritk/generate-markdown` (`packages/generate-markdown`)
+
+Renders a single configuration-reference table from a `config.schema.json` into a `README.md`. Used to keep the CLI / generator READMEs in sync with their config schemas. Reads `x-cli-flag` and `x-icon` extension keywords.
+
+### `@amritk/helpers` (`packages/helpers`)
+
+Shared utility belt used both by the generators and copied into generated output. Each helper is exposed as its own subpath export (`@amritk/helpers/<name>`) so consumers — and generated files — only pull in what they need.
+
+Categories:
+
+- **Schema traversal:** `extract-refs`, `resolve-ref`, `build-dynamic-ref-map`, `resolve-dynamic-refs`, `upgrade-draft07-schema`, `ref-to-filename`, `ref-to-name`, `schema-guards`
+- **Codegen utilities:** `generate-type-definition`, `parse-documentation`
+- **Runtime helpers (also copied into generated output):** `is-object`, `safe-accessor`, `validate-array`, `validate-record`
 
 ## Import Conventions
 
-- **Within a package:** use `#` subpath imports (e.g. `import { foo } from '#helpers/foo'`)
-- **Cross-package:** use the workspace package name (e.g. `import { buildSchema } from '@amritk/generate-parsers/generators/build-schema'`)
-- **Same directory:** use relative `./` imports
+- **Within a package:** use `#` subpath imports declared in that package's `package.json` (e.g. `import { foo } from '#helpers/foo'`).
+- **Cross-package:** use the published package name (e.g. `import { buildSchema } from '@amritk/generate-parsers'`, `import { resolveRef } from '@amritk/helpers/resolve-ref'`).
+- **Same directory:** use relative `./` imports.
 
 ## Generation Pipeline
 
@@ -62,18 +75,18 @@ Generates a `README.md` from a `config.schema.json` file and the project's `pack
 JSON Schema file
        │
        ▼
-  @amritk/mjst (cli.ts)
-       │  reads schema, parses CLI args
+  @amritk/mjst (src/cli.ts)
+       │  parses CLI args / config, loads schema
        ▼
-  buildSchema()                    ← generators/build-schema.ts
+  buildSchema()                    ← generate-parsers/src/generators/build-schema.ts
        │  traverses $ref graph
-       │  resolves $dynamicRef
+       │  resolves $dynamicRef via @amritk/helpers
        │  applies schema extensions
        ▼
-  generateFile()                   ← generators/generate-files.ts
+  generateFiles()                  ← generate-parsers/src/generators/generate-files.ts
   (per schema node)
-       ├─ generateTypeDefinition() ← type shape as TypeScript type
-       ├─ generateParserFunction() ← runtime coercion/validation (skipped in --types-only mode)
+       ├─ generateTypeDefinition() ← TypeScript type shape
+       ├─ generateParserFunction() ← runtime coercion/validation (skipped with --types-only)
        └─ collectImports()         ← import statements for $ref dependencies
        │
        ▼
@@ -82,14 +95,15 @@ JSON Schema file
        │
        ▼
   Written to --outDir
-  (including runtime helper copies: validators/, helpers/)
+  (with --build, tsc compiles them to .js + .d.ts)
 ```
 
 ## Testing
 
-- **Framework:** `vitest`
-- **Convention:** test files colocated with implementation, named `*.test.ts`
-- **No mocking** except where necessary (e.g. `generate-markdown` tests mock `node:fs/promises`)
+- **Framework:** [Vitest](https://vitest.dev). See `.claude/testing.md`.
+- **Convention:** test files colocated with implementation, named `*.test.ts`.
+- **Mocking:** avoided unless necessary (e.g. `generate-markdown` tests stub `node:fs/promises`).
+- **Aliases:** `vitest.config.ts` aliases the `@amritk/*` package names back to source so tests run without a build step.
 
 Run all tests:
 
@@ -97,14 +111,15 @@ Run all tests:
 bun run test
 ```
 
-Run tests for a specific package:
+Run tests for a specific package or file:
 
 ```sh
-bun run test ./packages/generate-parsers/
+bun run test packages/generate-parsers
 ```
 
 ## Design Principles
 
-- **Functional programming:** one function per file, no classes
-- **Type safety:** strict TypeScript throughout, comprehensive type guards
-- **Extensible:** `SchemaExtensions` allows injecting additional properties into specific definitions before generation
+- **Functional programming:** one function per file, no classes.
+- **Type safety:** strict TypeScript throughout (`exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, etc.) with comprehensive type guards in `@amritk/helpers/schema-guards`.
+- **Extensible:** `SchemaExtensions` allows injecting additional optional properties into specific definitions before generation.
+- **Node-friendly output:** packages build with `--target=node` so the CLI runs under `npx` / `pnpm dlx` / `bunx` without forcing consumers onto Bun.

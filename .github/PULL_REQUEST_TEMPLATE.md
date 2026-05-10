@@ -10,10 +10,10 @@
 
 <!-- How did you verify this works? -->
 
-- [ ] `bun test` passes
+- [ ] `bun run test` passes
 - [ ] `bun run check` passes
 - [ ] `bun run build` passes
-- [ ] Fixtures regenerated if codegen changed (`bun run generate:all`)
+- [ ] READMEs regenerated if `config.schema.json` changed (`bun run generate-readmes`)
 - [ ] Changeset added (`bunx changeset`) if this affects a published package
 
 ## Related issues
