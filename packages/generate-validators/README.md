@@ -31,6 +31,10 @@ A shared `validation-result.ts` template and an `index.ts` barrel are emitted al
 ## Installation
 
 ```bash
+npm install @amritk/generate-validators
+# or
+pnpm add @amritk/generate-validators
+# or
 bun add @amritk/generate-validators
 ```
 

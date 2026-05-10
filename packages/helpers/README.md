@@ -24,6 +24,10 @@
 ## Installation
 
 ```bash
+npm install @amritk/helpers
+# or
+pnpm add @amritk/helpers
+# or
 bun add @amritk/helpers
 ```
 

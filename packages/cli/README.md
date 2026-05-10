@@ -26,10 +26,14 @@ Options can be supplied via CLI flags or a JSON config file. **CLI flags always 
 ## Installation
 
 ```bash
+npm install --save-dev @amritk/mjst
+# or
+pnpm add -D @amritk/mjst
+# or
 bun add -d @amritk/mjst
 ```
 
-The package ships a `mjst` bin, so you can invoke it via `bunx mjst` or as a script in `package.json`.
+The package ships a `mjst` bin that runs under Node ≥ 20 (or Bun), so you can invoke it via `npx mjst`, `pnpm dlx mjst`, `bunx mjst`, or as a script in `package.json`.
 
 ---
 
@@ -38,13 +42,13 @@ The package ships a `mjst` bin, so you can invoke it via `bunx mjst` or as a scr
 ### CLI
 
 ```bash
-bunx mjst --schema ./schema.json --outDir ./generated
+npx mjst --schema ./schema.json --outDir ./generated
 ```
 
 ### Config file
 
 ```bash
-bunx mjst --config ./mjst.config.json
+npx mjst --config ./mjst.config.json
 ```
 
 > [!NOTE]

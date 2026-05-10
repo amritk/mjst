@@ -38,30 +38,37 @@ The CLI (`mjst`) is the primary entry point; the underlying generators are also 
 
 ## Quick start
 
-Install the CLI:
+Install the CLI with whichever package manager you prefer:
 
 ```bash
+npm install --save-dev @amritk/mjst
+# or
+pnpm add -D @amritk/mjst
+# or
 bun add -d @amritk/mjst
 ```
 
 Generate parsers and types from a schema:
 
 ```bash
-bunx mjst --schema ./schema.json --outDir ./generated
+npx mjst --schema ./schema.json --outDir ./generated
+# or pnpm dlx mjst …, or bunx mjst …
 ```
 
 Or use a config file:
 
 ```bash
-bunx mjst --config ./mjst.config.json
+npx mjst --config ./mjst.config.json
 ```
 
 See the [CLI README](./packages/cli/README.md) for the full flag reference.
 
 ## Requirements
 
-- [Bun](https://bun.sh) ≥ 1.1 (the CLI uses Bun's shell APIs at build time)
+- Node.js ≥ 20 (or Bun ≥ 1.1) to run the CLI
 - TypeScript ≥ 5 in your consuming project
+
+Contributing? You'll need [Bun](https://bun.sh) ≥ 1.1 — it's the package manager and bundler for this repo. See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## Development
 

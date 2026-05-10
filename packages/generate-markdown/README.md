@@ -29,6 +29,10 @@ It picks up two non-standard keywords from each property to produce richer outpu
 ## Installation
 
 ```bash
+npm install @amritk/generate-markdown
+# or
+pnpm add @amritk/generate-markdown
+# or
 bun add @amritk/generate-markdown
 ```
 
