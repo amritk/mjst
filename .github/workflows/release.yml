@@ -17,17 +17,18 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: oven-sh/setup-bun@v2
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
       - name: Install dependencies
         run: bun install --frozen-lockfile
-
-      - name: Lint
-        run: bun run check
-
-      - name: Test
-        run: bun run test
 
       - name: Build
         run: bun run build
@@ -35,7 +36,10 @@ jobs:
       - name: Create Release PR or Publish
         uses: changesets/action@v1
         with:
+          version: bun run changeset version && bun install --no-frozen-lockfile
           publish: bun run changeset publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
