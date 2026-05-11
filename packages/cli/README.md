@@ -35,7 +35,7 @@ yarn add -D @amritk/mjst
 bun add -d @amritk/mjst
 ```
 
-The package ships a `mjst` bin that runs under Node ≥ 20 (or Bun), so you can invoke it via `npx mjst`, `pnpm dlx mjst`, `bunx mjst`, or as a script in `package.json`.
+The package ships a `mjst` bin that runs under Node ≥ 20 (or Bun), so you can invoke it via `npx mjst`, `pnpm dlx mjst`, `yarn dlx mjst`, `bunx mjst`, or as a script in `package.json`.
 
 ---
 
