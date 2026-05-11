@@ -30,6 +30,8 @@ npm install --save-dev @amritk/mjst
 # or
 pnpm add -D @amritk/mjst
 # or
+yarn add -D @amritk/mjst
+# or
 bun add -d @amritk/mjst
 ```
 

@@ -33,6 +33,8 @@ npm install @amritk/generate-markdown
 # or
 pnpm add @amritk/generate-markdown
 # or
+yarn add @amritk/generate-markdown
+# or
 bun add @amritk/generate-markdown
 ```
 

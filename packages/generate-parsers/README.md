@@ -30,6 +30,8 @@ npm install @amritk/generate-parsers
 # or
 pnpm add @amritk/generate-parsers
 # or
+yarn add @amritk/generate-parsers
+# or
 bun add @amritk/generate-parsers
 ```
 

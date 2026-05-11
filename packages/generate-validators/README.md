@@ -35,6 +35,8 @@ npm install @amritk/generate-validators
 # or
 pnpm add @amritk/generate-validators
 # or
+yarn add @amritk/generate-validators
+# or
 bun add @amritk/generate-validators
 ```
 

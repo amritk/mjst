@@ -28,6 +28,8 @@ npm install @amritk/helpers
 # or
 pnpm add @amritk/helpers
 # or
+yarn add @amritk/helpers
+# or
 bun add @amritk/helpers
 ```
 
