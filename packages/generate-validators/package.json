@@ -26,6 +26,9 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "bun run build:code && bun run build:types",
     "build:code": "bun build ./src/index.ts --outdir=dist --target=node",
