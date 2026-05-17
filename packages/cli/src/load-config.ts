@@ -24,5 +24,6 @@ export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>
     ...(typeof obj['typesOnly'] === 'boolean' && { typesOnly: obj['typesOnly'] }),
     ...(typeof obj['build'] === 'boolean' && { build: obj['build'] }),
     ...(typeof obj['logWarnings'] === 'boolean' && { logWarnings: obj['logWarnings'] }),
+    ...(typeof obj['strict'] === 'boolean' && { strict: obj['strict'] }),
   }
 }

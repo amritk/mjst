@@ -48,4 +48,22 @@ describe('load-config', () => {
   it('throws for missing config files', async () => {
     await expect(loadConfig('/nonexistent/config.json')).rejects.toThrow()
   })
+
+  it('loads strict boolean from config file', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', outDir: 'o', strict: true }))
+
+    const result = await loadConfig(configPath)
+
+    expect(result).toEqual({ schema: 's.json', outDir: 'o', strict: true })
+  })
+
+  it('ignores non-boolean strict value', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', strict: 'yes' }))
+
+    const result = await loadConfig(configPath)
+
+    expect(result).toEqual({ schema: 's.json' })
+  })
 })

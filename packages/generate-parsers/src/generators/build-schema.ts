@@ -71,6 +71,9 @@ const extractDynamicAnchorDefs = (schema: JSONSchema): string[] => {
  * @param typesOnly - When true, only generate TypeScript type definitions without parser functions.
  * @param logWarnings - When true, the generated parsers emit a console.warn for every input key
  *   that is not declared in the schema's properties.
+ * @param strict - When true, the generated parsers throw on type/shape mismatches
+ *   (wrong type, missing required property, enum/pattern/min/max violations) instead
+ *   of coercing invalid input to default values.
  * @returns An array of generated TypeScript files
  *
  * @example
@@ -109,6 +112,7 @@ export const buildSchema = async (
   extensions?: SchemaExtensions,
   typesOnly?: boolean,
   logWarnings?: boolean,
+  strict?: boolean,
 ): Promise<GeneratedFile[]> => {
   // Upgrade draft-07 schemas to 2020-12 conventions before processing.
   // This renames `definitions` → `$defs` recursively so the rest of the
@@ -133,6 +137,7 @@ export const buildSchema = async (
     typesOnly: typesOnly ?? false,
     rootSchema: rootSchema as Record<string, unknown>,
     ...(logWarnings !== undefined ? { logWarnings } : {}),
+    ...(strict !== undefined ? { strict } : {}),
   })
   const rootFilename = rootTypeName.toLowerCase()
 
@@ -180,6 +185,7 @@ export const buildSchema = async (
       selfRef: ref,
       rootSchema: rootSchema as Record<string, unknown>,
       ...(logWarnings !== undefined ? { logWarnings } : {}),
+      ...(strict !== undefined ? { strict } : {}),
     })
 
     if (!processedFilenames.has(filename)) {

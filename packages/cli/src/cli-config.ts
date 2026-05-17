@@ -22,4 +22,10 @@ export type CliConfig = {
    * that is not declared in the schema's properties.
    */
   readonly logWarnings?: boolean
+  /**
+   * When true, the generated parsers throw on type/shape mismatches
+   * (wrong type, missing required property, enum/pattern/min/max violations)
+   * instead of coercing invalid input to default values.
+   */
+  readonly strict?: boolean
 }
