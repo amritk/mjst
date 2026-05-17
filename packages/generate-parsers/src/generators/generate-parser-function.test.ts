@@ -1663,4 +1663,136 @@ describe('generate-parser-function', () => {
       expect(result).not.toContain('console.warn')
     })
   })
+
+  describe('strict option', () => {
+    it('throws on non-object input for object schemas', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+        required: ['name'],
+      }
+      const result = generateParserFunction(schema, 'UserObject', { strict: true })
+      expect(result).toContain(
+        'if (!isObject(input)) throw new Error(`[UserObject] expected object, got ${input === null ? "null" : typeof input}`)',
+      )
+      expect(result).not.toContain('if (!isObject(input)) return')
+    })
+
+    it('throws on missing required property', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+        required: ['name'],
+      }
+      const result = generateParserFunction(schema, 'UserObject', { strict: true })
+      expect(result).toContain(
+        'if (!("name" in input)) throw new Error(\'[UserObject] missing required property "name"\')',
+      )
+    })
+
+    it('throws on wrong primitive type for required property', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+        required: ['name'],
+      }
+      const result = generateParserFunction(schema, 'UserObject', { strict: true })
+      expect(result).toContain(
+        'if (typeof input.name !== "string") throw new Error(`[UserObject] field "name" expected string, got ${typeof input.name}`)',
+      )
+    })
+
+    it('only throws on wrong type for optional property when provided', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { age: { type: 'number' } },
+      }
+      const result = generateParserFunction(schema, 'UserObject', { strict: true })
+      expect(result).toContain(
+        'if (input.age !== undefined && (typeof input.age !== "number")) throw new Error(`[UserObject] field "age" expected number, got ${typeof input.age}`)',
+      )
+    })
+
+    it('throws on enum mismatch', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { role: { enum: ['admin', 'user'] } },
+        required: ['role'],
+      }
+      const result = generateParserFunction(schema, 'UserObject', { strict: true })
+      expect(result).toContain('must be one of: "admin", "user"')
+    })
+
+    it('throws on pattern mismatch for strings', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { code: { type: 'string', pattern: '^[A-Z]+$' } },
+        required: ['code'],
+      }
+      const result = generateParserFunction(schema, 'UserObject', { strict: true })
+      expect(result).toContain('must match pattern ^[A-Z]+$')
+    })
+
+    it('throws on minLength / maxLength violations', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { name: { type: 'string', minLength: 1, maxLength: 10 } },
+        required: ['name'],
+      }
+      const result = generateParserFunction(schema, 'UserObject', { strict: true })
+      expect(result).toContain('must have at least 1 characters')
+      expect(result).toContain('must have at most 10 characters')
+    })
+
+    it('throws on minimum / maximum / multipleOf violations', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { age: { type: 'number', minimum: 0, maximum: 120, multipleOf: 1 } },
+        required: ['age'],
+      }
+      const result = generateParserFunction(schema, 'UserObject', { strict: true })
+      expect(result).toContain('must be >= 0')
+      expect(result).toContain('must be <= 120')
+      expect(result).toContain('must be a multiple of 1')
+    })
+
+    it('does not generate strict assertions for $ref properties (delegated to nested parser)', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { contact: { $ref: '#/$defs/contact' } },
+        required: ['contact'],
+      }
+      const result = generateParserFunction(schema, 'UserObject', { strict: true, useRefImports: true })
+      // The missing-required check is still emitted, but no inline type check.
+      expect(result).toContain('missing required property "contact"')
+      expect(result).not.toContain('field "contact" expected')
+    })
+
+    it('throws on wrong type for non-object scalar schemas', () => {
+      const schema: JSONSchema = { type: 'string' }
+      const result = generateParserFunction(schema, 'Name', { strict: true })
+      expect(result).toContain(
+        'if (typeof input !== "string") throw new Error(`[Name] expected string, got ${input === null ? "null" : typeof input}`)',
+      )
+      expect(result).toContain('return input as Name;')
+    })
+
+    it('throws on non-object input for empty object schemas', () => {
+      const schema: JSONSchema = { type: 'object' }
+      const result = generateParserFunction(schema, 'AnyObject', { strict: true })
+      expect(result).toContain('if (!isObject(input)) throw new Error')
+      expect(result).toContain('return { ...input } as AnyObject;')
+    })
+
+    it('preserves existing safe behavior when strict is not set', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+        required: ['name'],
+      }
+      const result = generateParserFunction(schema, 'UserObject')
+      expect(result).not.toContain('throw new Error')
+      expect(result).toContain('if (!isObject(input)) return')
+    })
+  })
 })

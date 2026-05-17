@@ -169,4 +169,38 @@ describe('parse-cli-args', () => {
       logWarnings: true,
     })
   })
+
+  it('parses --strict boolean flag', () => {
+    const result = parseCliArgs(['--strict'])
+
+    expect(result).toEqual({
+      strict: true,
+    })
+  })
+
+  it('parses --strict=true with equals syntax', () => {
+    const result = parseCliArgs(['--strict=true'])
+
+    expect(result).toEqual({
+      strict: true,
+    })
+  })
+
+  it('parses --strict=false with equals syntax', () => {
+    const result = parseCliArgs(['--strict=false'])
+
+    expect(result).toEqual({
+      strict: false,
+    })
+  })
+
+  it('parses --strict alongside other flags', () => {
+    const result = parseCliArgs(['--schema', 'schema.json', '--outDir', 'dist', '--strict'])
+
+    expect(result).toEqual({
+      schema: 'schema.json',
+      outDir: 'dist',
+      strict: true,
+    })
+  })
 })

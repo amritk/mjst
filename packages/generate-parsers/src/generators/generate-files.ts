@@ -30,6 +30,11 @@ type GenerateFileOptions = {
    * that is not declared in the schema's properties.
    */
   readonly logWarnings?: boolean
+  /**
+   * When true, the generated parser throws on type/shape mismatches instead
+   * of coercing invalid input to default values.
+   */
+  readonly strict?: boolean
 }
 
 /**
@@ -86,6 +91,7 @@ export const generateFile = (schema: JSONSchema, typeName: string, options?: Gen
   const parserFunction = generateParserFunction(schema, typeName, {
     useRefImports: true,
     ...(options?.logWarnings !== undefined ? { logWarnings: options.logWarnings } : {}),
+    ...(options?.strict !== undefined ? { strict: options.strict } : {}),
   })
   const shapeValidator = generateShapeValidator(schema, typeName, true)
   const combinedFunctions = `${shapeValidator}\n\n${parserFunction}`

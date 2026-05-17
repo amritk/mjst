@@ -41,11 +41,18 @@
       "default": false,
       "description": "Emit a console.warn in the generated parsers for every input key that is not declared in the schema's properties. Useful for detecting schema drift or unexpected data shapes at runtime."
     },
+    "strict": {
+      "type": "boolean",
+      "x-cli-flag": "--strict",
+      "x-icon": "🚫",
+      "default": false,
+      "description": "Generate parsers that throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. Unknown extra keys are still allowed."
+    },
     "config": {
       "type": "string",
       "x-cli-flag": "--config <path>",
       "x-icon": "⚙️",
-      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, outDir, typesOnly, build, logWarnings). CLI flags take precedence over config file values.",
+      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, outDir, typesOnly, build, logWarnings, strict). CLI flags take precedence over config file values.",
       "examples": ["./mjst.config.json"]
     }
   },
@@ -68,12 +75,18 @@
       "schema": "./schema.json",
       "outDir": "./generated",
       "logWarnings": true
+    },
+    {
+      "schema": "./schema.json",
+      "outDir": "./generated",
+      "strict": true
     }
   ],
   "x-example-titles": [
     "Minimal — generate parsers and types",
     "Types only — skip parser functions",
     "Build — emit .js and .d.ts",
-    "Log warnings — warn on unknown input properties"
+    "Log warnings — warn on unknown input properties",
+    "Strict — throw on invalid input"
   ]
 }

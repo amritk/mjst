@@ -75,7 +75,7 @@ Write them to disk however you like.
 
 ## API
 
-### `buildSchema(rootSchema, rootTypeName, extensions?, typesOnly?, logWarnings?)`
+### `buildSchema(rootSchema, rootTypeName, extensions?, typesOnly?, logWarnings?, strict?)`
 
 | Parameter | Type | Description |
 |:---|:---|:---|
@@ -84,6 +84,7 @@ Write them to disk however you like.
 | `extensions` | `SchemaExtensions` _(optional)_ | Map of definition name → extra optional properties to merge in before generation. |
 | `typesOnly` | `boolean` _(optional)_ | When `true`, only emit `.ts` type definitions — skip parser functions and runtime helpers. |
 | `logWarnings` | `boolean` _(optional)_ | When `true`, generated parsers emit a `console.warn` for every input key not declared in the schema's properties. |
+| `strict` | `boolean` _(optional)_ | When `true`, generated parsers throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. |
 
 Returns: `Promise<GeneratedFile[]>`.
 
@@ -96,6 +97,7 @@ Returns: `Promise<GeneratedFile[]>`.
 |:---:|:---|:---|:---:|:---:|:---:|:---|
 | 🏷️ | `typesOnly` | — | `boolean` | — | `false` | Generate only TypeScript type definitions without parser functions. Runtime helper files (validators, isObject) are also omitted since they are only needed for parsers. |
 | ⚠️ | `logWarnings` | — | `boolean` | — | `false` | Emit a console.warn in the generated parsers for every input key that is not declared in the schema's properties. Useful for detecting schema drift or unexpected data shapes at runtime. |
+| 🚫 | `strict` | — | `boolean` | — | `false` | Generate parsers that throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. Unknown extra keys are still allowed. |
 <!-- config-table-end -->
 
 The generator handles:

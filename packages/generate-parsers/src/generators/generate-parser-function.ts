@@ -29,6 +29,7 @@ import {
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { getDefaultValue } from '#helpers/get-default-value'
 
+import { generateObjectStrictAssertion, generateScalarStrictAssertion } from './generate-strict-assertion'
 import { generateValidationExpression } from './generate-validation-expression'
 
 /**
@@ -46,6 +47,12 @@ type GenerateParserOptions = {
    * that is not declared in the schema's properties.
    */
   readonly logWarnings?: boolean
+  /**
+   * When true, the generated parser throws on type/shape mismatches instead
+   * of coercing invalid input to default values. Throws on the first violation
+   * with a path-aware Error. Unknown extra keys are still allowed.
+   */
+  readonly strict?: boolean
 }
 
 /**
@@ -389,12 +396,22 @@ const generateFallbackObject = (schema: JSONSchema, useRefImports: boolean, type
  * Generates a parser for non-object schemas (string, number, boolean, array, etc.)
  * that validates the input matches the expected primitive type before casting.
  */
-const generateNonObjectParser = (typeName: string, schema: JSONSchema): string => {
+const generateNonObjectParser = (typeName: string, schema: JSONSchema, strict?: boolean): string => {
   const functionName = generateParserName(typeName)
 
   if (!isSchemaObject(schema) || !hasType(schema)) {
     // Schema without type information cannot be validated beyond a cast
     return `export const ${functionName} = (input: unknown): ${typeName} => input as ${typeName};`
+  }
+
+  if (strict) {
+    const assertion = generateScalarStrictAssertion(schema, typeName)
+    if (assertion === null) {
+      return `export const ${functionName} = (input: unknown): ${typeName} => input as ${typeName};`
+    }
+    const returnExpr =
+      schema.type === 'array' ? `[...(input as readonly unknown[])] as ${typeName}` : `input as ${typeName}`
+    return `export const ${functionName} = (input: unknown): ${typeName} => {\n${assertion}\n  return ${returnExpr};\n};`
   }
 
   switch (schema.type) {
@@ -417,8 +434,11 @@ const generateNonObjectParser = (typeName: string, schema: JSONSchema): string =
  * Validates the input is an object before casting, falling back to an empty object.
  * Returns a shallow copy to avoid mutating the original input.
  */
-const generateEmptyObjectParser = (typeName: string): string => {
+const generateEmptyObjectParser = (typeName: string, strict?: boolean): string => {
   const functionName = generateParserName(typeName)
+  if (strict) {
+    return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);\n  return { ...input } as ${typeName};\n};`
+  }
   return `export const ${functionName} = (input: unknown): ${typeName} => isObject(input) ? { ...input } as ${typeName} : {} as ${typeName};`
 }
 
@@ -556,10 +576,14 @@ const generateObjectParser = (
   typeName: string,
   useRefImports: boolean,
   logWarnings?: boolean,
+  strict?: boolean,
 ): string => {
   const functionName = generateParserName(typeName)
 
   if (!hasProperties(schema)) {
+    if (strict) {
+      return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);\n  return input as ${typeName};\n};`
+    }
     return `export const ${functionName} = (input: unknown): ${typeName} => isObject(input) ? input as ${typeName} : {} as ${typeName};`
   }
 
@@ -568,7 +592,13 @@ const generateObjectParser = (
 
   const lines: string[] = []
   lines.push(`export const ${functionName} = (input: unknown): ${typeName} => {`)
-  lines.push(`  if (!isObject(input)) return ${fallbackObject};`)
+  if (strict) {
+    for (const assertionLine of generateObjectStrictAssertion(schema, typeName)) {
+      lines.push(assertionLine)
+    }
+  } else {
+    lines.push(`  if (!isObject(input)) return ${fallbackObject};`)
+  }
 
   // First pass: determine if we can generate a fast path
   const propInfo: {
@@ -761,6 +791,7 @@ const generateCombinedObjectParser = (
   typeName: string,
   useRefImports: boolean,
   logWarnings?: boolean,
+  strict?: boolean,
 ): string => {
   const functionName = generateParserName(typeName)
   const entries = generatePropertyEntries(schema, useRefImports)
@@ -775,7 +806,7 @@ const generateCombinedObjectParser = (
 
   // Find the first pattern with a $ref for parser delegation
   if (!isSchemaObject(schema) || !('patternProperties' in schema)) {
-    return generateObjectParser(schema, typeName, useRefImports, logWarnings)
+    return generateObjectParser(schema, typeName, useRefImports, logWarnings, strict)
   }
 
   const patternProps = schema.patternProperties as Record<string, JSONSchema>
@@ -783,7 +814,7 @@ const generateCombinedObjectParser = (
   const refPattern = patterns.find(([, ps]) => isSchemaObject(ps) && hasRef(ps))
 
   if (!refPattern || !useRefImports) {
-    return generateObjectParser(schema, typeName, useRefImports, logWarnings)
+    return generateObjectParser(schema, typeName, useRefImports, logWarnings, strict)
   }
 
   const [pattern, patternSchema] = refPattern
@@ -801,9 +832,13 @@ const generateCombinedObjectParser = (
     }
   }
 
+  const notObjectBranch = strict
+    ? `    throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);`
+    : `    return {} as unknown as ${typeName};`
+
   return `export const ${functionName} = (input: unknown): ${typeName} => {
   if (!isObject(input)) {
-    return {} as unknown as ${typeName};
+${notObjectBranch}
   }
   const result = {
 ${objectProperties}
@@ -825,13 +860,14 @@ const generateAdditionalPropertiesParser = (
   schema: JSONSchema.Object,
   typeName: string,
   useRefImports: boolean,
+  strict?: boolean,
 ): string => {
   const functionName = generateParserName(typeName)
   const additionalProps = schema.additionalProperties
 
   // Check if additionalProps is defined before using it
   if (!additionalProps) {
-    return generateEmptyObjectParser(typeName)
+    return generateEmptyObjectParser(typeName, strict)
   }
 
   // If additionalProperties is a $ref and useRefImports is true, generate a loop
@@ -839,6 +875,9 @@ const generateAdditionalPropertiesParser = (
     const ref = additionalProps.$ref
     const parserName = generateParserName(refToName(ref))
 
+    if (strict) {
+      return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);\n  return validateRecord(input, ${parserName}) as ${typeName};\n};`
+    }
     return `export const ${functionName} = (input: unknown): ${typeName} => validateRecord(input, ${parserName}) as ${typeName};`
   }
 
@@ -846,11 +885,17 @@ const generateAdditionalPropertiesParser = (
   if (isSchemaObject(additionalProps) && hasType(additionalProps)) {
     const inlineParser = generateInlineValueParser(additionalProps)
     if (inlineParser) {
+      if (strict) {
+        return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);\n  return validateRecord(input, ${inlineParser}) as ${typeName};\n};`
+      }
       return `export const ${functionName} = (input: unknown): ${typeName} => validateRecord(input, ${inlineParser}) as ${typeName};`
     }
   }
 
   // Otherwise, just validate the input type and shallow copy
+  if (strict) {
+    return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);\n  return { ...input } as ${typeName};\n};`
+  }
   return `export const ${functionName} = (input: unknown): ${typeName} => isObject(input) ? { ...input } as ${typeName} : {};`
 }
 
@@ -898,11 +943,12 @@ const generatePatternPropertiesParser = (
   schema: JSONSchema.Object,
   typeName: string,
   useRefImports: boolean,
+  strict?: boolean,
 ): string => {
   const functionName = generateParserName(typeName)
 
   if (!('patternProperties' in schema) || typeof schema.patternProperties !== 'object') {
-    return generateEmptyObjectParser(typeName)
+    return generateEmptyObjectParser(typeName, strict)
   }
 
   const patternProps = schema.patternProperties as Record<string, JSONSchema>
@@ -910,7 +956,7 @@ const generatePatternPropertiesParser = (
   // Find the first pattern and its schema
   const patterns = Object.entries(patternProps)
   if (patterns.length === 0) {
-    return generateEmptyObjectParser(typeName)
+    return generateEmptyObjectParser(typeName, strict)
   }
 
   const [pattern, patternSchema] = patterns[0] as [string, JSONSchema]
@@ -929,10 +975,14 @@ const generatePatternPropertiesParser = (
   // Escape the pattern for safe inclusion in generated code
   const escapedPattern = escapeRegexPattern(pattern)
 
+  const notObjectBranch = strict
+    ? `    throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);`
+    : `    return {} as unknown as ${typeName};`
+
   // Generate a parser that handles both pattern matching and x- extensions
   return `export const ${functionName} = (input: unknown): ${typeName} => {
   if (!isObject(input)) {
-    return {} as unknown as ${typeName};
+${notObjectBranch}
   }
   const result = {
     ...input,
@@ -1098,6 +1148,7 @@ const generateSchemaObjectParser = (typeName: string): string => {
 const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: GenerateParserOptions): string => {
   const useRefImports = options?.useRefImports ?? false
   const logWarnings = options?.logWarnings ?? false
+  const strict = options?.strict ?? false
 
   // Special case for SchemaObject - it can be any JSON Schema
   if (typeName === 'SchemaObject') {
@@ -1110,14 +1161,14 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
 
   // Handle non-object schemas with type-appropriate validation
   if (!isObjectLikeSchema && !isSchemaObject(schema)) {
-    return generateNonObjectParser(typeName, schema)
+    return generateNonObjectParser(typeName, schema, strict)
   }
 
   // Handle schemas with both properties AND patternProperties.
   // This generates a parser that handles known properties and also iterates
   // pattern-matched keys (e.g. responses with "default" + "200", "4XX").
   if (hasProperties(schema) && isSchemaObject(schema) && 'patternProperties' in schema) {
-    return generateCombinedObjectParser(schema, typeName, useRefImports, logWarnings)
+    return generateCombinedObjectParser(schema, typeName, useRefImports, logWarnings, strict)
   }
 
   // Handle schemas that have explicit properties — generate a full object parser.
@@ -1125,7 +1176,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   // properties AND conditional keywords use all declared properties rather than
   // only the if/then fragment.
   if (hasProperties(schema)) {
-    return generateObjectParser(schema, typeName, useRefImports, logWarnings)
+    return generateObjectParser(schema, typeName, useRefImports, logWarnings, strict)
   }
 
   // Handle conditional schemas (if/then/else) for schemas without explicit properties.
@@ -1137,17 +1188,17 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   // We flatten the fragments into a regular object parser.
   const conditionalObjectSchema = getConditionalObjectSchema(schema)
   if (conditionalObjectSchema) {
-    return generateObjectParser(conditionalObjectSchema, typeName, useRefImports, logWarnings)
+    return generateObjectParser(conditionalObjectSchema, typeName, useRefImports, logWarnings, strict)
   }
 
   // Handle non-object schemas with type-appropriate validation (no properties, no conditionals)
   if (!isObjectLikeSchema) {
-    return generateNonObjectParser(typeName, schema)
+    return generateNonObjectParser(typeName, schema, strict)
   }
 
   // Handle schemas with patternProperties (but no properties)
   if ('patternProperties' in schema) {
-    return generatePatternPropertiesParser(schema as JSONSchema.Object, typeName, useRefImports)
+    return generatePatternPropertiesParser(schema as JSONSchema.Object, typeName, useRefImports, strict)
   }
 
   // Handle schemas with additionalProperties as true or false (but no properties)
@@ -1156,20 +1207,20 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
 
     // If additionalProperties is true or false, validate it is an object
     if (additionalProps === true || additionalProps === false) {
-      return generateEmptyObjectParser(typeName)
+      return generateEmptyObjectParser(typeName, strict)
     }
 
     // Otherwise, handle as a schema (could be a $ref or object schema)
-    return generateAdditionalPropertiesParser(schema as JSONSchema.Object, typeName, useRefImports)
+    return generateAdditionalPropertiesParser(schema as JSONSchema.Object, typeName, useRefImports, strict)
   }
 
   // Handle empty object schemas
   if ('type' in schema && schema.type === 'object' && !hasProperties(schema)) {
-    return generateEmptyObjectParser(typeName)
+    return generateEmptyObjectParser(typeName, strict)
   }
 
   // Default fallback - validate it is an object since we passed the isObjectSchema check
-  return generateEmptyObjectParser(typeName)
+  return generateEmptyObjectParser(typeName, strict)
 }
 
 /**
