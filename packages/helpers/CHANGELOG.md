@@ -1,5 +1,11 @@
 # @amritk/helpers
 
+## 0.2.1
+
+### Patch Changes
+
+- dbf49bf: Republish via npm trusted publishing (OIDC).
+
 ## 0.2.0
 
 ### Minor Changes
