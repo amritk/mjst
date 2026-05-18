@@ -1,5 +1,5 @@
 ---
-"@amritk/cli": minor
+"@amritk/mjst": minor
 "@amritk/generate-parsers": minor
 "@amritk/generate-validators": minor
 "@amritk/generate-markdown": minor
