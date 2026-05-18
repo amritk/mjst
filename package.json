@@ -24,7 +24,9 @@
     "check": "bun run biome check .",
     "format": "bun run biome format --write .",
     "test": "vitest run",
-    "build": "bun run --filter='./packages/*' build"
+    "build": "bun run --filter='./packages/*' build",
+    "release:version": "changeset version",
+    "release:publish": "changeset publish"
   },
   "devDependencies": {
     "@amritk/helpers": "workspace:*",
