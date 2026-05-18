@@ -1,5 +1,13 @@
 # @amritk/generate-validators
 
+## 0.2.1
+
+### Patch Changes
+
+- dbf49bf: Republish via npm trusted publishing (OIDC).
+- Updated dependencies [dbf49bf]
+  - @amritk/helpers@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes
