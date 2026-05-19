@@ -93,8 +93,11 @@ describe('generate-files', () => {
 
     const result = generateFile(schema, 'Simple')
 
-    // Should still import isObject helper
-    expect(result).toContain("import { isObject } from '@amritk/helpers/is-object';")
+    // isObject is inlined as a local const rather than imported.
+    expect(result).toContain(
+      "const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);",
+    )
+    expect(result).not.toContain("from '@amritk/helpers/is-object'")
     // But should not import any ref types (check for type imports specifically)
     expect(result).not.toContain('import { type')
   })
@@ -186,7 +189,9 @@ describe('generate-files', () => {
       "import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';",
     )
     expect(result).toContain("import { validateArray } from '@amritk/helpers/validate-array';")
-    expect(result).toContain("import { isObject } from '@amritk/helpers/is-object';")
+    expect(result).toContain(
+      "const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);",
+    )
 
     // Check for required array validation using cached variable
     expect(result).toContain('servers: validateArray(_servers, parseServerObject),')

@@ -13,12 +13,14 @@ describe('collect-helpers', () => {
     expect(result).toEqual(["import { validateRecord } from '@amritk/helpers/validate-record';"])
   })
 
-  it('returns isObject import when parser contains isObject', () => {
+  it('inlines isObject as a local const when parser contains isObject', () => {
     const result = collectHelpers('if (isObject(input)) {')
-    expect(result).toEqual(["import { isObject } from '@amritk/helpers/is-object';"])
+    expect(result).toEqual([
+      "const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);",
+    ])
   })
 
-  it('returns all three imports when parser uses all helpers', () => {
+  it('returns imports for validators and inlines isObject when parser uses all helpers', () => {
     const parser = `
       const arr = validateArray(input.items, parseItem)
       const rec = validateRecord(input.map, parseValue)
@@ -28,7 +30,9 @@ describe('collect-helpers', () => {
     expect(result).toHaveLength(3)
     expect(result).toContain("import { validateArray } from '@amritk/helpers/validate-array';")
     expect(result).toContain("import { validateRecord } from '@amritk/helpers/validate-record';")
-    expect(result).toContain("import { isObject } from '@amritk/helpers/is-object';")
+    expect(result).toContain(
+      "const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);",
+    )
   })
 
   it('returns empty array when parser uses no helpers', () => {
