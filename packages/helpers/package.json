@@ -35,6 +35,7 @@
     "json-schema-typed": "catalog:"
   },
   "exports": {
+    "./package.json": "./package.json",
     "./build-dynamic-ref-map": {
       "bun": "./src/build-dynamic-ref-map.ts",
       "default": "./dist/build-dynamic-ref-map.js",

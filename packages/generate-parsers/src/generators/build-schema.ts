@@ -1,3 +1,6 @@
+import { readFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import { dirname, resolve as resolvePath } from 'node:path'
 import { buildDynamicRefMap } from '@amritk/helpers/build-dynamic-ref-map'
 import { extractRefs } from '@amritk/helpers/extract-refs'
 import { refToFilename } from '@amritk/helpers/ref-to-filename'
@@ -6,12 +9,20 @@ import { resolveDynamicRefs } from '@amritk/helpers/resolve-dynamic-refs'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { upgradeDraft07Schema } from '@amritk/helpers/upgrade-draft07-schema'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { RUNTIME_HELPER_SOURCES } from '#generated/runtime-helper-sources'
 import { applySchemaExtensions } from '#helpers/apply-schema-extensions'
 import type { HelpersMode, RuntimeHelperName } from '#helpers/collect-helpers'
 import type { SchemaExtensions } from '#types/schema-extensions'
 
 import { generateFile } from './generate-files'
+
+/** Locate the @amritk/helpers package on disk so we can copy its runtime
+ * helper source files into the generated output when in embedded mode. */
+const readHelperSource = async (helper: RuntimeHelperName): Promise<string> => {
+  const require = createRequire(import.meta.url)
+  const helpersPkgPath = require.resolve('@amritk/helpers/package.json')
+  const helpersRoot = dirname(helpersPkgPath)
+  return readFile(resolvePath(helpersRoot, 'src', `${helper}.ts`), 'utf-8')
+}
 
 /**
  * Represents a generated file with its filename and content.
@@ -221,12 +232,8 @@ export const buildSchema = async (
   // typesOnly skips parser generation entirely, so no runtime helpers are needed.
   if (helpersMode === 'embedded' && !typesOnly) {
     for (const helper of usedHelpers) {
-      const filename = `_helpers/${helper}.ts`
-      const source = RUNTIME_HELPER_SOURCES[`${helper}.ts`]
-      if (!source) {
-        throw new Error(`Missing runtime-helper snapshot for ${helper}.ts`)
-      }
-      files.push({ filename, content: source })
+      const source = await readHelperSource(helper)
+      files.push({ filename: `_helpers/${helper}.ts`, content: source })
     }
   }
 

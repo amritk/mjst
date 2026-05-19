@@ -30,15 +30,12 @@
     "access": "public"
   },
   "scripts": {
-    "prebuild": "bun run ./scripts/build-runtime-helpers.ts",
     "build": "bun run build:code && bun run build:types",
     "build:code": "bun build ./src/index.ts --outdir=dist --target=node",
     "build:types": "tsc -p .",
-    "build:runtime-helpers": "bun run ./scripts/build-runtime-helpers.ts",
     "generate-readme": "bun run ./scripts/generate-readme.ts"
   },
   "imports": {
-    "#generated/*": "./src/generated/*.ts",
     "#generators/*": "./src/generators/*.ts",
     "#helpers/*": "./src/helpers/*.ts",
     "#types/*": "./src/types/*.ts"

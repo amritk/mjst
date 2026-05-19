@@ -34,8 +34,8 @@
     "access": "public"
   },
   "scripts": {
-    "dev": "bun run --filter='@amritk/generate-parsers' build:runtime-helpers && bun run --conditions=development ./src/cli.ts",
-    "start": "bun run --filter='@amritk/generate-parsers' build:runtime-helpers && bun run ./src/cli.ts",
+    "dev": "bun run --conditions=development ./src/cli.ts",
+    "start": "bun run ./src/cli.ts",
     "build": "bun run build:code && bun run build:types",
     "build:code": "bun build ./src/cli.ts --outdir=dist --target=node",
     "build:types": "tsc -p .",
