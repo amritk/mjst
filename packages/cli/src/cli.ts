@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process'
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
-import { dirname, join, relative, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { buildSchema } from '@amritk/generate-parsers'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 const execFileAsync = promisify(execFile)
 
+import { detectHelpersMode } from './detect-helpers-mode'
 import { loadConfig } from './load-config'
 import { parseCliArgs } from './parse-cli-args'
 
@@ -57,6 +57,12 @@ const run = async (): Promise<void> => {
   const raw = await readFile(schemaPath, 'utf-8')
   const schema: unknown = JSON.parse(raw)
 
+  const outputDir = resolve(config.outDir)
+  await mkdir(outputDir, { recursive: true })
+
+  const helpersMode = config.helpers ?? detectHelpersMode(outputDir)
+  console.log(`Helpers mode: ${helpersMode}${config.helpers ? ' (explicit)' : ' (auto-detected)'}`)
+
   const files = await buildSchema(
     schema as JSONSchema,
     'Document',
@@ -64,10 +70,8 @@ const run = async (): Promise<void> => {
     config.typesOnly,
     config.logWarnings,
     config.strict,
+    helpersMode,
   )
-
-  const outputDir = resolve(config.outDir)
-  await mkdir(outputDir, { recursive: true })
 
   for (const file of files) {
     const filePath = join(outputDir, file.filename)
@@ -80,9 +84,8 @@ const run = async (): Promise<void> => {
   if (config.build) {
     // Write a minimal tsconfig so tsc can compile the generated files without
     // inheriting settings like allowImportingTsExtensions that block emission.
-    // Add paths so tsc can resolve @amritk/helpers from the output directory.
-    const helpersDir = resolve(dirname(fileURLToPath(import.meta.url)), '../../helpers/dist')
-    const helpersRelative = relative(outputDir, helpersDir)
+    // In 'package' mode tsc finds @amritk/helpers via the consumer's node_modules.
+    // In 'embedded' mode the helpers live under ./_helpers and need no resolution.
     const tsconfigContent = JSON.stringify(
       {
         compilerOptions: {
@@ -92,9 +95,6 @@ const run = async (): Promise<void> => {
           declaration: true,
           emitDeclarationOnly: config.typesOnly,
           skipLibCheck: true,
-          paths: {
-            '@amritk/helpers/*': [`${helpersRelative}/*`],
-          },
         },
         include: ['./**/*.ts'],
       },

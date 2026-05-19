@@ -60,8 +60,8 @@ Shared utility belt used both by the generators and copied into generated output
 Categories:
 
 - **Schema traversal:** `extract-refs`, `resolve-ref`, `build-dynamic-ref-map`, `resolve-dynamic-refs`, `upgrade-draft07-schema`, `ref-to-filename`, `ref-to-name`, `schema-guards`
-- **Codegen utilities:** `generate-type-definition`, `parse-documentation`
-- **Runtime helpers (also copied into generated output):** `is-object`, `safe-accessor`, `validate-array`, `validate-record`
+- **Codegen utilities:** `generate-type-definition`, `parse-documentation`, `safe-accessor`
+- **Runtime helpers (referenced from generated output):** `is-object`, `validate-array`, `validate-record`, `has-ref`. In `--helpers=embedded` mode (default when `@amritk/helpers` is not resolvable from `outDir`), these sources are snapshotted at `@amritk/generate-parsers` build time and emitted into `outDir/_helpers/` so the generated output is self-contained.
 
 ## Import Conventions
 

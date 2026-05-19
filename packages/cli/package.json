@@ -27,7 +27,8 @@
     "mjst": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "publishConfig": {
     "access": "public"
@@ -42,7 +43,8 @@
   },
   "dependencies": {
     "@amritk/generate-parsers": "workspace:*",
-    "@amritk/generate-markdown": "workspace:*"
+    "@amritk/generate-markdown": "workspace:*",
+    "@amritk/helpers": "workspace:*"
   },
   "devDependencies": {
     "json-schema-typed": "catalog:"

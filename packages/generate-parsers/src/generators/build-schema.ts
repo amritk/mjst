@@ -1,3 +1,6 @@
+import { readFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import { dirname, resolve as resolvePath } from 'node:path'
 import { buildDynamicRefMap } from '@amritk/helpers/build-dynamic-ref-map'
 import { extractRefs } from '@amritk/helpers/extract-refs'
 import { refToFilename } from '@amritk/helpers/ref-to-filename'
@@ -7,9 +10,19 @@ import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { upgradeDraft07Schema } from '@amritk/helpers/upgrade-draft07-schema'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { applySchemaExtensions } from '#helpers/apply-schema-extensions'
+import type { HelpersMode, RuntimeHelperName } from '#helpers/collect-helpers'
 import type { SchemaExtensions } from '#types/schema-extensions'
 
 import { generateFile } from './generate-files'
+
+/** Locate the @amritk/helpers package on disk so we can copy its runtime
+ * helper source files into the generated output when in embedded mode. */
+const readHelperSource = async (helper: RuntimeHelperName): Promise<string> => {
+  const require = createRequire(import.meta.url)
+  const helpersPkgPath = require.resolve('@amritk/helpers/package.json')
+  const helpersRoot = dirname(helpersPkgPath)
+  return readFile(resolvePath(helpersRoot, 'src', `${helper}.ts`), 'utf-8')
+}
 
 /**
  * Represents a generated file with its filename and content.
@@ -74,6 +87,9 @@ const extractDynamicAnchorDefs = (schema: JSONSchema): string[] => {
  * @param strict - When true, the generated parsers throw on type/shape mismatches
  *   (wrong type, missing required property, enum/pattern/min/max violations) instead
  *   of coercing invalid input to default values.
+ * @param helpersMode - `'package'` (default) emits `import ... from '@amritk/helpers/...'`.
+ *   `'embedded'` emits `import ... from './_helpers/...'` and appends the helper sources
+ *   as additional `GeneratedFile` entries so the output directory is self-contained.
  * @returns An array of generated TypeScript files
  *
  * @example
@@ -113,6 +129,7 @@ export const buildSchema = async (
   typesOnly?: boolean,
   logWarnings?: boolean,
   strict?: boolean,
+  helpersMode: HelpersMode = 'package',
 ): Promise<GeneratedFile[]> => {
   // Upgrade draft-07 schemas to 2020-12 conventions before processing.
   // This renames `definitions` → `$defs` recursively so the rest of the
@@ -123,6 +140,7 @@ export const buildSchema = async (
   const processedRefs = new Set<string>()
   const processedFilenames = new Set<string>()
   const refsToProcess: string[] = []
+  const usedHelpers = new Set<RuntimeHelperName>()
 
   // Build a map of $dynamicRef anchors to their $ref paths so we can
   // convert $dynamicRef: "#meta" to $ref: "#/$defs/schema" before generating
@@ -133,9 +151,10 @@ export const buildSchema = async (
   const extendedRootSchema = extensions
     ? applySchemaExtensions(processedRootSchema, rootTypeName.toLowerCase(), extensions)
     : processedRootSchema
-  const rootContent = generateFile(extendedRootSchema, rootTypeName, {
+  const rootResult = generateFile(extendedRootSchema, rootTypeName, {
     typesOnly: typesOnly ?? false,
     rootSchema: rootSchema as Record<string, unknown>,
+    helpersMode,
     ...(logWarnings !== undefined ? { logWarnings } : {}),
     ...(strict !== undefined ? { strict } : {}),
   })
@@ -144,8 +163,9 @@ export const buildSchema = async (
   processedFilenames.add(rootFilename)
   files.push({
     filename: `${rootFilename}.ts`,
-    content: rootContent,
+    content: rootResult.content,
   })
+  for (const helper of rootResult.usedHelpers) usedHelpers.add(helper)
 
   // Extract all refs from the root schema
   const rootRefs = extractRefs(rootSchema)
@@ -180,10 +200,11 @@ export const buildSchema = async (
     const filename = refToFilename(ref)
     const processedSchema = resolveDynamicRefs(resolvedSchema as JSONSchema, dynamicRefMap)
     const extendedSchema = extensions ? applySchemaExtensions(processedSchema, filename, extensions) : processedSchema
-    const content = generateFile(extendedSchema, typeName, {
+    const fileResult = generateFile(extendedSchema, typeName, {
       typesOnly: typesOnly ?? false,
       selfRef: ref,
       rootSchema: rootSchema as Record<string, unknown>,
+      helpersMode,
       ...(logWarnings !== undefined ? { logWarnings } : {}),
       ...(strict !== undefined ? { strict } : {}),
     })
@@ -192,9 +213,10 @@ export const buildSchema = async (
       processedFilenames.add(filename)
       files.push({
         filename: `${filename}.ts`,
-        content,
+        content: fileResult.content,
       })
     }
+    for (const helper of fileResult.usedHelpers) usedHelpers.add(helper)
 
     // Extract refs from this schema and add to queue
     const nestedRefs = extractRefs(resolvedSchema as JSONSchema)
@@ -205,12 +227,25 @@ export const buildSchema = async (
     }
   }
 
+  // In embedded mode, ship the runtime helper source files alongside the parsers so
+  // the output directory is self-contained (no `@amritk/helpers` install required).
+  // typesOnly skips parser generation entirely, so no runtime helpers are needed.
+  if (helpersMode === 'embedded' && !typesOnly) {
+    for (const helper of usedHelpers) {
+      const source = await readHelperSource(helper)
+      files.push({ filename: `_helpers/${helper}.ts`, content: source })
+    }
+  }
+
   // Generate index.ts with named re-exports extracted from each generated file's content.
   // Regex matches `export type Foo` and `export const foo` declarations.
   const TYPE_EXPORT_RE = /^export type (\w+)/gm
   const CONST_EXPORT_RE = /^export const (\w+)/gm
 
-  const sortedFiles = [...files].sort((a, b) => a.filename.localeCompare(b.filename))
+  // _helpers/ is an internal directory; never re-export from it.
+  const sortedFiles = [...files]
+    .filter((f) => !f.filename.startsWith('_helpers/'))
+    .sort((a, b) => a.filename.localeCompare(b.filename))
 
   let indexContent = ''
   for (const file of sortedFiles) {

@@ -1,6 +1,11 @@
 import { generateTypeDefinition } from '@amritk/helpers/generate-type-definition'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { collectHelpers } from '#helpers/collect-helpers'
+import {
+  type CollectedHelpers,
+  collectHelpers,
+  type HelpersMode,
+  type RuntimeHelperName,
+} from '#helpers/collect-helpers'
 import { collectImports } from '#helpers/collect-imports'
 
 import { generateParserFunction, generateShapeValidator } from './generate-parser-function'
@@ -35,6 +40,19 @@ type GenerateFileOptions = {
    * of coercing invalid input to default values.
    */
   readonly strict?: boolean
+  /**
+   * Controls how runtime helpers are referenced.
+   * - `'package'` (default): emit imports from `@amritk/helpers/...`.
+   * - `'embedded'`: emit imports from `./_helpers/...` so the helper sources can
+   *   be shipped alongside the generated files.
+   */
+  readonly helpersMode?: HelpersMode
+}
+
+/** Result of generating a single parser file. */
+export type GeneratedFileContent = {
+  readonly content: string
+  readonly usedHelpers: ReadonlySet<RuntimeHelperName>
 }
 
 /**
@@ -46,7 +64,7 @@ type GenerateFileOptions = {
  * @param schema - The JSON Schema to generate code from
  * @param typeName - The name to use for the generated TypeScript type
  * @param options - Optional settings to control what gets generated
- * @returns The complete TypeScript code
+ * @returns The generated file content and the set of runtime helpers it references
  *
  * @example
  * ```typescript
@@ -66,10 +84,15 @@ type GenerateFileOptions = {
  * // typesOnly contains only type-only imports and type User (no parser)
  * ```
  */
-export const generateFile = (schema: JSONSchema, typeName: string, options?: GenerateFileOptions): string => {
+export const generateFile = (
+  schema: JSONSchema,
+  typeName: string,
+  options?: GenerateFileOptions,
+): GeneratedFileContent => {
   const typesOnly = options?.typesOnly === true
   const selfRef = options?.selfRef
   const rootSchema = options?.rootSchema
+  const helpersMode: HelpersMode = options?.helpersMode ?? 'package'
   const typeDefinition = generateTypeDefinition(schema, typeName)
 
   if (typesOnly) {
@@ -85,7 +108,7 @@ export const generateFile = (schema: JSONSchema, typeName: string, options?: Gen
       result += '\n\n'
     }
 
-    return result + typeDefinition
+    return { content: result + typeDefinition, usedHelpers: new Set() }
   }
 
   const parserFunction = generateParserFunction(schema, typeName, {
@@ -95,7 +118,8 @@ export const generateFile = (schema: JSONSchema, typeName: string, options?: Gen
   })
   const shapeValidator = generateShapeValidator(schema, typeName, true)
   const combinedFunctions = `${shapeValidator}\n\n${parserFunction}`
-  const imports = [...collectImports(schema, { selfRef, rootSchema }), ...collectHelpers(combinedFunctions)]
+  const helpers: CollectedHelpers = collectHelpers(combinedFunctions, helpersMode)
+  const imports = [...collectImports(schema, { selfRef, rootSchema }), ...helpers.imports]
 
   // Build file output using string concatenation instead of array join for performance
   let result = ''
@@ -108,5 +132,5 @@ export const generateFile = (schema: JSONSchema, typeName: string, options?: Gen
     result += '\n\n'
   }
 
-  return result + typeDefinition + '\n\n' + combinedFunctions
+  return { content: result + typeDefinition + '\n\n' + combinedFunctions, usedHelpers: helpers.used }
 }
