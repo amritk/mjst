@@ -11,7 +11,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Document')
+    const { content: result } = generateFile(schema, 'Document')
 
     expect(result).toContain(
       "import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';",
@@ -26,7 +26,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Document')
+    const { content: result } = generateFile(schema, 'Document')
 
     // With local variable caching, optional $ref properties use the cached variable
     expect(result).toContain('_contact !== undefined && { contact: parseContactObject(_contact) }')
@@ -41,7 +41,7 @@ describe('generate-files', () => {
       required: ['contact'],
     }
 
-    const result = generateFile(schema, 'Document')
+    const { content: result } = generateFile(schema, 'Document')
 
     // With local variable caching, required $ref properties use the cached variable
     expect(result).toContain('contact: parseContactObject(_contact),')
@@ -56,7 +56,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Document')
+    const { content: result } = generateFile(schema, 'Document')
 
     expect(result).toContain(
       "import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';",
@@ -74,7 +74,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Document')
+    const { content: result } = generateFile(schema, 'Document')
 
     expect(result).toContain(
       "import { type ExternalDocumentationObject, parseExternalDocumentationObject, validateExternalDocumentationObjectShape } from './external-documentation';",
@@ -91,7 +91,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Simple')
+    const { content: result } = generateFile(schema, 'Simple')
 
     // Should still import isObject helper
     expect(result).toContain("import { isObject } from '@amritk/helpers/is-object';")
@@ -108,7 +108,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Document')
+    const { content: result } = generateFile(schema, 'Document')
 
     // Non-ref property should have inline validation against the cached local
     expect(result).toContain('typeof _name === "string"')
@@ -125,7 +125,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Document')
+    const { content: result } = generateFile(schema, 'Document')
 
     expect(result).toContain(
       "import { type CallbacksOrReferenceObject, parseCallbacksOrReferenceObject, validateCallbacksOrReferenceObjectShape } from './callbacks-or-reference';",
@@ -141,7 +141,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Simple')
+    const { content: result } = generateFile(schema, 'Simple')
 
     expect(result).toContain('export const parseSimple = (input: unknown): Simple =>')
     expect(result).not.toContain('function parseSimple')
@@ -158,7 +158,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Document')
+    const { content: result } = generateFile(schema, 'Document')
 
     expect(result).toContain(
       "import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';",
@@ -179,7 +179,7 @@ describe('generate-files', () => {
       required: ['servers'],
     }
 
-    const result = generateFile(schema, 'Document')
+    const { content: result } = generateFile(schema, 'Document')
 
     // Check for required imports
     expect(result).toContain(
@@ -206,7 +206,7 @@ describe('generate-files', () => {
       required: ['name'],
     }
 
-    const result = generateFile(schema, 'Parameter')
+    const { content: result } = generateFile(schema, 'Parameter')
 
     // Type should include extension properties as optional
     expect(result).toContain("'x-enabled'?: boolean")
@@ -230,7 +230,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Operation')
+    const { content: result } = generateFile(schema, 'Operation')
 
     // Type should include the complex extension
     expect(result).toContain("'x-codegen'")
@@ -245,7 +245,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Simple', { typesOnly: true })
+    const { content: result } = generateFile(schema, 'Simple', { typesOnly: true })
 
     expect(result).toContain('export type Simple')
     expect(result).not.toContain('export const parseSimple')
@@ -259,7 +259,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Document', { typesOnly: true })
+    const { content: result } = generateFile(schema, 'Document', { typesOnly: true })
 
     expect(result).toContain("import type { ContactObject } from './contact';")
     expect(result).not.toContain('parseContactObject')
@@ -273,7 +273,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Simple', { typesOnly: true })
+    const { content: result } = generateFile(schema, 'Simple', { typesOnly: true })
 
     // No parser helpers should be imported since there is no parser function
     expect(result).not.toContain('import { isObject }')
@@ -291,7 +291,7 @@ describe('generate-files', () => {
       required: ['name'],
     }
 
-    const result = generateFile(schema, 'User', { typesOnly: true })
+    const { content: result } = generateFile(schema, 'User', { typesOnly: true })
 
     expect(result).toContain('export type User')
     expect(result).toContain('name: string')
@@ -309,7 +309,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Document', { typesOnly: true })
+    const { content: result } = generateFile(schema, 'Document', { typesOnly: true })
 
     expect(result).toContain("import type { ServerObject } from './server';")
     expect(result).not.toContain('parseServerObject')
@@ -322,7 +322,7 @@ describe('generate-files', () => {
       additionalProperties: { $ref: '#/$defs/path-item' },
     }
 
-    const result = generateFile(schema, 'Paths', { typesOnly: true })
+    const { content: result } = generateFile(schema, 'Paths', { typesOnly: true })
 
     expect(result).toContain("import type { PathItemObject } from './path-item';")
     expect(result).not.toContain('parsePathItemObject')
@@ -334,7 +334,7 @@ describe('generate-files', () => {
       oneOf: [{ $ref: '#/$defs/cat' }, { $ref: '#/$defs/dog' }],
     }
 
-    const result = generateFile(schema, 'Pet', { typesOnly: true })
+    const { content: result } = generateFile(schema, 'Pet', { typesOnly: true })
 
     expect(result).toContain("import type { CatObject } from './cat';")
     expect(result).toContain("import type { DogObject } from './dog';")
@@ -352,7 +352,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'Wrapper', { typesOnly: true })
+    const { content: result } = generateFile(schema, 'Wrapper', { typesOnly: true })
 
     expect(result).toContain("import type { StringValueObject } from './string-value';")
     expect(result).toContain("import type { NumberValueObject } from './number-value';")
@@ -368,8 +368,8 @@ describe('generate-files', () => {
       },
     }
 
-    const defaultResult = generateFile(schema, 'Document')
-    const explicitFalseResult = generateFile(schema, 'Document', { typesOnly: false })
+    const { content: defaultResult } = generateFile(schema, 'Document')
+    const { content: explicitFalseResult } = generateFile(schema, 'Document', { typesOnly: false })
 
     expect(defaultResult).toBe(explicitFalseResult)
     expect(defaultResult).toContain(
@@ -401,7 +401,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'EncodingObject', {
+    const { content: result } = generateFile(schema, 'EncodingObject', {
       typesOnly: true,
       selfRef: '#/$defs/encoding',
     })
@@ -423,7 +423,7 @@ describe('generate-files', () => {
       },
     }
 
-    const result = generateFile(schema, 'EncodingObject', { selfRef: '#/$defs/encoding' })
+    const { content: result } = generateFile(schema, 'EncodingObject', { selfRef: '#/$defs/encoding' })
 
     expect(result).not.toContain(
       "import { type EncodingObject, parseEncodingObject, validateEncodingObjectShape } from './encoding';",

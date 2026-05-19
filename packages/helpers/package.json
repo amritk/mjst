@@ -27,7 +27,7 @@
   },
   "scripts": {
     "build": "bun run build:code && bun run build:types",
-    "build:code": "bun build ./src/build-dynamic-ref-map.ts ./src/extract-refs.ts ./src/generate-type-definition.ts ./src/is-object.ts ./src/parse-documentation.ts ./src/ref-to-filename.ts ./src/ref-to-name.ts ./src/resolve-dynamic-refs.ts ./src/resolve-ref.ts ./src/safe-accessor.ts ./src/schema-guards.ts ./src/upgrade-draft07-schema.ts ./src/validate-array.ts ./src/validate-record.ts --outdir=dist --root=src --target=node",
+    "build:code": "bun build ./src/build-dynamic-ref-map.ts ./src/extract-refs.ts ./src/generate-type-definition.ts ./src/has-ref.ts ./src/is-object.ts ./src/parse-documentation.ts ./src/ref-to-filename.ts ./src/ref-to-name.ts ./src/resolve-dynamic-refs.ts ./src/resolve-ref.ts ./src/safe-accessor.ts ./src/schema-guards.ts ./src/upgrade-draft07-schema.ts ./src/validate-array.ts ./src/validate-record.ts --outdir=dist --root=src --target=node",
     "build:types": "tsc -p ."
   },
   "dependencies": {
@@ -48,6 +48,11 @@
       "bun": "./src/generate-type-definition.ts",
       "default": "./dist/generate-type-definition.js",
       "types": "./dist/generate-type-definition.d.ts"
+    },
+    "./has-ref": {
+      "bun": "./src/has-ref.ts",
+      "default": "./dist/has-ref.js",
+      "types": "./dist/has-ref.d.ts"
     },
     "./is-object": {
       "bun": "./src/is-object.ts",

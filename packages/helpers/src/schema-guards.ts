@@ -157,7 +157,4 @@ export const hasMaxProperties = (schema: JSONSchema): schema is SchemaObject & {
   return isSchemaObject(schema) && 'maxProperties' in schema && typeof schema.maxProperties === 'number'
 }
 
-/** Type guard to check if schema has $ref */
-export const hasRef = (schema: JSONSchema): schema is SchemaObject & { $ref: string } => {
-  return isSchemaObject(schema) && '$ref' in schema && typeof schema.$ref === 'string'
-}
+export { hasRef } from './has-ref'

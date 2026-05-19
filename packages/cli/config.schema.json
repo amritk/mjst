@@ -48,11 +48,18 @@
       "default": false,
       "description": "Generate parsers that throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. Unknown extra keys are still allowed."
     },
+    "helpers": {
+      "type": "string",
+      "enum": ["package", "embedded"],
+      "x-cli-flag": "--helpers <mode>",
+      "x-icon": "🧰",
+      "description": "Controls how generated parsers reference their runtime helpers. 'package' emits imports from @amritk/helpers (requires it to be installed in the consumer project). 'embedded' ships the helper source under outDir/_helpers/ so the output is self-contained. When omitted, the CLI auto-detects: it picks 'package' if @amritk/helpers resolves from outDir, otherwise 'embedded'."
+    },
     "config": {
       "type": "string",
       "x-cli-flag": "--config <path>",
       "x-icon": "⚙️",
-      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, outDir, typesOnly, build, logWarnings, strict). CLI flags take precedence over config file values.",
+      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, outDir, typesOnly, build, logWarnings, strict, helpers). CLI flags take precedence over config file values.",
       "examples": ["./mjst.config.json"]
     }
   },

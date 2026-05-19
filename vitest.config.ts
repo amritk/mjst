@@ -17,5 +17,6 @@ export default defineConfig({
   },
   test: {
     include: ['packages/**/*.test.ts'],
+    globalSetup: [resolve(root, 'packages/generate-parsers/scripts/vitest-global-setup.ts')],
   },
 })

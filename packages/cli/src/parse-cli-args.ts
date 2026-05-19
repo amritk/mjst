@@ -14,7 +14,13 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
     build?: boolean
     logWarnings?: boolean
     strict?: boolean
+    helpers?: 'package' | 'embedded'
   } = {}
+
+  const parseHelpersValue = (value: string): 'package' | 'embedded' | undefined => {
+    if (value === 'package' || value === 'embedded') return value
+    return undefined
+  }
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -42,6 +48,9 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
         config.logWarnings = value !== 'false'
       } else if (key === 'strict') {
         config.strict = value !== 'false'
+      } else if (key === 'helpers') {
+        const parsed = parseHelpersValue(value)
+        if (parsed) config.helpers = parsed
       }
 
       continue
@@ -71,6 +80,16 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
       config.logWarnings = true
     } else if (arg === '--strict') {
       config.strict = true
+    } else if (arg === '--helpers') {
+      const value = args[i + 1]
+
+      if (value && !value.startsWith('--')) {
+        const parsed = parseHelpersValue(value)
+        if (parsed) {
+          config.helpers = parsed
+          i++
+        }
+      }
     }
   }
 

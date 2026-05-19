@@ -664,4 +664,167 @@ describe('build-schema', () => {
     expect(filenames.filter((f) => f === 'common.ts')).toHaveLength(1)
     expect(filenames.filter((f) => f === 'item.ts')).toHaveLength(1)
   })
+
+  describe('helpersMode: embedded', () => {
+    it('emits relative ./_helpers/ imports and a _helpers/is-object.ts file for a basic schema', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+      }
+
+      const result = await buildSchema(schema, 'Document', undefined, undefined, undefined, undefined, 'embedded')
+      const filenames = result.map((f) => f.filename)
+      const root = result.find((f) => f.filename === 'document.ts')
+
+      expect(root?.content).toContain("import { isObject } from './_helpers/is-object';")
+      expect(root?.content).not.toContain('@amritk/helpers')
+      expect(filenames).toContain('_helpers/is-object.ts')
+    })
+
+    it('ships validate-array.ts (plus its transitive is-object.ts) for array schemas', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          tags: { type: 'array', items: { $ref: '#/$defs/tag' } },
+        },
+        $defs: {
+          tag: { type: 'object', properties: { value: { type: 'string' } } },
+        },
+      }
+
+      const result = await buildSchema(schema, 'Document', undefined, undefined, undefined, undefined, 'embedded')
+      const filenames = result.map((f) => f.filename)
+
+      expect(filenames).toContain('_helpers/validate-array.ts')
+      expect(filenames).toContain('_helpers/is-object.ts')
+      expect(filenames).not.toContain('_helpers/validate-record.ts')
+      expect(filenames).not.toContain('_helpers/has-ref.ts')
+    })
+
+    it('ships validate-record.ts plus is-object.ts when additionalProperties is a $ref', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          headers: { type: 'object', additionalProperties: { $ref: '#/$defs/header' } },
+        },
+        $defs: {
+          header: { type: 'object', properties: { value: { type: 'string' } } },
+        },
+      }
+
+      const result = await buildSchema(schema, 'Document', undefined, undefined, undefined, undefined, 'embedded')
+      const filenames = result.map((f) => f.filename)
+
+      expect(filenames).toContain('_helpers/validate-record.ts')
+      expect(filenames).toContain('_helpers/is-object.ts')
+    })
+
+    it('ships has-ref.ts for schemas using if/then/else with $ref branches', async () => {
+      // hasRef(input) is emitted into runtime parser bodies only for conditional schemas
+      // whose `if` requires `$ref` and whose then/else branches are both $refs.
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          param: { $ref: '#/$defs/parameter-or-reference' },
+        },
+        $defs: {
+          reference: {
+            type: 'object',
+            properties: { $ref: { type: 'string' } },
+            required: ['$ref'],
+          },
+          parameter: {
+            type: 'object',
+            properties: { name: { type: 'string' } },
+          },
+          'parameter-or-reference': {
+            if: { type: 'object', required: ['$ref'] },
+            then: { $ref: '#/$defs/reference' },
+            else: { $ref: '#/$defs/parameter' },
+          },
+        },
+      }
+
+      const result = await buildSchema(schema, 'Document', undefined, undefined, undefined, undefined, 'embedded')
+      const filenames = result.map((f) => f.filename)
+
+      expect(filenames).toContain('_helpers/has-ref.ts')
+      const conditional = result.find((f) => f.filename === 'parameter-or-reference.ts')
+      expect(conditional?.content).toContain("import { hasRef } from './_helpers/has-ref';")
+    })
+
+    it('emits zero _helpers/*.ts files in types-only mode', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          tags: { type: 'array', items: { type: 'string' } },
+        },
+      }
+
+      const result = await buildSchema(schema, 'Document', undefined, true, undefined, undefined, 'embedded')
+      const filenames = result.map((f) => f.filename)
+
+      expect(filenames.some((f) => f.startsWith('_helpers/'))).toBe(false)
+    })
+
+    it('does not include _helpers/ entries in the generated index.ts re-exports', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+      }
+
+      const result = await buildSchema(schema, 'Document', undefined, undefined, undefined, undefined, 'embedded')
+      const index = result.find((f) => f.filename === 'index.ts')
+
+      expect(index?.content).not.toContain('_helpers')
+      expect(index?.content).not.toContain('isObject')
+    })
+
+    it('emits _helpers/has-ref.ts content with the standalone hasRef (no JSONSchema import)', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          param: { $ref: '#/$defs/parameter-or-reference' },
+        },
+        $defs: {
+          reference: {
+            type: 'object',
+            properties: { $ref: { type: 'string' } },
+            required: ['$ref'],
+          },
+          parameter: { type: 'object' },
+          'parameter-or-reference': {
+            if: { type: 'object', required: ['$ref'] },
+            then: { $ref: '#/$defs/reference' },
+            else: { $ref: '#/$defs/parameter' },
+          },
+        },
+      }
+
+      const result = await buildSchema(schema, 'Document', undefined, undefined, undefined, undefined, 'embedded')
+      const hasRefFile = result.find((f) => f.filename === '_helpers/has-ref.ts')
+
+      expect(hasRefFile?.content).toContain('export const hasRef')
+      // The embedded helper must not pull in json-schema-typed; that would defeat self-containment.
+      expect(hasRefFile?.content).not.toContain('json-schema-typed')
+    })
+  })
+
+  describe('helpersMode: package (default)', () => {
+    it('keeps the historical @amritk/helpers/... imports and emits no _helpers/ files', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          tags: { type: 'array', items: { type: 'string' } },
+        },
+      }
+
+      const result = await buildSchema(schema, 'Document')
+      const filenames = result.map((f) => f.filename)
+      const root = result.find((f) => f.filename === 'document.ts')
+
+      expect(root?.content).toContain("from '@amritk/helpers/")
+      expect(filenames.some((f) => f.startsWith('_helpers/'))).toBe(false)
+    })
+  })
 })

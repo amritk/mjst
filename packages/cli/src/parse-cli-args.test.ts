@@ -203,4 +203,24 @@ describe('parse-cli-args', () => {
       strict: true,
     })
   })
+
+  it('parses --helpers package with space-separated value', () => {
+    const result = parseCliArgs(['--helpers', 'package'])
+    expect(result).toEqual({ helpers: 'package' })
+  })
+
+  it('parses --helpers=embedded with equals syntax', () => {
+    const result = parseCliArgs(['--helpers=embedded'])
+    expect(result).toEqual({ helpers: 'embedded' })
+  })
+
+  it('ignores invalid --helpers values', () => {
+    const result = parseCliArgs(['--helpers', 'bogus', '--schema', 's.json'])
+    expect(result).toEqual({ schema: 's.json' })
+  })
+
+  it('ignores invalid --helpers=foo values', () => {
+    const result = parseCliArgs(['--helpers=foo', '--schema', 's.json'])
+    expect(result).toEqual({ schema: 's.json' })
+  })
 })
