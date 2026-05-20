@@ -1,5 +1,17 @@
 # @amritk/mjst
 
+## 0.4.0
+
+### Minor Changes
+
+- 83eb57a: Derive the root type name from the schema's `title` instead of always using "Document". The CLI now generates types and parsers named after the schema (e.g. an "OpenAPI Document" title yields `OpenAPIDocument` / `parseOpenAPIDocument`), falling back to `Document` when the schema has no usable title. Adds a `deriveRootTypeName` helper to `@amritk/helpers`.
+
+### Patch Changes
+
+- Updated dependencies [83eb57a]
+  - @amritk/helpers@0.3.0
+  - @amritk/generate-parsers@0.3.1
+
 ## 0.3.0
 
 ### Minor Changes
