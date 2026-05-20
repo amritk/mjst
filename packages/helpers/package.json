@@ -28,7 +28,7 @@
   },
   "scripts": {
     "build": "bun run build:code && bun run build:types",
-    "build:code": "bun build ./src/build-dynamic-ref-map.ts ./src/extract-refs.ts ./src/generate-type-definition.ts ./src/has-ref.ts ./src/is-object.ts ./src/parse-documentation.ts ./src/ref-to-filename.ts ./src/ref-to-name.ts ./src/resolve-dynamic-refs.ts ./src/resolve-ref.ts ./src/safe-accessor.ts ./src/schema-guards.ts ./src/upgrade-draft07-schema.ts ./src/validate-array.ts ./src/validate-record.ts --outdir=dist --root=src --target=node",
+    "build:code": "bun build ./src/build-dynamic-ref-map.ts ./src/derive-root-type-name.ts ./src/extract-refs.ts ./src/generate-type-definition.ts ./src/has-ref.ts ./src/is-object.ts ./src/parse-documentation.ts ./src/ref-to-filename.ts ./src/ref-to-name.ts ./src/resolve-dynamic-refs.ts ./src/resolve-ref.ts ./src/safe-accessor.ts ./src/schema-guards.ts ./src/upgrade-draft07-schema.ts ./src/validate-array.ts ./src/validate-record.ts --outdir=dist --root=src --target=node",
     "build:types": "tsc -p ."
   },
   "dependencies": {
@@ -40,6 +40,11 @@
       "bun": "./src/build-dynamic-ref-map.ts",
       "default": "./dist/build-dynamic-ref-map.js",
       "types": "./dist/build-dynamic-ref-map.d.ts"
+    },
+    "./derive-root-type-name": {
+      "bun": "./src/derive-root-type-name.ts",
+      "default": "./dist/derive-root-type-name.js",
+      "types": "./dist/derive-root-type-name.d.ts"
     },
     "./extract-refs": {
       "bun": "./src/extract-refs.ts",
