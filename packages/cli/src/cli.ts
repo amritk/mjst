@@ -4,6 +4,7 @@ import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { buildSchema } from '@amritk/generate-parsers'
+import { deriveRootTypeName } from '@amritk/helpers/derive-root-type-name'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 const execFileAsync = promisify(execFile)
@@ -63,9 +64,12 @@ const run = async (): Promise<void> => {
   const helpersMode = config.helpers ?? detectHelpersMode(outputDir)
   console.log(`Helpers mode: ${helpersMode}${config.helpers ? ' (explicit)' : ' (auto-detected)'}`)
 
+  const rootTypeName = deriveRootTypeName(schema)
+  console.log(`Root type: ${rootTypeName}`)
+
   const files = await buildSchema(
     schema as JSONSchema,
-    'Document',
+    rootTypeName,
     undefined,
     config.typesOnly,
     config.logWarnings,
