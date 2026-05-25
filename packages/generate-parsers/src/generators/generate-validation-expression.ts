@@ -1,3 +1,4 @@
+import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
@@ -33,6 +34,17 @@ import { generateDiscriminatedUnionValidation } from './generate-discriminated-u
 import { generateEnumCheck } from './generate-enum-check'
 import { generateNonDiscriminatedUnionValidation } from './generate-non-discriminated-union-validation'
 import { generateSchemaChecks } from './generate-schema-checks'
+
+/**
+ * Coercion expression for an `x-mjst` instanceOf value, when one is known.
+ * `Date` can be reconstructed from the common JSON encodings (ISO string or
+ * epoch number); other classes have no safe generic coercion, so we return null
+ * and the caller falls back to the default.
+ */
+const getInstanceCoercion = (accessor: string, instanceOf: string): string | null => {
+  if (instanceOf === 'Date') return `new Date(${accessor} as string | number | Date)`
+  return null
+}
 
 /**
  * Generates a type coercion expression for converting a value to the expected type.
@@ -83,6 +95,34 @@ export const generateValidationExpression = (
 
   if (!isSchemaObject(schema)) {
     return isRequired ? `${accessor} ?? ${defaultValue}` : accessor
+  }
+
+  // Handle x-mjst instanceOf (e.g. Date): the value must be an instance of the
+  // named class. Invalid values are coerced when a coercer is known, otherwise
+  // they fall back to the default (required) or undefined (optional).
+  const instanceOf = getMjstInstanceOf(schema)
+  if (instanceOf) {
+    const valid = `${accessor} instanceof ${instanceOf}`
+    const coercion = getInstanceCoercion(accessor, instanceOf)
+
+    if (isRequired) {
+      return coercion
+        ? `${valid} ? ${accessor} : (${accessor} !== undefined ? ${coercion} : ${defaultValue})`
+        : `${valid} ? ${accessor} : ${defaultValue}`
+    }
+    return coercion
+      ? `${valid} ? ${accessor} : (${accessor} !== undefined ? ${coercion} : undefined)`
+      : `${valid} ? ${accessor} : undefined`
+  }
+
+  // Handle x-mjst primitive (e.g. bigint): validate with typeof. We do not
+  // coerce — BigInt() throws on invalid input, which a pure coercion expression
+  // cannot guard — so invalid values fall back to the default (required) or
+  // undefined (optional).
+  const primitive = getMjstPrimitive(schema)
+  if (primitive) {
+    const valid = `typeof ${accessor} === "${primitive}"`
+    return isRequired ? `${valid} ? ${accessor} : ${defaultValue}` : `${valid} ? ${accessor} : undefined`
   }
 
   // Handle $ref - resolve and validate against the referenced schema

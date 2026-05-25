@@ -1,10 +1,22 @@
+import type { SourceFormat } from '@amritk/adapters/source-format'
+
 /**
  * Configuration for the CLI tool.
  * These properties map 1:1 with CLI flags and config file keys.
  */
 export type CliConfig = {
-  /** Path to the JSON Schema file to process. */
+  /** Path to the schema to process — a JSON Schema file, or a JS/TS module when `input` is set. */
   readonly schema: string
+  /**
+   * The source format of the schema. Defaults to `'json'` (a plain JSON Schema file).
+   * Any other format loads `schema` as a module and converts it via the matching adapter.
+   */
+  readonly input?: SourceFormat
+  /**
+   * Which export of the schema module to use when `input` is not `'json'`.
+   * Defaults to the default export, or the sole named export when there is exactly one.
+   */
+  readonly export?: string
   /** Output directory for generated TypeScript files. */
   readonly outDir: string
   /**

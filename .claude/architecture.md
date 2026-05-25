@@ -13,6 +13,7 @@ mjst/
 │   ├── generate-parsers/      # @amritk/generate-parsers — parser + type generator
 │   ├── generate-validators/   # @amritk/generate-validators — predicate validator generator
 │   ├── generate-markdown/     # @amritk/generate-markdown — README table generator
+│   ├── adapters/              # @amritk/adapters — convert external schemas (TypeBox, …) to JSON Schema
 │   └── helpers/               # @amritk/helpers — shared schema utilities + runtime
 ├── .claude/                   # Developer guidelines
 ├── .changeset/                # Changesets config (release automation)
@@ -52,6 +53,13 @@ Generates lightweight predicate-style validators: each schema becomes a `validat
 ### `@amritk/generate-markdown` (`packages/generate-markdown`)
 
 Renders a single configuration-reference table from a `config.schema.json` into a `README.md`. Used to keep the CLI / generator READMEs in sync with their config schemas. Reads `x-cli-flag` and `x-icon` extension keywords.
+
+### `@amritk/adapters` (`packages/adapters`)
+
+Converts schemas authored in external libraries into Draft 2020-12 JSON Schema so the rest of the pipeline can consume them unchanged. Each adapter is a pure `(source: unknown) => JSONSchema` function; loading the source module is the CLI's job (`--input <format>` / `--export <name>`).
+
+- **Implemented:** `typebox`, `zod`, `valibot`, and `effect`. Each external library is an optional peer dependency loaded at runtime (so the core stays slim): TypeBox schemas are already JSON-Schema-shaped (strip symbol keys + rewrite extended types); `zod` uses Zod 4's `toJSONSchema`; `valibot` uses `@valibot/to-json-schema`; `effect` uses `JSONSchema.make`. The Zod, Valibot, and TypeBox adapters map their date types to the `x-mjst` Date extension; the Effect adapter passes through Effect's encoded (string) representation.
+- **Lossy constructs:** types JSON Schema cannot express are preserved as an `x-mjst` vendor extension rather than dropped. `@amritk/helpers/mjst-extension` defines the shared contract (`MJST_EXTENSION_KEY`, `MjstExtension`, and the readers `getMjstInstanceOf` / `getMjstPrimitive` / `getMjstBrand`), which the type generator, parsers, and validators read to emit the right TypeScript type and runtime checks. The extension currently carries: `instanceOf` (a runtime class such as `Date`, checked with `instanceof`), `primitive` (a non-JSON primitive such as `bigint`, checked with `typeof`), and `brand` (a type-level nominal brand — the value still validates as its base JSON type at runtime, but the generated TypeScript type is intersected with a unique brand). Brands cannot be auto-detected from the source libraries (Zod/Valibot/Effect brands are type-level or stripped during conversion), so they are opt-in via a hand-authored `x-mjst.brand` keyword — which TypeBox passes through from `Type.String({ 'x-mjst': { brand: 'UserId' } })`.
 
 ### `@amritk/helpers` (`packages/helpers`)
 

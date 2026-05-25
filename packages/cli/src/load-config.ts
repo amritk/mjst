@@ -1,7 +1,13 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import type { SourceFormat } from '@amritk/adapters/source-format'
 
 import type { CliConfig } from './cli-config'
+
+const SOURCE_FORMATS: readonly string[] = ['json', 'typebox', 'zod', 'valibot', 'effect']
+
+const isSourceFormat = (value: unknown): value is SourceFormat =>
+  typeof value === 'string' && SOURCE_FORMATS.includes(value)
 
 /**
  * Loads a JSON config file and returns the relevant CLI config properties.
@@ -21,6 +27,8 @@ export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>
   return {
     ...(typeof obj['schema'] === 'string' && { schema: obj['schema'] }),
     ...(typeof obj['outDir'] === 'string' && { outDir: obj['outDir'] }),
+    ...(isSourceFormat(obj['input']) && { input: obj['input'] }),
+    ...(typeof obj['export'] === 'string' && { export: obj['export'] }),
     ...(typeof obj['typesOnly'] === 'boolean' && { typesOnly: obj['typesOnly'] }),
     ...(typeof obj['build'] === 'boolean' && { build: obj['build'] }),
     ...(typeof obj['logWarnings'] === 'boolean' && { logWarnings: obj['logWarnings'] }),

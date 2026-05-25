@@ -1,3 +1,4 @@
+import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import {
   hasAdditionalProperties,
@@ -83,6 +84,40 @@ const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired:
       lines.push(`  if (${raw} !== undefined) {`)
       lines.push(`    const _r = ${vName}(${raw}, ${path})`)
       lines.push(`    if (_r !== true) errors.push(..._r.errors)`)
+      lines.push(`  }`)
+    }
+    return lines
+  }
+
+  // x-mjst instanceOf (e.g. Date) — value must be an instance of the class
+  const instanceOf = getMjstInstanceOf(propSchema)
+  if (instanceOf) {
+    if (isRequired) {
+      lines.push(`  if (!(${JSON.stringify(key)} in obj)) {`)
+      lines.push(`    errors.push({ message: "must have required property '${key}'", path: _path })`)
+      lines.push(`  } else if (!(${raw} instanceof ${instanceOf})) {`)
+      lines.push(`    errors.push({ message: 'must be ${instanceOf}', path: ${path} })`)
+      lines.push(`  }`)
+    } else {
+      lines.push(`  if (${raw} !== undefined && !(${raw} instanceof ${instanceOf})) {`)
+      lines.push(`    errors.push({ message: 'must be ${instanceOf}', path: ${path} })`)
+      lines.push(`  }`)
+    }
+    return lines
+  }
+
+  // x-mjst primitive (e.g. bigint) — value must satisfy a typeof check
+  const primitive = getMjstPrimitive(propSchema)
+  if (primitive) {
+    if (isRequired) {
+      lines.push(`  if (!(${JSON.stringify(key)} in obj)) {`)
+      lines.push(`    errors.push({ message: "must have required property '${key}'", path: _path })`)
+      lines.push(`  } else if (typeof ${raw} !== "${primitive}") {`)
+      lines.push(`    errors.push({ message: 'must be ${primitive}', path: ${path} })`)
+      lines.push(`  }`)
+    } else {
+      lines.push(`  if (${raw} !== undefined && typeof ${raw} !== "${primitive}") {`)
+      lines.push(`    errors.push({ message: 'must be ${primitive}', path: ${path} })`)
       lines.push(`  }`)
     }
     return lines
@@ -277,6 +312,32 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string): string =
     return [
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
       `  return ${delegateName}(input, _path)`,
+      `}`,
+    ].join('\n')
+  }
+
+  // Top-level x-mjst instanceOf (e.g. a schema that is itself a Date)
+  const instanceOf = getMjstInstanceOf(schema)
+  if (instanceOf) {
+    return [
+      `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+      `  if (!(input instanceof ${instanceOf})) {`,
+      `    return { valid: false, errors: [{ message: 'must be ${instanceOf}', path: _path }] }`,
+      `  }`,
+      `  return true`,
+      `}`,
+    ].join('\n')
+  }
+
+  // Top-level x-mjst primitive (e.g. a schema that is itself a bigint)
+  const primitive = getMjstPrimitive(schema)
+  if (primitive) {
+    return [
+      `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+      `  if (typeof input !== "${primitive}") {`,
+      `    return { valid: false, errors: [{ message: 'must be ${primitive}', path: _path }] }`,
+      `  }`,
+      `  return true`,
       `}`,
     ].join('\n')
   }

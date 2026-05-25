@@ -1,5 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { getMjstBrand, getMjstInstanceOf, getMjstPrimitive } from './mjst-extension'
 import { refToName } from './ref-to-name'
 import { safeKey } from './safe-accessor'
 import { isObjectSchema, isSchemaObject } from './schema-guards'
@@ -107,10 +108,22 @@ const buildJsDocBlock = (title: string, description: string, commentUrl?: string
 }
 
 /**
- * Converts a JSON Schema type to its TypeScript equivalent.
- * Recursively handles nested objects and arrays.
+ * Converts a JSON Schema type to its TypeScript equivalent, applying any
+ * `x-mjst` brand. Branding is type-level only, so we compute the underlying
+ * type and intersect it with a unique brand marker. This is the recursion entry
+ * point, so branded nested fields are wrapped too.
  */
 const getTypeScriptType = (schema: JSONSchema): string => {
+  const base = getUnbrandedType(schema)
+  const brand = getMjstBrand(schema)
+  return brand ? `(${base} & { readonly __brand: '${brand}' })` : base
+}
+
+/**
+ * Converts a JSON Schema type to its TypeScript equivalent, ignoring any brand.
+ * Recursively handles nested objects and arrays.
+ */
+const getUnbrandedType = (schema: JSONSchema): string => {
   // Boolean schema: `true` means any value is valid (unknown), `false` means no value is valid (never)
   if (typeof schema === 'boolean') {
     return getBooleanSubSchemaType(schema)
@@ -119,6 +132,20 @@ const getTypeScriptType = (schema: JSONSchema): string => {
   // Check if schema is an object (not a boolean schema)
   if (typeof schema !== 'object' || schema === null) {
     return 'unknown'
+  }
+
+  // An x-mjst instanceOf hint means the value is a runtime class (e.g. Date)
+  // that JSON Schema cannot describe — emit the class name as the type directly.
+  const instanceOf = getMjstInstanceOf(schema)
+  if (instanceOf) {
+    return instanceOf
+  }
+
+  // An x-mjst primitive hint (e.g. bigint) names a non-JSON primitive — emit it
+  // directly as the TypeScript type.
+  const primitive = getMjstPrimitive(schema)
+  if (primitive) {
+    return primitive
   }
 
   // Handle $ref

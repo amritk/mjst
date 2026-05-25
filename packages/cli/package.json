@@ -42,6 +42,7 @@
     "generate-readme": "bun run ./scripts/generate-readme.ts"
   },
   "dependencies": {
+    "@amritk/adapters": "workspace:*",
     "@amritk/generate-parsers": "workspace:*",
     "@amritk/generate-markdown": "workspace:*",
     "@amritk/helpers": "workspace:*"

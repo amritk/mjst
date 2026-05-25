@@ -164,4 +164,63 @@ describe('generate-validator-function', () => {
     expect(code).toContain('Array.isArray(input)')
     expect(code).toContain('must be object')
   })
+
+  it('generates an instanceof check for a required x-mjst Date property', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { createdAt: { 'x-mjst': { instanceOf: 'Date' } } },
+      required: ['createdAt'],
+    }
+    const code = generateValidatorFunction(schema, 'Event')
+
+    expect(code).toContain('"createdAt" in obj')
+    expect(code).toContain('!(obj["createdAt"] instanceof Date)')
+    expect(code).toContain('must be Date')
+  })
+
+  it('generates an instanceof check for an optional x-mjst Date property', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { createdAt: { 'x-mjst': { instanceOf: 'Date' } } },
+    }
+    const code = generateValidatorFunction(schema, 'Event')
+
+    expect(code).toContain('obj["createdAt"] !== undefined && !(obj["createdAt"] instanceof Date)')
+  })
+
+  it('generates an instanceof check for a top-level x-mjst Date schema', () => {
+    const code = generateValidatorFunction({ 'x-mjst': { instanceOf: 'Date' } }, 'When')
+
+    expect(code).toContain('!(input instanceof Date)')
+    expect(code).toContain('must be Date')
+  })
+
+  it('generates a typeof check for a required x-mjst bigint property', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { balance: { 'x-mjst': { primitive: 'bigint' } } },
+      required: ['balance'],
+    }
+    const code = generateValidatorFunction(schema, 'Account')
+
+    expect(code).toContain('typeof obj["balance"] !== "bigint"')
+    expect(code).toContain('must be bigint')
+  })
+
+  it('guards undefined for an optional x-mjst bigint property', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { balance: { 'x-mjst': { primitive: 'bigint' } } },
+    }
+    const code = generateValidatorFunction(schema, 'Account')
+
+    expect(code).toContain('obj["balance"] !== undefined && typeof obj["balance"] !== "bigint"')
+  })
+
+  it('generates a typeof check for a top-level x-mjst bigint schema', () => {
+    const code = generateValidatorFunction({ 'x-mjst': { primitive: 'bigint' } }, 'Big')
+
+    expect(code).toContain('typeof input !== "bigint"')
+    expect(code).toContain('must be bigint')
+  })
 })

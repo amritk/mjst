@@ -319,4 +319,12 @@ describe('generate-schema-checks', () => {
     const result = generateSchemaChecks('input?.name', { type: 'string', minLength: 1 })
     expect(result).toEqual(['typeof input?.name === "string"', 'input?.name.length >= 1'])
   })
+
+  it('returns an instanceof check for an x-mjst instanceOf node', () => {
+    expect(generateSchemaChecks('value', { 'x-mjst': { instanceOf: 'Date' } })).toEqual(['value instanceof Date'])
+  })
+
+  it('returns a typeof check for an x-mjst bigint node', () => {
+    expect(generateSchemaChecks('value', { 'x-mjst': { primitive: 'bigint' } })).toEqual(['typeof value === "bigint"'])
+  })
 })

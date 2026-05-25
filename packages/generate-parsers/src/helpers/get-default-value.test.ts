@@ -132,4 +132,8 @@ describe('get-default-value', () => {
   it('handles empty oneOf array and falls back', () => {
     expect(getDefaultValue({ oneOf: [], type: 'boolean' })).toBe('false')
   })
+
+  it('returns 0n for an x-mjst bigint schema', () => {
+    expect(getDefaultValue({ 'x-mjst': { primitive: 'bigint' } })).toBe('0n')
+  })
 })

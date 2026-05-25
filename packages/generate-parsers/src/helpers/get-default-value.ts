@@ -1,3 +1,4 @@
+import { getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import {
   hasAllOf,
   hasAnyOf,
@@ -58,6 +59,11 @@ export const getDefaultValue = (schema: JSONSchema): string => {
     if (firstSchema !== undefined) {
       return getDefaultValue(firstSchema)
     }
+  }
+
+  // x-mjst bigint has no native JSON type but a sensible zero default.
+  if (getMjstPrimitive(schema) === 'bigint') {
+    return '0n'
   }
 
   if (!hasType(schema)) {

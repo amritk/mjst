@@ -791,4 +791,41 @@ describe('generate-validation-expression', () => {
 
     expect(result).toContain('? input?.status : undefined')
   })
+
+  it('checks instanceof and coerces a required x-mjst Date field', () => {
+    const schema = { 'x-mjst': { instanceOf: 'Date' } }
+    const result = generateValidationExpression('createdAt', schema, '{}', true)
+
+    expect(result).toContain('input?.createdAt instanceof Date')
+    expect(result).toContain('new Date(input?.createdAt as string | number | Date)')
+  })
+
+  it('checks instanceof and coerces an optional x-mjst Date field', () => {
+    const schema = { 'x-mjst': { instanceOf: 'Date' } }
+    const result = generateValidationExpression('createdAt', schema, 'undefined', false)
+
+    expect(result).toContain('input?.createdAt instanceof Date')
+    expect(result).toContain('? input?.createdAt : (input?.createdAt !== undefined ? new Date')
+  })
+
+  it('falls back to the default for an unknown instanceOf with no coercion', () => {
+    const schema = { 'x-mjst': { instanceOf: 'CustomThing' } }
+    const result = generateValidationExpression('value', schema, '{}', true)
+
+    expect(result).toBe('input?.value instanceof CustomThing ? input?.value : {}')
+  })
+
+  it('checks typeof bigint for a required x-mjst primitive field', () => {
+    const schema = { 'x-mjst': { primitive: 'bigint' } }
+    const result = generateValidationExpression('balance', schema, '0n', true)
+
+    expect(result).toBe('typeof input?.balance === "bigint" ? input?.balance : 0n')
+  })
+
+  it('checks typeof bigint for an optional x-mjst primitive field', () => {
+    const schema = { 'x-mjst': { primitive: 'bigint' } }
+    const result = generateValidationExpression('balance', schema, '0n', false)
+
+    expect(result).toBe('typeof input?.balance === "bigint" ? input?.balance : undefined')
+  })
 })

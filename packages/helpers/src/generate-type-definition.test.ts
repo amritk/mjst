@@ -1207,4 +1207,67 @@ describe('generateTypeDefinition', () => {
     expect(result).toMatch(/\* A plain-text description with no URL\.\n\*\//)
     expect(result).not.toContain('* \n*/')
   })
+
+  it('emits the class name for an x-mjst instanceOf property', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { createdAt: { 'x-mjst': { instanceOf: 'Date' } } },
+      required: ['createdAt'],
+    }
+
+    expect(generateTypeDefinition(schema, 'Event')).toContain('createdAt: Date;')
+  })
+
+  it('emits the class name for a top-level x-mjst instanceOf schema', () => {
+    const schema: JSONSchema = { 'x-mjst': { instanceOf: 'Date' } }
+
+    expect(generateTypeDefinition(schema, 'When')).toBe('export type When = Date;')
+  })
+
+  it('ignores an x-mjst instanceOf that is not a safe identifier', () => {
+    const schema: JSONSchema = { 'x-mjst': { instanceOf: 'Date; doEvil()' } }
+
+    expect(generateTypeDefinition(schema, 'When')).not.toContain('doEvil')
+  })
+
+  it('emits a primitive type for an x-mjst bigint property', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { balance: { 'x-mjst': { primitive: 'bigint' } } },
+      required: ['balance'],
+    }
+
+    expect(generateTypeDefinition(schema, 'Account')).toContain('balance: bigint;')
+  })
+
+  it('emits a primitive type for a top-level x-mjst bigint schema', () => {
+    expect(generateTypeDefinition({ 'x-mjst': { primitive: 'bigint' } }, 'Big')).toBe('export type Big = bigint;')
+  })
+
+  it('wraps a branded property in a nominal intersection', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { id: { type: 'string', 'x-mjst': { brand: 'UserId' } } },
+      required: ['id'],
+    }
+
+    expect(generateTypeDefinition(schema, 'User')).toContain("id: (string & { readonly __brand: 'UserId' });")
+  })
+
+  it('brands a top-level schema and combines with instanceOf', () => {
+    expect(generateTypeDefinition({ type: 'string', 'x-mjst': { brand: 'Email' } }, 'Email')).toBe(
+      "export type Email = (string & { readonly __brand: 'Email' });",
+    )
+    expect(generateTypeDefinition({ 'x-mjst': { instanceOf: 'Date', brand: 'Timestamp' } }, 'Ts')).toBe(
+      "export type Ts = (Date & { readonly __brand: 'Timestamp' });",
+    )
+  })
+
+  it('ignores an x-mjst brand that is not safe to embed', () => {
+    const schema: JSONSchema = { type: 'string', 'x-mjst': { brand: "x'; doEvil()" } }
+
+    const result = generateTypeDefinition(schema, 'Bad')
+    expect(result).not.toContain('doEvil')
+    expect(result).toBe('export type Bad = string;')
+  })
 })

@@ -1,4 +1,8 @@
+import type { SourceFormat } from '@amritk/adapters/source-format'
+
 import type { CliConfig } from './cli-config'
+
+const SOURCE_FORMATS: readonly SourceFormat[] = ['json', 'typebox', 'zod', 'valibot', 'effect']
 
 /**
  * Parses command-line arguments into a partial CLI config.
@@ -10,6 +14,8 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
   const config: {
     schema?: string
     outDir?: string
+    input?: SourceFormat
+    export?: string
     typesOnly?: boolean
     build?: boolean
     logWarnings?: boolean
@@ -21,6 +27,9 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
     if (value === 'package' || value === 'embedded') return value
     return undefined
   }
+
+  const parseInputValue = (value: string): SourceFormat | undefined =>
+    (SOURCE_FORMATS as readonly string[]).includes(value) ? (value as SourceFormat) : undefined
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -39,6 +48,11 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
         config.schema = value
       } else if (key === 'outDir') {
         config.outDir = value
+      } else if (key === 'input') {
+        const parsed = parseInputValue(value)
+        if (parsed) config.input = parsed
+      } else if (key === 'export') {
+        config.export = value
       } else if (key === 'types-only') {
         // Accept --types-only=false to explicitly opt out, otherwise treat as true
         config.typesOnly = value !== 'false'
@@ -69,6 +83,23 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
 
       if (value && !value.startsWith('--')) {
         config.outDir = value
+        i++
+      }
+    } else if (arg === '--input') {
+      const value = args[i + 1]
+
+      if (value && !value.startsWith('--')) {
+        const parsed = parseInputValue(value)
+        if (parsed) {
+          config.input = parsed
+          i++
+        }
+      }
+    } else if (arg === '--export') {
+      const value = args[i + 1]
+
+      if (value && !value.startsWith('--')) {
+        config.export = value
         i++
       }
     } else if (arg === '--types-only') {
