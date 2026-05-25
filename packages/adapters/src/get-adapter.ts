@@ -1,10 +1,16 @@
 import type { Adapter } from './adapter'
 import type { SourceFormat } from './source-format'
 import { typeboxToJsonSchema } from './typebox-to-json-schema'
+import { zodToJsonSchema } from './zod-to-json-schema'
 
 const typeboxAdapter: Adapter = {
   format: 'typebox',
   toJSONSchema: typeboxToJsonSchema,
+}
+
+const zodAdapter: Adapter = {
+  format: 'zod',
+  toJSONSchema: zodToJsonSchema,
 }
 
 /**
@@ -19,10 +25,12 @@ export const getAdapter = (format: SourceFormat): Adapter => {
   switch (format) {
     case 'typebox':
       return typeboxAdapter
+    case 'zod':
+      return zodAdapter
     default:
       throw new Error(
         `No adapter is available for input format '${format}' yet. ` +
-          `Supported today: 'typebox'. Use --input json for plain JSON Schema files.`,
+          `Supported today: 'typebox', 'zod'. Use --input json for plain JSON Schema files.`,
       )
   }
 }

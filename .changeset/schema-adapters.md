@@ -9,8 +9,12 @@
 Add schema adapters so the CLI can ingest schemas from external libraries. The
 new `@amritk/adapters` package converts a source schema into Draft 2020-12 JSON
 Schema before generation, leaving the core pipeline untouched. The CLI gains
-`--input <format>` (currently `typebox`, alongside the default `json`) and
-`--export <name>` to pick which export of a schema module to use.
+`--input <format>` (currently `typebox` and `zod`, alongside the default
+`json`) and `--export <name>` to pick which export of a schema module to use.
+
+The Zod adapter uses Zod 4's native `toJSONSchema` (zod is an optional peer
+dependency) and maps `z.date()` to the same `x-mjst` instanceOf extension used
+by TypeBox dates.
 
 Constructs that JSON Schema cannot express (e.g. TypeBox's `Type.Date()`) are
 preserved via an `x-mjst` vendor extension. The type generator, parsers, and

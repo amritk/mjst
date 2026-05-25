@@ -67,7 +67,7 @@ const run = async (): Promise<void> => {
   } else {
     console.log(`Input format: ${inputFormat}`)
     const source = await loadSchemaModule(schemaPath, config.export)
-    schema = getAdapter(inputFormat).toJSONSchema(source)
+    schema = await getAdapter(inputFormat).toJSONSchema(source)
   }
 
   const outputDir = resolve(config.outDir)

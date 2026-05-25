@@ -31,7 +31,7 @@
   },
   "scripts": {
     "build": "bun run build:code && bun run build:types",
-    "build:code": "bun build ./src/adapter.ts ./src/source-format.ts ./src/get-adapter.ts ./src/typebox-to-json-schema.ts --outdir=dist --root=src --target=node",
+    "build:code": "bun build ./src/adapter.ts ./src/source-format.ts ./src/get-adapter.ts ./src/typebox-to-json-schema.ts ./src/zod-to-json-schema.ts --outdir=dist --root=src --target=node",
     "build:types": "tsc -p ."
   },
   "dependencies": {
@@ -59,6 +59,19 @@
       "bun": "./src/typebox-to-json-schema.ts",
       "default": "./dist/typebox-to-json-schema.js",
       "types": "./dist/typebox-to-json-schema.d.ts"
+    },
+    "./zod-to-json-schema": {
+      "bun": "./src/zod-to-json-schema.ts",
+      "default": "./dist/zod-to-json-schema.js",
+      "types": "./dist/zod-to-json-schema.d.ts"
+    }
+  },
+  "peerDependencies": {
+    "zod": ">=4"
+  },
+  "peerDependenciesMeta": {
+    "zod": {
+      "optional": true
     }
   }
 }

@@ -18,12 +18,12 @@ runs *before* `buildSchema`. The core generators stay untouched. Most target
 libraries already emit JSON Schema, so adapters are wrappers, not
 reimplementations:
 
-| Source     | Conversion mechanism                          | Effort |
+| Source     | Conversion mechanism                          | Status |
 |:-----------|:----------------------------------------------|:-------|
-| TypeBox    | schemas *are* JSON Schema objects (pass-through + draft normalize) | lowest |
-| Zod        | Zod 4 `z.toJSONSchema()`; Zod 3 `zod-to-json-schema` | low |
-| Valibot    | `@valibot/to-json-schema`                     | low |
-| Effect     | `JSONSchema.make`                             | low |
+| TypeBox    | schemas *are* JSON Schema objects (pass-through + draft normalize) | ✅ implemented |
+| Zod        | Zod 4 `z.toJSONSchema()` (optional peer dep)  | ✅ implemented |
+| Valibot    | `@valibot/to-json-schema`                     | planned |
+| Effect     | `JSONSchema.make`                             | planned |
 
 ## The real work: input loading, not conversion
 
@@ -98,9 +98,11 @@ Per `.claude/testing.md` (Vitest, colocated `*.test.ts`, minimal mocking):
 
 ## Rollout order
 
-1. **TypeBox adapter** — lowest effort (near pass-through); proves the
+1. ✅ **TypeBox adapter** — lowest effort (near pass-through); proved the
    interface + CLI wiring end to end.
-2. **Zod adapter** — highest user demand; handle Zod 3 vs 4 conversion paths.
+2. ✅ **Zod adapter** — Zod 4 via native `toJSONSchema`. Zod 3 (which lacks
+   `toJSONSchema`) is not yet supported; a `zod-to-json-schema` fallback could
+   be added later.
 3. **Valibot / Effect** — same interface, additive.
 
 ## Lossy constructs → `x-mjst` extension (resolves open question #4)
@@ -145,6 +147,12 @@ TypeBox emits non-standard `type` strings for its extended types (e.g.
 `type: 'Date'`). The TypeBox adapter maps a known set of these to an
 `instanceOf` extension (starting with `Date`). Unrecognised non-standard types
 still warn and pass through, preserving the permissive fallback.
+
+The Zod adapter reaches the same outcome differently: Zod 4's `toJSONSchema`
+throws on `z.date()`, so the adapter runs with `unrepresentable: 'any'` and uses
+the `override` hook to rewrite date schemas into the `x-mjst` instanceOf
+extension. Both adapters therefore feed identical `Date` handling into the
+generators.
 
 ## Open questions
 

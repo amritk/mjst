@@ -15,6 +15,10 @@ import type { SourceFormat } from './source-format'
 export type Adapter = {
   /** The source format this adapter handles, matching the `--input` CLI flag. */
   readonly format: SourceFormat
-  /** Convert a loaded source schema value into a JSON Schema. */
-  readonly toJSONSchema: (source: unknown) => JSONSchema
+  /**
+   * Convert a loaded source schema value into a JSON Schema. May be async:
+   * some adapters (e.g. Zod) dynamically import their source library to perform
+   * the conversion, so callers should always `await` the result.
+   */
+  readonly toJSONSchema: (source: unknown) => JSONSchema | Promise<JSONSchema>
 }
