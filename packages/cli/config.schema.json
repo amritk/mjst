@@ -19,7 +19,7 @@
       "default": "json",
       "x-cli-flag": "--input <format>",
       "x-icon": "🔌",
-      "description": "Source format of the schema. 'json' (default) reads a JSON Schema file directly. Any other format loads 'schema' as a module and converts it to JSON Schema with the matching adapter. Currently implemented: 'typebox', 'zod' (requires zod v4+ in your project)."
+      "description": "Source format of the schema. 'json' (default) reads a JSON Schema file directly. Any other format loads 'schema' as a module and converts it to JSON Schema with the matching adapter. Supported: 'typebox', 'zod' (zod v4+), 'valibot' (with @valibot/to-json-schema), and 'effect' — each requires the corresponding library installed in your project."
     },
     "export": {
       "type": "string",

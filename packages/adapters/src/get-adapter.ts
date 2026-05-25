@@ -1,6 +1,8 @@
 import type { Adapter } from './adapter'
+import { effectToJsonSchema } from './effect-to-json-schema'
 import type { SourceFormat } from './source-format'
 import { typeboxToJsonSchema } from './typebox-to-json-schema'
+import { valibotToJsonSchema } from './valibot-to-json-schema'
 import { zodToJsonSchema } from './zod-to-json-schema'
 
 const typeboxAdapter: Adapter = {
@@ -11,6 +13,16 @@ const typeboxAdapter: Adapter = {
 const zodAdapter: Adapter = {
   format: 'zod',
   toJSONSchema: zodToJsonSchema,
+}
+
+const valibotAdapter: Adapter = {
+  format: 'valibot',
+  toJSONSchema: valibotToJsonSchema,
+}
+
+const effectAdapter: Adapter = {
+  format: 'effect',
+  toJSONSchema: effectToJsonSchema,
 }
 
 /**
@@ -27,10 +39,14 @@ export const getAdapter = (format: SourceFormat): Adapter => {
       return typeboxAdapter
     case 'zod':
       return zodAdapter
+    case 'valibot':
+      return valibotAdapter
+    case 'effect':
+      return effectAdapter
     default:
       throw new Error(
-        `No adapter is available for input format '${format}' yet. ` +
-          `Supported today: 'typebox', 'zod'. Use --input json for plain JSON Schema files.`,
+        `No adapter is available for input format '${format}'. ` +
+          `Supported: 'typebox', 'zod', 'valibot', 'effect'. Use --input json for plain JSON Schema files.`,
       )
   }
 }

@@ -10,6 +10,8 @@
     "typescript",
     "typebox",
     "zod",
+    "valibot",
+    "effect",
     "adapter",
     "mjst"
   ],
@@ -31,7 +33,7 @@
   },
   "scripts": {
     "build": "bun run build:code && bun run build:types",
-    "build:code": "bun build ./src/adapter.ts ./src/source-format.ts ./src/get-adapter.ts ./src/typebox-to-json-schema.ts ./src/zod-to-json-schema.ts --outdir=dist --root=src --target=node",
+    "build:code": "bun build ./src/adapter.ts ./src/source-format.ts ./src/get-adapter.ts ./src/typebox-to-json-schema.ts ./src/zod-to-json-schema.ts ./src/valibot-to-json-schema.ts ./src/effect-to-json-schema.ts --outdir=dist --root=src --target=node",
     "build:types": "tsc -p ."
   },
   "dependencies": {
@@ -64,13 +66,35 @@
       "bun": "./src/zod-to-json-schema.ts",
       "default": "./dist/zod-to-json-schema.js",
       "types": "./dist/zod-to-json-schema.d.ts"
+    },
+    "./valibot-to-json-schema": {
+      "bun": "./src/valibot-to-json-schema.ts",
+      "default": "./dist/valibot-to-json-schema.js",
+      "types": "./dist/valibot-to-json-schema.d.ts"
+    },
+    "./effect-to-json-schema": {
+      "bun": "./src/effect-to-json-schema.ts",
+      "default": "./dist/effect-to-json-schema.js",
+      "types": "./dist/effect-to-json-schema.d.ts"
     }
   },
   "peerDependencies": {
-    "zod": ">=4"
+    "zod": ">=4",
+    "valibot": ">=1",
+    "@valibot/to-json-schema": ">=1",
+    "effect": ">=3"
   },
   "peerDependenciesMeta": {
     "zod": {
+      "optional": true
+    },
+    "valibot": {
+      "optional": true
+    },
+    "@valibot/to-json-schema": {
+      "optional": true
+    },
+    "effect": {
       "optional": true
     }
   }

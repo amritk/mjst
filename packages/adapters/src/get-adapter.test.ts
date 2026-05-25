@@ -22,7 +22,15 @@ describe('getAdapter', () => {
     expect(result).toMatchObject({ type: 'object', properties: { name: { type: 'string' } } })
   })
 
-  it('throws an actionable error for not-yet-supported formats', () => {
-    expect(() => getAdapter('valibot')).toThrow(/No adapter is available for input format 'valibot' yet/)
+  it('returns the Valibot adapter', () => {
+    expect(getAdapter('valibot').format).toBe('valibot')
+  })
+
+  it('returns the Effect adapter', () => {
+    expect(getAdapter('effect').format).toBe('effect')
+  })
+
+  it('throws an actionable error for the json format (handled directly by the CLI)', () => {
+    expect(() => getAdapter('json')).toThrow(/No adapter is available for input format 'json'/)
   })
 })

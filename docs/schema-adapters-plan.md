@@ -22,8 +22,8 @@ reimplementations:
 |:-----------|:----------------------------------------------|:-------|
 | TypeBox    | schemas *are* JSON Schema objects (pass-through + draft normalize) | ✅ implemented |
 | Zod        | Zod 4 `z.toJSONSchema()` (optional peer dep)  | ✅ implemented |
-| Valibot    | `@valibot/to-json-schema`                     | planned |
-| Effect     | `JSONSchema.make`                             | planned |
+| Valibot    | `@valibot/to-json-schema` (optional peer dep) | ✅ implemented |
+| Effect     | `JSONSchema.make` (optional peer dep)         | ✅ implemented |
 
 ## The real work: input loading, not conversion
 
@@ -103,7 +103,10 @@ Per `.claude/testing.md` (Vitest, colocated `*.test.ts`, minimal mocking):
 2. ✅ **Zod adapter** — Zod 4 via native `toJSONSchema`. Zod 3 (which lacks
    `toJSONSchema`) is not yet supported; a `zod-to-json-schema` fallback could
    be added later.
-3. **Valibot / Effect** — same interface, additive.
+3. ✅ **Valibot** — via `@valibot/to-json-schema`; `v.date()` mapped to the
+   `x-mjst` Date extension through its `overrideSchema` hook.
+4. ✅ **Effect** — via `JSONSchema.make`; passes through Effect's encoded
+   representation (e.g. `Schema.Date` converts to its string wire form).
 
 ## Lossy constructs → `x-mjst` extension (resolves open question #4)
 

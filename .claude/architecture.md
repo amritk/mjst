@@ -58,7 +58,7 @@ Renders a single configuration-reference table from a `config.schema.json` into 
 
 Converts schemas authored in external libraries into Draft 2020-12 JSON Schema so the rest of the pipeline can consume them unchanged. Each adapter is a pure `(source: unknown) => JSONSchema` function; loading the source module is the CLI's job (`--input <format>` / `--export <name>`).
 
-- **Implemented:** `typebox` (TypeBox schemas are already JSON-Schema-shaped; the adapter strips internal symbol keys and rewrites extended types) and `zod` (uses Zod 4's native `toJSONSchema`; `zod` is an optional peer dependency loaded at runtime, and `z.date()` is mapped to the `x-mjst` Date extension).
+- **Implemented:** `typebox`, `zod`, `valibot`, and `effect`. Each external library is an optional peer dependency loaded at runtime (so the core stays slim): TypeBox schemas are already JSON-Schema-shaped (strip symbol keys + rewrite extended types); `zod` uses Zod 4's `toJSONSchema`; `valibot` uses `@valibot/to-json-schema`; `effect` uses `JSONSchema.make`. The Zod, Valibot, and TypeBox adapters map their date types to the `x-mjst` Date extension; the Effect adapter passes through Effect's encoded (string) representation.
 - **Lossy constructs:** types JSON Schema cannot express (e.g. TypeBox `Type.Date()`) are preserved as an `x-mjst` vendor extension rather than dropped. `@amritk/helpers/mjst-extension` defines the shared contract (`MJST_EXTENSION_KEY`, `MjstExtension`, `getMjstInstanceOf`), which the type generator, parsers, and validators read to emit the right TypeScript type and `instanceof` checks.
 
 ### `@amritk/helpers` (`packages/helpers`)
