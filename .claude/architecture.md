@@ -13,6 +13,7 @@ mjst/
 │   ├── generate-parsers/      # @amritk/generate-parsers — parser + type generator
 │   ├── generate-validators/   # @amritk/generate-validators — predicate validator generator
 │   ├── generate-markdown/     # @amritk/generate-markdown — README table generator
+│   ├── adapters/              # @amritk/adapters — convert external schemas (TypeBox, …) to JSON Schema
 │   └── helpers/               # @amritk/helpers — shared schema utilities + runtime
 ├── .claude/                   # Developer guidelines
 ├── .changeset/                # Changesets config (release automation)
@@ -52,6 +53,13 @@ Generates lightweight predicate-style validators: each schema becomes a `validat
 ### `@amritk/generate-markdown` (`packages/generate-markdown`)
 
 Renders a single configuration-reference table from a `config.schema.json` into a `README.md`. Used to keep the CLI / generator READMEs in sync with their config schemas. Reads `x-cli-flag` and `x-icon` extension keywords.
+
+### `@amritk/adapters` (`packages/adapters`)
+
+Converts schemas authored in external libraries into Draft 2020-12 JSON Schema so the rest of the pipeline can consume them unchanged. Each adapter is a pure `(source: unknown) => JSONSchema` function; loading the source module is the CLI's job (`--input <format>` / `--export <name>`).
+
+- **Implemented:** `typebox` (TypeBox schemas are already JSON-Schema-shaped; the adapter strips internal symbol keys and rewrites extended types).
+- **Lossy constructs:** types JSON Schema cannot express (e.g. TypeBox `Type.Date()`) are preserved as an `x-mjst` vendor extension rather than dropped. `@amritk/helpers/mjst-extension` defines the shared contract (`MJST_EXTENSION_KEY`, `MjstExtension`, `getMjstInstanceOf`), which the type generator, parsers, and validators read to emit the right TypeScript type and `instanceof` checks.
 
 ### `@amritk/helpers` (`packages/helpers`)
 
