@@ -1,0 +1,64 @@
+{
+  "name": "@amritk/adapters",
+  "version": "0.1.0",
+  "description": "Convert schemas from external libraries (TypeBox, Zod, ...) into JSON Schema for mjst.",
+  "type": "module",
+  "license": "MIT",
+  "author": "amritk",
+  "keywords": [
+    "json-schema",
+    "typescript",
+    "typebox",
+    "zod",
+    "adapter",
+    "mjst"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amritk/mjst.git",
+    "directory": "packages/adapters"
+  },
+  "homepage": "https://github.com/amritk/mjst/tree/main/packages/adapters#readme",
+  "bugs": {
+    "url": "https://github.com/amritk/mjst/issues"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "bun run build:code && bun run build:types",
+    "build:code": "bun build ./src/adapter.ts ./src/source-format.ts ./src/get-adapter.ts ./src/typebox-to-json-schema.ts --outdir=dist --root=src --target=node",
+    "build:types": "tsc -p ."
+  },
+  "dependencies": {
+    "json-schema-typed": "catalog:",
+    "@amritk/helpers": "workspace:*"
+  },
+  "exports": {
+    "./package.json": "./package.json",
+    "./adapter": {
+      "bun": "./src/adapter.ts",
+      "default": "./dist/adapter.js",
+      "types": "./dist/adapter.d.ts"
+    },
+    "./source-format": {
+      "bun": "./src/source-format.ts",
+      "default": "./dist/source-format.js",
+      "types": "./dist/source-format.d.ts"
+    },
+    "./get-adapter": {
+      "bun": "./src/get-adapter.ts",
+      "default": "./dist/get-adapter.js",
+      "types": "./dist/get-adapter.d.ts"
+    },
+    "./typebox-to-json-schema": {
+      "bun": "./src/typebox-to-json-schema.ts",
+      "default": "./dist/typebox-to-json-schema.js",
+      "types": "./dist/typebox-to-json-schema.d.ts"
+    }
+  }
+}

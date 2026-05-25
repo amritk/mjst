@@ -1,5 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { getMjstInstanceOf } from './mjst-extension'
 import { refToName } from './ref-to-name'
 import { safeKey } from './safe-accessor'
 import { isObjectSchema, isSchemaObject } from './schema-guards'
@@ -119,6 +120,13 @@ const getTypeScriptType = (schema: JSONSchema): string => {
   // Check if schema is an object (not a boolean schema)
   if (typeof schema !== 'object' || schema === null) {
     return 'unknown'
+  }
+
+  // An x-mjst instanceOf hint means the value is a runtime class (e.g. Date)
+  // that JSON Schema cannot describe — emit the class name as the type directly.
+  const instanceOf = getMjstInstanceOf(schema)
+  if (instanceOf) {
+    return instanceOf
   }
 
   // Handle $ref

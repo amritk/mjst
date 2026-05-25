@@ -1,3 +1,4 @@
+import { getMjstInstanceOf } from '@amritk/helpers/mjst-extension'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
   hasEnum,
@@ -134,6 +135,20 @@ const generatePropertyAssertion = (
   if (!isSchemaObject(propSchema)) return lines
   if (hasRef(propSchema)) return lines
 
+  const instanceOf = getMjstInstanceOf(propSchema)
+  if (instanceOf) {
+    if (isRequired) {
+      lines.push(
+        `  if (!(${acc} instanceof ${instanceOf})) throw new Error('[${typeName}] field "${key}" must be ${instanceOf}');`,
+      )
+    } else {
+      lines.push(
+        `  if (${acc} !== undefined && !(${acc} instanceof ${instanceOf})) throw new Error('[${typeName}] field "${key}" must be ${instanceOf}');`,
+      )
+    }
+    return lines
+  }
+
   if (hasEnum(propSchema)) {
     const allowed = JSON.stringify(propSchema.enum)
     const label = (propSchema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
@@ -202,6 +217,11 @@ export const generateObjectStrictAssertion = (schema: JSONSchema, typeName: stri
  * Returns null when the schema has no type information to assert on.
  */
 export const generateScalarStrictAssertion = (schema: JSONSchema, typeName: string): string | null => {
+  const instanceOf = getMjstInstanceOf(schema)
+  if (instanceOf) {
+    return `  if (!(input instanceof ${instanceOf})) throw new Error(\`[${typeName}] expected ${instanceOf}, got \${input === null ? "null" : typeof input}\`);`
+  }
+
   if (!isSchemaObject(schema) || !hasType(schema)) return null
   const t = schema.type as string
   const wrongType = wrongTypeCondition('input', t)

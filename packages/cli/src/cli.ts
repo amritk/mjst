@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process'
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
+import { getAdapter } from '@amritk/adapters/get-adapter'
 import { buildSchema } from '@amritk/generate-parsers'
 import { deriveRootTypeName } from '@amritk/helpers/derive-root-type-name'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
@@ -11,6 +12,7 @@ const execFileAsync = promisify(execFile)
 
 import { detectHelpersMode } from './detect-helpers-mode'
 import { loadConfig } from './load-config'
+import { loadSchemaModule } from './load-schema-module'
 import { parseCliArgs } from './parse-cli-args'
 
 /**
@@ -55,8 +57,18 @@ const run = async (): Promise<void> => {
   }
 
   const schemaPath = resolve(config.schema)
-  const raw = await readFile(schemaPath, 'utf-8')
-  const schema: unknown = JSON.parse(raw)
+  const inputFormat = config.input ?? 'json'
+
+  // 'json' is read straight off disk; every other format loads the schema as a
+  // module and runs it through its adapter to produce a JSON Schema.
+  let schema: unknown
+  if (inputFormat === 'json') {
+    schema = JSON.parse(await readFile(schemaPath, 'utf-8'))
+  } else {
+    console.log(`Input format: ${inputFormat}`)
+    const source = await loadSchemaModule(schemaPath, config.export)
+    schema = getAdapter(inputFormat).toJSONSchema(source)
+  }
 
   const outputDir = resolve(config.outDir)
   await mkdir(outputDir, { recursive: true })

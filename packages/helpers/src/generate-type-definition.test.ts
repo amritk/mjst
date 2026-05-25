@@ -1207,4 +1207,26 @@ describe('generateTypeDefinition', () => {
     expect(result).toMatch(/\* A plain-text description with no URL\.\n\*\//)
     expect(result).not.toContain('* \n*/')
   })
+
+  it('emits the class name for an x-mjst instanceOf property', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { createdAt: { 'x-mjst': { instanceOf: 'Date' } } },
+      required: ['createdAt'],
+    }
+
+    expect(generateTypeDefinition(schema, 'Event')).toContain('createdAt: Date;')
+  })
+
+  it('emits the class name for a top-level x-mjst instanceOf schema', () => {
+    const schema: JSONSchema = { 'x-mjst': { instanceOf: 'Date' } }
+
+    expect(generateTypeDefinition(schema, 'When')).toBe('export type When = Date;')
+  })
+
+  it('ignores an x-mjst instanceOf that is not a safe identifier', () => {
+    const schema: JSONSchema = { 'x-mjst': { instanceOf: 'Date; doEvil()' } }
+
+    expect(generateTypeDefinition(schema, 'When')).not.toContain('doEvil')
+  })
 })

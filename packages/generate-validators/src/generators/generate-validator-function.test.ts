@@ -164,4 +164,34 @@ describe('generate-validator-function', () => {
     expect(code).toContain('Array.isArray(input)')
     expect(code).toContain('must be object')
   })
+
+  it('generates an instanceof check for a required x-mjst Date property', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { createdAt: { 'x-mjst': { instanceOf: 'Date' } } },
+      required: ['createdAt'],
+    }
+    const code = generateValidatorFunction(schema, 'Event')
+
+    expect(code).toContain('"createdAt" in obj')
+    expect(code).toContain('!(obj["createdAt"] instanceof Date)')
+    expect(code).toContain('must be Date')
+  })
+
+  it('generates an instanceof check for an optional x-mjst Date property', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { createdAt: { 'x-mjst': { instanceOf: 'Date' } } },
+    }
+    const code = generateValidatorFunction(schema, 'Event')
+
+    expect(code).toContain('obj["createdAt"] !== undefined && !(obj["createdAt"] instanceof Date)')
+  })
+
+  it('generates an instanceof check for a top-level x-mjst Date schema', () => {
+    const code = generateValidatorFunction({ 'x-mjst': { instanceOf: 'Date' } }, 'When')
+
+    expect(code).toContain('!(input instanceof Date)')
+    expect(code).toContain('must be Date')
+  })
 })

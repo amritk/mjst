@@ -791,4 +791,27 @@ describe('generate-validation-expression', () => {
 
     expect(result).toContain('? input?.status : undefined')
   })
+
+  it('checks instanceof and coerces a required x-mjst Date field', () => {
+    const schema = { 'x-mjst': { instanceOf: 'Date' } }
+    const result = generateValidationExpression('createdAt', schema, '{}', true)
+
+    expect(result).toContain('input?.createdAt instanceof Date')
+    expect(result).toContain('new Date(input?.createdAt as string | number | Date)')
+  })
+
+  it('checks instanceof and coerces an optional x-mjst Date field', () => {
+    const schema = { 'x-mjst': { instanceOf: 'Date' } }
+    const result = generateValidationExpression('createdAt', schema, 'undefined', false)
+
+    expect(result).toContain('input?.createdAt instanceof Date')
+    expect(result).toContain('? input?.createdAt : (input?.createdAt !== undefined ? new Date')
+  })
+
+  it('falls back to the default for an unknown instanceOf with no coercion', () => {
+    const schema = { 'x-mjst': { instanceOf: 'CustomThing' } }
+    const result = generateValidationExpression('value', schema, '{}', true)
+
+    expect(result).toBe('input?.value instanceof CustomThing ? input?.value : {}')
+  })
 })

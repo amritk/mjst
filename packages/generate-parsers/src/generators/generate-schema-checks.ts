@@ -1,3 +1,4 @@
+import { getMjstInstanceOf } from '@amritk/helpers/mjst-extension'
 import {
   hasAdditionalProperties,
   hasEnum,
@@ -27,6 +28,12 @@ import { generateEnumCheck } from './generate-enum-check'
  */
 export const generateSchemaChecks = (accessor: string, schema: JSONSchema): string[] => {
   const checks: string[] = []
+
+  // x-mjst instanceOf nodes validate purely by instance check (no native type).
+  const instanceOf = getMjstInstanceOf(schema)
+  if (instanceOf) {
+    return [`${accessor} instanceof ${instanceOf}`]
+  }
 
   if (!hasType(schema)) {
     return checks
