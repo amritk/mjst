@@ -147,6 +147,18 @@ describe('generate-validator-function', () => {
     expect(code).toContain('must be string')
   })
 
+  it('accumulates all constraint errors for a scalar string schema', () => {
+    const schema = { type: 'string' as const, pattern: '^\\d+$', minLength: 2, maxLength: 4 }
+    const code = generateValidatorFunction(schema, 'Code')
+
+    // All three constraints push onto a shared errors array instead of returning early
+    expect(code).toContain('const errors: ValidationError[] = []')
+    expect(code).toContain("errors.push({ message: 'must match pattern")
+    expect(code).toContain("errors.push({ message: 'must have at least 2 characters'")
+    expect(code).toContain("errors.push({ message: 'must have at most 4 characters'")
+    expect(code).toContain('return errors.length > 0 ? { valid: false, errors } : true')
+  })
+
   it('returns true for empty object schemas', () => {
     const schema = { type: 'object' as const }
     const code = generateValidatorFunction(schema, 'Empty')
