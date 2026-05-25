@@ -26,7 +26,7 @@
     "test": "vitest run",
     "build": "bun run --filter='./packages/*' build",
     "release:version": "changeset version && bun install --no-frozen-lockfile",
-    "release:publish": "changeset publish"
+    "release:publish": "for dir in packages/*; do (cd \"$dir\" && bun publish || true); done && changeset tag"
   },
   "devDependencies": {
     "@amritk/helpers": "workspace:*",
