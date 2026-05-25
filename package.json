@@ -32,6 +32,7 @@
     "@amritk/helpers": "workspace:*",
     "@biomejs/biome": "2.4.4",
     "@changesets/cli": "^2.30.0",
+    "@sinclair/typebox": "^0.34.49",
     "@types/bun": "latest",
     "@valibot/to-json-schema": "^1.7.0",
     "effect": "^3.21.2",

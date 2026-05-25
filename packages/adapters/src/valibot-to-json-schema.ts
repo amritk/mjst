@@ -60,8 +60,11 @@ export const valibotToJsonSchema = async (source: unknown): Promise<JSONSchema> 
   try {
     json = toJsonSchema(source, {
       errorMode: 'ignore',
-      overrideSchema: (ctx) =>
-        ctx.valibotSchema?.type === 'date' ? { [MJST_EXTENSION_KEY]: { instanceOf: 'Date' } } : undefined,
+      overrideSchema: (ctx) => {
+        if (ctx.valibotSchema?.type === 'date') return { [MJST_EXTENSION_KEY]: { instanceOf: 'Date' } }
+        if (ctx.valibotSchema?.type === 'bigint') return { [MJST_EXTENSION_KEY]: { primitive: 'bigint' } }
+        return undefined
+      },
     })
   } catch (error) {
     throw new Error(`Valibot adapter failed to convert the schema. Is it a valid Valibot schema?\n${String(error)}`)

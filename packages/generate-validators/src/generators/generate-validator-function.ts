@@ -1,4 +1,4 @@
-import { getMjstInstanceOf } from '@amritk/helpers/mjst-extension'
+import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import {
   hasAdditionalProperties,
@@ -101,6 +101,23 @@ const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired:
     } else {
       lines.push(`  if (${raw} !== undefined && !(${raw} instanceof ${instanceOf})) {`)
       lines.push(`    errors.push({ message: 'must be ${instanceOf}', path: ${path} })`)
+      lines.push(`  }`)
+    }
+    return lines
+  }
+
+  // x-mjst primitive (e.g. bigint) — value must satisfy a typeof check
+  const primitive = getMjstPrimitive(propSchema)
+  if (primitive) {
+    if (isRequired) {
+      lines.push(`  if (!(${JSON.stringify(key)} in obj)) {`)
+      lines.push(`    errors.push({ message: "must have required property '${key}'", path: _path })`)
+      lines.push(`  } else if (typeof ${raw} !== "${primitive}") {`)
+      lines.push(`    errors.push({ message: 'must be ${primitive}', path: ${path} })`)
+      lines.push(`  }`)
+    } else {
+      lines.push(`  if (${raw} !== undefined && typeof ${raw} !== "${primitive}") {`)
+      lines.push(`    errors.push({ message: 'must be ${primitive}', path: ${path} })`)
       lines.push(`  }`)
     }
     return lines
@@ -306,6 +323,19 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string): string =
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
       `  if (!(input instanceof ${instanceOf})) {`,
       `    return { valid: false, errors: [{ message: 'must be ${instanceOf}', path: _path }] }`,
+      `  }`,
+      `  return true`,
+      `}`,
+    ].join('\n')
+  }
+
+  // Top-level x-mjst primitive (e.g. a schema that is itself a bigint)
+  const primitive = getMjstPrimitive(schema)
+  if (primitive) {
+    return [
+      `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+      `  if (typeof input !== "${primitive}") {`,
+      `    return { valid: false, errors: [{ message: 'must be ${primitive}', path: _path }] }`,
       `  }`,
       `  return true`,
       `}`,

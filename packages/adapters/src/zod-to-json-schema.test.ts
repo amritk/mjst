@@ -78,6 +78,20 @@ describe('zodToJsonSchema', () => {
     expect((result as { properties: { when: Record<string, unknown> } }).properties.when).not.toHaveProperty('type')
   })
 
+  it('maps z.bigint() to an x-mjst primitive bigint hint', async () => {
+    const result = await zodToJsonSchema(z.object({ balance: z.bigint(), name: z.string() }))
+
+    expect(result).toMatchObject({
+      properties: {
+        balance: { 'x-mjst': { primitive: 'bigint' } },
+        name: { type: 'string' },
+      },
+    })
+    expect((result as { properties: { balance: Record<string, unknown> } }).properties.balance).not.toHaveProperty(
+      'type',
+    )
+  })
+
   it('throws a helpful error for non-object input', async () => {
     await expect(zodToJsonSchema(null)).rejects.toThrow(/expected a Zod schema but received null/)
     await expect(zodToJsonSchema('nope')).rejects.toThrow(/received string/)

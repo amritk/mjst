@@ -1,4 +1,4 @@
-import { getMjstInstanceOf } from '@amritk/helpers/mjst-extension'
+import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
@@ -113,6 +113,16 @@ export const generateValidationExpression = (
     return coercion
       ? `${valid} ? ${accessor} : (${accessor} !== undefined ? ${coercion} : undefined)`
       : `${valid} ? ${accessor} : undefined`
+  }
+
+  // Handle x-mjst primitive (e.g. bigint): validate with typeof. We do not
+  // coerce — BigInt() throws on invalid input, which a pure coercion expression
+  // cannot guard — so invalid values fall back to the default (required) or
+  // undefined (optional).
+  const primitive = getMjstPrimitive(schema)
+  if (primitive) {
+    const valid = `typeof ${accessor} === "${primitive}"`
+    return isRequired ? `${valid} ? ${accessor} : ${defaultValue}` : `${valid} ? ${accessor} : undefined`
   }
 
   // Handle $ref - resolve and validate against the referenced schema

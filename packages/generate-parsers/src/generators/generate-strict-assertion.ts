@@ -1,4 +1,4 @@
-import { getMjstInstanceOf } from '@amritk/helpers/mjst-extension'
+import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
   hasEnum,
@@ -149,6 +149,20 @@ const generatePropertyAssertion = (
     return lines
   }
 
+  const primitive = getMjstPrimitive(propSchema)
+  if (primitive) {
+    if (isRequired) {
+      lines.push(
+        `  if (typeof ${acc} !== "${primitive}") throw new Error('[${typeName}] field "${key}" must be ${primitive}');`,
+      )
+    } else {
+      lines.push(
+        `  if (${acc} !== undefined && typeof ${acc} !== "${primitive}") throw new Error('[${typeName}] field "${key}" must be ${primitive}');`,
+      )
+    }
+    return lines
+  }
+
   if (hasEnum(propSchema)) {
     const allowed = JSON.stringify(propSchema.enum)
     const label = (propSchema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
@@ -220,6 +234,11 @@ export const generateScalarStrictAssertion = (schema: JSONSchema, typeName: stri
   const instanceOf = getMjstInstanceOf(schema)
   if (instanceOf) {
     return `  if (!(input instanceof ${instanceOf})) throw new Error(\`[${typeName}] expected ${instanceOf}, got \${input === null ? "null" : typeof input}\`);`
+  }
+
+  const primitive = getMjstPrimitive(schema)
+  if (primitive) {
+    return `  if (typeof input !== "${primitive}") throw new Error(\`[${typeName}] expected ${primitive}, got \${input === null ? "null" : typeof input}\`);`
   }
 
   if (!isSchemaObject(schema) || !hasType(schema)) return null

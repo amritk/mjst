@@ -1,4 +1,4 @@
-import { getMjstInstanceOf } from '@amritk/helpers/mjst-extension'
+import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import {
   hasAdditionalProperties,
   hasEnum,
@@ -33,6 +33,12 @@ export const generateSchemaChecks = (accessor: string, schema: JSONSchema): stri
   const instanceOf = getMjstInstanceOf(schema)
   if (instanceOf) {
     return [`${accessor} instanceof ${instanceOf}`]
+  }
+
+  // x-mjst primitive nodes (e.g. bigint) validate purely by typeof check.
+  const primitive = getMjstPrimitive(schema)
+  if (primitive) {
+    return [`typeof ${accessor} === "${primitive}"`]
   }
 
   if (!hasType(schema)) {

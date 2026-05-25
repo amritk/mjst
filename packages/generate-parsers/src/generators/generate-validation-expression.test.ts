@@ -814,4 +814,18 @@ describe('generate-validation-expression', () => {
 
     expect(result).toBe('input?.value instanceof CustomThing ? input?.value : {}')
   })
+
+  it('checks typeof bigint for a required x-mjst primitive field', () => {
+    const schema = { 'x-mjst': { primitive: 'bigint' } }
+    const result = generateValidationExpression('balance', schema, '0n', true)
+
+    expect(result).toBe('typeof input?.balance === "bigint" ? input?.balance : 0n')
+  })
+
+  it('checks typeof bigint for an optional x-mjst primitive field', () => {
+    const schema = { 'x-mjst': { primitive: 'bigint' } }
+    const result = generateValidationExpression('balance', schema, '0n', false)
+
+    expect(result).toBe('typeof input?.balance === "bigint" ? input?.balance : undefined')
+  })
 })

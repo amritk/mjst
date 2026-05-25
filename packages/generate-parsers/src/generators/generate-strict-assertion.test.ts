@@ -33,3 +33,35 @@ describe('generate-strict-assertion x-mjst instanceOf', () => {
     expect(line).toContain('expected Date')
   })
 })
+
+describe('generate-strict-assertion x-mjst primitive', () => {
+  it('asserts typeof bigint for a required property', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { balance: { 'x-mjst': { primitive: 'bigint' } } },
+      required: ['balance'],
+    }
+    const lines = generateObjectStrictAssertion(schema, 'Account').join('\n')
+
+    expect(lines).toContain('missing required property "balance"')
+    expect(lines).toContain('typeof input.balance !== "bigint"')
+    expect(lines).toContain('field "balance" must be bigint')
+  })
+
+  it('guards undefined before asserting typeof for an optional bigint property', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { balance: { 'x-mjst': { primitive: 'bigint' } } },
+    }
+    const lines = generateObjectStrictAssertion(schema, 'Account').join('\n')
+
+    expect(lines).toContain('input.balance !== undefined && typeof input.balance !== "bigint"')
+  })
+
+  it('asserts typeof for a top-level bigint schema', () => {
+    const line = generateScalarStrictAssertion({ 'x-mjst': { primitive: 'bigint' } }, 'Big')
+
+    expect(line).toContain('typeof input !== "bigint"')
+    expect(line).toContain('expected bigint')
+  })
+})

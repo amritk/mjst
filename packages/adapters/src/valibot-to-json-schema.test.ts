@@ -65,6 +65,20 @@ describe('valibotToJsonSchema', () => {
     expect((result as { properties: { when: Record<string, unknown> } }).properties.when).not.toHaveProperty('type')
   })
 
+  it('maps v.bigint() to an x-mjst primitive bigint hint', async () => {
+    const result = await valibotToJsonSchema(v.object({ balance: v.bigint(), name: v.string() }))
+
+    expect(result).toMatchObject({
+      properties: {
+        balance: { 'x-mjst': { primitive: 'bigint' } },
+        name: { type: 'string' },
+      },
+    })
+    expect((result as { properties: { balance: Record<string, unknown> } }).properties.balance).not.toHaveProperty(
+      'type',
+    )
+  })
+
   it('throws a helpful error for non-object input', async () => {
     await expect(valibotToJsonSchema(null)).rejects.toThrow(/expected a Valibot schema but received null/)
     await expect(valibotToJsonSchema(42)).rejects.toThrow(/received number/)

@@ -12,6 +12,12 @@ const EXTENDED_TYPE_TO_INSTANCE: Record<string, string> = {
   Date: 'Date',
 }
 
+// Maps a TypeBox extended `type` string to a non-JSON `x-mjst` primitive hint
+// (e.g. Type.BigInt() emits `{ type: 'bigint' }`).
+const EXTENDED_TYPE_TO_PRIMITIVE: Record<string, string> = {
+  bigint: 'bigint',
+}
+
 /**
  * Recursively rewrites TypeBox extended types into an `x-mjst` instanceOf hint.
  *
@@ -33,8 +39,12 @@ const rewriteExtendedTypes = (value: unknown): unknown => {
 
   const type = result['type']
   if (typeof type === 'string' && !JSON_SCHEMA_TYPES.has(type)) {
+    const primitive = EXTENDED_TYPE_TO_PRIMITIVE[type]
     const instanceOf = EXTENDED_TYPE_TO_INSTANCE[type]
-    if (instanceOf) {
+    if (primitive) {
+      delete result['type']
+      result[MJST_EXTENSION_KEY] = { primitive }
+    } else if (instanceOf) {
       delete result['type']
       result[MJST_EXTENSION_KEY] = { instanceOf }
     } else {

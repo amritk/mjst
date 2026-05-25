@@ -66,9 +66,13 @@ export const zodToJsonSchema = async (source: unknown): Promise<JSONSchema> => {
     json = toJSONSchema(source, {
       unrepresentable: 'any',
       override: (ctx) => {
-        if (ctx.zodSchema?._zod?.def?.type === 'date') {
+        const type = ctx.zodSchema?._zod?.def?.type
+        if (type === 'date') {
           for (const key of Object.keys(ctx.jsonSchema)) delete ctx.jsonSchema[key]
           ctx.jsonSchema[MJST_EXTENSION_KEY] = { instanceOf: 'Date' }
+        } else if (type === 'bigint') {
+          for (const key of Object.keys(ctx.jsonSchema)) delete ctx.jsonSchema[key]
+          ctx.jsonSchema[MJST_EXTENSION_KEY] = { primitive: 'bigint' }
         }
       },
     })
