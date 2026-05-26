@@ -386,42 +386,54 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string): string =
     if (t === 'string') {
       if (hasPattern(schema)) {
         constraintLines.push(`  if (typeof input === 'string' && !/${schema.pattern}/.test(input)) {`)
-        constraintLines.push(
-          `    return { valid: false, errors: [{ message: 'must match pattern ${schema.pattern}', path: _path }] }`,
-        )
+        constraintLines.push(`    errors.push({ message: 'must match pattern ${schema.pattern}', path: _path })`)
         constraintLines.push(`  }`)
       }
       if (hasMinLength(schema)) {
         constraintLines.push(`  if (typeof input === 'string' && input.length < ${schema.minLength}) {`)
         constraintLines.push(
-          `    return { valid: false, errors: [{ message: 'must have at least ${schema.minLength} characters', path: _path }] }`,
+          `    errors.push({ message: 'must have at least ${schema.minLength} characters', path: _path })`,
         )
         constraintLines.push(`  }`)
       }
       if (hasMaxLength(schema)) {
         constraintLines.push(`  if (typeof input === 'string' && input.length > ${schema.maxLength}) {`)
         constraintLines.push(
-          `    return { valid: false, errors: [{ message: 'must have at most ${schema.maxLength} characters', path: _path }] }`,
+          `    errors.push({ message: 'must have at most ${schema.maxLength} characters', path: _path })`,
         )
         constraintLines.push(`  }`)
       }
     }
 
-    const body = constraintLines.length > 0 ? '\n' + constraintLines.join('\n') + '\n' : ''
+    if (!wrongType) {
+      return [
+        `export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`,
+        `  return true`,
+        `}`,
+      ].join('\n')
+    }
 
-    return wrongType
-      ? [
-          `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
-          `  if (${wrongType}) {`,
-          `    return { valid: false, errors: [{ message: 'must be ${typLabel}', path: _path }] }`,
-          `  }`,
-          body,
-          `  return true`,
-          `}`,
-        ].join('\n')
-      : [`export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`, `  return true`, `}`].join(
-          '\n',
-        )
+    if (constraintLines.length === 0) {
+      return [
+        `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+        `  if (${wrongType}) {`,
+        `    return { valid: false, errors: [{ message: 'must be ${typLabel}', path: _path }] }`,
+        `  }`,
+        `  return true`,
+        `}`,
+      ].join('\n')
+    }
+
+    return [
+      `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+      `  if (${wrongType}) {`,
+      `    return { valid: false, errors: [{ message: 'must be ${typLabel}', path: _path }] }`,
+      `  }`,
+      `  const errors: ValidationError[] = []`,
+      constraintLines.join('\n'),
+      `  return errors.length > 0 ? { valid: false, errors } : true`,
+      `}`,
+    ].join('\n')
   }
 
   return [`export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`, `  return true`, `}`].join(
