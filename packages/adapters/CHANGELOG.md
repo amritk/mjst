@@ -1,5 +1,11 @@
 # @amritk/adapters
 
+## 0.2.1
+
+### Patch Changes
+
+- d14d39f: Publish `@amritk/adapters` for converting external schemas (TypeBox, Zod, Valibot, Effect) into JSON Schema for mjst.
+
 ## 0.2.0
 
 ### Minor Changes
