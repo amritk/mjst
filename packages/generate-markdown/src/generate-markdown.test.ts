@@ -251,6 +251,114 @@ describe('generate-readme', () => {
     expect(content).toContain('["item1","item2"]')
   })
 
+  it('links object properties to a detail table rendered below', async () => {
+    const schemaWithNestedObject = {
+      ...minimalSchema,
+      properties: {
+        server: {
+          type: 'object',
+          description: 'Server settings',
+          properties: {
+            host: {
+              type: 'string',
+              description: 'Hostname to bind',
+            },
+            port: {
+              type: 'number',
+              description: 'Port to listen on',
+              default: 8080,
+            },
+          },
+        },
+      },
+    }
+
+    mockFs(schemaWithNestedObject)
+
+    await generateMarkdown()
+
+    const [, content] = writeFileMock.mock.calls[0] ?? []
+    // Parent row links to the detail table anchor
+    expect(content).toContain('[`server`](#config-server)')
+    // Detail table has a matching anchor and heading
+    expect(content).toContain('<a id="config-server"></a>')
+    expect(content).toContain('#### `server`')
+    // Nested fields appear in the detail table by their local name
+    expect(content).toContain('`host`')
+    expect(content).toContain('`port`')
+    expect(content).toContain('`8080`')
+  })
+
+  it('renders a detail table per level for deeply nested objects', async () => {
+    const schemaWithDeepNesting = {
+      ...minimalSchema,
+      properties: {
+        a: {
+          type: 'object',
+          description: 'Level a',
+          properties: {
+            b: {
+              type: 'object',
+              description: 'Level b',
+              properties: {
+                c: {
+                  type: 'string',
+                  description: 'Level c',
+                },
+              },
+            },
+          },
+        },
+      },
+    }
+
+    mockFs(schemaWithDeepNesting)
+
+    await generateMarkdown()
+
+    const [, content] = writeFileMock.mock.calls[0] ?? []
+    // Each object links to the next level's table
+    expect(content).toContain('[`a`](#config-a)')
+    expect(content).toContain('[`b`](#config-a-b)')
+    expect(content).toContain('<a id="config-a-b"></a>')
+    expect(content).toContain('#### `a.b`')
+    expect(content).toContain('`c`')
+  })
+
+  it('marks nested required properties using the nested required list', async () => {
+    const schemaWithNestedRequired = {
+      ...minimalSchema,
+      properties: {
+        server: {
+          type: 'object',
+          description: 'Server settings',
+          required: ['host'],
+          properties: {
+            host: {
+              type: 'string',
+              description: 'Hostname to bind',
+            },
+            port: {
+              type: 'number',
+              description: 'Port to listen on',
+            },
+          },
+        },
+      },
+    }
+
+    mockFs(schemaWithNestedRequired)
+
+    await generateMarkdown()
+
+    const [, content] = writeFileMock.mock.calls[0] ?? []
+    const lines = (content as string).split('\n')
+    const hostLine = lines.find((line: string) => line.includes('`host`') && line.includes('|'))
+    const portLine = lines.find((line: string) => line.includes('`port`') && line.includes('|'))
+    expect(hostLine).toContain('✅')
+    expect(portLine).not.toContain('✅')
+  })
+
   it('renders em dash for undefined default values', async () => {
     mockFs(minimalSchema)
 
