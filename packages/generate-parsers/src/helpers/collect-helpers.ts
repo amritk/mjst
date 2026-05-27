@@ -23,26 +23,41 @@ const PACKAGE_IMPORTS: Record<RuntimeHelperName, string> = {
   'has-ref': "import { hasRef } from '@amritk/helpers/schema-guards';",
 }
 
-const EMBEDDED_IMPORTS: Record<RuntimeHelperName, string> = {
-  'is-object': "import { isObject } from './_helpers/is-object';",
-  'validate-array': "import { validateArray } from './_helpers/validate-array';",
-  'validate-record': "import { validateRecord } from './_helpers/validate-record';",
-  'has-ref': "import { hasRef } from './_helpers/has-ref';",
+const EMBEDDED_NAMED_EXPORTS: Record<RuntimeHelperName, string> = {
+  'is-object': 'isObject',
+  'validate-array': 'validateArray',
+  'validate-record': 'validateRecord',
+  'has-ref': 'hasRef',
 }
 
-/** Detects which runtime helpers a generated parser body references. */
-export const collectHelpers = (parserFunction: string, mode: HelpersMode): CollectedHelpers => {
+const embeddedImport = (helper: RuntimeHelperName, prefix: string): string =>
+  `import { ${EMBEDDED_NAMED_EXPORTS[helper]} } from '${prefix}_helpers/${helper}';`
+
+/**
+ * Detects which runtime helpers a generated parser body references.
+ *
+ * @param helpersImportPrefix - Relative path prefix to the shared `_helpers/`
+ *   directory in embedded mode. Defaults to `'./'`. The recursive multi-schema
+ *   build passes `'../'`, `'../../'`, etc. so nested parsers can reach a single
+ *   `_helpers/` directory at the output root.
+ */
+export const collectHelpers = (
+  parserFunction: string,
+  mode: HelpersMode,
+  helpersImportPrefix = './',
+): CollectedHelpers => {
   const imports: string[] = []
   const used = new Set<RuntimeHelperName>()
-  const table = mode === 'embedded' ? EMBEDDED_IMPORTS : PACKAGE_IMPORTS
+  const importFor = (helper: RuntimeHelperName): string =>
+    mode === 'embedded' ? embeddedImport(helper, helpersImportPrefix) : PACKAGE_IMPORTS[helper]
 
   if (parserFunction.includes('validateArray')) {
-    imports.push(table['validate-array'])
+    imports.push(importFor('validate-array'))
     used.add('validate-array')
   }
 
   if (parserFunction.includes('validateRecord')) {
-    imports.push(table['validate-record'])
+    imports.push(importFor('validate-record'))
     used.add('validate-record')
     // The embedded validate-record.ts imports is-object, so it must be shipped too —
     // but only the `validate-record` line is needed in the parser file unless the
@@ -51,12 +66,12 @@ export const collectHelpers = (parserFunction: string, mode: HelpersMode): Colle
   }
 
   if (parserFunction.includes('isObject')) {
-    imports.push(table['is-object'])
+    imports.push(importFor('is-object'))
     used.add('is-object')
   }
 
   if (parserFunction.includes('hasRef(')) {
-    imports.push(table['has-ref'])
+    imports.push(importFor('has-ref'))
     used.add('has-ref')
   }
 

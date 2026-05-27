@@ -90,6 +90,10 @@ const extractDynamicAnchorDefs = (schema: JSONSchema): string[] => {
  * @param helpersMode - `'package'` (default) emits `import ... from '@amritk/helpers/...'`.
  *   `'embedded'` emits `import ... from './_helpers/...'` and appends the helper sources
  *   as additional `GeneratedFile` entries so the output directory is self-contained.
+ * @param helpersImportPrefix - Relative path prefix to the `_helpers/` directory in
+ *   embedded mode. Defaults to `'./'`. The recursive multi-schema build passes `'../'`,
+ *   `'../../'`, etc. so nested parsers can import from a single shared `_helpers/`
+ *   directory while the helper sources are emitted once at the output root.
  * @returns An array of generated TypeScript files
  *
  * @example
@@ -130,6 +134,7 @@ export const buildSchema = async (
   logWarnings?: boolean,
   strict?: boolean,
   helpersMode: HelpersMode = 'package',
+  helpersImportPrefix = './',
 ): Promise<GeneratedFile[]> => {
   // Upgrade draft-07 schemas to 2020-12 conventions before processing.
   // This renames `definitions` → `$defs` recursively so the rest of the
@@ -155,6 +160,7 @@ export const buildSchema = async (
     typesOnly: typesOnly ?? false,
     rootSchema: rootSchema as Record<string, unknown>,
     helpersMode,
+    helpersImportPrefix,
     ...(logWarnings !== undefined ? { logWarnings } : {}),
     ...(strict !== undefined ? { strict } : {}),
   })
@@ -205,6 +211,7 @@ export const buildSchema = async (
       selfRef: ref,
       rootSchema: rootSchema as Record<string, unknown>,
       helpersMode,
+      helpersImportPrefix,
       ...(logWarnings !== undefined ? { logWarnings } : {}),
       ...(strict !== undefined ? { strict } : {}),
     })

@@ -47,6 +47,13 @@ type GenerateFileOptions = {
    *   be shipped alongside the generated files.
    */
   readonly helpersMode?: HelpersMode
+  /**
+   * Relative path prefix to the shared `_helpers/` directory in embedded mode.
+   * Defaults to `'./'`. The recursive multi-schema build passes `'../'`,
+   * `'../../'`, etc. so a nested parser can reach a single `_helpers/` directory
+   * at the output root.
+   */
+  readonly helpersImportPrefix?: string
 }
 
 /** Result of generating a single parser file. */
@@ -118,7 +125,7 @@ export const generateFile = (
   })
   const shapeValidator = generateShapeValidator(schema, typeName, true)
   const combinedFunctions = `${shapeValidator}\n\n${parserFunction}`
-  const helpers: CollectedHelpers = collectHelpers(combinedFunctions, helpersMode)
+  const helpers: CollectedHelpers = collectHelpers(combinedFunctions, helpersMode, options?.helpersImportPrefix)
   const imports = [...collectImports(schema, { selfRef, rootSchema }), ...helpers.imports]
 
   // Build file output using string concatenation instead of array join for performance

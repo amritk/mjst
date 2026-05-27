@@ -43,6 +43,26 @@ describe('parse-cli-args', () => {
     })
   })
 
+  it('parses --schemaDir with space-separated and equals syntax', () => {
+    expect(parseCliArgs(['--schemaDir', './schemas', '--outDir', 'dist'])).toEqual({
+      schemaDir: './schemas',
+      outDir: 'dist',
+    })
+    expect(parseCliArgs(['--schemaDir=./schemas', '--outDir=dist'])).toEqual({
+      schemaDir: './schemas',
+      outDir: 'dist',
+    })
+  })
+
+  it('keeps --schema and --schemaDir distinct', () => {
+    const result = parseCliArgs(['--schema', 'a.json', '--schemaDir', './schemas'])
+
+    expect(result).toEqual({
+      schema: 'a.json',
+      schemaDir: './schemas',
+    })
+  })
+
   it('handles only --outDir without --schema', () => {
     const result = parseCliArgs(['--outDir', 'output'])
 

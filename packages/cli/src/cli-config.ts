@@ -6,7 +6,15 @@ import type { SourceFormat } from '@amritk/adapters/source-format'
  */
 export type CliConfig = {
   /** Path to the schema to process — a JSON Schema file, or a JS/TS module when `input` is set. */
-  readonly schema: string
+  readonly schema?: string
+  /**
+   * Path to a directory of JSON Schema files. When set, the CLI walks the directory
+   * recursively, generates parsers for every `*.json` schema it finds, and mirrors the
+   * directory layout under `outDir`. A single shared `_helpers/` directory is emitted at
+   * the root of `outDir` (in embedded mode) and every nested parser imports from it.
+   * Mutually exclusive with `schema`; when both are present `schemaDir` wins.
+   */
+  readonly schemaDir?: string
   /**
    * The source format of the schema. Defaults to `'json'` (a plain JSON Schema file).
    * Any other format loads `schema` as a module and converts it via the matching adapter.

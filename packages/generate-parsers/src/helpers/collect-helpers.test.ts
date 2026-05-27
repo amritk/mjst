@@ -99,5 +99,17 @@ describe('collect-helpers', () => {
       expect(result.imports).toContain("import { validateRecord } from './_helpers/validate-record';")
       expect(result.imports).toContain("import { isObject } from './_helpers/is-object';")
     })
+
+    it('applies a custom import prefix so nested parsers can reach a shared _helpers/ at the root', () => {
+      const parser = 'if (isObject(input)) { const arr = validateArray(input.items, parseItem) }'
+      const result = collectHelpers(parser, 'embedded', '../../')
+      expect(result.imports).toContain("import { isObject } from '../../_helpers/is-object';")
+      expect(result.imports).toContain("import { validateArray } from '../../_helpers/validate-array';")
+    })
+
+    it('ignores the import prefix in package mode', () => {
+      const result = collectHelpers('if (isObject(input)) {', 'package', '../')
+      expect(result.imports).toEqual(["import { isObject } from '@amritk/helpers/is-object';"])
+    })
   })
 })
