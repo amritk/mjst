@@ -13,6 +13,7 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
   // Use a mutable local type for building, then return as Partial<CliConfig>
   const config: {
     schema?: string
+    schemaDir?: string
     outDir?: string
     input?: SourceFormat
     export?: string
@@ -46,6 +47,8 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
 
       if (key === 'schema') {
         config.schema = value
+      } else if (key === 'schemaDir') {
+        config.schemaDir = value
       } else if (key === 'outDir') {
         config.outDir = value
       } else if (key === 'input') {
@@ -76,6 +79,13 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
 
       if (value && !value.startsWith('--')) {
         config.schema = value
+        i++
+      }
+    } else if (arg === '--schemaDir') {
+      const value = args[i + 1]
+
+      if (value && !value.startsWith('--')) {
+        config.schemaDir = value
         i++
       }
     } else if (arg === '--outDir') {

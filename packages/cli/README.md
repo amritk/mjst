@@ -47,6 +47,28 @@ The package ships a `mjst` bin that runs under Node ≥ 20 (or Bun), so you can 
 npx mjst --schema ./schema.json --outDir ./generated
 ```
 
+### Recursive — a whole folder of schemas
+
+Point `--schemaDir` at a directory of JSON Schemas and mjst generates parsers for every
+`*.json` file it finds, mirroring the directory layout under `--outDir`:
+
+```bash
+npx mjst --schemaDir ./schemas --outDir ./generated
+```
+
+```
+schemas/                  generated/
+  user.json        ─▶       user/
+  api/                        document.ts, index.ts
+    order.json     ─▶       api/order/
+                              document.ts, index.ts
+                            _helpers/        ← shared runtime helpers (embedded mode)
+```
+
+Each schema lands in its own subdirectory so generated files never collide, and in embedded
+mode the runtime helpers are emitted **once** into `outDir/_helpers/` — every nested parser
+imports from that single shared location. `--build` compiles the whole tree in place.
+
 ### Config file
 
 ```bash
@@ -63,7 +85,8 @@ npx mjst --config ./mjst.config.json
 <!-- config-table-start -->
 | | Property | CLI Flag | Type | Required | Default | Description |
 |:---:|:---|:---|:---:|:---:|:---:|:---|
-| 📄 | `schema` | `--schema <path>` | `string` | ✅ | — | Path to the schema to process. With the default 'json' input this is a JSON Schema file that is read and parsed. With any other input format it is a JS/TS module that exports a schema, which is loaded and converted to JSON Schema via the matching adapter. |
+| 📄 | `schema` | `--schema <path>` | `string` | — | — | Path to the schema to process. With the default 'json' input this is a JSON Schema file that is read and parsed. With any other input format it is a JS/TS module that exports a schema, which is loaded and converted to JSON Schema via the matching adapter. Either 'schema' or 'schemaDir' is required. |
+| 🗂️ | `schemaDir` | `--schemaDir <dir>` | `string` | — | — | Path to a directory of JSON Schema files. When set, the CLI walks the directory recursively, generates parsers for every '*.json' schema it finds, and mirrors the directory layout under outDir (each schema lands in its own subdirectory). The runtime helpers are emitted once into a shared outDir/_helpers/ that every nested parser imports from. Mutually exclusive with 'schema'; when both are present 'schemaDir' wins. Only JSON Schema input is supported in this mode. |
 | 🔌 | `input` | `--input <format>` | `string` | — | `"json"` | Source format of the schema. 'json' (default) reads a JSON Schema file directly. Any other format loads 'schema' as a module and converts it to JSON Schema with the matching adapter. Supported: 'typebox', 'zod' (zod v4+), 'valibot' (with @valibot/to-json-schema), and 'effect' — each requires the corresponding library installed in your project. |
 | 📦 | `export` | `--export <name>` | `string` | — | — | Which export of the schema module to use when 'input' is not 'json'. Defaults to the default export, or the sole named export when the module has exactly one. |
 | 📁 | `outDir` | `--outDir <dir>` | `string` | ✅ | — | Output directory for generated TypeScript files. The directory is created automatically if it does not exist. Subdirectories are created as needed when a generated file includes a nested path. |
@@ -72,7 +95,7 @@ npx mjst --config ./mjst.config.json
 | ⚠️ | `logWarnings` | `--log-warnings` | `boolean` | — | `false` | Emit a console.warn in the generated parsers for every input key that is not declared in the schema's properties. Useful for detecting schema drift or unexpected data shapes at runtime. |
 | 🚫 | `strict` | `--strict` | `boolean` | — | `false` | Generate parsers that throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. Unknown extra keys are still allowed. |
 | 🧰 | `helpers` | `--helpers <mode>` | `string` | — | — | Controls how generated parsers reference their runtime helpers. 'package' emits imports from @amritk/helpers (requires it to be installed in the consumer project). 'embedded' ships the helper source under outDir/_helpers/ so the output is self-contained. When omitted, the CLI auto-detects: it picks 'package' if @amritk/helpers resolves from outDir, otherwise 'embedded'. |
-| ⚙️ | `config` | `--config <path>` | `string` | — | — | Path to a JSON config file. Keys match the option names in this schema (schema, outDir, typesOnly, build, logWarnings, strict, helpers). CLI flags take precedence over config file values. |
+| ⚙️ | `config` | `--config <path>` | `string` | — | — | Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, typesOnly, build, logWarnings, strict, helpers). CLI flags take precedence over config file values. |
 <!-- config-table-end -->
 
 ---

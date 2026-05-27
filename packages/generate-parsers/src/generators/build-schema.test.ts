@@ -681,6 +681,30 @@ describe('build-schema', () => {
       expect(filenames).toContain('_helpers/is-object.ts')
     })
 
+    it('honours a custom helpersImportPrefix so nested parsers import from a shared root _helpers/', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+      }
+
+      const result = await buildSchema(
+        schema,
+        'Document',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'embedded',
+        '../../',
+      )
+      const root = result.find((f) => f.filename === 'document.ts')
+      const filenames = result.map((f) => f.filename)
+
+      expect(root?.content).toContain("import { isObject } from '../../_helpers/is-object';")
+      // Helper sources keep their canonical filenames; the orchestrator relocates them to the root.
+      expect(filenames).toContain('_helpers/is-object.ts')
+    })
+
     it('ships validate-array.ts (plus its transitive is-object.ts) for array schemas', async () => {
       const schema: JSONSchema = {
         type: 'object',

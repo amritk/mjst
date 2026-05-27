@@ -4,14 +4,22 @@
   "description": "Generate TypeScript parsers and type definitions from JSON Schemas.\n\nYou can supply options via CLI flags or a JSON config file. CLI flags always take precedence over config file values.",
   "$comment": "Supply options either via CLI flags or a JSON config file — both approaches are shown below.",
   "type": "object",
-  "required": ["schema", "outDir"],
+  "required": ["outDir"],
+  "oneOf": [{ "required": ["schema"] }, { "required": ["schemaDir"] }],
   "properties": {
     "schema": {
       "type": "string",
       "x-cli-flag": "--schema <path>",
       "x-icon": "📄",
-      "description": "Path to the schema to process. With the default 'json' input this is a JSON Schema file that is read and parsed. With any other input format it is a JS/TS module that exports a schema, which is loaded and converted to JSON Schema via the matching adapter.",
+      "description": "Path to the schema to process. With the default 'json' input this is a JSON Schema file that is read and parsed. With any other input format it is a JS/TS module that exports a schema, which is loaded and converted to JSON Schema via the matching adapter. Either 'schema' or 'schemaDir' is required.",
       "examples": ["./schema.json"]
+    },
+    "schemaDir": {
+      "type": "string",
+      "x-cli-flag": "--schemaDir <dir>",
+      "x-icon": "🗂️",
+      "description": "Path to a directory of JSON Schema files. When set, the CLI walks the directory recursively, generates parsers for every '*.json' schema it finds, and mirrors the directory layout under outDir (each schema lands in its own subdirectory). The runtime helpers are emitted once into a shared outDir/_helpers/ that every nested parser imports from. Mutually exclusive with 'schema'; when both are present 'schemaDir' wins. Only JSON Schema input is supported in this mode.",
+      "examples": ["./schemas"]
     },
     "input": {
       "type": "string",
@@ -73,7 +81,7 @@
       "type": "string",
       "x-cli-flag": "--config <path>",
       "x-icon": "⚙️",
-      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, outDir, typesOnly, build, logWarnings, strict, helpers). CLI flags take precedence over config file values.",
+      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, typesOnly, build, logWarnings, strict, helpers). CLI flags take precedence over config file values.",
       "examples": ["./mjst.config.json"]
     }
   },

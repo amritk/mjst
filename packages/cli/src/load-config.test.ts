@@ -58,6 +58,15 @@ describe('load-config', () => {
     expect(result).toEqual({ schema: 's.json', outDir: 'o', strict: true })
   })
 
+  it('loads schemaDir from a config file', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ schemaDir: './schemas', outDir: 'output' }))
+
+    const result = await loadConfig(configPath)
+
+    expect(result).toEqual({ schemaDir: './schemas', outDir: 'output' })
+  })
+
   it('ignores non-boolean strict value', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
     await writeFile(configPath, JSON.stringify({ schema: 's.json', strict: 'yes' }))
