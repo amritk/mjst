@@ -109,7 +109,8 @@ npx mjst --config ./mjst.config.json
 | 🚫 | `strict` | `--strict` | `boolean` | — | `false` | Generate parsers that throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. Unknown extra keys are still allowed. |
 | 🔒 | `readonly` | `--readonly` | `boolean` | — | `false` | Emit every property, array, and record in the generated type definitions as readonly, producing deeply immutable types. Affects type definitions only; the generated parsers still build and return plain objects. |
 | 🧰 | `helpers` | `--helpers <mode>` | `string` | — | — | Controls how generated parsers reference their runtime helpers. 'package' emits imports from @amritk/helpers (requires it to be installed in the consumer project). 'embedded' ships the helper source under outDir/_helpers/ so the output is self-contained. When omitted, the CLI auto-detects: it picks 'package' if @amritk/helpers resolves from outDir, otherwise 'embedded'. |
-| ⚙️ | `config` | `--config <path>` | `string` | — | — | Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, outFile, typesOnly, build, logWarnings, strict, readonly, helpers). CLI flags take precedence over config file values. |
+| 🏷️ | `typeSuffix` | `--type-suffix <suffix>` | `string` | — | `""` | Suffix appended to every generated type name derived from a $ref (e.g. 'Object' turns Contact into ContactObject). Defaults to no suffix. The root type name is used verbatim and is unaffected. |
+| ⚙️ | `config` | `--config <path>` | `string` | — | — | Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, outFile, typesOnly, build, logWarnings, strict, readonly, helpers, typeSuffix). CLI flags take precedence over config file values. |
 <!-- config-table-end -->
 
 ---

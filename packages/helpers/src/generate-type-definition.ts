@@ -14,6 +14,11 @@ type ConditionalObjectResult = {
 export type TypeOptions = {
   /** When true, every property, array, and record in the generated types is emitted as readonly. */
   readonly readonly?: boolean
+  /**
+   * Suffix appended to every generated type name derived from a `$ref`.
+   * Defaults to `''` (no suffix). Set to e.g. `'Object'` to emit `ContactObject`.
+   */
+  readonly typeSuffix?: string
 }
 
 const getConditionalObjectSchema = (schema: JSONSchema): ConditionalObjectResult | null => {
@@ -164,16 +169,16 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string
     if (!schema.$ref.startsWith('#')) {
       return 'unknown'
     }
-    return refToName(schema.$ref)
+    return refToName(schema.$ref, options.typeSuffix)
   }
 
   // Handle $dynamicRef (used for recursive schemas)
   if (schema.$dynamicRef) {
     // For #meta, this refers to the Schema type itself (JSON Schema 2020-12 $dynamicAnchor pattern)
     if (schema.$dynamicRef === '#meta') {
-      return 'Schema'
+      return `Schema${options.typeSuffix ?? ''}`
     }
-    return refToName(schema.$dynamicRef)
+    return refToName(schema.$dynamicRef, options.typeSuffix)
   }
 
   // Handle const - literal type
@@ -235,7 +240,7 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string
   if (conditionalResult) {
     const baseType = getTypeScriptType(conditionalResult.schema, options)
     if (conditionalResult.thenRef) {
-      return `(${baseType}) & ${refToName(conditionalResult.thenRef)}`
+      return `(${baseType}) & ${refToName(conditionalResult.thenRef, options.typeSuffix)}`
     }
     return baseType
   }
@@ -493,7 +498,7 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
     if (isSchemaObject(schema) && Array.isArray(schema.allOf)) {
       for (const entry of schema.allOf) {
         if (isSchemaObject(entry) && entry.$ref) {
-          allOfIntersections.push(refToName(entry.$ref))
+          allOfIntersections.push(refToName(entry.$ref, options.typeSuffix))
         }
       }
     }
@@ -501,7 +506,7 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
     // JSON Schema 2019-09+ allows $ref as a sibling to other keywords.
     // Treat it as an additional intersection type (e.g. for specification-extensions).
     if (isSchemaObject(schema) && typeof schema.$ref === 'string' && schema.$ref.startsWith('#')) {
-      allOfIntersections.push(refToName(schema.$ref))
+      allOfIntersections.push(refToName(schema.$ref, options.typeSuffix))
     }
 
     let result = ''
@@ -512,7 +517,7 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
     let typeBody = '{\n' + properties + '\n}'
 
     if (conditionalThenRef) {
-      typeBody += ' & ' + refToName(conditionalThenRef)
+      typeBody += ' & ' + refToName(conditionalThenRef, options.typeSuffix)
     }
 
     for (const intersectionType of allOfIntersections) {

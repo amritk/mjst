@@ -74,7 +74,7 @@ describe('build-schema', () => {
     const documentFile = files.find((f) => f.filename === 'document.ts')
 
     expect(documentFile?.content).toContain("from './info'")
-    expect(documentFile?.content).toContain('validateInfoObject')
+    expect(documentFile?.content).toContain('validateInfo')
   })
 
   it('generates a valid index.ts with re-exports', async () => {
@@ -136,7 +136,7 @@ describe('build-schema', () => {
     const infoFile = files.find((f) => f.filename === 'info.ts')
 
     expect(documentFile?.content).toContain('validateDocument')
-    expect(infoFile?.content).toContain('validateInfoObject')
+    expect(infoFile?.content).toContain('validateInfo')
 
     // Cross-check: @scalar/openapi-parser says a complete document is valid
     const validDoc = { openapi: '3.1.0', info: { title: 'API', version: '1.0' }, paths: {} }

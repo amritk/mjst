@@ -27,6 +27,12 @@ type CollectImportsOptions = {
    * imports for external schemas that were never generated as files.
    */
   readonly rootSchema?: Record<string, unknown> | undefined
+  /**
+   * Suffix appended to every type name derived from a `$ref`. Must match the
+   * suffix used when generating the referenced files so imports resolve.
+   * Defaults to `''` (no suffix).
+   */
+  readonly typeSuffix?: string
 }
 
 /**
@@ -72,6 +78,7 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
   const typesOnly = options?.typesOnly === true
   const selfFilename = options?.selfRef ? refToFilename(options.selfRef) : undefined
   const rootSchema = options?.rootSchema
+  const typeSuffix = options?.typeSuffix
   const refs = new Set<string>()
 
   const collectRefsFromValue = (value: unknown): void => {
@@ -247,7 +254,7 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
       if (!resolveRef(ref, rootSchema)) continue
     }
 
-    const typeName = refToName(ref)
+    const typeName = refToName(ref, typeSuffix)
     const filename = refToFilename(ref)
 
     // Skip self-referential imports — a file must not import from itself

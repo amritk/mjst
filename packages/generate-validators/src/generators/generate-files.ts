@@ -17,6 +17,11 @@ type GenerateValidatorFileOptions = {
    * The root schema document. Used to filter out unresolvable refs.
    */
   readonly rootSchema?: Record<string, unknown>
+  /**
+   * Suffix appended to every type/validator name derived from a `$ref`.
+   * Defaults to `''` (no suffix).
+   */
+  readonly typeSuffix?: string
 }
 
 /**
@@ -46,13 +51,15 @@ export const generateValidatorFile = (
   typeName: string,
   options?: GenerateValidatorFileOptions,
 ): string => {
+  const typeSuffix = options?.typeSuffix ?? ''
   const refImports = collectValidatorImports(schema, {
     selfRef: options?.selfRef,
     rootSchema: options?.rootSchema,
+    typeSuffix,
   })
 
-  const typeDefinition = generateTypeDefinition(schema, typeName)
-  const validatorFunction = generateValidatorFunction(schema, typeName)
+  const typeDefinition = generateTypeDefinition(schema, typeName, { typeSuffix })
+  const validatorFunction = generateValidatorFunction(schema, typeName, typeSuffix)
 
   let result = `import type { ValidationResult, ValidationError } from './validation-result'\n`
 

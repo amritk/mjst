@@ -164,9 +164,9 @@ describe('generateTypeDefinition', () => {
       },
     }
 
-    const result = generateTypeDefinition(schema, 'GenericObject')
+    const result = generateTypeDefinition(schema, 'Generic')
 
-    expect(result).toStrictEqual('export type GenericObject = {\n' + '  metadata?: object;\n' + '};')
+    expect(result).toStrictEqual('export type Generic = {\n' + '  metadata?: object;\n' + '};')
   })
 
   it('generates type for complex nested structure with arrays and objects', () => {
@@ -220,9 +220,9 @@ describe('generateTypeDefinition', () => {
       properties: {},
     }
 
-    const result = generateTypeDefinition(schema, 'EmptyObject')
+    const result = generateTypeDefinition(schema, 'Empty')
 
-    expect(result).toStrictEqual('export type EmptyObject = {\n' + '\n' + '};')
+    expect(result).toStrictEqual('export type Empty = {\n' + '\n' + '};')
   })
 
   it('generates type for object with no type specified', () => {
@@ -575,18 +575,18 @@ describe('generateTypeDefinition', () => {
       required: ['title', 'version'],
     }
 
-    const result = generateTypeDefinition(info, 'InfoObject')
+    const result = generateTypeDefinition(info, 'Info')
 
     expect(result).toStrictEqual(
       '/**\n' +
-        '* InfoObject\n' +
+        '* Info\n' +
         '*\n' +
         '* https://spec.openapis.org/oas/v3.1#info-object\n' +
         '*/\n' +
-        'export type InfoObject = {\n' +
+        'export type Info = {\n' +
         '  title: string;\n' +
         '  summary?: string;\n' +
-        '  contact?: ContactObject;\n' +
+        '  contact?: Contact;\n' +
         '  version: string;\n' +
         '};',
     )
@@ -611,18 +611,18 @@ describe('generateTypeDefinition', () => {
       },
     }
 
-    const result = generateTypeDefinition(components, 'ComponentsObject')
+    const result = generateTypeDefinition(components, 'Components')
 
     expect(result).toStrictEqual(
-      'export type ComponentsObject = {\n' +
-        '  responses?: Record<string, ResponseObject>;\n' +
-        '  parameters?: Record<string, ParameterObject>;\n' +
-        '  pathItems?: Record<string, PathItemObject>;\n' +
+      'export type Components = {\n' +
+        '  responses?: Record<string, Response>;\n' +
+        '  parameters?: Record<string, Parameter>;\n' +
+        '  pathItems?: Record<string, PathItem>;\n' +
         '};',
     )
   })
 
-  it('generates type for object with paths property as Record<string, PathItemObject>', () => {
+  it('generates type for object with paths property as Record<string, PathItem>', () => {
     const document: JSONSchema.Object = {
       $comment: 'https://spec.openapis.org/oas/v3.1#openapi-object',
       type: 'object',
@@ -647,8 +647,8 @@ describe('generateTypeDefinition', () => {
         '*/\n' +
         'export type Document = {\n' +
         '  openapi: string;\n' +
-        '  info: InfoObject;\n' +
-        '  paths?: Record<string, PathItemObject>;\n' +
+        '  info: Info;\n' +
+        '  paths?: Record<string, PathItem>;\n' +
         '};',
     )
   })
@@ -702,12 +702,12 @@ describe('generateTypeDefinition', () => {
         '*/\n' +
         'export type Document = {\n' +
         '  openapi: string;\n' +
-        '  info: InfoObject;\n' +
+        '  info: Info;\n' +
         '  jsonSchemaDialect?: string;\n' +
-        '  servers?: ServerObject[];\n' +
-        '  paths?: Record<string, PathItemObject>;\n' +
-        '  webhooks?: Record<string, PathItemObject>;\n' +
-        '  components?: ComponentsObject;\n' +
+        '  servers?: Server[];\n' +
+        '  paths?: Record<string, PathItem>;\n' +
+        '  webhooks?: Record<string, PathItem>;\n' +
+        '  components?: Components;\n' +
         '};',
     )
   })
@@ -723,15 +723,15 @@ describe('generateTypeDefinition', () => {
       },
     }
 
-    const result = generateTypeDefinition(paths, 'PathsObject')
+    const result = generateTypeDefinition(paths, 'Paths')
 
     expect(result).toStrictEqual(
       '/**\n' +
-        '* PathsObject\n' +
+        '* Paths\n' +
         '*\n' +
         '* https://spec.openapis.org/oas/v3.1#paths-object\n' +
         '*/\n' +
-        'export type PathsObject = Record<string, PathItemObject>;',
+        'export type Paths = Record<string, PathItem>;',
     )
   })
 
@@ -743,7 +743,7 @@ describe('generateTypeDefinition', () => {
         name: { type: 'string' as const },
       },
     }
-    const result = generateTypeDefinition(schema, 'InfoExtensionsObject')
+    const result = generateTypeDefinition(schema, 'InfoExtensions')
     expect(result).toContain("'x-linkedin'?: string;")
     expect(result).toContain('name?: string;')
   })
@@ -767,11 +767,9 @@ describe('generateTypeDefinition', () => {
       },
     }
 
-    const result = generateTypeDefinition(schema, 'TypeHttpObject')
+    const result = generateTypeDefinition(schema, 'TypeHttp')
 
-    expect(result).toStrictEqual(
-      'export type TypeHttpObject = {\n' + '  type: "http";\n' + '  scheme: string;\n' + '};',
-    )
+    expect(result).toStrictEqual('export type TypeHttp = {\n' + '  type: "http";\n' + '  scheme: string;\n' + '};')
   })
 
   it('generates required property from then properties without explicit required', () => {
@@ -792,10 +790,10 @@ describe('generateTypeDefinition', () => {
       },
     }
 
-    const result = generateTypeDefinition(schema, 'TypeHttpObject')
+    const result = generateTypeDefinition(schema, 'TypeHttp')
 
     expect(result).toStrictEqual(
-      'export type TypeHttpObject = {\n' + '  type: "http";\n' + '  bearerFormat: string;\n' + '};',
+      'export type TypeHttp = {\n' + '  type: "http";\n' + '  bearerFormat: string;\n' + '};',
     )
   })
 
@@ -823,9 +821,9 @@ describe('generateTypeDefinition', () => {
       },
     }
 
-    const result = generateTypeDefinition(schema, 'TypeHttpObject')
+    const result = generateTypeDefinition(schema, 'TypeHttp')
 
-    expect(result).toContain('* TypeHttpObject')
+    expect(result).toContain('* TypeHttp')
     expect(result).toContain('* https://spec.openapis.org/oas/v3.1#security-scheme-object')
     expect(result).toContain('type: "http";')
     expect(result).toContain('scheme: string;')
@@ -847,13 +845,13 @@ describe('generateTypeDefinition', () => {
       allOf: [{ $ref: '#/$defs/type-apikey' }, { $ref: '#/$defs/type-http' }, { $ref: '#/$defs/type-oauth2' }],
     }
 
-    const result = generateTypeDefinition(securityScheme, 'SecuritySchemeObject')
+    const result = generateTypeDefinition(securityScheme, 'SecurityScheme')
 
     expect(result).toStrictEqual(
-      'export type SecuritySchemeObject = {\n' +
+      'export type SecurityScheme = {\n' +
         '  type: "apiKey" | "http" | "oauth2";\n' +
         '  description?: string;\n' +
-        '} & TypeApikeyObject & TypeHttpObject & TypeOauth2Object;',
+        '} & TypeApikey & TypeHttp & TypeOauth2;',
     )
   })
 
@@ -870,12 +868,12 @@ describe('generateTypeDefinition', () => {
       allOf: [{ $ref: '#/$defs/type-apikey' }, { $ref: '#/$defs/type-http' }],
     }
 
-    const result = generateTypeDefinition(securityScheme, 'SecuritySchemeObject')
+    const result = generateTypeDefinition(securityScheme, 'SecurityScheme')
 
-    expect(result).toContain('* SecuritySchemeObject')
+    expect(result).toContain('* SecurityScheme')
     expect(result).toContain('* https://spec.openapis.org/oas/v3.1#security-scheme-object')
     expect(result).toContain('type: "apiKey" | "http" | "oauth2";')
-    expect(result).toContain('} & TypeApikeyObject & TypeHttpObject;')
+    expect(result).toContain('} & TypeApikey & TypeHttp;')
   })
 
   it('generates record type for patternProperties-only schema without explicit type', () => {
@@ -885,9 +883,9 @@ describe('generateTypeDefinition', () => {
       },
     }
 
-    const result = generateTypeDefinition(schema, 'SpecificationExtensionsObject')
+    const result = generateTypeDefinition(schema, 'SpecificationExtensions')
 
-    expect(result).toStrictEqual('export type SpecificationExtensionsObject = Record<`x-${string}`, unknown>;')
+    expect(result).toStrictEqual('export type SpecificationExtensions = Record<`x-${string}`, unknown>;')
   })
 
   it('generates Record<string, never> for patternProperties-only schema with false boolean value', () => {
@@ -899,9 +897,9 @@ describe('generateTypeDefinition', () => {
       },
     }
 
-    const result = generateTypeDefinition(schema, 'RestrictedObject')
+    const result = generateTypeDefinition(schema, 'Restricted')
 
-    expect(result).toStrictEqual('export type RestrictedObject = Record<`x-${string}`, never>;')
+    expect(result).toStrictEqual('export type Restricted = Record<`x-${string}`, never>;')
   })
 
   it('generates Schema type for property with $dynamicRef pointing to #meta', () => {
@@ -930,7 +928,7 @@ describe('generateTypeDefinition', () => {
 
     const result = generateTypeDefinition(schema, 'ContentContainer')
 
-    expect(result).toContain('content?: SchemaObject')
+    expect(result).toContain('content?: Schema')
   })
 
   it('generates union type for schema with array of types', () => {
@@ -1058,12 +1056,12 @@ describe('generateTypeDefinition', () => {
       },
     }
 
-    const result = generateTypeDefinition(schema, 'CallbackObject')
+    const result = generateTypeDefinition(schema, 'Callback')
 
     expect(result).toContain('/**')
-    expect(result).toContain('* CallbackObject')
+    expect(result).toContain('* Callback')
     expect(result).toContain('* https://spec.openapis.org/oas/v3.1#callback-object')
-    expect(result).toContain('[key: string]: PathItemObject')
+    expect(result).toContain('[key: string]: PathItem')
   })
 
   it('generates type for product schema with required, optional, and array fields', () => {
@@ -1151,7 +1149,7 @@ describe('generateTypeDefinition', () => {
 
     const result = generateTypeDefinition(schema, 'Parameters')
 
-    expect(result).toBe('export type Parameters = (ParameterObject | ReferenceObject)[];')
+    expect(result).toBe('export type Parameters = (Parameter | Reference)[];')
   })
 
   it('emits JSDoc for non-object schemas with a $comment URL', () => {
@@ -1165,7 +1163,7 @@ describe('generateTypeDefinition', () => {
 
     expect(result).toContain('/**')
     expect(result).toContain('* https://spec.openapis.org/oas/v3.1#contact-object')
-    expect(result).toContain('export type Contacts = ServerObject[];')
+    expect(result).toContain('export type Contacts = Server[];')
   })
 
   it('emits JSDoc for non-object schemas with a plain-text $comment', () => {
@@ -1179,7 +1177,7 @@ describe('generateTypeDefinition', () => {
 
     expect(result).toContain('/**')
     expect(result).toContain('A list of parameters applicable to the operation.')
-    expect(result).toContain('export type Parameters = ParameterObject[];')
+    expect(result).toContain('export type Parameters = Parameter[];')
   })
 
   it('generates unknown for external $ref', () => {
@@ -1188,9 +1186,9 @@ describe('generateTypeDefinition', () => {
       $ref: 'http://json-schema.org/draft-04/schema#/properties/maximum',
     }
 
-    const result = generateTypeDefinition(schema, 'MaximumObject')
+    const result = generateTypeDefinition(schema, 'Maximum')
 
-    expect(result).toBe('export type MaximumObject = unknown;')
+    expect(result).toBe('export type Maximum = unknown;')
   })
 
   it('does not emit a trailing blank line in JSDoc when there is no @see link', () => {
@@ -1202,7 +1200,7 @@ describe('generateTypeDefinition', () => {
       },
     }
 
-    const result = generateTypeDefinition(schema, 'PlainCommentObject')
+    const result = generateTypeDefinition(schema, 'PlainComment')
 
     expect(result).toMatch(/\* A plain-text description with no URL\.\n\*\//)
     expect(result).not.toContain('* \n*/')
@@ -1312,6 +1310,27 @@ describe('generateTypeDefinition', () => {
       const result = generateTypeDefinition(schema, 'Doc')
       expect(result).not.toContain('readonly')
       expect(result).toContain('id: string;')
+    })
+  })
+
+  describe('typeSuffix', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: {
+        contact: { $ref: '#/$defs/contact' },
+      },
+      required: ['contact'],
+    }
+
+    it('appends the suffix to ref-derived type names', () => {
+      const result = generateTypeDefinition(schema, 'Document', { typeSuffix: 'Object' })
+      expect(result).toContain('contact: ContactObject;')
+    })
+
+    it('emits no suffix by default', () => {
+      const result = generateTypeDefinition(schema, 'Document')
+      expect(result).toContain('contact: Contact;')
+      expect(result).not.toContain('ContactObject')
     })
   })
 })

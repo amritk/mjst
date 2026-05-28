@@ -135,7 +135,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Document')
 
-    expect(code).toContain('validateInfoObject(')
+    expect(code).toContain('validateInfo(')
     expect(code).toContain('"info" in obj')
   })
 

@@ -61,7 +61,7 @@ const wrongTypeCondition = (accessor: string, type: string): string => {
  * Generates validation lines for a single property in an object schema.
  * Handles $ref delegation, enum checks, type checks, and string/number constraints.
  */
-const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired: boolean): string[] => {
+const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired: boolean, suffix: string): string[] => {
   if (!isSchemaObject(propSchema)) return []
 
   const raw = `obj[${JSON.stringify(key)}]`
@@ -71,7 +71,7 @@ const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired:
   // $ref — delegate to the imported validator
   if (hasRef(propSchema)) {
     const ref = propSchema.$ref
-    const vName = validatorName(refToName(ref))
+    const vName = validatorName(refToName(ref, suffix))
 
     if (isRequired) {
       lines.push(`  if (!(${JSON.stringify(key)} in obj)) {`)
@@ -218,7 +218,7 @@ const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired:
     if (t === 'array' && hasItems(propSchema)) {
       const itemSchema = propSchema.items
       if (hasRef(itemSchema)) {
-        const vName = validatorName(refToName(itemSchema.$ref))
+        const vName = validatorName(refToName(itemSchema.$ref, suffix))
         lines.push(`  if (Array.isArray(${raw})) {`)
         lines.push(`    for (let _i = 0; _i < ${raw}.length; _i++) {`)
         lines.push(`      const _ir = ${vName}(${raw}[_i], \`${path.slice(1, -1)}/${key}/\${_i}\`)`)
@@ -250,7 +250,7 @@ const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired:
  * Generates a validator function body for an object schema, checking each
  * property's presence and type and collecting all errors.
  */
-const generateObjectValidator = (schema: JSONSchema, typeName: string): string => {
+const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: string): string => {
   const vName = validatorName(typeName)
   const required = new Set(hasRequired(schema) ? schema.required : [])
   const properties = hasProperties(schema) ? schema.properties : {}
@@ -258,7 +258,7 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string): string =
   const propertyLines: string[] = []
 
   for (const [key, propSchema] of Object.entries(properties)) {
-    const checks = generatePropertyChecks(key, propSchema as JSONSchema, required.has(key))
+    const checks = generatePropertyChecks(key, propSchema as JSONSchema, required.has(key), suffix)
     if (checks.length > 0) {
       propertyLines.push(...checks)
     }
@@ -270,7 +270,7 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string): string =
     isSchemaObject(schema.additionalProperties) &&
     hasRef(schema.additionalProperties)
   ) {
-    const vRefName = validatorName(refToName(schema.additionalProperties.$ref))
+    const vRefName = validatorName(refToName(schema.additionalProperties.$ref, suffix))
     propertyLines.push(`  for (const _key of Object.keys(obj)) {`)
     propertyLines.push(`    if (${JSON.stringify(Object.keys(properties))}.includes(_key)) continue`)
     propertyLines.push(`    const _r = ${vRefName}(obj[_key as keyof typeof obj], \`\${_path}/\${_key}\`)`)
@@ -297,7 +297,7 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string): string =
 /**
  * Generates a validator function for a non-object schema (primitive, array, enum, $ref).
  */
-const generateScalarValidator = (schema: JSONSchema, typeName: string): string => {
+const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: string): string => {
   const vName = validatorName(typeName)
 
   if (!isSchemaObject(schema)) {
@@ -308,7 +308,7 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string): string =
 
   // Top-level $ref — delegate entirely
   if (hasRef(schema)) {
-    const delegateName = validatorName(refToName(schema.$ref))
+    const delegateName = validatorName(refToName(schema.$ref, suffix))
     return [
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
       `  return ${delegateName}(input, _path)`,
@@ -361,7 +361,7 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string): string =
     const branches = schema.oneOf
       .map((branch, i) => {
         if (!hasRef(branch)) return null
-        const bName = validatorName(refToName((branch as { $ref: string }).$ref))
+        const bName = validatorName(refToName((branch as { $ref: string }).$ref, suffix))
         return `  const _r${i} = ${bName}(input, _path)\n  if (_r${i} === true) return true`
       })
       .filter(Boolean)
@@ -463,10 +463,10 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string): string =
  * // }
  * ```
  */
-export const generateValidatorFunction = (schema: JSONSchema, typeName: string): string => {
+export const generateValidatorFunction = (schema: JSONSchema, typeName: string, suffix = ''): string => {
   if (isObjectSchema(schema)) {
-    return generateObjectValidator(schema, typeName)
+    return generateObjectValidator(schema, typeName, suffix)
   }
 
-  return generateScalarValidator(schema, typeName)
+  return generateScalarValidator(schema, typeName, suffix)
 }

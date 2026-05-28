@@ -13,9 +13,7 @@ describe('generate-files', () => {
 
     const { content: result } = generateFile(schema, 'Document')
 
-    expect(result).toContain(
-      "import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';",
-    )
+    expect(result).toContain("import { type Contact, parseContact, validateContactShape } from './contact';")
   })
 
   it('calls imported parser for optional $ref property', () => {
@@ -29,7 +27,7 @@ describe('generate-files', () => {
     const { content: result } = generateFile(schema, 'Document')
 
     // With local variable caching, optional $ref properties use the cached variable
-    expect(result).toContain('_contact !== undefined && { contact: parseContactObject(_contact) }')
+    expect(result).toContain('_contact !== undefined && { contact: parseContact(_contact) }')
   })
 
   it('calls imported parser for required $ref property', () => {
@@ -44,7 +42,7 @@ describe('generate-files', () => {
     const { content: result } = generateFile(schema, 'Document')
 
     // With local variable caching, required $ref properties use the cached variable
-    expect(result).toContain('contact: parseContactObject(_contact),')
+    expect(result).toContain('contact: parseContact(_contact),')
   })
 
   it('generates combined imports for multiple $ref properties', () => {
@@ -58,12 +56,8 @@ describe('generate-files', () => {
 
     const { content: result } = generateFile(schema, 'Document')
 
-    expect(result).toContain(
-      "import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';",
-    )
-    expect(result).toContain(
-      "import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';",
-    )
+    expect(result).toContain("import { type Contact, parseContact, validateContactShape } from './contact';")
+    expect(result).toContain("import { type Server, parseServer, validateServerShape } from './server';")
   })
 
   it('generates correct parser name for multi-word $ref', () => {
@@ -77,9 +71,9 @@ describe('generate-files', () => {
     const { content: result } = generateFile(schema, 'Document')
 
     expect(result).toContain(
-      "import { type ExternalDocumentationObject, parseExternalDocumentationObject, validateExternalDocumentationObjectShape } from './external-documentation';",
+      "import { type ExternalDocumentation, parseExternalDocumentation, validateExternalDocumentationShape } from './external-documentation';",
     )
-    expect(result).toContain('parseExternalDocumentationObject(_externalDoc)')
+    expect(result).toContain('parseExternalDocumentation(_externalDoc)')
   })
 
   it('does not generate ref imports when no $ref properties exist', () => {
@@ -113,7 +107,7 @@ describe('generate-files', () => {
     // Non-ref property should have inline validation against the cached local
     expect(result).toContain('typeof _name === "string"')
     // Ref property should call imported parser using cached variable
-    expect(result).toContain('parseContactObject(_contact)')
+    expect(result).toContain('parseContact(_contact)')
   })
 
   it('generates a correct import for -or-reference style $ref names', () => {
@@ -128,9 +122,9 @@ describe('generate-files', () => {
     const { content: result } = generateFile(schema, 'Document')
 
     expect(result).toContain(
-      "import { type CallbacksOrReferenceObject, parseCallbacksOrReferenceObject, validateCallbacksOrReferenceObjectShape } from './callbacks-or-reference';",
+      "import { type CallbacksOrReference, parseCallbacksOrReference, validateCallbacksOrReferenceShape } from './callbacks-or-reference';",
     )
-    expect(result).toContain('parseCallbacksOrReferenceObject(_callbacks)')
+    expect(result).toContain('parseCallbacksOrReference(_callbacks)')
   })
 
   it('generates arrow function parser', () => {
@@ -160,11 +154,9 @@ describe('generate-files', () => {
 
     const { content: result } = generateFile(schema, 'Document')
 
-    expect(result).toContain(
-      "import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';",
-    )
+    expect(result).toContain("import { type Server, parseServer, validateServerShape } from './server';")
     // With local variable caching, array validators use the cached variable
-    expect(result).toContain('validateArray(_servers, parseServerObject)')
+    expect(result).toContain('validateArray(_servers, parseServer)')
   })
 
   it('maps array items through imported parser for required array with $ref items', () => {
@@ -182,14 +174,12 @@ describe('generate-files', () => {
     const { content: result } = generateFile(schema, 'Document')
 
     // Check for required imports
-    expect(result).toContain(
-      "import { type ServerObject, parseServerObject, validateServerObjectShape } from './server';",
-    )
+    expect(result).toContain("import { type Server, parseServer, validateServerShape } from './server';")
     expect(result).toContain("import { validateArray } from '@amritk/helpers/validate-array';")
     expect(result).toContain("import { isObject } from '@amritk/helpers/is-object';")
 
     // Check for required array validation using cached variable
-    expect(result).toContain('servers: validateArray(_servers, parseServerObject),')
+    expect(result).toContain('servers: validateArray(_servers, parseServer),')
 
     // Should not use spread operator for required fields
     expect(result).not.toContain('...(_servers')
@@ -261,8 +251,8 @@ describe('generate-files', () => {
 
     const { content: result } = generateFile(schema, 'Document', { typesOnly: true })
 
-    expect(result).toContain("import type { ContactObject } from './contact';")
-    expect(result).not.toContain('parseContactObject')
+    expect(result).toContain("import type { Contact } from './contact';")
+    expect(result).not.toContain('parseContact')
   })
 
   it('does not include runtime helper imports in types-only mode', () => {
@@ -311,8 +301,8 @@ describe('generate-files', () => {
 
     const { content: result } = generateFile(schema, 'Document', { typesOnly: true })
 
-    expect(result).toContain("import type { ServerObject } from './server';")
-    expect(result).not.toContain('parseServerObject')
+    expect(result).toContain("import type { Server } from './server';")
+    expect(result).not.toContain('parseServer')
     expect(result).not.toContain('validateArray')
   })
 
@@ -324,8 +314,8 @@ describe('generate-files', () => {
 
     const { content: result } = generateFile(schema, 'Paths', { typesOnly: true })
 
-    expect(result).toContain("import type { PathItemObject } from './path-item';")
-    expect(result).not.toContain('parsePathItemObject')
+    expect(result).toContain("import type { PathItem } from './path-item';")
+    expect(result).not.toContain('parsePathItem')
     expect(result).not.toContain('validateRecord')
   })
 
@@ -336,10 +326,10 @@ describe('generate-files', () => {
 
     const { content: result } = generateFile(schema, 'Pet', { typesOnly: true })
 
-    expect(result).toContain("import type { CatObject } from './cat';")
-    expect(result).toContain("import type { DogObject } from './dog';")
-    expect(result).not.toContain('parseCatObject')
-    expect(result).not.toContain('parseDogObject')
+    expect(result).toContain("import type { Cat } from './cat';")
+    expect(result).toContain("import type { Dog } from './dog';")
+    expect(result).not.toContain('parseCat')
+    expect(result).not.toContain('parseDog')
   })
 
   it('generates type-only imports for anyOf $ref variants in types-only mode', () => {
@@ -354,10 +344,10 @@ describe('generate-files', () => {
 
     const { content: result } = generateFile(schema, 'Wrapper', { typesOnly: true })
 
-    expect(result).toContain("import type { StringValueObject } from './string-value';")
-    expect(result).toContain("import type { NumberValueObject } from './number-value';")
-    expect(result).not.toContain('parseStringValueObject')
-    expect(result).not.toContain('parseNumberValueObject')
+    expect(result).toContain("import type { StringValue } from './string-value';")
+    expect(result).toContain("import type { NumberValue } from './number-value';")
+    expect(result).not.toContain('parseStringValue')
+    expect(result).not.toContain('parseNumberValue')
   })
 
   it('does not change default behavior when typesOnly is false', () => {
@@ -372,16 +362,14 @@ describe('generate-files', () => {
     const { content: explicitFalseResult } = generateFile(schema, 'Document', { typesOnly: false })
 
     expect(defaultResult).toBe(explicitFalseResult)
-    expect(defaultResult).toContain(
-      "import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';",
-    )
+    expect(defaultResult).toContain("import { type Contact, parseContact, validateContactShape } from './contact';")
     expect(defaultResult).toContain('export const parseDocument')
   })
 
   it('does not generate a self-import for recursive schemas in types-only mode', () => {
-    // Mirrors the 3.2.0 encoding schema: EncodingObject has properties itemEncoding, prefixEncoding,
+    // Mirrors the 3.2.0 encoding schema: Encoding has properties itemEncoding, prefixEncoding,
     // and encoding that all $ref back to #/$defs/encoding. The generated encoding.ts must not
-    // import EncodingObject from itself.
+    // import Encoding from itself.
     const schema = {
       type: 'object',
       properties: {
@@ -401,14 +389,14 @@ describe('generate-files', () => {
       },
     }
 
-    const { content: result } = generateFile(schema, 'EncodingObject', {
+    const { content: result } = generateFile(schema, 'Encoding', {
       typesOnly: true,
       selfRef: '#/$defs/encoding',
     })
 
-    expect(result).not.toContain("import type { EncodingObject } from './encoding';")
-    expect(result).toContain("import type { HeaderOrReferenceObject } from './header-or-reference';")
-    expect(result).toContain('export type EncodingObject')
+    expect(result).not.toContain("import type { Encoding } from './encoding';")
+    expect(result).toContain("import type { HeaderOrReference } from './header-or-reference';")
+    expect(result).toContain('export type Encoding')
   })
 
   it('does not generate a self-import for recursive schemas in full parser mode', () => {
@@ -423,13 +411,38 @@ describe('generate-files', () => {
       },
     }
 
-    const { content: result } = generateFile(schema, 'EncodingObject', { selfRef: '#/$defs/encoding' })
+    const { content: result } = generateFile(schema, 'Encoding', { selfRef: '#/$defs/encoding' })
 
-    expect(result).not.toContain(
-      "import { type EncodingObject, parseEncodingObject, validateEncodingObjectShape } from './encoding';",
-    )
+    expect(result).not.toContain("import { type Encoding, parseEncoding, validateEncodingShape } from './encoding';")
     expect(result).toContain(
-      "import { type HeaderOrReferenceObject, parseHeaderOrReferenceObject, validateHeaderOrReferenceObjectShape } from './header-or-reference';",
+      "import { type HeaderOrReference, parseHeaderOrReference, validateHeaderOrReferenceShape } from './header-or-reference';",
     )
+  })
+
+  describe('typeSuffix', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        contact: { $ref: '#/$defs/contact' },
+      },
+      required: ['contact'],
+    }
+
+    it('appends the suffix to ref-derived type, parser, and import names', () => {
+      const { content: result } = generateFile(schema, 'Document', { typeSuffix: 'Object' })
+
+      expect(result).toContain(
+        "import { type ContactObject, parseContactObject, validateContactObjectShape } from './contact';",
+      )
+      expect(result).toContain('contact: ContactObject;')
+      expect(result).toContain('contact: parseContactObject(_contact)')
+    })
+
+    it('emits no suffix by default', () => {
+      const { content: result } = generateFile(schema, 'Document')
+
+      expect(result).toContain("import { type Contact, parseContact, validateContactShape } from './contact';")
+      expect(result).not.toContain('ContactObject')
+    })
   })
 })

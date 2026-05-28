@@ -93,11 +93,18 @@
       "x-icon": "🧰",
       "description": "Controls how generated parsers reference their runtime helpers. 'package' emits imports from @amritk/helpers (requires it to be installed in the consumer project). 'embedded' ships the helper source under outDir/_helpers/ so the output is self-contained. When omitted, the CLI auto-detects: it picks 'package' if @amritk/helpers resolves from outDir, otherwise 'embedded'."
     },
+    "typeSuffix": {
+      "type": "string",
+      "x-cli-flag": "--type-suffix <suffix>",
+      "x-icon": "🏷️",
+      "default": "",
+      "description": "Suffix appended to every generated type name derived from a $ref (e.g. 'Object' turns Contact into ContactObject). Defaults to no suffix. The root type name is used verbatim and is unaffected."
+    },
     "config": {
       "type": "string",
       "x-cli-flag": "--config <path>",
       "x-icon": "⚙️",
-      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, outFile, typesOnly, build, logWarnings, strict, readonly, helpers). CLI flags take precedence over config file values.",
+      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, outFile, typesOnly, build, logWarnings, strict, readonly, helpers, typeSuffix). CLI flags take precedence over config file values.",
       "examples": ["./mjst.config.json"]
     }
   },

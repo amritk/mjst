@@ -147,6 +147,7 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
     helpersMode,
     undefined,
     config.readonly,
+    config.typeSuffix,
   )
 
   for (const file of files) {
@@ -188,6 +189,7 @@ const runSingleFile = async (config: Partial<CliConfig>, schemaPath: string, out
     config.helpers ?? 'package',
     undefined,
     config.readonly,
+    config.typeSuffix,
   )
 
   await writeFile(outFilePath, combineGeneratedFiles(files), 'utf-8')
@@ -252,6 +254,7 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
       helpersMode,
       helpersImportPrefix,
       config.readonly,
+      config.typeSuffix,
     )
 
     for (const file of files) {
