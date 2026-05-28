@@ -876,6 +876,39 @@ describe('generateTypeDefinition', () => {
     expect(result).toContain('} & TypeApikey & TypeHttp;')
   })
 
+  it('preserves property descriptions as JSDoc comments when allOf contains an inline object schema', () => {
+    const schema: JSONSchema = {
+      allOf: [
+        { $ref: '#/$defs/baseTargetConfig' },
+        {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            packageName: {
+              type: 'string',
+              description: 'Import/package name for TypeScript and Node packages.',
+            },
+            packageManager: {
+              type: 'string',
+              description: 'TypeScript package manager preference for generated package metadata.',
+            },
+            publish: {
+              $ref: '#/$defs/npmPublishConfig',
+              description: 'npm publishing configuration.',
+            },
+          },
+          required: ['publish'],
+        },
+      ],
+    }
+
+    const result = generateTypeDefinition(schema, 'TypeScriptTargetConfig')
+
+    expect(result).toContain('/** Import/package name for TypeScript and Node packages. */')
+    expect(result).toContain('/** TypeScript package manager preference for generated package metadata. */')
+    expect(result).toContain('/** npm publishing configuration. */')
+  })
+
   it('generates record type for patternProperties-only schema without explicit type', () => {
     const schema: JSONSchema = {
       patternProperties: {
