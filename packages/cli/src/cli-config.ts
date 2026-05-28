@@ -68,4 +68,10 @@ export type CliConfig = {
    * definitions is emitted as `readonly`, producing deeply immutable types.
    */
   readonly readonly?: boolean
+  /**
+   * Suffix appended to every generated type name derived from a `$ref`
+   * (e.g. `'Object'` turns `Contact` into `ContactObject`). Defaults to `''`
+   * (no suffix). The root type name is used verbatim and is unaffected.
+   */
+  readonly typeSuffix?: string
 }

@@ -34,9 +34,9 @@ describe('build-schema', () => {
     expect(filenames).toContain('contact.ts')
     expect(filenames).toContain('schema.ts')
     const schemaFile = result.find((file) => file.filename === 'schema.ts')
-    // The generated schema.ts should declare SchemaObject and parseSchemaObject from the user's $defs/schema
-    expect(schemaFile?.content).toContain('export type SchemaObject')
-    expect(schemaFile?.content).toContain('parseSchemaObject')
+    // The generated schema.ts should declare Schema and parseSchema from the user's $defs/schema
+    expect(schemaFile?.content).toContain('export type Schema')
+    expect(schemaFile?.content).toContain('parseSchema')
   })
 
   it('applies extensions to matching definitions during build', async () => {
@@ -193,8 +193,8 @@ describe('build-schema', () => {
     const result = await buildSchema(schema, 'Document', undefined, true)
     const documentFile = result.find((file) => file.filename === 'document.ts')
 
-    expect(documentFile?.content).toContain("import type { ContactObject } from './contact';")
-    expect(documentFile?.content).not.toContain('parseContactObject')
+    expect(documentFile?.content).toContain("import type { Contact } from './contact';")
+    expect(documentFile?.content).not.toContain('parseContact')
   })
 
   it('still generates files for all $ref definitions in types-only mode', async () => {
@@ -246,8 +246,8 @@ describe('build-schema', () => {
     const result = await buildSchema(schema, 'Document', undefined, true)
     const contactFile = result.find((file) => file.filename === 'contact.ts')
 
-    expect(contactFile?.content).toContain('export type ContactObject')
-    expect(contactFile?.content).not.toContain('export const parseContactObject')
+    expect(contactFile?.content).toContain('export type Contact')
+    expect(contactFile?.content).not.toContain('export const parseContact')
   })
 
   it('applies extensions correctly in types-only mode', async () => {
@@ -273,7 +273,7 @@ describe('build-schema', () => {
     // Extension property should still appear in the type
     expect(parameterFile?.content).toContain("'x-enabled'")
     // But no parser should be generated
-    expect(parameterFile?.content).not.toContain('parseParameterObject')
+    expect(parameterFile?.content).not.toContain('parseParameter')
   })
 
   it('warns and skips when a $ref cannot be resolved', async () => {
@@ -322,7 +322,7 @@ describe('build-schema', () => {
     // Own property should be present in the object literal
     expect(documentFile?.content).toContain('name?:')
     // allOf ref generates an intersection type with the referenced type
-    expect(documentFile?.content).toContain('TaggableObject')
+    expect(documentFile?.content).toContain('Taggable')
     // The taggable definition should generate its own file
     const filenames = result.map((f) => f.filename)
     expect(filenames).toContain('taggable.ts')
@@ -356,11 +356,11 @@ describe('build-schema', () => {
     const documentFile = result.find((file) => file.filename === 'document.ts')
     const filenames = result.map((f) => f.filename)
 
-    // ExamplesObject IS imported since allOf generates an intersection type
-    expect(documentFile?.content).toContain('ExamplesObject')
+    // Examples IS imported since allOf generates an intersection type
+    expect(documentFile?.content).toContain('Examples')
     // The examples definition generates its own file
     expect(filenames).toContain('examples.ts')
-    // ExampleItemObject is also resolved from additionalProperties
+    // ExampleItem is also resolved from additionalProperties
     expect(filenames).toContain('example-item.ts')
   })
 
@@ -435,7 +435,7 @@ describe('build-schema', () => {
     const filenames = result.map((f) => f.filename)
 
     // specification-extensions is now treated like any other allOf ref
-    expect(documentFile?.content).toContain('SpecificationExtensionsObject')
+    expect(documentFile?.content).toContain('SpecificationExtensions')
     // The specification-extensions definition generates its own file
     expect(filenames).toContain('specification-extensions.ts')
     // x-custom property is NOT inlined into document.ts — it's in specification-extensions.ts
@@ -546,7 +546,7 @@ describe('build-schema', () => {
     // Both files are generated independently — they map to different filenames now
     expect(filenames).toContain('parameter.ts')
     expect(filenames).toContain('parameter-or-reference.ts')
-    // The parameter.ts should contain the real ParameterObject type
+    // The parameter.ts should contain the real Parameter type
     const parameterFile = result.find((f) => f.filename === 'parameter.ts')
     expect(parameterFile?.content).toContain('name')
     expect(parameterFile?.content).toContain('in')
@@ -572,7 +572,7 @@ describe('build-schema', () => {
     expect(indexFile).toBeDefined()
     // Named type + parser + shape-validator exports for each file
     expect(indexFile?.content).toContain(
-      "export { type ContactObject, validateContactObjectShape, parseContactObject } from './contact';",
+      "export { type Contact, validateContactShape, parseContact } from './contact';",
     )
     expect(indexFile?.content).toContain(
       "export { type Document, validateDocumentShape, parseDocument } from './document';",
@@ -601,9 +601,9 @@ describe('build-schema', () => {
 
     expect(indexFile).toBeDefined()
     // Types-only: export type { ... } syntax, no parsers
-    expect(indexFile?.content).toContain("export type { ContactObject } from './contact';")
+    expect(indexFile?.content).toContain("export type { Contact } from './contact';")
     expect(indexFile?.content).toContain("export type { Document } from './document';")
-    expect(indexFile?.content).not.toContain('parseContactObject')
+    expect(indexFile?.content).not.toContain('parseContact')
     expect(indexFile?.content).not.toContain('parseDocument')
     // No wildcard exports
     expect(indexFile?.content).not.toContain('export *')

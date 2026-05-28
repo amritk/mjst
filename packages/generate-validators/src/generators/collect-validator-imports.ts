@@ -18,15 +18,20 @@ type CollectValidatorImportsOptions = {
    * are excluded from the import list (they were never generated as files).
    */
   readonly rootSchema?: Record<string, unknown> | undefined
+  /**
+   * Suffix appended to every type/validator name derived from a `$ref`. Must
+   * match the suffix used when generating the referenced files. Defaults to `''`.
+   */
+  readonly typeSuffix?: string
 }
 
 /**
  * Generates an import statement for a single $ref, importing both the type
  * and the validator function from the ref's generated file.
  */
-const buildImport = (ref: string): string => {
+const buildImport = (ref: string, suffix: string): string => {
   const filename = refToFilename(ref)
-  const typeName = refToName(ref)
+  const typeName = refToName(ref, suffix)
   const validatorName = `validate${typeName}`
   return `import { type ${typeName}, ${validatorName} } from './${filename}'`
 }
@@ -94,12 +99,13 @@ const collectDirectRefs = (schema: JSONSchema): string[] => {
  * ```typescript
  * const schema = { properties: { contact: { $ref: '#/$defs/contact' } } }
  * collectValidatorImports(schema)
- * // ["import { type ContactObject, validateContactObject } from './contact-object'"]
+ * // ["import { type Contact, validateContact } from './contact'"]
  * ```
  */
 export const collectValidatorImports = (schema: JSONSchema, options?: CollectValidatorImportsOptions): string[] => {
   const selfFilename = options?.selfRef ? refToFilename(options.selfRef) : null
   const rootSchema = options?.rootSchema
+  const typeSuffix = options?.typeSuffix ?? ''
 
   const refs = collectDirectRefs(schema)
   const seen = new Set<string>()
@@ -121,7 +127,7 @@ export const collectValidatorImports = (schema: JSONSchema, options?: CollectVal
 
     // -or-reference unions import the base type's validator
     const importRef = ref.endsWith('-or-reference') ? ref.replace('-or-reference', '') : ref
-    imports.push(buildImport(importRef))
+    imports.push(buildImport(importRef, typeSuffix))
   }
 
   return imports

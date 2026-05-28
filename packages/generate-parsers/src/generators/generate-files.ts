@@ -59,6 +59,11 @@ type GenerateFileOptions = {
    * definitions is emitted as `readonly`.
    */
   readonly readonly?: boolean
+  /**
+   * Suffix appended to every type/parser name derived from a `$ref`.
+   * Defaults to `''` (no suffix). Set to e.g. `'Object'` to emit `ContactObject`.
+   */
+  readonly typeSuffix?: string
 }
 
 /** Result of generating a single parser file. */
@@ -105,11 +110,12 @@ export const generateFile = (
   const selfRef = options?.selfRef
   const rootSchema = options?.rootSchema
   const helpersMode: HelpersMode = options?.helpersMode ?? 'package'
-  const typeDefinition = generateTypeDefinition(schema, typeName, { readonly: options?.readonly ?? false })
+  const typeSuffix = options?.typeSuffix ?? ''
+  const typeDefinition = generateTypeDefinition(schema, typeName, { readonly: options?.readonly ?? false, typeSuffix })
 
   if (typesOnly) {
     // In types-only mode, skip the parser function and use type-only imports
-    const imports = collectImports(schema, { typesOnly: true, selfRef, rootSchema })
+    const imports = collectImports(schema, { typesOnly: true, selfRef, rootSchema, typeSuffix })
     let result = ''
 
     if (imports.length > 0) {
@@ -125,13 +131,14 @@ export const generateFile = (
 
   const parserFunction = generateParserFunction(schema, typeName, {
     useRefImports: true,
+    typeSuffix,
     ...(options?.logWarnings !== undefined ? { logWarnings: options.logWarnings } : {}),
     ...(options?.strict !== undefined ? { strict: options.strict } : {}),
   })
-  const shapeValidator = generateShapeValidator(schema, typeName, true)
+  const shapeValidator = generateShapeValidator(schema, typeName, true, typeSuffix)
   const combinedFunctions = `${shapeValidator}\n\n${parserFunction}`
   const helpers: CollectedHelpers = collectHelpers(combinedFunctions, helpersMode, options?.helpersImportPrefix)
-  const imports = [...collectImports(schema, { selfRef, rootSchema }), ...helpers.imports]
+  const imports = [...collectImports(schema, { selfRef, rootSchema, typeSuffix }), ...helpers.imports]
 
   // Build file output using string concatenation instead of array join for performance
   let result = ''

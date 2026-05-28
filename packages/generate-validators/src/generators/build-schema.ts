@@ -55,7 +55,11 @@ export type ValidationResult = true | { valid: false; errors: ValidationError[] 
  * // files → [{ filename: 'document.ts', content: '...' }, { filename: 'info.ts', ... }, ...]
  * ```
  */
-export const buildValidatorSchema = async (rootSchema: JSONSchema, rootTypeName: string): Promise<GeneratedFile[]> => {
+export const buildValidatorSchema = async (
+  rootSchema: JSONSchema,
+  rootTypeName: string,
+  typeSuffix = '',
+): Promise<GeneratedFile[]> => {
   rootSchema = upgradeDraft07Schema(rootSchema as Record<string, unknown>) as JSONSchema
 
   const files: GeneratedFile[] = []
@@ -69,6 +73,7 @@ export const buildValidatorSchema = async (rootSchema: JSONSchema, rootTypeName:
   const processedRootSchema = resolveDynamicRefs(rootSchema, dynamicRefMap)
   const rootContent = generateValidatorFile(processedRootSchema, rootTypeName, {
     rootSchema: rootSchema as Record<string, unknown>,
+    typeSuffix,
   })
   const rootFilename = rootTypeName.toLowerCase()
 
@@ -91,12 +96,13 @@ export const buildValidatorSchema = async (rootSchema: JSONSchema, rootTypeName:
       continue
     }
 
-    const typeName = refToName(ref)
+    const typeName = refToName(ref, typeSuffix)
     const filename = refToFilename(ref)
     const processedSchema = resolveDynamicRefs(resolvedSchema as JSONSchema, dynamicRefMap)
     const content = generateValidatorFile(processedSchema, typeName, {
       selfRef: ref,
       rootSchema: rootSchema as Record<string, unknown>,
+      typeSuffix,
     })
 
     if (filename !== 'validation-result' && !processedFilenames.has(filename)) {

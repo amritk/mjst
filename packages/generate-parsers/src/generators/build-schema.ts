@@ -96,6 +96,9 @@ const extractDynamicAnchorDefs = (schema: JSONSchema): string[] => {
  *   directory while the helper sources are emitted once at the output root.
  * @param readonly - When true, every property, array, and record in the generated type
  *   definitions is emitted as `readonly`.
+ * @param typeSuffix - Suffix appended to every type/parser name derived from a `$ref`
+ *   (e.g. `'Object'` → `ContactObject`). Defaults to `''` (no suffix). The root type name
+ *   is used verbatim and is not affected by this suffix.
  * @returns An array of generated TypeScript files
  *
  * @example
@@ -138,6 +141,7 @@ export const buildSchema = async (
   helpersMode: HelpersMode = 'package',
   helpersImportPrefix = './',
   readonly = false,
+  typeSuffix = '',
 ): Promise<GeneratedFile[]> => {
   // Upgrade draft-07 schemas to 2020-12 conventions before processing.
   // This renames `definitions` → `$defs` recursively so the rest of the
@@ -165,6 +169,7 @@ export const buildSchema = async (
     helpersMode,
     helpersImportPrefix,
     readonly,
+    typeSuffix,
     ...(logWarnings !== undefined ? { logWarnings } : {}),
     ...(strict !== undefined ? { strict } : {}),
   })
@@ -206,7 +211,7 @@ export const buildSchema = async (
 
     // Generate file for this ref, resolving any $dynamicRef to $ref first
     // and applying any matching extensions for this definition
-    const typeName = refToName(ref)
+    const typeName = refToName(ref, typeSuffix)
     const filename = refToFilename(ref)
     const processedSchema = resolveDynamicRefs(resolvedSchema as JSONSchema, dynamicRefMap)
     const extendedSchema = extensions ? applySchemaExtensions(processedSchema, filename, extensions) : processedSchema
@@ -217,6 +222,7 @@ export const buildSchema = async (
       helpersMode,
       helpersImportPrefix,
       readonly,
+      typeSuffix,
       ...(logWarnings !== undefined ? { logWarnings } : {}),
       ...(strict !== undefined ? { strict } : {}),
     })

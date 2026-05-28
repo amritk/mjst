@@ -53,6 +53,11 @@ type GenerateParserOptions = {
    * with a path-aware Error. Unknown extra keys are still allowed.
    */
   readonly strict?: boolean
+  /**
+   * Suffix appended to every type/parser name derived from a `$ref`. Must match
+   * the suffix used when generating the referenced files. Defaults to `''`.
+   */
+  readonly typeSuffix?: string
 }
 
 /**
@@ -87,60 +92,60 @@ const isPropertyRequired = (key: string, schema: JSONSchema): boolean => {
 
 /**
  * Generates a parser call expression for a required $ref property.
- * Example: parseContactObject(input.contact)
+ * Example: parseContact(input.contact)
  */
-const generateRequiredRefCall = (key: string, ref: string): string => {
+const generateRequiredRefCall = (key: string, ref: string, suffix: string): string => {
   const acc = safeAccessor('input', key)
-  const parserName = generateParserName(refToName(ref))
+  const parserName = generateParserName(refToName(ref, suffix))
   return `${parserName}(${acc})`
 }
 
 /**
  * Generates a parser call expression for an optional $ref property.
- * Example: ...(input.contact && { contact: parseContactObject(input.contact) })
+ * Example: ...(input.contact && { contact: parseContact(input.contact) })
  */
-const generateOptionalRefCall = (key: string, ref: string): string => {
+const generateOptionalRefCall = (key: string, ref: string, suffix: string): string => {
   const acc = safeAccessor('input', key)
-  const parserName = generateParserName(refToName(ref))
+  const parserName = generateParserName(refToName(ref, suffix))
   return `...(${acc} && { ${safeKey(key)}: ${parserName}(${acc}) })`
 }
 
 /**
  * Generates a validateArray call for required array properties with $ref items.
- * Example: validateArray(input.contacts, parseContactObject)
+ * Example: validateArray(input.contacts, parseContact)
  */
-const generateRequiredArrayRefCall = (key: string, ref: string): string => {
-  const parserName = generateParserName(refToName(ref))
+const generateRequiredArrayRefCall = (key: string, ref: string, suffix: string): string => {
+  const parserName = generateParserName(refToName(ref, suffix))
   return `validateArray(${safeAccessor('input', key)}, ${parserName})`
 }
 
 /**
  * Generates a validateArray call for optional array properties with $ref items.
- * Example: ...(input.contacts && { contacts: validateArray(input.contacts, parseContactObject) })
+ * Example: ...(input.contacts && { contacts: validateArray(input.contacts, parseContact) })
  */
-const generateOptionalArrayRefCall = (key: string, ref: string): string => {
-  const parserName = generateParserName(refToName(ref))
+const generateOptionalArrayRefCall = (key: string, ref: string, suffix: string): string => {
+  const parserName = generateParserName(refToName(ref, suffix))
   const acc = safeAccessor('input', key)
   return `...(${acc} && { ${safeKey(key)}: validateArray(${acc}, ${parserName}) })`
 }
 
 /**
  * Generates a validateRecord call for required object properties with additionalProperties $ref.
- * Example: validateRecord(input.responses, parseResponseObject)
+ * Example: validateRecord(input.responses, parseResponse)
  */
-const generateRequiredRecordRefCall = (key: string, ref: string): string => {
+const generateRequiredRecordRefCall = (key: string, ref: string, suffix: string): string => {
   const acc = safeAccessor('input', key)
-  const parserName = generateParserName(refToName(ref))
+  const parserName = generateParserName(refToName(ref, suffix))
   return `validateRecord(${acc}, ${parserName})`
 }
 
 /**
  * Generates a validateRecord call for optional object properties with additionalProperties $ref.
- * Example: ...(input.responses && { responses: validateRecord(input.responses, parseResponseObject) })
+ * Example: ...(input.responses && { responses: validateRecord(input.responses, parseResponse) })
  */
-const generateOptionalRecordRefCall = (key: string, ref: string): string => {
+const generateOptionalRecordRefCall = (key: string, ref: string, suffix: string): string => {
   const acc = safeAccessor('input', key)
-  const parserName = generateParserName(refToName(ref))
+  const parserName = generateParserName(refToName(ref, suffix))
   return `...(${acc} && { ${safeKey(key)}: validateRecord(${acc}, ${parserName}) })`
 }
 
@@ -214,25 +219,28 @@ const generatePropertyValue = (
   propSchema: JSONSchema,
   isRequired: boolean,
   useRefImports: boolean,
+  suffix: string,
 ): string => {
   // Handle direct $ref properties
   if (shouldUseRefImport(propSchema, useRefImports)) {
     const ref = (propSchema as { $ref: string }).$ref
-    return isRequired ? generateRequiredRefCall(key, ref) : generateOptionalRefCall(key, ref)
+    return isRequired ? generateRequiredRefCall(key, ref, suffix) : generateOptionalRefCall(key, ref, suffix)
   }
 
   // Handle array properties with $ref items
   if (shouldUseArrayRefImport(propSchema, useRefImports)) {
     const items = (propSchema as { items: { $ref: string } }).items
     const ref = items.$ref
-    return isRequired ? generateRequiredArrayRefCall(key, ref) : generateOptionalArrayRefCall(key, ref)
+    return isRequired ? generateRequiredArrayRefCall(key, ref, suffix) : generateOptionalArrayRefCall(key, ref, suffix)
   }
 
   // Handle object properties with additionalProperties $ref
   if (shouldUseRecordRefImport(propSchema, useRefImports)) {
     const additionalProps = (propSchema as { additionalProperties: { $ref: string } }).additionalProperties
     const ref = additionalProps.$ref
-    return isRequired ? generateRequiredRecordRefCall(key, ref) : generateOptionalRecordRefCall(key, ref)
+    return isRequired
+      ? generateRequiredRecordRefCall(key, ref, suffix)
+      : generateOptionalRecordRefCall(key, ref, suffix)
   }
 
   // Handle non-schema object properties (true/false)
@@ -249,7 +257,7 @@ const generatePropertyValue = (
 /**
  * Generates property entries for all properties in the schema.
  */
-const generatePropertyEntries = (schema: JSONSchema, useRefImports: boolean): PropertyEntry[] => {
+const generatePropertyEntries = (schema: JSONSchema, useRefImports: boolean, suffix: string): PropertyEntry[] => {
   if (!hasProperties(schema)) {
     return []
   }
@@ -258,7 +266,7 @@ const generatePropertyEntries = (schema: JSONSchema, useRefImports: boolean): Pr
 
   for (const [key, propSchema] of Object.entries(schema.properties)) {
     const isRequired = isPropertyRequired(key, schema)
-    const value = generatePropertyValue(key, propSchema, isRequired, useRefImports)
+    const value = generatePropertyValue(key, propSchema, isRequired, useRefImports, suffix)
 
     // Determine if the property uses spread syntax (making it optional in the object literal)
     const isOptional = value.startsWith('...')
@@ -274,11 +282,11 @@ const generatePropertyEntries = (schema: JSONSchema, useRefImports: boolean): Pr
  * This returns simple type-based defaults without pattern inference,
  * matching TypeBox's coercion behavior.
  */
-const generateFallbackValue = (_: string, propSchema: JSONSchema, useRefImports: boolean): string => {
+const generateFallbackValue = (_: string, propSchema: JSONSchema, useRefImports: boolean, suffix: string): string => {
   // Handle direct $ref properties - call the parser with undefined
   if (useRefImports && hasRef(propSchema)) {
     const ref = (propSchema as { $ref: string }).$ref
-    const parserName = generateParserName(refToName(ref))
+    const parserName = generateParserName(refToName(ref, suffix))
     return `${parserName}(undefined)`
   }
 
@@ -352,7 +360,12 @@ const generateFallbackValue = (_: string, propSchema: JSONSchema, useRefImports:
  * Generates a fallback object with required properties filled with default values.
  * This is used when input is not an object (undefined, null, etc.).
  */
-const generateFallbackObject = (schema: JSONSchema, useRefImports: boolean, typeName: string): string => {
+const generateFallbackObject = (
+  schema: JSONSchema,
+  useRefImports: boolean,
+  typeName: string,
+  suffix: string,
+): string => {
   if (!hasProperties(schema)) {
     return `{} as ${typeName}`
   }
@@ -369,7 +382,7 @@ const generateFallbackObject = (schema: JSONSchema, useRefImports: boolean, type
   for (const [key, propSchema] of Object.entries(schema.properties)) {
     const isRequired = isPropertyRequired(key, schema)
     if (isRequired) {
-      const fallbackValue = generateFallbackValue(key, propSchema, useRefImports)
+      const fallbackValue = generateFallbackValue(key, propSchema, useRefImports, suffix)
       if (fallbackValue === 'undefined') {
         return `{} as ${typeName}`
       }
@@ -467,12 +480,17 @@ const shapeValidatorName = (typeName: string): string => `validate${typeName}Sha
  * checked by calling the imported shape predicate, allowing parent parsers
  * to fast-path through nested ref types without recursing into their parsers.
  */
-const generatePropertyTypeCheck = (varName: string, schema: JSONSchema, useRefImports: boolean): string | null => {
+const generatePropertyTypeCheck = (
+  varName: string,
+  schema: JSONSchema,
+  useRefImports: boolean,
+  suffix: string,
+): string | null => {
   if (!isSchemaObject(schema)) return null
 
   // $ref via shape predicate (deep fast-path through nested types).
   if (useRefImports && hasRef(schema)) {
-    const refName = refToName((schema as { $ref: string }).$ref)
+    const refName = refToName((schema as { $ref: string }).$ref, suffix)
     return `${shapeValidatorName(refName)}(${varName})`
   }
 
@@ -498,7 +516,7 @@ const generatePropertyTypeCheck = (varName: string, schema: JSONSchema, useRefIm
     isSchemaObject(schema.items) &&
     hasRef(schema.items)
   ) {
-    const refName = refToName((schema.items as { $ref: string }).$ref)
+    const refName = refToName((schema.items as { $ref: string }).$ref, suffix)
     return `Array.isArray(${varName}) && ${varName}.every(${shapeValidatorName(refName)})`
   }
 
@@ -575,6 +593,7 @@ const generateObjectParser = (
   schema: JSONSchema,
   typeName: string,
   useRefImports: boolean,
+  suffix: string,
   logWarnings?: boolean,
   strict?: boolean,
 ): string => {
@@ -587,7 +606,7 @@ const generateObjectParser = (
     return `export const ${functionName} = (input: unknown): ${typeName} => isObject(input) ? input as ${typeName} : {} as ${typeName};`
   }
 
-  const fallbackObject = generateFallbackObject(schema, useRefImports, typeName)
+  const fallbackObject = generateFallbackObject(schema, useRefImports, typeName, suffix)
   const properties = Object.entries((schema as { properties: Record<string, JSONSchema> }).properties)
 
   const lines: string[] = []
@@ -631,7 +650,7 @@ const generateObjectParser = (
       if (shouldUseRecordRefImport(propSchema, useRefImports)) {
         canFastPath = false
       } else {
-        const check = generatePropertyTypeCheck(varName, propSchema, useRefImports)
+        const check = generatePropertyTypeCheck(varName, propSchema, useRefImports, suffix)
         if (check === null) {
           canFastPath = false
         } else {
@@ -681,7 +700,7 @@ const generateObjectParser = (
   if (useRefImports && isSchemaObject(schema) && hasAllOf(schema)) {
     for (const entry of schema.allOf) {
       if (isSchemaObject(entry) && hasRef(entry)) {
-        const parserName = generateParserName(refToName(entry.$ref))
+        const parserName = generateParserName(refToName(entry.$ref, suffix))
         objectLines.push(`    ...(${parserName}(input) as Record<string, unknown>),`)
       }
     }
@@ -694,7 +713,7 @@ const generateObjectParser = (
     // Handle direct $ref properties via imported parsers
     if (shouldUseRefImport(propSchema, useRefImports)) {
       const ref = (propSchema as { $ref: string }).$ref
-      const parserName = generateParserName(refToName(ref))
+      const parserName = generateParserName(refToName(ref, suffix))
       if (isRequired) {
         objectLines.push(`    ${safeKey(key)}: ${parserName}(${accessor}),`)
       } else {
@@ -707,7 +726,7 @@ const generateObjectParser = (
     if (shouldUseArrayRefImport(propSchema, useRefImports)) {
       const items = (propSchema as { items: { $ref: string } }).items
       const ref = items.$ref
-      const parserName = generateParserName(refToName(ref))
+      const parserName = generateParserName(refToName(ref, suffix))
       if (isRequired) {
         objectLines.push(`    ${safeKey(key)}: validateArray(${accessor}, ${parserName}),`)
       } else {
@@ -722,7 +741,7 @@ const generateObjectParser = (
     if (shouldUseRecordRefImport(propSchema, useRefImports)) {
       const additionalProps = (propSchema as { additionalProperties: { $ref: string } }).additionalProperties
       const ref = additionalProps.$ref
-      const parserName = generateParserName(refToName(ref))
+      const parserName = generateParserName(refToName(ref, suffix))
       if (isRequired) {
         objectLines.push(`    ${safeKey(key)}: validateRecord(${accessor}, ${parserName}),`)
       } else {
@@ -790,11 +809,12 @@ const generateCombinedObjectParser = (
   schema: JSONSchema,
   typeName: string,
   useRefImports: boolean,
+  suffix: string,
   logWarnings?: boolean,
   strict?: boolean,
 ): string => {
   const functionName = generateParserName(typeName)
-  const entries = generatePropertyEntries(schema, useRefImports)
+  const entries = generatePropertyEntries(schema, useRefImports, suffix)
 
   // Build the known property lines for the initial object
   const propertyLines = entries.map((entry) => {
@@ -806,7 +826,7 @@ const generateCombinedObjectParser = (
 
   // Find the first pattern with a $ref for parser delegation
   if (!isSchemaObject(schema) || !('patternProperties' in schema)) {
-    return generateObjectParser(schema, typeName, useRefImports, logWarnings, strict)
+    return generateObjectParser(schema, typeName, useRefImports, suffix, logWarnings, strict)
   }
 
   const patternProps = schema.patternProperties as Record<string, JSONSchema>
@@ -814,12 +834,12 @@ const generateCombinedObjectParser = (
   const refPattern = patterns.find(([, ps]) => isSchemaObject(ps) && hasRef(ps))
 
   if (!refPattern || !useRefImports) {
-    return generateObjectParser(schema, typeName, useRefImports, logWarnings, strict)
+    return generateObjectParser(schema, typeName, useRefImports, suffix, logWarnings, strict)
   }
 
   const [pattern, patternSchema] = refPattern
   const ref = (patternSchema as { $ref: string }).$ref
-  const parserName = generateParserName(refToName(ref))
+  const parserName = generateParserName(refToName(ref, suffix))
   const assignmentCode = `(result as Record<string, unknown>)[key] = ${parserName}(value);`
 
   const escapedPattern = escapeRegexPattern(pattern)
@@ -860,6 +880,7 @@ const generateAdditionalPropertiesParser = (
   schema: JSONSchema.Object,
   typeName: string,
   useRefImports: boolean,
+  suffix: string,
   strict?: boolean,
 ): string => {
   const functionName = generateParserName(typeName)
@@ -873,7 +894,7 @@ const generateAdditionalPropertiesParser = (
   // If additionalProperties is a $ref and useRefImports is true, generate a loop
   if (useRefImports && isSchemaObject(additionalProps) && hasRef(additionalProps)) {
     const ref = additionalProps.$ref
-    const parserName = generateParserName(refToName(ref))
+    const parserName = generateParserName(refToName(ref, suffix))
 
     if (strict) {
       return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);\n  return validateRecord(input, ${parserName}) as ${typeName};\n};`
@@ -943,6 +964,7 @@ const generatePatternPropertiesParser = (
   schema: JSONSchema.Object,
   typeName: string,
   useRefImports: boolean,
+  suffix: string,
   strict?: boolean,
 ): string => {
   const functionName = generateParserName(typeName)
@@ -965,7 +987,7 @@ const generatePatternPropertiesParser = (
   // Use imported parser when pattern schema points to a $ref.
   if (useRefImports && isSchemaObject(patternSchema) && hasRef(patternSchema)) {
     const ref = patternSchema.$ref
-    const parserName = generateParserName(refToName(ref))
+    const parserName = generateParserName(refToName(ref, suffix))
     patternAssignment = `(result as Record<string, unknown>)[key] = ${parserName}(value);`
   } else if (patternSchema === false) {
     // `false` means no values are allowed for matching keys.
@@ -1002,7 +1024,7 @@ ${notObjectBranch}
  * This always generates parser calls regardless of useRefImports setting,
  * because conditional logic requires delegating to the appropriate parser.
  */
-const generateConditionalParser = (schema: JSONSchema.Object, typeName: string): string => {
+const generateConditionalParser = (schema: JSONSchema.Object, typeName: string, suffix: string): string => {
   const functionName = generateParserName(typeName)
 
   // Extract the condition and branches
@@ -1020,7 +1042,7 @@ const generateConditionalParser = (schema: JSONSchema.Object, typeName: string):
     // regular object parser from the merged property set.
     const mergedSchema = getConditionalObjectSchema(schema)
     if (mergedSchema) {
-      return generateObjectParser(mergedSchema, typeName, false)
+      return generateObjectParser(mergedSchema, typeName, false, suffix)
     }
     return generateEmptyObjectParser(typeName)
   }
@@ -1037,7 +1059,7 @@ const generateConditionalParser = (schema: JSONSchema.Object, typeName: string):
     // Condition is not a $ref check — flatten into an object parser
     const mergedSchema = getConditionalObjectSchema(schema)
     if (mergedSchema) {
-      return generateObjectParser(mergedSchema, typeName, false)
+      return generateObjectParser(mergedSchema, typeName, false, suffix)
     }
     return generateEmptyObjectParser(typeName)
   }
@@ -1045,9 +1067,9 @@ const generateConditionalParser = (schema: JSONSchema.Object, typeName: string):
   const thenRef = thenSchema.$ref
   const elseRef = elseSchema.$ref
 
-  const thenParserName = generateParserName(refToName(thenRef))
-  const elseParserName = generateParserName(refToName(elseRef))
-  const thenTypeName = refToName(thenRef)
+  const thenParserName = generateParserName(refToName(thenRef, suffix))
+  const elseParserName = generateParserName(refToName(elseRef, suffix))
+  const thenTypeName = refToName(thenRef, suffix)
 
   return `export const ${functionName} = (input: unknown): ${typeName} | ${thenTypeName} =>
   hasRef(input) ? ${thenParserName}(input) : ${elseParserName}(input)
@@ -1149,9 +1171,11 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   const useRefImports = options?.useRefImports ?? false
   const logWarnings = options?.logWarnings ?? false
   const strict = options?.strict ?? false
+  const suffix = options?.typeSuffix ?? ''
 
-  // Special case for SchemaObject - it can be any JSON Schema
-  if (typeName === 'SchemaObject') {
+  // Special case for the self-referential JSON Schema meta-schema type (e.g.
+  // `Schema` / `SchemaObject`) - it can be any JSON Schema.
+  if (typeName === `Schema${suffix}`) {
     return generateSchemaObjectParser(typeName)
   }
 
@@ -1168,7 +1192,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   // This generates a parser that handles known properties and also iterates
   // pattern-matched keys (e.g. responses with "default" + "200", "4XX").
   if (hasProperties(schema) && isSchemaObject(schema) && 'patternProperties' in schema) {
-    return generateCombinedObjectParser(schema, typeName, useRefImports, logWarnings, strict)
+    return generateCombinedObjectParser(schema, typeName, useRefImports, suffix, logWarnings, strict)
   }
 
   // Handle schemas that have explicit properties — generate a full object parser.
@@ -1176,19 +1200,19 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   // properties AND conditional keywords use all declared properties rather than
   // only the if/then fragment.
   if (hasProperties(schema)) {
-    return generateObjectParser(schema, typeName, useRefImports, logWarnings, strict)
+    return generateObjectParser(schema, typeName, useRefImports, suffix, logWarnings, strict)
   }
 
   // Handle conditional schemas (if/then/else) for schemas without explicit properties.
   if (isSchemaObject(schema) && 'if' in schema && 'then' in schema && 'else' in schema) {
-    return generateConditionalParser(schema as JSONSchema.Object, typeName)
+    return generateConditionalParser(schema as JSONSchema.Object, typeName, suffix)
   }
 
   // Handle conditional schemas that only define if/then object fragments.
   // We flatten the fragments into a regular object parser.
   const conditionalObjectSchema = getConditionalObjectSchema(schema)
   if (conditionalObjectSchema) {
-    return generateObjectParser(conditionalObjectSchema, typeName, useRefImports, logWarnings, strict)
+    return generateObjectParser(conditionalObjectSchema, typeName, useRefImports, suffix, logWarnings, strict)
   }
 
   // Handle non-object schemas with type-appropriate validation (no properties, no conditionals)
@@ -1198,7 +1222,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
 
   // Handle schemas with patternProperties (but no properties)
   if ('patternProperties' in schema) {
-    return generatePatternPropertiesParser(schema as JSONSchema.Object, typeName, useRefImports, strict)
+    return generatePatternPropertiesParser(schema as JSONSchema.Object, typeName, useRefImports, suffix, strict)
   }
 
   // Handle schemas with additionalProperties as true or false (but no properties)
@@ -1211,7 +1235,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
     }
 
     // Otherwise, handle as a schema (could be a $ref or object schema)
-    return generateAdditionalPropertiesParser(schema as JSONSchema.Object, typeName, useRefImports, strict)
+    return generateAdditionalPropertiesParser(schema as JSONSchema.Object, typeName, useRefImports, suffix, strict)
   }
 
   // Handle empty object schemas
@@ -1259,7 +1283,12 @@ export const shapeValidatorFunctionName = (typeName: string): string => shapeVal
  * in additionalProperties). The stub is safe: parents calling it will fall
  * through to the slow path, matching the pre-deep-fast-path behavior.
  */
-export const generateShapeValidator = (schema: JSONSchema, typeName: string, useRefImports: boolean): string => {
+export const generateShapeValidator = (
+  schema: JSONSchema,
+  typeName: string,
+  useRefImports: boolean,
+  suffix = '',
+): string => {
   const fnName = shapeValidatorName(typeName)
   const stub = `export const ${fnName} = (_input: unknown): boolean => false;`
 
@@ -1291,7 +1320,7 @@ export const generateShapeValidator = (schema: JSONSchema, typeName: string, use
 
     const accessor = safeAccessor('input', key)
     const isRequired = isPropertyRequired(key, schema)
-    const check = generatePropertyTypeCheck(accessor, propSchema, useRefImports)
+    const check = generatePropertyTypeCheck(accessor, propSchema, useRefImports, suffix)
     if (check === null) {
       return stub
     }

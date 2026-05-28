@@ -18,6 +18,7 @@ type MutableConfig = {
   strict?: boolean
   readonly?: boolean
   helpers?: 'package' | 'embedded'
+  typeSuffix?: string
 }
 
 // Boolean flags toggle on by presence and accept `--flag=false` to opt out.
@@ -31,6 +32,7 @@ const VALUE_KEYS = new Set<keyof MutableConfig>([
   'input',
   'export',
   'helpers',
+  'typeSuffix',
 ])
 
 /** Normalizes a CLI flag name to its camelCase config key so both `--out-dir` and `--outDir` map to `outDir`. */
@@ -61,6 +63,9 @@ const assignValue = (config: MutableConfig, key: string, value: string): boolean
       return true
     case 'export':
       config.export = value
+      return true
+    case 'typeSuffix':
+      config.typeSuffix = value
       return true
     case 'input': {
       const parsed = parseInputValue(value)
