@@ -878,6 +878,40 @@ describe('generateTypeDefinition', () => {
     expect(result).toContain('} & TypeApikeyObject & TypeHttpObject;')
   })
 
+  // A top-level allOf combining a $ref with an inline object should still surface
+  // the descriptions on the inline properties (including description-bearing $ref
+  // properties) as JSDoc comments, just like non-allOf object properties do.
+  it('emits JSDoc descriptions for properties inside allOf sub-schemas', () => {
+    const schema: JSONSchema = {
+      allOf: [
+        { $ref: '#/$defs/baseTargetConfig' },
+        {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            packageName: { type: 'string', description: 'Import/package name for TypeScript and Node packages.' },
+            packageManager: {
+              type: 'string',
+              description: 'TypeScript package manager preference for generated package metadata.',
+            },
+            publish: { $ref: '#/$defs/npmPublishConfig', description: 'npm publishing configuration.' },
+          },
+          required: ['publish'],
+        },
+      ],
+    }
+
+    const result = generateTypeDefinition(schema, 'TypeScriptTargetConfigObject')
+
+    expect(result).toContain('/** Import/package name for TypeScript and Node packages. */')
+    expect(result).toContain('/** TypeScript package manager preference for generated package metadata. */')
+    expect(result).toContain('/** npm publishing configuration. */')
+    expect(result).toContain('packageName?: string')
+    expect(result).toContain('packageManager?: string')
+    expect(result).toContain('publish: NpmPublishConfigObject')
+    expect(result).toContain('BaseTargetConfigObject')
+  })
+
   it('generates record type for patternProperties-only schema without explicit type', () => {
     const schema: JSONSchema = {
       patternProperties: {

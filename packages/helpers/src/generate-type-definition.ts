@@ -346,6 +346,18 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string
           const optional = isRequired ? '' : '?'
           const propType = getTypeScriptType(propSchema, options)
           if (!first) properties += '; '
+          // Surface any property description (or $comment) as a JSDoc comment so it
+          // is preserved when this object is nested, for example inside an allOf
+          // sub-schema. A $ref carrying a sibling description lands here too.
+          const inlineDescription =
+            isSchemaObject(propSchema) && typeof propSchema.description === 'string'
+              ? propSchema.description
+              : isSchemaObject(propSchema) && typeof propSchema.$comment === 'string'
+                ? propSchema.$comment
+                : undefined
+          if (inlineDescription) {
+            properties += '/** ' + inlineDescription + ' */ '
+          }
           properties += readonlyPrefix + safeKey(key) + optional + ': ' + propType
           first = false
         }
