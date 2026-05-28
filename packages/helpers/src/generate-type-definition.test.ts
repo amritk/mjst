@@ -1270,4 +1270,48 @@ describe('generateTypeDefinition', () => {
     expect(result).not.toContain('doEvil')
     expect(result).toBe('export type Bad = string;')
   })
+
+  describe('readonly option', () => {
+    it('marks every property as readonly, deeply', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          tags: { type: 'array', items: { type: 'string' } },
+          nested: {
+            type: 'object',
+            properties: { value: { type: 'number' } },
+          },
+        },
+        required: ['id'],
+      }
+
+      const result = generateTypeDefinition(schema, 'Doc', { readonly: true })
+
+      expect(result).toContain('readonly id: string;')
+      expect(result).toContain('readonly tags?: readonly string[];')
+      expect(result).toContain('readonly nested?: { readonly value?: number }')
+    })
+
+    it('wraps record types in Readonly', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        additionalProperties: { type: 'number' },
+      }
+
+      expect(generateTypeDefinition(schema, 'Map', { readonly: true })).toContain('readonly [key: string]: number;')
+    })
+
+    it('leaves output unchanged when readonly is not set', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      }
+
+      const result = generateTypeDefinition(schema, 'Doc')
+      expect(result).not.toContain('readonly')
+      expect(result).toContain('id: string;')
+    })
+  })
 })

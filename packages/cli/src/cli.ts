@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process'
 import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { getAdapter } from '@amritk/adapters/get-adapter'
 import { buildSchema } from '@amritk/generate-parsers'
@@ -11,6 +11,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 const execFileAsync = promisify(execFile)
 
 import type { CliConfig } from './cli-config'
+import { combineGeneratedFiles } from './combine-files'
 import { detectHelpersMode } from './detect-helpers-mode'
 import { loadConfig } from './load-config'
 import { loadSchemaModule } from './load-schema-module'
@@ -75,7 +76,7 @@ const buildOutput = async (outputDir: string, tsFiles: readonly string[], typesO
         emitDeclarationOnly: typesOnly,
         skipLibCheck: true,
       },
-      include: ['./**/*.ts'],
+      include: tsFiles.map((file) => `./${file}`),
     },
     null,
     2,
@@ -139,6 +140,8 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
     config.logWarnings,
     config.strict,
     helpersMode,
+    undefined,
+    config.readonly,
   )
 
   for (const file of files) {
@@ -154,6 +157,41 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
     )
   } else {
     console.log(`\nTotal files generated: ${files.length}`)
+  }
+}
+
+/**
+ * Generates a single self-contained file from one schema, concatenating every
+ * generated definition (and dropping the cross-file imports that are no longer
+ * needed) into `outFilePath`. Currently used for types-only output.
+ */
+const runSingleFile = async (config: Partial<CliConfig>, schemaPath: string, outFilePath: string): Promise<void> => {
+  const schema = await loadSchema(config, schemaPath)
+  const outputDir = dirname(outFilePath)
+  await mkdir(outputDir, { recursive: true })
+
+  const rootTypeName = deriveRootTypeName(schema)
+  console.log(`Root type: ${rootTypeName}`)
+
+  const files = await buildSchema(
+    schema as JSONSchema,
+    rootTypeName,
+    undefined,
+    config.typesOnly,
+    config.logWarnings,
+    config.strict,
+    config.helpers ?? 'package',
+    undefined,
+    config.readonly,
+  )
+
+  await writeFile(outFilePath, combineGeneratedFiles(files), 'utf-8')
+  console.log(`Generated: ${relative(process.cwd(), outFilePath)}`)
+
+  if (config.build) {
+    await buildOutput(outputDir, [basename(outFilePath)], config.typesOnly)
+  } else {
+    console.log(`\nTotal files generated: 1`)
   }
 }
 
@@ -208,6 +246,7 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
       config.strict,
       helpersMode,
       helpersImportPrefix,
+      config.readonly,
     )
 
     for (const file of files) {
@@ -247,8 +286,34 @@ const run = async (): Promise<void> => {
   const cliConfig = parseCliArgs(args)
   const config = { ...fileConfig, ...cliConfig }
 
+  if (config.outDir && config.outFile) {
+    console.error('Error: provide only one of --out-dir or --out-file, not both.')
+    process.exit(1)
+  }
+
+  // Single-file output is the alternative to a directory of files.
+  if (config.outFile) {
+    if (!config.typesOnly) {
+      console.error('Error: --out-file currently supports only --types-only output. Add --types-only or use --out-dir.')
+      process.exit(1)
+    }
+
+    if (config.schemaDir) {
+      console.error('Error: --out-file cannot be combined with --schema-dir; use --out-dir for recursive output.')
+      process.exit(1)
+    }
+
+    if (!config.schema) {
+      console.error('Error: --schema is required. Provide a path to a JSON Schema.')
+      process.exit(1)
+    }
+
+    await runSingleFile(config, resolve(config.schema), resolve(config.outFile))
+    return
+  }
+
   if (!config.outDir) {
-    console.error('Error: --outDir is required. Provide an output directory for generated files.')
+    console.error('Error: --out-dir or --out-file is required. Provide an output destination for generated files.')
     process.exit(1)
   }
 

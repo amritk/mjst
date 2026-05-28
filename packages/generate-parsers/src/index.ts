@@ -1,1 +1,1 @@
-export { buildSchema } from './generators/build-schema'
+export { buildSchema, type GeneratedFile } from './generators/build-schema'

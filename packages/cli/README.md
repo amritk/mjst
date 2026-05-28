@@ -44,16 +44,28 @@ The package ships a `mjst` bin that runs under Node ≥ 20 (or Bun), so you can 
 ### CLI
 
 ```bash
-npx mjst --schema ./schema.json --outDir ./generated
+npx mjst --schema ./schema.json --out-dir ./generated
+```
+
+> [!NOTE]
+> Every flag accepts both kebab-case and camelCase, so `--out-dir` and `--outDir` are equivalent.
+
+### Single file
+
+Pass `--out-file` instead of `--out-dir` to concatenate every generated definition into one
+self-contained file. This is currently supported together with `--types-only`:
+
+```bash
+npx mjst --schema ./schema.json --out-file ./generated/schema.ts --types-only
 ```
 
 ### Recursive — a whole folder of schemas
 
-Point `--schemaDir` at a directory of JSON Schemas and mjst generates parsers for every
-`*.json` file it finds, mirroring the directory layout under `--outDir`:
+Point `--schema-dir` at a directory of JSON Schemas and mjst generates parsers for every
+`*.json` file it finds, mirroring the directory layout under `--out-dir`:
 
 ```bash
-npx mjst --schemaDir ./schemas --outDir ./generated
+npx mjst --schema-dir ./schemas --out-dir ./generated
 ```
 
 ```
@@ -86,16 +98,18 @@ npx mjst --config ./mjst.config.json
 | | Property | CLI Flag | Type | Required | Default | Description |
 |:---:|:---|:---|:---:|:---:|:---:|:---|
 | 📄 | `schema` | `--schema <path>` | `string` | — | — | Path to the schema to process. With the default 'json' input this is a JSON Schema file that is read and parsed. With any other input format it is a JS/TS module that exports a schema, which is loaded and converted to JSON Schema via the matching adapter. Either 'schema' or 'schemaDir' is required. |
-| 🗂️ | `schemaDir` | `--schemaDir <dir>` | `string` | — | — | Path to a directory of JSON Schema files. When set, the CLI walks the directory recursively, generates parsers for every '*.json' schema it finds, and mirrors the directory layout under outDir (each schema lands in its own subdirectory). The runtime helpers are emitted once into a shared outDir/_helpers/ that every nested parser imports from. Mutually exclusive with 'schema'; when both are present 'schemaDir' wins. Only JSON Schema input is supported in this mode. |
+| 🗂️ | `schemaDir` | `--schema-dir <dir>` | `string` | — | — | Path to a directory of JSON Schema files. When set, the CLI walks the directory recursively, generates parsers for every '*.json' schema it finds, and mirrors the directory layout under outDir (each schema lands in its own subdirectory). The runtime helpers are emitted once into a shared outDir/_helpers/ that every nested parser imports from. Mutually exclusive with 'schema'; when both are present 'schemaDir' wins. Only JSON Schema input is supported in this mode. |
 | 🔌 | `input` | `--input <format>` | `string` | — | `"json"` | Source format of the schema. 'json' (default) reads a JSON Schema file directly. Any other format loads 'schema' as a module and converts it to JSON Schema with the matching adapter. Supported: 'typebox', 'zod' (zod v4+), 'valibot' (with @valibot/to-json-schema), and 'effect' — each requires the corresponding library installed in your project. |
 | 📦 | `export` | `--export <name>` | `string` | — | — | Which export of the schema module to use when 'input' is not 'json'. Defaults to the default export, or the sole named export when the module has exactly one. |
-| 📁 | `outDir` | `--outDir <dir>` | `string` | ✅ | — | Output directory for generated TypeScript files. The directory is created automatically if it does not exist. Subdirectories are created as needed when a generated file includes a nested path. |
+| 📁 | `outDir` | `--out-dir <dir>` | `string` | — | — | Output directory for generated TypeScript files. The directory is created automatically if it does not exist. Subdirectories are created as needed when a generated file includes a nested path. Mutually exclusive with 'outFile'. |
+| 📄 | `outFile` | `--out-file <file>` | `string` | — | — | Output everything to a single TypeScript file instead of a directory. Every generated definition is concatenated into one self-contained file and the cross-file imports are dropped. Mutually exclusive with 'outDir'. Currently supported only together with 'typesOnly'. |
 | 🏷️ | `typesOnly` | `--types-only` | `boolean` | — | `false` | Generate only TypeScript type definitions without parser functions. Useful when you only need the type shapes and do not need runtime validation. |
 | 🔨 | `build` | `--build` | `boolean` | — | `false` | Compile the generated TypeScript files to .js and .d.ts output. A temporary tsconfig is written to the output directory, tsc is invoked, and the intermediate .ts source files are removed when compilation succeeds. |
 | ⚠️ | `logWarnings` | `--log-warnings` | `boolean` | — | `false` | Emit a console.warn in the generated parsers for every input key that is not declared in the schema's properties. Useful for detecting schema drift or unexpected data shapes at runtime. |
 | 🚫 | `strict` | `--strict` | `boolean` | — | `false` | Generate parsers that throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. Unknown extra keys are still allowed. |
+| 🔒 | `readonly` | `--readonly` | `boolean` | — | `false` | Emit every property, array, and record in the generated type definitions as readonly, producing deeply immutable types. Affects type definitions only; the generated parsers still build and return plain objects. |
 | 🧰 | `helpers` | `--helpers <mode>` | `string` | — | — | Controls how generated parsers reference their runtime helpers. 'package' emits imports from @amritk/helpers (requires it to be installed in the consumer project). 'embedded' ships the helper source under outDir/_helpers/ so the output is self-contained. When omitted, the CLI auto-detects: it picks 'package' if @amritk/helpers resolves from outDir, otherwise 'embedded'. |
-| ⚙️ | `config` | `--config <path>` | `string` | — | — | Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, typesOnly, build, logWarnings, strict, helpers). CLI flags take precedence over config file values. |
+| ⚙️ | `config` | `--config <path>` | `string` | — | — | Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, outFile, typesOnly, build, logWarnings, strict, readonly, helpers). CLI flags take precedence over config file values. |
 <!-- config-table-end -->
 
 ---

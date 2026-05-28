@@ -4,132 +4,146 @@ import type { CliConfig } from './cli-config'
 
 const SOURCE_FORMATS: readonly SourceFormat[] = ['json', 'typebox', 'zod', 'valibot', 'effect']
 
+// Mutable shape used while building, returned as Partial<CliConfig>.
+type MutableConfig = {
+  schema?: string
+  schemaDir?: string
+  outDir?: string
+  outFile?: string
+  input?: SourceFormat
+  export?: string
+  typesOnly?: boolean
+  build?: boolean
+  logWarnings?: boolean
+  strict?: boolean
+  readonly?: boolean
+  helpers?: 'package' | 'embedded'
+}
+
+// Boolean flags toggle on by presence and accept `--flag=false` to opt out.
+const BOOLEAN_KEYS = new Set<keyof MutableConfig>(['typesOnly', 'build', 'logWarnings', 'strict', 'readonly'])
+// Value flags consume the following argument (or `--flag=value`).
+const VALUE_KEYS = new Set<keyof MutableConfig>([
+  'schema',
+  'schemaDir',
+  'outDir',
+  'outFile',
+  'input',
+  'export',
+  'helpers',
+])
+
+/** Normalizes a CLI flag name to its camelCase config key so both `--out-dir` and `--outDir` map to `outDir`. */
+const toCamelCase = (key: string): string => key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())
+
+const parseHelpersValue = (value: string): 'package' | 'embedded' | undefined => {
+  if (value === 'package' || value === 'embedded') return value
+  return undefined
+}
+
+const parseInputValue = (value: string): SourceFormat | undefined =>
+  (SOURCE_FORMATS as readonly string[]).includes(value) ? (value as SourceFormat) : undefined
+
+/** Assigns a value-flag onto the config. Returns false for unknown keys. */
+const assignValue = (config: MutableConfig, key: string, value: string): boolean => {
+  switch (key) {
+    case 'schema':
+      config.schema = value
+      return true
+    case 'schemaDir':
+      config.schemaDir = value
+      return true
+    case 'outDir':
+      config.outDir = value
+      return true
+    case 'outFile':
+      config.outFile = value
+      return true
+    case 'export':
+      config.export = value
+      return true
+    case 'input': {
+      const parsed = parseInputValue(value)
+      if (parsed) config.input = parsed
+      return true
+    }
+    case 'helpers': {
+      const parsed = parseHelpersValue(value)
+      if (parsed) config.helpers = parsed
+      return true
+    }
+    default:
+      return false
+  }
+}
+
+/** Assigns a boolean flag onto the config. Returns false for unknown keys. */
+const assignBoolean = (config: MutableConfig, key: string, value: boolean): boolean => {
+  switch (key) {
+    case 'typesOnly':
+      config.typesOnly = value
+      return true
+    case 'build':
+      config.build = value
+      return true
+    case 'logWarnings':
+      config.logWarnings = value
+      return true
+    case 'strict':
+      config.strict = value
+      return true
+    case 'readonly':
+      config.readonly = value
+      return true
+    default:
+      return false
+  }
+}
+
 /**
  * Parses command-line arguments into a partial CLI config.
- * Supports --schema, --outDir, and --types-only flags with either `--flag value` or `--flag=value` syntax.
- * Only returns the flags that were explicitly provided so we can layer them on top of config file values.
+ * Every flag accepts both kebab-case and camelCase (e.g. `--out-dir` and `--outDir`)
+ * and supports either `--flag value` or `--flag=value` syntax. Boolean flags toggle
+ * on by presence and accept `--flag=false` to opt out. Only flags that were explicitly
+ * provided are returned so they can be layered on top of config file values.
  */
 export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
-  // Use a mutable local type for building, then return as Partial<CliConfig>
-  const config: {
-    schema?: string
-    schemaDir?: string
-    outDir?: string
-    input?: SourceFormat
-    export?: string
-    typesOnly?: boolean
-    build?: boolean
-    logWarnings?: boolean
-    strict?: boolean
-    helpers?: 'package' | 'embedded'
-  } = {}
-
-  const parseHelpersValue = (value: string): 'package' | 'embedded' | undefined => {
-    if (value === 'package' || value === 'embedded') return value
-    return undefined
-  }
-
-  const parseInputValue = (value: string): SourceFormat | undefined =>
-    (SOURCE_FORMATS as readonly string[]).includes(value) ? (value as SourceFormat) : undefined
+  const config: MutableConfig = {}
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
 
-    if (!arg) {
+    if (!arg || !arg.startsWith('--')) {
       continue
     }
 
     // Handle --flag=value syntax
-    if (arg.startsWith('--') && arg.includes('=')) {
-      const equalsIndex = arg.indexOf('=')
-      const key = arg.slice(2, equalsIndex)
+    const equalsIndex = arg.indexOf('=')
+    if (equalsIndex !== -1) {
+      const key = toCamelCase(arg.slice(2, equalsIndex))
       const value = arg.slice(equalsIndex + 1)
-
-      if (key === 'schema') {
-        config.schema = value
-      } else if (key === 'schemaDir') {
-        config.schemaDir = value
-      } else if (key === 'outDir') {
-        config.outDir = value
-      } else if (key === 'input') {
-        const parsed = parseInputValue(value)
-        if (parsed) config.input = parsed
-      } else if (key === 'export') {
-        config.export = value
-      } else if (key === 'types-only') {
-        // Accept --types-only=false to explicitly opt out, otherwise treat as true
-        config.typesOnly = value !== 'false'
-      } else if (key === 'build') {
-        config.build = value !== 'false'
-      } else if (key === 'log-warnings') {
-        config.logWarnings = value !== 'false'
-      } else if (key === 'strict') {
-        config.strict = value !== 'false'
-      } else if (key === 'helpers') {
-        const parsed = parseHelpersValue(value)
-        if (parsed) config.helpers = parsed
+      if (BOOLEAN_KEYS.has(key as keyof MutableConfig)) {
+        assignBoolean(config, key, value !== 'false')
+      } else {
+        assignValue(config, key, value)
       }
-
       continue
     }
 
-    // Handle --flag value syntax
-    if (arg === '--schema') {
-      const value = args[i + 1]
+    const key = toCamelCase(arg.slice(2))
 
+    // Boolean flag: presence alone enables it, no value needed
+    if (BOOLEAN_KEYS.has(key as keyof MutableConfig)) {
+      assignBoolean(config, key, true)
+      continue
+    }
+
+    // Value flag: consume the next argument when it is not another flag
+    if (VALUE_KEYS.has(key as keyof MutableConfig)) {
+      const value = args[i + 1]
       if (value && !value.startsWith('--')) {
-        config.schema = value
+        assignValue(config, key, value)
         i++
-      }
-    } else if (arg === '--schemaDir') {
-      const value = args[i + 1]
-
-      if (value && !value.startsWith('--')) {
-        config.schemaDir = value
-        i++
-      }
-    } else if (arg === '--outDir') {
-      const value = args[i + 1]
-
-      if (value && !value.startsWith('--')) {
-        config.outDir = value
-        i++
-      }
-    } else if (arg === '--input') {
-      const value = args[i + 1]
-
-      if (value && !value.startsWith('--')) {
-        const parsed = parseInputValue(value)
-        if (parsed) {
-          config.input = parsed
-          i++
-        }
-      }
-    } else if (arg === '--export') {
-      const value = args[i + 1]
-
-      if (value && !value.startsWith('--')) {
-        config.export = value
-        i++
-      }
-    } else if (arg === '--types-only') {
-      // Boolean flag: presence alone enables it, no value needed
-      config.typesOnly = true
-    } else if (arg === '--build') {
-      config.build = true
-    } else if (arg === '--log-warnings') {
-      config.logWarnings = true
-    } else if (arg === '--strict') {
-      config.strict = true
-    } else if (arg === '--helpers') {
-      const value = args[i + 1]
-
-      if (value && !value.startsWith('--')) {
-        const parsed = parseHelpersValue(value)
-        if (parsed) {
-          config.helpers = parsed
-          i++
-        }
       }
     }
   }
