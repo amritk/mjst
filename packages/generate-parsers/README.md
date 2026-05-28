@@ -93,11 +93,28 @@ Returns: `Promise<GeneratedFile[]>`.
 ## Options
 
 <!-- config-table-start -->
-| | Property | CLI Flag | Type | Required | Default | Description |
-|:---:|:---|:---|:---:|:---:|:---:|:---|
-| 🏷️ | `typesOnly` | — | `boolean` | — | `false` | Generate only TypeScript type definitions without parser functions. Runtime helper files (validators, isObject) are also omitted since they are only needed for parsers. |
-| ⚠️ | `logWarnings` | — | `boolean` | — | `false` | Emit a console.warn in the generated parsers for every input key that is not declared in the schema's properties. Useful for detecting schema drift or unexpected data shapes at runtime. |
-| 🚫 | `strict` | — | `boolean` | — | `false` | Generate parsers that throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. Unknown extra keys are still allowed. |
+
+<a id="config-typesOnly"></a>
+### 🏷️ `typesOnly`
+
+`boolean` · Default `false`
+
+Generate only TypeScript type definitions without parser functions. Runtime helper files (validators, isObject) are also omitted since they are only needed for parsers.
+
+<a id="config-logWarnings"></a>
+### ⚠️ `logWarnings`
+
+`boolean` · Default `false`
+
+Emit a console.warn in the generated parsers for every input key that is not declared in the schema's properties. Useful for detecting schema drift or unexpected data shapes at runtime.
+
+<a id="config-strict"></a>
+### 🚫 `strict`
+
+`boolean` · Default `false`
+
+Generate parsers that throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. Unknown extra keys are still allowed.
+
 <!-- config-table-end -->
 
 The generator handles:

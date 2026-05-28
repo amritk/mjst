@@ -30,7 +30,7 @@ type ConfigSchema = {
 }
 
 /**
- * Formats a JSON value for inline display inside a markdown table or sentence.
+ * Formats a JSON value for inline display inside a markdown sentence.
  * Strings get quoted so readers know they need quotes in their config.
  */
 const formatValue = (value: unknown): string => {
@@ -40,84 +40,88 @@ const formatValue = (value: unknown): string => {
   return `\`${JSON.stringify(value)}\``
 }
 
-const TABLE_HEADER = [
-  '| | Property | CLI Flag | Type | Required | Default | Description |',
-  '|:---:|:---|:---|:---:|:---:|:---:|:---|',
-]
+/** Separator between the inline facts on a property's metadata line. */
+const META_SEP = ' · '
+
+/** Heading level used for top-level properties (renders as `###`). */
+const ROOT_HEADING_LEVEL = 3
 
 /**
- * Builds a stable anchor id for an object property's detail table from its
- * dotted path (e.g. `server.tls` → `config-server-tls`). Explicit ids keep the
- * in-table links working regardless of how the host renderer slugifies headings.
+ * Builds a stable anchor id for a property's section from its dotted path
+ * (e.g. `server.tls` → `config-server-tls`). Explicit ids keep cross-links
+ * working regardless of how the host renderer slugifies headings.
  */
 const anchorId = (path: string): string => `config-${path.replace(/\./g, '-')}`
 
-const isObjectWithProperties = (prop: SchemaProperty): boolean =>
-  prop.type === 'object' && prop.properties !== undefined
-
 /**
- * Renders a single table row. Object properties with nested fields link to
- * their own detail table rendered below the main table.
+ * Renders the compact "facts" line that sits under a property heading: the CLI
+ * flag, type, a required marker, and the default value. Only the facts that
+ * apply are shown, so the line stays short and reads well at any width — unlike
+ * a fixed set of table columns that forces every value into the same grid.
  */
-const renderRow = (name: string, prop: SchemaProperty, required: ReadonlySet<string>, path: string): string => {
-  const icon = prop['x-icon'] ?? '🔧'
-  const cliFlag = prop['x-cli-flag'] ? `\`${prop['x-cli-flag']}\`` : '—'
-  const requiredCell = required.has(name) ? '✅' : '—'
-  const defaultCell = prop.default !== undefined ? formatValue(prop.default) : '—'
-  // First paragraph gives enough context without making the table unwieldy
-  const desc = prop.description?.split('\n\n')[0]?.replace(/\n/g, ' ') ?? ''
-  const nameCell = isObjectWithProperties(prop) ? `[\`${name}\`](#${anchorId(path)})` : `\`${name}\``
-  return `| ${icon} | ${nameCell} | ${cliFlag} | \`${prop.type}\` | ${requiredCell} | ${defaultCell} | ${desc} |`
+const renderMeta = (name: string, prop: SchemaProperty, required: ReadonlySet<string>): string => {
+  const facts: string[] = []
+  if (prop['x-cli-flag']) facts.push(`\`${prop['x-cli-flag']}\``)
+  facts.push(`\`${prop.type}\``)
+  if (required.has(name)) facts.push('**Required**')
+  if (prop.default !== undefined) facts.push(`Default ${formatValue(prop.default)}`)
+  return facts.join(META_SEP)
 }
 
 /**
- * Renders the table for one object's properties followed by a detail table for
- * each nested object property (recursively). The root call passes an empty path
- * and omits a heading; nested calls add an anchored heading so parent rows can
- * link straight to the relevant table.
+ * Renders one property as a self-contained section: an anchored heading, a
+ * compact metadata line, and the full description as flowing prose. Object
+ * properties recurse, rendering each child as a deeper section keyed by its
+ * dotted path so the hierarchy stays clear without nested tables.
+ *
+ * @param level - Heading level for this property (top-level properties use 3).
  */
-const renderTables = (
-  properties: Readonly<Record<string, SchemaProperty>>,
+const renderProperty = (
+  name: string,
+  prop: SchemaProperty,
   required: ReadonlySet<string>,
   path: string,
+  level: number,
 ): readonly string[] => {
-  const rows = Object.entries(properties).map(([name, prop]) =>
-    renderRow(name, prop, required, path ? `${path}.${name}` : name),
+  const icon = prop['x-icon'] ?? '🔧'
+  const heading = `<a id="${anchorId(path)}"></a>\n${'#'.repeat(level)} ${icon} \`${path}\``
+  const meta = renderMeta(name, prop, required)
+  const description = prop.description?.trim()
+
+  const section = [heading, meta, ...(description ? [description] : [])].join('\n\n')
+
+  if (prop.type !== 'object' || !prop.properties) return [section]
+
+  const childRequired = new Set(prop.required ?? [])
+  const children = Object.entries(prop.properties).flatMap(([childName, childProp]) =>
+    renderProperty(childName, childProp, childRequired, `${path}.${childName}`, level + 1),
   )
-  const table = [...TABLE_HEADER, ...rows].join('\n')
-  const block = path ? `<a id="${anchorId(path)}"></a>\n#### \`${path}\`\n\n${table}` : table
-
-  const nested = Object.entries(properties).flatMap(([name, prop]) => {
-    const childProps = prop.properties
-    if (prop.type !== 'object' || !childProps) return []
-    const childPath = path ? `${path}.${name}` : name
-    return renderTables(childProps, new Set(prop.required ?? []), childPath)
-  })
-
-  return [block, ...nested]
+  return [section, ...children]
 }
 
 /**
- * Renders the config reference: a main properties table plus a linked detail
- * table for every nested object property. Descriptions use the first paragraph
- * from the schema so each table stays readable without losing context.
+ * Renders the config reference as a stack of per-property sections. Each option
+ * gets its own heading and a full-width description, so long text wraps as
+ * normal prose instead of being squeezed into a narrow table column.
  */
-const renderConfigTable = (schema: ConfigSchema): string => {
+const renderConfigReference = (schema: ConfigSchema): string => {
   const required = new Set(schema.required ?? [])
-  return renderTables(schema.properties, required, '').join('\n\n')
+  return Object.entries(schema.properties)
+    .flatMap(([name, prop]) => renderProperty(name, prop, required, name, ROOT_HEADING_LEVEL))
+    .join('\n\n')
 }
 
 const START_MARKER = '<!-- config-table-start -->'
 const END_MARKER = '<!-- config-table-end -->'
 
 /**
- * Generates the properties table from the JSON Schema and writes it to README.md.
- * Every user-facing description comes from the schema so the two stay in sync —
- * update the schema, then run `bun run generate-readme`.
+ * Generates the configuration reference from the JSON Schema and writes it to
+ * README.md. Every user-facing description comes from the schema so the two
+ * stay in sync — update the schema, then run `bun run generate-readme`.
  *
  * If README.md already exists and contains <!-- config-table-start --> and
  * <!-- config-table-end --> markers, only the content between those markers is
- * replaced. Otherwise the whole file is overwritten with the table.
+ * replaced. Otherwise the whole file is overwritten with the reference.
  */
 export const generateMarkdown = async (): Promise<void> => {
   const root = process.cwd()
@@ -125,7 +129,7 @@ export const generateMarkdown = async (): Promise<void> => {
   const schemaRaw = await readFile(resolve(root, 'config.schema.json'), 'utf-8')
   const schema = JSON.parse(schemaRaw) as ConfigSchema
 
-  const table = renderConfigTable(schema)
+  const reference = renderConfigReference(schema)
   const readmePath = resolve(root, 'README.md')
 
   let content: string
@@ -134,12 +138,12 @@ export const generateMarkdown = async (): Promise<void> => {
     const startIdx = existing.indexOf(START_MARKER)
     const endIdx = existing.indexOf(END_MARKER)
     if (startIdx !== -1 && endIdx !== -1) {
-      content = existing.slice(0, startIdx + START_MARKER.length) + '\n' + table + '\n' + existing.slice(endIdx)
+      content = existing.slice(0, startIdx + START_MARKER.length) + '\n\n' + reference + '\n\n' + existing.slice(endIdx)
     } else {
-      content = table
+      content = reference
     }
   } catch {
-    content = table
+    content = reference
   }
 
   await writeFile(readmePath, content)

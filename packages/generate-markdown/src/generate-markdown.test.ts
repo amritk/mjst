@@ -36,13 +36,29 @@ const mockFs = (schema: unknown) => {
   writeFileMock.mockImplementation(async () => {})
 }
 
+/** Returns the markdown content written to README.md by the last run. */
+const writtenContent = (): string => (writeFileMock.mock.calls[0]?.[1] as string) ?? ''
+
+/** Finds the heading line for a property by its dotted path. */
+const headingFor = (content: string, path: string): string | undefined =>
+  content.split('\n').find((line) => line.startsWith('#') && line.includes(`\`${path}\``))
+
+/** Finds the metadata line that immediately follows a property's heading. */
+const metaFor = (content: string, path: string): string | undefined => {
+  const lines = content.split('\n')
+  const headingIdx = lines.findIndex((line) => line.startsWith('#') && line.includes(`\`${path}\``))
+  if (headingIdx === -1) return undefined
+  // Skip the blank line separating heading and metadata.
+  return lines.slice(headingIdx + 1).find((line) => line.trim().length > 0)
+}
+
 describe('generate-readme', () => {
   beforeEach(() => {
     readFileMock.mockReset()
     writeFileMock.mockReset()
   })
 
-  it('generates properties table from minimal schema', async () => {
+  it('generates a property section from a minimal schema', async () => {
     mockFs(minimalSchema)
 
     await generateMarkdown()
@@ -50,10 +66,10 @@ describe('generate-readme', () => {
     expect(writeFileMock).toHaveBeenCalledTimes(1)
     const [path, content] = writeFileMock.mock.calls[0] ?? []
     expect(path).toContain('README.md')
-    expect(content).toContain('testProp')
+    expect(headingFor(content as string, 'testProp')).toBeDefined()
   })
 
-  it('handles schema with required properties', async () => {
+  it('marks required properties with a Required badge', async () => {
     const schemaWithRequired = {
       ...minimalSchema,
       required: ['testProp'],
@@ -63,12 +79,10 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    expect(content).toContain('✅')
-    expect(content).toContain('testProp')
+    expect(metaFor(writtenContent(), 'testProp')).toContain('**Required**')
   })
 
-  it('handles schema with optional properties', async () => {
+  it('omits the Required badge for optional properties', async () => {
     const schemaWithOptional = {
       ...minimalSchema,
       required: [],
@@ -84,11 +98,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    const lines = (content as string).split('\n')
-    const optionalLine = lines.find((line: string) => line.includes('optionalProp'))
-    expect(optionalLine).toBeDefined()
-    expect(optionalLine).toContain('—')
+    expect(metaFor(writtenContent(), 'optionalProp')).not.toContain('Required')
   })
 
   it('renders CLI flags when x-cli-flag is present', async () => {
@@ -107,19 +117,17 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    expect(content).toContain('--test-flag')
+    expect(metaFor(writtenContent(), 'testProp')).toContain('`--test-flag`')
   })
 
-  it('renders em dash when CLI flag is not present', async () => {
+  it('omits the CLI flag fact when x-cli-flag is not present', async () => {
     mockFs(minimalSchema)
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    const lines = (content as string).split('\n')
-    const propLine = lines.find((line: string) => line.includes('testProp'))
-    expect(propLine).toContain('—')
+    const meta = metaFor(writtenContent(), 'testProp')
+    expect(meta).toBeDefined()
+    expect(meta).not.toContain('--')
   })
 
   it('renders custom icon when x-icon is present', async () => {
@@ -138,8 +146,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    expect(content).toContain('🎯')
+    expect(headingFor(writtenContent(), 'testProp')).toContain('🎯')
   })
 
   it('renders default icon when x-icon is not present', async () => {
@@ -147,8 +154,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    expect(content).toContain('🔧')
+    expect(headingFor(writtenContent(), 'testProp')).toContain('🔧')
   })
 
   it('formats string default values with quotes', async () => {
@@ -167,8 +173,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    expect(content).toContain('"default-value"')
+    expect(metaFor(writtenContent(), 'testProp')).toContain('Default `"default-value"`')
   })
 
   it('formats boolean default values without quotes', async () => {
@@ -187,8 +192,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    expect(content).toContain('`false`')
+    expect(metaFor(writtenContent(), 'testProp')).toContain('Default `false`')
   })
 
   it('formats number default values without quotes', async () => {
@@ -207,8 +211,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    expect(content).toContain('`42`')
+    expect(metaFor(writtenContent(), 'testProp')).toContain('Default `42`')
   })
 
   it('formats object default values as JSON', async () => {
@@ -227,8 +230,7 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    expect(content).toContain('{"key":"value"}')
+    expect(writtenContent()).toContain('{"key":"value"}')
   })
 
   it('formats array default values as JSON', async () => {
@@ -247,11 +249,10 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    expect(content).toContain('["item1","item2"]')
+    expect(writtenContent()).toContain('["item1","item2"]')
   })
 
-  it('links object properties to a detail table rendered below', async () => {
+  it('renders nested object properties as deeper sections', async () => {
     const schemaWithNestedObject = {
       ...minimalSchema,
       properties: {
@@ -277,19 +278,18 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    // Parent row links to the detail table anchor
-    expect(content).toContain('[`server`](#config-server)')
-    // Detail table has a matching anchor and heading
+    const content = writtenContent()
+    // Parent renders at level 3, children at level 4 keyed by dotted path.
+    expect(headingFor(content, 'server')).toMatch(/^### /)
+    expect(headingFor(content, 'server.host')).toMatch(/^#### /)
+    expect(headingFor(content, 'server.port')).toMatch(/^#### /)
+    // Each section carries a stable anchor for deep linking.
     expect(content).toContain('<a id="config-server"></a>')
-    expect(content).toContain('#### `server`')
-    // Nested fields appear in the detail table by their local name
-    expect(content).toContain('`host`')
-    expect(content).toContain('`port`')
-    expect(content).toContain('`8080`')
+    expect(content).toContain('<a id="config-server-host"></a>')
+    expect(metaFor(content, 'server.port')).toContain('Default `8080`')
   })
 
-  it('renders a detail table per level for deeply nested objects', async () => {
+  it('renders a section per level for deeply nested objects', async () => {
     const schemaWithDeepNesting = {
       ...minimalSchema,
       properties: {
@@ -316,13 +316,11 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    // Each object links to the next level's table
-    expect(content).toContain('[`a`](#config-a)')
-    expect(content).toContain('[`b`](#config-a-b)')
-    expect(content).toContain('<a id="config-a-b"></a>')
-    expect(content).toContain('#### `a.b`')
-    expect(content).toContain('`c`')
+    const content = writtenContent()
+    expect(headingFor(content, 'a')).toMatch(/^### /)
+    expect(headingFor(content, 'a.b')).toMatch(/^#### /)
+    expect(headingFor(content, 'a.b.c')).toMatch(/^##### /)
+    expect(content).toContain('<a id="config-a-b-c"></a>')
   })
 
   it('marks nested required properties using the nested required list', async () => {
@@ -351,28 +349,20 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    const lines = (content as string).split('\n')
-    const hostLine = lines.find((line: string) => line.includes('`host`') && line.includes('|'))
-    const portLine = lines.find((line: string) => line.includes('`port`') && line.includes('|'))
-    expect(hostLine).toContain('✅')
-    expect(portLine).not.toContain('✅')
+    const content = writtenContent()
+    expect(metaFor(content, 'server.host')).toContain('**Required**')
+    expect(metaFor(content, 'server.port')).not.toContain('Required')
   })
 
-  it('renders em dash for undefined default values', async () => {
+  it('omits the Default fact for undefined default values', async () => {
     mockFs(minimalSchema)
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    const lines = (content as string).split('\n')
-    const propLine = lines.find((line: string) => line.includes('testProp'))
-    const cells = propLine?.split('|').map((cell: string) => cell.trim())
-    const defaultCell = cells?.[6]
-    expect(defaultCell).toBe('—')
+    expect(metaFor(writtenContent(), 'testProp')).not.toContain('Default')
   })
 
-  it('renders em dash for null default values', async () => {
+  it('omits the Default fact for null default values', async () => {
     const schemaWithNullDefault = {
       ...minimalSchema,
       properties: {
@@ -388,15 +378,10 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    const lines = (content as string).split('\n')
-    const propLine = lines.find((line: string) => line.includes('testProp'))
-    const cells = propLine?.split('|').map((cell: string) => cell.trim())
-    const defaultCell = cells?.[6]
-    expect(defaultCell).toBe('—')
+    expect(metaFor(writtenContent(), 'testProp')).toContain('Default —')
   })
 
-  it('uses first paragraph of description in table', async () => {
+  it('renders the full multi-paragraph description', async () => {
     const schemaWithMultiParagraph = {
       ...minimalSchema,
       properties: {
@@ -411,28 +396,9 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
+    const content = writtenContent()
     expect(content).toContain('First paragraph.')
-    expect(content).not.toContain('Second paragraph.')
-  })
-
-  it('replaces newlines with spaces in description', async () => {
-    const schemaWithNewlines = {
-      ...minimalSchema,
-      properties: {
-        testProp: {
-          type: 'string',
-          description: 'Line one\nLine two\nLine three',
-        },
-      },
-    }
-
-    mockFs(schemaWithNewlines)
-
-    await generateMarkdown()
-
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    expect(content).toContain('Line one Line two Line three')
+    expect(content).toContain('Second paragraph.')
   })
 
   it('handles missing description gracefully', async () => {
@@ -449,17 +415,15 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    expect(content).toContain('testProp')
+    expect(headingFor(writtenContent(), 'testProp')).toBeDefined()
   })
 
-  it('includes table header with correct columns', async () => {
+  it('renders each property as its own heading', async () => {
     mockFs(minimalSchema)
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    expect(content).toContain('| | Property | CLI Flag | Type | Required | Default | Description |')
+    expect(headingFor(writtenContent(), 'testProp')).toMatch(/^### .* `testProp`$/)
   })
 
   it('handles multiple properties in schema', async () => {
@@ -485,10 +449,10 @@ describe('generate-readme', () => {
 
     await generateMarkdown()
 
-    const [, content] = writeFileMock.mock.calls[0] ?? []
-    expect(content).toContain('prop1')
-    expect(content).toContain('prop2')
-    expect(content).toContain('prop3')
+    const content = writtenContent()
+    expect(headingFor(content, 'prop1')).toBeDefined()
+    expect(headingFor(content, 'prop2')).toBeDefined()
+    expect(headingFor(content, 'prop3')).toBeDefined()
   })
 
   it('logs success message to console', async () => {
@@ -538,7 +502,7 @@ describe('generate-readme', () => {
   })
 
   describe('marker injection', () => {
-    it('injects table between markers when both markers are present', async () => {
+    it('injects the reference between markers when both markers are present', async () => {
       const existingReadme = `# My Package\n\n<!-- config-table-start -->\nold content\n<!-- config-table-end -->\n\n---\n`
 
       readFileMock.mockImplementation(async (path) => {
@@ -552,11 +516,11 @@ describe('generate-readme', () => {
 
       await generateMarkdown()
 
-      const [, content] = writeFileMock.mock.calls[0] ?? []
+      const content = writtenContent()
       expect(content).toContain('# My Package')
       expect(content).toContain('<!-- config-table-start -->')
       expect(content).toContain('<!-- config-table-end -->')
-      expect(content).toContain('testProp')
+      expect(headingFor(content, 'testProp')).toBeDefined()
       expect(content).not.toContain('old content')
       expect(content).toContain('---')
     })
@@ -575,8 +539,7 @@ describe('generate-readme', () => {
 
       await generateMarkdown()
 
-      const [, content] = writeFileMock.mock.calls[0] ?? []
-      expect((content as string).startsWith('# Header\n\nSome intro.')).toBe(true)
+      expect(writtenContent().startsWith('# Header\n\nSome intro.')).toBe(true)
     })
 
     it('preserves content after end marker', async () => {
@@ -593,12 +556,12 @@ describe('generate-readme', () => {
 
       await generateMarkdown()
 
-      const [, content] = writeFileMock.mock.calls[0] ?? []
+      const content = writtenContent()
       expect(content).toContain('## License')
       expect(content).toContain('MIT')
     })
 
-    it('falls back to table-only when README has no markers', async () => {
+    it('falls back to reference-only when README has no markers', async () => {
       const existingReadme = `# My Package\n\nNo markers here.\n`
 
       readFileMock.mockImplementation(async (path) => {
@@ -612,12 +575,12 @@ describe('generate-readme', () => {
 
       await generateMarkdown()
 
-      const [, content] = writeFileMock.mock.calls[0] ?? []
+      const content = writtenContent()
       expect(content).not.toContain('# My Package')
-      expect(content).toContain('testProp')
+      expect(headingFor(content, 'testProp')).toBeDefined()
     })
 
-    it('falls back to table-only when README does not exist', async () => {
+    it('falls back to reference-only when README does not exist', async () => {
       readFileMock.mockImplementation(async (path) => {
         if (typeof path === 'string' && path.includes('config.schema.json')) {
           return JSON.stringify(minimalSchema)
@@ -628,8 +591,7 @@ describe('generate-readme', () => {
 
       await generateMarkdown()
 
-      const [, content] = writeFileMock.mock.calls[0] ?? []
-      expect(content).toContain('testProp')
+      expect(headingFor(writtenContent(), 'testProp')).toBeDefined()
     })
   })
 })
