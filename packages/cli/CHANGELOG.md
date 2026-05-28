@@ -1,5 +1,20 @@
 # @amritk/mjst
 
+## 0.6.0
+
+### Minor Changes
+
+- 99f1876: Add an `--out-file` option that concatenates every generated definition into a single self-contained file instead of a directory (currently supported with `--types-only`). Add a `--readonly` option that emits every property, array, and record in the generated types as `readonly` for deeply immutable types. All CLI flags now accept both kebab-case and camelCase (e.g. `--out-dir` and `--outDir`) and are documented as kebab-case. `buildSchema` gains an optional trailing `readonly` argument, and `generateTypeDefinition` gains an optional `options` argument.
+- 9a26ac1: Add `--schemaDir` for recursive generation: point mjst at a directory of JSON Schemas and it generates parsers for every `*.json` file, mirroring the directory layout under `outDir`. The runtime helpers are emitted once into a shared `outDir/_helpers/` that every nested parser imports from (via a computed relative path), and `--build` compiles the whole tree in place. `buildSchema` gains an optional `helpersImportPrefix` argument to support the shared-helpers layout.
+
+### Patch Changes
+
+- Updated dependencies [99f1876]
+- Updated dependencies [9a26ac1]
+  - @amritk/generate-parsers@0.5.0
+  - @amritk/helpers@0.5.0
+  - @amritk/adapters@0.2.2
+
 ## 0.5.1
 
 ### Patch Changes
