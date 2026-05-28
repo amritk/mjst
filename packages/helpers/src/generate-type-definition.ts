@@ -342,6 +342,45 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string
     case 'object':
       if (schema.properties) {
         const readonlyPrefix = options.readonly ? 'readonly ' : ''
+        const hasDescriptions = Object.values(schema.properties).some(
+          (p) => isSchemaObject(p) && (typeof p.description === 'string' || typeof p.$comment === 'string'),
+        )
+
+        if (hasDescriptions) {
+          let properties = ''
+          let first = true
+          for (const key in schema.properties) {
+            // schema.properties[key] is safe: key comes from iterating schema.properties
+            const propSchema = schema.properties[key]!
+            const isRequired = schema.required?.includes(key) ?? false
+            const optional = isRequired ? '' : '?'
+            const propType = getTypeScriptType(propSchema, options)
+            const inlineDescription =
+              isSchemaObject(propSchema) && typeof propSchema.description === 'string'
+                ? propSchema.description
+                : isSchemaObject(propSchema) && typeof propSchema.$comment === 'string'
+                  ? propSchema.$comment
+                  : undefined
+            if (!first) properties += '\n'
+            first = false
+            if (inlineDescription) {
+              properties +=
+                '  /** ' +
+                inlineDescription +
+                ' */\n  ' +
+                readonlyPrefix +
+                safeKey(key) +
+                optional +
+                ': ' +
+                propType +
+                ';'
+            } else {
+              properties += '  ' + readonlyPrefix + safeKey(key) + optional + ': ' + propType + ';'
+            }
+          }
+          return '{\n' + properties + '\n}'
+        }
+
         let properties = ''
         let first = true
         for (const key in schema.properties) {
