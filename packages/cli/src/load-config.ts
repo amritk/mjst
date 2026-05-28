@@ -28,11 +28,13 @@ export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>
     ...(typeof obj['schema'] === 'string' && { schema: obj['schema'] }),
     ...(typeof obj['schemaDir'] === 'string' && { schemaDir: obj['schemaDir'] }),
     ...(typeof obj['outDir'] === 'string' && { outDir: obj['outDir'] }),
+    ...(typeof obj['outFile'] === 'string' && { outFile: obj['outFile'] }),
     ...(isSourceFormat(obj['input']) && { input: obj['input'] }),
     ...(typeof obj['export'] === 'string' && { export: obj['export'] }),
     ...(typeof obj['typesOnly'] === 'boolean' && { typesOnly: obj['typesOnly'] }),
     ...(typeof obj['build'] === 'boolean' && { build: obj['build'] }),
     ...(typeof obj['logWarnings'] === 'boolean' && { logWarnings: obj['logWarnings'] }),
     ...(typeof obj['strict'] === 'boolean' && { strict: obj['strict'] }),
+    ...(typeof obj['readonly'] === 'boolean' && { readonly: obj['readonly'] }),
   }
 }

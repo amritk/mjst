@@ -4,8 +4,10 @@
   "description": "Generate TypeScript parsers and type definitions from JSON Schemas.\n\nYou can supply options via CLI flags or a JSON config file. CLI flags always take precedence over config file values.",
   "$comment": "Supply options either via CLI flags or a JSON config file — both approaches are shown below.",
   "type": "object",
-  "required": ["outDir"],
-  "oneOf": [{ "required": ["schema"] }, { "required": ["schemaDir"] }],
+  "allOf": [
+    { "oneOf": [{ "required": ["schema"] }, { "required": ["schemaDir"] }] },
+    { "oneOf": [{ "required": ["outDir"] }, { "required": ["outFile"] }] }
+  ],
   "properties": {
     "schema": {
       "type": "string",
@@ -16,7 +18,7 @@
     },
     "schemaDir": {
       "type": "string",
-      "x-cli-flag": "--schemaDir <dir>",
+      "x-cli-flag": "--schema-dir <dir>",
       "x-icon": "🗂️",
       "description": "Path to a directory of JSON Schema files. When set, the CLI walks the directory recursively, generates parsers for every '*.json' schema it finds, and mirrors the directory layout under outDir (each schema lands in its own subdirectory). The runtime helpers are emitted once into a shared outDir/_helpers/ that every nested parser imports from. Mutually exclusive with 'schema'; when both are present 'schemaDir' wins. Only JSON Schema input is supported in this mode.",
       "examples": ["./schemas"]
@@ -37,10 +39,17 @@
     },
     "outDir": {
       "type": "string",
-      "x-cli-flag": "--outDir <dir>",
+      "x-cli-flag": "--out-dir <dir>",
       "x-icon": "📁",
-      "description": "Output directory for generated TypeScript files. The directory is created automatically if it does not exist. Subdirectories are created as needed when a generated file includes a nested path.",
+      "description": "Output directory for generated TypeScript files. The directory is created automatically if it does not exist. Subdirectories are created as needed when a generated file includes a nested path. Mutually exclusive with 'outFile'.",
       "examples": ["./generated"]
+    },
+    "outFile": {
+      "type": "string",
+      "x-cli-flag": "--out-file <file>",
+      "x-icon": "📄",
+      "description": "Output everything to a single TypeScript file instead of a directory. Every generated definition is concatenated into one self-contained file and the cross-file imports are dropped. Mutually exclusive with 'outDir'. Currently supported only together with 'typesOnly'.",
+      "examples": ["./generated/schema.ts"]
     },
     "typesOnly": {
       "type": "boolean",
@@ -70,6 +79,13 @@
       "default": false,
       "description": "Generate parsers that throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. Unknown extra keys are still allowed."
     },
+    "readonly": {
+      "type": "boolean",
+      "x-cli-flag": "--readonly",
+      "x-icon": "🔒",
+      "default": false,
+      "description": "Emit every property, array, and record in the generated type definitions as readonly, producing deeply immutable types. Affects type definitions only; the generated parsers still build and return plain objects."
+    },
     "helpers": {
       "type": "string",
       "enum": ["package", "embedded"],
@@ -81,7 +97,7 @@
       "type": "string",
       "x-cli-flag": "--config <path>",
       "x-icon": "⚙️",
-      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, typesOnly, build, logWarnings, strict, helpers). CLI flags take precedence over config file values.",
+      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, outFile, typesOnly, build, logWarnings, strict, readonly, helpers). CLI flags take precedence over config file values.",
       "examples": ["./mjst.config.json"]
     }
   },

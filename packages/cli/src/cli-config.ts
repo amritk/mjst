@@ -25,8 +25,13 @@ export type CliConfig = {
    * Defaults to the default export, or the sole named export when there is exactly one.
    */
   readonly export?: string
-  /** Output directory for generated TypeScript files. */
-  readonly outDir: string
+  /** Output directory for generated TypeScript files. Mutually exclusive with `outFile`. */
+  readonly outDir?: string
+  /**
+   * Output everything to a single TypeScript file instead of a directory of files.
+   * Mutually exclusive with `outDir`. Currently supported only with `typesOnly`.
+   */
+  readonly outFile?: string
   /**
    * When true, only generate TypeScript type definitions without parser functions.
    * Useful when you only need the type shapes and do not need runtime validation.
@@ -58,4 +63,9 @@ export type CliConfig = {
    * resolves from outDir, otherwise falls back to `'embedded'`.
    */
   readonly helpers?: 'package' | 'embedded'
+  /**
+   * When true, every property, array, and record in the generated type
+   * definitions is emitted as `readonly`, producing deeply immutable types.
+   */
+  readonly readonly?: boolean
 }

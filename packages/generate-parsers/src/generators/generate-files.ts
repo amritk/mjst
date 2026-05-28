@@ -54,6 +54,11 @@ type GenerateFileOptions = {
    * at the output root.
    */
   readonly helpersImportPrefix?: string
+  /**
+   * When true, every property, array, and record in the generated type
+   * definitions is emitted as `readonly`.
+   */
+  readonly readonly?: boolean
 }
 
 /** Result of generating a single parser file. */
@@ -100,7 +105,7 @@ export const generateFile = (
   const selfRef = options?.selfRef
   const rootSchema = options?.rootSchema
   const helpersMode: HelpersMode = options?.helpersMode ?? 'package'
-  const typeDefinition = generateTypeDefinition(schema, typeName)
+  const typeDefinition = generateTypeDefinition(schema, typeName, { readonly: options?.readonly ?? false })
 
   if (typesOnly) {
     // In types-only mode, skip the parser function and use type-only imports

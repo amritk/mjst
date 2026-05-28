@@ -39,16 +39,16 @@ No install required — run it directly with your favourite package runner:
 
 ```bash
 # npm
-npx @amritk/mjst --schema ./schema.json --outDir ./generated
+npx @amritk/mjst --schema ./schema.json --out-dir ./generated
 
 # pnpm
-pnpx @amritk/mjst --schema ./schema.json --outDir ./generated
+pnpx @amritk/mjst --schema ./schema.json --out-dir ./generated
 
 # yarn
-yarn dlx @amritk/mjst --schema ./schema.json --outDir ./generated
+yarn dlx @amritk/mjst --schema ./schema.json --out-dir ./generated
 
 # bun
-bunx @amritk/mjst --schema ./schema.json --outDir ./generated
+bunx @amritk/mjst --schema ./schema.json --out-dir ./generated
 ```
 
 Or use a config file:

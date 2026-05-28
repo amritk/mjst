@@ -94,6 +94,8 @@ const extractDynamicAnchorDefs = (schema: JSONSchema): string[] => {
  *   embedded mode. Defaults to `'./'`. The recursive multi-schema build passes `'../'`,
  *   `'../../'`, etc. so nested parsers can import from a single shared `_helpers/`
  *   directory while the helper sources are emitted once at the output root.
+ * @param readonly - When true, every property, array, and record in the generated type
+ *   definitions is emitted as `readonly`.
  * @returns An array of generated TypeScript files
  *
  * @example
@@ -135,6 +137,7 @@ export const buildSchema = async (
   strict?: boolean,
   helpersMode: HelpersMode = 'package',
   helpersImportPrefix = './',
+  readonly = false,
 ): Promise<GeneratedFile[]> => {
   // Upgrade draft-07 schemas to 2020-12 conventions before processing.
   // This renames `definitions` → `$defs` recursively so the rest of the
@@ -161,6 +164,7 @@ export const buildSchema = async (
     rootSchema: rootSchema as Record<string, unknown>,
     helpersMode,
     helpersImportPrefix,
+    readonly,
     ...(logWarnings !== undefined ? { logWarnings } : {}),
     ...(strict !== undefined ? { strict } : {}),
   })
@@ -212,6 +216,7 @@ export const buildSchema = async (
       rootSchema: rootSchema as Record<string, unknown>,
       helpersMode,
       helpersImportPrefix,
+      readonly,
       ...(logWarnings !== undefined ? { logWarnings } : {}),
       ...(strict !== undefined ? { strict } : {}),
     })

@@ -10,6 +10,12 @@ type ConditionalObjectResult = {
   thenRef: string | null
 }
 
+/** Options controlling generated type output. */
+export type TypeOptions = {
+  /** When true, every property, array, and record in the generated types is emitted as readonly. */
+  readonly readonly?: boolean
+}
+
 const getConditionalObjectSchema = (schema: JSONSchema): ConditionalObjectResult | null => {
   if (!isSchemaObject(schema)) {
     return null
@@ -113,17 +119,21 @@ const buildJsDocBlock = (title: string, description: string, commentUrl?: string
  * type and intersect it with a unique brand marker. This is the recursion entry
  * point, so branded nested fields are wrapped too.
  */
-const getTypeScriptType = (schema: JSONSchema): string => {
-  const base = getUnbrandedType(schema)
+const getTypeScriptType = (schema: JSONSchema, options: TypeOptions = {}): string => {
+  const base = getUnbrandedType(schema, options)
   const brand = getMjstBrand(schema)
   return brand ? `(${base} & { readonly __brand: '${brand}' })` : base
 }
+
+/** Wraps a `Record<...>` in `Readonly<...>` when readonly output is requested. */
+const recordType = (keyType: string, valueType: string, options: TypeOptions): string =>
+  options.readonly ? `Readonly<Record<${keyType}, ${valueType}>>` : `Record<${keyType}, ${valueType}>`
 
 /**
  * Converts a JSON Schema type to its TypeScript equivalent, ignoring any brand.
  * Recursively handles nested objects and arrays.
  */
-const getUnbrandedType = (schema: JSONSchema): string => {
+const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string => {
   // Boolean schema: `true` means any value is valid (unknown), `false` means no value is valid (never)
   if (typeof schema === 'boolean') {
     return getBooleanSubSchemaType(schema)
@@ -195,17 +205,17 @@ const getUnbrandedType = (schema: JSONSchema): string => {
   // Handle union types (oneOf, anyOf) - check this before returning unknown
   if (schema.oneOf && Array.isArray(schema.oneOf) && schema.oneOf.length > 0) {
     // schema.oneOf[0] is safe: we guard with .length > 0 above
-    let oneOfUnion = getTypeScriptType(schema.oneOf[0]!)
+    let oneOfUnion = getTypeScriptType(schema.oneOf[0]!, options)
     for (let i = 1; i < schema.oneOf.length; i++) {
-      oneOfUnion += ' | ' + getTypeScriptType(schema.oneOf[i]!)
+      oneOfUnion += ' | ' + getTypeScriptType(schema.oneOf[i]!, options)
     }
     return oneOfUnion
   }
   if (schema.anyOf && Array.isArray(schema.anyOf) && schema.anyOf.length > 0) {
     // schema.anyOf[0] is safe: we guard with .length > 0 above
-    let anyOfUnion = getTypeScriptType(schema.anyOf[0]!)
+    let anyOfUnion = getTypeScriptType(schema.anyOf[0]!, options)
     for (let i = 1; i < schema.anyOf.length; i++) {
-      anyOfUnion += ' | ' + getTypeScriptType(schema.anyOf[i]!)
+      anyOfUnion += ' | ' + getTypeScriptType(schema.anyOf[i]!, options)
     }
     return anyOfUnion
   }
@@ -213,9 +223,9 @@ const getUnbrandedType = (schema: JSONSchema): string => {
   // Handle allOf (intersection types)
   if (schema.allOf && Array.isArray(schema.allOf) && schema.allOf.length > 0) {
     // schema.allOf[0] is safe: we guard with .length > 0 above
-    let intersectionTypes = getTypeScriptType(schema.allOf[0]!)
+    let intersectionTypes = getTypeScriptType(schema.allOf[0]!, options)
     for (let i = 1; i < schema.allOf.length; i++) {
-      intersectionTypes += ' & ' + getTypeScriptType(schema.allOf[i]!)
+      intersectionTypes += ' & ' + getTypeScriptType(schema.allOf[i]!, options)
     }
     return intersectionTypes
   }
@@ -223,7 +233,7 @@ const getUnbrandedType = (schema: JSONSchema): string => {
   // Handle object-like conditional schemas that use if/then without declaring type
   const conditionalResult = getConditionalObjectSchema(schema)
   if (conditionalResult) {
-    const baseType = getTypeScriptType(conditionalResult.schema)
+    const baseType = getTypeScriptType(conditionalResult.schema, options)
     if (conditionalResult.thenRef) {
       return `(${baseType}) & ${refToName(conditionalResult.thenRef)}`
     }
@@ -234,9 +244,9 @@ const getUnbrandedType = (schema: JSONSchema): string => {
   if (!schema.type) {
     if (schema.additionalProperties !== undefined) {
       if (typeof schema.additionalProperties === 'boolean') {
-        return `Record<string, ${getBooleanSubSchemaType(schema.additionalProperties)}>`
+        return recordType('string', getBooleanSubSchemaType(schema.additionalProperties), options)
       }
-      return `Record<string, ${getTypeScriptType(schema.additionalProperties)}>`
+      return recordType('string', getTypeScriptType(schema.additionalProperties, options), options)
     }
 
     if (schema.patternProperties && typeof schema.patternProperties === 'object') {
@@ -244,13 +254,14 @@ const getUnbrandedType = (schema: JSONSchema): string => {
       if (firstEntry) {
         const [pattern, value] = firstEntry
         if (value !== undefined) {
-          const valueType = typeof value === 'boolean' ? getBooleanSubSchemaType(value) : getTypeScriptType(value)
+          const valueType =
+            typeof value === 'boolean' ? getBooleanSubSchemaType(value) : getTypeScriptType(value, options)
           // The ^x- pattern is a common JSON Schema convention for vendor extensions
           // that maps naturally to the TypeScript template literal `x-${string}`
           if (pattern === '^x-') {
-            return `Record<\`x-\${string}\`, ${valueType}>`
+            return recordType('`x-${string}`', valueType, options)
           }
-          return `Record<string, ${valueType}>`
+          return recordType('string', valueType, options)
         }
       }
     }
@@ -315,16 +326,17 @@ const getUnbrandedType = (schema: JSONSchema): string => {
     // Array
     case 'array':
       if (schema.items) {
-        const itemType = getTypeScriptType(schema.items)
+        const itemType = getTypeScriptType(schema.items, options)
         // Wrap union types in parentheses so `(A | B)[]` is not misread as `A | B[]`
         const wrappedItemType = itemType.includes(' | ') ? `(${itemType})` : itemType
-        return `${wrappedItemType}[]`
+        return options.readonly ? `readonly ${wrappedItemType}[]` : `${wrappedItemType}[]`
       }
-      return 'unknown[]'
+      return options.readonly ? 'readonly unknown[]' : 'unknown[]'
 
     // Object
     case 'object':
       if (schema.properties) {
+        const readonlyPrefix = options.readonly ? 'readonly ' : ''
         let properties = ''
         let first = true
         for (const key in schema.properties) {
@@ -332,17 +344,17 @@ const getUnbrandedType = (schema: JSONSchema): string => {
           const propSchema = schema.properties[key]!
           const isRequired = schema.required?.includes(key) ?? false
           const optional = isRequired ? '' : '?'
-          const propType = getTypeScriptType(propSchema)
+          const propType = getTypeScriptType(propSchema, options)
           if (!first) properties += '; '
-          properties += safeKey(key) + optional + ': ' + propType
+          properties += readonlyPrefix + safeKey(key) + optional + ': ' + propType
           first = false
         }
         return '{ ' + properties + ' }'
       }
       // Handle additionalProperties with $ref or $dynamicRef
       if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
-        const additionalPropType = getTypeScriptType(schema.additionalProperties)
-        return `Record<string, ${additionalPropType}>`
+        const additionalPropType = getTypeScriptType(schema.additionalProperties, options)
+        return recordType('string', additionalPropType, options)
       }
       // Handle patternProperties as a Record type
       if (schema.patternProperties && typeof schema.patternProperties === 'object') {
@@ -350,11 +362,11 @@ const getUnbrandedType = (schema: JSONSchema): string => {
         if (firstEntry) {
           const [pattern, patternVal] = firstEntry
           if (patternVal) {
-            const valueType = getTypeScriptType(patternVal)
+            const valueType = getTypeScriptType(patternVal, options)
             if (pattern === '^x-') {
-              return `Record<\`x-\${string}\`, ${valueType}>`
+              return recordType('`x-${string}`', valueType, options)
             }
-            return `Record<string, ${valueType}>`
+            return recordType('string', valueType, options)
           }
         }
       }
@@ -371,10 +383,12 @@ const getUnbrandedType = (schema: JSONSchema): string => {
  * Handles required vs optional properties based on the schema's required array.
  * Uses $comment as inline JSDoc description when present.
  */
-export const generateTypeDefinition = (schema: JSONSchema, typeName: string): string => {
+export const generateTypeDefinition = (schema: JSONSchema, typeName: string, options: TypeOptions = {}): string => {
+  const readonlyPrefix = options.readonly ? 'readonly ' : ''
+
   // Handle non-object schemas first
   if (!isObjectLikeSchema(schema)) {
-    const tsType = getTypeScriptType(schema)
+    const tsType = getTypeScriptType(schema, options)
     let result = ''
 
     if (isSchemaObject(schema) && schema.$comment && typeof schema.$comment === 'string') {
@@ -418,7 +432,7 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string): st
       const patternPropType =
         typeof firstPatternProperty === 'boolean'
           ? getBooleanSubSchemaType(firstPatternProperty)
-          : getTypeScriptType(firstPatternProperty)
+          : getTypeScriptType(firstPatternProperty, options)
 
       // The ^x- pattern is a common JSON Schema convention for vendor extensions
       // that maps naturally to the TypeScript template literal `x-${string}`
@@ -428,20 +442,20 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string): st
       if (jsDocTitle && jsDocDescription) {
         result += buildJsDocBlock(jsDocTitle, jsDocDescription)
       }
-      result += `export type ${typeName} = Record<${keyType}, ${patternPropType}>;`
+      result += `export type ${typeName} = ${recordType(keyType, patternPropType, options)};`
 
       return result
     }
 
     // Handle objects with only additionalProperties (no fixed properties)
     if (!hasProperties && hasAdditionalProperties && normalizedSchema.additionalProperties) {
-      const additionalPropType = getTypeScriptType(normalizedSchema.additionalProperties)
+      const additionalPropType = getTypeScriptType(normalizedSchema.additionalProperties, options)
 
       let result = ''
       if (jsDocTitle && jsDocDescription) {
         result += buildJsDocBlock(jsDocTitle, jsDocDescription)
       }
-      result += `export type ${typeName} = {\n  [key: string]: ${additionalPropType};\n};`
+      result += `export type ${typeName} = {\n  ${readonlyPrefix}[key: string]: ${additionalPropType};\n};`
 
       return result
     }
@@ -454,8 +468,8 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string): st
       const propSchema = schemaProps[key]!
       const isRequired = normalizedSchema.required?.includes(key) ?? false
       const optional = isRequired ? '' : '?'
-      const propType = getTypeScriptType(propSchema)
-      const quotedKey = safeKey(key)
+      const propType = getTypeScriptType(propSchema, options)
+      const quotedKey = readonlyPrefix + safeKey(key)
 
       if (!isFirstProp) properties += '\n'
       isFirstProp = false

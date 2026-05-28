@@ -243,4 +243,32 @@ describe('parse-cli-args', () => {
     const result = parseCliArgs(['--helpers=foo', '--schema', 's.json'])
     expect(result).toEqual({ schema: 's.json' })
   })
+
+  it('accepts kebab-case flag names', () => {
+    const result = parseCliArgs(['--schema-dir', './schemas', '--out-dir', 'dist'])
+
+    expect(result).toEqual({
+      schemaDir: './schemas',
+      outDir: 'dist',
+    })
+  })
+
+  it('treats kebab-case and camelCase variants as equivalent', () => {
+    const kebab = parseCliArgs(['--out-dir', 'dist', '--types-only', '--log-warnings'])
+    const camel = parseCliArgs(['--outDir', 'dist', '--typesOnly', '--logWarnings'])
+
+    expect(kebab).toEqual(camel)
+    expect(camel).toEqual({ outDir: 'dist', typesOnly: true, logWarnings: true })
+  })
+
+  it('parses --out-file with space-separated and equals syntax', () => {
+    expect(parseCliArgs(['--out-file', './out/schema.ts'])).toEqual({ outFile: './out/schema.ts' })
+    expect(parseCliArgs(['--outFile=./out/schema.ts'])).toEqual({ outFile: './out/schema.ts' })
+  })
+
+  it('parses --readonly boolean flag and its equals forms', () => {
+    expect(parseCliArgs(['--readonly'])).toEqual({ readonly: true })
+    expect(parseCliArgs(['--readonly=true'])).toEqual({ readonly: true })
+    expect(parseCliArgs(['--readonly=false'])).toEqual({ readonly: false })
+  })
 })
