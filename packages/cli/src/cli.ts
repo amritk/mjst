@@ -16,6 +16,11 @@ import { detectHelpersMode } from './detect-helpers-mode'
 import { loadConfig } from './load-config'
 import { loadSchemaModule } from './load-schema-module'
 import { parseCliArgs } from './parse-cli-args'
+import { readVersion } from './read-version'
+
+/** True when the args request the CLI version (`version`, `--version`, or `-v`). */
+const isVersionRequest = (args: readonly string[]): boolean =>
+  args[0] === 'version' || args.includes('--version') || args.includes('-v')
 
 /**
  * Extracts the --config flag value from process args before full parsing.
@@ -278,6 +283,11 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
 const run = async (): Promise<void> => {
   // Skip the first two args (node executable and script path)
   const args = process.argv.slice(2)
+
+  if (isVersionRequest(args)) {
+    console.log(await readVersion())
+    return
+  }
 
   const configPath = extractConfigPath(args)
 
