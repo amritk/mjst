@@ -396,8 +396,12 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
     const tsType = getTypeScriptType(schema, options)
     let result = ''
 
-    if (isSchemaObject(schema) && schema.$comment && typeof schema.$comment === 'string') {
-      result += buildJsDocBlock(typeName, schema.$comment)
+    const topLevelComment =
+      (isSchemaObject(schema) && typeof schema.description === 'string' && schema.description) ||
+      (isSchemaObject(schema) && typeof schema.$comment === 'string' && schema.$comment) ||
+      undefined
+    if (topLevelComment) {
+      result += buildJsDocBlock(typeName, topLevelComment)
     }
 
     result += `export type ${typeName} = ${tsType};`
@@ -411,9 +415,13 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
     let jsDocTitle: string | undefined
     let jsDocDescription: string | undefined
 
-    if (isSchemaObject(schema) && schema.$comment && typeof schema.$comment === 'string') {
+    const topLevelComment =
+      (isSchemaObject(schema) && typeof schema.description === 'string' && schema.description) ||
+      (isSchemaObject(schema) && typeof schema.$comment === 'string' && schema.$comment) ||
+      undefined
+    if (topLevelComment) {
       jsDocTitle = typeName
-      jsDocDescription = schema.$comment
+      jsDocDescription = topLevelComment
     }
 
     const hasProperties = normalizedSchema.properties && Object.keys(normalizedSchema.properties).length > 0

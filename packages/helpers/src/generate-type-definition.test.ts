@@ -1085,7 +1085,12 @@ describe('generateTypeDefinition', () => {
     const result = generateTypeDefinition(schema, 'Product')
 
     expect(result).toBe(
-      'export type Product = {\n' +
+      '/**\n' +
+        '* Product\n' +
+        '*\n' +
+        '* A product available for purchase in the catalog.\n' +
+        '*/\n' +
+        'export type Product = {\n' +
         '  /** Unique product identifier (UUID). */\n' +
         '  id: string;\n' +
         '  /** Display name shown to customers. */\n' +
@@ -1109,7 +1114,14 @@ describe('generateTypeDefinition', () => {
 
     const result = generateTypeDefinition(schema, 'ThemeColor')
 
-    expect(result).toBe('export type ThemeColor = "red" | "green" | "blue" | "yellow" | "purple";')
+    expect(result).toBe(
+      '/**\n' +
+        '* ThemeColor\n' +
+        '*\n' +
+        '* One of the supported theme colors.\n' +
+        '*/\n' +
+        'export type ThemeColor = "red" | "green" | "blue" | "yellow" | "purple";',
+    )
   })
 
   it('generates type for geo coordinate with min/max constraints on required number fields', () => {
@@ -1128,7 +1140,12 @@ describe('generateTypeDefinition', () => {
     const result = generateTypeDefinition(schema, 'GeoCoordinate')
 
     expect(result).toBe(
-      'export type GeoCoordinate = {\n' +
+      '/**\n' +
+        '* GeoCoordinate\n' +
+        '*\n' +
+        '* A geographic coordinate pair.\n' +
+        '*/\n' +
+        'export type GeoCoordinate = {\n' +
         '  /** Degrees latitude, from -90 to 90. */\n' +
         '  latitude: number;\n' +
         '  /** Degrees longitude, from -180 to 180. */\n' +
