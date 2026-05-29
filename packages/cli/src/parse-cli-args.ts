@@ -19,6 +19,7 @@ type MutableConfig = {
   readonly?: boolean
   helpers?: 'package' | 'embedded'
   typeSuffix?: string
+  banner?: boolean | string
 }
 
 // Boolean flags toggle on by presence and accept `--flag=false` to opt out.
@@ -127,7 +128,10 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
     if (equalsIndex !== -1) {
       const key = toCamelCase(arg.slice(2, equalsIndex))
       const value = arg.slice(equalsIndex + 1)
-      if (BOOLEAN_KEYS.has(key as keyof MutableConfig)) {
+      if (key === 'banner') {
+        // --banner=false → false, --banner=true → true, --banner=<text> → custom string
+        config.banner = value === 'false' ? false : value === 'true' ? true : value
+      } else if (BOOLEAN_KEYS.has(key as keyof MutableConfig)) {
         assignBoolean(config, key, value !== 'false')
       } else {
         assignValue(config, key, value)
@@ -136,6 +140,19 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
     }
 
     const key = toCamelCase(arg.slice(2))
+
+    // --banner: presence alone enables the default message; an immediately
+    // following non-flag argument is treated as a custom message string.
+    if (key === 'banner') {
+      const nextArg = args[i + 1]
+      if (nextArg && !nextArg.startsWith('--')) {
+        config.banner = nextArg
+        i++
+      } else {
+        config.banner = true
+      }
+      continue
+    }
 
     // Boolean flag: presence alone enables it, no value needed
     if (BOOLEAN_KEYS.has(key as keyof MutableConfig)) {
