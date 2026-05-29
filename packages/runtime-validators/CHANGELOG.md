@@ -1,5 +1,11 @@
 # @amritk/runtime-validators
 
+## 0.2.1
+
+### Patch Changes
+
+- 8cde234: Re-publish all packages.
+
 ## 0.2.0
 
 ### Minor Changes

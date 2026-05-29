@@ -1,5 +1,13 @@
 # @amritk/adapters
 
+## 0.2.5
+
+### Patch Changes
+
+- 8cde234: Re-publish all packages.
+- Updated dependencies [8cde234]
+  - @amritk/helpers@0.6.2
+
 ## 0.2.4
 
 ### Patch Changes

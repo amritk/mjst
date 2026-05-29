@@ -1,5 +1,11 @@
 # @amritk/helpers
 
+## 0.6.2
+
+### Patch Changes
+
+- 8cde234: Re-publish all packages.
+
 ## 0.6.1
 
 ### Patch Changes

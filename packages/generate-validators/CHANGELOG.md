@@ -1,5 +1,13 @@
 # @amritk/generate-validators
 
+## 0.4.2
+
+### Patch Changes
+
+- 8cde234: Re-publish all packages.
+- Updated dependencies [8cde234]
+  - @amritk/helpers@0.6.2
+
 ## 0.4.1
 
 ### Patch Changes
