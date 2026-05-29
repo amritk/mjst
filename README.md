@@ -33,6 +33,27 @@ The CLI (`mjst`) is the primary entry point; the underlying generators are also 
 
 ---
 
+## How mjst compares
+
+Most tools in this space pick a single lane — types **or** validation **or** docs. mjst generates the whole TypeScript surface from one schema, and it can also *consume* schemas authored in other libraries as input.
+
+| | Types | Validators | Parsers&nbsp;/&nbsp;coercion | Markdown&nbsp;docs | Multi-library&nbsp;input |
+|:--|:-:|:-:|:-:|:-:|:-:|
+| **mjst** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| [json-schema-to-typescript](https://github.com/bcherny/json-schema-to-typescript) | ✅ | — | — | — | — |
+| [ajv](https://ajv.js.org/) *(standalone)* | — | ✅ | — | — | — |
+| [quicktype](https://quicktype.io/) | ✅ | — | 🟡 | — | — |
+| TypeBox · Zod · Valibot | ✅ | ✅ | ✅ | — | n/a&nbsp;¹ |
+
+<sub>✅ first-class · 🟡 partial · — not offered</sub>
+
+<sub>¹ These libraries *are* a schema source rather than a competitor — mjst consumes them via [`@amritk/adapters`](./packages/adapters).</sub>
+
+> [!NOTE]
+> Benchmarks — generation speed and generated-validator throughput against ajv and zod — are on the roadmap and will land in this section.
+
+---
+
 ## Quick start
 
 No install required — run it directly with your favourite package runner:
