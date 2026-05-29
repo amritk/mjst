@@ -37,17 +37,19 @@ The CLI (`mjst`) is the primary entry point; the underlying generators are also 
 
 Most tools in this space pick a single lane — types **or** validation **or** docs. mjst generates the whole TypeScript surface from one schema, and it can also *consume* schemas authored in other libraries as input.
 
-| | Types | Validators | Parsers&nbsp;/&nbsp;coercion | Markdown&nbsp;docs | Multi-library&nbsp;input |
-|:--|:-:|:-:|:-:|:-:|:-:|
-| **mjst** | ✅ | ✅ | ✅ | ✅ | ✅ |
-| [json-schema-to-typescript](https://github.com/bcherny/json-schema-to-typescript) | ✅ | — | — | — | — |
-| [ajv](https://ajv.js.org/) *(standalone)* | — | ✅ | — | — | — |
-| [quicktype](https://quicktype.io/) | ✅ | — | 🟡 | — | — |
-| TypeBox · Zod · Valibot | ✅ | ✅ | ✅ | — | n/a&nbsp;¹ |
+| | Types | Validators | Parsers&nbsp;/&nbsp;coercion | Markdown&nbsp;docs | Test&nbsp;data&nbsp;² | Multi-library&nbsp;input |
+|:--|:-:|:-:|:-:|:-:|:-:|:-:|
+| **mjst** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| [json-schema-to-typescript](https://github.com/bcherny/json-schema-to-typescript) | ✅ | — | — | — | — | — |
+| [ajv](https://ajv.js.org/) *(standalone)* | — | ✅ | — | — | — | — |
+| [quicktype](https://quicktype.io/) | ✅ | — | 🟡 | — | — | — |
+| TypeBox · Zod · Valibot | ✅ | ✅ | ✅ | — | — | n/a&nbsp;¹ |
 
 <sub>✅ first-class · 🟡 partial · — not offered</sub>
 
 <sub>¹ These libraries *are* a schema source rather than a competitor — mjst consumes them via [`@amritk/adapters`](./packages/adapters).</sub>
+
+<sub>² fast-check arbitraries for property testing plus concrete example values, via [`@amritk/generate-examples`](./packages/generate-examples).</sub>
 
 > [!NOTE]
 > Benchmarks — generation speed and generated-validator throughput against ajv and zod — are on the roadmap and will land in this section.
@@ -96,6 +98,7 @@ See the [CLI README](./packages/cli/README.md) for the full flag reference and c
 | [`@amritk/mjst`](./packages/cli) | CLI — generates parsers, validators, and types from a schema |
 | [`@amritk/generate-parsers`](./packages/generate-parsers) | Programmatic API for parser + type generation |
 | [`@amritk/generate-validators`](./packages/generate-validators) | Programmatic API for validator generation |
+| [`@amritk/generate-examples`](./packages/generate-examples) | Programmatic API for fast-check arbitraries + example data generation |
 | [`@amritk/generate-markdown`](./packages/generate-markdown) | Programmatic API for markdown documentation generation |
 | [`@amritk/helpers`](./packages/helpers) | Shared runtime helpers used by generated code |
 
