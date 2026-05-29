@@ -12,6 +12,7 @@ mjst/
 │   ├── cli/                   # @amritk/mjst — command-line interface
 │   ├── generate-parsers/      # @amritk/generate-parsers — parser + type generator
 │   ├── generate-validators/   # @amritk/generate-validators — predicate validator generator
+│   ├── runtime-validators/    # @amritk/runtime-validators — runtime schema → validator compiler
 │   ├── generate-examples/     # @amritk/generate-examples — fast-check arbitrary + example generator
 │   ├── generate-markdown/     # @amritk/generate-markdown — README table generator
 │   ├── adapters/              # @amritk/adapters — convert external schemas (TypeBox, …) to JSON Schema
@@ -50,6 +51,15 @@ Generates lightweight predicate-style validators: each schema becomes a `validat
 - **Depends on:** `@amritk/helpers`, `json-schema-typed`
 - **Subpath imports:** `#generators/*` → `./src/generators/*.ts`
 - **Key entry point:** `src/generators/build-schema.ts`
+
+### `@amritk/runtime-validators` (`packages/runtime-validators`)
+
+The runtime counterpart to `generate-validators`. Instead of writing validator source files at build time, it compiles a JSON Schema discovered **at runtime** (a plugin config, a user-supplied schema) into a specialized function via `new Function`. Built for the same extreme-performance goal as the rest of the repo: it benchmarks faster than Ajv on validation and dramatically cheaper on startup.
+
+- **Depends on:** `json-schema-typed` (types only). Deliberately self-contained — no `@amritk/helpers` — so the runtime stays slim. `ajv` / `ajv-formats` are dev-only, for the benchmark suite.
+- **Subpath imports:** `#compiler/*` → `./src/compiler/*.ts`
+- **Entry points:** `compile(schema)` → error-collecting validator (`true | { valid: false, errors }`); `compileGuard(schema)` → zero-allocation boolean type guard.
+- **Design notes:** the whole validator is emitted as one flat function; regexes, enum `Set`s, and deep-equal constants are hoisted into the function's closure (built once, never per call). Compilation is lazy (deferred to first use) and cached in a `WeakMap` keyed by schema identity, to keep startup cost near zero. Only local `$ref`s are resolved (recursion supported via generated named functions). The core emitter is `src/compiler/generate-schema-code.ts`.
 
 ### `@amritk/generate-examples` (`packages/generate-examples`)
 

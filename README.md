@@ -98,6 +98,7 @@ See the [CLI README](./packages/cli/README.md) for the full flag reference and c
 | [`@amritk/mjst`](./packages/cli) | CLI — generates parsers, validators, and types from a schema |
 | [`@amritk/generate-parsers`](./packages/generate-parsers) | Programmatic API for parser + type generation |
 | [`@amritk/generate-validators`](./packages/generate-validators) | Programmatic API for validator generation |
+| [`@amritk/runtime-validators`](./packages/runtime-validators) | Runtime JSON Schema validation for schemas not known ahead of time |
 | [`@amritk/generate-examples`](./packages/generate-examples) | Programmatic API for fast-check arbitraries + example data generation |
 | [`@amritk/generate-markdown`](./packages/generate-markdown) | Programmatic API for markdown documentation generation |
 | [`@amritk/helpers`](./packages/helpers) | Shared runtime helpers used by generated code |

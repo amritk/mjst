@@ -99,6 +99,17 @@
         "json-schema-typed": "catalog:",
       },
     },
+    "packages/runtime-validators": {
+      "name": "@amritk/runtime-validators",
+      "version": "0.1.0",
+      "dependencies": {
+        "json-schema-typed": "catalog:",
+      },
+      "devDependencies": {
+        "ajv": "^8.17.1",
+        "ajv-formats": "^3.0.1",
+      },
+    },
   },
   "catalog": {
     "json-schema-typed": "^8.0.1",
@@ -117,6 +128,8 @@
     "@amritk/helpers": ["@amritk/helpers@workspace:packages/helpers"],
 
     "@amritk/mjst": ["@amritk/mjst@workspace:packages/cli"],
+
+    "@amritk/runtime-validators": ["@amritk/runtime-validators@workspace:packages/runtime-validators"],
 
     "@babel/runtime": ["@babel/runtime@7.29.2", "", {}, "sha512-JiDShH45zKHWyGe4ZNVRrCjBz8Nh9TMmZG1kh4QTK8hCBTWBi8Da+i7s1fJw7/lYpM4ccepSNfqzZ/QvABBi5g=="],
 

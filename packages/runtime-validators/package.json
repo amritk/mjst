@@ -1,0 +1,58 @@
+{
+  "name": "@amritk/runtime-validators",
+  "version": "0.1.0",
+  "description": "Extremely fast runtime JSON Schema validation. Compiles a schema you do not know ahead of time into a specialized validator function.",
+  "module": "./dist/index.js",
+  "type": "module",
+  "license": "MIT",
+  "author": "amritk",
+  "keywords": [
+    "json-schema",
+    "typescript",
+    "validator",
+    "validation",
+    "runtime",
+    "ajv",
+    "fast",
+    "mjst"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amritk/mjst.git",
+    "directory": "packages/runtime-validators"
+  },
+  "homepage": "https://github.com/amritk/mjst/tree/main/packages/runtime-validators#readme",
+  "bugs": {
+    "url": "https://github.com/amritk/mjst/issues"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "bun run build:code && bun run build:types",
+    "build:code": "bun build ./src/index.ts --outdir=dist --target=node",
+    "build:types": "tsc -p .",
+    "bench": "bun run ./bench/run.ts"
+  },
+  "imports": {
+    "#compiler/*": "./src/compiler/*.ts"
+  },
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "dependencies": {
+    "json-schema-typed": "catalog:"
+  },
+  "devDependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1"
+  }
+}

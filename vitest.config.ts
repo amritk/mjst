@@ -15,6 +15,10 @@ export default defineConfig({
         find: /^@amritk\/generate-validators$/,
         replacement: resolve(root, 'packages/generate-validators/src/index.ts'),
       },
+      {
+        find: /^@amritk\/runtime-validators$/,
+        replacement: resolve(root, 'packages/runtime-validators/src/index.ts'),
+      },
     ],
   },
   test: {
