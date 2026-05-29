@@ -237,6 +237,60 @@ describe('validate', () => {
     expect(validator({ user: {} })).not.toBe(true)
   })
 
+  it('validates contains with min/maxContains', () => {
+    const atLeastOne = validate({ type: 'array', contains: { type: 'number' } })
+    expect(atLeastOne([1, 'a'])).toBe(true)
+    expect(atLeastOne(['a', 'b'])).not.toBe(true)
+    expect(atLeastOne([])).not.toBe(true)
+
+    const between = validate({ type: 'array', contains: { type: 'number' }, minContains: 2, maxContains: 3 })
+    expect(between(['a', 1, 2])).toBe(true)
+    expect(between([1])).not.toBe(true)
+    expect(between([1, 2, 3, 4])).not.toBe(true)
+
+    // minContains: 0 makes the lower bound trivially satisfied, even when empty.
+    const zero = validate({ type: 'array', contains: { type: 'number' }, minContains: 0, maxContains: 1 })
+    expect(zero([])).toBe(true)
+    expect(zero(['a'])).toBe(true)
+    expect(zero([1, 2])).not.toBe(true)
+  })
+
+  it('validates propertyNames against a schema', () => {
+    const validator = validate({ type: 'object', propertyNames: { pattern: '^[a-z]+$' } })
+    expect(validator({ foo: 1, bar: 2 })).toBe(true)
+    expect(validator({ Foo: 1 })).toEqual({
+      valid: false,
+      errors: [{ message: 'property name "Foo" is invalid', path: '/Foo' }],
+    })
+  })
+
+  it('applies dependentSchemas when the trigger property is present', () => {
+    const validator = validate({
+      type: 'object',
+      properties: { creditCard: { type: 'number' } },
+      dependentSchemas: {
+        creditCard: { required: ['billingAddress'], properties: { billingAddress: { type: 'string' } } },
+      },
+    })
+    expect(validator({})).toBe(true) // trigger absent → no dependency
+    expect(validator({ creditCard: 1, billingAddress: 'x' })).toBe(true)
+    expect(validator({ creditCard: 1 })).not.toBe(true) // missing dependent
+  })
+
+  it('supports the draft-07 dependencies keyword (array and schema forms)', () => {
+    const arrayForm = validate({ type: 'object', dependencies: { creditCard: ['billingAddress'] } })
+    expect(arrayForm({ creditCard: 1, billingAddress: 'x' })).toBe(true)
+    expect(arrayForm({ creditCard: 1 })).toEqual({
+      valid: false,
+      errors: [{ message: "must have property 'billingAddress' when 'creditCard' is present", path: '' }],
+    })
+
+    const schemaForm = validate({ type: 'object', dependencies: { creditCard: { required: ['billingAddress'] } } })
+    expect(schemaForm({ creditCard: 1, billingAddress: 'x' })).toBe(true)
+    expect(schemaForm({ creditCard: 1 })).not.toBe(true)
+    expect(schemaForm({})).toBe(true)
+  })
+
   it('validates allOf as the intersection', () => {
     const validator = validate({
       allOf: [

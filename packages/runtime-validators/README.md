@@ -114,7 +114,7 @@ What keeps the interpreter lean:
 - **No allocation on the happy path.** The error array is created only when the first error is recorded, so valid input (and the entire guard path) allocates nothing.
 - **A `WeakMap` cache** keyed by schema object, so `validate(sameSchema)` hands back the same validator (with its warm caches) per `(mode, formats)`.
 
-> Benchmarks live in [`bench/`](./bench) and run a correctness parity check against Ajv on every case. Correctness is further locked down by [`src/differential.test.ts`](./src/differential.test.ts), a differential fuzz that compares the interpreter's verdict against Ajv's across ~72k random and mutated values (zero divergences) — so "fast" never comes at the cost of "correct".
+> Benchmarks live in [`bench/`](./bench) and run a correctness parity check against Ajv on every case. Correctness is further locked down by [`src/differential.test.ts`](./src/differential.test.ts), a differential fuzz that compares the interpreter's verdict against Ajv's across ~132k random and mutated values (zero divergences) — so "fast" never comes at the cost of "correct".
 
 ---
 
@@ -137,11 +137,21 @@ Builds a boolean type guard `(input: unknown) => input is T`. Same options as `v
 
 ### Supported keywords
 
-`type` (incl. unions and `integer`), `enum`, `const`, `properties`, `required`, `additionalProperties`, `patternProperties`, `minProperties`, `maxProperties`, `dependentRequired`, `items`/`prefixItems` (2020-12) and array-`items` + `additionalItems` (draft-07), `minItems`, `maxItems`, `uniqueItems`, `minLength`, `maxLength`, `pattern`, `format` (opt-in), `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, `$ref` (local), `nullable` (OpenAPI 3.0), boolean schemas.
+`type` (incl. unions and `integer`), `enum`, `const`, `properties`, `required`, `additionalProperties`, `patternProperties`, `propertyNames`, `minProperties`, `maxProperties`, `dependentRequired`, `dependentSchemas`, `dependencies` (draft-07), `items`/`prefixItems` (2020-12) and array-`items` + `additionalItems` (draft-07), `contains`/`minContains`/`maxContains`, `minItems`, `maxItems`, `uniqueItems`, `minLength`, `maxLength`, `pattern`, `format` (opt-in), `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, `$ref` (local), `nullable` (OpenAPI 3.0), boolean schemas.
 
 > Only **local** `$ref`s are supported — the interpreter resolves pointers within the same document and does not fetch remote ones. Bundle external schemas into `$defs` first.
 
 > **OpenAPI `nullable`.** When a subschema sets `nullable: true`, a `null` value is accepted regardless of its declared `type` (and short-circuits every other keyword), matching how Ajv is configured to treat OpenAPI 3.0 schemas. Without this, a single nullable field produced a flood of spurious `must be …` errors.
+
+### Not supported (by design)
+
+This is a **pragmatic subset** of JSON Schema — sized for validating data against the kind of schemas real APIs and configs use, not for being an authoritative, spec-complete validator. The following are intentionally left out; if your schemas lean on them, reach for Ajv:
+
+- **`unevaluatedProperties` / `unevaluatedItems`.** These require tracking which properties/items were "evaluated" *across* `allOf`/`anyOf`/`$ref` branches. Note the standard consequence: `additionalProperties` only sees `properties`/`patternProperties` in the **same** schema object (not those pulled in via `allOf` or `$ref`) — that is correct per spec, and `unevaluatedProperties` is the keyword that would relax it. We don't implement it.
+- **Remote / non-local references.** `$ref` to another document or URL, plus `$id` base-URI resolution and `$dynamicRef` / `$recursiveRef`. Only same-document JSON-Pointer refs (`#/$defs/...`, `#/definitions/...`) resolve, including recursion; `$ref` by `$anchor` name does not.
+- **`contentEncoding` / `contentMediaType` / `contentSchema`** — treated as annotations (ignored), as they are by default in 2020-12.
+- **Full `format` coverage.** A pragmatic regex set (`email`, `date-time`, `date`, `time`, `duration`, `uuid`, `uri`, `uri-reference`, `hostname`) that is opt-in and "good enough," not RFC-exact; other formats (`ipv4`, `ipv6`, `regex`, `json-pointer`, …) are not checked.
+- **Draft-2020 exotica** beyond the keywords listed above, and the draft-04 boolean form of `exclusiveMinimum`/`exclusiveMaximum`.
 
 ---
 

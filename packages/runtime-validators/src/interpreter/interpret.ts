@@ -213,6 +213,38 @@ const interpretObject = (ctx: InterpreterContext, s: Record<string, unknown>, va
     }
   }
 
+  // `dependentSchemas` (2020-12): when a property is present, the whole object
+  // must also match the associated subschema.
+  const dependentSchemas = isPlainObject(s['dependentSchemas']) ? s['dependentSchemas'] : undefined
+  if (dependentSchemas) {
+    for (const [trigger, subSchema] of Object.entries(dependentSchemas)) {
+      if (obj[trigger] === undefined) continue
+      interpret(ctx, subSchema, obj, path)
+      if (ctx.failed) return
+    }
+  }
+
+  // `dependencies` (draft-07): the dual-form predecessor of `dependentRequired`
+  // + `dependentSchemas`. An array value requires the listed keys; a schema
+  // value is applied to the whole object — both gated on the trigger's presence.
+  const dependencies = isPlainObject(s['dependencies']) ? s['dependencies'] : undefined
+  if (dependencies) {
+    for (const [trigger, dep] of Object.entries(dependencies)) {
+      if (obj[trigger] === undefined) continue
+      if (Array.isArray(dep)) {
+        for (const key of dep as string[]) {
+          if (obj[key] === undefined) {
+            fail(ctx, `must have property '${key}' when '${trigger}' is present`, path)
+            if (ctx.failed) return
+          }
+        }
+      } else {
+        interpret(ctx, dep, obj, path)
+        if (ctx.failed) return
+      }
+    }
+  }
+
   const needsLoop = patternProperties !== undefined || (hasAdditional && additional !== true)
   if (needsLoop) {
     const patternEntries = patternProperties ? Object.entries(patternProperties) : []
@@ -254,6 +286,18 @@ const interpretObject = (ctx: InterpreterContext, s: Record<string, unknown>, va
     }
     if (maxProps !== undefined && count > maxProps) {
       fail(ctx, `must have at most ${maxProps} properties`, path)
+      if (ctx.failed) return
+    }
+  }
+
+  // `propertyNames` — every property *key* (as a string) must match the schema.
+  if ('propertyNames' in s) {
+    const nameSchema = s['propertyNames']
+    for (const k in obj) {
+      if (!matchesSchema(ctx, nameSchema, k)) {
+        fail(ctx, `property name "${k}" is invalid`, `${path}/${k}`)
+        if (ctx.failed) return
+      }
     }
   }
 }
@@ -312,6 +356,26 @@ const interpretArray = (ctx: InterpreterContext, s: Record<string, unknown>, val
 
   if (uniqueRequired && !allUnique(arr)) {
     fail(ctx, 'must have unique items', path)
+    if (ctx.failed) return
+  }
+
+  // `contains` — at least `minContains` (default 1) and at most `maxContains`
+  // items must match the subschema. `minContains: 0` makes the lower bound
+  // trivially satisfied (even for an empty array) while any `maxContains` still
+  // applies. Branch matches are evaluated as booleans so they never leak errors.
+  if ('contains' in s) {
+    const containsSchema = s['contains']
+    const min = typeof s['minContains'] === 'number' ? s['minContains'] : 1
+    const max = typeof s['maxContains'] === 'number' ? s['maxContains'] : undefined
+    let count = 0
+    for (const item of arr) if (matchesSchema(ctx, containsSchema, item)) count++
+    if (count < min) {
+      fail(ctx, `must contain at least ${min} matching items`, path)
+      if (ctx.failed) return
+    }
+    if (max !== undefined && count > max) {
+      fail(ctx, `must contain at most ${max} matching items`, path)
+    }
   }
 }
 

@@ -14,4 +14,4 @@ cold one-shot path (validate a few values per schema), where it beats Ajv's
 compile-then-validate by ~90–1600×; for one-schema-many-values throughput, a
 compiling validator like Ajv or this repo's build-time `@amritk/generate-validators`
 is the right tool. Parity with Ajv is enforced by a differential fuzz test
-(~72k random/mutated values, zero divergences).
+(~132k random/mutated values, zero divergences).

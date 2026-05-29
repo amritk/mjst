@@ -1,4 +1,5 @@
 import Ajv from 'ajv'
+import Ajv2020 from 'ajv/dist/2020'
 import { describe, expect, it } from 'vitest'
 
 import { validate } from './validate'
@@ -77,7 +78,11 @@ const mutate = (rng: () => number, value: unknown): unknown => {
   return randomValue(rng, 2)
 }
 
-type Case = { name: string; schema: Record<string, unknown>; seeds: unknown[] }
+// `dialect` selects which Ajv build to compare against: keywords added in
+// 2019-09/2020-12 (dependentSchemas, min/maxContains) are unknown to draft-07
+// Ajv, while `dependencies` was *removed* after draft-07 — so each case names
+// the dialect whose Ajv actually understands its keywords.
+type Case = { name: string; schema: Record<string, unknown>; seeds: unknown[]; dialect?: 'draft7' | '2020' }
 
 const CASES: Case[] = [
   {
@@ -158,15 +163,59 @@ const CASES: Case[] = [
     },
     seeds: [{ value: 1 }, { value: 1, children: [{ value: 2 }] }, { value: 'x' }, { value: 1, children: [{}] }],
   },
+  {
+    name: 'contains (at least one number)',
+    schema: { type: 'array', contains: { type: 'number' } },
+    seeds: [[], [1], [1, 'a'], ['a', 'b'], [1, 2, 3]],
+  },
+  {
+    name: 'contains with min/maxContains',
+    dialect: '2020',
+    schema: { type: 'array', contains: { type: 'number' }, minContains: 2, maxContains: 3 },
+    seeds: [['a', 1, 2], [1], [1, 2, 3], [1, 2, 3, 4], []],
+  },
+  {
+    name: 'propertyNames pattern',
+    schema: { type: 'object', propertyNames: { pattern: '^[a-z]+$' } },
+    seeds: [{ a: 1 }, { abc: 2 }, { Foo: 1 }, { num_x: 1 }, {}, { a: 1, B: 2 }],
+  },
+  {
+    name: 'dependentSchemas',
+    dialect: '2020',
+    schema: {
+      type: 'object',
+      properties: { creditCard: { type: 'number' } },
+      dependentSchemas: {
+        creditCard: { required: ['billingAddress'], properties: { billingAddress: { type: 'string' } } },
+      },
+    },
+    seeds: [
+      {},
+      { creditCard: 1 },
+      { creditCard: 1, billingAddress: 'x' },
+      { billingAddress: 'x' },
+      { creditCard: 1, billingAddress: 5 },
+    ],
+  },
+  {
+    name: 'draft-07 dependencies (array + schema forms)',
+    schema: {
+      type: 'object',
+      dependencies: { creditCard: ['billingAddress'], foo: { required: ['bar'] } },
+    },
+    seeds: [{}, { creditCard: 1, billingAddress: 'x' }, { creditCard: 1 }, { foo: 1, bar: 2 }, { foo: 1 }],
+  },
 ]
 
 describe('differential fuzz vs ajv', () => {
   const ajv = new Ajv({ allErrors: true, strict: false })
+  const ajv2020 = new Ajv2020({ allErrors: true, strict: false })
 
   for (const testCase of CASES) {
     it(`agrees with ajv: ${testCase.name}`, () => {
       const ours = validate(testCase.schema)
-      const ajvValidate = ajv.compile(testCase.schema)
+      const compiler = testCase.dialect === '2020' ? ajv2020 : ajv
+      const ajvValidate = compiler.compile(testCase.schema)
       const rng = makeRng(0x1234 + testCase.name.length)
 
       const iterations = 12_000
