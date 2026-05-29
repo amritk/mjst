@@ -85,10 +85,11 @@ describe('generate-readme', () => {
     await generateMarkdown()
 
     const [, content] = writeFileMock.mock.calls[0] ?? []
-    const lines = (content as string).split('\n')
-    const optionalLine = lines.find((line: string) => line.includes('optionalProp'))
-    expect(optionalLine).toBeDefined()
-    expect(optionalLine).toContain('—')
+    const metaRow = (content as string)
+      .split('<tr>')
+      .find((row: string) => row.includes('<code>optionalProp</code>') && !row.includes('colspan'))
+    expect(metaRow).toBeDefined()
+    expect(metaRow).toContain('—')
   })
 
   it('renders CLI flags when x-cli-flag is present', async () => {
@@ -117,9 +118,11 @@ describe('generate-readme', () => {
     await generateMarkdown()
 
     const [, content] = writeFileMock.mock.calls[0] ?? []
-    const lines = (content as string).split('\n')
-    const propLine = lines.find((line: string) => line.includes('testProp'))
-    expect(propLine).toContain('—')
+    const metaRow = (content as string)
+      .split('<tr>')
+      .find((row: string) => row.includes('<code>testProp</code>') && !row.includes('colspan'))
+    // CLI flag cell falls back to a plain em dash
+    expect(metaRow).toContain('<td>—</td>')
   })
 
   it('renders custom icon when x-icon is present', async () => {
@@ -188,7 +191,7 @@ describe('generate-readme', () => {
     await generateMarkdown()
 
     const [, content] = writeFileMock.mock.calls[0] ?? []
-    expect(content).toContain('`false`')
+    expect(content).toContain('<code>false</code>')
   })
 
   it('formats number default values without quotes', async () => {
@@ -208,7 +211,7 @@ describe('generate-readme', () => {
     await generateMarkdown()
 
     const [, content] = writeFileMock.mock.calls[0] ?? []
-    expect(content).toContain('`42`')
+    expect(content).toContain('<code>42</code>')
   })
 
   it('formats object default values as JSON', async () => {
@@ -279,14 +282,14 @@ describe('generate-readme', () => {
 
     const [, content] = writeFileMock.mock.calls[0] ?? []
     // Parent row links to the detail table anchor
-    expect(content).toContain('[`server`](#config-server)')
+    expect(content).toContain('<a href="#config-server"><code>server</code></a>')
     // Detail table has a matching anchor and heading
     expect(content).toContain('<a id="config-server"></a>')
     expect(content).toContain('#### `server`')
     // Nested fields appear in the detail table by their local name
-    expect(content).toContain('`host`')
-    expect(content).toContain('`port`')
-    expect(content).toContain('`8080`')
+    expect(content).toContain('<code>host</code>')
+    expect(content).toContain('<code>port</code>')
+    expect(content).toContain('<code>8080</code>')
   })
 
   it('renders a detail table per level for deeply nested objects', async () => {
@@ -318,11 +321,11 @@ describe('generate-readme', () => {
 
     const [, content] = writeFileMock.mock.calls[0] ?? []
     // Each object links to the next level's table
-    expect(content).toContain('[`a`](#config-a)')
-    expect(content).toContain('[`b`](#config-a-b)')
+    expect(content).toContain('<a href="#config-a"><code>a</code></a>')
+    expect(content).toContain('<a href="#config-a-b"><code>b</code></a>')
     expect(content).toContain('<a id="config-a-b"></a>')
     expect(content).toContain('#### `a.b`')
-    expect(content).toContain('`c`')
+    expect(content).toContain('<code>c</code>')
   })
 
   it('marks nested required properties using the nested required list', async () => {
@@ -352,11 +355,11 @@ describe('generate-readme', () => {
     await generateMarkdown()
 
     const [, content] = writeFileMock.mock.calls[0] ?? []
-    const lines = (content as string).split('\n')
-    const hostLine = lines.find((line: string) => line.includes('`host`') && line.includes('|'))
-    const portLine = lines.find((line: string) => line.includes('`port`') && line.includes('|'))
-    expect(hostLine).toContain('✅')
-    expect(portLine).not.toContain('✅')
+    const rows = (content as string).split('<tr>')
+    const hostRow = rows.find((row: string) => row.includes('<code>host</code>') && !row.includes('colspan'))
+    const portRow = rows.find((row: string) => row.includes('<code>port</code>') && !row.includes('colspan'))
+    expect(hostRow).toContain('✅')
+    expect(portRow).not.toContain('✅')
   })
 
   it('renders em dash for undefined default values', async () => {
@@ -365,11 +368,11 @@ describe('generate-readme', () => {
     await generateMarkdown()
 
     const [, content] = writeFileMock.mock.calls[0] ?? []
-    const lines = (content as string).split('\n')
-    const propLine = lines.find((line: string) => line.includes('testProp'))
-    const cells = propLine?.split('|').map((cell: string) => cell.trim())
-    const defaultCell = cells?.[6]
-    expect(defaultCell).toBe('—')
+    const metaRow = (content as string)
+      .split('<tr>')
+      .find((row: string) => row.includes('<code>testProp</code>') && !row.includes('colspan'))
+    // Default column renders an em dash when no default is set
+    expect(metaRow).toContain('<td align="center">—</td>')
   })
 
   it('renders em dash for null default values', async () => {
@@ -389,11 +392,11 @@ describe('generate-readme', () => {
     await generateMarkdown()
 
     const [, content] = writeFileMock.mock.calls[0] ?? []
-    const lines = (content as string).split('\n')
-    const propLine = lines.find((line: string) => line.includes('testProp'))
-    const cells = propLine?.split('|').map((cell: string) => cell.trim())
-    const defaultCell = cells?.[6]
-    expect(defaultCell).toBe('—')
+    const metaRow = (content as string)
+      .split('<tr>')
+      .find((row: string) => row.includes('<code>testProp</code>') && !row.includes('colspan'))
+    // A null default is treated the same as an absent one: an em dash
+    expect(metaRow).toContain('<td align="center">—</td>')
   })
 
   it('uses first paragraph of description in table', async () => {
@@ -453,13 +456,46 @@ describe('generate-readme', () => {
     expect(content).toContain('testProp')
   })
 
+  it('renders the description in a full-width row below the metadata', async () => {
+    mockFs(minimalSchema)
+
+    await generateMarkdown()
+
+    const [, content] = writeFileMock.mock.calls[0] ?? []
+    expect(content).toContain('<td colspan="5">A test property</td>')
+  })
+
+  it('escapes html-significant characters in cli flags', async () => {
+    const schemaWithAngleBrackets = {
+      ...minimalSchema,
+      properties: {
+        testProp: {
+          type: 'string',
+          description: 'A test property',
+          'x-cli-flag': '--out <dir>',
+        },
+      },
+    }
+
+    mockFs(schemaWithAngleBrackets)
+
+    await generateMarkdown()
+
+    const [, content] = writeFileMock.mock.calls[0] ?? []
+    expect(content).toContain('<code>--out &lt;dir&gt;</code>')
+  })
+
   it('includes table header with correct columns', async () => {
     mockFs(minimalSchema)
 
     await generateMarkdown()
 
     const [, content] = writeFileMock.mock.calls[0] ?? []
-    expect(content).toContain('| | Property | CLI Flag | Type | Required | Default | Description |')
+    expect(content).toContain('<th>Property</th>')
+    expect(content).toContain('<th>CLI Flag</th>')
+    expect(content).toContain('<th>Type</th>')
+    expect(content).toContain('<th align="center">Required</th>')
+    expect(content).toContain('<th align="center">Default</th>')
   })
 
   it('handles multiple properties in schema', async () => {

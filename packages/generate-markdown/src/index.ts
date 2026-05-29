@@ -30,20 +30,44 @@ type ConfigSchema = {
 }
 
 /**
- * Formats a JSON value for inline display inside a markdown table or sentence.
- * Strings get quoted so readers know they need quotes in their config.
+ * Escapes the HTML-significant characters so schema text (and CLI flags such as
+ * `--schema <path>`) renders literally inside the HTML table cells.
+ */
+const escapeHtml = (value: string): string => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+/**
+ * Formats a JSON value for inline display inside an HTML table cell. Strings get
+ * quoted so readers know they need quotes in their config.
  */
 const formatValue = (value: unknown): string => {
   if (value === undefined || value === null) return '—'
-  if (typeof value === 'string') return `\`"${value}"\``
-  if (typeof value === 'boolean' || typeof value === 'number') return `\`${value}\``
-  return `\`${JSON.stringify(value)}\``
+  if (typeof value === 'string') return `<code>"${escapeHtml(value)}"</code>`
+  if (typeof value === 'boolean' || typeof value === 'number') return `<code>${value}</code>`
+  return `<code>${escapeHtml(JSON.stringify(value))}</code>`
 }
 
-const TABLE_HEADER = [
-  '| | Property | CLI Flag | Type | Required | Default | Description |',
-  '|:---:|:---|:---|:---:|:---:|:---:|:---|',
-]
+/**
+ * The number of metadata columns in a property table. The description row spans
+ * all of them so the prose can use the table's full width.
+ */
+const COLUMN_COUNT = 5
+
+/**
+ * Header row shared by the main table and every nested detail table. The
+ * description has no header of its own — it lives in a full-width row under each
+ * property's metadata.
+ */
+const TABLE_HEAD = [
+  '<thead>',
+  '<tr>',
+  '<th>Property</th>',
+  '<th>CLI Flag</th>',
+  '<th>Type</th>',
+  '<th align="center">Required</th>',
+  '<th align="center">Default</th>',
+  '</tr>',
+  '</thead>',
+].join('\n')
 
 /**
  * Builds a stable anchor id for an object property's detail table from its
@@ -56,18 +80,33 @@ const isObjectWithProperties = (prop: SchemaProperty): boolean =>
   prop.type === 'object' && prop.properties !== undefined
 
 /**
- * Renders a single table row. Object properties with nested fields link to
- * their own detail table rendered below the main table.
+ * Renders a property as two table rows: a metadata row (name, flag, type,
+ * required, default) and a full-width description row beneath it. The split lets
+ * the description use the whole table width instead of being squeezed into one
+ * narrow column. Object properties with nested fields link to their own detail
+ * table rendered below the main table.
  */
 const renderRow = (name: string, prop: SchemaProperty, required: ReadonlySet<string>, path: string): string => {
   const icon = prop['x-icon'] ?? '🔧'
-  const cliFlag = prop['x-cli-flag'] ? `\`${prop['x-cli-flag']}\`` : '—'
+  const code = `<code>${escapeHtml(name)}</code>`
+  const nameCell = isObjectWithProperties(prop) ? `${icon} <a href="#${anchorId(path)}">${code}</a>` : `${icon} ${code}`
+  const cliFlag = prop['x-cli-flag'] ? `<code>${escapeHtml(prop['x-cli-flag'])}</code>` : '—'
   const requiredCell = required.has(name) ? '✅' : '—'
   const defaultCell = prop.default !== undefined ? formatValue(prop.default) : '—'
   // First paragraph gives enough context without making the table unwieldy
-  const desc = prop.description?.split('\n\n')[0]?.replace(/\n/g, ' ') ?? ''
-  const nameCell = isObjectWithProperties(prop) ? `[\`${name}\`](#${anchorId(path)})` : `\`${name}\``
-  return `| ${icon} | ${nameCell} | ${cliFlag} | \`${prop.type}\` | ${requiredCell} | ${defaultCell} | ${desc} |`
+  const desc = escapeHtml(prop.description?.split('\n\n')[0]?.replace(/\n/g, ' ') ?? '')
+  return [
+    '<tr>',
+    `<td>${nameCell}</td>`,
+    `<td>${cliFlag}</td>`,
+    `<td><code>${escapeHtml(prop.type)}</code></td>`,
+    `<td align="center">${requiredCell}</td>`,
+    `<td align="center">${defaultCell}</td>`,
+    '</tr>',
+    '<tr>',
+    `<td colspan="${COLUMN_COUNT}">${desc}</td>`,
+    '</tr>',
+  ].join('\n')
 }
 
 /**
@@ -84,7 +123,7 @@ const renderTables = (
   const rows = Object.entries(properties).map(([name, prop]) =>
     renderRow(name, prop, required, path ? `${path}.${name}` : name),
   )
-  const table = [...TABLE_HEADER, ...rows].join('\n')
+  const table = ['<table>', TABLE_HEAD, '<tbody>', ...rows, '</tbody>', '</table>'].join('\n')
   const block = path ? `<a id="${anchorId(path)}"></a>\n#### \`${path}\`\n\n${table}` : table
 
   const nested = Object.entries(properties).flatMap(([name, prop]) => {
