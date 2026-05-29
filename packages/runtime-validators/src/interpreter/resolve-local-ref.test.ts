@@ -38,4 +38,13 @@ describe('resolve-local-ref', () => {
   it('returns undefined for non-local refs', () => {
     expect(resolveLocalRef('https://example.com/schema.json', root)).toBeUndefined()
   })
+
+  it('resolves a plain-name fragment via $anchor search', () => {
+    const anchored = {
+      type: 'object',
+      $defs: { node: { $anchor: 'node', type: 'object' } },
+    }
+    expect(resolveLocalRef('#node', anchored)).toBe(anchored.$defs.node)
+    expect(resolveLocalRef('#missing', anchored)).toBeUndefined()
+  })
 })

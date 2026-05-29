@@ -356,6 +356,42 @@ describe('validate', () => {
     expect(strict('not-an-email')).not.toBe(true)
   })
 
+  it('supports the extended built-in formats', () => {
+    const cases: Array<[string, string, string]> = [
+      ['ipv4', '192.168.0.1', '999.1.1.1'],
+      ['ipv6', '::1', 'nope::zz'],
+      ['json-pointer', '/a/b/~0/~1', 'no-leading-slash'],
+      ['relative-json-pointer', '1/foo', '/leading-slash'],
+      ['uri-template', 'http://x/{id}', 'has space'],
+      ['iri', 'https://例え.テスト/path', 'no scheme'],
+      ['idn-email', 'аdа@example.com', 'not-an-email'],
+    ]
+    for (const [format, ok, bad] of cases) {
+      const v = validate({ type: 'string', format }, { formats: 'all' })
+      expect(v(ok), `${format} should accept ${ok}`).toBe(true)
+      expect(v(bad), `${format} should reject ${bad}`).not.toBe(true)
+    }
+  })
+
+  it('resolves $ref by $anchor name, including recursion', () => {
+    const validator = validate({
+      $ref: '#node',
+      $defs: {
+        node: {
+          $anchor: 'node',
+          type: 'object',
+          properties: { value: { type: 'number' }, next: { $ref: '#node' } },
+          required: ['value'],
+          additionalProperties: false,
+        },
+      },
+    })
+    expect(validator({ value: 1 })).toBe(true)
+    expect(validator({ value: 1, next: { value: 2 } })).toBe(true)
+    expect(validator({ value: 1, next: { value: 'x' } })).not.toBe(true)
+    expect(validator({ value: 1, extra: true })).not.toBe(true)
+  })
+
   it('accepts null for an OpenAPI `nullable: true` schema regardless of type', () => {
     const validator = validate({ type: 'string', minLength: 3, nullable: true })
     expect(validator(null)).toBe(true)

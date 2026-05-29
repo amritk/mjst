@@ -205,6 +205,23 @@ const CASES: Case[] = [
     },
     seeds: [{}, { creditCard: 1, billingAddress: 'x' }, { creditCard: 1 }, { foo: 1, bar: 2 }, { foo: 1 }],
   },
+  {
+    name: 'recursive $ref by $anchor',
+    dialect: '2020',
+    schema: {
+      $ref: '#node',
+      $defs: {
+        node: {
+          $anchor: 'node',
+          type: 'object',
+          properties: { value: { type: 'number' }, children: { type: 'array', items: { $ref: '#node' } } },
+          required: ['value'],
+          additionalProperties: false,
+        },
+      },
+    },
+    seeds: [{ value: 1 }, { value: 1, children: [{ value: 2 }] }, { value: 'x' }, { value: 1, children: [{}] }],
+  },
 ]
 
 describe('differential fuzz vs ajv', () => {
