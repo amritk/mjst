@@ -1,0 +1,62 @@
+{
+  "name": "@amritk/generate-examples",
+  "version": "0.0.0",
+  "description": "Generate fast-check arbitraries and example values from JSON Schemas.",
+  "module": "./dist/index.js",
+  "type": "module",
+  "license": "MIT",
+  "author": "amritk",
+  "keywords": [
+    "json-schema",
+    "typescript",
+    "fast-check",
+    "property-testing",
+    "test-data",
+    "fixtures",
+    "code-generation",
+    "mjst"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amritk/mjst.git",
+    "directory": "packages/generate-examples"
+  },
+  "homepage": "https://github.com/amritk/mjst/tree/main/packages/generate-examples#readme",
+  "bugs": {
+    "url": "https://github.com/amritk/mjst/issues"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "bun run build:code && bun run build:types",
+    "build:code": "bun build ./src/index.ts --outdir=dist --target=node",
+    "build:types": "tsc -p ."
+  },
+  "imports": {
+    "#generators/*": "./src/generators/*.ts"
+  },
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "dependencies": {
+    "json-schema-typed": "catalog:",
+    "@amritk/helpers": "workspace:*"
+  },
+  "peerDependencies": {
+    "fast-check": ">=3"
+  },
+  "peerDependenciesMeta": {
+    "fast-check": {
+      "optional": true
+    }
+  }
+}

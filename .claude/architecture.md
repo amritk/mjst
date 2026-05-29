@@ -12,6 +12,7 @@ mjst/
 │   ├── cli/                   # @amritk/mjst — command-line interface
 │   ├── generate-parsers/      # @amritk/generate-parsers — parser + type generator
 │   ├── generate-validators/   # @amritk/generate-validators — predicate validator generator
+│   ├── generate-examples/     # @amritk/generate-examples — fast-check arbitrary + example generator
 │   ├── generate-markdown/     # @amritk/generate-markdown — README table generator
 │   ├── adapters/              # @amritk/adapters — convert external schemas (TypeBox, …) to JSON Schema
 │   └── helpers/               # @amritk/helpers — shared schema utilities + runtime
@@ -49,6 +50,14 @@ Generates lightweight predicate-style validators: each schema becomes a `validat
 - **Depends on:** `@amritk/helpers`, `json-schema-typed`
 - **Subpath imports:** `#generators/*` → `./src/generators/*.ts`
 - **Key entry point:** `src/generators/build-schema.ts`
+
+### `@amritk/generate-examples` (`packages/generate-examples`)
+
+Generates **test data** from a schema. For each schema node it emits a type definition, a [`fast-check`](https://github.com/dubzzz/fast-check) arbitrary (`FooArbitrary`) for property-based testing, and a concrete, self-contained example value (`fooExample`) for fixtures/seeds/docs.
+
+- **Depends on:** `@amritk/helpers`, `json-schema-typed`. `fast-check` is an **optional peer dependency** — only the *generated* arbitraries import it; the generator itself and the static `fooExample` values do not.
+- **Subpath imports:** `#generators/*` → `./src/generators/*.ts`
+- **Key entry points:** `src/generators/build-schema.ts` (pipeline), `generate-arbitrary.ts` (fast-check combinator emitter), `derive-example.ts` (concrete value derivation + serialization). Tests assert the generated source strings rather than executing fast-check, keeping them hermetic.
 
 ### `@amritk/generate-markdown` (`packages/generate-markdown`)
 
