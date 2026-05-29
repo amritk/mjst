@@ -19,10 +19,11 @@ type MutableConfig = {
   readonly?: boolean
   helpers?: 'package' | 'embedded'
   typeSuffix?: string
+  banner?: boolean
 }
 
 // Boolean flags toggle on by presence and accept `--flag=false` to opt out.
-const BOOLEAN_KEYS = new Set<keyof MutableConfig>(['typesOnly', 'build', 'logWarnings', 'strict', 'readonly'])
+const BOOLEAN_KEYS = new Set<keyof MutableConfig>(['typesOnly', 'build', 'logWarnings', 'strict', 'readonly', 'banner'])
 // Value flags consume the following argument (or `--flag=value`).
 const VALUE_KEYS = new Set<keyof MutableConfig>([
   'schema',
@@ -99,6 +100,9 @@ const assignBoolean = (config: MutableConfig, key: string, value: boolean): bool
       return true
     case 'readonly':
       config.readonly = value
+      return true
+    case 'banner':
+      config.banner = value
       return true
     default:
       return false

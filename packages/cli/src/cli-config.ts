@@ -74,4 +74,10 @@ export type CliConfig = {
    * (no suffix). The root type name is used verbatim and is unaffected.
    */
   readonly typeSuffix?: string
+  /**
+   * When true, prepends a comment header to every generated file noting that
+   * the file was produced by @amritk/mjst and should not be edited manually.
+   * Runtime helper files (under `_helpers/`) are not annotated.
+   */
+  readonly banner?: boolean
 }

@@ -271,4 +271,10 @@ describe('parse-cli-args', () => {
     expect(parseCliArgs(['--readonly=true'])).toEqual({ readonly: true })
     expect(parseCliArgs(['--readonly=false'])).toEqual({ readonly: false })
   })
+
+  it('parses --banner boolean flag and its equals forms', () => {
+    expect(parseCliArgs(['--banner'])).toEqual({ banner: true })
+    expect(parseCliArgs(['--banner=true'])).toEqual({ banner: true })
+    expect(parseCliArgs(['--banner=false'])).toEqual({ banner: false })
+  })
 })
