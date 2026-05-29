@@ -153,6 +153,8 @@ This is a **pragmatic subset** of JSON Schema — sized for validating data agai
 - **Full `format` coverage.** A pragmatic regex set (`email`, `date-time`, `date`, `time`, `duration`, `uuid`, `uri`, `uri-reference`, `hostname`) that is opt-in and "good enough," not RFC-exact; other formats (`ipv4`, `ipv6`, `regex`, `json-pointer`, …) are not checked.
 - **Draft-2020 exotica** beyond the keywords listed above, and the draft-04 boolean form of `exclusiveMinimum`/`exclusiveMaximum`.
 
+> **Want one of these?** None of these are off the table — "by design" means *not yet*, not *never*. If something here is blocking a real use case, [open an issue](https://github.com/amritk/mjst/issues) describing the schema you need to validate. The cheap, local additions (more formats, `$anchor` refs) are easy; the harder ones (`unevaluated*`, which need cross-branch tracking) we're willing to take on if there's demand.
+
 ---
 
 ## Related packages
