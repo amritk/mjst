@@ -8,8 +8,8 @@
  * (see {@link ValidateOptions.formats}) precisely because their strictness is a
  * judgement call.
  *
- * Each entry is a `RegExp`. The compiler hoists the matched expressions into
- * the validator's closure so they are compiled exactly once, never per call.
+ * Each entry is a `RegExp`, compiled once at module load and reused on every
+ * validation call.
  */
 export const FORMAT_CHECKS: Readonly<Record<string, RegExp>> = {
   // Pragmatic email: one @, no spaces, a dot in the domain. Good enough for

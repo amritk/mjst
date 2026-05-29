@@ -1,10 +1,9 @@
-import { compileCached } from '#compiler/compile-cached'
+import { prepareValidator } from '#interpreter/prepare'
 
 import type { Guard, ValidateOptions } from './types'
 
 /**
- * Compiles a JSON Schema into the fastest possible validator: a boolean type
- * guard.
+ * Builds the fastest kind of validator: a boolean type guard.
  *
  * The guard short-circuits on the first failing check and never allocates an
  * error object or builds a path string, so it is the hot-path tool for things
@@ -30,5 +29,5 @@ import type { Guard, ValidateOptions } from './types'
  * ```
  */
 export const validateGuard = <T = unknown>(schema: unknown, options?: ValidateOptions): Guard<T> => {
-  return compileCached(schema, options, false) as unknown as Guard<T>
+  return prepareValidator(schema, options, false) as unknown as Guard<T>
 }

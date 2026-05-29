@@ -27,18 +27,19 @@ const throughput = (fn: () => void, budgetMs = 600): number => {
   return ops / (elapsed / 1000)
 }
 
-/** Times how long it takes to compile a freshly-cloned schema, averaged. */
-const compileTimeMs = (
-  compileOnce: (schema: Record<string, unknown>) => void,
-  schema: Record<string, unknown>,
-): number => {
+/**
+ * Times the cold cost of going from a freshly-cloned schema to a *ready* result
+ * — for us, building the validator and running it once; for Ajv, compiling and
+ * running once. This is the one-shot CLI path where each schema is used once.
+ */
+const coldRunMs = (coldRun: (schema: Record<string, unknown>) => void, schema: Record<string, unknown>): number => {
   const iterations = 200
   // Warmup.
-  for (let i = 0; i < 20; i++) compileOnce(structuredClone(schema))
+  for (let i = 0; i < 20; i++) coldRun(structuredClone(schema))
 
   const clones = Array.from({ length: iterations }, () => structuredClone(schema))
   const start = performance.now()
-  for (let i = 0; i < iterations; i++) compileOnce(clones[i] as Record<string, unknown>)
+  for (let i = 0; i < iterations; i++) coldRun(clones[i] as Record<string, unknown>)
   return (performance.now() - start) / iterations
 }
 
@@ -118,22 +119,22 @@ for (const testCase of BENCH_CASES) {
     )
   }
 
-  // Compile (startup) cost: time to a *ready-to-use* validator. Compilation is
-  // lazy, so we call the validator once on the valid sample to force the
-  // `new Function` JIT — this is the true cost a caller pays before the first
-  // successful validation, and the fair comparison against Ajv's eager compile.
-  const mjstCompileMs = compileTimeMs((schema) => void validate(schema)(testCase.valid), testCase.schema)
-  const mjstGuardCompileMs = compileTimeMs((schema) => void validateGuard(schema)(testCase.valid), testCase.schema)
-  const ajvCompileMs = compileTimeMs((schema) => {
+  // Cold one-shot cost: time from a schema to a ready *result*. The interpreter
+  // has no compile step, so this is essentially the cost of a single walk; Ajv
+  // must compile the schema first. This is the common CLI path — validate one
+  // example per schema in a fresh process — and where the interpreter wins big.
+  const mjstColdMs = coldRunMs((schema) => void validate(schema)(testCase.valid), testCase.schema)
+  const mjstGuardColdMs = coldRunMs((schema) => void validateGuard(schema)(testCase.valid), testCase.schema)
+  const ajvColdMs = coldRunMs((schema) => {
     const ajv = makeAjv(false)
     ajv.compile(schema)(testCase.valid)
   }, testCase.schema)
 
-  console.log(`\n  compile (startup) cost per schema:`)
-  console.log(`    ${pad('mjst compile', 18)}${padStart(`${mjstCompileMs.toFixed(4)} ms`, 14)}`)
-  console.log(`    ${pad('mjst guard', 18)}${padStart(`${mjstGuardCompileMs.toFixed(4)} ms`, 14)}`)
+  console.log(`\n  cold one-shot cost per schema (schema → first result):`)
+  console.log(`    ${pad('mjst validate', 18)}${padStart(`${mjstColdMs.toFixed(4)} ms`, 14)}`)
+  console.log(`    ${pad('mjst guard', 18)}${padStart(`${mjstGuardColdMs.toFixed(4)} ms`, 14)}`)
   console.log(
-    `    ${pad('ajv', 18)}${padStart(`${ajvCompileMs.toFixed(4)} ms`, 14)}  (${(ajvCompileMs / mjstCompileMs).toFixed(1)}x mjst)`,
+    `    ${pad('ajv', 18)}${padStart(`${ajvColdMs.toFixed(4)} ms`, 14)}  (${(ajvColdMs / mjstColdMs).toFixed(1)}x mjst)`,
   )
 }
 

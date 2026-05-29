@@ -361,17 +361,17 @@ describe('validate', () => {
   })
 
   it('throws a helpful error for an unresolvable $ref on first use', () => {
-    // Compilation is lazy (to keep startup cheap), so the error surfaces when
-    // the validator is first invoked rather than at validate() time.
+    // The schema is walked lazily — `$ref`s resolve when the validator runs, not
+    // when it is built — so an unresolvable pointer surfaces on first use.
     const validator = validate({ $ref: '#/$defs/missing' })
     expect(() => validator({})).toThrow(/Cannot resolve/)
   })
 
-  it('compiles lazily and only once', () => {
+  it('does no work until the validator is actually called', () => {
+    // Building the validator must not walk or resolve anything: a malformed
+    // $ref would throw on use, so construction completing without a throw proves
+    // the interpreter is fully deferred to call time.
     let constructed = false
-    // Building the validator must not eagerly validate. We cannot observe the
-    // JIT directly, but a malformed $ref would throw on validate — so the fact
-    // that construction does not throw proves compilation was deferred.
     const validator = validate({ $ref: '#/$defs/missing' })
     constructed = true
     expect(constructed).toBe(true)
