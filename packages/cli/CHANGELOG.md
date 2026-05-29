@@ -1,5 +1,16 @@
 # @amritk/mjst
 
+## 0.7.3
+
+### Patch Changes
+
+- 8cde234: Re-publish all packages.
+- Updated dependencies [8cde234]
+  - @amritk/adapters@0.2.5
+  - @amritk/generate-markdown@0.2.3
+  - @amritk/generate-parsers@0.6.3
+  - @amritk/helpers@0.6.2
+
 ## 0.7.2
 
 ### Patch Changes

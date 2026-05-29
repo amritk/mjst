@@ -1,6 +1,6 @@
 {
   "name": "@amritk/generate-validators",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Generate TypeScript validation functions from JSON Schemas.",
   "module": "./dist/index.js",
   "type": "module",
