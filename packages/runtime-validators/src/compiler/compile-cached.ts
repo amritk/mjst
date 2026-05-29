@@ -1,6 +1,6 @@
 import { buildValidator } from '#compiler/build-validator'
 
-import type { CompileOptions } from '../types'
+import type { ValidateOptions } from '../types'
 
 /**
  * Caches compiled validators per `(schema, mode, formats)`. The schema object
@@ -10,7 +10,7 @@ import type { CompileOptions } from '../types'
  */
 const cache = new WeakMap<object, Map<string, (input: unknown) => unknown>>()
 
-const normalizeFormats = (formats: CompileOptions['formats']): 'all' | ReadonlySet<string> => {
+const normalizeFormats = (formats: ValidateOptions['formats']): 'all' | ReadonlySet<string> => {
   if (formats === 'all') return 'all'
   if (formats === undefined) return new Set()
   return new Set(formats)
@@ -26,8 +26,8 @@ const cacheKey = (emitErrors: boolean, formats: 'all' | ReadonlySet<string>): st
  * handing it to `new Function` — is deferred until the validator is first
  * actually called.
  *
- * This is the core of keeping startup cost near zero: `compile` /
- * `compileGuard` return immediately, and an app that builds many validators up
+ * This is the core of keeping startup cost near zero: `validate` /
+ * `validateGuard` return immediately, and an app that builds many validators up
  * front (a schema registry, a router, a config loader) only pays the JIT cost
  * for the ones it ends up using, spread across first use rather than bunched at
  * boot. After the first call the wrapper holds the real function directly, so
@@ -52,7 +52,7 @@ const lazyValidator = (
  */
 export const compileCached = (
   schema: unknown,
-  options: CompileOptions | undefined,
+  options: ValidateOptions | undefined,
   emitErrors: boolean,
 ): ((input: unknown) => unknown) => {
   const formats = normalizeFormats(options?.formats)

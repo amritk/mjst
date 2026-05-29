@@ -56,8 +56,8 @@ export type CompilerContext = {
 
 /**
  * Builds a fresh {@link CompilerContext}. `emitErrors` seeds whether the root
- * validator collects errors ({@link compile}) or is a pure boolean guard
- * ({@link compileGuard}); the failure statement is wired up by the caller.
+ * validator collects errors ({@link validate}) or is a pure boolean guard
+ * ({@link validateGuard}); the failure statement is wired up by the caller.
  */
 export const createContext = (
   root: unknown,

@@ -5,7 +5,7 @@
  * cases people actually rely on, while staying intentionally pragmatic: a
  * regex that is fast and rejects obviously-bad input beats a spec-perfect
  * parser that shows up in every benchmark flame graph. Formats are opt-in
- * (see {@link CompileOptions.formats}) precisely because their strictness is a
+ * (see {@link ValidateOptions.formats}) precisely because their strictness is a
  * judgement call.
  *
  * Each entry is a `RegExp`. The compiler hoists the matched expressions into

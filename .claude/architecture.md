@@ -58,7 +58,7 @@ The runtime counterpart to `generate-validators`. Instead of writing validator s
 
 - **Depends on:** `json-schema-typed` (types only). Deliberately self-contained — no `@amritk/helpers` — so the runtime stays slim. `ajv` / `ajv-formats` are dev-only, for the benchmark suite.
 - **Subpath imports:** `#compiler/*` → `./src/compiler/*.ts`
-- **Entry points:** `compile(schema)` → error-collecting validator (`true | { valid: false, errors }`); `compileGuard(schema)` → zero-allocation boolean type guard.
+- **Entry points:** `validate(schema)` → error-collecting validator (`true | { valid: false, errors }`); `validateGuard(schema)` → zero-allocation boolean type guard. (Internally both funnel through the `#compiler/*` modules — the package validates by *compiling* the schema to a function.)
 - **Design notes:** the whole validator is emitted as one flat function; regexes, enum `Set`s, and deep-equal constants are hoisted into the function's closure (built once, never per call). Compilation is lazy (deferred to first use) and cached in a `WeakMap` keyed by schema identity, to keep startup cost near zero. Only local `$ref`s are resolved (recursion supported via generated named functions). The core emitter is `src/compiler/generate-schema-code.ts`.
 
 ### `@amritk/generate-examples` (`packages/generate-examples`)

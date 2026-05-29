@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { compileGuard } from './compile-guard'
+import { validateGuard } from './validate-guard'
 
-describe('compile-guard', () => {
+describe('validate-guard', () => {
   it('returns true for valid input and false for invalid input', () => {
-    const isUser = compileGuard({
+    const isUser = validateGuard({
       type: 'object',
       properties: { id: { type: 'integer' }, name: { type: 'string' } },
       required: ['id', 'name'],
@@ -17,14 +17,14 @@ describe('compile-guard', () => {
   })
 
   it('always returns a boolean, never an error object', () => {
-    const guard = compileGuard({ type: 'string' })
+    const guard = validateGuard({ type: 'string' })
     expect(guard('x')).toBe(true)
     expect(guard(1)).toBe(false)
   })
 
   it('narrows the type when used as a guard', () => {
     type Point = { x: number; y: number }
-    const isPoint = compileGuard<Point>({
+    const isPoint = validateGuard<Point>({
       type: 'object',
       properties: { x: { type: 'number' }, y: { type: 'number' } },
       required: ['x', 'y'],
@@ -40,7 +40,7 @@ describe('compile-guard', () => {
   })
 
   it('handles recursive schemas', () => {
-    const isTree = compileGuard({
+    const isTree = validateGuard({
       type: 'object',
       properties: { value: { type: 'number' }, children: { type: 'array', items: { $ref: '#' } } },
       required: ['value'],
@@ -48,6 +48,13 @@ describe('compile-guard', () => {
 
     expect(isTree({ value: 1, children: [{ value: 2 }] })).toBe(true)
     expect(isTree({ value: 1, children: [{ value: 'x' }] })).toBe(false)
+  })
+
+  it('accepts null for an OpenAPI `nullable: true` schema', () => {
+    const guard = validateGuard({ type: 'string', nullable: true })
+    expect(guard(null)).toBe(true)
+    expect(guard('x')).toBe(true)
+    expect(guard(1)).toBe(false)
   })
 
   it('agrees with the error-collecting validator across many shapes', () => {
@@ -61,7 +68,7 @@ describe('compile-guard', () => {
       required: ['role'],
       additionalProperties: false,
     }
-    const guard = compileGuard(schema)
+    const guard = validateGuard(schema)
 
     const samples: unknown[] = [
       { role: 'admin' },

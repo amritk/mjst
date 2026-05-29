@@ -1,3 +1,3 @@
-export { compile } from './compile'
-export { compileGuard } from './compile-guard'
-export type { CompileOptions, Guard, ValidationError, ValidationResult, Validator } from './types'
+export type { Guard, ValidateOptions, ValidationError, ValidationResult, Validator } from './types'
+export { validate } from './validate'
+export { validateGuard } from './validate-guard'

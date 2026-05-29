@@ -1,7 +1,7 @@
 import Ajv from 'ajv'
 import addFormats from 'ajv-formats'
 
-import { compile, compileGuard } from '../src/index.ts'
+import { validate, validateGuard } from '../src/index.ts'
 import { BENCH_CASES } from './schemas.ts'
 
 /**
@@ -64,8 +64,8 @@ for (const testCase of BENCH_CASES) {
   console.log(`\n## ${testCase.name}\n`)
 
   // Build validators once for the throughput phase.
-  const mjstGuard = compileGuard(testCase.schema)
-  const mjstFull = compile(testCase.schema)
+  const mjstGuard = validateGuard(testCase.schema)
+  const mjstFull = validate(testCase.schema)
 
   const ajvFirst = makeAjv(false).compile(testCase.schema)
   // A second Ajv instance is needed for the all-errors variant because the
@@ -91,7 +91,7 @@ for (const testCase of BENCH_CASES) {
       throughput(() => void mjstGuard(testCase.invalid)),
     ],
     [
-      'mjst compile',
+      'mjst validate',
       throughput(() => void mjstFull(testCase.valid)),
       throughput(() => void mjstFull(testCase.invalid)),
     ],
@@ -122,8 +122,8 @@ for (const testCase of BENCH_CASES) {
   // lazy, so we call the validator once on the valid sample to force the
   // `new Function` JIT — this is the true cost a caller pays before the first
   // successful validation, and the fair comparison against Ajv's eager compile.
-  const mjstCompileMs = compileTimeMs((schema) => void compile(schema)(testCase.valid), testCase.schema)
-  const mjstGuardCompileMs = compileTimeMs((schema) => void compileGuard(schema)(testCase.valid), testCase.schema)
+  const mjstCompileMs = compileTimeMs((schema) => void validate(schema)(testCase.valid), testCase.schema)
+  const mjstGuardCompileMs = compileTimeMs((schema) => void validateGuard(schema)(testCase.valid), testCase.schema)
   const ajvCompileMs = compileTimeMs((schema) => {
     const ajv = makeAjv(false)
     ajv.compile(schema)(testCase.valid)

@@ -23,8 +23,8 @@ Like the rest of `mjst`, the obsession here is performance. A schema is compiled
 
 Two entry points, for two different jobs:
 
-- **`compileGuard(schema)`** → `(input) => input is T`. The fastest path: a boolean type guard that short-circuits on the first failure and never allocates. Reach for this in hot loops, request filters, and cache gates.
-- **`compile(schema)`** → `(input) => true | { valid: false, errors }`. Collects every error with a JSON Pointer path, so you can tell a caller exactly what went wrong.
+- **`validateGuard(schema)`** → `(input) => input is T`. The fastest path: a boolean type guard that short-circuits on the first failure and never allocates. Reach for this in hot loops, request filters, and cache gates.
+- **`validate(schema)`** → `(input) => true | { valid: false, errors }`. Collects every error with a JSON Pointer path, so you can tell a caller exactly what went wrong.
 
 ---
 
@@ -45,7 +45,7 @@ bun add @amritk/runtime-validators
 ## Usage
 
 ```ts
-import { compile, compileGuard } from '@amritk/runtime-validators'
+import { validate, validateGuard } from '@amritk/runtime-validators'
 
 const schema = {
   type: 'object',
@@ -59,15 +59,15 @@ const schema = {
 }
 
 // Detailed errors
-const validate = compile(schema)
-const result = validate({ id: 1, name: 'Ada', tags: ['a', 'b'] })
+const validator = validate(schema)
+const result = validator({ id: 1, name: 'Ada', tags: ['a', 'b'] })
 if (result !== true) {
   console.error(result.errors) // [{ message, path }, ...]
 }
 
 // Fast boolean guard (with type narrowing)
 type User = { id: number; name: string; tags?: string[] }
-const isUser = compileGuard<User>(schema)
+const isUser = validateGuard<User>(schema)
 
 if (isUser(input)) {
   input.name // narrowed to User
@@ -77,7 +77,7 @@ if (isUser(input)) {
 Recursive schemas via local `$ref` work out of the box:
 
 ```ts
-const isTree = compileGuard({
+const isTree = validateGuard({
   type: 'object',
   properties: {
     value: { type: 'number' },
@@ -97,16 +97,16 @@ Representative numbers from `bun run bench` (a wide 40-property object and a dee
 
 | schema | validator | valid throughput | vs Ajv | invalid throughput | vs Ajv |
 |:---|:---|---:|---:|---:|---:|
-| wide (40 props) | `compileGuard` | 2.6M ops/s | **1.8×** | 67M ops/s | **17×** |
-| wide (40 props) | `compile` | 2.5M ops/s | **1.7×** | 2.3M ops/s | 1.7× vs all-errors |
-| deep (`$ref`) | `compileGuard` | 0.61M ops/s | **1.7×** | 29M ops/s | **3.3×** |
-| deep (`$ref`) | `compile` | 0.56M ops/s | **1.5×** | 2.6M ops/s | 2.9× vs all-errors |
+| wide (40 props) | `validateGuard` | 2.6M ops/s | **1.8×** | 67M ops/s | **17×** |
+| wide (40 props) | `validate` | 2.5M ops/s | **1.7×** | 2.3M ops/s | 1.7× vs all-errors |
+| deep (`$ref`) | `validateGuard` | 0.61M ops/s | **1.7×** | 29M ops/s | **3.3×** |
+| deep (`$ref`) | `validate` | 0.56M ops/s | **1.5×** | 2.6M ops/s | 2.9× vs all-errors |
 
-The boolean guard short-circuits, so invalid input is where it pulls away the hardest. `compile` collects all errors, so the fair comparison there is Ajv with `allErrors: true`.
+The boolean guard short-circuits, so invalid input is where it pulls away the hardest. `validate` collects all errors, so the fair comparison there is Ajv with `allErrors: true`.
 
 **Startup cost** is where the gap is widest. Because the compiler is lean and does no schema-of-schema validation, compiling a single schema is **dozens to hundreds of times cheaper** than Ajv:
 
-| schema | `compile` | Ajv | speedup |
+| schema | `validate` | Ajv | speedup |
 |:---|---:|---:|---:|
 | small | ~0.03 ms | ~10 ms | **~350×** |
 | wide (40 props) | ~0.19 ms | ~15 ms | **~75×** |
@@ -114,8 +114,8 @@ The boolean guard short-circuits, so invalid input is where it pulls away the ha
 
 Startup is kept cheap from several directions:
 
-- **Lazy compilation.** `compile` / `compileGuard` return immediately; the `new Function` JIT is deferred until the validator is first actually called. An app that builds many validators at boot (a schema registry, a router) only pays for the ones it uses — constructing an unused validator is ~1–6 µs.
-- **A `WeakMap` cache.** Repeated `compile(sameSchema)` calls return the same validator, so a given schema is compiled at most once per `(mode, formats)`.
+- **Lazy compilation.** `validate` / `validateGuard` return immediately; the `new Function` JIT is deferred until the validator is first actually called. An app that builds many validators at boot (a schema registry, a router) only pays for the ones it uses — constructing an unused validator is ~1–6 µs.
+- **A `WeakMap` cache.** Repeated `validate(sameSchema)` calls return the same validator, so a given schema is compiled at most once per `(mode, formats)`.
 - **A lean compiler.** No schema-of-schema validation, no `$ref` graph bookkeeping — just a single recursive pass that emits source.
 
 > Benchmarks live in [`bench/`](./bench). They include a correctness parity check against Ajv on every case, and the suite is backed by a differential fuzz test (150k+ random and mutated values, zero divergences) so "fast" never comes at the cost of "correct".
@@ -124,7 +124,7 @@ Startup is kept cheap from several directions:
 
 ## API
 
-### `compile(schema, options?)`
+### `validate(schema, options?)`
 
 Compiles a schema into an error-collecting validator.
 
@@ -135,15 +135,17 @@ Compiles a schema into an error-collecting validator.
 
 Returns a `Validator`: `(input: unknown) => true | { valid: false; errors: ValidationError[] }`.
 
-### `compileGuard<T>(schema, options?)`
+### `validateGuard<T>(schema, options?)`
 
-Compiles a schema into a boolean type guard `(input: unknown) => input is T`. Same options as `compile`. This is the fastest option and allocates nothing.
+Compiles a schema into a boolean type guard `(input: unknown) => input is T`. Same options as `validate`. This is the fastest option and allocates nothing.
 
 ### Supported keywords
 
-`type` (incl. unions and `integer`), `enum`, `const`, `properties`, `required`, `additionalProperties`, `patternProperties`, `minProperties`, `maxProperties`, `dependentRequired`, `items`/`prefixItems` (2020-12) and array-`items` + `additionalItems` (draft-07), `minItems`, `maxItems`, `uniqueItems`, `minLength`, `maxLength`, `pattern`, `format` (opt-in), `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, `$ref` (local), boolean schemas.
+`type` (incl. unions and `integer`), `enum`, `const`, `properties`, `required`, `additionalProperties`, `patternProperties`, `minProperties`, `maxProperties`, `dependentRequired`, `items`/`prefixItems` (2020-12) and array-`items` + `additionalItems` (draft-07), `minItems`, `maxItems`, `uniqueItems`, `minLength`, `maxLength`, `pattern`, `format` (opt-in), `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, `$ref` (local), `nullable` (OpenAPI 3.0), boolean schemas.
 
 > Only **local** `$ref`s are supported — a compiled validator is a single self-contained function, so it does not fetch remote documents. Bundle external schemas into `$defs` first.
+
+> **OpenAPI `nullable`.** When a subschema sets `nullable: true`, a `null` value is accepted regardless of its declared `type` (and short-circuits every other keyword), matching how Ajv is configured to treat OpenAPI 3.0 schemas. Without this, a single nullable field produced a flood of spurious `must be …` errors.
 
 ---
 

@@ -421,6 +421,15 @@ export const generateSchemaCode = (ctx: CompilerContext, schema: unknown, v: str
   const s = schema
   const code: string[] = []
 
+  // OpenAPI 3.0 `nullable: true` — `null` is accepted regardless of the
+  // declared `type` (or any other keyword). Ajv, as Loupe configures it, treats
+  // a nullable schema this way, so a bare `null` must short-circuit the whole
+  // subschema as valid; without this the `type` check alone produced a flood of
+  // spurious "must be …" findings. We gate every emitted check on `!== null`
+  // rather than only widening `type`, matching that "accepts null, full stop"
+  // behaviour even when keywords like `enum`, `format`, or `$ref` are present.
+  const nullable = s['nullable'] === true
+
   // $ref — delegate to a generated function (handles recursion). Sibling
   // keywords still apply per 2020-12, so we do not early-return.
   if (typeof s['$ref'] === 'string') {
@@ -547,5 +556,7 @@ export const generateSchemaCode = (ctx: CompilerContext, schema: unknown, v: str
     code.push(block)
   }
 
-  return code.join('')
+  const body = code.join('')
+  if (nullable && body !== '') return `if(${v}!==null){${body}}`
+  return body
 }

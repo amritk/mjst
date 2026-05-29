@@ -23,7 +23,7 @@ export type ValidationResult = true | { valid: false; errors: ValidationError[] 
 /**
  * A compiled validator that reports every error it finds.
  *
- * Produced by {@link compile}. Use this when you need to tell the caller *why*
+ * Produced by {@link validate}. Use this when you need to tell the caller *why*
  * their data is invalid (form validation, API error responses, and so on).
  */
 export type Validator = (input: unknown) => ValidationResult
@@ -31,16 +31,16 @@ export type Validator = (input: unknown) => ValidationResult
 /**
  * A compiled boolean type guard.
  *
- * Produced by {@link compileGuard}. This is the fastest path: it short-circuits
+ * Produced by {@link validateGuard}. This is the fastest path: it short-circuits
  * on the first failure and never allocates an error object, so it is ideal for
  * hot loops where you only care whether the value matches the schema.
  */
 export type Guard<T = unknown> = (input: unknown) => input is T
 
 /**
- * Options shared by {@link compile} and {@link compileGuard}.
+ * Options shared by {@link validate} and {@link validateGuard}.
  */
-export type CompileOptions = {
+export type ValidateOptions = {
   /**
    * String formats to enforce (e.g. `email`, `date-time`, `uuid`). Formats are
    * opt-in because, like Ajv, we treat unknown or unlisted formats as
