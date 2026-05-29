@@ -12,6 +12,7 @@ mjst/
 │   ├── cli/                   # @amritk/mjst — command-line interface
 │   ├── generate-parsers/      # @amritk/generate-parsers — parser + type generator
 │   ├── generate-validators/   # @amritk/generate-validators — predicate validator generator
+│   ├── runtime-validators/    # @amritk/runtime-validators — eval-free runtime schema interpreter
 │   ├── generate-examples/     # @amritk/generate-examples — fast-check arbitrary + example generator
 │   ├── generate-markdown/     # @amritk/generate-markdown — README table generator
 │   ├── adapters/              # @amritk/adapters — convert external schemas (TypeBox, …) to JSON Schema
@@ -50,6 +51,15 @@ Generates lightweight predicate-style validators: each schema becomes a `validat
 - **Depends on:** `@amritk/helpers`, `json-schema-typed`
 - **Subpath imports:** `#generators/*` → `./src/generators/*.ts`
 - **Key entry point:** `src/generators/build-schema.ts`
+
+### `@amritk/runtime-validators` (`packages/runtime-validators`)
+
+The runtime counterpart to `generate-validators`. Instead of writing validator source files at build time, it validates a JSON Schema discovered **at runtime** (a plugin config, a user-supplied schema). It is an **eval-free interpreter** — it walks the schema directly, with no `new Function` and no compile step — so it has zero startup cost and runs anywhere `eval` is forbidden (strict CSP, Cloudflare Workers, React Native/Hermes). The trade-off vs Ajv is deliberate: it wins the cold one-shot path (validate a few values per schema) by ~90–1600×, and loses steady-state throughput (one schema, many values) by ~15–25× — use the build-time `generate-validators` for that.
+
+- **Depends on:** `json-schema-typed` (types only). Deliberately self-contained — no `@amritk/helpers` — so the runtime stays slim. `ajv` / `ajv-formats` are dev-only, for the benchmark suite and the differential fuzz test.
+- **Subpath imports:** `#interpreter/*` → `./src/interpreter/*.ts`
+- **Entry points:** `validate(schema)` → error-collecting validator (`true | { valid: false, errors }`); `validateGuard(schema)` → zero-allocation boolean type guard. Both go through `src/interpreter/prepare.ts` (a `WeakMap` cache over the interpreter).
+- **Design notes:** a single recursive walker (`src/interpreter/interpret.ts`) evaluates the schema against the value; the error array is allocated lazily so valid input never allocates, and the guard path short-circuits on first failure. The only reusable work — compiling `pattern` regexes and resolving local `$ref`s (JSON-Pointer fragments and `$anchor` names) — is memoized per validator. Recursion via `$ref` terminates naturally as the data shrinks. Parity with Ajv is enforced by `src/differential.test.ts` (~144k random/mutated values). OpenAPI `nullable: true` is honored (null accepted regardless of type).
 
 ### `@amritk/generate-examples` (`packages/generate-examples`)
 
