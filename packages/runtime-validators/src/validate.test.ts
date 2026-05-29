@@ -330,6 +330,36 @@ describe('validate', () => {
     expect(validator({ name: 'Ada', nickname: 7 })).not.toBe(true)
   })
 
+  it('accepts null on a nullable schema that wraps a $ref', () => {
+    // OpenAPI emits `nullable` as a sibling of `$ref` (and, where the spec is
+    // followed strictly, as a sibling of `allOf: [{ $ref }]`). In both forms a
+    // null value must short-circuit before the referenced schema is applied.
+    const defs = { $defs: { Point: { type: 'object', properties: { x: { type: 'number' } }, required: ['x'] } } }
+
+    const sibling = validate({ ...defs, $ref: '#/$defs/Point', nullable: true })
+    expect(sibling(null)).toBe(true)
+    expect(sibling({ x: 1 })).toBe(true)
+    expect(sibling({ x: 'no' })).not.toBe(true) // non-null still validates against the ref
+
+    const wrapped = validate({ ...defs, allOf: [{ $ref: '#/$defs/Point' }], nullable: true })
+    expect(wrapped(null)).toBe(true)
+    expect(wrapped({ x: 'no' })).not.toBe(true)
+  })
+
+  it('treats a non-schema node leniently instead of throwing or inventing errors', () => {
+    // OpenAPI parameter objects (`{ in, name, required, ... }`) get swept up by
+    // broad example selectors and handed to the validator as if they were
+    // schemas. Ajv cannot compile them — `required` is a boolean, not an array
+    // — so it silently skips them. We reach the same zero-findings outcome by
+    // ignoring keywords we do not recognize and the malformed `required`,
+    // rather than failing: an unknown keyword is an annotation, not a rule.
+    const parameter = { in: 'query', name: 'limit', required: false, description: 'page size' }
+    const validator = validate(parameter)
+    expect(validator(123)).toBe(true)
+    expect(validator({ anything: true })).toBe(true)
+    expect(validator(null)).toBe(true)
+  })
+
   it('throws a helpful error for an unresolvable $ref on first use', () => {
     // Compilation is lazy (to keep startup cheap), so the error surfaces when
     // the validator is first invoked rather than at validate() time.
