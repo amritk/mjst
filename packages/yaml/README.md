@@ -17,7 +17,7 @@
 
 ## Overview
 
-`@amritk/yaml` parses YAML into a JavaScript value **and** a lightweight tree where **every node records its exact `[start, end)` source range**. That second part is the whole point: a linter or language server needs to put a squiggle at an exact `line:column`, and most fast YAML parsers throw position information away.
+`@amritk/yaml` parses YAML into a JavaScript value **and** a lightweight tree where **every node records the exact source it came from** — a `start` offset (inclusive) and an `end` offset (exclusive). That second part is the whole point: a linter or language server needs to put a squiggle at an exact `line:column`, and most fast YAML parsers throw position information away.
 
 It is **zero-dependency** and tuned to be **small and fast**. Against the two parsers people reach for on the web:
 
@@ -98,7 +98,7 @@ if (isMap(contents)) {
 | --- | --- |
 | `parse(source, options?)` | Parse straight to a JavaScript value, like `JSON.parse`. |
 | `parseDocument(source, options?)` | Parse to `{ contents, errors, warnings, toJS() }` where every node carries `start`/`end` source offsets. |
-| `nodeAtPath(root, path, closest?)` | Resolve a JSON path to its node (with `range`), optionally falling back to the closest ancestor. |
+| `nodeAtPath(root, path, closest?)` | Resolve a JSON path to its node (carrying `start`/`end`), optionally falling back to the closest ancestor. |
 | `lineCounter(source)` | Build an `offset → { line, col }` mapper (1-based). |
 | `isScalar` / `isMap` / `isSeq` / `isPair` / `isAlias` | Narrowing guards over the node union. |
 
