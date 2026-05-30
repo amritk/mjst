@@ -1,0 +1,152 @@
+<div align="center">
+
+# @amritk/yaml
+
+**A tiny, dependency-free YAML parser with exact source positions — built for diagnostics.**
+
+![status](https://img.shields.io/badge/status-pre--alpha-ef4444?style=flat-square)&nbsp;
+![version](https://img.shields.io/badge/version-v0.0.0-6366f1?style=flat-square&logo=npm&logoColor=white)&nbsp;
+![license](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)&nbsp;
+![dependencies](https://img.shields.io/badge/dependencies-0-f97316?style=flat-square)&nbsp;
+![node](https://img.shields.io/badge/node-%E2%89%A520-339933?style=flat-square&logo=node.js&logoColor=white)&nbsp;
+![vibe coded](https://img.shields.io/badge/vibe%20coded-100%25-a855f7?style=flat-square)
+
+</div>
+
+---
+
+## Overview
+
+`@amritk/yaml` parses YAML into a JavaScript value **and** a lightweight tree where **every node records its exact `[start, end)` source range**. That second part is the whole point: a linter or language server needs to put a squiggle at an exact `line:column`, and most fast YAML parsers throw position information away.
+
+It is **zero-dependency** and tuned to be **small and fast**. Against the two parsers people reach for on the web:
+
+- **vs [`yaml`](https://www.npmjs.com/package/yaml) (eemeli)** — the only other parser here that also tracks source positions — building the source-mapped tree is **~20–26× faster**, and the bundle is **~7.6× smaller**.
+- **vs [`js-yaml`](https://www.npmjs.com/package/js-yaml)** — which has **no concept of source positions** — parsing straight to data is **~1.2–1.8× faster**, the bundle is **~2.9× smaller**, and we *also* hand you the positioned tree it cannot produce.
+
+It targets the YAML that real configuration and OpenAPI documents use: block and flow collections, all three quoting styles, literal/folded block scalars with chomping, comments, anchors, aliases, and merge keys. Scalars resolve via the YAML 1.2 **core schema**, so an OpenAPI `version: 1.0.0` stays the string `"1.0.0"` instead of turning into a number.
+
+---
+
+## Installation
+
+```bash
+npm install @amritk/yaml
+# or
+pnpm add @amritk/yaml
+# or
+bun add @amritk/yaml
+```
+
+---
+
+## Usage
+
+### Parse to data
+
+```ts
+import { parse } from '@amritk/yaml'
+
+parse('openapi: 3.1.0\ninfo:\n  title: My API\n')
+// → { openapi: '3.1.0', info: { title: 'My API' } }
+```
+
+### Parse with source positions (the diagnostics path)
+
+```ts
+import { lineCounter, nodeAtPath, parseDocument } from '@amritk/yaml'
+
+const source = 'info:\n  title: My API\n  version: 1.0.0\n'
+const doc = parseDocument(source)
+
+// Walk to a value by its JSON path and read its exact span.
+const node = nodeAtPath(doc.contents, ['info', 'version'])
+const lc = lineCounter(source)
+
+lc.linePos(node.range[0]) // → { line: 3, col: 12 }  (1-based)
+lc.linePos(node.range[1]) // → { line: 3, col: 17 }
+
+// Parser-level problems (duplicate keys, unterminated flow, …) come with spans too.
+for (const error of doc.errors) {
+  const { line, col } = lc.linePos(error.pos[0])
+  console.error(`${line}:${col} ${error.message}`)
+}
+```
+
+`nodeAtPath(root, path, closest)` returns the node at a JSON path, or — with `closest: true` — the nearest existing ancestor, so a diagnostic can still point somewhere real when the exact path is missing.
+
+### Walk the tree
+
+The node guards mirror the mainstream `yaml` package, so traversal code is mechanical:
+
+```ts
+import { isMap, isScalar, isSeq, parseDocument } from '@amritk/yaml'
+
+const { contents } = parseDocument(source)
+if (isMap(contents)) {
+  for (const pair of contents.items) {
+    if (isScalar(pair.key)) console.log(pair.key.value, pair.value?.range)
+  }
+}
+```
+
+---
+
+## API
+
+| Export | What it does |
+| --- | --- |
+| `parse(source, options?)` | Parse straight to a JavaScript value, like `JSON.parse`. |
+| `parseDocument(source, options?)` | Parse to `{ contents, errors, warnings, toJS() }` where every node carries a `range`. |
+| `nodeAtPath(root, path, closest?)` | Resolve a JSON path to its node (with `range`), optionally falling back to the closest ancestor. |
+| `lineCounter(source)` | Build an `offset → { line, col }` mapper (1-based). |
+| `isScalar` / `isMap` / `isSeq` / `isPair` / `isAlias` | Narrowing guards over the node union. |
+
+**Options**
+
+- `uniqueKeys` (default `true`) — report duplicate mapping keys as errors. Set `false` to allow them (last value wins).
+- `merge` (default `true`) — honor the `<<` merge key. Set `false` to treat `<<` as an ordinary key.
+
+---
+
+## Performance
+
+Run it yourself with `bun run bench`. Representative numbers (Bun, Linux):
+
+**Parse to a source-mapped tree** — the job this package exists for. `js-yaml` cannot produce positions, so it is not a candidate here.
+
+| fixture | @amritk/yaml | yaml (eemeli) | speedup |
+| --- | --- | --- | --- |
+| small (155 B) | 197k ops/s | 9.5k ops/s | **20.8×** |
+| medium (2 KB) | 19.4k ops/s | 756 ops/s | **25.7×** |
+| large (100 KB) | 381 ops/s | 17.5 ops/s | **21.8×** |
+
+**Parse to plain data** — all three can do this.
+
+| fixture | @amritk/yaml | yaml | js-yaml | vs yaml | vs js-yaml |
+| --- | --- | --- | --- | --- | --- |
+| small | 167k | 8.3k | 93k | 20.1× | 1.80× |
+| medium | 13.1k | 708 | 9.0k | 18.6× | 1.46× |
+| large | 219 | 15 | 188 | 14.6× | 1.17× |
+
+**Bundle size** (minified + gzipped):
+
+| | size | |
+| --- | --- | --- |
+| **@amritk/yaml** | **4.7 KB** | — |
+| yaml | 35.6 KB | 7.6× larger |
+| js-yaml | 13.5 KB | 2.9× larger |
+
+Correctness is pinned to `yaml` by a differential test suite (`src/differential.test.ts`) that parses a battery of documents — including full OpenAPI specs — and asserts byte-identical data output. Where `js-yaml` diverges (its `!!timestamp` type turns ISO strings into `Date`s, which is wrong for a JSON superset), we instead agree with `yaml`.
+
+---
+
+## Scope
+
+The parser covers the YAML that configuration and OpenAPI documents use in the wild. A few exotic YAML 1.2 constructs are intentionally out of scope to stay tiny and fast: explicit `? key` mapping entries, multi-document streams (only the first document is read), custom/global tags beyond `!!`-style hints, and non-space indentation. If you need full YAML 1.2 conformance, use `yaml`; if you need a small, fast, position-aware parser for diagnostics, use this.
+
+---
+
+## License
+
+MIT

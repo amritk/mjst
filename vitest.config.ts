@@ -21,6 +21,7 @@ export default defineConfig({
         replacement: resolve(root, 'packages/runtime-validators/src/index.ts'),
       },
       { find: /^@amritk\/resolve-refs$/, replacement: resolve(root, 'packages/resolve-refs/src/index.ts') },
+      { find: /^@amritk\/yaml$/, replacement: resolve(root, 'packages/yaml/src/index.ts') },
     ],
   },
   test: {
