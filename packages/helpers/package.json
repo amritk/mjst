@@ -28,7 +28,7 @@
   },
   "scripts": {
     "build": "bun run build:code && bun run build:types",
-    "build:code": "bun build ./src/build-dynamic-ref-map.ts ./src/derive-root-type-name.ts ./src/extract-refs.ts ./src/generate-type-definition.ts ./src/has-ref.ts ./src/is-object.ts ./src/mjst-extension.ts ./src/parse-documentation.ts ./src/ref-to-filename.ts ./src/ref-to-name.ts ./src/resolve-dynamic-refs.ts ./src/resolve-ref.ts ./src/safe-accessor.ts ./src/schema-guards.ts ./src/upgrade-draft07-schema.ts ./src/validate-array.ts ./src/validate-record.ts --outdir=dist --root=src --target=node",
+    "build:code": "bun build ./src/build-dynamic-ref-map.ts ./src/derive-root-type-name.ts ./src/extract-dynamic-anchor-defs.ts ./src/extract-refs.ts ./src/generate-index-barrel.ts ./src/generate-type-definition.ts ./src/has-ref.ts ./src/is-object.ts ./src/mjst-extension.ts ./src/parse-documentation.ts ./src/ref-to-filename.ts ./src/ref-to-name.ts ./src/resolve-dynamic-refs.ts ./src/resolve-ref.ts ./src/safe-accessor.ts ./src/schema-guards.ts ./src/upgrade-draft07-schema.ts ./src/validate-array.ts ./src/validate-record.ts ./src/walk-ref-graph.ts --outdir=dist --root=src --target=node",
     "build:types": "tsc -p ."
   },
   "dependencies": {
@@ -46,10 +46,20 @@
       "default": "./dist/derive-root-type-name.js",
       "types": "./dist/derive-root-type-name.d.ts"
     },
+    "./extract-dynamic-anchor-defs": {
+      "bun": "./src/extract-dynamic-anchor-defs.ts",
+      "default": "./dist/extract-dynamic-anchor-defs.js",
+      "types": "./dist/extract-dynamic-anchor-defs.d.ts"
+    },
     "./extract-refs": {
       "bun": "./src/extract-refs.ts",
       "default": "./dist/extract-refs.js",
       "types": "./dist/extract-refs.d.ts"
+    },
+    "./generate-index-barrel": {
+      "bun": "./src/generate-index-barrel.ts",
+      "default": "./dist/generate-index-barrel.js",
+      "types": "./dist/generate-index-barrel.d.ts"
     },
     "./generate-type-definition": {
       "bun": "./src/generate-type-definition.ts",
@@ -120,6 +130,11 @@
       "bun": "./src/validate-record.ts",
       "default": "./dist/validate-record.js",
       "types": "./dist/validate-record.d.ts"
+    },
+    "./walk-ref-graph": {
+      "bun": "./src/walk-ref-graph.ts",
+      "default": "./dist/walk-ref-graph.js",
+      "types": "./dist/walk-ref-graph.d.ts"
     }
   }
 }

@@ -1,0 +1,235 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve as resolvePath } from 'node:path'
+
+import { getByPointer } from './get-by-pointer'
+import { isPrivateHost } from './is-private-host'
+import type { ResolveError, ResolveOptions, ResolveResult } from './types'
+
+// A ref currently mid-resolution is marked with this sentinel; revisiting it
+// means a cycle, so we return `{}` instead of recursing forever.
+const CYCLE = Symbol('cycle')
+type CacheValue = unknown | typeof CYCLE
+
+// --- Document location helpers ---------------------------------------------
+//
+// A "location" is the absolute identity of a document: either an absolute file
+// path or an absolute http(s) URL. Refs are resolved relative to the location
+// of the document they appear in, so a relative ref inside a remote document
+// resolves to another remote URL, and one inside a local file to another path.
+
+const isRemote = (location: string): boolean => /^https?:\/\//i.test(location)
+
+/** Resolves the location of `ref` (its file/URL part) relative to `base`. */
+const joinLocation = (base: string, ref: string): string => {
+  if (isRemote(ref)) return ref
+  if (isRemote(base)) return new URL(ref, base).href
+  return resolvePath(dirname(base), ref)
+}
+
+/** Splits a `$ref` into its document part and JSON-pointer part. */
+const splitRef = (ref: string): { filePart: string; pointer: string } => {
+  const hashIdx = ref.indexOf('#')
+  return {
+    filePart: hashIdx === -1 ? ref : ref.slice(0, hashIdx),
+    pointer: hashIdx === -1 ? '' : ref.slice(hashIdx + 1),
+  }
+}
+
+// mjst deals only in JSON Schema documents, so every document — local or
+// remote — is parsed as JSON. (The Loupe linter's sibling resolver additionally
+// accepts YAML; this one stays JSON-only to keep the package dependency-free.)
+const parseContent = (content: string): unknown => JSON.parse(content) as unknown
+
+// --- Remote document cache -------------------------------------------------
+//
+// Fetched remote documents are cached in memory for the lifetime of the
+// process ("the session"). Local files are intentionally NOT cached across
+// resolve passes — they can change on disk during a long-lived session (e.g.
+// an editor/LSP), so each pass re-reads them. Remote documents are assumed
+// stable for the session; call `clearRemoteCache()` to drop them.
+
+const remoteCache = new Map<string, unknown>()
+
+/** Drops every cached remote document. Mainly useful for tests/long sessions. */
+export const clearRemoteCache = (): void => {
+  remoteCache.clear()
+}
+
+/** Returns why a remote location may not be fetched, or `null` if it is allowed. */
+const denialReason = (location: string, options: ResolveOptions): string | null => {
+  if (options.remote === false) return 'remote $ref resolution is disabled'
+
+  let url: URL
+  try {
+    url = new URL(location)
+  } catch {
+    return 'the URL is invalid'
+  }
+
+  const allow = options.allowedHosts
+  // An explicit allow-list entry is an intentional opt-in and bypasses the
+  // private-host guard; otherwise refuse non-public targets by default.
+  if (allow && allow.length > 0) {
+    return allow.includes(url.host) ? null : 'host is not in the allow-list'
+  }
+  if (!options.allowPrivateHosts && isPrivateHost(url.hostname)) {
+    return 'host resolves to a private or loopback address (set allowPrivateHosts to permit)'
+  }
+  return null
+}
+
+/**
+ * Loads a document into `docCache`, fetching/reading it if needed. Remote
+ * documents are additionally cached for the session in `remoteCache`. On
+ * failure an error is recorded and the location is cached as `{}` so that
+ * pointer lookups degrade gracefully instead of throwing. Returns whether the
+ * document loaded successfully.
+ */
+const loadDoc = async (
+  location: string,
+  docCache: Map<string, unknown>,
+  options: ResolveOptions,
+  errors: ResolveError[],
+): Promise<boolean> => {
+  if (docCache.has(location)) return true
+
+  if (isRemote(location)) {
+    if (remoteCache.has(location)) {
+      docCache.set(location, remoteCache.get(location))
+      return true
+    }
+    const reason = denialReason(location, options)
+    if (reason !== null) {
+      errors.push({ message: `Refusing to resolve remote $ref (${reason}): ${location}`, path: [] })
+      docCache.set(location, {})
+      return false
+    }
+    try {
+      const response = await fetch(location)
+      if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`)
+      const doc = parseContent(await response.text())
+      remoteCache.set(location, doc)
+      docCache.set(location, doc)
+      return true
+    } catch (err) {
+      errors.push({ message: `Failed to fetch ${location}: ${String(err)}`, path: [] })
+      docCache.set(location, {})
+      return false
+    }
+  }
+
+  try {
+    docCache.set(location, parseContent(readFileSync(location, 'utf8')))
+    return true
+  } catch (err) {
+    errors.push({ message: String(err), path: [] })
+    docCache.set(location, {})
+    return false
+  }
+}
+
+/** Collects the distinct document parts of every `$ref` directly under `node`. */
+const collectRefTargets = (node: unknown, out: Set<string>): Set<string> => {
+  if (node === null || typeof node !== 'object') return out
+  if (Array.isArray(node)) {
+    for (const item of node) collectRefTargets(item, out)
+    return out
+  }
+  const obj = node as Record<string, unknown>
+  if (typeof obj['$ref'] === 'string') {
+    // A `$ref` object's siblings are ignored on resolution, so we do not recurse
+    // into them — mirroring resolveAt's behaviour.
+    const { filePart } = splitRef(obj['$ref'])
+    if (filePart !== '') out.add(filePart)
+    return out
+  }
+  for (const key of Object.keys(obj)) collectRefTargets(obj[key], out)
+  return out
+}
+
+/**
+ * Walks every reachable document starting from `rootLocation`, loading each one
+ * so the synchronous resolve pass can look them up. This is the only async part
+ * of resolution: remote documents are fetched here (in dependency order) and
+ * cached for the session.
+ */
+const prefetch = async (
+  rootLocation: string,
+  docCache: Map<string, unknown>,
+  options: ResolveOptions,
+  errors: ResolveError[],
+): Promise<void> => {
+  const seen = new Set<string>([rootLocation])
+  const queue: string[] = [rootLocation]
+  while (queue.length > 0) {
+    const location = queue.shift() as string
+    for (const filePart of collectRefTargets(docCache.get(location), new Set())) {
+      const target = joinLocation(location, filePart)
+      if (seen.has(target)) continue
+      seen.add(target)
+      await loadDoc(target, docCache, options, errors)
+      queue.push(target)
+    }
+  }
+}
+
+/**
+ * Single-pass resolver that inlines internal and external (`$ref` to other
+ * file/URL) references. Every reachable document has already been loaded into
+ * `docCache` by `prefetch`, so this stays synchronous. Refs are resolved once
+ * (`refCache`); the CYCLE sentinel short-circuits re-entrant resolution.
+ *
+ * `baseLocation` is the location of the document `node` belongs to, used to
+ * resolve relative refs and `#/...` pointers within it.
+ */
+const resolveAt = (
+  node: unknown,
+  baseLocation: string,
+  docCache: Map<string, unknown>,
+  refCache: Map<string, CacheValue>,
+): unknown => {
+  if (node === null || typeof node !== 'object') return node
+  if (Array.isArray(node)) {
+    return node.map((item) => resolveAt(item, baseLocation, docCache, refCache))
+  }
+  const obj = node as Record<string, unknown>
+  if (typeof obj['$ref'] === 'string') {
+    const { filePart, pointer } = splitRef(obj['$ref'])
+    const targetLocation = filePart === '' ? baseLocation : joinLocation(baseLocation, filePart)
+    const targetRoot = docCache.get(targetLocation) ?? {}
+
+    const cacheKey = `${targetLocation}#${pointer}`
+    if (refCache.has(cacheKey)) {
+      const cached = refCache.get(cacheKey)
+      return cached === CYCLE ? {} : cached
+    }
+    refCache.set(cacheKey, CYCLE)
+    const target = pointer ? getByPointer(targetRoot, pointer) : targetRoot
+    const resolved = resolveAt(target, targetLocation, docCache, refCache)
+    refCache.set(cacheKey, resolved)
+    return resolved
+  }
+  const result: Record<string, unknown> = {}
+  for (const key of Object.keys(obj)) {
+    result[key] = resolveAt(obj[key], baseLocation, docCache, refCache)
+  }
+  return result
+}
+
+/**
+ * Resolves `$ref`s in a document on disk (or at a URL), including cross-file
+ * and remote refs. Remote documents are fetched on the fly and cached in memory
+ * for the session; `options` governs whether/which remote hosts are allowed.
+ */
+export const resolveRefsFromFile = async (filename: string, options: ResolveOptions = {}): Promise<ResolveResult> => {
+  const rootLocation = isRemote(filename) ? filename : resolvePath(filename)
+  const errors: ResolveError[] = []
+  const docCache = new Map<string, unknown>()
+
+  if (!(await loadDoc(rootLocation, docCache, options, errors))) {
+    return { resolved: {}, errors }
+  }
+  await prefetch(rootLocation, docCache, options, errors)
+  const resolved = resolveAt(docCache.get(rootLocation), rootLocation, docCache, new Map())
+  return { resolved, errors }
+}

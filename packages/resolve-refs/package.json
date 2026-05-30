@@ -1,0 +1,47 @@
+{
+  "name": "@amritk/resolve-refs",
+  "version": "0.0.0",
+  "description": "Resolve and inline JSON Schema / OpenAPI $refs — internal, cross-file, and remote — with session caching and a default-deny SSRF guard.",
+  "module": "./dist/index.js",
+  "type": "module",
+  "license": "MIT",
+  "author": "amritk",
+  "keywords": [
+    "json-schema",
+    "openapi",
+    "$ref",
+    "ref",
+    "resolver",
+    "dereference",
+    "typescript",
+    "mjst"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amritk/mjst.git",
+    "directory": "packages/resolve-refs"
+  },
+  "homepage": "https://github.com/amritk/mjst/tree/main/packages/resolve-refs#readme",
+  "bugs": {
+    "url": "https://github.com/amritk/mjst/issues"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "bun run build:code && bun run build:types",
+    "build:code": "bun build ./src/index.ts --outdir=dist --target=node",
+    "build:types": "tsc -p ."
+  },
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  }
+}
