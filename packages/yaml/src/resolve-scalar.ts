@@ -13,6 +13,28 @@ const INT_OCT = /^[-+]?0o[0-7]+$/
 // Float requires a `.` or exponent so version strings like `1.0.0` stay strings.
 const FLOAT = /^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?$/
 
+/**
+ * First-character gate as a 128-entry lookup table. Only a handful of characters
+ * can begin a non-string scalar; the overwhelmingly common case is a key or
+ * value whose first char is a plain letter, so a single indexed read beats the
+ * branch chain it replaces. Built once at module load.
+ */
+const MAYBE_SPECIAL = /* @__PURE__ */ (() => {
+  const t = new Uint8Array(128)
+  t[0x2e] = 1 // .
+  t[0x2d] = 1 // -
+  t[0x2b] = 1 // +
+  t[0x7e] = 1 // ~
+  for (let d = 0x30; d <= 0x39; d++) t[d] = 1 // 0-9
+  t[0x6e] = 1 // n
+  t[0x4e] = 1 // N
+  t[0x74] = 1 // t
+  t[0x54] = 1 // T
+  t[0x66] = 1 // f
+  t[0x46] = 1 // F
+  return t
+})()
+
 /** Resolves a plain (unquoted) scalar to its core-schema JavaScript value. */
 export const resolvePlainValue = (text: string): string | number | boolean | null => {
   // Empty plain scalar is null in YAML (e.g. a key with no value).
@@ -20,19 +42,7 @@ export const resolvePlainValue = (text: string): string | number | boolean | nul
 
   // Cheap first-char gate: only a handful of characters can begin a non-string.
   const c = text.charCodeAt(0)
-  const couldBeSpecial =
-    c === 0x2e /* . */ ||
-    c === 0x2d /* - */ ||
-    c === 0x2b /* + */ ||
-    c === 0x7e /* ~ */ ||
-    (c >= 0x30 && c <= 0x39) /* 0-9 */ ||
-    c === 0x6e /* n */ ||
-    c === 0x4e /* N */ ||
-    c === 0x74 /* t */ ||
-    c === 0x54 /* T */ ||
-    c === 0x66 /* f */ ||
-    c === 0x46 /* F */
-  if (!couldBeSpecial) return text
+  if (c >= 128 || MAYBE_SPECIAL[c] === 0) return text
 
   switch (text) {
     case '~':

@@ -157,33 +157,35 @@ const pushError = (state: State, code: string, message: string, pos: Range): voi
  */
 const findKeyColon = (src: string, from: number, len: number): number => {
   let i = from
+  // A quote only delimits when it opens the key (`Let's` mid-word is literal), so
+  // the quote-skip belongs before the scan loop — not as a per-character test.
+  const first = src.charCodeAt(from)
+  if (first === SQUOTE) {
+    i = from + 1
+    while (i < len) {
+      if (src.charCodeAt(i) === SQUOTE) {
+        if (src.charCodeAt(i + 1) === SQUOTE) i += 2
+        else break
+      } else i++
+    }
+    i++
+  } else if (first === DQUOTE) {
+    i = from + 1
+    while (i < len) {
+      const d = src.charCodeAt(i)
+      if (d === DQUOTE) break
+      if (d === 92 /* \ */) i += 2
+      else i++
+    }
+    i++
+  }
+  // Past any opening quote, the only things that matter are line end, a ` #`
+  // comment, and the `key:` colon. Hoisting the quote checks keeps this the
+  // tight inner loop it wants to be — three comparisons per character.
   while (i < len) {
     const c = src.charCodeAt(i)
     if (c === NL || c === CR) return -1
     if (c === HASH && i > from && isSpace(src.charCodeAt(i - 1))) return -1
-    // A quote only delimits when it opens the key; `Let's` mid-word is literal.
-    if (c === SQUOTE && i === from) {
-      i++
-      while (i < len) {
-        if (src.charCodeAt(i) === SQUOTE) {
-          if (src.charCodeAt(i + 1) === SQUOTE) i += 2
-          else break
-        } else i++
-      }
-      i++
-      continue
-    }
-    if (c === DQUOTE && i === from) {
-      i++
-      while (i < len) {
-        const d = src.charCodeAt(i)
-        if (d === DQUOTE) break
-        if (d === 92 /* \ */) i += 2
-        else i++
-      }
-      i++
-      continue
-    }
     if (c === COLON) {
       const n = src.charCodeAt(i + 1)
       if (i + 1 >= len || n === SPACE || n === TAB || n === NL || n === CR) return i
@@ -604,7 +606,7 @@ const keyText = (node: YamlNode): string => {
   return ''
 }
 
-const parseBlockMap = (state: State, indent: number): YamlMap => {
+const parseBlockMap = (state: State, indent: number, firstColon: number): YamlMap => {
   const { src, len } = state
   const items: YamlPair[] = []
   // Duplicate-key tracking is lazy: most maps have unique keys, and many have a
@@ -618,17 +620,22 @@ const parseBlockMap = (state: State, indent: number): YamlMap => {
   let contentPos = state.pos
   let firstEntry = true
   for (;;) {
-    if (!firstEntry) {
+    let colon: number
+    if (firstEntry) {
+      // `parseNode` already located this colon to decide we are a mapping; reuse
+      // it instead of re-scanning the first line.
+      colon = firstColon
+    } else {
       const line = peekLine(state)
       if (line.eof || line.indent !== indent) break
       contentPos = line.contentPos
+      const c = src.charCodeAt(contentPos)
+      // A `- ` at this indent is a sequence, not a mapping key.
+      if (c === DASH && (contentPos + 1 >= len || isSpace(src.charCodeAt(contentPos + 1)))) break
+      colon = findKeyColon(src, contentPos, len)
+      if (colon < 0) break
     }
     firstEntry = false
-    const c = src.charCodeAt(contentPos)
-    // A `- ` at this indent is a sequence, not a mapping key.
-    if (c === DASH && (contentPos + 1 >= len || isSpace(src.charCodeAt(contentPos + 1)))) break
-    const colon = findKeyColon(src, contentPos, len)
-    if (colon < 0) break
 
     const lineContentPos = contentPos
     state.pos = contentPos
@@ -778,7 +785,8 @@ const parseNode = (state: State, indent: number): YamlNode => {
 
   // A line beginning with a quote may be a quoted *key* (e.g. `"200":`), so the
   // mapping check has to come before treating the quote as a standalone scalar.
-  if (findKeyColon(src, state.pos, len) >= 0) return attachProps(parseBlockMap(state, indent), props, state)
+  const colon = findKeyColon(src, state.pos, len)
+  if (colon >= 0) return attachProps(parseBlockMap(state, indent, colon), props, state)
   if (cc === DQUOTE || cc === SQUOTE) return attachProps(scanQuoted(state, cc), props, state)
   return attachProps(scanPlainScalar(state, indent - 1), props, state)
 }
@@ -817,10 +825,20 @@ const toJsValue = (node: YamlNode | null, anchors: Map<string, YamlNode>, merge:
     const target = anchors.get(node.source)
     return target ? toJsValue(target, anchors, merge) : undefined
   }
-  if (node.kind === 'seq') return node.items.map((item) => toJsValue(item, anchors, merge))
+  if (node.kind === 'seq') {
+    // Index loop into a pre-sized array: no per-seq closure (as `.map` allocates)
+    // and the result array never reallocates as it grows.
+    const items = node.items
+    const out = new Array(items.length)
+    for (let i = 0; i < items.length; i++) out[i] = toJsValue(items[i] ?? null, anchors, merge)
+    return out
+  }
 
   const obj: Record<string, unknown> = {}
-  for (const pair of node.items) {
+  const items = node.items
+  for (let i = 0; i < items.length; i++) {
+    const pair = items[i]
+    if (pair === undefined) continue
     const key = pair.key
     if (merge && key.kind === 'scalar' && key.source === '<<') {
       applyMerge(obj, toJsValue(pair.value, anchors, merge))
