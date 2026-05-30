@@ -25,6 +25,23 @@ describe('resolve-refs', () => {
     expect(head.properties.next).toEqual({})
   })
 
+  it('breaks a mutual cycle (A → B → A) without infinite recursion', () => {
+    const { resolved } = resolveRefs({
+      $defs: {
+        a: { type: 'object', properties: { b: { $ref: '#/$defs/b' } } },
+        b: { type: 'object', properties: { a: { $ref: '#/$defs/a' } } },
+      },
+      properties: { root: { $ref: '#/$defs/a' } },
+    })
+
+    // Resolution terminates; `a` is in the cache by the time `properties.root` is
+    // processed, so we get the partially-resolved shape where the back-reference
+    // leg terminated at `{}` rather than looping forever.
+    const root = (resolved as { properties: { root: { type: string; properties: { b: unknown } } } }).properties.root
+    expect(root.type).toBe('object')
+    expect(root.properties.b).toEqual({})
+  })
+
   it('leaves external (non-#) refs untouched', () => {
     const { resolved } = resolveRefs({ properties: { pet: { $ref: 'pet.json#/Pet' } } })
 

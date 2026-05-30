@@ -82,6 +82,22 @@ describe('resolve-refs-from-file', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
+  it('uses a custom parse callback to load non-JSON (e.g. YAML) documents', async () => {
+    // Real YAML that JSON.parse would reject — a custom callback handles it.
+    writeFileSync(join(dir, 'contact.yaml'), 'type: object\nproperties:\n  name:\n    type: string\n')
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ contact: { $ref: './contact.yaml' } }))
+
+    const parse = (content: string, location: string): unknown => {
+      if (/\.ya?ml$/i.test(location)) return { type: 'object', properties: { name: { type: 'string' } } }
+      return JSON.parse(content) as unknown
+    }
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'), { parse })
+
+    expect(errors).toEqual([])
+    expect(resolved).toMatchObject({ contact: { type: 'object', properties: { name: { type: 'string' } } } })
+  })
+
   it('fetches an allow-listed remote $ref and caches it for the session', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ Foo: { type: 'string' } }), {
