@@ -90,6 +90,21 @@ describe('walk-ref-graph', () => {
     warn.mockRestore()
   })
 
+  it('handles circular refs (A → B → A) without infinite looping', () => {
+    const schema = {
+      properties: { root: { $ref: '#/$defs/a' } },
+      $defs: {
+        a: { type: 'object', properties: { b: { $ref: '#/$defs/b' } } },
+        b: { type: 'object', properties: { a: { $ref: '#/$defs/a' } } },
+      },
+    }
+
+    const nodes = collect(schema, 'Document')
+
+    // Both defs are visited exactly once each despite the cycle.
+    expect(nodes.map((n) => n.filename)).toEqual(['document', 'a', 'b'])
+  })
+
   it('reuses cached resolution across repeated walks of the same schema object', () => {
     // The second walk should produce the same nodes from the per-root cache,
     // proving the cache does not corrupt or drop results on reuse.
