@@ -36,9 +36,7 @@
   "scripts": {
     "dev": "bun run --conditions=development ./src/cli.ts",
     "start": "bun run ./src/cli.ts",
-    "build": "bun run build:code && bun run build:types",
-    "build:code": "bun build ./src/cli.ts --outdir=dist --target=node",
-    "build:types": "tsgo -p .",
+    "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f",
     "types:check": "tsgo -p . --noEmit",
     "test": "NODE_ENV=production vitest run --root ../.. cli",
     "generate-readme": "bun run ./scripts/generate-readme.ts"

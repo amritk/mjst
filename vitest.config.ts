@@ -1,11 +1,12 @@
 import { resolve } from 'node:path'
 import { defineConfig } from 'vitest/config'
 
-const root = import.meta.dirname
+const root = process.cwd().includes('/packages/') ? resolve(process.cwd(), '../..') : process.cwd()
 
 export default defineConfig({
   resolve: {
     alias: [
+      { find: /^@\//, replacement: `${resolve(process.cwd(), 'src')}/` },
       { find: /^@amritk\/adapters\/(.*)$/, replacement: resolve(root, 'packages/adapters/src/$1.ts') },
       { find: /^@amritk\/helpers\/(.*)$/, replacement: resolve(root, 'packages/helpers/src/$1.ts') },
       { find: /^@amritk\/generate-examples$/, replacement: resolve(root, 'packages/generate-examples/src/index.ts') },

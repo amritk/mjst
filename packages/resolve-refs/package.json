@@ -33,9 +33,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "bun run build:code && bun run build:types",
-    "build:code": "bun build ./src/index.ts --outdir=dist --target=node",
-    "build:types": "tsgo -p .",
+    "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f",
     "types:check": "tsgo -p . --noEmit",
     "test": "NODE_ENV=production vitest run --root ../.. resolve-refs"
   },

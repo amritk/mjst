@@ -1,11 +1,10 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "noEmit": false,
-    "declaration": true,
-    "emitDeclarationOnly": true,
-    "outDir": "dist",
-    "rootDir": "src"
+    "paths": {
+      "@/*": ["./src/*"],
+      "#generators/*": ["./src/generators/*"]
+    }
   },
   "include": ["src/**/*.ts"],
   "exclude": ["**/*.test.ts"]
