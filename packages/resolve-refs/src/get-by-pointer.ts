@@ -10,7 +10,15 @@ export const getByPointer = (root: unknown, pointer: string): unknown => {
   const segments = pointer
     .replace(/^\//, '')
     .split('/')
-    .map((segment) => segment.replace(/~1/g, '/').replace(/~0/g, '~'))
+    .map((segment) => {
+      let decoded = segment
+      try {
+        decoded = decodeURIComponent(segment)
+      } catch {
+        // leave invalid percent-escapes as-is
+      }
+      return decoded.replace(/~1/g, '/').replace(/~0/g, '~')
+    })
 
   let current: unknown = root
   for (const segment of segments) {

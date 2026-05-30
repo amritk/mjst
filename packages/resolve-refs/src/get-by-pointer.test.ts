@@ -28,6 +28,13 @@ describe('get-by-pointer', () => {
     expect(getByPointer(root, '/tilde~0key')).toBe(false)
   })
 
+  it('percent-decodes URI-encoded segments', () => {
+    const doc = { '{volume_id}': 'found', 'weird/key': true }
+    expect(getByPointer(doc, '/%7Bvolume_id%7D')).toBe('found')
+    // %2F in a segment must not be treated as a path separator
+    expect(getByPointer(doc, '/weird%2Fkey')).toBe(true)
+  })
+
   it('returns undefined when a segment is missing', () => {
     expect(getByPointer(root, '/info/nope')).toBeUndefined()
     expect(getByPointer(root, '/info/title/tooDeep')).toBeUndefined()
