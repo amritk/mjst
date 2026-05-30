@@ -1,5 +1,11 @@
 # @amritk/generate-markdown
 
+## 0.2.4
+
+### Patch Changes
+
+- 6218978: chore: version bumps
+
 ## 0.2.3
 
 ### Patch Changes

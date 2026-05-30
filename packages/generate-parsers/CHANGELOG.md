@@ -1,5 +1,14 @@
 # @amritk/generate-parsers
 
+## 0.7.1
+
+### Patch Changes
+
+- 6218978: chore: version bumps
+- Updated dependencies [6218978]
+  - @amritk/generate-markdown@0.2.4
+  - @amritk/helpers@0.7.1
+
 ## 0.7.0
 
 ### Minor Changes

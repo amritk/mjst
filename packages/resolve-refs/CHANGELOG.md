@@ -1,5 +1,11 @@
 # @amritk/resolve-refs
 
+## 0.1.1
+
+### Patch Changes
+
+- 6218978: chore: version bumps
+
 ## 0.1.0
 
 ### Minor Changes
