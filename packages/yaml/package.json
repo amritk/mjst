@@ -1,0 +1,54 @@
+{
+  "name": "@amritk/yaml",
+  "version": "0.0.0",
+  "description": "A tiny, dependency-free YAML parser with exact source positions. Built for diagnostics: every node maps back to an exact line:column.",
+  "module": "./dist/index.js",
+  "type": "module",
+  "license": "MIT",
+  "author": "amritk",
+  "keywords": [
+    "yaml",
+    "parser",
+    "yaml-parser",
+    "source-map",
+    "diagnostics",
+    "lint",
+    "openapi",
+    "typescript",
+    "fast",
+    "mjst"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amritk/mjst.git",
+    "directory": "packages/yaml"
+  },
+  "homepage": "https://github.com/amritk/mjst/tree/main/packages/yaml#readme",
+  "bugs": {
+    "url": "https://github.com/amritk/mjst/issues"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f",
+    "types:check": "tsgo -p . --noEmit",
+    "test": "NODE_ENV=production vitest run --root ../.. yaml",
+    "bench": "bun run ./bench/run.ts"
+  },
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "default": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "devDependencies": {
+    "js-yaml": "^4.1.0",
+    "yaml": "^2.6.0"
+  }
+}
