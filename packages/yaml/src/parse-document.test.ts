@@ -85,7 +85,7 @@ describe('parse-document', () => {
     expect(errors[0]?.code).toBe('DUPLICATE_KEY')
     expect(errors[0]?.kind).toBe('error')
     // The error points at the second `a`, which starts at offset 5.
-    expect(errors[0]?.pos[0]).toBe(5)
+    expect(errors[0]?.start).toBe(5)
   })
 
   it('keeps the last value for a duplicate key but still flags it', () => {
@@ -122,7 +122,7 @@ describe('parse-document', () => {
     if (node?.kind === 'map') {
       const value = node.items[0]?.value
       // "My API" starts at offset 7 and ends (exclusive) at 13.
-      expect(value?.range).toEqual([7, 13])
+      expect([value?.start, value?.end]).toEqual([7, 13])
     }
   })
 
@@ -132,7 +132,7 @@ describe('parse-document', () => {
     if (node?.kind === 'map') {
       const info = node.items[0]?.value
       // The nested map begins at `title`, the first child key (offset 8).
-      expect(info?.range[0]).toBe(8)
+      expect(info?.start).toBe(8)
     }
   })
 

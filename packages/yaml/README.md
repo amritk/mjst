@@ -21,8 +21,8 @@
 
 It is **zero-dependency** and tuned to be **small and fast**. Against the two parsers people reach for on the web:
 
-- **vs [`yaml`](https://www.npmjs.com/package/yaml) (eemeli)** — the only other parser here that also tracks source positions — building the source-mapped tree is **~20–26× faster**, and the bundle is **~7.6× smaller**.
-- **vs [`js-yaml`](https://www.npmjs.com/package/js-yaml)** — which has **no concept of source positions** — parsing straight to data is **~1.2–1.8× faster**, the bundle is **~2.9× smaller**, and we *also* hand you the positioned tree it cannot produce.
+- **vs [`yaml`](https://www.npmjs.com/package/yaml) (eemeli)** — the only other parser here that also tracks source positions — building the source-mapped tree is **~25–31× faster**, and the bundle is **~7.3× smaller**.
+- **vs [`js-yaml`](https://www.npmjs.com/package/js-yaml)** — which has **no concept of source positions** — parsing straight to data is **~1.8–2× faster**, the bundle is **~2.8× smaller**, and we *also* hand you the positioned tree it cannot produce.
 
 It targets the YAML that real configuration and OpenAPI documents use: block and flow collections, all three quoting styles, literal/folded block scalars with chomping, comments, anchors, aliases, and merge keys. Scalars resolve via the YAML 1.2 **core schema**, so an OpenAPI `version: 1.0.0` stays the string `"1.0.0"` instead of turning into a number.
 
@@ -63,12 +63,12 @@ const doc = parseDocument(source)
 const node = nodeAtPath(doc.contents, ['info', 'version'])
 const lc = lineCounter(source)
 
-lc.linePos(node.range[0]) // → { line: 3, col: 12 }  (1-based)
-lc.linePos(node.range[1]) // → { line: 3, col: 17 }
+lc.linePos(node.start) // → { line: 3, col: 12 }  (1-based)
+lc.linePos(node.end) // → { line: 3, col: 17 }
 
 // Parser-level problems (duplicate keys, unterminated flow, …) come with spans too.
 for (const error of doc.errors) {
-  const { line, col } = lc.linePos(error.pos[0])
+  const { line, col } = lc.linePos(error.start)
   console.error(`${line}:${col} ${error.message}`)
 }
 ```
@@ -85,7 +85,7 @@ import { isMap, isScalar, isSeq, parseDocument } from '@amritk/yaml'
 const { contents } = parseDocument(source)
 if (isMap(contents)) {
   for (const pair of contents.items) {
-    if (isScalar(pair.key)) console.log(pair.key.value, pair.value?.range)
+    if (isScalar(pair.key)) console.log(pair.key.value, pair.value?.start, pair.value?.end)
   }
 }
 ```
@@ -97,7 +97,7 @@ if (isMap(contents)) {
 | Export | What it does |
 | --- | --- |
 | `parse(source, options?)` | Parse straight to a JavaScript value, like `JSON.parse`. |
-| `parseDocument(source, options?)` | Parse to `{ contents, errors, warnings, toJS() }` where every node carries a `range`. |
+| `parseDocument(source, options?)` | Parse to `{ contents, errors, warnings, toJS() }` where every node carries `start`/`end` source offsets. |
 | `nodeAtPath(root, path, closest?)` | Resolve a JSON path to its node (with `range`), optionally falling back to the closest ancestor. |
 | `lineCounter(source)` | Build an `offset → { line, col }` mapper (1-based). |
 | `isScalar` / `isMap` / `isSeq` / `isPair` / `isAlias` | Narrowing guards over the node union. |
@@ -117,25 +117,25 @@ Run it yourself with `bun run bench`. Representative numbers (Bun, Linux):
 
 | fixture | @amritk/yaml | yaml (eemeli) | speedup |
 | --- | --- | --- | --- |
-| small (155 B) | 197k ops/s | 9.5k ops/s | **20.8×** |
-| medium (2 KB) | 19.4k ops/s | 756 ops/s | **25.7×** |
-| large (100 KB) | 381 ops/s | 17.5 ops/s | **21.8×** |
+| small (155 B) | 416k ops/s | 16.8k ops/s | **24.8×** |
+| medium (2 KB) | 35.9k ops/s | 1.3k ops/s | **27.4×** |
+| large (100 KB) | 747 ops/s | 24.0 ops/s | **31.2×** |
 
 **Parse to plain data** — all three can do this.
 
 | fixture | @amritk/yaml | yaml | js-yaml | vs yaml | vs js-yaml |
 | --- | --- | --- | --- | --- | --- |
-| small | 167k | 8.3k | 93k | 20.1× | 1.80× |
-| medium | 13.1k | 708 | 9.0k | 18.6× | 1.46× |
-| large | 219 | 15 | 188 | 14.6× | 1.17× |
+| small | 262k | 14.3k | 147k | 18.3× | 1.78× |
+| medium | 24.7k | 1.1k | 12.9k | 23.3× | 1.92× |
+| large | 538 | 26.7 | 275 | 20.1× | 1.96× |
 
 **Bundle size** (minified + gzipped):
 
 | | size | |
 | --- | --- | --- |
-| **@amritk/yaml** | **4.7 KB** | — |
-| yaml | 35.6 KB | 7.6× larger |
-| js-yaml | 13.5 KB | 2.9× larger |
+| **@amritk/yaml** | **4.8 KB** | — |
+| yaml | 35.6 KB | 7.3× larger |
+| js-yaml | 13.5 KB | 2.8× larger |
 
 Correctness is pinned to `yaml` by a differential test suite (`src/differential.test.ts`) that parses a battery of documents — including full OpenAPI specs — and asserts byte-identical data output. Where `js-yaml` diverges (its `!!timestamp` type turns ISO strings into `Date`s, which is wrong for a JSON superset), we instead agree with `yaml`.
 

@@ -1,15 +1,5 @@
 import { resolveDoubleQuoted, resolvePlainValue, resolveSingleQuoted } from './resolve-scalar'
-import type {
-  ParseOptions,
-  Range,
-  YamlDocument,
-  YamlError,
-  YamlMap,
-  YamlNode,
-  YamlPair,
-  YamlScalar,
-  YamlSeq,
-} from './types'
+import type { ParseOptions, YamlDocument, YamlError, YamlMap, YamlNode, YamlPair, YamlScalar, YamlSeq } from './types'
 
 /**
  * The parser. One cohesive recursive-descent walker — this is the deliberate
@@ -145,8 +135,8 @@ const finishLineIfMidLine = (state: State): void => {
   }
 }
 
-const pushError = (state: State, code: string, message: string, pos: Range): void => {
-  state.errors.push({ kind: 'error', code, message, pos })
+const pushError = (state: State, code: string, message: string, start: number, end: number): void => {
+  state.errors.push({ kind: 'error', code, message, start, end })
 }
 
 /**
@@ -157,33 +147,35 @@ const pushError = (state: State, code: string, message: string, pos: Range): voi
  */
 const findKeyColon = (src: string, from: number, len: number): number => {
   let i = from
+  // A quote only delimits when it opens the key (`Let's` mid-word is literal), so
+  // the quote-skip belongs before the scan loop — not as a per-character test.
+  const first = src.charCodeAt(from)
+  if (first === SQUOTE) {
+    i = from + 1
+    while (i < len) {
+      if (src.charCodeAt(i) === SQUOTE) {
+        if (src.charCodeAt(i + 1) === SQUOTE) i += 2
+        else break
+      } else i++
+    }
+    i++
+  } else if (first === DQUOTE) {
+    i = from + 1
+    while (i < len) {
+      const d = src.charCodeAt(i)
+      if (d === DQUOTE) break
+      if (d === 92 /* \ */) i += 2
+      else i++
+    }
+    i++
+  }
+  // Past any opening quote, the only things that matter are line end, a ` #`
+  // comment, and the `key:` colon. Hoisting the quote checks keeps this the
+  // tight inner loop it wants to be — three comparisons per character.
   while (i < len) {
     const c = src.charCodeAt(i)
     if (c === NL || c === CR) return -1
     if (c === HASH && i > from && isSpace(src.charCodeAt(i - 1))) return -1
-    // A quote only delimits when it opens the key; `Let's` mid-word is literal.
-    if (c === SQUOTE && i === from) {
-      i++
-      while (i < len) {
-        if (src.charCodeAt(i) === SQUOTE) {
-          if (src.charCodeAt(i + 1) === SQUOTE) i += 2
-          else break
-        } else i++
-      }
-      i++
-      continue
-    }
-    if (c === DQUOTE && i === from) {
-      i++
-      while (i < len) {
-        const d = src.charCodeAt(i)
-        if (d === DQUOTE) break
-        if (d === 92 /* \ */) i += 2
-        else i++
-      }
-      i++
-      continue
-    }
     if (c === COLON) {
       const n = src.charCodeAt(i + 1)
       if (i + 1 >= len || n === SPACE || n === TAB || n === NL || n === CR) return i
@@ -274,7 +266,7 @@ const scanQuoted = (state: State, quote: number): YamlScalar => {
   const inner = src.slice(start + 1, i - 1)
   const value = quote === SQUOTE ? resolveSingleQuoted(inner) : resolveDoubleQuoted(inner)
   state.pos = i
-  return { kind: 'scalar', value, source, style: quote === SQUOTE ? 'single' : 'double', range: [start, i] }
+  return { kind: 'scalar', value, source, style: quote === SQUOTE ? 'single' : 'double', start, end: i }
 }
 
 /** Reads a `*alias` reference. */
@@ -289,7 +281,7 @@ const scanAlias = (state: State): YamlNode => {
   }
   const name = src.slice(start + 1, i)
   state.pos = i
-  return { kind: 'alias', source: name, range: [start, i] }
+  return { kind: 'alias', source: name, start, end: i }
 }
 
 /** Index of the end of a plain scalar's text on one line (trailing spaces and ` #` comment trimmed). */
@@ -343,13 +335,13 @@ const scanPlainScalar = (state: State, parentIndent: number): YamlScalar => {
   state.pos = valueEnd
   if (!segments) {
     const text = src.slice(start, valueEnd)
-    return { kind: 'scalar', value: resolvePlainValue(text), source: text, style: 'plain', range: [start, valueEnd] }
+    return { kind: 'scalar', value: resolvePlainValue(text), source: text, style: 'plain', start, end: valueEnd }
   }
   // Drop trailing blank segments that turned out to precede sibling structure.
   while (segments.length > 1 && segments[segments.length - 1] === '') segments.pop()
   const folded = foldSegments(segments)
   const source = src.slice(start, valueEnd)
-  return { kind: 'scalar', value: folded, source, style: 'plain', range: [start, valueEnd] }
+  return { kind: 'scalar', value: folded, source, style: 'plain', start, end: valueEnd }
 }
 
 /** Folds plain-scalar continuation lines: single break → space, blank line → newline. */
@@ -441,7 +433,8 @@ const scanBlockScalar = (state: State, parentIndent: number): YamlScalar => {
     value,
     source: src.slice(start, valueEnd),
     style: folded ? 'block-folded' : 'block-literal',
-    range: [start, valueEnd],
+    start,
+    end: valueEnd,
   }
 }
 
@@ -479,7 +472,7 @@ const scanFlowPlain = (state: State): YamlScalar => {
   while (end > start && isSpace(src.charCodeAt(end - 1))) end--
   const text = src.slice(start, end)
   state.pos = i
-  return { kind: 'scalar', value: resolvePlainValue(text), source: text, style: 'plain', range: [start, end] }
+  return { kind: 'scalar', value: resolvePlainValue(text), source: text, style: 'plain', start, end }
 }
 
 const parseFlowNode = (state: State): YamlNode => {
@@ -508,7 +501,7 @@ const parseFlowSeq = (state: State): YamlSeq => {
       break
     }
     if (state.pos >= state.len) {
-      pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "]" for flow sequence', [start, state.pos])
+      pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "]" for flow sequence', start, state.pos)
       break
     }
     items.push(parseFlowNode(state))
@@ -519,11 +512,11 @@ const parseFlowSeq = (state: State): YamlSeq => {
       state.pos++
       break
     } else {
-      pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "]" for flow sequence', [start, state.pos])
+      pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "]" for flow sequence', start, state.pos)
       break
     }
   }
-  return { kind: 'seq', items, range: [start, state.pos] }
+  return { kind: 'seq', items, start, end: state.pos }
 }
 
 const parseFlowMap = (state: State): YamlMap => {
@@ -538,7 +531,7 @@ const parseFlowMap = (state: State): YamlMap => {
       break
     }
     if (state.pos >= state.len) {
-      pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "}" for flow mapping', [start, state.pos])
+      pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "}" for flow mapping', start, state.pos)
       break
     }
     const key = parseFlowNode(state)
@@ -550,7 +543,7 @@ const parseFlowMap = (state: State): YamlMap => {
       const vc = state.src.charCodeAt(state.pos)
       if (vc !== COMMA && vc !== RBRACE) value = parseFlowNode(state)
     }
-    items.push({ kind: 'pair', key, value, range: [key.range[0], value ? value.range[1] : key.range[1]] })
+    items.push({ kind: 'pair', key, value, start: key.start, end: value ? value.end : key.end })
     skipFlowWs(state)
     const sep = state.src.charCodeAt(state.pos)
     if (sep === COMMA) state.pos++
@@ -558,11 +551,11 @@ const parseFlowMap = (state: State): YamlMap => {
       state.pos++
       break
     } else {
-      pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "}" for flow mapping', [start, state.pos])
+      pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "}" for flow mapping', start, state.pos)
       break
     }
   }
-  return { kind: 'map', items, range: [start, state.pos] }
+  return { kind: 'map', items, start, end: state.pos }
 }
 
 /** Parses the inline value that follows a `key:` separator on the same line. */
@@ -604,7 +597,7 @@ const keyText = (node: YamlNode): string => {
   return ''
 }
 
-const parseBlockMap = (state: State, indent: number): YamlMap => {
+const parseBlockMap = (state: State, indent: number, firstColon: number): YamlMap => {
   const { src, len } = state
   const items: YamlPair[] = []
   // Duplicate-key tracking is lazy: most maps have unique keys, and many have a
@@ -618,17 +611,22 @@ const parseBlockMap = (state: State, indent: number): YamlMap => {
   let contentPos = state.pos
   let firstEntry = true
   for (;;) {
-    if (!firstEntry) {
+    let colon: number
+    if (firstEntry) {
+      // `parseNode` already located this colon to decide we are a mapping; reuse
+      // it instead of re-scanning the first line.
+      colon = firstColon
+    } else {
       const line = peekLine(state)
       if (line.eof || line.indent !== indent) break
       contentPos = line.contentPos
+      const c = src.charCodeAt(contentPos)
+      // A `- ` at this indent is a sequence, not a mapping key.
+      if (c === DASH && (contentPos + 1 >= len || isSpace(src.charCodeAt(contentPos + 1)))) break
+      colon = findKeyColon(src, contentPos, len)
+      if (colon < 0) break
     }
     firstEntry = false
-    const c = src.charCodeAt(contentPos)
-    // A `- ` at this indent is a sequence, not a mapping key.
-    if (c === DASH && (contentPos + 1 >= len || isSpace(src.charCodeAt(contentPos + 1)))) break
-    const colon = findKeyColon(src, contentPos, len)
-    if (colon < 0) break
 
     const lineContentPos = contentPos
     state.pos = contentPos
@@ -645,7 +643,8 @@ const parseBlockMap = (state: State, indent: number): YamlMap => {
         value: resolvePlainValue(text),
         source: text,
         style: 'plain',
-        range: [lineContentPos, end],
+        start: lineContentPos,
+        end,
       }
     }
 
@@ -675,23 +674,24 @@ const parseBlockMap = (state: State, indent: number): YamlMap => {
     if (state.uniqueKeys) {
       const text = keyText(key)
       if (seen) {
-        if (seen.has(text)) pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.range)
+        if (seen.has(text)) pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.start, key.end)
         else seen.add(text)
       } else if (firstKey === null) {
         firstKey = text
       } else {
         seen = new Set([firstKey])
-        if (firstKey === text) pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.range)
+        if (firstKey === text) pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.start, key.end)
         else seen.add(text)
       }
     }
-    items.push({ kind: 'pair', key, value, range: [key.range[0], value ? value.range[1] : key.range[1]] })
+    items.push({ kind: 'pair', key, value, start: key.start, end: value ? value.end : key.end })
   }
 
   const last = items[items.length - 1]
   const first = items[0]
-  const range: Range = [first ? first.range[0] : state.pos, last ? last.range[1] : state.pos]
-  return { kind: 'map', items, range }
+  const start = first ? first.start : state.pos
+  const end = last ? last.end : state.pos
+  return { kind: 'map', items, start, end }
 }
 
 const parseBlockSeq = (state: State, indent: number): YamlSeq => {
@@ -726,7 +726,7 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
         state.pos = child.contentPos
         item = parseNode(state, child.indent)
       } else {
-        item = { kind: 'scalar', value: null, source: '', style: 'plain', range: [dashPos + 1, dashPos + 1] }
+        item = { kind: 'scalar', value: null, source: '', style: 'plain', start: dashPos + 1, end: dashPos + 1 }
       }
     } else {
       const contentCol = state.pos - contentPos + indent
@@ -737,8 +737,9 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
   }
 
   const last = items[items.length - 1]
-  const range: Range = [startOffset === -1 ? state.pos : startOffset, last ? last.range[1] : state.pos]
-  return { kind: 'seq', items, range }
+  const start = startOffset === -1 ? state.pos : startOffset
+  const end = last ? last.end : state.pos
+  return { kind: 'seq', items, start, end }
 }
 
 /**
@@ -763,7 +764,7 @@ const parseNode = (state: State, indent: number): YamlNode => {
         return attachProps(parseNode(state, child.indent), props, state)
       }
       return attachProps(
-        { kind: 'scalar', value: null, source: '', style: 'plain', range: [state.pos, state.pos] },
+        { kind: 'scalar', value: null, source: '', style: 'plain', start: state.pos, end: state.pos },
         props,
         state,
       )
@@ -778,7 +779,8 @@ const parseNode = (state: State, indent: number): YamlNode => {
 
   // A line beginning with a quote may be a quoted *key* (e.g. `"200":`), so the
   // mapping check has to come before treating the quote as a standalone scalar.
-  if (findKeyColon(src, state.pos, len) >= 0) return attachProps(parseBlockMap(state, indent), props, state)
+  const colon = findKeyColon(src, state.pos, len)
+  if (colon >= 0) return attachProps(parseBlockMap(state, indent, colon), props, state)
   if (cc === DQUOTE || cc === SQUOTE) return attachProps(scanQuoted(state, cc), props, state)
   return attachProps(scanPlainScalar(state, indent - 1), props, state)
 }
@@ -817,10 +819,20 @@ const toJsValue = (node: YamlNode | null, anchors: Map<string, YamlNode>, merge:
     const target = anchors.get(node.source)
     return target ? toJsValue(target, anchors, merge) : undefined
   }
-  if (node.kind === 'seq') return node.items.map((item) => toJsValue(item, anchors, merge))
+  if (node.kind === 'seq') {
+    // Index loop into a pre-sized array: no per-seq closure (as `.map` allocates)
+    // and the result array never reallocates as it grows.
+    const items = node.items
+    const out = new Array(items.length)
+    for (let i = 0; i < items.length; i++) out[i] = toJsValue(items[i] ?? null, anchors, merge)
+    return out
+  }
 
   const obj: Record<string, unknown> = {}
-  for (const pair of node.items) {
+  const items = node.items
+  for (let i = 0; i < items.length; i++) {
+    const pair = items[i]
+    if (pair === undefined) continue
     const key = pair.key
     if (merge && key.kind === 'scalar' && key.source === '<<') {
       applyMerge(obj, toJsValue(pair.value, anchors, merge))
