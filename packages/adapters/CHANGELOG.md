@@ -1,5 +1,13 @@
 # @amritk/adapters
 
+## 0.2.7
+
+### Patch Changes
+
+- 6218978: chore: version bumps
+- Updated dependencies [6218978]
+  - @amritk/helpers@0.7.1
+
 ## 0.2.6
 
 ### Patch Changes

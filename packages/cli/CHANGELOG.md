@@ -1,5 +1,16 @@
 # @amritk/mjst
 
+## 0.7.5
+
+### Patch Changes
+
+- 6218978: chore: version bumps
+- Updated dependencies [6218978]
+  - @amritk/adapters@0.2.7
+  - @amritk/generate-markdown@0.2.4
+  - @amritk/generate-parsers@0.7.1
+  - @amritk/helpers@0.7.1
+
 ## 0.7.4
 
 ### Patch Changes
