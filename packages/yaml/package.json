@@ -1,6 +1,6 @@
 {
   "name": "@amritk/yaml",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A tiny, dependency-free YAML parser with exact source positions. Built for diagnostics: every node maps back to an exact line:column.",
   "module": "./dist/index.js",
   "type": "module",
