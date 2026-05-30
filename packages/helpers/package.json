@@ -35,9 +35,9 @@
   },
   "exports": {
     "./*": {
-         "import": "./dist/*.js",
-         "types": "./dist/*.d.ts",
-         "default": "./dist/*.js"
-       }
+      "import": "./dist/*.js",
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
+    }
   }
 }

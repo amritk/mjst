@@ -26,8 +26,7 @@
     "url": "https://github.com/amritk/mjst/issues"
   },
   "files": [
-    "dist",
-    "src"
+    "dist"
   ],
   "publishConfig": {
     "access": "public"
@@ -39,7 +38,7 @@
   },
   "exports": {
     ".": {
-      "bun": "./src/index.ts",
+      "development": "./src/index.ts",
       "default": "./dist/index.js",
       "types": "./dist/index.d.ts"
     }
