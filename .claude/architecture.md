@@ -16,6 +16,7 @@ mjst/
 │   ├── generate-examples/     # @amritk/generate-examples — fast-check arbitrary + example generator
 │   ├── generate-markdown/     # @amritk/generate-markdown — README table generator
 │   ├── adapters/              # @amritk/adapters — convert external schemas (TypeBox, …) to JSON Schema
+│   ├── resolve-refs/          # @amritk/resolve-refs — inline internal/cross-file/remote $refs
 │   └── helpers/               # @amritk/helpers — shared schema utilities + runtime
 ├── .claude/                   # Developer guidelines
 ├── .changeset/                # Changesets config (release automation)
@@ -80,14 +81,25 @@ Converts schemas authored in external libraries into Draft 2020-12 JSON Schema s
 - **Implemented:** `typebox`, `zod`, `valibot`, and `effect`. Each external library is an optional peer dependency loaded at runtime (so the core stays slim): TypeBox schemas are already JSON-Schema-shaped (strip symbol keys + rewrite extended types); `zod` uses Zod 4's `toJSONSchema`; `valibot` uses `@valibot/to-json-schema`; `effect` uses `JSONSchema.make`. The Zod, Valibot, and TypeBox adapters map their date types to the `x-mjst` Date extension; the Effect adapter passes through Effect's encoded (string) representation.
 - **Lossy constructs:** types JSON Schema cannot express are preserved as an `x-mjst` vendor extension rather than dropped. `@amritk/helpers/mjst-extension` defines the shared contract (`MJST_EXTENSION_KEY`, `MjstExtension`, and the readers `getMjstInstanceOf` / `getMjstPrimitive` / `getMjstBrand`), which the type generator, parsers, and validators read to emit the right TypeScript type and runtime checks. The extension currently carries: `instanceOf` (a runtime class such as `Date`, checked with `instanceof`), `primitive` (a non-JSON primitive such as `bigint`, checked with `typeof`), and `brand` (a type-level nominal brand — the value still validates as its base JSON type at runtime, but the generated TypeScript type is intersected with a unique brand). Brands cannot be auto-detected from the source libraries (Zod/Valibot/Effect brands are type-level or stripped during conversion), so they are opt-in via a hand-authored `x-mjst.brand` keyword — which TypeBox passes through from `Type.String({ 'x-mjst': { brand: 'UserId' } })`.
 
+### `@amritk/resolve-refs` (`packages/resolve-refs`)
+
+Resolves and inlines `$ref`s into a single dereferenced document — internal (`#/...`) pointers, cross-file refs, and remote http(s) documents. A one-pass, cycle-safe resolver: each unique ref resolves once, and a self-reference terminates at `{}` rather than looping. Fetched remote documents are cached in memory for the lifetime of the process; local files are re-read each pass (they may change on disk in a long-lived session). Remote fetches are guarded by a **default-deny SSRF check** (`isPrivateHost`) — loopback, private, link-local, and cloud-metadata (`169.254.169.254`) hosts are refused unless explicitly allow-listed.
+
+- **Depends on:** nothing. Documents are parsed as JSON only (mjst deals in JSON Schema), and there is no `@amritk/*` dependency, so it stays a slim, standalone resolver.
+- **Entry points:** `resolveRefs(data)` — in-memory, internal refs only; `resolveRefsFromFile(filename, options)` — from disk or a URL, including cross-file and remote refs. Errors are collected on the result (never thrown); a refused or missing target degrades to `{}`.
+- **Relationship to the lint repo:** mirrors the resolver shipped in `@amritk/loupe-ref-resolver` (the Loupe linter). The intent is for this published package to become the single shared implementation both repos depend on.
+
 ### `@amritk/helpers` (`packages/helpers`)
 
 Shared utility belt used both by the generators and copied into generated output. Each helper is exposed as its own subpath export (`@amritk/helpers/<name>`) so consumers — and generated files — only pull in what they need.
 
+The `$ref`-graph traversal that the parser, validator, and example generators run is centralized in `@amritk/helpers/walk-ref-graph`: it upgrades draft-07 input, resolves each ref, rewrites `$dynamicRef` → `$ref`, seeds `$dynamicAnchor`-only definitions, derives type/file names, and memoizes the resolution work per root document. Each generator only turns the prepared node into file content and barrels the result with `@amritk/helpers/generate-index-barrel`.
+
+
 Categories:
 
-- **Schema traversal:** `extract-refs`, `resolve-ref`, `build-dynamic-ref-map`, `resolve-dynamic-refs`, `upgrade-draft07-schema`, `ref-to-filename`, `ref-to-name`, `schema-guards`
-- **Codegen utilities:** `generate-type-definition`, `parse-documentation`, `safe-accessor`
+- **Schema traversal:** `extract-refs`, `resolve-ref`, `build-dynamic-ref-map`, `resolve-dynamic-refs`, `extract-dynamic-anchor-defs`, `upgrade-draft07-schema`, `ref-to-filename`, `ref-to-name`, `schema-guards`, `walk-ref-graph`
+- **Codegen utilities:** `generate-type-definition`, `generate-index-barrel`, `parse-documentation`, `safe-accessor`
 - **Runtime helpers (referenced from generated output):** `is-object`, `validate-array`, `validate-record`, `has-ref`. In `--helpers=embedded` mode (default when `@amritk/helpers` is not resolvable from `outDir`), these sources are snapshotted at `@amritk/generate-parsers` build time and emitted into `outDir/_helpers/` so the generated output is self-contained.
 
 ## Import Conventions

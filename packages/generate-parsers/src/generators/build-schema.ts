@@ -1,13 +1,8 @@
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, resolve as resolvePath } from 'node:path'
-import { buildDynamicRefMap } from '@amritk/helpers/build-dynamic-ref-map'
-import { extractRefs } from '@amritk/helpers/extract-refs'
-import { refToFilename } from '@amritk/helpers/ref-to-filename'
-import { refToName } from '@amritk/helpers/ref-to-name'
-import { resolveDynamicRefs } from '@amritk/helpers/resolve-dynamic-refs'
-import { resolveRef } from '@amritk/helpers/resolve-ref'
-import { upgradeDraft07Schema } from '@amritk/helpers/upgrade-draft07-schema'
+import { generateIndexBarrel } from '@amritk/helpers/generate-index-barrel'
+import { walkRefGraph } from '@amritk/helpers/walk-ref-graph'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { applySchemaExtensions } from '#helpers/apply-schema-extensions'
 import type { HelpersMode, RuntimeHelperName } from '#helpers/collect-helpers'
@@ -33,47 +28,13 @@ export type GeneratedFile = {
 }
 
 /**
- * Extracts all definitions from $defs that have a $dynamicAnchor.
- * These definitions need to be generated even if not directly referenced by $ref.
- */
-const extractDynamicAnchorDefs = (schema: JSONSchema): string[] => {
-  const refs: string[] = []
-
-  if (typeof schema !== 'object' || schema === null) {
-    return refs
-  }
-
-  // Check if schema has $defs
-  if (!('$defs' in schema) || typeof schema['$defs'] !== 'object' || schema['$defs'] === null) {
-    return refs
-  }
-
-  const defs = schema['$defs']
-
-  // Find all definitions with $dynamicAnchor
-  for (const [key, value] of Object.entries(defs)) {
-    if (typeof value === 'object' && value !== null) {
-      const defSchema = value as Record<string, unknown>
-      if ('$dynamicAnchor' in defSchema) {
-        // Convert to a $ref-style path
-        refs.push(`#/$defs/${key}`)
-      }
-    }
-  }
-
-  return refs
-}
-
-/**
- * Builds all TypeScript files from a JSON Schema by traversing
- * all $ref references recursively.
+ * Builds all TypeScript files from a JSON Schema by traversing its entire
+ * `$ref` / `$dynamicRef` graph (via the shared `@amritk/helpers/walk-ref-graph`
+ * walker, which also seeds `$dynamicAnchor` definitions and rewrites
+ * `$dynamicRef` to `$ref`).
  *
- * Starting from the root schema, this function:
- * 1. Generates a TypeScript file for the root type
- * 2. Extracts all $ref references from the schema
- * 3. Extracts all definitions with $dynamicAnchor (JSON Schema 2020-12 feature)
- * 4. Resolves each ref and generates a TypeScript file for it
- * 5. Recursively processes nested refs until all are handled
+ * For the root schema and each reachable definition this function generates a
+ * TypeScript file, then emits an `index.ts` barrel re-exporting them all.
  *
  * @param rootSchema - The root JSON Schema to build from
  * @param rootTypeName - The name for the root type (e.g., "Document")
@@ -143,107 +104,32 @@ export const buildSchema = async (
   readonly = false,
   typeSuffix = '',
 ): Promise<GeneratedFile[]> => {
-  // Upgrade draft-07 schemas to 2020-12 conventions before processing.
-  // This renames `definitions` → `$defs` recursively so the rest of the
-  // pipeline can resolve both short-name and URI-keyed refs uniformly.
-  rootSchema = upgradeDraft07Schema(rootSchema as Record<string, unknown>) as JSONSchema
-
   const files: GeneratedFile[] = []
-  const processedRefs = new Set<string>()
-  const processedFilenames = new Set<string>()
-  const refsToProcess: string[] = []
   const usedHelpers = new Set<RuntimeHelperName>()
 
-  // Build a map of $dynamicRef anchors to their $ref paths so we can
-  // convert $dynamicRef: "#meta" to $ref: "#/$defs/schema" before generating
-  const dynamicRefMap = buildDynamicRefMap(rootSchema)
+  walkRefGraph(rootSchema, rootTypeName, { typeSuffix }, (node) => {
+    // `index` is reserved for the barrel below, so never let a definition of
+    // that name overwrite it.
+    if (node.filename === 'index') return
 
-  // Generate file for the root schema, applying any matching extensions
-  const processedRootSchema = resolveDynamicRefs(rootSchema, dynamicRefMap)
-  const extendedRootSchema = extensions
-    ? applySchemaExtensions(processedRootSchema, rootTypeName.toLowerCase(), extensions)
-    : processedRootSchema
-  const rootResult = generateFile(extendedRootSchema, rootTypeName, {
-    typesOnly: typesOnly ?? false,
-    rootSchema: rootSchema as Record<string, unknown>,
-    helpersMode,
-    helpersImportPrefix,
-    readonly,
-    typeSuffix,
-    ...(logWarnings !== undefined ? { logWarnings } : {}),
-    ...(strict !== undefined ? { strict } : {}),
-  })
-  const rootFilename = rootTypeName.toLowerCase()
-
-  processedFilenames.add(rootFilename)
-  files.push({
-    filename: `${rootFilename}.ts`,
-    content: rootResult.content,
-  })
-  for (const helper of rootResult.usedHelpers) usedHelpers.add(helper)
-
-  // Extract all refs from the root schema
-  const rootRefs = extractRefs(rootSchema)
-  refsToProcess.push(...rootRefs)
-
-  // Extract all definitions with $dynamicAnchor
-  const dynamicAnchorRefs = extractDynamicAnchorDefs(rootSchema)
-  refsToProcess.push(...dynamicAnchorRefs)
-
-  // Process refs until none remain
-  while (refsToProcess.length > 0) {
-    const ref = refsToProcess.shift()
-
-    // Skip if already processed
-    if (!ref || processedRefs.has(ref)) {
-      continue
-    }
-
-    processedRefs.add(ref)
-
-    // Resolve the ref to get the actual schema
-    const resolvedSchema = resolveRef(ref, rootSchema as Record<string, unknown>)
-
-    if (!resolvedSchema) {
-      console.warn(`Warning: Could not resolve ref: ${ref}`)
-      continue
-    }
-
-    // Generate file for this ref, resolving any $dynamicRef to $ref first
-    // and applying any matching extensions for this definition
-    const typeName = refToName(ref, typeSuffix)
-    const filename = refToFilename(ref)
-    const processedSchema = resolveDynamicRefs(resolvedSchema as JSONSchema, dynamicRefMap)
-    const extendedSchema = extensions ? applySchemaExtensions(processedSchema, filename, extensions) : processedSchema
-    const fileResult = generateFile(extendedSchema, typeName, {
+    // Extensions are keyed by definition name, which is the node's filename for
+    // both the root (the lowercased root type name) and every `$ref` target.
+    const extended = extensions ? applySchemaExtensions(node.schema, node.filename, extensions) : node.schema
+    const result = generateFile(extended, node.typeName, {
       typesOnly: typesOnly ?? false,
-      selfRef: ref,
-      rootSchema: rootSchema as Record<string, unknown>,
+      rootSchema: node.rootSchema,
       helpersMode,
       helpersImportPrefix,
       readonly,
       typeSuffix,
+      ...(node.ref !== undefined ? { selfRef: node.ref } : {}),
       ...(logWarnings !== undefined ? { logWarnings } : {}),
       ...(strict !== undefined ? { strict } : {}),
     })
 
-    if (!processedFilenames.has(filename)) {
-      processedFilenames.add(filename)
-      files.push({
-        filename: `${filename}.ts`,
-        content: fileResult.content,
-      })
-    }
-    for (const helper of fileResult.usedHelpers) usedHelpers.add(helper)
-
-    // Extract refs from this schema and add to queue
-    const nestedRefs = extractRefs(resolvedSchema as JSONSchema)
-    for (const nestedRef of nestedRefs) {
-      if (!processedRefs.has(nestedRef)) {
-        refsToProcess.push(nestedRef)
-      }
-    }
-  }
+    files.push({ filename: `${node.filename}.ts`, content: result.content })
+    for (const helper of result.usedHelpers) usedHelpers.add(helper)
+  })
 
   // In embedded mode, ship the runtime helper source files alongside the parsers so
   // the output directory is self-contained (no `@amritk/helpers` install required).
@@ -255,44 +141,7 @@ export const buildSchema = async (
     }
   }
 
-  // Generate index.ts with named re-exports extracted from each generated file's content.
-  // Regex matches `export type Foo` and `export const foo` declarations.
-  const TYPE_EXPORT_RE = /^export type (\w+)/gm
-  const CONST_EXPORT_RE = /^export const (\w+)/gm
-
-  // _helpers/ is an internal directory; never re-export from it.
-  const sortedFiles = [...files]
-    .filter((f) => !f.filename.startsWith('_helpers/'))
-    .sort((a, b) => a.filename.localeCompare(b.filename))
-
-  let indexContent = ''
-  for (const file of sortedFiles) {
-    const moduleName = file.filename.replace(/\.ts$/, '')
-    const typeNames: string[] = []
-    const constNames: string[] = []
-
-    for (const match of file.content.matchAll(TYPE_EXPORT_RE)) {
-      typeNames.push(match[1] as string)
-    }
-    for (const match of file.content.matchAll(CONST_EXPORT_RE)) {
-      constNames.push(match[1] as string)
-    }
-
-    if (typeNames.length === 0 && constNames.length === 0) continue
-
-    if (typesOnly) {
-      indexContent += `export type { ${typeNames.join(', ')} } from './${moduleName}';\n`
-    } else {
-      const typeExports = typeNames.map((n) => `type ${n}`)
-      const allExports = [...typeExports, ...constNames]
-      indexContent += `export { ${allExports.join(', ')} } from './${moduleName}';\n`
-    }
-  }
-
-  files.push({
-    filename: 'index.ts',
-    content: indexContent,
-  })
+  files.push({ filename: 'index.ts', content: generateIndexBarrel(files, { typesOnly: typesOnly ?? false }) })
 
   return files
 }

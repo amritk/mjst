@@ -1,4 +1,5 @@
 import { FORMAT_CHECKS } from '#interpreter/format-checks'
+import { resolveDynamicRef } from '#interpreter/resolve-dynamic-ref'
 import { resolveLocalRef } from '#interpreter/resolve-local-ref'
 
 import type { ValidationError } from '../types'
@@ -136,6 +137,25 @@ const resolveRef = (ctx: InterpreterContext, ref: string): unknown => {
       throw new Error(`Cannot resolve $ref "${ref}". Only local refs into the same document are supported.`)
     }
     ctx.refCache.set(ref, resolved)
+  }
+  return resolved
+}
+
+/**
+ * Resolves a `$dynamicRef` target, caching it. Keyed separately from `$ref`
+ * (the `dyn:` prefix) because the same fragment can resolve differently as a
+ * dynamic anchor than as a static pointer. Throws on an unresolvable ref, the
+ * same loud failure {@link resolveRef} produces.
+ */
+const resolveDyn = (ctx: InterpreterContext, ref: string): unknown => {
+  const key = `dyn:${ref}`
+  let resolved = ctx.refCache.get(key)
+  if (resolved === undefined) {
+    resolved = resolveDynamicRef(ref, ctx.root)
+    if (resolved === undefined) {
+      throw new Error(`Cannot resolve $dynamicRef "${ref}". Only local refs into the same document are supported.`)
+    }
+    ctx.refCache.set(key, resolved)
   }
   return resolved
 }
@@ -474,6 +494,13 @@ export const interpret = (ctx: InterpreterContext, schema: unknown, value: unkno
   // 2020-12, so we do not stop here.
   if (typeof s['$ref'] === 'string') {
     interpret(ctx, resolveRef(ctx, s['$ref']), value, path)
+    if (ctx.failed) return
+  }
+
+  // `$dynamicRef` (2020-12) — late-binds to a matching `$dynamicAnchor`. Like
+  // `$ref`, sibling keywords still apply, so we do not stop here.
+  if (typeof s['$dynamicRef'] === 'string') {
+    interpret(ctx, resolveDyn(ctx, s['$dynamicRef']), value, path)
     if (ctx.failed) return
   }
 

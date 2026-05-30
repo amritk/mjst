@@ -18,6 +18,24 @@ describe('validate', () => {
     expect(validator({ name: 'Ada', age: 36 })).toBe(true)
   })
 
+  it('validates through a $dynamicRef bound to its $dynamicAnchor', () => {
+    // Mirrors the OpenAPI 3.1 pattern: a property late-binds to the document's
+    // schema dialect via `$dynamicRef: "#meta"`.
+    const validator = validate({
+      type: 'object',
+      properties: { payload: { $dynamicRef: '#meta' } },
+      $defs: {
+        meta: { $dynamicAnchor: 'meta', type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      },
+    })
+
+    expect(validator({ payload: { id: 'abc' } })).toBe(true)
+    expect(validator({ payload: { id: 42 } })).toEqual({
+      valid: false,
+      errors: [{ message: 'must be string', path: '/payload/id' }],
+    })
+  })
+
   it('reports a missing required property with its path', () => {
     const validator = validate({
       type: 'object',
