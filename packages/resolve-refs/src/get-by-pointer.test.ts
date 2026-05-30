@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { getByPointer } from './get-by-pointer'
+import { getByPointer, pointerToPath } from './get-by-pointer'
 
 describe('get-by-pointer', () => {
   const root = {
@@ -38,5 +38,23 @@ describe('get-by-pointer', () => {
   it('returns undefined when a segment is missing', () => {
     expect(getByPointer(root, '/info/nope')).toBeUndefined()
     expect(getByPointer(root, '/info/title/tooDeep')).toBeUndefined()
+  })
+})
+
+describe('pointerToPath', () => {
+  it('yields an empty path for the whole document', () => {
+    expect(pointerToPath('')).toEqual([])
+    expect(pointerToPath('/')).toEqual([])
+  })
+
+  it('splits segments and turns array-index-looking ones into numbers', () => {
+    expect(pointerToPath('/components/schemas/Pet')).toEqual(['components', 'schemas', 'Pet'])
+    expect(pointerToPath('/paths/1/post/id')).toEqual(['paths', 1, 'post', 'id'])
+  })
+
+  it('decodes %XX then ~1/~0 escapes', () => {
+    expect(pointerToPath('/%7Bvolume_id%7D')).toEqual(['{volume_id}'])
+    expect(pointerToPath('/weird~1key')).toEqual(['weird/key'])
+    expect(pointerToPath('/tilde~0key')).toEqual(['tilde~key'])
   })
 })

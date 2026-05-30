@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs'
 import { dirname, resolve as resolvePath } from 'node:path'
 
-import { getByPointer } from './get-by-pointer'
+import { getByPointer, pointerToPath } from './get-by-pointer'
 import { isPrivateHost } from './is-private-host'
-import type { ResolveError, ResolveOptions, ResolveResult } from './types'
+import type { NodeOrigin, ResolveError, ResolveOptions, ResolveResult } from './types'
 
 // A ref currently mid-resolution is marked with this sentinel; revisiting it
 // means a cycle, so we return `{}` instead of recursing forever.
@@ -178,16 +178,22 @@ const prefetch = async (
  *
  * `baseLocation` is the location of the document `node` belongs to, used to
  * resolve relative refs and `#/...` pointers within it.
+ *
+ * When `origins` is provided, each inlined object/array is stamped (by identity)
+ * with where it came from. We stamp only if the node is not already stamped, so
+ * a chain of refs (`a → b`) keeps the innermost origin — the place the content
+ * actually lives — rather than the indirection that pointed at it.
  */
 const resolveAt = (
   node: unknown,
   baseLocation: string,
   docCache: Map<string, unknown>,
   refCache: Map<string, CacheValue>,
+  origins: WeakMap<object, NodeOrigin> | undefined,
 ): unknown => {
   if (node === null || typeof node !== 'object') return node
   if (Array.isArray(node)) {
-    return node.map((item) => resolveAt(item, baseLocation, docCache, refCache))
+    return node.map((item) => resolveAt(item, baseLocation, docCache, refCache, origins))
   }
   const obj = node as Record<string, unknown>
   if (typeof obj['$ref'] === 'string') {
@@ -202,13 +208,16 @@ const resolveAt = (
     }
     refCache.set(cacheKey, CYCLE)
     const target = pointer ? getByPointer(targetRoot, pointer) : targetRoot
-    const resolved = resolveAt(target, targetLocation, docCache, refCache)
+    const resolved = resolveAt(target, targetLocation, docCache, refCache, origins)
     refCache.set(cacheKey, resolved)
+    if (origins && resolved !== null && typeof resolved === 'object' && !origins.has(resolved)) {
+      origins.set(resolved, { location: targetLocation, pointer: pointerToPath(pointer) })
+    }
     return resolved
   }
   const result: Record<string, unknown> = {}
   for (const key of Object.keys(obj)) {
-    result[key] = resolveAt(obj[key], baseLocation, docCache, refCache)
+    result[key] = resolveAt(obj[key], baseLocation, docCache, refCache, origins)
   }
   return result
 }
@@ -227,6 +236,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     return { resolved: {}, errors }
   }
   await prefetch(rootLocation, docCache, options, errors)
-  const resolved = resolveAt(docCache.get(rootLocation), rootLocation, docCache, new Map())
-  return { resolved, errors }
+  const origins = options.trackOrigins ? new WeakMap<object, NodeOrigin>() : undefined
+  const resolved = resolveAt(docCache.get(rootLocation), rootLocation, docCache, new Map(), origins)
+  return origins ? { resolved, errors, origins } : { resolved, errors }
 }

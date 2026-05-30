@@ -10,11 +10,32 @@ export type ResolveError = {
   path: JsonPath
 }
 
+/**
+ * Where an inlined node originally came from: the document it lived in and its
+ * path within that document. Consumers (e.g. a linter) use this to report a
+ * finding at the right file and line, rather than at the `$ref` site that pulled
+ * the node in.
+ */
+export type NodeOrigin = {
+  /** Absolute location (file path or URL) of the document this node came from. */
+  location: string
+  /** The path of this node within that document. */
+  pointer: JsonPath
+}
+
 /** The outcome of a resolve pass: the dereferenced document plus any errors. */
 export type ResolveResult = {
   /** The dereferenced document (all resolvable `$ref`s inlined). */
   resolved: unknown
   errors: ResolveError[]
+  /**
+   * Present only when `trackOrigins` is set. Maps each inlined object/array (by
+   * identity) to where it came from. A node carries the origin of the innermost
+   * `$ref` that produced it, so a chain `a.yaml#/x → b.yaml#/y` records the node
+   * as originating in `b.yaml`. Resolution shares the identity of repeated `$ref`
+   * targets, so a target reused in many places maps to its single origin.
+   */
+  origins?: WeakMap<object, NodeOrigin>
 }
 
 /** Controls how external `$ref`s to other documents are loaded. */
@@ -53,4 +74,11 @@ export type ResolveOptions = {
    * ```
    */
   parse?: (content: string, location: string) => unknown
+  /**
+   * When true, the result includes an `origins` map recording where each inlined
+   * node came from (document + path within it). Off by default to keep the common
+   * case allocation-free; turn it on when you need to map inlined nodes back to
+   * their original source location.
+   */
+  trackOrigins?: boolean
 }

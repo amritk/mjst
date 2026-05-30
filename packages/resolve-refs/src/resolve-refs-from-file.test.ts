@@ -98,6 +98,48 @@ describe('resolve-refs-from-file', () => {
     expect(resolved).toMatchObject({ contact: { type: 'object', properties: { name: { type: 'string' } } } })
   })
 
+  it('does not produce an origins map unless asked', async () => {
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: '#/b' }, b: { value: 1 } }))
+
+    const result = await resolveRefsFromFile(join(dir, 'root.json'))
+
+    expect(result.origins).toBeUndefined()
+  })
+
+  it('records the origin of an inlined external node', async () => {
+    writeFileSync(join(dir, 'pet.json'), JSON.stringify({ Pet: { type: 'object' } }))
+    writeFileSync(
+      join(dir, 'api.json'),
+      JSON.stringify({ components: { schemas: { Pet: { $ref: './pet.json#/Pet' } } } }),
+    )
+
+    const { resolved, origins } = await resolveRefsFromFile(join(dir, 'api.json'), { trackOrigins: true })
+
+    const pet = (resolved as { components: { schemas: { Pet: object } } }).components.schemas.Pet
+    expect(origins?.get(pet)).toEqual({ location: join(dir, 'pet.json'), pointer: ['Pet'] })
+  })
+
+  it('records the root document as the origin of an internal $ref target', async () => {
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: '#/b' }, b: { value: 1 } }))
+
+    const { resolved, origins } = await resolveRefsFromFile(join(dir, 'root.json'), { trackOrigins: true })
+
+    const a = (resolved as { a: object }).a
+    expect(origins?.get(a)).toEqual({ location: join(dir, 'root.json'), pointer: ['b'] })
+  })
+
+  it('keeps the innermost origin when a ref chains through several files', async () => {
+    // a.json#/x is itself a ref to b.json#/y, so the inlined node lives in b.json.
+    writeFileSync(join(dir, 'b.json'), JSON.stringify({ y: { leaf: true } }))
+    writeFileSync(join(dir, 'a.json'), JSON.stringify({ x: { $ref: './b.json#/y' } }))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: './a.json#/x' } }))
+
+    const { resolved, origins } = await resolveRefsFromFile(join(dir, 'root.json'), { trackOrigins: true })
+
+    const node = (resolved as { a: object }).a
+    expect(origins?.get(node)).toEqual({ location: join(dir, 'b.json'), pointer: ['y'] })
+  })
+
   it('fetches an allow-listed remote $ref and caches it for the session', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ Foo: { type: 'string' } }), {
