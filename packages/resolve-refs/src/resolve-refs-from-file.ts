@@ -102,7 +102,7 @@ const loadDoc = async (
     try {
       const response = await fetch(location)
       if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`)
-      const parse = options.parse ?? JSON.parse
+      const parse = options.parse ?? ((c: string) => JSON.parse(c) as unknown)
       const doc = parse(await response.text(), location)
       remoteCache.set(location, doc)
       docCache.set(location, doc)
@@ -115,7 +115,7 @@ const loadDoc = async (
   }
 
   try {
-    const parse = options.parse ?? JSON.parse
+    const parse = options.parse ?? ((c: string) => JSON.parse(c) as unknown)
     docCache.set(location, parse(readFileSync(location, 'utf8'), location))
     return true
   } catch (err) {
