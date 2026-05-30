@@ -112,31 +112,50 @@ const DOUBLE_ESCAPES: Record<string, string> = {
 }
 
 /**
- * Folds the line breaks of a multi-line flow scalar: a single break becomes a
- * space, and each blank line becomes one literal newline. Leading and trailing
- * whitespace on continuation lines is trimmed, per the YAML flow folding rules.
+ * Folds the line breaks of a multi-line flow scalar, per the YAML flow folding
+ * rules: a single break between content becomes a space, and a run of blank
+ * lines becomes that many literal newlines.
+ *
+ * Whitespace handling mirrors what the spec keeps as content vs. discards:
+ * - leading whitespace on a continuation line is folding indentation, so it is
+ *   always dropped;
+ * - trailing whitespace is dropped on every line *except the last*, where no
+ *   line break follows so the spaces are literal content;
+ * - a blank-line run that reaches the end of the scalar yields one fewer
+ *   newline, because the break before the closing delimiter is stripped.
  */
+const lstrip = (s: string): string => s.replace(/^[ \t]+/, '')
+const rstrip = (s: string): string => s.replace(/[ \t]+$/, '')
+
 const foldLines = (text: string): string => {
   const lines = text.split('\n')
   if (lines.length === 1) return text
-  let out = lines[0]?.replace(/[ \t]+$/, '') ?? ''
+  const last = lines.length - 1
+  let out = rstrip(lines[0] ?? '')
   let i = 1
-  while (i < lines.length) {
-    const trimmed = (lines[i] ?? '').trim()
-    if (trimmed === '') {
-      // Run of blank lines: each one contributes a newline.
+  while (i <= last) {
+    if ((lines[i] ?? '').trim() === '') {
+      // Run of blank lines.
       let blanks = 0
-      while (i < lines.length && (lines[i] ?? '').trim() === '') {
+      while (i <= last && (lines[i] ?? '').trim() === '') {
         blanks++
         i++
       }
-      out += '\n'.repeat(blanks)
-      if (i < lines.length) {
-        out += (lines[i] ?? '').trim()
+      if (i > last) {
+        // Trailing run reaching the closing delimiter: a lone break still folds
+        // to a space; any further blank lines each drop one break, so a run of
+        // `n` contributes `n - 1` newlines.
+        out += blanks === 1 ? ' ' : '\n'.repeat(blanks - 1)
+      } else {
+        // Interior run: each blank line is one newline, then the next content.
+        out += '\n'.repeat(blanks)
+        out += i === last ? lstrip(lines[i] ?? '') : (lines[i] ?? '').trim()
         i++
       }
     } else {
-      out += ' ' + trimmed
+      // Single break folds to a space. Keep trailing whitespace only on the
+      // final line, where it is literal content rather than folding padding.
+      out += ' ' + (i === last ? lstrip(lines[i] ?? '') : (lines[i] ?? '').trim())
       i++
     }
   }

@@ -41,6 +41,14 @@ const CASES: string[] = [
   // Quoting and escapes.
   `s: 'single ''quote'''\nd: "double \\"quote\\" and \\n newline"\n`,
   'q: "https://example.com/a?b=c&d=e"\n',
+  // Multi-line flow scalars — folding edge cases that real specs (GitHub's
+  // OpenAPI) hit: trailing whitespace on the closing line is literal content,
+  // and a blank-line run reaching the close yields one fewer newline.
+  "s: 'first line\n  second line. '\n",
+  's: "first line\n  second line. "\n',
+  "s: 'para one\n  still one\n\n  '\n",
+  's: "para one\n  still one\n\n  "\n',
+  "s: 'a\n\n\n  '\nt: 'a\n  b\n\n  c'\n",
   // Block scalars with chomping.
   'text: |\n  line one\n  line two\n',
   'text: |-\n  no trailing\n',
@@ -74,4 +82,22 @@ describe('differential', () => {
       expect(ours(source)).toEqual(eemeli(source, { merge: true }))
     })
   }
+
+  // GitHub's REST API description is ~9 MB — too large to vendor, but a great
+  // adversarial corpus. Fetch it when the network allows and skip otherwise, so
+  // the suite stays hermetic offline while still catching regressions in CI/dev
+  // environments that have egress.
+  it('matches yaml for the live GitHub OpenAPI spec', async () => {
+    const url =
+      'https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.yaml'
+    let source: string
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(30_000) })
+      if (!res.ok) return
+      source = await res.text()
+    } catch {
+      return // offline or blocked — nothing to assert
+    }
+    expect(ours(source)).toEqual(eemeli(source, { merge: true }))
+  })
 })
