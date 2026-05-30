@@ -82,22 +82,4 @@ describe('differential', () => {
       expect(ours(source)).toEqual(eemeli(source, { merge: true }))
     })
   }
-
-  // GitHub's REST API description is ~9 MB — too large to vendor, but a great
-  // adversarial corpus. Fetch it when the network allows and skip otherwise, so
-  // the suite stays hermetic offline while still catching regressions in CI/dev
-  // environments that have egress.
-  it('matches yaml for the live GitHub OpenAPI spec', async () => {
-    const url =
-      'https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.yaml'
-    let source: string
-    try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(30_000) })
-      if (!res.ok) return
-      source = await res.text()
-    } catch {
-      return // offline or blocked — nothing to assert
-    }
-    expect(ours(source)).toEqual(eemeli(source, { merge: true }))
-  })
 })

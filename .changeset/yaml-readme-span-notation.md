@@ -15,7 +15,6 @@ differential tests.
   mismatched bracket pair, with plain wording that spells out the `start`
   (inclusive) and `end` (exclusive) offsets, and fix the `nodeAtPath` API row to
   say nodes carry `start`/`end` rather than a `range`.
-- Add the real-world DigitalOcean OpenAPI spec as a vendored fixture, regression
-  cases for the folding fix, and a network-gated check against the live GitHub
-  spec (skipped offline). The fixture lives outside `src/`, so it is not shipped
-  in the published package.
+- Add the real-world DigitalOcean OpenAPI spec as a vendored fixture and
+  regression cases for the folding fix. The fixture lives outside `src/`, so it
+  is not shipped in the published package.
