@@ -1,6 +1,5 @@
-import { type InterpreterContext, interpret } from '#interpreter/interpret'
-
-import type { ValidateOptions, ValidationResult } from '../types'
+import { type InterpreterContext, interpret } from '@/interpreter/interpret'
+import type { ValidateOptions, ValidationResult } from '@/types'
 
 /**
  * Caches one prepared validator per `(schema, mode, formats)`. The schema object

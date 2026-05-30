@@ -34,7 +34,9 @@
   "scripts": {
     "build": "bun run build:code && bun run build:types",
     "build:code": "bun build ./src/adapter.ts ./src/source-format.ts ./src/get-adapter.ts ./src/typebox-to-json-schema.ts ./src/zod-to-json-schema.ts ./src/valibot-to-json-schema.ts ./src/effect-to-json-schema.ts --outdir=dist --root=src --target=node",
-    "build:types": "tsc -p ."
+    "build:types": "tsgo -p .",
+    "types:check": "tsgo -p . --noEmit",
+    "test": "NODE_ENV=production vitest run --root ../.. adapters"
   },
   "dependencies": {
     "json-schema-typed": "catalog:",
@@ -43,37 +45,37 @@
   "exports": {
     "./package.json": "./package.json",
     "./adapter": {
-      "bun": "./src/adapter.ts",
+      "development": "./src/adapter.ts",
       "default": "./dist/adapter.js",
       "types": "./dist/adapter.d.ts"
     },
     "./source-format": {
-      "bun": "./src/source-format.ts",
+      "development": "./src/source-format.ts",
       "default": "./dist/source-format.js",
       "types": "./dist/source-format.d.ts"
     },
     "./get-adapter": {
-      "bun": "./src/get-adapter.ts",
+      "development": "./src/get-adapter.ts",
       "default": "./dist/get-adapter.js",
       "types": "./dist/get-adapter.d.ts"
     },
     "./typebox-to-json-schema": {
-      "bun": "./src/typebox-to-json-schema.ts",
+      "development": "./src/typebox-to-json-schema.ts",
       "default": "./dist/typebox-to-json-schema.js",
       "types": "./dist/typebox-to-json-schema.d.ts"
     },
     "./zod-to-json-schema": {
-      "bun": "./src/zod-to-json-schema.ts",
+      "development": "./src/zod-to-json-schema.ts",
       "default": "./dist/zod-to-json-schema.js",
       "types": "./dist/zod-to-json-schema.d.ts"
     },
     "./valibot-to-json-schema": {
-      "bun": "./src/valibot-to-json-schema.ts",
+      "development": "./src/valibot-to-json-schema.ts",
       "default": "./dist/valibot-to-json-schema.js",
       "types": "./dist/valibot-to-json-schema.d.ts"
     },
     "./effect-to-json-schema": {
-      "bun": "./src/effect-to-json-schema.ts",
+      "development": "./src/effect-to-json-schema.ts",
       "default": "./dist/effect-to-json-schema.js",
       "types": "./dist/effect-to-json-schema.d.ts"
     }

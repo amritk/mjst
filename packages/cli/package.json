@@ -38,7 +38,9 @@
     "start": "bun run ./src/cli.ts",
     "build": "bun run build:code && bun run build:types",
     "build:code": "bun build ./src/cli.ts --outdir=dist --target=node",
-    "build:types": "tsc -p .",
+    "build:types": "tsgo -p .",
+    "types:check": "tsgo -p . --noEmit",
+    "test": "NODE_ENV=production vitest run --root ../.. cli",
     "generate-readme": "bun run ./scripts/generate-readme.ts"
   },
   "dependencies": {

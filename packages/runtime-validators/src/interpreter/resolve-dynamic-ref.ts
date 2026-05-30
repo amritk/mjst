@@ -1,4 +1,4 @@
-import { resolveLocalRef } from '#interpreter/resolve-local-ref'
+import { resolveLocalRef } from '@/interpreter/resolve-local-ref'
 
 /**
  * Resolves a JSON Schema 2020-12 `$dynamicRef` against the root document.

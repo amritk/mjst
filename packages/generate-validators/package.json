@@ -33,7 +33,9 @@
   "scripts": {
     "build": "bun run build:code && bun run build:types",
     "build:code": "bun build ./src/index.ts --outdir=dist --target=node",
-    "build:types": "tsc -p ."
+    "build:types": "tsgo -p .",
+    "types:check": "tsgo -p . --noEmit",
+    "test": "NODE_ENV=production vitest run --root ../.. generate-validators"
   },
   "imports": {
     "#generators/*": "./src/generators/*.ts"

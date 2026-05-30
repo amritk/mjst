@@ -1,4 +1,4 @@
-import { prepareValidator } from '#interpreter/prepare'
+import { prepareValidator } from '@/interpreter/prepare'
 
 import type { Guard, ValidateOptions } from './types'
 

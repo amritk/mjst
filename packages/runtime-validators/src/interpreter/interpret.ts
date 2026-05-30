@@ -1,8 +1,7 @@
-import { FORMAT_CHECKS } from '#interpreter/format-checks'
-import { resolveDynamicRef } from '#interpreter/resolve-dynamic-ref'
-import { resolveLocalRef } from '#interpreter/resolve-local-ref'
-
-import type { ValidationError } from '../types'
+import { FORMAT_CHECKS } from '@/interpreter/format-checks'
+import { resolveDynamicRef } from '@/interpreter/resolve-dynamic-ref'
+import { resolveLocalRef } from '@/interpreter/resolve-local-ref'
+import type { ValidationError } from '@/types'
 
 /**
  * Mutable state threaded through a single validation run.
