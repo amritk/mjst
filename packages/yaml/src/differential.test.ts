@@ -1,8 +1,19 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { parse as eemeli } from 'yaml'
 
 import { FIXTURES } from '../bench/fixtures'
 import { parse as ours } from './parse'
+
+/**
+ * Real-world public specs vendored under `fixtures/` (see `fixtures/README.md`
+ * for provenance). Read from disk so the bytes stay identical to what the
+ * upstream publisher serves. `bench/fixtures.ts` stays synthetic; this is where
+ * we exercise the parser against documents we don't control.
+ */
+const VENDORED = ['digitalocean'] as const
+const readVendored = (name: string): string =>
+  readFileSync(new URL(`../fixtures/${name}.yaml`, import.meta.url), 'utf8')
 
 /**
  * Differential tests against `yaml` (eemeli) — the reference parser the Loupe
@@ -51,6 +62,15 @@ describe('differential', () => {
     it(`matches yaml for case ${index}: ${label}`, () => {
       // `yaml` defaults merge keys off; we default them on, so enable them here
       // to line the two up on the `<<` case.
+      expect(ours(source)).toEqual(eemeli(source, { merge: true }))
+    })
+  }
+
+  // Large, real-world public specs we don't control — the documents this
+  // parser actually has to survive in the wild.
+  for (const name of VENDORED) {
+    it(`matches yaml for vendored spec: ${name}`, () => {
+      const source = readVendored(name)
       expect(ours(source)).toEqual(eemeli(source, { merge: true }))
     })
   }
