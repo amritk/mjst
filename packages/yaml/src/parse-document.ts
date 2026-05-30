@@ -1,15 +1,5 @@
 import { resolveDoubleQuoted, resolvePlainValue, resolveSingleQuoted } from './resolve-scalar'
-import type {
-  ParseOptions,
-  Range,
-  YamlDocument,
-  YamlError,
-  YamlMap,
-  YamlNode,
-  YamlPair,
-  YamlScalar,
-  YamlSeq,
-} from './types'
+import type { ParseOptions, YamlDocument, YamlError, YamlMap, YamlNode, YamlPair, YamlScalar, YamlSeq } from './types'
 
 /**
  * The parser. One cohesive recursive-descent walker — this is the deliberate
@@ -145,8 +135,8 @@ const finishLineIfMidLine = (state: State): void => {
   }
 }
 
-const pushError = (state: State, code: string, message: string, pos: Range): void => {
-  state.errors.push({ kind: 'error', code, message, pos })
+const pushError = (state: State, code: string, message: string, start: number, end: number): void => {
+  state.errors.push({ kind: 'error', code, message, start, end })
 }
 
 /**
@@ -276,7 +266,7 @@ const scanQuoted = (state: State, quote: number): YamlScalar => {
   const inner = src.slice(start + 1, i - 1)
   const value = quote === SQUOTE ? resolveSingleQuoted(inner) : resolveDoubleQuoted(inner)
   state.pos = i
-  return { kind: 'scalar', value, source, style: quote === SQUOTE ? 'single' : 'double', range: [start, i] }
+  return { kind: 'scalar', value, source, style: quote === SQUOTE ? 'single' : 'double', start, end: i }
 }
 
 /** Reads a `*alias` reference. */
@@ -291,7 +281,7 @@ const scanAlias = (state: State): YamlNode => {
   }
   const name = src.slice(start + 1, i)
   state.pos = i
-  return { kind: 'alias', source: name, range: [start, i] }
+  return { kind: 'alias', source: name, start, end: i }
 }
 
 /** Index of the end of a plain scalar's text on one line (trailing spaces and ` #` comment trimmed). */
@@ -345,13 +335,13 @@ const scanPlainScalar = (state: State, parentIndent: number): YamlScalar => {
   state.pos = valueEnd
   if (!segments) {
     const text = src.slice(start, valueEnd)
-    return { kind: 'scalar', value: resolvePlainValue(text), source: text, style: 'plain', range: [start, valueEnd] }
+    return { kind: 'scalar', value: resolvePlainValue(text), source: text, style: 'plain', start, end: valueEnd }
   }
   // Drop trailing blank segments that turned out to precede sibling structure.
   while (segments.length > 1 && segments[segments.length - 1] === '') segments.pop()
   const folded = foldSegments(segments)
   const source = src.slice(start, valueEnd)
-  return { kind: 'scalar', value: folded, source, style: 'plain', range: [start, valueEnd] }
+  return { kind: 'scalar', value: folded, source, style: 'plain', start, end: valueEnd }
 }
 
 /** Folds plain-scalar continuation lines: single break → space, blank line → newline. */
@@ -443,7 +433,8 @@ const scanBlockScalar = (state: State, parentIndent: number): YamlScalar => {
     value,
     source: src.slice(start, valueEnd),
     style: folded ? 'block-folded' : 'block-literal',
-    range: [start, valueEnd],
+    start,
+    end: valueEnd,
   }
 }
 
@@ -481,7 +472,7 @@ const scanFlowPlain = (state: State): YamlScalar => {
   while (end > start && isSpace(src.charCodeAt(end - 1))) end--
   const text = src.slice(start, end)
   state.pos = i
-  return { kind: 'scalar', value: resolvePlainValue(text), source: text, style: 'plain', range: [start, end] }
+  return { kind: 'scalar', value: resolvePlainValue(text), source: text, style: 'plain', start, end }
 }
 
 const parseFlowNode = (state: State): YamlNode => {
@@ -510,7 +501,7 @@ const parseFlowSeq = (state: State): YamlSeq => {
       break
     }
     if (state.pos >= state.len) {
-      pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "]" for flow sequence', [start, state.pos])
+      pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "]" for flow sequence', start, state.pos)
       break
     }
     items.push(parseFlowNode(state))
@@ -521,11 +512,11 @@ const parseFlowSeq = (state: State): YamlSeq => {
       state.pos++
       break
     } else {
-      pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "]" for flow sequence', [start, state.pos])
+      pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "]" for flow sequence', start, state.pos)
       break
     }
   }
-  return { kind: 'seq', items, range: [start, state.pos] }
+  return { kind: 'seq', items, start, end: state.pos }
 }
 
 const parseFlowMap = (state: State): YamlMap => {
@@ -540,7 +531,7 @@ const parseFlowMap = (state: State): YamlMap => {
       break
     }
     if (state.pos >= state.len) {
-      pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "}" for flow mapping', [start, state.pos])
+      pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "}" for flow mapping', start, state.pos)
       break
     }
     const key = parseFlowNode(state)
@@ -552,7 +543,7 @@ const parseFlowMap = (state: State): YamlMap => {
       const vc = state.src.charCodeAt(state.pos)
       if (vc !== COMMA && vc !== RBRACE) value = parseFlowNode(state)
     }
-    items.push({ kind: 'pair', key, value, range: [key.range[0], value ? value.range[1] : key.range[1]] })
+    items.push({ kind: 'pair', key, value, start: key.start, end: value ? value.end : key.end })
     skipFlowWs(state)
     const sep = state.src.charCodeAt(state.pos)
     if (sep === COMMA) state.pos++
@@ -560,11 +551,11 @@ const parseFlowMap = (state: State): YamlMap => {
       state.pos++
       break
     } else {
-      pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "}" for flow mapping', [start, state.pos])
+      pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "}" for flow mapping', start, state.pos)
       break
     }
   }
-  return { kind: 'map', items, range: [start, state.pos] }
+  return { kind: 'map', items, start, end: state.pos }
 }
 
 /** Parses the inline value that follows a `key:` separator on the same line. */
@@ -652,7 +643,8 @@ const parseBlockMap = (state: State, indent: number, firstColon: number): YamlMa
         value: resolvePlainValue(text),
         source: text,
         style: 'plain',
-        range: [lineContentPos, end],
+        start: lineContentPos,
+        end,
       }
     }
 
@@ -682,23 +674,24 @@ const parseBlockMap = (state: State, indent: number, firstColon: number): YamlMa
     if (state.uniqueKeys) {
       const text = keyText(key)
       if (seen) {
-        if (seen.has(text)) pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.range)
+        if (seen.has(text)) pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.start, key.end)
         else seen.add(text)
       } else if (firstKey === null) {
         firstKey = text
       } else {
         seen = new Set([firstKey])
-        if (firstKey === text) pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.range)
+        if (firstKey === text) pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.start, key.end)
         else seen.add(text)
       }
     }
-    items.push({ kind: 'pair', key, value, range: [key.range[0], value ? value.range[1] : key.range[1]] })
+    items.push({ kind: 'pair', key, value, start: key.start, end: value ? value.end : key.end })
   }
 
   const last = items[items.length - 1]
   const first = items[0]
-  const range: Range = [first ? first.range[0] : state.pos, last ? last.range[1] : state.pos]
-  return { kind: 'map', items, range }
+  const start = first ? first.start : state.pos
+  const end = last ? last.end : state.pos
+  return { kind: 'map', items, start, end }
 }
 
 const parseBlockSeq = (state: State, indent: number): YamlSeq => {
@@ -733,7 +726,7 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
         state.pos = child.contentPos
         item = parseNode(state, child.indent)
       } else {
-        item = { kind: 'scalar', value: null, source: '', style: 'plain', range: [dashPos + 1, dashPos + 1] }
+        item = { kind: 'scalar', value: null, source: '', style: 'plain', start: dashPos + 1, end: dashPos + 1 }
       }
     } else {
       const contentCol = state.pos - contentPos + indent
@@ -744,8 +737,9 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
   }
 
   const last = items[items.length - 1]
-  const range: Range = [startOffset === -1 ? state.pos : startOffset, last ? last.range[1] : state.pos]
-  return { kind: 'seq', items, range }
+  const start = startOffset === -1 ? state.pos : startOffset
+  const end = last ? last.end : state.pos
+  return { kind: 'seq', items, start, end }
 }
 
 /**
@@ -770,7 +764,7 @@ const parseNode = (state: State, indent: number): YamlNode => {
         return attachProps(parseNode(state, child.indent), props, state)
       }
       return attachProps(
-        { kind: 'scalar', value: null, source: '', style: 'plain', range: [state.pos, state.pos] },
+        { kind: 'scalar', value: null, source: '', style: 'plain', start: state.pos, end: state.pos },
         props,
         state,
       )

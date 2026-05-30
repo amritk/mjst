@@ -63,12 +63,12 @@ const doc = parseDocument(source)
 const node = nodeAtPath(doc.contents, ['info', 'version'])
 const lc = lineCounter(source)
 
-lc.linePos(node.range[0]) // → { line: 3, col: 12 }  (1-based)
-lc.linePos(node.range[1]) // → { line: 3, col: 17 }
+lc.linePos(node.start) // → { line: 3, col: 12 }  (1-based)
+lc.linePos(node.end) // → { line: 3, col: 17 }
 
 // Parser-level problems (duplicate keys, unterminated flow, …) come with spans too.
 for (const error of doc.errors) {
-  const { line, col } = lc.linePos(error.pos[0])
+  const { line, col } = lc.linePos(error.start)
   console.error(`${line}:${col} ${error.message}`)
 }
 ```
@@ -85,7 +85,7 @@ import { isMap, isScalar, isSeq, parseDocument } from '@amritk/yaml'
 const { contents } = parseDocument(source)
 if (isMap(contents)) {
   for (const pair of contents.items) {
-    if (isScalar(pair.key)) console.log(pair.key.value, pair.value?.range)
+    if (isScalar(pair.key)) console.log(pair.key.value, pair.value?.start, pair.value?.end)
   }
 }
 ```
@@ -97,7 +97,7 @@ if (isMap(contents)) {
 | Export | What it does |
 | --- | --- |
 | `parse(source, options?)` | Parse straight to a JavaScript value, like `JSON.parse`. |
-| `parseDocument(source, options?)` | Parse to `{ contents, errors, warnings, toJS() }` where every node carries a `range`. |
+| `parseDocument(source, options?)` | Parse to `{ contents, errors, warnings, toJS() }` where every node carries `start`/`end` source offsets. |
 | `nodeAtPath(root, path, closest?)` | Resolve a JSON path to its node (with `range`), optionally falling back to the closest ancestor. |
 | `lineCounter(source)` | Build an `offset → { line, col }` mapper (1-based). |
 | `isScalar` / `isMap` / `isSeq` / `isPair` / `isAlias` | Narrowing guards over the node union. |

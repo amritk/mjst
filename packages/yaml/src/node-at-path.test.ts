@@ -17,8 +17,8 @@ describe('node-at-path', () => {
   it('exposes the exact source range for a located node', () => {
     const node = nodeAtPath(contents, ['info', 'title'])
     const lc = lineCounter(source)
-    expect(node && lc.linePos(node.range[0])).toEqual({ line: 3, col: 10 })
-    expect(node && lc.linePos(node.range[1])).toEqual({ line: 3, col: 16 })
+    expect(node && lc.linePos(node.start)).toEqual({ line: 3, col: 10 })
+    expect(node && lc.linePos(node.end)).toEqual({ line: 3, col: 16 })
   })
 
   it('locates an array element with a numeric segment', () => {
@@ -35,7 +35,7 @@ describe('node-at-path', () => {
     const node = nodeAtPath(contents, ['info', 'description'], true)
     // The `info` map begins at its first child key, `title`.
     const lc = lineCounter(source)
-    expect(node && lc.linePos(node.range[0])).toEqual({ line: 3, col: 3 })
+    expect(node && lc.linePos(node.start)).toEqual({ line: 3, col: 3 })
   })
 
   it('matches numeric map keys against stringified segments', () => {

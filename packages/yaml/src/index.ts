@@ -5,7 +5,6 @@ export { parse } from './parse'
 export { parseDocument } from './parse-document'
 export type {
   ParseOptions,
-  Range,
   ScalarStyle,
   YamlAlias,
   YamlDocument,
