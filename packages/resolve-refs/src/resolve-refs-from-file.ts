@@ -35,11 +35,6 @@ const splitRef = (ref: string): { filePart: string; pointer: string } => {
   }
 }
 
-// mjst deals only in JSON Schema documents, so every document — local or
-// remote — is parsed as JSON. (The Loupe linter's sibling resolver additionally
-// accepts YAML; this one stays JSON-only to keep the package dependency-free.)
-const parseContent = (content: string): unknown => JSON.parse(content) as unknown
-
 // --- Remote document cache -------------------------------------------------
 //
 // Fetched remote documents are cached in memory for the lifetime of the
@@ -107,7 +102,8 @@ const loadDoc = async (
     try {
       const response = await fetch(location)
       if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`)
-      const doc = parseContent(await response.text())
+      const parse = options.parse ?? JSON.parse
+      const doc = parse(await response.text(), location)
       remoteCache.set(location, doc)
       docCache.set(location, doc)
       return true
@@ -119,7 +115,8 @@ const loadDoc = async (
   }
 
   try {
-    docCache.set(location, parseContent(readFileSync(location, 'utf8')))
+    const parse = options.parse ?? JSON.parse
+    docCache.set(location, parse(readFileSync(location, 'utf8'), location))
     return true
   } catch (err) {
     errors.push({ message: String(err), path: [] })

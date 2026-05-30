@@ -36,4 +36,21 @@ export type ResolveOptions = {
    * endpoint). An explicit `allowedHosts` entry always bypasses this guard.
    */
   allowPrivateHosts?: boolean
+  /**
+   * Custom content parser. Receives the raw text of every loaded document and
+   * its absolute location (file path or URL). Defaults to `JSON.parse`.
+   *
+   * Pass a YAML-aware function to support `.yaml`/`.yml` documents without
+   * adding a dependency to this package:
+   *
+   * ```ts
+   * import { parse as parseYaml } from 'yaml'
+   *
+   * resolveRefsFromFile(path, {
+   *   parse: (content, location) =>
+   *     /\.ya?ml$/i.test(location) ? parseYaml(content) : JSON.parse(content),
+   * })
+   * ```
+   */
+  parse?: (content: string, location: string) => unknown
 }
