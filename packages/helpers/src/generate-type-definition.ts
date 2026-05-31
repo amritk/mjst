@@ -188,23 +188,7 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string
 
   // Handle enum - union of literal types
   if (schema.enum && schema.enum.length > 0) {
-    if (schema.enum.length === 1) {
-      return JSON.stringify(schema.enum[0])
-    }
-    let enumUnion = JSON.stringify(schema.enum[0])
-    for (let i = 1; i < schema.enum.length; i++) {
-      enumUnion += ' | ' + JSON.stringify(schema.enum[i])
-    }
-    return enumUnion
-  }
-
-  // Handle multi-value enum - union of literal types
-  if (schema.enum && schema.enum.length > 1) {
-    let multiEnumUnion = JSON.stringify(schema.enum[0])
-    for (let i = 1; i < schema.enum.length; i++) {
-      multiEnumUnion += ' | ' + JSON.stringify(schema.enum[i])
-    }
-    return multiEnumUnion
+    return schema.enum.map((value) => JSON.stringify(value)).join(' | ')
   }
 
   // Handle union types (oneOf, anyOf) - check this before returning unknown
