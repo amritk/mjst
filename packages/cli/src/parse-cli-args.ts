@@ -70,12 +70,18 @@ const assignValue = (config: MutableConfig, key: string, value: string): boolean
       return true
     case 'input': {
       const parsed = parseInputValue(value)
-      if (parsed) config.input = parsed
+      if (!parsed) {
+        throw new Error(`Invalid --input value "${value}". Expected one of: ${SOURCE_FORMATS.join(', ')}.`)
+      }
+      config.input = parsed
       return true
     }
     case 'helpers': {
       const parsed = parseHelpersValue(value)
-      if (parsed) config.helpers = parsed
+      if (!parsed) {
+        throw new Error(`Invalid --helpers value "${value}". Expected one of: package, embedded.`)
+      }
+      config.helpers = parsed
       return true
     }
     default:

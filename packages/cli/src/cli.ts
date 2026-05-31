@@ -101,8 +101,14 @@ const buildOutput = async (outputDir: string, tsFiles: readonly string[], typesO
 
   try {
     await execFileAsync('npx', ['tsc', '--project', tsconfigPath])
-  } catch {
-    throw new Error('TypeScript compilation failed. Check the generated files for errors.')
+  } catch (error) {
+    // tsc reports the actual errors on stdout; surface them so the user sees
+    // *what* failed instead of a bare "compilation failed".
+    const details = error as { stdout?: string; stderr?: string }
+    const output = [details.stdout, details.stderr].filter(Boolean).join('\n').trim()
+    throw new Error(
+      `TypeScript compilation failed. Check the generated files for errors.${output ? `\n\n${output}` : ''}`,
+    )
   } finally {
     await unlink(tsconfigPath)
   }

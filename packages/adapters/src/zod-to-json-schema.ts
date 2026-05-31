@@ -61,6 +61,12 @@ export const zodToJsonSchema = async (source: unknown): Promise<JSONSchema> => {
 
   const toJSONSchema = await loadToJsonSchema()
 
+  // Zod types with no JSON Schema equivalent that we do *not* rescue into an
+  // `x-mjst` hint. `unrepresentable: 'any'` turns these into `{}` (accepts
+  // anything), which silently widens the generated type — so we surface them.
+  const LOSSY_TYPES = new Set(['symbol', 'nan', 'void', 'undefined', 'never', 'map', 'set', 'promise', 'function'])
+  const droppedTypes = new Set<string>()
+
   let json: Record<string, unknown>
   try {
     json = toJSONSchema(source, {
@@ -73,11 +79,19 @@ export const zodToJsonSchema = async (source: unknown): Promise<JSONSchema> => {
         } else if (type === 'bigint') {
           for (const key of Object.keys(ctx.jsonSchema)) delete ctx.jsonSchema[key]
           ctx.jsonSchema[MJST_EXTENSION_KEY] = { primitive: 'bigint' }
+        } else if (type && LOSSY_TYPES.has(type)) {
+          droppedTypes.add(type)
         }
       },
     })
   } catch (error) {
     throw new Error(`Zod adapter failed to convert the schema. Is it a valid Zod schema?\n${String(error)}`)
+  }
+
+  if (droppedTypes.size > 0) {
+    console.warn(
+      `[mjst] Zod adapter: ${[...droppedTypes].sort().join(', ')} ${droppedTypes.size === 1 ? 'has' : 'have'} no JSON Schema representation and became "accept anything". The generated type will be wider than the Zod schema.`,
+    )
   }
 
   // The dialect marker is noise for the generators, which already target 2020-12.
