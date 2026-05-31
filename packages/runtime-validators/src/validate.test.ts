@@ -485,4 +485,103 @@ describe('validate', () => {
     expect(constructed).toBe(true)
     expect(() => validator(1)).toThrow(/Cannot resolve/)
   })
+
+  describe('unevaluatedProperties', () => {
+    it('rejects a property left unevaluated by properties (unevaluatedProperties: false)', () => {
+      const validator = validate({
+        type: 'object',
+        properties: { id: { type: 'integer' } },
+        unevaluatedProperties: false,
+      })
+
+      expect(validator({ id: 1 })).toBe(true)
+      expect(validator({ id: 1, extra: true })).toEqual({
+        valid: false,
+        errors: [{ message: 'must NOT have unevaluated properties', path: '/extra' }],
+      })
+    })
+
+    it('sees properties evaluated inside allOf branches', () => {
+      const validator = validate({
+        allOf: [
+          { type: 'object', properties: { id: { type: 'integer' } } },
+          { properties: { name: { type: 'string' } } },
+        ],
+        unevaluatedProperties: false,
+      })
+
+      expect(validator({ id: 1, name: 'a' })).toBe(true)
+      expect(validator({ id: 1, name: 'a', extra: 1 })).not.toBe(true)
+    })
+
+    it('validates leftover properties against a schema-form unevaluatedProperties', () => {
+      const validator = validate({
+        type: 'object',
+        properties: { id: { type: 'integer' } },
+        unevaluatedProperties: { type: 'string' },
+      })
+
+      expect(validator({ id: 1, note: 'ok' })).toBe(true)
+      expect(validator({ id: 1, note: 5 })).not.toBe(true)
+    })
+
+    it('counts properties evaluated by the taken if/then branch', () => {
+      const validator = validate({
+        type: 'object',
+        properties: { kind: { type: 'string' } },
+        if: { properties: { kind: { const: 'a' } }, required: ['kind'] },
+        then: { properties: { a: { type: 'number' } } },
+        unevaluatedProperties: false,
+      })
+
+      expect(validator({ kind: 'a', a: 1 })).toBe(true)
+      expect(validator({ kind: 'a', b: 2 })).not.toBe(true)
+    })
+  })
+
+  describe('unevaluatedItems', () => {
+    it('rejects items past prefixItems (unevaluatedItems: false)', () => {
+      const validator = validate({
+        type: 'array',
+        prefixItems: [{ type: 'string' }, { type: 'number' }],
+        unevaluatedItems: false,
+      })
+
+      expect(validator(['a', 1])).toBe(true)
+      expect(validator(['a', 1, 'extra'])).toEqual({
+        valid: false,
+        errors: [{ message: 'must NOT have unevaluated items', path: '/2' }],
+      })
+    })
+
+    it('treats a satisfied contains as evaluating the whole array', () => {
+      const validator = validate({
+        type: 'array',
+        contains: { type: 'number' },
+        unevaluatedItems: false,
+      })
+
+      // index 1 is not a number, but a satisfied `contains` evaluates everything.
+      expect(validator([1, 'anything', {}])).toBe(true)
+      // No number at all → contains itself fails.
+      expect(validator(['x'])).not.toBe(true)
+    })
+  })
+
+  describe('uniqueItems', () => {
+    it('detects duplicate primitives (distinguishing 1 from "1" and true)', () => {
+      const validator = validate({ type: 'array', uniqueItems: true })
+
+      expect(validator([1, '1', true, null, 'a'])).toBe(true)
+      expect(validator([1, 2, 1])).not.toBe(true)
+      expect(validator(['a', 'a'])).not.toBe(true)
+    })
+
+    it('detects duplicate objects via deep equality', () => {
+      const validator = validate({ type: 'array', uniqueItems: true })
+
+      expect(validator([{ a: 1 }, { a: 2 }])).toBe(true)
+      expect(validator([{ a: 1 }, { a: 1 }])).not.toBe(true)
+    })
+  })
 })

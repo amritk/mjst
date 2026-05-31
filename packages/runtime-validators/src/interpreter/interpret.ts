@@ -40,6 +40,35 @@ const isPrimitiveEnumValue = (value: unknown): boolean =>
   value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
 
 /**
+ * Annotation tracker for `unevaluatedProperties` / `unevaluatedItems`. These
+ * 2020-12 keywords act on whatever a value's *other* keywords — including
+ * in-place applicators (`allOf`, `$ref`, `if`/`then`/`else`, successful
+ * `anyOf`/`oneOf` branches, `dependentSchemas`) — left untouched. We collect the
+ * evaluated property keys / item indices for one instance location as those
+ * keywords run, then the unevaluated keyword consults what is left.
+ *
+ * A tracker is created only when a schema node actually carries an
+ * `unevaluated*` keyword, so the common path allocates nothing.
+ */
+type Evaluation = {
+  props: Set<string>
+  /** Set once a schema-form `additionalProperties`/`unevaluatedProperties` swept every remaining key. */
+  allProps: boolean
+  items: Set<number>
+  /** Set once a tail `items` schema swept every remaining index. */
+  allItems: boolean
+}
+
+const newEvaluation = (): Evaluation => ({ props: new Set(), allProps: false, items: new Set(), allItems: false })
+
+const mergeEvaluation = (into: Evaluation, from: Evaluation): void => {
+  for (const p of from.props) into.props.add(p)
+  if (from.allProps) into.allProps = true
+  for (const i of from.items) into.items.add(i)
+  if (from.allItems) into.allItems = true
+}
+
+/**
  * Deep structural equality, matching the comparison the generated validator
  * used for `const`, `enum`, and `uniqueItems`: arrays compare element-wise,
  * objects compare own enumerable keys, everything else uses `===`.
@@ -71,6 +100,28 @@ const deepEqual = (a: unknown, b: unknown): boolean => {
 const allUnique = (arr: readonly unknown[]): boolean => {
   const len = arr.length
   if (len < 2) return true
+
+  // Fast path: when every element is a primitive, dedupe in one linear pass via
+  // a Set of type-tagged keys (so 1, "1", and true never collide) instead of the
+  // O(n²) pairwise deepEqual. Objects/arrays fall back to the exact comparison.
+  let allPrimitive = true
+  for (let i = 0; i < len; i++) {
+    const v = arr[i]
+    if (v !== null && typeof v === 'object') {
+      allPrimitive = false
+      break
+    }
+  }
+  if (allPrimitive) {
+    const seen = new Set<string>()
+    for (const v of arr) {
+      const key = `${typeof v}:${JSON.stringify(v)}`
+      if (seen.has(key)) return false
+      seen.add(key)
+    }
+    return true
+  }
+
   for (let i = 0; i < len; i++) for (let j = i + 1; j < len; j++) if (deepEqual(arr[i], arr[j])) return false
   return true
 }
@@ -165,7 +216,12 @@ const resolveDyn = (ctx: InterpreterContext, ref: string): unknown => {
  * not pollute the caller's error list. Shares the regex and ref caches so the
  * isolation costs nothing beyond a small context object.
  */
-const matchesSchema = (ctx: InterpreterContext, schema: unknown, value: unknown): boolean => {
+const matchesSchema = (
+  ctx: InterpreterContext,
+  schema: unknown,
+  value: unknown,
+  collect?: Evaluation | null,
+): boolean => {
   const sub: InterpreterContext = {
     root: ctx.root,
     formats: ctx.formats,
@@ -175,12 +231,24 @@ const matchesSchema = (ctx: InterpreterContext, schema: unknown, value: unknown)
     errors: null,
     failed: false,
   }
-  interpret(sub, schema, value, '')
-  return !sub.failed
+  // When the caller is tracking annotations, evaluate the branch into a private
+  // tracker and fold it in only if the branch matched — annotations from a
+  // failing branch never count toward `unevaluated*`.
+  const branchEval = collect ? newEvaluation() : null
+  interpret(sub, schema, value, '', branchEval)
+  const ok = !sub.failed
+  if (ok && collect && branchEval) mergeEvaluation(collect, branchEval)
+  return ok
 }
 
 /** Emits the object-applicator keywords, inert for non-objects. */
-const interpretObject = (ctx: InterpreterContext, s: Record<string, unknown>, value: unknown, path: string): void => {
+const interpretObject = (
+  ctx: InterpreterContext,
+  s: Record<string, unknown>,
+  value: unknown,
+  path: string,
+  evalScope: Evaluation | null,
+): void => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return
   const obj = value as Record<string, unknown>
 
@@ -202,9 +270,13 @@ const interpretObject = (ctx: InterpreterContext, s: Record<string, unknown>, va
       const pv = obj[key]
       if (requiredSet.has(key)) {
         if (pv === undefined) fail(ctx, `must have required property '${key}'`, path)
-        else interpret(ctx, properties[key], pv, `${path}/${key}`)
+        else {
+          interpret(ctx, properties[key], pv, `${path}/${key}`)
+          evalScope?.props.add(key)
+        }
       } else if (pv !== undefined) {
         interpret(ctx, properties[key], pv, `${path}/${key}`)
+        evalScope?.props.add(key)
       }
       if (ctx.failed) return
     }
@@ -238,7 +310,7 @@ const interpretObject = (ctx: InterpreterContext, s: Record<string, unknown>, va
   if (dependentSchemas) {
     for (const [trigger, subSchema] of Object.entries(dependentSchemas)) {
       if (obj[trigger] === undefined) continue
-      interpret(ctx, subSchema, obj, path)
+      interpret(ctx, subSchema, obj, path, evalScope)
       if (ctx.failed) return
     }
   }
@@ -258,7 +330,7 @@ const interpretObject = (ctx: InterpreterContext, s: Record<string, unknown>, va
           }
         }
       } else {
-        interpret(ctx, dep, obj, path)
+        interpret(ctx, dep, obj, path, evalScope)
         if (ctx.failed) return
       }
     }
@@ -275,21 +347,26 @@ const interpretObject = (ctx: InterpreterContext, s: Record<string, unknown>, va
         for (const [source, patternSchema] of patternEntries) {
           if (getRegex(ctx, source).test(k)) {
             matched = true
+            evalScope?.props.add(k)
             interpret(ctx, patternSchema, obj[k], `${path}/${k}`)
             if (ctx.failed) return
           }
         }
         if (!matched && hasAdditional && additional === false) {
+          evalScope?.props.add(k)
           fail(ctx, 'must NOT have additional properties', `${path}/${k}`)
           if (ctx.failed) return
         } else if (!matched && hasAdditional && isPlainObject(additional)) {
+          evalScope?.props.add(k)
           interpret(ctx, additional, obj[k], `${path}/${k}`)
           if (ctx.failed) return
         }
       } else if (hasAdditional && additional === false) {
+        evalScope?.props.add(k)
         fail(ctx, 'must NOT have additional properties', `${path}/${k}`)
         if (ctx.failed) return
       } else if (hasAdditional && isPlainObject(additional)) {
+        evalScope?.props.add(k)
         interpret(ctx, additional, obj[k], `${path}/${k}`)
         if (ctx.failed) return
       }
@@ -322,7 +399,13 @@ const interpretObject = (ctx: InterpreterContext, s: Record<string, unknown>, va
 }
 
 /** Emits the array-applicator keywords, inert for non-arrays. */
-const interpretArray = (ctx: InterpreterContext, s: Record<string, unknown>, value: unknown, path: string): void => {
+const interpretArray = (
+  ctx: InterpreterContext,
+  s: Record<string, unknown>,
+  value: unknown,
+  path: string,
+  evalScope: Evaluation | null,
+): void => {
   if (!Array.isArray(value)) return
   const arr = value as unknown[]
 
@@ -356,6 +439,7 @@ const interpretArray = (ctx: InterpreterContext, s: Record<string, unknown>, val
     for (let index = 0; index < tuple.length; index++) {
       if (arr.length > index) {
         interpret(ctx, tuple[index], arr[index], `${path}/${index}`)
+        evalScope?.items.add(index)
         if (ctx.failed) return
       }
     }
@@ -371,6 +455,11 @@ const interpretArray = (ctx: InterpreterContext, s: Record<string, unknown>, val
       interpret(ctx, rest, arr[i], `${path}/${i}`)
       if (ctx.failed) return
     }
+    // A tail `items`/`additionalItems` schema sweeps every index from `start` on.
+    if (evalScope) evalScope.allItems = true
+  } else if (rest === true && evalScope) {
+    // `items: true` likewise evaluates the whole tail.
+    evalScope.allItems = true
   }
 
   if (uniqueRequired && !allUnique(arr)) {
@@ -388,6 +477,12 @@ const interpretArray = (ctx: InterpreterContext, s: Record<string, unknown>, val
     const max = typeof s['maxContains'] === 'number' ? s['maxContains'] : undefined
     let count = 0
     for (const item of arr) if (matchesSchema(ctx, containsSchema, item)) count++
+    // Ajv parity for `unevaluatedItems`: a satisfied `contains` marks the *whole*
+    // array as evaluated, not just the matching items — but `minContains: 0` opts
+    // out of contributing any evaluated-item annotation at all.
+    if (evalScope && min !== 0 && count >= min && (max === undefined || count <= max)) {
+      evalScope.allItems = true
+    }
     if (count < min) {
       fail(ctx, `must contain at least ${min} matching items`, path)
       if (ctx.failed) return
@@ -468,7 +563,13 @@ const interpretNumber = (ctx: InterpreterContext, s: Record<string, unknown>, va
  * through; the order of checks mirrors the schema's own keyword order so error
  * output is stable.
  */
-export const interpret = (ctx: InterpreterContext, schema: unknown, value: unknown, path: string): void => {
+export const interpret = (
+  ctx: InterpreterContext,
+  schema: unknown,
+  value: unknown,
+  path: string,
+  evaluation: Evaluation | null = null,
+): void => {
   // In guard mode the first failure unwinds the whole walk; in error mode this
   // is never set, so every branch runs and collects.
   if (ctx.failed) return
@@ -488,18 +589,25 @@ export const interpret = (ctx: InterpreterContext, schema: unknown, value: unkno
   // is configured for OpenAPI schemas.
   if (s['nullable'] === true && value === null) return
 
+  // `unevaluated*` consults annotations gathered by every other keyword applied
+  // to this same instance. Inherit the ancestor's tracker when one is in scope;
+  // otherwise start one only if this node carries an `unevaluated*` keyword, so
+  // schemas that never use them allocate nothing.
+  const nodeUnevaluated = 'unevaluatedProperties' in s || 'unevaluatedItems' in s
+  const evalScope: Evaluation | null = evaluation ?? (nodeUnevaluated ? newEvaluation() : null)
+
   // $ref — validate against the resolved target (handles recursion naturally,
   // since the data shrinks with each level). Sibling keywords still apply per
   // 2020-12, so we do not stop here.
   if (typeof s['$ref'] === 'string') {
-    interpret(ctx, resolveRef(ctx, s['$ref']), value, path)
+    interpret(ctx, resolveRef(ctx, s['$ref']), value, path, evalScope)
     if (ctx.failed) return
   }
 
   // `$dynamicRef` (2020-12) — late-binds to a matching `$dynamicAnchor`. Like
   // `$ref`, sibling keywords still apply, so we do not stop here.
   if (typeof s['$dynamicRef'] === 'string') {
-    interpret(ctx, resolveDyn(ctx, s['$dynamicRef']), value, path)
+    interpret(ctx, resolveDyn(ctx, s['$dynamicRef']), value, path, evalScope)
     if (ctx.failed) return
   }
 
@@ -550,9 +658,9 @@ export const interpret = (ctx: InterpreterContext, schema: unknown, value: unkno
 
   // Type-specific keyword blocks. Each self-guards on the value's type, so they
   // compose correctly with unions and with schemas that omit `type` entirely.
-  interpretObject(ctx, s, value, path)
+  interpretObject(ctx, s, value, path, evalScope)
   if (ctx.failed) return
-  interpretArray(ctx, s, value, path)
+  interpretArray(ctx, s, value, path, evalScope)
   if (ctx.failed) return
   interpretString(ctx, s, value, path)
   if (ctx.failed) return
@@ -561,7 +669,7 @@ export const interpret = (ctx: InterpreterContext, schema: unknown, value: unkno
 
   if (Array.isArray(s['allOf'])) {
     for (const sub of s['allOf']) {
-      interpret(ctx, sub, value, path)
+      interpret(ctx, sub, value, path, evalScope)
       if (ctx.failed) return
     }
   }
@@ -569,9 +677,11 @@ export const interpret = (ctx: InterpreterContext, schema: unknown, value: unkno
   if (Array.isArray(s['anyOf']) && s['anyOf'].length > 0) {
     let ok = false
     for (const sub of s['anyOf']) {
-      if (matchesSchema(ctx, sub, value)) {
+      // When tracking annotations, evaluate every branch (each match contributes
+      // its evaluated keys); otherwise short-circuit on the first match.
+      if (matchesSchema(ctx, sub, value, evalScope)) {
         ok = true
-        break
+        if (!evalScope) break
       }
     }
     if (!ok) {
@@ -583,7 +693,7 @@ export const interpret = (ctx: InterpreterContext, schema: unknown, value: unkno
   if (Array.isArray(s['oneOf']) && s['oneOf'].length > 0) {
     let count = 0
     for (const sub of s['oneOf']) {
-      if (matchesSchema(ctx, sub, value)) count++
+      if (matchesSchema(ctx, sub, value, evalScope)) count++
     }
     if (count !== 1) {
       fail(ctx, 'must match exactly one schema in oneOf', path)
@@ -592,6 +702,7 @@ export const interpret = (ctx: InterpreterContext, schema: unknown, value: unkno
   }
 
   if ('not' in s) {
+    // `not` produces no annotations — a passing inner schema means failure.
     if (matchesSchema(ctx, s['not'], value)) {
       fail(ctx, 'must not match schema', path)
       if (ctx.failed) return
@@ -599,10 +710,65 @@ export const interpret = (ctx: InterpreterContext, schema: unknown, value: unkno
   }
 
   if ('if' in s) {
-    if (matchesSchema(ctx, s['if'], value)) {
-      if ('then' in s) interpret(ctx, s['then'], value, path)
+    if (matchesSchema(ctx, s['if'], value, evalScope)) {
+      if ('then' in s) interpret(ctx, s['then'], value, path, evalScope)
     } else if ('else' in s) {
-      interpret(ctx, s['else'], value, path)
+      interpret(ctx, s['else'], value, path, evalScope)
+    }
+  }
+
+  // `unevaluatedProperties` / `unevaluatedItems` (2020-12) run last: every other
+  // keyword above has recorded what it evaluated into `evalScope`, so these act
+  // on exactly what is left over.
+  if (nodeUnevaluated && evalScope) interpretUnevaluated(ctx, s, value, path, evalScope)
+}
+
+/**
+ * Applies `unevaluatedProperties` / `unevaluatedItems` against the leftovers in
+ * `evalScope`. A `false` schema rejects any leftover; a real subschema validates
+ * it (and marks it evaluated, so a further-out `unevaluated*` does not see it
+ * again); `true` simply sweeps the rest.
+ */
+const interpretUnevaluated = (
+  ctx: InterpreterContext,
+  s: Record<string, unknown>,
+  value: unknown,
+  path: string,
+  evalScope: Evaluation,
+): void => {
+  if ('unevaluatedProperties' in s && typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    const up = s['unevaluatedProperties']
+    if (!evalScope.allProps) {
+      const obj = value as Record<string, unknown>
+      for (const k in obj) {
+        if (evalScope.props.has(k)) continue
+        if (up === false) {
+          fail(ctx, 'must NOT have unevaluated properties', `${path}/${k}`)
+        } else if (up !== true && isPlainObject(up)) {
+          interpret(ctx, up, obj[k], `${path}/${k}`)
+        }
+        evalScope.props.add(k)
+        if (ctx.failed) return
+      }
+      if (up !== false) evalScope.allProps = true
+    }
+  }
+
+  if ('unevaluatedItems' in s && Array.isArray(value)) {
+    const ui = s['unevaluatedItems']
+    if (!evalScope.allItems) {
+      const arr = value as unknown[]
+      for (let i = 0; i < arr.length; i++) {
+        if (evalScope.items.has(i)) continue
+        if (ui === false) {
+          fail(ctx, 'must NOT have unevaluated items', `${path}/${i}`)
+        } else if (ui !== true && isPlainObject(ui)) {
+          interpret(ctx, ui, arr[i], `${path}/${i}`)
+        }
+        evalScope.items.add(i)
+        if (ctx.failed) return
+      }
+      if (ui !== false) evalScope.allItems = true
     }
   }
 }
