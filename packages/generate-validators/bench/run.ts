@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { TypeCompiler } from '@sinclair/typebox/compiler'
 import type { ValidateFunction } from 'ajv'
 import Ajv from 'ajv'
 import addFormats from 'ajv-formats'
@@ -10,15 +11,16 @@ import { buildValidatorSchema } from '../src/index.ts'
 import { BENCH_CASES, type BenchCase } from './schemas.ts'
 
 /**
- * Compares the three ways a JSON Schema becomes a runtime check:
+ * Compares the four ways a JSON Schema becomes a runtime check:
  *
  *   - **mjst** generates standalone TypeScript validator source ahead of time
  *     (`@amritk/generate-validators`); here we generate it, load it, and run it.
  *   - **Ajv** compiles the schema to a function at startup.
+ *   - **TypeBox** compiles its schema to a checker at startup (`TypeCompiler`).
  *   - **Zod** is authored as code directly (no schema-compilation step).
  *
  * We report steady-state throughput (validator already prepared) and the cold
- * "prepare a validator" cost — codegen for mjst, compile for Ajv.
+ * "prepare a validator" cost — codegen for mjst, compile for Ajv and TypeBox.
  */
 
 /** Runs `fn` for ~`budgetMs` after a short warmup and returns operations/sec. */
@@ -91,11 +93,13 @@ const run = async (): Promise<void> => {
     const mjst = await loadMjstValidator(benchCase)
     const ajv = makeAjv()
     const ajvValidate = ajv.compile(benchCase.schema as object) as ValidateFunction
+    const typebox = TypeCompiler.Compile(benchCase.typebox)
     const zod = benchCase.zod
 
     const validators: Array<[string, BoolValidator]> = [
       ['mjst (generated)', mjst],
       ['ajv (compiled)', (input) => ajvValidate(input) === true],
+      ['typebox (compiled)', (input) => typebox.Check(input)],
       ['zod', (input) => zod.safeParse(input).success],
     ]
 
@@ -115,9 +119,11 @@ const run = async (): Promise<void> => {
     // Cold "prepare a validator" cost.
     const mjstGen = await prepareMs(() => buildValidatorSchema(benchCase.schema, benchCase.typeName))
     const ajvCompile = await prepareMs(() => makeAjv().compile(benchCase.schema as object))
+    const typeboxCompile = await prepareMs(() => TypeCompiler.Compile(benchCase.typebox))
     console.log('\n  prepare-a-validator cost (one-shot):')
     console.log(`    mjst codegen (source)   ${mjstGen.toFixed(3)} ms`)
     console.log(`    ajv compile             ${ajvCompile.toFixed(3)} ms`)
+    console.log(`    typebox compile         ${typeboxCompile.toFixed(3)} ms`)
     console.log('    zod authoring           n/a (no build step)')
     console.log('')
   }
