@@ -36,6 +36,3 @@ content.json
 
 # Finder (MacOS) folder config
 .DS_Store
-
-# Claude Code local settings (personal overrides)
-.claude/settings.local.json
