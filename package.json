@@ -31,7 +31,7 @@
     "test": "bun run --workspaces test",
     "test:seq": "bun run --workspaces --sequential test",
     "release:version": "changeset version && bun install --no-frozen-lockfile",
-    "release:publish": "bun run scripts/resolve-workspace-protocol.ts && changeset publish"
+    "release:publish": "bun run scripts/resolve-workspace-protocol.ts && bun run scripts/strip-development-exports.ts && changeset publish"
   },
   "devDependencies": {
     "@amritk/helpers": "workspace:*",
