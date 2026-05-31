@@ -47,4 +47,32 @@ describe('resolve-refs', () => {
 
     expect(resolved).toEqual({ properties: { pet: { $ref: 'pet.json#/Pet' } } })
   })
+
+  it('omits the origin map unless trackOrigins is set', () => {
+    const result = resolveRefs({ a: { $ref: '#/$defs/x' }, $defs: { x: { type: 'string' } } })
+    expect(result.origins).toBeUndefined()
+  })
+
+  it('stamps each inlined node with its in-document origin path', () => {
+    const { resolved, origins } = resolveRefs(
+      {
+        properties: { a: { $ref: '#/$defs/x' }, b: { $ref: '#/$defs/x' } },
+        $defs: { x: { type: 'object', properties: { id: { type: 'string' } } } },
+      },
+      { trackOrigins: true },
+    )
+    const tree = resolved as { properties: { a: object; b: object } }
+    // Repeated refs share one object, stamped once with the definition path.
+    expect(tree.properties.a).toBe(tree.properties.b)
+    expect(origins?.get(tree.properties.a)).toEqual({ location: '', pointer: ['$defs', 'x'] })
+  })
+
+  it('decodes pointer escapes and array indices in origin paths', () => {
+    const { resolved, origins } = resolveRefs(
+      { ref: { $ref: '#/a~1b/c~0d/0' }, 'a/b': { 'c~d': [{ type: 'number' }] } },
+      { trackOrigins: true },
+    )
+    const node = (resolved as { ref: object }).ref
+    expect(origins?.get(node)).toEqual({ location: '', pointer: ['a/b', 'c~d', 0] })
+  })
 })
