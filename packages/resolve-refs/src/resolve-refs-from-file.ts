@@ -45,9 +45,48 @@ const splitRef = (ref: string): { filePart: string; pointer: string } => {
 
 const remoteCache = new Map<string, unknown>()
 
+// In-flight remote loads, keyed by location. Two resolve passes that start at
+// the same time and reach the same URL share a single fetch instead of racing
+// two requests; whichever arrives first installs the promise, the rest await it.
+const inFlight = new Map<string, Promise<unknown>>()
+
 /** Drops every cached remote document. Mainly useful for tests/long sessions. */
 export const clearRemoteCache = (): void => {
   remoteCache.clear()
+}
+
+// Cap on redirect hops before we give up — generous enough for real services,
+// low enough to stop a redirect loop from spinning forever.
+const MAX_REDIRECTS = 5
+
+/**
+ * Fetches and parses a remote document, following redirects manually so the
+ * SSRF guard is re-applied to every hop. `fetch` follows redirects by default,
+ * which would let an allow-listed public URL bounce to a private/loopback
+ * address (e.g. the `169.254.169.254` metadata endpoint) — so we set
+ * `redirect: 'manual'` and re-run {@link denialReason} on each `Location`.
+ */
+const fetchRemote = async (location: string, options: ResolveOptions): Promise<unknown> => {
+  let current = location
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const reason = denialReason(current, options)
+    if (reason !== null) throw new Error(`refusing to follow redirect (${reason}): ${current}`)
+
+    const response = await fetch(current, { redirect: 'manual' })
+    if (response.status >= 300 && response.status < 400) {
+      const next = response.headers.get('location')
+      if (!next) throw new Error(`HTTP ${response.status} redirect with no Location header`)
+      current = new URL(next, current).href
+      continue
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`)
+
+    const parse = options.parse ?? ((c: string) => JSON.parse(c) as unknown)
+    // Parse against the original request location so the caller's format sniffing
+    // (e.g. `.yaml` vs `.json`) and any relative refs key off a stable identity.
+    return parse(await response.text(), location)
+  }
+  throw new Error(`too many redirects (>${MAX_REDIRECTS}): ${location}`)
 }
 
 /** Returns why a remote location may not be fetched, or `null` if it is allowed. */
@@ -99,11 +138,16 @@ const loadDoc = async (
       docCache.set(location, {})
       return false
     }
+    // Coalesce concurrent loads of the same URL onto one in-flight request; the
+    // owner (first caller) clears the slot once it settles.
+    let pending = inFlight.get(location)
+    const owner = pending === undefined
+    if (pending === undefined) {
+      pending = fetchRemote(location, options)
+      inFlight.set(location, pending)
+    }
     try {
-      const response = await fetch(location)
-      if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`)
-      const parse = options.parse ?? ((c: string) => JSON.parse(c) as unknown)
-      const doc = parse(await response.text(), location)
+      const doc = await pending
       remoteCache.set(location, doc)
       docCache.set(location, doc)
       return true
@@ -111,6 +155,8 @@ const loadDoc = async (
       errors.push({ message: `Failed to fetch ${location}: ${String(err)}`, path: [] })
       docCache.set(location, {})
       return false
+    } finally {
+      if (owner) inFlight.delete(location)
     }
   }
 

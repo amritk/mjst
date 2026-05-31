@@ -1,3 +1,4 @@
+import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import {
   hasAdditionalProperties,
@@ -49,7 +50,7 @@ export const generateSchemaChecks = (accessor: string, schema: JSONSchema): stri
     case 'string': {
       checks.push(`typeof ${accessor} === "string"`)
       if (hasPattern(schema)) {
-        checks.push(`/${schema.pattern.replace(/\//g, '\\/')}/.test(${accessor})`)
+        checks.push(`/${escapeRegexPattern(schema.pattern)}/.test(${accessor})`)
       }
       if (hasMinLength(schema)) {
         checks.push(`${accessor}.length >= ${schema.minLength}`)

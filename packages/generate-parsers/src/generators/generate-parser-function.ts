@@ -1,3 +1,4 @@
+import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { safeAccessor, safeKey } from '@amritk/helpers/safe-accessor'
 import {
@@ -945,15 +946,6 @@ const generateInlineValueParser = (schema: JSONSchema): string | null => {
     default:
       return null
   }
-}
-
-/**
- * Escapes special regex characters in a pattern string for use in a regex literal.
- * This escapes backslashes and forward slashes for safe inclusion in /pattern/ syntax.
- */
-const escapeRegexPattern = (pattern: string): string => {
-  // Escape backslashes first, then forward slashes
-  return pattern.replace(/\\/g, '\\\\').replace(/\//g, '\\/')
 }
 
 /**

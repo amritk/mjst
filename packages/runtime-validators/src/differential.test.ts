@@ -222,6 +222,70 @@ const CASES: Case[] = [
     },
     seeds: [{ value: 1 }, { value: 1, children: [{ value: 2 }] }, { value: 'x' }, { value: 1, children: [{}] }],
   },
+  {
+    name: 'unevaluatedProperties:false with properties',
+    dialect: '2020',
+    schema: {
+      type: 'object',
+      properties: { id: { type: 'integer' }, name: { type: 'string' } },
+      unevaluatedProperties: false,
+    },
+    seeds: [{ id: 1 }, { id: 1, name: 'a' }, { id: 1, extra: true }, {}, { name: 'x', a: 1 }],
+  },
+  {
+    name: 'unevaluatedProperties:false collected across allOf',
+    dialect: '2020',
+    schema: {
+      allOf: [
+        { type: 'object', properties: { id: { type: 'integer' } } },
+        { properties: { name: { type: 'string' } } },
+      ],
+      unevaluatedProperties: false,
+    },
+    seeds: [{ id: 1 }, { id: 1, name: 'a' }, { id: 1, name: 'a', extra: 1 }, {}, { name: 'a' }],
+  },
+  {
+    name: 'unevaluatedProperties schema + patternProperties',
+    dialect: '2020',
+    schema: {
+      type: 'object',
+      patternProperties: { '^num_': { type: 'number' } },
+      unevaluatedProperties: { type: 'string' },
+    },
+    seeds: [{ num_x: 1 }, { num_x: 1, a: 's' }, { a: 1 }, { a: 's', b: 't' }, { num_x: 'no' }],
+  },
+  {
+    name: 'unevaluatedProperties:false with if/then',
+    dialect: '2020',
+    schema: {
+      type: 'object',
+      properties: { kind: { type: 'string' } },
+      if: { properties: { kind: { const: 'a' } }, required: ['kind'] },
+      then: { properties: { a: { type: 'number' } } },
+      unevaluatedProperties: false,
+    },
+    seeds: [{ kind: 'a', a: 1 }, { kind: 'b' }, { kind: 'a', a: 1, extra: 1 }, { kind: 'a', b: 2 }, {}],
+  },
+  {
+    name: 'unevaluatedItems:false with prefixItems',
+    dialect: '2020',
+    schema: {
+      type: 'array',
+      prefixItems: [{ type: 'string' }, { type: 'number' }],
+      unevaluatedItems: false,
+    },
+    seeds: [['a', 1], ['a'], ['a', 1, true], [], ['a', 1, 2]],
+  },
+  {
+    name: 'unevaluatedItems schema with contains',
+    dialect: '2020',
+    schema: {
+      type: 'array',
+      contains: { type: 'number' },
+      unevaluatedItems: { type: 'string' },
+    },
+    seeds: [[1], [1, 'a'], ['a', 1, 'b'], ['a'], [1, 2], ['a', 1, 5]],
+  },
 ]
 
 describe('differential fuzz vs ajv', () => {

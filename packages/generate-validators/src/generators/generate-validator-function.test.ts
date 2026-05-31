@@ -104,6 +104,77 @@ describe('generate-validator-function', () => {
     expect(code).toContain('.test(')
   })
 
+  it('escapes forward slashes in a pattern so the emitted regex literal compiles', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { date: { type: 'string' as const, pattern: '^\\d{4}/\\d{2}/\\d{2}$' } },
+      required: ['date'],
+    }
+    const code = generateValidatorFunction(schema, 'Event')
+
+    // The bare slashes are escaped (\/) and the digit classes keep their single
+    // backslash, so the literal is valid and means what the pattern says.
+    expect(code).toContain('!/^\\d{4}\\/\\d{2}\\/\\d{2}$/.test(')
+    // Sanity check: the emitted regex source actually parses and matches.
+    const emitted = /!\/(.+)\/\.test\(/.exec(code)?.[1]
+    expect(emitted).toBeDefined()
+    expect(new RegExp(emitted as string).test('2024/01/02')).toBe(true)
+  })
+
+  it('checks a const property for an exact value', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { kind: { const: 'user' }, version: { const: 2 } },
+      required: ['kind'],
+    }
+    const code = generateValidatorFunction(schema, 'Record')
+
+    expect(code).toContain('obj["kind"] !== "user"')
+    expect(code).toContain('obj["version"] !== 2')
+    expect(code).toContain('must be \\"user\\"')
+  })
+
+  it('checks a const object property by canonical JSON', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { meta: { const: { a: 1 } } },
+    }
+    const code = generateValidatorFunction(schema, 'Record')
+
+    expect(code).toContain('JSON.stringify(obj["meta"]) !== ')
+  })
+
+  it('generates a top-level const validator', () => {
+    const code = generateValidatorFunction({ const: 'fixed' }, 'Tag')
+
+    expect(code).toContain('input !== "fixed"')
+    expect(code).toContain('must be \\"fixed\\"')
+  })
+
+  it('generates dependentRequired presence checks', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { creditCard: { type: 'number' as const }, billingAddress: { type: 'string' as const } },
+      dependentRequired: { creditCard: ['billingAddress'] },
+    }
+    const code = generateValidatorFunction(schema, 'Payment')
+
+    expect(code).toContain('"creditCard" in obj && !("billingAddress" in obj)')
+    expect(code).toContain("must have property 'billingAddress' when 'creditCard' is present")
+  })
+
+  it('generates a propertyNames pattern check over every key', () => {
+    const schema = {
+      type: 'object' as const,
+      propertyNames: { pattern: '^[a-z]+$' },
+    }
+    const code = generateValidatorFunction(schema, 'Dict')
+
+    expect(code).toContain('for (const _name of Object.keys(obj))')
+    expect(code).toContain('!/^[a-z]+$/.test(_name)')
+    expect(code).toContain('property name must match pattern')
+  })
+
   it('generates min/maxLength checks', () => {
     const schema = {
       type: 'object' as const,
@@ -153,7 +224,9 @@ describe('generate-validator-function', () => {
 
     // All three constraints push onto a shared errors array instead of returning early
     expect(code).toContain('const errors: ValidationError[] = []')
-    expect(code).toContain("errors.push({ message: 'must match pattern")
+    expect(code).toContain('errors.push({ message: "must match pattern')
+    // The pattern body keeps its backslash (\d), so the emitted literal is a digit class.
+    expect(code).toContain('!/^\\d+$/.test(input)')
     expect(code).toContain("errors.push({ message: 'must have at least 2 characters'")
     expect(code).toContain("errors.push({ message: 'must have at most 4 characters'")
     expect(code).toContain('return errors.length > 0 ? { valid: false, errors } : true')

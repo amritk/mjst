@@ -157,4 +157,21 @@ export const hasMaxProperties = (schema: JSONSchema): schema is SchemaObject & {
   return isSchemaObject(schema) && 'maxProperties' in schema && typeof schema.maxProperties === 'number'
 }
 
+/** Type guard to check if schema has dependentRequired (2020-12). */
+export const hasDependentRequired = (
+  schema: JSONSchema,
+): schema is SchemaObject & { dependentRequired: Record<string, readonly string[]> } => {
+  return (
+    isSchemaObject(schema) &&
+    'dependentRequired' in schema &&
+    typeof schema.dependentRequired === 'object' &&
+    schema.dependentRequired !== null
+  )
+}
+
+/** Type guard to check if schema has a propertyNames subschema. */
+export const hasPropertyNames = (schema: JSONSchema): schema is SchemaObject & { propertyNames: JSONSchema } => {
+  return isSchemaObject(schema) && 'propertyNames' in schema
+}
+
 export { hasRef } from './has-ref'

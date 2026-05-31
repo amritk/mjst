@@ -17,6 +17,7 @@ mjst/
 │   ├── generate-markdown/     # @amritk/generate-markdown — README table generator
 │   ├── adapters/              # @amritk/adapters — convert external schemas (TypeBox, …) to JSON Schema
 │   ├── resolve-refs/          # @amritk/resolve-refs — inline internal/cross-file/remote $refs
+│   ├── yaml/                  # @amritk/yaml — tiny YAML parser with exact source positions
 │   └── helpers/               # @amritk/helpers — shared schema utilities + runtime
 ├── .claude/                   # Developer guidelines
 ├── .changeset/                # Changesets config (release automation)
@@ -82,11 +83,18 @@ Converts schemas authored in external libraries into Draft 2020-12 JSON Schema s
 
 ### `@amritk/resolve-refs` (`packages/resolve-refs`)
 
-Resolves and inlines `$ref`s into a single dereferenced document — internal (`#/...`) pointers, cross-file refs, and remote http(s) documents. A one-pass, cycle-safe resolver: each unique ref resolves once, and a self-reference terminates at `{}` rather than looping. Fetched remote documents are cached in memory for the lifetime of the process; local files are re-read each pass (they may change on disk in a long-lived session). Remote fetches are guarded by a **default-deny SSRF check** (`isPrivateHost`) — loopback, private, link-local, and cloud-metadata (`169.254.169.254`) hosts are refused unless explicitly allow-listed.
+Resolves and inlines `$ref`s into a single dereferenced document — internal (`#/...`) pointers, cross-file refs, and remote http(s) documents. A one-pass, cycle-safe resolver: each unique ref resolves once, and a self-reference terminates at `{}` rather than looping. Fetched remote documents are cached in memory for the lifetime of the process (and concurrent loads of the same URL are coalesced onto one request); local files are re-read each pass (they may change on disk in a long-lived session). Remote fetches are guarded by a **default-deny SSRF check** (`isPrivateHost`) — loopback, private, link-local, IPv4-mapped IPv6, and cloud-metadata (`169.254.169.254`) hosts are refused unless explicitly allow-listed. Redirects are followed manually (`redirect: 'manual'`) with the guard re-applied to every hop, so an allow-listed host cannot bounce to a private address.
 
 - **Depends on:** nothing. Documents are parsed as JSON only (mjst deals in JSON Schema), and there is no `@amritk/*` dependency, so it stays a slim, standalone resolver.
 - **Entry points:** `resolveRefs(data)` — in-memory, internal refs only; `resolveRefsFromFile(filename, options)` — from disk or a URL, including cross-file and remote refs. Errors are collected on the result (never thrown); a refused or missing target degrades to `{}`.
 - **Relationship to the lint repo:** mirrors the resolver shipped in `@amritk/loupe-ref-resolver` (the Loupe linter). The intent is for this published package to become the single shared implementation both repos depend on.
+
+### `@amritk/yaml` (`packages/yaml`)
+
+A tiny, dependency-free YAML parser built for diagnostics: every node maps back to an exact `line:column` source position. Used to load `.yaml`/`.yml` schema/config documents (e.g. via the `resolveRefsFromFile` `parse` callback) while preserving the locations needed to point at the offending node in an error.
+
+- **Depends on:** nothing.
+- **Scope:** a pragmatic subset of YAML 1.2 sized for configs/OpenAPI — block & flow collections, block scalars (`|`/`>`), quoted/plain scalars, comments, and anchors. Out of scope by design: multi-document streams (only the first document is read), explicit `?` mapping keys, and exotic tags.
 
 ### `@amritk/helpers` (`packages/helpers`)
 

@@ -1,5 +1,5 @@
 import { generateTypeDefinition } from '@amritk/helpers/generate-type-definition'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import * as zodModule from 'zod'
 
 import { zodToJsonSchema } from './zod-to-json-schema'
@@ -35,6 +35,16 @@ describe('zodToJsonSchema', () => {
   it('strips the $schema dialect marker', async () => {
     const result = await zodToJsonSchema(z.object({ name: z.string() }))
     expect(result).not.toHaveProperty('$schema')
+  })
+
+  it('warns when a lossy (unrepresentable) Zod type is widened to "accept anything"', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await zodToJsonSchema(z.object({ id: z.string(), sym: z.symbol() }))
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/Zod adapter: symbol/))
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('converts enums to a string schema with an enum list', async () => {

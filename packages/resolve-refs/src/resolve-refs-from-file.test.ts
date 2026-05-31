@@ -122,4 +122,66 @@ describe('resolve-refs-from-file', () => {
     // Both refs hit the same document, which is fetched and cached exactly once.
     expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
+
+  it('refuses a redirect that lands on a private host (SSRF via redirect)', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/latest/meta-data' } }),
+      )
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ x: { $ref: 'https://api.example.com/s.json#/Foo' } }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'), {
+      allowedHosts: ['api.example.com'],
+    })
+
+    expect((resolved as { x: unknown }).x).toBeUndefined()
+    expect(errors[0]?.message).toMatch(/refusing to follow redirect/i)
+    // The initial host was allowed, so the first request happened — but the
+    // redirect target was re-checked and refused before any second request.
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy).toHaveBeenCalledWith('https://api.example.com/s.json', { redirect: 'manual' })
+  })
+
+  it('follows a redirect to another allowed host', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(null, { status: 301, headers: { location: 'https://cdn.example.com/s.json' } }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ Foo: { type: 'string' } }), { status: 200 }))
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ x: { $ref: 'https://api.example.com/s.json#/Foo' } }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'), {
+      allowedHosts: ['api.example.com', 'cdn.example.com'],
+    })
+
+    expect(errors).toEqual([])
+    expect(resolved).toMatchObject({ x: { type: 'string' } })
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+  })
+
+  it('coalesces two concurrent resolves of the same remote URL into one fetch', async () => {
+    let resolveFetch: ((r: Response) => void) | undefined
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      () =>
+        new Promise<Response>((res) => {
+          resolveFetch = res
+        }),
+    )
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ x: { $ref: 'https://api.example.com/s.json#/Foo' } }))
+
+    // Two passes start before either fetch settles — they must share one request.
+    const pass1 = resolveRefsFromFile(join(dir, 'api.json'), { allowedHosts: ['api.example.com'] })
+    const pass2 = resolveRefsFromFile(join(dir, 'api.json'), { allowedHosts: ['api.example.com'] })
+    await Promise.resolve()
+    resolveFetch?.(new Response(JSON.stringify({ Foo: { type: 'string' } }), { status: 200 }))
+
+    const [r1, r2] = await Promise.all([pass1, pass2])
+    expect(r1.errors).toEqual([])
+    expect(r2.errors).toEqual([])
+    expect(r1.resolved).toMatchObject({ x: { type: 'string' } })
+    expect(r2.resolved).toMatchObject({ x: { type: 'string' } })
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
 })

@@ -43,9 +43,10 @@ const loadToJsonSchema = async (): Promise<ToJsonSchema> => {
  * `@valibot/to-json-schema`.
  *
  * Valibot's `date` schema has no JSON Schema representation and would otherwise
- * throw, so we run with `errorMode: 'ignore'` (other unsupported constructs
- * degrade to an open schema rather than failing the whole conversion) and use
- * the `overrideSchema` hook to rewrite dates into the shared `x-mjst` instanceOf
+ * throw, so we run with `errorMode: 'warn'` (other unsupported constructs degrade
+ * to an open schema rather than failing the whole conversion, and the converter
+ * logs which ones — so the widening is visible instead of silent) and use the
+ * `overrideSchema` hook to rewrite dates into the shared `x-mjst` instanceOf
  * extension — the same handling TypeBox and Zod dates receive.
  */
 export const valibotToJsonSchema = async (source: unknown): Promise<JSONSchema> => {
@@ -59,7 +60,7 @@ export const valibotToJsonSchema = async (source: unknown): Promise<JSONSchema> 
   let json: Record<string, unknown>
   try {
     json = toJsonSchema(source, {
-      errorMode: 'ignore',
+      errorMode: 'warn',
       overrideSchema: (ctx) => {
         if (ctx.valibotSchema?.type === 'date') return { [MJST_EXTENSION_KEY]: { instanceOf: 'Date' } }
         if (ctx.valibotSchema?.type === 'bigint') return { [MJST_EXTENSION_KEY]: { primitive: 'bigint' } }

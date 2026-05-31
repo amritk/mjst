@@ -234,14 +234,22 @@ describe('parse-cli-args', () => {
     expect(result).toEqual({ helpers: 'embedded' })
   })
 
-  it('ignores invalid --helpers values', () => {
-    const result = parseCliArgs(['--helpers', 'bogus', '--schema', 's.json'])
-    expect(result).toEqual({ schema: 's.json' })
+  it('throws on an invalid --helpers value instead of silently ignoring it', () => {
+    expect(() => parseCliArgs(['--helpers', 'bogus', '--schema', 's.json'])).toThrow(/Invalid --helpers value "bogus"/)
   })
 
-  it('ignores invalid --helpers=foo values', () => {
-    const result = parseCliArgs(['--helpers=foo', '--schema', 's.json'])
-    expect(result).toEqual({ schema: 's.json' })
+  it('throws on an invalid --helpers=foo value', () => {
+    expect(() => parseCliArgs(['--helpers=foo', '--schema', 's.json'])).toThrow(/package, embedded/)
+  })
+
+  it('parses a valid --input value', () => {
+    expect(parseCliArgs(['--input', 'zod'])).toEqual({ input: 'zod' })
+  })
+
+  it('throws on an invalid --input value, listing the valid formats', () => {
+    expect(() => parseCliArgs(['--input', 'typscript'])).toThrow(
+      /Invalid --input value "typscript".*json, typebox, zod, valibot, effect/,
+    )
   })
 
   it('accepts kebab-case flag names', () => {

@@ -137,7 +137,7 @@ Builds a boolean type guard `(input: unknown) => input is T`. Same options as `v
 
 ### Supported keywords
 
-`type` (incl. unions and `integer`), `enum`, `const`, `properties`, `required`, `additionalProperties`, `patternProperties`, `propertyNames`, `minProperties`, `maxProperties`, `dependentRequired`, `dependentSchemas`, `dependencies` (draft-07), `items`/`prefixItems` (2020-12) and array-`items` + `additionalItems` (draft-07), `contains`/`minContains`/`maxContains`, `minItems`, `maxItems`, `uniqueItems`, `minLength`, `maxLength`, `pattern`, `format` (opt-in), `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, `$ref` (local), `nullable` (OpenAPI 3.0), boolean schemas.
+`type` (incl. unions and `integer`), `enum`, `const`, `properties`, `required`, `additionalProperties`, `patternProperties`, `propertyNames`, `minProperties`, `maxProperties`, `dependentRequired`, `dependentSchemas`, `dependencies` (draft-07), `items`/`prefixItems` (2020-12) and array-`items` + `additionalItems` (draft-07), `contains`/`minContains`/`maxContains`, `minItems`, `maxItems`, `uniqueItems`, `unevaluatedProperties`, `unevaluatedItems`, `minLength`, `maxLength`, `pattern`, `format` (opt-in), `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, `$ref` (local), `nullable` (OpenAPI 3.0), boolean schemas.
 
 > Only **local** `$ref`s are supported — the interpreter resolves both JSON-Pointer fragments (`#/$defs/user`) and `$anchor` names (`#user`) within the same document, including recursion, but does not fetch remote ones. Bundle external schemas into `$defs` first.
 
@@ -149,13 +149,14 @@ Builds a boolean type guard `(input: unknown) => input is T`. Same options as `v
 
 This is a **pragmatic subset** of JSON Schema — sized for validating data against the kind of schemas real APIs and configs use, not for being an authoritative, spec-complete validator. The following are intentionally left out; if your schemas lean on them, reach for Ajv:
 
-- **`unevaluatedProperties` / `unevaluatedItems`.** These require tracking which properties/items were "evaluated" *across* `allOf`/`anyOf`/`$ref` branches. Note the standard consequence: `additionalProperties` only sees `properties`/`patternProperties` in the **same** schema object (not those pulled in via `allOf` or `$ref`) — that is correct per spec, and `unevaluatedProperties` is the keyword that would relax it. We don't implement it.
-- **Remote / non-local references.** `$ref` to another document or URL, plus `$id` base-URI resolution and `$dynamicRef` / `$recursiveRef`. Same-document refs — JSON-Pointer fragments and `$anchor` names — resolve (including recursion); cross-document ones do not.
+- **Remote / non-local references.** `$ref` to another document or URL, plus `$id` base-URI resolution and `$recursiveRef`. Same-document refs — JSON-Pointer fragments, `$anchor` names, and `$dynamicRef`/`$dynamicAnchor` — resolve (including recursion); cross-document ones do not.
 - **`contentEncoding` / `contentMediaType` / `contentSchema`** — treated as annotations (ignored), as they are by default in 2020-12.
 - **Spec-exact `format` coverage.** Formats are opt-in and validated by pragmatic regexes that reject obviously-bad input rather than being RFC-perfect. The `regex` format (which would need to *compile* the string, not match it) is not checked.
 - **Draft-2020 exotica** beyond the keywords listed above, and the draft-04 boolean form of `exclusiveMinimum`/`exclusiveMaximum`.
 
-> **Want one of these?** None of these are off the table — "by design" means *not yet*, not *never*. If something here is blocking a real use case, [open an issue](https://github.com/amritk/mjst/issues) describing the schema you need to validate. The cheap, local additions (more formats, `$anchor` refs) are easy; the harder ones (`unevaluated*`, which need cross-branch tracking) we're willing to take on if there's demand.
+> **Want one of these?** None of these are off the table — "by design" means *not yet*, not *never*. If something here is blocking a real use case, [open an issue](https://github.com/amritk/mjst/issues) describing the schema you need to validate.
+
+> **`unevaluatedProperties` / `unevaluatedItems` note.** These are supported and collect annotations across the in-place applicators applied to the *same* schema object — `allOf`, `$ref`/`$dynamicRef`, the taken `if`/`then`/`else` branch, successful `anyOf`/`oneOf` branches, and `dependentSchemas`. The one case not covered is an `unevaluated*` keyword nested *inside* one applicator branch reading annotations produced by a *sibling* branch of an ancestor (e.g. `unevaluatedProperties` inside `allOf[1]` expecting to see keys evaluated by `allOf[0]`); keep `unevaluated*` at the same level as the keywords it should account for.
 
 ---
 
