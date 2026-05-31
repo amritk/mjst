@@ -16,3 +16,7 @@ packages and an appropriate semver bump, and commit the generated file under
 tooling, CI), create an empty changeset (`bunx changeset --empty`) so the PR
 still records intent. The release workflow turns merged changesets into a
 version PR and npm publish on merge to `main`.
+
+## Git & PR Guidelines
+
+NEVER include Claude session links, tracking IDs, or platform attributions in commits or PR text. Keep all PR descriptions strictly focused on the code changes.
