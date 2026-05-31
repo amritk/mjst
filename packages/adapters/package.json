@@ -25,8 +25,7 @@
     "url": "https://github.com/amritk/mjst/issues"
   },
   "files": [
-    "dist",
-    "src"
+    "dist"
   ],
   "publishConfig": {
     "access": "public"
