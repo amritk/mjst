@@ -4,6 +4,7 @@ import { refToName } from '@amritk/helpers/ref-to-name'
 import {
   hasAdditionalProperties,
   hasConst,
+  hasDependentRequired,
   hasEnum,
   hasExclusiveMaximum,
   hasExclusiveMinimum,
@@ -16,6 +17,7 @@ import {
   hasOneOf,
   hasPattern,
   hasProperties,
+  hasPropertyNames,
   hasRef,
   hasRequired,
   hasType,
@@ -310,6 +312,31 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: s
     propertyLines.push(`    if (${JSON.stringify(Object.keys(properties))}.includes(_key)) continue`)
     propertyLines.push(`    const _r = ${vRefName}(obj[_key as keyof typeof obj], \`\${_path}/\${_key}\`)`)
     propertyLines.push(`    if (_r !== true) errors.push(..._r.errors)`)
+    propertyLines.push(`  }`)
+  }
+
+  // dependentRequired — when a trigger property is present, its dependencies must be too.
+  if (hasDependentRequired(schema)) {
+    for (const [trigger, deps] of Object.entries(schema.dependentRequired)) {
+      if (!Array.isArray(deps)) continue
+      for (const dep of deps) {
+        const msg = JSON.stringify(`must have property '${dep}' when '${trigger}' is present`)
+        propertyLines.push(`  if (${JSON.stringify(trigger)} in obj && !(${JSON.stringify(dep)} in obj)) {`)
+        propertyLines.push(`    errors.push({ message: ${msg}, path: _path })`)
+        propertyLines.push(`  }`)
+      }
+    }
+  }
+
+  // propertyNames with a pattern — every key must match. (Only the pattern form
+  // is emitted; a $ref/complex propertyNames schema is left to runtime validation.)
+  if (hasPropertyNames(schema) && isSchemaObject(schema.propertyNames) && hasPattern(schema.propertyNames)) {
+    const re = escapeRegexPattern(schema.propertyNames.pattern)
+    const msg = JSON.stringify(`property name must match pattern ${schema.propertyNames.pattern}`)
+    propertyLines.push(`  for (const _name of Object.keys(obj)) {`)
+    propertyLines.push(`    if (!/${re}/.test(_name)) {`)
+    propertyLines.push(`      errors.push({ message: ${msg}, path: \`\${_path}/\${_name}\` })`)
+    propertyLines.push(`    }`)
     propertyLines.push(`  }`)
   }
 

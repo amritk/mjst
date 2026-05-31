@@ -7,6 +7,7 @@ import {
   hasAnyOf,
   hasConst,
   hasDefault,
+  hasDependentRequired,
   hasEnum,
   hasExamples,
   hasExclusiveMaximum,
@@ -25,6 +26,7 @@ import {
   hasOneOf,
   hasPattern,
   hasProperties,
+  hasPropertyNames,
   hasRef,
   hasRequired,
   hasType,
@@ -384,6 +386,25 @@ describe('schema-guards', () => {
 
   it('hasMaxProperties returns false when missing', () => {
     expect(hasMaxProperties({})).toBe(false)
+  })
+
+  // hasDependentRequired
+  it('hasDependentRequired returns true for an object value', () => {
+    expect(hasDependentRequired({ dependentRequired: { a: ['b'] } })).toBe(true)
+  })
+
+  it('hasDependentRequired returns false when missing or non-object', () => {
+    expect(hasDependentRequired({})).toBe(false)
+    expect(hasDependentRequired({ dependentRequired: null } as unknown as JSONSchema)).toBe(false)
+  })
+
+  // hasPropertyNames
+  it('hasPropertyNames returns true when the keyword is present', () => {
+    expect(hasPropertyNames({ propertyNames: { pattern: '^[a-z]+$' } })).toBe(true)
+  })
+
+  it('hasPropertyNames returns false when missing', () => {
+    expect(hasPropertyNames({})).toBe(false)
   })
 
   // hasRef
