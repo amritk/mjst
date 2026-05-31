@@ -41,6 +41,14 @@ const exampleString = (schema: JSONSchema): string => {
         return '1970-01-01T00:00:00.000Z'
       case 'date':
         return '1970-01-01'
+      case 'time':
+        return '00:00:00.000Z'
+      case 'hostname':
+        return 'example.com'
+      case 'ipv4':
+        return '127.0.0.1'
+      case 'ipv6':
+        return '::1'
     }
   }
 
@@ -89,11 +97,25 @@ export const deriveExample = (
   if (hasOneOf(schema) && schema.oneOf[0] !== undefined) return deriveExample(schema.oneOf[0], rootSchema, seen)
   if (hasAnyOf(schema) && schema.anyOf[0] !== undefined) return deriveExample(schema.anyOf[0], rootSchema, seen)
 
-  // `hasType` only matches a single string `type`; multi-type schemas fall
-  // through to `null`.
-  if (!hasType(schema)) return null
+  if (hasType(schema)) return deriveForType(schema.type, schema, rootSchema, seen)
 
-  switch (schema.type) {
+  // Multi-type schemas (`type: ['string', 'null']`) derive from their first
+  // member type; `hasType` only matches a single string `type`.
+  if (Array.isArray(schema.type) && schema.type.length > 0) {
+    return deriveForType(schema.type[0] as string, schema, rootSchema, seen)
+  }
+
+  return null
+}
+
+/** Derives a canonical value for a single declared `type`. */
+const deriveForType = (
+  type: string,
+  schema: JSONSchema,
+  rootSchema: Record<string, unknown> | undefined,
+  seen: ReadonlySet<string>,
+): unknown => {
+  switch (type) {
     case 'string':
       return exampleString(schema)
     case 'number':

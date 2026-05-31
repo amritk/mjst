@@ -47,6 +47,14 @@ const stringExpr = (schema: JSONSchema): string => {
         return 'fc.date({ noInvalidDate: true }).map((d) => d.toISOString())'
       case 'date':
         return 'fc.date({ noInvalidDate: true }).map((d) => d.toISOString().slice(0, 10))'
+      case 'time':
+        return 'fc.date({ noInvalidDate: true }).map((d) => d.toISOString().slice(11))'
+      case 'hostname':
+        return 'fc.domain()'
+      case 'ipv4':
+        return 'fc.ipV4()'
+      case 'ipv6':
+        return 'fc.ipV6()'
     }
   }
 
@@ -172,9 +180,14 @@ const arbitraryExpr = (schema: JSONSchema, suffix: string): string => {
   if (hasOneOf(schema)) return oneofExpr(schema.oneOf, suffix)
   if (hasAnyOf(schema)) return oneofExpr(schema.anyOf, suffix)
 
-  // `hasType` only matches a single string `type`; multi-type schemas
-  // (`type: ['string', 'null']`) fall through to the permissive fallback.
   if (hasType(schema)) return scalarExpr(schema.type, schema, suffix)
+
+  // Multi-type schemas (`type: ['string', 'null']`) become a oneof over each
+  // member type; `hasType` only matches a single string `type`.
+  if (Array.isArray(schema.type)) {
+    const exprs = schema.type.map((type) => scalarExpr(type, schema, suffix))
+    return exprs.length === 1 ? (exprs[0] as string) : `fc.oneof(${exprs.join(', ')})`
+  }
 
   return 'fc.anything()'
 }

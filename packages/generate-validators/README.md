@@ -92,6 +92,28 @@ Returns: `Promise<GeneratedFile[]>` where `GeneratedFile = { filename: string; c
 
 ---
 
+## Benchmarks
+
+Generated validators are straight-line, monomorphic TypeScript with no generic
+dispatch, so they validate quickly once emitted — and emitting them is far
+cheaper than compiling a schema at startup. Measured on Bun 1.3 (Linux x64),
+validating valid input at steady state:
+
+| schema | mjst (generated) | ajv (compiled) | zod |
+|:--|--:|--:|--:|
+| small (4 fields) | **~47M** ops/s | ~7M ops/s | ~1.9M ops/s |
+| order (nested + array) | **~17M** ops/s | ~2.5M ops/s | ~0.45M ops/s |
+
+Preparing a validator (mjst codegen vs Ajv compile) costs ~0.11 ms vs ~9–12 ms.
+All three libraries agree on every verdict; parity is asserted before timing.
+Micro-benchmark figures vary by machine and runtime — reproduce with:
+
+```bash
+bun run bench
+```
+
+---
+
 ## Related packages
 
 - [`@amritk/generate-parsers`](../generate-parsers) — type definitions plus parsers that coerce input

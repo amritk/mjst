@@ -105,6 +105,20 @@ describe('validate', () => {
     expect(validator(0.3)).not.toBe(true)
   })
 
+  it('honours the draft-04 boolean exclusiveMinimum/exclusiveMaximum form', () => {
+    const min = validate({ type: 'number', minimum: 0, exclusiveMinimum: true })
+    expect(min(0)).not.toBe(true)
+    expect(min(0.1)).toBe(true)
+
+    const max = validate({ type: 'number', maximum: 10, exclusiveMaximum: true })
+    expect(max(10)).not.toBe(true)
+    expect(max(9.9)).toBe(true)
+
+    // `exclusiveMinimum: false` leaves the bound inclusive.
+    const inclusive = validate({ type: 'number', minimum: 0, exclusiveMinimum: false })
+    expect(inclusive(0)).toBe(true)
+  })
+
   it('handles multipleOf with floating point values correctly', () => {
     const validator = validate({ type: 'number', multipleOf: 0.1 })
     expect(validator(0.3)).toBe(true)
@@ -389,6 +403,14 @@ describe('validate', () => {
       expect(v(ok), `${format} should accept ${ok}`).toBe(true)
       expect(v(bad), `${format} should reject ${bad}`).not.toBe(true)
     }
+  })
+
+  it('validates the `regex` format by compiling the string', () => {
+    const v = validate({ type: 'string', format: 'regex' }, { formats: 'all' })
+    expect(v('^[a-z]+$')).toBe(true)
+    expect(v('(')).not.toBe(true)
+    // Still opt-in: a lenient validator treats an invalid regex as an annotation.
+    expect(validate({ type: 'string', format: 'regex' })('(')).toBe(true)
   })
 
   it('resolves $ref by $anchor name, including recursion', () => {

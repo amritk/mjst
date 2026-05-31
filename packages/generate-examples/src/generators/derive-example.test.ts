@@ -20,7 +20,14 @@ describe('deriveExample', () => {
 
   it('honours string formats and length', () => {
     expect(deriveExample({ type: 'string', format: 'email' })).toBe('user@example.com')
+    expect(deriveExample({ type: 'string', format: 'ipv4' })).toBe('127.0.0.1')
+    expect(deriveExample({ type: 'string', format: 'hostname' })).toBe('example.com')
     expect(deriveExample({ type: 'string', minLength: 10 })).toHaveLength(10)
+  })
+
+  it('derives from the first member of a multi-type schema', () => {
+    expect(deriveExample({ type: ['string', 'null'] })).toBe('string')
+    expect(deriveExample({ type: ['null', 'integer'] })).toBe(null)
   })
 
   it('builds nested objects including all declared properties', () => {

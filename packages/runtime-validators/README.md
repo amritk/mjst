@@ -137,11 +137,11 @@ Builds a boolean type guard `(input: unknown) => input is T`. Same options as `v
 
 ### Supported keywords
 
-`type` (incl. unions and `integer`), `enum`, `const`, `properties`, `required`, `additionalProperties`, `patternProperties`, `propertyNames`, `minProperties`, `maxProperties`, `dependentRequired`, `dependentSchemas`, `dependencies` (draft-07), `items`/`prefixItems` (2020-12) and array-`items` + `additionalItems` (draft-07), `contains`/`minContains`/`maxContains`, `minItems`, `maxItems`, `uniqueItems`, `unevaluatedProperties`, `unevaluatedItems`, `minLength`, `maxLength`, `pattern`, `format` (opt-in), `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, `$ref` (local), `nullable` (OpenAPI 3.0), boolean schemas.
+`type` (incl. unions and `integer`), `enum`, `const`, `properties`, `required`, `additionalProperties`, `patternProperties`, `propertyNames`, `minProperties`, `maxProperties`, `dependentRequired`, `dependentSchemas`, `dependencies` (draft-07), `items`/`prefixItems` (2020-12) and array-`items` + `additionalItems` (draft-07), `contains`/`minContains`/`maxContains`, `minItems`, `maxItems`, `uniqueItems`, `unevaluatedProperties`, `unevaluatedItems`, `minLength`, `maxLength`, `pattern`, `format` (opt-in), `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` (both the numeric 2020-12 form and the draft-04 boolean modifier), `multipleOf`, `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, `$ref` (local), `nullable` (OpenAPI 3.0), boolean schemas.
 
 > Only **local** `$ref`s are supported — the interpreter resolves both JSON-Pointer fragments (`#/$defs/user`) and `$anchor` names (`#user`) within the same document, including recursion, but does not fetch remote ones. Bundle external schemas into `$defs` first.
 
-> **Built-in `format`s** (opt-in via `options.formats`): `email`, `idn-email`, `date-time`, `date`, `time`, `duration`, `uuid`, `uri`, `iri`, `uri-reference`, `iri-reference`, `uri-template`, `json-pointer`, `relative-json-pointer`, `hostname`, `ipv4`, `ipv6`. Unlisted or disabled formats are treated as annotations, matching Ajv's default opt-in behavior.
+> **Built-in `format`s** (opt-in via `options.formats`): `email`, `idn-email`, `date-time`, `date`, `time`, `duration`, `uuid`, `uri`, `iri`, `uri-reference`, `iri-reference`, `uri-template`, `json-pointer`, `relative-json-pointer`, `hostname`, `ipv4`, `ipv6`, `regex` (compiled, not pattern-matched). Unlisted or disabled formats are treated as annotations, matching Ajv's default opt-in behavior.
 
 > **OpenAPI `nullable`.** When a subschema sets `nullable: true`, a `null` value is accepted regardless of its declared `type` (and short-circuits every other keyword), matching how Ajv is configured to treat OpenAPI 3.0 schemas. Without this, a single nullable field produced a flood of spurious `must be …` errors.
 
@@ -151,8 +151,8 @@ This is a **pragmatic subset** of JSON Schema — sized for validating data agai
 
 - **Remote / non-local references.** `$ref` to another document or URL, plus `$id` base-URI resolution and `$recursiveRef`. Same-document refs — JSON-Pointer fragments, `$anchor` names, and `$dynamicRef`/`$dynamicAnchor` — resolve (including recursion); cross-document ones do not.
 - **`contentEncoding` / `contentMediaType` / `contentSchema`** — treated as annotations (ignored), as they are by default in 2020-12.
-- **Spec-exact `format` coverage.** Formats are opt-in and validated by pragmatic regexes that reject obviously-bad input rather than being RFC-perfect. The `regex` format (which would need to *compile* the string, not match it) is not checked.
-- **Draft-2020 exotica** beyond the keywords listed above, and the draft-04 boolean form of `exclusiveMinimum`/`exclusiveMaximum`.
+- **Spec-exact `format` coverage.** Formats are opt-in and validated by pragmatic regexes that reject obviously-bad input rather than being RFC-perfect. (The `regex` format is the exception — it compiles the string to confirm it is a valid pattern.)
+- **Draft-2020 exotica** beyond the keywords listed above.
 
 > **Want one of these?** None of these are off the table — "by design" means *not yet*, not *never*. If something here is blocking a real use case, [open an issue](https://github.com/amritk/mjst/issues) describing the schema you need to validate.
 
