@@ -1,10 +1,23 @@
+import { FormatRegistry, type TSchema, Type } from '@sinclair/typebox'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { z } from 'zod'
 
 /**
- * Each benchmark case carries three equivalent encodings of the same contract —
+ * TypeBox does not validate `format` unless a checker is registered, so we wire
+ * up the two formats these schemas use. This keeps the comparison fair — every
+ * library does the same uuid/email work — and is what a TypeBox user shipping
+ * these contracts would do anyway.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+FormatRegistry.Set('uuid', (value) => UUID_RE.test(value))
+FormatRegistry.Set('email', (value) => EMAIL_RE.test(value))
+
+/**
+ * Each benchmark case carries four equivalent encodings of the same contract —
  * a JSON Schema (the input mjst and Ajv both consume), a hand-written Zod schema
- * (Zod has no schema-compilation step, so it is authored directly), and a
+ * and a hand-written TypeBox schema (neither has mjst's standalone codegen step;
+ * Zod is authored directly while TypeBox is compiled at startup like Ajv), and a
  * valid / invalid sample pair used for the throughput and parity checks.
  */
 export type BenchCase = {
@@ -12,6 +25,7 @@ export type BenchCase = {
   typeName: string
   schema: JSONSchema
   zod: z.ZodType
+  typebox: TSchema
   valid: unknown
   invalid: unknown
 }
@@ -34,6 +48,16 @@ const smallZod = z.object({
   age: z.number().int().min(0).max(130),
   active: z.boolean().optional(),
 })
+
+const smallTypebox = Type.Object(
+  {
+    id: Type.String({ format: 'uuid' }),
+    name: Type.String({ minLength: 1, maxLength: 80 }),
+    age: Type.Integer({ minimum: 0, maximum: 130 }),
+    active: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+)
 
 /** A realistic nested order: address sub-object, line-item array, enum status. */
 const orderSchema: JSONSchema = {
@@ -106,12 +130,55 @@ const orderZod = z.object({
     .min(1),
 })
 
+const orderTypebox = Type.Object(
+  {
+    id: Type.String({ format: 'uuid' }),
+    status: Type.Union([
+      Type.Literal('pending'),
+      Type.Literal('paid'),
+      Type.Literal('shipped'),
+      Type.Literal('cancelled'),
+    ]),
+    total: Type.Number({ minimum: 0 }),
+    customer: Type.Object(
+      {
+        name: Type.String({ minLength: 1 }),
+        email: Type.String({ format: 'email' }),
+      },
+      { additionalProperties: false },
+    ),
+    shipTo: Type.Optional(
+      Type.Object(
+        {
+          street: Type.String({ minLength: 1 }),
+          city: Type.String({ minLength: 1 }),
+          zip: Type.String({ pattern: '^[0-9]{5}$' }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    items: Type.Array(
+      Type.Object(
+        {
+          sku: Type.String({ minLength: 1 }),
+          qty: Type.Integer({ minimum: 1 }),
+          price: Type.Number({ minimum: 0 }),
+        },
+        { additionalProperties: false },
+      ),
+      { minItems: 1 },
+    ),
+  },
+  { additionalProperties: false },
+)
+
 export const BENCH_CASES: readonly BenchCase[] = [
   {
     name: 'small (4 fields)',
     typeName: 'User',
     schema: smallSchema,
     zod: smallZod,
+    typebox: smallTypebox,
     valid: { id: '00000000-0000-4000-8000-000000000000', name: 'Ada', age: 36, active: true },
     invalid: { id: 'not-a-uuid', name: '', age: -1 },
   },
@@ -120,6 +187,7 @@ export const BENCH_CASES: readonly BenchCase[] = [
     typeName: 'Order',
     schema: orderSchema,
     zod: orderZod,
+    typebox: orderTypebox,
     valid: {
       id: '00000000-0000-4000-8000-000000000000',
       status: 'paid',
