@@ -44,6 +44,65 @@ describe('resolve-refs-from-file', () => {
     expect(resolved).toMatchObject({ a: { value: 1 }, b: { value: 1 } })
   })
 
+  it('omits the origin map unless trackOrigins is set', async () => {
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: '#/b' }, b: { value: 1 } }))
+
+    const result = await resolveRefsFromFile(join(dir, 'root.json'))
+
+    expect(result.origins).toBeUndefined()
+  })
+
+  it('stamps inlined nodes with their origin document and in-file path', async () => {
+    const petPath = join(dir, 'pet.json')
+    const apiPath = join(dir, 'api.json')
+    writeFileSync(petPath, JSON.stringify({ Pet: { type: 'object', properties: { name: { type: 'string' } } } }))
+    writeFileSync(
+      apiPath,
+      JSON.stringify({
+        components: { schemas: { Pet: { $ref: './pet.json#/Pet' }, Pet2: { $ref: './pet.json#/Pet' } } },
+        widget: { type: 'object' },
+        useWidget: { $ref: '#/widget' },
+      }),
+    )
+
+    const { resolved, origins } = await resolveRefsFromFile(apiPath, { trackOrigins: true })
+    expect(origins).toBeDefined()
+    const tree = resolved as {
+      components: { schemas: { Pet: object; Pet2: object } }
+      useWidget: object
+    }
+
+    // The cross-file node is stamped with pet.json and its in-file path; both call
+    // sites share the one inlined object, so the stamp identifies the definition.
+    expect(tree.components.schemas.Pet).toBe(tree.components.schemas.Pet2)
+    expect(origins?.get(tree.components.schemas.Pet)).toEqual({ location: petPath, pointer: ['Pet'] })
+
+    // An internal ref is stamped against the root document at the target path.
+    expect(origins?.get(tree.useWidget)).toEqual({ location: apiPath, pointer: ['widget'] })
+  })
+
+  it('keeps the definition origin when a node is reached through a chained ref (first-write-wins)', async () => {
+    const petPath = join(dir, 'pet.json')
+    const apiPath = join(dir, 'api.json')
+    writeFileSync(petPath, JSON.stringify({ Pet: { type: 'object' } }))
+    writeFileSync(
+      apiPath,
+      JSON.stringify({
+        components: { schemas: { Pet: { $ref: './pet.json#/Pet' } } },
+        // Resolves through the internal ref to the same pet.json object.
+        alias: { $ref: '#/components/schemas/Pet' },
+      }),
+    )
+
+    const { resolved, origins } = await resolveRefsFromFile(apiPath, { trackOrigins: true })
+    const tree = resolved as { components: { schemas: { Pet: object } }; alias: object }
+
+    // `alias` resolves through to the same object; its origin stays the pet.json
+    // definition rather than the intermediate root-document pointer.
+    expect(tree.alias).toBe(tree.components.schemas.Pet)
+    expect(origins?.get(tree.alias)).toEqual({ location: petPath, pointer: ['Pet'] })
+  })
+
   it('records an error and degrades to {} when a referenced file is missing', async () => {
     writeFileSync(join(dir, 'api.json'), JSON.stringify({ x: { $ref: './missing.json#/Nope' } }))
 

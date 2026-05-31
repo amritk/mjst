@@ -1,10 +1,21 @@
-import { getByPointer } from './get-by-pointer'
-import type { ResolveResult } from './types'
+import { getByPointer, pointerToPath } from './get-by-pointer'
+import type { OriginMap, ResolveResult } from './types'
 
 // A ref currently mid-resolution is marked with this sentinel; revisiting it
 // means we have looped, so we return `{}` instead of recursing forever.
 const CYCLE = Symbol('cycle')
 type CacheValue = unknown | typeof CYCLE
+
+/** Options for the in-memory resolver. */
+export type ResolveRefsOptions = {
+  /**
+   * Record a per-node origin map on the result (`origins`). For every object or
+   * array inlined in place of a `$ref`, the map records the in-document path it
+   * was defined at (the `location` is `''`, the single in-memory document).
+   * Defaults to `false`.
+   */
+  trackOrigins?: boolean
+}
 
 /**
  * Single-pass internal-only `$ref` resolver. Each unique ref string is resolved
@@ -13,9 +24,14 @@ type CacheValue = unknown | typeof CYCLE
  * files, HTTP) are left untouched — callers that need those should use
  * `resolveRefsFromFile`.
  */
-const resolveInternal = (node: unknown, root: unknown, cache: Map<string, CacheValue>): unknown => {
+const resolveInternal = (
+  node: unknown,
+  root: unknown,
+  cache: Map<string, CacheValue>,
+  origins: OriginMap | undefined,
+): unknown => {
   if (node === null || typeof node !== 'object') return node
-  if (Array.isArray(node)) return node.map((item) => resolveInternal(item, root, cache))
+  if (Array.isArray(node)) return node.map((item) => resolveInternal(item, root, cache, origins))
 
   const obj = node as Record<string, unknown>
   if (typeof obj['$ref'] === 'string') {
@@ -26,14 +42,20 @@ const resolveInternal = (node: unknown, root: unknown, cache: Map<string, CacheV
       return cached === CYCLE ? {} : cached
     }
     cache.set(ref, CYCLE)
-    const resolved = resolveInternal(getByPointer(root, ref.slice(1)), root, cache)
+    const resolved = resolveInternal(getByPointer(root, ref.slice(1)), root, cache, origins)
     cache.set(ref, resolved)
+    // Stamp the inlined node with the path it was defined at (see resolveAt).
+    // First-write-wins so the deepest definition stamps before any outer ref that
+    // transitively points at the same object. Primitives can't key the map.
+    if (origins && resolved !== null && typeof resolved === 'object' && !origins.has(resolved)) {
+      origins.set(resolved, { location: '', pointer: pointerToPath(ref.slice(1)) })
+    }
     return resolved
   }
 
   const result: Record<string, unknown> = {}
   for (const key of Object.keys(obj)) {
-    result[key] = resolveInternal(obj[key], root, cache)
+    result[key] = resolveInternal(obj[key], root, cache, origins)
   }
   return result
 }
@@ -43,7 +65,8 @@ const resolveInternal = (node: unknown, root: unknown, cache: Map<string, CacheV
  * each target. External and remote refs are left as-is. Cycles are broken with
  * an empty object so the result is always finite.
  */
-export const resolveRefs = (data: unknown): ResolveResult => {
-  const resolved = resolveInternal(data, data, new Map())
-  return { resolved, errors: [] }
+export const resolveRefs = (data: unknown, options: ResolveRefsOptions = {}): ResolveResult => {
+  const origins: OriginMap | undefined = options.trackOrigins ? new Map() : undefined
+  const resolved = resolveInternal(data, data, new Map(), origins)
+  return origins ? { resolved, errors: [], origins } : { resolved, errors: [] }
 }

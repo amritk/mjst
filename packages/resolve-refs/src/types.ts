@@ -10,11 +10,36 @@ export type ResolveError = {
   path: JsonPath
 }
 
+/**
+ * Where an inlined node came from: the absolute location (file path or URL, or
+ * `''` for the single in-memory document) of the document it was defined in, and
+ * the path to it within that document.
+ */
+export type Origin = {
+  location: string
+  pointer: JsonPath
+}
+
+/**
+ * Per-node origin map produced when `trackOrigins` is set: maps each object/array
+ * that was inlined in place of a `$ref` to where it was defined. A consumer can
+ * then attribute a node in the resolved tree back to its source document and path
+ * with a single lookup instead of re-deriving the `$ref` traversal. Keyed by node
+ * identity, so it relies on the resolver sharing one object per repeated `$ref`
+ * target (which it does).
+ */
+export type OriginMap = Map<object, Origin>
+
 /** The outcome of a resolve pass: the dereferenced document plus any errors. */
 export type ResolveResult = {
   /** The dereferenced document (all resolvable `$ref`s inlined). */
   resolved: unknown
   errors: ResolveError[]
+  /**
+   * Per-node origin map. Present only when `trackOrigins` was requested; each
+   * entry maps an inlined object/array to the document and path it came from.
+   */
+  origins?: OriginMap
 }
 
 /** Controls how external `$ref`s to other documents are loaded. */
@@ -53,4 +78,11 @@ export type ResolveOptions = {
    * ```
    */
   parse?: (content: string, location: string) => unknown
+  /**
+   * Record a per-node origin map on the result (`origins`). For every object or
+   * array inlined in place of a `$ref`, the map records the document and in-file
+   * path it was defined at, so a consumer can attribute resolved-tree nodes back
+   * to their source without re-walking the `$ref` chain. Defaults to `false`.
+   */
+  trackOrigins?: boolean
 }
