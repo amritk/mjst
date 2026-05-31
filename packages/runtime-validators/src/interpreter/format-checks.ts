@@ -43,3 +43,18 @@ export const FORMAT_CHECKS: Readonly<Record<string, RegExp>> = {
   ipv4: /^((25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(25[0-5]|2[0-4]\d|1?\d?\d)$/,
   ipv6: /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|::([0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(:[0-9a-fA-F]{1,4}){1,6})$/,
 }
+
+/**
+ * The `regex` format asks whether the string *itself* is a valid regular
+ * expression — so unlike every other format it can't be a pattern in
+ * {@link FORMAT_CHECKS}. We compile it and report the verdict instead of
+ * letting the `SyntaxError` escape the validator.
+ */
+export const isValidRegex = (value: string): boolean => {
+  try {
+    new RegExp(value)
+    return true
+  } catch {
+    return false
+  }
+}

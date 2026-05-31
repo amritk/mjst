@@ -32,7 +32,8 @@
   "scripts": {
     "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f",
     "types:check": "tsgo -p . --noEmit",
-    "test": "NODE_ENV=production vitest run --root ../.. generate-validators"
+    "test": "NODE_ENV=production vitest run --root ../.. generate-validators",
+    "bench": "bun run ./bench/run.ts"
   },
   "imports": {
     "#generators/*": "./src/generators/*.ts"
@@ -49,6 +50,9 @@
     "@amritk/helpers": "workspace:*"
   },
   "devDependencies": {
-    "@scalar/openapi-parser": "^0.26.1"
+    "@scalar/openapi-parser": "^0.26.1",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "zod": "^4.4.3"
   }
 }

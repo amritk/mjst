@@ -51,8 +51,25 @@ Most tools in this space pick a single lane — types **or** validation **or** d
 
 <sub>² fast-check arbitraries for property testing plus concrete example values, via [`@amritk/generate-examples`](./packages/generate-examples).</sub>
 
-> [!NOTE]
-> Benchmarks — generation speed and generated-validator throughput against ajv and zod — are on the roadmap and will land in this section.
+### Benchmarks
+
+mjst's validators are *generated* TypeScript — straight-line, monomorphic code with no generic dispatch — so once they're emitted they validate quickly. The numbers below compare a generated mjst validator against an Ajv-compiled function and a hand-written Zod schema on the same data.
+
+**Steady-state throughput** (valid input, higher is better):
+
+| schema | mjst (generated) | ajv (compiled) | zod |
+|:--|--:|--:|--:|
+| small (4 fields) | **~47M** ops/s | ~7M ops/s | ~1.9M ops/s |
+| order (nested + array) | **~17M** ops/s | ~2.5M ops/s | ~0.45M ops/s |
+
+**Prepare-a-validator cost** (one-shot, lower is better):
+
+| | mjst (codegen) | ajv (compile) | zod |
+|:--|--:|--:|--:|
+| small | ~0.11 ms | ~9 ms | n/a — authored in code |
+| order | ~0.11 ms | ~12 ms | n/a — authored in code |
+
+<sub>Measured on Bun 1.3 (Linux x64); micro-benchmark figures vary by machine and runtime. All three libraries agree on every valid/invalid verdict (parity is asserted before timing). Reproduce with `cd packages/generate-validators && bun run bench`.</sub>
 
 ---
 

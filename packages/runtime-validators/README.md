@@ -137,11 +137,11 @@ Builds a boolean type guard `(input: unknown) => input is T`. Same options as `v
 
 ### Supported keywords
 
-`type` (incl. unions and `integer`), `enum`, `const`, `properties`, `required`, `additionalProperties`, `patternProperties`, `propertyNames`, `minProperties`, `maxProperties`, `dependentRequired`, `dependentSchemas`, `dependencies` (draft-07), `items`/`prefixItems` (2020-12) and array-`items` + `additionalItems` (draft-07), `contains`/`minContains`/`maxContains`, `minItems`, `maxItems`, `uniqueItems`, `unevaluatedProperties`, `unevaluatedItems`, `minLength`, `maxLength`, `pattern`, `format` (opt-in), `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, `$ref` (local), `nullable` (OpenAPI 3.0), boolean schemas.
+`type` (incl. unions and `integer`), `enum`, `const`, `properties`, `required`, `additionalProperties`, `patternProperties`, `propertyNames`, `minProperties`, `maxProperties`, `dependentRequired`, `dependentSchemas`, `dependencies` (draft-07), `items`/`prefixItems` (2020-12) and array-`items` + `additionalItems` (draft-07), `contains`/`minContains`/`maxContains`, `minItems`, `maxItems`, `uniqueItems`, `unevaluatedProperties`, `unevaluatedItems`, `minLength`, `maxLength`, `pattern`, `format` (opt-in), `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` (both the numeric 2020-12 form and the draft-04 boolean modifier), `multipleOf`, `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, `$ref` (local), `nullable` (OpenAPI 3.0), boolean schemas.
 
-> Only **local** `$ref`s are supported — the interpreter resolves both JSON-Pointer fragments (`#/$defs/user`) and `$anchor` names (`#user`) within the same document, including recursion, but does not fetch remote ones. Bundle external schemas into `$defs` first.
+> Only **local** `$ref`s are supported — the interpreter resolves both JSON-Pointer fragments (`#/$defs/user`) and `$anchor` names (`#user`) within the same document, including recursion, but does not fetch remote ones. To validate against a schema that references other documents, **bundle it first** with [`@amritk/resolve-refs`](../resolve-refs) (see [Remote and cross-file references](#remote-and-cross-file-references) below), then hand the single dereferenced document to `validate`.
 
-> **Built-in `format`s** (opt-in via `options.formats`): `email`, `idn-email`, `date-time`, `date`, `time`, `duration`, `uuid`, `uri`, `iri`, `uri-reference`, `iri-reference`, `uri-template`, `json-pointer`, `relative-json-pointer`, `hostname`, `ipv4`, `ipv6`. Unlisted or disabled formats are treated as annotations, matching Ajv's default opt-in behavior.
+> **Built-in `format`s** (opt-in via `options.formats`): `email`, `idn-email`, `date-time`, `date`, `time`, `duration`, `uuid`, `uri`, `iri`, `uri-reference`, `iri-reference`, `uri-template`, `json-pointer`, `relative-json-pointer`, `hostname`, `ipv4`, `ipv6`, `regex` (compiled, not pattern-matched). Unlisted or disabled formats are treated as annotations, matching Ajv's default opt-in behavior.
 
 > **OpenAPI `nullable`.** When a subschema sets `nullable: true`, a `null` value is accepted regardless of its declared `type` (and short-circuits every other keyword), matching how Ajv is configured to treat OpenAPI 3.0 schemas. Without this, a single nullable field produced a flood of spurious `must be …` errors.
 
@@ -149,10 +149,10 @@ Builds a boolean type guard `(input: unknown) => input is T`. Same options as `v
 
 This is a **pragmatic subset** of JSON Schema — sized for validating data against the kind of schemas real APIs and configs use, not for being an authoritative, spec-complete validator. The following are intentionally left out; if your schemas lean on them, reach for Ajv:
 
-- **Remote / non-local references.** `$ref` to another document or URL, plus `$id` base-URI resolution and `$recursiveRef`. Same-document refs — JSON-Pointer fragments, `$anchor` names, and `$dynamicRef`/`$dynamicAnchor` — resolve (including recursion); cross-document ones do not.
+- **Remote / non-local references.** `$ref` to another document or URL, plus `$id` base-URI resolution and `$recursiveRef`. Same-document refs — JSON-Pointer fragments, `$anchor` names, and `$dynamicRef`/`$dynamicAnchor` — resolve (including recursion); cross-document ones do not. This is a deliberate split, not a gap: fetching is async and unsafe to do from inside a validator, so it lives in [`@amritk/resolve-refs`](../resolve-refs) instead — bundle once, then validate. See [Remote and cross-file references](#remote-and-cross-file-references).
 - **`contentEncoding` / `contentMediaType` / `contentSchema`** — treated as annotations (ignored), as they are by default in 2020-12.
-- **Spec-exact `format` coverage.** Formats are opt-in and validated by pragmatic regexes that reject obviously-bad input rather than being RFC-perfect. The `regex` format (which would need to *compile* the string, not match it) is not checked.
-- **Draft-2020 exotica** beyond the keywords listed above, and the draft-04 boolean form of `exclusiveMinimum`/`exclusiveMaximum`.
+- **Spec-exact `format` coverage.** Formats are opt-in and validated by pragmatic regexes that reject obviously-bad input rather than being RFC-perfect. (The `regex` format is the exception — it compiles the string to confirm it is a valid pattern.)
+- **Draft-2020 exotica** beyond the keywords listed above.
 
 > **Want one of these?** None of these are off the table — "by design" means *not yet*, not *never*. If something here is blocking a real use case, [open an issue](https://github.com/amritk/mjst/issues) describing the schema you need to validate.
 
@@ -160,8 +160,46 @@ This is a **pragmatic subset** of JSON Schema — sized for validating data agai
 
 ---
 
+## Remote and cross-file references
+
+The interpreter resolves only **same-document** `$ref`s, but that doesn't mean
+you can't validate against schemas split across files or URLs — you just resolve
+them *before* validating, not during.
+
+This separation is deliberate. `validate` returns a **synchronous**,
+zero-allocation function so it can run on the hot path and inside strict
+sandboxes (CSP, Cloudflare Workers, React Native/Hermes). Fetching a remote
+document is asynchronous and, when the schema is third-party, a security
+concern — a `$ref` pointing at `http://169.254.169.254/…` or `file:///etc/passwd`
+would turn the validator into an SSRF gadget. So the fetching lives in a
+dedicated, async, I/O-aware package — [`@amritk/resolve-refs`](../resolve-refs) —
+which caches documents, coalesces concurrent loads, and applies a default-deny
+SSRF guard (loopback, private, link-local, and cloud-metadata hosts are refused
+unless explicitly allow-listed, with the guard re-applied on every redirect hop).
+
+Bundle once, then validate the single dereferenced document:
+
+```typescript
+import { resolveRefsFromFile } from '@amritk/resolve-refs'
+import { validate } from '@amritk/runtime-validators'
+
+// Async: fetches/reads and inlines every external $ref, SSRF-guarded.
+const { resolved: schema } = await resolveRefsFromFile('./openapi.schema.json')
+
+// Sync, pure, slim — every $ref is now local.
+const isValid = validate(schema)
+isValid(value)
+```
+
+The two halves compose cleanly: `resolve-refs` owns the network and its policy
+(timeouts, caching, allow-lists), while `runtime-validators` stays a pure
+function of `(schema, value)`.
+
+---
+
 ## Related packages
 
+- [`@amritk/resolve-refs`](../resolve-refs) — inline cross-file and remote `$ref`s before validating
 - [`@amritk/generate-validators`](../generate-validators) — generate validator source files at build time
 - [`@amritk/generate-parsers`](../generate-parsers) — type definitions plus parsers that coerce input
 - [`@amritk/mjst`](../cli) — CLI wrapper around the generators

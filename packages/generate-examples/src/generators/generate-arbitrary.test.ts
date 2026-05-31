@@ -99,4 +99,20 @@ describe('generate-arbitrary', () => {
     expect(generateArbitrary({ 'x-mjst': { instanceOf: 'Date' } } as never, 'When')).toContain('fc.date(')
     expect(generateArbitrary({ 'x-mjst': { primitive: 'bigint' } } as never, 'Big')).toContain('fc.bigInt()')
   })
+
+  it('maps network and time string formats to dedicated arbitraries', () => {
+    expect(generateArbitrary({ type: 'string', format: 'hostname' }, 'H')).toContain('fc.domain()')
+    expect(generateArbitrary({ type: 'string', format: 'ipv4' }, 'A')).toContain('fc.ipV4()')
+    expect(generateArbitrary({ type: 'string', format: 'ipv6' }, 'B')).toContain('fc.ipV6()')
+    expect(generateArbitrary({ type: 'string', format: 'time' }, 'T')).toContain('.toISOString().slice(11)')
+  })
+
+  it('generates fc.oneof for multi-type schemas', () => {
+    const schema = { type: ['string', 'null'] as const }
+    expect(generateArbitrary(schema, 'Nullable')).toContain('fc.oneof(fc.string(), fc.constant(null))')
+  })
+
+  it('unwraps a single-member type array to the bare arbitrary', () => {
+    expect(generateArbitrary({ type: ['integer'] as const }, 'Solo')).toContain('= fc.integer()')
+  })
 })

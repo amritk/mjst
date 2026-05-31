@@ -120,13 +120,15 @@ const res = await fetch('/users', { method: 'POST', body: JSON.stringify(userExa
 
 ## Supported keywords
 
-`type` (string/number/integer/boolean/null/array/object), `properties`,
+`type` — including multi-type unions like `['string', 'null']` —
+(string/number/integer/boolean/null/array/object), `properties`,
 `required`, `items`, `minItems`/`maxItems`, `uniqueItems`,
 `minLength`/`maxLength`, `pattern`, `format` (`email`, `uuid`, `uri`/`url`,
-`date`, `date-time`), `minimum`/`maximum`, `exclusiveMinimum`/`exclusiveMaximum`,
-`multipleOf`, `enum`, `const`, `oneOf`/`anyOf`, `$ref`, and the `x-mjst`
-extension (`Date`, `bigint`). Unsupported constructs degrade to `fc.anything()`
-in arbitraries and `null` in static examples.
+`date`, `date-time`, `time`, `hostname`, `ipv4`, `ipv6`), `minimum`/`maximum`,
+`exclusiveMinimum`/`exclusiveMaximum`, `multipleOf`, `enum`, `const`,
+`oneOf`/`anyOf`, `$ref`, and the `x-mjst` extension (`Date`, `bigint`).
+Unsupported constructs degrade to `fc.anything()` in arbitraries and `null` in
+static examples.
 
 > [!TIP]
 > A static example constrained only by `pattern` is not guaranteed to match the

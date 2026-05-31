@@ -1,4 +1,4 @@
-import { FORMAT_CHECKS } from '@/interpreter/format-checks'
+import { FORMAT_CHECKS, isValidRegex } from '@/interpreter/format-checks'
 import { resolveDynamicRef } from '@/interpreter/resolve-dynamic-ref'
 import { resolveLocalRef } from '@/interpreter/resolve-local-ref'
 import type { ValidationError } from '@/types'
@@ -515,9 +515,14 @@ const interpretString = (ctx: InterpreterContext, s: Record<string, unknown>, va
   const format = s['format']
   if (typeof format === 'string') {
     const enabled = ctx.formats === 'all' || ctx.formats.has(format)
-    const re = FORMAT_CHECKS[format]
-    if (enabled && re && !re.test(value)) {
-      fail(ctx, `must match format "${format}"`, path)
+    if (enabled) {
+      // `regex` is the one format whose check is a compile, not a pattern match.
+      if (format === 'regex') {
+        if (!isValidRegex(value)) fail(ctx, `must match format "${format}"`, path)
+      } else {
+        const re = FORMAT_CHECKS[format]
+        if (re && !re.test(value)) fail(ctx, `must match format "${format}"`, path)
+      }
     }
   }
 }
@@ -527,14 +532,23 @@ const interpretNumber = (ctx: InterpreterContext, s: Record<string, unknown>, va
   if (typeof value !== 'number') return
 
   const minimum = s['minimum']
-  if (typeof minimum === 'number' && value < minimum) {
-    fail(ctx, `must be >= ${minimum}`, path)
-    if (ctx.failed) return
+  if (typeof minimum === 'number') {
+    // Draft-04 used a boolean `exclusiveMinimum: true` alongside `minimum` to
+    // make the bound strict; draft-06+ replaced it with a standalone numeric
+    // keyword (handled below). Honour both forms.
+    const strict = s['exclusiveMinimum'] === true
+    if (strict ? value <= minimum : value < minimum) {
+      fail(ctx, strict ? `must be > ${minimum}` : `must be >= ${minimum}`, path)
+      if (ctx.failed) return
+    }
   }
   const maximum = s['maximum']
-  if (typeof maximum === 'number' && value > maximum) {
-    fail(ctx, `must be <= ${maximum}`, path)
-    if (ctx.failed) return
+  if (typeof maximum === 'number') {
+    const strict = s['exclusiveMaximum'] === true
+    if (strict ? value >= maximum : value > maximum) {
+      fail(ctx, strict ? `must be < ${maximum}` : `must be <= ${maximum}`, path)
+      if (ctx.failed) return
+    }
   }
   const exclusiveMinimum = s['exclusiveMinimum']
   if (typeof exclusiveMinimum === 'number' && value <= exclusiveMinimum) {
