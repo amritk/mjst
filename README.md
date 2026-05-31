@@ -59,15 +59,15 @@ mjst's validators are *generated* TypeScript — straight-line, monomorphic code
 
 | schema | mjst (generated) | ajv (compiled) | typebox (compiled) | zod |
 |:--|--:|--:|--:|--:|
-| small (4 fields) | **~47M** ops/s | ~7M ops/s | ~3.7M ops/s | ~1.9M ops/s |
-| order (nested + array) | **~17M** ops/s | ~2.5M ops/s | ~1.6M ops/s | ~0.45M ops/s |
+| small (4 fields) | **~38M** ops/s | ~6.5M ops/s | ~3.9M ops/s | ~1.7M ops/s |
+| order (nested + array) | **~16M** ops/s | ~2.6M ops/s | ~1.7M ops/s | ~0.4M ops/s |
 
 **Prepare-a-validator cost** (one-shot, lower is better):
 
 | | mjst (codegen) | ajv (compile) | typebox (compile) | zod |
 |:--|--:|--:|--:|--:|
-| small | ~0.11 ms | ~9 ms | ~0.15 ms | n/a — authored in code |
-| order | ~0.11 ms | ~12 ms | ~0.24 ms | n/a — authored in code |
+| small | ~0.11 ms | ~12 ms | ~0.13 ms | n/a — authored in code |
+| order | ~0.11 ms | ~13 ms | ~0.29 ms | n/a — authored in code |
 
 <sub>Measured on Bun 1.3 (Linux x64); micro-benchmark figures vary by machine and runtime. All four libraries agree on every valid/invalid verdict (parity is asserted before timing). TypeBox is compiled with `TypeCompiler` and given uuid/email format checkers so every library does the same work. Reproduce with `cd packages/generate-validators && bun run bench`.</sub>
 

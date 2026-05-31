@@ -101,11 +101,11 @@ validating valid input at steady state:
 
 | schema | mjst (generated) | ajv (compiled) | typebox (compiled) | zod |
 |:--|--:|--:|--:|--:|
-| small (4 fields) | **~47M** ops/s | ~7M ops/s | ~3.7M ops/s | ~1.9M ops/s |
-| order (nested + array) | **~17M** ops/s | ~2.5M ops/s | ~1.6M ops/s | ~0.45M ops/s |
+| small (4 fields) | **~38M** ops/s | ~6.5M ops/s | ~3.9M ops/s | ~1.7M ops/s |
+| order (nested + array) | **~16M** ops/s | ~2.6M ops/s | ~1.7M ops/s | ~0.4M ops/s |
 
-Preparing a validator costs ~0.11 ms for mjst codegen and ~0.15–0.25 ms for a
-TypeBox `TypeCompiler` compile, versus ~9–12 ms for an Ajv compile. All four
+Preparing a validator costs ~0.11 ms for mjst codegen and ~0.13–0.29 ms for a
+TypeBox `TypeCompiler` compile, versus ~12–13 ms for an Ajv compile. All four
 libraries agree on every verdict; parity is asserted before timing (TypeBox is
 given uuid/email format checkers so every library does the same work).
 Micro-benchmark figures vary by machine and runtime — reproduce with:
