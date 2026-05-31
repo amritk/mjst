@@ -67,6 +67,18 @@ describe('resolve-dynamic-refs', () => {
     expect(resolveDynamicRefs(false, { '#meta': '#/$defs/schema' })).toBe(false)
   })
 
+  it('replaces $dynamicRef nested inside an array keyword (allOf)', () => {
+    const schema = {
+      allOf: [{ $dynamicRef: '#meta' }, { type: 'object' as const, properties: { x: { $dynamicRef: '#meta' } } }],
+    }
+
+    const result = resolveDynamicRefs(schema, { '#meta': '#/$defs/schema' })
+
+    expect(result).toEqual({
+      allOf: [{ $ref: '#/$defs/schema' }, { type: 'object', properties: { x: { $ref: '#/$defs/schema' } } }],
+    })
+  })
+
   it('handles nested $dynamicRef in property sub-schemas', () => {
     const schema = {
       type: 'object' as const,

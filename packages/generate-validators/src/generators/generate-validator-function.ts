@@ -1,7 +1,9 @@
+import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import {
   hasAdditionalProperties,
+  hasConst,
   hasEnum,
   hasExclusiveMaximum,
   hasExclusiveMinimum,
@@ -34,6 +36,19 @@ const validatorName = (typeName: string): string => `validate${typeName}`
 const typeofString = (type: string): string => {
   if (type === 'integer') return 'number'
   return type
+}
+
+/**
+ * Generates the inline condition that is TRUE when `accessor` does NOT equal the
+ * `const` value. Primitives compare with `!==`; objects/arrays compare by their
+ * canonical JSON serialization (sufficient for the literal, fixed shapes `const`
+ * is used for).
+ */
+const constMismatchCondition = (accessor: string, value: unknown): string => {
+  if (value === null || typeof value !== 'object') {
+    return `${accessor} !== ${JSON.stringify(value)}`
+  }
+  return `JSON.stringify(${accessor}) !== ${JSON.stringify(JSON.stringify(value))}`
 }
 
 /**
@@ -123,6 +138,24 @@ const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired:
     return lines
   }
 
+  // const — value must equal the fixed value exactly
+  if (hasConst(propSchema)) {
+    const mismatch = constMismatchCondition(raw, propSchema.const)
+    const msg = JSON.stringify(`must be ${JSON.stringify(propSchema.const)}`)
+    if (isRequired) {
+      lines.push(`  if (!(${JSON.stringify(key)} in obj)) {`)
+      lines.push(`    errors.push({ message: "must have required property '${key}'", path: _path })`)
+      lines.push(`  } else if (${mismatch}) {`)
+      lines.push(`    errors.push({ message: ${msg}, path: ${path} })`)
+      lines.push(`  }`)
+    } else {
+      lines.push(`  if (${raw} !== undefined && ${mismatch}) {`)
+      lines.push(`    errors.push({ message: ${msg}, path: ${path} })`)
+      lines.push(`  }`)
+    }
+    return lines
+  }
+
   // enum
   if (hasEnum(propSchema)) {
     const allowed = JSON.stringify(propSchema.enum)
@@ -165,8 +198,10 @@ const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired:
     // String constraints
     if (t === 'string') {
       if (hasPattern(propSchema)) {
-        lines.push(`  if (typeof ${raw} === 'string' && !/${propSchema.pattern}/.test(${raw})) {`)
-        lines.push(`    errors.push({ message: 'must match pattern ${propSchema.pattern}', path: ${path} })`)
+        const re = escapeRegexPattern(propSchema.pattern)
+        const msg = JSON.stringify(`must match pattern ${propSchema.pattern}`)
+        lines.push(`  if (typeof ${raw} === 'string' && !/${re}/.test(${raw})) {`)
+        lines.push(`    errors.push({ message: ${msg}, path: ${path} })`)
         lines.push(`  }`)
       }
       if (hasMinLength(propSchema)) {
@@ -342,6 +377,20 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
     ].join('\n')
   }
 
+  // Top-level const
+  if (hasConst(schema)) {
+    const mismatch = constMismatchCondition('input', schema.const)
+    const msg = JSON.stringify(`must be ${JSON.stringify(schema.const)}`)
+    return [
+      `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+      `  if (${mismatch}) {`,
+      `    return { valid: false, errors: [{ message: ${msg}, path: _path }] }`,
+      `  }`,
+      `  return true`,
+      `}`,
+    ].join('\n')
+  }
+
   // Top-level enum
   if (hasEnum(schema)) {
     const allowed = JSON.stringify(schema.enum)
@@ -385,8 +434,10 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
 
     if (t === 'string') {
       if (hasPattern(schema)) {
-        constraintLines.push(`  if (typeof input === 'string' && !/${schema.pattern}/.test(input)) {`)
-        constraintLines.push(`    errors.push({ message: 'must match pattern ${schema.pattern}', path: _path })`)
+        const re = escapeRegexPattern(schema.pattern)
+        const msg = JSON.stringify(`must match pattern ${schema.pattern}`)
+        constraintLines.push(`  if (typeof input === 'string' && !/${re}/.test(input)) {`)
+        constraintLines.push(`    errors.push({ message: ${msg}, path: _path })`)
         constraintLines.push(`  }`)
       }
       if (hasMinLength(schema)) {

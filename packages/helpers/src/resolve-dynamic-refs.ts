@@ -7,9 +7,10 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
  * the clone and converts any { $dynamicRef: "#meta" } to { $ref: "#/$defs/schema" }
  * (or whatever the dynamicRefMap dictates).
  *
- * Only the direct properties and their nested schemas are walked — this does not need
- * to be infinitely deep because the build system generates separate files for each $def,
- * so each schema is relatively shallow.
+ * Walks both object properties and array elements, so a `$dynamicRef` nested
+ * inside a keyword whose value is an array of subschemas (`allOf`, `anyOf`,
+ * `oneOf`, `prefixItems`, …) is rewritten too. The build system generates a
+ * separate file per `$def`, so each schema walked here is relatively shallow.
  */
 export const resolveDynamicRefs = (schema: JSONSchema, dynamicRefMap: Record<string, string>): JSONSchema => {
   if (typeof schema !== 'object' || schema === null) {
@@ -24,7 +25,12 @@ export const resolveDynamicRefs = (schema: JSONSchema, dynamicRefMap: Record<str
   const clone = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>
 
   const walk = (obj: unknown): void => {
-    if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
+    if (typeof obj !== 'object' || obj === null) {
+      return
+    }
+
+    if (Array.isArray(obj)) {
+      for (const item of obj) walk(item)
       return
     }
 

@@ -1,3 +1,4 @@
+import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
@@ -45,13 +46,6 @@ const wrongTypeCondition = (accessor: string, type: string): string | null => {
  * `integer` collapses to `number` since both are validated via `typeof === "number"`.
  */
 const typeLabel = (type: string): string => (type === 'integer' ? 'number' : type)
-
-/**
- * Escapes special regex characters in a pattern string for use in a regex literal.
- */
-const escapeRegexPattern = (pattern: string): string => {
-  return pattern.replace(/\\/g, '\\\\').replace(/\//g, '\\/')
-}
 
 /**
  * Generates strict-mode constraint checks for a typed property

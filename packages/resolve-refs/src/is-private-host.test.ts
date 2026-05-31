@@ -28,9 +28,37 @@ describe('is-private-host', () => {
     expect(isPrivateHost('fd00::1')).toBe(true)
   })
 
+  it('flags the full fe80::/10 link-local range, not just fe80', () => {
+    expect(isPrivateHost('fe9a::1')).toBe(true)
+    expect(isPrivateHost('feba::1')).toBe(true)
+    expect(isPrivateHost('febf::1')).toBe(true)
+    // fec0:: is outside fe80::/10 (third nibble c), so it is not link-local.
+    expect(isPrivateHost('fec0::1')).toBe(false)
+  })
+
+  it('flags IPv4-mapped IPv6 loopback in both dotted and hex form', () => {
+    expect(isPrivateHost('::ffff:127.0.0.1')).toBe(true)
+    // The form `new URL()` produces for ::ffff:127.0.0.1.
+    expect(isPrivateHost('::ffff:7f00:1')).toBe(true)
+    // ::ffff:169.254.169.254 (cloud metadata) → hex a9fe:a9fe.
+    expect(isPrivateHost('::ffff:a9fe:a9fe')).toBe(true)
+    // A mapped public address stays public.
+    expect(isPrivateHost('::ffff:8.8.8.8')).toBe(false)
+  })
+
+  it('flags decimal/octal/hex IPv4 encodings (defense-in-depth)', () => {
+    expect(isPrivateHost('2130706433')).toBe(true) // 127.0.0.1
+    expect(isPrivateHost('0177.0.0.1')).toBe(true)
+    expect(isPrivateHost('0x7f000001')).toBe(true)
+    expect(isPrivateHost('127.1')).toBe(true)
+  })
+
   it('allows public hosts', () => {
     expect(isPrivateHost('example.com')).toBe(false)
     expect(isPrivateHost('8.8.8.8')).toBe(false)
     expect(isPrivateHost('172.32.0.1')).toBe(false)
+    // Hostnames made only of hex letters must not be mistaken for IPs.
+    expect(isPrivateHost('cafe')).toBe(false)
+    expect(isPrivateHost('dead.beef')).toBe(false)
   })
 })
