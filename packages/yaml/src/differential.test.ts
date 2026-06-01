@@ -1,19 +1,19 @@
-import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { parse as eemeli } from 'yaml'
 
+import { loadOpenApiFixtures } from '../../../fixtures/openapi/load-fixtures'
 import { FIXTURES } from '../bench/fixtures'
 import { parse as ours } from './parse'
 
 /**
- * Real-world public specs vendored under `fixtures/` (see `fixtures/README.md`
- * for provenance). Read from disk so the bytes stay identical to what the
- * upstream publisher serves. `bench/fixtures.ts` stays synthetic; this is where
- * we exercise the parser against documents we don't control.
+ * Real-world public OpenAPI specs vendored under the repo-root
+ * `fixtures/openapi/` directory (see its `README.md` for provenance). Read from
+ * disk so the bytes stay identical to what the upstream publisher serves.
+ * `bench/fixtures.ts` stays synthetic; this is where we exercise the parser
+ * against documents we don't control. JSON fixtures are skipped — JSON is a
+ * YAML subset but `JSON.parse` is the right reference for those.
  */
-const VENDORED = ['digitalocean'] as const
-const readVendored = (name: string): string =>
-  readFileSync(new URL(`../fixtures/${name}.yaml`, import.meta.url), 'utf8')
+const VENDORED = loadOpenApiFixtures().filter((fixture) => fixture.format === 'yaml')
 
 /**
  * Differential tests against `yaml` (eemeli) — the reference parser the Loupe
@@ -76,9 +76,8 @@ describe('differential', () => {
 
   // Large, real-world public specs we don't control — the documents this
   // parser actually has to survive in the wild.
-  for (const name of VENDORED) {
+  for (const { name, source } of VENDORED) {
     it(`matches yaml for vendored spec: ${name}`, () => {
-      const source = readVendored(name)
       expect(ours(source)).toEqual(eemeli(source, { merge: true }))
     })
   }
