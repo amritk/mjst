@@ -34,6 +34,9 @@ const RBRACE = 125 // }
 const COMMA = 44 // ,
 const PIPE = 124 // |
 const GT = 62 // >
+const QUESTION = 63 // ?
+const DOT = 46 // .
+const PERCENT = 37 // %
 
 type LineInfo = {
   eof: boolean
@@ -68,11 +71,35 @@ const NO_PROPS: NodeProps = Object.freeze({})
 
 const isSpace = (c: number): boolean => c === SPACE || c === TAB
 
+/**
+ * True when the character at `after` ends a `?`/`:` introducer — whitespace, a
+ * line break, or end of input. This is what distinguishes the explicit-key
+ * `? ` / `: ` tokens from an ordinary scalar that merely starts with `?`/`:`.
+ */
+const introducerBoundary = (src: string, after: number, len: number): boolean => {
+  if (after >= len) return true
+  const c = src.charCodeAt(after)
+  return c === SPACE || c === TAB || c === NL || c === CR
+}
+
 /** Offset just past the next line break (or end of input). */
 const nextLineStart = (src: string, from: number, len: number): number => {
   let i = from
   while (i < len && src.charCodeAt(i) !== NL) i++
   return i < len ? i + 1 : len
+}
+
+/**
+ * True when the three characters at `i` are a document marker — `---` or `...` —
+ * standing alone (followed by whitespace or end of line). `src.charCodeAt(i)`
+ * decides which marker, so a caller that already knows the first char can gate
+ * the call and pay nothing on the common path.
+ */
+const isDocMarker = (src: string, i: number, len: number): boolean => {
+  const c = src.charCodeAt(i)
+  if ((c !== DASH && c !== DOT) || src.charCodeAt(i + 1) !== c || src.charCodeAt(i + 2) !== c) return false
+  const n = src.charCodeAt(i + 3)
+  return i + 3 >= len || n === SPACE || n === TAB || n === NL || n === CR
 }
 
 /**
@@ -325,6 +352,10 @@ const scanPlainScalar = (state: State, parentIndent: number): YamlScalar => {
     if (i >= len) break
     const indent = i - scan
     if (indent <= parentIndent || c === HASH) break
+    // Only a top-level scalar (`parentIndent < 0`) can sit at column 0 alongside
+    // a `---`/`...` marker; for nested scalars the indent test above already
+    // stopped us, so this short-circuits to a single comparison off the hot path.
+    if (parentIndent < 0 && (c === DASH || c === DOT) && isDocMarker(src, i, len)) break
     const lineEnd = plainLineEnd(src, i, len)
     if (!segments) segments = [src.slice(start, valueEnd)]
     segments.push(src.slice(i, lineEnd))
@@ -586,6 +617,36 @@ const parseInlineValue = (state: State, parentIndent: number): YamlNode | null =
   return attachProps(node, props, state)
 }
 
+/**
+ * Parses the node that follows an explicit `?` or `:` introducer: either an
+ * inline value on the same line, or a block node on the deeper-indented lines
+ * below. Mirrors the implicit `key:` value handling but is reached only on the
+ * cold explicit-entry path, so the hot block-mapping loop stays untouched.
+ */
+const parseValueOrChild = (state: State, indent: number): YamlNode | null => {
+  const { src, len } = state
+  skipInlineSpaces(state)
+  if (atLineEnd(state)) {
+    finishLine(state)
+    const child = peekLine(state)
+    if (!child.eof && child.indent > indent) {
+      state.pos = child.contentPos
+      return parseNode(state, child.indent)
+    }
+    if (!child.eof && child.indent === indent) {
+      const cc = src.charCodeAt(child.contentPos)
+      if (cc === DASH && (child.contentPos + 1 >= len || isSpace(src.charCodeAt(child.contentPos + 1)))) {
+        state.pos = child.contentPos
+        return parseBlockSeq(state, indent)
+      }
+    }
+    return null
+  }
+  const node = parseInlineValue(state, indent)
+  finishLineIfMidLine(state)
+  return node
+}
+
 const keyText = (node: YamlNode): string => {
   if (node.kind === 'scalar') {
     const v = node.value
@@ -612,10 +673,12 @@ const parseBlockMap = (state: State, indent: number, firstColon: number): YamlMa
   let firstEntry = true
   for (;;) {
     let colon: number
+    let explicit: boolean
     if (firstEntry) {
-      // `parseNode` already located this colon to decide we are a mapping; reuse
-      // it instead of re-scanning the first line.
+      // `parseNode` already classified this line: a non-negative `firstColon` is
+      // an inline `key:`; a negative one signals an explicit `?` introducer.
       colon = firstColon
+      explicit = firstColon < 0
     } else {
       const line = peekLine(state)
       if (line.eof || line.indent !== indent) break
@@ -624,54 +687,89 @@ const parseBlockMap = (state: State, indent: number, firstColon: number): YamlMa
       // A `- ` at this indent is a sequence, not a mapping key.
       if (c === DASH && (contentPos + 1 >= len || isSpace(src.charCodeAt(contentPos + 1)))) break
       colon = findKeyColon(src, contentPos, len)
-      if (colon < 0) break
+      if (colon < 0) {
+        // No inline colon: either an explicit `? key` entry or the end of the map.
+        if (c === QUESTION && introducerBoundary(src, contentPos + 1, len)) explicit = true
+        else break
+      } else {
+        explicit = false
+      }
     }
     firstEntry = false
 
-    const lineContentPos = contentPos
-    state.pos = contentPos
     let key: YamlNode
-    const kc = src.charCodeAt(state.pos)
-    if (kc === DQUOTE || kc === SQUOTE) {
-      key = scanQuoted(state, kc)
-    } else {
-      let end = colon
-      while (end > lineContentPos && isSpace(src.charCodeAt(end - 1))) end--
-      const text = src.slice(lineContentPos, end)
-      key = {
-        kind: 'scalar',
-        value: resolvePlainValue(text),
-        source: text,
-        style: 'plain',
-        start: lineContentPos,
-        end,
-      }
-    }
-
-    state.pos = colon + 1
-    skipInlineSpaces(state)
-
     let value: YamlNode | null = null
-    if (atLineEnd(state)) {
-      // Value lives on the following lines (or is empty).
-      finishLine(state)
-      const child = peekLine(state)
-      if (!child.eof && child.indent > indent) {
-        state.pos = child.contentPos
-        value = parseNode(state, child.indent)
-      } else if (!child.eof && child.indent === indent) {
-        const cc = src.charCodeAt(child.contentPos)
-        if (cc === DASH && (child.contentPos + 1 >= len || isSpace(src.charCodeAt(child.contentPos + 1)))) {
-          state.pos = child.contentPos
-          value = parseBlockSeq(state, indent)
+    if (explicit) {
+      // `? key` (inline or a block key on the deeper lines below), optionally
+      // followed by a `: value` line at the same indent. An absent `: value`
+      // line leaves the value null.
+      const qStart = contentPos
+      state.pos = contentPos + 1
+      key = parseValueOrChild(state, indent) ?? {
+        kind: 'scalar',
+        value: null,
+        source: '',
+        style: 'plain',
+        start: qStart + 1,
+        end: qStart + 1,
+      }
+      const vline = peekLine(state)
+      if (
+        !vline.eof &&
+        vline.indent === indent &&
+        src.charCodeAt(vline.contentPos) === COLON &&
+        introducerBoundary(src, vline.contentPos + 1, len)
+      ) {
+        state.pos = vline.contentPos + 1
+        value = parseValueOrChild(state, indent)
+      }
+    } else {
+      const lineContentPos = contentPos
+      state.pos = contentPos
+      const kc = src.charCodeAt(state.pos)
+      if (kc === DQUOTE || kc === SQUOTE) {
+        key = scanQuoted(state, kc)
+      } else {
+        let end = colon
+        while (end > lineContentPos && isSpace(src.charCodeAt(end - 1))) end--
+        const text = src.slice(lineContentPos, end)
+        key = {
+          kind: 'scalar',
+          value: resolvePlainValue(text),
+          source: text,
+          style: 'plain',
+          start: lineContentPos,
+          end,
         }
       }
-    } else {
-      value = parseInlineValue(state, indent)
-      finishLineIfMidLine(state)
+
+      state.pos = colon + 1
+      skipInlineSpaces(state)
+
+      if (atLineEnd(state)) {
+        // Value lives on the following lines (or is empty).
+        finishLine(state)
+        const child = peekLine(state)
+        if (!child.eof && child.indent > indent) {
+          state.pos = child.contentPos
+          value = parseNode(state, child.indent)
+        } else if (!child.eof && child.indent === indent) {
+          const cc = src.charCodeAt(child.contentPos)
+          if (cc === DASH && (child.contentPos + 1 >= len || isSpace(src.charCodeAt(child.contentPos + 1)))) {
+            state.pos = child.contentPos
+            value = parseBlockSeq(state, indent)
+          }
+        }
+      } else {
+        value = parseInlineValue(state, indent)
+        finishLineIfMidLine(state)
+      }
     }
 
-    if (state.uniqueKeys) {
+    // Duplicate-key tracking. Complex (map/seq) keys have no stable text form, so
+    // we skip them rather than collapse every one to the same bucket and falsely
+    // report a duplicate.
+    if (state.uniqueKeys && (key.kind === 'scalar' || key.kind === 'alias')) {
       const text = keyText(key)
       if (seen) {
         if (seen.has(text)) pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.start, key.end)
@@ -781,6 +879,11 @@ const parseNode = (state: State, indent: number): YamlNode => {
   // mapping check has to come before treating the quote as a standalone scalar.
   const colon = findKeyColon(src, state.pos, len)
   if (colon >= 0) return attachProps(parseBlockMap(state, indent, colon), props, state)
+  // An explicit `? key` introducer also starts a mapping; `-1` tells
+  // `parseBlockMap` the first entry has no inline colon to reuse.
+  if (cc === QUESTION && introducerBoundary(src, state.pos + 1, len)) {
+    return attachProps(parseBlockMap(state, indent, -1), props, state)
+  }
   if (cc === DQUOTE || cc === SQUOTE) return attachProps(scanQuoted(state, cc), props, state)
   return attachProps(scanPlainScalar(state, indent - 1), props, state)
 }
@@ -812,9 +915,45 @@ const skipDocumentHead = (state: State): void => {
   }
 }
 
+/**
+ * Coerces a scalar's value to honor a `!!`-style core-schema tag. Reached only
+ * when a scalar actually carries a tag (rare), so the untagged hot path pays
+ * just one `node.tag !== undefined` check. Unknown/custom tags pass through with
+ * the value unchanged — the tag stays on the node for callers that want it.
+ */
+const applyScalarTag = (node: YamlScalar): unknown => {
+  const v = node.value
+  switch (node.tag) {
+    case 'str':
+      // For a plain scalar the raw source *is* the string (so `!!str 1.50` keeps
+      // its trailing zero); quoted/block styles already resolved to a string.
+      return node.style === 'plain' ? node.source : typeof v === 'string' ? v : v === null ? '' : String(v)
+    case 'null':
+      return null
+    case 'bool': {
+      const s = node.source
+      if (s === 'true' || s === 'True' || s === 'TRUE') return true
+      if (s === 'false' || s === 'False' || s === 'FALSE') return false
+      return v
+    }
+    case 'int': {
+      if (typeof v === 'number') return Math.trunc(v)
+      const n = Number.parseInt(typeof v === 'string' ? v : node.source, 10)
+      return Number.isNaN(n) ? v : n
+    }
+    case 'float': {
+      if (typeof v === 'number') return v
+      const n = Number.parseFloat(typeof v === 'string' ? v : node.source)
+      return Number.isNaN(n) ? v : n
+    }
+    default:
+      return v
+  }
+}
+
 const toJsValue = (node: YamlNode | null, anchors: Map<string, YamlNode>, merge: boolean): unknown => {
   if (node === null) return null
-  if (node.kind === 'scalar') return node.value
+  if (node.kind === 'scalar') return node.tag !== undefined ? applyScalarTag(node) : node.value
   if (node.kind === 'alias') {
     const target = anchors.get(node.source)
     return target ? toJsValue(target, anchors, merge) : undefined
@@ -856,23 +995,31 @@ const applyMerge = (target: Record<string, unknown>, value: unknown): void => {
   }
 }
 
+const newState = (source: string, options: ParseOptions): State => ({
+  src: source,
+  len: source.length,
+  pos: 0,
+  errors: [],
+  warnings: [],
+  anchors: new Map(),
+  uniqueKeys: options.uniqueKeys !== false,
+  merge: options.merge !== false,
+  line: { eof: false, indent: 0, contentPos: 0 },
+})
+
+/** Builds a document from the current `state`, closing over its anchors/problems. */
+const finishDocument = (state: State, contents: YamlNode | null): YamlDocument => {
+  const { errors, warnings, anchors, merge } = state
+  return { contents, errors, warnings, toJS: () => toJsValue(contents, anchors, merge) }
+}
+
 /**
  * Parses a YAML document into a node tree with source ranges, collected
- * problems, and a lazy `toJS` projection.
+ * problems, and a lazy `toJS` projection. Only the first document of a stream is
+ * read; use {@link parseAllDocuments} for multi-document (`---`-separated) input.
  */
 export const parseDocument = (source: string, options: ParseOptions = {}): YamlDocument => {
-  const state: State = {
-    src: source,
-    len: source.length,
-    pos: 0,
-    errors: [],
-    warnings: [],
-    anchors: new Map(),
-    uniqueKeys: options.uniqueKeys !== false,
-    merge: options.merge !== false,
-    line: { eof: false, indent: 0, contentPos: 0 },
-  }
-
+  const state = newState(source, options)
   skipDocumentHead(state)
   const head = peekLine(state)
   let contents: YamlNode | null = null
@@ -886,12 +1033,79 @@ export const parseDocument = (source: string, options: ParseOptions = {}): YamlD
       contents = parseNode(state, head.indent)
     }
   }
+  return finishDocument(state, contents)
+}
 
-  const { anchors, merge } = state
-  return {
-    contents,
-    errors: state.errors,
-    warnings: state.warnings,
-    toJS: () => toJsValue(contents, anchors, merge),
+/**
+ * Consumes the head of one document in a stream — any `%`-directives, `...`
+ * end markers of a preceding document, and a single `---` start marker. Returns
+ * whether a `---` start marker was consumed, which marks an explicit (possibly
+ * empty) document even when no body follows.
+ */
+const skipStreamHead = (state: State): boolean => {
+  const { src, len } = state
+  for (;;) {
+    const line = peekLine(state)
+    if (line.eof) return false
+    const p = line.contentPos
+    const c = src.charCodeAt(p)
+    if (c === PERCENT) {
+      state.pos = nextLineStart(src, p, len)
+      continue
+    }
+    if (c === DOT && isDocMarker(src, p, len)) {
+      state.pos = nextLineStart(src, p + 3, len)
+      continue
+    }
+    if (c === DASH && isDocMarker(src, p, len)) {
+      state.pos = nextLineStart(src, p + 3, len)
+      return true
+    }
+    return false
   }
+}
+
+/**
+ * Parses a multi-document YAML stream into one {@link YamlDocument} per `---`
+ * separated document. Each document gets its own anchors and problem lists. An
+ * empty stream yields an empty array; an explicit bare `---` yields one
+ * null-contents document.
+ *
+ * The single-document hot path is untouched: this is a thin outer loop that only
+ * does extra work once a real document boundary appears.
+ */
+export const parseAllDocuments = (source: string, options: ParseOptions = {}): YamlDocument[] => {
+  const state = newState(source, options)
+  const { src, len } = state
+  if (src.charCodeAt(0) === 0xfeff) state.pos = 1
+
+  const docs: YamlDocument[] = []
+  for (;;) {
+    const sawStart = skipStreamHead(state)
+    const line = peekLine(state)
+    let contents: YamlNode | null = null
+    let bodyConsumed = false
+    if (!line.eof) {
+      const p = line.contentPos
+      const c = src.charCodeAt(p)
+      if (c === DASH && isDocMarker(src, p, len)) {
+        // The next document's start marker: the current document is empty. Leave
+        // the marker for the next iteration's `skipStreamHead` to consume.
+      } else if (c === DOT && isDocMarker(src, p, len)) {
+        // A `...` end marker terminates this (empty) document; consume it.
+        state.pos = nextLineStart(src, p + 3, len)
+      } else {
+        state.pos = p
+        contents = parseNode(state, line.indent)
+        finishLineIfMidLine(state)
+        bodyConsumed = true
+      }
+    }
+    if (!sawStart && !bodyConsumed) break
+    docs.push(finishDocument(state, contents))
+    state.errors = []
+    state.warnings = []
+    state.anchors = new Map()
+  }
+  return docs
 }

@@ -98,6 +98,7 @@ if (isMap(contents)) {
 | --- | --- |
 | `parse(source, options?)` | Parse straight to a JavaScript value, like `JSON.parse`. |
 | `parseDocument(source, options?)` | Parse to `{ contents, errors, warnings, toJS() }` where every node carries `start`/`end` source offsets. |
+| `parseAllDocuments(source, options?)` | Parse a multi-document (`---`-separated) stream to an array of documents, each with its own anchors and problems. |
 | `nodeAtPath(root, path, closest?)` | Resolve a JSON path to its node (carrying `start`/`end`), optionally falling back to the closest ancestor. |
 | `lineCounter(source)` | Build an `offset → { line, col }` mapper (1-based). |
 | `isScalar` / `isMap` / `isSeq` / `isPair` / `isAlias` | Narrowing guards over the node union. |
@@ -143,7 +144,7 @@ Correctness is pinned to `yaml` by a differential test suite (`src/differential.
 
 ## Scope
 
-The parser covers the YAML that configuration and OpenAPI documents use in the wild. A few exotic YAML 1.2 constructs are intentionally out of scope to stay tiny and fast: explicit `? key` mapping entries, multi-document streams (only the first document is read), custom/global tags beyond `!!`-style hints, and non-space indentation. If you need full YAML 1.2 conformance, use `yaml`; if you need a small, fast, position-aware parser for diagnostics, use this.
+The parser covers the YAML that configuration and OpenAPI documents use in the wild, including explicit `? key` / `: value` mapping entries, multi-document streams (via `parseAllDocuments`), and the core-schema `!!` tags (`!!str`, `!!int`, `!!float`, `!!bool`, `!!null`) applied to scalar values. Custom/global tags beyond those hints are captured on the node but otherwise passed through unchanged, and non-space (tab) indentation is intentionally out of scope — it would cost a comparison on the hottest scanning loop and is forbidden by YAML 1.2 anyway. If you need full YAML 1.2 conformance, use `yaml`; if you need a small, fast, position-aware parser for diagnostics, use this.
 
 ---
 
