@@ -400,6 +400,44 @@ const foldSegments = (segments: string[]): string => {
   return out
 }
 
+/**
+ * Folds the interior lines of a `>` block scalar (indent already stripped, so
+ * more-indented lines keep their extra leading spaces). Per YAML 1.2 line
+ * folding: a break between two normal (non-empty, non-more-indented) lines folds
+ * to a space; any break adjacent to a more-indented line stays literal; and a
+ * run of `p` blank lines yields `p` newlines between two normal lines but `p + 1`
+ * when either neighbour is more-indented (the entering break is only trimmed
+ * when it would otherwise have folded to a space).
+ */
+const foldBlockFolded = (lines: string[]): string => {
+  let out = ''
+  let started = false
+  let prevMore = false
+  let pendingBlanks = 0
+  for (const line of lines) {
+    // `scanBlockScalar` stores a genuinely empty line as `''` and a
+    // whitespace-only line that reaches past the block indent as the leftover
+    // spaces — the latter is a more-indented content line, not a fold blank.
+    if (line === '') {
+      pendingBlanks++
+      continue
+    }
+    const curMore = line.charCodeAt(0) === SPACE
+    if (!started) {
+      // Blank lines before the first content survive as leading line breaks.
+      out = '\n'.repeat(pendingBlanks) + line
+      started = true
+    } else if (pendingBlanks > 0) {
+      out += '\n'.repeat(prevMore || curMore ? pendingBlanks + 1 : pendingBlanks) + line
+    } else {
+      out += (prevMore || curMore ? '\n' : ' ') + line
+    }
+    prevMore = curMore
+    pendingBlanks = 0
+  }
+  return out
+}
+
 /** Reads a `|` literal or `>` folded block scalar with chomping and indent indicators. */
 const scanBlockScalar = (state: State, parentIndent: number): YamlScalar => {
   const { src, len } = state
@@ -453,7 +491,7 @@ const scanBlockScalar = (state: State, parentIndent: number): YamlScalar => {
     trailingBlanks++
     lines.pop()
   }
-  const body = folded ? foldSegments(lines) : lines.join('\n')
+  const body = folded ? foldBlockFolded(lines) : lines.join('\n')
   let value = body
   if (chomp === 'strip') value = body
   else if (chomp === 'keep') value = body + '\n'.repeat(trailingBlanks + (lines.length ? 1 : 0))
