@@ -56,6 +56,12 @@ type State = {
   uniqueKeys: boolean
   merge: boolean
   /**
+   * Line start of the most recent tab-indentation error, so the same offending
+   * line peeked more than once (child then parent) reports only one error.
+   * `-1` until the first tab is seen.
+   */
+  tabReportedAt: number
+  /**
    * Reused by `peekLine` to avoid allocating a result object per line. Callers
    * read it immediately and never hold it across another `peekLine`, so a single
    * shared instance is safe and keeps large documents allocation-light.
@@ -118,6 +124,28 @@ const peekLine = (state: State): LineInfo => {
     if (c === NL || c === CR || c === HASH) {
       p = nextLineStart(src, i, len)
       continue
+    }
+    if (c === TAB) {
+      // Cold path: a tab sits in the indentation whitespace. YAML 1.2 forbids
+      // tabs for indentation, so skip the run of tabs/spaces to find the real
+      // content, then — only once we know content actually follows (a tab-only
+      // line is just blank) — record a single error and keep parsing.
+      let j = i
+      while (j < len && (src.charCodeAt(j) === TAB || src.charCodeAt(j) === SPACE)) j++
+      const cj = src.charCodeAt(j)
+      if (j >= len || cj === NL || cj === CR || cj === HASH) {
+        p = nextLineStart(src, j, len)
+        continue
+      }
+      if (state.tabReportedAt !== p) {
+        pushError(state, 'TAB_INDENT', 'Tabs cannot be used for indentation', i, j)
+        state.tabReportedAt = p
+      }
+      state.pos = p
+      line.eof = false
+      line.indent = j - p
+      line.contentPos = j
+      return line
     }
     state.pos = p
     line.eof = false
@@ -573,8 +601,22 @@ const parseFlowSeq = (state: State): YamlSeq => {
       pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "]" for flow sequence', start, state.pos)
       break
     }
-    items.push(parseFlowNode(state))
+    const item = parseFlowNode(state)
     skipFlowWs(state)
+    if (state.src.charCodeAt(state.pos) === COLON) {
+      // `[ key: value ]` — an implicit single-pair mapping as a sequence entry
+      // (the shape `!!omap` is written in). Only reached when an item is actually
+      // followed by a colon, so plain `[a, b]` sequences pay nothing extra.
+      state.pos++
+      skipFlowWs(state)
+      const vc = state.src.charCodeAt(state.pos)
+      const value = vc === COMMA || vc === RBRACKET || state.pos >= state.len ? null : parseFlowNode(state)
+      const pair: YamlPair = { kind: 'pair', key: item, value, start: item.start, end: value ? value.end : item.end }
+      items.push({ kind: 'map', items: [pair], start: item.start, end: pair.end })
+      skipFlowWs(state)
+    } else {
+      items.push(item)
+    }
     const sep = state.src.charCodeAt(state.pos)
     if (sep === COMMA) state.pos++
     else if (sep === RBRACKET) {
@@ -954,14 +996,44 @@ const skipDocumentHead = (state: State): void => {
 }
 
 /**
- * Coerces a scalar's value to honor a `!!`-style core-schema tag. Reached only
- * when a scalar actually carries a tag (rare), so the untagged hot path pays
- * just one `node.tag !== undefined` check. Unknown/custom tags pass through with
- * the value unchanged — the tag stays on the node for callers that want it.
+ * Decodes a `!!binary` base64 payload to bytes without a dependency. `atob`
+ * handles the decode; surrounding whitespace (block scalars wrap base64 across
+ * lines) is stripped first. Returns `null` on malformed input so the caller can
+ * fall back to the raw value rather than throw.
+ */
+const decodeBase64 = (text: string): Uint8Array | null => {
+  try {
+    const binary = atob(text.replace(/\s+/g, ''))
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    return bytes
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Coerces a scalar's value to honor a `!!`-style tag. Reached only when a scalar
+ * actually carries a tag (rare), so the untagged hot path pays just one
+ * `node.tag !== undefined` check. Beyond the core schema (`str`/`int`/`float`/
+ * `bool`/`null`) we honor the common extended tags `binary` (→ bytes) and
+ * `timestamp` (→ `Date`), matching `yaml` (eemeli). Note this is *explicit*
+ * coercion only: an untagged ISO string still resolves to a string, so the
+ * implicit-timestamp surprise that makes a JSON superset lossy never happens.
+ * Unknown/custom tags pass through with the value unchanged — the tag stays on
+ * the node for callers that want it.
  */
 const applyScalarTag = (node: YamlScalar): unknown => {
   const v = node.value
   switch (node.tag) {
+    case 'binary': {
+      const bytes = decodeBase64(typeof v === 'string' ? v : node.source)
+      return bytes ?? v
+    }
+    case 'timestamp': {
+      const date = new Date((typeof v === 'string' ? v : node.source).trim())
+      return Number.isNaN(date.getTime()) ? v : date
+    }
     case 'str':
       // For a plain scalar the raw source *is* the string (so `!!str 1.50` keeps
       // its trailing zero); quoted/block styles already resolved to a string.
@@ -1002,6 +1074,10 @@ const toJsValue = (node: YamlNode | null, anchors: Map<string, YamlNode>, merge:
     const items = node.items
     const out = new Array(items.length)
     for (let i = 0; i < items.length; i++) out[i] = toJsValue(items[i] ?? null, anchors, merge)
+    // `!!omap` is an ordered map written as a sequence of single-pair maps;
+    // collapse it to a `Map` to match `yaml` (eemeli). One `=== 'omap'` check
+    // per sequence keeps the untagged path effectively free.
+    if (node.tag === 'omap') return toOmap(out)
     return out
   }
 
@@ -1017,7 +1093,27 @@ const toJsValue = (node: YamlNode | null, anchors: Map<string, YamlNode>, merge:
     }
     obj[keyText(key)] = pair.value ? toJsValue(pair.value, anchors, merge) : null
   }
+  // `!!set` is a mapping whose keys are the members; project to a `Set`.
+  if (node.tag === 'set') {
+    const set = new Set<unknown>()
+    for (let i = 0; i < items.length; i++) {
+      const pair = items[i]
+      if (pair) set.add(toJsValue(pair.key, anchors, merge))
+    }
+    return set
+  }
   return obj
+}
+
+/** Folds a `!!omap` sequence (single-pair maps) into an ordered `Map`. */
+const toOmap = (items: unknown[]): Map<unknown, unknown> => {
+  const map = new Map<unknown, unknown>()
+  for (const item of items) {
+    if (item && typeof item === 'object') {
+      for (const [k, value] of Object.entries(item)) map.set(k, value)
+    }
+  }
+  return map
 }
 
 /** Folds a `<<` merge value (a map or list of maps) into `target` without overriding existing keys. */
@@ -1042,6 +1138,7 @@ const newState = (source: string, options: ParseOptions): State => ({
   anchors: new Map(),
   uniqueKeys: options.uniqueKeys !== false,
   merge: options.merge !== false,
+  tabReportedAt: -1,
   line: { eof: false, indent: 0, contentPos: 0 },
 })
 

@@ -20,8 +20,10 @@ const VENDORED = loadOpenApiFixtures().filter((fixture) => fixture.format === 'y
  * linter currently uses and the one that, like us, tracks source positions. For
  * the YAML subset that real configuration and OpenAPI documents use, our plain
  * data projection must match it exactly. Where we intentionally diverge from
- * `js-yaml` (its `!!timestamp` type turns ISO strings into `Date`s, which is
- * wrong for a JSON superset) we instead agree with `yaml`.
+ * `js-yaml` (it *implicitly* turns untagged ISO date strings into `Date`s, which
+ * is wrong for a JSON superset) we instead agree with `yaml` and keep them
+ * strings. An *explicit* `!!timestamp` tag still resolves to a `Date`, matching
+ * `yaml`.
  */
 
 const CASES: string[] = [

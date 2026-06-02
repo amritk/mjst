@@ -21,10 +21,10 @@
 
 It is **zero-dependency** and tuned to be **small and fast**. Against the two parsers people reach for on the web:
 
-- **vs [`yaml`](https://www.npmjs.com/package/yaml) (eemeli)** — the only other parser here that also tracks source positions — building the source-mapped tree is **~25–31× faster**, and the bundle is **~6.5× smaller**.
-- **vs [`js-yaml`](https://www.npmjs.com/package/js-yaml)** — which has **no concept of source positions** — parsing straight to data is **~1.8–2× faster**, the bundle is **~2.5× smaller**, and we *also* hand you the positioned tree it cannot produce.
+- **vs [`yaml`](https://www.npmjs.com/package/yaml) (eemeli)** — the only other parser here that also tracks source positions — building the source-mapped tree is **~25–31× faster**, and the bundle is **~6× smaller**.
+- **vs [`js-yaml`](https://www.npmjs.com/package/js-yaml)** — which has **no concept of source positions** — parsing straight to data is **~1.8–2× faster**, the bundle is **~2.3× smaller**, and we *also* hand you the positioned tree it cannot produce.
 
-It targets the YAML that real configuration and OpenAPI documents use: block and flow collections, all three quoting styles, literal/folded block scalars with chomping, comments, anchors, aliases, merge keys, explicit `? key` / `: value` entries, and multi-document (`---`-separated) streams. Scalars resolve via the YAML 1.2 **core schema** — so an OpenAPI `version: 1.0.0` stays the string `"1.0.0"` instead of turning into a number — and the core-schema `!!` tags (`!!str`, `!!int`, `!!float`, `!!bool`, `!!null`) coerce a value when written.
+It targets the YAML that real configuration and OpenAPI documents use: block and flow collections, all three quoting styles, literal/folded block scalars with chomping, comments, anchors, aliases, merge keys, explicit `? key` / `: value` entries, and multi-document (`---`-separated) streams. Scalars resolve via the YAML 1.2 **core schema** — so an OpenAPI `version: 1.0.0` stays the string `"1.0.0"` instead of turning into a number — and the core-schema `!!` tags (`!!str`, `!!int`, `!!float`, `!!bool`, `!!null`) coerce a value when written. The common extended tags resolve too, matching `yaml` (eemeli): `!!binary` → `Uint8Array`, `!!timestamp` → `Date`, `!!set` → `Set`, and `!!omap` → `Map`. These fire only on an *explicit* tag, so an untagged ISO date string still stays a string.
 
 ---
 
@@ -146,9 +146,9 @@ Run it yourself with `bun run bench`. Representative numbers (Bun, Linux):
 
 | | size | |
 | --- | --- | --- |
-| **@amritk/yaml** | **5.5 KB** | — |
-| yaml | 35.6 KB | 6.5× larger |
-| js-yaml | 13.5 KB | 2.5× larger |
+| **@amritk/yaml** | **6.0 KB** | — |
+| yaml | 35.6 KB | 5.9× larger |
+| js-yaml | 13.5 KB | 2.3× larger |
 
 Correctness is pinned to `yaml` by a differential test suite (`src/differential.test.ts`) that parses a battery of documents — including full OpenAPI specs — and asserts byte-identical data output. Where `js-yaml` diverges (its `!!timestamp` type turns ISO strings into `Date`s, which is wrong for a JSON superset), we instead agree with `yaml`.
 
@@ -156,7 +156,9 @@ Correctness is pinned to `yaml` by a differential test suite (`src/differential.
 
 ## Scope
 
-The parser covers the YAML that configuration and OpenAPI documents use in the wild, including explicit `? key` / `: value` mapping entries, multi-document streams (via `parseAllDocuments`), and the core-schema `!!` tags (`!!str`, `!!int`, `!!float`, `!!bool`, `!!null`) applied to scalar values. Custom/global tags beyond those hints are captured on the node but otherwise passed through unchanged, and non-space (tab) indentation is intentionally out of scope — it would cost a comparison on the hottest scanning loop and is forbidden by YAML 1.2 anyway. If you need full YAML 1.2 conformance, use `yaml`; if you need a small, fast, position-aware parser for diagnostics, use this.
+The parser covers the YAML that configuration and OpenAPI documents use in the wild, including explicit `? key` / `: value` mapping entries, multi-document streams (via `parseAllDocuments`), and tagged values: the core-schema scalar tags (`!!str`, `!!int`, `!!float`, `!!bool`, `!!null`) plus the common extended tags `!!binary` (→ `Uint8Array`), `!!timestamp` (→ `Date`), `!!set` (→ `Set`), and `!!omap` (→ `Map`). Custom/global tags beyond those hints are captured on the node but otherwise passed through unchanged.
+
+Tabs for indentation stay unsupported — they are forbidden by YAML 1.2 — but a tab in a line's indentation is now reported as a `TAB_INDENT` error (with its exact span) rather than silently mis-parsed. Detection costs one comparison per line, not per character, so the hottest per-character scanning loop is untouched. This still isn't a fully conformant YAML 1.2 processor (no `%TAG`/local-tag resolution, no schema selection): if you need full YAML 1.2 conformance, use `yaml`; if you need a small, fast, position-aware parser for diagnostics, use this.
 
 ---
 

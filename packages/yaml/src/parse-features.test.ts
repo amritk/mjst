@@ -31,6 +31,71 @@ describe('core-schema tags', () => {
   })
 })
 
+describe('extended !! tags', () => {
+  it('decodes !!binary to bytes', () => {
+    const value = parseDocument('a: !!binary "aGVsbG8="\n').toJS() as { a: Uint8Array }
+    expect(value.a).toBeInstanceOf(Uint8Array)
+    expect(new TextDecoder().decode(value.a)).toBe('hello')
+  })
+
+  it('decodes multi-line !!binary, stripping the wrapping whitespace', () => {
+    const value = parseDocument('a: !!binary |\n  aGVsbG8g\n  d29ybGQ=\n').toJS() as { a: Uint8Array }
+    expect(new TextDecoder().decode(value.a)).toBe('hello world')
+  })
+
+  it('parses !!timestamp to a Date', () => {
+    const value = parseDocument('a: !!timestamp 2020-01-02T03:04:05Z\n').toJS() as { a: Date }
+    expect(value.a).toBeInstanceOf(Date)
+    expect(value.a.toISOString()).toBe('2020-01-02T03:04:05.000Z')
+  })
+
+  it('builds a Set from !!set', () => {
+    const value = parseDocument('a: !!set { x, y, z }\n').toJS() as { a: Set<unknown> }
+    expect(value.a).toBeInstanceOf(Set)
+    expect([...value.a]).toEqual(['x', 'y', 'z'])
+  })
+
+  it('builds an ordered Map from !!omap', () => {
+    const value = parseDocument('a: !!omap [ x: 1, y: 2 ]\n').toJS() as { a: Map<unknown, unknown> }
+    expect(value.a).toBeInstanceOf(Map)
+    expect([...value.a]).toEqual([
+      ['x', 1],
+      ['y', 2],
+    ])
+  })
+
+  it('keeps the raw value when an extended tag cannot resolve', () => {
+    expect(parseDocument('a: !!timestamp not-a-date\n').toJS()).toEqual({ a: 'not-a-date' })
+  })
+})
+
+describe('tab indentation', () => {
+  it('reports a tab used for indentation', () => {
+    const doc = parseDocument('a:\n\tb: 1\n')
+    expect(doc.errors.map((e) => e.code)).toContain('TAB_INDENT')
+  })
+
+  it('points the error span at the offending tab', () => {
+    const doc = parseDocument('a:\n\tb: 1\n')
+    const tab = doc.errors.find((e) => e.code === 'TAB_INDENT')
+    // The tab is the third character (after `a:\n`).
+    expect([tab?.start, tab?.end]).toEqual([3, 4])
+  })
+
+  it('does not flag a tab used to separate a key from its value', () => {
+    const doc = parseDocument('a:\tvalue\n')
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.toJS()).toEqual({ a: 'value' })
+  })
+
+  it('reports each tab-indented line once, not once per peek', () => {
+    const doc = parseDocument('a:\n\tb: 1\n\tc: 2\n')
+    // Two distinct offending lines → exactly two errors, never doubled by a
+    // child-then-parent re-peek of the same line.
+    expect(doc.errors.filter((e) => e.code === 'TAB_INDENT')).toHaveLength(2)
+  })
+})
+
 describe('multi-document streams', () => {
   it('parses each --- separated document', () => {
     const docs = parseAllDocuments('a: 1\n---\nb: 2\n')
