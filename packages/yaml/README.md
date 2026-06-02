@@ -2,7 +2,7 @@
 
 # @amritk/yaml
 
-**A tiny, dependency-free YAML parser with exact source positions — built for diagnostics.**
+**Featherweight, fast YAML parsing for OpenAPI tooling — position-aware down to the column, zero dependencies.**
 
 ![status](https://img.shields.io/badge/status-pre--alpha-ef4444?style=flat-square)&nbsp;
 ![version](https://img.shields.io/badge/version-v0.0.0-6366f1?style=flat-square&logo=npm&logoColor=white)&nbsp;
