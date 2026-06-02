@@ -2,7 +2,7 @@
 
 # @amritk/yaml
 
-**Featherweight, fast YAML parsing for OpenAPI tooling — position-aware down to the column, zero dependencies.**
+**The featherweight YAML parser built for OpenAPI tooling — fast, zero-dependency, and it never loses track of where a value came from, down to the column.**
 
 ![status](https://img.shields.io/badge/status-pre--alpha-ef4444?style=flat-square)&nbsp;
 ![version](https://img.shields.io/badge/version-v0.0.0-6366f1?style=flat-square&logo=npm&logoColor=white)&nbsp;
