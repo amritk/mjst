@@ -2,7 +2,7 @@
 
 # @amritk/yaml
 
-**A tiny, dependency-free YAML parser with exact source positions — built for diagnostics.**
+**The featherweight YAML parser built for OpenAPI tooling — fast, zero-dependency, and it never loses track of where a value came from, down to the column.**
 
 ![status](https://img.shields.io/badge/status-pre--alpha-ef4444?style=flat-square)&nbsp;
 ![version](https://img.shields.io/badge/version-v0.0.0-6366f1?style=flat-square&logo=npm&logoColor=white)&nbsp;
@@ -21,10 +21,14 @@
 
 It is **zero-dependency** and tuned to be **small and fast**. Against the two parsers people reach for on the web:
 
-- **vs [`yaml`](https://www.npmjs.com/package/yaml) (eemeli)** — the only other parser here that also tracks source positions — building the source-mapped tree is **~25–31× faster**, and the bundle is **~6.5× smaller**.
-- **vs [`js-yaml`](https://www.npmjs.com/package/js-yaml)** — which has **no concept of source positions** — parsing straight to data is **~1.8–2× faster**, the bundle is **~2.5× smaller**, and we *also* hand you the positioned tree it cannot produce.
+- **vs [`yaml`](https://www.npmjs.com/package/yaml) (eemeli)** — the only other parser here that also tracks source positions — building the source-mapped tree is **~25–31× faster**, and the bundle is **~6× smaller**.
+- **vs [`js-yaml`](https://www.npmjs.com/package/js-yaml)** — which has **no concept of source positions** — parsing straight to data is **~1.8–2× faster**, the bundle is **~2.3× smaller**, and we *also* hand you the positioned tree it cannot produce.
 
 It targets the YAML that real configuration and OpenAPI documents use: block and flow collections, all three quoting styles, literal/folded block scalars with chomping, comments, anchors, aliases, merge keys, explicit `? key` / `: value` entries, and multi-document (`---`-separated) streams. Scalars resolve via the YAML 1.2 **core schema** — so an OpenAPI `version: 1.0.0` stays the string `"1.0.0"` instead of turning into a number — and the core-schema `!!` tags (`!!str`, `!!int`, `!!float`, `!!bool`, `!!null`) coerce a value when written.
+
+**OpenAPI compatibility.** OpenAPI restricts its YAML to the JSON-compatible subset — *"tags MUST be limited to those allowed by the JSON Schema ruleset"* and map keys must be scalar strings — and that subset is exactly what's covered above. Keeping `version: 1.0.0` a string (rather than a float) and *not* coercing untagged ISO dates into `Date`s is the correct, round-trip-safe behavior an OpenAPI tool needs.
+
+Beyond that JSON-compatible core, the common extended tags resolve too, for general config files (Kubernetes, CI, Ansible) that use them — matching `yaml` (eemeli): `!!binary` → `Uint8Array`, `!!timestamp` → `Date`, `!!set` → `Set`, and `!!omap` → `Map`. These fire only on an *explicit* tag, so they never change how a tagless OpenAPI document parses. (A conformant OpenAPI spec won't contain them.)
 
 ---
 
@@ -146,9 +150,9 @@ Run it yourself with `bun run bench`. Representative numbers (Bun, Linux):
 
 | | size | |
 | --- | --- | --- |
-| **@amritk/yaml** | **5.5 KB** | — |
-| yaml | 35.6 KB | 6.5× larger |
-| js-yaml | 13.5 KB | 2.5× larger |
+| **@amritk/yaml** | **6.0 KB** | — |
+| yaml | 35.6 KB | 5.9× larger |
+| js-yaml | 13.5 KB | 2.3× larger |
 
 Correctness is pinned to `yaml` by a differential test suite (`src/differential.test.ts`) that parses a battery of documents — including full OpenAPI specs — and asserts byte-identical data output. Where `js-yaml` diverges (its `!!timestamp` type turns ISO strings into `Date`s, which is wrong for a JSON superset), we instead agree with `yaml`.
 
@@ -156,7 +160,56 @@ Correctness is pinned to `yaml` by a differential test suite (`src/differential.
 
 ## Scope
 
-The parser covers the YAML that configuration and OpenAPI documents use in the wild, including explicit `? key` / `: value` mapping entries, multi-document streams (via `parseAllDocuments`), and the core-schema `!!` tags (`!!str`, `!!int`, `!!float`, `!!bool`, `!!null`) applied to scalar values. Custom/global tags beyond those hints are captured on the node but otherwise passed through unchanged, and non-space (tab) indentation is intentionally out of scope — it would cost a comparison on the hottest scanning loop and is forbidden by YAML 1.2 anyway. If you need full YAML 1.2 conformance, use `yaml`; if you need a small, fast, position-aware parser for diagnostics, use this.
+This is **not** a fully conformant YAML 1.2 processor. It implements the subset
+that real configuration and OpenAPI documents use, plus the YAML 1.2 **core
+schema** for scalar typing. The exact boundaries:
+
+### Supported
+
+**Structure**
+
+- Block mappings (`key: value`) and block sequences (`- item`), nested arbitrarily.
+- Flow mappings `{ … }` and flow sequences `[ … ]`, including spanning multiple lines (split at token boundaries) and trailing commas.
+- Implicit single-pair entries inside a flow sequence (`[ key: value ]`).
+- Explicit `? key` / `: value` entries, including block and complex (map/seq) keys.
+
+**Scalars**
+
+- Plain (unquoted), single-quoted (`''` escape), and double-quoted scalars (full escapes — `\n`, `\t`, `\xNN`, `\uNNNN`, `\UNNNNNNNN` — line continuation, and folding).
+- Literal `|` and folded `>` block scalars with chomping (`-` strip, `+` keep, default clip) and explicit indentation indicators.
+- Multi-line plain scalars (folded) in block context.
+
+**Type resolution (YAML 1.2 core schema)**
+
+- `null` (`null`/`Null`/`NULL`/`~`/empty), booleans (`true`/`false` and case variants), integers (decimal, `0x` hex, `0o` octal), floats (including `.inf`/`-.inf`/`.nan`); everything else is a string. So `version: 1.0.0` stays the string `"1.0.0"`.
+
+**Tags**
+
+- Core scalar tags (the JSON-compatible set OpenAPI allows): `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`.
+- Extended tags, for general config files beyond the OpenAPI subset: `!!binary` → `Uint8Array`, `!!timestamp` → `Date`, `!!set` → `Set`, `!!omap` → `Map` (matching `yaml`). A conformant OpenAPI document won't use these.
+- Any other tag is **captured on the node** (readable via `node.tag`) and its value passed through unchanged.
+
+**References, documents, and trivia**
+
+- Anchors (`&name`) and aliases (`*name`); `<<` merge keys (toggle with the `merge` option).
+- Multi-document streams (`---` / `...`) via `parseAllDocuments`, each document with its own anchor scope and problem list.
+- Comments (full-line and inline), blank lines, and a leading byte-order mark.
+
+**Diagnostics**
+
+- Exact `[start, end)` source span on every node, duplicate-key detection (`DUPLICATE_KEY`), unterminated flow collections (`UNTERMINATED_FLOW`), and tab-in-indentation (`TAB_INDENT`).
+
+### Not supported
+
+- **Tab indentation.** Forbidden by YAML 1.2; reported as a `TAB_INDENT` error rather than parsed. (Tabs *after* content — e.g. separating a key from its value — are fine.)
+- **Directive processing.** `%YAML` and `%TAG` lines are skipped, not applied. There is no resolution of named tag handles (`!handle!suffix`) or verbatim tags (`!<uri>`); every `!`/`!!` prefix is stripped and only the core/extended tag names above are interpreted, so a local `!foo` and `!!foo` are treated alike.
+- **Schema selection.** Always the 1.2 core schema — no JSON, failsafe, or YAML 1.1 schema switch.
+- **YAML 1.1-only scalar forms.** `yes`/`no`/`on`/`off` booleans, sexagesimal numbers (`1:30:00`), and underscore digit groups (`1_000`) stay strings, per the 1.2 core schema.
+- **Implicit timestamps.** An untagged ISO date string stays a string; only an explicit `!!timestamp` produces a `Date`.
+- **Multi-line plain scalars inside flow collections.** A plain scalar that *wraps across lines* within `[ … ]` / `{ … }` is not folded (the collection itself may still span lines at token boundaries).
+- **Reserved indicators.** A plain scalar beginning with the reserved `@` or `` ` `` is accepted as text rather than rejected.
+
+If you need full YAML 1.2 conformance, use [`yaml`](https://www.npmjs.com/package/yaml). If you need a small, fast, position-aware parser for diagnostics, use this.
 
 ---
 
