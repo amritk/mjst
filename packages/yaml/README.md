@@ -24,7 +24,11 @@ It is **zero-dependency** and tuned to be **small and fast**. Against the two pa
 - **vs [`yaml`](https://www.npmjs.com/package/yaml) (eemeli)** — the only other parser here that also tracks source positions — building the source-mapped tree is **~25–31× faster**, and the bundle is **~6× smaller**.
 - **vs [`js-yaml`](https://www.npmjs.com/package/js-yaml)** — which has **no concept of source positions** — parsing straight to data is **~1.8–2× faster**, the bundle is **~2.3× smaller**, and we *also* hand you the positioned tree it cannot produce.
 
-It targets the YAML that real configuration and OpenAPI documents use: block and flow collections, all three quoting styles, literal/folded block scalars with chomping, comments, anchors, aliases, merge keys, explicit `? key` / `: value` entries, and multi-document (`---`-separated) streams. Scalars resolve via the YAML 1.2 **core schema** — so an OpenAPI `version: 1.0.0` stays the string `"1.0.0"` instead of turning into a number — and the core-schema `!!` tags (`!!str`, `!!int`, `!!float`, `!!bool`, `!!null`) coerce a value when written. The common extended tags resolve too, matching `yaml` (eemeli): `!!binary` → `Uint8Array`, `!!timestamp` → `Date`, `!!set` → `Set`, and `!!omap` → `Map`. These fire only on an *explicit* tag, so an untagged ISO date string still stays a string.
+It targets the YAML that real configuration and OpenAPI documents use: block and flow collections, all three quoting styles, literal/folded block scalars with chomping, comments, anchors, aliases, merge keys, explicit `? key` / `: value` entries, and multi-document (`---`-separated) streams. Scalars resolve via the YAML 1.2 **core schema** — so an OpenAPI `version: 1.0.0` stays the string `"1.0.0"` instead of turning into a number — and the core-schema `!!` tags (`!!str`, `!!int`, `!!float`, `!!bool`, `!!null`) coerce a value when written.
+
+**OpenAPI compatibility.** OpenAPI restricts its YAML to the JSON-compatible subset — *"tags MUST be limited to those allowed by the JSON Schema ruleset"* and map keys must be scalar strings — and that subset is exactly what's covered above. Keeping `version: 1.0.0` a string (rather than a float) and *not* coercing untagged ISO dates into `Date`s is the correct, round-trip-safe behavior an OpenAPI tool needs.
+
+Beyond that JSON-compatible core, the common extended tags resolve too, for general config files (Kubernetes, CI, Ansible) that use them — matching `yaml` (eemeli): `!!binary` → `Uint8Array`, `!!timestamp` → `Date`, `!!set` → `Set`, and `!!omap` → `Map`. These fire only on an *explicit* tag, so they never change how a tagless OpenAPI document parses. (A conformant OpenAPI spec won't contain them.)
 
 ---
 
@@ -181,8 +185,8 @@ schema** for scalar typing. The exact boundaries:
 
 **Tags**
 
-- Core scalar tags: `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`.
-- Extended tags: `!!binary` → `Uint8Array`, `!!timestamp` → `Date`, `!!set` → `Set`, `!!omap` → `Map` (matching `yaml`).
+- Core scalar tags (the JSON-compatible set OpenAPI allows): `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`.
+- Extended tags, for general config files beyond the OpenAPI subset: `!!binary` → `Uint8Array`, `!!timestamp` → `Date`, `!!set` → `Set`, `!!omap` → `Map` (matching `yaml`). A conformant OpenAPI document won't use these.
 - Any other tag is **captured on the node** (readable via `node.tag`) and its value passed through unchanged.
 
 **References, documents, and trivia**
