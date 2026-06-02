@@ -118,6 +118,9 @@ See the [CLI README](./packages/cli/README.md) for the full flag reference and c
 | [`@amritk/runtime-validators`](./packages/runtime-validators) | Runtime JSON Schema validation for schemas not known ahead of time |
 | [`@amritk/generate-examples`](./packages/generate-examples) | Programmatic API for fast-check arbitraries + example data generation |
 | [`@amritk/generate-markdown`](./packages/generate-markdown) | Programmatic API for markdown documentation generation |
+| [`@amritk/adapters`](./packages/adapters) | Convert schemas from external libraries (TypeBox, Zod, …) into JSON Schema |
+| [`@amritk/resolve-refs`](./packages/resolve-refs) | Resolve and inline JSON Schema / OpenAPI `$ref`s, with a default-deny SSRF guard |
+| [`@amritk/yaml`](./packages/yaml) | Tiny, dependency-free YAML parser with exact source positions for diagnostics |
 | [`@amritk/helpers`](./packages/helpers) | Shared runtime helpers used by generated code |
 
 ---
