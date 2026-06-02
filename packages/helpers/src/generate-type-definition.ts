@@ -1,5 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { isPropertyRequired } from './is-property-required'
 import { getMjstBrand, getMjstInstanceOf, getMjstPrimitive } from './mjst-extension'
 import { refToName } from './ref-to-name'
 import { safeKey } from './safe-accessor'
@@ -352,7 +353,7 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string
           for (const key in schema.properties) {
             // schema.properties[key] is safe: key comes from iterating schema.properties
             const propSchema = schema.properties[key]!
-            const isRequired = schema.required?.includes(key) ?? false
+            const isRequired = isPropertyRequired(key, schema)
             const optional = isRequired ? '' : '?'
             const propType = getTypeScriptType(propSchema, options)
             const inlineDescription =
@@ -386,7 +387,7 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string
         for (const key in schema.properties) {
           // schema.properties[key] is safe: key comes from iterating schema.properties
           const propSchema = schema.properties[key]!
-          const isRequired = schema.required?.includes(key) ?? false
+          const isRequired = isPropertyRequired(key, schema)
           const optional = isRequired ? '' : '?'
           const propType = getTypeScriptType(propSchema, options)
           if (!first) properties += '; '
@@ -518,7 +519,7 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
     for (const key in schemaProps) {
       // schemaProps[key] is safe: key comes from iterating schemaProps
       const propSchema = schemaProps[key]!
-      const isRequired = normalizedSchema.required?.includes(key) ?? false
+      const isRequired = isPropertyRequired(key, normalizedSchema)
       const optional = isRequired ? '' : '?'
       const propType = getTypeScriptType(propSchema, options)
       const quotedKey = readonlyPrefix + safeKey(key)

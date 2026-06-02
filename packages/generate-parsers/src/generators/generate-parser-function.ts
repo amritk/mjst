@@ -1,4 +1,5 @@
 import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
+import { isPropertyRequired } from '@amritk/helpers/is-property-required'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { safeAccessor, safeKey } from '@amritk/helpers/safe-accessor'
 import {
@@ -76,19 +77,6 @@ type PropertyEntry = {
  */
 const generateParserName = (typeName: string): string => {
   return `parse${typeName}`
-}
-
-/**
- * Checks if a property is required based on the schema's required array.
- */
-const isPropertyRequired = (key: string, schema: JSONSchema): boolean => {
-  if (!isSchemaObject(schema)) {
-    return false
-  }
-  if (!('required' in schema) || !Array.isArray(schema.required)) {
-    return false
-  }
-  return schema.required.includes(key)
 }
 
 /**
