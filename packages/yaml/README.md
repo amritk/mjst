@@ -156,9 +156,56 @@ Correctness is pinned to `yaml` by a differential test suite (`src/differential.
 
 ## Scope
 
-The parser covers the YAML that configuration and OpenAPI documents use in the wild, including explicit `? key` / `: value` mapping entries, multi-document streams (via `parseAllDocuments`), and tagged values: the core-schema scalar tags (`!!str`, `!!int`, `!!float`, `!!bool`, `!!null`) plus the common extended tags `!!binary` (→ `Uint8Array`), `!!timestamp` (→ `Date`), `!!set` (→ `Set`), and `!!omap` (→ `Map`). Custom/global tags beyond those hints are captured on the node but otherwise passed through unchanged.
+This is **not** a fully conformant YAML 1.2 processor. It implements the subset
+that real configuration and OpenAPI documents use, plus the YAML 1.2 **core
+schema** for scalar typing. The exact boundaries:
 
-Tabs for indentation stay unsupported — they are forbidden by YAML 1.2 — but a tab in a line's indentation is now reported as a `TAB_INDENT` error (with its exact span) rather than silently mis-parsed. Detection costs one comparison per line, not per character, so the hottest per-character scanning loop is untouched. This still isn't a fully conformant YAML 1.2 processor (no `%TAG`/local-tag resolution, no schema selection): if you need full YAML 1.2 conformance, use `yaml`; if you need a small, fast, position-aware parser for diagnostics, use this.
+### Supported
+
+**Structure**
+
+- Block mappings (`key: value`) and block sequences (`- item`), nested arbitrarily.
+- Flow mappings `{ … }` and flow sequences `[ … ]`, including spanning multiple lines (split at token boundaries) and trailing commas.
+- Implicit single-pair entries inside a flow sequence (`[ key: value ]`).
+- Explicit `? key` / `: value` entries, including block and complex (map/seq) keys.
+
+**Scalars**
+
+- Plain (unquoted), single-quoted (`''` escape), and double-quoted scalars (full escapes — `\n`, `\t`, `\xNN`, `\uNNNN`, `\UNNNNNNNN` — line continuation, and folding).
+- Literal `|` and folded `>` block scalars with chomping (`-` strip, `+` keep, default clip) and explicit indentation indicators.
+- Multi-line plain scalars (folded) in block context.
+
+**Type resolution (YAML 1.2 core schema)**
+
+- `null` (`null`/`Null`/`NULL`/`~`/empty), booleans (`true`/`false` and case variants), integers (decimal, `0x` hex, `0o` octal), floats (including `.inf`/`-.inf`/`.nan`); everything else is a string. So `version: 1.0.0` stays the string `"1.0.0"`.
+
+**Tags**
+
+- Core scalar tags: `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`.
+- Extended tags: `!!binary` → `Uint8Array`, `!!timestamp` → `Date`, `!!set` → `Set`, `!!omap` → `Map` (matching `yaml`).
+- Any other tag is **captured on the node** (readable via `node.tag`) and its value passed through unchanged.
+
+**References, documents, and trivia**
+
+- Anchors (`&name`) and aliases (`*name`); `<<` merge keys (toggle with the `merge` option).
+- Multi-document streams (`---` / `...`) via `parseAllDocuments`, each document with its own anchor scope and problem list.
+- Comments (full-line and inline), blank lines, and a leading byte-order mark.
+
+**Diagnostics**
+
+- Exact `[start, end)` source span on every node, duplicate-key detection (`DUPLICATE_KEY`), unterminated flow collections (`UNTERMINATED_FLOW`), and tab-in-indentation (`TAB_INDENT`).
+
+### Not supported
+
+- **Tab indentation.** Forbidden by YAML 1.2; reported as a `TAB_INDENT` error rather than parsed. (Tabs *after* content — e.g. separating a key from its value — are fine.)
+- **Directive processing.** `%YAML` and `%TAG` lines are skipped, not applied. There is no resolution of named tag handles (`!handle!suffix`) or verbatim tags (`!<uri>`); every `!`/`!!` prefix is stripped and only the core/extended tag names above are interpreted, so a local `!foo` and `!!foo` are treated alike.
+- **Schema selection.** Always the 1.2 core schema — no JSON, failsafe, or YAML 1.1 schema switch.
+- **YAML 1.1-only scalar forms.** `yes`/`no`/`on`/`off` booleans, sexagesimal numbers (`1:30:00`), and underscore digit groups (`1_000`) stay strings, per the 1.2 core schema.
+- **Implicit timestamps.** An untagged ISO date string stays a string; only an explicit `!!timestamp` produces a `Date`.
+- **Multi-line plain scalars inside flow collections.** A plain scalar that *wraps across lines* within `[ … ]` / `{ … }` is not folded (the collection itself may still span lines at token boundaries).
+- **Reserved indicators.** A plain scalar beginning with the reserved `@` or `` ` `` is accepted as text rather than rejected.
+
+If you need full YAML 1.2 conformance, use [`yaml`](https://www.npmjs.com/package/yaml). If you need a small, fast, position-aware parser for diagnostics, use this.
 
 ---
 
