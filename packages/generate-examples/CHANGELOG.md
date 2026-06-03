@@ -1,5 +1,13 @@
 # @amritk/generate-examples
 
+## 0.3.0
+
+### Minor Changes
+
+- 4431f2d: Generate dedicated fast-check arbitraries and concrete examples for more string
+  formats (`time`, `hostname`, `ipv4`, `ipv6`) and for multi-type schemas such as
+  `type: ['string', 'null']`, instead of degrading them to `fc.anything()` / `null`.
+
 ## 0.2.2
 
 ### Patch Changes

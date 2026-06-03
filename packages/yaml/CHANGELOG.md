@@ -1,5 +1,59 @@
 # @amritk/yaml
 
+## 0.2.0
+
+### Minor Changes
+
+- ca07514: Resolve the common extended `!!` tags, matching `yaml` (eemeli): `!!binary` →
+  `Uint8Array`, `!!timestamp` → `Date`, `!!set` → `Set`, and `!!omap` → `Map`.
+  These coerce only on an explicit tag, so an untagged ISO date string still
+  resolves to a string. Flow sequences now accept implicit single-pair-map
+  entries (`[ key: value ]`), the shape `!!omap` is written in.
+
+  Tabs used for indentation are now reported as a `TAB_INDENT` error with an exact
+  source span, instead of being silently mis-parsed. Tab indentation remains
+  unsupported (it is forbidden by YAML 1.2); detection costs one comparison per
+  line, so the per-character scanning hot path is unchanged.
+
+- f129364: Add three parser features that fit the existing single-pass design without a
+  hot-path cost:
+
+  - **Core-schema `!!` tags** — `!!str`, `!!int`, `!!float`, `!!bool`, and `!!null`
+    now coerce scalar values during `toJS()` (so `!!str 123` is the string
+    `"123"`). The coercion lives in the lazy projection and is gated on a scalar
+    actually carrying a tag, so the tree-building path is untouched. Unknown/custom
+    tags still pass through with their value unchanged and the tag left on the node.
+  - **Multi-document streams** — new `parseAllDocuments(source, options?)` returns
+    one document per `---`-separated body, each with its own anchors and problem
+    lists. `parseDocument` still reads only the first document. The single-document
+    path is unchanged; the stream loop only engages once a real boundary appears.
+  - **Explicit `? key` / `: value` mapping entries** — including block and flow
+    keys, mixed with implicit entries. Detection is a single gated branch per
+    mapping entry, so ordinary `key: value` maps pay nothing measurable.
+
+  Tab (non-space) indentation remains out of scope: it would add a comparison to
+  the innermost scanning loop and is forbidden by YAML 1.2.
+
+### Patch Changes
+
+- 6b5f25f: Fix `>` folded block-scalar folding to follow YAML 1.2 line-folding rules.
+  Previously every line break in a folded scalar was collapsed to a space, which
+  mangled real-world documents (e.g. embedded code samples in the OpenAI OpenAPI
+  spec). Now:
+
+  - **More-indented lines** keep their line breaks — a break adjacent to a line
+    indented past the block's base indent stays literal instead of folding to a
+    space, and that line's extra indentation is preserved.
+  - **Blank lines** fold correctly: a run of `p` blank lines between two normal
+    lines yields `p` newlines, but `p + 1` when either neighbour is more-indented
+    (the entering break is only trimmed when it would otherwise fold to a space).
+  - **Leading and trailing whitespace lines** are handled per spec — leading
+    blank lines survive as line breaks, and a trailing whitespace-only line that
+    reaches past the block indent is preserved as content rather than chomped.
+
+  Validated against the `yaml` reference parser over the new vendored OpenAPI
+  corpus and an end-to-end fuzz of randomized folded scalars.
+
 ## 0.1.1
 
 ### Patch Changes
