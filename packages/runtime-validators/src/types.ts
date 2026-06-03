@@ -21,12 +21,26 @@ export type ValidationError = {
 export type ValidationResult = true | { valid: false; errors: ValidationError[] }
 
 /**
+ * Phantom carrier for a validator's inferred output type. It exists only at the
+ * type level — there is no runtime property — so a built {@link Validator} can
+ * remember the schema type it was created from without changing its call shape.
+ */
+declare const output: unique symbol
+
+/**
  * A compiled validator that reports every error it finds.
  *
  * Produced by {@link validate}. Use this when you need to tell the caller *why*
  * their data is invalid (form validation, API error responses, and so on).
+ *
+ * The optional `T` carries the type of data the validator accepts. {@link validate}
+ * infers it from the schema, so `Infer<typeof myValidator>` can recover it; the
+ * default of `unknown` keeps the bare `Validator` usable wherever the schema type
+ * is not needed.
  */
-export type Validator = (input: unknown) => ValidationResult
+export type Validator<T = unknown> = ((input: unknown) => ValidationResult) & {
+  readonly [output]?: T
+}
 
 /**
  * A compiled boolean type guard.
