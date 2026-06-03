@@ -52,6 +52,18 @@ export type Validator<T = unknown> = ((input: unknown) => ValidationResult) & {
 export type Guard<T = unknown> = (input: unknown) => input is T
 
 /**
+ * The error `assert` throws when its input fails validation.
+ *
+ * It is a plain `Error` — so `instanceof Error`, stack traces, and ordinary
+ * logging all work — augmented with the structured `errors` array. That lets a
+ * caller inspect each failure programmatically (by message and JSON Pointer path)
+ * instead of parsing the formatted message string.
+ */
+export type ValidationFailedError = Error & {
+  readonly errors: readonly ValidationError[]
+}
+
+/**
  * Options shared by {@link validate} and {@link validateGuard}.
  */
 export type ValidateOptions = {

@@ -23,10 +23,11 @@ It is an **eval-free interpreter**: it walks the schema directly, with **no `new
 
 The trade is steady-state throughput: a JIT-compiled validator (like Ajv after it compiles) validates a *single fixed schema* against *millions of values* faster than an interpreter can. So this package is tuned for the opposite shape — **validate a few values per schema, in a cold process** (CLI checks, one-shot config validation, edge requests), where there is no compile cost to amortize. See [Performance](#performance).
 
-Two entry points, for two different jobs:
+Three entry points, for three different jobs:
 
 - **`validateGuard(schema)`** → `(input) => input is T`. A boolean type guard that short-circuits on the first failure and never allocates. Reach for this when you only need yes/no.
 - **`validate(schema)`** → `(input) => true | { valid: false, errors }`. Collects every error with a JSON Pointer path, so you can tell a caller exactly what went wrong.
+- **`assert(schema, value)`** → `T`. The one-shot "valid or bust" path: returns the value typed to the schema, or throws a `ValidationFailedError` (carrying the same `errors` array) when it does not match. Reach for this when invalid input is exceptional and you want a parse step, not a result to branch on.
 
 ---
 
@@ -47,7 +48,7 @@ bun add @amritk/runtime-validators
 ## Usage
 
 ```ts
-import { validate, validateGuard } from '@amritk/runtime-validators'
+import { assert, validate, validateGuard } from '@amritk/runtime-validators'
 
 const schema = {
   type: 'object',
@@ -73,6 +74,10 @@ const isUser = validateGuard(schema)
 if (isUser(input)) {
   input.name // narrowed to { id: number; name: string; tags?: string[] }
 }
+
+// Valid or bust — one call, returns the typed value or throws a ValidationFailedError
+const user = assert(schema, { id: 1, name: 'Ada' })
+//    ^? { id: number; name: string; tags?: string[] }
 ```
 
 ### Type inference
@@ -162,6 +167,10 @@ Returns a `Validator`: `(input: unknown) => true | { valid: false; errors: Valid
 ### `validateGuard<T>(schema, options?)`
 
 Builds a boolean type guard `(input: unknown) => input is T`. Same options as `validate`; it short-circuits on the first failure and allocates nothing, so it is the faster of the two when you only need yes/no. `T` is inferred from a schema written `as const`; pass it explicitly to override.
+
+### `assert(schema, value, options?)`
+
+Validates `value` against the schema in a single call and returns it typed to the schema, or throws a `ValidationFailedError` when it does not match — a plain `Error` (so `instanceof Error` and logging work) whose message lists each failure and whose `errors` property carries the same `ValidationError[]` that `validate` collects. Same `options` as `validate`. Reach for it when invalid input is exceptional and you would rather parse-or-throw than branch on a result. When the schema is written `as const` (or inferred via the `const` parameter), the return type is inferred from it.
 
 ### `FromSchema<Schema>` and `Infer<Validator>`
 
