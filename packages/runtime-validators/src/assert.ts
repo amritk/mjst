@@ -1,7 +1,7 @@
 import { prepareValidator } from '@/interpreter/prepare'
 
 import type { FromSchema } from './from-schema'
-import type { Asserter, ValidateOptions, ValidationError, ValidationFailedError, Validator } from './types'
+import type { ValidateOptions, ValidationError, ValidationFailedError, ValidationResult } from './types'
 
 /**
  * Renders the collected errors into one readable message for the thrown Error.
@@ -27,48 +27,48 @@ const validationFailedError = (errors: ValidationError[]): ValidationFailedError
 }
 
 /**
- * Builds an asserting parser for a JSON Schema: a function that returns its input
- * typed to the schema when valid, and throws when not.
+ * Validates `value` against a JSON Schema and returns it typed to the schema, or
+ * throws when it does not match.
  *
- * This is the "valid or bust" counterpart to {@link validate}. Where `validate`
- * hands back a result you branch on, `assert` returns the data directly — typed
- * to the schema — so it slots into a pipeline as a parse step, and a failure is a
- * thrown {@link ValidationFailedError} rather than a value to inspect. The thrown
- * error carries every collected error (each with a message and JSON Pointer path)
- * on its `errors` property, so a caller can still report exactly what went wrong.
+ * This is the one-shot, "valid or bust" counterpart to {@link validate}. Where
+ * `validate` builds a reusable validator you call later and branch on, `assert`
+ * does it all in a single call: pass the schema and the value, get the typed data
+ * back, and on failure get a thrown {@link ValidationFailedError} instead of a
+ * result to inspect. That error carries every collected error (each with a message
+ * and JSON Pointer path) on its `errors` property, so a caller can still report
+ * exactly what went wrong.
  *
- * Like the others, it interprets the schema directly (no `new Function`, no build
- * step) and shares the same per-schema validator cache, so repeated calls reuse
- * the warm regex and `$ref` caches.
+ * It interprets the schema directly (no `new Function`, no build step) and shares
+ * the same per-schema validator cache as {@link validate}, so passing the same
+ * schema object repeatedly reuses the warm regex and `$ref` caches.
  *
- * The `const` type parameter infers the schema as a literal, so the returned
- * {@link Asserter} is typed to the data it accepts — no `as const` needed at the
- * call site. Recover the type with `ReturnType<typeof asserter>`.
+ * The `const` type parameter infers the schema as a literal, so the returned value
+ * is typed to the data the schema accepts — no `as const` needed at the call site.
  *
  * @example
  * ```typescript
- * const parseUser = assert({
- *   type: 'object',
- *   properties: { id: { type: 'integer' }, name: { type: 'string' } },
- *   required: ['id', 'name'],
- * })
- *
- * const user = parseUser(input) // typed { id: number; name: string }, or throws
+ * const user = assert(
+ *   {
+ *     type: 'object',
+ *     properties: { id: { type: 'integer' }, name: { type: 'string' } },
+ *     required: ['id', 'name'],
+ *   },
+ *   input,
+ * )
+ * //    ^? { id: number; name: string }   — or throws ValidationFailedError
  *
  * try {
- *   parseUser({ id: 'nope' })
+ *   assert({ type: 'integer' }, 3.5)
  * } catch (error) {
  *   if (error instanceof Error && 'errors' in error) {
- *     error.errors // [{ message: 'must be integer', path: '/id' }, ...]
+ *     error.errors // [{ message: 'must be integer', path: '' }]
  *   }
  * }
  * ```
  */
-export const assert = <const S = unknown>(schema: S, options?: ValidateOptions): Asserter<FromSchema<S>> => {
-  const validator = prepareValidator(schema, options, true) as Validator<FromSchema<S>>
-  return (input: unknown): FromSchema<S> => {
-    const result = validator(input)
-    if (result === true) return input as FromSchema<S>
-    throw validationFailedError(result.errors)
-  }
+export const assert = <const S = unknown>(schema: S, value: unknown, options?: ValidateOptions): FromSchema<S> => {
+  const validator = prepareValidator(schema, options, true) as (input: unknown) => ValidationResult
+  const result = validator(value)
+  if (result === true) return value as FromSchema<S>
+  throw validationFailedError(result.errors)
 }

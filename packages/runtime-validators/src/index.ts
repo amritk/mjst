@@ -2,7 +2,6 @@ export { assert } from './assert'
 export type { FromSchema } from './from-schema'
 export type { Infer } from './infer'
 export type {
-  Asserter,
   Guard,
   ValidateOptions,
   ValidationError,
