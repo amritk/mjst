@@ -52,6 +52,29 @@ export type Validator<T = unknown> = ((input: unknown) => ValidationResult) & {
 export type Guard<T = unknown> = (input: unknown) => input is T
 
 /**
+ * A compiled asserting parser.
+ *
+ * Produced by `assert`. Unlike {@link Validator}, which hands back a result you
+ * branch on, an asserter takes the "valid or bust" path: it returns the input
+ * narrowed to `T` when it matches the schema, and throws a
+ * {@link ValidationFailedError} listing every error when it does not. The typed
+ * return value is the data itself, so it reads like a parse step at the call site.
+ */
+export type Asserter<T = unknown> = (input: unknown) => T
+
+/**
+ * The error an {@link Asserter} throws when its input fails validation.
+ *
+ * It is a plain `Error` — so `instanceof Error`, stack traces, and ordinary
+ * logging all work — augmented with the structured `errors` array. That lets a
+ * caller inspect each failure programmatically (by message and JSON Pointer path)
+ * instead of parsing the formatted message string.
+ */
+export type ValidationFailedError = Error & {
+  readonly errors: readonly ValidationError[]
+}
+
+/**
  * Options shared by {@link validate} and {@link validateGuard}.
  */
 export type ValidateOptions = {
