@@ -58,7 +58,7 @@ const schema = {
   },
   required: ['id', 'name'],
   additionalProperties: false,
-}
+} as const
 
 // Detailed errors
 const validator = validate(schema)
@@ -67,14 +67,42 @@ if (result !== true) {
   console.error(result.errors) // [{ message, path }, ...]
 }
 
-// Fast boolean guard (with type narrowing)
-type User = { id: number; name: string; tags?: string[] }
-const isUser = validateGuard<User>(schema)
+// Fast boolean guard — the guarded type is inferred from the schema
+const isUser = validateGuard(schema)
 
 if (isUser(input)) {
-  input.name // narrowed to User
+  input.name // narrowed to { id: number; name: string; tags?: string[] }
 }
 ```
+
+### Type inference
+
+Write the schema `as const` and the output type comes along for free — no
+hand-written interface to drift from the schema. `validate` and `validateGuard`
+infer it directly; `Infer` recovers it from a built validator, and `FromSchema`
+derives it from a schema type:
+
+```ts
+import { validate, type FromSchema, type Infer } from '@amritk/runtime-validators'
+
+// Straight from the schema type…
+type User = FromSchema<typeof schema>
+//   ^? { id: number; name: string; tags?: string[] }
+
+// …or from a built validator.
+const validateUser = validate(schema)
+type SameUser = Infer<typeof validateUser>
+```
+
+Runtime-only constraints (`minLength`, `pattern`, numeric bounds, …) leave the
+base type untouched, so `name` stays `string`. Inference covers every keyword that
+shapes a type — `type` (incl. unions, `integer`, `nullable`), `const`, `enum`,
+`properties`/`required`/`additionalProperties`/`patternProperties`,
+`items`/`prefixItems` (lists and tuples), and `allOf`/`anyOf`/`oneOf`. Keywords
+that cannot be expressed structurally (`$ref`, `not`, `if`/`then`/`else`,
+`unevaluated*`) are skipped so the inferred type stays useful rather than
+collapsing to `never`. You can still pass an explicit type argument
+(`validateGuard<MyType>(schema)`) to override inference.
 
 Recursive schemas via local `$ref` work out of the box:
 
@@ -129,11 +157,15 @@ Builds an error-collecting validator that interprets the schema on the fly.
 | `schema` | `unknown` | A JSON Schema (object, or a boolean schema). Local `$ref`s into the same document are resolved, including recursion. |
 | `options.formats` | `'all' \| string[]` | String formats to enforce. Unlisted formats are treated as annotations (not validated), matching Ajv's opt-in behavior. |
 
-Returns a `Validator`: `(input: unknown) => true | { valid: false; errors: ValidationError[] }`.
+Returns a `Validator`: `(input: unknown) => true | { valid: false; errors: ValidationError[] }`. When the schema is written `as const`, the validator carries the inferred output type — recover it with `Infer`.
 
 ### `validateGuard<T>(schema, options?)`
 
-Builds a boolean type guard `(input: unknown) => input is T`. Same options as `validate`; it short-circuits on the first failure and allocates nothing, so it is the faster of the two when you only need yes/no.
+Builds a boolean type guard `(input: unknown) => input is T`. Same options as `validate`; it short-circuits on the first failure and allocates nothing, so it is the faster of the two when you only need yes/no. `T` is inferred from a schema written `as const`; pass it explicitly to override.
+
+### `FromSchema<Schema>` and `Infer<Validator>`
+
+Type-level helpers. `FromSchema<typeof schema>` infers the type a schema (written `as const`) accepts; `Infer<typeof validator>` recovers that type from a built `validate`/`validateGuard`. See [Type inference](#type-inference) above.
 
 ### Supported keywords
 
