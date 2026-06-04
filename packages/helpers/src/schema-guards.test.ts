@@ -29,6 +29,8 @@ import {
   hasPropertyNames,
   hasRef,
   hasRequired,
+  hasStrictExclusiveMaximum,
+  hasStrictExclusiveMinimum,
   hasType,
   hasUniqueItems,
   isObjectSchema,
@@ -423,5 +425,17 @@ describe('schema-guards', () => {
   it('hasRef returns false when $ref is not a string', () => {
     // Intentionally passing wrong type to verify the guard rejects it
     expect(hasRef({ $ref: 123 } as unknown as JSONSchema)).toBe(false)
+  })
+
+  // hasStrictExclusiveMinimum / hasStrictExclusiveMaximum (draft-04 boolean form)
+  it('detects the draft-04 boolean exclusiveMinimum/exclusiveMaximum form', () => {
+    expect(hasStrictExclusiveMinimum({ minimum: 0, exclusiveMinimum: true } as unknown as JSONSchema)).toBe(true)
+    expect(hasStrictExclusiveMaximum({ maximum: 5, exclusiveMaximum: true } as unknown as JSONSchema)).toBe(true)
+  })
+
+  it('treats the draft-06+ numeric exclusive form as not strict-boolean', () => {
+    expect(hasStrictExclusiveMinimum({ exclusiveMinimum: 0 })).toBe(false)
+    expect(hasStrictExclusiveMaximum({ exclusiveMaximum: 5 })).toBe(false)
+    expect(hasStrictExclusiveMinimum({})).toBe(false)
   })
 })

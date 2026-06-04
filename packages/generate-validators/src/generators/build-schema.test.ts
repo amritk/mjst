@@ -159,5 +159,19 @@ describe('build-schema', () => {
     expect(vrFile?.content).toContain('export type ValidationResult')
     expect(vrFile?.content).toContain('message: string')
     expect(vrFile?.content).toContain('path: string')
+    // The runtime deep-equality helper backing structural `const` checks.
+    expect(vrFile?.content).toContain('export const valuesEqual')
+  })
+
+  it('imports valuesEqual only into files that use a structural const', async () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { meta: { const: { a: 1 } }, name: { type: 'string' } },
+    }
+    const files = await buildValidatorSchema(schema, 'Doc')
+    const docFile = files.find((f) => f.filename === 'doc.ts')
+
+    expect(docFile?.content).toContain("import { valuesEqual } from './validation-result'")
+    expect(docFile?.content).toContain('!valuesEqual(obj["meta"], {"a":1})')
   })
 })

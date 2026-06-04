@@ -127,6 +127,24 @@ export const hasExclusiveMaximum = (schema: JSONSchema): schema is SchemaObject 
   return isSchemaObject(schema) && 'exclusiveMaximum' in schema && typeof schema.exclusiveMaximum === 'number'
 }
 
+/**
+ * Draft-04 expressed a strict lower bound as a boolean `exclusiveMinimum: true`
+ * paired with `minimum`, where draft-06+ uses a standalone numeric keyword. True
+ * only for that legacy boolean form, so callers can tighten the `minimum` compare.
+ */
+export const hasStrictExclusiveMinimum = (schema: JSONSchema): boolean => {
+  if (!isSchemaObject(schema)) return false
+  const flag: unknown = schema.exclusiveMinimum
+  return flag === true
+}
+
+/** Draft-04 boolean `exclusiveMaximum: true` paired with `maximum`. See {@link hasStrictExclusiveMinimum}. */
+export const hasStrictExclusiveMaximum = (schema: JSONSchema): boolean => {
+  if (!isSchemaObject(schema)) return false
+  const flag: unknown = schema.exclusiveMaximum
+  return flag === true
+}
+
 /** Type guard to check if schema has multipleOf */
 export const hasMultipleOf = (schema: JSONSchema): schema is SchemaObject & { multipleOf: number } => {
   return isSchemaObject(schema) && 'multipleOf' in schema && typeof schema.multipleOf === 'number'
