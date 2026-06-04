@@ -25,6 +25,14 @@ describe('resolve-scalar', () => {
     expect(resolvePlainValue('0o17')).toBe(15)
   })
 
+  it('keeps the sign on negative hex and octal integers', () => {
+    // A leading `-` must survive base conversion: `parseInt` already applies it,
+    // so the magnitude must not be re-negated back to a positive number.
+    expect(resolvePlainValue('-0x10')).toBe(-16)
+    expect(resolvePlainValue('-0o10')).toBe(-8)
+    expect(resolvePlainValue('+0x10')).toBe(16)
+  })
+
   it('resolves floats including infinity and nan', () => {
     expect(resolvePlainValue('3.14')).toBe(3.14)
     expect(resolvePlainValue('1e3')).toBe(1000)
@@ -51,6 +59,17 @@ describe('resolve-scalar', () => {
     expect(resolveDoubleQuoted('quote\\"end')).toBe('quote"end')
     expect(resolveDoubleQuoted('\\u00e9')).toBe('é')
     expect(resolveDoubleQuoted('plain')).toBe('plain')
+  })
+
+  it('treats invalid and out-of-range escapes as literal without crashing', () => {
+    // `\U` over 0x10FFFF would make String.fromCodePoint throw; it must instead
+    // fall back to the literal escape letter and leave the trailing characters
+    // to be processed normally (so nothing is dropped and nothing crashes).
+    expect(resolveDoubleQuoted('\\UFFFFFFFF')).toBe('UFFFFFFFF')
+    // A short/non-hex run must not silently consume the characters that follow it.
+    expect(resolveDoubleQuoted('\\xZZ')).toBe('xZZ')
+    // A valid astral code point still resolves.
+    expect(resolveDoubleQuoted('\\U0001F600')).toBe('😀')
   })
 
   it('folds multi-line flow scalars', () => {

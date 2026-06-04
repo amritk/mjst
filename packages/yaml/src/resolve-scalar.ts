@@ -83,8 +83,11 @@ export const resolvePlainValue = (text: string): string | number | boolean | nul
   if (c === 0x6e || c === 0x4e || c === 0x74 || c === 0x54 || c === 0x66 || c === 0x46) return text
 
   if (INT_DEC.test(text)) return Number.parseInt(text, 10)
-  if (INT_HEX.test(text)) return Number.parseInt(text.replace('0x', ''), 16) * (text[0] === '-' ? -1 : 1)
-  if (INT_OCT.test(text)) return Number.parseInt(text.replace('0o', ''), 8) * (text[0] === '-' ? -1 : 1)
+  // `parseInt` already honours a leading sign, so stripping only the `0x`/`0o`
+  // base marker leaves e.g. `-10` for it to parse as -16. An extra sign multiply
+  // here would double-negate and flip `-0x10` back to +16.
+  if (INT_HEX.test(text)) return Number.parseInt(text.replace('0x', ''), 16)
+  if (INT_OCT.test(text)) return Number.parseInt(text.replace('0o', ''), 8)
   if (FLOAT.test(text)) return Number.parseFloat(text)
 
   return text
@@ -111,6 +114,9 @@ const DOUBLE_ESCAPES: Record<string, string> = {
   P: ' ',
 }
 
+const lstrip = (s: string): string => s.replace(/^[ \t]+/, '')
+const rstrip = (s: string): string => s.replace(/[ \t]+$/, '')
+
 /**
  * Folds the line breaks of a multi-line flow scalar, per the YAML flow folding
  * rules: a single break between content becomes a space, and a run of blank
@@ -124,9 +130,6 @@ const DOUBLE_ESCAPES: Record<string, string> = {
  * - a blank-line run that reaches the end of the scalar yields one fewer
  *   newline, because the break before the closing delimiter is stripped.
  */
-const lstrip = (s: string): string => s.replace(/^[ \t]+/, '')
-const rstrip = (s: string): string => s.replace(/[ \t]+$/, '')
-
 const foldLines = (text: string): string => {
   const lines = text.split('\n')
   if (lines.length === 1) return text
@@ -191,9 +194,19 @@ export const resolveDoubleQuoted = (inner: string): string => {
     if (next === 'x' || next === 'u' || next === 'U') {
       const len = next === 'x' ? 2 : next === 'u' ? 4 : 8
       const hex = source.slice(i + 2, i + 2 + len)
-      const code = Number.parseInt(hex, 16)
-      out += Number.isNaN(code) ? next : String.fromCodePoint(code)
-      i += 2 + len
+      // The escape is only valid with exactly `len` hex digits naming a real Unicode
+      // code point. A short/non-hex run (`\xZZ`) or an out-of-range value (`\UFFFFFFFF`,
+      // which would make `String.fromCodePoint` throw) is treated as a literal escape
+      // letter, consuming just `\x` so the trailing characters are preserved.
+      const valid = hex.length === len && /^[0-9a-fA-F]+$/.test(hex)
+      const code = valid ? Number.parseInt(hex, 16) : Number.NaN
+      if (code <= 0x10ffff && !Number.isNaN(code)) {
+        out += String.fromCodePoint(code)
+        i += 2 + len
+      } else {
+        out += next
+        i += 2
+      }
       continue
     }
     const mapped = DOUBLE_ESCAPES[next]

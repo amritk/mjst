@@ -20,6 +20,8 @@ import {
   hasPropertyNames,
   hasRef,
   hasRequired,
+  hasStrictExclusiveMaximum,
+  hasStrictExclusiveMinimum,
   hasType,
   isObjectSchema,
   isSchemaObject,
@@ -42,15 +44,16 @@ const typeofString = (type: string): string => {
 
 /**
  * Generates the inline condition that is TRUE when `accessor` does NOT equal the
- * `const` value. Primitives compare with `!==`; objects/arrays compare by their
- * canonical JSON serialization (sufficient for the literal, fixed shapes `const`
- * is used for).
+ * `const` value. Primitives compare with `!==`; objects/arrays compare with the
+ * runtime `valuesEqual` helper so a reordered-but-equal value still matches (the
+ * interpreter uses order-independent deep equality, and `JSON.stringify` would
+ * disagree because it is key-order sensitive).
  */
 const constMismatchCondition = (accessor: string, value: unknown): string => {
   if (value === null || typeof value !== 'object') {
     return `${accessor} !== ${JSON.stringify(value)}`
   }
-  return `JSON.stringify(${accessor}) !== ${JSON.stringify(JSON.stringify(value))}`
+  return `!valuesEqual(${accessor}, ${JSON.stringify(value)})`
 }
 
 /**
@@ -225,13 +228,20 @@ const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired:
     // Number constraints
     if (t === 'number' || t === 'integer') {
       if (hasMinimum(propSchema)) {
-        lines.push(`  if (typeof ${raw} === 'number' && ${raw} < ${propSchema.minimum}) {`)
-        lines.push(`    errors.push({ message: 'must be >= ${propSchema.minimum}', path: ${path} })`)
+        // Draft-04 `exclusiveMinimum: true` makes the paired `minimum` strict.
+        const strict = hasStrictExclusiveMinimum(propSchema)
+        const op = strict ? '<=' : '<'
+        const rel = strict ? '>' : '>='
+        lines.push(`  if (typeof ${raw} === 'number' && ${raw} ${op} ${propSchema.minimum}) {`)
+        lines.push(`    errors.push({ message: 'must be ${rel} ${propSchema.minimum}', path: ${path} })`)
         lines.push(`  }`)
       }
       if (hasMaximum(propSchema)) {
-        lines.push(`  if (typeof ${raw} === 'number' && ${raw} > ${propSchema.maximum}) {`)
-        lines.push(`    errors.push({ message: 'must be <= ${propSchema.maximum}', path: ${path} })`)
+        const strict = hasStrictExclusiveMaximum(propSchema)
+        const op = strict ? '>=' : '>'
+        const rel = strict ? '<' : '<='
+        lines.push(`  if (typeof ${raw} === 'number' && ${raw} ${op} ${propSchema.maximum}) {`)
+        lines.push(`    errors.push({ message: 'must be ${rel} ${propSchema.maximum}', path: ${path} })`)
         lines.push(`  }`)
       }
       if (hasExclusiveMinimum(propSchema)) {
@@ -284,6 +294,54 @@ const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired:
 }
 
 /**
+ * Generates the `propertyNames` loop: every object key is a string, so we apply
+ * the string-relevant constraints of the subschema (or delegate to a `$ref`'s
+ * validator). This keeps the generator in step with the interpreter, which runs
+ * the whole subschema against each key — not just the `pattern` form.
+ */
+const generatePropertyNameChecks = (nameSchema: JSONSchema, suffix: string): string[] => {
+  if (!isSchemaObject(nameSchema)) return []
+
+  const at = '`${_path}/${_name}`'
+  const checks: string[] = []
+
+  if (hasRef(nameSchema)) {
+    const vName = validatorName(refToName(nameSchema.$ref, suffix))
+    checks.push(`    const _nr = ${vName}(_name, ${at})`)
+    checks.push(`    if (_nr !== true) errors.push(..._nr.errors)`)
+  } else {
+    if (hasPattern(nameSchema)) {
+      const re = escapeRegexPattern(nameSchema.pattern)
+      const msg = JSON.stringify(`property name must match pattern ${nameSchema.pattern}`)
+      checks.push(`    if (!/${re}/.test(_name)) errors.push({ message: ${msg}, path: ${at} })`)
+    }
+    if (hasMinLength(nameSchema)) {
+      const msg = JSON.stringify(`property name must have at least ${nameSchema.minLength} characters`)
+      checks.push(`    if (_name.length < ${nameSchema.minLength}) errors.push({ message: ${msg}, path: ${at} })`)
+    }
+    if (hasMaxLength(nameSchema)) {
+      const msg = JSON.stringify(`property name must have at most ${nameSchema.maxLength} characters`)
+      checks.push(`    if (_name.length > ${nameSchema.maxLength}) errors.push({ message: ${msg}, path: ${at} })`)
+    }
+    if (hasEnum(nameSchema)) {
+      const allowed = JSON.stringify(nameSchema.enum)
+      const label = (nameSchema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
+      const msg = JSON.stringify(`property name must be one of: ${label}`)
+      checks.push(`    if (!(${allowed} as unknown[]).includes(_name)) errors.push({ message: ${msg}, path: ${at} })`)
+    }
+    if (hasConst(nameSchema)) {
+      const msg = JSON.stringify(`property name must be ${JSON.stringify(nameSchema.const)}`)
+      checks.push(
+        `    if (_name !== ${JSON.stringify(nameSchema.const)}) errors.push({ message: ${msg}, path: ${at} })`,
+      )
+    }
+  }
+
+  if (checks.length === 0) return []
+  return [`  for (const _name of Object.keys(obj)) {`, ...checks, `  }`]
+}
+
+/**
  * Generates a validator function body for an object schema, checking each
  * property's presence and type and collecting all errors.
  */
@@ -328,16 +386,10 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: s
     }
   }
 
-  // propertyNames with a pattern — every key must match. (Only the pattern form
-  // is emitted; a $ref/complex propertyNames schema is left to runtime validation.)
-  if (hasPropertyNames(schema) && isSchemaObject(schema.propertyNames) && hasPattern(schema.propertyNames)) {
-    const re = escapeRegexPattern(schema.propertyNames.pattern)
-    const msg = JSON.stringify(`property name must match pattern ${schema.propertyNames.pattern}`)
-    propertyLines.push(`  for (const _name of Object.keys(obj)) {`)
-    propertyLines.push(`    if (!/${re}/.test(_name)) {`)
-    propertyLines.push(`      errors.push({ message: ${msg}, path: \`\${_path}/\${_name}\` })`)
-    propertyLines.push(`    }`)
-    propertyLines.push(`  }`)
+  // propertyNames — every key (always a string) must satisfy the subschema. This
+  // mirrors the interpreter, which runs the full subschema against each key.
+  if (hasPropertyNames(schema) && isSchemaObject(schema.propertyNames)) {
+    propertyLines.push(...generatePropertyNameChecks(schema.propertyNames, suffix))
   }
 
   const body = propertyLines.length > 0 ? '\n' + propertyLines.join('\n') + '\n' : ''

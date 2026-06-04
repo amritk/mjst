@@ -27,6 +27,35 @@ export type ValidationError = {
  * and a list of errors when it is not.
  */
 export type ValidationResult = true | { valid: false; errors: ValidationError[] }
+
+/**
+ * Structural deep equality used by generated \`const\` checks. Objects compare by
+ * their key sets rather than serialization, so \`{ a: 1, b: 2 }\` and
+ * \`{ b: 2, a: 1 }\` are equal — unlike \`JSON.stringify\`, which is key-order
+ * sensitive and would reject a reordered-but-equal value.
+ */
+export const valuesEqual = (a: unknown, b: unknown): boolean => {
+  if (a === b) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  const aArray = Array.isArray(a)
+  const bArray = Array.isArray(b)
+  if (aArray !== bArray) return false
+  if (aArray) {
+    const aa = a as unknown[]
+    const bb = b as unknown[]
+    if (aa.length !== bb.length) return false
+    for (let i = 0; i < aa.length; i++) if (!valuesEqual(aa[i], bb[i])) return false
+    return true
+  }
+  const ao = a as Record<string, unknown>
+  const bo = b as Record<string, unknown>
+  const keys = Object.keys(ao)
+  if (keys.length !== Object.keys(bo).length) return false
+  for (const key of keys) {
+    if (!Object.hasOwn(bo, key) || !valuesEqual(ao[key], bo[key])) return false
+  }
+  return true
+}
 `
 
 /**

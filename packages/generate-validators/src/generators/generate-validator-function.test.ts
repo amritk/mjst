@@ -134,14 +134,14 @@ describe('generate-validator-function', () => {
     expect(code).toContain('must be \\"user\\"')
   })
 
-  it('checks a const object property by canonical JSON', () => {
+  it('checks a const object property by order-independent deep equality', () => {
     const schema = {
       type: 'object' as const,
       properties: { meta: { const: { a: 1 } } },
     }
     const code = generateValidatorFunction(schema, 'Record')
 
-    expect(code).toContain('JSON.stringify(obj["meta"]) !== ')
+    expect(code).toContain('!valuesEqual(obj["meta"], {"a":1})')
   })
 
   it('generates a top-level const validator', () => {
@@ -173,6 +173,37 @@ describe('generate-validator-function', () => {
     expect(code).toContain('for (const _name of Object.keys(obj))')
     expect(code).toContain('!/^[a-z]+$/.test(_name)')
     expect(code).toContain('property name must match pattern')
+  })
+
+  it('generates propertyNames checks beyond pattern (length, enum, const, $ref)', () => {
+    expect(generateValidatorFunction({ type: 'object', propertyNames: { maxLength: 3 } }, 'Dict')).toContain(
+      '_name.length > 3',
+    )
+    expect(generateValidatorFunction({ type: 'object', propertyNames: { enum: ['a', 'b'] } }, 'Dict')).toContain(
+      '.includes(_name)',
+    )
+    expect(generateValidatorFunction({ type: 'object', propertyNames: { const: 'only' } }, 'Dict')).toContain(
+      '_name !== "only"',
+    )
+    expect(generateValidatorFunction({ type: 'object', propertyNames: { $ref: '#/$defs/key' } }, 'Dict')).toContain(
+      'validateKey(_name',
+    )
+  })
+
+  it('honours the draft-04 boolean exclusiveMinimum/exclusiveMaximum form', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: {
+        n: { type: 'number' as const, minimum: 0, exclusiveMinimum: true, maximum: 10, exclusiveMaximum: true },
+      },
+    }
+    const code = generateValidatorFunction(schema, 'Bounds')
+
+    // A strict bound flips `<`/`>` to `<=`/`>=` so the boundary itself is rejected.
+    expect(code).toContain('<= 0')
+    expect(code).toContain('must be > 0')
+    expect(code).toContain('>= 10')
+    expect(code).toContain('must be < 10')
   })
 
   it('generates min/maxLength checks', () => {

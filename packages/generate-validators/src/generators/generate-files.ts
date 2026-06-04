@@ -63,6 +63,13 @@ export const generateValidatorFile = (
 
   let result = `import type { ValidationResult, ValidationError } from './validation-result'\n`
 
+  // `const` checks on object/array values call the runtime `valuesEqual` helper.
+  // Only import it when the generated body actually uses it, so files without a
+  // structural `const` do not carry an unused import.
+  if (validatorFunction.includes('valuesEqual(')) {
+    result += `import { valuesEqual } from './validation-result'\n`
+  }
+
   for (const imp of refImports) {
     result += imp + '\n'
   }
