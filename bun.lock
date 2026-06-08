@@ -59,7 +59,7 @@
     },
     "packages/generate-examples": {
       "name": "@amritk/generate-examples",
-      "version": "0.2.2",
+      "version": "0.3.0",
       "dependencies": {
         "@amritk/helpers": "workspace:*",
         "json-schema-typed": "catalog:",
@@ -112,18 +112,19 @@
     },
     "packages/runtime-validators": {
       "name": "@amritk/runtime-validators",
-      "version": "0.4.0",
+      "version": "0.6.0",
       "dependencies": {
         "json-schema-typed": "catalog:",
       },
       "devDependencies": {
+        "@amritk/helpers": "workspace:*",
         "ajv": "^8.17.1",
         "ajv-formats": "^3.0.1",
       },
     },
     "packages/yaml": {
       "name": "@amritk/yaml",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "devDependencies": {
         "js-yaml": "^4.1.0",
         "yaml": "^2.6.0",

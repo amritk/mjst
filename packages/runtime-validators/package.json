@@ -35,7 +35,8 @@
     "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f",
     "types:check": "tsgo -p . --noEmit",
     "test": "NODE_ENV=production vitest run --root ../.. runtime-validators",
-    "bench": "bun run ./bench/run.ts"
+    "bench": "bun run ./bench/run.ts",
+    "bench:dynamic": "bun --conditions development ./bench/dynamic-refs.ts"
   },
   "exports": {
     ".": {
@@ -48,6 +49,7 @@
     "json-schema-typed": "catalog:"
   },
   "devDependencies": {
+    "@amritk/helpers": "workspace:*",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1"
   }
