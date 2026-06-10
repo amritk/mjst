@@ -103,7 +103,16 @@ const run = async (): Promise<void> => {
       ['zod', (input) => zod.safeParse(input).success],
     ]
 
-    // Parity: every library must agree the valid sample passes and the invalid one fails.
+    // Parity: every library must agree the valid sample passes and the invalid
+    // one(s) fail. A disagreement makes the throughput numbers meaningless, so
+    // assert it before timing and fail loudly rather than report a mirage.
+    for (const [label, fn] of validators) {
+      if (fn(benchCase.valid) !== true) throw new Error(`${benchCase.name}: ${label} rejected the valid sample`)
+      if (fn(benchCase.invalid) !== false) throw new Error(`${benchCase.name}: ${label} accepted the invalid sample`)
+      for (const sample of benchCase.extraInvalid ?? []) {
+        if (fn(sample) !== false) throw new Error(`${benchCase.name}: ${label} accepted an extra-invalid sample`)
+      }
+    }
     const parity = validators
       .map(([label, fn]) => `${label}=${fn(benchCase.valid)}/${fn(benchCase.invalid)}`)
       .join('  ')

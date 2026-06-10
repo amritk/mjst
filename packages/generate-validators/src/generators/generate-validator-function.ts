@@ -484,6 +484,117 @@ const generatePropertyNameChecks = (nameSchema: JSONSchema, suffix: string): str
 }
 
 /**
+ * Builds the `&&` conditions that prove a single property is valid, or `null`
+ * when the property carries any keyword the slow path enforces beyond a bare
+ * type check (pattern, min/max, enum, const, `$ref`, items, x-mjst, …). A `null`
+ * makes the whole guard bail so that input still flows through the slow,
+ * error-collecting path — the guard only ever returns true for *provably* valid
+ * input, never weakening a verdict. `objAcc` is the expression yielding the
+ * parent object (already narrowed to a record); `key` indexes into it.
+ */
+const guardPropConditions = (key: string, propSchema: JSONSchema, objAcc: string): string[] | null => {
+  if (!isSchemaObject(propSchema)) return null
+
+  const raw = `${objAcc}[${JSON.stringify(key)}]`
+
+  // Anything the slow path enforces past a typeof is cheaper to leave to the
+  // slow path than to mirror here, so bail and keep the guard sound.
+  if (
+    hasRef(propSchema) ||
+    hasEnum(propSchema) ||
+    hasConst(propSchema) ||
+    hasOneOf(propSchema) ||
+    getMjstInstanceOf(propSchema) !== undefined ||
+    getMjstPrimitive(propSchema) !== undefined ||
+    hasPattern(propSchema) ||
+    hasMinLength(propSchema) ||
+    hasMaxLength(propSchema) ||
+    hasMinimum(propSchema) ||
+    hasMaximum(propSchema) ||
+    hasExclusiveMinimum(propSchema) ||
+    hasExclusiveMaximum(propSchema) ||
+    hasMultipleOf(propSchema) ||
+    hasItems(propSchema)
+  ) {
+    return null
+  }
+
+  if (!hasType(propSchema)) return null
+
+  switch (propSchema.type as string) {
+    case 'string':
+      return [`typeof ${raw} === 'string'`]
+    // mjst treats `integer` like `number` (it never enforces integrality), so a
+    // `typeof === 'number'` guard matches the slow path's verdict exactly.
+    case 'number':
+    case 'integer':
+      return [`typeof ${raw} === 'number'`]
+    case 'boolean':
+      return [`typeof ${raw} === 'boolean'`]
+    case 'object':
+      // Member access into the nested record is only reached after the shape
+      // check ahead of it in the `&&` chain, so the cast is always safe.
+      return guardObjectConditions(propSchema, raw, `(${raw} as Record<string, unknown>)`)
+    // Arrays need a per-item loop the guard can't express, and any other type
+    // (null, multi-type, untyped) is left to the slow path.
+    default:
+      return null
+  }
+}
+
+/**
+ * Builds the allocation-free boolean guard for an object schema as a list of
+ * `&&` conditions, or `null` when the schema can't be proven valid by a cheap
+ * expression. The conditions are ordered so every member access is guarded by
+ * the object-shape check that precedes it in the `&&` chain.
+ *
+ * The guard only handles the happy path: every declared property must be
+ * required and a bare-typed scalar or a likewise-guardable nested object. Any
+ * optional property, object-level constraint the slow path enforces
+ * (`patternProperties`, `propertyNames`, `dependentRequired`, an
+ * `additionalProperties` *schema*), or unguardable property makes it bail, and
+ * the validator falls back to its full error-collecting body.
+ */
+const guardObjectConditions = (schema: JSONSchema, raw: string, objAcc: string): string[] | null => {
+  if (!isObjectSchema(schema)) return null
+  if (hasDependentRequired(schema) || hasPropertyNames(schema)) return null
+  if (isSchemaObject(schema) && 'patternProperties' in schema) return null
+
+  let strict = false
+  if (hasAdditionalProperties(schema)) {
+    // Only `additionalProperties: false` is guardable (via the key-count trick
+    // below); an additional-properties *schema* needs per-key validation.
+    if (schema.additionalProperties === false) strict = true
+    else return null
+  }
+
+  const required = new Set(hasRequired(schema) ? schema.required : [])
+  const properties = hasProperties(schema) ? schema.properties : {}
+  const keys = Object.keys(properties)
+
+  const conditions: string[] = [`typeof ${raw} === 'object' && ${raw} !== null && !Array.isArray(${raw})`]
+
+  for (const key of keys) {
+    // An optional property would need an `=== undefined ||` branch and breaks
+    // the key-count trick, so the guard only covers all-required objects.
+    if (!required.has(key)) return null
+    const propConditions = guardPropConditions(key, properties[key] as JSONSchema, objAcc)
+    if (propConditions === null) return null
+    conditions.push(...propConditions)
+  }
+
+  if (strict) {
+    // `additionalProperties: false` with every declared property required: once
+    // the typeof checks confirm each key is present, an exact key count proves
+    // there are no extras — TypeBox's trick, with no loop and no Set.
+    if (!keys.every((key) => required.has(key))) return null
+    conditions.push(`Object.keys(${objAcc}).length === ${keys.length}`)
+  }
+
+  return conditions
+}
+
+/**
  * Generates a validator function body for an object schema, checking each
  * property's presence and type and collecting all errors.
  */
@@ -544,14 +655,27 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: s
   // validator reuses them instead of rebuilding them.
   const hoistedBlock = ctx.hoisted.length > 0 ? `${ctx.hoisted.join('\n')}\n\n` : ''
 
+  // A pure boolean guard for the happy path: when every property is present and
+  // well-typed (and, for strict objects, there are no extras) it returns true
+  // without allocating an `errors` array or walking the slow path. It returns
+  // true only for provably valid input; anything it can't prove cheaply falls
+  // through to the error-collecting body below, which produces the same verdict
+  // and full JSON-Pointer errors. Schemas with constraints the guard can't
+  // express produce no guard at all (`null`), leaving behaviour unchanged.
+  const guard = guardObjectConditions(schema, 'input', 'obj')
+  const guardBlock = guard
+    ? [`  if (`, guard.map((condition) => `    ${condition}`).join(' &&\n'), `  ) {`, `    return true`, `  }`, ``]
+    : []
+
   return [
     `${hoistedBlock}export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+    `  const obj = input as Record<string, unknown>`,
+    ...guardBlock,
     `  if (typeof input !== 'object' || input === null || Array.isArray(input)) {`,
     `    return { valid: false, errors: [{ message: 'must be object', path: _path }] }`,
     `  }`,
     ``,
     `  const errors: ValidationError[] = []`,
-    `  const obj = input as Record<string, unknown>`,
     body,
     `  return errors.length > 0 ? { valid: false, errors } : true`,
     `}`,
