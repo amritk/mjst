@@ -1,6 +1,7 @@
 import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { refToName } from '@amritk/helpers/ref-to-name'
+import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
   hasAdditionalProperties,
   hasConst,
@@ -495,7 +496,8 @@ const generatePropertyNameChecks = (nameSchema: JSONSchema, suffix: string): str
 const guardPropConditions = (key: string, propSchema: JSONSchema, objAcc: string): string[] | null => {
   if (!isSchemaObject(propSchema)) return null
 
-  const raw = `${objAcc}[${JSON.stringify(key)}]`
+  // Dotted access (`obj.number`) for identifier keys, bracket access otherwise.
+  const raw = safeAccessor(objAcc, key)
 
   // Anything the slow path enforces past a typeof is cheaper to leave to the
   // slow path than to mirror here, so bail and keep the guard sound.
@@ -542,6 +544,37 @@ const guardPropConditions = (key: string, propSchema: JSONSchema, objAcc: string
   }
 }
 
+/** A property key an array carries with a non-`undefined` value: `length`, or a
+ * canonical array index. A required prop on one of these can't be used to rule
+ * out arrays (an array's `length` is a number, an index can be anything). */
+const ARRAY_INDEX_KEY = /^(0|[1-9]\d*)$/
+
+/** Schema types whose guard is a `typeof` check `typeof undefined` never passes. */
+const TYPEOF_CHECKABLE_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'object'])
+
+/**
+ * Whether some required, typeof-guarded property proves the value can't be an
+ * array — letting the object shape-check drop its `!Array.isArray(...)` term. An
+ * array indexed by a normal key yields `undefined` (or an inherited method),
+ * which no `typeof === 'string' | 'number' | 'boolean' | 'object'` accepts, so
+ * that field check already rejects arrays. Keys an array does carry a real value
+ * for (`length`, numeric indices) are excluded, since those could slip through.
+ */
+const arrayRejectedByRequiredProp = (
+  keys: string[],
+  required: Set<string>,
+  properties: Record<string, unknown>,
+): boolean => {
+  for (const key of keys) {
+    if (!required.has(key) || key === 'length' || ARRAY_INDEX_KEY.test(key)) continue
+    const propSchema = properties[key]
+    if (isSchemaObject(propSchema) && hasType(propSchema) && TYPEOF_CHECKABLE_TYPES.has(propSchema.type as string)) {
+      return true
+    }
+  }
+  return false
+}
+
 /**
  * Builds the allocation-free boolean guard for an object schema as a list of
  * `&&` conditions, or `null` when the schema can't be proven valid by a cheap
@@ -572,7 +605,10 @@ const guardObjectConditions = (schema: JSONSchema, raw: string, objAcc: string):
   const properties = hasProperties(schema) ? schema.properties : {}
   const keys = Object.keys(properties)
 
-  const conditions: string[] = [`typeof ${raw} === 'object' && ${raw} !== null && !Array.isArray(${raw})`]
+  // The object shape-check only needs `!Array.isArray` when no required field
+  // check would already reject an array (see `arrayRejectedByRequiredProp`).
+  const arrayCheck = arrayRejectedByRequiredProp(keys, required, properties) ? '' : ` && !Array.isArray(${raw})`
+  const conditions: string[] = [`typeof ${raw} === 'object' && ${raw} !== null${arrayCheck}`]
 
   for (const key of keys) {
     // An optional property would need an `=== undefined ||` branch and breaks
@@ -657,27 +693,54 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: s
 
   // A pure boolean guard for the happy path: when every property is present and
   // well-typed (and, for strict objects, there are no extras) it returns true
-  // without allocating an `errors` array or walking the slow path. It returns
+  // without allocating an `errors` array or touching the slow path. It returns
   // true only for provably valid input; anything it can't prove cheaply falls
-  // through to the error-collecting body below, which produces the same verdict
-  // and full JSON-Pointer errors. Schemas with constraints the guard can't
-  // express produce no guard at all (`null`), leaving behaviour unchanged.
+  // through to the error-collecting path, which produces the same verdict and
+  // full JSON-Pointer errors. Schemas with constraints the guard can't express
+  // produce no guard at all (`null`), leaving behaviour unchanged.
   const guard = guardObjectConditions(schema, 'input', 'obj')
-  const guardBlock = guard
-    ? [`  if (`, guard.map((condition) => `    ${condition}`).join(' &&\n'), `  ) {`, `    return true`, `  }`, ``]
-    : []
 
+  // The cold, error-collecting body. When there's a guard this is a separate
+  // (unexported) function reached only on failure; the hot path never enters it
+  // unless input is actually invalid, so its size never costs the happy path.
+  const collectBody = (name: string, exported: boolean): string =>
+    [
+      `${exported ? 'export ' : ''}const ${name} = (input: unknown, _path = ''): ValidationResult => {`,
+      `  const obj = input as Record<string, unknown>`,
+      `  if (typeof input !== 'object' || input === null || Array.isArray(input)) {`,
+      `    return { valid: false, errors: [{ message: 'must be object', path: _path }] }`,
+      `  }`,
+      ``,
+      `  const errors: ValidationError[] = []`,
+      body,
+      `  return errors.length > 0 ? { valid: false, errors } : true`,
+      `}`,
+    ].join('\n')
+
+  // No guard: the exported validator is the error-collecting function itself.
+  if (!guard) {
+    return `${hoistedBlock}${collectBody(vName, true)}`
+  }
+
+  // With a guard, keep the happy path inside the exported function — the guard
+  // is inlined as an early `return true`, so a valid input never pays an extra
+  // call — and move only the cold, error-collecting body into a separate
+  // (unexported) function. That keeps `validateX` itself tiny (guard + a single
+  // tail call) so V8 optimises it well, without the giant error body bloating
+  // the hot path. The exported `(input, _path?) => ValidationResult` contract
+  // is unchanged.
+  const collectName = `${vName}Errors`
   return [
-    `${hoistedBlock}export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
-    `  const obj = input as Record<string, unknown>`,
-    ...guardBlock,
-    `  if (typeof input !== 'object' || input === null || Array.isArray(input)) {`,
-    `    return { valid: false, errors: [{ message: 'must be object', path: _path }] }`,
-    `  }`,
+    `${hoistedBlock}${collectBody(collectName, false)}`,
     ``,
-    `  const errors: ValidationError[] = []`,
-    body,
-    `  return errors.length > 0 ? { valid: false, errors } : true`,
+    `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+    `  const obj = input as Record<string, unknown>`,
+    `  if (`,
+    guard.map((condition) => `    ${condition}`).join(' &&\n'),
+    `  ) {`,
+    `    return true`,
+    `  }`,
+    `  return ${collectName}(input, _path)`,
     `}`,
   ].join('\n')
 }

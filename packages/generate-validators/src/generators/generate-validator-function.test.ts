@@ -588,9 +588,33 @@ describe('generate-validator-function', () => {
 
       expect(hasGuard(code)).toBe(true)
       // Member access into obj is guarded by the object-shape check ahead of it.
+      // The `!Array.isArray` term is dropped: the required `name`/`age` typeof
+      // checks already reject an array (`[].name` is undefined), so it's dead weight.
+      expect(code).toContain("typeof input === 'object' && input !== null &&")
+      expect(code).not.toContain('!Array.isArray(input)')
+      // Identifier keys use dotted access in the guard.
+      expect(code).toContain("typeof obj.name === 'string'")
+      expect(code).toContain("typeof obj.age === 'number'")
+    })
+
+    it('keeps !Array.isArray in the guard when no required field check would reject an array', () => {
+      // `length` is the one string key an array carries a real (numeric) value
+      // for, so `typeof obj["length"] === 'number'` does NOT rule out an array —
+      // the explicit array check has to stay or `[]` would pass the guard.
+      const schema = {
+        type: 'object' as const,
+        properties: { length: { type: 'number' as const } },
+        required: ['length'],
+      }
+      const code = generateValidatorFunction(schema, 'Lengthy')
+
+      expect(hasGuard(code)).toBe(true)
       expect(code).toContain("typeof input === 'object' && input !== null && !Array.isArray(input)")
-      expect(code).toContain('typeof obj["name"] === \'string\'')
-      expect(code).toContain('typeof obj["age"] === \'number\'')
+      // The guard must reject an array even though `[].length` is a number.
+      expect(evalValidator(code)([])).toEqual({
+        valid: false,
+        errors: [{ message: 'must be object', path: '' }],
+      })
     })
 
     it('proves validity for the happy path and falls through to identical errors otherwise', () => {
@@ -656,11 +680,18 @@ describe('generate-validator-function', () => {
       const code = generateValidatorFunction(schema, 'Wrap')
 
       expect(hasGuard(code)).toBe(true)
-      expect(code).toContain('typeof obj["p"] === \'object\' && obj["p"] !== null && !Array.isArray(obj["p"])')
-      expect(code).toContain('typeof (obj["p"] as Record<string, unknown>)["n"] === \'string\'')
+      // The nested object's guard uses dotted access and drops its own array
+      // check (the required `n` string check already rejects an array for `p`).
+      expect(code).toContain("typeof obj.p === 'object' && obj.p !== null &&")
+      expect(code).toContain("typeof (obj.p as Record<string, unknown>).n === 'string'")
 
       const validate = evalValidator(code)
       expect(validate({ p: { n: 'ok' } })).toBe(true)
+      // A non-object (array) at `p` still falls through to the slow path.
+      expect(validate({ p: [] })).toEqual({
+        valid: false,
+        errors: [{ message: 'must be object', path: '/p' }],
+      })
       expect(validate({ p: { n: 7 } })).toEqual({
         valid: false,
         errors: [{ message: 'must be string', path: '/p/n' }],
@@ -675,7 +706,7 @@ describe('generate-validator-function', () => {
       }
       const code = generateValidatorFunction(schema, 'Counter')
 
-      expect(code).toContain('typeof obj["count"] === \'number\'')
+      expect(code).toContain("typeof obj.count === 'number'")
       // mjst never enforces integrality, so the guard's verdict matches the slow path.
       expect(evalValidator(code)({ count: 1.5 })).toBe(true)
     })
