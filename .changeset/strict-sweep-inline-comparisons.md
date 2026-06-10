@@ -12,6 +12,7 @@ evaluates faster for small key counts and which avoids the per-module `Set`
 allocation. Objects with more declared keys keep the `Set` fallback.
 
 The shared logic lives in a new `@amritk/helpers/unknown-key-check` export so the
-parser's strict-mode and warning sweeps and the validator's strict sweep stay in
-step. Roughly triples valid throughput on small strict schemas in the benchmark
-suite.
+parser's strict-mode, warning, and `patternProperties` combined sweeps and the
+validator's strict sweep stay in step (the combined parser uses the matching
+`isKnown` form to skip declared keys without a per-call `Set`). Roughly triples
+valid throughput on small strict schemas in the benchmark suite.

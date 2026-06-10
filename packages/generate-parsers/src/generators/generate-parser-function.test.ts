@@ -1314,7 +1314,8 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'Responses', { useRefImports: true })
 
     expect(result).not.toContain('...input,')
-    expect(result).toContain('const _knownKeys = new Set(["default"])')
+    expect(result).toContain('if (key === "default") continue;')
+    expect(result).not.toContain('new Set')
 
     const parse = evalGenerated<(input: unknown) => Record<string, unknown>>(
       result.replace(/parseResponse\(([^)]*)\)/g, '$1'),
@@ -1344,6 +1345,20 @@ describe('generate-parser-function', () => {
     )
     expect(() => parse({ default: {}, '200': {} })).not.toThrow()
     expect(() => parse({ default: {}, nope: {} })).toThrow('unknown property "nope"')
+  })
+
+  it('combined parser hoists a Set for the known-key skip above the threshold', () => {
+    const properties = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`k${i}`, { type: 'string' as const }]))
+    const schema: JSONSchema = {
+      type: 'object',
+      properties,
+      patternProperties: { '^x-': { type: 'string' } },
+      additionalProperties: false,
+    }
+    const result = generateParserFunction(schema, 'Wide')
+
+    expect(result).toContain('const _knownKeys = new Set(')
+    expect(result).toContain('if (_knownKeys.has(key)) continue;')
   })
 
   it('pattern-only parser strips non-matching keys under additionalProperties false', () => {

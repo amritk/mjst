@@ -21,6 +21,12 @@ export type UnknownKeyCheck = {
    * constant `true` when there are no known keys (every key is undeclared).
    */
   readonly isUnknown: (keyVar: string) => string
+  /**
+   * The complement of {@link isUnknown}: true when `keyVar` IS a known key — an
+   * inline chain of `===` comparisons, a `Set.has` hit, or the constant `false`
+   * when there are no known keys.
+   */
+  readonly isKnown: (keyVar: string) => string
 }
 
 /**
@@ -37,6 +43,7 @@ export type UnknownKeyCheck = {
  * const check = unknownKeyCheck(['id', 'name'], '_knownKeys0')
  * check.declarations          // []
  * check.isUnknown('_k')       // '_k !== "id" && _k !== "name"'
+ * check.isKnown('_k')         // '_k === "id" || _k === "name"'
  */
 export const unknownKeyCheck = (
   knownKeys: readonly string[],
@@ -44,16 +51,18 @@ export const unknownKeyCheck = (
   inlineLimit: number = INLINE_KEY_LIMIT,
 ): UnknownKeyCheck => {
   if (knownKeys.length === 0) {
-    return { declarations: [], isUnknown: () => 'true' }
+    return { declarations: [], isUnknown: () => 'true', isKnown: () => 'false' }
   }
   if (knownKeys.length <= inlineLimit) {
     return {
       declarations: [],
       isUnknown: (keyVar) => knownKeys.map((key) => `${keyVar} !== ${JSON.stringify(key)}`).join(' && '),
+      isKnown: (keyVar) => knownKeys.map((key) => `${keyVar} === ${JSON.stringify(key)}`).join(' || '),
     }
   }
   return {
     declarations: [`const ${setName} = new Set(${JSON.stringify(knownKeys)})`],
     isUnknown: (keyVar) => `!${setName}.has(${keyVar})`,
+    isKnown: (keyVar) => `${setName}.has(${keyVar})`,
   }
 }

@@ -8,13 +8,15 @@ describe('unknown-key-check', () => {
 
     expect(check.declarations).toEqual([])
     expect(check.isUnknown('_k')).toBe('_k !== "id" && _k !== "name"')
+    expect(check.isKnown('_k')).toBe('_k === "id" || _k === "name"')
   })
 
-  it('uses the constant true when there are no known keys', () => {
+  it('uses the constant true/false when there are no known keys', () => {
     const check = unknownKeyCheck([], '_knownKeys0')
 
     expect(check.declarations).toEqual([])
     expect(check.isUnknown('_k')).toBe('true')
+    expect(check.isKnown('_k')).toBe('false')
   })
 
   it('hoists a Set and tests membership above the threshold', () => {
@@ -23,6 +25,7 @@ describe('unknown-key-check', () => {
 
     expect(check.declarations).toEqual([`const _knownKeysFoo = new Set(${JSON.stringify(keys)})`])
     expect(check.isUnknown('_k')).toBe('!_knownKeysFoo.has(_k)')
+    expect(check.isKnown('_k')).toBe('_knownKeysFoo.has(_k)')
   })
 
   it('stays inline exactly at the threshold', () => {
