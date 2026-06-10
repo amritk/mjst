@@ -1,5 +1,12 @@
 # @amritk/adapters
 
+## 0.2.10
+
+### Patch Changes
+
+- Updated dependencies [cdfe681]
+  - @amritk/helpers@0.10.0
+
 ## 0.2.9
 
 ### Patch Changes
