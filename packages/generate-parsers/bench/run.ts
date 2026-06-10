@@ -73,9 +73,19 @@ const run = async (): Promise<void> => {
   console.log(`Node/Bun: ${typeof Bun !== 'undefined' ? `Bun ${Bun.version}` : process.version}`)
   console.log('Each library is timed in an isolated process; ±n% is the coefficient of variation,')
   console.log('and ~ flags a sample whose CV exceeded 10% (treat it as less trustworthy).')
-  console.log('All parsers strip undeclared keys (mjst via strict + stripUnknown) and throw on bad types.\n')
+  console.log('parseSafe strips undeclared keys (mjst via strict + stripUnknown); parseStrict rejects them')
+  console.log('(mjst via strict + additionalProperties: false). Both throw on bad types.\n')
 
+  let lastMode = ''
   for (const parseCase of PARSE_CASES) {
+    if (parseCase.mode !== lastMode) {
+      lastMode = parseCase.mode
+      const banner =
+        parseCase.mode === 'safe'
+          ? '################  parseSafe — assert + strip extras  ################'
+          : '################  parseStrict — assert + reject extras  ################'
+      console.log(`\n${banner}\n`)
+    }
     console.log(`## ${parseCase.name}\n`)
 
     const results = new Map<LibraryId, WorkerResult>()
@@ -108,7 +118,18 @@ const run = async (): Promise<void> => {
     // Cold "prepare a parser" cost. Only mjst has a build step (codegen); zod and
     // TypeBox author/interpret with no compile, so there is nothing to time.
     const mjstGen = await prepareMs(() =>
-      buildSchema(parseCase.schema, parseCase.typeName, undefined, false, false, true, 'package', './', false, true),
+      buildSchema(
+        parseCase.schema,
+        parseCase.typeName,
+        undefined,
+        false,
+        false,
+        true,
+        'package',
+        './',
+        false,
+        parseCase.mode === 'safe',
+      ),
     )
     console.log('\n  prepare-a-parser cost (one-shot):')
     console.log(`    mjst codegen (source)   ${mjstGen.toFixed(3)} ms`)

@@ -29,19 +29,22 @@ export const LIBRARY_LABELS: Record<LibraryId, string> = {
 }
 
 /**
- * TypeBox parse pipeline: clone the input (so the operation stays pure), strip
- * undeclared properties, then assert the declared shape. This is the parseSafe
- * equivalent — `Default`/`Convert` are deliberately left out so no value is
- * coerced, matching what mjst's `strict` parser and zod's `.parse` do.
+ * TypeBox parse pipelines, both cloning first so the operation stays pure and
+ * leaving `Default`/`Convert` out so no value is coerced (matching mjst's
+ * `strict` parser and zod's `.parse`):
+ *   - safe — `Clean` strips undeclared properties, then `Assert`.
+ *   - strict — `Assert` against the closed schema, which rejects extras.
  */
-const TYPEBOX_PARSE_OPS = ['Clone', 'Clean', 'Assert'] as const
+const TYPEBOX_PARSE_OPS = {
+  safe: ['Clone', 'Clean', 'Assert'],
+  strict: ['Clone', 'Assert'],
+} as const
 
 /**
- * Generates mjst parser source for `parseCase` in `strict + stripUnknown` mode,
- * writes the self-contained embedded output (parsers plus their `_helpers/`
- * sources) to a temp dir, and dynamically imports the exported `parse<TypeName>`.
- * strict makes the parser throw on a type mismatch like the others; stripUnknown
- * removes the undeclared keys instead of preserving them.
+ * Generates mjst parser source for `parseCase` and dynamically imports the
+ * exported `parse<TypeName>`. Both modes run in `strict` so a type mismatch
+ * throws like the others; `stripUnknown` is on only in safe mode (strict mode's
+ * schema is closed, so undeclared keys are rejected rather than stripped).
  */
 const loadMjstParser = async (parseCase: ParseCase): Promise<Parser> => {
   const files = await buildSchema(
@@ -54,7 +57,7 @@ const loadMjstParser = async (parseCase: ParseCase): Promise<Parser> => {
     'embedded', // helpersMode — ship helper sources so the temp dir is self-contained
     './', // helpersImportPrefix
     false, // readonly
-    true, // stripUnknown
+    parseCase.mode === 'safe', // stripUnknown — strip extras (safe) vs reject them via the closed schema (strict)
   )
   const dir = mkdtempSync(join(tmpdir(), 'mjst-parse-bench-'))
   for (const file of files) {
@@ -85,7 +88,8 @@ export const buildParser = async (lib: LibraryId, parseCase: ParseCase): Promise
     }
     case 'typebox': {
       const schema = parseCase.typebox as TSchema
-      return (input) => Value.Parse(TYPEBOX_PARSE_OPS, schema, input)
+      const ops = TYPEBOX_PARSE_OPS[parseCase.mode]
+      return (input) => Value.Parse(ops, schema, input)
     }
   }
 }

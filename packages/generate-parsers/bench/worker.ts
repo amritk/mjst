@@ -26,28 +26,31 @@ if (!parseCase) throw new Error(`unknown parse case: ${caseName}`)
 
 const parse = await buildParser(libId, parseCase)
 
-// Parity has two halves under parseSafe: the parser must (1) produce exactly the
-// stripped `expected` object from valid-with-extras input, and (2) reject the
-// wrong-typed `invalid` sample by throwing. Report rather than throw so the
+// Parity has two halves: the parser must (1) produce exactly the `expected`
+// object from `input` (stripped extras in safe mode, the clean value unchanged in
+// strict mode), and (2) reject every `mustThrow` sample by throwing — wrong types
+// in both modes, plus extra keys in strict mode. Report rather than throw so the
 // orchestrator can flag a disagreement in the table instead of aborting.
-let output: unknown
-let stripOk = false
+let outputOk = false
 try {
-  output = parse(parseCase.input)
-  stripOk = Bun.deepEquals(output, parseCase.expected)
+  outputOk = Bun.deepEquals(parse(parseCase.input), parseCase.expected)
 } catch {
-  stripOk = false
+  outputOk = false
 }
 
-let rejectsInvalid = false
-try {
-  parse(parseCase.invalid)
-} catch {
-  rejectsInvalid = true
+const throws = (sample: unknown): boolean => {
+  try {
+    parse(sample)
+    return false
+  } catch {
+    return true
+  }
 }
+const rejectsAll = parseCase.mustThrow.every(throws)
 
-const parityOk = stripOk && rejectsInvalid
-const parityDetail = `${stripOk ? 'strip✓' : 'strip✗'} ${rejectsInvalid ? 'reject✓' : 'reject✗'}`
+const parityOk = outputOk && rejectsAll
+const verb = parseCase.mode === 'safe' ? 'strip' : 'keep'
+const parityDetail = `${outputOk ? `${verb}✓` : `${verb}✗`} ${rejectsAll ? 'reject✓' : 'reject✗'}`
 
 // Pool of distinct deep clones so the timed loop cycles fresh object identities
 // rather than hammering one frozen value — the input is no longer loop-invariant,
