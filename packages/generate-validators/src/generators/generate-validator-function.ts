@@ -101,27 +101,48 @@ type NestingContext = {
 const createRootContext = (): NestingContext => ({ objVar: 'obj', pathPrefix: '${_path}', depth: 0, hoisted: [] })
 
 /**
+ * Returns the `patternProperties` regex sources, or an empty array when the
+ * schema declares none. The keys of `patternProperties` are the patterns.
+ */
+const patternPropertySources = (schema: JSONSchema): string[] => {
+  if (!isSchemaObject(schema) || !('patternProperties' in schema)) return []
+  const patterns = schema.patternProperties
+  if (typeof patterns !== 'object' || patterns === null) return []
+  return Object.keys(patterns)
+}
+
+/**
  * Generates the unknown-key sweep for `additionalProperties: false`, mirroring
  * the interpreter's behaviour (same error message, one error per extra key).
  * The known-keys Set is hoisted to module scope and the sweep uses `for...in`
  * — the same allocation-free shape Ajv compiles to — so the hot path costs one
- * Set lookup per key. Schemas that combine it with `patternProperties` are
- * skipped: the generator does not evaluate key patterns yet, so rejecting
- * every undeclared key would wrongly fail keys the patterns allow.
+ * Set lookup per key. When the schema also declares `patternProperties`, a key
+ * matching any pattern is not "additional": the patterns are compiled once at
+ * module scope (the same regex-caching the interpreter does) and a key survives
+ * the sweep if it matches the known-keys Set or any pattern.
  */
 const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): string[] => {
   if (!isSchemaObject(schema)) return []
   if (!hasAdditionalProperties(schema) || schema.additionalProperties !== false) return []
-  if ('patternProperties' in schema) return []
 
   const known = Object.keys(hasProperties(schema) ? schema.properties : {})
   const setName = `_knownKeys${ctx.hoisted.length}`
   ctx.hoisted.push(`const ${setName} = new Set(${JSON.stringify(known)})`)
   const d = ctx.depth
 
+  // A key that matches any `patternProperties` regex is allowed, so only keys
+  // outside both the known-keys Set and every pattern count as additional.
+  const patterns = patternPropertySources(schema)
+  let patternGuard = ''
+  if (patterns.length > 0) {
+    const patternsName = `_patterns${ctx.hoisted.length}`
+    ctx.hoisted.push(`const ${patternsName} = [${patterns.map((p) => `new RegExp(${JSON.stringify(p)})`).join(', ')}]`)
+    patternGuard = ` && !${patternsName}.some((re) => re.test(_key${d}))`
+  }
+
   return [
     `  for (const _key${d} in ${ctx.objVar}) {`,
-    `    if (!${setName}.has(_key${d})) {`,
+    `    if (!${setName}.has(_key${d})${patternGuard}) {`,
     `      errors.push({ message: 'must NOT have additional properties', path: \`${ctx.pathPrefix}/\${_key${d}}\` })`,
     `    }`,
     `  }`,
