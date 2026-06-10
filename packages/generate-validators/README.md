@@ -95,17 +95,17 @@ Returns: `Promise<GeneratedFile[]>` where `GeneratedFile = { filename: string; c
 ## Benchmarks
 
 Generated validators are straight-line, monomorphic TypeScript with no generic
-dispatch, so they validate quickly once emitted — and emitting them is far
-cheaper than compiling a schema at startup. Measured on Bun 1.3 (Linux x64),
-validating valid input at steady state:
+dispatch, so they validate as fast as an Ajv-compiled function once emitted —
+and emitting them is far cheaper than compiling a schema at startup. Measured
+on Bun 1.3 (Linux x64), validating valid input at steady state:
 
 | schema | mjst (generated) | ajv (compiled) | typebox (compiled) | zod |
 |:--|--:|--:|--:|--:|
-| small (4 fields) | **~38M** ops/s | ~6.5M ops/s | ~3.9M ops/s | ~1.7M ops/s |
-| order (nested + array) | **~16M** ops/s | ~2.6M ops/s | ~1.7M ops/s | ~0.4M ops/s |
+| small (4 fields) | **~9.5M** ops/s | ~9.3M ops/s | ~4.8M ops/s | ~1.7M ops/s |
+| order (nested + array) | **~3.7M** ops/s | ~3.5M ops/s | ~2.0M ops/s | ~0.4M ops/s |
 
-Preparing a validator costs ~0.11 ms for mjst codegen and ~0.13–0.29 ms for a
-TypeBox `TypeCompiler` compile, versus ~12–13 ms for an Ajv compile. All four
+Preparing a validator costs ~0.15–0.20 ms for mjst codegen and ~0.12–0.21 ms for
+a TypeBox `TypeCompiler` compile, versus ~13–14 ms for an Ajv compile. All four
 libraries agree on every verdict; parity is asserted before timing (TypeBox is
 given uuid/email format checkers so every library does the same work).
 Micro-benchmark figures vary by machine and runtime — reproduce with:

@@ -78,14 +78,76 @@ const wrongTypeCondition = (accessor: string, type: string): string => {
 }
 
 /**
- * Generates validation lines for a single property in an object schema.
- * Handles $ref delegation, enum checks, type checks, and string/number constraints.
+ * Where in the object tree the generated checks live. The root context reads
+ * from `obj` and reports missing properties at `_path`; every inline nested
+ * object gets its own narrowed variable and a longer static path, so checks
+ * can recurse to any depth without variable or path collisions.
  */
-const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired: boolean, suffix: string): string[] => {
+type NestingContext = {
+  /** Generated variable holding the object currently being checked. */
+  objVar: string
+  /** Template-literal body that evaluates to the current object's path. */
+  pathPrefix: string
+  /** Inline-object nesting depth, used to mint collision-free variable names. */
+  depth: number
+  /**
+   * Module-level statements to emit before the validator function. Shared by
+   * every nesting level of one validator so per-call work (like building a
+   * known-keys Set) is paid once at module load instead of on every call.
+   */
+  hoisted: string[]
+}
+
+const createRootContext = (): NestingContext => ({ objVar: 'obj', pathPrefix: '${_path}', depth: 0, hoisted: [] })
+
+/**
+ * Generates the unknown-key sweep for `additionalProperties: false`, mirroring
+ * the interpreter's behaviour (same error message, one error per extra key).
+ * The known-keys Set is hoisted to module scope and the sweep uses `for...in`
+ * — the same allocation-free shape Ajv compiles to — so the hot path costs one
+ * Set lookup per key. Schemas that combine it with `patternProperties` are
+ * skipped: the generator does not evaluate key patterns yet, so rejecting
+ * every undeclared key would wrongly fail keys the patterns allow.
+ */
+const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): string[] => {
+  if (!isSchemaObject(schema)) return []
+  if (!hasAdditionalProperties(schema) || schema.additionalProperties !== false) return []
+  if ('patternProperties' in schema) return []
+
+  const known = Object.keys(hasProperties(schema) ? schema.properties : {})
+  const setName = `_knownKeys${ctx.hoisted.length}`
+  ctx.hoisted.push(`const ${setName} = new Set(${JSON.stringify(known)})`)
+  const d = ctx.depth
+
+  return [
+    `  for (const _key${d} in ${ctx.objVar}) {`,
+    `    if (!${setName}.has(_key${d})) {`,
+    `      errors.push({ message: 'must NOT have additional properties', path: \`${ctx.pathPrefix}/\${_key${d}}\` })`,
+    `    }`,
+    `  }`,
+  ]
+}
+
+/**
+ * Generates validation lines for a single property in an object schema.
+ * Handles $ref delegation, enum checks, type checks, string/number constraints,
+ * and recursion into inline nested objects.
+ */
+const generatePropertyChecks = (
+  key: string,
+  propSchema: JSONSchema,
+  isRequired: boolean,
+  suffix: string,
+  ctx: NestingContext,
+): string[] => {
   if (!isSchemaObject(propSchema)) return []
 
-  const raw = `obj[${JSON.stringify(key)}]`
-  const path = `\`\${_path}/${key}\``
+  const raw = `${ctx.objVar}[${JSON.stringify(key)}]`
+  const path = `\`${ctx.pathPrefix}/${key}\``
+  // Missing-property errors report at the parent object's path. At the root
+  // that is the `_path` parameter itself; inside nested objects it is the
+  // parent's accumulated static path.
+  const parentPath = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
   const lines: string[] = []
 
   // $ref — delegate to the imported validator
@@ -94,8 +156,8 @@ const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired:
     const vName = validatorName(refToName(ref, suffix))
 
     if (isRequired) {
-      lines.push(`  if (!(${JSON.stringify(key)} in obj)) {`)
-      lines.push(`    errors.push({ message: "must have required property '${key}'", path: _path })`)
+      lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
+      lines.push(`    errors.push({ message: "must have required property '${key}'", path: ${parentPath} })`)
       lines.push(`  } else {`)
       lines.push(`    const _r = ${vName}(${raw}, ${path})`)
       lines.push(`    if (_r !== true) errors.push(..._r.errors)`)
@@ -113,8 +175,8 @@ const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired:
   const instanceOf = getMjstInstanceOf(propSchema)
   if (instanceOf) {
     if (isRequired) {
-      lines.push(`  if (!(${JSON.stringify(key)} in obj)) {`)
-      lines.push(`    errors.push({ message: "must have required property '${key}'", path: _path })`)
+      lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
+      lines.push(`    errors.push({ message: "must have required property '${key}'", path: ${parentPath} })`)
       lines.push(`  } else if (!(${raw} instanceof ${instanceOf})) {`)
       lines.push(`    errors.push({ message: 'must be ${instanceOf}', path: ${path} })`)
       lines.push(`  }`)
@@ -130,8 +192,8 @@ const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired:
   const primitive = getMjstPrimitive(propSchema)
   if (primitive) {
     if (isRequired) {
-      lines.push(`  if (!(${JSON.stringify(key)} in obj)) {`)
-      lines.push(`    errors.push({ message: "must have required property '${key}'", path: _path })`)
+      lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
+      lines.push(`    errors.push({ message: "must have required property '${key}'", path: ${parentPath} })`)
       lines.push(`  } else if (typeof ${raw} !== "${primitive}") {`)
       lines.push(`    errors.push({ message: 'must be ${primitive}', path: ${path} })`)
       lines.push(`  }`)
@@ -148,8 +210,8 @@ const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired:
     const mismatch = constMismatchCondition(raw, propSchema.const)
     const msg = JSON.stringify(`must be ${JSON.stringify(propSchema.const)}`)
     if (isRequired) {
-      lines.push(`  if (!(${JSON.stringify(key)} in obj)) {`)
-      lines.push(`    errors.push({ message: "must have required property '${key}'", path: _path })`)
+      lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
+      lines.push(`    errors.push({ message: "must have required property '${key}'", path: ${parentPath} })`)
       lines.push(`  } else if (${mismatch}) {`)
       lines.push(`    errors.push({ message: ${msg}, path: ${path} })`)
       lines.push(`  }`)
@@ -167,8 +229,8 @@ const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired:
     const label = (propSchema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
 
     if (isRequired) {
-      lines.push(`  if (!(${JSON.stringify(key)} in obj)) {`)
-      lines.push(`    errors.push({ message: "must have required property '${key}'", path: _path })`)
+      lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
+      lines.push(`    errors.push({ message: "must have required property '${key}'", path: ${parentPath} })`)
       lines.push(`  } else if (!(${allowed} as unknown[]).includes(${raw})) {`)
       lines.push(`    errors.push({ message: \`must be one of: ${label}\`, path: ${path} })`)
       lines.push(`  }`)
@@ -187,8 +249,8 @@ const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired:
     const typLabel = typeofString(t)
 
     if (isRequired) {
-      lines.push(`  if (!(${JSON.stringify(key)} in obj)) {`)
-      lines.push(`    errors.push({ message: "must have required property '${key}'", path: _path })`)
+      lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
+      lines.push(`    errors.push({ message: "must have required property '${key}'", path: ${parentPath} })`)
       if (wrongType) {
         lines.push(`  } else if (${wrongType}) {`)
         lines.push(`    errors.push({ message: 'must be ${typLabel}', path: ${path} })`)
@@ -268,7 +330,7 @@ const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired:
         const vName = validatorName(refToName(itemSchema.$ref, suffix))
         lines.push(`  if (Array.isArray(${raw})) {`)
         lines.push(`    for (let _i = 0; _i < ${raw}.length; _i++) {`)
-        lines.push(`      const _ir = ${vName}(${raw}[_i], \`${path.slice(1, -1)}/${key}/\${_i}\`)`)
+        lines.push(`      const _ir = ${vName}(${raw}[_i], \`${path.slice(1, -1)}/\${_i}\`)`)
         lines.push(`      if (_ir !== true) errors.push(..._ir.errors)`)
         lines.push(`    }`)
         lines.push(`  }`)
@@ -281,16 +343,71 @@ const generatePropertyChecks = (key: string, propSchema: JSONSchema, isRequired:
           lines.push(`    for (let _i = 0; _i < ${raw}.length; _i++) {`)
           lines.push(`      const _item = ${raw}[_i]`)
           lines.push(
-            `      if (${itemWrong}) errors.push({ message: 'items must be ${itemLabel}', path: \`${path.slice(1, -1)}/${key}/\${_i}\` })`,
+            `      if (${itemWrong}) errors.push({ message: 'items must be ${itemLabel}', path: \`${path.slice(1, -1)}/\${_i}\` })`,
           )
           lines.push(`    }`)
           lines.push(`  }`)
         }
       }
     }
+
+    // Inline nested object — recurse so the nested fields are actually
+    // validated. Without this only the "must be object" shape check above
+    // runs and everything inside the nested object silently passes.
+    if (t === 'object') {
+      lines.push(...generateInlineObjectChecks(key, propSchema, raw, suffix, ctx))
+    }
   }
 
   return lines
+}
+
+/**
+ * Generates the recursive checks for an inline nested object property, i.e. an
+ * object schema written directly under `properties` rather than referenced via
+ * `$ref` (those delegate to the referenced validator instead). The value is
+ * narrowed into its own block-scoped variable and each nested property runs
+ * through the same per-property generator, so nesting works to any depth.
+ */
+const generateInlineObjectChecks = (
+  key: string,
+  propSchema: JSONSchema,
+  raw: string,
+  suffix: string,
+  ctx: NestingContext,
+): string[] => {
+  if (!isSchemaObject(propSchema)) return []
+
+  const child: NestingContext = {
+    objVar: `_obj${ctx.depth + 1}`,
+    pathPrefix: `${ctx.pathPrefix}/${key}`,
+    depth: ctx.depth + 1,
+    hoisted: ctx.hoisted,
+  }
+
+  const required = new Set(hasRequired(propSchema) ? propSchema.required : [])
+  const properties = hasProperties(propSchema) ? propSchema.properties : {}
+
+  const innerLines: string[] = []
+
+  for (const [childKey, childSchema] of Object.entries(properties)) {
+    innerLines.push(
+      ...generatePropertyChecks(childKey, childSchema as JSONSchema, required.has(childKey), suffix, child),
+    )
+  }
+
+  innerLines.push(...generateStrictKeyChecks(propSchema, child))
+
+  if (innerLines.length === 0) return []
+
+  // The shape check for the property itself already ran (or the property is
+  // optional), so re-guard here instead of assuming the value is an object.
+  return [
+    `  if (typeof ${raw} === 'object' && ${raw} !== null && !Array.isArray(${raw})) {`,
+    `    const ${child.objVar} = ${raw} as Record<string, unknown>`,
+    ...innerLines.map((line) => `  ${line}`),
+    `  }`,
+  ]
 }
 
 /**
@@ -349,11 +466,12 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: s
   const vName = validatorName(typeName)
   const required = new Set(hasRequired(schema) ? schema.required : [])
   const properties = hasProperties(schema) ? schema.properties : {}
+  const ctx = createRootContext()
 
   const propertyLines: string[] = []
 
   for (const [key, propSchema] of Object.entries(properties)) {
-    const checks = generatePropertyChecks(key, propSchema as JSONSchema, required.has(key), suffix)
+    const checks = generatePropertyChecks(key, propSchema as JSONSchema, required.has(key), suffix, ctx)
     if (checks.length > 0) {
       propertyLines.push(...checks)
     }
@@ -372,6 +490,9 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: s
     propertyLines.push(`    if (_r !== true) errors.push(..._r.errors)`)
     propertyLines.push(`  }`)
   }
+
+  // additionalProperties: false rejects every key not declared in properties
+  propertyLines.push(...generateStrictKeyChecks(schema, ctx))
 
   // dependentRequired — when a trigger property is present, its dependencies must be too.
   if (hasDependentRequired(schema)) {
@@ -394,8 +515,12 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: s
 
   const body = propertyLines.length > 0 ? '\n' + propertyLines.join('\n') + '\n' : ''
 
+  // Hoisted statements (e.g. known-keys Sets) come first so every call of the
+  // validator reuses them instead of rebuilding them.
+  const hoistedBlock = ctx.hoisted.length > 0 ? `${ctx.hoisted.join('\n')}\n\n` : ''
+
   return [
-    `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+    `${hoistedBlock}export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
     `  if (typeof input !== 'object' || input === null || Array.isArray(input)) {`,
     `    return { valid: false, errors: [{ message: 'must be object', path: _path }] }`,
     `  }`,

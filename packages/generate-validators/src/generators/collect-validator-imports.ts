@@ -1,7 +1,15 @@
 import { refToFilename } from '@amritk/helpers/ref-to-filename'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
-import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from '@amritk/helpers/schema-guards'
+import {
+  hasAdditionalProperties,
+  hasAllOf,
+  hasAnyOf,
+  hasItems,
+  hasOneOf,
+  hasProperties,
+  hasRef,
+} from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 /**
@@ -70,6 +78,9 @@ const collectDirectRefs = (schema: JSONSchema): string[] => {
     if (hasAdditionalProperties(prop) && hasRef(prop.additionalProperties as JSONSchema)) {
       refs.push((prop.additionalProperties as { $ref: string }).$ref)
     }
+    // Inline nested objects are validated recursively by the generator, so any
+    // $refs anywhere inside them must become imports as well.
+    if (hasProperties(prop)) refs.push(...collectDirectRefs(prop))
   }
 
   if (hasItems(schema) && hasRef(schema.items)) {

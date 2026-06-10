@@ -1,19 +1,21 @@
+import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
 import { generateValidatorFunction } from './generate-validator-function'
 
-// Eval helper: compiles a generated function string in context of a minimal
-// ValidationResult runtime so we can actually run the generated code.
-const _evalValidator = (code: string): ((input: unknown, path?: string) => unknown) => {
-  const _wrapped = `
-    const ValidationResult = null // type-only
-    ${code}
-  `
-  // eslint-disable-next-line no-new-func
-  return new Function(`
-    ${code}
-    return validate${code.match(/export const validate(\w+)/)?.[1] ?? ''}
-  `)() as (input: unknown, path?: string) => unknown
+/**
+ * Compiles a generated validator (TypeScript source) to JavaScript and returns
+ * the exported function, so tests can run real inputs through the emitted code
+ * instead of only asserting on its text.
+ */
+const evalValidator = (code: string): ((input: unknown, path?: string) => unknown) => {
+  const js = ts.transpileModule(code, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText
+  const moduleExports: Record<string, unknown> = {}
+  new Function('exports', js)(moduleExports)
+  const name = Object.keys(moduleExports).find((exportName) => exportName.startsWith('validate'))
+  return moduleExports[name ?? ''] as (input: unknown, path?: string) => unknown
 }
 
 describe('generate-validator-function', () => {
@@ -338,5 +340,152 @@ describe('generate-validator-function', () => {
 
     expect(code).toContain('typeof input !== "bigint"')
     expect(code).toContain('must be bigint')
+  })
+
+  it('validates the fields of an inline nested object', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: {
+        profile: {
+          type: 'object' as const,
+          properties: { name: { type: 'string' as const }, age: { type: 'number' as const } },
+          required: ['name'],
+        },
+      },
+      required: ['profile'],
+    }
+    const validate = evalValidator(generateValidatorFunction(schema, 'User'))
+
+    expect(validate({ profile: { name: 'Ada', age: 36 } })).toBe(true)
+    expect(validate({ profile: { name: 42 } })).toEqual({
+      valid: false,
+      errors: [{ message: 'must be string', path: '/profile/name' }],
+    })
+  })
+
+  it('reports a missing required nested property at the nested parent path', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: {
+        profile: {
+          type: 'object' as const,
+          properties: { name: { type: 'string' as const } },
+          required: ['name'],
+        },
+      },
+      required: ['profile'],
+    }
+    const validate = evalValidator(generateValidatorFunction(schema, 'User'))
+
+    expect(validate({ profile: {} })).toEqual({
+      valid: false,
+      errors: [{ message: "must have required property 'name'", path: '/profile' }],
+    })
+  })
+
+  it('validates inline objects nested more than one level deep', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: {
+        outer: {
+          type: 'object' as const,
+          properties: {
+            inner: {
+              type: 'object' as const,
+              properties: { leaf: { type: 'boolean' as const } },
+              required: ['leaf'],
+            },
+          },
+          required: ['inner'],
+        },
+      },
+      required: ['outer'],
+    }
+    const validate = evalValidator(generateValidatorFunction(schema, 'Tree'))
+
+    expect(validate({ outer: { inner: { leaf: true } } })).toBe(true)
+    expect(validate({ outer: { inner: { leaf: 'no' } } })).toEqual({
+      valid: false,
+      errors: [{ message: 'must be boolean', path: '/outer/inner/leaf' }],
+    })
+  })
+
+  it('rejects undeclared keys when additionalProperties is false', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { id: { type: 'number' as const } },
+      required: ['id'],
+      additionalProperties: false,
+    }
+    const validate = evalValidator(generateValidatorFunction(schema, 'Strict'))
+
+    expect(validate({ id: 1 })).toBe(true)
+    expect(validate({ id: 1, extra: 'nope' })).toEqual({
+      valid: false,
+      errors: [{ message: 'must NOT have additional properties', path: '/extra' }],
+    })
+  })
+
+  it('rejects undeclared nested keys when the nested object sets additionalProperties false', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: {
+        nested: {
+          type: 'object' as const,
+          properties: { a: { type: 'string' as const } },
+          additionalProperties: false,
+        },
+      },
+      required: ['nested'],
+    }
+    const validate = evalValidator(generateValidatorFunction(schema, 'Strict'))
+
+    expect(validate({ nested: { a: 'ok' } })).toBe(true)
+    expect(validate({ nested: { a: 'ok', b: 'extra' } })).toEqual({
+      valid: false,
+      errors: [{ message: 'must NOT have additional properties', path: '/nested/b' }],
+    })
+  })
+
+  it('allows undeclared keys when additionalProperties is absent', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { id: { type: 'number' as const } },
+      required: ['id'],
+    }
+    const validate = evalValidator(generateValidatorFunction(schema, 'Loose'))
+
+    expect(validate({ id: 1, extra: 'fine' })).toBe(true)
+  })
+
+  it('skips the additionalProperties false sweep when patternProperties is present', () => {
+    // The generator does not evaluate key patterns yet, so sweeping every
+    // undeclared key would wrongly reject keys the patterns allow.
+    const schema = {
+      type: 'object' as const,
+      properties: { id: { type: 'number' as const } },
+      patternProperties: { '^x-': { type: 'string' as const } },
+      additionalProperties: false,
+    }
+    const code = generateValidatorFunction(schema, 'Extensible')
+
+    expect(code).not.toContain('must NOT have additional properties')
+  })
+
+  it('reports array item errors at the item index path', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { tags: { type: 'array' as const, items: { type: 'string' as const } } },
+      required: ['tags'],
+    }
+    const code = generateValidatorFunction(schema, 'Post')
+
+    expect(code).toContain('`${_path}/tags/${_i}`')
+
+    const validate = evalValidator(code)
+    expect(validate({ tags: ['a', 42] })).toEqual({
+      valid: false,
+      errors: [{ message: 'items must be string', path: '/tags/1' }],
+    })
   })
 })
