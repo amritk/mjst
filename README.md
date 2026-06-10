@@ -53,14 +53,18 @@ Most tools in this space pick a single lane — types **or** validation **or** d
 
 ### Benchmarks
 
-mjst's validators are *generated* TypeScript — straight-line, monomorphic code with no generic dispatch — so once they're emitted they validate as fast as an Ajv-compiled function without the compile step. The numbers below compare a generated mjst validator against an Ajv-compiled function, a TypeBox-compiled checker, and a hand-written Zod schema on the same data.
+mjst's validators are *generated* TypeScript — straight-line, monomorphic code with no generic dispatch. The exported `validateX` runs a tiny inlined boolean guard on the happy path and falls back to a separate error-collecting function only when input is actually invalid, so a valid-input check beats every other library measured — including the build-time transformer typia. The numbers below compare a generated mjst validator against typia, an Ajv-compiled function, a TypeBox-compiled checker, and a hand-written Zod schema on the same data.
 
 **Steady-state throughput** (valid input, higher is better):
 
-| schema | mjst (generated) | ajv (compiled) | typebox (compiled) | zod |
-|:--|--:|--:|--:|--:|
-| small (4 fields) | **~9.5M** ops/s | ~9.3M ops/s | ~4.8M ops/s | ~1.7M ops/s |
-| order (nested + array) | **~3.7M** ops/s | ~3.5M ops/s | ~2.0M ops/s | ~0.4M ops/s |
+| schema | mjst (generated) | typia (transformed) | ajv (compiled) | typebox (compiled) | zod |
+|:--|--:|--:|--:|--:|--:|
+| small (4 fields) | **~22M** ops/s | ~4.2M ops/s | ~7.0M ops/s | ~4.0M ops/s | ~1.8M ops/s |
+| order (nested + array) | **~6.9M** ops/s | ~1.7M ops/s | ~2.5M ops/s | ~1.7M ops/s | ~0.4M ops/s |
+| assert-loose | **~110M** ops/s | ~100M ops/s | ~31M ops/s | ~41M ops/s | ~3.2M ops/s |
+| assert-strict | **~98M** ops/s | ~82M ops/s | ~13M ops/s | ~28M ops/s | ~1.1M ops/s |
+
+The `assert-loose` / `assert-strict` rows are the exact shape used by [`moltar/typescript-runtime-type-benchmarks`](https://github.com/moltar/typescript-runtime-type-benchmarks).
 
 **Prepare-a-validator cost** (one-shot, lower is better):
 
@@ -69,7 +73,7 @@ mjst's validators are *generated* TypeScript — straight-line, monomorphic code
 | small | ~0.15 ms | ~13 ms | ~0.12 ms | n/a — authored in code |
 | order | ~0.20 ms | ~14 ms | ~0.21 ms | n/a — authored in code |
 
-<sub>Measured on Bun 1.3 (Linux x64); micro-benchmark figures vary by machine and runtime. All four libraries agree on every valid/invalid verdict (parity is asserted before timing). TypeBox is compiled with `TypeCompiler` and given uuid/email format checkers so every library does the same work. Reproduce with `cd packages/generate-validators && bun run bench`.</sub>
+<sub>Measured on Bun 1.3 (Linux x64); micro-benchmark figures vary by machine and runtime. Each library is timed in an isolated process over a pool of distinct inputs, reporting the median of many trials (so the optimiser can't hoist or eliminate the work). Every library agrees on each valid/invalid verdict — parity is asserted before timing — and TypeBox is given uuid/email format checkers so every library does the same work. Reproduce with `cd packages/generate-validators && bun run bench`.</sub>
 
 ---
 
