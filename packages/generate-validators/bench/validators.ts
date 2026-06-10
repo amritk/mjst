@@ -19,14 +19,24 @@ export type BoolValidator = (input: unknown) => boolean
  * `moltar/typescript-runtime-type-benchmarks` that are installed here. Each id
  * is what the orchestrator passes to a worker to select one library to isolate.
  */
-export const LIBRARY_IDS = ['mjst', 'ajv', 'typebox', 'zod'] as const
+export const LIBRARY_IDS = ['mjst', 'typia', 'ajv', 'typebox', 'zod'] as const
 export type LibraryId = (typeof LIBRARY_IDS)[number]
 
 export const LIBRARY_LABELS: Record<LibraryId, string> = {
   mjst: 'mjst (generated)',
+  typia: 'typia (transformed)',
   ajv: 'ajv (compiled)',
   typebox: 'typebox (compiled)',
   zod: 'zod',
+}
+
+/**
+ * Libraries whose worker must be spawned with a Bun preload (their codegen is a
+ * load-time transform, not a plain import). typia is transformed by
+ * `typia-preload.ts`; everything else runs transform-free.
+ */
+export const LIBRARY_PRELOADS: Partial<Record<LibraryId, string>> = {
+  typia: 'typia-preload.ts',
 }
 
 const makeAjv = (): Ajv => {
@@ -64,6 +74,14 @@ export const buildValidator = async (lib: LibraryId, benchCase: BenchCase): Prom
   switch (lib) {
     case 'mjst':
       return loadMjstValidator(benchCase)
+    case 'typia': {
+      // Dynamically imported so the typia transform is only applied in the
+      // preloaded worker; the static import would throw in a plain process.
+      const { typiaValidators } = await import('./typia-validators.ts')
+      const validator = typiaValidators[benchCase.name]
+      if (!validator) throw new Error(`no typia validator for case: ${benchCase.name}`)
+      return validator
+    }
     case 'ajv': {
       const validate = makeAjv().compile(benchCase.schema as object) as ValidateFunction
       return (input) => validate(input) === true

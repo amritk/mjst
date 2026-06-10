@@ -35,11 +35,17 @@ for (const sample of benchCase.extraInvalid ?? []) {
 }
 const parityDetail = `${fn(benchCase.valid)}/${fn(benchCase.invalid)}`
 
+// Pool of distinct deep clones so the timed loop cycles fresh object identities
+// rather than hammering one frozen value — the input is no longer loop-invariant,
+// so the optimiser can't hoist a pure validator's call out of the loop. 32 keeps
+// the pool in cache while still being plainly non-constant.
+const pool = (sample: unknown): unknown[] => Array.from({ length: 32 }, () => structuredClone(sample))
+
 const result: WorkerResult = {
   parityOk,
   parityDetail,
-  valid: measure(() => fn(benchCase.valid)),
-  invalid: measure(() => fn(benchCase.invalid)),
+  valid: measure(fn, pool(benchCase.valid)),
+  invalid: measure(fn, pool(benchCase.invalid)),
 }
 
 process.stdout.write(JSON.stringify(result))

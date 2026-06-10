@@ -6,7 +6,7 @@ import addFormats from 'ajv-formats'
 
 import { buildValidatorSchema } from '../src/index.ts'
 import { BENCH_CASES } from './schemas.ts'
-import { LIBRARY_IDS, LIBRARY_LABELS, type LibraryId } from './validators.ts'
+import { LIBRARY_IDS, LIBRARY_LABELS, LIBRARY_PRELOADS, type LibraryId } from './validators.ts'
 import type { WorkerResult } from './worker.ts'
 
 /**
@@ -41,8 +41,8 @@ const fmt = (n: number): string => {
 const pad = (s: string, width: number): string => s.padEnd(width)
 const padStart = (s: string, width: number): string => s.padStart(width)
 
-/** A spread above this fraction is flagged as a noisy (less trustworthy) sample. */
-const NOISY_SPREAD = 0.15
+/** A coefficient of variation above this is flagged as a noisy (less trustworthy) sample. */
+const NOISY_SPREAD = 0.1
 
 /** Throughput + stability for one cell of the table. */
 const cell = (median: number, spread: number): string => {
@@ -50,9 +50,17 @@ const cell = (median: number, spread: number): string => {
   return `${flag}${fmt(median)} (±${(spread * 100).toFixed(0)}%)`
 }
 
+const BENCH_DIR = fileURLToPath(new URL('.', import.meta.url))
+
 /** Spawns an isolated worker to time one library against one case. */
 const runWorker = (caseName: string, lib: LibraryId): WorkerResult => {
-  const stdout = execFileSync(process.execPath, [WORKER, caseName, lib], {
+  // `--conditions development` resolves the `@amritk/*` workspace packages to
+  // their TypeScript sources (no build step needed). Libraries whose codegen is
+  // a load-time transform also get their Bun preload.
+  const preload = LIBRARY_PRELOADS[lib]
+  const flags = ['--conditions', 'development']
+  if (preload) flags.push('--preload', `${BENCH_DIR}${preload}`)
+  const stdout = execFileSync(process.execPath, [...flags, WORKER, caseName, lib], {
     encoding: 'utf8',
     maxBuffer: 1024 * 1024,
   })
@@ -76,7 +84,8 @@ const makeAjv = (): Ajv => {
 const run = async (): Promise<void> => {
   console.log('\n=== @amritk/generate-validators vs ajv vs typebox vs zod ===\n')
   console.log(`Node/Bun: ${typeof Bun !== 'undefined' ? `Bun ${Bun.version}` : process.version}`)
-  console.log('Each library is timed in an isolated process; ~ flags a sample that wobbled >15%.\n')
+  console.log('Each library is timed in an isolated process; ±n% is the coefficient of variation,')
+  console.log('and ~ flags a sample whose CV exceeded 10% (treat it as less trustworthy).\n')
 
   for (const benchCase of BENCH_CASES) {
     console.log(`## ${benchCase.name}\n`)
