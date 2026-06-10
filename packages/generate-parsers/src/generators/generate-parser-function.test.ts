@@ -1638,9 +1638,8 @@ describe('generate-parser-function', () => {
       };
   const _name = input.name;
   const _age = input.age;
-  const _knownKeys = new Set(["name", "age"]);
   for (const _k in input) {
-    if (!_knownKeys.has(_k)) {
+    if (_k !== "name" && _k !== "age") {
       console.warn(\`[User] Unknown property "\${_k}"\`);
     }
   }
@@ -1941,6 +1940,24 @@ describe('generate-parser-function', () => {
       expect(parse({ a: 1, nested: { foo: 'x' } })).toEqual({ a: 1, nested: { foo: 'x' } })
       expect(() => parse({ a: 1, nested: { foo: 'x' }, evil: true })).toThrow('[Demo] unknown property "evil"')
       expect(() => parse({ a: 1, nested: { foo: 'x', evil: 2 } })).toThrow('[DemoNested] unknown property "evil"')
+    })
+
+    it('inlines !== comparisons for the strict-key sweep below the threshold', () => {
+      const result = generateParserFunction(strictKeysSchema, 'Demo', { strict: true })
+
+      expect(result).toContain('_k !== "a" && _k !== "nested"')
+      expect(result).not.toContain('_knownKeysDemo = new Set')
+    })
+
+    it('falls back to a hoisted Set for the strict-key sweep above the threshold', () => {
+      const properties = Object.fromEntries(
+        Array.from({ length: 20 }, (_, i) => [`k${i}`, { type: 'string' as const }]),
+      )
+      const wide: JSONSchema = { type: 'object', properties, additionalProperties: false }
+      const result = generateParserFunction(wide, 'Wide', { strict: true })
+
+      expect(result).toContain('_knownKeysWide = new Set(')
+      expect(result).toContain('!_knownKeysWide.has(_k)')
     })
 
     it('rejects undeclared keys in the shape validator', () => {

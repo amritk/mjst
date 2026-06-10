@@ -26,6 +26,7 @@ import {
   isObjectSchema,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
+import { unknownKeyCheck } from '@amritk/helpers/unknown-key-check'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 /**
@@ -101,25 +102,15 @@ type NestingContext = {
 const createRootContext = (): NestingContext => ({ objVar: 'obj', pathPrefix: '${_path}', depth: 0, hoisted: [] })
 
 /**
- * Up to this many known keys, the unknown-key sweep tests each key against an
- * inline chain of `!==` string comparisons rather than a hoisted `Set`. V8
- * evaluates a short comparison chain faster than `Set.has` (which has to hash
- * the string) for small key counts — the same shape Ajv and TypeBox compile to
- * — and it skips the per-module `Set` allocation. Above the threshold the chain
- * grows long enough that the `Set`'s O(1) lookup wins, so we fall back to it.
- */
-const STRICT_INLINE_KEY_LIMIT = 16
-
-/**
  * Generates the unknown-key sweep for `additionalProperties: false`, mirroring
  * the interpreter's behaviour (same error message, one error per extra key).
  * The sweep uses `for...in` — the same allocation-free shape Ajv compiles to.
- * For a small number of known keys it inlines a chain of `!==` comparisons
- * (faster than `Set.has` and allocation-free, see {@link STRICT_INLINE_KEY_LIMIT});
- * beyond that it hoists a known-keys `Set` to module scope and tests with one
- * lookup per key. Schemas that combine it with `patternProperties` are skipped:
- * the generator does not evaluate key patterns yet, so rejecting every
- * undeclared key would wrongly fail keys the patterns allow.
+ * The per-key "is this undeclared" test comes from `unknownKeyCheck`, which
+ * inlines `!==` comparisons for small key counts (faster than `Set.has` and
+ * allocation-free) and hoists a known-keys `Set` only when the list is long.
+ * Schemas that combine it with `patternProperties` are skipped: the generator
+ * does not evaluate key patterns yet, so rejecting every undeclared key would
+ * wrongly fail keys the patterns allow.
  */
 const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): string[] => {
   if (!isSchemaObject(schema)) return []
@@ -129,23 +120,12 @@ const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): strin
   const known = Object.keys(hasProperties(schema) ? schema.properties : {})
   const d = ctx.depth
 
-  // True when `_key${d}` is not one of the declared properties. With no declared
-  // properties every key is additional; a short list inlines comparisons; a long
-  // one falls back to a hoisted Set.
-  let unknownKeyCondition: string
-  if (known.length === 0) {
-    unknownKeyCondition = 'true'
-  } else if (known.length <= STRICT_INLINE_KEY_LIMIT) {
-    unknownKeyCondition = known.map((key) => `_key${d} !== ${JSON.stringify(key)}`).join(' && ')
-  } else {
-    const setName = `_knownKeys${ctx.hoisted.length}`
-    ctx.hoisted.push(`const ${setName} = new Set(${JSON.stringify(known)})`)
-    unknownKeyCondition = `!${setName}.has(_key${d})`
-  }
+  const check = unknownKeyCheck(known, `_knownKeys${ctx.hoisted.length}`)
+  ctx.hoisted.push(...check.declarations)
 
   return [
     `  for (const _key${d} in ${ctx.objVar}) {`,
-    `    if (${unknownKeyCondition}) {`,
+    `    if (${check.isUnknown(`_key${d}`)}) {`,
     `      errors.push({ message: 'must NOT have additional properties', path: \`${ctx.pathPrefix}/\${_key${d}}\` })`,
     `    }`,
     `  }`,

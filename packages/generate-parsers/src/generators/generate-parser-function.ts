@@ -28,6 +28,7 @@ import {
   isObjectSchema,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
+import { unknownKeyCheck } from '@amritk/helpers/unknown-key-check'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { getDefaultValue } from '#helpers/get-default-value'
 
@@ -692,14 +693,21 @@ const generateObjectParser = (
     preamble.push(generateObjectParser(propSchema, subName, useRefImports, suffix, logWarnings, strict, false))
   }
 
-  // additionalProperties: false — hoist the declared-keys Set so the per-call
-  // sweep is one Set lookup per key. The predicate form is shared by the fast
-  // path and the shape validator; strict mode throws with the offending key.
+  // additionalProperties: false — the per-key "is this undeclared" test inlines
+  // `!==` comparisons for a short key list and hoists a Set only for a long one
+  // (see unknownKeyCheck). The predicate form is shared by the fast path and the
+  // shape validator; strict mode throws with the offending key.
   const strictKeys = hasStrictKeys(schema)
+  const strictKeyCheck = unknownKeyCheck(
+    properties.map(([key]) => key),
+    `_knownKeys${typeName}`,
+  )
   if (strictKeys) {
-    preamble.push(`const _knownKeys${typeName} = new Set(${JSON.stringify(properties.map(([key]) => key))});`)
+    for (const declaration of strictKeyCheck.declarations) {
+      preamble.push(`${declaration};`)
+    }
     preamble.push(
-      `const _hasOnlyKnownKeys${typeName} = (input: Record<string, unknown>): boolean => {\n  for (const _k in input) if (!_knownKeys${typeName}.has(_k)) return false;\n  return true;\n};`,
+      `const _hasOnlyKnownKeys${typeName} = (input: Record<string, unknown>): boolean => {\n  for (const _k in input) if (${strictKeyCheck.isUnknown('_k')}) return false;\n  return true;\n};`,
     )
   }
 
@@ -714,7 +722,7 @@ const generateObjectParser = (
     if (strictKeys) {
       lines.push(`  for (const _k in input) {`)
       lines.push(
-        `    if (!_knownKeys${typeName}.has(_k)) throw new Error(\`[${typeName}] unknown property "\${_k}"\`);`,
+        `    if (${strictKeyCheck.isUnknown('_k')}) throw new Error(\`[${typeName}] unknown property "\${_k}"\`);`,
       )
       lines.push(`  }`)
     }
@@ -788,10 +796,15 @@ const generateObjectParser = (
 
   // Emit a warning for any input key not declared in the schema's properties
   if (logWarnings && propInfo.length > 0) {
-    const keysList = propInfo.map(({ key }) => JSON.stringify(key)).join(', ')
-    lines.push(`  const _knownKeys = new Set([${keysList}]);`)
+    const warnKeyCheck = unknownKeyCheck(
+      propInfo.map(({ key }) => key),
+      '_knownKeys',
+    )
+    for (const declaration of warnKeyCheck.declarations) {
+      lines.push(`  ${declaration};`)
+    }
     lines.push(`  for (const _k in input) {`)
-    lines.push(`    if (!_knownKeys.has(_k)) {`)
+    lines.push(`    if (${warnKeyCheck.isUnknown('_k')}) {`)
     lines.push(`      console.warn(\`[${typeName}] Unknown property "\${_k}"\`);`)
     lines.push(`    }`)
     lines.push(`  }`)
