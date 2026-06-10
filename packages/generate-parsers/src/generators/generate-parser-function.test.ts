@@ -1,7 +1,25 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
-import { generateParserFunction } from './generate-parser-function'
+import { generateParserFunction, generateShapeValidator } from './generate-parser-function'
+
+/**
+ * Compiles generated parser source to JavaScript and returns the named export,
+ * so tests can run real inputs through the emitted code instead of only
+ * asserting on its text. The `isObject` runtime helper the generated code
+ * imports is injected directly.
+ */
+const evalGenerated = <T>(code: string, exportName: string): T => {
+  const js = ts.transpileModule(code, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText
+  const moduleExports: Record<string, unknown> = {}
+  const isObject = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+  new Function('exports', 'isObject', js)(moduleExports, isObject)
+  return moduleExports[exportName] as T
+}
 
 describe('generate-parser-function', () => {
   it('generates parser function for simple object schema', () => {
@@ -1789,6 +1807,151 @@ describe('generate-parser-function', () => {
       const result = generateParserFunction(schema, 'User')
       expect(result).not.toContain('throw new Error')
       expect(result).toContain('if (!isObject(input)) return')
+    })
+  })
+
+  describe('inline nested objects', () => {
+    const nestedSchema: JSONSchema = {
+      type: 'object',
+      properties: {
+        a: { type: 'number' },
+        nested: {
+          type: 'object',
+          properties: { foo: { type: 'string' } },
+          required: ['foo'],
+        },
+      },
+      required: ['a', 'nested'],
+    }
+
+    it('emits a private sub-parser and shape predicate for an inline nested object', () => {
+      const result = generateParserFunction(nestedSchema, 'Demo')
+
+      expect(result).toContain('type DemoNested = Demo["nested"];')
+      expect(result).toContain('const parseDemoNested = (input: unknown): DemoNested =>')
+      expect(result).toContain('const validateDemoNestedShape = (input: unknown): boolean =>')
+      // Private helpers stay private — only the root parser is exported.
+      expect(result).not.toContain('export const parseDemoNested')
+      expect(result).toContain('nested: parseDemoNested(_nested),')
+    })
+
+    it('coerces the fields of an inline nested object', () => {
+      const parse = evalGenerated<(input: unknown) => unknown>(
+        generateParserFunction(nestedSchema, 'Demo'),
+        'parseDemo',
+      )
+
+      expect(parse({ a: 1, nested: { foo: 'x' } })).toEqual({ a: 1, nested: { foo: 'x' } })
+      // Previously the nested object passed through unchecked; now its fields
+      // are coerced like any top-level property.
+      expect(parse({ a: 1, nested: { foo: 42 } })).toEqual({ a: 1, nested: { foo: '42' } })
+    })
+
+    it('throws on invalid inline nested fields in strict mode', () => {
+      const parse = evalGenerated<(input: unknown) => unknown>(
+        generateParserFunction(nestedSchema, 'Demo', { strict: true }),
+        'parseDemo',
+      )
+
+      expect(() => parse({ a: 1, nested: { foo: 42 } })).toThrow('[DemoNested] field "foo" expected string, got number')
+      expect(() => parse({ a: 1, nested: {} })).toThrow('[DemoNested] missing required property "foo"')
+    })
+
+    it('parses inline objects nested more than one level deep', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          outer: {
+            type: 'object',
+            properties: {
+              inner: {
+                type: 'object',
+                properties: { leaf: { type: 'boolean' } },
+                required: ['leaf'],
+              },
+            },
+            required: ['inner'],
+          },
+        },
+        required: ['outer'],
+      }
+      const parse = evalGenerated<(input: unknown) => unknown>(
+        generateParserFunction(schema, 'Tree', { strict: true }),
+        'parseTree',
+      )
+
+      expect(parse({ outer: { inner: { leaf: true } } })).toEqual({ outer: { inner: { leaf: true } } })
+      expect(() => parse({ outer: { inner: { leaf: 'no' } } })).toThrow(
+        '[TreeOuterInner] field "leaf" expected boolean, got string',
+      )
+    })
+
+    it('falls back to deep defaults for required inline nested objects', () => {
+      const parse = evalGenerated<(input: unknown) => unknown>(
+        generateParserFunction(nestedSchema, 'Demo'),
+        'parseDemo',
+      )
+
+      expect(parse(null)).toEqual({ a: 0, nested: { foo: '' } })
+    })
+  })
+
+  describe('additionalProperties: false', () => {
+    const strictKeysSchema: JSONSchema = {
+      type: 'object',
+      properties: {
+        a: { type: 'number' },
+        nested: {
+          type: 'object',
+          properties: { foo: { type: 'string' } },
+          required: ['foo'],
+          additionalProperties: false,
+        },
+      },
+      required: ['a', 'nested'],
+      additionalProperties: false,
+    }
+
+    it('strips undeclared keys at every level', () => {
+      const parse = evalGenerated<(input: unknown) => unknown>(
+        generateParserFunction(strictKeysSchema, 'Demo'),
+        'parseDemo',
+      )
+
+      expect(parse({ a: 1, nested: { foo: 'x', evil: 2 }, evil: true })).toEqual({ a: 1, nested: { foo: 'x' } })
+    })
+
+    it('keeps undeclared keys when additionalProperties is absent', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { a: { type: 'number' } },
+        required: ['a'],
+      }
+      const parse = evalGenerated<(input: unknown) => unknown>(generateParserFunction(schema, 'Loose'), 'parseLoose')
+
+      expect(parse({ a: 1, extra: 'fine' })).toEqual({ a: 1, extra: 'fine' })
+    })
+
+    it('throws on undeclared keys in strict mode', () => {
+      const parse = evalGenerated<(input: unknown) => unknown>(
+        generateParserFunction(strictKeysSchema, 'Demo', { strict: true }),
+        'parseDemo',
+      )
+
+      expect(parse({ a: 1, nested: { foo: 'x' } })).toEqual({ a: 1, nested: { foo: 'x' } })
+      expect(() => parse({ a: 1, nested: { foo: 'x' }, evil: true })).toThrow('[Demo] unknown property "evil"')
+      expect(() => parse({ a: 1, nested: { foo: 'x', evil: 2 } })).toThrow('[DemoNested] unknown property "evil"')
+    })
+
+    it('rejects undeclared keys in the shape validator', () => {
+      // The shape predicate gates the fast path, so it has to refuse inputs
+      // the parser would strip — otherwise extras would survive `{ ...input }`.
+      const combined = `${generateShapeValidator(strictKeysSchema, 'Demo', false)}\n\n${generateParserFunction(strictKeysSchema, 'Demo')}`
+      const isShape = evalGenerated<(input: unknown) => boolean>(combined, 'validateDemoShape')
+
+      expect(isShape({ a: 1, nested: { foo: 'x' } })).toBe(true)
+      expect(isShape({ a: 1, nested: { foo: 'x' }, evil: true })).toBe(false)
+      expect(isShape({ a: 1, nested: { foo: 'x', evil: 2 } })).toBe(false)
     })
   })
 })

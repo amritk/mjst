@@ -2,6 +2,7 @@ import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { safeAccessor, safeKey } from '@amritk/helpers/safe-accessor'
 import {
+  hasAdditionalProperties,
   hasAllOf,
   hasAnyOf,
   hasConst,
@@ -51,7 +52,8 @@ type GenerateParserOptions = {
   /**
    * When true, the generated parser throws on type/shape mismatches instead
    * of coercing invalid input to default values. Throws on the first violation
-   * with a path-aware Error. Unknown extra keys are still allowed.
+   * with a path-aware Error. When the schema sets `additionalProperties: false`,
+   * undeclared keys throw too; otherwise they are still allowed.
    */
   readonly strict?: boolean
   /**
@@ -366,6 +368,7 @@ const generateFallbackObject = (
   useRefImports: boolean,
   typeName: string,
   suffix: string,
+  subTypeNames?: Map<string, string>,
 ): string => {
   if (!hasProperties(schema)) {
     return `{} as ${typeName}`
@@ -383,7 +386,12 @@ const generateFallbackObject = (
   for (const [key, propSchema] of Object.entries(schema.properties)) {
     const isRequired = isPropertyRequired(key, schema)
     if (isRequired) {
-      const fallbackValue = generateFallbackValue(key, propSchema, useRefImports, suffix)
+      // Inline nested objects delegate to their sub-parser so the fallback
+      // carries proper deep defaults instead of an empty object literal.
+      const subName = subTypeNames?.get(key)
+      const fallbackValue = subName
+        ? `${generateParserName(subName)}(undefined)`
+        : generateFallbackValue(key, propSchema, useRefImports, suffix)
       if (fallbackValue === 'undefined') {
         return `{} as ${typeName}`
       }
@@ -471,6 +479,65 @@ const toVarName = (key: string): string => {
  * whether `input` is already in the shape produced by the parser's fast path.
  */
 const shapeValidatorName = (typeName: string): string => `validate${typeName}Shape`
+
+/**
+ * Matches an inline nested object property — an object schema written directly
+ * under `properties` with its own `properties`, rather than referenced via
+ * `$ref`. These get a private sub-parser (and shape predicate) in the same
+ * generated file so their fields are actually parsed; anything involving
+ * composition, conditionals, enums, or record semantics keeps the existing
+ * code paths.
+ */
+const isInlineObjectProperty = (propSchema: JSONSchema): propSchema is JSONSchema.Object => {
+  if (!isSchemaObject(propSchema)) return false
+  if (hasRef(propSchema) || hasEnum(propSchema) || hasConst(propSchema)) return false
+  if (hasOneOf(propSchema) || hasAnyOf(propSchema) || hasAllOf(propSchema)) return false
+  if ('patternProperties' in propSchema || 'not' in propSchema || 'if' in propSchema) return false
+  // additionalProperties-as-schema records go through the record paths instead
+  if (hasAdditionalProperties(propSchema) && typeof propSchema.additionalProperties !== 'boolean') return false
+  return isObjectSchema(propSchema) && hasProperties(propSchema)
+}
+
+/**
+ * Builds the property-key → synthesized-type-name map for every inline nested
+ * object property of a schema, e.g. parent `Order` + key `shipTo` →
+ * `OrderShipTo`. Both the parser and the shape validator derive the map
+ * independently, so the naming (including collision suffixes) is a pure
+ * function of the schema and parent type name.
+ */
+const collectInlineObjectProperties = (schema: JSONSchema, typeName: string): Map<string, string> => {
+  const subTypeNames = new Map<string, string>()
+  if (!hasProperties(schema)) return subTypeNames
+
+  const used = new Set<string>()
+  for (const [key, propSchema] of Object.entries(schema.properties)) {
+    if (!isInlineObjectProperty(propSchema)) continue
+    const pascal = key
+      .replace(/[^a-zA-Z0-9_$]/g, '_')
+      .split('_')
+      .filter((part) => part.length > 0)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join('')
+    let subName = `${typeName}${pascal || 'Value'}`
+    while (used.has(subName)) subName = `${subName}_`
+    used.add(subName)
+    subTypeNames.set(key, subName)
+  }
+  return subTypeNames
+}
+
+/**
+ * True when the parser must reject (strict mode) or strip (coerce mode) every
+ * undeclared key: the schema sets `additionalProperties: false` and nothing
+ * else (key patterns, composition) can legitimately introduce extra keys.
+ */
+const hasStrictKeys = (schema: JSONSchema): boolean => {
+  if (!isSchemaObject(schema) || !hasProperties(schema)) return false
+  if (!hasAdditionalProperties(schema) || schema.additionalProperties !== false) return false
+  if ('patternProperties' in schema) return false
+  if (hasAllOf(schema) || hasOneOf(schema) || hasAnyOf(schema)) return false
+  return true
+}
 
 /**
  * Generates a fast-path type check expression for a property.
@@ -597,24 +664,59 @@ const generateObjectParser = (
   suffix: string,
   logWarnings?: boolean,
   strict?: boolean,
+  exported = true,
 ): string => {
   const functionName = generateParserName(typeName)
+  const exportPrefix = exported ? 'export ' : ''
 
   if (!hasProperties(schema)) {
     if (strict) {
-      return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);\n  return input as ${typeName};\n};`
+      return `${exportPrefix}const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);\n  return input as ${typeName};\n};`
     }
-    return `export const ${functionName} = (input: unknown): ${typeName} => isObject(input) ? input as ${typeName} : {} as ${typeName};`
+    return `${exportPrefix}const ${functionName} = (input: unknown): ${typeName} => isObject(input) ? input as ${typeName} : {} as ${typeName};`
   }
 
-  const fallbackObject = generateFallbackObject(schema, useRefImports, typeName, suffix)
   const properties = Object.entries((schema as { properties: Record<string, JSONSchema> }).properties)
 
+  // Inline nested object properties get a private sub-parser (plus shape
+  // predicate and type alias) in the same file, so their fields are parsed for
+  // real instead of only passing an isObject check. The sub-parser recurses
+  // through this same generator, so nesting works to any depth.
+  const subTypeNames = collectInlineObjectProperties(schema, typeName)
+  const preamble: string[] = []
+
+  for (const [key, subName] of subTypeNames) {
+    const propSchema = (schema as { properties: Record<string, JSONSchema> }).properties[key] as JSONSchema
+    preamble.push(`type ${subName} = ${typeName}[${JSON.stringify(key)}];`)
+    preamble.push(generateShapeValidator(propSchema, subName, useRefImports, suffix, false))
+    preamble.push(generateObjectParser(propSchema, subName, useRefImports, suffix, logWarnings, strict, false))
+  }
+
+  // additionalProperties: false — hoist the declared-keys Set so the per-call
+  // sweep is one Set lookup per key. The predicate form is shared by the fast
+  // path and the shape validator; strict mode throws with the offending key.
+  const strictKeys = hasStrictKeys(schema)
+  if (strictKeys) {
+    preamble.push(`const _knownKeys${typeName} = new Set(${JSON.stringify(properties.map(([key]) => key))});`)
+    preamble.push(
+      `const _hasOnlyKnownKeys${typeName} = (input: Record<string, unknown>): boolean => {\n  for (const _k in input) if (!_knownKeys${typeName}.has(_k)) return false;\n  return true;\n};`,
+    )
+  }
+
+  const fallbackObject = generateFallbackObject(schema, useRefImports, typeName, suffix, subTypeNames)
+
   const lines: string[] = []
-  lines.push(`export const ${functionName} = (input: unknown): ${typeName} => {`)
+  lines.push(`${exportPrefix}const ${functionName} = (input: unknown): ${typeName} => {`)
   if (strict) {
     for (const assertionLine of generateObjectStrictAssertion(schema, typeName)) {
       lines.push(assertionLine)
+    }
+    if (strictKeys) {
+      lines.push(`  for (const _k in input) {`)
+      lines.push(
+        `    if (!_knownKeys${typeName}.has(_k)) throw new Error(\`[${typeName}] unknown property "\${_k}"\`);`,
+      )
+      lines.push(`  }`)
     }
   } else {
     lines.push(`  if (!isObject(input)) return ${fallbackObject};`)
@@ -651,7 +753,12 @@ const generateObjectParser = (
       if (shouldUseRecordRefImport(propSchema, useRefImports)) {
         canFastPath = false
       } else {
-        const check = generatePropertyTypeCheck(varName, propSchema, useRefImports, suffix)
+        const subName = subTypeNames.get(key)
+        // Inline nested objects fast-path through their private shape
+        // predicate, the same way $ref properties use the imported one.
+        const check = subName
+          ? `${shapeValidatorName(subName)}(${varName})`
+          : generatePropertyTypeCheck(varName, propSchema, useRefImports, suffix)
         if (check === null) {
           canFastPath = false
         } else {
@@ -663,6 +770,13 @@ const generateObjectParser = (
         }
       }
     }
+  }
+
+  // The fast path returns `{ ...input }`, so with additionalProperties: false
+  // it must only fire when no undeclared keys are present. Strict mode already
+  // threw on them above.
+  if (strictKeys && !strict) {
+    fastPathChecks.push(`_hasOnlyKnownKeys${typeName}(input)`)
   }
 
   // Second pass: generate variable declarations only for properties that need them
@@ -692,9 +806,13 @@ const generateObjectParser = (
     lines.push(`  if (${fastPathExpr}) return { ...input } as ${typeName};`)
   }
 
-  // Generate slow-path object construction
+  // Generate slow-path object construction. The input spread preserves
+  // undeclared keys, so it is dropped when additionalProperties: false —
+  // building from the declared properties alone strips them from the result.
   const objectLines: string[] = []
-  objectLines.push('    ...input,')
+  if (!strictKeys) {
+    objectLines.push('    ...input,')
+  }
 
   // Spread allOf $ref parsers so their field coercions are applied before
   // the explicit property validations below.
@@ -710,6 +828,19 @@ const generateObjectParser = (
   for (const { key, varName, isRequired, propSchema } of propInfo) {
     const shouldCache = shouldCacheVariable(propSchema, canFastPath, useRefImports)
     const accessor = shouldCache ? varName : safeAccessor('input', key)
+
+    // Handle inline nested objects via their private sub-parser, mirroring
+    // how $ref properties delegate to the imported parser.
+    const subName = subTypeNames.get(key)
+    if (subName) {
+      const subParserName = generateParserName(subName)
+      if (isRequired) {
+        objectLines.push(`    ${safeKey(key)}: ${subParserName}(${accessor}),`)
+      } else {
+        objectLines.push(`    ...(${accessor} !== undefined && { ${safeKey(key)}: ${subParserName}(${accessor}) }),`)
+      }
+      continue
+    }
 
     // Handle direct $ref properties via imported parsers
     if (shouldUseRefImport(propSchema, useRefImports)) {
@@ -785,21 +916,13 @@ const generateObjectParser = (
   }
 
   lines.push(`  return {`)
-  // objectLines[0] is safe: objectLines is always non-empty (has at least the closing brace line)
-  let objectBody = objectLines[0] as string
-  for (let i = 1; i < objectLines.length; i++) {
-    objectBody += '\n' + objectLines[i]
-  }
-  lines.push(objectBody)
+  lines.push(objectLines.join('\n'))
   lines.push(`  } as unknown as ${typeName};`)
   lines.push(`}`)
 
-  // lines[0] is safe: lines is always non-empty (it always has the function declaration)
-  let result = lines[0] as string
-  for (let i = 1; i < lines.length; i++) {
-    result += '\n' + lines[i]
-  }
-  return result
+  const fn = lines.join('\n')
+  if (preamble.length === 0) return fn
+  return `${preamble.join('\n\n')}\n\n${fn}`
 }
 
 /**
@@ -1280,9 +1403,11 @@ export const generateShapeValidator = (
   typeName: string,
   useRefImports: boolean,
   suffix = '',
+  exported = true,
 ): string => {
   const fnName = shapeValidatorName(typeName)
-  const stub = `export const ${fnName} = (_input: unknown): boolean => false;`
+  const exportPrefix = exported ? 'export ' : ''
+  const stub = `${exportPrefix}const ${fnName} = (_input: unknown): boolean => false;`
 
   if (!isSchemaObject(schema)) return stub
   if (!hasProperties(schema)) return stub
@@ -1302,6 +1427,12 @@ export const generateShapeValidator = (
   }
 
   const properties = Object.entries((schema as { properties: Record<string, JSONSchema> }).properties)
+  // Same deterministic naming as the parser's sub-parser generation, so the
+  // referenced private shape predicates exist in the same file.
+  const subTypeNames = collectInlineObjectProperties(schema, typeName)
+  // With additionalProperties: false the shape only matches when every key is
+  // declared, so the parser's fast path will not smuggle extras through.
+  const strictKeysGuard = hasStrictKeys(schema) ? `\n  if (!_hasOnlyKnownKeys${typeName}(input)) return false;` : ''
   const checks: string[] = []
 
   for (const [key, propSchema] of properties) {
@@ -1312,7 +1443,10 @@ export const generateShapeValidator = (
 
     const accessor = safeAccessor('input', key)
     const isRequired = isPropertyRequired(key, schema)
-    const check = generatePropertyTypeCheck(accessor, propSchema, useRefImports, suffix)
+    const subName = subTypeNames.get(key)
+    const check = subName
+      ? `${shapeValidatorName(subName)}(${accessor})`
+      : generatePropertyTypeCheck(accessor, propSchema, useRefImports, suffix)
     if (check === null) {
       return stub
     }
@@ -1325,7 +1459,13 @@ export const generateShapeValidator = (
   }
 
   if (checks.length === 0) {
-    return `export const ${fnName} = (input: unknown): boolean => isObject(input);`
+    if (strictKeysGuard) {
+      return `${exportPrefix}const ${fnName} = (input: unknown): boolean => {
+  if (!isObject(input)) return false;${strictKeysGuard}
+  return true;
+};`
+    }
+    return `${exportPrefix}const ${fnName} = (input: unknown): boolean => isObject(input);`
   }
 
   let body = checks[0] as string
@@ -1333,8 +1473,8 @@ export const generateShapeValidator = (
     body += '\n    && ' + checks[i]
   }
 
-  return `export const ${fnName} = (input: unknown): boolean => {
-  if (!isObject(input)) return false;
+  return `${exportPrefix}const ${fnName} = (input: unknown): boolean => {
+  if (!isObject(input)) return false;${strictKeysGuard}
   return ${body};
 };`
 }

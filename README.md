@@ -53,21 +53,21 @@ Most tools in this space pick a single lane — types **or** validation **or** d
 
 ### Benchmarks
 
-mjst's validators are *generated* TypeScript — straight-line, monomorphic code with no generic dispatch — so once they're emitted they validate quickly. The numbers below compare a generated mjst validator against an Ajv-compiled function, a TypeBox-compiled checker, and a hand-written Zod schema on the same data.
+mjst's validators are *generated* TypeScript — straight-line, monomorphic code with no generic dispatch — so once they're emitted they validate as fast as an Ajv-compiled function without the compile step. The numbers below compare a generated mjst validator against an Ajv-compiled function, a TypeBox-compiled checker, and a hand-written Zod schema on the same data.
 
 **Steady-state throughput** (valid input, higher is better):
 
 | schema | mjst (generated) | ajv (compiled) | typebox (compiled) | zod |
 |:--|--:|--:|--:|--:|
-| small (4 fields) | **~38M** ops/s | ~6.5M ops/s | ~3.9M ops/s | ~1.7M ops/s |
-| order (nested + array) | **~16M** ops/s | ~2.6M ops/s | ~1.7M ops/s | ~0.4M ops/s |
+| small (4 fields) | **~9.5M** ops/s | ~9.3M ops/s | ~4.8M ops/s | ~1.7M ops/s |
+| order (nested + array) | **~3.7M** ops/s | ~3.5M ops/s | ~2.0M ops/s | ~0.4M ops/s |
 
 **Prepare-a-validator cost** (one-shot, lower is better):
 
 | | mjst (codegen) | ajv (compile) | typebox (compile) | zod |
 |:--|--:|--:|--:|--:|
-| small | ~0.11 ms | ~12 ms | ~0.13 ms | n/a — authored in code |
-| order | ~0.11 ms | ~13 ms | ~0.29 ms | n/a — authored in code |
+| small | ~0.15 ms | ~13 ms | ~0.12 ms | n/a — authored in code |
+| order | ~0.20 ms | ~14 ms | ~0.21 ms | n/a — authored in code |
 
 <sub>Measured on Bun 1.3 (Linux x64); micro-benchmark figures vary by machine and runtime. All four libraries agree on every valid/invalid verdict (parity is asserted before timing). TypeBox is compiled with `TypeCompiler` and given uuid/email format checkers so every library does the same work. Reproduce with `cd packages/generate-validators && bun run bench`.</sub>
 
