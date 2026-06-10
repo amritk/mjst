@@ -58,6 +58,24 @@ describe('load-config', () => {
     expect(result).toEqual({ schema: 's.json', outDir: 'o', strict: true })
   })
 
+  it('loads stripUnknown boolean from config file', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', outDir: 'o', stripUnknown: true }))
+
+    const result = await loadConfig(configPath)
+
+    expect(result).toEqual({ schema: 's.json', outDir: 'o', stripUnknown: true })
+  })
+
+  it('ignores non-boolean stripUnknown value', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', stripUnknown: 'yes' }))
+
+    const result = await loadConfig(configPath)
+
+    expect(result).toEqual({ schema: 's.json' })
+  })
+
   it('loads schemaDir from a config file', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
     await writeFile(configPath, JSON.stringify({ schemaDir: './schemas', outDir: 'output' }))

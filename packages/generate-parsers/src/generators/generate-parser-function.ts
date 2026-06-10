@@ -58,6 +58,16 @@ type GenerateParserOptions = {
    */
   readonly strict?: boolean
   /**
+   * When true, the generated parser builds its result from the schema's declared
+   * properties only, silently dropping any undeclared input key at every nesting
+   * level (zod's `.strip()`). Unlike `additionalProperties: false`, extras are
+   * never a validation error — this composes with `strict`: `strict + stripUnknown`
+   * still throws on wrong types and missing required properties but strips extras
+   * instead of throwing on them. When the schema *also* sets
+   * `additionalProperties: false`, rejecting wins over stripping in strict mode.
+   */
+  readonly stripUnknown?: boolean
+  /**
    * Suffix appended to every type/parser name derived from a `$ref`. Must match
    * the suffix used when generating the referenced files. Defaults to `''`.
    */
@@ -666,6 +676,7 @@ const generateObjectParser = (
   logWarnings?: boolean,
   strict?: boolean,
   exported = true,
+  stripUnknown = false,
 ): string => {
   const functionName = generateParserName(typeName)
   const exportPrefix = exported ? 'export ' : ''
@@ -689,20 +700,28 @@ const generateObjectParser = (
   for (const [key, subName] of subTypeNames) {
     const propSchema = (schema as { properties: Record<string, JSONSchema> }).properties[key] as JSONSchema
     preamble.push(`type ${subName} = ${typeName}[${JSON.stringify(key)}];`)
-    preamble.push(generateShapeValidator(propSchema, subName, useRefImports, suffix, false))
-    preamble.push(generateObjectParser(propSchema, subName, useRefImports, suffix, logWarnings, strict, false))
+    preamble.push(generateShapeValidator(propSchema, subName, useRefImports, suffix, false, stripUnknown))
+    preamble.push(
+      generateObjectParser(propSchema, subName, useRefImports, suffix, logWarnings, strict, false, stripUnknown),
+    )
   }
 
   // additionalProperties: false — the per-key "is this undeclared" test inlines
   // `!==` comparisons for a short key list and hoists a Set only for a long one
   // (see unknownKeyCheck). The predicate form is shared by the fast path and the
   // shape validator; strict mode throws with the offending key.
+  // `additionalProperties: false` strips *and rejects* extras; `stripUnknown`
+  // only strips them. Both build the result from declared properties alone, so
+  // they share the same machinery (`stripKeys`): drop the `...input` spread and
+  // gate the `{ ...input }` fast path on the known-keys predicate. Only the real
+  // `strictKeys` makes an extra a hard error (the throw block further down).
   const strictKeys = hasStrictKeys(schema)
+  const stripKeys = strictKeys || stripUnknown
   const strictKeyCheck = unknownKeyCheck(
     properties.map(([key]) => key),
     `_knownKeys${typeName}`,
   )
-  if (strictKeys) {
+  if (stripKeys) {
     for (const declaration of strictKeyCheck.declarations) {
       preamble.push(`${declaration};`)
     }
@@ -780,10 +799,11 @@ const generateObjectParser = (
     }
   }
 
-  // The fast path returns `{ ...input }`, so with additionalProperties: false
-  // it must only fire when no undeclared keys are present. Strict mode already
-  // threw on them above.
-  if (strictKeys && !strict) {
+  // The fast path returns `{ ...input }`, which preserves extras — so when we're
+  // stripping it must only fire when no undeclared key is present. The exception
+  // is strict + additionalProperties: false, where the throw block above already
+  // rejected any extra, so the fast path is safe to take unconditionally.
+  if (stripKeys && !(strict && strictKeys)) {
     fastPathChecks.push(`_hasOnlyKnownKeys${typeName}(input)`)
   }
 
@@ -820,10 +840,11 @@ const generateObjectParser = (
   }
 
   // Generate slow-path object construction. The input spread preserves
-  // undeclared keys, so it is dropped when additionalProperties: false —
-  // building from the declared properties alone strips them from the result.
+  // undeclared keys, so it is dropped whenever we're stripping (either
+  // additionalProperties: false or stripUnknown) — building from the declared
+  // properties alone strips the extras from the result.
   const objectLines: string[] = []
-  if (!strictKeys) {
+  if (!stripKeys) {
     objectLines.push('    ...input,')
   }
 
@@ -1016,6 +1037,7 @@ const generateCombinedObjectParser = (
   suffix: string,
   logWarnings?: boolean,
   strict?: boolean,
+  stripUnknown = false,
 ): string => {
   const functionName = generateParserName(typeName)
   const entries = generatePropertyEntries(schema, useRefImports, suffix)
@@ -1030,7 +1052,7 @@ const generateCombinedObjectParser = (
 
   // Find the first pattern with a $ref for parser delegation
   if (!isSchemaObject(schema) || !('patternProperties' in schema)) {
-    return generateObjectParser(schema, typeName, useRefImports, suffix, logWarnings, strict)
+    return generateObjectParser(schema, typeName, useRefImports, suffix, logWarnings, strict, true, stripUnknown)
   }
 
   const patternProps = schema.patternProperties as Record<string, JSONSchema>
@@ -1056,7 +1078,7 @@ const generateCombinedObjectParser = (
   }
 
   if (!refPattern || !useRefImports) {
-    return generateObjectParser(schema, typeName, useRefImports, suffix, logWarnings, strict)
+    return generateObjectParser(schema, typeName, useRefImports, suffix, logWarnings, strict, true, stripUnknown)
   }
 
   const [pattern, patternSchema] = refPattern
@@ -1270,7 +1292,12 @@ ${notObjectBranch}
  * This always generates parser calls regardless of useRefImports setting,
  * because conditional logic requires delegating to the appropriate parser.
  */
-const generateConditionalParser = (schema: JSONSchema.Object, typeName: string, suffix: string): string => {
+const generateConditionalParser = (
+  schema: JSONSchema.Object,
+  typeName: string,
+  suffix: string,
+  stripUnknown = false,
+): string => {
   const functionName = generateParserName(typeName)
 
   // Extract the condition and branches
@@ -1288,7 +1315,7 @@ const generateConditionalParser = (schema: JSONSchema.Object, typeName: string, 
     // regular object parser from the merged property set.
     const mergedSchema = getConditionalObjectSchema(schema)
     if (mergedSchema) {
-      return generateObjectParser(mergedSchema, typeName, false, suffix)
+      return generateObjectParser(mergedSchema, typeName, false, suffix, false, false, true, stripUnknown)
     }
     return generateEmptyObjectParser(typeName)
   }
@@ -1305,7 +1332,7 @@ const generateConditionalParser = (schema: JSONSchema.Object, typeName: string, 
     // Condition is not a $ref check — flatten into an object parser
     const mergedSchema = getConditionalObjectSchema(schema)
     if (mergedSchema) {
-      return generateObjectParser(mergedSchema, typeName, false, suffix)
+      return generateObjectParser(mergedSchema, typeName, false, suffix, false, false, true, stripUnknown)
     }
     return generateEmptyObjectParser(typeName)
   }
@@ -1417,6 +1444,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   const useRefImports = options?.useRefImports ?? false
   const logWarnings = options?.logWarnings ?? false
   const strict = options?.strict ?? false
+  const stripUnknown = options?.stripUnknown ?? false
   const suffix = options?.typeSuffix ?? ''
 
   // Special case for the self-referential JSON Schema meta-schema type (e.g.
@@ -1438,7 +1466,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   // This generates a parser that handles known properties and also iterates
   // pattern-matched keys (e.g. responses with "default" + "200", "4XX").
   if (hasProperties(schema) && isSchemaObject(schema) && 'patternProperties' in schema) {
-    return generateCombinedObjectParser(schema, typeName, useRefImports, suffix, logWarnings, strict)
+    return generateCombinedObjectParser(schema, typeName, useRefImports, suffix, logWarnings, strict, stripUnknown)
   }
 
   // Handle schemas that have explicit properties — generate a full object parser.
@@ -1446,19 +1474,28 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   // properties AND conditional keywords use all declared properties rather than
   // only the if/then fragment.
   if (hasProperties(schema)) {
-    return generateObjectParser(schema, typeName, useRefImports, suffix, logWarnings, strict)
+    return generateObjectParser(schema, typeName, useRefImports, suffix, logWarnings, strict, true, stripUnknown)
   }
 
   // Handle conditional schemas (if/then/else) for schemas without explicit properties.
   if (isSchemaObject(schema) && 'if' in schema && 'then' in schema && 'else' in schema) {
-    return generateConditionalParser(schema as JSONSchema.Object, typeName, suffix)
+    return generateConditionalParser(schema as JSONSchema.Object, typeName, suffix, stripUnknown)
   }
 
   // Handle conditional schemas that only define if/then object fragments.
   // We flatten the fragments into a regular object parser.
   const conditionalObjectSchema = getConditionalObjectSchema(schema)
   if (conditionalObjectSchema) {
-    return generateObjectParser(conditionalObjectSchema, typeName, useRefImports, suffix, logWarnings, strict)
+    return generateObjectParser(
+      conditionalObjectSchema,
+      typeName,
+      useRefImports,
+      suffix,
+      logWarnings,
+      strict,
+      true,
+      stripUnknown,
+    )
   }
 
   // Handle non-object schemas with type-appropriate validation (no properties, no conditionals)
@@ -1535,6 +1572,7 @@ export const generateShapeValidator = (
   useRefImports: boolean,
   suffix = '',
   exported = true,
+  stripUnknown = false,
 ): string => {
   const fnName = shapeValidatorName(typeName)
   const exportPrefix = exported ? 'export ' : ''
@@ -1561,9 +1599,13 @@ export const generateShapeValidator = (
   // Same deterministic naming as the parser's sub-parser generation, so the
   // referenced private shape predicates exist in the same file.
   const subTypeNames = collectInlineObjectProperties(schema, typeName)
-  // With additionalProperties: false the shape only matches when every key is
-  // declared, so the parser's fast path will not smuggle extras through.
-  const strictKeysGuard = hasStrictKeys(schema) ? `\n  if (!_hasOnlyKnownKeys${typeName}(input)) return false;` : ''
+  // When the parser strips extras (additionalProperties: false or stripUnknown),
+  // an input carrying an undeclared key is *not* fast-path eligible — the parser
+  // would strip it rather than return `{ ...input }` — so the shape only matches
+  // when every key is declared. (The `_hasOnlyKnownKeys` predicate this calls is
+  // emitted by the parser under the same `stripKeys` condition.)
+  const strictKeysGuard =
+    hasStrictKeys(schema) || stripUnknown ? `\n  if (!_hasOnlyKnownKeys${typeName}(input)) return false;` : ''
   const checks: string[] = []
 
   for (const [key, propSchema] of properties) {
