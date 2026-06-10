@@ -28,6 +28,12 @@ export type BenchCase = {
   typebox: TSchema
   valid: unknown
   invalid: unknown
+  /**
+   * Extra samples every library must also reject. Asserted alongside `invalid`
+   * before timing but never timed — used to pin down a second failure mode (e.g.
+   * an undeclared *nested* key under `additionalProperties: false`).
+   */
+  extraInvalid?: readonly unknown[]
 }
 
 const smallSchema: JSONSchema = {
@@ -172,6 +178,86 @@ const orderTypebox = Type.Object(
   { additionalProperties: false },
 )
 
+/**
+ * The exact shape `moltar/typescript-runtime-type-benchmarks` validates: seven
+ * scalar roots plus one nested object. The ~1.1k-char `longString` keeps the
+ * workload string-heavy (a real payload, not a degenerate all-shape check) so
+ * the comparison reflects what these libraries do on realistic data.
+ */
+const LONG_STRING = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. '.repeat(20)
+
+const assertValid = {
+  number: 1,
+  negNumber: -1,
+  maxNumber: Number.MAX_VALUE,
+  string: 'string',
+  longString: LONG_STRING,
+  boolean: true,
+  deeplyNested: { foo: 'bar', num: 1, bool: false },
+}
+
+/**
+ * Builds the assert-benchmark JSON Schema. Every root property is required and
+ * `deeplyNested` is an inline object with all three fields required. `strict`
+ * adds `additionalProperties: false` to both the root and the nested object.
+ */
+const assertSchema = (strict: boolean): JSONSchema => ({
+  type: 'object',
+  properties: {
+    number: { type: 'number' },
+    negNumber: { type: 'number' },
+    maxNumber: { type: 'number' },
+    string: { type: 'string' },
+    longString: { type: 'string' },
+    boolean: { type: 'boolean' },
+    deeplyNested: {
+      type: 'object',
+      properties: {
+        foo: { type: 'string' },
+        num: { type: 'number' },
+        bool: { type: 'boolean' },
+      },
+      required: ['foo', 'num', 'bool'],
+      ...(strict ? { additionalProperties: false } : {}),
+    },
+  },
+  required: ['number', 'negNumber', 'maxNumber', 'string', 'longString', 'boolean', 'deeplyNested'],
+  ...(strict ? { additionalProperties: false } : {}),
+})
+
+/** The TypeBox equivalent of {@link assertSchema}; `strict` closes both objects. */
+const assertTypebox = (strict: boolean): TSchema => {
+  const options = strict ? { additionalProperties: false } : {}
+  return Type.Object(
+    {
+      number: Type.Number(),
+      negNumber: Type.Number(),
+      maxNumber: Type.Number(),
+      string: Type.String(),
+      longString: Type.String(),
+      boolean: Type.Boolean(),
+      deeplyNested: Type.Object({ foo: Type.String(), num: Type.Number(), bool: Type.Boolean() }, options),
+    },
+    options,
+  )
+}
+
+/** The Zod equivalent of {@link assertSchema}; `strict` closes both objects. */
+const assertZod = (strict: boolean): z.ZodType => {
+  const nestedFields = { foo: z.string(), num: z.number(), bool: z.boolean() }
+  const nested = strict ? z.strictObject(nestedFields) : z.object(nestedFields)
+  const rootFields = {
+    number: z.number(),
+    negNumber: z.number(),
+    maxNumber: z.number(),
+    string: z.string(),
+    longString: z.string(),
+    boolean: z.boolean(),
+    deeplyNested: nested,
+  }
+  return strict ? z.strictObject(rootFields) : z.object(rootFields)
+}
+
 export const BENCH_CASES: readonly BenchCase[] = [
   {
     name: 'small (4 fields)',
@@ -206,5 +292,28 @@ export const BENCH_CASES: readonly BenchCase[] = [
       customer: { name: '', email: 'not-an-email' },
       items: [],
     },
+  },
+  {
+    name: 'assert-loose',
+    typeName: 'AssertLoose',
+    schema: assertSchema(false),
+    zod: assertZod(false),
+    typebox: assertTypebox(false),
+    valid: assertValid,
+    // A single wrong-typed root property — the shape is otherwise complete.
+    invalid: { ...assertValid, number: 'foo' },
+  },
+  {
+    name: 'assert-strict',
+    typeName: 'AssertStrict',
+    schema: assertSchema(true),
+    zod: assertZod(true),
+    typebox: assertTypebox(true),
+    valid: assertValid,
+    // One undeclared top-level key — every field is otherwise valid, so only
+    // `additionalProperties: false` rejects it.
+    invalid: { ...assertValid, extra: true },
+    // An undeclared key in the nested object must be rejected too.
+    extraInvalid: [{ ...assertValid, deeplyNested: { ...assertValid.deeplyNested, extra: true } }],
   },
 ]
