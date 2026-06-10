@@ -83,12 +83,12 @@ and **rejects** undeclared keys (zod's `.strict()`):
 | schema | mjst (generated) | zod (`.parse`) | typebox (`Value.Parse`) |
 |:--|--:|--:|--:|
 | **parseSafe** — strip extras | | | |
-| small (4 fields) | **~9.5M** ops/s | ~2.5M ops/s | ~1.1M ops/s |
-| order (nested + array) | **~3.6M** ops/s | ~0.53M ops/s | ~0.14M ops/s |
+| small (4 fields) | **~12M** ops/s | ~2.5M ops/s | ~1.1M ops/s |
+| order (nested + array) | **~5.3M** ops/s | ~0.53M ops/s | ~0.14M ops/s |
 | assert (moltar shape) | **~12M** ops/s | ~3.3M ops/s | ~0.56M ops/s |
 | **parseStrict** — reject extras | | | |
-| small (4 fields) | **~16M** ops/s | ~1.6M ops/s | ~1.5M ops/s |
-| order (nested + array) | **~2.9M** ops/s | ~0.30M ops/s | ~0.23M ops/s |
+| small (4 fields) | **~17M** ops/s | ~1.6M ops/s | ~1.5M ops/s |
+| order (nested + array) | **~3.4M** ops/s | ~0.30M ops/s | ~0.23M ops/s |
 | assert (moltar shape) | **~9.4M** ops/s | ~1.1M ops/s | ~0.79M ops/s |
 
 <sub>mjst parses in `strict` mode throughout (throwing on a type mismatch like the others), adding `stripUnknown` for parseSafe and `additionalProperties: false` for parseStrict; zod uses `.object`/`.strictObject` and TypeBox a `Clean+Assert`/`Assert` pipeline. Parity — identical parsed output, and rejection of every wrong-typed (and, in strict mode, extra-keyed) sample — is asserted before timing. ajv (`removeAdditional`) and typia (`assertPrune`) are excluded because they strip by mutating the input in place rather than returning a new value, which a reused input pool can't measure fairly. Reproduce with `cd packages/generate-parsers && bun run bench`.</sub>
