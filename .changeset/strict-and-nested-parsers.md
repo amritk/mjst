@@ -25,7 +25,7 @@ just-fixed validator generator:
 
 Schemas without `additionalProperties: false` generate byte-identical output
 to before, so loose parsing keeps its existing fast path. Schemas combining
-`additionalProperties: false` with `patternProperties` or composition keywords
-skip the undeclared-key handling, since the generator cannot evaluate those
-yet. The `strict` option docs and config schemas no longer claim unknown keys
-are always allowed.
+`additionalProperties: false` with composition keywords (`allOf`/`anyOf`/
+`oneOf`) skip the undeclared-key handling, since the generator cannot evaluate
+those yet. The `strict` option docs and config schemas no longer claim unknown
+keys are always allowed.

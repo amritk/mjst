@@ -15,9 +15,7 @@ interpreter performs, closing two correctness gaps:
   rejected with the interpreter's `must NOT have additional properties`
   message, at both the root and nested levels. The known-keys Set is hoisted to
   module scope and the sweep uses an allocation-free `for...in` loop, so the
-  generated validators stay at Ajv-compiled speed. Schemas combining it with
-  `patternProperties` skip the sweep for now, since the generator does not
-  evaluate key patterns yet.
+  generated validators stay at Ajv-compiled speed.
 
 Also fixes array item error paths, which duplicated the property name
 (`/tags/tags/0` instead of `/tags/0`), and updates the README benchmark tables:

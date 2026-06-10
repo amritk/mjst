@@ -926,6 +926,70 @@ const generateObjectParser = (
 }
 
 /**
+ * Combined-parser variant for `properties` + `patternProperties` schemas that
+ * set `additionalProperties: false`. Declared properties are coerced as usual,
+ * keys matching any pattern are kept (the first `$ref` pattern is coerced via
+ * its imported parser when ref imports are on), and every other key is rejected
+ * in strict mode or stripped in coerce mode — matching the interpreter.
+ */
+const generateStrictCombinedParser = (
+  schema: JSONSchema,
+  typeName: string,
+  functionName: string,
+  propertyLines: string[],
+  patterns: [string, JSONSchema][],
+  useRefImports: boolean,
+  suffix: string,
+  strict?: boolean,
+): string => {
+  const declaredKeys = hasProperties(schema) ? Object.keys(schema.properties) : []
+  const knownSet = `[${declaredKeys.map((k) => JSON.stringify(k)).join(', ')}]`
+
+  // The first $ref pattern (when ref imports are on) coerces its matching values
+  // through the imported parser; the remaining patterns keep the raw value.
+  const refPattern = useRefImports ? patterns.find(([, ps]) => isSchemaObject(ps) && hasRef(ps)) : undefined
+  const loopLines: string[] = [`    if (_knownKeys.has(key)) continue;`]
+  if (refPattern) {
+    const parserName = generateParserName(refToName((refPattern[1] as { $ref: string }).$ref, suffix))
+    loopLines.push(`    if (/${escapeRegexPattern(refPattern[0])}/.test(key)) {`)
+    loopLines.push(`      (result as Record<string, unknown>)[key] = ${parserName}(input[key]);`)
+    loopLines.push(`      continue;`)
+    loopLines.push(`    }`)
+  }
+
+  const keepConditions = patterns
+    .filter(([p]) => !(refPattern && p === refPattern[0]))
+    .map(([p]) => `/${escapeRegexPattern(p)}/.test(key)`)
+  if (keepConditions.length > 0) {
+    loopLines.push(`    if (${keepConditions.join(' || ')}) {`)
+    loopLines.push(`      (result as Record<string, unknown>)[key] = input[key];`)
+    loopLines.push(`      continue;`)
+    loopLines.push(`    }`)
+  }
+
+  // Unknown key: throw in strict mode, otherwise let it fall through (dropped,
+  // since it was never copied into `result`).
+  if (strict) loopLines.push(`    throw new Error(\`[${typeName}] unknown property "\${key}"\`);`)
+
+  const notObjectBranch = strict
+    ? `    throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);`
+    : `    return {} as unknown as ${typeName};`
+  const resultBody = propertyLines.length > 0 ? `{\n${propertyLines.join('\n')}\n  }` : '{}'
+
+  return `export const ${functionName} = (input: unknown): ${typeName} => {
+  if (!isObject(input)) {
+${notObjectBranch}
+  }
+  const _knownKeys = new Set(${knownSet});
+  const result = ${resultBody} as unknown as ${typeName};
+  for (const key in input) {
+${loopLines.join('\n')}
+  }
+  return result;
+};`
+}
+
+/**
  * Generates a parser for schemas that have both properties AND patternProperties.
  * Parses the known properties first, then iterates remaining keys to match patterns.
  */
@@ -956,6 +1020,24 @@ const generateCombinedObjectParser = (
   const patternProps = schema.patternProperties as Record<string, JSONSchema>
   const patterns = Object.entries(patternProps)
   const refPattern = patterns.find(([, ps]) => isSchemaObject(ps) && hasRef(ps))
+  const strictKeys = hasAdditionalProperties(schema) && schema.additionalProperties === false
+
+  // With `additionalProperties: false`, keys matching neither a declared
+  // property nor any pattern must be rejected (strict) or stripped (coerce).
+  // The blanket `...input` spread used below cannot do that, so build a
+  // selective copy that mirrors the interpreter's undeclared-key handling.
+  if (strictKeys) {
+    return generateStrictCombinedParser(
+      schema,
+      typeName,
+      functionName,
+      propertyLines,
+      patterns,
+      useRefImports,
+      suffix,
+      strict,
+    )
+  }
 
   if (!refPattern || !useRefImports) {
     return generateObjectParser(schema, typeName, useRefImports, suffix, logWarnings, strict)
@@ -1115,6 +1197,39 @@ const generatePatternPropertiesParser = (
   const notObjectBranch = strict
     ? `    throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);`
     : `    return {} as unknown as ${typeName};`
+
+  // With `additionalProperties: false`, only keys matching a pattern survive:
+  // others are rejected (strict) or stripped (coerce). Start from an empty
+  // object rather than spreading every input key.
+  const strictKeys = hasAdditionalProperties(schema) && schema.additionalProperties === false
+  if (strictKeys) {
+    const loopLines: string[] = [`    if (/${escapedPattern}/.test(key)) {`]
+    if (patternAssignment) {
+      loopLines.push(`      const value = input[key];`)
+      loopLines.push(`      ${patternAssignment}`)
+    }
+    loopLines.push(`      continue;`)
+    loopLines.push(`    }`)
+    const keepConditions = patterns.slice(1).map(([p]) => `/${escapeRegexPattern(p)}/.test(key)`)
+    if (keepConditions.length > 0) {
+      loopLines.push(`    if (${keepConditions.join(' || ')}) {`)
+      loopLines.push(`      (result as Record<string, unknown>)[key] = input[key];`)
+      loopLines.push(`      continue;`)
+      loopLines.push(`    }`)
+    }
+    if (strict) loopLines.push(`    throw new Error(\`[${typeName}] unknown property "\${key}"\`);`)
+
+    return `export const ${functionName} = (input: unknown): ${typeName} => {
+  if (!isObject(input)) {
+${notObjectBranch}
+  }
+  const result = {} as unknown as ${typeName};
+  for (const key in input) {
+${loopLines.join('\n')}
+  }
+  return result;
+};`
+  }
 
   // Generate a parser that handles both pattern matching and x- extensions
   return `export const ${functionName} = (input: unknown): ${typeName} => {
