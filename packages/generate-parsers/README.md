@@ -132,7 +132,7 @@ Returns: `Promise<GeneratedFile[]>`.
 <td align="center"><code>false</code></td>
 </tr>
 <tr>
-<td colspan="5">Generate parsers that throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. Unknown extra keys are still allowed.</td>
+<td colspan="5">Generate parsers that throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. When a schema sets additionalProperties: false, undeclared keys throw too; otherwise they are still allowed.</td>
 </tr>
 </tbody>
 </table>
