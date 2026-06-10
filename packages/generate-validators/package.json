@@ -33,7 +33,7 @@
     "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f",
     "types:check": "tsgo -p . --noEmit",
     "test": "NODE_ENV=production vitest run --root ../.. generate-validators",
-    "bench": "bun run ./bench/run.ts"
+    "bench": "bun --conditions development ./bench/run.ts"
   },
   "imports": {
     "#generators/*": "./src/generators/*.ts"
@@ -50,10 +50,12 @@
     "@amritk/helpers": "workspace:*"
   },
   "devDependencies": {
+    "@ryoppippi/unplugin-typia": "^2.6.5",
     "@scalar/openapi-parser": "^0.26.1",
     "@sinclair/typebox": "^0.34.49",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
+    "typia": "^12.1.1",
     "zod": "^4.4.3"
   }
 }

@@ -54,6 +54,15 @@ export type CliConfig = {
    */
   readonly strict?: boolean
   /**
+   * When true, generated parsers build their result from declared properties
+   * only, silently dropping any undeclared input key at every nesting level
+   * (zod's `.strip()`). Extras are never a validation error, so this composes
+   * with `strict` (which still throws on wrong types and missing required
+   * properties) and yields to `additionalProperties: false`, which rejects
+   * rather than strips in strict mode.
+   */
+  readonly stripUnknown?: boolean
+  /**
    * Controls how generated parsers reference their runtime helpers.
    * - `'package'`: emit `import ... from '@amritk/helpers/...'`.
    * - `'embedded'`: ship the helper source under `outDir/_helpers/` and emit

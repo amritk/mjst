@@ -2068,4 +2068,76 @@ describe('generate-parser-function', () => {
       expect(isShape({ a: 1, nested: { foo: 'x', evil: 2 } })).toBe(false)
     })
   })
+
+  describe('stripUnknown', () => {
+    // A nested object schema with no additionalProperties keyword, so the
+    // default parser preserves extras and stripUnknown is what removes them.
+    const nestedSchema: JSONSchema = {
+      type: 'object',
+      properties: {
+        a: { type: 'string' },
+        nested: { type: 'object', properties: { b: { type: 'number' } }, required: ['b'] },
+      },
+      required: ['a', 'nested'],
+    }
+    const withExtras = { a: 'x', extra: 1, nested: { b: 2, extra: 3 } }
+
+    const parserFor = (schema: JSONSchema, options: Parameters<typeof generateParserFunction>[2]) =>
+      evalGenerated<(input: unknown) => Record<string, unknown>>(
+        generateParserFunction(schema, 'T', { useRefImports: true, ...options }),
+        'parseT',
+      )
+
+    it('defaults to preserving undeclared keys', () => {
+      const parse = parserFor(nestedSchema, {})
+      expect(parse(withExtras)).toEqual({ a: 'x', extra: 1, nested: { b: 2, extra: 3 } })
+    })
+
+    it('drops undeclared keys at every nesting level', () => {
+      const parse = parserFor(nestedSchema, { stripUnknown: true })
+      expect(parse(withExtras)).toEqual({ a: 'x', nested: { b: 2 } })
+    })
+
+    it('strips extras on both the fast path (no extras) and the slow path (extras present)', () => {
+      const parse = parserFor(nestedSchema, { stripUnknown: true })
+      // No extras: declared-only input still parses correctly.
+      expect(parse({ a: 'x', nested: { b: 2 } })).toEqual({ a: 'x', nested: { b: 2 } })
+      // Extras at either level go through the slow path and are stripped.
+      expect(parse({ a: 'x', nested: { b: 2, extra: 3 } })).toEqual({ a: 'x', nested: { b: 2 } })
+    })
+
+    it('composes with strict: throws on wrong types and missing required, but strips extras', () => {
+      const parse = parserFor(nestedSchema, { strict: true, stripUnknown: true })
+      expect(parse(withExtras)).toEqual({ a: 'x', nested: { b: 2 } })
+      expect(() => parse({ a: 1, nested: { b: 2 } })).toThrow()
+      expect(() => parse({ a: 'x' })).toThrow()
+    })
+
+    it('yields to additionalProperties: false — rejecting wins over stripping in strict mode', () => {
+      const closed: JSONSchema = {
+        type: 'object',
+        properties: { a: { type: 'string' } },
+        required: ['a'],
+        additionalProperties: false,
+      }
+      const parse = parserFor(closed, { strict: true, stripUnknown: true })
+      expect(parse({ a: 'x' })).toEqual({ a: 'x' })
+      // An undeclared key throws rather than being silently stripped.
+      expect(() => parse({ a: 'x', extra: 1 })).toThrow()
+    })
+
+    it('strips extras for additionalProperties: false in non-strict mode (unchanged behaviour)', () => {
+      const closed: JSONSchema = {
+        type: 'object',
+        properties: { a: { type: 'string' } },
+        required: ['a'],
+        additionalProperties: false,
+      }
+      // stripUnknown is redundant here; the result is the same with or without it.
+      for (const stripUnknown of [false, true]) {
+        const parse = parserFor(closed, { stripUnknown })
+        expect(parse({ a: 'x', extra: 1 })).toEqual({ a: 'x' })
+      }
+    })
+  })
 })

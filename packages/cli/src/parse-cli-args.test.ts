@@ -214,6 +214,22 @@ describe('parse-cli-args', () => {
     })
   })
 
+  it('parses --strip-unknown boolean flag (kebab-case)', () => {
+    const result = parseCliArgs(['--strip-unknown'])
+
+    expect(result).toEqual({
+      stripUnknown: true,
+    })
+  })
+
+  it('parses --strip-unknown=false with equals syntax', () => {
+    const result = parseCliArgs(['--strip-unknown=false'])
+
+    expect(result).toEqual({
+      stripUnknown: false,
+    })
+  })
+
   it('parses --strict alongside other flags', () => {
     const result = parseCliArgs(['--schema', 'schema.json', '--outDir', 'dist', '--strict'])
 

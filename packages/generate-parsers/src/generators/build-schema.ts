@@ -57,6 +57,10 @@ export type GeneratedFile = {
  *   directory while the helper sources are emitted once at the output root.
  * @param readonly - When true, every property, array, and record in the generated type
  *   definitions is emitted as `readonly`.
+ * @param stripUnknown - When true, the generated parsers build their result from declared
+ *   properties only, silently dropping undeclared input keys at every nesting level (zod's
+ *   `.strip()`) without treating extras as a validation error. Composes with `strict` and
+ *   yields to `additionalProperties: false` (which rejects rather than strips in strict mode).
  * @param typeSuffix - Suffix appended to every type/parser name derived from a `$ref`
  *   (e.g. `'Object'` → `ContactObject`). Defaults to `''` (no suffix). The root type name
  *   is used verbatim and is not affected by this suffix.
@@ -102,6 +106,7 @@ export const buildSchema = async (
   helpersMode: HelpersMode = 'package',
   helpersImportPrefix = './',
   readonly = false,
+  stripUnknown = false,
   typeSuffix = '',
 ): Promise<GeneratedFile[]> => {
   const files: GeneratedFile[] = []
@@ -125,6 +130,7 @@ export const buildSchema = async (
       ...(node.ref !== undefined ? { selfRef: node.ref } : {}),
       ...(logWarnings !== undefined ? { logWarnings } : {}),
       ...(strict !== undefined ? { strict } : {}),
+      ...(stripUnknown ? { stripUnknown } : {}),
     })
 
     files.push({ filename: `${node.filename}.ts`, content: result.content })

@@ -1,44 +1,36 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { TypeCompiler } from '@sinclair/typebox/compiler'
-import type { ValidateFunction } from 'ajv'
 import Ajv from 'ajv'
 import addFormats from 'ajv-formats'
 
 import { buildValidatorSchema } from '../src/index.ts'
-import { BENCH_CASES, type BenchCase } from './schemas.ts'
+import { BENCH_CASES } from './schemas.ts'
+import { LIBRARY_IDS, LIBRARY_LABELS, LIBRARY_PRELOADS, type LibraryId } from './validators.ts'
+import type { WorkerResult } from './worker.ts'
 
 /**
- * Compares the four ways a JSON Schema becomes a runtime check:
+ * Reliable replication of the steady-state half of
+ * `moltar/typescript-runtime-type-benchmarks` for this repo's four installed
+ * libraries (mjst, ajv, typebox, zod).
  *
- *   - **mjst** generates standalone TypeScript validator source ahead of time
- *     (`@amritk/generate-validators`); here we generate it, load it, and run it.
- *   - **Ajv** compiles the schema to a function at startup.
- *   - **TypeBox** compiles its schema to a checker at startup (`TypeCompiler`).
- *   - **Zod** is authored as code directly (no schema-compilation step).
+ * Reliability is the point. Two things make these numbers reproducible rather
+ * than the run-to-run lottery a single shared-process loop produces:
+ *
+ *   - **Isolation** — every (case, library) pair is timed in its own freshly
+ *     spawned process (`worker.ts`). One library's JIT state and GC never touch
+ *     another's. This is the same fix upstream adopted ("isolated node
+ *     processes for each benchmarked package").
+ *   - **Statistics** — each worker takes many timed trials and reports the
+ *     median plus the spread, so a number is only trusted when it's stable. The
+ *     table prints the spread; a `~` flag marks any measurement that wobbled
+ *     more than 15%.
  *
  * We report steady-state throughput (validator already prepared) and the cold
  * "prepare a validator" cost — codegen for mjst, compile for Ajv and TypeBox.
  */
 
-/** Runs `fn` for ~`budgetMs` after a short warmup and returns operations/sec. */
-const throughput = (fn: () => void, budgetMs = 600): number => {
-  const warmupEnd = performance.now() + 100
-  while (performance.now() < warmupEnd) fn()
-
-  let ops = 0
-  const start = performance.now()
-  const end = start + budgetMs
-  do {
-    for (let i = 0; i < 1000; i++) fn()
-    ops += 1000
-  } while (performance.now() < end)
-  const elapsed = performance.now() - start
-
-  return ops / (elapsed / 1000)
-}
+const WORKER = fileURLToPath(new URL('./worker.ts', import.meta.url))
 
 const fmt = (n: number): string => {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
@@ -49,30 +41,30 @@ const fmt = (n: number): string => {
 const pad = (s: string, width: number): string => s.padEnd(width)
 const padStart = (s: string, width: number): string => s.padStart(width)
 
-const makeAjv = (): Ajv => {
-  const ajv = new Ajv({ strict: false })
-  addFormats(ajv)
-  return ajv
+/** A coefficient of variation above this is flagged as a noisy (less trustworthy) sample. */
+const NOISY_SPREAD = 0.1
+
+/** Throughput + stability for one cell of the table. */
+const cell = (median: number, spread: number): string => {
+  const flag = spread > NOISY_SPREAD ? '~' : ' '
+  return `${flag}${fmt(median)} (±${(spread * 100).toFixed(0)}%)`
 }
 
-/** A validator that returns a plain boolean, normalising each library's verdict. */
-type BoolValidator = (input: unknown) => boolean
+const BENCH_DIR = fileURLToPath(new URL('.', import.meta.url))
 
-/**
- * Generates mjst validator source for `case`, writes the files to a temp dir,
- * and dynamically imports the exported `validate<TypeName>`. The generated code
- * only imports its sibling `./validation-result`, so a temp dir resolves cleanly.
- */
-const loadMjstValidator = async (benchCase: BenchCase): Promise<BoolValidator> => {
-  const files = await buildValidatorSchema(benchCase.schema, benchCase.typeName)
-  const dir = mkdtempSync(join(tmpdir(), 'mjst-bench-'))
-  for (const file of files) writeFileSync(join(dir, file.filename), file.content)
-
-  const mod = await import(pathToFileURL(join(dir, 'index.ts')).href)
-  rmSync(dir, { recursive: true, force: true })
-
-  const validate = mod[`validate${benchCase.typeName}`] as (input: unknown, path?: string) => unknown
-  return (input) => validate(input) === true
+/** Spawns an isolated worker to time one library against one case. */
+const runWorker = (caseName: string, lib: LibraryId): WorkerResult => {
+  // `--conditions development` resolves the `@amritk/*` workspace packages to
+  // their TypeScript sources (no build step needed). Libraries whose codegen is
+  // a load-time transform also get their Bun preload.
+  const preload = LIBRARY_PRELOADS[lib]
+  const flags = ['--conditions', 'development']
+  if (preload) flags.push('--preload', `${BENCH_DIR}${preload}`)
+  const stdout = execFileSync(process.execPath, [...flags, WORKER, caseName, lib], {
+    encoding: 'utf8',
+    maxBuffer: 1024 * 1024,
+  })
+  return JSON.parse(stdout) as WorkerResult
 }
 
 /** Times the cold cost of producing a ready-to-run validator, averaged over runs. */
@@ -83,49 +75,52 @@ const prepareMs = async (prepare: () => unknown | Promise<unknown>, iterations =
   return (performance.now() - start) / iterations
 }
 
+const makeAjv = (): Ajv => {
+  const ajv = new Ajv({ strict: false })
+  addFormats(ajv)
+  return ajv
+}
+
 const run = async (): Promise<void> => {
-  console.log('\n=== @amritk/generate-validators vs ajv vs zod ===\n')
-  console.log(`Node/Bun: ${typeof Bun !== 'undefined' ? `Bun ${Bun.version}` : process.version}\n`)
+  console.log('\n=== @amritk/generate-validators vs ajv vs typebox vs zod ===\n')
+  console.log(`Node/Bun: ${typeof Bun !== 'undefined' ? `Bun ${Bun.version}` : process.version}`)
+  console.log('Each library is timed in an isolated process; ±n% is the coefficient of variation,')
+  console.log('and ~ flags a sample whose CV exceeded 10% (treat it as less trustworthy).\n')
 
   for (const benchCase of BENCH_CASES) {
     console.log(`## ${benchCase.name}\n`)
 
-    const mjst = await loadMjstValidator(benchCase)
-    const ajv = makeAjv()
-    const ajvValidate = ajv.compile(benchCase.schema as object) as ValidateFunction
-    const typebox = TypeCompiler.Compile(benchCase.typebox)
-    const zod = benchCase.zod
+    const results = new Map<LibraryId, WorkerResult>()
+    for (const lib of LIBRARY_IDS) results.set(lib, runWorker(benchCase.name, lib))
 
-    const validators: Array<[string, BoolValidator]> = [
-      ['mjst (generated)', mjst],
-      ['ajv (compiled)', (input) => ajvValidate(input) === true],
-      ['typebox (compiled)', (input) => typebox.Check(input)],
-      ['zod', (input) => zod.safeParse(input).success],
-    ]
-
-    // Parity: every library must agree the valid sample passes and the invalid
-    // one(s) fail. A disagreement makes the throughput numbers meaningless, so
-    // assert it before timing and fail loudly rather than report a mirage.
-    for (const [label, fn] of validators) {
-      if (fn(benchCase.valid) !== true) throw new Error(`${benchCase.name}: ${label} rejected the valid sample`)
-      if (fn(benchCase.invalid) !== false) throw new Error(`${benchCase.name}: ${label} accepted the invalid sample`)
-      for (const sample of benchCase.extraInvalid ?? []) {
-        if (fn(sample) !== false) throw new Error(`${benchCase.name}: ${label} accepted an extra-invalid sample`)
-      }
+    const parity = LIBRARY_IDS.map((lib) => `${LIBRARY_LABELS[lib]}=${results.get(lib)?.parityDetail}`).join('  ')
+    console.log(`  parity (valid/invalid): ${parity}`)
+    for (const lib of LIBRARY_IDS) {
+      if (!results.get(lib)?.parityOk) console.log(`  ⚠ ${LIBRARY_LABELS[lib]} disagreed on a verdict`)
     }
-    const parity = validators
-      .map(([label, fn]) => `${label}=${fn(benchCase.valid)}/${fn(benchCase.invalid)}`)
-      .join('  ')
-    console.log(`  parity (valid/invalid): ${parity}\n`)
+    console.log('')
 
-    console.log(`  ${pad('validator', 20)}${padStart('valid ops/s', 16)}${padStart('invalid ops/s', 16)}`)
-    for (const [label, fn] of validators) {
-      const valid = throughput(() => fn(benchCase.valid))
-      const invalid = throughput(() => fn(benchCase.invalid))
-      console.log(`  ${pad(label, 20)}${padStart(fmt(valid), 16)}${padStart(fmt(invalid), 16)}`)
+    console.log(`  ${pad('validator', 20)}${padStart('valid ops/s', 20)}${padStart('invalid ops/s', 20)}`)
+    for (const lib of LIBRARY_IDS) {
+      const r = results.get(lib)
+      if (!r) continue
+      const valid = padStart(cell(r.valid.median, r.valid.spread), 20)
+      const invalid = padStart(cell(r.invalid.median, r.invalid.spread), 20)
+      console.log(`  ${pad(LIBRARY_LABELS[lib], 20)}${valid}${invalid}`)
     }
 
-    // Cold "prepare a validator" cost.
+    // Headline ratio for the steady-state goal: mjst vs the fastest compiled
+    // checker (TypeBox) on the valid sample.
+    const mjstValid = results.get('mjst')?.valid.median ?? 0
+    const typeboxValid = results.get('typebox')?.valid.median ?? 0
+    if (mjstValid > 0 && typeboxValid > 0) {
+      const ratio = mjstValid / typeboxValid
+      const verb = ratio >= 1 ? `${ratio.toFixed(2)}x faster than` : `${(1 / ratio).toFixed(2)}x slower than`
+      console.log(`\n  → mjst is ${verb} typebox on valid input`)
+    }
+
+    // Cold "prepare a validator" cost. Cheap and order-insensitive, so it stays
+    // in-process rather than paying a spawn per measurement.
     const mjstGen = await prepareMs(() => buildValidatorSchema(benchCase.schema, benchCase.typeName))
     const ajvCompile = await prepareMs(() => makeAjv().compile(benchCase.schema as object))
     const typeboxCompile = await prepareMs(() => TypeCompiler.Compile(benchCase.typebox))

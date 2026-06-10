@@ -162,6 +162,7 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
     helpersMode,
     undefined,
     config.readonly,
+    config.stripUnknown,
     config.typeSuffix,
   )
 
@@ -206,6 +207,7 @@ const runSingleFile = async (config: Partial<CliConfig>, schemaPath: string, out
     config.helpers ?? 'package',
     undefined,
     config.readonly,
+    config.stripUnknown,
     config.typeSuffix,
   )
 
@@ -272,6 +274,7 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
       helpersMode,
       helpersImportPrefix,
       config.readonly,
+      config.stripUnknown,
       config.typeSuffix,
     )
 

@@ -16,6 +16,7 @@ type MutableConfig = {
   build?: boolean
   logWarnings?: boolean
   strict?: boolean
+  stripUnknown?: boolean
   readonly?: boolean
   helpers?: 'package' | 'embedded'
   typeSuffix?: string
@@ -23,7 +24,14 @@ type MutableConfig = {
 }
 
 // Boolean flags toggle on by presence and accept `--flag=false` to opt out.
-const BOOLEAN_KEYS = new Set<keyof MutableConfig>(['typesOnly', 'build', 'logWarnings', 'strict', 'readonly'])
+const BOOLEAN_KEYS = new Set<keyof MutableConfig>([
+  'typesOnly',
+  'build',
+  'logWarnings',
+  'strict',
+  'stripUnknown',
+  'readonly',
+])
 // Value flags consume the following argument (or `--flag=value`).
 const VALUE_KEYS = new Set<keyof MutableConfig>([
   'schema',
@@ -103,6 +111,9 @@ const assignBoolean = (config: MutableConfig, key: string, value: boolean): bool
       return true
     case 'strict':
       config.strict = value
+      return true
+    case 'stripUnknown':
+      config.stripUnknown = value
       return true
     case 'readonly':
       config.readonly = value

@@ -41,6 +41,15 @@ type GenerateFileOptions = {
    */
   readonly strict?: boolean
   /**
+   * When true, the generated parser builds its result from declared properties
+   * only, silently dropping undeclared input keys at every nesting level (zod's
+   * `.strip()`), without treating extras as a validation error. Composes with
+   * `strict` (still throws on wrong types / missing required properties) and
+   * yields to `additionalProperties: false` (which rejects rather than strips in
+   * strict mode).
+   */
+  readonly stripUnknown?: boolean
+  /**
    * Controls how runtime helpers are referenced.
    * - `'package'` (default): emit imports from `@amritk/helpers/...`.
    * - `'embedded'`: emit imports from `./_helpers/...` so the helper sources can
@@ -129,13 +138,15 @@ export const generateFile = (
     return { content: result + typeDefinition, usedHelpers: new Set() }
   }
 
+  const stripUnknown = options?.stripUnknown ?? false
   const parserFunction = generateParserFunction(schema, typeName, {
     useRefImports: true,
     typeSuffix,
     ...(options?.logWarnings !== undefined ? { logWarnings: options.logWarnings } : {}),
     ...(options?.strict !== undefined ? { strict: options.strict } : {}),
+    ...(options?.stripUnknown !== undefined ? { stripUnknown: options.stripUnknown } : {}),
   })
-  const shapeValidator = generateShapeValidator(schema, typeName, true, typeSuffix)
+  const shapeValidator = generateShapeValidator(schema, typeName, true, typeSuffix, true, stripUnknown)
   const combinedFunctions = `${shapeValidator}\n\n${parserFunction}`
   const helpers: CollectedHelpers = collectHelpers(combinedFunctions, helpersMode, options?.helpersImportPrefix)
   const imports = [...collectImports(schema, { selfRef, rootSchema, typeSuffix }), ...helpers.imports]
