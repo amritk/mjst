@@ -563,12 +563,17 @@ const TYPEOF_CHECKABLE_TYPES = new Set(['string', 'number', 'integer', 'boolean'
 const arrayRejectedByRequiredProp = (
   keys: string[],
   required: Set<string>,
-  properties: Record<string, unknown>,
+  properties: Record<string, JSONSchema>,
 ): boolean => {
   for (const key of keys) {
     if (!required.has(key) || key === 'length' || ARRAY_INDEX_KEY.test(key)) continue
     const propSchema = properties[key]
-    if (isSchemaObject(propSchema) && hasType(propSchema) && TYPEOF_CHECKABLE_TYPES.has(propSchema.type as string)) {
+    if (
+      propSchema !== undefined &&
+      isSchemaObject(propSchema) &&
+      hasType(propSchema) &&
+      TYPEOF_CHECKABLE_TYPES.has(propSchema.type as string)
+    ) {
       return true
     }
   }
