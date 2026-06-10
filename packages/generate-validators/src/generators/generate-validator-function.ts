@@ -26,6 +26,7 @@ import {
   isObjectSchema,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
+import { unknownKeyCheck } from '@amritk/helpers/unknown-key-check'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 /**
@@ -114,24 +115,27 @@ const patternPropertySources = (schema: JSONSchema): string[] => {
 /**
  * Generates the unknown-key sweep for `additionalProperties: false`, mirroring
  * the interpreter's behaviour (same error message, one error per extra key).
- * The known-keys Set is hoisted to module scope and the sweep uses `for...in`
- * — the same allocation-free shape Ajv compiles to — so the hot path costs one
- * Set lookup per key. When the schema also declares `patternProperties`, a key
- * matching any pattern is not "additional": the patterns are compiled once at
- * module scope (the same regex-caching the interpreter does) and a key survives
- * the sweep if it matches the known-keys Set or any pattern.
+ * The sweep uses `for...in` — the same allocation-free shape Ajv compiles to.
+ * The per-key "is this declared" test comes from `unknownKeyCheck`, which
+ * inlines `!==` comparisons for small key counts (faster than `Set.has` and
+ * allocation-free) and hoists a known-keys `Set` only when the list is long.
+ * When the schema also declares `patternProperties`, a key matching any pattern
+ * is not "additional": the patterns are compiled once at module scope (the same
+ * regex-caching the interpreter does) and a key survives the sweep if it is a
+ * known key or matches any pattern.
  */
 const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): string[] => {
   if (!isSchemaObject(schema)) return []
   if (!hasAdditionalProperties(schema) || schema.additionalProperties !== false) return []
 
   const known = Object.keys(hasProperties(schema) ? schema.properties : {})
-  const setName = `_knownKeys${ctx.hoisted.length}`
-  ctx.hoisted.push(`const ${setName} = new Set(${JSON.stringify(known)})`)
   const d = ctx.depth
 
+  const check = unknownKeyCheck(known, `_knownKeys${ctx.hoisted.length}`)
+  ctx.hoisted.push(...check.declarations)
+
   // A key that matches any `patternProperties` regex is allowed, so only keys
-  // outside both the known-keys Set and every pattern count as additional.
+  // outside both the known keys and every pattern count as additional.
   const patterns = patternPropertySources(schema)
   let patternGuard = ''
   if (patterns.length > 0) {
@@ -142,7 +146,7 @@ const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): strin
 
   return [
     `  for (const _key${d} in ${ctx.objVar}) {`,
-    `    if (!${setName}.has(_key${d})${patternGuard}) {`,
+    `    if (${check.isUnknown(`_key${d}`)}${patternGuard}) {`,
     `      errors.push({ message: 'must NOT have additional properties', path: \`${ctx.pathPrefix}/\${_key${d}}\` })`,
     `    }`,
     `  }`,

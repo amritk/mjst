@@ -426,6 +426,41 @@ describe('generate-validator-function', () => {
     })
   })
 
+  it('inlines !== comparisons for the strict sweep below the key threshold', () => {
+    // A handful of known keys compile to a comparison chain (no Set allocation),
+    // which V8 evaluates faster than Set.has — the same shape Ajv/TypeBox emit.
+    const schema = {
+      type: 'object' as const,
+      properties: { number: { type: 'number' as const }, negNumber: { type: 'number' as const } },
+      additionalProperties: false,
+    }
+    const code = generateValidatorFunction(schema, 'Bench')
+
+    expect(code).toContain('_key0 !== "number" && _key0 !== "negNumber"')
+    expect(code).not.toContain('new Set')
+    expect(code).not.toContain('.has(_key0)')
+  })
+
+  it('falls back to a hoisted Set when the strict sweep exceeds the key threshold', () => {
+    const properties = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`k${i}`, { type: 'string' as const }]))
+    const schema = { type: 'object' as const, properties, additionalProperties: false }
+    const code = generateValidatorFunction(schema, 'Wide')
+
+    expect(code).toContain('new Set(')
+    expect(code).toContain('.has(_key0)')
+  })
+
+  it('rejects every key for additionalProperties false with no declared properties', () => {
+    const schema = { type: 'object' as const, additionalProperties: false }
+    const validate = evalValidator(generateValidatorFunction(schema, 'Empty'))
+
+    expect(validate({})).toBe(true)
+    expect(validate({ extra: 1 })).toEqual({
+      valid: false,
+      errors: [{ message: 'must NOT have additional properties', path: '/extra' }],
+    })
+  })
+
   it('rejects undeclared nested keys when the nested object sets additionalProperties false', () => {
     const schema = {
       type: 'object' as const,

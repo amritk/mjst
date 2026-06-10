@@ -28,6 +28,7 @@ import {
   isObjectSchema,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
+import { unknownKeyCheck } from '@amritk/helpers/unknown-key-check'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { getDefaultValue } from '#helpers/get-default-value'
 
@@ -692,14 +693,21 @@ const generateObjectParser = (
     preamble.push(generateObjectParser(propSchema, subName, useRefImports, suffix, logWarnings, strict, false))
   }
 
-  // additionalProperties: false — hoist the declared-keys Set so the per-call
-  // sweep is one Set lookup per key. The predicate form is shared by the fast
-  // path and the shape validator; strict mode throws with the offending key.
+  // additionalProperties: false — the per-key "is this undeclared" test inlines
+  // `!==` comparisons for a short key list and hoists a Set only for a long one
+  // (see unknownKeyCheck). The predicate form is shared by the fast path and the
+  // shape validator; strict mode throws with the offending key.
   const strictKeys = hasStrictKeys(schema)
+  const strictKeyCheck = unknownKeyCheck(
+    properties.map(([key]) => key),
+    `_knownKeys${typeName}`,
+  )
   if (strictKeys) {
-    preamble.push(`const _knownKeys${typeName} = new Set(${JSON.stringify(properties.map(([key]) => key))});`)
+    for (const declaration of strictKeyCheck.declarations) {
+      preamble.push(`${declaration};`)
+    }
     preamble.push(
-      `const _hasOnlyKnownKeys${typeName} = (input: Record<string, unknown>): boolean => {\n  for (const _k in input) if (!_knownKeys${typeName}.has(_k)) return false;\n  return true;\n};`,
+      `const _hasOnlyKnownKeys${typeName} = (input: Record<string, unknown>): boolean => {\n  for (const _k in input) if (${strictKeyCheck.isUnknown('_k')}) return false;\n  return true;\n};`,
     )
   }
 
@@ -714,7 +722,7 @@ const generateObjectParser = (
     if (strictKeys) {
       lines.push(`  for (const _k in input) {`)
       lines.push(
-        `    if (!_knownKeys${typeName}.has(_k)) throw new Error(\`[${typeName}] unknown property "\${_k}"\`);`,
+        `    if (${strictKeyCheck.isUnknown('_k')}) throw new Error(\`[${typeName}] unknown property "\${_k}"\`);`,
       )
       lines.push(`  }`)
     }
@@ -788,10 +796,15 @@ const generateObjectParser = (
 
   // Emit a warning for any input key not declared in the schema's properties
   if (logWarnings && propInfo.length > 0) {
-    const keysList = propInfo.map(({ key }) => JSON.stringify(key)).join(', ')
-    lines.push(`  const _knownKeys = new Set([${keysList}]);`)
+    const warnKeyCheck = unknownKeyCheck(
+      propInfo.map(({ key }) => key),
+      '_knownKeys',
+    )
+    for (const declaration of warnKeyCheck.declarations) {
+      lines.push(`  ${declaration};`)
+    }
     lines.push(`  for (const _k in input) {`)
-    lines.push(`    if (!_knownKeys.has(_k)) {`)
+    lines.push(`    if (${warnKeyCheck.isUnknown('_k')}) {`)
     lines.push(`      console.warn(\`[${typeName}] Unknown property "\${_k}"\`);`)
     lines.push(`    }`)
     lines.push(`  }`)
@@ -943,12 +956,14 @@ const generateStrictCombinedParser = (
   strict?: boolean,
 ): string => {
   const declaredKeys = hasProperties(schema) ? Object.keys(schema.properties) : []
-  const knownSet = `[${declaredKeys.map((k) => JSON.stringify(k)).join(', ')}]`
+  // Below the inline threshold a key === "a" || key === "b" chain skips declared
+  // keys without the per-call Set allocation; a wider list hoists the Set.
+  const knownKeyCheck = unknownKeyCheck(declaredKeys, '_knownKeys')
 
   // The first $ref pattern (when ref imports are on) coerces its matching values
   // through the imported parser; the remaining patterns keep the raw value.
   const refPattern = useRefImports ? patterns.find(([, ps]) => isSchemaObject(ps) && hasRef(ps)) : undefined
-  const loopLines: string[] = [`    if (_knownKeys.has(key)) continue;`]
+  const loopLines: string[] = [`    if (${knownKeyCheck.isKnown('key')}) continue;`]
   if (refPattern) {
     const parserName = generateParserName(refToName((refPattern[1] as { $ref: string }).$ref, suffix))
     loopLines.push(`    if (/${escapeRegexPattern(refPattern[0])}/.test(key)) {`)
@@ -975,13 +990,14 @@ const generateStrictCombinedParser = (
     ? `    throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);`
     : `    return {} as unknown as ${typeName};`
   const resultBody = propertyLines.length > 0 ? `{\n${propertyLines.join('\n')}\n  }` : '{}'
+  // Only the Set form needs a declaration; the inline === chain is stateless.
+  const knownKeysDeclaration = knownKeyCheck.declarations.map((decl) => `  ${decl};\n`).join('')
 
   return `export const ${functionName} = (input: unknown): ${typeName} => {
   if (!isObject(input)) {
 ${notObjectBranch}
   }
-  const _knownKeys = new Set(${knownSet});
-  const result = ${resultBody} as unknown as ${typeName};
+${knownKeysDeclaration}  const result = ${resultBody} as unknown as ${typeName};
   for (const key in input) {
 ${loopLines.join('\n')}
   }
