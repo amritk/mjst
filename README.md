@@ -75,6 +75,18 @@ The `assert-loose` / `assert-strict` rows are the exact shape used by [`moltar/t
 
 <sub>Measured on Bun 1.3 (Linux x64); micro-benchmark figures vary by machine and runtime. Each library is timed in an isolated process over a pool of distinct inputs, reporting the median of many trials (so the optimiser can't hoist or eliminate the work). Every library agrees on each valid/invalid verdict — parity is asserted before timing — and TypeBox is given uuid/email format checkers so every library does the same work. Reproduce with `cd packages/generate-validators && bun run bench`.</sub>
 
+**Parsing** (the `parseSafe` half of the same benchmark — assert the types *and*
+strip undeclared keys, returning a clean typed object) compares the generated
+mjst parser against the two libraries with a pure parse-and-strip operation:
+
+| schema | mjst (generated) | zod (`.parse`) | typebox (`Value.Parse`) |
+|:--|--:|--:|--:|
+| small (4 fields) | **~9.4M** ops/s | ~2.7M ops/s | ~1.1M ops/s |
+| order (nested + array) | **~3.6M** ops/s | ~0.54M ops/s | ~0.14M ops/s |
+| assert (moltar parseSafe) | **~11.5M** ops/s | ~3.1M ops/s | ~0.58M ops/s |
+
+<sub>mjst parses in `strict + stripUnknown` mode, so it asserts types (throwing on a mismatch) and strips extras at every nesting level, exactly like zod's `.parse` and TypeBox's `Value.Parse` clean+assert pipeline — parity (identical stripped output, and rejection of wrong-typed input) is asserted before timing. ajv (`removeAdditional`) and typia (`assertPrune`) are excluded here because they strip by mutating the input in place rather than returning a new value, which a reused input pool can't measure fairly. Reproduce with `cd packages/generate-parsers && bun run bench`.</sub>
+
 ---
 
 ## Quick start

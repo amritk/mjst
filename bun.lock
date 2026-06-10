@@ -83,6 +83,10 @@
         "@amritk/helpers": "workspace:*",
         "json-schema-typed": "catalog:",
       },
+      "devDependencies": {
+        "@sinclair/typebox": "^0.34.49",
+        "zod": "^4.4.3",
+      },
     },
     "packages/generate-validators": {
       "name": "@amritk/generate-validators",
