@@ -493,18 +493,66 @@ describe('generate-validator-function', () => {
     expect(validate({ id: 1, extra: 'fine' })).toBe(true)
   })
 
-  it('skips the additionalProperties false sweep when patternProperties is present', () => {
-    // The generator does not evaluate key patterns yet, so sweeping every
-    // undeclared key would wrongly reject keys the patterns allow.
+  it('allows pattern-matched keys but rejects others when additionalProperties is false', () => {
+    // Mirrors the interpreter: a key matching any `patternProperties` regex is
+    // not "additional"; only keys outside both `properties` and every pattern
+    // are rejected.
     const schema = {
       type: 'object' as const,
       properties: { id: { type: 'number' as const } },
       patternProperties: { '^x-': { type: 'string' as const } },
       additionalProperties: false,
     }
-    const code = generateValidatorFunction(schema, 'Extensible')
+    const validate = evalValidator(generateValidatorFunction(schema, 'Extensible'))
 
-    expect(code).not.toContain('must NOT have additional properties')
+    expect(validate({ id: 1 })).toBe(true)
+    expect(validate({ id: 1, 'x-foo': 'ok' })).toBe(true)
+    expect(validate({ id: 1, 'x-foo': 'ok', 'x-bar': 'also ok' })).toBe(true)
+    expect(validate({ id: 1, nope: 'bad' })).toEqual({
+      valid: false,
+      errors: [{ message: 'must NOT have additional properties', path: '/nope' }],
+    })
+  })
+
+  it('allows keys matching any of several patterns under additionalProperties false', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { id: { type: 'number' as const } },
+      patternProperties: {
+        '^x-': { type: 'string' as const },
+        _count$: { type: 'number' as const },
+      },
+      additionalProperties: false,
+    }
+    const validate = evalValidator(generateValidatorFunction(schema, 'MultiPattern'))
+
+    expect(validate({ id: 1, 'x-foo': 'ok', item_count: 3 })).toBe(true)
+    expect(validate({ id: 1, stray: true })).toEqual({
+      valid: false,
+      errors: [{ message: 'must NOT have additional properties', path: '/stray' }],
+    })
+  })
+
+  it('rejects keys matching no pattern at nested levels under additionalProperties false', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: {
+        nested: {
+          type: 'object' as const,
+          properties: { a: { type: 'string' as const } },
+          patternProperties: { '^x-': { type: 'string' as const } },
+          additionalProperties: false,
+        },
+      },
+      required: ['nested'],
+    }
+    const validate = evalValidator(generateValidatorFunction(schema, 'NestedPattern'))
+
+    expect(validate({ nested: { a: 'ok', 'x-meta': 'fine' } })).toBe(true)
+    expect(validate({ nested: { a: 'ok', b: 'extra' } })).toEqual({
+      valid: false,
+      errors: [{ message: 'must NOT have additional properties', path: '/nested/b' }],
+    })
   })
 
   it('reports array item errors at the item index path', () => {

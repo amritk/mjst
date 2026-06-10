@@ -1297,6 +1297,88 @@ describe('generate-parser-function', () => {
     expect(result).not.toContain('input as SpecificationExtensions')
   })
 
+  it('combined parser strips undeclared keys but keeps pattern matches under additionalProperties false', () => {
+    // Mirrors the interpreter: declared properties and pattern-matched keys are
+    // kept; keys matching neither are dropped in coerce mode.
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: {
+        default: { $ref: '#/$defs/response' },
+      },
+      patternProperties: {
+        '^[1-5](?:[0-9]{2}|XX)$': { $ref: '#/$defs/response' },
+      },
+      additionalProperties: false,
+    }
+
+    const result = generateParserFunction(schema, 'Responses', { useRefImports: true })
+
+    expect(result).not.toContain('...input,')
+    expect(result).toContain('const _knownKeys = new Set(["default"])')
+
+    const parse = evalGenerated<(input: unknown) => Record<string, unknown>>(
+      result.replace(/parseResponse\(([^)]*)\)/g, '$1'),
+      'parseResponses',
+    )
+    expect(parse({ default: { a: 1 }, '200': { b: 2 }, nope: { c: 3 } })).toEqual({
+      default: { a: 1 },
+      '200': { b: 2 },
+    })
+  })
+
+  it('combined parser throws on undeclared keys under additionalProperties false in strict mode', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { default: { $ref: '#/$defs/response' } },
+      patternProperties: {
+        '^[1-5](?:[0-9]{2}|XX)$': { $ref: '#/$defs/response' },
+      },
+      additionalProperties: false,
+    }
+
+    const result = generateParserFunction(schema, 'Responses', { useRefImports: true, strict: true })
+
+    const parse = evalGenerated<(input: unknown) => unknown>(
+      result.replace(/parseResponse\(([^)]*)\)/g, '$1'),
+      'parseResponses',
+    )
+    expect(() => parse({ default: {}, '200': {} })).not.toThrow()
+    expect(() => parse({ default: {}, nope: {} })).toThrow('unknown property "nope"')
+  })
+
+  it('pattern-only parser strips non-matching keys under additionalProperties false', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      patternProperties: {
+        '^x-': { type: 'string' },
+      },
+      additionalProperties: false,
+    }
+
+    const result = generateParserFunction(schema, 'Extensions', { useRefImports: true })
+
+    expect(result).not.toContain('...input,')
+
+    const parse = evalGenerated<(input: unknown) => Record<string, unknown>>(result, 'parseExtensions')
+    expect(parse({ 'x-foo': 'a', 'x-bar': 'b', nope: 'c' })).toEqual({ 'x-foo': 'a', 'x-bar': 'b' })
+  })
+
+  it('pattern-only parser throws on non-matching keys under additionalProperties false in strict mode', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      patternProperties: {
+        '^x-': { type: 'string' },
+      },
+      additionalProperties: false,
+    }
+
+    const result = generateParserFunction(schema, 'Extensions', { useRefImports: true, strict: true })
+
+    const parse = evalGenerated<(input: unknown) => unknown>(result, 'parseExtensions')
+    expect(() => parse({ 'x-foo': 'a' })).not.toThrow()
+    expect(() => parse({ nope: 'c' })).toThrow('unknown property "nope"')
+  })
+
   it('optimization: inlines variables for simple properties without fast-path', () => {
     // When there's no fast-path, simple properties should be inlined
     const schema: JSONSchema = {
