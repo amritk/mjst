@@ -571,4 +571,181 @@ describe('generate-validator-function', () => {
       errors: [{ message: 'items must be string', path: '/tags/1' }],
     })
   })
+
+  describe('happy-path guard', () => {
+    // The early `return true` block (an `&&` chain that proves validity without
+    // allocating an errors array) only appears when the guard is emitted; the
+    // slow path's final return is `... : true`, never a bare `return true`.
+    const hasGuard = (code: string): boolean => code.includes('  ) {\n    return true\n  }')
+
+    it('emits a boolean guard for an all-required object of bare-typed scalars', () => {
+      const schema = {
+        type: 'object' as const,
+        properties: { name: { type: 'string' as const }, age: { type: 'number' as const } },
+        required: ['name', 'age'],
+      }
+      const code = generateValidatorFunction(schema, 'Person')
+
+      expect(hasGuard(code)).toBe(true)
+      // Member access into obj is guarded by the object-shape check ahead of it.
+      expect(code).toContain("typeof input === 'object' && input !== null && !Array.isArray(input)")
+      expect(code).toContain('typeof obj["name"] === \'string\'')
+      expect(code).toContain('typeof obj["age"] === \'number\'')
+    })
+
+    it('proves validity for the happy path and falls through to identical errors otherwise', () => {
+      const schema = {
+        type: 'object' as const,
+        properties: { name: { type: 'string' as const }, age: { type: 'number' as const } },
+        required: ['name', 'age'],
+      }
+      const validate = evalValidator(generateValidatorFunction(schema, 'Person'))
+
+      expect(validate({ name: 'Ada', age: 36 })).toBe(true)
+      // A bad property type falls through the guard to the slow, error-collecting path.
+      expect(validate({ name: 'Ada', age: 'old' })).toEqual({
+        valid: false,
+        errors: [{ message: 'must be number', path: '/age' }],
+      })
+      // A missing required property likewise falls through to the slow path.
+      expect(validate({ name: 'Ada' })).toEqual({
+        valid: false,
+        errors: [{ message: "must have required property 'age'", path: '' }],
+      })
+      // Non-object input is rejected by the slow path's object guard, not the fast one.
+      expect(validate(null)).toEqual({
+        valid: false,
+        errors: [{ message: 'must be object', path: '' }],
+      })
+    })
+
+    it('uses an exact key count instead of a sweep for strict all-required objects', () => {
+      const schema = {
+        type: 'object' as const,
+        properties: { id: { type: 'number' as const } },
+        required: ['id'],
+        additionalProperties: false,
+      }
+      const code = generateValidatorFunction(schema, 'Strict')
+
+      expect(hasGuard(code)).toBe(true)
+      expect(code).toContain('Object.keys(obj).length === 1')
+
+      const validate = evalValidator(code)
+      expect(validate({ id: 1 })).toBe(true)
+      // An extra key bumps the count past 1, so the guard bails and the slow
+      // path reports the additional property.
+      expect(validate({ id: 1, extra: 'x' })).toEqual({
+        valid: false,
+        errors: [{ message: 'must NOT have additional properties', path: '/extra' }],
+      })
+    })
+
+    it('inlines a guard for guardable nested objects, casting through each level', () => {
+      const schema = {
+        type: 'object' as const,
+        properties: {
+          p: {
+            type: 'object' as const,
+            properties: { n: { type: 'string' as const } },
+            required: ['n'],
+          },
+        },
+        required: ['p'],
+      }
+      const code = generateValidatorFunction(schema, 'Wrap')
+
+      expect(hasGuard(code)).toBe(true)
+      expect(code).toContain('typeof obj["p"] === \'object\' && obj["p"] !== null && !Array.isArray(obj["p"])')
+      expect(code).toContain('typeof (obj["p"] as Record<string, unknown>)["n"] === \'string\'')
+
+      const validate = evalValidator(code)
+      expect(validate({ p: { n: 'ok' } })).toBe(true)
+      expect(validate({ p: { n: 7 } })).toEqual({
+        valid: false,
+        errors: [{ message: 'must be string', path: '/p/n' }],
+      })
+    })
+
+    it('guards integer like number, so a non-integral value still passes the fast path', () => {
+      const schema = {
+        type: 'object' as const,
+        properties: { count: { type: 'integer' as const } },
+        required: ['count'],
+      }
+      const code = generateValidatorFunction(schema, 'Counter')
+
+      expect(code).toContain('typeof obj["count"] === \'number\'')
+      // mjst never enforces integrality, so the guard's verdict matches the slow path.
+      expect(evalValidator(code)({ count: 1.5 })).toBe(true)
+    })
+
+    it('omits the guard when any property is optional', () => {
+      const schema = {
+        type: 'object' as const,
+        properties: { name: { type: 'string' as const } },
+      }
+      const code = generateValidatorFunction(schema, 'Loose')
+
+      expect(hasGuard(code)).toBe(false)
+      expect(evalValidator(code)({})).toBe(true)
+    })
+
+    it('omits the guard when a property carries a constraint beyond a bare type', () => {
+      const constrained = {
+        pattern: { type: 'string' as const, pattern: '^x' },
+        enum: { enum: ['a', 'b'] },
+        const: { const: 'fixed' },
+        minLength: { type: 'string' as const, minLength: 1 },
+        minimum: { type: 'number' as const, minimum: 0 },
+        ref: { $ref: '#/$defs/other' },
+        items: { type: 'array' as const, items: { type: 'string' as const } },
+        instanceOf: { 'x-mjst': { instanceOf: 'Date' } },
+      }
+
+      for (const [label, prop] of Object.entries(constrained)) {
+        const schema = {
+          type: 'object' as const,
+          properties: { value: prop as Parameters<typeof generateValidatorFunction>[0] },
+          required: ['value'],
+        }
+        const code = generateValidatorFunction(schema, 'T')
+        expect(hasGuard(code), `expected no guard for ${label}`).toBe(false)
+      }
+    })
+
+    it('omits the guard for object-level constraints the cheap expression cannot prove', () => {
+      const cases = {
+        patternProperties: {
+          type: 'object' as const,
+          properties: { id: { type: 'number' as const } },
+          required: ['id'],
+          patternProperties: { '^x-': { type: 'string' as const } },
+        },
+        propertyNames: {
+          type: 'object' as const,
+          properties: { id: { type: 'number' as const } },
+          required: ['id'],
+          propertyNames: { pattern: '^[a-z]+$' },
+        },
+        dependentRequired: {
+          type: 'object' as const,
+          properties: { a: { type: 'string' as const }, b: { type: 'string' as const } },
+          required: ['a', 'b'],
+          dependentRequired: { a: ['b'] },
+        },
+        additionalPropertiesSchema: {
+          type: 'object' as const,
+          properties: { id: { type: 'number' as const } },
+          required: ['id'],
+          additionalProperties: { type: 'string' as const },
+        },
+      }
+
+      for (const [label, schema] of Object.entries(cases)) {
+        const code = generateValidatorFunction(schema as Parameters<typeof generateValidatorFunction>[0], 'T')
+        expect(hasGuard(code), `expected no guard for ${label}`).toBe(false)
+      }
+    })
+  })
 })
