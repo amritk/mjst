@@ -55,6 +55,8 @@ Most tools in this space pick a single lane — types **or** validation **or** d
 
 mjst's validators are *generated* TypeScript — straight-line, monomorphic code with no generic dispatch. The exported `validateX` runs a tiny inlined boolean guard on the happy path and falls back to a separate error-collecting function only when input is actually invalid, so a valid-input check beats every other library measured — including the build-time transformer typia. The numbers below compare a generated mjst validator against typia, an Ajv-compiled function, a TypeBox-compiled checker, and a hand-written Zod schema on the same data.
 
+Each schema also generates a boolean type-guard `isX(input): input is X` — a single flat predicate (no error array, no cold-path call) returning the same verdict as `validateX`. It is the inline-friendly equivalent of TypeBox's compiled `check` / typia's `is`, for the common "is this valid?" question where you don't need the error list; `validateX` remains the rich, error-collecting form.
+
 **Steady-state throughput** (valid input, higher is better):
 
 | schema | mjst (generated) | typia (transformed) | ajv (compiled) | typebox (compiled) | zod |

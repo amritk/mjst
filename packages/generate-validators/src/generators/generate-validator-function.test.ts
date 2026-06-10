@@ -1,7 +1,7 @@
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
-import { generateValidatorFunction } from './generate-validator-function'
+import { generateBooleanGuard, generateValidatorFunction } from './generate-validator-function'
 
 /**
  * Compiles a generated validator (TypeScript source) to JavaScript and returns
@@ -777,6 +777,185 @@ describe('generate-validator-function', () => {
         const code = generateValidatorFunction(schema as Parameters<typeof generateValidatorFunction>[0], 'T')
         expect(hasGuard(code), `expected no guard for ${label}`).toBe(false)
       }
+    })
+  })
+
+  describe('boolean type-guard (isX)', () => {
+    /**
+     * Compiles the validator and its boolean guard together (the guard may fall
+     * back to calling the validator) and returns both, so tests can assert the
+     * guard's verdict matches `validateX(input) === true` exactly.
+     */
+    const evalBoth = (
+      schema: Parameters<typeof generateValidatorFunction>[0],
+      typeName: string,
+    ): { validate: (input: unknown) => unknown; guard: (input: unknown) => boolean } => {
+      const code = `${generateValidatorFunction(schema, typeName)}\n\n${generateBooleanGuard(schema, typeName)}`
+      const js = ts.transpileModule(code, {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+      }).outputText
+      const moduleExports: Record<string, unknown> = {}
+      new Function('exports', js)(moduleExports)
+      return {
+        validate: moduleExports[`validate${typeName}`] as (input: unknown) => unknown,
+        guard: moduleExports[`is${typeName}`] as (input: unknown) => boolean,
+      }
+    }
+
+    it('emits an exported `input is T` predicate', () => {
+      const schema = {
+        type: 'object' as const,
+        properties: { name: { type: 'string' as const } },
+        required: ['name'],
+      }
+      const code = generateBooleanGuard(schema, 'User')
+      expect(code).toContain('export const isUser = (input: unknown): input is User =>')
+      // Flat predicate: no error array, no cold-path call.
+      expect(code).not.toContain('errors')
+      expect(code).not.toContain('validateUser')
+    })
+
+    it('accepts valid input and rejects invalid input', () => {
+      const { guard } = evalBoth(
+        {
+          type: 'object' as const,
+          properties: {
+            id: { type: 'string' as const },
+            age: { type: 'integer' as const, minimum: 0, maximum: 130 },
+            active: { type: 'boolean' as const },
+          },
+          required: ['id', 'age'],
+        },
+        'User',
+      )
+      expect(guard({ id: 'x', age: 30 })).toBe(true)
+      expect(guard({ id: 'x', age: 30, active: true })).toBe(true)
+      expect(guard({ id: 'x' })).toBe(false) // missing required age
+      expect(guard({ id: 1, age: 30 })).toBe(false) // wrong type
+      expect(guard({ id: 'x', age: -1 })).toBe(false) // below minimum
+      expect(guard({ id: 'x', age: 30, active: 'yes' })).toBe(false) // wrong optional type
+      expect(guard('nope')).toBe(false)
+      expect(guard(null)).toBe(false)
+      expect(guard([])).toBe(false)
+    })
+
+    it('rejects extras under additionalProperties: false at every level', () => {
+      const { guard } = evalBoth(
+        {
+          type: 'object' as const,
+          additionalProperties: false,
+          properties: {
+            a: { type: 'number' as const },
+            nested: {
+              type: 'object' as const,
+              additionalProperties: false,
+              properties: { foo: { type: 'string' as const } },
+              required: ['foo'],
+            },
+          },
+          required: ['a', 'nested'],
+        },
+        'T',
+      )
+      expect(guard({ a: 1, nested: { foo: 'x' } })).toBe(true)
+      expect(guard({ a: 1, nested: { foo: 'x' }, extra: true })).toBe(false)
+      expect(guard({ a: 1, nested: { foo: 'x', extra: 1 } })).toBe(false)
+    })
+
+    it('matches the validator on NaN for a constrained number (both accept it)', () => {
+      // The validator uses `typeof === number` + `value < min` (NaN passes both),
+      // so the guard must too — `!(value < min)`, not `value >= min`.
+      const { validate, guard } = evalBoth(
+        {
+          type: 'object' as const,
+          properties: { n: { type: 'number' as const, minimum: 0, maximum: 10 } },
+          required: ['n'],
+        },
+        'T',
+      )
+      expect(validate({ n: NaN })).toBe(true)
+      expect(guard({ n: NaN })).toBe(true)
+      expect(guard({ n: 5 })).toBe(true)
+      expect(guard({ n: 20 })).toBe(false)
+    })
+
+    it("matches the validator's shallow array-item check (no deep item validation)", () => {
+      const { validate, guard } = evalBoth(
+        {
+          type: 'object' as const,
+          properties: {
+            items: {
+              type: 'array' as const,
+              items: {
+                type: 'object' as const,
+                additionalProperties: false,
+                properties: { sku: { type: 'string' as const } },
+                required: ['sku'],
+              },
+            },
+          },
+          required: ['items'],
+        },
+        'T',
+      )
+      // The validator only shape-checks object array items, so a bad item field
+      // is accepted by both — the guard must not be stricter than the validator.
+      const withBadItem = { items: [{ sku: 123, extra: true }] }
+      expect(validate(withBadItem)).toBe(true)
+      expect(guard(withBadItem)).toBe(true)
+      expect(guard({ items: ['not-an-object'] })).toBe(false)
+      expect(guard({ items: 'not-an-array' })).toBe(false)
+    })
+
+    it('falls back to the validator for schemas it cannot express flat', () => {
+      // A $ref defers to the imported validator, which the flat form cannot mirror.
+      const schema = {
+        type: 'object' as const,
+        properties: { child: { $ref: '#/$defs/child' } },
+        required: ['child'],
+      }
+      const code = generateBooleanGuard(schema, 'Parent')
+      expect(code).toBe('export const isParent = (input: unknown): input is Parent => validateParent(input) === true')
+    })
+
+    it('agrees with `validateX(input) === true` across many mutated inputs', () => {
+      const schema = {
+        type: 'object' as const,
+        additionalProperties: false,
+        properties: {
+          id: { type: 'string' as const, minLength: 1 },
+          status: { enum: ['on', 'off'] as const },
+          score: { type: 'number' as const, minimum: 0, maximum: 100 },
+          tags: { type: 'array' as const, items: { type: 'string' as const } },
+          meta: {
+            type: 'object' as const,
+            additionalProperties: false,
+            properties: { k: { type: 'string' as const } },
+            required: ['k'],
+          },
+          note: { type: 'string' as const },
+        },
+        required: ['id', 'status', 'score', 'meta'],
+      }
+      const { validate, guard } = evalBoth(schema, 'T')
+
+      const valid = { id: 'a', status: 'on', score: 50, tags: ['x'], meta: { k: 'v' }, note: 'hi' }
+      const edges = [undefined, null, NaN, Infinity, 0, -1, 100, 101, '', 'a', true, {}, [], [1]]
+      let checked = 0
+      const check = (value: unknown): void => {
+        checked++
+        expect(guard(value), `disagreement on ${JSON.stringify(value)}`).toBe(validate(value) === true)
+      }
+      check(valid)
+      for (const e of edges) check(e)
+      for (const key of Object.keys(valid)) {
+        for (const e of edges) check({ ...valid, [key]: e })
+        const { [key]: _omit, ...without } = valid as Record<string, unknown>
+        check(without)
+      }
+      check({ ...valid, EXTRA: 1 })
+      check({ ...valid, meta: { k: 'v', EXTRA: 1 } })
+      expect(checked).toBeGreaterThan(100)
     })
   })
 })

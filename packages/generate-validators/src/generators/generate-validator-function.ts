@@ -751,6 +751,215 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: s
 }
 
 /**
+ * Derives the boolean type-guard name from a type name.
+ * e.g. "InfoObject" → "isInfoObject"
+ */
+const guardName = (typeName: string): string => `is${typeName}`
+
+/**
+ * Positive type check for a value — the negation of {@link wrongTypeCondition}.
+ * Used by the boolean type-guard, which proves validity with `&&` conditions
+ * rather than collecting errors. Object is a shape-only check (matching the
+ * validator, which never recurses into array items or untyped object values).
+ */
+const rightTypeCondition = (accessor: string, type: string): string | null => {
+  switch (type) {
+    case 'string':
+      return `typeof ${accessor} === 'string'`
+    case 'number':
+    case 'integer':
+      return `typeof ${accessor} === 'number'`
+    case 'boolean':
+      return `typeof ${accessor} === 'boolean'`
+    case 'array':
+      return `Array.isArray(${accessor})`
+    case 'object':
+      return `typeof ${accessor} === 'object' && ${accessor} !== null && !Array.isArray(${accessor})`
+    default:
+      return null
+  }
+}
+
+/**
+ * Builds a boolean expression that is TRUE iff `acc` satisfies `schema`, with the
+ * *exact same verdict* as the error-collecting validator — or `null` when the
+ * schema carries something the flat form can't faithfully mirror ($ref, unions,
+ * `const`, x-mjst, etc.), in which case the whole guard falls back to calling the
+ * validator. Used for a property value or an array item; `acc` is the expression
+ * yielding the value.
+ */
+const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
+  if (!isSchemaObject(schema)) return null
+
+  // Anything whose verdict the flat form can't mirror exactly: defer to the
+  // validator (the caller turns a single `null` into a full fallback guard).
+  if (
+    hasRef(schema) ||
+    hasConst(schema) ||
+    hasOneOf(schema) ||
+    'anyOf' in schema ||
+    'allOf' in schema ||
+    'not' in schema ||
+    getMjstInstanceOf(schema) !== undefined ||
+    getMjstPrimitive(schema) !== undefined
+  ) {
+    return null
+  }
+
+  // enum — same membership test the validator uses.
+  if (hasEnum(schema)) {
+    return `(${JSON.stringify(schema.enum)} as unknown[]).includes(${acc})`
+  }
+
+  if (!hasType(schema)) return null
+  const t = schema.type as string
+
+  switch (t) {
+    // Each constraint is the exact negation of the validator's error condition
+    // (`!(len < min)`, not `len >= min`) so edge values — most importantly `NaN`,
+    // which the validator accepts for a constrained number since `NaN < min` is
+    // false — get the identical verdict.
+    case 'string': {
+      const parts = [`typeof ${acc} === 'string'`]
+      if (hasPattern(schema)) parts.push(`/${escapeRegexPattern(schema.pattern)}/.test(${acc})`)
+      if (hasMinLength(schema)) parts.push(`!(${acc}.length < ${schema.minLength})`)
+      if (hasMaxLength(schema)) parts.push(`!(${acc}.length > ${schema.maxLength})`)
+      return parts.join(' && ')
+    }
+    case 'number':
+    case 'integer': {
+      const parts = [`typeof ${acc} === 'number'`]
+      if (hasMinimum(schema))
+        parts.push(`!(${acc} ${hasStrictExclusiveMinimum(schema) ? '<=' : '<'} ${schema.minimum})`)
+      if (hasMaximum(schema))
+        parts.push(`!(${acc} ${hasStrictExclusiveMaximum(schema) ? '>=' : '>'} ${schema.maximum})`)
+      if (hasExclusiveMinimum(schema)) parts.push(`!(${acc} <= ${schema.exclusiveMinimum})`)
+      if (hasExclusiveMaximum(schema)) parts.push(`!(${acc} >= ${schema.exclusiveMaximum})`)
+      if (hasMultipleOf(schema)) parts.push(`${acc} % ${schema.multipleOf} === 0`)
+      return parts.join(' && ')
+    }
+    case 'boolean':
+      return `typeof ${acc} === 'boolean'`
+    case 'object': {
+      const parts = booleanObjectParts(schema, acc, `(${acc} as Record<string, unknown>)`)
+      return parts === null ? null : parts.join(' && ')
+    }
+    case 'array':
+      return booleanArrayExpr(schema, acc)
+    default:
+      return null
+  }
+}
+
+/**
+ * Boolean expression for an array value. Mirrors the validator, which checks the
+ * array shape and — for typed items — only each item's *type* (objects are shape-
+ * checked, not recursed into); it never enforces `minItems`/`maxItems` or item
+ * constraints. Returns `null` for `$ref` items (those defer to the validator).
+ */
+const booleanArrayExpr = (schema: JSONSchema, acc: string): string | null => {
+  const base = `Array.isArray(${acc})`
+  if (!hasItems(schema)) return base
+  const items = schema.items
+  if (!isSchemaObject(items)) return base
+  if (hasRef(items)) return null
+  if (!hasType(items)) return base
+  const itemCheck = rightTypeCondition('_it', items.type as string)
+  if (itemCheck === null) return base
+  return `${base} && (${acc} as unknown[]).every((_it) => ${itemCheck})`
+}
+
+/**
+ * Builds the `&&` conditions proving an object value is valid (same verdict as
+ * the error-collecting validator), or `null` when any property or object-level
+ * keyword can't be mirrored flat. `raw` yields the value (for the shape check);
+ * `objAcc` is the same value narrowed to a record (for member access).
+ */
+const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string): string[] | null => {
+  if (!isObjectSchema(schema)) return null
+  // These need per-key loops or cross-references the flat form can't express.
+  if (hasDependentRequired(schema) || hasPropertyNames(schema)) return null
+  if (isSchemaObject(schema) && 'patternProperties' in schema) return null
+
+  let strict = false
+  if (hasAdditionalProperties(schema)) {
+    // Only `additionalProperties: false` is expressible; a schema needs per-key
+    // validation, so defer to the validator.
+    if (schema.additionalProperties === false) strict = true
+    else return null
+  }
+
+  const required = new Set(hasRequired(schema) ? schema.required : [])
+  const properties = hasProperties(schema) ? schema.properties : {}
+  const keys = Object.keys(properties)
+
+  // Drop the `!Array.isArray` term when a required, typeof-guarded property
+  // already rejects arrays (an array's normal key is `undefined`, which no
+  // `typeof` accepts) — the same sound optimisation the validator's hot guard
+  // uses. Kept when no such property exists.
+  const arrayCheck = arrayRejectedByRequiredProp(keys, required, properties) ? '' : ` && !Array.isArray(${raw})`
+  const parts: string[] = [`typeof ${raw} === 'object' && ${raw} !== null${arrayCheck}`]
+
+  for (const key of keys) {
+    const propSchema = properties[key]
+    if (propSchema === undefined || !isSchemaObject(propSchema)) return null
+    const member = safeAccessor(objAcc, key)
+    const expr = booleanLeafExpr(propSchema, member)
+    if (expr === null) return null
+    parts.push(required.has(key) ? expr : `(${member} === undefined || (${expr}))`)
+  }
+
+  if (strict) {
+    // `additionalProperties: false`: with every property required, an exact key
+    // count proves no extras (the typeof checks above already proved presence);
+    // otherwise sweep the keys against the declared set.
+    if (keys.length === 0) {
+      parts.push(`Object.keys(${objAcc}).length === 0`)
+    } else if (keys.every((key) => required.has(key))) {
+      parts.push(`Object.keys(${objAcc}).length === ${keys.length}`)
+    } else {
+      const known = keys.map((key) => `_k === ${JSON.stringify(key)}`).join(' || ')
+      parts.push(`Object.keys(${objAcc}).every((_k) => ${known})`)
+    }
+  }
+
+  return parts
+}
+
+/**
+ * Generates the exported boolean type-guard `isTypeName(input): input is TypeName`.
+ *
+ * Unlike `validateTypeName` (which returns rich `ValidationResult` errors), this
+ * is a single flat boolean predicate — no error array, no cold-path call — so V8
+ * inlines it like a hand-written `check`, matching the shape of TypeBox's
+ * compiled checker. It returns the *same verdict* as the validator. When the
+ * schema carries anything the flat form can't mirror exactly, it falls back to
+ * `validateTypeName(input) === true`, which is always correct.
+ */
+export const generateBooleanGuard = (schema: JSONSchema, typeName: string, _suffix = ''): string => {
+  const name = guardName(typeName)
+  const fallback = `export const ${name} = (input: unknown): input is ${typeName} => ${validatorName(typeName)}(input) === true`
+
+  if (isObjectSchema(schema)) {
+    const parts = booleanObjectParts(schema, 'input', 'obj')
+    if (parts === null) return fallback
+    return [
+      `export const ${name} = (input: unknown): input is ${typeName} => {`,
+      `  const obj = input as Record<string, unknown>`,
+      `  return (`,
+      parts.map((part) => `    ${part}`).join(' &&\n'),
+      `  )`,
+      `}`,
+    ].join('\n')
+  }
+
+  // Non-object roots (scalar, enum, array) can often be expressed inline too.
+  const expr = booleanLeafExpr(schema, 'input')
+  if (expr === null) return fallback
+  return `export const ${name} = (input: unknown): input is ${typeName} => ${expr}`
+}
+
+/**
  * Generates a validator function for a non-object schema (primitive, array, enum, $ref).
  */
 const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: string): string => {
