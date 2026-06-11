@@ -1,5 +1,12 @@
 # @amritk/mjst
 
+## 0.7.10
+
+### Patch Changes
+
+- Updated dependencies [6fa79a6]
+  - @amritk/generate-parsers@0.11.0
+
 ## 0.7.9
 
 ### Patch Changes
