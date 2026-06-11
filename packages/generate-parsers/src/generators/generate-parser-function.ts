@@ -994,6 +994,42 @@ const generateObjectParser = (
     lines.push(`  } as unknown as ${typeName};`)
   }
 
+  // The deep-guard fast path. `{ ...input }` is the only correct shape when the
+  // guard let undeclared keys through (no known-keys term) — they must survive.
+  // But when `stripKeys` is set the guard *also* proved `_hasOnlyKnownKeys`, so
+  // the input's keys are exactly the declared properties: an explicit literal of
+  // those keys is then equivalent to the spread, and faster — a fixed-shape
+  // literal beats a generic spread, yields a stable hidden class, and produces
+  // the same declared key order as the slow path (the spread used input order).
+  // The literal shares each value by reference, exactly like the spread did, so
+  // it never re-parses an already-validated nested object. allOf merges in
+  // properties this `propInfo` list doesn't carry, so it keeps the spread.
+  const emitDeepGuardReturn = (lines: string[]): void => {
+    const canLiteral = stripKeys && !(isSchemaObject(schema) && hasAllOf(schema))
+    if (!canLiteral) {
+      lines.push(`  if (${deepGuard}) return { ...input } as ${typeName};`)
+      return
+    }
+    const fields: string[] = []
+    for (const { key, varName, isRequired, propSchema } of propInfo) {
+      if (!isSchemaObject(propSchema)) {
+        if (isRequired) fields.push(`    ${safeKey(key)}: undefined,`)
+        continue
+      }
+      const accessor = shouldCacheVariable(propSchema, canFastPath, useRefImports)
+        ? varName
+        : safeAccessor('input', key)
+      fields.push(
+        isRequired
+          ? `    ${safeKey(key)}: ${accessor},`
+          : `    ...(${accessor} !== undefined && { ${safeKey(key)}: ${accessor} }),`,
+      )
+    }
+    lines.push(`  if (${deepGuard}) return {`)
+    lines.push(fields.join('\n'))
+    lines.push(`  } as ${typeName};`)
+  }
+
   const lines: string[] = []
   lines.push(`${exportPrefix}const ${functionName} = (input: unknown): ${typeName} => {`)
 
@@ -1021,7 +1057,7 @@ const generateObjectParser = (
       emitReturn(lines, buildObjectLines(true))
     } else {
       if (deepGuard) {
-        lines.push(`  if (${deepGuard}) return { ...input } as ${typeName};`)
+        emitDeepGuardReturn(lines)
       }
       for (const assertionLine of assertionLines) {
         lines.push(assertionLine)
@@ -1040,7 +1076,7 @@ const generateObjectParser = (
     lines.push(...varDeclLines)
     lines.push(...warnLines)
     if (deepGuard) {
-      lines.push(`  if (${deepGuard}) return { ...input } as ${typeName};`)
+      emitDeepGuardReturn(lines)
     }
     emitReturn(lines, buildObjectLines(false))
   }
