@@ -2,7 +2,7 @@ import { generateTypeDefinition } from '@amritk/helpers/generate-type-definition
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { collectValidatorImports } from './collect-validator-imports'
-import { generateValidatorFunction } from './generate-validator-function'
+import { generateBooleanGuard, generateValidatorFunction } from './generate-validator-function'
 
 /**
  * Options for controlling what gets generated in a validator file.
@@ -31,7 +31,8 @@ type GenerateValidatorFileOptions = {
  * - Imports for the ValidationResult/ValidationError types
  * - Imports for any $ref types and their validator functions
  * - The exported TypeScript type definition
- * - The exported validator function
+ * - The exported validator function (`validateX`, rich `ValidationResult`)
+ * - The exported boolean type-guard (`isX`, a flat `input is X` predicate)
  *
  * @example
  * ```typescript
@@ -44,6 +45,7 @@ type GenerateValidatorFileOptions = {
  * // import type { ValidationResult, ValidationError } from './validation-result'
  * // export type Info = { title: string }
  * // export const validateInfo = (input: unknown, _path = ''): ValidationResult => { ... }
+ * // export const isInfo = (input: unknown): input is Info => { ... }
  * ```
  */
 export const generateValidatorFile = (
@@ -60,6 +62,7 @@ export const generateValidatorFile = (
 
   const typeDefinition = generateTypeDefinition(schema, typeName, { typeSuffix })
   const validatorFunction = generateValidatorFunction(schema, typeName, typeSuffix)
+  const booleanGuard = generateBooleanGuard(schema, typeName, typeSuffix)
 
   let result = `import type { ValidationResult, ValidationError } from './validation-result'\n`
 
@@ -80,7 +83,7 @@ export const generateValidatorFile = (
     result += '\n'
   }
 
-  result += typeDefinition + '\n\n' + validatorFunction
+  result += typeDefinition + '\n\n' + validatorFunction + '\n\n' + booleanGuard
 
   return result
 }

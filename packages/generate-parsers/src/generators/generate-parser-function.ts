@@ -732,24 +732,10 @@ const generateObjectParser = (
 
   const fallbackObject = generateFallbackObject(schema, useRefImports, typeName, suffix, subTypeNames)
 
-  const lines: string[] = []
-  lines.push(`${exportPrefix}const ${functionName} = (input: unknown): ${typeName} => {`)
-  if (strict) {
-    for (const assertionLine of generateObjectStrictAssertion(schema, typeName)) {
-      lines.push(assertionLine)
-    }
-    if (strictKeys) {
-      lines.push(`  for (const _k in input) {`)
-      lines.push(
-        `    if (${strictKeyCheck.isUnknown('_k')}) throw new Error(\`[${typeName}] unknown property "\${_k}"\`);`,
-      )
-      lines.push(`  }`)
-    }
-  } else {
-    lines.push(`  if (!isObject(input)) return ${fallbackObject};`)
-  }
-
-  // First pass: determine if we can generate a fast path
+  // First pass: gather per-property info and decide whether a fast path is
+  // possible. A fast path returns the input (or a direct strip-build) for
+  // already-valid input without re-running per-property validation, so it may
+  // only fire when every property can be cheaply proven in-shape.
   const propInfo: {
     readonly key: string
     readonly varName: string
@@ -773,185 +759,292 @@ const generateObjectParser = (
     const varName = toVarName(key)
     propInfo.push({ key, varName, isRequired, propSchema })
 
-    // Check if this property can participate in fast path
-    if (canFastPath) {
-      // Records of refs require iterating every value to check shape — too
-      // expensive to inline into the parser's fast path. Disable.
-      if (shouldUseRecordRefImport(propSchema, useRefImports)) {
-        canFastPath = false
-      } else {
-        const subName = subTypeNames.get(key)
-        // Inline nested objects fast-path through their private shape
-        // predicate, the same way $ref properties use the imported one.
-        const check = subName
-          ? `${shapeValidatorName(subName)}(${varName})`
-          : generatePropertyTypeCheck(varName, propSchema, useRefImports, suffix)
-        if (check === null) {
-          canFastPath = false
-        } else {
-          if (isRequired) {
-            fastPathChecks.push(check)
-          } else {
-            fastPathChecks.push(`(${varName} === undefined || ${check})`)
-          }
-        }
-      }
+    if (!canFastPath) continue
+
+    // Records of refs require iterating every value to check shape — too
+    // expensive to inline into the parser's fast path. Disable.
+    if (shouldUseRecordRefImport(propSchema, useRefImports)) {
+      canFastPath = false
+      continue
+    }
+
+    const subName = subTypeNames.get(key)
+    // Inline nested objects fast-path through their private shape predicate, the
+    // same way $ref properties use the imported one.
+    const check = subName
+      ? `${shapeValidatorName(subName)}(${varName})`
+      : generatePropertyTypeCheck(varName, propSchema, useRefImports, suffix)
+    if (check === null) {
+      canFastPath = false
+    } else if (isRequired) {
+      fastPathChecks.push(check)
+    } else {
+      fastPathChecks.push(`(${varName} === undefined || ${check})`)
     }
   }
 
-  // The fast path returns `{ ...input }`, which preserves extras — so when we're
-  // stripping it must only fire when no undeclared key is present. The exception
-  // is strict + additionalProperties: false, where the throw block above already
-  // rejected any extra, so the fast path is safe to take unconditionally.
-  if (stripKeys && !(strict && strictKeys)) {
+  // The `{ ...input }` fast path preserves extras, so when stripping it may only
+  // fire on inputs that carry no undeclared key. For strict + additionalProperties:
+  // false the cold path rejects extras instead; folding the known-keys term into
+  // the guard lets the guard run *before* that rejection, so a valid clean input
+  // never pays for the per-property assertions.
+  if (stripKeys) {
     fastPathChecks.push(`_hasOnlyKnownKeys${typeName}(input)`)
   }
 
-  // Second pass: generate variable declarations only for properties that need them
+  // The deep guard proves the whole shape (so `{ ...input }` can be returned),
+  // using the nested shape predicates and the known-keys term above.
+  const deepGuard = canFastPath && fastPathChecks.length > 0 ? fastPathChecks.join(' && ') : null
+
+  // The shallow guard powers the strict strip-build fast path (stripUnknown
+  // without additionalProperties: false): it proves every scalar is well-typed
+  // and every nested object is an object, but neither walks nested shapes deeply
+  // nor requires the absence of extras. That lets it fire on the common
+  // stripUnknown input — which carries extras the build removes, and nested
+  // extras each sub-parser removes — while the cold path's per-property
+  // assertions still produce the precise error on a genuine mismatch.
+  let canShallowGuard = strict && stripUnknown && !strictKeys
+  const shallowChecks: string[] = []
+  if (canShallowGuard) {
+    for (const { key, varName, isRequired, propSchema } of propInfo) {
+      const subName = subTypeNames.get(key)
+      let check: string | null
+      if (subName) {
+        // Nested inline object: a shallow `isObject` is enough — the sub-parser
+        // validates and strips it.
+        check = `isObject(${varName})`
+      } else if (
+        isSchemaObject(propSchema) &&
+        !hasEnum(propSchema) &&
+        !hasRef(propSchema) &&
+        !hasOneOf(propSchema) &&
+        !hasAnyOf(propSchema) &&
+        !hasAllOf(propSchema) &&
+        !('not' in propSchema) &&
+        !shouldUseRefImport(propSchema, useRefImports) &&
+        !shouldUseArrayRefImport(propSchema, useRefImports) &&
+        !shouldUseRecordRefImport(propSchema, useRefImports)
+      ) {
+        // Plain scalar / array / object: its own type check is already shallow
+        // (arrays are not walked, objects only `isObject`-checked).
+        check = generatePropertyTypeCheck(varName, propSchema, useRefImports, suffix)
+      } else {
+        check = null
+      }
+      if (check === null) {
+        canShallowGuard = false
+        break
+      }
+      shallowChecks.push(isRequired ? check : `(${varName} === undefined || ${check})`)
+    }
+  }
+  const shallowGuard = canShallowGuard && shallowChecks.length > 0 ? shallowChecks.join(' && ') : null
+
+  // Variable declarations for properties that need them (the build and guards
+  // read each cached value once instead of re-accessing `input`).
+  const varDeclLines: string[] = []
   for (const { key, varName, propSchema } of propInfo) {
     if (shouldCacheVariable(propSchema, canFastPath, useRefImports)) {
-      lines.push(`  const ${varName} = ${safeAccessor('input', key)};`)
+      varDeclLines.push(`  const ${varName} = ${safeAccessor('input', key)};`)
     }
   }
 
-  // Emit a warning for any input key not declared in the schema's properties
+  // Emit a warning for any input key not declared in the schema's properties.
+  const warnLines: string[] = []
   if (logWarnings && propInfo.length > 0) {
     const warnKeyCheck = unknownKeyCheck(
       propInfo.map(({ key }) => key),
       '_knownKeys',
     )
     for (const declaration of warnKeyCheck.declarations) {
-      lines.push(`  ${declaration};`)
+      warnLines.push(`  ${declaration};`)
     }
-    lines.push(`  for (const _k in input) {`)
-    lines.push(`    if (${warnKeyCheck.isUnknown('_k')}) {`)
-    lines.push(`      console.warn(\`[${typeName}] Unknown property "\${_k}"\`);`)
-    lines.push(`    }`)
-    lines.push(`  }`)
+    warnLines.push(`  for (const _k in input) {`)
+    warnLines.push(`    if (${warnKeyCheck.isUnknown('_k')}) {`)
+    warnLines.push(`      console.warn(\`[${typeName}] Unknown property "\${_k}"\`);`)
+    warnLines.push(`    }`)
+    warnLines.push(`  }`)
   }
 
-  // Generate fast-path check if possible
-  if (canFastPath && fastPathChecks.length > 0) {
-    let fastPathExpr = fastPathChecks[0]
-    for (let i = 1; i < fastPathChecks.length; i++) {
-      fastPathExpr += ' && ' + fastPathChecks[i]
+  // Builds the result object literal. `directAssign` (strict mode) assigns each
+  // field straight from its cached read — the guard or the per-property
+  // assertions have already proven the type, so no coercion ternary is needed.
+  // Coerce mode keeps the type-checking-and-coercing expression. Refs, arrays of
+  // refs, records of refs and inline nested objects always delegate to their
+  // parser in both modes; the input spread is dropped whenever stripping.
+  const buildObjectLines = (directAssign: boolean): string[] => {
+    const objectLines: string[] = []
+    if (!stripKeys) {
+      objectLines.push('    ...input,')
     }
-    lines.push(`  if (${fastPathExpr}) return { ...input } as ${typeName};`)
-  }
 
-  // Generate slow-path object construction. The input spread preserves
-  // undeclared keys, so it is dropped whenever we're stripping (either
-  // additionalProperties: false or stripUnknown) — building from the declared
-  // properties alone strips the extras from the result.
-  const objectLines: string[] = []
-  if (!stripKeys) {
-    objectLines.push('    ...input,')
-  }
-
-  // Spread allOf $ref parsers so their field coercions are applied before
-  // the explicit property validations below.
-  if (useRefImports && isSchemaObject(schema) && hasAllOf(schema)) {
-    for (const entry of schema.allOf) {
-      if (isSchemaObject(entry) && hasRef(entry)) {
-        const parserName = generateParserName(refToName(entry.$ref, suffix))
-        objectLines.push(`    ...(${parserName}(input) as Record<string, unknown>),`)
+    // Spread allOf $ref parsers so their field coercions are applied before
+    // the explicit property validations below.
+    if (useRefImports && isSchemaObject(schema) && hasAllOf(schema)) {
+      for (const entry of schema.allOf) {
+        if (isSchemaObject(entry) && hasRef(entry)) {
+          const parserName = generateParserName(refToName(entry.$ref, suffix))
+          objectLines.push(`    ...(${parserName}(input) as Record<string, unknown>),`)
+        }
       }
     }
-  }
 
-  for (const { key, varName, isRequired, propSchema } of propInfo) {
-    const shouldCache = shouldCacheVariable(propSchema, canFastPath, useRefImports)
-    const accessor = shouldCache ? varName : safeAccessor('input', key)
+    for (const { key, varName, isRequired, propSchema } of propInfo) {
+      const shouldCache = shouldCacheVariable(propSchema, canFastPath, useRefImports)
+      const accessor = shouldCache ? varName : safeAccessor('input', key)
 
-    // Handle inline nested objects via their private sub-parser, mirroring
-    // how $ref properties delegate to the imported parser.
-    const subName = subTypeNames.get(key)
-    if (subName) {
-      const subParserName = generateParserName(subName)
-      if (isRequired) {
-        objectLines.push(`    ${safeKey(key)}: ${subParserName}(${accessor}),`)
-      } else {
-        objectLines.push(`    ...(${accessor} !== undefined && { ${safeKey(key)}: ${subParserName}(${accessor}) }),`)
+      // Handle inline nested objects via their private sub-parser, mirroring
+      // how $ref properties delegate to the imported parser.
+      const subName = subTypeNames.get(key)
+      if (subName) {
+        const subParserName = generateParserName(subName)
+        if (isRequired) {
+          objectLines.push(`    ${safeKey(key)}: ${subParserName}(${accessor}),`)
+        } else {
+          objectLines.push(`    ...(${accessor} !== undefined && { ${safeKey(key)}: ${subParserName}(${accessor}) }),`)
+        }
+        continue
       }
-      continue
-    }
 
-    // Handle direct $ref properties via imported parsers
-    if (shouldUseRefImport(propSchema, useRefImports)) {
-      const ref = (propSchema as { $ref: string }).$ref
-      const parserName = generateParserName(refToName(ref, suffix))
-      if (isRequired) {
-        objectLines.push(`    ${safeKey(key)}: ${parserName}(${accessor}),`)
-      } else {
-        objectLines.push(`    ...(${accessor} !== undefined && { ${safeKey(key)}: ${parserName}(${accessor}) }),`)
+      // Handle direct $ref properties via imported parsers
+      if (shouldUseRefImport(propSchema, useRefImports)) {
+        const ref = (propSchema as { $ref: string }).$ref
+        const parserName = generateParserName(refToName(ref, suffix))
+        if (isRequired) {
+          objectLines.push(`    ${safeKey(key)}: ${parserName}(${accessor}),`)
+        } else {
+          objectLines.push(`    ...(${accessor} !== undefined && { ${safeKey(key)}: ${parserName}(${accessor}) }),`)
+        }
+        continue
       }
-      continue
-    }
 
-    // Handle array properties with $ref items
-    if (shouldUseArrayRefImport(propSchema, useRefImports)) {
-      const items = (propSchema as { items: { $ref: string } }).items
-      const ref = items.$ref
-      const parserName = generateParserName(refToName(ref, suffix))
-      if (isRequired) {
-        objectLines.push(`    ${safeKey(key)}: validateArray(${accessor}, ${parserName}),`)
+      // Handle array properties with $ref items
+      if (shouldUseArrayRefImport(propSchema, useRefImports)) {
+        const items = (propSchema as { items: { $ref: string } }).items
+        const ref = items.$ref
+        const parserName = generateParserName(refToName(ref, suffix))
+        if (isRequired) {
+          objectLines.push(`    ${safeKey(key)}: validateArray(${accessor}, ${parserName}),`)
+        } else {
+          objectLines.push(
+            `    ...(${accessor} !== undefined && { ${safeKey(key)}: validateArray(${accessor}, ${parserName}) }),`,
+          )
+        }
+        continue
+      }
+
+      // Handle object properties with additionalProperties $ref
+      if (shouldUseRecordRefImport(propSchema, useRefImports)) {
+        const additionalProps = (propSchema as { additionalProperties: { $ref: string } }).additionalProperties
+        const ref = additionalProps.$ref
+        const parserName = generateParserName(refToName(ref, suffix))
+        if (isRequired) {
+          objectLines.push(`    ${safeKey(key)}: validateRecord(${accessor}, ${parserName}),`)
+        } else {
+          objectLines.push(
+            `    ...(${accessor} !== undefined && { ${safeKey(key)}: validateRecord(${accessor}, ${parserName}) }),`,
+          )
+        }
+        continue
+      }
+
+      // Handle non-schema-object properties
+      if (!isSchemaObject(propSchema)) {
+        if (isRequired) {
+          objectLines.push(`    ${safeKey(key)}: undefined,`)
+        }
+        continue
+      }
+
+      // Strict mode has already proven the value's type (by guard or assertion),
+      // so the field is assigned straight from the cached read with no coercion.
+      let valueExpr: string
+      if (directAssign) {
+        valueExpr = accessor
       } else {
-        objectLines.push(
-          `    ...(${accessor} !== undefined && { ${safeKey(key)}: validateArray(${accessor}, ${parserName}) }),`,
+        const defaultValue = getDefaultValue(propSchema)
+        // For optional properties we know the value is not undefined because
+        // we're inside the `...(accessor !== undefined && { ... })` check.
+        const knownNotUndefined = !isRequired
+        valueExpr = generateValidationExpression(
+          key,
+          propSchema,
+          defaultValue,
+          true,
+          undefined,
+          undefined,
+          shouldCache ? varName : undefined,
+          knownNotUndefined,
         )
       }
-      continue
-    }
 
-    // Handle object properties with additionalProperties $ref
-    if (shouldUseRecordRefImport(propSchema, useRefImports)) {
-      const additionalProps = (propSchema as { additionalProperties: { $ref: string } }).additionalProperties
-      const ref = additionalProps.$ref
-      const parserName = generateParserName(refToName(ref, suffix))
       if (isRequired) {
-        objectLines.push(`    ${safeKey(key)}: validateRecord(${accessor}, ${parserName}),`)
+        objectLines.push(`    ${safeKey(key)}: ${valueExpr},`)
       } else {
-        objectLines.push(
-          `    ...(${accessor} !== undefined && { ${safeKey(key)}: validateRecord(${accessor}, ${parserName}) }),`,
-        )
+        objectLines.push(`    ...(${accessor} !== undefined && { ${safeKey(key)}: ${valueExpr} }),`)
       }
-      continue
     }
 
-    // Handle non-schema-object properties
-    if (!isSchemaObject(propSchema)) {
-      if (isRequired) {
-        objectLines.push(`    ${safeKey(key)}: undefined,`)
-      }
-      continue
-    }
+    return objectLines
+  }
 
-    // Generate validation expression
-    const defaultValue = getDefaultValue(propSchema)
-    // For optional properties in the slow path, we know the value is not undefined
-    // because we're inside the `...(accessor !== undefined && { ... })` check
-    const knownNotUndefined = !isRequired
-    const valueExpr = generateValidationExpression(
-      key,
-      propSchema,
-      defaultValue,
-      true,
-      undefined,
-      undefined,
-      shouldCache ? varName : undefined,
-      knownNotUndefined,
+  const emitReturn = (lines: string[], objectLines: string[]): void => {
+    lines.push(`  return {`)
+    lines.push(objectLines.join('\n'))
+    lines.push(`  } as unknown as ${typeName};`)
+  }
+
+  const lines: string[] = []
+  lines.push(`${exportPrefix}const ${functionName} = (input: unknown): ${typeName} => {`)
+
+  if (strict) {
+    // Guard first: a non-object throws straight away; a clean, well-typed input
+    // then short-circuits past the per-property assertions, which only run to
+    // pinpoint the failure when the guard rejects the input.
+    lines.push(
+      `  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);`,
     )
+    lines.push(...varDeclLines)
+    lines.push(...warnLines)
 
-    if (isRequired) {
-      objectLines.push(`    ${safeKey(key)}: ${valueExpr},`)
+    // The first assertion line is the `isObject` check, already done above.
+    const assertionLines = generateObjectStrictAssertion(schema, typeName).slice(1)
+
+    if (shallowGuard) {
+      // stripUnknown: a well-typed input skips the assertions and goes straight
+      // to the strip build (which removes extras and recurses into sub-parsers).
+      lines.push(`  if (!(${shallowGuard})) {`)
+      for (const assertionLine of assertionLines) {
+        lines.push(`  ${assertionLine}`)
+      }
+      lines.push(`  }`)
+      emitReturn(lines, buildObjectLines(true))
     } else {
-      objectLines.push(`    ...(${accessor} !== undefined && { ${safeKey(key)}: ${valueExpr} }),`)
+      if (deepGuard) {
+        lines.push(`  if (${deepGuard}) return { ...input } as ${typeName};`)
+      }
+      for (const assertionLine of assertionLines) {
+        lines.push(assertionLine)
+      }
+      if (strictKeys) {
+        lines.push(`  for (const _k in input) {`)
+        lines.push(
+          `    if (${strictKeyCheck.isUnknown('_k')}) throw new Error(\`[${typeName}] unknown property "\${_k}"\`);`,
+        )
+        lines.push(`  }`)
+      }
+      emitReturn(lines, buildObjectLines(true))
     }
+  } else {
+    lines.push(`  if (!isObject(input)) return ${fallbackObject};`)
+    lines.push(...varDeclLines)
+    lines.push(...warnLines)
+    if (deepGuard) {
+      lines.push(`  if (${deepGuard}) return { ...input } as ${typeName};`)
+    }
+    emitReturn(lines, buildObjectLines(false))
   }
 
-  lines.push(`  return {`)
-  lines.push(objectLines.join('\n'))
-  lines.push(`  } as unknown as ${typeName};`)
   lines.push(`}`)
 
   const fn = lines.join('\n')
