@@ -389,6 +389,33 @@ describe('generate-parser-function', () => {
     )
   })
 
+  it('returns a declared-key field literal (not a spread) on the strict fast path', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'number' },
+        name: { type: 'string' },
+      },
+      required: ['id', 'name'],
+    }
+
+    const result = generateParserFunction(schema, 'Strict', { strict: true })
+
+    // The deep guard already proved the key set is exactly the declared
+    // properties (the `_hasOnlyKnownKeys` term), so the fast path builds an
+    // explicit literal — faster than a generic spread and a stable shape —
+    // rather than `{ ...input }`.
+    expect(result).toContain('_hasOnlyKnownKeysStrict(input)) return {')
+    expect(result).toContain('    id: _id,')
+    expect(result).toContain('    name: _name,')
+    expect(result).not.toContain('return { ...input } as Strict;')
+
+    const parse = evalGenerated<(input: unknown) => Record<string, unknown>>(result, 'parseStrict')
+    expect(parse({ id: 1, name: 'a' })).toEqual({ id: 1, name: 'a' })
+    expect(() => parse({ id: 1, name: 'a', extra: true })).toThrow('unknown property "extra"')
+  })
+
   it('handles complex object with multiple property types', () => {
     const schema: JSONSchema = {
       type: 'object',
