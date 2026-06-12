@@ -13,6 +13,20 @@ import type { ValidationError } from '@/types'
  * `$ref` targets — are cached on the context so a validator reused across calls
  * builds each at most once.
  */
+/**
+ * The two genuinely reusable artifacts of a validation — compiled `RegExp`s and
+ * resolved `$ref` targets — held in one place and shared across a run and its
+ * nested branch contexts. Each map is allocated lazily on first use, so the
+ * common schema that has neither a `pattern` nor a `$ref` never allocates them —
+ * which is what a single (first-run) validation is most sensitive to.
+ */
+export type ValidatorCaches = {
+  regex: Map<string, RegExp> | null
+  ref: Map<string, unknown> | null
+}
+
+export const newValidatorCaches = (): ValidatorCaches => ({ regex: null, ref: null })
+
 export type InterpreterContext = {
   /** The root schema document, used to resolve local `$ref` pointers. */
   readonly root: unknown
@@ -23,10 +37,8 @@ export type InterpreterContext = {
    * short-circuits to a boolean on the first failure (the guard path).
    */
   readonly emitErrors: boolean
-  /** Pattern/`patternProperties` regexes, compiled once and reused per call. */
-  readonly regexCache: Map<string, RegExp>
-  /** Resolved `$ref` targets, looked up once and reused per call. */
-  readonly refCache: Map<string, unknown>
+  /** Lazily-built regex/`$ref` caches, shared with nested branch contexts. */
+  readonly caches: ValidatorCaches
   /** Collected errors, lazily allocated so valid input never allocates. */
   errors: ValidationError[] | null
   /** Set in guard mode on the first failure so the walk can unwind. */
@@ -176,10 +188,11 @@ const childPath = (ctx: InterpreterContext, path: string, key: string | number):
 
 /** Returns a cached compiled `RegExp` for the given source. */
 const getRegex = (ctx: InterpreterContext, source: string): RegExp => {
-  let re = ctx.regexCache.get(source)
+  const cache = (ctx.caches.regex ??= new Map())
+  let re = cache.get(source)
   if (re === undefined) {
     re = new RegExp(source)
-    ctx.regexCache.set(source, re)
+    cache.set(source, re)
   }
   return re
 }
@@ -190,13 +203,14 @@ const getRegex = (ctx: InterpreterContext, source: string): RegExp => {
  * never silently treated as "anything goes".
  */
 const resolveRef = (ctx: InterpreterContext, ref: string): unknown => {
-  let resolved = ctx.refCache.get(ref)
+  const cache = (ctx.caches.ref ??= new Map())
+  let resolved = cache.get(ref)
   if (resolved === undefined) {
     resolved = resolveLocalRef(ref, ctx.root)
     if (resolved === undefined) {
       throw new Error(`Cannot resolve $ref "${ref}". Only local refs into the same document are supported.`)
     }
-    ctx.refCache.set(ref, resolved)
+    cache.set(ref, resolved)
   }
   return resolved
 }
@@ -209,13 +223,14 @@ const resolveRef = (ctx: InterpreterContext, ref: string): unknown => {
  */
 const resolveDyn = (ctx: InterpreterContext, ref: string): unknown => {
   const key = `dyn:${ref}`
-  let resolved = ctx.refCache.get(key)
+  const cache = (ctx.caches.ref ??= new Map())
+  let resolved = cache.get(key)
   if (resolved === undefined) {
     resolved = resolveDynamicRef(ref, ctx.root)
     if (resolved === undefined) {
       throw new Error(`Cannot resolve $dynamicRef "${ref}". Only local refs into the same document are supported.`)
     }
-    ctx.refCache.set(key, resolved)
+    cache.set(key, resolved)
   }
   return resolved
 }
@@ -236,8 +251,7 @@ const matchesSchema = (
     root: ctx.root,
     formats: ctx.formats,
     emitErrors: false,
-    regexCache: ctx.regexCache,
-    refCache: ctx.refCache,
+    caches: ctx.caches,
     errors: null,
     failed: false,
   }
