@@ -164,6 +164,16 @@ const fail = (ctx: InterpreterContext, message: string, path: string): void => {
   }
 }
 
+/**
+ * Builds the child instance path for a nested property or item. In guard mode
+ * the path is never read — {@link fail} only records it when `emitErrors` is set
+ * — so we skip the concatenation and thread the parent path down unchanged. That
+ * keeps every property/item recursion allocation-free on the guard hot path,
+ * where a single validation is otherwise dominated by these throwaway strings.
+ */
+const childPath = (ctx: InterpreterContext, path: string, key: string | number): string =>
+  ctx.emitErrors ? `${path}/${key}` : path
+
 /** Returns a cached compiled `RegExp` for the given source. */
 const getRegex = (ctx: InterpreterContext, source: string): RegExp => {
   let re = ctx.regexCache.get(source)
@@ -261,21 +271,24 @@ const interpretObject = (
   const minProps = typeof s['minProperties'] === 'number' ? s['minProperties'] : undefined
   const maxProps = typeof s['maxProperties'] === 'number' ? s['maxProperties'] : undefined
 
-  const requiredSet = new Set(required)
-  const knownKeys = properties ? Object.keys(properties) : []
-  const knownKeySet = new Set(knownKeys)
+  // A `Set` only pays for itself when `required` is long; for the usual handful
+  // of keys a linear scan allocates nothing, which is what the first (cold)
+  // validation of a schema is most sensitive to. Membership in `properties` is
+  // likewise tested with `Object.hasOwn` rather than a precomputed key set.
+  const requiredSet = required.length > 16 ? new Set(required) : null
+  const knownKeys = properties ? Object.keys(properties) : undefined
 
-  if (properties) {
+  if (properties && knownKeys) {
     for (const key of knownKeys) {
       const pv = obj[key]
-      if (requiredSet.has(key)) {
+      if (requiredSet ? requiredSet.has(key) : required.includes(key)) {
         if (pv === undefined) fail(ctx, `must have required property '${key}'`, path)
         else {
-          interpret(ctx, properties[key], pv, `${path}/${key}`)
+          interpret(ctx, properties[key], pv, childPath(ctx, path, key))
           evalScope?.props.add(key)
         }
       } else if (pv !== undefined) {
-        interpret(ctx, properties[key], pv, `${path}/${key}`)
+        interpret(ctx, properties[key], pv, childPath(ctx, path, key))
         evalScope?.props.add(key)
       }
       if (ctx.failed) return
@@ -340,7 +353,7 @@ const interpretObject = (
   if (needsLoop) {
     const patternEntries = patternProperties ? Object.entries(patternProperties) : []
     for (const k in obj) {
-      if (knownKeySet.has(k)) continue
+      if (properties !== undefined && Object.hasOwn(properties, k)) continue
 
       if (patternEntries.length > 0) {
         let matched = false
@@ -348,26 +361,26 @@ const interpretObject = (
           if (getRegex(ctx, source).test(k)) {
             matched = true
             evalScope?.props.add(k)
-            interpret(ctx, patternSchema, obj[k], `${path}/${k}`)
+            interpret(ctx, patternSchema, obj[k], childPath(ctx, path, k))
             if (ctx.failed) return
           }
         }
         if (!matched && hasAdditional && additional === false) {
           evalScope?.props.add(k)
-          fail(ctx, 'must NOT have additional properties', `${path}/${k}`)
+          fail(ctx, 'must NOT have additional properties', childPath(ctx, path, k))
           if (ctx.failed) return
         } else if (!matched && hasAdditional && isPlainObject(additional)) {
           evalScope?.props.add(k)
-          interpret(ctx, additional, obj[k], `${path}/${k}`)
+          interpret(ctx, additional, obj[k], childPath(ctx, path, k))
           if (ctx.failed) return
         }
       } else if (hasAdditional && additional === false) {
         evalScope?.props.add(k)
-        fail(ctx, 'must NOT have additional properties', `${path}/${k}`)
+        fail(ctx, 'must NOT have additional properties', childPath(ctx, path, k))
         if (ctx.failed) return
       } else if (hasAdditional && isPlainObject(additional)) {
         evalScope?.props.add(k)
-        interpret(ctx, additional, obj[k], `${path}/${k}`)
+        interpret(ctx, additional, obj[k], childPath(ctx, path, k))
         if (ctx.failed) return
       }
     }
@@ -391,7 +404,7 @@ const interpretObject = (
     const nameSchema = s['propertyNames']
     for (const k in obj) {
       if (!matchesSchema(ctx, nameSchema, k)) {
-        fail(ctx, `property name "${k}" is invalid`, `${path}/${k}`)
+        fail(ctx, `property name "${k}" is invalid`, childPath(ctx, path, k))
         if (ctx.failed) return
       }
     }
@@ -438,7 +451,7 @@ const interpretArray = (
   if (tuple) {
     for (let index = 0; index < tuple.length; index++) {
       if (arr.length > index) {
-        interpret(ctx, tuple[index], arr[index], `${path}/${index}`)
+        interpret(ctx, tuple[index], arr[index], childPath(ctx, path, index))
         evalScope?.items.add(index)
         if (ctx.failed) return
       }
@@ -452,7 +465,7 @@ const interpretArray = (
     }
   } else if (rest !== undefined && rest !== true) {
     for (let i = start; i < arr.length; i++) {
-      interpret(ctx, rest, arr[i], `${path}/${i}`)
+      interpret(ctx, rest, arr[i], childPath(ctx, path, i))
       if (ctx.failed) return
     }
     // A tail `items`/`additionalItems` schema sweeps every index from `start` on.
@@ -757,9 +770,9 @@ const interpretUnevaluated = (
       for (const k in obj) {
         if (evalScope.props.has(k)) continue
         if (up === false) {
-          fail(ctx, 'must NOT have unevaluated properties', `${path}/${k}`)
+          fail(ctx, 'must NOT have unevaluated properties', childPath(ctx, path, k))
         } else if (up !== true && isPlainObject(up)) {
-          interpret(ctx, up, obj[k], `${path}/${k}`)
+          interpret(ctx, up, obj[k], childPath(ctx, path, k))
         }
         evalScope.props.add(k)
         if (ctx.failed) return
@@ -775,9 +788,9 @@ const interpretUnevaluated = (
       for (let i = 0; i < arr.length; i++) {
         if (evalScope.items.has(i)) continue
         if (ui === false) {
-          fail(ctx, 'must NOT have unevaluated items', `${path}/${i}`)
+          fail(ctx, 'must NOT have unevaluated items', childPath(ctx, path, i))
         } else if (ui !== true && isPlainObject(ui)) {
-          interpret(ctx, ui, arr[i], `${path}/${i}`)
+          interpret(ctx, ui, arr[i], childPath(ctx, path, i))
         }
         evalScope.items.add(i)
         if (ctx.failed) return
