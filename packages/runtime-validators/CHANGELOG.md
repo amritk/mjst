@@ -1,5 +1,19 @@
 # @amritk/runtime-validators
 
+## 0.6.1
+
+### Patch Changes
+
+- 23660c7: Allocate the regex and `$ref` caches lazily. A validator now defers building
+  either `Map` until the schema first hits a `pattern`/`patternProperties` or a
+  `$ref`/`$dynamicRef`, so the first validation of the common schema that has
+  neither allocates 1 `Map` instead of 3. Schemas that do use those keywords
+  build the same caches on first use, with no change in behavior.
+- 78346bd: Speed up guard-mode interpretation. `validateGuard` no longer builds instance
+  path strings while walking (they are only read in error mode), and object
+  validation avoids redundant `Set` allocations per node. Roughly doubles
+  guard-mode throughput on typical object schemas with no behavior change.
+
 ## 0.6.0
 
 ### Minor Changes
