@@ -1,4 +1,4 @@
-import { type InterpreterContext, interpret } from '@/interpreter/interpret'
+import { type InterpreterContext, interpret, newValidatorCaches } from '@/interpreter/interpret'
 import type { ValidateOptions, ValidationResult } from '@/types'
 
 /**
@@ -31,16 +31,18 @@ const makeValidator = (
   formats: 'all' | ReadonlySet<string>,
   emitErrors: boolean,
 ): ((input: unknown) => unknown) => {
-  const regexCache = new Map<string, RegExp>()
-  const refCache = new Map<string, unknown>()
+  // One caches holder, captured here and shared across every call of this
+  // validator. Its maps stay null until the schema actually hits a `pattern` or
+  // `$ref`, so a first validation of the common map-free schema allocates
+  // nothing here beyond this tiny holder.
+  const caches = newValidatorCaches()
 
   return (input: unknown): unknown => {
     const ctx: InterpreterContext = {
       root: schema,
       formats,
       emitErrors,
-      regexCache,
-      refCache,
+      caches,
       errors: null,
       failed: false,
     }
