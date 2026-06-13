@@ -188,7 +188,11 @@ const childPath = (ctx: InterpreterContext, path: string, key: string | number):
 
 /** Returns a cached compiled `RegExp` for the given source. */
 const getRegex = (ctx: InterpreterContext, source: string): RegExp => {
-  const cache = (ctx.caches.regex ??= new Map())
+  let cache = ctx.caches.regex
+  if (cache === null) {
+    cache = new Map()
+    ctx.caches.regex = cache
+  }
   let re = cache.get(source)
   if (re === undefined) {
     re = new RegExp(source)
@@ -203,7 +207,11 @@ const getRegex = (ctx: InterpreterContext, source: string): RegExp => {
  * never silently treated as "anything goes".
  */
 const resolveRef = (ctx: InterpreterContext, ref: string): unknown => {
-  const cache = (ctx.caches.ref ??= new Map())
+  let cache = ctx.caches.ref
+  if (cache === null) {
+    cache = new Map()
+    ctx.caches.ref = cache
+  }
   let resolved = cache.get(ref)
   if (resolved === undefined) {
     resolved = resolveLocalRef(ref, ctx.root)
@@ -223,7 +231,11 @@ const resolveRef = (ctx: InterpreterContext, ref: string): unknown => {
  */
 const resolveDyn = (ctx: InterpreterContext, ref: string): unknown => {
   const key = `dyn:${ref}`
-  const cache = (ctx.caches.ref ??= new Map())
+  let cache = ctx.caches.ref
+  if (cache === null) {
+    cache = new Map()
+    ctx.caches.ref = cache
+  }
   let resolved = cache.get(key)
   if (resolved === undefined) {
     resolved = resolveDynamicRef(ref, ctx.root)
