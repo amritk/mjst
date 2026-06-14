@@ -690,7 +690,15 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: s
     propertyLines.push(...generatePropertyNameChecks(schema.propertyNames, suffix))
   }
 
-  const body = propertyLines.length > 0 ? '\n' + propertyLines.join('\n') + '\n' : ''
+  // Lazily allocate the errors array so a valid input never builds one — the same
+  // allocation-free happy path the runtime interpreter uses. Each emitted
+  // `errors.push(...)` becomes a create-on-first-use push; nothing is allocated
+  // until the first actual error, so the common valid case stays alloc-free even
+  // when the schema is too rich for the boolean guard.
+  const body = (propertyLines.length > 0 ? '\n' + propertyLines.join('\n') + '\n' : '').replaceAll(
+    'errors.push(',
+    '(errors ??= []).push(',
+  )
 
   // Hoisted statements (e.g. known-keys Sets) come first so every call of the
   // validator reuses them instead of rebuilding them.
@@ -716,9 +724,9 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: s
       `    return { valid: false, errors: [{ message: 'must be object', path: _path }] }`,
       `  }`,
       ``,
-      `  const errors: ValidationError[] = []`,
+      `  let errors: ValidationError[] | undefined`,
       body,
-      `  return errors.length > 0 ? { valid: false, errors } : true`,
+      `  return errors !== undefined ? { valid: false, errors } : true`,
       `}`,
     ].join('\n')
 
@@ -781,6 +789,25 @@ const rightTypeCondition = (accessor: string, type: string): string | null => {
 }
 
 /**
+ * Builds the membership test for an `enum`, matching the slow path's
+ * `[...].includes(value)` verdict exactly. For the common all-primitive case it
+ * emits a parenthesized `a === x || a === y` chain — no per-call array
+ * allocation and no linear scan, so it stays on the allocation-free hot path —
+ * and falls back to `.includes` when a member is an object/array (reference
+ * equality) or `NaN` (where `includes`'s SameValueZero differs from `===`).
+ */
+const enumMembershipExpr = (values: unknown[], acc: string): string => {
+  const allPrimitive =
+    values.length > 0 &&
+    values.every((v) => (v === null || typeof v !== 'object') && typeof v !== 'function') &&
+    !values.some((v) => typeof v === 'number' && Number.isNaN(v))
+  if (allPrimitive) {
+    return `(${values.map((v) => `${acc} === ${JSON.stringify(v)}`).join(' || ')})`
+  }
+  return `(${JSON.stringify(values)} as unknown[]).includes(${acc})`
+}
+
+/**
  * Builds a boolean expression that is TRUE iff `acc` satisfies `schema`, with the
  * *exact same verdict* as the error-collecting validator — or `null` when the
  * schema carries something the flat form can't faithfully mirror ($ref, unions,
@@ -808,7 +835,7 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
 
   // enum — same membership test the validator uses.
   if (hasEnum(schema)) {
-    return `(${JSON.stringify(schema.enum)} as unknown[]).includes(${acc})`
+    return enumMembershipExpr(schema.enum as unknown[], acc)
   }
 
   if (!hasType(schema)) return null
@@ -856,6 +883,12 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
  * array shape and — for typed items — only each item's *type* (objects are shape-
  * checked, not recursed into); it never enforces `minItems`/`maxItems` or item
  * constraints. Returns `null` for `$ref` items (those defer to the validator).
+ *
+ * Item iteration goes through `Array.from` rather than `Array.prototype.every`
+ * because `every` *skips holes* in a sparse array (`[, 'x']`), whereas the
+ * validator's index-based `for` loop reads a hole as `undefined` and rejects it.
+ * Materialising the array first makes the guard's verdict match the slow path's
+ * on sparse input — the guard must never accept what the slow path would reject.
  */
 const booleanArrayExpr = (schema: JSONSchema, acc: string): string | null => {
   const base = `Array.isArray(${acc})`
@@ -866,7 +899,7 @@ const booleanArrayExpr = (schema: JSONSchema, acc: string): string | null => {
   if (!hasType(items)) return base
   const itemCheck = rightTypeCondition('_it', items.type as string)
   if (itemCheck === null) return base
-  return `${base} && (${acc} as unknown[]).every((_it) => ${itemCheck})`
+  return `${base} && Array.from(${acc} as unknown[]).every((_it) => ${itemCheck})`
 }
 
 /**
@@ -1110,9 +1143,9 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
       `  if (${wrongType}) {`,
       `    return { valid: false, errors: [{ message: 'must be ${typLabel}', path: _path }] }`,
       `  }`,
-      `  const errors: ValidationError[] = []`,
-      constraintLines.join('\n'),
-      `  return errors.length > 0 ? { valid: false, errors } : true`,
+      `  let errors: ValidationError[] | undefined`,
+      constraintLines.join('\n').replaceAll('errors.push(', '(errors ??= []).push('),
+      `  return errors !== undefined ? { valid: false, errors } : true`,
       `}`,
     ].join('\n')
   }
