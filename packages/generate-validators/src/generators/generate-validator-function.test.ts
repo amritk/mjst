@@ -255,14 +255,15 @@ describe('generate-validator-function', () => {
     const schema = { type: 'string' as const, pattern: '^\\d+$', minLength: 2, maxLength: 4 }
     const code = generateValidatorFunction(schema, 'Code')
 
-    // All three constraints push onto a shared errors array instead of returning early
-    expect(code).toContain('const errors: ValidationError[] = []')
-    expect(code).toContain('errors.push({ message: "must match pattern')
+    // All three constraints push onto a lazily-allocated errors array (created on
+    // the first error) instead of returning early, so valid input allocates nothing.
+    expect(code).toContain('let errors: ValidationError[] | undefined')
+    expect(code).toContain('(errors ??= []).push({ message: "must match pattern')
     // The pattern body keeps its backslash (\d), so the emitted literal is a digit class.
     expect(code).toContain('!/^\\d+$/.test(input)')
-    expect(code).toContain("errors.push({ message: 'must have at least 2 characters'")
-    expect(code).toContain("errors.push({ message: 'must have at most 4 characters'")
-    expect(code).toContain('return errors.length > 0 ? { valid: false, errors } : true')
+    expect(code).toContain("(errors ??= []).push({ message: 'must have at least 2 characters'")
+    expect(code).toContain("(errors ??= []).push({ message: 'must have at most 4 characters'")
+    expect(code).toContain('return errors !== undefined ? { valid: false, errors } : true')
   })
 
   it('returns true for empty object schemas', () => {
@@ -271,7 +272,7 @@ describe('generate-validator-function', () => {
 
     expect(code).toContain('validateEmpty')
     expect(code).toContain('must be object')
-    expect(code).toContain('return errors.length > 0')
+    expect(code).toContain('return errors !== undefined')
   })
 
   it('generates object guard at top of object validator', () => {
@@ -956,6 +957,179 @@ describe('generate-validator-function', () => {
       check({ ...valid, EXTRA: 1 })
       check({ ...valid, meta: { k: 'v', EXTRA: 1 } })
       expect(checked).toBeGreaterThan(100)
+    })
+  })
+
+  describe('guard soundness, fuzzed (isX never disagrees with validateX)', () => {
+    /** Compiles `validateX` + `isX` together so the fuzz can assert the flat guard's
+     * verdict matches the error-collecting validator on every input. */
+    const evalBoth = (
+      schema: Parameters<typeof generateValidatorFunction>[0],
+      typeName: string,
+    ): { validate: (i: unknown) => unknown; guard: (i: unknown) => boolean } => {
+      const code = `${generateValidatorFunction(schema, typeName)}\n\n${generateBooleanGuard(schema, typeName)}`
+      const js = ts.transpileModule(code, {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+      }).outputText
+      const m: Record<string, unknown> = {}
+      new Function('exports', js)(m)
+      return {
+        validate: m[`validate${typeName}`] as (i: unknown) => unknown,
+        guard: m[`is${typeName}`] as (i: unknown) => boolean,
+      }
+    }
+
+    /** Deterministic PRNG so a failure reproduces from the seed in the message. */
+    const mulberry32 = (seed: number): (() => number) => {
+      let a = seed
+      return () => {
+        a |= 0
+        a = (a + 0x6d2b79f5) | 0
+        let t = Math.imul(a ^ (a >>> 15), 1 | a)
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+      }
+    }
+
+    const SCALARS: readonly unknown[] = [
+      0,
+      1,
+      -1,
+      1.5,
+      NaN,
+      Infinity,
+      '',
+      'a',
+      'xy',
+      'on',
+      'off',
+      'paid',
+      '12345',
+      true,
+      false,
+      null,
+      undefined,
+      {},
+      [],
+      [1],
+    ]
+    const pick = <T>(rng: () => number, xs: readonly T[]): T => xs[Math.floor(rng() * xs.length)] as T
+
+    const randomValue = (rng: () => number, depth: number): unknown => {
+      if (depth > 2 || rng() < 0.7) return pick(rng, SCALARS)
+      if (rng() < 0.5) {
+        const arr = Array.from({ length: Math.floor(rng() * 4) }, () => randomValue(rng, depth + 1))
+        // Punch a hole sometimes so sparse arrays (which `.every` skips but the
+        // slow path's `for` loop rejects) are part of the search space.
+        if (arr.length > 0 && rng() < 0.3) delete arr[Math.floor(rng() * arr.length)]
+        return arr
+      }
+      const obj: Record<string, unknown> = {}
+      for (const key of ['id', 'name', 'age', 'k', 'foo', 'extra', 'status']) {
+        if (rng() < 0.5) obj[key] = randomValue(rng, depth + 1)
+      }
+      return obj
+    }
+
+    const mutate = (rng: () => number, base: unknown): unknown => {
+      const value = structuredClone(base)
+      if (value === null || typeof value !== 'object') return rng() < 0.5 ? randomValue(rng, 0) : value
+      const obj = value as Record<string, unknown>
+      const keys = Object.keys(obj)
+      const op = rng()
+      if (op < 0.3 && keys.length > 0) obj[pick(rng, keys)] = randomValue(rng, 0)
+      else if (op < 0.5 && keys.length > 0) delete obj[pick(rng, keys)]
+      else if (op < 0.7) obj[`x${Math.floor(rng() * 3)}`] = randomValue(rng, 0)
+      else if (op < 0.85 && keys.length > 0) obj[pick(rng, keys)] = mutate(rng, obj[pick(rng, keys)])
+      else if (Array.isArray(value) && value.length > 0) delete value[0] // force a sparse array
+      return value
+    }
+
+    // The moltar-benchmark shapes plus an optional/array-heavy object — the schemas
+    // the rich `isX` guard now covers via constrained scalars, enums and arrays.
+    const cases: ReadonlyArray<{
+      name: string
+      schema: Parameters<typeof generateValidatorFunction>[0]
+      valid: unknown
+    }> = [
+      {
+        name: 'small',
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string', minLength: 1 },
+            name: { type: 'string', minLength: 1, maxLength: 80 },
+            age: { type: 'integer', minimum: 0, maximum: 130 },
+            active: { type: 'boolean' },
+          },
+          required: ['id', 'name', 'age'],
+        },
+        valid: { id: 'u1', name: 'Ada', age: 36, active: true },
+      },
+      {
+        name: 'order',
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string', minLength: 1 },
+            status: { type: 'string', enum: ['pending', 'paid', 'shipped', 'cancelled'] },
+            total: { type: 'number', minimum: 0 },
+            customer: {
+              type: 'object',
+              additionalProperties: false,
+              properties: { name: { type: 'string', minLength: 1 }, email: { type: 'string', minLength: 1 } },
+              required: ['name', 'email'],
+            },
+            tags: { type: 'array', items: { type: 'string' } },
+          },
+          required: ['id', 'status', 'total', 'customer', 'tags'],
+        },
+        valid: {
+          id: 'o1',
+          status: 'paid',
+          total: 59.97,
+          customer: { name: 'Ada', email: 'ada@example.com' },
+          tags: ['vip'],
+        },
+      },
+      {
+        name: 'enum-and-array',
+        schema: {
+          type: 'object',
+          properties: {
+            kind: { enum: ['a', 'b', 3, true] },
+            nums: { type: 'array', items: { type: 'number' } },
+          },
+          required: ['kind'],
+        },
+        valid: { kind: 'a', nums: [1, 2, 3] },
+      },
+    ]
+
+    const verdictsEqual = (a: unknown, b: boolean): boolean => (a === true) === b
+
+    it.each(cases)('$name: isX matches validateX on thousands of random + sparse inputs', ({ schema, valid, name }) => {
+      const { validate, guard } = evalBoth(schema, 'T')
+      expect(validate(valid), `${name} valid`).toBe(true)
+      expect(guard(valid), `${name} valid guard`).toBe(true)
+
+      const seed = 0xbeef ^ name.length
+      const rng = mulberry32(seed)
+      const mismatches: string[] = []
+      for (let i = 0; i < 4000; i++) {
+        const input = rng() < 0.6 ? mutate(rng, valid) : randomValue(rng, 0)
+        // The flat guard must return `true` only when the error-collecting
+        // validator also accepts — never weakening a verdict (the core soundness
+        // property, exercised here over sparse arrays, enums and constraints).
+        if (!verdictsEqual(validate(input), guard(input))) {
+          mismatches.push(
+            `${JSON.stringify(input)} → validate=${JSON.stringify(validate(input))} guard=${guard(input)}`,
+          )
+        }
+      }
+      expect(mismatches, `seed 0x${seed.toString(16)}`).toEqual([])
     })
   })
 })
