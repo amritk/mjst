@@ -652,15 +652,17 @@ export const interpret = (
   // $ref — validate against the resolved target (handles recursion naturally,
   // since the data shrinks with each level). Sibling keywords still apply per
   // 2020-12, so we do not stop here.
-  if (typeof s['$ref'] === 'string') {
-    interpret(ctx, resolveRef(ctx, s['$ref']), value, path, evalScope)
+  const ref = s['$ref']
+  if (typeof ref === 'string') {
+    interpret(ctx, resolveRef(ctx, ref), value, path, evalScope)
     if (ctx.failed) return
   }
 
   // `$dynamicRef` (2020-12) — late-binds to a matching `$dynamicAnchor`. Like
   // `$ref`, sibling keywords still apply, so we do not stop here.
-  if (typeof s['$dynamicRef'] === 'string') {
-    interpret(ctx, resolveDyn(ctx, s['$dynamicRef']), value, path, evalScope)
+  const dynRef = s['$dynamicRef']
+  if (typeof dynRef === 'string') {
+    interpret(ctx, resolveDyn(ctx, dynRef), value, path, evalScope)
     if (ctx.failed) return
   }
 
@@ -676,25 +678,36 @@ export const interpret = (
 
   if (Array.isArray(s['enum'])) {
     const values = s['enum'] as unknown[]
-    const label = values.map((v) => JSON.stringify(v)).join(', ')
+    let found: boolean
     if (values.every(isPrimitiveEnumValue)) {
-      if (!values.includes(value)) fail(ctx, `must be one of: ${label}`, path)
+      found = values.includes(value)
     } else {
-      let found = false
+      found = false
       for (const candidate of values) {
         if (deepEqual(value, candidate)) {
           found = true
           break
         }
       }
-      if (!found) fail(ctx, `must be one of: ${label}`, path)
     }
-    if (ctx.failed) return
+    if (!found) {
+      // Build the label only on failure — the success path is the common case and
+      // this `map`/`join` would otherwise allocate on every value, hurting cold.
+      const label = values.map((v) => JSON.stringify(v)).join(', ')
+      fail(ctx, `must be one of: ${label}`, path)
+      if (ctx.failed) return
+    }
   }
 
   const rawType = s['type']
-  const types = Array.isArray(rawType) ? (rawType as string[]) : typeof rawType === 'string' ? [rawType] : undefined
-  if (types && types.length > 0) {
+  if (typeof rawType === 'string') {
+    // The common single-type case: check it directly without wrapping it in a
+    // throwaway one-element array (which this hot path would otherwise allocate
+    // on every typed node — exactly the cold-path cost we want to avoid).
+    if (!matchesType(rawType, value)) fail(ctx, `must be ${rawType}`, path)
+    if (ctx.failed) return
+  } else if (Array.isArray(rawType) && rawType.length > 0) {
+    const types = rawType as string[]
     let ok = false
     for (const t of types) {
       if (matchesType(t, value)) {
@@ -702,23 +715,28 @@ export const interpret = (
         break
       }
     }
-    if (!ok) {
-      const label = types.length === 1 ? `must be ${types[0]}` : `must be one of type: ${types.join(', ')}`
-      fail(ctx, label, path)
-    }
+    if (!ok) fail(ctx, `must be one of type: ${types.join(', ')}`, path)
     if (ctx.failed) return
   }
 
-  // Type-specific keyword blocks. Each self-guards on the value's type, so they
-  // compose correctly with unions and with schemas that omit `type` entirely.
-  interpretObject(ctx, s, value, path, evalScope)
-  if (ctx.failed) return
-  interpretArray(ctx, s, value, path, evalScope)
-  if (ctx.failed) return
-  interpretString(ctx, s, value, path)
-  if (ctx.failed) return
-  interpretNumber(ctx, s, value, path)
-  if (ctx.failed) return
+  // Type-specific keyword blocks. A value is only ever one of object / array /
+  // string / number, and each block is inert for every other type, so we dispatch
+  // on the value's type and run the at-most-one block that can do work — skipping
+  // three guaranteed-inert calls per node. This is a pure value-side check (no
+  // schema analysis, no allocation), so it costs the cold one-shot path nothing.
+  if (typeof value === 'object') {
+    if (value !== null) {
+      if (Array.isArray(value)) interpretArray(ctx, s, value, path, evalScope)
+      else interpretObject(ctx, s, value, path, evalScope)
+      if (ctx.failed) return
+    }
+  } else if (typeof value === 'string') {
+    interpretString(ctx, s, value, path)
+    if (ctx.failed) return
+  } else if (typeof value === 'number') {
+    interpretNumber(ctx, s, value, path)
+    if (ctx.failed) return
+  }
 
   if (Array.isArray(s['allOf'])) {
     for (const sub of s['allOf']) {
