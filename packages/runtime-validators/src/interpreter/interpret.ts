@@ -277,6 +277,50 @@ const matchesSchema = (
   return ok
 }
 
+/**
+ * The allocation-heavy, reusable parts of an object schema node: its property
+ * keys, the `required` membership set, the leftover required keys not covered by
+ * `properties`, and the compiled `patternProperties` entries. These are a pure
+ * function of the schema node, so they are computed once and memoized per node
+ * (keyed on the node object) instead of rebuilt on every validation.
+ */
+type ObjectMeta = {
+  properties: Record<string, unknown> | undefined
+  knownKeys: string[] | undefined
+  requiredSet: Set<string>
+  requiredNotInProps: string[]
+  patternEntries: [string, unknown][] | null
+}
+
+/**
+ * Per-node cache for {@link ObjectMeta}. A schema's object metadata never
+ * changes, so a module-level `WeakMap` shares it across every validator and call
+ * that touches the node. Crucially this is built *only for object schema nodes*
+ * (there are few of them) and lazily on first touch, so the cold one-shot path —
+ * which this package optimizes for — pays at most a handful of small allocations,
+ * not one per scalar node. An object node revisited many times (an array of
+ * objects, a recursive `$ref`, or a reused validator) then rebuilds none of it.
+ */
+const objectMetaCache = new WeakMap<object, ObjectMeta>()
+
+const getObjectMeta = (s: Record<string, unknown>): ObjectMeta => {
+  let meta = objectMetaCache.get(s)
+  if (meta === undefined) {
+    const properties = isPlainObject(s['properties']) ? s['properties'] : undefined
+    const patternProperties = isPlainObject(s['patternProperties']) ? s['patternProperties'] : undefined
+    const required = Array.isArray(s['required']) ? (s['required'] as string[]) : []
+    meta = {
+      properties,
+      knownKeys: properties ? Object.keys(properties) : undefined,
+      requiredSet: new Set(required),
+      requiredNotInProps: required.filter((k) => !(properties !== undefined && k in properties)),
+      patternEntries: patternProperties ? Object.entries(patternProperties) : null,
+    }
+    objectMetaCache.set(s, meta)
+  }
+  return meta
+}
+
 /** Emits the object-applicator keywords, inert for non-objects. */
 const interpretObject = (
   ctx: InterpreterContext,
@@ -288,26 +332,19 @@ const interpretObject = (
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return
   const obj = value as Record<string, unknown>
 
-  const properties = isPlainObject(s['properties']) ? s['properties'] : undefined
-  const patternProperties = isPlainObject(s['patternProperties']) ? s['patternProperties'] : undefined
+  const meta = getObjectMeta(s)
+  const { properties, knownKeys, requiredSet } = meta
+
   const hasAdditional = 'additionalProperties' in s
   const additional = s['additionalProperties']
-  const required = Array.isArray(s['required']) ? (s['required'] as string[]) : []
   const dependentRequired = isPlainObject(s['dependentRequired']) ? s['dependentRequired'] : undefined
   const minProps = typeof s['minProperties'] === 'number' ? s['minProperties'] : undefined
   const maxProps = typeof s['maxProperties'] === 'number' ? s['maxProperties'] : undefined
 
-  // A `Set` only pays for itself when `required` is long; for the usual handful
-  // of keys a linear scan allocates nothing, which is what the first (cold)
-  // validation of a schema is most sensitive to. Membership in `properties` is
-  // likewise tested with `Object.hasOwn` rather than a precomputed key set.
-  const requiredSet = required.length > 16 ? new Set(required) : null
-  const knownKeys = properties ? Object.keys(properties) : undefined
-
   if (properties && knownKeys) {
     for (const key of knownKeys) {
       const pv = obj[key]
-      if (requiredSet ? requiredSet.has(key) : required.includes(key)) {
+      if (requiredSet.has(key)) {
         if (pv === undefined) fail(ctx, `must have required property '${key}'`, path)
         else {
           interpret(ctx, properties[key], pv, childPath(ctx, path, key))
@@ -322,8 +359,7 @@ const interpretObject = (
   }
 
   // Required keys with no `properties` entry still need a presence check.
-  for (const key of required) {
-    if (properties && key in properties) continue
+  for (const key of meta.requiredNotInProps) {
     if (obj[key] === undefined) {
       fail(ctx, `must have required property '${key}'`, path)
       if (ctx.failed) return
@@ -375,9 +411,9 @@ const interpretObject = (
     }
   }
 
-  const needsLoop = patternProperties !== undefined || (hasAdditional && additional !== true)
+  const needsLoop = meta.patternEntries !== null || (hasAdditional && additional !== true)
   if (needsLoop) {
-    const patternEntries = patternProperties ? Object.entries(patternProperties) : []
+    const patternEntries = meta.patternEntries ?? []
     for (const k in obj) {
       if (properties !== undefined && Object.hasOwn(properties, k)) continue
 

@@ -13,8 +13,16 @@ rather than paying an amortized compile cost.
 - Avoid wrapping a single `type` keyword in a throwaway one-element array on
   every typed node, and build the `enum` mismatch label only on failure rather
   than allocating it (a `map`/`join`) on every successful check.
+- Memoize the allocation-heavy parts of an object schema node (its property
+  keys, the `required` membership set, and the compiled `patternProperties`
+  entries) keyed on the node, so they are built once instead of on every
+  validation. This is done only for object nodes (few in number) and lazily, so
+  the cold one-shot path pays at most a handful of small allocations — and an
+  object node revisited within a single walk (an array of objects, a recursive
+  `$ref`) rebuilds none of it, which speeds up the cold path too.
 
-Measured on `bun run bench`: cold `validate` ~30–45% faster on the small/wide
-cases and steady-state throughput up ~30–90%, with no regression to the cold
-path. Behaviour is unchanged — all unit tests and the ~144k-value differential
-fuzz against Ajv still pass.
+Measured on `bun run bench`: steady-state throughput is ~2–3.4× the previous
+baseline (the reuse-heavy path that matters for long-lived consumers such as a
+linter), and the cold one-shot path is also faster across the board (e.g. the
+deep `$ref` schema roughly halved). Behaviour is unchanged — all unit tests and
+the ~144k-value differential fuzz against Ajv still pass.
