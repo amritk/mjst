@@ -277,6 +277,50 @@ const matchesSchema = (
   return ok
 }
 
+/**
+ * The allocation-heavy, reusable parts of an object schema node: its property
+ * keys, the `required` membership set, the leftover required keys not covered by
+ * `properties`, and the compiled `patternProperties` entries. These are a pure
+ * function of the schema node, so they are computed once and memoized per node
+ * (keyed on the node object) instead of rebuilt on every validation.
+ */
+type ObjectMeta = {
+  properties: Record<string, unknown> | undefined
+  knownKeys: string[] | undefined
+  requiredSet: Set<string>
+  requiredNotInProps: string[]
+  patternEntries: [string, unknown][] | null
+}
+
+/**
+ * Per-node cache for {@link ObjectMeta}. A schema's object metadata never
+ * changes, so a module-level `WeakMap` shares it across every validator and call
+ * that touches the node. Crucially this is built *only for object schema nodes*
+ * (there are few of them) and lazily on first touch, so the cold one-shot path —
+ * which this package optimizes for — pays at most a handful of small allocations,
+ * not one per scalar node. An object node revisited many times (an array of
+ * objects, a recursive `$ref`, or a reused validator) then rebuilds none of it.
+ */
+const objectMetaCache = new WeakMap<object, ObjectMeta>()
+
+const getObjectMeta = (s: Record<string, unknown>): ObjectMeta => {
+  let meta = objectMetaCache.get(s)
+  if (meta === undefined) {
+    const properties = isPlainObject(s['properties']) ? s['properties'] : undefined
+    const patternProperties = isPlainObject(s['patternProperties']) ? s['patternProperties'] : undefined
+    const required = Array.isArray(s['required']) ? (s['required'] as string[]) : []
+    meta = {
+      properties,
+      knownKeys: properties ? Object.keys(properties) : undefined,
+      requiredSet: new Set(required),
+      requiredNotInProps: required.filter((k) => !(properties !== undefined && k in properties)),
+      patternEntries: patternProperties ? Object.entries(patternProperties) : null,
+    }
+    objectMetaCache.set(s, meta)
+  }
+  return meta
+}
+
 /** Emits the object-applicator keywords, inert for non-objects. */
 const interpretObject = (
   ctx: InterpreterContext,
@@ -288,26 +332,19 @@ const interpretObject = (
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return
   const obj = value as Record<string, unknown>
 
-  const properties = isPlainObject(s['properties']) ? s['properties'] : undefined
-  const patternProperties = isPlainObject(s['patternProperties']) ? s['patternProperties'] : undefined
+  const meta = getObjectMeta(s)
+  const { properties, knownKeys, requiredSet } = meta
+
   const hasAdditional = 'additionalProperties' in s
   const additional = s['additionalProperties']
-  const required = Array.isArray(s['required']) ? (s['required'] as string[]) : []
   const dependentRequired = isPlainObject(s['dependentRequired']) ? s['dependentRequired'] : undefined
   const minProps = typeof s['minProperties'] === 'number' ? s['minProperties'] : undefined
   const maxProps = typeof s['maxProperties'] === 'number' ? s['maxProperties'] : undefined
 
-  // A `Set` only pays for itself when `required` is long; for the usual handful
-  // of keys a linear scan allocates nothing, which is what the first (cold)
-  // validation of a schema is most sensitive to. Membership in `properties` is
-  // likewise tested with `Object.hasOwn` rather than a precomputed key set.
-  const requiredSet = required.length > 16 ? new Set(required) : null
-  const knownKeys = properties ? Object.keys(properties) : undefined
-
   if (properties && knownKeys) {
     for (const key of knownKeys) {
       const pv = obj[key]
-      if (requiredSet ? requiredSet.has(key) : required.includes(key)) {
+      if (requiredSet.has(key)) {
         if (pv === undefined) fail(ctx, `must have required property '${key}'`, path)
         else {
           interpret(ctx, properties[key], pv, childPath(ctx, path, key))
@@ -322,8 +359,7 @@ const interpretObject = (
   }
 
   // Required keys with no `properties` entry still need a presence check.
-  for (const key of required) {
-    if (properties && key in properties) continue
+  for (const key of meta.requiredNotInProps) {
     if (obj[key] === undefined) {
       fail(ctx, `must have required property '${key}'`, path)
       if (ctx.failed) return
@@ -375,9 +411,9 @@ const interpretObject = (
     }
   }
 
-  const needsLoop = patternProperties !== undefined || (hasAdditional && additional !== true)
+  const needsLoop = meta.patternEntries !== null || (hasAdditional && additional !== true)
   if (needsLoop) {
-    const patternEntries = patternProperties ? Object.entries(patternProperties) : []
+    const patternEntries = meta.patternEntries ?? []
     for (const k in obj) {
       if (properties !== undefined && Object.hasOwn(properties, k)) continue
 
@@ -652,15 +688,17 @@ export const interpret = (
   // $ref — validate against the resolved target (handles recursion naturally,
   // since the data shrinks with each level). Sibling keywords still apply per
   // 2020-12, so we do not stop here.
-  if (typeof s['$ref'] === 'string') {
-    interpret(ctx, resolveRef(ctx, s['$ref']), value, path, evalScope)
+  const ref = s['$ref']
+  if (typeof ref === 'string') {
+    interpret(ctx, resolveRef(ctx, ref), value, path, evalScope)
     if (ctx.failed) return
   }
 
   // `$dynamicRef` (2020-12) — late-binds to a matching `$dynamicAnchor`. Like
   // `$ref`, sibling keywords still apply, so we do not stop here.
-  if (typeof s['$dynamicRef'] === 'string') {
-    interpret(ctx, resolveDyn(ctx, s['$dynamicRef']), value, path, evalScope)
+  const dynRef = s['$dynamicRef']
+  if (typeof dynRef === 'string') {
+    interpret(ctx, resolveDyn(ctx, dynRef), value, path, evalScope)
     if (ctx.failed) return
   }
 
@@ -676,25 +714,36 @@ export const interpret = (
 
   if (Array.isArray(s['enum'])) {
     const values = s['enum'] as unknown[]
-    const label = values.map((v) => JSON.stringify(v)).join(', ')
+    let found: boolean
     if (values.every(isPrimitiveEnumValue)) {
-      if (!values.includes(value)) fail(ctx, `must be one of: ${label}`, path)
+      found = values.includes(value)
     } else {
-      let found = false
+      found = false
       for (const candidate of values) {
         if (deepEqual(value, candidate)) {
           found = true
           break
         }
       }
-      if (!found) fail(ctx, `must be one of: ${label}`, path)
     }
-    if (ctx.failed) return
+    if (!found) {
+      // Build the label only on failure — the success path is the common case and
+      // this `map`/`join` would otherwise allocate on every value, hurting cold.
+      const label = values.map((v) => JSON.stringify(v)).join(', ')
+      fail(ctx, `must be one of: ${label}`, path)
+      if (ctx.failed) return
+    }
   }
 
   const rawType = s['type']
-  const types = Array.isArray(rawType) ? (rawType as string[]) : typeof rawType === 'string' ? [rawType] : undefined
-  if (types && types.length > 0) {
+  if (typeof rawType === 'string') {
+    // The common single-type case: check it directly without wrapping it in a
+    // throwaway one-element array (which this hot path would otherwise allocate
+    // on every typed node — exactly the cold-path cost we want to avoid).
+    if (!matchesType(rawType, value)) fail(ctx, `must be ${rawType}`, path)
+    if (ctx.failed) return
+  } else if (Array.isArray(rawType) && rawType.length > 0) {
+    const types = rawType as string[]
     let ok = false
     for (const t of types) {
       if (matchesType(t, value)) {
@@ -702,23 +751,28 @@ export const interpret = (
         break
       }
     }
-    if (!ok) {
-      const label = types.length === 1 ? `must be ${types[0]}` : `must be one of type: ${types.join(', ')}`
-      fail(ctx, label, path)
-    }
+    if (!ok) fail(ctx, `must be one of type: ${types.join(', ')}`, path)
     if (ctx.failed) return
   }
 
-  // Type-specific keyword blocks. Each self-guards on the value's type, so they
-  // compose correctly with unions and with schemas that omit `type` entirely.
-  interpretObject(ctx, s, value, path, evalScope)
-  if (ctx.failed) return
-  interpretArray(ctx, s, value, path, evalScope)
-  if (ctx.failed) return
-  interpretString(ctx, s, value, path)
-  if (ctx.failed) return
-  interpretNumber(ctx, s, value, path)
-  if (ctx.failed) return
+  // Type-specific keyword blocks. A value is only ever one of object / array /
+  // string / number, and each block is inert for every other type, so we dispatch
+  // on the value's type and run the at-most-one block that can do work — skipping
+  // three guaranteed-inert calls per node. This is a pure value-side check (no
+  // schema analysis, no allocation), so it costs the cold one-shot path nothing.
+  if (typeof value === 'object') {
+    if (value !== null) {
+      if (Array.isArray(value)) interpretArray(ctx, s, value, path, evalScope)
+      else interpretObject(ctx, s, value, path, evalScope)
+      if (ctx.failed) return
+    }
+  } else if (typeof value === 'string') {
+    interpretString(ctx, s, value, path)
+    if (ctx.failed) return
+  } else if (typeof value === 'number') {
+    interpretNumber(ctx, s, value, path)
+    if (ctx.failed) return
+  }
 
   if (Array.isArray(s['allOf'])) {
     for (const sub of s['allOf']) {
