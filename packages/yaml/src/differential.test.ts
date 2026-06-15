@@ -51,6 +51,13 @@ const CASES: string[] = [
   "s: 'para one\n  still one\n\n  '\n",
   's: "para one\n  still one\n\n  "\n',
   "s: 'a\n\n\n  '\nt: 'a\n  b\n\n  c'\n",
+  // A bare `-` at end of line is an entry with an empty (null) value, not the
+  // end of the sequence — so a trailing empty item must be preserved.
+  '- ~\n- null\n-\n',
+  'items:\n  - a\n  -\n  - b\n',
+  // Explicit `!!bool` tags must coerce quoted/plain scalars to booleans, the same
+  // way `!!int` / `!!str` / `!!null` already do.
+  'a: !!bool "true"\nb: !!bool false\nc: !!bool "FALSE"\n',
   // Block scalars with chomping.
   'text: |\n  line one\n  line two\n',
   'text: |-\n  no trailing\n',

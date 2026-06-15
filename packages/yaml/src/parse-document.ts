@@ -889,7 +889,11 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
     }
     firstEntry = false
     const c = src.charCodeAt(contentPos)
-    if (c !== DASH || (contentPos + 1 < len && !isSpace(src.charCodeAt(contentPos + 1)))) break
+    // A `-` is a sequence-entry indicator when followed by whitespace, a line
+    // break, or EOF; a `-` glued to other content (e.g. `-1`) is a plain scalar.
+    // A bare `-` at end of line is a valid entry with an empty (null) value.
+    const next = src.charCodeAt(contentPos + 1)
+    if (c !== DASH || (contentPos + 1 < len && !isSpace(next) && next !== NL && next !== CR)) break
     if (startOffset === -1) startOffset = contentPos
 
     const dashPos = contentPos
@@ -1041,7 +1045,10 @@ const applyScalarTag = (node: YamlScalar): unknown => {
     case 'null':
       return null
     case 'bool': {
-      const s = node.source
+      // For a quoted/block scalar the resolved value is the string content; for a
+      // plain scalar fall back to the raw source. Either way `!!bool "true"` must
+      // become `true`, matching how `int`/`float`/`str` read tagged scalars.
+      const s = typeof v === 'string' ? v : node.source
       if (s === 'true' || s === 'True' || s === 'TRUE') return true
       if (s === 'false' || s === 'False' || s === 'FALSE') return false
       return v
