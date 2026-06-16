@@ -68,8 +68,17 @@ const randomValue = (rng: () => number, depth: number): unknown => {
 // disjoint value spaces) — otherwise a value matching two branches makes `oneOf`
 // fail for reasons unrelated to the generator.
 const combinatorSchema = (rng: () => number): Record<string, unknown> => {
-  const which = pick(rng, ['anyOf', 'oneOf', 'not', 'allOf'])
+  const which = pick(rng, ['anyOf', 'oneOf', 'not', 'allOf', 'typeless'])
   if (which === 'not') return { not: { type: pick(rng, ['string', 'number', 'boolean']) } }
+  // Type-less branches (no declared `type`, just `required` / `minItems`): these
+  // apply to the value's runtime type and must not collapse to "always matches".
+  if (which === 'typeless') {
+    return pick(rng, [
+      { not: { required: ['x'] } },
+      { anyOf: [{ required: ['x'] }, { required: ['y'] }] },
+      { anyOf: [{ minItems: 2 }, { type: 'string' }] },
+    ])
+  }
   if (which === 'allOf') {
     return {
       allOf: [

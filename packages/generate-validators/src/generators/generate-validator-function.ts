@@ -322,21 +322,28 @@ const generatePropertyChecks = (
     lines.push(...generateConstraintChecks(key, raw, path, propSchema, suffix, ctx))
   }
 
-  // Combinator keywords (`allOf`/`anyOf`/`oneOf`/`not`/`if`) can sit alongside or
-  // instead of `type`. Validate them on the present value; presence for a
-  // required property is enforced by the typed branch above, or here when there
-  // is no `type` to anchor the missing-property check.
-  const combinatorLines = generateCombinatorChecks(key, raw, path, propSchema, suffix, ctx)
-  if (combinatorLines.length > 0) {
+  // Keywords that can sit alongside or instead of `type`: combinators
+  // (`allOf`/`anyOf`/`oneOf`/`not`/`if`) for any schema, plus the constraint
+  // checks for a *type-less* schema (e.g. a bare `{ required: [...] }` or
+  // `{ minItems: 2 }` property). A typed schema already ran its constraints in
+  // the `hasType` branch above, so it only needs the combinators here.
+  const extraLines = hasType(propSchema)
+    ? generateCombinatorChecks(key, raw, path, propSchema, suffix, ctx)
+    : [
+        ...generateConstraintChecks(key, raw, path, propSchema, suffix, ctx),
+        ...generateCombinatorChecks(key, raw, path, propSchema, suffix, ctx),
+      ]
+  if (extraLines.length > 0) {
     if (!hasType(propSchema) && isRequired) {
+      // No `type` to anchor a missing-property check, so enforce presence here.
       lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
       lines.push(`    errors.push({ message: "must have required property '${key}'", path: ${parentPath} })`)
       lines.push(`  } else {`)
-      lines.push(...combinatorLines)
+      lines.push(...extraLines)
       lines.push(`  }`)
     } else {
       lines.push(`  if (${raw} !== undefined) {`)
-      lines.push(...combinatorLines)
+      lines.push(...extraLines)
       lines.push(`  }`)
     }
   }
@@ -361,12 +368,18 @@ const generateConstraintChecks = (
   suffix: string,
   ctx: NestingContext,
 ): string[] => {
-  if (!isSchemaObject(propSchema) || !hasType(propSchema)) return []
-  const t = propSchema.type as string
+  if (!isSchemaObject(propSchema)) return []
+  const sp = propSchema as Record<string, unknown>
   const lines: string[] = []
 
+  // Each block is gated on the *presence of its keywords*, not a declared `type`,
+  // and every emitted check carries its own runtime-type guard (`typeof` /
+  // `Array.isArray`). So a type-less schema (e.g. an `allOf` / `anyOf` / `not`
+  // branch that is just `{ required: [...] }` or `{ minItems: 2 }`) is validated
+  // against the value's runtime type, matching the interpreter.
+
   // String constraints
-  if (t === 'string') {
+  if (hasPattern(propSchema) || hasMinLength(propSchema) || hasMaxLength(propSchema)) {
     if (hasPattern(propSchema)) {
       const re = escapeRegexPattern(propSchema.pattern)
       const msg = JSON.stringify(`must match pattern ${propSchema.pattern}`)
@@ -387,7 +400,13 @@ const generateConstraintChecks = (
   }
 
   // Number constraints
-  if (t === 'number' || t === 'integer') {
+  if (
+    hasMinimum(propSchema) ||
+    hasMaximum(propSchema) ||
+    hasExclusiveMinimum(propSchema) ||
+    hasExclusiveMaximum(propSchema) ||
+    hasMultipleOf(propSchema)
+  ) {
     if (hasMinimum(propSchema)) {
       // Draft-04 `exclusiveMinimum: true` makes the paired `minimum` strict.
       const strict = hasStrictExclusiveMinimum(propSchema)
@@ -423,7 +442,7 @@ const generateConstraintChecks = (
   }
 
   // Array with typed items
-  if (t === 'array' && hasItems(propSchema)) {
+  if (hasItems(propSchema)) {
     const itemSchema = propSchema.items
     if (hasRef(itemSchema)) {
       const vName = validatorName(refToName(itemSchema.$ref, suffix))
@@ -453,7 +472,13 @@ const generateConstraintChecks = (
   // Array length / uniqueness. `uniqueItems` dedupes by a JSON projection — exact
   // for primitives (what the type guard also uses); deep-but-key-ordered for
   // objects, the same pragmatic trade-off the rest of the generator makes.
-  if (t === 'array') {
+  if (
+    hasMinItems(propSchema) ||
+    hasMaxItems(propSchema) ||
+    (hasUniqueItems(propSchema) && propSchema.uniqueItems === true) ||
+    isSchemaObject(sp['contains'] as JSONSchema) ||
+    Array.isArray(sp['prefixItems'])
+  ) {
     if (hasMinItems(propSchema)) {
       lines.push(`  if (Array.isArray(${raw}) && ${raw}.length < ${propSchema.minItems}) {`)
       lines.push(`    errors.push({ message: 'must have at least ${propSchema.minItems} items', path: ${path} })`)
@@ -475,7 +500,6 @@ const generateConstraintChecks = (
     // `contains` — at least `minContains` (default 1) and at most `maxContains`
     // items must match the subschema. `minContains: 0` makes any array (even
     // empty) satisfy the lower bound.
-    const sp = propSchema as Record<string, unknown>
     if (isSchemaObject(sp['contains'] as JSONSchema)) {
       const min = typeof sp['minContains'] === 'number' ? sp['minContains'] : 1
       const max = typeof sp['maxContains'] === 'number' ? (sp['maxContains'] as number) : undefined
@@ -519,9 +543,10 @@ const generateConstraintChecks = (
   }
 
   // Inline nested object — recurse so the nested fields are actually validated.
-  if (t === 'object') {
-    lines.push(...generateInlineObjectChecks(key, propSchema, raw, suffix, ctx))
-  }
+  // Unconditional: `generateInlineObjectChecks` self-gates (returns `[]` when the
+  // schema has no object keywords) and each check is guarded by an `isObject`
+  // runtime check, so this is a no-op for non-object schemas.
+  lines.push(...generateInlineObjectChecks(key, propSchema, raw, suffix, ctx))
 
   return lines
 }
@@ -597,9 +622,13 @@ const generateValueChecks = (
       lines.push(`    errors.push({ message: 'must be ${typLabel}', path: ${path} })`)
       lines.push(`  }`)
     }
-    lines.push(...generateConstraintChecks(key, raw, path, propSchema, suffix, ctx))
   }
 
+  // Constraint and combinator checks run regardless of a declared `type`: they
+  // gate on keyword presence + a runtime-type guard, so a type-less subschema
+  // (a combinator branch like `{ required: [...] }` or `{ minItems: 2 }`) is
+  // still validated rather than collapsing to "matches everything".
+  lines.push(...generateConstraintChecks(key, raw, path, propSchema, suffix, ctx))
   lines.push(...generateCombinatorChecks(key, raw, path, propSchema, suffix, ctx))
 
   return lines
