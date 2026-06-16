@@ -180,13 +180,15 @@ const collectRefTargets = (node: unknown, out: Set<string>): Set<string> => {
   }
   const obj = node as Record<string, unknown>
   if (typeof obj['$ref'] === 'string') {
-    // A `$ref` object's siblings are ignored on resolution, so we do not recurse
-    // into them — mirroring resolveAt's behaviour.
     const { filePart } = splitRef(obj['$ref'])
     if (filePart !== '') out.add(filePart)
-    return out
   }
-  for (const key of Object.keys(obj)) collectRefTargets(obj[key], out)
+  // Recurse into every key — including a `$ref` node's siblings, which apply
+  // alongside the referenced schema (2020-12) and may carry their own refs.
+  for (const key of Object.keys(obj)) {
+    if (key === '$ref') continue
+    collectRefTargets(obj[key], out)
+  }
   return out
 }
 
@@ -243,24 +245,34 @@ const resolveAt = (
     const targetRoot = docCache.get(targetLocation) ?? {}
 
     const cacheKey = `${targetLocation}#${pointer}`
+    let resolved: unknown
     if (refCache.has(cacheKey)) {
       const cached = refCache.get(cacheKey)
-      return cached === CYCLE ? {} : cached
+      resolved = cached === CYCLE ? {} : cached
+    } else {
+      refCache.set(cacheKey, CYCLE)
+      const target = pointer ? getByPointer(targetRoot, pointer) : targetRoot
+      resolved = resolveAt(target, targetLocation, docCache, refCache, origins)
+      refCache.set(cacheKey, resolved)
+      // Stamp the inlined node with where it was defined so a consumer can map a
+      // resolved-tree node back to its source document/path. Only objects/arrays are
+      // stamped (primitives can't key the map). First-write-wins: resolution recurses
+      // to the deepest `$ref` before returning, so the *definition* site stamps first;
+      // an outer ref that merely points (transitively) at the same object must not
+      // overwrite it with an intermediate location.
+      if (origins && resolved !== null && typeof resolved === 'object' && !origins.has(resolved)) {
+        origins.set(resolved, { location: targetLocation, pointer: pointerToPath(pointer) })
+      }
     }
-    refCache.set(cacheKey, CYCLE)
-    const target = pointer ? getByPointer(targetRoot, pointer) : targetRoot
-    const resolved = resolveAt(target, targetLocation, docCache, refCache, origins)
-    refCache.set(cacheKey, resolved)
-    // Stamp the inlined node with where it was defined so a consumer can map a
-    // resolved-tree node back to its source document/path. Only objects/arrays are
-    // stamped (primitives can't key the map). First-write-wins: resolution recurses
-    // to the deepest `$ref` before returning, so the *definition* site stamps first;
-    // an outer ref that merely points (transitively) at the same object must not
-    // overwrite it with an intermediate location.
-    if (origins && resolved !== null && typeof resolved === 'object' && !origins.has(resolved)) {
-      origins.set(resolved, { location: targetLocation, pointer: pointerToPath(pointer) })
-    }
-    return resolved
+
+    // Keywords sibling to `$ref` apply alongside the referenced schema (2020-12),
+    // so preserve them by combining both in an `allOf` rather than dropping them.
+    const siblingKeys = Object.keys(obj).filter((key) => key !== '$ref')
+    if (siblingKeys.length === 0) return resolved
+    const siblings: Record<string, unknown> = {}
+    for (const key of siblingKeys) siblings[key] = resolveAt(obj[key], baseLocation, docCache, refCache, origins)
+    const existingAllOf = Array.isArray(siblings['allOf']) ? siblings['allOf'] : []
+    return { ...siblings, allOf: [...existingAllOf, resolved] }
   }
   const result: Record<string, unknown> = {}
   for (const key of Object.keys(obj)) {
