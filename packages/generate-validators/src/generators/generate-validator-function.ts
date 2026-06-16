@@ -11,8 +11,10 @@ import {
   hasExclusiveMinimum,
   hasItems,
   hasMaximum,
+  hasMaxItems,
   hasMaxLength,
   hasMinimum,
+  hasMinItems,
   hasMinLength,
   hasMultipleOf,
   hasOneOf,
@@ -24,6 +26,7 @@ import {
   hasStrictExclusiveMaximum,
   hasStrictExclusiveMinimum,
   hasType,
+  hasUniqueItems,
   isObjectSchema,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
@@ -423,6 +426,29 @@ const generateConstraintChecks = (
         lines.push(`    }`)
         lines.push(`  }`)
       }
+    }
+  }
+
+  // Array length / uniqueness. `uniqueItems` dedupes by a JSON projection — exact
+  // for primitives (what the type guard also uses); deep-but-key-ordered for
+  // objects, the same pragmatic trade-off the rest of the generator makes.
+  if (t === 'array') {
+    if (hasMinItems(propSchema)) {
+      lines.push(`  if (Array.isArray(${raw}) && ${raw}.length < ${propSchema.minItems}) {`)
+      lines.push(`    errors.push({ message: 'must have at least ${propSchema.minItems} items', path: ${path} })`)
+      lines.push(`  }`)
+    }
+    if (hasMaxItems(propSchema)) {
+      lines.push(`  if (Array.isArray(${raw}) && ${raw}.length > ${propSchema.maxItems}) {`)
+      lines.push(`    errors.push({ message: 'must have at most ${propSchema.maxItems} items', path: ${path} })`)
+      lines.push(`  }`)
+    }
+    if (hasUniqueItems(propSchema) && propSchema.uniqueItems === true) {
+      lines.push(
+        `  if (Array.isArray(${raw}) && new Set((${raw} as unknown[]).map((_u) => JSON.stringify(_u))).size !== ${raw}.length) {`,
+      )
+      lines.push(`    errors.push({ message: 'must NOT have duplicate items', path: ${path} })`)
+      lines.push(`  }`)
     }
   }
 
@@ -1106,7 +1132,16 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
  * on sparse input — the guard must never accept what the slow path would reject.
  */
 const booleanArrayExpr = (schema: JSONSchema, acc: string): string | null => {
-  const base = `Array.isArray(${acc})`
+  const parts = [`Array.isArray(${acc})`]
+  // Length / uniqueness, mirroring the validator's checks exactly so the guard's
+  // verdict matches the slow path's.
+  if (hasMinItems(schema)) parts.push(`${acc}.length >= ${schema.minItems}`)
+  if (hasMaxItems(schema)) parts.push(`${acc}.length <= ${schema.maxItems}`)
+  if (hasUniqueItems(schema) && schema.uniqueItems === true) {
+    parts.push(`new Set((${acc} as unknown[]).map((_u) => JSON.stringify(_u))).size === ${acc}.length`)
+  }
+  const base = parts.join(' && ')
+
   if (!hasItems(schema)) return base
   const items = schema.items
   if (!isSchemaObject(items)) return base

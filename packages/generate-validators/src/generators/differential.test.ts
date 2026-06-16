@@ -65,7 +65,7 @@ const randomValue = (rng: () => number, depth: number): unknown => {
 }
 
 const randomTyped = (rng: () => number, depth: number): Record<string, unknown> => {
-  const t = pick(rng, ['string', 'number', 'integer', 'boolean', 'null', 'object', 'enumconst'])
+  const t = pick(rng, ['string', 'number', 'integer', 'boolean', 'null', 'object', 'array', 'enumconst'])
   const s: Record<string, unknown> = {}
   if (t === 'enumconst') {
     if (rng() < 0.5) s.enum = [pick(rng, STRINGS), pick(rng, NUMBERS), true]
@@ -82,6 +82,13 @@ const randomTyped = (rng: () => number, depth: number): Record<string, unknown> 
     if (rng() < 0.4) s.maximum = pick(rng, [5, 10, 100])
     if (rng() < 0.2) s.exclusiveMinimum = 0
     if (rng() < 0.2) s.exclusiveMaximum = 10
+  } else if (t === 'array') {
+    // Scalar item types only: `uniqueItems` dedupes by a JSON projection, which
+    // matches Ajv's deep equality for primitives but not for objects.
+    if (rng() < 0.7) s.items = { type: pick(rng, ['string', 'number', 'boolean']) }
+    if (rng() < 0.5) s.minItems = Math.floor(rng() * 3)
+    if (rng() < 0.5) s.maxItems = 2 + Math.floor(rng() * 3)
+    if (rng() < 0.4) s.uniqueItems = true
   } else if (t === 'object' && depth > 0) {
     return randomObjectSchema(rng, depth - 1)
   }
