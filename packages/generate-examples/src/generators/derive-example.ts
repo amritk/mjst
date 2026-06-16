@@ -376,8 +376,13 @@ const deriveNumber = (schema: JSONSchema, isInteger: boolean): number => {
   if (hasMultipleOf(schema) && schema.multipleOf > 0) {
     const m = schema.multipleOf
     value = Math.ceil(value / m - 1e-9) * m
+    // Rounding up can overshoot the upper bound; drop to the largest multiple
+    // that fits. (If even that falls below `lo`, the range has no multiple — an
+    // unsatisfiable schema — and we return the in-range candidate as best effort.)
+    if (value > hi && Number.isFinite(hi)) value = Math.floor(hi / m + 1e-9) * m
   }
-  return isInteger ? Math.round(value) : value
+  // `+ 0` normalizes a `-0` (which `Math.ceil`/`Math.floor` can produce) to `0`.
+  return (isInteger ? Math.round(value) : value) + 0
 }
 
 /**
@@ -402,14 +407,20 @@ const deriveArray = (
 
   const min = hasMinItems(schema) ? schema.minItems : 0
   const max = hasMaxItems(schema) ? schema.maxItems : Number.POSITIVE_INFINITY
-  // The rest/uniform element schema (the singular `items`, not the tuple form).
-  const rest = items !== undefined && !Array.isArray(items) ? items : undefined
+  // The rest/uniform element schema (the singular object-form `items`). A boolean
+  // `items` (`true`/`false`) is not a value-producing schema, so it is not `rest`.
+  const rest = items !== undefined && !Array.isArray(items) && isSchemaObject(items) ? items : undefined
 
   if (prefix) {
     const tuple = prefix.map((item) => deriveExample(item, rootSchema, seen))
-    // Pad up to `minItems` with the rest schema when one is present.
-    while (tuple.length < min && tuple.length < max && rest !== undefined) {
-      tuple.push(deriveExample(rest, rootSchema, seen))
+    // Pad up to `minItems`: with the rest schema when one is present, otherwise
+    // (in 2020-12 additional items past `prefixItems` are unconstrained unless
+    // `items: false`) with a plain `null`.
+    const itemsClosed = (schema as Record<string, unknown>)['items'] === false
+    while (tuple.length < min && tuple.length < max) {
+      if (rest !== undefined) tuple.push(deriveExample(rest, rootSchema, seen))
+      else if (itemsClosed) break
+      else tuple.push(null)
     }
     return tuple.length > max ? tuple.slice(0, max) : tuple
   }
@@ -430,20 +441,25 @@ const deriveArray = (
     // Make the first `minContains` items satisfy `contains`; the rest use `items`.
     const itemSchema = contains !== undefined && i < minContains ? contains : elem
     const base = itemSchema !== undefined ? deriveExample(itemSchema, rootSchema, seen) : null
-    result.push(unique ? distinctify(base, i) : base)
+    result.push(unique ? distinctify(base, i, itemSchema) : base)
   }
   return result
 }
 
 /**
  * Returns a value distinct from earlier ones for index `i`, used to satisfy
- * `uniqueItems`. Primitives are perturbed (numbers offset, strings suffixed,
- * booleans alternated); values that can't be cheaply varied are returned as-is
- * (a best-effort the generated `fast-check` arbitrary covers fully).
+ * `uniqueItems`, while staying within the item schema's constraints: numbers step
+ * by `multipleOf` (so the perturbed values remain valid multiples) rather than by
+ * 1, strings are suffixed, booleans alternated. Values that can't be cheaply
+ * varied are returned as-is (a best-effort the generated `fast-check` arbitrary
+ * covers fully).
  */
-const distinctify = (base: unknown, i: number): unknown => {
+const distinctify = (base: unknown, i: number, itemSchema: JSONSchema | undefined): unknown => {
   if (i === 0) return base
-  if (typeof base === 'number') return base + i
+  if (typeof base === 'number') {
+    const step = itemSchema && isSchemaObject(itemSchema) && hasMultipleOf(itemSchema) && itemSchema.multipleOf > 0 ? itemSchema.multipleOf : 1
+    return base + i * step
+  }
   if (typeof base === 'string') return `${base}${i}`
   if (typeof base === 'boolean') return i % 2 === 1 ? !base : base
   return base
@@ -489,6 +505,13 @@ const mergeAllOf = (schema: JSONSchema): JSONSchema => {
         }
       } else if (key === 'required' && Array.isArray(value)) {
         for (const r of value) required.add(r as string)
+      } else if (key === 'enum' && Array.isArray(value)) {
+        // A value must be in *every* branch's enum, so intersect rather than let
+        // a later branch's enum replace an earlier one (which could pick a member
+        // the earlier branch rejects).
+        merged['enum'] = Array.isArray(merged['enum'])
+          ? (merged['enum'] as unknown[]).filter((member) => value.includes(member))
+          : value
       } else if (TIGHTEST.has(key) && typeof value === 'number' && typeof merged[key] === 'number') {
         // Numeric bounds from different branches combine to the tightest one.
         merged[key] = TIGHTEST.get(key) === 'max' ? Math.max(merged[key], value) : Math.min(merged[key], value)

@@ -71,6 +71,44 @@ describe('serializeValue', () => {
   })
 })
 
+describe('deriveExample — satisfiable-instance regressions', () => {
+  it('keeps a multipleOf value within the upper bound', () => {
+    // 10 is the only multiple of 5 in [6, 12]; must not overshoot to 15.
+    expect(deriveExample({ type: 'integer', minimum: 6, maximum: 12, multipleOf: 5 })).toBe(10)
+  })
+
+  it('produces distinct uniqueItems that respect the item schema', () => {
+    expect(
+      deriveExample({
+        type: 'array',
+        uniqueItems: true,
+        minItems: 3,
+        items: { type: 'integer', minimum: 0, maximum: 6, multipleOf: 3 },
+      }),
+    ).toEqual([0, 3, 6])
+  })
+
+  it('pads a tuple to minItems when additional items are allowed', () => {
+    expect(deriveExample({ type: 'array', prefixItems: [{ type: 'string' }], minItems: 3 })).toEqual([
+      'string',
+      null,
+      null,
+    ])
+  })
+
+  it('does not pad past a closed tuple (items: false)', () => {
+    expect(deriveExample({ type: 'array', prefixItems: [{ type: 'string' }], items: false, minItems: 3 })).toEqual([
+      'string',
+    ])
+  })
+
+  it('intersects enums across allOf branches', () => {
+    expect(deriveExample({ allOf: [{ type: 'string', enum: ['a', 'b'] }, { type: 'string', enum: ['c', 'b'] }] })).toBe(
+      'b',
+    )
+  })
+})
+
 describe('generateExampleConst', () => {
   it('emits a typed const with a derived value', () => {
     const schema = { type: 'object' as const, properties: { name: { type: 'string' as const } } }
