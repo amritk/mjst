@@ -80,6 +80,62 @@ const enforceTupleLength = (node: unknown): void => {
   for (const value of Object.values(obj)) enforceTupleLength(value)
 }
 
+// Keys a branch may carry and still be treated as a plain "closed object" that
+// is safe to merge. Anything else (patternProperties, a nested allOf, $ref, a
+// conditional, …) makes the merge unsafe, so we leave such an allOf alone.
+const CLOSED_OBJECT_KEYS = new Set(['type', 'properties', 'required', 'additionalProperties'])
+
+const isClosedObject = (node: unknown): node is Record<string, unknown> => {
+  if (node === null || typeof node !== 'object' || Array.isArray(node)) return false
+  const obj = node as Record<string, unknown>
+  if (obj['type'] !== 'object' || obj['additionalProperties'] !== false) return false
+  return Object.keys(obj).every((key) => CLOSED_OBJECT_KEYS.has(key))
+}
+
+/**
+ * Zod emits an intersection of objects as an `allOf` where every branch carries
+ * `additionalProperties: false`. That is unsatisfiable — each branch rejects the
+ * keys the others contribute — even though the Zod intersection accepts the
+ * combined object. When every `allOf` branch is a closed object we merge them
+ * into one: properties are unioned (a key in several branches becomes an `allOf`
+ * of its schemas), `required` is unioned, and `additionalProperties: false` is
+ * kept over the combined key set. `allOf`s with a non-object branch (e.g. two
+ * refined strings) are left untouched — those already combine correctly.
+ */
+const mergeClosedObjectAllOf = (node: unknown): unknown => {
+  if (node === null || typeof node !== 'object') return node
+  if (Array.isArray(node)) return node.map(mergeClosedObjectAllOf)
+
+  const obj = node as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(obj)) out[key] = mergeClosedObjectAllOf(value)
+
+  const allOf = out['allOf']
+  if (Array.isArray(allOf) && allOf.length > 1 && allOf.every(isClosedObject)) {
+    const properties: Record<string, unknown[]> = {}
+    const required = new Set<string>()
+    for (const branch of allOf as Record<string, unknown>[]) {
+      const props = (branch['properties'] ?? {}) as Record<string, unknown>
+      for (const [prop, schema] of Object.entries(props)) {
+        const bucket = properties[prop]
+        if (bucket) bucket.push(schema)
+        else properties[prop] = [schema]
+      }
+      for (const r of (branch['required'] ?? []) as string[]) required.add(r)
+    }
+    const mergedProps: Record<string, unknown> = {}
+    for (const [prop, schemas] of Object.entries(properties)) {
+      mergedProps[prop] = schemas.length === 1 ? schemas[0] : { allOf: schemas }
+    }
+    delete out['allOf']
+    out['type'] = 'object'
+    out['properties'] = mergedProps
+    if (required.size > 0) out['required'] = [...required]
+    out['additionalProperties'] = false
+  }
+  return out
+}
+
 export const zodToJsonSchema = async (source: unknown): Promise<JSONSchema> => {
   if (typeof source !== 'object' || source === null) {
     const received = source === null ? 'null' : typeof source
@@ -127,5 +183,6 @@ export const zodToJsonSchema = async (source: unknown): Promise<JSONSchema> => {
   // Zod under-constrains fixed tuples (bare `prefixItems`); restore their length.
   enforceTupleLength(json)
 
-  return json as JSONSchema
+  // Collapse an unsatisfiable `allOf` of closed objects (object intersections).
+  return mergeClosedObjectAllOf(json) as JSONSchema
 }
