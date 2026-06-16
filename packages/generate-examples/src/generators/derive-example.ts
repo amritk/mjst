@@ -18,12 +18,15 @@ import {
   hasMinItems,
   hasMinimum,
   hasMinLength,
+  hasMinProperties,
   hasMultipleOf,
   hasOneOf,
+  hasPattern,
   hasProperties,
   hasRef,
   hasRequired,
   hasType,
+  hasUniqueItems,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
@@ -34,7 +37,82 @@ const lowerFirst = (name: string): string => name.charAt(0).toLowerCase() + name
 /** Derives the example const name from a type name. e.g. "User" → "userExample" */
 const exampleName = (typeName: string): string => `${lowerFirst(typeName)}Example`
 
-/** Returns a representative string honouring `format` and length constraints. */
+/**
+ * Best-effort generator of a string matching a `pattern`. Handles the common
+ * building blocks (anchors, literals, `.`, escapes like `\d`/`\w`/`\s`, character
+ * classes, and the `+`/`*`/`?`/`{n}`/`{n,m}` quantifiers); alternation and groups
+ * fall through to `undefined`. The caller verifies the result against the real
+ * regex and only uses it on a match, so a partial sampler never makes the example
+ * worse — it just upgrades the common cases.
+ */
+const sampleFromPattern = (pattern: string, minLength: number): string | undefined => {
+  // Bail on constructs this simple sampler can't reason about.
+  if (/[(|]/.test(pattern.replace(/\\[(|]/g, ''))) return undefined
+  let body = pattern
+  const anchored = body.startsWith('^')
+  if (anchored) body = body.slice(1)
+  if (body.endsWith('$')) body = body.slice(0, -1)
+
+  // A representative character for the token starting at `body[i]`.
+  const charFor = (token: string): string => {
+    if (token === '\\d') return '5'
+    if (token === '\\w') return 'a'
+    if (token === '\\s') return ' '
+    if (token.startsWith('[')) {
+      const inner = token.slice(1, -1)
+      if (/a-z/.test(inner) || /A-Z/.test(inner)) return /a-z/.test(inner) ? 'a' : 'A'
+      if (/0-9|\\d/.test(inner)) return '5'
+      const first = inner.replace(/^\^/, '')[0]
+      return first && first !== '\\' ? first : 'a'
+    }
+    if (token === '.') return 'a'
+    if (token.startsWith('\\')) return token[1] ?? 'a'
+    return token
+  }
+
+  let out = ''
+  let i = 0
+  while (i < body.length) {
+    // Read one token: a class `[...]`, an escape `\x`, or a single char.
+    let token: string
+    if (body[i] === '[') {
+      const end = body.indexOf(']', i + 1)
+      if (end === -1) return undefined
+      token = body.slice(i, end + 1)
+      i = end + 1
+    } else if (body[i] === '\\') {
+      token = body.slice(i, i + 2)
+      i += 2
+    } else {
+      token = body[i] as string
+      i += 1
+    }
+
+    // Read an optional quantifier.
+    let reps = 1
+    const q = body[i]
+    if (q === '+') {
+      reps = Math.max(1, minLength)
+      i += 1
+    } else if (q === '*') {
+      reps = Math.max(0, minLength)
+      i += 1
+    } else if (q === '?') {
+      reps = 1
+      i += 1
+    } else if (q === '{') {
+      const end = body.indexOf('}', i + 1)
+      if (end === -1) return undefined
+      const spec = body.slice(i + 1, end)
+      reps = Number.parseInt(spec, 10) || 0
+      i = end + 1
+    }
+    out += charFor(token).repeat(reps)
+  }
+  return out
+}
+
+/** Returns a representative string honouring `format`, `pattern`, and length. */
 const exampleString = (schema: JSONSchema): string => {
   if (hasFormat(schema)) {
     switch (schema.format) {
@@ -60,8 +138,17 @@ const exampleString = (schema: JSONSchema): string => {
     }
   }
 
+  const minLength = hasMinLength(schema) ? schema.minLength : 0
+  if (hasPattern(schema)) {
+    const sampled = sampleFromPattern(schema.pattern, minLength)
+    // Only trust the sampler when it actually matches and fits the length bound.
+    if (sampled !== undefined && new RegExp(schema.pattern).test(sampled)) {
+      if (!(hasMaxLength(schema) && sampled.length > schema.maxLength)) return sampled
+    }
+  }
+
   let value = 'string'
-  if (hasMinLength(schema) && value.length < schema.minLength) value = value.padEnd(schema.minLength, 'x')
+  if (value.length < minLength) value = value.padEnd(minLength, 'x')
   if (hasMaxLength(schema) && value.length > schema.maxLength) value = value.slice(0, schema.maxLength)
   return value
 }
@@ -171,13 +258,25 @@ const deriveForType = (
           out[key] = deriveExample(propSchema, rootSchema, seen)
         }
       }
+      const additional = hasAdditionalProperties(schema) ? schema.additionalProperties : false
+      const additionalSchema = isSchemaObject(additional) ? additional : undefined
+      // Extra keys are allowed unless `additionalProperties: false` forbids them.
+      const extrasAllowed = !(hasAdditionalProperties(schema) && schema.additionalProperties === false)
       // A required key with no `properties` entry still needs a value. Use the
       // `additionalProperties` schema when one constrains it, else a null.
       if (hasRequired(schema)) {
-        const additional = hasAdditionalProperties(schema) ? schema.additionalProperties : false
         for (const key of schema.required) {
           if (key in out) continue
-          out[key] = isSchemaObject(additional) ? deriveExample(additional, rootSchema, seen) : null
+          out[key] = additionalSchema ? deriveExample(additionalSchema, rootSchema, seen) : null
+        }
+      }
+      // Synthesize filler keys to reach `minProperties` when extras are allowed.
+      if (hasMinProperties(schema) && extrasAllowed) {
+        let n = 0
+        while (Object.keys(out).length < schema.minProperties) {
+          const key = `extra${n++}`
+          if (key in out) continue
+          out[key] = additionalSchema ? deriveExample(additionalSchema, rootSchema, seen) : null
         }
       }
       return out
@@ -249,10 +348,39 @@ const deriveArray = (
     return tuple.length > max ? tuple.slice(0, max) : tuple
   }
 
-  const item = rest !== undefined ? deriveExample(rest, rootSchema, seen) : null
-  // Prefer a non-empty example, but never exceed `maxItems` or fall below `minItems`.
-  const count = Math.min(Math.max(min, max === 0 ? 0 : 1), max)
-  return Array.from({ length: count }, () => item)
+  const raw = schema as Record<string, unknown>
+  const containsRaw = raw['contains'] as JSONSchema | undefined
+  const contains = containsRaw !== undefined && isSchemaObject(containsRaw) ? containsRaw : undefined
+  const minContains =
+    contains !== undefined ? (typeof raw['minContains'] === 'number' ? (raw['minContains'] as number) : 1) : 0
+  const unique = hasUniqueItems(schema) && schema.uniqueItems === true
+  // The element schema: the uniform `items`, else the `contains` subschema.
+  const elem = rest ?? contains
+
+  // Prefer a non-empty example, satisfy `minItems` and `minContains`, never exceed `maxItems`.
+  const count = Math.min(Math.max(min, minContains, max === 0 ? 0 : 1), max)
+  const result: unknown[] = []
+  for (let i = 0; i < count; i++) {
+    // Make the first `minContains` items satisfy `contains`; the rest use `items`.
+    const itemSchema = contains !== undefined && i < minContains ? contains : elem
+    const base = itemSchema !== undefined ? deriveExample(itemSchema, rootSchema, seen) : null
+    result.push(unique ? distinctify(base, i) : base)
+  }
+  return result
+}
+
+/**
+ * Returns a value distinct from earlier ones for index `i`, used to satisfy
+ * `uniqueItems`. Primitives are perturbed (numbers offset, strings suffixed,
+ * booleans alternated); values that can't be cheaply varied are returned as-is
+ * (a best-effort the generated `fast-check` arbitrary covers fully).
+ */
+const distinctify = (base: unknown, i: number): unknown => {
+  if (i === 0) return base
+  if (typeof base === 'number') return base + i
+  if (typeof base === 'string') return `${base}${i}`
+  if (typeof base === 'boolean') return i % 2 === 1 ? !base : base
+  return base
 }
 
 /**

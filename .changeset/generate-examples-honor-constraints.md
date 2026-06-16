@@ -17,6 +17,13 @@ schema; a new Ajv differential test now guards against that. It now honors:
   numeric/length bounds tightened) instead of returning `null`.
 - `enum` (and `const`) members alongside a length/range constraint — the first
   member that also satisfies it is chosen rather than blindly the first.
+- `minProperties` (filler keys are synthesized when extras are allowed),
+  `uniqueItems` (primitive items are perturbed to stay distinct), `contains` /
+  `minContains` (enough items satisfy the contained schema), and `pattern` via a
+  best-effort regex sampler covering the common building blocks (anchors,
+  character classes, `\d`/`\w`/`\s`, and quantifiers), verified against the real
+  regex before use.
 
-`pattern`, `uniqueItems`, `contains`, and `minProperties` remain best-effort;
-use the generated `fast-check` arbitrary when full fidelity is required.
+Alternation/group patterns and otherwise unsatisfiable schemas remain
+best-effort; use the generated `fast-check` arbitrary when full fidelity is
+required.

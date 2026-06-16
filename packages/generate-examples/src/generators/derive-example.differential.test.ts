@@ -33,9 +33,11 @@ const leaf = (rng: () => number): Record<string, unknown> => {
   const type = pick(rng, ['string', 'integer', 'number', 'boolean', 'null'])
   const s: Record<string, unknown> = { type }
   if (type === 'string') {
-    if (rng() < 0.4) s['minLength'] = Math.floor(rng() * 4)
-    if (rng() < 0.4) s['maxLength'] = 6 + Math.floor(rng() * 6)
-    if (rng() < 0.3) s['enum'] = ['aa', 'bbb', 'cccc']
+    if (rng() < 0.3) s['minLength'] = Math.floor(rng() * 4)
+    if (rng() < 0.3) s['maxLength'] = 6 + Math.floor(rng() * 6)
+    if (rng() < 0.25) s['enum'] = ['aa', 'bbb', 'cccc']
+    // Patterns the best-effort sampler should be able to satisfy.
+    else if (rng() < 0.3) s['pattern'] = pick(rng, ['^[a-z]+$', '^\\d{3}$', '^[A-Z][a-z]+$', '^x-[a-z]+$'])
   } else if (type === 'integer' || type === 'number') {
     const min = pick(rng, [0, 1, 4, 7])
     if (rng() < 0.6) s['minimum'] = min
@@ -76,20 +78,30 @@ const gen = (rng: () => number, depth: number): Record<string, unknown> => {
       s['required'] = req
       if (req.includes('extra')) s['additionalProperties'] = leaf(rng)
     }
+    // `minProperties` is satisfiable only when extra keys are allowed.
+    if (rng() < 0.25 && s['additionalProperties'] !== false) s['minProperties'] = Math.floor(rng() * 4)
     return s
   }
 
   if (k < 0.7) {
     const s: Record<string, unknown> = { type: 'array' }
+    const intItem = rng() < 0.5
+    const itemSchema = intItem ? { type: 'integer', minimum: 0, maximum: 1000 } : { type: 'string' }
     if (rng() < 0.4) {
       s['prefixItems'] = [leaf(rng), leaf(rng)]
       if (rng() < 0.5) s['items'] = leaf(rng)
     } else {
-      s['items'] = gen(rng, depth - 1)
+      s['items'] = rng() < 0.5 ? gen(rng, depth - 1) : itemSchema
     }
     const min = Math.floor(rng() * 3)
     if (rng() < 0.6) s['minItems'] = min
     if (rng() < 0.6) s['maxItems'] = min + 2 + Math.floor(rng() * 3) // always >= minItems
+    // `uniqueItems`/`contains` only when the item schema permits — distinct values
+    // exist, and `contains` is compatible with the (integer) item type.
+    if (s['items'] === itemSchema) {
+      if (rng() < 0.4) s['uniqueItems'] = true
+      if (intItem && rng() < 0.3) s['contains'] = { type: 'integer', minimum: 500, maximum: 1000 }
+    }
     return s
   }
 
