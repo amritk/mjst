@@ -4,17 +4,19 @@ import { refToName } from '@amritk/helpers/ref-to-name'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
   hasAdditionalProperties,
+  hasAllOf,
+  hasAnyOf,
   hasConst,
   hasDependentRequired,
   hasEnum,
   hasExclusiveMaximum,
   hasExclusiveMinimum,
   hasItems,
-  hasMaximum,
   hasMaxItems,
+  hasMaximum,
   hasMaxLength,
-  hasMinimum,
   hasMinItems,
+  hasMinimum,
   hasMinLength,
   hasMultipleOf,
   hasOneOf,
@@ -320,6 +322,25 @@ const generatePropertyChecks = (
     lines.push(...generateConstraintChecks(key, raw, path, propSchema, suffix, ctx))
   }
 
+  // Combinator keywords (`allOf`/`anyOf`/`oneOf`/`not`/`if`) can sit alongside or
+  // instead of `type`. Validate them on the present value; presence for a
+  // required property is enforced by the typed branch above, or here when there
+  // is no `type` to anchor the missing-property check.
+  const combinatorLines = generateCombinatorChecks(key, raw, path, propSchema, suffix, ctx)
+  if (combinatorLines.length > 0) {
+    if (!hasType(propSchema) && isRequired) {
+      lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
+      lines.push(`    errors.push({ message: "must have required property '${key}'", path: ${parentPath} })`)
+      lines.push(`  } else {`)
+      lines.push(...combinatorLines)
+      lines.push(`  }`)
+    } else {
+      lines.push(`  if (${raw} !== undefined) {`)
+      lines.push(...combinatorLines)
+      lines.push(`  }`)
+    }
+  }
+
   return lines
 }
 
@@ -450,6 +471,51 @@ const generateConstraintChecks = (
       lines.push(`    errors.push({ message: 'must NOT have duplicate items', path: ${path} })`)
       lines.push(`  }`)
     }
+
+    // `contains` — at least `minContains` (default 1) and at most `maxContains`
+    // items must match the subschema. `minContains: 0` makes any array (even
+    // empty) satisfy the lower bound.
+    const sp = propSchema as Record<string, unknown>
+    if (isSchemaObject(sp['contains'] as JSONSchema)) {
+      const min = typeof sp['minContains'] === 'number' ? sp['minContains'] : 1
+      const max = typeof sp['maxContains'] === 'number' ? (sp['maxContains'] as number) : undefined
+      const matchExpr = generateMatchesExpr('_c', sp['contains'] as JSONSchema, suffix, ctx)
+      const bound = max !== undefined ? `_cn < ${min} || _cn > ${max}` : `_cn < ${min}`
+      lines.push(`  if (Array.isArray(${raw})) {`)
+      lines.push(`    const _cn = (${raw} as unknown[]).filter((_c) => ${matchExpr}).length`)
+      lines.push(`    if (${bound}) {`)
+      lines.push(`      errors.push({ message: 'array does not contain the required matching items', path: ${path} })`)
+      lines.push(`    }`)
+      lines.push(`  }`)
+    }
+
+    // Tuple `prefixItems` — each position validated against its own subschema; a
+    // sibling `items: false` (or draft `additionalItems: false`) caps the length.
+    const prefix = sp['prefixItems']
+    if (Array.isArray(prefix)) {
+      lines.push(`  if (Array.isArray(${raw})) {`)
+      for (let i = 0; i < prefix.length; i++) {
+        const itemChecks = generateValueChecks(
+          '',
+          `${raw}[${i}]`,
+          `\`${path.slice(1, -1)}/${i}\``,
+          prefix[i] as JSONSchema,
+          suffix,
+          ctx,
+        )
+        if (itemChecks.length > 0) {
+          lines.push(`    if (${raw}.length > ${i}) {`)
+          lines.push(...itemChecks.map((l) => `    ${l}`))
+          lines.push(`    }`)
+        }
+      }
+      if (sp['items'] === false || sp['additionalItems'] === false) {
+        lines.push(`    if (${raw}.length > ${prefix.length}) {`)
+        lines.push(`      errors.push({ message: 'must NOT have more than ${prefix.length} items', path: ${path} })`)
+        lines.push(`    }`)
+      }
+      lines.push(`  }`)
+    }
   }
 
   // Inline nested object — recurse so the nested fields are actually validated.
@@ -532,6 +598,89 @@ const generateValueChecks = (
       lines.push(`  }`)
     }
     lines.push(...generateConstraintChecks(key, raw, path, propSchema, suffix, ctx))
+  }
+
+  lines.push(...generateCombinatorChecks(key, raw, path, propSchema, suffix, ctx))
+
+  return lines
+}
+
+/**
+ * A boolean expression that is `true` when `raw` matches `sub`. Reuses the value
+ * checks but collects their errors into a throwaway local buffer, so the same
+ * logic that produces error messages also answers the yes/no question the
+ * combinators (`anyOf`/`oneOf`/`not`/`if`) and `contains` need.
+ */
+const generateMatchesExpr = (raw: string, sub: JSONSchema, suffix: string, ctx: NestingContext): string => {
+  if (sub === true) return 'true'
+  if (sub === false) return 'false'
+  if (!isSchemaObject(sub)) return 'true'
+  const checks = generateValueChecks('', raw, '`${_path}`', sub, suffix, ctx)
+  if (checks.length === 0) return 'true'
+  // The checks push to `errors`; redirect them to the IIFE-local `_m`. The outer
+  // validator's `errors.push` → `(errors ??= [])` rewrite never sees these (they
+  // are already `_m.push`), and nested match IIFEs each shadow their own `_m`.
+  const body = checks.join('\n').replaceAll('errors.push(', '_m.push(')
+  return `((): boolean => { const _m: ValidationError[] = []\n${body}\n    return _m.length === 0 })()`
+}
+
+/**
+ * Emits the combinator keywords (`allOf`, `anyOf`, `oneOf`, `not`,
+ * `if`/`then`/`else`). `allOf` surfaces each branch's errors directly; the others
+ * evaluate branch membership as a boolean via {@link generateMatchesExpr}.
+ */
+const generateCombinatorChecks = (
+  key: string,
+  raw: string,
+  path: string,
+  schema: JSONSchema,
+  suffix: string,
+  ctx: NestingContext,
+): string[] => {
+  if (!isSchemaObject(schema)) return []
+  const lines: string[] = []
+
+  if (hasAllOf(schema)) {
+    for (const branch of schema.allOf) lines.push(...generateValueChecks(key, raw, path, branch, suffix, ctx))
+  }
+
+  if (hasAnyOf(schema) && schema.anyOf.length > 0) {
+    const conds = schema.anyOf.map((b) => generateMatchesExpr(raw, b, suffix, ctx))
+    lines.push(`  if (!(${conds.join(' || ')})) {`)
+    lines.push(`    errors.push({ message: 'must match a schema in anyOf', path: ${path} })`)
+    lines.push(`  }`)
+  }
+
+  if (hasOneOf(schema) && schema.oneOf.length > 0) {
+    const conds = schema.oneOf.map((b) => `(${generateMatchesExpr(raw, b, suffix, ctx)} ? 1 : 0)`)
+    lines.push(`  if ((${conds.join(' + ')}) !== 1) {`)
+    lines.push(`    errors.push({ message: 'must match exactly one schema in oneOf', path: ${path} })`)
+    lines.push(`  }`)
+  }
+
+  const not = (schema as Record<string, unknown>)['not']
+  if (not !== undefined && (isSchemaObject(not as JSONSchema) || typeof not === 'boolean')) {
+    const cond = generateMatchesExpr(raw, not as JSONSchema, suffix, ctx)
+    lines.push(`  if (${cond}) {`)
+    lines.push(`    errors.push({ message: 'must NOT match the schema in not', path: ${path} })`)
+    lines.push(`  }`)
+  }
+
+  const ifSchema = (schema as Record<string, unknown>)['if']
+  if (ifSchema !== undefined && (isSchemaObject(ifSchema as JSONSchema) || typeof ifSchema === 'boolean')) {
+    const thenSchema = (schema as Record<string, unknown>)['then']
+    const elseSchema = (schema as Record<string, unknown>)['else']
+    const thenLines =
+      thenSchema !== undefined ? generateValueChecks(key, raw, path, thenSchema as JSONSchema, suffix, ctx) : []
+    const elseLines =
+      elseSchema !== undefined ? generateValueChecks(key, raw, path, elseSchema as JSONSchema, suffix, ctx) : []
+    if (thenLines.length > 0 || elseLines.length > 0) {
+      lines.push(`  if (${generateMatchesExpr(raw, ifSchema as JSONSchema, suffix, ctx)}) {`)
+      lines.push(...thenLines)
+      lines.push(`  } else {`)
+      lines.push(...elseLines)
+      lines.push(`  }`)
+    }
   }
 
   return lines
@@ -751,6 +900,10 @@ const guardPropConditions = (key: string, propSchema: JSONSchema, objAcc: string
     hasEnum(propSchema) ||
     hasConst(propSchema) ||
     hasOneOf(propSchema) ||
+    hasAnyOf(propSchema) ||
+    hasAllOf(propSchema) ||
+    'not' in propSchema ||
+    'if' in propSchema ||
     getMjstInstanceOf(propSchema) !== undefined ||
     getMjstPrimitive(propSchema) !== undefined ||
     hasPattern(propSchema) ||
@@ -925,6 +1078,10 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: s
     propertyLines.push(...generatePropertyNameChecks(schema.propertyNames, suffix, ctx))
   }
 
+  // Combinators declared alongside the object's properties (e.g. an object with
+  // `allOf` refining it further) are validated against the object value itself.
+  propertyLines.push(...generateCombinatorChecks('', 'obj', '`${_path}`', schema, suffix, ctx))
+
   // Lazily allocate the errors array so a valid input never builds one — the same
   // allocation-free happy path the runtime interpreter uses. Each emitted
   // `errors.push(...)` becomes a create-on-first-use push; nothing is allocated
@@ -1065,6 +1222,9 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
     'anyOf' in schema ||
     'allOf' in schema ||
     'not' in schema ||
+    'if' in schema ||
+    'contains' in schema ||
+    'prefixItems' in schema ||
     getMjstInstanceOf(schema) !== undefined ||
     getMjstPrimitive(schema) !== undefined
   ) {
@@ -1319,20 +1479,18 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
   }
 
   // oneOf — try each branch, return errors from all if none match
-  if (hasOneOf(schema)) {
-    const branches = schema.oneOf
-      .map((branch, i) => {
-        if (!hasRef(branch)) return null
-        const bName = validatorName(refToName((branch as { $ref: string }).$ref, suffix))
-        return `  const _r${i} = ${bName}(input, _path)\n  if (_r${i} === true) return true`
-      })
-      .filter(Boolean)
-      .join('\n')
-
+  // Top-level combinators (`allOf` / `anyOf` / `oneOf` / `not` / `if`), validated
+  // against the input via the shared combinator generator — correct `oneOf`
+  // (exactly one) and inline branches included, not just `$ref` branches.
+  if (hasAllOf(schema) || hasAnyOf(schema) || hasOneOf(schema) || 'not' in schema || 'if' in schema) {
+    const ctx = createRootContext()
+    const checks = generateCombinatorChecks('', 'input', '`${_path}`', schema, suffix, ctx)
+    const body = checks.join('\n').replaceAll('errors.push(', '(errors ??= []).push(')
     return [
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
-      branches,
-      `  return { valid: false, errors: [{ message: 'must match one of the expected schemas', path: _path }] }`,
+      `  let errors: ValidationError[] | undefined`,
+      body,
+      `  return errors !== undefined ? { valid: false, errors } : true`,
       `}`,
     ].join('\n')
   }

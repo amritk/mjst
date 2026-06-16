@@ -64,7 +64,27 @@ const randomValue = (rng: () => number, depth: number): unknown => {
   return out
 }
 
+// Combinator subschemas built so a `oneOf` is non-degenerate (branches with
+// disjoint value spaces) — otherwise a value matching two branches makes `oneOf`
+// fail for reasons unrelated to the generator.
+const combinatorSchema = (rng: () => number): Record<string, unknown> => {
+  const which = pick(rng, ['anyOf', 'oneOf', 'not', 'allOf'])
+  if (which === 'not') return { not: { type: pick(rng, ['string', 'number', 'boolean']) } }
+  if (which === 'allOf') {
+    return {
+      allOf: [
+        { type: 'object', properties: { p: { type: 'string' } }, required: ['p'] },
+        { type: 'object', properties: { q: { type: 'number' } }, required: ['q'] },
+      ],
+    }
+  }
+  // anyOf / oneOf over disjoint primitive types.
+  const types = ['string', 'number', 'boolean', 'null'].sort(() => rng() - 0.5).slice(0, 2 + Math.floor(rng() * 2))
+  return { [which]: types.map((type) => ({ type })) }
+}
+
 const randomTyped = (rng: () => number, depth: number): Record<string, unknown> => {
+  if (rng() < 0.18) return combinatorSchema(rng)
   const t = pick(rng, ['string', 'number', 'integer', 'boolean', 'null', 'object', 'array', 'enumconst'])
   const s: Record<string, unknown> = {}
   if (t === 'enumconst') {
@@ -85,9 +105,19 @@ const randomTyped = (rng: () => number, depth: number): Record<string, unknown> 
   } else if (t === 'array') {
     // Scalar item types only: `uniqueItems` dedupes by a JSON projection, which
     // matches Ajv's deep equality for primitives but not for objects.
-    if (rng() < 0.7) s.items = { type: pick(rng, ['string', 'number', 'boolean']) }
-    if (rng() < 0.5) s.minItems = Math.floor(rng() * 3)
-    if (rng() < 0.5) s.maxItems = 2 + Math.floor(rng() * 3)
+    const useTuple = rng() < 0.3
+    if (useTuple) {
+      s.prefixItems = [{ type: pick(rng, ['string', 'number']) }, { type: 'boolean' }]
+      if (rng() < 0.5) s.items = false
+    } else if (rng() < 0.7) {
+      s.items = { type: pick(rng, ['string', 'number', 'boolean']) }
+    }
+    // `contains` only on non-tuple arrays: Ajv has a known quirk where
+    // `prefixItems` + `contains` wrongly accepts an empty array, and the
+    // generator is spec-correct — so the two are exercised separately.
+    if (!useTuple && rng() < 0.4) s.contains = { type: 'number' }
+    if (!useTuple && rng() < 0.5) s.minItems = Math.floor(rng() * 3)
+    if (!useTuple && rng() < 0.5) s.maxItems = 2 + Math.floor(rng() * 3)
     if (rng() < 0.4) s.uniqueItems = true
   } else if (t === 'object' && depth > 0) {
     return randomObjectSchema(rng, depth - 1)
@@ -151,6 +181,36 @@ describe('differential fuzz vs ajv', () => {
           divergences.push(
             `schema: ${JSON.stringify(schema)}\n  value: ${JSON.stringify(value)}\n  ours=${oursValid} ajv=${!oursValid}`,
           )
+        }
+      }
+    }
+
+    expect(divergences, divergences.join('\n\n')).toEqual([])
+  })
+
+  it('root-level combinator schemas agree with ajv', { timeout: 60_000 }, () => {
+    const ajv = new Ajv2020({ allErrors: false, strict: false })
+    const rng = makeRng(0x7a3c)
+    const divergences: string[] = []
+
+    for (let si = 0; si < 1500 && divergences.length < 10; si++) {
+      const schema = combinatorSchema(rng)
+      let ajvValidate: (v: unknown) => boolean
+      let ours: (v: unknown) => unknown
+      try {
+        ajvValidate = ajv.compile(schema)
+      } catch {
+        continue
+      }
+      try {
+        ours = evalValidator(generateValidatorFunction(schema as never, 'Root'))
+      } catch {
+        continue
+      }
+      for (let t = 0; t < 40 && divergences.length < 10; t++) {
+        const value = randomValue(rng, 3)
+        if ((ours(value) === true) !== (ajvValidate(value) === true)) {
+          divergences.push(`schema: ${JSON.stringify(schema)}\n  value: ${JSON.stringify(value)}`)
         }
       }
     }
