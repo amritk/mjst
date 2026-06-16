@@ -147,7 +147,12 @@ describe('zodToJsonSchema', () => {
 
   it('leaves a non-object intersection as an allOf', async () => {
     const json = await zodToJsonSchema(z.intersection(z.string().min(2), z.string().max(5)))
-    expect(json).toMatchObject({ allOf: [{ type: 'string', minLength: 2 }, { type: 'string', maxLength: 5 }] })
+    expect(json).toMatchObject({
+      allOf: [
+        { type: 'string', minLength: 2 },
+        { type: 'string', maxLength: 5 },
+      ],
+    })
   })
 
   it('round-trips through the type generator, including Date fields', async () => {

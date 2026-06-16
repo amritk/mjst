@@ -935,7 +935,6 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
  */
 const parseNode = (state: State, indent: number): YamlNode => {
   const { src, len } = state
-  const c = src.charCodeAt(state.pos)
   if (isSeqEntryDash(src, state.pos, len)) {
     return parseBlockSeq(state, indent)
   }

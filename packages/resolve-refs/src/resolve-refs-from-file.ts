@@ -274,7 +274,8 @@ const resolveAt = (
     const existingAllOf = Array.isArray(siblings['allOf']) ? siblings['allOf'] : []
     const merged = { ...siblings, allOf: [...existingAllOf, resolved] }
     // Stamp the wrapper too, so origin lookups resolve for a `$ref`-with-siblings node.
-    if (origins && !origins.has(merged)) origins.set(merged, { location: targetLocation, pointer: pointerToPath(pointer) })
+    if (origins && !origins.has(merged))
+      origins.set(merged, { location: targetLocation, pointer: pointerToPath(pointer) })
     return merged
   }
   const result: Record<string, unknown> = {}

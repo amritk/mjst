@@ -103,9 +103,14 @@ describe('deriveExample — satisfiable-instance regressions', () => {
   })
 
   it('intersects enums across allOf branches', () => {
-    expect(deriveExample({ allOf: [{ type: 'string', enum: ['a', 'b'] }, { type: 'string', enum: ['c', 'b'] }] })).toBe(
-      'b',
-    )
+    expect(
+      deriveExample({
+        allOf: [
+          { type: 'string', enum: ['a', 'b'] },
+          { type: 'string', enum: ['c', 'b'] },
+        ],
+      }),
+    ).toBe('b')
   })
 })
 

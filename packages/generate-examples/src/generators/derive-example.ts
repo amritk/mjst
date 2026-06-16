@@ -457,7 +457,10 @@ const deriveArray = (
 const distinctify = (base: unknown, i: number, itemSchema: JSONSchema | undefined): unknown => {
   if (i === 0) return base
   if (typeof base === 'number') {
-    const step = itemSchema && isSchemaObject(itemSchema) && hasMultipleOf(itemSchema) && itemSchema.multipleOf > 0 ? itemSchema.multipleOf : 1
+    const step =
+      itemSchema && isSchemaObject(itemSchema) && hasMultipleOf(itemSchema) && itemSchema.multipleOf > 0
+        ? itemSchema.multipleOf
+        : 1
     return base + i * step
   }
   if (typeof base === 'string') return `${base}${i}`

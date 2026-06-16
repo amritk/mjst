@@ -1155,7 +1155,10 @@ describe('generate-validator-function', () => {
     })
 
     it('requires exactly one oneOf branch', () => {
-      const v = validate({ type: 'object', properties: { a: { oneOf: [{ type: 'string' }, { type: 'string', minLength: 3 }] } } })
+      const v = validate({
+        type: 'object',
+        properties: { a: { oneOf: [{ type: 'string' }, { type: 'string', minLength: 3 }] } },
+      })
       expect(v({ a: 'ab' })).toBe(true)
       expect(v({ a: 'abcd' })).not.toBe(true) // matches both branches
     })
