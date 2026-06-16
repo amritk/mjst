@@ -76,17 +76,28 @@ const gen = (rng: () => number, depth: number): Record<string, unknown> => {
   return leaf(rng)
 }
 
+const SCALAR_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'null'])
+
+const isScalarItems = (items: unknown): boolean =>
+  items !== null &&
+  typeof items === 'object' &&
+  !Array.isArray(items) &&
+  SCALAR_TYPES.has((items as Record<string, unknown>)['type'] as string) &&
+  !('enum' in (items as object))
+
 /**
- * The shape oracle: drop array `items` (element values are out of scope) and
- * treat `integer` as `number` (the generated TS type is `number` — TS can't
- * express integrality — so a non-integral number still conforms to the type).
+ * The shape oracle: treat `integer` as `number` (the generated TS type is
+ * `number`). Array `items` are kept when they are a single scalar type — those
+ * elements are coerced, so they must conform — and dropped otherwise (object /
+ * union / `$ref` element values are not deeply coerced and are out of scope).
  */
 const shapeOracle = (schema: unknown): unknown => {
   if (schema === null || typeof schema !== 'object') return schema
   if (Array.isArray(schema)) return schema.map(shapeOracle)
   const out: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
-    if (key === 'items' || key === 'prefixItems') continue
+    if (key === 'prefixItems') continue
+    if (key === 'items' && !isScalarItems(value)) continue
     out[key] = key === 'type' && value === 'integer' ? 'number' : shapeOracle(value)
   }
   return out

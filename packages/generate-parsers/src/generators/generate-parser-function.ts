@@ -31,7 +31,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { getDefaultValue } from '#helpers/get-default-value'
 
 import { generateObjectStrictAssertion, generateScalarStrictAssertion } from './generate-strict-assertion'
-import { generateValidationExpression } from './generate-validation-expression'
+import { generateValidationExpression, scalarItemTypeCheck } from './generate-validation-expression'
 
 /**
  * Options for controlling parser function generation behavior.
@@ -478,8 +478,24 @@ const generateNonObjectParser = (typeName: string, schema: JSONSchema, strict?: 
       return `export const ${functionName} = (input: unknown): ${typeName} => typeof input === "number" ? input as ${typeName} : 0 as ${typeName};`
     case 'boolean':
       return `export const ${functionName} = (input: unknown): ${typeName} => typeof input === "boolean" ? input as ${typeName} : false as ${typeName};`
-    case 'array':
+    case 'array': {
+      // Coerce each element when the item schema is a single scalar type.
+      if (hasItems(schema) && !Array.isArray(schema.items) && scalarItemTypeCheck(schema.items, '_it') !== null) {
+        const item = schema.items
+        const itemExpr = generateValidationExpression(
+          '',
+          item,
+          getDefaultValue(item),
+          true,
+          undefined,
+          undefined,
+          '_it',
+          true,
+        )
+        return `export const ${functionName} = (input: unknown): ${typeName} => Array.isArray(input) ? (input as unknown[]).map((_it) => ${itemExpr}) as ${typeName} : [] as ${typeName};`
+      }
       return `export const ${functionName} = (input: unknown): ${typeName} => Array.isArray(input) ? [...input] as ${typeName} : [] as ${typeName};`
+    }
     default:
       return `export const ${functionName} = (input: unknown): ${typeName} => input as ${typeName};`
   }
@@ -651,6 +667,13 @@ const generatePropertyTypeCheck = (
       if (hasMaxItems(schema)) checks.push(`${varName}.length <= ${schema.maxItems}`)
       if (hasUniqueItems(schema) && schema.uniqueItems === true) {
         checks.push(`new Set(${varName}).size === ${varName}.length`)
+      }
+      // For a scalar item type, every element must already be well-typed to take
+      // the fast path; a mistyped element routes the array to the slow path where
+      // each element is coerced.
+      if (hasItems(schema) && !Array.isArray(schema.items)) {
+        const itemCheck = scalarItemTypeCheck(schema.items, '_it')
+        if (itemCheck) checks.push(`${varName}.every((_it) => ${itemCheck})`)
       }
       break
     }

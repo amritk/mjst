@@ -10,6 +10,7 @@ import {
   hasEnum,
   hasExclusiveMaximum,
   hasExclusiveMinimum,
+  hasItems,
   hasMaxItems,
   hasMaximum,
   hasMaxLength,
@@ -30,6 +31,7 @@ import {
 } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { findDiscriminator } from '#helpers/find-discriminator'
+import { getDefaultValue } from '#helpers/get-default-value'
 
 import { generateDiscriminatedUnionValidation } from './generate-discriminated-union-validation'
 import { generateEnumCheck } from './generate-enum-check'
@@ -45,6 +47,29 @@ import { generateSchemaChecks } from './generate-schema-checks'
 const getInstanceCoercion = (accessor: string, instanceOf: string): string | null => {
   if (instanceOf === 'Date') return `new Date(${accessor} as string | number | Date)`
   return null
+}
+
+/**
+ * A boolean type check for an array element whose schema is a single scalar type
+ * (the cases the element coercion below can handle). `integer` is treated as
+ * `number` because the generated TS element type is `number`. Returns `null` for
+ * objects, arrays, unions, `$ref`s, and anything richer.
+ */
+export const scalarItemTypeCheck = (itemSchema: JSONSchema, accessor: string): string | null => {
+  if (!isSchemaObject(itemSchema) || !hasType(itemSchema) || hasEnum(itemSchema)) return null
+  switch (itemSchema.type) {
+    case 'string':
+      return `typeof ${accessor} === "string"`
+    case 'number':
+    case 'integer':
+      return `typeof ${accessor} === "number"`
+    case 'boolean':
+      return `typeof ${accessor} === "boolean"`
+    case 'null':
+      return `${accessor} === null`
+    default:
+      return null
+  }
 }
 
 /**
@@ -203,6 +228,32 @@ export const generateValidationExpression = (
 
   if (!hasType(schema) && !hasEnum(schema)) {
     return `${accessor} ?? ${defaultValue}`
+  }
+
+  // An array of scalar items: coerce each element so e.g. `number[]` actually
+  // contains numbers. The fast path only takes a well-typed array, so a mistyped
+  // element reaches here. ($ref items use the caller's validateArray path;
+  // object/union items still pass through.)
+  if (
+    hasType(schema) &&
+    schema.type === 'array' &&
+    hasItems(schema) &&
+    !Array.isArray(schema.items) &&
+    scalarItemTypeCheck(schema.items, '_it') !== null
+  ) {
+    const itemSchema = schema.items
+    const itemExpr = generateValidationExpression(
+      '',
+      itemSchema,
+      getDefaultValue(itemSchema),
+      true,
+      rootSchema,
+      visitedRefs,
+      '_it',
+      true,
+    )
+    const mapped = `(Array.isArray(${accessor}) ? (${accessor} as unknown[]).map((_it) => ${itemExpr}) : ${defaultValue})`
+    return isRequired ? mapped : `(${accessor} !== undefined ? ${mapped} : undefined)`
   }
 
   // Build type-specific checks

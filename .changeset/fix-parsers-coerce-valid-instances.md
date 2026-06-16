@@ -16,6 +16,9 @@ generated type, closing gaps a new Ajv conformance differential test surfaced:
   `null`, and nested-object properties with complete defaults (a shared
   `getDefaultValue`), so the fallback object is itself valid rather than `{}`.
 
-Inline (non-`$ref`) array *element* coercion remains a known limitation — a
-`number[]` validates that the value is an array but does not yet coerce each
-element; use a `$ref` item schema for deep element parsing.
+- inline array elements of a scalar item type are now coerced — a `number[]`
+  given `[1, 'x', true]` becomes `[1, 0, 1]` — at the top level and for
+  properties. The fast path now requires every element to already be well-typed,
+  so a mistyped element routes the array to the coercing slow path. Object,
+  union, and `$ref` array items keep their existing handling (`$ref` items are
+  already parsed per-element; object/union items are not deeply coerced).
