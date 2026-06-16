@@ -70,7 +70,9 @@ const getTypeCoercion = (accessor: string, schema: JSONSchema, defaultValue: str
     case 'array':
       return `[]`
     case 'object':
-      return `typeof ${accessor} === "object" && ${accessor} !== null ? ${accessor} : {}`
+      // Fall back to the schema's default (which fills required properties)
+      // rather than a bare `{}`, so a coerced object is a valid instance.
+      return `typeof ${accessor} === "object" && ${accessor} !== null ? ${accessor} : ${defaultValue}`
     default:
       return null
   }
@@ -242,6 +244,9 @@ export const generateValidationExpression = (
       case 'boolean':
         checks.push(`typeof ${accessor} === "boolean"`)
         break
+      case 'null':
+        checks.push(`${accessor} === null`)
+        break
       case 'array': {
         checks.push(`Array.isArray(${accessor})`)
         if (hasMinItems(schema)) {
@@ -300,7 +305,12 @@ export const generateValidationExpression = (
   // Generate the fallback value
   // If the value exists but fails validation, try to coerce it
   // If the value is missing and required, use the default
-  const typeCoercion = getTypeCoercion(accessor, schema, defaultValue)
+  //
+  // `enum` constrains the value to a fixed set, so type coercion (e.g.
+  // `String(x)`) can't rescue a non-member — `String("z")` is still not in the
+  // enum. Fall back to the default (the first enum value) so the result is always
+  // a valid member of the declared literal-union type.
+  const typeCoercion = hasEnum(schema) ? null : getTypeCoercion(accessor, schema, defaultValue)
 
   if (isRequired) {
     // For required fields: valid ? use_value : (exists ? coerce : default)

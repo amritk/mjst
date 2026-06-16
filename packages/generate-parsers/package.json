@@ -54,6 +54,7 @@
   },
   "devDependencies": {
     "@sinclair/typebox": "^0.34.49",
+    "ajv": "^8.17.1",
     "zod": "^4.4.3"
   }
 }

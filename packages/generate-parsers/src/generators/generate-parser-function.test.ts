@@ -1701,8 +1701,11 @@ describe('generate-parser-function', () => {
 
     const result = generateParserFunction(schema, 'ThemeColor')
 
+    // A non-member must coerce to a valid member (the first), not pass through —
+    // the generated type is the literal union, so any other string is not a
+    // `ThemeColor`.
     expect(result).toBe(
-      'export const parseThemeColor = (input: unknown): ThemeColor => typeof input === "string" ? input as ThemeColor : "" as ThemeColor;',
+      'export const parseThemeColor = (input: unknown): ThemeColor => ["red","green","blue","yellow","purple"].includes(input as never) ? input as ThemeColor : "red" as ThemeColor;',
     )
   })
 
@@ -2165,6 +2168,49 @@ describe('generate-parser-function', () => {
         const parse = parserFor(closed, { stripUnknown })
         expect(parse({ a: 'x', extra: 1 })).toEqual({ a: 'x' })
       }
+    })
+  })
+
+  describe('coerces to a valid instance of the declared type', () => {
+    const parse = (schema: JSONSchema) =>
+      evalGenerated<(input: unknown) => unknown>(generateParserFunction(schema, 'Root'), 'parseRoot')
+
+    it('coerces a non-member of a top-level enum to the first member', () => {
+      const p = parse({ type: 'string', enum: ['a', 'b'] })
+      expect(p('z')).toBe('a')
+      expect(p('b')).toBe('b')
+    })
+
+    it('coerces a non-matching value of a top-level const to the const', () => {
+      const p = parse({ const: 'fixed' })
+      expect(p('other')).toBe('fixed')
+    })
+
+    it('coerces a non-member of an enum property to the first member', () => {
+      const p = parse({ type: 'object', properties: { k: { type: 'string', enum: ['a', 'b'] } }, required: ['k'] })
+      expect(p({ k: 'z' })).toEqual({ k: 'a' })
+    })
+
+    it('validates a top-level union and defaults a non-member', () => {
+      const p = parse({ anyOf: [{ type: 'string' }, { type: 'number' }] })
+      expect(p('s')).toBe('s')
+      expect(p(5)).toBe(5)
+      expect(p(true)).toBe('')
+      expect(p({})).toBe('')
+    })
+
+    it('coerces any input to null for a null type', () => {
+      expect(parse({ type: 'null' })('anything')).toBe(null)
+    })
+
+    it('fills required const/null props in the non-object fallback', () => {
+      const p = parse({
+        type: 'object',
+        properties: { role: { const: 7 }, x: { type: 'null' } },
+        required: ['role', 'x'],
+      })
+      expect(p('not an object')).toEqual({ role: 7, x: null })
+      expect(p({ role: 1, x: 5 })).toEqual({ role: 7, x: null })
     })
   })
 })
