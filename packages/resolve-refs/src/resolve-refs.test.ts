@@ -90,6 +90,18 @@ describe('resolve-refs', () => {
     })
   })
 
+  it('stamps the origin of a $ref-with-siblings wrapper node', () => {
+    const { resolved, origins } = resolveRefs(
+      {
+        properties: { p: { $ref: '#/$defs/s', maxLength: 2 } },
+        $defs: { s: { type: 'string' } },
+      },
+      { trackOrigins: true },
+    )
+    const node = (resolved as { properties: { p: object } }).properties.p
+    expect(origins?.get(node)).toEqual({ location: '', pointer: ['$defs', 's'] })
+  })
+
   it('leaves a $ref with no siblings inlined directly', () => {
     const { resolved } = resolveRefs({
       a: { $ref: '#/$defs/s' },

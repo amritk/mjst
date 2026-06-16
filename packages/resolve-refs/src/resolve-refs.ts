@@ -64,7 +64,11 @@ const resolveInternal = (
     const siblings: Record<string, unknown> = {}
     for (const key of siblingKeys) siblings[key] = resolveInternal(obj[key], root, cache, origins)
     const existingAllOf = Array.isArray(siblings['allOf']) ? siblings['allOf'] : []
-    return { ...siblings, allOf: [...existingAllOf, target] }
+    const merged = { ...siblings, allOf: [...existingAllOf, target] }
+    // Stamp the wrapper too, so a consumer mapping the resolved node back to its
+    // origin finds one for a `$ref`-with-siblings node (not only the inner target).
+    if (origins && !origins.has(merged)) origins.set(merged, { location: '', pointer: pointerToPath(ref.slice(1)) })
+    return merged
   }
 
   const result: Record<string, unknown> = {}

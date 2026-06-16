@@ -272,7 +272,10 @@ const resolveAt = (
     const siblings: Record<string, unknown> = {}
     for (const key of siblingKeys) siblings[key] = resolveAt(obj[key], baseLocation, docCache, refCache, origins)
     const existingAllOf = Array.isArray(siblings['allOf']) ? siblings['allOf'] : []
-    return { ...siblings, allOf: [...existingAllOf, resolved] }
+    const merged = { ...siblings, allOf: [...existingAllOf, resolved] }
+    // Stamp the wrapper too, so origin lookups resolve for a `$ref`-with-siblings node.
+    if (origins && !origins.has(merged)) origins.set(merged, { location: targetLocation, pointer: pointerToPath(pointer) })
+    return merged
   }
   const result: Record<string, unknown> = {}
   for (const key of Object.keys(obj)) {
