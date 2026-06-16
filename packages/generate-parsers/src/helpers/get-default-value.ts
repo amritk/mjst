@@ -103,10 +103,15 @@ export const getDefaultValue = (schema: JSONSchema): string => {
       // fallback object is itself a valid instance.
       if (hasProperties(schema) && hasRequired(schema)) {
         const props = schema.properties
-        const parts = schema.required
-          .filter((key) => Object.hasOwn(props, key))
-          .map((key) => `${JSON.stringify(key)}: ${getDefaultValue(props[key] as JSONSchema)}`)
-        if (parts.length > 0) return `{ ${parts.join(', ')} }`
+        const required = schema.required.filter((key) => Object.hasOwn(props, key))
+        const defaults = required.map((key) => getDefaultValue(props[key] as JSONSchema))
+        // A required property whose schema has no concrete default (a `$ref` we
+        // can't resolve here, or a type-less schema) would otherwise emit
+        // `"key": undefined` — i.e. a *missing* required key. Don't build a
+        // partial object with holes; fall back to a bare `{}` for the whole node.
+        if (defaults.length > 0 && !defaults.includes('undefined')) {
+          return `{ ${required.map((key, i) => `${JSON.stringify(key)}: ${defaults[i]}`).join(', ')} }`
+        }
       }
       return '{}'
     }

@@ -431,7 +431,14 @@ const generateNonObjectParser = (typeName: string, schema: JSONSchema, strict?: 
   if (!strict && isSchemaObject(schema)) {
     if (hasConst(schema)) {
       const literal = JSON.stringify(schema.const)
-      return `export const ${functionName} = (input: unknown): ${typeName} => input === ${literal} ? input as ${typeName} : ${literal} as ${typeName};`
+      // The const is the only valid value, so the parser always yields it. For a
+      // primitive we can keep the caller's value when it already equals the const
+      // (`===` is a correct comparison); for an object/array, `===` would be a
+      // (always-false) reference comparison, so just return the const literal.
+      const isPrimitive = schema.const === null || typeof schema.const !== 'object'
+      return isPrimitive
+        ? `export const ${functionName} = (input: unknown): ${typeName} => input === ${literal} ? input as ${typeName} : ${literal} as ${typeName};`
+        : `export const ${functionName} = (input: unknown): ${typeName} => ${literal} as ${typeName};`
     }
     if (hasEnum(schema) && schema.enum.length > 0) {
       const values = JSON.stringify(schema.enum)
@@ -440,14 +447,19 @@ const generateNonObjectParser = (typeName: string, schema: JSONSchema, strict?: 
     }
     // A top-level union must validate membership: an unmatched value is not of
     // the declared union type, so coerce it to a member-shaped default. Reuse the
-    // same union validation the property path uses.
+    // same union validation the property path uses. A `$ref` branch can't be
+    // validated inline here (the membership test would silently drop it and
+    // wrongly coerce a valid ref-shaped value), so fall through to a passthrough
+    // cast rather than discarding valid input.
     if (hasOneOf(schema) || hasAnyOf(schema)) {
       const branches = hasOneOf(schema) ? schema.oneOf : hasAnyOf(schema) ? schema.anyOf : []
-      if (branches.length > 0) {
+      const hasRefBranch = branches.some((b) => isSchemaObject(b) && hasRef(b))
+      if (branches.length > 0 && !hasRefBranch) {
         const fallback = scalarDefaultLiteral(branches[0] as JSONSchema)
         const expr = generateValidationExpression('', schema, fallback, true, undefined, undefined, 'input', true)
         return `export const ${functionName} = (input: unknown): ${typeName} => (${expr}) as ${typeName};`
       }
+      return `export const ${functionName} = (input: unknown): ${typeName} => input as ${typeName};`
     }
   }
 
