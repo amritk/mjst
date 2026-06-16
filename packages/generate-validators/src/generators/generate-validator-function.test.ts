@@ -699,7 +699,7 @@ describe('generate-validator-function', () => {
       })
     })
 
-    it('guards integer like number, so a non-integral value still passes the fast path', () => {
+    it('enforces integrality for integer in both the guard and the slow path', () => {
       const schema = {
         type: 'object' as const,
         properties: { count: { type: 'integer' as const } },
@@ -707,9 +707,14 @@ describe('generate-validator-function', () => {
       }
       const code = generateValidatorFunction(schema, 'Counter')
 
-      expect(code).toContain("typeof obj.count === 'number'")
-      // mjst never enforces integrality, so the guard's verdict matches the slow path.
-      expect(evalValidator(code)({ count: 1.5 })).toBe(true)
+      expect(code).toContain('Number.isInteger(obj.count)')
+      const validate = evalValidator(code)
+      expect(validate({ count: 1 })).toBe(true)
+      // A non-integral number is rejected, and the guard agrees with the slow path.
+      expect(validate({ count: 1.5 })).toEqual({
+        valid: false,
+        errors: [{ message: 'must be number', path: '/count' }],
+      })
     })
 
     it('omits the guard when any property is optional', () => {
