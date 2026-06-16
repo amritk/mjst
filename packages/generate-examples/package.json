@@ -50,6 +50,9 @@
     "json-schema-typed": "catalog:",
     "@amritk/helpers": "workspace:*"
   },
+  "devDependencies": {
+    "ajv": "^8.17.1"
+  },
   "peerDependencies": {
     "fast-check": ">=3"
   },

@@ -1,20 +1,28 @@
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import {
+  hasAdditionalProperties,
+  hasAllOf,
   hasAnyOf,
   hasConst,
   hasDefault,
   hasEnum,
   hasExamples,
+  hasExclusiveMaximum,
+  hasExclusiveMinimum,
   hasFormat,
   hasItems,
+  hasMaxItems,
+  hasMaximum,
   hasMaxLength,
   hasMinItems,
   hasMinimum,
   hasMinLength,
+  hasMultipleOf,
   hasOneOf,
   hasProperties,
   hasRef,
+  hasRequired,
   hasType,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
@@ -79,7 +87,12 @@ export const deriveExample = (
   if (hasConst(schema)) return schema.const
   if (hasExamples(schema) && Array.isArray(schema.examples) && schema.examples.length > 0) return schema.examples[0]
   if (hasDefault(schema)) return schema.default
-  if (hasEnum(schema) && schema.enum.length > 0) return schema.enum[0]
+  if (hasEnum(schema) && schema.enum.length > 0) {
+    // Prefer the first member that also satisfies any sibling length/range
+    // constraints (e.g. `enum` + `minLength`), falling back to the first member.
+    const fitting = schema.enum.find((value) => satisfiesScalarConstraints(schema, value))
+    return fitting !== undefined ? fitting : schema.enum[0]
+  }
 
   if (hasRef(schema)) {
     const ref = schema.$ref
@@ -93,6 +106,11 @@ export const deriveExample = (
   if (instanceOf === 'Date') return new Date(0)
   const primitive = getMjstPrimitive(schema)
   if (primitive === 'bigint') return 0n
+
+  // `allOf` must satisfy every branch at once, so derive from a single schema
+  // that merges the branches (and the node's own keywords) rather than picking
+  // one branch — picking one would ignore the others' constraints.
+  if (hasAllOf(schema)) return deriveExample(mergeAllOf(schema), rootSchema, seen)
 
   if (hasOneOf(schema) && schema.oneOf[0] !== undefined) return deriveExample(schema.oneOf[0], rootSchema, seen)
   if (hasAnyOf(schema) && schema.anyOf[0] !== undefined) return deriveExample(schema.anyOf[0], rootSchema, seen)
@@ -108,6 +126,25 @@ export const deriveExample = (
   return null
 }
 
+/**
+ * True when a candidate value (e.g. an `enum`/`const` member) satisfies the
+ * node's simple string-length and numeric-range constraints. Used to pick an
+ * `enum` member that also meets a sibling `minLength`/`minimum`/etc.
+ */
+const satisfiesScalarConstraints = (schema: JSONSchema, value: unknown): boolean => {
+  if (typeof value === 'string') {
+    if (hasMinLength(schema) && value.length < schema.minLength) return false
+    if (hasMaxLength(schema) && value.length > schema.maxLength) return false
+  } else if (typeof value === 'number') {
+    if (hasMinimum(schema) && value < schema.minimum) return false
+    if (hasMaximum(schema) && value > schema.maximum) return false
+    if (hasExclusiveMinimum(schema) && value <= schema.exclusiveMinimum) return false
+    if (hasExclusiveMaximum(schema) && value >= schema.exclusiveMaximum) return false
+    if (hasMultipleOf(schema) && schema.multipleOf > 0 && value % schema.multipleOf !== 0) return false
+  }
+  return true
+}
+
 /** Derives a canonical value for a single declared `type`. */
 const deriveForType = (
   type: string,
@@ -120,16 +157,13 @@ const deriveForType = (
       return exampleString(schema)
     case 'number':
     case 'integer':
-      return hasMinimum(schema) ? schema.minimum : 0
+      return deriveNumber(schema, type === 'integer')
     case 'boolean':
       return true
     case 'null':
       return null
-    case 'array': {
-      const item = hasItems(schema) ? deriveExample(schema.items, rootSchema, seen) : null
-      const count = hasMinItems(schema) ? Math.max(schema.minItems, 1) : 1
-      return Array.from({ length: count }, () => item)
-    }
+    case 'array':
+      return deriveArray(schema, rootSchema, seen)
     case 'object': {
       const out: Record<string, unknown> = {}
       if (hasProperties(schema)) {
@@ -137,11 +171,146 @@ const deriveForType = (
           out[key] = deriveExample(propSchema, rootSchema, seen)
         }
       }
+      // A required key with no `properties` entry still needs a value. Use the
+      // `additionalProperties` schema when one constrains it, else a null.
+      if (hasRequired(schema)) {
+        const additional = hasAdditionalProperties(schema) ? schema.additionalProperties : false
+        for (const key of schema.required) {
+          if (key in out) continue
+          out[key] = isSchemaObject(additional) ? deriveExample(additional, rootSchema, seen) : null
+        }
+      }
       return out
     }
     default:
       return null
   }
+}
+
+/**
+ * Picks a number satisfying the node's bounds and `multipleOf`. Starts at the
+ * lower bound (or 0 when unbounded), nudges past an exclusive bound, then rounds
+ * up to the nearest multiple. An unsatisfiable range (e.g. `minimum > maximum`)
+ * can't be met and falls back to the lower bound.
+ */
+const deriveNumber = (schema: JSONSchema, isInteger: boolean): number => {
+  const step = isInteger ? 1 : 0.5
+  let lo = -Infinity
+  if (hasMinimum(schema)) lo = Math.max(lo, schema.minimum)
+  if (hasExclusiveMinimum(schema)) lo = Math.max(lo, schema.exclusiveMinimum + step)
+  const hi = hasMaximum(schema)
+    ? schema.maximum
+    : hasExclusiveMaximum(schema)
+      ? schema.exclusiveMaximum - step
+      : Number.POSITIVE_INFINITY
+
+  // Base candidate: the lower bound, or 0 (or the upper bound) when unbounded below.
+  let value = Number.isFinite(lo) ? lo : Number.isFinite(hi) ? Math.min(0, hi) : 0
+  if (isInteger) value = Math.ceil(value)
+
+  if (hasMultipleOf(schema) && schema.multipleOf > 0) {
+    const m = schema.multipleOf
+    value = Math.ceil(value / m - 1e-9) * m
+  }
+  return isInteger ? Math.round(value) : value
+}
+
+/**
+ * Derives an array value. A tuple schema (`prefixItems`, or the draft-07
+ * array-form `items`) derives one value per position; a uniform array repeats a
+ * single item value. The count is clamped into `[minItems, maxItems]` so a
+ * `maxItems: 0` yields `[]` and a `minItems` is always met.
+ */
+const deriveArray = (
+  schema: JSONSchema,
+  rootSchema: Record<string, unknown> | undefined,
+  seen: ReadonlySet<string>,
+): unknown[] => {
+  const items = hasItems(schema) ? schema.items : undefined
+  const prefixItems = (schema as Record<string, unknown>)['prefixItems']
+  // A tuple is `prefixItems` (2020-12) or the draft-07 array-form `items`.
+  const prefix = Array.isArray(prefixItems)
+    ? (prefixItems as JSONSchema[])
+    : Array.isArray(items)
+      ? (items as JSONSchema[])
+      : undefined
+
+  const min = hasMinItems(schema) ? schema.minItems : 0
+  const max = hasMaxItems(schema) ? schema.maxItems : Number.POSITIVE_INFINITY
+  // The rest/uniform element schema (the singular `items`, not the tuple form).
+  const rest = items !== undefined && !Array.isArray(items) ? items : undefined
+
+  if (prefix) {
+    const tuple = prefix.map((item) => deriveExample(item, rootSchema, seen))
+    // Pad up to `minItems` with the rest schema when one is present.
+    while (tuple.length < min && tuple.length < max && rest !== undefined) {
+      tuple.push(deriveExample(rest, rootSchema, seen))
+    }
+    return tuple.length > max ? tuple.slice(0, max) : tuple
+  }
+
+  const item = rest !== undefined ? deriveExample(rest, rootSchema, seen) : null
+  // Prefer a non-empty example, but never exceed `maxItems` or fall below `minItems`.
+  const count = Math.min(Math.max(min, max === 0 ? 0 : 1), max)
+  return Array.from({ length: count }, () => item)
+}
+
+/**
+ * Flattens an `allOf` into a single schema: object `properties` are merged and
+ * `required` unioned across branches, while scalar keywords from later branches
+ * (and the node's own keywords) win. `allOf` itself is dropped so the merged
+ * schema derives directly.
+ */
+const TIGHTEST = new Map<string, 'max' | 'min'>([
+  ['minimum', 'max'],
+  ['exclusiveMinimum', 'max'],
+  ['minLength', 'max'],
+  ['minItems', 'max'],
+  ['minProperties', 'max'],
+  ['maximum', 'min'],
+  ['exclusiveMaximum', 'min'],
+  ['maxLength', 'min'],
+  ['maxItems', 'min'],
+  ['maxProperties', 'min'],
+])
+
+const mergeAllOf = (schema: JSONSchema): JSONSchema => {
+  const branches = hasAllOf(schema) ? schema.allOf : []
+  const merged: Record<string, unknown> = {}
+  const properties: Record<string, unknown[]> = {}
+  const required = new Set<string>()
+
+  for (const branch of [...branches, schema]) {
+    if (!isSchemaObject(branch)) continue
+    for (const [key, value] of Object.entries(branch)) {
+      if (key === 'allOf') continue
+      if (key === 'properties' && value && typeof value === 'object') {
+        // The same property constrained by several branches must satisfy all of
+        // them, so collect each schema and combine them below rather than letting
+        // a later branch's schema silently replace an earlier one.
+        for (const [prop, propSchema] of Object.entries(value)) {
+          const bucket = properties[prop]
+          if (bucket) bucket.push(propSchema)
+          else properties[prop] = [propSchema]
+        }
+      } else if (key === 'required' && Array.isArray(value)) {
+        for (const r of value) required.add(r as string)
+      } else if (TIGHTEST.has(key) && typeof value === 'number' && typeof merged[key] === 'number') {
+        // Numeric bounds from different branches combine to the tightest one.
+        merged[key] = TIGHTEST.get(key) === 'max' ? Math.max(merged[key], value) : Math.min(merged[key], value)
+      } else {
+        merged[key] = value
+      }
+    }
+  }
+
+  const mergedProps: Record<string, unknown> = {}
+  for (const [prop, schemas] of Object.entries(properties)) {
+    mergedProps[prop] = schemas.length === 1 ? schemas[0] : { allOf: schemas }
+  }
+  if (Object.keys(mergedProps).length > 0) merged['properties'] = mergedProps
+  if (required.size > 0) merged['required'] = [...required]
+  return merged as JSONSchema
 }
 
 /**
