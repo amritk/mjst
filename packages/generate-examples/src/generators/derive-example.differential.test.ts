@@ -37,7 +37,18 @@ const leaf = (rng: () => number): Record<string, unknown> => {
     if (rng() < 0.3) s['maxLength'] = 6 + Math.floor(rng() * 6)
     if (rng() < 0.25) s['enum'] = ['aa', 'bbb', 'cccc']
     // Patterns the best-effort sampler should be able to satisfy.
-    else if (rng() < 0.3) s['pattern'] = pick(rng, ['^[a-z]+$', '^\\d{3}$', '^[A-Z][a-z]+$', '^x-[a-z]+$'])
+    else if (rng() < 0.3)
+      s['pattern'] = pick(rng, [
+        '^[a-z]+$',
+        '^\\d{3}$',
+        '^[A-Z][a-z]+$',
+        '^x-[a-z]+$',
+        '^(cat|dog|bird)$',
+        '^a(b|c)d$',
+        '^(ab)+$',
+        '^(?:foo|bar)-\\d{2}$',
+        '^(red|green)?[a-z]+$',
+      ])
   } else if (type === 'integer' || type === 'number') {
     const min = pick(rng, [0, 1, 4, 7])
     if (rng() < 0.6) s['minimum'] = min

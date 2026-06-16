@@ -20,10 +20,11 @@ schema; a new Ajv differential test now guards against that. It now honors:
 - `minProperties` (filler keys are synthesized when extras are allowed),
   `uniqueItems` (primitive items are perturbed to stay distinct), `contains` /
   `minContains` (enough items satisfy the contained schema), and `pattern` via a
-  best-effort regex sampler covering the common building blocks (anchors,
-  character classes, `\d`/`\w`/`\s`, and quantifiers), verified against the real
-  regex before use.
+  best-effort regex sampler that does a small recursive descent over the pattern
+  — anchors, character classes, `\d`/`\w`/`\s`, groups (capturing /
+  non-capturing / named), alternation (`a|b`), and quantifiers — verified against
+  the real regex before use.
 
-Alternation/group patterns and otherwise unsatisfiable schemas remain
+Lookarounds, backreferences, and otherwise unsatisfiable schemas remain
 best-effort; use the generated `fast-check` arbitrary when full fidelity is
 required.

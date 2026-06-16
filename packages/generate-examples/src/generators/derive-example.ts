@@ -37,79 +37,145 @@ const lowerFirst = (name: string): string => name.charAt(0).toLowerCase() + name
 /** Derives the example const name from a type name. e.g. "User" → "userExample" */
 const exampleName = (typeName: string): string => `${lowerFirst(typeName)}Example`
 
+/** A representative character for a single regex atom (class body / escape). */
+const charForClass = (inner: string): string => {
+  if (/a-z/.test(inner)) return 'a'
+  if (/A-Z/.test(inner)) return 'A'
+  if (/0-9|\\d/.test(inner)) return '5'
+  const first = inner.replace(/^\^/, '')[0]
+  return first && first !== '\\' ? first : 'a'
+}
+const charForEscape = (esc: string): string => {
+  if (esc === '\\d') return '5'
+  if (esc === '\\w') return 'a'
+  if (esc === '\\s') return ' '
+  return esc[1] ?? 'a'
+}
+
+/** Splits `s` on top-level `|`, respecting `[...]` and `(...)` nesting. */
+const topLevelAlternatives = (s: string): string[] => {
+  const parts: string[] = []
+  let depth = 0
+  let inClass = false
+  let cur = ''
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i] as string
+    if (c === '\\') {
+      cur += c + (s[i + 1] ?? '')
+      i++
+      continue
+    }
+    if (inClass) {
+      cur += c
+      if (c === ']') inClass = false
+      continue
+    }
+    if (c === '[') inClass = true
+    else if (c === '(') depth++
+    else if (c === ')') depth--
+    else if (c === '|' && depth === 0) {
+      parts.push(cur)
+      cur = ''
+      continue
+    }
+    cur += c
+  }
+  parts.push(cur)
+  return parts
+}
+
 /**
- * Best-effort generator of a string matching a `pattern`. Handles the common
- * building blocks (anchors, literals, `.`, escapes like `\d`/`\w`/`\s`, character
- * classes, and the `+`/`*`/`?`/`{n}`/`{n,m}` quantifiers); alternation and groups
- * fall through to `undefined`. The caller verifies the result against the real
- * regex and only uses it on a match, so a partial sampler never makes the example
- * worse — it just upgrades the common cases.
+ * Best-effort generator of a string matching a `pattern`, via recursive descent:
+ * anchors, literals, `.`, escapes (`\d`/`\w`/`\s`), character classes, groups
+ * (capturing / non-capturing / named), alternation (`a|b` — picks the first
+ * usable branch), and the `+`/`*`/`?`/`{n}`/`{n,m}` quantifiers. Lookarounds and
+ * backreferences fall through to `undefined`. The caller verifies the result
+ * against the real regex and only uses it on a match, so a partial sampler never
+ * makes the example worse — it just upgrades the cases it understands.
  */
 const sampleFromPattern = (pattern: string, minLength: number): string | undefined => {
-  // Bail on constructs this simple sampler can't reason about.
-  if (/[(|]/.test(pattern.replace(/\\[(|]/g, ''))) return undefined
   let body = pattern
-  const anchored = body.startsWith('^')
-  if (anchored) body = body.slice(1)
-  if (body.endsWith('$')) body = body.slice(0, -1)
+  if (body.startsWith('^')) body = body.slice(1)
+  if (body.endsWith('$') && !body.endsWith('\\$')) body = body.slice(0, -1)
 
-  // A representative character for the token starting at `body[i]`.
-  const charFor = (token: string): string => {
-    if (token === '\\d') return '5'
-    if (token === '\\w') return 'a'
-    if (token === '\\s') return ' '
-    if (token.startsWith('[')) {
-      const inner = token.slice(1, -1)
-      if (/a-z/.test(inner) || /A-Z/.test(inner)) return /a-z/.test(inner) ? 'a' : 'A'
-      if (/0-9|\\d/.test(inner)) return '5'
-      const first = inner.replace(/^\^/, '')[0]
-      return first && first !== '\\' ? first : 'a'
+  // Samples one alternation, preferring the first branch that samples cleanly.
+  const sampleAlt = (s: string): string | undefined => {
+    for (const alt of topLevelAlternatives(s)) {
+      const r = sampleSeq(alt)
+      if (r !== undefined) return r
     }
-    if (token === '.') return 'a'
-    if (token.startsWith('\\')) return token[1] ?? 'a'
-    return token
+    return undefined
   }
 
-  let out = ''
-  let i = 0
-  while (i < body.length) {
-    // Read one token: a class `[...]`, an escape `\x`, or a single char.
-    let token: string
-    if (body[i] === '[') {
-      const end = body.indexOf(']', i + 1)
-      if (end === -1) return undefined
-      token = body.slice(i, end + 1)
-      i = end + 1
-    } else if (body[i] === '\\') {
-      token = body.slice(i, i + 2)
-      i += 2
-    } else {
-      token = body[i] as string
-      i += 1
-    }
+  // Samples one concatenation (no top-level `|`).
+  const sampleSeq = (seq: string): string | undefined => {
+    let out = ''
+    let i = 0
+    while (i < seq.length) {
+      let unit: string | undefined
+      const c = seq[i] as string
+      if (c === '(') {
+        // Find the matching close paren.
+        let depth = 1
+        let j = i + 1
+        for (; j < seq.length && depth > 0; j++) {
+          const cj = seq[j]
+          if (cj === '\\') {
+            j++
+            continue
+          }
+          if (cj === '(') depth++
+          else if (cj === ')') depth--
+        }
+        if (depth !== 0) return undefined
+        let inner = seq.slice(i + 1, j - 1)
+        if (/^\?[=!]/.test(inner) || /^\?<[=!]/.test(inner)) return undefined // lookaround
+        inner = inner.replace(/^\?:/, '').replace(/^\?<[^>]*>/, '')
+        unit = sampleAlt(inner)
+        if (unit === undefined) return undefined
+        i = j
+      } else if (c === '[') {
+        const end = seq.indexOf(']', i + 1)
+        if (end === -1) return undefined
+        unit = charForClass(seq.slice(i + 1, end))
+        i = end + 1
+      } else if (c === '\\') {
+        const esc = seq.slice(i, i + 2)
+        if (/\d/.test(esc[1] ?? '')) return undefined // backreference
+        unit = charForEscape(esc)
+        i += 2
+      } else if (c === '.') {
+        unit = 'a'
+        i++
+      } else {
+        unit = c
+        i++
+      }
 
-    // Read an optional quantifier.
-    let reps = 1
-    const q = body[i]
-    if (q === '+') {
-      reps = Math.max(1, minLength)
-      i += 1
-    } else if (q === '*') {
-      reps = Math.max(0, minLength)
-      i += 1
-    } else if (q === '?') {
-      reps = 1
-      i += 1
-    } else if (q === '{') {
-      const end = body.indexOf('}', i + 1)
-      if (end === -1) return undefined
-      const spec = body.slice(i + 1, end)
-      reps = Number.parseInt(spec, 10) || 0
-      i = end + 1
+      // Optional quantifier.
+      let reps = 1
+      const q = seq[i]
+      if (q === '+') {
+        reps = Math.max(1, minLength)
+        i++
+      } else if (q === '*') {
+        reps = Math.max(0, minLength)
+        i++
+      } else if (q === '?') {
+        reps = 1
+        i++
+      } else if (q === '{') {
+        const end = seq.indexOf('}', i + 1)
+        if (end === -1) return undefined
+        reps = Number.parseInt(seq.slice(i + 1, end), 10) || 0
+        i = end + 1
+      }
+      out += unit.repeat(reps)
     }
-    out += charFor(token).repeat(reps)
+    return out
   }
-  return out
+
+  return sampleAlt(body)
 }
 
 /** Returns a representative string honouring `format`, `pattern`, and length. */
