@@ -53,6 +53,33 @@ const loadToJsonSchema = async (): Promise<ToJsonSchema> => {
  * same extension TypeBox dates use — so generated types and runtime checks treat
  * them as `Date`.
  */
+/**
+ * Zod 4's `toJSONSchema` emits a fixed tuple as a bare `prefixItems` array with
+ * no length bound, so the result accepts a too-short array (positions past the
+ * end are simply unconstrained) and a too-long one (nothing forbids extra
+ * items). A Zod tuple requires exactly its fixed elements, so we restore that:
+ * `minItems` forces the fixed elements to be present, and — when the tuple has
+ * no `.rest(...)` (no `items`) — `items: false` forbids extras. Applied to every
+ * `prefixItems` node in the tree. Existing tighter bounds are never loosened.
+ */
+const enforceTupleLength = (node: unknown): void => {
+  if (node === null || typeof node !== 'object') return
+  if (Array.isArray(node)) {
+    for (const item of node) enforceTupleLength(item)
+    return
+  }
+  const obj = node as Record<string, unknown>
+  if (Array.isArray(obj['prefixItems'])) {
+    const fixed = obj['prefixItems'].length
+    const min = typeof obj['minItems'] === 'number' ? obj['minItems'] : 0
+    if (min < fixed) obj['minItems'] = fixed
+    // No `items` keyword means no rest element: the array may not exceed the
+    // fixed tuple, so forbid additional items.
+    if (!('items' in obj)) obj['items'] = false
+  }
+  for (const value of Object.values(obj)) enforceTupleLength(value)
+}
+
 export const zodToJsonSchema = async (source: unknown): Promise<JSONSchema> => {
   if (typeof source !== 'object' || source === null) {
     const received = source === null ? 'null' : typeof source
@@ -96,6 +123,9 @@ export const zodToJsonSchema = async (source: unknown): Promise<JSONSchema> => {
 
   // The dialect marker is noise for the generators, which already target 2020-12.
   delete json['$schema']
+
+  // Zod under-constrains fixed tuples (bare `prefixItems`); restore their length.
+  enforceTupleLength(json)
 
   return json as JSONSchema
 }

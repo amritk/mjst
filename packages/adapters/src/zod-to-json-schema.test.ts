@@ -107,6 +107,31 @@ describe('zodToJsonSchema', () => {
     await expect(zodToJsonSchema('nope')).rejects.toThrow(/received string/)
   })
 
+  it('enforces the length of a fixed tuple', async () => {
+    // Zod emits a bare `prefixItems` with no length bound; the adapter restores
+    // the exact-length constraint a Zod tuple actually has.
+    const json = await zodToJsonSchema(z.tuple([z.string(), z.number()]))
+
+    expect(json).toMatchObject({
+      type: 'array',
+      prefixItems: [{ type: 'string' }, { type: 'number' }],
+      minItems: 2,
+      items: false,
+    })
+  })
+
+  it('keeps a tuple rest element open but still requires the fixed prefix', async () => {
+    const json = await zodToJsonSchema(z.tuple([z.string()]).rest(z.number()))
+
+    expect(json).toMatchObject({
+      type: 'array',
+      prefixItems: [{ type: 'string' }],
+      items: { type: 'number' },
+      minItems: 1,
+    })
+    expect('maxItems' in (json as object)).toBe(false)
+  })
+
   it('round-trips through the type generator, including Date fields', async () => {
     const schema = z.object({
       id: z.string(),
