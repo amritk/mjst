@@ -67,6 +67,37 @@ describe('resolve-refs', () => {
     expect(origins?.get(tree.properties.a)).toEqual({ location: '', pointer: ['$defs', 'x'] })
   })
 
+  it('keeps keywords sibling to a $ref by combining them in an allOf', () => {
+    // JSON Schema 2020-12 applies `$ref` siblings alongside the referenced
+    // schema, so inlining must not drop them.
+    const { resolved } = resolveRefs({
+      properties: { p: { $ref: '#/$defs/s', maxLength: 2 } },
+      $defs: { s: { type: 'string' } },
+    })
+    expect((resolved as { properties: { p: unknown } }).properties.p).toEqual({
+      maxLength: 2,
+      allOf: [{ type: 'string' }],
+    })
+  })
+
+  it('merges $ref siblings into an existing allOf rather than overwriting it', () => {
+    const { resolved } = resolveRefs({
+      root: { $ref: '#/$defs/s', allOf: [{ minLength: 1 }] },
+      $defs: { s: { type: 'string' } },
+    })
+    expect((resolved as { root: unknown }).root).toEqual({
+      allOf: [{ minLength: 1 }, { type: 'string' }],
+    })
+  })
+
+  it('leaves a $ref with no siblings inlined directly', () => {
+    const { resolved } = resolveRefs({
+      a: { $ref: '#/$defs/s' },
+      $defs: { s: { type: 'string' } },
+    })
+    expect((resolved as { a: unknown }).a).toEqual({ type: 'string' })
+  })
+
   it('decodes pointer escapes and array indices in origin paths', () => {
     const { resolved, origins } = resolveRefs(
       { ref: { $ref: '#/a~1b/c~0d/0' }, 'a/b': { 'c~d': [{ type: 'number' }] } },
