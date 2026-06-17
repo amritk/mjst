@@ -1,5 +1,32 @@
 # @amritk/adapters
 
+## 0.2.11
+
+### Patch Changes
+
+- e57d6ca: Two more adapter fidelity fixes:
+
+  - **Effect**: a top-level `Schema.BigIntFromSelf` / `Schema.DateFromSelf` now
+    converts to the shared `x-mjst` hint (`primitive: 'bigint'` / `instanceOf:
+'Date'`) instead of throwing, matching the Zod, Valibot, and TypeBox adapters.
+    A nested unrepresentable bigint/Date now throws an actionable error pointing at
+    the string-encoded `Schema.BigInt` / `Schema.Date` or a `jsonSchema` annotation.
+  - **Zod**: an object intersection (`z.intersection` / `.and`) emitted an `allOf`
+    of two `additionalProperties: false` objects, which is unsatisfiable (each
+    branch rejects the other's keys). When every `allOf` branch is a closed object
+    the adapter now merges them into one object — properties unioned, `required`
+    unioned, `additionalProperties: false` kept. Non-object intersections (e.g. two
+    refined strings) are left as an `allOf`.
+
+- b6e103d: Enforce tuple length in the Zod adapter. Zod 4's `toJSONSchema` emits a fixed
+  tuple as a bare `prefixItems` array with no length bound, so the converted schema
+  accepted arrays that were too short (trailing positions went unchecked) or too
+  long (nothing forbade extra items) — values the Zod schema itself rejects. The
+  adapter now restores the constraint: `minItems` requires the fixed elements, and
+  a tuple with no `.rest(...)` gets `items: false` to forbid extras. Tuples with a
+  rest element keep their open tail. Applied to every `prefixItems` node, so nested
+  tuples are fixed too.
+
 ## 0.2.10
 
 ### Patch Changes

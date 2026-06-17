@@ -1,5 +1,40 @@
 # @amritk/generate-validators
 
+## 0.11.0
+
+### Minor Changes
+
+- fadf545: Enforce the array and combinator keywords the generator previously parsed but
+  ignored, proven against Ajv by the differential fuzz test:
+
+  - Array: `minItems`, `maxItems`, `uniqueItems` (dedupes by a JSON projection —
+    exact for primitives, the same projection the boolean guard uses),
+    `contains` / `minContains` / `maxContains`, and tuple `prefixItems` with a
+    length cap from `items: false` / `additionalItems: false`.
+  - Combinators: `allOf` (conjunction, errors surfaced per branch), `anyOf`,
+    `oneOf` (exactly one), `not`, and `if` / `then` / `else` — built on a shared
+    "does this value match this subschema" boolean primitive — both as object
+    properties and as a top-level schema.
+
+  The generated `isX` type guard bails to the validator for schemas carrying any of
+  these so it never disagrees with the slow path. Still out of scope: validating
+  constraints on a top-level non-object schema (e.g. a root `{ type: 'array',
+minItems }`), and `$ref` inside a `contains` / combinator branch in single-file
+  output (it requires the referenced validator to be in scope).
+
+- 26732dd: Generated validators now enforce several constraints they previously accepted
+  silently, closing gaps a new Ajv differential fuzz test surfaced:
+
+  - `patternProperties` values and a schema-form `additionalProperties` are now
+    validated (previously only `additionalProperties: false` was enforced, so a
+    value matching a pattern — or any extra key under an `additionalProperties`
+    schema — passed unchecked).
+  - `type: 'integer'` now rejects non-integral numbers, and `type: 'null'` is
+    enforced, in both the validator and its boolean guard.
+  - `required` keys with no `properties` entry now get a presence check.
+  - `propertyNames` and `dependentRequired` are now enforced inside nested inline
+    objects, not just at the root.
+
 ## 0.10.1
 
 ### Patch Changes
