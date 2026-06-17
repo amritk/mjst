@@ -71,4 +71,17 @@ describe('effectToJsonSchema', () => {
     expect(typeDef).toContain('id: string;')
     expect(typeDef).toContain('score?: number;')
   })
+
+  it('rescues a top-level BigIntFromSelf into an x-mjst bigint hint', async () => {
+    expect(await effectToJsonSchema(Schema.BigIntFromSelf)).toEqual({ 'x-mjst': { primitive: 'bigint' } })
+  })
+
+  it('rescues a top-level DateFromSelf into an x-mjst Date hint', async () => {
+    expect(await effectToJsonSchema(Schema.DateFromSelf)).toEqual({ 'x-mjst': { instanceOf: 'Date' } })
+  })
+
+  it('throws an actionable error for a nested unrepresentable type', async () => {
+    const schema = Schema.Struct({ a: Schema.BigIntFromSelf, b: Schema.String })
+    await expect(effectToJsonSchema(schema)).rejects.toThrow(/BigIntFromSelf \/ DateFromSelf/)
+  })
 })

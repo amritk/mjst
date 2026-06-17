@@ -699,7 +699,7 @@ describe('generate-validator-function', () => {
       })
     })
 
-    it('guards integer like number, so a non-integral value still passes the fast path', () => {
+    it('enforces integrality for integer in both the guard and the slow path', () => {
       const schema = {
         type: 'object' as const,
         properties: { count: { type: 'integer' as const } },
@@ -707,9 +707,14 @@ describe('generate-validator-function', () => {
       }
       const code = generateValidatorFunction(schema, 'Counter')
 
-      expect(code).toContain("typeof obj.count === 'number'")
-      // mjst never enforces integrality, so the guard's verdict matches the slow path.
-      expect(evalValidator(code)({ count: 1.5 })).toBe(true)
+      expect(code).toContain('Number.isInteger(obj.count)')
+      const validate = evalValidator(code)
+      expect(validate({ count: 1 })).toBe(true)
+      // A non-integral number is rejected, and the guard agrees with the slow path.
+      expect(validate({ count: 1.5 })).toEqual({
+        valid: false,
+        errors: [{ message: 'must be number', path: '/count' }],
+      })
     })
 
     it('omits the guard when any property is optional', () => {
@@ -1130,6 +1135,64 @@ describe('generate-validator-function', () => {
         }
       }
       expect(mismatches, `seed 0x${seed.toString(16)}`).toEqual([])
+    })
+  })
+
+  describe('combinators, contains, and tuples', () => {
+    const validate = (schema: Parameters<typeof generateValidatorFunction>[0]) =>
+      evalValidator(generateValidatorFunction(schema, 'Root'))
+
+    it('validates anyOf membership on a property', () => {
+      const v = validate({
+        type: 'object',
+        properties: { a: { anyOf: [{ type: 'string' }, { type: 'number' }] } },
+        required: ['a'],
+      })
+      expect(v({ a: 's' })).toBe(true)
+      expect(v({ a: 5 })).toBe(true)
+      expect(v({ a: true })).not.toBe(true)
+      expect(v({})).not.toBe(true)
+    })
+
+    it('requires exactly one oneOf branch', () => {
+      const v = validate({
+        type: 'object',
+        properties: { a: { oneOf: [{ type: 'string' }, { type: 'string', minLength: 3 }] } },
+      })
+      expect(v({ a: 'ab' })).toBe(true)
+      expect(v({ a: 'abcd' })).not.toBe(true) // matches both branches
+    })
+
+    it('negates a not schema', () => {
+      const v = validate({ type: 'object', properties: { a: { not: { type: 'string' } } } })
+      expect(v({ a: 5 })).toBe(true)
+      expect(v({ a: 's' })).not.toBe(true)
+    })
+
+    it('conjoins allOf branches', () => {
+      const v = validate({
+        allOf: [
+          { type: 'object', properties: { x: { type: 'number' } }, required: ['x'] },
+          { type: 'object', properties: { y: { type: 'string' } }, required: ['y'] },
+        ],
+      })
+      expect(v({ x: 1, y: 's' })).toBe(true)
+      expect(v({ x: 1 })).not.toBe(true)
+    })
+
+    it('enforces contains and tuple prefixItems', () => {
+      const c = validate({ type: 'object', properties: { a: { type: 'array', contains: { type: 'number' } } } })
+      expect(c({ a: [1] })).toBe(true)
+      expect(c({ a: ['x'] })).not.toBe(true)
+      expect(c({ a: [] })).not.toBe(true)
+
+      const t = validate({
+        type: 'object',
+        properties: { a: { type: 'array', prefixItems: [{ type: 'string' }, { type: 'number' }], items: false } },
+      })
+      expect(t({ a: ['s', 1] })).toBe(true)
+      expect(t({ a: [1, 1] })).not.toBe(true)
+      expect(t({ a: ['s', 1, 2] })).not.toBe(true)
     })
   })
 })

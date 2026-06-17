@@ -442,12 +442,12 @@ describe('generate-parser-function', () => {
   const _tags = input.tags;
   const _metadata = input.metadata;
   const _isActive = input.isActive;
-  if (typeof _id === "number" && typeof _name === "string" && (_tags === undefined || Array.isArray(_tags)) && (_metadata === undefined || isObject(_metadata)) && (_isActive === undefined || typeof _isActive === "boolean")) return { ...input } as Complex;
+  if (typeof _id === "number" && typeof _name === "string" && (_tags === undefined || Array.isArray(_tags) && _tags.every((_it) => typeof _it === "string")) && (_metadata === undefined || isObject(_metadata)) && (_isActive === undefined || typeof _isActive === "boolean")) return { ...input } as Complex;
   return {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? (Number.isFinite(Number(_id)) ? Number(_id) : 0) : 0),
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
-    ...(_tags !== undefined && { tags: Array.isArray(_tags) ? _tags : [] }),
+    ...(_tags !== undefined && { tags: (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []) }),
     ...(_metadata !== undefined && { metadata: isObject(_metadata) ? _metadata : typeof _metadata === "object" && _metadata !== null ? _metadata : {} }),
     ...(_isActive !== undefined && { isActive: typeof _isActive === "boolean" ? _isActive : Boolean(_isActive) }),
   } as unknown as Complex;
@@ -560,10 +560,10 @@ describe('generate-parser-function', () => {
       `export const parseTagged = (input: unknown): Tagged => {
   if (!isObject(input)) return {} as Tagged;
   const _tags = input.tags;
-  if ((_tags === undefined || Array.isArray(_tags))) return { ...input } as Tagged;
+  if ((_tags === undefined || Array.isArray(_tags) && _tags.every((_it) => typeof _it === "string"))) return { ...input } as Tagged;
   return {
     ...input,
-    ...(_tags !== undefined && { tags: Array.isArray(_tags) ? _tags : [] }),
+    ...(_tags !== undefined && { tags: (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []) }),
   } as unknown as Tagged;
 }`,
     )
@@ -1649,14 +1649,14 @@ describe('generate-parser-function', () => {
   const _price = input.price;
   const _inStock = input.inStock;
   const _tags = input.tags;
-  if (typeof _id === "string" && typeof _name === "string" && typeof _price === "number" && _price >= 0 && (_inStock === undefined || typeof _inStock === "boolean") && (_tags === undefined || Array.isArray(_tags))) return { ...input } as Product;
+  if (typeof _id === "string" && typeof _name === "string" && typeof _price === "number" && _price >= 0 && (_inStock === undefined || typeof _inStock === "boolean") && (_tags === undefined || Array.isArray(_tags) && _tags.every((_it) => typeof _it === "string"))) return { ...input } as Product;
   return {
     ...input,
     id: typeof _id === "string" ? _id : (_id !== undefined ? String(_id) : ""),
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
     price: typeof _price === "number" && _price >= 0 ? _price : (_price !== undefined ? (Number.isFinite(Number(_price)) ? Number(_price) : 0) : 0),
     ...(_inStock !== undefined && { inStock: typeof _inStock === "boolean" ? _inStock : Boolean(_inStock) }),
-    ...(_tags !== undefined && { tags: Array.isArray(_tags) ? _tags : [] }),
+    ...(_tags !== undefined && { tags: (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []) }),
   } as unknown as Product;
 }`,
     )
@@ -1701,8 +1701,11 @@ describe('generate-parser-function', () => {
 
     const result = generateParserFunction(schema, 'ThemeColor')
 
+    // A non-member must coerce to a valid member (the first), not pass through —
+    // the generated type is the literal union, so any other string is not a
+    // `ThemeColor`.
     expect(result).toBe(
-      'export const parseThemeColor = (input: unknown): ThemeColor => typeof input === "string" ? input as ThemeColor : "" as ThemeColor;',
+      'export const parseThemeColor = (input: unknown): ThemeColor => ["red","green","blue","yellow","purple"].includes(input as never) ? input as ThemeColor : "red" as ThemeColor;',
     )
   })
 
@@ -2165,6 +2168,60 @@ describe('generate-parser-function', () => {
         const parse = parserFor(closed, { stripUnknown })
         expect(parse({ a: 'x', extra: 1 })).toEqual({ a: 'x' })
       }
+    })
+  })
+
+  describe('coerces to a valid instance of the declared type', () => {
+    const parse = (schema: JSONSchema) =>
+      evalGenerated<(input: unknown) => unknown>(generateParserFunction(schema, 'Root'), 'parseRoot')
+
+    it('coerces a non-member of a top-level enum to the first member', () => {
+      const p = parse({ type: 'string', enum: ['a', 'b'] })
+      expect(p('z')).toBe('a')
+      expect(p('b')).toBe('b')
+    })
+
+    it('coerces a non-matching value of a top-level const to the const', () => {
+      const p = parse({ const: 'fixed' })
+      expect(p('other')).toBe('fixed')
+    })
+
+    it('coerces a non-member of an enum property to the first member', () => {
+      const p = parse({ type: 'object', properties: { k: { type: 'string', enum: ['a', 'b'] } }, required: ['k'] })
+      expect(p({ k: 'z' })).toEqual({ k: 'a' })
+    })
+
+    it('validates a top-level union and defaults a non-member', () => {
+      const p = parse({ anyOf: [{ type: 'string' }, { type: 'number' }] })
+      expect(p('s')).toBe('s')
+      expect(p(5)).toBe(5)
+      expect(p(true)).toBe('')
+      expect(p({})).toBe('')
+    })
+
+    it('coerces any input to null for a null type', () => {
+      expect(parse({ type: 'null' })('anything')).toBe(null)
+    })
+
+    it('fills required const/null props in the non-object fallback', () => {
+      const p = parse({
+        type: 'object',
+        properties: { role: { const: 7 }, x: { type: 'null' } },
+        required: ['role', 'x'],
+      })
+      expect(p('not an object')).toEqual({ role: 7, x: null })
+      expect(p({ role: 1, x: 5 })).toEqual({ role: 7, x: null })
+    })
+
+    it('coerces each element of a scalar array', () => {
+      expect(parse({ type: 'array', items: { type: 'number' } })([1, 'x', true])).toEqual([1, 0, 1])
+      const obj = parse({
+        type: 'object',
+        properties: { tags: { type: 'array', items: { type: 'string' } } },
+        required: ['tags'],
+      })
+      expect(obj({ tags: ['a', 1, true] })).toEqual({ tags: ['a', '1', 'true'] })
+      expect(obj({ tags: ['a', 'b'] })).toEqual({ tags: ['a', 'b'] }) // already valid, untouched
     })
   })
 })

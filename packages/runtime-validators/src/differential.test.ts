@@ -14,6 +14,14 @@ import { validate } from './validate'
  * Scope notes: we stay inside the interpreter's draft-07-compatible subset and
  * deliberately exclude the keywords where we *intend* to differ from Ajv
  * (`nullable`, lenient non-schema nodes) — those have dedicated unit tests.
+ *
+ * `multipleOf` with a repeating-fraction divisor (`0.1`, `0.01`) is also out of
+ * scope: we judge multiples by distance to the nearest integer, while Ajv's
+ * default check is `value / multipleOf !== parseInt(...)`. The two disagree both
+ * ways — Ajv rejects `0.3` against `multipleOf: 0.1` (we accept it) yet wrongly
+ * rejects huge integers like `1e21` against `multipleOf: 1` because `parseInt`
+ * stringifies them to exponential form. Cases here use only exactly
+ * representable divisors so the two implementations line up.
  */
 
 // Deterministic PRNG so a failure reproduces exactly. (mulberry32)
@@ -116,6 +124,32 @@ const CASES: Case[] = [
       additionalProperties: { type: 'string' },
     },
     seeds: [{ num_x: 1, other: 'y' }, { num_x: 'no' }, { other: 5 }, {}],
+  },
+  {
+    // Regression: `patternProperties` constrains every matching key independently
+    // of `properties`. A key listed in both must satisfy both — the pattern check
+    // must not be skipped just because the key also has a `properties` entry.
+    name: 'properties key also matched by patternProperties (both apply)',
+    schema: {
+      type: 'object',
+      properties: { num_x: { type: ['integer', 'array'] } },
+      patternProperties: { '^num_': { type: 'integer', minimum: 0 } },
+    },
+    seeds: [{ num_x: 1 }, { num_x: -1 }, { num_x: [1] }, { num_x: 5 }, {}],
+  },
+  {
+    // Regression: `additionalProperties: true` annotates every additional property
+    // as evaluated (like `items: true` for arrays), so `unevaluatedProperties`
+    // must treat them as covered rather than rejecting them.
+    name: 'unevaluatedProperties:false with additionalProperties:true',
+    dialect: '2020',
+    schema: {
+      type: 'object',
+      properties: { id: { type: 'integer' } },
+      additionalProperties: true,
+      unevaluatedProperties: false,
+    },
+    seeds: [{ id: 1 }, { id: 1, extra: 5 }, {}, { x: 'any', y: true }, { id: 'no', extra: 1 }],
   },
   {
     name: 'draft-07 tuple with additionalItems:false',

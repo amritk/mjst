@@ -92,8 +92,12 @@ describe('get-default-value', () => {
     expect(getDefaultValue({ type: 'object' })).toBe('{}')
   })
 
-  it('returns undefined for unknown type', () => {
-    expect(getDefaultValue({ type: 'null' })).toBe('undefined')
+  it('returns null for the null type', () => {
+    expect(getDefaultValue({ type: 'null' })).toBe('null')
+  })
+
+  it('returns undefined for a typeless schema with no other defaulting keyword', () => {
+    expect(getDefaultValue({})).toBe('undefined')
   })
 
   it('uses pattern-based default for string with email pattern', () => {

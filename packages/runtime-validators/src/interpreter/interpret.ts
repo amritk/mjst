@@ -411,36 +411,37 @@ const interpretObject = (
     }
   }
 
+  // `additionalProperties: true` validates nothing but still annotates every
+  // additional property as evaluated (mirroring the `items: true` tail sweep), so
+  // `unevaluatedProperties` must treat the whole object as covered. The schema and
+  // `false` forms mark their keys inside the loop below; the `true` form skips it.
+  if (hasAdditional && additional === true && evalScope) evalScope.allProps = true
+
   const needsLoop = meta.patternEntries !== null || (hasAdditional && additional !== true)
   if (needsLoop) {
     const patternEntries = meta.patternEntries ?? []
     for (const k in obj) {
-      if (properties !== undefined && Object.hasOwn(properties, k)) continue
+      // `patternProperties` applies to every matching key independently of
+      // `properties` — a key declared in both must satisfy both — so it runs even
+      // when `k` is also a known property. Only `additionalProperties` is the
+      // fallback for keys reached by neither.
+      const inProps = properties !== undefined && Object.hasOwn(properties, k)
+      let matched = false
+      for (const [source, patternSchema] of patternEntries) {
+        if (getRegex(ctx, source).test(k)) {
+          matched = true
+          evalScope?.props.add(k)
+          interpret(ctx, patternSchema, obj[k], childPath(ctx, path, k))
+          if (ctx.failed) return
+        }
+      }
 
-      if (patternEntries.length > 0) {
-        let matched = false
-        for (const [source, patternSchema] of patternEntries) {
-          if (getRegex(ctx, source).test(k)) {
-            matched = true
-            evalScope?.props.add(k)
-            interpret(ctx, patternSchema, obj[k], childPath(ctx, path, k))
-            if (ctx.failed) return
-          }
-        }
-        if (!matched && hasAdditional && additional === false) {
-          evalScope?.props.add(k)
-          fail(ctx, 'must NOT have additional properties', childPath(ctx, path, k))
-          if (ctx.failed) return
-        } else if (!matched && hasAdditional && isPlainObject(additional)) {
-          evalScope?.props.add(k)
-          interpret(ctx, additional, obj[k], childPath(ctx, path, k))
-          if (ctx.failed) return
-        }
-      } else if (hasAdditional && additional === false) {
+      if (inProps || matched || !hasAdditional) continue
+      if (additional === false) {
         evalScope?.props.add(k)
         fail(ctx, 'must NOT have additional properties', childPath(ctx, path, k))
         if (ctx.failed) return
-      } else if (hasAdditional && isPlainObject(additional)) {
+      } else if (isPlainObject(additional)) {
         evalScope?.props.add(k)
         interpret(ctx, additional, obj[k], childPath(ctx, path, k))
         if (ctx.failed) return

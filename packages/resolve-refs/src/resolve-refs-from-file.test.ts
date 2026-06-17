@@ -44,6 +44,37 @@ describe('resolve-refs-from-file', () => {
     expect(resolved).toMatchObject({ a: { value: 1 }, b: { value: 1 } })
   })
 
+  it('keeps keywords sibling to a cross-file $ref via an allOf', async () => {
+    writeFileSync(join(dir, 'pet.json'), JSON.stringify({ Pet: { type: 'object' } }))
+    writeFileSync(
+      join(dir, 'api.json'),
+      JSON.stringify({ schemas: { Pet: { $ref: './pet.json#/Pet', required: ['name'] } } }),
+    )
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    expect(errors).toEqual([])
+    expect(resolved).toEqual({ schemas: { Pet: { required: ['name'], allOf: [{ type: 'object' }] } } })
+  })
+
+  it('prefetches a cross-file $ref that appears in a $ref node sibling', async () => {
+    writeFileSync(join(dir, 'name.json'), JSON.stringify({ Name: { type: 'string' } }))
+    writeFileSync(join(dir, 'base.json'), JSON.stringify({ Base: { type: 'object' } }))
+    writeFileSync(
+      join(dir, 'api.json'),
+      JSON.stringify({
+        Thing: { $ref: './base.json#/Base', properties: { name: { $ref: './name.json#/Name' } } },
+      }),
+    )
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    expect(errors).toEqual([])
+    expect(resolved).toEqual({
+      Thing: { properties: { name: { type: 'string' } }, allOf: [{ type: 'object' }] },
+    })
+  })
+
   it('omits the origin map unless trackOrigins is set', async () => {
     writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: '#/b' }, b: { value: 1 } }))
 

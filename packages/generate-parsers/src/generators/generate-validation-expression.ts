@@ -10,6 +10,7 @@ import {
   hasEnum,
   hasExclusiveMaximum,
   hasExclusiveMinimum,
+  hasItems,
   hasMaxItems,
   hasMaximum,
   hasMaxLength,
@@ -30,6 +31,7 @@ import {
 } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { findDiscriminator } from '#helpers/find-discriminator'
+import { getDefaultValue } from '#helpers/get-default-value'
 
 import { generateDiscriminatedUnionValidation } from './generate-discriminated-union-validation'
 import { generateEnumCheck } from './generate-enum-check'
@@ -45,6 +47,29 @@ import { generateSchemaChecks } from './generate-schema-checks'
 const getInstanceCoercion = (accessor: string, instanceOf: string): string | null => {
   if (instanceOf === 'Date') return `new Date(${accessor} as string | number | Date)`
   return null
+}
+
+/**
+ * A boolean type check for an array element whose schema is a single scalar type
+ * (the cases the element coercion below can handle). `integer` is treated as
+ * `number` because the generated TS element type is `number`. Returns `null` for
+ * objects, arrays, unions, `$ref`s, and anything richer.
+ */
+export const scalarItemTypeCheck = (itemSchema: JSONSchema, accessor: string): string | null => {
+  if (!isSchemaObject(itemSchema) || !hasType(itemSchema) || hasEnum(itemSchema)) return null
+  switch (itemSchema.type) {
+    case 'string':
+      return `typeof ${accessor} === "string"`
+    case 'number':
+    case 'integer':
+      return `typeof ${accessor} === "number"`
+    case 'boolean':
+      return `typeof ${accessor} === "boolean"`
+    case 'null':
+      return `${accessor} === null`
+    default:
+      return null
+  }
 }
 
 /**
@@ -70,7 +95,9 @@ const getTypeCoercion = (accessor: string, schema: JSONSchema, defaultValue: str
     case 'array':
       return `[]`
     case 'object':
-      return `typeof ${accessor} === "object" && ${accessor} !== null ? ${accessor} : {}`
+      // Fall back to the schema's default (which fills required properties)
+      // rather than a bare `{}`, so a coerced object is a valid instance.
+      return `typeof ${accessor} === "object" && ${accessor} !== null ? ${accessor} : ${defaultValue}`
     default:
       return null
   }
@@ -203,6 +230,32 @@ export const generateValidationExpression = (
     return `${accessor} ?? ${defaultValue}`
   }
 
+  // An array of scalar items: coerce each element so e.g. `number[]` actually
+  // contains numbers. The fast path only takes a well-typed array, so a mistyped
+  // element reaches here. ($ref items use the caller's validateArray path;
+  // object/union items still pass through.)
+  if (
+    hasType(schema) &&
+    schema.type === 'array' &&
+    hasItems(schema) &&
+    !Array.isArray(schema.items) &&
+    scalarItemTypeCheck(schema.items, '_it') !== null
+  ) {
+    const itemSchema = schema.items
+    const itemExpr = generateValidationExpression(
+      '',
+      itemSchema,
+      getDefaultValue(itemSchema),
+      true,
+      rootSchema,
+      visitedRefs,
+      '_it',
+      true,
+    )
+    const mapped = `(Array.isArray(${accessor}) ? (${accessor} as unknown[]).map((_it) => ${itemExpr}) : ${defaultValue})`
+    return isRequired ? mapped : `(${accessor} !== undefined ? ${mapped} : undefined)`
+  }
+
   // Build type-specific checks
   if (hasType(schema)) {
     switch (schema.type) {
@@ -241,6 +294,9 @@ export const generateValidationExpression = (
       }
       case 'boolean':
         checks.push(`typeof ${accessor} === "boolean"`)
+        break
+      case 'null':
+        checks.push(`${accessor} === null`)
         break
       case 'array': {
         checks.push(`Array.isArray(${accessor})`)
@@ -300,7 +356,12 @@ export const generateValidationExpression = (
   // Generate the fallback value
   // If the value exists but fails validation, try to coerce it
   // If the value is missing and required, use the default
-  const typeCoercion = getTypeCoercion(accessor, schema, defaultValue)
+  //
+  // `enum` constrains the value to a fixed set, so type coercion (e.g.
+  // `String(x)`) can't rescue a non-member — `String("z")` is still not in the
+  // enum. Fall back to the default (the first enum value) so the result is always
+  // a valid member of the declared literal-union type.
+  const typeCoercion = hasEnum(schema) ? null : getTypeCoercion(accessor, schema, defaultValue)
 
   if (isRequired) {
     // For required fields: valid ? use_value : (exists ? coerce : default)

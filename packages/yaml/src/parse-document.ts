@@ -78,6 +78,18 @@ const NO_PROPS: NodeProps = Object.freeze({})
 const isSpace = (c: number): boolean => c === SPACE || c === TAB
 
 /**
+ * True when the `-` at `pos` is a block sequence-entry indicator: a `-` followed
+ * by whitespace, a line break, or end of input. A `-` glued to other content
+ * (e.g. `-1`) is a plain scalar, and a bare `-` at end of line is an entry with
+ * an empty (null) value.
+ */
+const isSeqEntryDash = (src: string, pos: number, len: number): boolean => {
+  if (src.charCodeAt(pos) !== DASH) return false
+  const next = src.charCodeAt(pos + 1)
+  return pos + 1 >= len || isSpace(next) || next === NL || next === CR
+}
+
+/**
  * True when the character at `after` ends a `?`/`:` introducer — whitespace, a
  * line break, or end of input. This is what distinguishes the explicit-key
  * `? ` / `: ` tokens from an ordinary scalar that merely starts with `?`/`:`.
@@ -714,8 +726,7 @@ const parseValueOrChild = (state: State, indent: number): YamlNode | null => {
       return parseNode(state, child.indent)
     }
     if (!child.eof && child.indent === indent) {
-      const cc = src.charCodeAt(child.contentPos)
-      if (cc === DASH && (child.contentPos + 1 >= len || isSpace(src.charCodeAt(child.contentPos + 1)))) {
+      if (isSeqEntryDash(src, child.contentPos, len)) {
         state.pos = child.contentPos
         return parseBlockSeq(state, indent)
       }
@@ -764,8 +775,8 @@ const parseBlockMap = (state: State, indent: number, firstColon: number): YamlMa
       if (line.eof || line.indent !== indent) break
       contentPos = line.contentPos
       const c = src.charCodeAt(contentPos)
-      // A `- ` at this indent is a sequence, not a mapping key.
-      if (c === DASH && (contentPos + 1 >= len || isSpace(src.charCodeAt(contentPos + 1)))) break
+      // A `-` entry indicator at this indent is a sequence, not a mapping key.
+      if (isSeqEntryDash(src, contentPos, len)) break
       colon = findKeyColon(src, contentPos, len)
       if (colon < 0) {
         // No inline colon: either an explicit `? key` entry or the end of the map.
@@ -834,8 +845,7 @@ const parseBlockMap = (state: State, indent: number, firstColon: number): YamlMa
           state.pos = child.contentPos
           value = parseNode(state, child.indent)
         } else if (!child.eof && child.indent === indent) {
-          const cc = src.charCodeAt(child.contentPos)
-          if (cc === DASH && (child.contentPos + 1 >= len || isSpace(src.charCodeAt(child.contentPos + 1)))) {
+          if (isSeqEntryDash(src, child.contentPos, len)) {
             state.pos = child.contentPos
             value = parseBlockSeq(state, indent)
           }
@@ -888,8 +898,7 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
       contentPos = line.contentPos
     }
     firstEntry = false
-    const c = src.charCodeAt(contentPos)
-    if (c !== DASH || (contentPos + 1 < len && !isSpace(src.charCodeAt(contentPos + 1)))) break
+    if (!isSeqEntryDash(src, contentPos, len)) break
     if (startOffset === -1) startOffset = contentPos
 
     const dashPos = contentPos
@@ -926,8 +935,7 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
  */
 const parseNode = (state: State, indent: number): YamlNode => {
   const { src, len } = state
-  const c = src.charCodeAt(state.pos)
-  if (c === DASH && (state.pos + 1 >= len || isSpace(src.charCodeAt(state.pos + 1)))) {
+  if (isSeqEntryDash(src, state.pos, len)) {
     return parseBlockSeq(state, indent)
   }
 
@@ -1041,7 +1049,10 @@ const applyScalarTag = (node: YamlScalar): unknown => {
     case 'null':
       return null
     case 'bool': {
-      const s = node.source
+      // For a quoted/block scalar the resolved value is the string content; for a
+      // plain scalar fall back to the raw source. Either way `!!bool "true"` must
+      // become `true`, matching how `int`/`float`/`str` read tagged scalars.
+      const s = typeof v === 'string' ? v : node.source
       if (s === 'true' || s === 'True' || s === 'TRUE') return true
       if (s === 'false' || s === 'False' || s === 'FALSE') return false
       return v

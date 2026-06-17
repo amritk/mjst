@@ -6,9 +6,7 @@ import {
   hasAllOf,
   hasAnyOf,
   hasConst,
-  hasDefault,
   hasEnum,
-  hasExamples,
   hasExclusiveMaximum,
   hasExclusiveMinimum,
   hasItems,
@@ -33,7 +31,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { getDefaultValue } from '#helpers/get-default-value'
 
 import { generateObjectStrictAssertion, generateScalarStrictAssertion } from './generate-strict-assertion'
-import { generateValidationExpression } from './generate-validation-expression'
+import { generateValidationExpression, scalarItemTypeCheck } from './generate-validation-expression'
 
 /**
  * Options for controlling parser function generation behavior.
@@ -328,46 +326,10 @@ const generateFallbackValue = (_: string, propSchema: JSONSchema, useRefImports:
     }
   }
 
-  // For non-schema objects, return undefined
-  if (!isSchemaObject(propSchema)) {
-    return 'undefined'
-  }
-
-  // Use explicit default if provided
-  if (hasDefault(propSchema)) {
-    return JSON.stringify(propSchema.default)
-  }
-
-  // Use first enum value if available
-  if (hasEnum(propSchema) && propSchema.enum.length > 0) {
-    return JSON.stringify(propSchema.enum[0])
-  }
-
-  // Use first example if available
-  if (hasExamples(propSchema) && propSchema.examples.length > 0) {
-    return JSON.stringify(propSchema.examples[0])
-  }
-
-  // Return simple type-based defaults without pattern inference
-  if (!hasType(propSchema)) {
-    return 'undefined'
-  }
-
-  switch (propSchema.type) {
-    case 'string':
-      return '""'
-    case 'number':
-    case 'integer':
-      return '0'
-    case 'boolean':
-      return 'false'
-    case 'array':
-      return '[]'
-    case 'object':
-      return '{}'
-    default:
-      return 'undefined'
-  }
+  // Everything else (default/const/enum/examples/union, the null type, and a
+  // recursively-defaulted object) shares one source of truth so the fallback
+  // object is itself a valid instance — `getDefaultValue` handles them all.
+  return getDefaultValue(propSchema)
 }
 
 /**
@@ -429,12 +391,85 @@ const generateFallbackObject = (
  * Generates a parser for non-object schemas (string, number, boolean, array, etc.)
  * that validates the input matches the expected primitive type before casting.
  */
+/**
+ * A default value literal (as source text) for `schema`, used as the fallback a
+ * top-level union coerces an unmatched value to. Prefers a `const`/`enum` member,
+ * then a per-type empty value.
+ */
+const scalarDefaultLiteral = (schema: JSONSchema): string => {
+  if (!isSchemaObject(schema)) return '{}'
+  if (hasConst(schema)) return JSON.stringify(schema.const)
+  if (hasEnum(schema) && schema.enum.length > 0) return JSON.stringify(schema.enum[0])
+  if (hasType(schema)) {
+    switch (schema.type) {
+      case 'string':
+        return '""'
+      case 'number':
+      case 'integer':
+        return '0'
+      case 'boolean':
+        return 'false'
+      case 'null':
+        return 'null'
+      case 'array':
+        return '[]'
+      case 'object':
+        return '{}'
+    }
+  }
+  return '{}'
+}
+
 const generateNonObjectParser = (typeName: string, schema: JSONSchema, strict?: boolean): string => {
   const functionName = generateParserName(typeName)
+
+  // `const`/`enum` define the value space directly (the generated type is a
+  // literal / literal-union), so a non-member must coerce to a valid member —
+  // otherwise the returned value would not be of the declared type. This runs
+  // before the `type` switch so e.g. `{ type: 'string', enum: [...] }` is covered,
+  // and before the no-`type` bail so a bare `const`/`enum` schema is covered too.
+  if (!strict && isSchemaObject(schema)) {
+    if (hasConst(schema)) {
+      const literal = JSON.stringify(schema.const)
+      // The const is the only valid value, so the parser always yields it. For a
+      // primitive we can keep the caller's value when it already equals the const
+      // (`===` is a correct comparison); for an object/array, `===` would be a
+      // (always-false) reference comparison, so just return the const literal.
+      const isPrimitive = schema.const === null || typeof schema.const !== 'object'
+      return isPrimitive
+        ? `export const ${functionName} = (input: unknown): ${typeName} => input === ${literal} ? input as ${typeName} : ${literal} as ${typeName};`
+        : `export const ${functionName} = (input: unknown): ${typeName} => ${literal} as ${typeName};`
+    }
+    if (hasEnum(schema) && schema.enum.length > 0) {
+      const values = JSON.stringify(schema.enum)
+      const fallback = JSON.stringify(schema.enum[0])
+      return `export const ${functionName} = (input: unknown): ${typeName} => ${values}.includes(input as never) ? input as ${typeName} : ${fallback} as ${typeName};`
+    }
+    // A top-level union must validate membership: an unmatched value is not of
+    // the declared union type, so coerce it to a member-shaped default. Reuse the
+    // same union validation the property path uses. A `$ref` branch can't be
+    // validated inline here (the membership test would silently drop it and
+    // wrongly coerce a valid ref-shaped value), so fall through to a passthrough
+    // cast rather than discarding valid input.
+    if (hasOneOf(schema) || hasAnyOf(schema)) {
+      const branches = hasOneOf(schema) ? schema.oneOf : hasAnyOf(schema) ? schema.anyOf : []
+      const hasRefBranch = branches.some((b) => isSchemaObject(b) && hasRef(b))
+      if (branches.length > 0 && !hasRefBranch) {
+        const fallback = scalarDefaultLiteral(branches[0] as JSONSchema)
+        const expr = generateValidationExpression('', schema, fallback, true, undefined, undefined, 'input', true)
+        return `export const ${functionName} = (input: unknown): ${typeName} => (${expr}) as ${typeName};`
+      }
+      return `export const ${functionName} = (input: unknown): ${typeName} => input as ${typeName};`
+    }
+  }
 
   if (!isSchemaObject(schema) || !hasType(schema)) {
     // Schema without type information cannot be validated beyond a cast
     return `export const ${functionName} = (input: unknown): ${typeName} => input as ${typeName};`
+  }
+
+  if (!strict && schema.type === 'null') {
+    return `export const ${functionName} = (input: unknown): ${typeName} => null as ${typeName};`
   }
 
   if (strict) {
@@ -455,8 +490,24 @@ const generateNonObjectParser = (typeName: string, schema: JSONSchema, strict?: 
       return `export const ${functionName} = (input: unknown): ${typeName} => typeof input === "number" ? input as ${typeName} : 0 as ${typeName};`
     case 'boolean':
       return `export const ${functionName} = (input: unknown): ${typeName} => typeof input === "boolean" ? input as ${typeName} : false as ${typeName};`
-    case 'array':
+    case 'array': {
+      // Coerce each element when the item schema is a single scalar type.
+      if (hasItems(schema) && !Array.isArray(schema.items) && scalarItemTypeCheck(schema.items, '_it') !== null) {
+        const item = schema.items
+        const itemExpr = generateValidationExpression(
+          '',
+          item,
+          getDefaultValue(item),
+          true,
+          undefined,
+          undefined,
+          '_it',
+          true,
+        )
+        return `export const ${functionName} = (input: unknown): ${typeName} => Array.isArray(input) ? (input as unknown[]).map((_it) => ${itemExpr}) as ${typeName} : [] as ${typeName};`
+      }
       return `export const ${functionName} = (input: unknown): ${typeName} => Array.isArray(input) ? [...input] as ${typeName} : [] as ${typeName};`
+    }
     default:
       return `export const ${functionName} = (input: unknown): ${typeName} => input as ${typeName};`
   }
@@ -628,6 +679,13 @@ const generatePropertyTypeCheck = (
       if (hasMaxItems(schema)) checks.push(`${varName}.length <= ${schema.maxItems}`)
       if (hasUniqueItems(schema) && schema.uniqueItems === true) {
         checks.push(`new Set(${varName}).size === ${varName}.length`)
+      }
+      // For a scalar item type, every element must already be well-typed to take
+      // the fast path; a mistyped element routes the array to the slow path where
+      // each element is coerced.
+      if (hasItems(schema) && !Array.isArray(schema.items)) {
+        const itemCheck = scalarItemTypeCheck(schema.items, '_it')
+        if (itemCheck) checks.push(`${varName}.every((_it) => ${itemCheck})`)
       }
       break
     }

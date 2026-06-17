@@ -43,7 +43,7 @@
     },
     "packages/cli": {
       "name": "@amritk/mjst",
-      "version": "0.7.8",
+      "version": "0.7.11",
       "bin": {
         "mjst": "./dist/cli.js",
       },
@@ -64,6 +64,9 @@
         "@amritk/helpers": "workspace:*",
         "json-schema-typed": "catalog:",
       },
+      "devDependencies": {
+        "ajv": "^8.17.1",
+      },
       "peerDependencies": {
         "fast-check": ">=3",
       },
@@ -77,7 +80,7 @@
     },
     "packages/generate-parsers": {
       "name": "@amritk/generate-parsers",
-      "version": "0.9.0",
+      "version": "0.11.1",
       "dependencies": {
         "@amritk/generate-markdown": "workspace:*",
         "@amritk/helpers": "workspace:*",
@@ -85,12 +88,13 @@
       },
       "devDependencies": {
         "@sinclair/typebox": "^0.34.49",
+        "ajv": "^8.17.1",
         "zod": "^4.4.3",
       },
     },
     "packages/generate-validators": {
       "name": "@amritk/generate-validators",
-      "version": "0.8.0",
+      "version": "0.10.1",
       "dependencies": {
         "@amritk/helpers": "workspace:*",
         "json-schema-typed": "catalog:",
@@ -118,7 +122,7 @@
     },
     "packages/runtime-validators": {
       "name": "@amritk/runtime-validators",
-      "version": "0.6.0",
+      "version": "0.6.2",
       "dependencies": {
         "json-schema-typed": "catalog:",
       },

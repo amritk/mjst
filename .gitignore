@@ -36,3 +36,6 @@ content.json
 
 # Finder (MacOS) folder config
 .DS_Store
+
+# Agent worktrees (Claude Code background agents)
+.claude/worktrees/

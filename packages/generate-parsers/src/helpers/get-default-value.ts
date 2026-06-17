@@ -2,11 +2,14 @@ import { getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import {
   hasAllOf,
   hasAnyOf,
+  hasConst,
   hasDefault,
   hasEnum,
   hasExamples,
   hasOneOf,
   hasPattern,
+  hasProperties,
+  hasRequired,
   hasType,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
@@ -26,6 +29,11 @@ export const getDefaultValue = (schema: JSONSchema): string => {
   // Explicit default takes highest priority
   if (hasDefault(schema)) {
     return JSON.stringify(schema.default)
+  }
+
+  // A `const` value is the only valid value, so it is also the default.
+  if (hasConst(schema)) {
+    return JSON.stringify(schema.const)
   }
 
   // Use first enum value if available
@@ -85,10 +93,28 @@ export const getDefaultValue = (schema: JSONSchema): string => {
       return '0'
     case 'boolean':
       return 'false'
+    case 'null':
+      return 'null'
     case 'array':
       return '[]'
-    case 'object':
+    case 'object': {
+      // A bare `{}` omits required properties, leaving the default invalid against
+      // its own type. Populate each required property with its own default so the
+      // fallback object is itself a valid instance.
+      if (hasProperties(schema) && hasRequired(schema)) {
+        const props = schema.properties
+        const required = schema.required.filter((key) => Object.hasOwn(props, key))
+        const defaults = required.map((key) => getDefaultValue(props[key] as JSONSchema))
+        // A required property whose schema has no concrete default (a `$ref` we
+        // can't resolve here, or a type-less schema) would otherwise emit
+        // `"key": undefined` — i.e. a *missing* required key. Don't build a
+        // partial object with holes; fall back to a bare `{}` for the whole node.
+        if (defaults.length > 0 && !defaults.includes('undefined')) {
+          return `{ ${required.map((key, i) => `${JSON.stringify(key)}: ${defaults[i]}`).join(', ')} }`
+        }
+      }
       return '{}'
+    }
     default:
       return 'undefined'
   }
