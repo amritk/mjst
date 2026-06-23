@@ -105,17 +105,43 @@ const getBooleanSubSchemaType = (schema: boolean): string => {
   return schema ? 'unknown' : 'never'
 }
 
+/**
+ * Renders a possibly multi-line description as JSDoc body lines, prefixing each
+ * line with `${indent}* `. Blank lines become a bare `${indent}*` so we never
+ * emit trailing whitespace. Without this, embedded newlines would leave
+ * continuation lines unprefixed and break the comment block.
+ */
+const renderJsDocBody = (description: string, indent: string): string =>
+  description
+    .split('\n')
+    .map((line) => (line.length > 0 ? `${indent}* ${line}\n` : `${indent}*\n`))
+    .join('')
+
 const buildJsDocBlock = (title: string, description: string, commentUrl?: string): string => {
   let block = `/**\n`
   block += `* ${title}\n`
   block += `*\n`
-  block += `* ${description}\n`
+  block += renderJsDocBody(description, '')
   if (commentUrl?.startsWith('http')) {
     block += `* \n`
     block += `* @see {@link ${commentUrl}}\n`
   }
   block += `*/\n`
   return block
+}
+
+/**
+ * Builds the inline JSDoc comment that precedes a generated property. A
+ * single-line description stays compact (`  /** text *\/`); a multi-line
+ * description expands into an asterisk-prefixed block so every line is
+ * commented. The returned string always ends with a newline, ready for the
+ * property declaration to follow.
+ */
+const buildInlinePropertyComment = (description: string): string => {
+  if (!description.includes('\n')) {
+    return `  /** ${description} */\n`
+  }
+  return `  /**\n${renderJsDocBody(description, '   ')}   */\n`
 }
 
 /**
@@ -365,9 +391,8 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string
             first = false
             if (inlineDescription) {
               properties +=
-                '  /** ' +
-                inlineDescription +
-                ' */\n  ' +
+                buildInlinePropertyComment(inlineDescription) +
+                '  ' +
                 readonlyPrefix +
                 safeKey(key) +
                 optional +
@@ -534,7 +559,8 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
             ? propSchema.$comment
             : undefined
       if (inlineDescription) {
-        properties += '  /** ' + inlineDescription + ' */\n  ' + quotedKey + optional + ': ' + propType + ';'
+        properties +=
+          buildInlinePropertyComment(inlineDescription) + '  ' + quotedKey + optional + ': ' + propType + ';'
       } else {
         properties += '  ' + quotedKey + optional + ': ' + propType + ';'
       }
