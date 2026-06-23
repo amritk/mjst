@@ -1319,6 +1319,70 @@ describe('generateTypeDefinition', () => {
     expect(result).toBe('export type Bad = string;')
   })
 
+  describe('multiline descriptions', () => {
+    it('prefixes every line of a multiline top-level description with an asterisk', () => {
+      const schema: JSONSchema = {
+        description:
+          'Human-readable SDK/product name used for generated package metadata and client naming.\n\nThis becomes the default basis for the generated client class name and surfaces in README titles and package descriptions. It is descriptive text, not an import identifier, so spaces and capitalization are fine.',
+        type: 'string',
+      }
+
+      const result = generateTypeDefinition(schema, 'SdkName')
+
+      expect(result).toBe(
+        '/**\n' +
+          '* SdkName\n' +
+          '*\n' +
+          '* Human-readable SDK/product name used for generated package metadata and client naming.\n' +
+          '*\n' +
+          '* This becomes the default basis for the generated client class name and surfaces in README titles and package descriptions. It is descriptive text, not an import identifier, so spaces and capitalization are fine.\n' +
+          '*/\n' +
+          'export type SdkName = string;',
+      )
+    })
+
+    it('emits a multiline inline property description as an asterisk-prefixed block', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description:
+              'Human-readable SDK/product name used for generated package metadata and client naming.\n\nThis becomes the default basis for the generated client class name and surfaces in README titles and package descriptions. It is descriptive text, not an import identifier, so spaces and capitalization are fine.',
+          },
+        },
+        required: ['name'],
+      }
+
+      const result = generateTypeDefinition(schema, 'ScalarSdkConfig')
+
+      expect(result).toBe(
+        'export type ScalarSdkConfig = {\n' +
+          '  /**\n' +
+          '   * Human-readable SDK/product name used for generated package metadata and client naming.\n' +
+          '   *\n' +
+          '   * This becomes the default basis for the generated client class name and surfaces in README titles and package descriptions. It is descriptive text, not an import identifier, so spaces and capitalization are fine.\n' +
+          '   */\n' +
+          '  name: string;\n' +
+          '};',
+      )
+    })
+
+    it('keeps single-line property descriptions on one line', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Human-readable SDK name.' },
+        },
+        required: ['name'],
+      }
+
+      const result = generateTypeDefinition(schema, 'ScalarSdkConfig')
+
+      expect(result).toContain('  /** Human-readable SDK name. */\n')
+    })
+  })
+
   describe('readonly option', () => {
     it('marks every property as readonly, deeply', () => {
       const schema: JSONSchema = {
