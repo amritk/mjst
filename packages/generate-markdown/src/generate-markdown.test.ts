@@ -89,7 +89,9 @@ describe('generate-readme', () => {
       .split('<tr>')
       .find((row: string) => row.includes('<code>optionalProp</code>') && !row.includes('colspan'))
     expect(metaRow).toBeDefined()
-    expect(metaRow).toContain('—')
+    // Nothing marks it required, and there is no placeholder dash
+    expect(metaRow).not.toContain('✅')
+    expect(content).not.toContain('—')
   })
 
   it('renders CLI flags when x-cli-flag is present', async () => {
@@ -112,17 +114,39 @@ describe('generate-readme', () => {
     expect(content).toContain('--test-flag')
   })
 
-  it('renders em dash when CLI flag is not present', async () => {
+  it('omits the CLI Flag column entirely when no property declares one', async () => {
     mockFs(minimalSchema)
 
     await generateMarkdown()
 
     const [, content] = writeFileMock.mock.calls[0] ?? []
+    // No CLI flags anywhere -> the whole column (header and cells) is gone
+    expect(content).not.toContain('<th>CLI Flag</th>')
+    expect(content).not.toContain('—')
+  })
+
+  it('keeps the CLI Flag column for properties without a flag when another has one', async () => {
+    const schemaWithMixedFlags = {
+      ...minimalSchema,
+      properties: {
+        withFlag: { type: 'string', description: 'Has a flag', 'x-cli-flag': '--with' },
+        withoutFlag: { type: 'string', description: 'No flag' },
+      },
+    }
+
+    mockFs(schemaWithMixedFlags)
+
+    await generateMarkdown()
+
+    const [, content] = writeFileMock.mock.calls[0] ?? []
+    expect(content).toContain('<th>CLI Flag</th>')
+    expect(content).toContain('<code>--with</code>')
+    // The flag-less row gets an empty cell, never a dash placeholder
     const metaRow = (content as string)
       .split('<tr>')
-      .find((row: string) => row.includes('<code>testProp</code>') && !row.includes('colspan'))
-    // CLI flag cell falls back to a plain em dash
-    expect(metaRow).toContain('<td>—</td>')
+      .find((row: string) => row.includes('<code>withoutFlag</code>') && !row.includes('colspan'))
+    expect(metaRow).toContain('<td></td>')
+    expect(content).not.toContain('—')
   })
 
   it('renders custom icon when x-icon is present', async () => {
@@ -145,13 +169,15 @@ describe('generate-readme', () => {
     expect(content).toContain('🎯')
   })
 
-  it('renders default icon when x-icon is not present', async () => {
+  it('renders no icon when x-icon is not present', async () => {
     mockFs(minimalSchema)
 
     await generateMarkdown()
 
     const [, content] = writeFileMock.mock.calls[0] ?? []
-    expect(content).toContain('🔧')
+    // There is no fallback icon — the name stands on its own
+    expect(content).not.toContain('🔧')
+    expect(content).toContain('<td><code>testProp</code></td>')
   })
 
   it('formats string default values with quotes', async () => {
@@ -460,28 +486,23 @@ describe('generate-readme', () => {
     expect(portRow).not.toContain('✅')
   })
 
-  it('renders em dash for undefined default values', async () => {
+  it('omits the Default column entirely when no property has a default', async () => {
     mockFs(minimalSchema)
 
     await generateMarkdown()
 
     const [, content] = writeFileMock.mock.calls[0] ?? []
-    const metaRow = (content as string)
-      .split('<tr>')
-      .find((row: string) => row.includes('<code>testProp</code>') && !row.includes('colspan'))
-    // Default column renders an em dash when no default is set
-    expect(metaRow).toContain('<td align="center">—</td>')
+    // No defaults anywhere -> the whole column disappears, no placeholder dash
+    expect(content).not.toContain('<th align="center">Default</th>')
+    expect(content).not.toContain('—')
   })
 
-  it('renders em dash for null default values', async () => {
+  it('treats a null default as no default and leaves the cell empty', async () => {
     const schemaWithNullDefault = {
       ...minimalSchema,
       properties: {
-        testProp: {
-          type: 'null',
-          description: 'A test property',
-          default: null,
-        },
+        real: { type: 'string', description: 'Has a default', default: 'x' },
+        nullish: { type: 'null', description: 'Null default', default: null },
       },
     }
 
@@ -490,11 +511,13 @@ describe('generate-readme', () => {
     await generateMarkdown()
 
     const [, content] = writeFileMock.mock.calls[0] ?? []
+    // The real default keeps the column alive; the null one renders empty
+    expect(content).toContain('<th align="center">Default</th>')
     const metaRow = (content as string)
       .split('<tr>')
-      .find((row: string) => row.includes('<code>testProp</code>') && !row.includes('colspan'))
-    // A null default is treated the same as an absent one: an em dash
-    expect(metaRow).toContain('<td align="center">—</td>')
+      .find((row: string) => row.includes('<code>nullish</code>') && !row.includes('colspan'))
+    expect(metaRow).toContain('<td align="center"></td>')
+    expect(content).not.toContain('—')
   })
 
   it('uses first paragraph of description in table', async () => {
@@ -560,7 +583,8 @@ describe('generate-readme', () => {
     await generateMarkdown()
 
     const [, content] = writeFileMock.mock.calls[0] ?? []
-    expect(content).toContain('<td colspan="5">A test property</td>')
+    // Minimal schema renders only Property + Type, so the detail row spans 2
+    expect(content).toContain('<td colspan="2">A test property</td>')
   })
 
   it('escapes html-significant characters in cli flags', async () => {
@@ -583,8 +607,21 @@ describe('generate-readme', () => {
     expect(content).toContain('<code>--out &lt;dir&gt;</code>')
   })
 
-  it('includes table header with correct columns', async () => {
-    mockFs(minimalSchema)
+  it('includes every column header when the schema uses every feature', async () => {
+    const fullSchema = {
+      title: 'Full',
+      required: ['testProp'],
+      properties: {
+        testProp: {
+          type: 'string',
+          description: 'A test property',
+          'x-cli-flag': '--test',
+          default: 'value',
+        },
+      },
+    }
+
+    mockFs(fullSchema)
 
     await generateMarkdown()
 
@@ -594,6 +631,19 @@ describe('generate-readme', () => {
     expect(content).toContain('<th>Type</th>')
     expect(content).toContain('<th align="center">Required</th>')
     expect(content).toContain('<th align="center">Default</th>')
+  })
+
+  it('renders only Property and Type columns for a minimal schema', async () => {
+    mockFs(minimalSchema)
+
+    await generateMarkdown()
+
+    const [, content] = writeFileMock.mock.calls[0] ?? []
+    expect(content).toContain('<th>Property</th>')
+    expect(content).toContain('<th>Type</th>')
+    expect(content).not.toContain('<th>CLI Flag</th>')
+    expect(content).not.toContain('<th align="center">Required</th>')
+    expect(content).not.toContain('<th align="center">Default</th>')
   })
 
   it('handles multiple properties in schema', async () => {
