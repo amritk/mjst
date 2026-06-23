@@ -11,6 +11,7 @@ type SchemaProperty = {
   readonly description?: string
   readonly $comment?: string
   readonly default?: unknown
+  readonly enum?: readonly unknown[]
   readonly examples?: readonly unknown[]
   readonly required?: readonly string[]
   readonly properties?: Readonly<Record<string, SchemaProperty>>
@@ -44,6 +45,28 @@ const formatValue = (value: unknown): string => {
   if (typeof value === 'string') return `<code>"${escapeHtml(value)}"</code>`
   if (typeof value === 'boolean' || typeof value === 'number') return `<code>${value}</code>`
   return `<code>${escapeHtml(JSON.stringify(value))}</code>`
+}
+
+/**
+ * Renders a comma-separated list of JSON values (used for `enum` and
+ * `examples`), reusing {@link formatValue} so each entry is quoted and escaped
+ * the same way a default is.
+ */
+const formatList = (values: readonly unknown[]): string => values.map(formatValue).join(', ')
+
+/**
+ * Builds the content of the full-width row beneath a property's metadata. It
+ * always leads with the first paragraph of the description and then appends the
+ * allowed values (`enum`) and sample values (`examples`) when the schema
+ * provides them, so readers see the constraints the metadata columns can't hold.
+ */
+const renderDetailCell = (prop: SchemaProperty): string => {
+  // First paragraph gives enough context without making the table unwieldy
+  const desc = escapeHtml(prop.description?.split('\n\n')[0]?.replace(/\n/g, ' ') ?? '')
+  const lines = [desc]
+  if (prop.enum && prop.enum.length > 0) lines.push(`<strong>Allowed:</strong> ${formatList(prop.enum)}`)
+  if (prop.examples && prop.examples.length > 0) lines.push(`<strong>Examples:</strong> ${formatList(prop.examples)}`)
+  return lines.filter((line) => line.length > 0).join('<br>')
 }
 
 /**
@@ -81,10 +104,11 @@ const isObjectWithProperties = (prop: SchemaProperty): boolean =>
 
 /**
  * Renders a property as two table rows: a metadata row (name, flag, type,
- * required, default) and a full-width description row beneath it. The split lets
- * the description use the whole table width instead of being squeezed into one
- * narrow column. Object properties with nested fields link to their own detail
- * table rendered below the main table.
+ * required, default) and a full-width detail row beneath it carrying the
+ * description plus any allowed values (`enum`) and sample values (`examples`).
+ * The split lets the detail row use the whole table width instead of being
+ * squeezed into one narrow column. Object properties with nested fields link to
+ * their own detail table rendered below the main table.
  */
 const renderRow = (name: string, prop: SchemaProperty, required: ReadonlySet<string>, path: string): string => {
   const icon = prop['x-icon'] ?? '🔧'
@@ -93,8 +117,7 @@ const renderRow = (name: string, prop: SchemaProperty, required: ReadonlySet<str
   const cliFlag = prop['x-cli-flag'] ? `<code>${escapeHtml(prop['x-cli-flag'])}</code>` : '—'
   const requiredCell = required.has(name) ? '✅' : '—'
   const defaultCell = prop.default !== undefined ? formatValue(prop.default) : '—'
-  // First paragraph gives enough context without making the table unwieldy
-  const desc = escapeHtml(prop.description?.split('\n\n')[0]?.replace(/\n/g, ' ') ?? '')
+  const desc = renderDetailCell(prop)
   return [
     '<tr>',
     `<td>${nameCell}</td>`,

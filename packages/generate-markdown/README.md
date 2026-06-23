@@ -17,12 +17,23 @@
 
 ## Overview
 
-`@amritk/generate-markdown` renders a single configuration reference table from a `config.schema.json` file and writes the result to `README.md`. It exists so the documentation for a CLI's flags can be regenerated from the schema itself, keeping the two in sync.
+`@amritk/generate-markdown` renders a configuration reference table from a `config.schema.json` file and writes the result to `README.md`. It exists so the documentation for a CLI's flags can be regenerated from the schema itself, keeping the two in sync.
 
-It picks up two non-standard keywords from each property to produce richer output:
+For every property it reads the standard JSON Schema keywords:
 
-- `x-cli-flag` — the matching CLI flag (e.g. `--schema <path>`)
-- `x-icon` — an emoji shown in the leading column of the table
+- `type` — shown in the **Type** column
+- `description` — the first paragraph fills the full-width detail row
+- `default` — shown (quoted/JSON-encoded) in the **Default** column
+- `enum` — listed as **Allowed:** values in the detail row
+- `examples` — listed as **Examples:** values in the detail row
+- `required` — the parent's `required` array drives the **Required** column
+
+…plus two non-standard keywords for richer output:
+
+- `x-cli-flag` — the matching CLI flag (e.g. `--schema <path>`), shown in the **CLI Flag** column
+- `x-icon` — an emoji shown next to the property name
+
+Object properties with their own `properties` are linked to a nested detail table rendered below the main one.
 
 ---
 
@@ -50,12 +61,307 @@ await generateMarkdown()
 // Writes ./README.md
 ```
 
-The generator currently expects:
+If `README.md` already exists and contains the marker comments below, only the content between them is replaced — everything else in the file is preserved:
 
-- `config.schema.json` — the source schema, located relative to the current working directory
-- Each property may declare `description`, `default`, `x-cli-flag`, and `x-icon`
+```md
+<!-- config-table-start -->
+<!-- config-table-end -->
+```
 
-The output is a single Markdown table with the columns: icon, property, CLI flag, type, required, default, description.
+Without markers (or without an existing README) the file is overwritten with just the table.
+
+---
+
+## Examples
+
+Each example below shows an input `config.schema.json` and the markdown `generateMarkdown()` produces from it.
+
+### Defaults of every type
+
+Defaults are rendered in the **Default** column. Strings are quoted; numbers and booleans are printed bare; objects and arrays are JSON-encoded.
+
+<details>
+<summary><strong>Input schema</strong></summary>
+
+```json
+{
+  "title": "Defaults",
+  "properties": {
+    "outDir":  { "type": "string",  "default": "./generated", "x-icon": "📁", "description": "Output directory." },
+    "port":    { "type": "number",  "default": 8080, "x-icon": "🔌", "description": "Port to listen on." },
+    "minify":  { "type": "boolean", "default": false, "x-icon": "🗜️", "description": "Minify the output." },
+    "include": { "type": "array",   "default": ["**/*.ts"], "x-icon": "📥", "description": "Glob patterns to include." },
+    "env":     { "type": "object",  "default": { "NODE_ENV": "production" }, "x-icon": "🌱", "description": "Environment variables." }
+  }
+}
+```
+
+</details>
+
+Generated markdown:
+
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>CLI Flag</th>
+<th>Type</th>
+<th align="center">Required</th>
+<th align="center">Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>📁 <code>outDir</code></td>
+<td>—</td>
+<td><code>string</code></td>
+<td align="center">—</td>
+<td align="center"><code>"./generated"</code></td>
+</tr>
+<tr>
+<td colspan="5">Output directory.</td>
+</tr>
+<tr>
+<td>🔌 <code>port</code></td>
+<td>—</td>
+<td><code>number</code></td>
+<td align="center">—</td>
+<td align="center"><code>8080</code></td>
+</tr>
+<tr>
+<td colspan="5">Port to listen on.</td>
+</tr>
+<tr>
+<td>🗜️ <code>minify</code></td>
+<td>—</td>
+<td><code>boolean</code></td>
+<td align="center">—</td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="5">Minify the output.</td>
+</tr>
+<tr>
+<td>📥 <code>include</code></td>
+<td>—</td>
+<td><code>array</code></td>
+<td align="center">—</td>
+<td align="center"><code>["**/*.ts"]</code></td>
+</tr>
+<tr>
+<td colspan="5">Glob patterns to include.</td>
+</tr>
+<tr>
+<td>🌱 <code>env</code></td>
+<td>—</td>
+<td><code>object</code></td>
+<td align="center">—</td>
+<td align="center"><code>{"NODE_ENV":"production"}</code></td>
+</tr>
+<tr>
+<td colspan="5">Environment variables.</td>
+</tr>
+</tbody>
+</table>
+
+### Enums and examples
+
+`enum` becomes an **Allowed:** line and `examples` becomes an **Examples:** line, both appended to the property's detail row beneath the description.
+
+<details>
+<summary><strong>Input schema</strong></summary>
+
+```json
+{
+  "title": "Input",
+  "required": ["input"],
+  "properties": {
+    "input": {
+      "type": "string",
+      "enum": ["json", "zod", "typebox"],
+      "default": "json",
+      "x-cli-flag": "--input <format>",
+      "x-icon": "🔌",
+      "description": "Source format of the schema.",
+      "examples": ["json", "zod"]
+    }
+  }
+}
+```
+
+</details>
+
+Generated markdown:
+
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>CLI Flag</th>
+<th>Type</th>
+<th align="center">Required</th>
+<th align="center">Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>🔌 <code>input</code></td>
+<td><code>--input &lt;format&gt;</code></td>
+<td><code>string</code></td>
+<td align="center">✅</td>
+<td align="center"><code>"json"</code></td>
+</tr>
+<tr>
+<td colspan="5">Source format of the schema.<br><strong>Allowed:</strong> <code>"json"</code>, <code>"zod"</code>, <code>"typebox"</code><br><strong>Examples:</strong> <code>"json"</code>, <code>"zod"</code></td>
+</tr>
+</tbody>
+</table>
+
+### Required properties and CLI flags
+
+A property name appears in the **Required** column (✅) when it is listed in the object's `required` array. `x-cli-flag` fills the **CLI Flag** column, and `x-icon` sits next to the name; both fall back to an em dash / 🔧 when absent.
+
+<details>
+<summary><strong>Input schema</strong></summary>
+
+```json
+{
+  "title": "RequiredFlags",
+  "required": ["schema"],
+  "properties": {
+    "schema":  { "type": "string", "x-cli-flag": "--schema <path>", "x-icon": "📄", "description": "Path to the schema to process.", "examples": ["./schema.json"] },
+    "outFile": { "type": "string", "x-cli-flag": "--out-file <file>", "x-icon": "📄", "description": "Write everything to a single file." }
+  }
+}
+```
+
+</details>
+
+Generated markdown:
+
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>CLI Flag</th>
+<th>Type</th>
+<th align="center">Required</th>
+<th align="center">Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>📄 <code>schema</code></td>
+<td><code>--schema &lt;path&gt;</code></td>
+<td><code>string</code></td>
+<td align="center">✅</td>
+<td align="center">—</td>
+</tr>
+<tr>
+<td colspan="5">Path to the schema to process.<br><strong>Examples:</strong> <code>"./schema.json"</code></td>
+</tr>
+<tr>
+<td>📄 <code>outFile</code></td>
+<td><code>--out-file &lt;file&gt;</code></td>
+<td><code>string</code></td>
+<td align="center">—</td>
+<td align="center">—</td>
+</tr>
+<tr>
+<td colspan="5">Write everything to a single file.</td>
+</tr>
+</tbody>
+</table>
+
+### Nested objects
+
+An object property that declares its own `properties` is linked to a detail table rendered below the main one. The nested table uses the object's own `required` array, so required markers are scoped to each level.
+
+<details>
+<summary><strong>Input schema</strong></summary>
+
+```json
+{
+  "title": "Nested",
+  "properties": {
+    "server": {
+      "type": "object",
+      "x-icon": "🖥️",
+      "description": "HTTP server settings.",
+      "required": ["host"],
+      "properties": {
+        "host": { "type": "string", "x-icon": "🌐", "description": "Hostname to bind." },
+        "port": { "type": "number", "x-icon": "🔌", "default": 3000, "description": "Port to listen on." }
+      }
+    }
+  }
+}
+```
+
+</details>
+
+Generated markdown:
+
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>CLI Flag</th>
+<th>Type</th>
+<th align="center">Required</th>
+<th align="center">Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>🖥️ <a href="#config-server"><code>server</code></a></td>
+<td>—</td>
+<td><code>object</code></td>
+<td align="center">—</td>
+<td align="center">—</td>
+</tr>
+<tr>
+<td colspan="5">HTTP server settings.</td>
+</tr>
+</tbody>
+</table>
+
+<a id="config-server"></a>
+#### `server`
+
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>CLI Flag</th>
+<th>Type</th>
+<th align="center">Required</th>
+<th align="center">Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>🌐 <code>host</code></td>
+<td>—</td>
+<td><code>string</code></td>
+<td align="center">✅</td>
+<td align="center">—</td>
+</tr>
+<tr>
+<td colspan="5">Hostname to bind.</td>
+</tr>
+<tr>
+<td>🔌 <code>port</code></td>
+<td>—</td>
+<td><code>number</code></td>
+<td align="center">—</td>
+<td align="center"><code>3000</code></td>
+</tr>
+<tr>
+<td colspan="5">Port to listen on.</td>
+</tr>
+</tbody>
+</table>
 
 ---
 

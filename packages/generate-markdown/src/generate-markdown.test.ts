@@ -254,6 +254,104 @@ describe('generate-readme', () => {
     expect(content).toContain('["item1","item2"]')
   })
 
+  it('renders enum values as an allowed list in the detail row', async () => {
+    const schemaWithEnum = {
+      ...minimalSchema,
+      properties: {
+        input: {
+          type: 'string',
+          description: 'Source format.',
+          enum: ['json', 'zod', 'typebox'],
+        },
+      },
+    }
+
+    mockFs(schemaWithEnum)
+
+    await generateMarkdown()
+
+    const [, content] = writeFileMock.mock.calls[0] ?? []
+    expect(content).toContain('<strong>Allowed:</strong>')
+    expect(content).toContain('<code>"json"</code>')
+    expect(content).toContain('<code>"zod"</code>')
+    expect(content).toContain('<code>"typebox"</code>')
+  })
+
+  it('renders examples in the detail row', async () => {
+    const schemaWithExamples = {
+      ...minimalSchema,
+      properties: {
+        schema: {
+          type: 'string',
+          description: 'Path to the schema.',
+          examples: ['./schema.json'],
+        },
+      },
+    }
+
+    mockFs(schemaWithExamples)
+
+    await generateMarkdown()
+
+    const [, content] = writeFileMock.mock.calls[0] ?? []
+    expect(content).toContain('<strong>Examples:</strong>')
+    expect(content).toContain('<code>"./schema.json"</code>')
+  })
+
+  it('renders both enum and examples alongside the description', async () => {
+    const schemaWithBoth = {
+      ...minimalSchema,
+      properties: {
+        input: {
+          type: 'string',
+          description: 'Source format.',
+          enum: ['json', 'zod'],
+          examples: ['json'],
+        },
+      },
+    }
+
+    mockFs(schemaWithBoth)
+
+    await generateMarkdown()
+
+    const [, content] = writeFileMock.mock.calls[0] ?? []
+    const detailRow = (content as string).split('<tr>').find((row: string) => row.includes('colspan'))
+    expect(detailRow).toContain('Source format.')
+    expect(detailRow).toContain('<strong>Allowed:</strong>')
+    expect(detailRow).toContain('<strong>Examples:</strong>')
+  })
+
+  it('omits the allowed and examples lines when neither is present', async () => {
+    mockFs(minimalSchema)
+
+    await generateMarkdown()
+
+    const [, content] = writeFileMock.mock.calls[0] ?? []
+    expect(content).not.toContain('<strong>Allowed:</strong>')
+    expect(content).not.toContain('<strong>Examples:</strong>')
+  })
+
+  it('omits the allowed line when enum is an empty array', async () => {
+    const schemaWithEmptyEnum = {
+      ...minimalSchema,
+      properties: {
+        testProp: {
+          type: 'string',
+          description: 'A test property',
+          enum: [] as string[],
+        },
+      },
+    }
+
+    mockFs(schemaWithEmptyEnum)
+
+    await generateMarkdown()
+
+    const [, content] = writeFileMock.mock.calls[0] ?? []
+    expect(content).not.toContain('<strong>Allowed:</strong>')
+  })
+
   it('links object properties to a detail table rendered below', async () => {
     const schemaWithNestedObject = {
       ...minimalSchema,
