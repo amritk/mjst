@@ -28,6 +28,14 @@ For every property it reads the standard JSON Schema keywords:
 - `examples` — listed as **Examples:** values in the detail row
 - `required` — the parent's `required` array drives the **Required** column
 
+Schemas built from references work too. `$ref` pointers are resolved against the
+document's `$defs` (any `#/…` JSON pointer, in fact) before rendering, recursive
+definitions are detected and collapsed so generation always terminates, and
+sibling keywords on a `$ref` node — typically `description` — override the
+referenced definition. When a property describes its type through `enum`,
+`const`, or `anyOf`/`oneOf`/`allOf` rather than a plain `type`, the **Type**
+column shows an inferred label (e.g. `string` or `number | string`).
+
 …plus two non-standard keywords for richer output:
 
 - `x-cli-flag` — the matching CLI flag (e.g. `--schema <path>`), shown in the **CLI Flag** column
@@ -312,6 +320,111 @@ Generated markdown:
 </tr>
 <tr>
 <td colspan="4">HTTP server settings.</td>
+</tr>
+</tbody>
+</table>
+
+<a id="config-server"></a>
+#### `server`
+
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Type</th>
+<th align="center">Required</th>
+<th align="center">Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>🌐 <code>host</code></td>
+<td><code>string</code></td>
+<td align="center">✅</td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">Hostname to bind.</td>
+</tr>
+<tr>
+<td>🔌 <code>port</code></td>
+<td><code>number</code></td>
+<td align="center"></td>
+<td align="center"><code>3000</code></td>
+</tr>
+<tr>
+<td colspan="4">Port to listen on.</td>
+</tr>
+</tbody>
+</table>
+
+### References and definitions
+
+`$ref` pointers are inlined from `$defs` before rendering, so a schema assembled
+from reusable definitions produces the same tables as an inline one. Sibling
+keywords on a `$ref` (here `x-icon` and `description`) override the definition,
+and a property whose type comes from `enum` (`logLevel`) gets an inferred **Type**.
+
+<details>
+<summary><strong>Input schema</strong></summary>
+
+```json
+{
+  "title": "Refs",
+  "required": ["server"],
+  "properties": {
+    "server": { "$ref": "#/$defs/server", "x-icon": "🖥️", "description": "HTTP server settings." },
+    "logLevel": { "$ref": "#/$defs/logLevel", "x-icon": "🔊" }
+  },
+  "$defs": {
+    "server": {
+      "type": "object",
+      "required": ["host"],
+      "properties": {
+        "host": { "type": "string", "x-icon": "🌐", "description": "Hostname to bind." },
+        "port": { "type": "number", "x-icon": "🔌", "default": 3000, "description": "Port to listen on." }
+      }
+    },
+    "logLevel": {
+      "enum": ["debug", "info", "warn", "error"],
+      "default": "info",
+      "description": "Minimum log level to emit."
+    }
+  }
+}
+```
+
+</details>
+
+Generated markdown:
+
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Type</th>
+<th align="center">Required</th>
+<th align="center">Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>🖥️ <a href="#config-server"><code>server</code></a></td>
+<td><code>object</code></td>
+<td align="center">✅</td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">HTTP server settings.</td>
+</tr>
+<tr>
+<td>🔊 <code>logLevel</code></td>
+<td><code>string</code></td>
+<td align="center"></td>
+<td align="center"><code>"info"</code></td>
+</tr>
+<tr>
+<td colspan="4">Minimum log level to emit.<br><strong>Allowed:</strong> <code>"debug"</code>, <code>"info"</code>, <code>"warn"</code>, <code>"error"</code></td>
 </tr>
 </tbody>
 </table>

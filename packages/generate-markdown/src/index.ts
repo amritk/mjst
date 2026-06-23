@@ -4,29 +4,40 @@ import { resolve } from 'node:path'
 /**
  * Describes the shape of a single property entry inside a JSON Schema object.
  * We include the x- extension fields we added so the generator can produce
- * richer output (CLI flag labels, icons) without hard-coding them here.
+ * richer output (CLI flag labels, icons) without hard-coding them here, plus the
+ * reference (`$ref`) and composition (`enum`/`const`/`anyOf`/…) keywords that
+ * real-world schemas lean on. `type` is optional because a property can describe
+ * itself purely through those keywords; {@link displayType} fills the gap.
  */
 type SchemaProperty = {
-  readonly type: string
+  readonly type?: string | readonly string[]
+  readonly $ref?: string
   readonly description?: string
   readonly $comment?: string
   readonly default?: unknown
   readonly enum?: readonly unknown[]
+  readonly const?: unknown
   readonly examples?: readonly unknown[]
   readonly required?: readonly string[]
   readonly properties?: Readonly<Record<string, SchemaProperty>>
+  readonly items?: SchemaProperty | readonly SchemaProperty[]
+  readonly anyOf?: readonly SchemaProperty[]
+  readonly oneOf?: readonly SchemaProperty[]
+  readonly allOf?: readonly SchemaProperty[]
   readonly 'x-cli-flag'?: string
   readonly 'x-icon'?: string
 }
 
 /**
- * The top-level structure of our config.schema.json file.
+ * The top-level structure of our config.schema.json file. `$defs` holds the
+ * reusable definitions that `$ref`s point at; they are inlined before rendering.
  */
 type ConfigSchema = {
   readonly title: string
   readonly $comment?: string
   readonly required?: readonly string[]
   readonly properties: Readonly<Record<string, SchemaProperty>>
+  readonly $defs?: Readonly<Record<string, SchemaProperty>>
   readonly examples?: readonly unknown[]
 }
 
@@ -42,6 +53,89 @@ type Columns = {
   readonly type: boolean
   readonly required: boolean
   readonly default: boolean
+}
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+/**
+ * Follows a JSON pointer (the fragment after `#/`, e.g. `$defs/server`) from the
+ * document root. Segments are unescaped per RFC 6901 (`~1` → `/`, `~0` → `~`).
+ * Returns `undefined` when the pointer can't be resolved so a broken `$ref`
+ * degrades gracefully instead of throwing.
+ */
+const resolvePointer = (root: Record<string, unknown>, ref: string): unknown => {
+  if (!ref.startsWith('#/')) return undefined
+  const segments = ref
+    .slice(2)
+    .split('/')
+    .map((segment) => segment.replace(/~1/g, '/').replace(/~0/g, '~'))
+  let current: unknown = root
+  for (const segment of segments) {
+    if (!isObject(current)) return undefined
+    current = current[segment]
+  }
+  return current
+}
+
+/**
+ * Inlines every `$ref` in the schema by resolving it against the document root
+ * (typically into `$defs`) and recursing into the result. Sibling keywords on a
+ * `$ref` node — most commonly `description` — win over the referenced target, as
+ * JSON Schema 2020-12 allows. A `seen` set of pointers along the current branch
+ * breaks recursive definitions: the second time a ref is encountered it collapses
+ * to a bare object stub so generation always terminates.
+ */
+const dereference = (node: unknown, root: Record<string, unknown>, seen: ReadonlySet<string>): unknown => {
+  if (Array.isArray(node)) return node.map((item) => dereference(item, root, seen))
+  if (!isObject(node)) return node
+
+  const { $ref: ref, ...siblings } = node
+  if (typeof ref === 'string') {
+    if (seen.has(ref)) {
+      // Recursive reference: stop here, keeping any description from the ref site.
+      return { type: 'object', ...(dereference(siblings, root, seen) as object) }
+    }
+    const target = dereference(resolvePointer(root, ref), root, new Set(seen).add(ref))
+    return { ...(isObject(target) ? target : {}), ...(dereference(siblings, root, seen) as object) }
+  }
+
+  const resolved: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(node)) resolved[key] = dereference(value, root, seen)
+  return resolved
+}
+
+/** Maps a JSON value to the JSON Schema type name that best describes it. */
+const jsonTypeOf = (value: unknown): string => {
+  if (value === null) return 'null'
+  if (Array.isArray(value)) return 'array'
+  return typeof value
+}
+
+/** Joins type names into a `a | b` union, dropping blanks and duplicates. */
+const unionOf = (parts: readonly string[]): string => [...new Set(parts.filter((part) => part.length > 0))].join(' | ')
+
+/**
+ * Derives the type label to show for a property. Prefers the declared `type`
+ * (string or `["string","null"]` union) and otherwise infers one from the
+ * composition keywords real schemas use instead — `enum`, `const`, and
+ * `anyOf`/`oneOf`/`allOf` — falling back to `object`/`array` when the shape is
+ * implied by `properties`/`items`. Returns an empty string when nothing applies.
+ */
+const displayType = (prop: SchemaProperty): string => {
+  if (typeof prop.type === 'string') return prop.type
+  if (Array.isArray(prop.type)) return unionOf(prop.type.filter((entry): entry is string => typeof entry === 'string'))
+  if (prop.enum && prop.enum.length > 0) return unionOf(prop.enum.map(jsonTypeOf))
+  if (prop.const !== undefined) return jsonTypeOf(prop.const)
+  for (const variants of [prop.anyOf, prop.oneOf, prop.allOf]) {
+    if (variants && variants.length > 0) {
+      const union = unionOf(variants.map(displayType).filter((type) => type !== 'null'))
+      if (union.length > 0) return union
+    }
+  }
+  if (prop.properties) return 'object'
+  if (prop.items !== undefined) return 'array'
+  return ''
 }
 
 /**
@@ -116,7 +210,7 @@ const anyRequired = (node: {
  */
 const resolveColumns = (schema: ConfigSchema): Columns => ({
   cliFlag: anyProperty(schema.properties, (prop) => prop['x-cli-flag'] !== undefined),
-  type: anyProperty(schema.properties, (prop) => typeof prop.type === 'string' && prop.type.length > 0),
+  type: anyProperty(schema.properties, (prop) => displayType(prop).length > 0),
   required: anyRequired(schema),
   default: anyProperty(schema.properties, (prop) => prop.default !== undefined && prop.default !== null),
 })
@@ -147,7 +241,7 @@ const renderTableHead = (columns: Columns): string => {
 const anchorId = (path: string): string => `config-${path.replace(/\./g, '-')}`
 
 const isObjectWithProperties = (prop: SchemaProperty): boolean =>
-  prop.type === 'object' && prop.properties !== undefined
+  prop.properties !== undefined && Object.keys(prop.properties).length > 0
 
 /**
  * Renders a property as two table rows: a metadata row (name, optional flag,
@@ -171,7 +265,10 @@ const renderRow = (
   const cells = [`<td>${nameCell}</td>`]
   if (columns.cliFlag)
     cells.push(`<td>${prop['x-cli-flag'] ? `<code>${escapeHtml(prop['x-cli-flag'])}</code>` : ''}</td>`)
-  if (columns.type) cells.push(`<td><code>${escapeHtml(prop.type)}</code></td>`)
+  if (columns.type) {
+    const type = displayType(prop)
+    cells.push(`<td>${type ? `<code>${escapeHtml(type)}</code>` : ''}</td>`)
+  }
   if (columns.required) cells.push(`<td align="center">${required.has(name) ? '✅' : ''}</td>`)
   if (columns.default) cells.push(`<td align="center">${prop.default != null ? formatValue(prop.default) : ''}</td>`)
 
@@ -204,10 +301,9 @@ const renderTables = (
   const block = path ? `<a id="${anchorId(path)}"></a>\n#### \`${path}\`\n\n${table}` : table
 
   const nested = Object.entries(properties).flatMap(([name, prop]) => {
-    const childProps = prop.properties
-    if (prop.type !== 'object' || !childProps) return []
+    if (!isObjectWithProperties(prop) || !prop.properties) return []
     const childPath = path ? `${path}.${name}` : name
-    return renderTables(childProps, new Set(prop.required ?? []), childPath, columns)
+    return renderTables(prop.properties, new Set(prop.required ?? []), childPath, columns)
   })
 
   return [block, ...nested]
@@ -240,7 +336,9 @@ export const generateMarkdown = async (): Promise<void> => {
   const root = process.cwd()
 
   const schemaRaw = await readFile(resolve(root, 'config.schema.json'), 'utf-8')
-  const schema = JSON.parse(schemaRaw) as ConfigSchema
+  const parsed = JSON.parse(schemaRaw) as Record<string, unknown>
+  // Inline every $ref against the document's own $defs before rendering.
+  const schema = dereference(parsed, parsed, new Set()) as ConfigSchema
 
   const table = renderConfigTable(schema)
   const readmePath = resolve(root, 'README.md')

@@ -721,6 +721,193 @@ describe('generate-readme', () => {
     expect(readFileMock).toHaveBeenCalledTimes(2)
   })
 
+  describe('$ref and $defs resolution', () => {
+    it('inlines a top-level $ref into the referenced definition', async () => {
+      const schema = {
+        title: 'Refs',
+        properties: {
+          server: { $ref: '#/$defs/server' },
+        },
+        $defs: {
+          server: {
+            type: 'object',
+            description: 'HTTP server settings.',
+            properties: {
+              host: { type: 'string', description: 'Hostname to bind.' },
+            },
+          },
+        },
+      }
+
+      mockFs(schema)
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      // The ref expands into a linked object row plus its own detail table
+      expect(content).toContain('<a href="#config-server"><code>server</code></a>')
+      expect(content).toContain('#### `server`')
+      expect(content).toContain('<code>host</code>')
+      expect(content).toContain('Hostname to bind.')
+    })
+
+    it('resolves nested $refs and $refs that point at other $refs', async () => {
+      const schema = {
+        title: 'Nested refs',
+        properties: {
+          target: { $ref: '#/$defs/target' },
+        },
+        $defs: {
+          target: {
+            type: 'object',
+            description: 'A target.',
+            properties: {
+              publish: { $ref: '#/$defs/publish' },
+            },
+          },
+          publish: {
+            type: 'object',
+            description: 'Publish settings.',
+            properties: {
+              registry: { $ref: '#/$defs/registry' },
+            },
+          },
+          registry: { type: 'string', description: 'Registry URL.' },
+        },
+      }
+
+      mockFs(schema)
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).toContain('<a href="#config-target"><code>target</code></a>')
+      expect(content).toContain('<a href="#config-target-publish"><code>publish</code></a>')
+      expect(content).toContain('#### `target.publish`')
+      expect(content).toContain('<code>registry</code>')
+      expect(content).toContain('Registry URL.')
+    })
+
+    it('lets sibling keywords on a $ref override the referenced definition', async () => {
+      const schema = {
+        title: 'Sibling override',
+        properties: {
+          primary: { $ref: '#/$defs/url', description: 'The primary endpoint.' },
+        },
+        $defs: {
+          url: { type: 'string', description: 'A generic URL.' },
+        },
+      }
+
+      mockFs(schema)
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      // The description from the ref site wins over the one in $defs
+      expect(content).toContain('The primary endpoint.')
+      expect(content).not.toContain('A generic URL.')
+    })
+
+    it('terminates on recursive $refs instead of looping forever', async () => {
+      const schema = {
+        title: 'Recursive',
+        properties: {
+          node: { $ref: '#/$defs/node' },
+        },
+        $defs: {
+          node: {
+            type: 'object',
+            description: 'A tree node.',
+            properties: {
+              value: { type: 'string', description: 'Node value.' },
+              child: { $ref: '#/$defs/node' },
+            },
+          },
+        },
+      }
+
+      mockFs(schema)
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).toContain('#### `node`')
+      expect(content).toContain('<code>value</code>')
+      // The recursive child resolves to a plain object row, not an infinite tree
+      expect(content).toContain('<code>child</code>')
+    })
+
+    it('degrades gracefully when a $ref cannot be resolved', async () => {
+      const schema = {
+        title: 'Broken ref',
+        properties: {
+          missing: { $ref: '#/$defs/nope', description: 'Points nowhere.' },
+        },
+        $defs: {},
+      }
+
+      mockFs(schema)
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).toContain('<code>missing</code>')
+      expect(content).toContain('Points nowhere.')
+    })
+
+    it('infers a union type from enum values when type is absent', async () => {
+      const schema = {
+        title: 'Enum type',
+        properties: {
+          format: { enum: ['json', 'zod'], description: 'Source format.' },
+        },
+      }
+
+      mockFs(schema)
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).toContain('<code>string</code>')
+    })
+
+    it('infers a type from const when type is absent', async () => {
+      const schema = {
+        title: 'Const type',
+        properties: {
+          kind: { const: true, description: 'Always true.' },
+        },
+      }
+
+      mockFs(schema)
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).toContain('<code>boolean</code>')
+    })
+
+    it('infers a union type from anyOf members when type is absent', async () => {
+      const schema = {
+        title: 'AnyOf type',
+        properties: {
+          timeout: {
+            anyOf: [{ type: 'number' }, { type: 'string' }],
+            description: 'Timeout in ms or duration string.',
+          },
+        },
+      }
+
+      mockFs(schema)
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).toContain('<code>number | string</code>')
+    })
+  })
+
   describe('marker injection', () => {
     it('injects table between markers when both markers are present', async () => {
       const existingReadme = `# My Package\n\n<!-- config-table-start -->\nold content\n<!-- config-table-end -->\n\n---\n`
