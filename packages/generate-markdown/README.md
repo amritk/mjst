@@ -28,10 +28,25 @@ For every property it reads the standard JSON Schema keywords:
 - `examples` — listed as **Examples:** values in the detail row
 - `required` — the parent's `required` array drives the **Required** column
 
+Schemas built from references work too. `$ref` pointers are resolved against the
+document's `$defs` (any `#/…` JSON pointer, in fact) before rendering, recursive
+definitions are detected and collapsed so generation always terminates, and
+sibling keywords on a `$ref` node — typically `description` — override the
+referenced definition. When a property describes its type through `enum`,
+`const`, or `anyOf`/`oneOf`/`allOf` rather than a plain `type`, the **Type**
+column shows an inferred label (e.g. `string` or `number | string`).
+
 …plus two non-standard keywords for richer output:
 
 - `x-cli-flag` — the matching CLI flag (e.g. `--schema <path>`), shown in the **CLI Flag** column
 - `x-icon` — an emoji shown next to the property name
+
+Columns and icons are only rendered when the schema actually uses them. The
+**CLI Flag**, **Required**, and **Default** columns are each dropped entirely
+when no property anywhere in the schema fills them, and a property with no
+`x-icon` simply shows no icon. There are no `—` placeholders: a cell with
+nothing to say is left empty. The check spans the whole schema (including
+nested objects), so every table keeps the same set of columns.
 
 Object properties with their own `properties` are linked to a nested detail table rendered below the main one.
 
@@ -78,7 +93,7 @@ Each example below shows an input `config.schema.json` and the markdown `generat
 
 ### Defaults of every type
 
-Defaults are rendered in the **Default** column. Strings are quoted; numbers and booleans are printed bare; objects and arrays are JSON-encoded.
+Defaults are rendered in the **Default** column. Strings are quoted; numbers and booleans are printed bare; objects and arrays are JSON-encoded. None of these properties use a CLI flag or are required, so those columns are dropped — only **Property**, **Type**, and **Default** remain.
 
 <details>
 <summary><strong>Input schema</strong></summary>
@@ -104,62 +119,50 @@ Generated markdown:
 <thead>
 <tr>
 <th>Property</th>
-<th>CLI Flag</th>
 <th>Type</th>
-<th align="center">Required</th>
 <th align="center">Default</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td>📁 <code>outDir</code></td>
-<td>—</td>
 <td><code>string</code></td>
-<td align="center">—</td>
 <td align="center"><code>"./generated"</code></td>
 </tr>
 <tr>
-<td colspan="5">Output directory.</td>
+<td colspan="3">Output directory.</td>
 </tr>
 <tr>
 <td>🔌 <code>port</code></td>
-<td>—</td>
 <td><code>number</code></td>
-<td align="center">—</td>
 <td align="center"><code>8080</code></td>
 </tr>
 <tr>
-<td colspan="5">Port to listen on.</td>
+<td colspan="3">Port to listen on.</td>
 </tr>
 <tr>
 <td>🗜️ <code>minify</code></td>
-<td>—</td>
 <td><code>boolean</code></td>
-<td align="center">—</td>
 <td align="center"><code>false</code></td>
 </tr>
 <tr>
-<td colspan="5">Minify the output.</td>
+<td colspan="3">Minify the output.</td>
 </tr>
 <tr>
 <td>📥 <code>include</code></td>
-<td>—</td>
 <td><code>array</code></td>
-<td align="center">—</td>
 <td align="center"><code>["**/*.ts"]</code></td>
 </tr>
 <tr>
-<td colspan="5">Glob patterns to include.</td>
+<td colspan="3">Glob patterns to include.</td>
 </tr>
 <tr>
 <td>🌱 <code>env</code></td>
-<td>—</td>
 <td><code>object</code></td>
-<td align="center">—</td>
 <td align="center"><code>{"NODE_ENV":"production"}</code></td>
 </tr>
 <tr>
-<td colspan="5">Environment variables.</td>
+<td colspan="3">Environment variables.</td>
 </tr>
 </tbody>
 </table>
@@ -219,7 +222,7 @@ Generated markdown:
 
 ### Required properties and CLI flags
 
-A property name appears in the **Required** column (✅) when it is listed in the object's `required` array. `x-cli-flag` fills the **CLI Flag** column, and `x-icon` sits next to the name; both fall back to an em dash / 🔧 when absent.
+A property name appears in the **Required** column (✅) when it is listed in the object's `required` array. `x-cli-flag` fills the **CLI Flag** column, and `x-icon` sits next to the name. Neither property sets a `default`, so the **Default** column is dropped; the `outFile` row, which isn't required, leaves the **Required** cell empty rather than printing a placeholder.
 
 <details>
 <summary><strong>Input schema</strong></summary>
@@ -246,7 +249,6 @@ Generated markdown:
 <th>CLI Flag</th>
 <th>Type</th>
 <th align="center">Required</th>
-<th align="center">Default</th>
 </tr>
 </thead>
 <tbody>
@@ -255,20 +257,18 @@ Generated markdown:
 <td><code>--schema &lt;path&gt;</code></td>
 <td><code>string</code></td>
 <td align="center">✅</td>
-<td align="center">—</td>
 </tr>
 <tr>
-<td colspan="5">Path to the schema to process.<br><strong>Examples:</strong> <code>"./schema.json"</code></td>
+<td colspan="4">Path to the schema to process.<br><strong>Examples:</strong> <code>"./schema.json"</code></td>
 </tr>
 <tr>
 <td>📄 <code>outFile</code></td>
 <td><code>--out-file &lt;file&gt;</code></td>
 <td><code>string</code></td>
-<td align="center">—</td>
-<td align="center">—</td>
+<td align="center"></td>
 </tr>
 <tr>
-<td colspan="5">Write everything to a single file.</td>
+<td colspan="4">Write everything to a single file.</td>
 </tr>
 </tbody>
 </table>
@@ -306,7 +306,6 @@ Generated markdown:
 <thead>
 <tr>
 <th>Property</th>
-<th>CLI Flag</th>
 <th>Type</th>
 <th align="center">Required</th>
 <th align="center">Default</th>
@@ -315,13 +314,12 @@ Generated markdown:
 <tbody>
 <tr>
 <td>🖥️ <a href="#config-server"><code>server</code></a></td>
-<td>—</td>
 <td><code>object</code></td>
-<td align="center">—</td>
-<td align="center">—</td>
+<td align="center"></td>
+<td align="center"></td>
 </tr>
 <tr>
-<td colspan="5">HTTP server settings.</td>
+<td colspan="4">HTTP server settings.</td>
 </tr>
 </tbody>
 </table>
@@ -333,7 +331,6 @@ Generated markdown:
 <thead>
 <tr>
 <th>Property</th>
-<th>CLI Flag</th>
 <th>Type</th>
 <th align="center">Required</th>
 <th align="center">Default</th>
@@ -342,23 +339,126 @@ Generated markdown:
 <tbody>
 <tr>
 <td>🌐 <code>host</code></td>
-<td>—</td>
 <td><code>string</code></td>
 <td align="center">✅</td>
-<td align="center">—</td>
+<td align="center"></td>
 </tr>
 <tr>
-<td colspan="5">Hostname to bind.</td>
+<td colspan="4">Hostname to bind.</td>
 </tr>
 <tr>
 <td>🔌 <code>port</code></td>
-<td>—</td>
 <td><code>number</code></td>
-<td align="center">—</td>
+<td align="center"></td>
 <td align="center"><code>3000</code></td>
 </tr>
 <tr>
-<td colspan="5">Port to listen on.</td>
+<td colspan="4">Port to listen on.</td>
+</tr>
+</tbody>
+</table>
+
+### References and definitions
+
+`$ref` pointers are inlined from `$defs` before rendering, so a schema assembled
+from reusable definitions produces the same tables as an inline one. Sibling
+keywords on a `$ref` (here `x-icon` and `description`) override the definition,
+and a property whose type comes from `enum` (`logLevel`) gets an inferred **Type**.
+
+<details>
+<summary><strong>Input schema</strong></summary>
+
+```json
+{
+  "title": "Refs",
+  "required": ["server"],
+  "properties": {
+    "server": { "$ref": "#/$defs/server", "x-icon": "🖥️", "description": "HTTP server settings." },
+    "logLevel": { "$ref": "#/$defs/logLevel", "x-icon": "🔊" }
+  },
+  "$defs": {
+    "server": {
+      "type": "object",
+      "required": ["host"],
+      "properties": {
+        "host": { "type": "string", "x-icon": "🌐", "description": "Hostname to bind." },
+        "port": { "type": "number", "x-icon": "🔌", "default": 3000, "description": "Port to listen on." }
+      }
+    },
+    "logLevel": {
+      "enum": ["debug", "info", "warn", "error"],
+      "default": "info",
+      "description": "Minimum log level to emit."
+    }
+  }
+}
+```
+
+</details>
+
+Generated markdown:
+
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Type</th>
+<th align="center">Required</th>
+<th align="center">Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>🖥️ <a href="#config-server"><code>server</code></a></td>
+<td><code>object</code></td>
+<td align="center">✅</td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">HTTP server settings.</td>
+</tr>
+<tr>
+<td>🔊 <code>logLevel</code></td>
+<td><code>string</code></td>
+<td align="center"></td>
+<td align="center"><code>"info"</code></td>
+</tr>
+<tr>
+<td colspan="4">Minimum log level to emit.<br><strong>Allowed:</strong> <code>"debug"</code>, <code>"info"</code>, <code>"warn"</code>, <code>"error"</code></td>
+</tr>
+</tbody>
+</table>
+
+<a id="config-server"></a>
+#### `server`
+
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Type</th>
+<th align="center">Required</th>
+<th align="center">Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>🌐 <code>host</code></td>
+<td><code>string</code></td>
+<td align="center">✅</td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">Hostname to bind.</td>
+</tr>
+<tr>
+<td>🔌 <code>port</code></td>
+<td><code>number</code></td>
+<td align="center"></td>
+<td align="center"><code>3000</code></td>
+</tr>
+<tr>
+<td colspan="4">Port to listen on.</td>
 </tr>
 </tbody>
 </table>
