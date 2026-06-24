@@ -1,6 +1,6 @@
 {
   "name": "@amritk/mjst",
-  "version": "0.7.13",
+  "version": "0.7.14",
   "description": "Generate TypeScript parsers and type definitions from JSON Schemas.",
   "type": "module",
   "license": "MIT",

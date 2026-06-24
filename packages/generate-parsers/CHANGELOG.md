@@ -1,5 +1,13 @@
 # @amritk/generate-parsers
 
+## 0.12.2
+
+### Patch Changes
+
+- Updated dependencies [dc740e4]
+- Updated dependencies [3e6f49d]
+  - @amritk/generate-markdown@0.4.0
+
 ## 0.12.1
 
 ### Patch Changes
