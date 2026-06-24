@@ -1,5 +1,23 @@
 # @amritk/generate-markdown
 
+## 0.4.0
+
+### Minor Changes
+
+- dc740e4: Only render columns and icons the schema actually uses. The **CLI Flag**,
+  **Required**, and **Default** columns are now dropped entirely when no property
+  anywhere in the schema fills them (the check spans nested objects so every table
+  keeps a consistent shape), and properties without an `x-icon` no longer get a
+  fallback icon. Empty cells are left blank instead of showing an `—` placeholder.
+- 3e6f49d: Resolve `$ref`/`$defs` and infer types from composition keywords. `$ref`
+  pointers are now inlined from the document's `$defs` (any `#/…` JSON pointer)
+  before rendering, with recursive definitions detected and collapsed so
+  generation always terminates and sibling keywords on a `$ref` (e.g.
+  `description`) overriding the referenced definition. Properties that describe
+  their type through `enum`, `const`, or `anyOf`/`oneOf`/`allOf` instead of a
+  plain `type` now get an inferred **Type** label. This lets schemas assembled
+  from reusable definitions render directly, without pre-bundling.
+
 ## 0.3.0
 
 ### Minor Changes
