@@ -97,52 +97,42 @@ Returns: `Promise<GeneratedFile[]>`.
 <thead>
 <tr>
 <th>Property</th>
-<th>CLI Flag</th>
 <th>Type</th>
-<th align="center">Required</th>
 <th align="center">Default</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td>🏷️ <code>typesOnly</code></td>
-<td>—</td>
 <td><code>boolean</code></td>
-<td align="center">—</td>
 <td align="center"><code>false</code></td>
 </tr>
 <tr>
-<td colspan="5">Generate only TypeScript type definitions without parser functions. Runtime helper files (validators, isObject) are also omitted since they are only needed for parsers.</td>
+<td colspan="3">Generate only TypeScript type definitions without parser functions. Runtime helper files (validators, isObject) are also omitted since they are only needed for parsers.</td>
 </tr>
 <tr>
 <td>⚠️ <code>logWarnings</code></td>
-<td>—</td>
 <td><code>boolean</code></td>
-<td align="center">—</td>
 <td align="center"><code>false</code></td>
 </tr>
 <tr>
-<td colspan="5">Emit a console.warn in the generated parsers for every input key that is not declared in the schema's properties. Useful for detecting schema drift or unexpected data shapes at runtime.</td>
+<td colspan="3">Emit a console.warn in the generated parsers for every input key that is not declared in the schema's properties. Useful for detecting schema drift or unexpected data shapes at runtime.</td>
 </tr>
 <tr>
 <td>🚫 <code>strict</code></td>
-<td>—</td>
 <td><code>boolean</code></td>
-<td align="center">—</td>
 <td align="center"><code>false</code></td>
 </tr>
 <tr>
-<td colspan="5">Generate parsers that throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. When a schema sets additionalProperties: false, undeclared keys throw too; otherwise they are still allowed.</td>
+<td colspan="3">Generate parsers that throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. When a schema sets additionalProperties: false, undeclared keys throw too; otherwise they are still allowed.</td>
 </tr>
 <tr>
 <td>🧹 <code>stripUnknown</code></td>
-<td>—</td>
 <td><code>boolean</code></td>
-<td align="center">—</td>
 <td align="center"><code>false</code></td>
 </tr>
 <tr>
-<td colspan="5">Build each parser's result from the schema's declared properties only, silently dropping undeclared input keys at every nesting level (zod's .strip()). Extras are never a validation error, so this composes with strict (which still throws on wrong types and missing required properties) and yields to additionalProperties: false, which rejects rather than strips in strict mode.</td>
+<td colspan="3">Build each parser's result from the schema's declared properties only, silently dropping undeclared input keys at every nesting level (zod's .strip()). Extras are never a validation error, so this composes with strict (which still throws on wrong types and missing required properties) and yields to additionalProperties: false, which rejects rather than strips in strict mode.</td>
 </tr>
 </tbody>
 </table>
