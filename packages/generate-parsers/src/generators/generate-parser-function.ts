@@ -1,5 +1,4 @@
 import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
-import { multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { safeAccessor, safeKey } from '@amritk/helpers/safe-accessor'
@@ -9,22 +8,11 @@ import {
   hasAnyOf,
   hasConst,
   hasEnum,
-  hasExclusiveMaximum,
-  hasExclusiveMinimum,
   hasItems,
-  hasMaxItems,
-  hasMaximum,
-  hasMaxLength,
-  hasMinItems,
-  hasMinimum,
-  hasMinLength,
-  hasMultipleOf,
   hasOneOf,
-  hasPattern,
   hasProperties,
   hasRef,
   hasType,
-  hasUniqueItems,
   isObjectSchema,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
@@ -35,6 +23,13 @@ import { getDefaultValue } from '#helpers/get-default-value'
 import { getDiscriminatorValue } from '#helpers/get-discriminator-value'
 
 import { generateObjectStrictAssertion, generateScalarStrictAssertion } from './generate-strict-assertion'
+import {
+  canEnforceUnion,
+  generatePropertyTypeCheck,
+  generateUnionCheck,
+  getUnionBranches,
+  shapeValidatorName,
+} from './generate-type-checks'
 import { generateValidationExpression, scalarItemTypeCheck } from './generate-validation-expression'
 
 /**
@@ -444,6 +439,13 @@ type UnionParserContext = {
   readonly useRefImports: boolean
   readonly suffix: string
   readonly rootSchema?: Record<string, unknown>
+  /**
+   * Mirrors the parser's stripUnknown option. Strict union *enforcement* is
+   * skipped when stripping: imported shape validators then treat undeclared
+   * keys as a mismatch, but the stripUnknown contract is to drop extras, not
+   * reject the value — throwing on that predicate would be wrong.
+   */
+  readonly stripUnknown?: boolean
 }
 
 /**
@@ -524,6 +526,32 @@ const generateNonObjectParser = (
     if (branches.length > 0 && branches.every((b) => isSchemaObject(b) && hasRef(b))) {
       const dispatch = generateRefUnionDispatch(functionName, typeName, branches as JSONSchema[], strict, unionCtx)
       if (dispatch !== null) return dispatch
+    }
+  }
+
+  // An alias definition (a bare `$ref` with no shape of its own, e.g. a root
+  // schema that is just `$ref: '#/$defs/expr'`) delegates to the referenced
+  // parser instead of blindly casting, in both modes. Guarded against
+  // self-reference: delegating to ourselves would recurse forever.
+  if (unionCtx?.useRefImports && isSchemaObject(schema) && hasRef(schema) && !hasProperties(schema)) {
+    const refName = refToName((schema as { $ref: string }).$ref, unionCtx.suffix)
+    if (refName !== typeName) {
+      return `export const ${functionName} = (input: unknown): ${typeName} => ${generateParserName(refName)}(input) as ${typeName};`
+    }
+  }
+
+  // Strict union enforcement for inline (or mixed) branches: membership is the
+  // disjunction of per-branch checks, and a non-member throws. Only emitted
+  // when every branch check is false-sound (see canEnforceUnion) — otherwise a
+  // conservative stub validator somewhere in the graph could reject valid
+  // input — and never when stripping unknown keys (see UnionParserContext).
+  if (strict && unionCtx && isSchemaObject(schema)) {
+    const branches = getUnionBranches(schema)
+    if (branches && !unionCtx.stripUnknown && canEnforceUnion(branches, unionCtx.rootSchema)) {
+      const check = generateUnionCheck('input', branches, unionCtx.useRefImports, unionCtx.suffix)
+      if (check !== null) {
+        return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!(${check})) throw new Error(${JSON.stringify(`[${typeName}] value does not match any union branch`)});\n  return input as ${typeName};\n};`
+      }
     }
   }
 
@@ -642,13 +670,6 @@ const toVarName = (key: string): string => {
 }
 
 /**
- * Returns the shape-predicate function name for a given type name.
- * The predicate is generated alongside each parser and tells callers
- * whether `input` is already in the shape produced by the parser's fast path.
- */
-const shapeValidatorName = (typeName: string): string => `validate${typeName}Shape`
-
-/**
  * Matches an inline nested object property — an object schema written directly
  * under `properties` with its own `properties`, rather than referenced via
  * `$ref`. These get a private sub-parser (and shape predicate) in the same
@@ -708,122 +729,6 @@ const hasStrictKeys = (schema: JSONSchema): boolean => {
 }
 
 /**
- * Generates a fast-path type check expression for a property.
- * Returns null if the schema is too complex for a simple type check
- * (e.g. has unions, enums that require more elaborate validation).
- *
- * When `useRefImports` is true, $ref properties (and arrays of $refs) are
- * checked by calling the imported shape predicate, allowing parent parsers
- * to fast-path through nested ref types without recursing into their parsers.
- */
-const generatePropertyTypeCheck = (
-  varName: string,
-  schema: JSONSchema,
-  useRefImports: boolean,
-  suffix: string,
-): string | null => {
-  if (!isSchemaObject(schema)) return null
-
-  // $ref via shape predicate (deep fast-path through nested types).
-  if (useRefImports && hasRef(schema)) {
-    const refName = refToName((schema as { $ref: string }).$ref, suffix)
-    return `${shapeValidatorName(refName)}(${varName})`
-  }
-
-  // Skip fast path for complex schemas that need more elaborate validation
-  if (
-    hasEnum(schema) ||
-    hasOneOf(schema) ||
-    hasAnyOf(schema) ||
-    hasAllOf(schema) ||
-    hasRef(schema) ||
-    'not' in schema
-  ) {
-    return null
-  }
-
-  // A `const` property (the usual discriminated-union tag, e.g. `kind: "lit"`) has
-  // no `type`, but is fast-path predicable via strict equality. Handling it here is
-  // what lets a discriminated branch's shape validator be a real predicate instead
-  // of the `=> false` stub. Structural consts need deep equality, so skip those.
-  if (hasConst(schema)) {
-    const c = schema.const
-    return c === null || typeof c !== 'object' ? `${varName} === ${JSON.stringify(c)}` : null
-  }
-
-  if (!hasType(schema)) return null
-
-  // Array of $refs: each item must satisfy the imported shape predicate.
-  if (
-    useRefImports &&
-    schema.type === 'array' &&
-    hasItems(schema) &&
-    isSchemaObject(schema.items) &&
-    hasRef(schema.items)
-  ) {
-    const refName = refToName((schema.items as { $ref: string }).$ref, suffix)
-    return `Array.isArray(${varName}) && ${varName}.every(${shapeValidatorName(refName)})`
-  }
-
-  const checks: string[] = []
-
-  switch (schema.type) {
-    case 'string': {
-      checks.push(`typeof ${varName} === "string"`)
-      if (hasPattern(schema)) checks.push(`/${escapeRegexPattern(schema.pattern)}/.test(${varName})`)
-      if (hasMinLength(schema)) checks.push(`${varName}.length >= ${schema.minLength}`)
-      if (hasMaxLength(schema)) checks.push(`${varName}.length <= ${schema.maxLength}`)
-      break
-    }
-    case 'number':
-    case 'integer': {
-      checks.push(`typeof ${varName} === "number"`)
-      // `integer` must reject non-integral numbers on the fast path too, otherwise
-      // `1.5` would pass through uncoerced.
-      if (schema.type === 'integer') checks.push(`Number.isInteger(${varName})`)
-      if (hasMinimum(schema)) checks.push(`${varName} >= ${schema.minimum}`)
-      if (hasMaximum(schema)) checks.push(`${varName} <= ${schema.maximum}`)
-      if (hasExclusiveMinimum(schema)) checks.push(`${varName} > ${schema.exclusiveMinimum}`)
-      if (hasExclusiveMaximum(schema)) checks.push(`${varName} < ${schema.exclusiveMaximum}`)
-      if (hasMultipleOf(schema)) checks.push(multipleOfPassExpr(varName, schema.multipleOf))
-      break
-    }
-    case 'boolean':
-      checks.push(`typeof ${varName} === "boolean"`)
-      break
-    case 'array': {
-      checks.push(`Array.isArray(${varName})`)
-      if (hasMinItems(schema)) checks.push(`${varName}.length >= ${schema.minItems}`)
-      if (hasMaxItems(schema)) checks.push(`${varName}.length <= ${schema.maxItems}`)
-      if (hasUniqueItems(schema) && schema.uniqueItems === true) {
-        checks.push(`new Set(${varName}).size === ${varName}.length`)
-      }
-      // For a scalar item type, every element must already be well-typed to take
-      // the fast path; a mistyped element routes the array to the slow path where
-      // each element is coerced.
-      if (hasItems(schema) && !Array.isArray(schema.items)) {
-        const itemCheck = scalarItemTypeCheck(schema.items, '_it')
-        if (itemCheck) checks.push(`${varName}.every((_it) => ${itemCheck})`)
-      }
-      break
-    }
-    case 'object':
-      checks.push(`isObject(${varName})`)
-      break
-    default:
-      return null
-  }
-
-  if (checks.length === 0) return null
-  // checks[0] is safe: we guard with checks.length === 0 above
-  let result = checks[0] as string
-  for (let i = 1; i < checks.length; i++) {
-    result += ' && ' + checks[i]
-  }
-  return result
-}
-
-/**
  * Determines if a property needs a local variable or can be inlined.
  * Schema-object properties are always cached: the slow-path ternary chain
  * reads each value 3-4x (typeof check, valid branch, undefined check, coerce),
@@ -853,6 +758,7 @@ const generateObjectParser = (
   strict?: boolean,
   exported = true,
   stripUnknown = false,
+  rootSchema?: Record<string, unknown>,
 ): string => {
   const functionName = generateParserName(typeName)
   const exportPrefix = exported ? 'export ' : ''
@@ -878,7 +784,17 @@ const generateObjectParser = (
     preamble.push(`type ${subName} = ${typeName}[${JSON.stringify(key)}];`)
     preamble.push(generateShapeValidator(propSchema, subName, useRefImports, suffix, false, stripUnknown))
     preamble.push(
-      generateObjectParser(propSchema, subName, useRefImports, suffix, logWarnings, strict, false, stripUnknown),
+      generateObjectParser(
+        propSchema,
+        subName,
+        useRefImports,
+        suffix,
+        logWarnings,
+        strict,
+        false,
+        stripUnknown,
+        rootSchema,
+      ),
     )
   }
 
@@ -1227,7 +1143,12 @@ const generateObjectParser = (
     lines.push(...warnLines)
 
     // The first assertion line is the `isObject` check, already done above.
-    const assertionLines = generateObjectStrictAssertion(schema, typeName).slice(1)
+    const assertionLines = generateObjectStrictAssertion(schema, typeName, {
+      useRefImports,
+      suffix,
+      stripUnknown,
+      ...(rootSchema !== undefined ? { rootSchema } : {}),
+    }).slice(1)
 
     if (shallowGuard) {
       // stripUnknown: a well-typed input skips the assertions and goes straight
@@ -1774,6 +1695,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
     return generateNonObjectParser(typeName, schema, strict, {
       useRefImports,
       suffix,
+      stripUnknown,
       ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
     })
   }
@@ -1790,7 +1712,17 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   // properties AND conditional keywords use all declared properties rather than
   // only the if/then fragment.
   if (hasProperties(schema)) {
-    return generateObjectParser(schema, typeName, useRefImports, suffix, logWarnings, strict, true, stripUnknown)
+    return generateObjectParser(
+      schema,
+      typeName,
+      useRefImports,
+      suffix,
+      logWarnings,
+      strict,
+      true,
+      stripUnknown,
+      options?.rootSchema,
+    )
   }
 
   // Handle conditional schemas (if/then/else) for schemas without explicit properties.
@@ -1819,6 +1751,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
     return generateNonObjectParser(typeName, schema, strict, {
       useRefImports,
       suffix,
+      stripUnknown,
       ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
     })
   }
@@ -1899,6 +1832,34 @@ export const generateShapeValidator = (
   const stub = `${exportPrefix}const ${fnName} = (_input: unknown): boolean => false;`
 
   if (!isSchemaObject(schema)) return stub
+
+  // An alias definition (a bare `$ref` with no shape of its own) delegates to
+  // the referenced type's validator. Guarded against self-reference.
+  if (useRefImports && hasRef(schema) && !hasProperties(schema)) {
+    const refName = refToName((schema as { $ref: string }).$ref, suffix)
+    if (refName !== typeName) {
+      return `${exportPrefix}const ${fnName} = (input: unknown): boolean => ${shapeValidatorName(refName)}(input);`
+    }
+    return stub
+  }
+
+  // A pure union definition (file-level oneOf/anyOf without properties) gets a
+  // real membership predicate when every branch is checkable. A recursive
+  // union (e.g. `expr` whose branches $ref `expr` itself) works because the
+  // branch checks call this very validator by name at runtime. Skipped under
+  // stripUnknown: the branch checks carry no known-keys terms, so a `true`
+  // could not guarantee the parser's strip build would be a no-op.
+  if (!hasProperties(schema) && !('patternProperties' in schema) && !('if' in schema) && !stripUnknown) {
+    const branches = getUnionBranches(schema)
+    if (branches) {
+      const check = generateUnionCheck('input', branches, useRefImports, suffix)
+      if (check !== null) {
+        return `${exportPrefix}const ${fnName} = (input: unknown): boolean => ${check};`
+      }
+    }
+    return stub
+  }
+
   if (!hasProperties(schema)) return stub
 
   // Composition / conditional schemas can match in many shapes — bail.

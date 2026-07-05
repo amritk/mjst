@@ -154,12 +154,9 @@ describe('cli-e2e', () => {
     expect(probes.emptyShape?.value).toBe(false)
   })
 
-  // KNOWN GAP (found by this suite): the strict slow path checks that an array
-  // property is an array of sufficient length but never re-checks the item
-  // types, so a `string[]` field happily carries numbers when any *other*
-  // property forced the parser off the fast path — and here the fast path
-  // already fails on the items themselves.
-  it.fails('rejects wrong-typed array items in strict mode', async () => {
+  // Regression pin: the strict slow path used to check only array length and
+  // uniqueness, letting a number slip into a declared `string[]`.
+  it('rejects wrong-typed array items in strict mode', async () => {
     const outDir = await generate(
       'array-item-types',
       {
@@ -300,10 +297,10 @@ describe('cli-e2e', () => {
     expect(declaration).not.toContain('parsePlan')
   })
 
-  // KNOWN GAP: a oneOf property gets its *type* generated but no validation at
-  // all — strict parsing passes any value through, and the shape validator
-  // stubs to `=> false`. Downstream, union-typed spec fields go unchecked.
-  it.fails('validates property-level union values in strict mode', async () => {
+  // Regression pin: a oneOf property used to get its type generated but no
+  // validation at all — strict mode now throws on a value matching no variant,
+  // and the shape validator is a real membership predicate.
+  it('validates property-level union values in strict mode', async () => {
     const outDir = await generate(
       'property-union',
       {
@@ -340,11 +337,10 @@ describe('cli-e2e', () => {
     expect(probes.validShape?.value).toBe(true)
   })
 
-  // KNOWN GAP: the shape validator for a nested inline object stubs to
-  // `=> false` when it hits an unsupported property check (here: the enum),
-  // which is safe for the parser's internal fast path but leaks into the
-  // exported validate{Type}Shape API — valid input reports as invalid.
-  it.fails('exported shape validators accept valid nested inline objects', async () => {
+  // Regression pin: nested inline objects with enum properties used to stub
+  // their shape validator to `=> false`, making the exported
+  // validate{Type}Shape reject valid input.
+  it('exported shape validators accept valid nested inline objects', async () => {
     const outDir = await generate('nested-shape', PLAN_SCHEMA, ['--strict', '--build'])
     const probes = await runProbes(join(outDir, 'index.js'), {
       validShape: "m.validatePlanShape({ axiom: { kind: 'assume' } })",
@@ -353,11 +349,11 @@ describe('cli-e2e', () => {
     expect(probes.validShape?.value).toBe(true)
   })
 
-  // KNOWN GAP: a definition that is itself a union (file-level oneOf) gets a
-  // blind-cast parser and a `=> false` shape validator — the union generators
-  // only run for unions nested inside object properties. Downstream this is
-  // the stubbed recursive `expr` parser from the 0.7.15 evaluation.
-  it.fails('generates a working parser for a file-level union definition', async () => {
+  // Regression pin: a definition that is itself a union (file-level oneOf)
+  // used to get a blind-cast parser and a `=> false` shape validator — the
+  // stubbed recursive `expr` parser from the 0.7.15 evaluation. Strict mode
+  // now enforces membership recursively through the branch $refs.
+  it('generates a working parser for a file-level union definition', async () => {
     const outDir = await generate('union-def', AST_SCHEMA, ['--strict', '--build'])
     const probes = await runProbes(join(outDir, 'index.js'), {
       validLit: "m.parseExpr({ kind: 'lit', value: 1 })",
@@ -372,11 +368,10 @@ describe('cli-e2e', () => {
     expect(probes.validShape?.value).toBe(true)
   })
 
-  // KNOWN GAP: when the root is a $ref whose derived name matches the
-  // definition (title "Expr" → #/$defs/expr), both land in expr.ts and the
-  // file imports from itself while redeclaring the same identifiers —
-  // `--build` cannot even compile it.
-  it.fails('handles a root $ref whose name collides with its definition', async () => {
+  // Regression pin: a root $ref whose derived name matches its definition
+  // (title "Expr" → #/$defs/expr) used to emit a self-importing, uncompilable
+  // wrapper. The walker now merges the definition into the root file.
+  it('handles a root $ref whose name collides with its definition', async () => {
     const outDir = await generate('root-ref-collision', { ...AST_SCHEMA, title: 'Expr' }, ['--strict', '--build'])
     const probes = await runProbes(join(outDir, 'index.js'), {
       garbage: "m.parseExpr({ kind: 'bogus' })",

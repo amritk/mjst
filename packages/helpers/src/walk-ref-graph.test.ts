@@ -115,4 +115,69 @@ describe('walk-ref-graph', () => {
 
     expect(second).toEqual(first)
   })
+
+  it('merges an alias root into its same-named definition instead of a self-importing wrapper', () => {
+    // A document that is only `$ref: '#/$defs/expr'` with root type "Expr"
+    // maps to the same filename as the definition. The old behavior emitted a
+    // wrapper for the root and skipped the definition, leaving expr.ts to
+    // import (and redeclare) itself. The walker now hands the *resolved*
+    // definition to the root node, carrying the ref for self-import exclusion.
+    const schema = {
+      title: 'Expr',
+      $ref: '#/$defs/expr',
+      $defs: {
+        expr: {
+          oneOf: [
+            { type: 'object', properties: { kind: { const: 'lit' } }, required: ['kind'] },
+            {
+              type: 'object',
+              properties: { kind: { const: 'add' }, left: { $ref: '#/$defs/expr' } },
+              required: ['kind', 'left'],
+            },
+          ],
+        },
+      },
+    }
+
+    const nodes = collect(schema, 'Expr')
+
+    expect(nodes).toHaveLength(1)
+    expect(nodes[0]?.filename).toBe('expr')
+    expect(nodes[0]?.isRoot).toBe(true)
+    expect(nodes[0]?.ref).toBe('#/$defs/expr')
+    // The node carries the union definition, not the bare-$ref wrapper.
+    expect(nodes[0]?.schema).toHaveProperty('oneOf')
+  })
+
+  it('keeps the wrapper for an alias root whose name does not collide', () => {
+    const schema = {
+      title: 'Ast',
+      $ref: '#/$defs/expr',
+      $defs: { expr: { type: 'object', properties: { kind: { type: 'string' } } } },
+    }
+
+    const nodes = collect(schema, 'Ast')
+
+    expect(nodes.map((n) => ({ filename: n.filename, ref: n.ref, isRoot: n.isRoot }))).toEqual([
+      { filename: 'ast', ref: undefined, isRoot: true },
+      { filename: 'expr', ref: '#/$defs/expr', isRoot: false },
+    ])
+  })
+
+  it('does not treat a root with shape keywords beside its $ref as an alias', () => {
+    // `$ref` plus sibling keywords is a composition, not a pure alias — the
+    // root keeps its own (merged) schema even when the filename collides.
+    const schema = {
+      title: 'Expr',
+      $ref: '#/$defs/expr',
+      type: 'object',
+      properties: { extra: { type: 'string' } },
+      $defs: { expr: { type: 'object', properties: { kind: { type: 'string' } } } },
+    }
+
+    const nodes = collect(schema, 'Expr')
+
+    expect(nodes[0]?.ref).toBeUndefined()
+    expect(nodes[0]?.schema).toHaveProperty('properties')
+  })
 })
