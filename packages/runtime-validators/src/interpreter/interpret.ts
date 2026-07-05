@@ -177,23 +177,24 @@ const fail = (ctx: InterpreterContext, message: string, path: string): void => {
 }
 
 /**
- * Escapes a property name for a JSON Pointer (RFC 6901): `~` → `~0`, `/` → `~1`.
- * Without this a key like `a/b` produces the path `/a/b`, indistinguishable from
- * property `b` nested under `a`. The `includes` guard keeps the common
- * escape-free key (every array index, most property names) allocation-free.
- */
-const escapePointerToken = (key: string): string =>
-  key.includes('~') || key.includes('/') ? key.replace(/~/g, '~0').replace(/\//g, '~1') : key
-
-/**
  * Builds the child instance path for a nested property or item. In guard mode
  * the path is never read — {@link fail} only records it when `emitErrors` is set
  * — so we skip the concatenation and thread the parent path down unchanged. That
  * keeps every property/item recursion allocation-free on the guard hot path,
  * where a single validation is otherwise dominated by these throwaway strings.
+ *
+ * When a path *is* built, a property name is escaped for JSON Pointer (RFC 6901):
+ * `~` → `~0`, `/` → `~1`, so `a/b` doesn't collide with `b` under `a`. The escape
+ * is gated behind a two-char scan that virtually every real key (and every array
+ * index) fails, so the common case stays a bare concatenation.
  */
-const childPath = (ctx: InterpreterContext, path: string, key: string | number): string =>
-  ctx.emitErrors ? `${path}/${typeof key === 'string' ? escapePointerToken(key) : key}` : path
+const childPath = (ctx: InterpreterContext, path: string, key: string | number): string => {
+  if (!ctx.emitErrors) return path
+  if (typeof key === 'string' && (key.indexOf('/') !== -1 || key.indexOf('~') !== -1)) {
+    return `${path}/${key.replace(/~/g, '~0').replace(/\//g, '~1')}`
+  }
+  return `${path}/${key}`
+}
 
 /**
  * Counts Unicode code points in `value`, as JSON Schema's `minLength`/`maxLength`
@@ -334,7 +335,35 @@ type ObjectMeta = {
   requiredSet: Set<string>
   requiredNotInProps: string[]
   patternEntries: [RegExp, unknown][] | null
+  /**
+   * True when none of this node's declared/required keys is a name inherited from
+   * `Object.prototype` (`constructor`, `toString`, `__proto__`, …). For such keys
+   * presence can be tested with the cheap `obj[key] !== undefined` — a JSON object
+   * never inherits them — instead of the slower `Object.hasOwn`. Only a schema
+   * that actually declares a prototype-member key pays the `hasOwn` cost.
+   */
+  safeKeys: boolean
 }
+
+/**
+ * Names reachable on a plain object via its prototype chain, for which a bare
+ * `obj[key]` read could return an inherited value and wrongly report presence.
+ */
+const PROTO_MEMBER_NAMES = new Set<string>([
+  '__proto__',
+  'constructor',
+  'prototype',
+  'toString',
+  'toLocaleString',
+  'valueOf',
+  'hasOwnProperty',
+  'isPrototypeOf',
+  'propertyIsEnumerable',
+  '__defineGetter__',
+  '__defineSetter__',
+  '__lookupGetter__',
+  '__lookupSetter__',
+])
 
 /**
  * Memoized enum membership. An all-primitive enum resolves to a `Set` (SameValueZero,
@@ -371,9 +400,10 @@ const getObjectMeta = (s: Record<string, unknown>): ObjectMeta => {
     const properties = isPlainObject(s['properties']) ? s['properties'] : undefined
     const patternProperties = isPlainObject(s['patternProperties']) ? s['patternProperties'] : undefined
     const required = Array.isArray(s['required']) ? (s['required'] as string[]) : []
+    const knownKeys = properties ? Object.keys(properties) : undefined
     meta = {
       properties,
-      knownKeys: properties ? Object.keys(properties) : undefined,
+      knownKeys,
       requiredSet: new Set(required),
       requiredNotInProps: required.filter((k) => !(properties !== undefined && k in properties)),
       // Compile each `patternProperties` regex once here (a stateless RegExp is
@@ -382,6 +412,9 @@ const getObjectMeta = (s: Record<string, unknown>): ObjectMeta => {
       patternEntries: patternProperties
         ? Object.entries(patternProperties).map(([source, schema]) => [compilePattern(source), schema])
         : null,
+      safeKeys:
+        (knownKeys === undefined || knownKeys.every((k) => !PROTO_MEMBER_NAMES.has(k))) &&
+        required.every((k) => !PROTO_MEMBER_NAMES.has(k)),
     }
     objectMetaCache.set(s, meta)
   }
@@ -400,7 +433,7 @@ const interpretObject = (
   const obj = value as Record<string, unknown>
 
   const meta = getObjectMeta(s)
-  const { properties, knownKeys, requiredSet } = meta
+  const { properties, knownKeys, requiredSet, safeKeys } = meta
 
   const hasAdditional = 'additionalProperties' in s
   const additional = s['additionalProperties']
@@ -410,11 +443,11 @@ const interpretObject = (
 
   if (properties && knownKeys) {
     for (const key of knownKeys) {
-      // Presence is own-property membership, not `value !== undefined`. Using
-      // the latter false-accepts an inherited `constructor`/`toString` for a
-      // `required` key and false-rejects a real `__proto__` property (whose
-      // bracket read on a prototype-less lookup returns `Object.prototype`).
-      const present = Object.hasOwn(obj, key)
+      // Presence is own-property membership. `Object.hasOwn` is authoritative but
+      // has call overhead, so when no declared key is a prototype member (the
+      // common case, precomputed as `safeKeys`) the cheap `obj[key] !== undefined`
+      // is equivalent — a JSON object can't inherit a non-prototype-member name.
+      const present = safeKeys ? obj[key] !== undefined : Object.hasOwn(obj, key)
       if (requiredSet.has(key)) {
         if (!present) fail(ctx, `must have required property '${key}'`, path)
         else {
@@ -431,7 +464,7 @@ const interpretObject = (
 
   // Required keys with no `properties` entry still need a presence check.
   for (const key of meta.requiredNotInProps) {
-    if (!Object.hasOwn(obj, key)) {
+    if (safeKeys ? obj[key] === undefined : !Object.hasOwn(obj, key)) {
       fail(ctx, `must have required property '${key}'`, path)
       if (ctx.failed) return
     }
@@ -645,16 +678,26 @@ const interpretArray = (
 const interpretString = (ctx: InterpreterContext, s: Record<string, unknown>, value: unknown, path: string): void => {
   if (typeof value !== 'string') return
 
+  // Length is measured in code points per spec, but `value.length` (UTF-16 code
+  // units) is an upper bound on it — and equal unless the string holds a surrogate
+  // pair. So the cheap unit count is authoritative except in a narrow band near
+  // each bound, and the exact `codePointLength` scan is only paid there. This
+  // keeps the common ASCII / short-string path allocation- and scan-free.
   const minLength = s['minLength']
-  const maxLength = s['maxLength']
-  if (typeof minLength === 'number' || typeof maxLength === 'number') {
-    // Measured in code points per spec, computed once and reused for both bounds.
-    const length = codePointLength(value)
-    if (typeof minLength === 'number' && length < minLength) {
+  if (typeof minLength === 'number') {
+    const units = value.length
+    // units < min ⇒ code points < min (fail). units >= 2·min ⇒ code points >= min
+    // (each point is ≤ 2 units), so only the band [min, 2·min) needs the exact count.
+    if (units < minLength || (units < 2 * minLength && codePointLength(value) < minLength)) {
       fail(ctx, `must have at least ${minLength} characters`, path)
       if (ctx.failed) return
     }
-    if (typeof maxLength === 'number' && length > maxLength) {
+  }
+  const maxLength = s['maxLength']
+  if (typeof maxLength === 'number') {
+    // units <= max ⇒ code points <= max (pass); only an over-long unit count needs
+    // the exact scan, where surrogate pairs may still bring it within bounds.
+    if (value.length > maxLength && codePointLength(value) > maxLength) {
       fail(ctx, `must have at most ${maxLength} characters`, path)
       if (ctx.failed) return
     }
