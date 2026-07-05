@@ -1,6 +1,7 @@
 import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
 import { refToName } from '@amritk/helpers/ref-to-name'
+import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { safeAccessor, safeKey } from '@amritk/helpers/safe-accessor'
 import {
   hasAdditionalProperties,
@@ -29,7 +30,9 @@ import {
 } from '@amritk/helpers/schema-guards'
 import { unknownKeyCheck } from '@amritk/helpers/unknown-key-check'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+import { findDiscriminator } from '#helpers/find-discriminator'
 import { getDefaultValue } from '#helpers/get-default-value'
+import { getDiscriminatorValue } from '#helpers/get-discriminator-value'
 
 import { generateObjectStrictAssertion, generateScalarStrictAssertion } from './generate-strict-assertion'
 import { generateValidationExpression, scalarItemTypeCheck } from './generate-validation-expression'
@@ -71,6 +74,12 @@ type GenerateParserOptions = {
    * the suffix used when generating the referenced files. Defaults to `''`.
    */
   readonly typeSuffix?: string
+  /**
+   * The root schema document. When present, a top-level `oneOf`/`anyOf` whose
+   * branches are `$ref`s can be resolved to find a shared discriminator and emit a
+   * dispatch to the branch parsers, instead of falling back to a passthrough cast.
+   */
+  readonly rootSchema?: Record<string, unknown>
 }
 
 /**
@@ -426,8 +435,97 @@ const scalarDefaultLiteral = (schema: JSONSchema): string => {
   return '{}'
 }
 
-const generateNonObjectParser = (typeName: string, schema: JSONSchema, strict?: boolean): string => {
+/**
+ * Context a top-level union parser needs to dispatch to `$ref` branch parsers:
+ * whether ref branches are imported as parser functions, the type-name suffix,
+ * and the root document to resolve branch refs against.
+ */
+type UnionParserContext = {
+  readonly useRefImports: boolean
+  readonly suffix: string
+  readonly rootSchema?: Record<string, unknown>
+}
+
+/**
+ * Emits a dispatcher for a top-level `oneOf`/`anyOf` whose branches are `$ref`s,
+ * when the branches share a discriminator (a `const`/`enum` tag such as `kind`).
+ * Each resolved branch's discriminant selects its imported parser, so a recursive
+ * discriminated union (e.g. `Expr = Lit | BinOp`, where `BinOp` has `Expr`
+ * children) is actually validated and dispatched instead of blindly cast. Returns
+ * `null` when it can't be done (no root schema, no discriminator, a non-ref
+ * branch, or ref imports disabled), so the caller keeps its passthrough fallback.
+ */
+const generateRefUnionDispatch = (
+  functionName: string,
+  typeName: string,
+  branches: readonly JSONSchema[],
+  strict: boolean | undefined,
+  ctx: UnionParserContext,
+): string | null => {
+  const rootSchema = ctx.rootSchema
+  if (!ctx.useRefImports || rootSchema === undefined) return null
+  if (branches.length === 0 || !branches.every((b) => isSchemaObject(b) && hasRef(b))) return null
+
+  // Resolve each branch ref so we can read its discriminant tag and derive its
+  // imported parser name.
+  const resolved = branches.map((b) => {
+    const ref = (b as { $ref: string }).$ref
+    return { parser: generateParserName(refToName(ref, ctx.suffix)), schema: resolveRef(ref, rootSchema) as JSONSchema }
+  })
+  if (resolved.some((r) => !isSchemaObject(r.schema))) return null
+
+  const discriminator = findDiscriminator(resolved.map((r) => r.schema as JSONSchema))
+  if (discriminator === null) return null
+
+  const cases: { value: unknown; parser: string }[] = []
+  for (const r of resolved) {
+    const value = getDiscriminatorValue(r.schema as JSONSchema, discriminator)
+    if (value === null) return null
+    cases.push({ value, parser: r.parser })
+  }
+
+  // Read the discriminant safely: `null`/`undefined` is guarded (a property read
+  // would throw), and a non-object primitive yields `undefined` (no branch matches).
+  const access = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(discriminator)
+    ? `.${discriminator}`
+    : `[${JSON.stringify(discriminator)}]`
+  const discExpr = `input == null ? undefined : (input as Record<string, unknown>)${access}`
+
+  // Fold branches into a nested ternary in declaration order:
+  // `_disc === "lit" ? parseLit(input) : _disc === "binop" ? parseBinop(input) : <fallback>`.
+  // Unmatched: strict throws (not a member of the union); non-strict coerces via the
+  // first branch's parser, preserving the coercing parser's lenient contract while
+  // still running real validation/coercion instead of a blind cast.
+  const fallback = strict
+    ? `(() => { throw new Error(${JSON.stringify(`[${typeName}] value does not match any union branch`)}); })()`
+    : `${cases[0]?.parser}(input)`
+  let expr = fallback
+  for (let i = cases.length - 1; i >= 0; i--) {
+    const c = cases[i]
+    if (c) expr = `_disc === ${JSON.stringify(c.value)} ? ${c.parser}(input) : ${expr}`
+  }
+  return `export const ${functionName} = (input: unknown): ${typeName} => {\n  const _disc = ${discExpr};\n  return ${expr};\n};`
+}
+
+const generateNonObjectParser = (
+  typeName: string,
+  schema: JSONSchema,
+  strict?: boolean,
+  unionCtx?: UnionParserContext,
+): string => {
   const functionName = generateParserName(typeName)
+
+  // A ref-branch discriminated union dispatches to its branch parsers in *both*
+  // modes (strict throws on an unmatched discriminant; non-strict coerces via the
+  // first branch). This runs before the `!strict` coercion block below so a strict
+  // recursive union is validated instead of blindly cast.
+  if (unionCtx && isSchemaObject(schema) && (hasOneOf(schema) || hasAnyOf(schema))) {
+    const branches = hasOneOf(schema) ? schema.oneOf : hasAnyOf(schema) ? schema.anyOf : []
+    if (branches.length > 0 && branches.every((b) => isSchemaObject(b) && hasRef(b))) {
+      const dispatch = generateRefUnionDispatch(functionName, typeName, branches as JSONSchema[], strict, unionCtx)
+      if (dispatch !== null) return dispatch
+    }
+  }
 
   // `const`/`enum` define the value space directly (the generated type is a
   // literal / literal-union), so a non-member must coerce to a valid member —
@@ -453,10 +551,7 @@ const generateNonObjectParser = (typeName: string, schema: JSONSchema, strict?: 
     }
     // A top-level union must validate membership: an unmatched value is not of
     // the declared union type, so coerce it to a member-shaped default. Reuse the
-    // same union validation the property path uses. A `$ref` branch can't be
-    // validated inline here (the membership test would silently drop it and
-    // wrongly coerce a valid ref-shaped value), so fall through to a passthrough
-    // cast rather than discarding valid input.
+    // same union validation the property path uses.
     if (hasOneOf(schema) || hasAnyOf(schema)) {
       const branches = hasOneOf(schema) ? schema.oneOf : hasAnyOf(schema) ? schema.anyOf : []
       const hasRefBranch = branches.some((b) => isSchemaObject(b) && hasRef(b))
@@ -465,6 +560,9 @@ const generateNonObjectParser = (typeName: string, schema: JSONSchema, strict?: 
         const expr = generateValidationExpression('', schema, fallback, true, undefined, undefined, 'input', true)
         return `export const ${functionName} = (input: unknown): ${typeName} => (${expr}) as ${typeName};`
       }
+      // Ref-branch union: a *discriminated* one was already dispatched above (both
+      // modes). Anything reaching here is non-discriminated, which can't be validated
+      // inline without risking dropping valid input — fall back to a passthrough cast.
       return `export const ${functionName} = (input: unknown): ${typeName} => input as ${typeName};`
     }
   }
@@ -642,6 +740,15 @@ const generatePropertyTypeCheck = (
     'not' in schema
   ) {
     return null
+  }
+
+  // A `const` property (the usual discriminated-union tag, e.g. `kind: "lit"`) has
+  // no `type`, but is fast-path predicable via strict equality. Handling it here is
+  // what lets a discriminated branch's shape validator be a real predicate instead
+  // of the `=> false` stub. Structural consts need deep equality, so skip those.
+  if (hasConst(schema)) {
+    const c = schema.const
+    return c === null || typeof c !== 'object' ? `${varName} === ${JSON.stringify(c)}` : null
   }
 
   if (!hasType(schema)) return null
@@ -1664,7 +1771,11 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
 
   // Handle non-object schemas with type-appropriate validation
   if (!isObjectLikeSchema && !isSchemaObject(schema)) {
-    return generateNonObjectParser(typeName, schema, strict)
+    return generateNonObjectParser(typeName, schema, strict, {
+      useRefImports,
+      suffix,
+      ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
+    })
   }
 
   // Handle schemas with both properties AND patternProperties.
@@ -1705,7 +1816,11 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
 
   // Handle non-object schemas with type-appropriate validation (no properties, no conditionals)
   if (!isObjectLikeSchema) {
-    return generateNonObjectParser(typeName, schema, strict)
+    return generateNonObjectParser(typeName, schema, strict, {
+      useRefImports,
+      suffix,
+      ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
+    })
   }
 
   // Handle schemas with patternProperties (but no properties)

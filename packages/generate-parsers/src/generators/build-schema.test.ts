@@ -867,4 +867,47 @@ describe('build-schema', () => {
       expect(filenames.some((f) => f.startsWith('_helpers/'))).toBe(false)
     })
   })
+
+  describe('recursive discriminated $ref union', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { program: { $ref: '#/$defs/expr' } },
+      required: ['program'],
+      $defs: {
+        expr: { oneOf: [{ $ref: '#/$defs/lit' }, { $ref: '#/$defs/binop' }] },
+        lit: {
+          type: 'object',
+          properties: { kind: { const: 'lit' }, value: { type: 'number' } },
+          required: ['kind', 'value'],
+        },
+        binop: {
+          type: 'object',
+          properties: { kind: { const: 'binop' }, left: { $ref: '#/$defs/expr' }, right: { $ref: '#/$defs/expr' } },
+          required: ['kind', 'left', 'right'],
+        },
+      },
+    }
+
+    it('dispatches on the discriminator to the branch parsers instead of blind-casting', async () => {
+      const files = await buildSchema(schema, 'Root', undefined, undefined)
+      const expr = files.find((f) => f.filename === 'expr.ts')?.content ?? ''
+      // Previously this was `parseExpr = (input) => input as Expr;` (a blind cast).
+      expect(expr).not.toMatch(/parseExpr = \(input: unknown\): Expr => input as Expr;/)
+      expect(expr).toContain('=== "lit" ? parseLit(input)')
+      expect(expr).toContain('=== "binop" ? parseBinop(input)')
+    })
+
+    it('emits a real shape predicate for a discriminated branch (not the => false stub)', async () => {
+      const files = await buildSchema(schema, 'Root', undefined, undefined)
+      const lit = files.find((f) => f.filename === 'lit.ts')?.content ?? ''
+      expect(lit).not.toContain('validateLitShape = (_input: unknown): boolean => false;')
+      expect(lit).toContain('input.kind === "lit"')
+    })
+
+    it('throws on an unknown discriminant in strict mode', async () => {
+      const files = await buildSchema(schema, 'Root', undefined, undefined, undefined, true)
+      const expr = files.find((f) => f.filename === 'expr.ts')?.content ?? ''
+      expect(expr).toContain('does not match any union branch')
+    })
+  })
 })
