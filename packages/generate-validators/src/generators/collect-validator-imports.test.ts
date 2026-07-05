@@ -44,4 +44,39 @@ describe('collect-validator-imports', () => {
 
     expect(collectValidatorImports(schema)).toEqual(["import { type Contact, validateContact } from './contact'"])
   })
+
+  it('collects refs the emitter delegates for via patternProperties, contains, prefixItems and if/then/else', () => {
+    // Every one of these keywords makes the emitter emit a `validateX(...)` call,
+    // so each referenced validator has to be imported or the output references an
+    // undefined symbol. The old traversal covered none of these paths.
+    const schema = {
+      type: 'object' as const,
+      patternProperties: { '^x-': { $ref: '#/$defs/ext' } },
+      propertyNames: { $ref: '#/$defs/name' },
+      if: { $ref: '#/$defs/cond' },
+      then: { $ref: '#/$defs/ontrue' },
+      else: { $ref: '#/$defs/onfalse' },
+      properties: {
+        list: {
+          type: 'array' as const,
+          contains: { $ref: '#/$defs/needle' },
+          prefixItems: [{ $ref: '#/$defs/first' }],
+        },
+        branch: { oneOf: [{ $ref: '#/$defs/variant' }] },
+      },
+    }
+
+    // Order follows traversal order (properties → patternProperties → single
+    // subschema keywords). The point of the test is that NONE are dropped.
+    expect(collectValidatorImports(schema)).toEqual([
+      "import { type Needle, validateNeedle } from './needle'",
+      "import { type First, validateFirst } from './first'",
+      "import { type Variant, validateVariant } from './variant'",
+      "import { type Ext, validateExt } from './ext'",
+      "import { type Name, validateName } from './name'",
+      "import { type Cond, validateCond } from './cond'",
+      "import { type Ontrue, validateOntrue } from './ontrue'",
+      "import { type Onfalse, validateOnfalse } from './onfalse'",
+    ])
+  })
 })

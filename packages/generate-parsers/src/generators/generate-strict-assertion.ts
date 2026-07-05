@@ -1,5 +1,6 @@
 import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
+import { multipleOfFailExpr } from '@amritk/helpers/multiple-of-check'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
   hasEnum,
@@ -28,8 +29,10 @@ const wrongTypeCondition = (accessor: string, type: string): string | null => {
     case 'string':
       return `typeof ${accessor} !== "string"`
     case 'number':
-    case 'integer':
       return `typeof ${accessor} !== "number"`
+    case 'integer':
+      // `integer` also rejects non-integral numbers; a bare typeof accepts `1.5`.
+      return `(typeof ${accessor} !== "number" || !Number.isInteger(${accessor}))`
     case 'boolean':
       return `typeof ${accessor} !== "boolean"`
     case 'array':
@@ -113,7 +116,7 @@ const generateConstraintChecks = (acc: string, propSchema: JSONSchema, typeName:
     }
     if (hasMultipleOf(propSchema)) {
       lines.push(
-        `  if (typeof ${acc} === "number" && ${acc} % ${propSchema.multipleOf} !== 0) ${throwError(`${field} must be a multiple of ${propSchema.multipleOf}`)};`,
+        `  if (typeof ${acc} === "number" && ${multipleOfFailExpr(acc, propSchema.multipleOf)}) ${throwError(`${field} must be a multiple of ${propSchema.multipleOf}`)};`,
       )
     }
   }

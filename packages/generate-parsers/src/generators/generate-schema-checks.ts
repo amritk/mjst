@@ -1,5 +1,6 @@
 import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
+import { multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
 import {
   hasAdditionalProperties,
   hasEnum,
@@ -63,6 +64,10 @@ export const generateSchemaChecks = (accessor: string, schema: JSONSchema): stri
     case 'number':
     case 'integer':
       checks.push(`typeof ${accessor} === "number"`)
+      // `integer` must reject non-integral numbers (a bare typeof accepts `1.5`).
+      if (schema.type === 'integer') {
+        checks.push(`Number.isInteger(${accessor})`)
+      }
       if (hasMinimum(schema)) {
         checks.push(`${accessor} >= ${schema.minimum}`)
       }
@@ -76,7 +81,7 @@ export const generateSchemaChecks = (accessor: string, schema: JSONSchema): stri
         checks.push(`${accessor} < ${schema.exclusiveMaximum}`)
       }
       if (hasMultipleOf(schema)) {
-        checks.push(`${accessor} % ${schema.multipleOf} === 0`)
+        checks.push(multipleOfPassExpr(accessor, schema.multipleOf))
       }
       break
     case 'boolean':

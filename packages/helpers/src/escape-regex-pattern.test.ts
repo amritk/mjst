@@ -32,4 +32,21 @@ describe('escape-regex-pattern', () => {
       expect(re.source.replace(/\\\//g, '/')).toBe(pattern.replace(/\\\//g, '/'))
     }
   })
+
+  it('throws a clear error for an invalid regex pattern', () => {
+    // `([` is not a valid regex; emitting it verbatim would break the generated
+    // file, so generation must fail loudly instead.
+    expect(() => escapeRegexPattern('([')).toThrow(/Invalid regex pattern/)
+  })
+
+  it('escapes raw line terminators so the emitted regex literal stays on one line', () => {
+    // A raw newline / CR inside a `/…/` literal is a syntax error; escaping it to
+    // `\n` / `\r` keeps the literal intact while matching the same character.
+    expect(escapeRegexPattern('a\nb')).toBe('a\\nb')
+    expect(escapeRegexPattern('a\rb')).toBe('a\\rb')
+    expect(escapeRegexPattern('a\u2028b')).toBe('a\\u2028b')
+    expect(escapeRegexPattern('a\u2029b')).toBe('a\\u2029b')
+    // The escaped body still compiles and matches the original character.
+    expect(new RegExp(escapeRegexPattern('a\nb')).test('a\nb')).toBe(true)
+  })
 })

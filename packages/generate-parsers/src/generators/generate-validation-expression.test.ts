@@ -98,7 +98,10 @@ describe('generate-validation-expression', () => {
     const result = generateValidationExpression('quantity', schema, '0', true)
 
     expect(result).toContain('typeof input?.quantity === "number"')
-    expect(result).toContain('input?.quantity % 5 === 0')
+    // multipleOf uses the interpreter's epsilon-relative division check, not `% === 0`.
+    expect(result).toContain(
+      'Math.abs(input?.quantity / 5 - Math.round(input?.quantity / 5)) <= 1e-8 * Math.max(1, Math.abs(input?.quantity / 5))',
+    )
   })
 
   it('generates integer type validation', () => {
@@ -203,7 +206,7 @@ describe('generate-validation-expression', () => {
     const schema = { enum: ['red', 'green', 'blue'] }
     const result = generateValidationExpression('color', schema, '"red"', true)
 
-    expect(result).toContain('["red","green","blue"].includes(input?.color as never)')
+    expect(result).toContain('(input?.color === "red" || input?.color === "green" || input?.color === "blue")')
   })
 
   it('generates enum validation with type', () => {
@@ -211,7 +214,7 @@ describe('generate-validation-expression', () => {
     const result = generateValidationExpression('status', schema, '"active"', true)
 
     expect(result).toContain('typeof input?.status === "string"')
-    expect(result).toContain('["active","inactive"].includes(input?.status as never)')
+    expect(result).toContain('(input?.status === "active" || input?.status === "inactive")')
   })
 
   it('handles $ref resolution', () => {
@@ -443,7 +446,7 @@ describe('generate-validation-expression', () => {
     const result = generateValidationExpression('count', schema, '0', true)
 
     expect(result).toBe(
-      'typeof input?.count === "number" ? input?.count : (input?.count !== undefined ? (Number.isFinite(Number(input?.count)) ? Number(input?.count) : 0) : 0)',
+      'typeof input?.count === "number" && Number.isInteger(input?.count) ? input?.count : (input?.count !== undefined ? (Number.isFinite(Number(input?.count)) ? Number(input?.count) : 0) : 0)',
     )
   })
 
@@ -520,7 +523,9 @@ describe('generate-validation-expression', () => {
     expect(result).toContain('typeof input?.score === "number"')
     expect(result).toContain('input?.score >= 0')
     expect(result).toContain('input?.score <= 100')
-    expect(result).toContain('input?.score % 5 === 0')
+    expect(result).toContain(
+      'Math.abs(input?.score / 5 - Math.round(input?.score / 5)) <= 1e-8 * Math.max(1, Math.abs(input?.score / 5))',
+    )
   })
 
   it('combines multiple array constraints', () => {
@@ -631,11 +636,14 @@ describe('generate-validation-expression', () => {
     const result = generateValidationExpression('count', schema, '0', true)
 
     expect(result).toContain('typeof input?.count === "number"')
+    expect(result).toContain('Number.isInteger(input?.count)')
     expect(result).toContain('input?.count >= 10')
     expect(result).toContain('input?.count <= 100')
     expect(result).toContain('input?.count > 5')
     expect(result).toContain('input?.count < 105')
-    expect(result).toContain('input?.count % 10 === 0')
+    expect(result).toContain(
+      'Math.abs(input?.count / 10 - Math.round(input?.count / 10)) <= 1e-8 * Math.max(1, Math.abs(input?.count / 10))',
+    )
   })
 
   it('handles empty required array', () => {

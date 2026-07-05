@@ -1196,6 +1196,60 @@ describe('generate-validator-function', () => {
     })
   })
 
+  it('validates non-string constraints on a root scalar (number bounds, multipleOf)', () => {
+    // Previously a root `{type:'number', minimum:5}` dropped every non-string
+    // constraint and accepted `4`.
+    const validate = evalValidator(generateValidatorFunction({ type: 'number', minimum: 5, multipleOf: 3 }, 'N'))
+    expect(validate(9)).toBe(true)
+    expect(validate(4)).not.toBe(true) // below minimum
+    expect(validate(7)).not.toBe(true) // not a multiple of 3
+  })
+
+  it('validates items and minItems on a root array', () => {
+    // Previously a root `{type:'array', items:..., minItems:2}` accepted `[1]`.
+    const validate = evalValidator(
+      generateValidatorFunction({ type: 'array', items: { type: 'string' }, minItems: 2 }, 'A'),
+    )
+    expect(validate(['a', 'b'])).toBe(true)
+    expect(validate(['a'])).not.toBe(true) // too few items
+    expect(validate(['a', 1])).not.toBe(true) // item wrong type
+  })
+
+  it('accepts either type of a nullable multi-type property and still enforces presence', () => {
+    // `type: ["string","null"]` previously emitted NO check — not even presence.
+    const validate = evalValidator(
+      generateValidatorFunction(
+        { type: 'object', properties: { nickname: { type: ['string', 'null'] } }, required: ['nickname'] },
+        'User',
+      ),
+    )
+    expect(validate({ nickname: 'ok' })).toBe(true)
+    expect(validate({ nickname: null })).toBe(true)
+    expect(validate({ nickname: 42 })).not.toBe(true) // neither string nor null
+    expect(validate({})).not.toBe(true) // required presence still enforced
+  })
+
+  it('throws for a constraining unevaluatedProperties (unsupported keyword)', () => {
+    // The generator has no support for `unevaluatedProperties`, so rather than
+    // emit a validator that silently accepts what the interpreter rejects it must
+    // fail loudly at generation time.
+    expect(() =>
+      generateValidatorFunction(
+        { type: 'object', properties: { a: { type: 'string' } }, unevaluatedProperties: false },
+        'X',
+      ),
+    ).toThrow(/unsupported keyword "unevaluatedProperties"/)
+  })
+
+  it('allows unevaluatedProperties: true since it constrains nothing', () => {
+    expect(() =>
+      generateValidatorFunction(
+        { type: 'object', properties: { a: { type: 'string' } }, unevaluatedProperties: true },
+        'X',
+      ),
+    ).not.toThrow()
+  })
+
   describe('code injection safety', () => {
     it('treats schema-controlled property names and enum values as inert data', () => {
       // Enum values interpolated into a backtick error message previously let a

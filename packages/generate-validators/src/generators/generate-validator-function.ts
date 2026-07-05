@@ -1,5 +1,6 @@
 import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
+import { multipleOfFailExpr, multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
@@ -85,6 +86,19 @@ const wrongTypeCondition = (accessor: string, type: string): string => {
     default:
       return ''
   }
+}
+
+/**
+ * Returns the list of type names when a schema's `type` is an array (the JSON
+ * Schema multi-type / nullable idiom, e.g. `["string","null"]`), else `null`.
+ * `hasType` only recognises a *string* `type`, so without special handling a
+ * multi-type schema slips through every branch and emits NO check — not even a
+ * required-presence check. A multi-type is validated as the *disjunction* of its
+ * per-type checks (the value must match at least one).
+ */
+const getTypeArray = (schema: JSONSchema): string[] | null => {
+  if (!isSchemaObject(schema) || !('type' in schema) || !Array.isArray(schema.type)) return null
+  return schema.type as string[]
 }
 
 /**
@@ -309,6 +323,43 @@ const generatePropertyChecks = (
     return lines
   }
 
+  // Multi-type / nullable property (array `type`, e.g. `["string","null"]`).
+  // `hasType` is false for an array `type`, so without this the property emits no
+  // check at all. The value is valid when it matches ANY listed type, i.e. an
+  // error is reported only when it is the wrong type for EVERY listed type; the
+  // required-presence check is still emitted so a missing required prop fails.
+  const typeArray = getTypeArray(propSchema)
+  if (typeArray) {
+    const allWrong = typeArray
+      .map((t) => wrongTypeCondition(raw, t))
+      .filter((c) => c !== '')
+      .map((c) => `(${c})`)
+      .join(' && ')
+    const label = typeArray.map((t) => typeofString(t)).join(' or ')
+
+    if (isRequired) {
+      lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
+      lines.push(
+        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+      )
+      if (allWrong) {
+        lines.push(`  } else if (${allWrong}) {`)
+        lines.push(`    errors.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${path} })`)
+      }
+      lines.push(`  }`)
+    } else if (allWrong) {
+      lines.push(`  if (${raw} !== undefined && (${allWrong})) {`)
+      lines.push(`    errors.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${path} })`)
+      lines.push(`  }`)
+    }
+
+    // Any sibling value constraints (e.g. `minLength` on a `["string","null"]`)
+    // still apply — each carries its own runtime-type guard, so it is a no-op for
+    // the values it does not target.
+    lines.push(...generateConstraintChecks(key, raw, path, propSchema, suffix, ctx))
+    return lines
+  }
+
   // typed property
   if (hasType(propSchema)) {
     const t = propSchema.type as string
@@ -449,7 +500,7 @@ const generateConstraintChecks = (
       lines.push(`  }`)
     }
     if (hasMultipleOf(propSchema)) {
-      lines.push(`  if (typeof ${raw} === 'number' && ${raw} % ${propSchema.multipleOf} !== 0) {`)
+      lines.push(`  if (typeof ${raw} === 'number' && ${multipleOfFailExpr(raw, propSchema.multipleOf)}) {`)
       lines.push(`    errors.push({ message: 'must be a multiple of ${propSchema.multipleOf}', path: ${path} })`)
       lines.push(`  }`)
     }
@@ -1304,7 +1355,7 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
         parts.push(`!(${acc} ${hasStrictExclusiveMaximum(schema) ? '>=' : '>'} ${schema.maximum})`)
       if (hasExclusiveMinimum(schema)) parts.push(`!(${acc} <= ${schema.exclusiveMinimum})`)
       if (hasExclusiveMaximum(schema)) parts.push(`!(${acc} >= ${schema.exclusiveMaximum})`)
-      if (hasMultipleOf(schema)) parts.push(`${acc} % ${schema.multipleOf} === 0`)
+      if (hasMultipleOf(schema)) parts.push(multipleOfPassExpr(acc, schema.multipleOf))
       return parts.join(' && ')
     }
     case 'boolean':
@@ -1538,37 +1589,50 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
     ].join('\n')
   }
 
+  // Top-level multi-type / nullable schema (array `type`, e.g. `["string","null"]`).
+  // `hasType` is false for an array `type`, so without this a root multi-type
+  // schema falls through to the final `return true` and validates NOTHING. The
+  // value is valid when it matches any listed type.
+  const rootTypeArray = getTypeArray(schema)
+  if (rootTypeArray) {
+    const allWrong = rootTypeArray
+      .map((t) => wrongTypeCondition('input', t))
+      .filter((c) => c !== '')
+      .map((c) => `(${c})`)
+      .join(' && ')
+    const label = rootTypeArray.map((t) => typeofString(t)).join(' or ')
+    if (!allWrong) {
+      return [
+        `export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`,
+        `  return true`,
+        `}`,
+      ].join('\n')
+    }
+    return [
+      `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+      `  if (${allWrong}) {`,
+      `    return { valid: false, errors: [{ message: ${JSON.stringify(`must be ${label}`)}, path: _path }] }`,
+      `  }`,
+      `  return true`,
+      `}`,
+    ].join('\n')
+  }
+
   // Top-level typed schema (string, number, boolean, array)
   if (hasType(schema)) {
     const t = schema.type as string
     const wrongType = wrongTypeCondition('input', t)
     const typLabel = typeofString(t)
 
-    const constraintLines: string[] = []
-
-    if (t === 'string') {
-      if (hasPattern(schema)) {
-        const re = escapeRegexPattern(schema.pattern)
-        const msg = JSON.stringify(`must match pattern ${schema.pattern}`)
-        constraintLines.push(`  if (typeof input === 'string' && !/${re}/.test(input)) {`)
-        constraintLines.push(`    errors.push({ message: ${msg}, path: _path })`)
-        constraintLines.push(`  }`)
-      }
-      if (hasMinLength(schema)) {
-        constraintLines.push(`  if (typeof input === 'string' && input.length < ${schema.minLength}) {`)
-        constraintLines.push(
-          `    errors.push({ message: 'must have at least ${schema.minLength} characters', path: _path })`,
-        )
-        constraintLines.push(`  }`)
-      }
-      if (hasMaxLength(schema)) {
-        constraintLines.push(`  if (typeof input === 'string' && input.length > ${schema.maxLength}) {`)
-        constraintLines.push(
-          `    errors.push({ message: 'must have at most ${schema.maxLength} characters', path: _path })`,
-        )
-        constraintLines.push(`  }`)
-      }
-    }
+    // Reuse the shared constraint emitter — the per-property path already handles
+    // string (pattern, min/maxLength), number/integer (bounds, multipleOf) and
+    // array (items, min/maxItems, uniqueItems, contains, prefixItems). The root
+    // path previously only built string constraints, so a `{type:'number',
+    // minimum:5}` or `{type:'array', minItems:2}` root accepted invalid input.
+    // `raw` is `input`; `path` is the root `_path` (as a template so the shared
+    // emitter's `path.slice(1,-1)` for array-item indices still works).
+    const rootCtx = createRootContext()
+    const constraintLines = generateConstraintChecks('', 'input', '`${_path}`', schema, suffix, rootCtx)
 
     if (!wrongType) {
       return [
@@ -1589,8 +1653,11 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
       ].join('\n')
     }
 
+    // Array-item / nested constraints can hoist module-level declarations (e.g. a
+    // compiled known-keys set); emit them before the function so it references them.
+    const hoistedBlock = rootCtx.hoisted.length > 0 ? `${rootCtx.hoisted.join('\n')}\n\n` : ''
     return [
-      `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+      `${hoistedBlock}export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
       `  if (${wrongType}) {`,
       `    return { valid: false, errors: [{ message: 'must be ${typLabel}', path: _path }] }`,
       `  }`,
@@ -1604,6 +1671,44 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
   return [`export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`, `  return true`, `}`].join(
     '\n',
   )
+}
+
+/**
+ * Throws when a schema (anywhere in its subtree) uses a keyword this generator
+ * does not implement but which *narrows* the set of valid documents. Today that
+ * is `unevaluatedProperties` / `unevaluatedItems` with a constraining value
+ * (`false` or a subschema). The generator has no support for them — only the
+ * runtime interpreter does — so silently emitting a validator would produce one
+ * that ACCEPTS documents the interpreter REJECTS: a wrong verdict, worse than an
+ * error. `unevaluated*: true` is a no-op (it permits everything), so it is
+ * allowed through.
+ *
+ * We deliberately throw rather than implement the keywords: doing them correctly
+ * requires tracking which properties/items each combinator branch "evaluated",
+ * which is a large, separate feature. Failing loudly at generation time surfaces
+ * the gap instead of shipping a validator that lies.
+ */
+const assertNoUnsupportedKeywords = (schema: JSONSchema, typeName: string): void => {
+  const visit = (node: unknown): void => {
+    if (typeof node !== 'object' || node === null) return
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item)
+      return
+    }
+    const record = node as Record<string, unknown>
+    for (const keyword of ['unevaluatedProperties', 'unevaluatedItems'] as const) {
+      // `true` permits everything → no constraint → safe to ignore.
+      if (keyword in record && record[keyword] !== true) {
+        throw new Error(
+          `[${typeName}] unsupported keyword "${keyword}": the validator generator does not implement it and would ` +
+            `silently accept documents the interpreter rejects. Validate this schema with the runtime interpreter, ` +
+            `or remove the keyword.`,
+        )
+      }
+    }
+    for (const value of Object.values(record)) visit(value)
+  }
+  visit(schema)
 }
 
 /**
@@ -1629,6 +1734,8 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
  * ```
  */
 export const generateValidatorFunction = (schema: JSONSchema, typeName: string, suffix = ''): string => {
+  assertNoUnsupportedKeywords(schema, typeName)
+
   if (isObjectSchema(schema)) {
     return generateObjectValidator(schema, typeName, suffix)
   }

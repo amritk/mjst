@@ -1,4 +1,5 @@
 import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
+import { multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { safeAccessor, safeKey } from '@amritk/helpers/safe-accessor'
 import {
@@ -119,7 +120,10 @@ const generateRequiredRefCall = (key: string, ref: string, suffix: string): stri
 const generateOptionalRefCall = (key: string, ref: string, suffix: string): string => {
   const acc = safeAccessor('input', key)
   const parserName = generateParserName(refToName(ref, suffix))
-  return `...(${acc} && { ${safeKey(key)}: ${parserName}(${acc}) })`
+  // Gate on presence, not truthiness: a `&&` guard skips parsing when the value
+  // is `false`/`0`/`""`/`null`, spreading it raw. `!== undefined` still omits an
+  // absent optional property but coerces every present one, matching the main path.
+  return `...(${acc} !== undefined && { ${safeKey(key)}: ${parserName}(${acc}) })`
 }
 
 /**
@@ -138,7 +142,8 @@ const generateRequiredArrayRefCall = (key: string, ref: string, suffix: string):
 const generateOptionalArrayRefCall = (key: string, ref: string, suffix: string): string => {
   const parserName = generateParserName(refToName(ref, suffix))
   const acc = safeAccessor('input', key)
-  return `...(${acc} && { ${safeKey(key)}: validateArray(${acc}, ${parserName}) })`
+  // Presence gating (not truthiness) so a falsy-but-present value is still parsed.
+  return `...(${acc} !== undefined && { ${safeKey(key)}: validateArray(${acc}, ${parserName}) })`
 }
 
 /**
@@ -158,7 +163,8 @@ const generateRequiredRecordRefCall = (key: string, ref: string, suffix: string)
 const generateOptionalRecordRefCall = (key: string, ref: string, suffix: string): string => {
   const acc = safeAccessor('input', key)
   const parserName = generateParserName(refToName(ref, suffix))
-  return `...(${acc} && { ${safeKey(key)}: validateRecord(${acc}, ${parserName}) })`
+  // Presence gating (not truthiness) so a falsy-but-present value is still parsed.
+  return `...(${acc} !== undefined && { ${safeKey(key)}: validateRecord(${acc}, ${parserName}) })`
 }
 
 /**
@@ -486,8 +492,10 @@ const generateNonObjectParser = (typeName: string, schema: JSONSchema, strict?: 
     case 'string':
       return `export const ${functionName} = (input: unknown): ${typeName} => typeof input === "string" ? input as ${typeName} : "" as ${typeName};`
     case 'number':
-    case 'integer':
       return `export const ${functionName} = (input: unknown): ${typeName} => typeof input === "number" ? input as ${typeName} : 0 as ${typeName};`
+    case 'integer':
+      // `integer` rejects non-integral numbers; a bare typeof would accept `1.5`.
+      return `export const ${functionName} = (input: unknown): ${typeName} => typeof input === "number" && Number.isInteger(input) ? input as ${typeName} : 0 as ${typeName};`
     case 'boolean':
       return `export const ${functionName} = (input: unknown): ${typeName} => typeof input === "boolean" ? input as ${typeName} : false as ${typeName};`
     case 'array': {
@@ -663,11 +671,14 @@ const generatePropertyTypeCheck = (
     case 'number':
     case 'integer': {
       checks.push(`typeof ${varName} === "number"`)
+      // `integer` must reject non-integral numbers on the fast path too, otherwise
+      // `1.5` would pass through uncoerced.
+      if (schema.type === 'integer') checks.push(`Number.isInteger(${varName})`)
       if (hasMinimum(schema)) checks.push(`${varName} >= ${schema.minimum}`)
       if (hasMaximum(schema)) checks.push(`${varName} <= ${schema.maximum}`)
       if (hasExclusiveMinimum(schema)) checks.push(`${varName} > ${schema.exclusiveMinimum}`)
       if (hasExclusiveMaximum(schema)) checks.push(`${varName} < ${schema.exclusiveMaximum}`)
-      if (hasMultipleOf(schema)) checks.push(`${varName} % ${schema.multipleOf} === 0`)
+      if (hasMultipleOf(schema)) checks.push(multipleOfPassExpr(varName, schema.multipleOf))
       break
     }
     case 'boolean':
@@ -812,9 +823,16 @@ const generateObjectParser = (
   let canFastPath = !hasAllOfRefParsers
   const fastPathChecks: string[] = []
 
+  // `toVarName` collapses distinct keys that differ only in non-identifier chars
+  // (e.g. `a-b` and `a.b` both → `_a_b`), which would emit two `const _a_b`
+  // declarations (TS2451). Dedupe by suffixing `_` until unique — the same
+  // approach `collectInlineObjectProperties` uses — so each key gets its own var.
+  const usedVarNames = new Set<string>()
   for (const [key, propSchema] of properties) {
     const isRequired = isPropertyRequired(key, schema)
-    const varName = toVarName(key)
+    let varName = toVarName(key)
+    while (usedVarNames.has(varName)) varName = `${varName}_`
+    usedVarNames.add(varName)
     propInfo.push({ key, varName, isRequired, propSchema })
 
     if (!canFastPath) continue

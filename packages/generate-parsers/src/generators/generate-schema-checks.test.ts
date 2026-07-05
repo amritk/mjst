@@ -180,12 +180,17 @@ describe('generate-schema-checks', () => {
 
   it('generates number check with multipleOf', () => {
     const result = generateSchemaChecks('value', { type: 'number', multipleOf: 5 })
-    expect(result).toEqual(['typeof value === "number"', 'value % 5 === 0'])
+    // multipleOf uses the interpreter's epsilon-relative division check, not `% === 0`.
+    expect(result).toEqual([
+      'typeof value === "number"',
+      'Math.abs(value / 5 - Math.round(value / 5)) <= 1e-8 * Math.max(1, Math.abs(value / 5))',
+    ])
   })
 
   it('generates typeof check for integer type', () => {
     const result = generateSchemaChecks('value', { type: 'integer' })
-    expect(result).toEqual(['typeof value === "number"'])
+    // integer now also enforces Number.isInteger, rejecting non-integral numbers.
+    expect(result).toEqual(['typeof value === "number"', 'Number.isInteger(value)'])
   })
 
   it('generates integer check with all numeric constraints', () => {
@@ -199,11 +204,12 @@ describe('generate-schema-checks', () => {
     })
     expect(result).toEqual([
       'typeof value === "number"',
+      'Number.isInteger(value)',
       'value >= 1',
       'value <= 10',
       'value > 0',
       'value < 11',
-      'value % 2 === 0',
+      'Math.abs(value / 2 - Math.round(value / 2)) <= 1e-8 * Math.max(1, Math.abs(value / 2))',
     ])
   })
 
@@ -307,7 +313,7 @@ describe('generate-schema-checks', () => {
   it('appends enum check regardless of type', () => {
     const result = generateSchemaChecks('value', { type: 'string', enum: ['a', 'b'] })
     expect(result).toContain('typeof value === "string"')
-    expect(result).toContain('["a","b"].includes(value as never)')
+    expect(result).toContain('(value === "a" || value === "b")')
   })
 
   it('does not append enum check when enum is empty', () => {
