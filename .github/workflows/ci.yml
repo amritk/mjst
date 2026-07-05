@@ -29,3 +29,11 @@ jobs:
 
       - name: Build
         run: bun run build
+
+      # Loads every compiled module under plain Node, runs the CLI from dist/
+      # end-to-end (generate → tsc → parse), and installs packed tarballs like
+      # an npm consumer — catches build/pack-step corruption the src-aliased
+      # tests can't see (v0.12.3 of generate-parsers shipped an unparseable
+      # regex that way).
+      - name: Smoke and e2e test built artifacts
+        run: bun run test:dist

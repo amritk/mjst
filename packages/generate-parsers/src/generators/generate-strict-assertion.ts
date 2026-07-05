@@ -6,6 +6,7 @@ import {
   hasEnum,
   hasExclusiveMaximum,
   hasExclusiveMinimum,
+  hasItems,
   hasMaxItems,
   hasMaximum,
   hasMaxLength,
@@ -22,6 +23,26 @@ import {
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
+import { generateEnumCheck } from './generate-enum-check'
+import { canEnforceUnion, generateUnionCheck, getUnionBranches } from './generate-type-checks'
+import { scalarItemTypeCheck } from './generate-validation-expression'
+
+/**
+ * Context for assertions that reach beyond the property's own schema: union
+ * membership checks may call imported `validate{X}Shape` predicates ($ref
+ * branches), which requires knowing the ref-import mode, the type-name suffix,
+ * and the root document (to prove those validators are real — see
+ * canEnforceUnion). `stripUnknown` disables union enforcement entirely, since
+ * shape validators then treat undeclared keys as a mismatch while the
+ * stripUnknown contract is to drop them.
+ */
+export type StrictAssertionContext = {
+  readonly useRefImports?: boolean
+  readonly suffix?: string
+  readonly rootSchema?: Record<string, unknown>
+  readonly stripUnknown?: boolean
+}
 
 /**
  * Returns the inline condition that is true when `accessor` is the wrong type
@@ -142,9 +163,38 @@ const generateConstraintChecks = (acc: string, propSchema: JSONSchema, typeName:
         `  if (Array.isArray(${acc}) && new Set(${acc}.map((_u) => JSON.stringify(_u))).size !== ${acc}.length) ${throwError(`${field} must NOT have duplicate items`)};`,
       )
     }
+    // Item types: the fast path proves them via `.every`, but this slow path
+    // used to check only length/uniqueness, letting e.g. a number slip into a
+    // declared `string[]`. Enforce scalar and enum item schemas here; richer
+    // item schemas ($refs, objects) are validated by their own parsers.
+    const itemCheck = generateItemCheck(propSchema)
+    if (itemCheck) {
+      lines.push(
+        `  if (Array.isArray(${acc}) && !${acc}.every((_it) => ${itemCheck.check})) ${throwError(`${field} ${itemCheck.message}`)};`,
+      )
+    }
   }
 
   return lines
+}
+
+/**
+ * Boolean per-item check (bound to `_it`) for an array schema's `items`, with
+ * the error-message fragment describing what was expected. Only scalar types
+ * and enums are checked — returns null for anything richer.
+ */
+const generateItemCheck = (schema: JSONSchema): { check: string; message: string } | null => {
+  if (!isSchemaObject(schema) || !hasItems(schema) || Array.isArray(schema.items)) return null
+  const items = schema.items
+
+  if (isSchemaObject(items) && hasEnum(items) && items.enum.length > 0) {
+    const label = (items.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
+    return { check: generateEnumCheck('_it', items.enum), message: `items must be one of: ${label}` }
+  }
+
+  const scalarCheck = scalarItemTypeCheck(items, '_it')
+  if (scalarCheck === null || !isSchemaObject(items) || !hasType(items)) return null
+  return { check: scalarCheck, message: `items expected ${typeLabel(items.type as string)}` }
 }
 
 /**
@@ -157,6 +207,7 @@ const generatePropertyAssertion = (
   propSchema: JSONSchema,
   isRequired: boolean,
   typeName: string,
+  context: StrictAssertionContext = {},
 ): string[] => {
   const acc = safeAccessor('input', key)
   const field = `[${typeName}] field '${key}'`
@@ -170,6 +221,24 @@ const generatePropertyAssertion = (
 
   if (!isSchemaObject(propSchema)) return lines
   if (hasRef(propSchema)) return lines
+
+  // Union properties: enforce membership when every branch check is
+  // false-sound (canEnforceUnion), so a value matching no variant throws
+  // instead of passing through untyped. Left unenforced (pass-through, the
+  // historical behavior) when any branch is too complex to check safely.
+  const unionBranches = getUnionBranches(propSchema)
+  if (unionBranches) {
+    if (!context.stripUnknown && canEnforceUnion(unionBranches, context.rootSchema)) {
+      const check = generateUnionCheck(acc, unionBranches, context.useRefImports ?? false, context.suffix ?? '')
+      if (check !== null) {
+        const failure = throwError(`${field} does not match any allowed variant`)
+        lines.push(
+          isRequired ? `  if (!(${check})) ${failure};` : `  if (${acc} !== undefined && !(${check})) ${failure};`,
+        )
+      }
+    }
+    return lines
+  }
 
   const instanceOf = getMjstInstanceOf(propSchema)
   if (instanceOf) {
@@ -238,7 +307,11 @@ const generatePropertyAssertion = (
  * Properties with a `$ref` are validated by the nested parser's own strict
  * check when that parser is invoked downstream.
  */
-export const generateObjectStrictAssertion = (schema: JSONSchema, typeName: string): string[] => {
+export const generateObjectStrictAssertion = (
+  schema: JSONSchema,
+  typeName: string,
+  context: StrictAssertionContext = {},
+): string[] => {
   const lines: string[] = []
   lines.push(
     `  if (!isObject(input)) ${throwError(`[${typeName}] expected object, got `, 'input === null ? "null" : typeof input')};`,
@@ -249,7 +322,7 @@ export const generateObjectStrictAssertion = (schema: JSONSchema, typeName: stri
   const required = new Set<string>(hasRequired(schema) ? schema.required : [])
 
   for (const [key, propSchema] of Object.entries(schema.properties)) {
-    lines.push(...generatePropertyAssertion(key, propSchema, required.has(key), typeName))
+    lines.push(...generatePropertyAssertion(key, propSchema, required.has(key), typeName, context))
   }
 
   return lines
@@ -276,5 +349,18 @@ export const generateScalarStrictAssertion = (schema: JSONSchema, typeName: stri
   const t = schema.type as string
   const wrongType = wrongTypeCondition('input', t)
   if (!wrongType) return null
-  return `  if (${wrongType}) ${throwError(`[${typeName}] expected ${typeLabel(t)}, got `, got)};`
+  const lines = [`  if (${wrongType}) ${throwError(`[${typeName}] expected ${typeLabel(t)}, got `, got)};`]
+
+  // Root-level arrays enforce scalar/enum item types too — the same gap the
+  // property path closes in generateConstraintChecks.
+  if (t === 'array') {
+    const itemCheck = generateItemCheck(schema)
+    if (itemCheck) {
+      lines.push(
+        `  if (!(input as readonly unknown[]).every((_it) => ${itemCheck.check})) ${throwError(`[${typeName}] ${itemCheck.message}`)};`,
+      )
+    }
+  }
+
+  return lines.join('\n')
 }

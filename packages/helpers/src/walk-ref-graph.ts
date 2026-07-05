@@ -16,7 +16,12 @@ import { upgradeDraft07Schema } from './upgrade-draft07-schema'
  * being copy-pasted into every generator.
  */
 export type RefNode = {
-  /** The `$ref` string this node was reached through, or `undefined` for the root schema. */
+  /**
+   * The `$ref` string this node was reached through, or `undefined` for the
+   * root schema. Exception: an alias root (a bare `$ref` document) whose
+   * derived filename collides with its target's carries the target's ref, so
+   * generators can exclude self-imports from the merged file.
+   */
   ref: string | undefined
   /** PascalCase type name — the root type name verbatim, or `refToName(ref, typeSuffix)`. */
   typeName: string
@@ -56,6 +61,38 @@ type RootCache = {
 }
 
 const rootCaches = new WeakMap<object, RootCache>()
+
+/**
+ * Keywords that give a schema a shape of its own. A root carrying any of these
+ * next to its `$ref` is a real composition, not a pure alias, and keeps the
+ * default root handling.
+ */
+const SHAPE_KEYWORDS = [
+  'properties',
+  'type',
+  'oneOf',
+  'anyOf',
+  'allOf',
+  'patternProperties',
+  'additionalProperties',
+  'enum',
+  'const',
+  'items',
+  'prefixItems',
+  'required',
+  'if',
+  'then',
+  'else',
+  'not',
+] as const
+
+/** The `$ref` of a pure-alias root document (only `$ref` + metadata keys), or null. */
+const getAliasRootRef = (schema: JSONSchema): string | null => {
+  if (typeof schema !== 'object' || schema === null) return null
+  const record = schema as Record<string, unknown>
+  if (typeof record['$ref'] !== 'string') return null
+  return SHAPE_KEYWORDS.some((key) => key in record) ? null : record['$ref']
+}
 
 const getRootCache = (rootSchema: JSONSchema): RootCache => {
   // Only object roots can key a WeakMap. A boolean root has no refs to walk and
@@ -136,11 +173,29 @@ export const walkRefGraph = (
   // the same name does not emit a duplicate file.
   const rootFilename = rootTypeName.toLowerCase()
   processedFilenames.add(rootFilename)
+
+  // An alias root (a document that is just `$ref: '#/$defs/x'`) whose derived
+  // filename equals its target's would reserve the filename for a wrapper that
+  // re-exports the target — and the target, mapping to the same file, would
+  // then never be generated, leaving a file that imports itself. Generate the
+  // *target's* schema under the root's name instead, carrying the ref so
+  // generators can exclude the self-import.
+  let rootNodeSchema = upgraded as JSONSchema
+  let rootNodeRef: string | undefined
+  const aliasRef = getAliasRootRef(upgraded as JSONSchema)
+  if (aliasRef && refToFilename(aliasRef) === rootFilename) {
+    const resolved = cachedResolveRef(cache, aliasRef)
+    if (resolved) {
+      rootNodeSchema = resolved as JSONSchema
+      rootNodeRef = aliasRef
+    }
+  }
+
   visit({
-    ref: undefined,
+    ref: rootNodeRef,
     typeName: rootTypeName,
     filename: rootFilename,
-    schema: resolveDynamicRefs(upgraded as JSONSchema, dynamicRefMap),
+    schema: resolveDynamicRefs(rootNodeSchema, dynamicRefMap),
     rootSchema: upgraded,
     isRoot: true,
   })

@@ -37,10 +37,10 @@ export const escapeRegexPattern = (pattern: string): string => {
   // Line terminators, keyed by code point, and the backslash escape each maps to.
   // These are the four characters disallowed *raw* inside a regex literal.
   const lineTerminatorEscapes: Record<number, string> = {
-    0x0a: '\\n', // LF
-    0x0d: '\\r', // CR
-    0x2028: '\\u2028', // LINE SEPARATOR
-    0x2029: '\\u2029', // PARAGRAPH SEPARATOR
+    10: '\\n', // LF
+    13: '\\r', // CR
+    8232: '\\u2028', // LINE SEPARATOR
+    8233: '\\u2029', // PARAGRAPH SEPARATOR
   }
 
   // Match either an escape sequence (`\` + any char, kept verbatim) or a single
