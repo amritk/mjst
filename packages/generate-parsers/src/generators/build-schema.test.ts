@@ -193,7 +193,7 @@ describe('build-schema', () => {
     const result = await buildSchema(schema, 'Document', undefined, true)
     const documentFile = result.find((file) => file.filename === 'document.ts')
 
-    expect(documentFile?.content).toContain("import type { Contact } from './contact';")
+    expect(documentFile?.content).toContain("import type { Contact } from './contact.js';")
     expect(documentFile?.content).not.toContain('parseContact')
   })
 
@@ -572,10 +572,10 @@ describe('build-schema', () => {
     expect(indexFile).toBeDefined()
     // Named type + parser + shape-validator exports for each file
     expect(indexFile?.content).toContain(
-      "export { type Contact, validateContactShape, parseContact } from './contact';",
+      "export { type Contact, validateContactShape, parseContact } from './contact.js';",
     )
     expect(indexFile?.content).toContain(
-      "export { type Document, validateDocumentShape, parseDocument } from './document';",
+      "export { type Document, validateDocumentShape, parseDocument } from './document.js';",
     )
     // No wildcard exports
     expect(indexFile?.content).not.toContain('export *')
@@ -601,8 +601,8 @@ describe('build-schema', () => {
 
     expect(indexFile).toBeDefined()
     // Types-only: export type { ... } syntax, no parsers
-    expect(indexFile?.content).toContain("export type { Contact } from './contact';")
-    expect(indexFile?.content).toContain("export type { Document } from './document';")
+    expect(indexFile?.content).toContain("export type { Contact } from './contact.js';")
+    expect(indexFile?.content).toContain("export type { Document } from './document.js';")
     expect(indexFile?.content).not.toContain('parseContact')
     expect(indexFile?.content).not.toContain('parseDocument')
     // No wildcard exports
@@ -676,9 +676,25 @@ describe('build-schema', () => {
       const filenames = result.map((f) => f.filename)
       const root = result.find((f) => f.filename === 'document.ts')
 
-      expect(root?.content).toContain("import { isObject } from './_helpers/is-object';")
+      expect(root?.content).toContain("import { isObject } from './_helpers/is-object.js';")
       expect(root?.content).not.toContain('@amritk/helpers')
       expect(filenames).toContain('_helpers/is-object.ts')
+    })
+
+    it('rewrites an embedded helper’s sibling import to carry a .js extension (Node ESM)', async () => {
+      // `validate-record` imports `./is-object`; embedded into `_helpers/`, that
+      // relative import must be `./is-object.js` to resolve under Node ESM, not
+      // only Bun. A record of $ref pulls in the `validate-record` helper.
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { ext: { type: 'object', additionalProperties: { $ref: '#/$defs/item' } } },
+        required: ['ext'],
+        $defs: { item: { type: 'object', properties: { n: { type: 'string' } }, required: ['n'] } },
+      }
+      const result = await buildSchema(schema, 'Doc', undefined, undefined, undefined, undefined, 'embedded')
+      const validateRecord = result.find((f) => f.filename === '_helpers/validate-record.ts')
+      expect(validateRecord?.content).toContain("import { isObject } from './is-object.js'")
+      expect(validateRecord?.content).not.toContain("from './is-object'\n")
     })
 
     it('honours a custom helpersImportPrefix so nested parsers import from a shared root _helpers/', async () => {
@@ -700,7 +716,7 @@ describe('build-schema', () => {
       const root = result.find((f) => f.filename === 'document.ts')
       const filenames = result.map((f) => f.filename)
 
-      expect(root?.content).toContain("import { isObject } from '../../_helpers/is-object';")
+      expect(root?.content).toContain("import { isObject } from '../../_helpers/is-object.js';")
       // Helper sources keep their canonical filenames; the orchestrator relocates them to the root.
       expect(filenames).toContain('_helpers/is-object.ts')
     })
@@ -774,7 +790,7 @@ describe('build-schema', () => {
 
       expect(filenames).toContain('_helpers/has-ref.ts')
       const conditional = result.find((f) => f.filename === 'parameter-or-reference.ts')
-      expect(conditional?.content).toContain("import { hasRef } from './_helpers/has-ref';")
+      expect(conditional?.content).toContain("import { hasRef } from './_helpers/has-ref.js';")
     })
 
     it('emits zero _helpers/*.ts files in types-only mode', async () => {

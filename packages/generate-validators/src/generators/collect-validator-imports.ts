@@ -33,7 +33,9 @@ const buildImport = (ref: string, suffix: string): string => {
   const filename = refToFilename(ref)
   const typeName = refToName(ref, suffix)
   const validatorName = `validate${typeName}`
-  return `import { type ${typeName}, ${validatorName} } from './${filename}'`
+  // `.js` extension so the emitted import resolves under Node ESM (not just Bun);
+  // `./x.js` → sibling `x.ts` is the standard NodeNext form.
+  return `import { type ${typeName}, ${validatorName} } from './${filename}.js'`
 }
 
 /**

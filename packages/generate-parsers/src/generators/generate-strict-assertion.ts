@@ -6,8 +6,10 @@ import {
   hasEnum,
   hasExclusiveMaximum,
   hasExclusiveMinimum,
+  hasMaxItems,
   hasMaximum,
   hasMaxLength,
+  hasMinItems,
   hasMinimum,
   hasMinLength,
   hasMultipleOf,
@@ -16,6 +18,7 @@ import {
   hasRef,
   hasRequired,
   hasType,
+  hasUniqueItems,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
@@ -117,6 +120,26 @@ const generateConstraintChecks = (acc: string, propSchema: JSONSchema, typeName:
     if (hasMultipleOf(propSchema)) {
       lines.push(
         `  if (typeof ${acc} === "number" && ${multipleOfFailExpr(acc, propSchema.multipleOf)}) ${throwError(`${field} must be a multiple of ${propSchema.multipleOf}`)};`,
+      )
+    }
+  }
+
+  if (t === 'array') {
+    if (hasMinItems(propSchema)) {
+      lines.push(
+        `  if (Array.isArray(${acc}) && ${acc}.length < ${propSchema.minItems}) ${throwError(`${field} must have at least ${propSchema.minItems} items`)};`,
+      )
+    }
+    if (hasMaxItems(propSchema)) {
+      lines.push(
+        `  if (Array.isArray(${acc}) && ${acc}.length > ${propSchema.maxItems}) ${throwError(`${field} must have at most ${propSchema.maxItems} items`)};`,
+      )
+    }
+    if (hasUniqueItems(propSchema) && propSchema.uniqueItems === true) {
+      // Deep-equality dedupe via JSON keys, matching the interpreter's semantics —
+      // a plain `new Set` would only catch primitive duplicates, not equal objects.
+      lines.push(
+        `  if (Array.isArray(${acc}) && new Set(${acc}.map((_u) => JSON.stringify(_u))).size !== ${acc}.length) ${throwError(`${field} must NOT have duplicate items`)};`,
       )
     }
   }

@@ -31,7 +31,8 @@ const EMBEDDED_NAMED_EXPORTS: Record<RuntimeHelperName, string> = {
 }
 
 const embeddedImport = (helper: RuntimeHelperName, prefix: string): string =>
-  `import { ${EMBEDDED_NAMED_EXPORTS[helper]} } from '${prefix}_helpers/${helper}';`
+  // `.js` extension so the embedded-helper import resolves under Node ESM, not only Bun.
+  `import { ${EMBEDDED_NAMED_EXPORTS[helper]} } from '${prefix}_helpers/${helper}.js';`
 
 /**
  * Detects which runtime helpers a generated parser body references.

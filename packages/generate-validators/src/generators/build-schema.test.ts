@@ -73,7 +73,7 @@ describe('build-schema', () => {
     const files = await buildValidatorSchema(schema, 'Document')
     const documentFile = files.find((f) => f.filename === 'document.ts')
 
-    expect(documentFile?.content).toContain("from './info'")
+    expect(documentFile?.content).toContain("from './info.js'")
     expect(documentFile?.content).toContain('validateInfo')
   })
 
@@ -86,7 +86,7 @@ describe('build-schema', () => {
     const files = await buildValidatorSchema(schema, 'Document')
     const indexFile = files.find((f) => f.filename === 'index.ts')
 
-    expect(indexFile?.content).toContain("from './document'")
+    expect(indexFile?.content).toContain("from './document.js'")
     expect(indexFile?.content).toContain('validateDocument')
   })
 
@@ -171,7 +171,7 @@ describe('build-schema', () => {
     const files = await buildValidatorSchema(schema, 'Doc')
     const docFile = files.find((f) => f.filename === 'doc.ts')
 
-    expect(docFile?.content).toContain("import { valuesEqual } from './validation-result'")
+    expect(docFile?.content).toContain("import { valuesEqual } from './validation-result.js'")
     expect(docFile?.content).toContain('!valuesEqual(obj["meta"], {"a":1})')
   })
 })

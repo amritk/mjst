@@ -1896,6 +1896,23 @@ describe('generate-parser-function', () => {
       expect(result).toContain('must be a multiple of 1')
     })
 
+    it('throws on minItems / maxItems / uniqueItems violations', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { tags: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 5, uniqueItems: true } },
+        required: ['tags'],
+      }
+      const parse = evalGenerated<(input: unknown) => unknown>(
+        generateParserFunction(schema, 'Doc', { strict: true }),
+        'parseDoc',
+      )
+      expect(parse({ tags: ['a', 'b'] })).toEqual({ tags: ['a', 'b'] })
+      // Previously these array constraints were silently unenforced even in strict mode.
+      expect(() => parse({ tags: [] })).toThrow(/at least 1 items/)
+      expect(() => parse({ tags: ['a', 'b', 'c', 'd', 'e', 'f'] })).toThrow(/at most 5 items/)
+      expect(() => parse({ tags: ['a', 'a'] })).toThrow(/NOT have duplicate items/)
+    })
+
     it('does not generate strict assertions for $ref properties (delegated to nested parser)', () => {
       const schema: JSONSchema = {
         type: 'object',

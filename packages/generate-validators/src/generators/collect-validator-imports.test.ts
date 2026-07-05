@@ -6,7 +6,7 @@ describe('collect-validator-imports', () => {
   it('collects a direct property $ref', () => {
     const schema = { properties: { contact: { $ref: '#/$defs/contact' } } }
 
-    expect(collectValidatorImports(schema)).toEqual(["import { type Contact, validateContact } from './contact'"])
+    expect(collectValidatorImports(schema)).toEqual(["import { type Contact, validateContact } from './contact.js'"])
   })
 
   it('collects $refs inside inline nested objects', () => {
@@ -26,8 +26,8 @@ describe('collect-validator-imports', () => {
     }
 
     expect(collectValidatorImports(schema)).toEqual([
-      "import { type Address, validateAddress } from './address'",
-      "import { type Contact, validateContact } from './contact'",
+      "import { type Address, validateAddress } from './address.js'",
+      "import { type Contact, validateContact } from './contact.js'",
     ])
   })
 
@@ -42,7 +42,7 @@ describe('collect-validator-imports', () => {
       },
     }
 
-    expect(collectValidatorImports(schema)).toEqual(["import { type Contact, validateContact } from './contact'"])
+    expect(collectValidatorImports(schema)).toEqual(["import { type Contact, validateContact } from './contact.js'"])
   })
 
   it('collects refs the emitter delegates for via patternProperties, contains, prefixItems and if/then/else', () => {
@@ -69,14 +69,14 @@ describe('collect-validator-imports', () => {
     // Order follows traversal order (properties → patternProperties → single
     // subschema keywords). The point of the test is that NONE are dropped.
     expect(collectValidatorImports(schema)).toEqual([
-      "import { type Needle, validateNeedle } from './needle'",
-      "import { type First, validateFirst } from './first'",
-      "import { type Variant, validateVariant } from './variant'",
-      "import { type Ext, validateExt } from './ext'",
-      "import { type Name, validateName } from './name'",
-      "import { type Cond, validateCond } from './cond'",
-      "import { type Ontrue, validateOntrue } from './ontrue'",
-      "import { type Onfalse, validateOnfalse } from './onfalse'",
+      "import { type Needle, validateNeedle } from './needle.js'",
+      "import { type First, validateFirst } from './first.js'",
+      "import { type Variant, validateVariant } from './variant.js'",
+      "import { type Ext, validateExt } from './ext.js'",
+      "import { type Name, validateName } from './name.js'",
+      "import { type Cond, validateCond } from './cond.js'",
+      "import { type Ontrue, validateOntrue } from './ontrue.js'",
+      "import { type Onfalse, validateOnfalse } from './onfalse.js'",
     ])
   })
 })

@@ -48,7 +48,7 @@ describe('buildExampleSchema', () => {
     expect(names).toContain('address.ts')
 
     const user = contentOf(files, 'user.ts')
-    expect(user).toContain("import { type Address, AddressArbitrary } from './address'")
+    expect(user).toContain("import { type Address, AddressArbitrary } from './address.js'")
     expect(user).toContain('"address": AddressArbitrary')
 
     // The concrete example inlines the ref's value rather than referencing a const.
@@ -60,6 +60,6 @@ describe('buildExampleSchema', () => {
     const files = await buildExampleSchema(schema, 'Thing')
     const index = contentOf(files, 'index.ts')
 
-    expect(index).toContain("export { type Thing, ThingArbitrary, thingExample } from './thing';")
+    expect(index).toContain("export { type Thing, ThingArbitrary, thingExample } from './thing.js';")
   })
 })

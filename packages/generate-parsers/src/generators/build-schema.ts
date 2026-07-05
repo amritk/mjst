@@ -10,13 +10,30 @@ import type { SchemaExtensions } from '#types/schema-extensions'
 
 import { generateFile } from './generate-files'
 
-/** Locate the @amritk/helpers package on disk so we can copy its runtime
- * helper source files into the generated output when in embedded mode. */
-const readHelperSource = async (helper: RuntimeHelperName): Promise<string> => {
+/** An embedded runtime-helper file: the extension to write it under and its source. */
+type EmbeddedHelper = { ext: 'ts' | 'js'; content: string }
+
+/**
+ * Loads a runtime helper's source to copy into `_helpers/` in embedded mode.
+ *
+ * Prefers the TypeScript source (`src/<helper>.ts`), rewriting any extensionless
+ * sibling import (e.g. `validate-record` → `./is-object`) to `./is-object.js` so
+ * the embedded copy resolves under Node ESM, not only Bun. When the resolved
+ * `@amritk/helpers` is a published/cached tarball that ships only `dist/` (its
+ * `files` historically excluded `src/`, which is exactly why `bunx mjst` crashed
+ * on this lookup), it falls back to the always-published compiled `dist/<helper>.js`
+ * — which tsc already emits with `.js`-extension imports — and writes it verbatim.
+ */
+const readHelperSource = async (helper: RuntimeHelperName): Promise<EmbeddedHelper> => {
   const require = createRequire(import.meta.url)
-  const helpersPkgPath = require.resolve('@amritk/helpers/package.json')
-  const helpersRoot = dirname(helpersPkgPath)
-  return readFile(resolvePath(helpersRoot, 'src', `${helper}.ts`), 'utf-8')
+  const helpersRoot = dirname(require.resolve('@amritk/helpers/package.json'))
+  try {
+    const source = await readFile(resolvePath(helpersRoot, 'src', `${helper}.ts`), 'utf-8')
+    return { ext: 'ts', content: source.replace(/from '(\.\/[^'".]+)'/g, "from '$1.js'") }
+  } catch {
+    const compiled = await readFile(resolvePath(helpersRoot, 'dist', `${helper}.js`), 'utf-8')
+    return { ext: 'js', content: compiled }
+  }
 }
 
 /**
@@ -142,8 +159,8 @@ export const buildSchema = async (
   // typesOnly skips parser generation entirely, so no runtime helpers are needed.
   if (helpersMode === 'embedded' && !typesOnly) {
     for (const helper of usedHelpers) {
-      const source = await readHelperSource(helper)
-      files.push({ filename: `_helpers/${helper}.ts`, content: source })
+      const { ext, content } = await readHelperSource(helper)
+      files.push({ filename: `_helpers/${helper}.${ext}`, content })
     }
   }
 

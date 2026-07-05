@@ -16,8 +16,8 @@ describe('collect-imports', () => {
     const result = collectImports(schema)
 
     expect(result).toEqual([
-      "import { type Contact, parseContact, validateContactShape } from './contact';",
-      "import { type Server, parseServer, validateServerShape } from './server';",
+      "import { type Contact, parseContact, validateContactShape } from './contact.js';",
+      "import { type Server, parseServer, validateServerShape } from './server.js';",
     ])
   })
 
@@ -34,7 +34,7 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toEqual(["import { type Server, parseServer, validateServerShape } from './server';"])
+    expect(result).toEqual(["import { type Server, parseServer, validateServerShape } from './server.js';"])
   })
 
   it('collects imports from additionalProperties with $ref', () => {
@@ -50,7 +50,7 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toEqual(["import { type PathItem, parsePathItem, validatePathItemShape } from './path-item';"])
+    expect(result).toEqual(["import { type PathItem, parsePathItem, validatePathItemShape } from './path-item.js';"])
   })
 
   it('collects imports from non-extension patternProperties with $ref', () => {
@@ -63,7 +63,7 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toEqual(["import { type PathItem, parsePathItem, validatePathItemShape } from './path-item';"])
+    expect(result).toEqual(["import { type PathItem, parsePathItem, validatePathItemShape } from './path-item.js';"])
   })
 
   it('collects imports from patternProperties with $ref', () => {
@@ -76,7 +76,7 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toEqual(["import { type PathItem, parsePathItem, validatePathItemShape } from './path-item';"])
+    expect(result).toEqual(["import { type PathItem, parsePathItem, validatePathItemShape } from './path-item.js';"])
   })
 
   it('collects imports from oneOf with $ref', () => {
@@ -92,8 +92,8 @@ describe('collect-imports', () => {
     const result = collectImports(schema)
 
     expect(result).toEqual([
-      "import { type Reference, parseReference, validateReferenceShape } from './reference';",
-      "import { type Response, parseResponse, validateResponseShape } from './response';",
+      "import { type Reference, parseReference, validateReferenceShape } from './reference.js';",
+      "import { type Response, parseResponse, validateResponseShape } from './response.js';",
     ])
   })
 
@@ -110,8 +110,8 @@ describe('collect-imports', () => {
     const result = collectImports(schema)
 
     expect(result).toEqual([
-      "import { type NumberValue, parseNumberValue, validateNumberValueShape } from './number-value';",
-      "import { type StringValue, parseStringValue, validateStringValueShape } from './string-value';",
+      "import { type NumberValue, parseNumberValue, validateNumberValueShape } from './number-value.js';",
+      "import { type StringValue, parseStringValue, validateStringValueShape } from './string-value.js';",
     ])
   })
 
@@ -128,8 +128,8 @@ describe('collect-imports', () => {
     const result = collectImports(schema)
 
     expect(result).toEqual([
-      "import { type Base, parseBase, validateBaseShape } from './base';",
-      "import { type Extension, parseExtension, validateExtensionShape } from './extension';",
+      "import { type Base, parseBase, validateBaseShape } from './base.js';",
+      "import { type Extension, parseExtension, validateExtensionShape } from './extension.js';",
     ])
   })
 
@@ -144,7 +144,7 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toEqual(["import { type Contact, parseContact, validateContactShape } from './contact';"])
+    expect(result).toEqual(["import { type Contact, parseContact, validateContactShape } from './contact.js';"])
   })
 
   it('collects imports from $ref properties', () => {
@@ -157,7 +157,7 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toEqual(["import { type Response, parseResponse, validateResponseShape } from './response';"])
+    expect(result).toEqual(["import { type Response, parseResponse, validateResponseShape } from './response.js';"])
   })
 
   it('handles nested refs in complex schemas', () => {
@@ -178,8 +178,8 @@ describe('collect-imports', () => {
     const result = collectImports(schema)
 
     expect(result).toEqual([
-      "import { type Callback, parseCallback, validateCallbackShape } from './callback';",
-      "import { type Server, parseServer, validateServerShape } from './server';",
+      "import { type Callback, parseCallback, validateCallbackShape } from './callback.js';",
+      "import { type Server, parseServer, validateServerShape } from './server.js';",
     ])
   })
 
@@ -191,7 +191,7 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toEqual(["import { type PathItem, parsePathItem, validatePathItemShape } from './path-item';"])
+    expect(result).toEqual(["import { type PathItem, parsePathItem, validatePathItemShape } from './path-item.js';"])
   })
 
   it('imports Schema parser and type from generated schema.ts', () => {
@@ -204,7 +204,7 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toEqual(["import { type Schema, parseSchema, validateSchemaShape } from './schema';"])
+    expect(result).toEqual(["import { type Schema, parseSchema, validateSchemaShape } from './schema.js';"])
   })
 
   it('handles empty schema', () => {
@@ -239,8 +239,8 @@ describe('collect-imports', () => {
     const result = collectImports(schema)
 
     expect(result).toEqual([
-      "import { type TypeApikey, parseTypeApikey, validateTypeApikeyShape } from './type-apikey';",
-      "import { type TypeHttp, parseTypeHttp, validateTypeHttpShape } from './type-http';",
+      "import { type TypeApikey, parseTypeApikey, validateTypeApikeyShape } from './type-apikey.js';",
+      "import { type TypeHttp, parseTypeHttp, validateTypeHttpShape } from './type-http.js';",
     ])
   })
 
@@ -256,8 +256,8 @@ describe('collect-imports', () => {
     const result = collectImports(schema)
 
     expect(result).toEqual([
-      "import { type BaseSchema, parseBaseSchema, validateBaseSchemaShape } from './base-schema';",
-      "import { type StylesForForm, parseStylesForForm, validateStylesForFormShape } from './styles-for-form';",
+      "import { type BaseSchema, parseBaseSchema, validateBaseSchemaShape } from './base-schema.js';",
+      "import { type StylesForForm, parseStylesForForm, validateStylesForFormShape } from './styles-for-form.js';",
     ])
   })
 
@@ -272,7 +272,10 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema, { typesOnly: true })
 
-    expect(result).toEqual(["import type { Contact } from './contact';", "import type { Server } from './server';"])
+    expect(result).toEqual([
+      "import type { Contact } from './contact.js';",
+      "import type { Server } from './server.js';",
+    ])
   })
 
   it('does not include parser names in type-only imports', () => {
@@ -285,7 +288,7 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema, { typesOnly: true })
 
-    expect(result).toEqual(["import type { Contact } from './contact';"])
+    expect(result).toEqual(["import type { Contact } from './contact.js';"])
     expect(result[0]).not.toContain('parseContact')
   })
 
@@ -299,7 +302,7 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema, { typesOnly: true })
 
-    expect(result).toEqual(["import type { Response } from './response';"])
+    expect(result).toEqual(["import type { Response } from './response.js';"])
   })
 
   it('generates type-only imports from array items $ref in typesOnly mode', () => {
@@ -315,7 +318,7 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema, { typesOnly: true })
 
-    expect(result).toEqual(["import type { Server } from './server';"])
+    expect(result).toEqual(["import type { Server } from './server.js';"])
   })
 
   it('generates type-only imports from additionalProperties $ref in typesOnly mode', () => {
@@ -326,7 +329,7 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema, { typesOnly: true })
 
-    expect(result).toEqual(["import type { PathItem } from './path-item';"])
+    expect(result).toEqual(["import type { PathItem } from './path-item.js';"])
   })
 
   it('generates type-only imports from anyOf $ref in typesOnly mode', () => {
@@ -342,8 +345,8 @@ describe('collect-imports', () => {
     const result = collectImports(schema, { typesOnly: true })
 
     expect(result).toEqual([
-      "import type { NumberValue } from './number-value';",
-      "import type { StringValue } from './string-value';",
+      "import type { NumberValue } from './number-value.js';",
+      "import type { StringValue } from './string-value.js';",
     ])
   })
 
@@ -355,7 +358,10 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema, { typesOnly: true })
 
-    expect(result).toEqual(["import type { Base } from './base';", "import type { Extension } from './extension';"])
+    expect(result).toEqual([
+      "import type { Base } from './base.js';",
+      "import type { Extension } from './extension.js';",
+    ])
   })
 
   it('deduplicates type-only imports by filename', () => {
@@ -369,7 +375,7 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema, { typesOnly: true })
 
-    expect(result).toEqual(["import type { Contact } from './contact';"])
+    expect(result).toEqual(["import type { Contact } from './contact.js';"])
   })
 
   it('returns empty array for schema with no $ref in typesOnly mode', () => {
@@ -394,7 +400,7 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toEqual(["import { type Server, parseServer, validateServerShape } from './server';"])
+    expect(result).toEqual(["import { type Server, parseServer, validateServerShape } from './server.js';"])
   })
 
   it('collects imports from root-level array items $ref in typesOnly mode', () => {
@@ -405,7 +411,7 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema, { typesOnly: true })
 
-    expect(result).toEqual(["import type { Parameter } from './parameter';"])
+    expect(result).toEqual(["import type { Parameter } from './parameter.js';"])
   })
 
   it('collects imports from root-level oneOf refs', () => {
@@ -416,8 +422,8 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toContain("import { type Contact, parseContact, validateContactShape } from './contact';")
-    expect(result).toContain("import { type Server, parseServer, validateServerShape } from './server';")
+    expect(result).toContain("import { type Contact, parseContact, validateContactShape } from './contact.js';")
+    expect(result).toContain("import { type Server, parseServer, validateServerShape } from './server.js';")
   })
 
   it('collects imports from root-level anyOf refs', () => {
@@ -428,8 +434,8 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toContain("import { type Contact, parseContact, validateContactShape } from './contact';")
-    expect(result).toContain("import { type Server, parseServer, validateServerShape } from './server';")
+    expect(result).toContain("import { type Contact, parseContact, validateContactShape } from './contact.js';")
+    expect(result).toContain("import { type Server, parseServer, validateServerShape } from './server.js';")
   })
 
   it('collects imports from root-level if branch', () => {
@@ -440,7 +446,7 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toContain("import { type Contact, parseContact, validateContactShape } from './contact';")
+    expect(result).toContain("import { type Contact, parseContact, validateContactShape } from './contact.js';")
   })
 
   it('collects imports from root-level then branch', () => {
@@ -451,7 +457,7 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toContain("import { type Server, parseServer, validateServerShape } from './server';")
+    expect(result).toContain("import { type Server, parseServer, validateServerShape } from './server.js';")
   })
 
   it('collects imports from root-level else branch', () => {
@@ -462,12 +468,12 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
-    expect(result).toContain("import { type Contact, parseContact, validateContactShape } from './contact';")
+    expect(result).toContain("import { type Contact, parseContact, validateContactShape } from './contact.js';")
   })
 
   it('does not generate a self-import when a schema references its own $defs key via a property', () => {
     // Mirrors the encoding schema: encoding.ts has a property `itemEncoding` that is a direct
-    // $ref back to #/$defs/encoding. Generating `import ... from './encoding'` inside encoding.ts
+    // $ref back to #/$defs/encoding. Generating `import ... from './encoding.js'` inside encoding.ts
     // would be a circular self-import that crashes at runtime.
     const schema: JSONSchema = {
       type: 'object',
@@ -480,7 +486,7 @@ describe('collect-imports', () => {
     const result = collectImports(schema, { selfRef: '#/$defs/encoding' })
 
     expect(result).not.toContain("'./encoding'")
-    expect(result).toContain("import { type Header, parseHeader, validateHeaderShape } from './header';")
+    expect(result).toContain("import { type Header, parseHeader, validateHeaderShape } from './header.js';")
   })
 
   it('does not generate a self-import when a schema references its own $defs key via additionalProperties', () => {
@@ -542,6 +548,6 @@ describe('collect-imports', () => {
     const result = collectImports(schema, { typesOnly: true, selfRef: '#/$defs/encoding' })
 
     expect(result).not.toContain("'./encoding'")
-    expect(result).toContain("import type { Header } from './header';")
+    expect(result).toContain("import type { Header } from './header.js';")
   })
 })
