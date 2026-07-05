@@ -1,5 +1,15 @@
 import { resolveDoubleQuoted, resolvePlainValue, resolveSingleQuoted } from './resolve-scalar'
-import type { ParseOptions, YamlDocument, YamlError, YamlMap, YamlNode, YamlPair, YamlScalar, YamlSeq } from './types'
+import type {
+  ParseOptions,
+  YamlAlias,
+  YamlDocument,
+  YamlError,
+  YamlMap,
+  YamlNode,
+  YamlPair,
+  YamlScalar,
+  YamlSeq,
+} from './types'
 
 /**
  * The parser. One cohesive recursive-descent walker — this is the deliberate
@@ -311,12 +321,18 @@ const scanQuoted = (state: State, quote: number): YamlScalar => {
   const { src, len } = state
   const start = state.pos
   let i = start + 1
+  // Track whether the closing quote was actually found: a scan that runs to `len`
+  // without it is an unterminated scalar that would otherwise swallow the rest of
+  // the document silently, so we report it (mirroring eemeli's "Missing closing
+  // quote" and the `UNTERMINATED_FLOW` handling for `[`/`{`).
+  let closed = false
   if (quote === SQUOTE) {
     while (i < len) {
       if (src.charCodeAt(i) === SQUOTE) {
         if (src.charCodeAt(i + 1) === SQUOTE) i += 2
         else {
           i++
+          closed = true
           break
         }
       } else i++
@@ -330,11 +346,13 @@ const scanQuoted = (state: State, quote: number): YamlScalar => {
       }
       if (c === DQUOTE) {
         i++
+        closed = true
         break
       }
       i++
     }
   }
+  if (!closed) pushError(state, 'UNTERMINATED_QUOTE', 'Missing closing quote', start, i)
   const source = src.slice(start, i)
   const inner = src.slice(start + 1, i - 1)
   const value = quote === SQUOTE ? resolveSingleQuoted(inner) : resolveDoubleQuoted(inner)
@@ -354,7 +372,14 @@ const scanAlias = (state: State): YamlNode => {
   }
   const name = src.slice(start + 1, i)
   state.pos = i
-  return { kind: 'alias', source: name, start, end: i }
+  // Bind to whichever anchor is currently registered under this name — the one
+  // in scope at this point in the document. Capturing the node identity now (not
+  // by name at `toJS` time) is what makes a later `&name` redefinition not
+  // retroactively change what earlier aliases resolve to.
+  const target = state.anchors.get(name)
+  const alias: YamlAlias = { kind: 'alias', source: name, start, end: i }
+  if (target !== undefined) alias.target = target
+  return alias
 }
 
 /** Index of the end of a plain scalar's text on one line (trailing spaces and ` #` comment trimmed). */
@@ -538,10 +563,13 @@ const scanBlockScalar = (state: State, parentIndent: number): YamlScalar => {
     lines.pop()
   }
   const body = folded ? foldBlockFolded(lines) : lines.join('\n')
-  let value = body
-  if (chomp === 'strip') value = body
-  else if (chomp === 'keep') value = body + '\n'.repeat(trailingBlanks + (lines.length ? 1 : 0))
-  else value = body + (lines.length ? '\n' : '')
+  // Chomping decides the trailing break: `strip` (`-`) drops it entirely (so
+  // `value` is just `body`), `keep` (`+`) preserves every trailing blank plus the
+  // final line break, and the default `clip` keeps a single trailing newline.
+  let value: string
+  if (chomp === 'keep') value = body + '\n'.repeat(trailingBlanks + (lines.length ? 1 : 0))
+  else if (chomp === 'clip') value = body + (lines.length ? '\n' : '')
+  else value = body
 
   return {
     kind: 'scalar',
@@ -668,6 +696,11 @@ const parseFlowMap = (state: State): YamlMap => {
   const start = state.pos
   state.pos++ // {
   const items: YamlPair[] = []
+  // Duplicate-key tracking mirrors `parseBlockMap`: lazy-allocate the Set only
+  // once a second key appears, and skip complex (map/seq) keys that have no
+  // stable text form. Flow maps enforce `uniqueKeys` just like block maps do.
+  let firstKey: string | null = null
+  let seen: Set<string> | null = null
   for (;;) {
     skipFlowWs(state)
     const c = state.src.charCodeAt(state.pos)
@@ -687,6 +720,19 @@ const parseFlowMap = (state: State): YamlMap => {
       skipFlowWs(state)
       const vc = state.src.charCodeAt(state.pos)
       if (vc !== COMMA && vc !== RBRACE) value = parseFlowNode(state)
+    }
+    if (state.uniqueKeys && (key.kind === 'scalar' || key.kind === 'alias')) {
+      const text = keyText(key)
+      if (seen) {
+        if (seen.has(text)) pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.start, key.end)
+        else seen.add(text)
+      } else if (firstKey === null) {
+        firstKey = text
+      } else {
+        seen = new Set([firstKey])
+        if (firstKey === text) pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.start, key.end)
+        else seen.add(text)
+      }
     }
     items.push({ kind: 'pair', key, value, start: key.start, end: value ? value.end : key.end })
     skipFlowWs(state)
@@ -1044,7 +1090,11 @@ const skipDocumentHead = (state: State): void => {
       src.charCodeAt(line.contentPos + 2) === DASH &&
       (line.contentPos + 3 >= len ||
         isSpace(src.charCodeAt(line.contentPos + 3)) ||
-        src.charCodeAt(line.contentPos + 3) === NL)
+        src.charCodeAt(line.contentPos + 3) === NL ||
+        // CRLF input parks a `\r` right after `---`; without this the marker is
+        // misread as a plain scalar. `isDocMarker` (stream path) already accepts
+        // CR, so this keeps the two marker detectors in agreement.
+        src.charCodeAt(line.contentPos + 3) === CR)
     ) {
       state.pos = nextLineStart(src, line.contentPos + 3, len)
       continue
@@ -1158,27 +1208,23 @@ const newExpansionBudget = (sourceLength: number): ExpansionBudget => ({
   left: Math.max(MIN_ALIAS_NODE_BUDGET, sourceLength * ALIAS_NODES_PER_BYTE),
 })
 
-const toJsValue = (
-  node: YamlNode | null,
-  anchors: Map<string, YamlNode>,
-  merge: boolean,
-  budget: ExpansionBudget,
-): unknown => {
+const toJsValue = (node: YamlNode | null, merge: boolean, budget: ExpansionBudget): unknown => {
   if (budget.left-- <= 0) {
     throw new Error('Excessive alias expansion — the document may be a resource-exhaustion attack')
   }
   if (node === null) return null
   if (node.kind === 'scalar') return node.tag !== undefined ? applyScalarTag(node) : node.value
   if (node.kind === 'alias') {
-    const target = anchors.get(node.source)
-    return target ? toJsValue(target, anchors, merge, budget) : undefined
+    // `target` was captured at parse time as the anchor in scope where the alias
+    // appeared, so a later redefinition of the same name doesn't affect it.
+    return node.target ? toJsValue(node.target, merge, budget) : undefined
   }
   if (node.kind === 'seq') {
     // Index loop into a pre-sized array: no per-seq closure (as `.map` allocates)
     // and the result array never reallocates as it grows.
     const items = node.items
     const out = new Array(items.length)
-    for (let i = 0; i < items.length; i++) out[i] = toJsValue(items[i] ?? null, anchors, merge, budget)
+    for (let i = 0; i < items.length; i++) out[i] = toJsValue(items[i] ?? null, merge, budget)
     // `!!omap` is an ordered map written as a sequence of single-pair maps;
     // collapse it to a `Map` to match `yaml` (eemeli). One `=== 'omap'` check
     // per sequence keeps the untagged path effectively free.
@@ -1193,17 +1239,17 @@ const toJsValue = (
     if (pair === undefined) continue
     const key = pair.key
     if (merge && key.kind === 'scalar' && key.source === '<<') {
-      applyMerge(obj, toJsValue(pair.value, anchors, merge, budget))
+      applyMerge(obj, toJsValue(pair.value, merge, budget))
       continue
     }
-    setMapKey(obj, keyText(key), pair.value ? toJsValue(pair.value, anchors, merge, budget) : null)
+    setMapKey(obj, keyText(key), pair.value ? toJsValue(pair.value, merge, budget) : null)
   }
   // `!!set` is a mapping whose keys are the members; project to a `Set`.
   if (node.tag === 'set') {
     const set = new Set<unknown>()
     for (let i = 0; i < items.length; i++) {
       const pair = items[i]
-      if (pair) set.add(toJsValue(pair.key, anchors, merge, budget))
+      if (pair) set.add(toJsValue(pair.key, merge, budget))
     }
     return set
   }
@@ -1248,10 +1294,12 @@ const newState = (source: string, options: ParseOptions): State => ({
   line: { eof: false, indent: 0, contentPos: 0 },
 })
 
-/** Builds a document from the current `state`, closing over its anchors/problems. */
+/** Builds a document from the current `state`, closing over its problems. */
 const finishDocument = (state: State, contents: YamlNode | null): YamlDocument => {
-  const { errors, warnings, anchors, merge, len } = state
-  return { contents, errors, warnings, toJS: () => toJsValue(contents, anchors, merge, newExpansionBudget(len)) }
+  const { errors, warnings, merge, len } = state
+  // Aliases carry their resolved target (captured at parse time), so projection
+  // no longer needs the anchors map — anchor scope is settled by the time we get here.
+  return { contents, errors, warnings, toJS: () => toJsValue(contents, merge, newExpansionBudget(len)) }
 }
 
 /**

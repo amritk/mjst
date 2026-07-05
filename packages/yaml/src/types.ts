@@ -36,6 +36,15 @@ export type YamlAlias = {
   source: string
   start: number
   end: number
+  /**
+   * The anchor definition in scope *at the alias's position*, captured at parse
+   * time. An anchor name can be redefined later in the document (`&x 1` … `&x 2`),
+   * and YAML binds each alias to the most recent prior definition — so resolving
+   * lazily by name at projection time would wrongly pick the final definition.
+   * `undefined` when the alias has no matching anchor yet (an unresolved/forward
+   * reference), which projects to `undefined`.
+   */
+  target?: YamlNode
 }
 
 /** One `key: value` entry of a block or flow mapping. */
