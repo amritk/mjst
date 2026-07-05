@@ -36,6 +36,13 @@ jobs:
       - name: Build
         run: bun run build
 
+      # Last line of defense before publish: load every compiled module under
+      # plain Node and run the CLI from dist/, so a build step that corrupts
+      # the output (as tsc-alias did to generate-parsers v0.12.3) can never
+      # ship to npm.
+      - name: Smoke test built artifacts
+        run: bun run test:dist
+
       - name: Create Release PR or Publish
         uses: changesets/action@v1
         with:

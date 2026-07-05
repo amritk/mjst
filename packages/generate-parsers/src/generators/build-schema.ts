@@ -29,7 +29,17 @@ const readHelperSource = async (helper: RuntimeHelperName): Promise<EmbeddedHelp
   const helpersRoot = dirname(require.resolve('@amritk/helpers/package.json'))
   try {
     const source = await readFile(resolvePath(helpersRoot, 'src', `${helper}.ts`), 'utf-8')
-    return { ext: 'ts', content: source.replace(/from '(\.\/[^'".]+)'/g, "from '$1.js'") }
+    // The leading `\b` in this pattern is load-bearing beyond its regex meaning.
+    // Our build runs tsc-alias --resolveFullPaths over the compiled output, and its
+    // scanner rewrites anything that looks like `from '<path>'` — even inside a
+    // regex literal. Without the `\b`, normalize-path turned this pattern's
+    // backslashes into slashes and v0.12.3 shipped with an unparseable regex that
+    // crashed the CLI on load. The `\b` blocks that scan (in the emitted text,
+    // `from` is preceded by the word character `b`, so tsc-alias's own `\bfrom`
+    // never matches) and is also semantically correct: an import keyword always
+    // sits at a word boundary. The dist smoke test (scripts/dist-smoke.test.ts)
+    // fails the build if this ever regresses.
+    return { ext: 'ts', content: source.replace(/\bfrom '(\.\/[^'".]+)'/g, "from '$1.js'") }
   } catch {
     const compiled = await readFile(resolvePath(helpersRoot, 'dist', `${helper}.js`), 'utf-8')
     return { ext: 'js', content: compiled }

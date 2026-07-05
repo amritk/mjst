@@ -30,6 +30,7 @@
     "lint": "biome lint .",
     "test": "bun run --workspaces test",
     "test:seq": "bun run --workspaces --sequential test",
+    "test:dist": "vitest run --config vitest.dist.config.ts",
     "release:version": "changeset version && bun install --no-frozen-lockfile",
     "release:publish": "bun run scripts/resolve-workspace-protocol.ts && bun run scripts/strip-development-exports.ts && changeset publish"
   },
