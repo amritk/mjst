@@ -107,11 +107,19 @@
       "default": "",
       "description": "Suffix appended to every generated type name derived from a $ref (e.g. 'Object' turns Contact into ContactObject). Defaults to no suffix. The root type name is used verbatim and is unaffected."
     },
+    "importExt": {
+      "type": "string",
+      "enum": ["js", "ts"],
+      "default": "js",
+      "x-cli-flag": "--import-ext <ext>",
+      "x-icon": "🔗",
+      "description": "Extension emitted on every relative import specifier in the generated output (cross-file $ref imports, the index barrel, and embedded-helper imports). 'js' (default) is the standard TS NodeNext form ('./x.js' resolving to a sibling x.ts), accepted by tsc, Bun, and bundlers, and required by 'build'. 'ts' emits the literal on-disk paths so the generated .ts sources run directly under Node's type stripping (Node 22.6+ with --experimental-strip-types, on by default from Node 23). Incompatible with 'build' — tsc refuses to emit from .ts specifiers."
+    },
     "config": {
       "type": "string",
       "x-cli-flag": "--config <path>",
       "x-icon": "⚙️",
-      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, outFile, typesOnly, build, logWarnings, strict, readonly, helpers, typeSuffix). CLI flags take precedence over config file values.",
+      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, outFile, typesOnly, build, logWarnings, strict, readonly, helpers, typeSuffix, importExt). CLI flags take precedence over config file values.",
       "examples": ["./mjst.config.json"]
     }
   },

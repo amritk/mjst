@@ -4,11 +4,15 @@ import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
-// Emit an explicit `.js` extension on the relative specifier. Node's ESM resolver
-// requires it (extensionless relative imports only work under a bundler or Bun),
-// and `./x.js` pointing at a sibling `x.ts` is the standard TS NodeNext form —
-// accepted by Bun, esbuild, webpack, and tsc alike.
-const getImportPathForFilename = (filename: string): string => `./${filename}.js`
+/** Extension emitted on every relative import specifier in generated code. */
+export type ImportExtension = 'js' | 'ts'
+
+// Emit an explicit extension on the relative specifier. Node's ESM resolver
+// requires one (extensionless relative imports only work under a bundler or
+// Bun). `./x.js` pointing at a sibling `x.ts` is the standard TS NodeNext form
+// — accepted by Bun, esbuild, webpack, and tsc alike — while `./x.ts` is the
+// literal on-disk path Node's type stripping needs to run the sources directly.
+const getImportPathForFilename = (filename: string, ext: ImportExtension): string => `./${filename}.${ext}`
 
 /**
  * Options for controlling how imports are collected.
@@ -37,6 +41,12 @@ type CollectImportsOptions = {
    * Defaults to `''` (no suffix).
    */
   readonly typeSuffix?: string
+  /**
+   * Extension used on every relative import specifier. Defaults to `'js'`
+   * (the TS NodeNext form); `'ts'` makes the output runnable under Node's
+   * type stripping.
+   */
+  readonly importExt?: ImportExtension
 }
 
 /**
@@ -83,6 +93,7 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
   const selfFilename = options?.selfRef ? refToFilename(options.selfRef) : undefined
   const rootSchema = options?.rootSchema
   const typeSuffix = options?.typeSuffix
+  const importExt = options?.importExt ?? 'js'
   const refs = new Set<string>()
 
   const collectRefsFromValue = (value: unknown): void => {
@@ -266,7 +277,7 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
       continue
     }
 
-    const importPath = getImportPathForFilename(filename)
+    const importPath = getImportPathForFilename(filename, importExt)
 
     // In types-only mode, omit the parser function import since there is no parser to call
     const importStatement = typesOnly

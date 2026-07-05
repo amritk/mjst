@@ -49,6 +49,29 @@ const PLAN_SCHEMA = {
   required: ['axiom'],
 }
 
+/** Array items that are inline objects carrying a nested enum and a $ref. */
+const WORKFLOW_SCHEMA = {
+  title: 'Workflow',
+  type: 'object',
+  properties: {
+    steps: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          kind: { enum: ['manual', 'auto'] },
+          owner: { $ref: '#/$defs/person' },
+        },
+        required: ['kind'],
+      },
+    },
+  },
+  required: ['steps'],
+  $defs: {
+    person: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+  },
+}
+
 /** A definition that is itself a recursive union — the spec-plan `expr` shape. */
 const AST_SCHEMA = {
   title: 'Ast',
@@ -198,6 +221,39 @@ describe('cli-e2e', () => {
     expect(probes.badKind?.ok).toBe(true)
     const kind = (probes.badKind?.value as { axiom: { kind: string } }).axiom.kind
     expect(['assume', 'derive']).toContain(kind)
+  })
+
+  // Regression pin: array items that are inline objects used to pass through
+  // with only an Array.isArray check — a nested enum or $ref value inside an
+  // element was never validated in either mode.
+  it('validates nested enum and $ref values inside array items in strict mode', async () => {
+    const outDir = await generate('array-item-nested-strict', WORKFLOW_SCHEMA, ['--strict', '--build'])
+    const probes = await runProbes(join(outDir, 'index.js'), {
+      valid: "m.parseWorkflow({ steps: [{ kind: 'manual', owner: { name: 'a' } }] })",
+      badEnum: "m.parseWorkflow({ steps: [{ kind: 'bogus' }] })",
+      badRef: "m.parseWorkflow({ steps: [{ kind: 'auto', owner: { name: 7 } }] })",
+      validShape: "m.validateWorkflowShape({ steps: [{ kind: 'manual' }] })",
+      badShape: "m.validateWorkflowShape({ steps: [{ kind: 'bogus' }] })",
+    })
+
+    expect(probes.valid?.ok).toBe(true)
+    expect(probes.badEnum?.ok).toBe(false)
+    expect(probes.badEnum?.error).toContain('must be one of')
+    expect(probes.badRef?.ok).toBe(false)
+    expect(probes.validShape?.value).toBe(true)
+    expect(probes.badShape?.value).toBe(false)
+  })
+
+  it('coerces invalid nested enum values inside array items in lax mode', async () => {
+    const outDir = await generate('array-item-nested-lax', WORKFLOW_SCHEMA, ['--build'])
+    const probes = await runProbes(join(outDir, 'index.js'), {
+      coerced: "m.parseWorkflow({ steps: [{ kind: 'bogus' }, { kind: 'auto' }] })",
+    })
+
+    expect(probes.coerced?.ok).toBe(true)
+    const steps = (probes.coerced?.value as { steps: { kind: string }[] }).steps
+    expect(steps[1]?.kind).toBe('auto')
+    expect(['manual', 'auto']).toContain(steps[0]?.kind)
   })
 
   // Cross-file $refs are the main consumers of the `.js`-suffixed relative
@@ -380,13 +436,46 @@ describe('cli-e2e', () => {
     expect(probes.garbage?.ok).toBe(false)
   })
 
-  // KNOWN GAP (accepted limitation from the 0.7.15 evaluation): generated .ts
-  // sources import siblings as `./x.js`, which tsc and Bun resolve to the .ts
-  // files but Node type stripping does not — it wants the literal path on
-  // disk. If generation ever emits stripping-compatible imports, this flips.
+  // KNOWN GAP (accepted limitation from the 0.7.15 evaluation): by default the
+  // generated .ts sources import siblings as `./x.js`, which tsc and Bun
+  // resolve to the .ts files but Node type stripping does not — it wants the
+  // literal path on disk. `--import-ext ts` (below) is the opt-in that fixes
+  // this; the default stays `.js` so `--build` keeps working.
   itUnderTypeStripping('generated .ts sources run directly under Node type stripping', async () => {
     const outDir = await generate('type-stripping', PLAN_SCHEMA, ['--strict'])
     await runNode([...stripTypesArgs, join(outDir, 'index.ts')])
+  })
+
+  // --import-ext ts emits literal `.ts` specifiers (cross-file $refs, the index
+  // barrel, embedded _helpers) so the sources are directly runnable under Node
+  // type stripping — no tsc, no bundler.
+  const itWithTypeStripping = supportsTypeStripping ? it : it.skip
+  itWithTypeStripping('runs generated sources under Node type stripping with --import-ext ts', async () => {
+    const outDir = await generate('import-ext-ts', WORKFLOW_SCHEMA, ['--strict', '--import-ext', 'ts'])
+
+    const script = `
+      import { parseWorkflow } from ${JSON.stringify(join(outDir, 'index.ts'))}
+      parseWorkflow({ steps: [{ kind: 'manual', owner: { name: 'a' } }] })
+      let threw = false
+      try { parseWorkflow({ steps: [{ kind: 'bogus' }] }) } catch { threw = true }
+      if (!threw) throw new Error('strict parser did not reject a bad nested enum')
+      console.log('ok')
+    `
+    const scriptPath = join(outDir, 'probe.ts')
+    await writeFile(scriptPath, script, 'utf-8')
+    const { stdout } = await runNode([...stripTypesArgs, scriptPath])
+    expect(stdout).toContain('ok')
+  })
+
+  it('rejects --import-ext ts combined with --build', async () => {
+    const caseDir = join(workDir, 'import-ext-conflict')
+    await mkdir(caseDir, { recursive: true })
+    const schemaPath = join(caseDir, 'schema.json')
+    await writeFile(schemaPath, JSON.stringify(PLAN_SCHEMA), 'utf-8')
+
+    await expect(
+      runNode([CLI_BIN, '--schema', schemaPath, '--outDir', join(caseDir, 'out'), '--import-ext', 'ts', '--build']),
+    ).rejects.toThrow(/cannot be combined with --build/)
   })
 
   // The 0.7.15 corruption shipped because nothing ever exercised the *packed*

@@ -21,6 +21,13 @@ describe('generate-index-barrel', () => {
     expect(generateIndexBarrel(files, { typesOnly: true })).toBe("export type { Contact } from './contact.js';\n")
   })
 
+  it('emits .ts specifiers when importExt is ts', () => {
+    const files = [{ filename: 'contact.ts', content: 'export type Contact = {};\nexport const parseContact = 1;' }]
+    expect(generateIndexBarrel(files, { importExt: 'ts' })).toBe(
+      "export { type Contact, parseContact } from './contact.ts';\n",
+    )
+  })
+
   it('never re-exports internal _helpers modules', () => {
     const files = [
       { filename: 'document.ts', content: 'export type Document = {}\n' },

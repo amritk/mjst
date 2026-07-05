@@ -6,6 +6,7 @@ import { walkRefGraph } from '@amritk/helpers/walk-ref-graph'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { applySchemaExtensions } from '#helpers/apply-schema-extensions'
 import type { HelpersMode, RuntimeHelperName } from '#helpers/collect-helpers'
+import type { ImportExtension } from '#helpers/collect-imports'
 import type { SchemaExtensions } from '#types/schema-extensions'
 
 import { generateFile } from './generate-files'
@@ -24,7 +25,7 @@ type EmbeddedHelper = { ext: 'ts' | 'js'; content: string }
  * on this lookup), it falls back to the always-published compiled `dist/<helper>.js`
  * — which tsc already emits with `.js`-extension imports — and writes it verbatim.
  */
-const readHelperSource = async (helper: RuntimeHelperName): Promise<EmbeddedHelper> => {
+const readHelperSource = async (helper: RuntimeHelperName, importExt: ImportExtension): Promise<EmbeddedHelper> => {
   const require = createRequire(import.meta.url)
   const helpersRoot = dirname(require.resolve('@amritk/helpers/package.json'))
   try {
@@ -39,9 +40,16 @@ const readHelperSource = async (helper: RuntimeHelperName): Promise<EmbeddedHelp
     // never matches) and is also semantically correct: an import keyword always
     // sits at a word boundary. The dist smoke test (scripts/dist-smoke.test.ts)
     // fails the build if this ever regresses.
-    return { ext: 'ts', content: source.replace(/\bfrom '(\.\/[^'".]+)'/g, "from '$1.js'") }
+    return { ext: 'ts', content: source.replace(/\bfrom '(\.\/[^'".]+)'/g, `from '$1.${importExt}'`) }
   } catch {
     const compiled = await readFile(resolvePath(helpersRoot, 'dist', `${helper}.js`), 'utf-8')
+    // With `.ts` import specifiers the on-disk file must literally be `.ts`, so
+    // ship the compiled JS (valid TS) under that name and retarget its own
+    // sibling imports to match. The pattern keeps the same `\bfrom` shape as
+    // above so tsc-alias's scanner can't corrupt it (see the comment there).
+    if (importExt === 'ts') {
+      return { ext: 'ts', content: compiled.replace(/\bfrom '(\.\/[^'"]+)\.js'/g, "from '$1.ts'") }
+    }
     return { ext: 'js', content: compiled }
   }
 }
@@ -91,6 +99,10 @@ export type GeneratedFile = {
  * @param typeSuffix - Suffix appended to every type/parser name derived from a `$ref`
  *   (e.g. `'Object'` → `ContactObject`). Defaults to `''` (no suffix). The root type name
  *   is used verbatim and is not affected by this suffix.
+ * @param importExt - Extension used on every relative import specifier in the generated
+ *   output (cross-file `$ref` imports, the index barrel, and embedded-helper imports).
+ *   `'js'` (default) is the standard TS NodeNext form; `'ts'` emits the literal on-disk
+ *   paths so the generated sources run directly under Node's type stripping.
  * @returns An array of generated TypeScript files
  *
  * @example
@@ -135,6 +147,7 @@ export const buildSchema = async (
   readonly = false,
   stripUnknown = false,
   typeSuffix = '',
+  importExt: ImportExtension = 'js',
 ): Promise<GeneratedFile[]> => {
   const files: GeneratedFile[] = []
   const usedHelpers = new Set<RuntimeHelperName>()
@@ -154,6 +167,7 @@ export const buildSchema = async (
       helpersImportPrefix,
       readonly,
       typeSuffix,
+      importExt,
       ...(node.ref !== undefined ? { selfRef: node.ref } : {}),
       ...(logWarnings !== undefined ? { logWarnings } : {}),
       ...(strict !== undefined ? { strict } : {}),
@@ -169,12 +183,15 @@ export const buildSchema = async (
   // typesOnly skips parser generation entirely, so no runtime helpers are needed.
   if (helpersMode === 'embedded' && !typesOnly) {
     for (const helper of usedHelpers) {
-      const { ext, content } = await readHelperSource(helper)
+      const { ext, content } = await readHelperSource(helper, importExt)
       files.push({ filename: `_helpers/${helper}.${ext}`, content })
     }
   }
 
-  files.push({ filename: 'index.ts', content: generateIndexBarrel(files, { typesOnly: typesOnly ?? false }) })
+  files.push({
+    filename: 'index.ts',
+    content: generateIndexBarrel(files, { typesOnly: typesOnly ?? false, importExt }),
+  })
 
   return files
 }

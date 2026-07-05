@@ -697,6 +697,44 @@ describe('build-schema', () => {
       expect(validateRecord?.content).not.toContain("from './is-object'\n")
     })
 
+    it('emits .ts specifiers throughout when importExt is ts', async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          owner: { $ref: '#/$defs/person' },
+          ext: { type: 'object', additionalProperties: { $ref: '#/$defs/person' } },
+        },
+        required: ['owner'],
+        $defs: { person: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
+      }
+
+      const result = await buildSchema(
+        schema,
+        'Document',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'embedded',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'ts',
+      )
+      const root = result.find((f) => f.filename === 'document.ts')
+      const index = result.find((f) => f.filename === 'index.ts')
+      const validateRecord = result.find((f) => f.filename === '_helpers/validate-record.ts')
+
+      // Cross-file $ref import, embedded helper import, helper sibling import,
+      // and the barrel all carry the literal on-disk .ts paths.
+      expect(root?.content).toContain("import { type Person, parsePerson, validatePersonShape } from './person.ts';")
+      expect(root?.content).toContain("from './_helpers/validate-record.ts';")
+      expect(validateRecord?.content).toContain("import { isObject } from './is-object.ts'")
+      expect(index?.content).toContain("from './document.ts';")
+      expect(index?.content).not.toContain('.js')
+    })
+
     it('honours a custom helpersImportPrefix so nested parsers import from a shared root _helpers/', async () => {
       const schema: JSONSchema = {
         type: 'object',

@@ -21,6 +21,7 @@ type MutableConfig = {
   helpers?: 'package' | 'embedded'
   typeSuffix?: string
   banner?: boolean | string
+  importExt?: 'js' | 'ts'
 }
 
 // Boolean flags toggle on by presence and accept `--flag=false` to opt out.
@@ -42,6 +43,7 @@ const VALUE_KEYS = new Set<keyof MutableConfig>([
   'export',
   'helpers',
   'typeSuffix',
+  'importExt',
 ])
 
 // Recognized flags that don't map into CliConfig because they're consumed
@@ -55,6 +57,11 @@ const toCamelCase = (key: string): string => key.replace(/-([a-z])/g, (_, c: str
 
 const parseHelpersValue = (value: string): 'package' | 'embedded' | undefined => {
   if (value === 'package' || value === 'embedded') return value
+  return undefined
+}
+
+const parseImportExtValue = (value: string): 'js' | 'ts' | undefined => {
+  if (value === 'js' || value === 'ts') return value
   return undefined
 }
 
@@ -96,6 +103,14 @@ const assignValue = (config: MutableConfig, key: string, value: string): boolean
         throw new Error(`Invalid --helpers value "${value}". Expected one of: package, embedded.`)
       }
       config.helpers = parsed
+      return true
+    }
+    case 'importExt': {
+      const parsed = parseImportExtValue(value)
+      if (!parsed) {
+        throw new Error(`Invalid --import-ext value "${value}". Expected one of: js, ts.`)
+      }
+      config.importExt = parsed
       return true
     }
     default:

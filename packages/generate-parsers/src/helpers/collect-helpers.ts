@@ -30,9 +30,9 @@ const EMBEDDED_NAMED_EXPORTS: Record<RuntimeHelperName, string> = {
   'has-ref': 'hasRef',
 }
 
-const embeddedImport = (helper: RuntimeHelperName, prefix: string): string =>
-  // `.js` extension so the embedded-helper import resolves under Node ESM, not only Bun.
-  `import { ${EMBEDDED_NAMED_EXPORTS[helper]} } from '${prefix}_helpers/${helper}.js';`
+const embeddedImport = (helper: RuntimeHelperName, prefix: string, ext: 'js' | 'ts'): string =>
+  // An explicit extension so the embedded-helper import resolves under Node ESM, not only Bun.
+  `import { ${EMBEDDED_NAMED_EXPORTS[helper]} } from '${prefix}_helpers/${helper}.${ext}';`
 
 /**
  * Detects which runtime helpers a generated parser body references.
@@ -41,16 +41,20 @@ const embeddedImport = (helper: RuntimeHelperName, prefix: string): string =>
  *   directory in embedded mode. Defaults to `'./'`. The recursive multi-schema
  *   build passes `'../'`, `'../../'`, etc. so nested parsers can reach a single
  *   `_helpers/` directory at the output root.
+ * @param importExt - Extension used on embedded-helper import specifiers.
+ *   Defaults to `'js'` (the TS NodeNext form); `'ts'` makes the output runnable
+ *   under Node's type stripping.
  */
 export const collectHelpers = (
   parserFunction: string,
   mode: HelpersMode,
   helpersImportPrefix = './',
+  importExt: 'js' | 'ts' = 'js',
 ): CollectedHelpers => {
   const imports: string[] = []
   const used = new Set<RuntimeHelperName>()
   const importFor = (helper: RuntimeHelperName): string =>
-    mode === 'embedded' ? embeddedImport(helper, helpersImportPrefix) : PACKAGE_IMPORTS[helper]
+    mode === 'embedded' ? embeddedImport(helper, helpersImportPrefix, importExt) : PACKAGE_IMPORTS[helper]
 
   if (parserFunction.includes('validateArray')) {
     imports.push(importFor('validate-array'))

@@ -12,6 +12,13 @@ export type GenerateIndexBarrelOptions = {
    * Defaults to `false`.
    */
   readonly typesOnly?: boolean
+  /**
+   * Extension used on every relative re-export specifier. `'js'` (default) is
+   * the standard TS NodeNext form (`./x.js` resolving to a sibling `x.ts`);
+   * `'ts'` emits the literal on-disk path so the output runs directly under
+   * Node's type stripping.
+   */
+  readonly importExt?: 'js' | 'ts'
 }
 
 // Generated files declare their public surface with these two forms, so we can
@@ -34,6 +41,7 @@ const CONST_EXPORT_RE = /^export const (\w+)/gm
  */
 export const generateIndexBarrel = (files: IndexBarrelFile[], options: GenerateIndexBarrelOptions = {}): string => {
   const typesOnly = options.typesOnly ?? false
+  const importExt = options.importExt ?? 'js'
 
   const sortedFiles = files
     .filter((file) => !file.filename.startsWith('_helpers/'))
@@ -50,12 +58,12 @@ export const generateIndexBarrel = (files: IndexBarrelFile[], options: GenerateI
 
     if (typeNames.length === 0 && constNames.length === 0) continue
 
-    // `.js` extension so the barrel resolves under Node ESM, not only Bun.
+    // An explicit extension so the barrel resolves under Node ESM, not only Bun.
     if (typesOnly) {
-      indexContent += `export type { ${typeNames.join(', ')} } from './${moduleName}.js';\n`
+      indexContent += `export type { ${typeNames.join(', ')} } from './${moduleName}.${importExt}';\n`
     } else {
       const typeExports = typeNames.map((name) => `type ${name}`)
-      indexContent += `export { ${[...typeExports, ...constNames].join(', ')} } from './${moduleName}.js';\n`
+      indexContent += `export { ${[...typeExports, ...constNames].join(', ')} } from './${moduleName}.${importExt}';\n`
     }
   }
 
