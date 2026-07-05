@@ -51,8 +51,8 @@ export const escapeRegexPattern = (pattern: string): string => {
   // double-escaped.
   return pattern.replace(/\\[\s\S]|[/\n\r\u2028\u2029]/g, (match) => {
     if (match === '/') return '\\/'
-    const escape = lineTerminatorEscapes[match.charCodeAt(0)]
-    if (escape !== undefined && match.length === 1) return escape
+    const terminatorEscape = lineTerminatorEscapes[match.charCodeAt(0)]
+    if (terminatorEscape !== undefined && match.length === 1) return terminatorEscape
     // An escape pair like `\/` or `\d`: keep exactly as authored.
     return match
   })
