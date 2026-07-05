@@ -27,12 +27,18 @@ describe('parse-cli-args', () => {
     expect(result).toEqual({})
   })
 
-  it('ignores unknown flags', () => {
-    const result = parseCliArgs(['--unknown', 'value', '--schema', 'schema.json'])
+  it('throws on an unknown flag instead of silently dropping it', () => {
+    expect(() => parseCliArgs(['--unknown', 'value', '--schema', 'schema.json'])).toThrow(/Unknown flag "--unknown"/)
+  })
 
-    expect(result).toEqual({
-      schema: 'schema.json',
-    })
+  it('throws on an unknown flag in equals form (typo like --strcit)', () => {
+    expect(() => parseCliArgs(['--strcit', '--schema', 'schema.json'])).toThrow(/Unknown flag "--strcit"/)
+    expect(() => parseCliArgs(['--strcit=true'])).toThrow(/Unknown flag "--strcit"/)
+  })
+
+  it('ignores the externally-consumed --config flag without error', () => {
+    expect(parseCliArgs(['--config', 'mjst.config.json', '--schema', 's.json'])).toEqual({ schema: 's.json' })
+    expect(parseCliArgs(['--config=mjst.config.json', '--outDir', 'dist'])).toEqual({ outDir: 'dist' })
   })
 
   it('handles only --schema without --outDir', () => {
@@ -71,12 +77,13 @@ describe('parse-cli-args', () => {
     })
   })
 
-  it('does not treat a flag as a value for the previous flag', () => {
-    const result = parseCliArgs(['--schema', '--outDir', 'output'])
+  it('throws when a value flag is immediately followed by another flag', () => {
+    // `--schema` lost its value; silently defaulting would surprise the user.
+    expect(() => parseCliArgs(['--schema', '--outDir', 'output'])).toThrow(/Flag "--schema" expects a value/)
+  })
 
-    expect(result).toEqual({
-      outDir: 'output',
-    })
+  it('throws when a value flag is the last argument with no value', () => {
+    expect(() => parseCliArgs(['--outDir', 'dist', '--schema'])).toThrow(/Flag "--schema" expects a value/)
   })
 
   it('handles equals syntax with empty value', () => {

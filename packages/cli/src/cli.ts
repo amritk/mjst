@@ -102,9 +102,18 @@ const buildOutput = async (outputDir: string, tsFiles: readonly string[], typesO
   try {
     await execFileAsync('npx', ['tsc', '--project', tsconfigPath])
   } catch (error) {
-    // tsc reports the actual errors on stdout; surface them so the user sees
-    // *what* failed instead of a bare "compilation failed".
-    const details = error as { stdout?: string; stderr?: string }
+    const details = error as { code?: string; stdout?: string; stderr?: string }
+    // A spawn failure (ENOENT) means the *tool* is missing, not that the code is
+    // wrong — pointing the user at "the generated files" would send them hunting
+    // for a compile error that doesn't exist. Report the missing executable.
+    if (details.code === 'ENOENT') {
+      throw new Error(
+        'Could not run `npx tsc` to compile the generated files: `npx` (or `tsc`) was not found. ' +
+          'Install TypeScript (e.g. `npm install -D typescript`) or drop --build to skip compilation.',
+      )
+    }
+    // Otherwise tsc ran and reported real errors on stdout; surface them so the
+    // user sees *what* failed instead of a bare "compilation failed".
     const output = [details.stdout, details.stderr].filter(Boolean).join('\n').trim()
     throw new Error(
       `TypeScript compilation failed. Check the generated files for errors.${output ? `\n\n${output}` : ''}`,
@@ -131,6 +140,10 @@ const findJsonSchemas = async (dir: string): Promise<string[]> => {
   for (const entry of entries) {
     const full = join(dir, entry.name)
     if (entry.isDirectory()) {
+      // `node_modules` holds dependency schemas that aren't the user's, and
+      // dot-directories (`.git`, `.cache`, ...) hold tooling state — descending
+      // into either pulls in `.json` files the user never meant to generate from.
+      if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue
       results.push(...(await findJsonSchemas(full)))
     } else if (entry.isFile() && entry.name.endsWith('.json')) {
       results.push(full)

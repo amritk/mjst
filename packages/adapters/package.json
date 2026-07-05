@@ -43,38 +43,38 @@
     "./package.json": "./package.json",
     "./adapter": {
       "development": "./src/adapter.ts",
-      "default": "./dist/adapter.js",
-      "types": "./dist/adapter.d.ts"
+      "types": "./dist/adapter.d.ts",
+      "default": "./dist/adapter.js"
     },
     "./source-format": {
       "development": "./src/source-format.ts",
-      "default": "./dist/source-format.js",
-      "types": "./dist/source-format.d.ts"
+      "types": "./dist/source-format.d.ts",
+      "default": "./dist/source-format.js"
     },
     "./get-adapter": {
       "development": "./src/get-adapter.ts",
-      "default": "./dist/get-adapter.js",
-      "types": "./dist/get-adapter.d.ts"
+      "types": "./dist/get-adapter.d.ts",
+      "default": "./dist/get-adapter.js"
     },
     "./typebox-to-json-schema": {
       "development": "./src/typebox-to-json-schema.ts",
-      "default": "./dist/typebox-to-json-schema.js",
-      "types": "./dist/typebox-to-json-schema.d.ts"
+      "types": "./dist/typebox-to-json-schema.d.ts",
+      "default": "./dist/typebox-to-json-schema.js"
     },
     "./zod-to-json-schema": {
       "development": "./src/zod-to-json-schema.ts",
-      "default": "./dist/zod-to-json-schema.js",
-      "types": "./dist/zod-to-json-schema.d.ts"
+      "types": "./dist/zod-to-json-schema.d.ts",
+      "default": "./dist/zod-to-json-schema.js"
     },
     "./valibot-to-json-schema": {
       "development": "./src/valibot-to-json-schema.ts",
-      "default": "./dist/valibot-to-json-schema.js",
-      "types": "./dist/valibot-to-json-schema.d.ts"
+      "types": "./dist/valibot-to-json-schema.d.ts",
+      "default": "./dist/valibot-to-json-schema.js"
     },
     "./effect-to-json-schema": {
       "development": "./src/effect-to-json-schema.ts",
-      "default": "./dist/effect-to-json-schema.js",
-      "types": "./dist/effect-to-json-schema.d.ts"
+      "types": "./dist/effect-to-json-schema.d.ts",
+      "default": "./dist/effect-to-json-schema.js"
     }
   },
   "peerDependencies": {

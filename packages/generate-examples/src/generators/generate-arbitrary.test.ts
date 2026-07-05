@@ -45,7 +45,21 @@ describe('generate-arbitrary', () => {
 
   it('uses stringMatching for pattern constraints', () => {
     const schema = { type: 'string' as const, pattern: '^[a-z]+$' }
-    expect(generateArbitrary(schema, 'Slug')).toContain('fc.stringMatching(/^[a-z]+$/)')
+    expect(generateArbitrary(schema, 'Slug')).toContain('fc.stringMatching(new RegExp("^[a-z]+$"))')
+  })
+
+  it('escapes a pattern containing a slash instead of breaking the regex literal', () => {
+    const schema = { type: 'string' as const, pattern: '^/api/v\\d+$' }
+    const code = generateArbitrary(schema, 'Path')
+    // A `/`-bearing pattern must not be inlined into a `/.../ ` literal.
+    expect(code).toContain('fc.stringMatching(new RegExp("^/api/v\\\\d+$"))')
+    expect(code).not.toContain('fc.stringMatching(/')
+  })
+
+  it('preserves min/maxLength alongside a pattern via a filter', () => {
+    const schema = { type: 'string' as const, pattern: '^[a-z]+$', minLength: 3, maxLength: 8 }
+    const code = generateArbitrary(schema, 'Bounded')
+    expect(code).toContain('.filter((s) => s.length >= 3 && s.length <= 8)')
   })
 
   it('honours integer range and multipleOf', () => {
@@ -58,6 +72,12 @@ describe('generate-arbitrary', () => {
   it('adjusts exclusive integer bounds', () => {
     const schema = { type: 'integer' as const, exclusiveMinimum: 0, exclusiveMaximum: 10 }
     expect(generateArbitrary(schema, 'N')).toContain('fc.integer({ min: 1, max: 9 })')
+  })
+
+  it('honours the tighter bound when both minimum and exclusiveMinimum are present', () => {
+    // minimum 5 vs exclusiveMinimum 9 → effective min is 10 (9 + 1), not 5.
+    const schema = { type: 'integer' as const, minimum: 5, exclusiveMinimum: 9 }
+    expect(generateArbitrary(schema, 'Tight')).toContain('fc.integer({ min: 10 })')
   })
 
   it('uses excluded bounds for numbers', () => {
@@ -114,5 +134,90 @@ describe('generate-arbitrary', () => {
 
   it('unwraps a single-member type array to the bare arbitrary', () => {
     expect(generateArbitrary({ type: ['integer'] as const }, 'Solo')).toContain('= fc.integer()')
+  })
+
+  it('generates fc.tuple for prefixItems (2020-12 tuples)', () => {
+    const schema = {
+      type: 'array' as const,
+      prefixItems: [{ type: 'string' as const }, { type: 'integer' as const }],
+      items: false,
+    }
+    expect(generateArbitrary(schema, 'Pair')).toContain('fc.tuple(fc.string(), fc.integer())')
+  })
+
+  it('generates fc.tuple for the draft-07 array-form items', () => {
+    const schema = { type: 'array' as const, items: [{ type: 'boolean' as const }, { type: 'string' as const }] }
+    expect(generateArbitrary(schema, 'T')).toContain('fc.tuple(fc.boolean(), fc.string())')
+  })
+
+  it('merges allOf branches into a single record arbitrary', () => {
+    const schema = {
+      allOf: [
+        { type: 'object' as const, properties: { a: { type: 'string' as const } }, required: ['a'] },
+        { type: 'object' as const, properties: { b: { type: 'integer' as const } }, required: ['b'] },
+      ],
+    }
+    const code = generateArbitrary(schema, 'Merged')
+    expect(code).toContain('"a": fc.string()')
+    expect(code).toContain('"b": fc.integer()')
+    // allOf collapses to one record, not an fc.oneof / fc.anything fallback.
+    expect(code).not.toContain('fc.anything()')
+    expect(code).not.toContain('fc.oneof')
+  })
+
+  it('generates fc.dictionary for a map-style object with typed additionalProperties', () => {
+    const schema = { type: 'object' as const, additionalProperties: { type: 'integer' as const } }
+    expect(generateArbitrary(schema, 'Scores')).toContain('fc.dictionary(fc.string(), fc.integer())')
+  })
+
+  it('composes a dictionary of extras when properties and additionalProperties coexist', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { id: { type: 'string' as const } },
+      required: ['id'],
+      additionalProperties: { type: 'number' as const },
+    }
+    const code = generateArbitrary(schema, 'Open')
+    expect(code).toContain('"id": fc.string()')
+    expect(code).toContain('fc.dictionary(fc.string(), fc.double(')
+  })
+
+  it('ties a self-referential schema with fc.letrec instead of a bare identifier', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: {
+        value: { type: 'string' as const },
+        children: { type: 'array' as const, items: { $ref: '#/$defs/node' } },
+      },
+      required: ['value'],
+    }
+    const code = generateArbitrary(schema, 'Node')
+    // The self-reference resolves to `tie('self')`, wrapped in fc.letrec — never a
+    // bare `NodeArbitrary` that would TDZ-crash on import.
+    expect(code).toContain('fc.letrec')
+    expect(code).toContain('tie("self")')
+    expect(code).not.toContain('fc.array(NodeArbitrary)')
+  })
+
+  it('produces recursive arbitrary code that imports and samples without crashing', async () => {
+    const fc = await import('fast-check')
+    const schema = {
+      type: 'object' as const,
+      properties: {
+        value: { type: 'string' as const },
+        next: { $ref: '#/$defs/node' },
+      },
+      required: ['value'],
+    }
+    const code = generateArbitrary(schema, 'Node')
+    // Strip the `export const X: fc.Arbitrary<Node> =` prefix, then drop the TS-only
+    // `fc.letrec<{ self: Node }>` type argument so the remaining RHS is plain JS we
+    // can eval with `fc` in scope, mimicking the compiled module. A TDZ bug (the
+    // pre-letrec behaviour) would throw a ReferenceError right here.
+    const rhs = code.slice(code.indexOf('=') + 1).replace(/fc\.letrec<[^>]*>/, 'fc.letrec')
+    const arbitrary = new Function('fc', `return (${rhs})`)(fc) as import('fast-check').Arbitrary<unknown>
+    const sample = fc.sample(arbitrary, 1)[0]
+    expect(sample).toBeDefined()
+    expect(typeof (sample as { value: unknown }).value).toBe('string')
   })
 })

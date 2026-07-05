@@ -1,6 +1,8 @@
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import {
+  hasAdditionalProperties,
+  hasAllOf,
   hasAnyOf,
   hasConst,
   hasEnum,
@@ -26,11 +28,31 @@ import {
 } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { mergeAllOf } from './derive-example'
+
 /**
  * Derives the arbitrary const name from a type name.
  * e.g. "User" → "UserArbitrary"
  */
 const arbitraryName = (typeName: string): string => `${typeName}Arbitrary`
+
+/**
+ * Threaded through `arbitraryExpr` while building one type's arbitrary.
+ * `selfArbName` is the arbitrary name of the type currently being generated; a
+ * `$ref` resolving to it is a *self*-reference which must be tied lazily (via
+ * `fc.letrec`'s `tie`) rather than emitted as a bare identifier — the eager
+ * identifier would reference a `const` mid-initialization and throw a TDZ
+ * `ReferenceError` at import. `usedTie` records whether that happened so the
+ * caller knows to wrap the expression in `fc.letrec`.
+ */
+type ExprCtx = {
+  readonly suffix: string
+  readonly selfArbName: string
+  readonly usedTie: { value: boolean }
+}
+
+/** The letrec key used for a type's own (self-referential) arbitrary. */
+const SELF_KEY = 'self'
 
 /** Builds a `fc.string({ ... })` expression honouring format and length constraints. */
 const stringExpr = (schema: JSONSchema): string => {
@@ -58,7 +80,18 @@ const stringExpr = (schema: JSONSchema): string => {
     }
   }
 
-  if (hasPattern(schema)) return `fc.stringMatching(/${schema.pattern}/)`
+  if (hasPattern(schema)) {
+    // Build the regex via `new RegExp(<json-string>)` rather than inlining the
+    // pattern into a `/.../ ` literal: a pattern containing `/` (e.g. `^/api/v\d+$`)
+    // would otherwise close the literal early and emit invalid TypeScript.
+    const base = `fc.stringMatching(new RegExp(${JSON.stringify(schema.pattern)}))`
+    // `stringMatching` takes no length bounds, so honour any min/maxLength with a
+    // filter instead of silently dropping them. Only emit it when a bound exists.
+    const checks: string[] = []
+    if (hasMinLength(schema)) checks.push(`s.length >= ${schema.minLength}`)
+    if (hasMaxLength(schema)) checks.push(`s.length <= ${schema.maxLength}`)
+    return checks.length > 0 ? `${base}.filter((s) => ${checks.join(' && ')})` : base
+  }
 
   const opts: string[] = []
   if (hasMinLength(schema)) opts.push(`minLength: ${schema.minLength}`)
@@ -69,10 +102,18 @@ const stringExpr = (schema: JSONSchema): string => {
 /** Builds a `fc.integer({ ... })` expression honouring range and multiple-of constraints. */
 const integerExpr = (schema: JSONSchema): string => {
   const opts: string[] = []
-  if (hasMinimum(schema)) opts.push(`min: ${schema.minimum}`)
-  else if (hasExclusiveMinimum(schema)) opts.push(`min: ${Number(schema.exclusiveMinimum) + 1}`)
-  if (hasMaximum(schema)) opts.push(`max: ${schema.maximum}`)
-  else if (hasExclusiveMaximum(schema)) opts.push(`max: ${Number(schema.exclusiveMaximum) - 1}`)
+  // With both `minimum` and `exclusiveMinimum` present the effective lower bound
+  // is the tighter (larger) of the two, so combine them rather than letting one
+  // shadow the other via else-if.
+  const mins: number[] = []
+  if (hasMinimum(schema)) mins.push(Number(schema.minimum))
+  if (hasExclusiveMinimum(schema)) mins.push(Number(schema.exclusiveMinimum) + 1)
+  if (mins.length > 0) opts.push(`min: ${Math.max(...mins)}`)
+
+  const maxs: number[] = []
+  if (hasMaximum(schema)) maxs.push(Number(schema.maximum))
+  if (hasExclusiveMaximum(schema)) maxs.push(Number(schema.exclusiveMaximum) - 1)
+  if (maxs.length > 0) opts.push(`max: ${Math.min(...maxs)}`)
 
   const base = opts.length > 0 ? `fc.integer({ ${opts.join(', ')} })` : 'fc.integer()'
   return hasMultipleOf(schema) ? `${base}.filter((n) => n % ${schema.multipleOf} === 0)` : base
@@ -90,9 +131,25 @@ const numberExpr = (schema: JSONSchema): string => {
   return hasMultipleOf(schema) ? `${base}.filter((n) => n % ${schema.multipleOf} === 0)` : base
 }
 
-/** Builds a `fc.array(...)` / `fc.uniqueArray(...)` expression for an array schema. */
-const arrayExpr = (schema: JSONSchema, suffix: string): string => {
-  const items = hasItems(schema) && isSchemaObject(schema.items) ? arbitraryExpr(schema.items, suffix) : 'fc.anything()'
+/** Builds a `fc.array(...)` / `fc.uniqueArray(...)` / `fc.tuple(...)` expression for an array schema. */
+const arrayExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
+  const raw = schema as Record<string, unknown>
+  // A tuple is `prefixItems` (2020-12) or the draft-07 array-form `items`. Both
+  // describe one schema per position, so map them to `fc.tuple(...)`. Extra items
+  // beyond the prefix are unconstrained (or forbidden by `items: false`); the
+  // minimal tuple is schema-valid either way.
+  const prefixItems = raw['prefixItems']
+  const tuple = Array.isArray(prefixItems)
+    ? (prefixItems as JSONSchema[])
+    : Array.isArray(raw['items'])
+      ? (raw['items'] as JSONSchema[])
+      : undefined
+  if (tuple) {
+    const exprs = tuple.map((item) => arbitraryExpr(item, ctx))
+    return `fc.tuple(${exprs.join(', ')})`
+  }
+
+  const items = hasItems(schema) && isSchemaObject(schema.items) ? arbitraryExpr(schema.items, ctx) : 'fc.anything()'
 
   const opts: string[] = []
   if (hasMinItems(schema)) opts.push(`minLength: ${schema.minItems}`)
@@ -102,14 +159,23 @@ const arrayExpr = (schema: JSONSchema, suffix: string): string => {
   return opts.length > 0 ? `${fn}(${items}, { ${opts.join(', ')} })` : `${fn}(${items})`
 }
 
-/** Builds a `fc.record(...)` expression for an object schema. */
-const objectExpr = (schema: JSONSchema, suffix: string): string => {
-  if (!hasProperties(schema)) return 'fc.object()'
+/** Builds a `fc.record(...)` / `fc.dictionary(...)` expression for an object schema. */
+const objectExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
+  // The `additionalProperties` value schema (when it constrains extra keys with a
+  // real subschema rather than the boolean true/false form).
+  const additional = hasAdditionalProperties(schema) ? schema.additionalProperties : false
+  const additionalArb = isSchemaObject(additional) ? arbitraryExpr(additional, ctx) : undefined
+
+  if (!hasProperties(schema)) {
+    // A map-style object (no declared properties) with a typed `additionalProperties`
+    // is a dictionary of that value type; otherwise fall back to a free-form object.
+    return additionalArb ? `fc.dictionary(fc.string(), ${additionalArb})` : 'fc.object()'
+  }
 
   const required = new Set(hasRequired(schema) ? schema.required : [])
   const keys = Object.keys(schema.properties)
   const entries = Object.entries(schema.properties).map(
-    ([key, propSchema]) => `${JSON.stringify(key)}: ${arbitraryExpr(propSchema, suffix)}`,
+    ([key, propSchema]) => `${JSON.stringify(key)}: ${arbitraryExpr(propSchema, ctx)}`,
   )
 
   if (entries.length === 0) return 'fc.record({})'
@@ -118,20 +184,27 @@ const objectExpr = (schema: JSONSchema, suffix: string): string => {
 
   // fc.record treats all keys as required by default. Only emit requiredKeys
   // when at least one property is optional.
-  if (keys.every((key) => required.has(key))) return `fc.record(${model})`
+  const record = keys.every((key) => required.has(key))
+    ? `fc.record(${model})`
+    : `fc.record(${model}, { requiredKeys: [${[...required].map((key) => JSON.stringify(key)).join(', ')}] })`
 
-  const requiredKeys = [...required].map((key) => JSON.stringify(key)).join(', ')
-  return `fc.record(${model}, { requiredKeys: [${requiredKeys}] })`
+  // When both declared properties and a typed `additionalProperties` are present,
+  // fold in a dictionary of extra keys so the value exercises the open-map part of
+  // the schema too. The declared keys win on collision (merged last).
+  if (additionalArb) {
+    return `fc.tuple(${record}, fc.dictionary(fc.string(), ${additionalArb})).map(([base, extra]) => ({ ...extra, ...base }))`
+  }
+  return record
 }
 
 /** Builds a `fc.oneof(...)` expression from a list of branch schemas. */
-const oneofExpr = (branches: readonly JSONSchema[], suffix: string): string => {
-  const exprs = branches.map((branch) => arbitraryExpr(branch, suffix))
+const oneofExpr = (branches: readonly JSONSchema[], ctx: ExprCtx): string => {
+  const exprs = branches.map((branch) => arbitraryExpr(branch, ctx))
   return `fc.oneof(${exprs.join(', ')})`
 }
 
 /** Builds the fast-check expression for a single (non-union) JSON Schema type. */
-const scalarExpr = (type: string, schema: JSONSchema, suffix: string): string => {
+const scalarExpr = (type: string, schema: JSONSchema, ctx: ExprCtx): string => {
   switch (type) {
     case 'string':
       return stringExpr(schema)
@@ -144,9 +217,9 @@ const scalarExpr = (type: string, schema: JSONSchema, suffix: string): string =>
     case 'null':
       return 'fc.constant(null)'
     case 'array':
-      return arrayExpr(schema, suffix)
+      return arrayExpr(schema, ctx)
     case 'object':
-      return objectExpr(schema, suffix)
+      return objectExpr(schema, ctx)
     default:
       return 'fc.anything()'
   }
@@ -154,13 +227,23 @@ const scalarExpr = (type: string, schema: JSONSchema, suffix: string): string =>
 
 /**
  * Recursively builds the fast-check arbitrary expression for a schema node.
- * `$ref`s resolve to the referenced file's exported arbitrary; everything else
- * maps to the appropriate `fc.*` combinator.
+ * `$ref`s resolve to the referenced file's exported arbitrary; a self-`$ref`
+ * resolves to `tie('self')` so recursive schemas tie lazily via `fc.letrec`.
+ * Everything else maps to the appropriate `fc.*` combinator.
  */
-const arbitraryExpr = (schema: JSONSchema, suffix: string): string => {
+const arbitraryExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
   if (!isSchemaObject(schema)) return 'fc.anything()'
 
-  if (hasRef(schema)) return arbitraryName(refToName(schema.$ref, suffix))
+  if (hasRef(schema)) {
+    const name = arbitraryName(refToName(schema.$ref, ctx.suffix))
+    // A reference back to the type being generated must be tied lazily; an eager
+    // identifier would touch a still-uninitialized const (TDZ) at import time.
+    if (name === ctx.selfArbName) {
+      ctx.usedTie.value = true
+      return `tie(${JSON.stringify(SELF_KEY)})`
+    }
+    return name
+  }
 
   if (hasConst(schema)) return `fc.constant(${JSON.stringify(schema.const)})`
 
@@ -177,15 +260,20 @@ const arbitraryExpr = (schema: JSONSchema, suffix: string): string => {
   if (primitive === 'bigint') return 'fc.bigInt()'
   if (primitive) return 'fc.anything()'
 
-  if (hasOneOf(schema)) return oneofExpr(schema.oneOf, suffix)
-  if (hasAnyOf(schema)) return oneofExpr(schema.anyOf, suffix)
+  // `allOf` must satisfy every branch at once. fast-check has no generic
+  // intersection combinator, so flatten the branches into one merged schema
+  // (tightest bounds, unioned required, merged properties) and generate from it.
+  if (hasAllOf(schema)) return arbitraryExpr(mergeAllOf(schema), ctx)
 
-  if (hasType(schema)) return scalarExpr(schema.type, schema, suffix)
+  if (hasOneOf(schema)) return oneofExpr(schema.oneOf, ctx)
+  if (hasAnyOf(schema)) return oneofExpr(schema.anyOf, ctx)
+
+  if (hasType(schema)) return scalarExpr(schema.type, schema, ctx)
 
   // Multi-type schemas (`type: ['string', 'null']`) become a oneof over each
   // member type; `hasType` only matches a single string `type`.
   if (Array.isArray(schema.type)) {
-    const exprs = schema.type.map((type) => scalarExpr(type, schema, suffix))
+    const exprs = schema.type.map((type) => scalarExpr(type, schema, ctx))
     return exprs.length === 1 ? (exprs[0] as string) : `fc.oneof(${exprs.join(', ')})`
   }
 
@@ -195,6 +283,10 @@ const arbitraryExpr = (schema: JSONSchema, suffix: string): string => {
 /**
  * Generates a `fast-check` arbitrary that produces schema-valid values.
  *
+ * A schema that references itself is wrapped in `fc.letrec` so the recursion is
+ * tied lazily — a plain `const NodeArbitrary = fc.record({ next: NodeArbitrary })`
+ * would throw a TDZ `ReferenceError` the moment the module is imported.
+ *
  * @example
  * ```typescript
  * generateArbitrary({ type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }, 'Info')
@@ -202,6 +294,13 @@ const arbitraryExpr = (schema: JSONSchema, suffix: string): string => {
  * ```
  */
 export const generateArbitrary = (schema: JSONSchema, typeName: string, suffix = ''): string => {
-  const expr = arbitraryExpr(schema, suffix)
-  return `export const ${arbitraryName(typeName)}: fc.Arbitrary<${typeName}> = ${expr}`
+  const selfArbName = arbitraryName(typeName)
+  const ctx: ExprCtx = { suffix, selfArbName, usedTie: { value: false } }
+  const expr = arbitraryExpr(schema, ctx)
+
+  if (ctx.usedTie.value) {
+    return `export const ${selfArbName}: fc.Arbitrary<${typeName}> = fc.letrec<{ ${SELF_KEY}: ${typeName} }>((tie) => ({\n  ${SELF_KEY}: ${expr},\n})).${SELF_KEY}`
+  }
+
+  return `export const ${selfArbName}: fc.Arbitrary<${typeName}> = ${expr}`
 }

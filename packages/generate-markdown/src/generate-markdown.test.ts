@@ -169,6 +169,27 @@ describe('generate-readme', () => {
     expect(content).toContain('🎯')
   })
 
+  it('escapes html-significant characters in x-icon', async () => {
+    const schemaWithHtmlIcon = {
+      ...minimalSchema,
+      properties: {
+        testProp: {
+          type: 'string',
+          description: 'A test property',
+          'x-icon': '<img src=x onerror=alert(1)>',
+        },
+      },
+    }
+
+    mockFs(schemaWithHtmlIcon)
+
+    await generateMarkdown()
+
+    const [, content] = writeFileMock.mock.calls[0] ?? []
+    expect(content).toContain('&lt;img src=x onerror=alert(1)&gt;')
+    expect(content).not.toContain('<img src=x')
+  })
+
   it('renders no icon when x-icon is not present', async () => {
     mockFs(minimalSchema)
 
@@ -969,7 +990,7 @@ describe('generate-readme', () => {
       expect(content).toContain('MIT')
     })
 
-    it('falls back to table-only when README has no markers', async () => {
+    it('refuses to overwrite an existing README that has no markers', async () => {
       const existingReadme = `# My Package\n\nNo markers here.\n`
 
       readFileMock.mockImplementation(async (path) => {
@@ -981,11 +1002,25 @@ describe('generate-readme', () => {
       })
       writeFileMock.mockImplementation(async () => {})
 
-      await generateMarkdown()
+      // Clobbering a hand-written README would lose content, so we error instead.
+      await expect(generateMarkdown()).rejects.toThrow(/missing the .* markers/)
+      expect(writeFileMock).not.toHaveBeenCalled()
+    })
 
-      const [, content] = writeFileMock.mock.calls[0] ?? []
-      expect(content).not.toContain('# My Package')
-      expect(content).toContain('testProp')
+    it('refuses to overwrite when only one marker is present', async () => {
+      const existingReadme = `# My Package\n\n<!-- config-table-start -->\nno end marker\n`
+
+      readFileMock.mockImplementation(async (path) => {
+        if (typeof path === 'string') {
+          if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
+          if (path.includes('README.md')) return existingReadme
+        }
+        throw new Error('Unexpected file path')
+      })
+      writeFileMock.mockImplementation(async () => {})
+
+      await expect(generateMarkdown()).rejects.toThrow(/missing the .* markers/)
+      expect(writeFileMock).not.toHaveBeenCalled()
     })
 
     it('falls back to table-only when README does not exist', async () => {
