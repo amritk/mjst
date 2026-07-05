@@ -1,5 +1,15 @@
 # @amritk/mjst
 
+## 0.7.16
+
+### Patch Changes
+
+- Updated dependencies [18df9f7]
+- Updated dependencies [02f6b05]
+  - @amritk/generate-parsers@0.13.0
+  - @amritk/helpers@0.10.3
+  - @amritk/adapters@0.2.14
+
 ## 0.7.15
 
 ### Patch Changes
