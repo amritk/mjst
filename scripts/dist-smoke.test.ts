@@ -1,15 +1,10 @@
-import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
-import { promisify } from 'node:util'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-const execFileAsync = promisify(execFile)
-
-const ROOT = resolve(import.meta.dirname, '..')
-const CLI_BIN = join(ROOT, 'packages/cli/dist/cli.js')
+import { CLI_BIN, ROOT, runNode } from './e2e-helpers'
 
 /**
  * Smoke test for the compiled `dist/` artifacts — the exact files that ship to
@@ -23,19 +18,6 @@ const CLI_BIN = join(ROOT, 'packages/cli/dist/cli.js')
  *
  * Requires a prior `bun run build`; run via `bun run test:dist`.
  */
-
-/**
- * Runs `node` with the given args, folding the child's output into the thrown
- * error so a failure shows what broke, not just a non-zero exit code.
- */
-const runNode = async (args: string[]): Promise<{ stdout: string; stderr: string }> => {
-  try {
-    return await execFileAsync('node', args)
-  } catch (error) {
-    const details = error as { stdout?: string; stderr?: string; message: string }
-    throw new Error([details.message, details.stdout, details.stderr].filter(Boolean).join('\n'))
-  }
-}
 
 /** Every compiled `.js` module shipped by the non-private workspace packages. */
 const collectDistModules = async (): Promise<string[]> => {
