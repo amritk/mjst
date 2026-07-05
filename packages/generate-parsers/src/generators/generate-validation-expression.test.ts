@@ -656,7 +656,7 @@ describe('generate-validation-expression', () => {
     const schema = { type: 'string' as const }
     const result = generateValidationExpression('x-linkedin', schema, '""', true)
 
-    expect(result).toContain("input?.['x-linkedin']")
+    expect(result).toContain('input?.["x-linkedin"]')
     expect(result).not.toContain('input?.x-linkedin')
   })
 

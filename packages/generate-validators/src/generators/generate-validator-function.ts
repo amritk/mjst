@@ -214,7 +214,9 @@ const generatePropertyChecks = (
 
     if (isRequired) {
       lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
-      lines.push(`    errors.push({ message: "must have required property '${key}'", path: ${parentPath} })`)
+      lines.push(
+        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+      )
       lines.push(`  } else {`)
       lines.push(`    const _r = ${vName}(${raw}, ${path})`)
       lines.push(`    if (_r !== true) errors.push(..._r.errors)`)
@@ -233,7 +235,9 @@ const generatePropertyChecks = (
   if (instanceOf) {
     if (isRequired) {
       lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
-      lines.push(`    errors.push({ message: "must have required property '${key}'", path: ${parentPath} })`)
+      lines.push(
+        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+      )
       lines.push(`  } else if (!(${raw} instanceof ${instanceOf})) {`)
       lines.push(`    errors.push({ message: 'must be ${instanceOf}', path: ${path} })`)
       lines.push(`  }`)
@@ -250,7 +254,9 @@ const generatePropertyChecks = (
   if (primitive) {
     if (isRequired) {
       lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
-      lines.push(`    errors.push({ message: "must have required property '${key}'", path: ${parentPath} })`)
+      lines.push(
+        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+      )
       lines.push(`  } else if (typeof ${raw} !== "${primitive}") {`)
       lines.push(`    errors.push({ message: 'must be ${primitive}', path: ${path} })`)
       lines.push(`  }`)
@@ -268,7 +274,9 @@ const generatePropertyChecks = (
     const msg = JSON.stringify(`must be ${JSON.stringify(propSchema.const)}`)
     if (isRequired) {
       lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
-      lines.push(`    errors.push({ message: "must have required property '${key}'", path: ${parentPath} })`)
+      lines.push(
+        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+      )
       lines.push(`  } else if (${mismatch}) {`)
       lines.push(`    errors.push({ message: ${msg}, path: ${path} })`)
       lines.push(`  }`)
@@ -287,13 +295,15 @@ const generatePropertyChecks = (
 
     if (isRequired) {
       lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
-      lines.push(`    errors.push({ message: "must have required property '${key}'", path: ${parentPath} })`)
+      lines.push(
+        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+      )
       lines.push(`  } else if (!(${allowed} as unknown[]).includes(${raw})) {`)
-      lines.push(`    errors.push({ message: \`must be one of: ${label}\`, path: ${path} })`)
+      lines.push(`    errors.push({ message: ${JSON.stringify(`must be one of: ${label}`)}, path: ${path} })`)
       lines.push(`  }`)
     } else {
       lines.push(`  if (${raw} !== undefined && !(${allowed} as unknown[]).includes(${raw})) {`)
-      lines.push(`    errors.push({ message: \`must be one of: ${label}\`, path: ${path} })`)
+      lines.push(`    errors.push({ message: ${JSON.stringify(`must be one of: ${label}`)}, path: ${path} })`)
       lines.push(`  }`)
     }
     return lines
@@ -307,7 +317,9 @@ const generatePropertyChecks = (
 
     if (isRequired) {
       lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
-      lines.push(`    errors.push({ message: "must have required property '${key}'", path: ${parentPath} })`)
+      lines.push(
+        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+      )
       if (wrongType) {
         lines.push(`  } else if (${wrongType}) {`)
         lines.push(`    errors.push({ message: 'must be ${typLabel}', path: ${path} })`)
@@ -337,7 +349,9 @@ const generatePropertyChecks = (
     if (!hasType(propSchema) && isRequired) {
       // No `type` to anchor a missing-property check, so enforce presence here.
       lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
-      lines.push(`    errors.push({ message: "must have required property '${key}'", path: ${parentPath} })`)
+      lines.push(
+        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+      )
       lines.push(`  } else {`)
       lines.push(...extraLines)
       lines.push(`  }`)
@@ -608,7 +622,7 @@ const generateValueChecks = (
     const allowed = JSON.stringify(propSchema.enum)
     const label = (propSchema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
     lines.push(`  if (${raw} !== undefined && !(${allowed} as unknown[]).includes(${raw})) {`)
-    lines.push(`    errors.push({ message: \`must be one of: ${label}\`, path: ${path} })`)
+    lines.push(`    errors.push({ message: ${JSON.stringify(`must be one of: ${label}`)}, path: ${path} })`)
     lines.push(`  }`)
     return lines
   }
@@ -1500,7 +1514,7 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
     return [
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
       `  if (!(${allowed} as unknown[]).includes(input)) {`,
-      `    return { valid: false, errors: [{ message: \`must be one of: ${label}\`, path: _path }] }`,
+      `    return { valid: false, errors: [{ message: ${JSON.stringify(`must be one of: ${label}`)}, path: _path }] }`,
       `  }`,
       `  return true`,
       `}`,

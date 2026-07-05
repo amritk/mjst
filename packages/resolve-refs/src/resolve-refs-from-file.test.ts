@@ -230,7 +230,26 @@ describe('resolve-refs-from-file', () => {
     // The initial host was allowed, so the first request happened — but the
     // redirect target was re-checked and refused before any second request.
     expect(fetchSpy).toHaveBeenCalledTimes(1)
-    expect(fetchSpy).toHaveBeenCalledWith('https://api.example.com/s.json', { redirect: 'manual' })
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://api.example.com/s.json',
+      expect.objectContaining({ redirect: 'manual' }),
+    )
+  })
+
+  it('refuses a redirect to a file:// URL (SSRF local file disclosure)', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(null, { status: 302, headers: { location: 'file:///etc/passwd' } }))
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ x: { $ref: 'https://api.example.com/s.json#/Foo' } }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'), {
+      allowedHosts: ['api.example.com'],
+    })
+
+    expect((resolved as { x: unknown }).x).toBeUndefined()
+    expect(errors[0]?.message).toMatch(/unsupported URL protocol/i)
+    // Only the initial https request happened; the file:// target was refused.
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 
   it('follows a redirect to another allowed host', async () => {

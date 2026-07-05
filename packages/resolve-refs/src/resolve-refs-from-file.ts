@@ -59,6 +59,37 @@ export const clearRemoteCache = (): void => {
 // low enough to stop a redirect loop from spinning forever.
 const MAX_REDIRECTS = 5
 
+/** Abort a remote fetch that has not responded within this many milliseconds. */
+const FETCH_TIMEOUT_MS = 30_000
+
+/** Refuse to buffer a remote document larger than this (bytes) to bound memory. */
+const MAX_REMOTE_BYTES = 16 * 1024 * 1024
+
+/**
+ * Reads a response body, refusing to buffer more than {@link MAX_REMOTE_BYTES}.
+ * A `Content-Length` over the limit is rejected up front; a missing/lying header
+ * is caught while streaming so a chunked response can't exhaust memory either.
+ */
+const readCapped = async (response: Response): Promise<string> => {
+  const declared = Number(response.headers.get('content-length'))
+  if (Number.isFinite(declared) && declared > MAX_REMOTE_BYTES) {
+    throw new Error(`remote document exceeds ${MAX_REMOTE_BYTES} bytes`)
+  }
+
+  const body = response.body
+  if (!body) return response.text()
+
+  const decoder = new TextDecoder()
+  let text = ''
+  let total = 0
+  for await (const chunk of body as unknown as AsyncIterable<Uint8Array>) {
+    total += chunk.byteLength
+    if (total > MAX_REMOTE_BYTES) throw new Error(`remote document exceeds ${MAX_REMOTE_BYTES} bytes`)
+    text += decoder.decode(chunk, { stream: true })
+  }
+  return text + decoder.decode()
+}
+
 /**
  * Fetches and parses a remote document, following redirects manually so the
  * SSRF guard is re-applied to every hop. `fetch` follows redirects by default,
@@ -72,7 +103,11 @@ const fetchRemote = async (location: string, options: ResolveOptions): Promise<u
     const reason = denialReason(current, options)
     if (reason !== null) throw new Error(`refusing to follow redirect (${reason}): ${current}`)
 
-    const response = await fetch(current, { redirect: 'manual' })
+    const response = await fetch(current, {
+      redirect: 'manual',
+      // Cap the wait for a response so a stalling host can't hang resolution forever.
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    })
     if (response.status >= 300 && response.status < 400) {
       const next = response.headers.get('location')
       if (!next) throw new Error(`HTTP ${response.status} redirect with no Location header`)
@@ -84,7 +119,7 @@ const fetchRemote = async (location: string, options: ResolveOptions): Promise<u
     const parse = options.parse ?? ((c: string) => JSON.parse(c) as unknown)
     // Parse against the original request location so the caller's format sniffing
     // (e.g. `.yaml` vs `.json`) and any relative refs key off a stable identity.
-    return parse(await response.text(), location)
+    return parse(await readCapped(response), location)
   }
   throw new Error(`too many redirects (>${MAX_REDIRECTS}): ${location}`)
 }
@@ -98,6 +133,13 @@ const denialReason = (location: string, options: ResolveOptions): string | null 
     url = new URL(location)
   } catch {
     return 'the URL is invalid'
+  }
+
+  // Only http(s) may be fetched. Without this, a redirect to `file:///etc/passwd`
+  // or a `data:` URL passes every host check below (their `hostname` is empty, so
+  // `isPrivateHost('')` is false) and Bun's `fetch` would happily read the file.
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return `unsupported URL protocol "${url.protocol}" (only http and https are allowed)`
   }
 
   const allow = options.allowedHosts

@@ -1195,4 +1195,32 @@ describe('generate-validator-function', () => {
       expect(t({ a: ['s', 1, 2] })).not.toBe(true)
     })
   })
+
+  describe('code injection safety', () => {
+    it('treats schema-controlled property names and enum values as inert data', () => {
+      // Enum values interpolated into a backtick error message previously let a
+      // value like `` `+payload+` `` escape the template literal and execute.
+      const marker = '__mjst_validator_pwned__'
+      const payloadKey = `evil"]; (globalThis)["${marker}"] = true; //`
+      const validator = evalValidator(
+        generateValidatorFunction(
+          {
+            type: 'object' as const,
+            properties: {
+              [payloadKey]: { enum: ['`+ ((globalThis)["' + marker + '"] = true) +`', "it's"] },
+            },
+            required: [payloadKey],
+          },
+          'Pwn',
+        ),
+      )
+
+      // Exercise the required + enum error paths where the payload text lives.
+      expect(validator({})).not.toBe(true)
+      expect(validator({ [payloadKey]: 'nope' })).not.toBe(true)
+
+      // If the payload had executed, this global would be set.
+      expect((globalThis as Record<string, unknown>)[marker]).toBeUndefined()
+    })
+  })
 })

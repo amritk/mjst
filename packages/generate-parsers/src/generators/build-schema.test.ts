@@ -65,7 +65,7 @@ describe('build-schema', () => {
     const parameterFile = result.find((file) => file.filename === 'parameter.ts')
     expect(parameterFile).toBeDefined()
     // The generated type should include the x-enabled extension property
-    expect(parameterFile?.content).toContain("'x-enabled'")
+    expect(parameterFile?.content).toContain('"x-enabled"')
     // The generated parser should validate the extension property
     expect(parameterFile?.content).toContain('x_enabled')
   })
@@ -122,7 +122,7 @@ describe('build-schema', () => {
 
     const documentFile = result.find((file) => file.filename === 'document.ts')
     expect(documentFile).toBeDefined()
-    expect(documentFile?.content).toContain("'x-generator'")
+    expect(documentFile?.content).toContain('"x-generator"')
   })
 
   it('works without extensions parameter', async () => {
@@ -271,7 +271,7 @@ describe('build-schema', () => {
 
     const parameterFile = result.find((file) => file.filename === 'parameter.ts')
     // Extension property should still appear in the type
-    expect(parameterFile?.content).toContain("'x-enabled'")
+    expect(parameterFile?.content).toContain('"x-enabled"')
     // But no parser should be generated
     expect(parameterFile?.content).not.toContain('parseParameter')
   })
@@ -439,7 +439,7 @@ describe('build-schema', () => {
     // The specification-extensions definition generates its own file
     expect(filenames).toContain('specification-extensions.ts')
     // x-custom property is NOT inlined into document.ts — it's in specification-extensions.ts
-    expect(documentFile?.content).not.toContain("'x-custom'")
+    expect(documentFile?.content).not.toContain('"x-custom"')
   })
 
   it('generates JSDoc from $comment plain text on nested $defs', async () => {

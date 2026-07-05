@@ -199,8 +199,8 @@ describe('generate-files', () => {
     const { content: result } = generateFile(schema, 'Parameter')
 
     // Type should include extension properties as optional
-    expect(result).toContain("'x-enabled'?: boolean")
-    expect(result).toContain("'x-internal'?: boolean")
+    expect(result).toContain('"x-enabled"?: boolean')
+    expect(result).toContain('"x-internal"?: boolean')
     // Parser should validate extension properties
     expect(result).toContain('x_enabled')
     expect(result).toContain('x_internal')
@@ -223,7 +223,7 @@ describe('generate-files', () => {
     const { content: result } = generateFile(schema, 'Operation')
 
     // Type should include the complex extension
-    expect(result).toContain("'x-codegen'")
+    expect(result).toContain('"x-codegen"')
     expect(result).toContain('methodName')
   })
 

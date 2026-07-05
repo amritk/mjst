@@ -8,11 +8,11 @@ describe('safe-accessor', () => {
   })
 
   it('uses bracket notation for hyphenated keys', () => {
-    expect(safeAccessor('input', 'x-linkedin')).toBe("input['x-linkedin']")
+    expect(safeAccessor('input', 'x-linkedin')).toBe('input["x-linkedin"]')
   })
 
   it('uses optional chaining with bracket notation for hyphenated keys', () => {
-    expect(safeAccessor('input?', 'x-linkedin')).toBe("input?.['x-linkedin']")
+    expect(safeAccessor('input?', 'x-linkedin')).toBe('input?.["x-linkedin"]')
   })
 
   it('uses dot notation for underscored identifiers', () => {
@@ -20,11 +20,17 @@ describe('safe-accessor', () => {
   })
 
   it('uses bracket notation for keys starting with numbers', () => {
-    expect(safeAccessor('input', '0foo')).toBe("input['0foo']")
+    expect(safeAccessor('input', '0foo')).toBe('input["0foo"]')
   })
 
   it('uses bracket notation for keys with dots', () => {
-    expect(safeAccessor('input', 'foo.bar')).toBe("input['foo.bar']")
+    expect(safeAccessor('input', 'foo.bar')).toBe('input["foo.bar"]')
+  })
+
+  it('escapes quotes and backslashes in bracket keys to prevent code injection', () => {
+    expect(safeAccessor('input', "a']; evil(); //")).toBe('input["a\']; evil(); //"]')
+    expect(safeAccessor('input', 'it"s')).toBe('input["it\\"s"]')
+    expect(safeAccessor('input', 'a\\b')).toBe('input["a\\\\b"]')
   })
 
   it('returns unquoted key for simple identifiers', () => {
@@ -32,10 +38,15 @@ describe('safe-accessor', () => {
   })
 
   it('returns quoted key for hyphenated names', () => {
-    expect(safeKey('x-linkedin')).toBe("'x-linkedin'")
+    expect(safeKey('x-linkedin')).toBe('"x-linkedin"')
   })
 
   it('returns quoted key for names with dots', () => {
-    expect(safeKey('foo.bar')).toBe("'foo.bar'")
+    expect(safeKey('foo.bar')).toBe('"foo.bar"')
+  })
+
+  it('escapes quotes and backslashes in object-literal keys', () => {
+    expect(safeKey("it's")).toBe('"it\'s"')
+    expect(safeKey('a": 1, evil')).toBe('"a\\": 1, evil"')
   })
 })

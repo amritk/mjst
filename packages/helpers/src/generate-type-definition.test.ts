@@ -744,7 +744,7 @@ describe('generateTypeDefinition', () => {
       },
     }
     const result = generateTypeDefinition(schema, 'InfoExtensions')
-    expect(result).toContain("'x-linkedin'?: string;")
+    expect(result).toContain('"x-linkedin"?: string;')
     expect(result).toContain('name?: string;')
   })
 

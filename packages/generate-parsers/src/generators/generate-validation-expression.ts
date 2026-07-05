@@ -316,7 +316,7 @@ export const generateValidationExpression = (
         // Check required properties exist
         if (hasRequired(schema) && schema.required.length > 0) {
           for (const requiredKey of schema.required) {
-            checks.push(`"${requiredKey}" in ${accessor}`)
+            checks.push(`${JSON.stringify(requiredKey)} in ${accessor}`)
           }
         }
         // Check minProperties
