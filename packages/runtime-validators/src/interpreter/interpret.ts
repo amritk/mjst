@@ -188,12 +188,12 @@ const fail = (ctx: InterpreterContext, message: string, path: string): void => {
  * is gated behind a two-char scan that virtually every real key (and every array
  * index) fails, so the common case stays a bare concatenation.
  */
+const escapePointer = (key: string): string =>
+  key.indexOf('/') !== -1 || key.indexOf('~') !== -1 ? key.replace(/~/g, '~0').replace(/\//g, '~1') : key
+
 const childPath = (ctx: InterpreterContext, path: string, key: string | number): string => {
   if (!ctx.emitErrors) return path
-  if (typeof key === 'string' && (key.indexOf('/') !== -1 || key.indexOf('~') !== -1)) {
-    return `${path}/${key.replace(/~/g, '~0').replace(/\//g, '~1')}`
-  }
-  return `${path}/${key}`
+  return `${path}/${typeof key === 'string' ? escapePointer(key) : key}`
 }
 
 /**
@@ -332,6 +332,8 @@ const matchesSchema = (
 type ObjectMeta = {
   properties: Record<string, unknown> | undefined
   knownKeys: string[] | undefined
+  /** `knownKeys` pre-escaped for JSON Pointer, so the error-path build is a bare concat. */
+  escapedKeys: string[] | undefined
   requiredSet: Set<string>
   requiredNotInProps: string[]
   patternEntries: [RegExp, unknown][] | null
@@ -404,6 +406,7 @@ const getObjectMeta = (s: Record<string, unknown>): ObjectMeta => {
     meta = {
       properties,
       knownKeys,
+      escapedKeys: knownKeys?.map(escapePointer),
       requiredSet: new Set(required),
       requiredNotInProps: required.filter((k) => !(properties !== undefined && k in properties)),
       // Compile each `patternProperties` regex once here (a stateless RegExp is
@@ -433,7 +436,8 @@ const interpretObject = (
   const obj = value as Record<string, unknown>
 
   const meta = getObjectMeta(s)
-  const { properties, knownKeys, requiredSet, safeKeys } = meta
+  const { properties, knownKeys, escapedKeys, requiredSet, safeKeys } = meta
+  const emitErrors = ctx.emitErrors
 
   const hasAdditional = 'additionalProperties' in s
   const additional = s['additionalProperties']
@@ -441,21 +445,26 @@ const interpretObject = (
   const minProps = typeof s['minProperties'] === 'number' ? s['minProperties'] : undefined
   const maxProps = typeof s['maxProperties'] === 'number' ? s['maxProperties'] : undefined
 
-  if (properties && knownKeys) {
-    for (const key of knownKeys) {
-      // Presence is own-property membership. `Object.hasOwn` is authoritative but
-      // has call overhead, so when no declared key is a prototype member (the
-      // common case, precomputed as `safeKeys`) the cheap `obj[key] !== undefined`
-      // is equivalent — a JSON object can't inherit a non-prototype-member name.
-      const present = safeKeys ? obj[key] !== undefined : Object.hasOwn(obj, key)
+  if (properties && knownKeys && escapedKeys) {
+    for (let i = 0; i < knownKeys.length; i++) {
+      const key = knownKeys[i] as string
+      // Read the value once and reuse it. Presence is own-property membership:
+      // `Object.hasOwn` is authoritative but has call overhead, so when no declared
+      // key is a prototype member (the common case, precomputed as `safeKeys`) the
+      // cheap `pv !== undefined` is equivalent — a JSON object can't inherit a
+      // non-prototype-member name.
+      const pv = obj[key]
+      const present = safeKeys ? pv !== undefined : Object.hasOwn(obj, key)
       if (requiredSet.has(key)) {
         if (!present) fail(ctx, `must have required property '${key}'`, path)
         else {
-          interpret(ctx, properties[key], obj[key], childPath(ctx, path, key))
+          // Build the child path from the pre-escaped key (a bare concat, no
+          // per-call scan), only in error mode where it is actually read.
+          interpret(ctx, properties[key], pv, emitErrors ? `${path}/${escapedKeys[i]}` : path)
           evalScope?.props.add(key)
         }
       } else if (present) {
-        interpret(ctx, properties[key], obj[key], childPath(ctx, path, key))
+        interpret(ctx, properties[key], pv, emitErrors ? `${path}/${escapedKeys[i]}` : path)
         evalScope?.props.add(key)
       }
       if (ctx.failed) return
