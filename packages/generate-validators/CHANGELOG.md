@@ -1,5 +1,53 @@
 # @amritk/generate-validators
 
+## 0.11.2
+
+### Patch Changes
+
+- 1efd6e8: Close generated-parser gaps reported from downstream use:
+
+  - **Recursive discriminated `$ref` unions** are now validated. A top-level
+    `oneOf`/`anyOf` of `$ref` branches sharing a discriminator dispatches to the
+    branch parsers (e.g. `_disc === "lit" ? parseLit(input) : …`) in both strict and
+    non-strict mode, instead of emitting a blind `input as T` cast that let
+    mis-shaped values through. A `const` discriminator tag is also predicable now,
+    so a discriminated branch's shape validator is a real predicate rather than the
+    `=> false` stub.
+  - **Strict parsers enforce array constraints** (`minItems`/`maxItems`/
+    `uniqueItems`), which were silently unenforced even in `--strict`.
+  - **Node ESM imports**: all emitted relative imports carry a `.js` extension
+    (cross-file `$ref` imports, the index barrel, embedded `_helpers`, the
+    validators' `validation-result`, and the examples' arbitrary imports). Node's
+    ESM resolver rejects extensionless relative specifiers.
+  - **Embedded-mode packaging**: `@amritk/helpers` now publishes its `src/*.ts`
+    helper sources, and parser generation falls back to the always-published
+    compiled `dist/*.js` when they are absent — fixing the `bunx mjst` crash that
+    read an unpublished `src/is-object.ts`.
+
+- c288a90: Security and robustness hardening:
+
+  - **resolve-refs**: the SSRF guard now rejects non-`http(s)` redirect targets, so a
+    remote schema can no longer bounce a fetch to `file://`/`data:` and disclose
+    local files; remote fetches also gain a timeout and a response-size cap.
+  - **generate-parsers / generate-validators / helpers**: schema-controlled strings
+    (property names, enum values, patterns, required keys) are now escaped via
+    `JSON.stringify` before being emitted into generated TypeScript. Previously a
+    crafted enum value or property name could break out of — or inject code into —
+    the generated output.
+  - **runtime-validators**: recursive `$ref` schemas (e.g. `{ $ref: '#' }`) no longer
+    overflow the stack; property presence is checked with `Object.hasOwn`, fixing a
+    false-accept of an inherited `constructor` and a false-reject of a real
+    `__proto__` property.
+  - **yaml**: alias expansion is bounded (billion-laughs protection) and parser
+    nesting is depth-limited, so a tiny adversarial document can no longer hang the
+    process or overflow the stack.
+  - **helpers / yaml / resolve-refs**: `__proto__` keys in untrusted input are stored
+    as own data instead of mutating an object's prototype.
+
+- Updated dependencies [1efd6e8]
+- Updated dependencies [c288a90]
+  - @amritk/helpers@0.10.2
+
 ## 0.11.1
 
 ### Patch Changes
