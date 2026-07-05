@@ -1,4 +1,7 @@
-import { resolveLocalRef } from '@/interpreter/resolve-local-ref'
+import { findAnchor, resolveLocalRef } from '@/interpreter/resolve-local-ref'
+
+/** A `$dynamicRef` binds only to a `$dynamicAnchor`, never a plain `$anchor`. */
+const DYNAMIC_ANCHOR_KEYWORDS = ['$dynamicAnchor'] as const
 
 /**
  * Resolves a JSON Schema 2020-12 `$dynamicRef` against the root document.
@@ -29,29 +32,11 @@ export const resolveDynamicRef = (ref: string, root: unknown): unknown => {
   // A plain-name fragment is a `$dynamicAnchor` lookup; a pointer (empty or
   // starting with "/") never names a dynamic anchor, so skip the search.
   if (fragment !== '' && !fragment.startsWith('/')) {
-    const anchored = findDynamicAnchor(root, fragment, new Set())
+    const anchored = findAnchor(root, fragment, DYNAMIC_ANCHOR_KEYWORDS, new Set())
     if (anchored !== undefined) return anchored
   }
 
   // Either a pointer form or a dynamic anchor that does not exist — defer to the
   // static resolver so `$dynamicRef` degrades gracefully to `$ref` semantics.
   return resolveLocalRef(ref, root)
-}
-
-/**
- * Depth-first search for the object carrying `$dynamicAnchor: name`. `seen`
- * guards against pathological cyclic inputs; schema trees are JSON-derived and
- * acyclic, and the caller memoizes the result so this runs at most once per ref.
- */
-const findDynamicAnchor = (node: unknown, name: string, seen: Set<object>): unknown => {
-  if (node === null || typeof node !== 'object' || seen.has(node)) return undefined
-  seen.add(node)
-
-  if (!Array.isArray(node) && (node as Record<string, unknown>)['$dynamicAnchor'] === name) return node
-
-  for (const key in node) {
-    const found = findDynamicAnchor((node as Record<string, unknown>)[key], name, seen)
-    if (found !== undefined) return found
-  }
-  return undefined
 }

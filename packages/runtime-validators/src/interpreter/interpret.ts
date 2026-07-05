@@ -4,16 +4,6 @@ import { resolveLocalRef } from '@/interpreter/resolve-local-ref'
 import type { ValidationError } from '@/types'
 
 /**
- * Mutable state threaded through a single validation run.
- *
- * Unlike a code-generating validator, the interpreter walks the schema afresh
- * on every call — there is no `new Function`, so it runs anywhere (a strict
- * CSP, Cloudflare Workers, React Native/Hermes) and costs nothing at startup.
- * The two genuinely reusable artifacts — compiled `RegExp`s and resolved
- * `$ref` targets — are cached on the context so a validator reused across calls
- * builds each at most once.
- */
-/**
  * The two genuinely reusable artifacts of a validation — compiled `RegExp`s and
  * resolved `$ref` targets — held in one place and shared across a run and its
  * nested branch contexts. Each map is allocated lazily on first use, so the
@@ -27,6 +17,15 @@ export type ValidatorCaches = {
 
 export const newValidatorCaches = (): ValidatorCaches => ({ regex: null, ref: null })
 
+/**
+ * Mutable state threaded through a single validation run.
+ *
+ * Unlike a code-generating validator, the interpreter walks the schema afresh
+ * on every call — there is no `new Function`, so it runs anywhere (a strict CSP,
+ * Cloudflare Workers, React Native/Hermes) and costs nothing at startup. The two
+ * genuinely reusable artifacts — compiled `RegExp`s and resolved `$ref` targets —
+ * are cached on {@link ValidatorCaches} so a reused validator builds each once.
+ */
 export type InterpreterContext = {
   /** The root schema document, used to resolve local `$ref` pointers. */
   readonly root: unknown
@@ -121,8 +120,10 @@ const allUnique = (arr: readonly unknown[]): boolean => {
   if (len < 2) return true
 
   // Fast path: when every element is a primitive, dedupe in one linear pass via
-  // a Set of type-tagged keys (so 1, "1", and true never collide) instead of the
-  // O(n²) pairwise deepEqual. Objects/arrays fall back to the exact comparison.
+  // a native Set. Set membership is SameValueZero, which is already type-sensitive
+  // (1, "1", and true are three distinct entries), so it matches JSON Schema's
+  // equality for primitives without allocating a stringified key per element.
+  // Objects/arrays fall back to the exact structural comparison below.
   let allPrimitive = true
   for (let i = 0; i < len; i++) {
     const v = arr[i]
@@ -131,15 +132,7 @@ const allUnique = (arr: readonly unknown[]): boolean => {
       break
     }
   }
-  if (allPrimitive) {
-    const seen = new Set<string>()
-    for (const v of arr) {
-      const key = `${typeof v}:${JSON.stringify(v)}`
-      if (seen.has(key)) return false
-      seen.add(key)
-    }
-    return true
-  }
+  if (allPrimitive) return new Set(arr).size === len
 
   for (let i = 0; i < len; i++) for (let j = i + 1; j < len; j++) if (deepEqual(arr[i], arr[j])) return false
   return true
@@ -184,6 +177,15 @@ const fail = (ctx: InterpreterContext, message: string, path: string): void => {
 }
 
 /**
+ * Escapes a property name for a JSON Pointer (RFC 6901): `~` → `~0`, `/` → `~1`.
+ * Without this a key like `a/b` produces the path `/a/b`, indistinguishable from
+ * property `b` nested under `a`. The `includes` guard keeps the common
+ * escape-free key (every array index, most property names) allocation-free.
+ */
+const escapePointerToken = (key: string): string =>
+  key.includes('~') || key.includes('/') ? key.replace(/~/g, '~0').replace(/\//g, '~1') : key
+
+/**
  * Builds the child instance path for a nested property or item. In guard mode
  * the path is never read — {@link fail} only records it when `emitErrors` is set
  * — so we skip the concatenation and thread the parent path down unchanged. That
@@ -191,7 +193,41 @@ const fail = (ctx: InterpreterContext, message: string, path: string): void => {
  * where a single validation is otherwise dominated by these throwaway strings.
  */
 const childPath = (ctx: InterpreterContext, path: string, key: string | number): string =>
-  ctx.emitErrors ? `${path}/${key}` : path
+  ctx.emitErrors ? `${path}/${typeof key === 'string' ? escapePointerToken(key) : key}` : path
+
+/**
+ * Counts Unicode code points in `value`, as JSON Schema's `minLength`/`maxLength`
+ * require — `String.length` counts UTF-16 code units, so a single astral
+ * character (e.g. an emoji) would otherwise count as 2. Iterating the string
+ * yields code points without allocating an intermediate array.
+ */
+const codePointLength = (value: string): number => {
+  let count = 0
+  for (let i = 0; i < value.length; i++) {
+    count++
+    const c = value.charCodeAt(i)
+    // A high surrogate followed by a low surrogate is one code point: skip the pair.
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < value.length) {
+      const next = value.charCodeAt(i + 1)
+      if (next >= 0xdc00 && next <= 0xdfff) i++
+    }
+  }
+  return count
+}
+
+/**
+ * Compiles a JSON Schema `pattern` source. 2020-12 regexes should be interpreted
+ * as Unicode (Ajv compiles with `u` by default): without it `^.$` rejects a single
+ * astral character and `\p{L}` is misread. Fall back to a non-Unicode compile for
+ * the rare legacy pattern that is only valid without the stricter `u` escapes.
+ */
+const compilePattern = (source: string): RegExp => {
+  try {
+    return new RegExp(source, 'u')
+  } catch {
+    return new RegExp(source)
+  }
+}
 
 /** Returns a cached compiled `RegExp` for the given source. */
 const getRegex = (ctx: InterpreterContext, source: string): RegExp => {
@@ -202,7 +238,7 @@ const getRegex = (ctx: InterpreterContext, source: string): RegExp => {
   }
   let re = cache.get(source)
   if (re === undefined) {
-    re = new RegExp(source)
+    re = compilePattern(source)
     cache.set(source, re)
   }
   return re
@@ -297,7 +333,25 @@ type ObjectMeta = {
   knownKeys: string[] | undefined
   requiredSet: Set<string>
   requiredNotInProps: string[]
-  patternEntries: [string, unknown][] | null
+  patternEntries: [RegExp, unknown][] | null
+}
+
+/**
+ * Memoized enum membership. An all-primitive enum resolves to a `Set` (SameValueZero,
+ * so type-sensitive) for O(1) lookup; a mixed/structural enum returns `null`, and
+ * the caller falls back to `deepEqual`. Keyed on the schema node so the scan runs
+ * once per node rather than once per validation. `null` set means "not all
+ * primitive"; an entry is always present after the first touch.
+ */
+const enumSetCache = new WeakMap<object, Set<unknown> | null>()
+
+const getEnumSet = (s: object, values: unknown[]): Set<unknown> | null => {
+  let set = enumSetCache.get(s)
+  if (set === undefined) {
+    set = values.every(isPrimitiveEnumValue) ? new Set(values) : null
+    enumSetCache.set(s, set)
+  }
+  return set
 }
 
 /**
@@ -322,7 +376,12 @@ const getObjectMeta = (s: Record<string, unknown>): ObjectMeta => {
       knownKeys: properties ? Object.keys(properties) : undefined,
       requiredSet: new Set(required),
       requiredNotInProps: required.filter((k) => !(properties !== undefined && k in properties)),
-      patternEntries: patternProperties ? Object.entries(patternProperties) : null,
+      // Compile each `patternProperties` regex once here (a stateless RegExp is
+      // safe to share across contexts) so the per-key loop below skips both the
+      // shared-cache Map lookup and recompilation.
+      patternEntries: patternProperties
+        ? Object.entries(patternProperties).map(([source, schema]) => [compilePattern(source), schema])
+        : null,
     }
     objectMetaCache.set(s, meta)
   }
@@ -397,7 +456,7 @@ const interpretObject = (
   if (dependentSchemas) {
     for (const [trigger, subSchema] of Object.entries(dependentSchemas)) {
       if (!Object.hasOwn(obj, trigger)) continue
-      interpret(ctx, subSchema, obj, path, evalScope)
+      interpretInPlace(ctx, subSchema, obj, path, evalScope)
       if (ctx.failed) return
     }
   }
@@ -417,7 +476,7 @@ const interpretObject = (
           }
         }
       } else {
-        interpret(ctx, dep, obj, path, evalScope)
+        interpretInPlace(ctx, dep, obj, path, evalScope)
         if (ctx.failed) return
       }
     }
@@ -439,8 +498,8 @@ const interpretObject = (
       // fallback for keys reached by neither.
       const inProps = properties !== undefined && Object.hasOwn(properties, k)
       let matched = false
-      for (const [source, patternSchema] of patternEntries) {
-        if (getRegex(ctx, source).test(k)) {
+      for (const [regex, patternSchema] of patternEntries) {
+        if (regex.test(k)) {
           matched = true
           evalScope?.props.add(k)
           interpret(ctx, patternSchema, obj[k], childPath(ctx, path, k))
@@ -567,7 +626,8 @@ const interpretArray = (
     for (const item of arr) if (matchesSchema(ctx, containsSchema, item)) count++
     // Ajv parity for `unevaluatedItems`: a satisfied `contains` marks the *whole*
     // array as evaluated, not just the matching items — but `minContains: 0` opts
-    // out of contributing any evaluated-item annotation at all.
+    // out of contributing any evaluated-item annotation at all. (This intentionally
+    // tracks Ajv, the package's differential oracle, over the stricter spec letter.)
     if (evalScope && min !== 0 && count >= min && (max === undefined || count <= max)) {
       evalScope.allItems = true
     }
@@ -586,14 +646,18 @@ const interpretString = (ctx: InterpreterContext, s: Record<string, unknown>, va
   if (typeof value !== 'string') return
 
   const minLength = s['minLength']
-  if (typeof minLength === 'number' && value.length < minLength) {
-    fail(ctx, `must have at least ${minLength} characters`, path)
-    if (ctx.failed) return
-  }
   const maxLength = s['maxLength']
-  if (typeof maxLength === 'number' && value.length > maxLength) {
-    fail(ctx, `must have at most ${maxLength} characters`, path)
-    if (ctx.failed) return
+  if (typeof minLength === 'number' || typeof maxLength === 'number') {
+    // Measured in code points per spec, computed once and reused for both bounds.
+    const length = codePointLength(value)
+    if (typeof minLength === 'number' && length < minLength) {
+      fail(ctx, `must have at least ${minLength} characters`, path)
+      if (ctx.failed) return
+    }
+    if (typeof maxLength === 'number' && length > maxLength) {
+      fail(ctx, `must have at most ${maxLength} characters`, path)
+      if (ctx.failed) return
+    }
   }
   const pattern = s['pattern']
   if (typeof pattern === 'string' && !getRegex(ctx, pattern).test(value)) {
@@ -651,20 +715,18 @@ const interpretNumber = (ctx: InterpreterContext, s: Record<string, unknown>, va
   const multipleOf = s['multipleOf']
   if (typeof multipleOf === 'number' && multipleOf > 0) {
     // Floating-point modulo is unreliable (0.3 % 0.1 !== 0), so divide and
-    // measure the distance to the nearest integer instead.
+    // measure the distance to the nearest integer instead. The tolerance scales
+    // with the quotient's magnitude: a fixed 1e-8 falsely rejects large values
+    // like `1234567.89` against `multipleOf: 0.01`, whose representation error in
+    // `q` (~q·2⁻⁵²) already exceeds 1e-8.
     const q = value / multipleOf
-    if (Math.abs(q - Math.round(q)) > 1e-8) {
+    const tolerance = 1e-8 * Math.max(1, Math.abs(q))
+    if (Math.abs(q - Math.round(q)) > tolerance) {
       fail(ctx, `must be a multiple of ${multipleOf}`, path)
     }
   }
 }
 
-/**
- * Validates `value` against a single (sub)schema, recording failures via
- * {@link fail}. This is the core recursive walker that every keyword funnels
- * through; the order of checks mirrors the schema's own keyword order so error
- * output is stable.
- */
 /**
  * Recurses into a `$ref` / `$dynamicRef` target while breaking reference cycles.
  * A ref that resolves to the same (schema node, value) pair already being
@@ -687,10 +749,44 @@ const interpretRef = (
     if (stack[i] === target && stack[i + 1] === value) return
   }
   stack.push(target, value)
-  interpret(ctx, target, value, path, evalScope)
+  interpretInPlace(ctx, target, value, path, evalScope)
   stack.length -= 2
 }
 
+/**
+ * Interprets an in-place applicator subschema (`$ref`/`$dynamicRef` target,
+ * `allOf` item, `then`/`else`, `dependentSchemas`) with correct `unevaluated*`
+ * scoping. The child evaluates into a FRESH annotation scope, so its own
+ * `unevaluated*` keyword sees only what its own subtree evaluated — never the
+ * parent's already-evaluated properties (the spec forbids that leak, and Ajv
+ * agrees). The child's annotations are then merged UP into the parent so the
+ * parent's `unevaluated*` still counts them. When no ancestor is tracking
+ * annotations (`parentScope === null`) this is a plain `interpret`, so the common
+ * unevaluated-free schema pays nothing. `anyOf`/`oneOf`/`if` already get this
+ * isolation via {@link matchesSchema}.
+ */
+const interpretInPlace = (
+  ctx: InterpreterContext,
+  schema: unknown,
+  value: unknown,
+  path: string,
+  parentScope: Evaluation | null,
+): void => {
+  if (parentScope === null) {
+    interpret(ctx, schema, value, path, null)
+    return
+  }
+  const childScope = newEvaluation()
+  interpret(ctx, schema, value, path, childScope)
+  mergeEvaluation(parentScope, childScope)
+}
+
+/**
+ * Validates `value` against a single (sub)schema, recording failures via
+ * {@link fail}. This is the core recursive walker that every keyword funnels
+ * through; the order of checks mirrors the schema's own keyword order so error
+ * output is stable.
+ */
 export const interpret = (
   ctx: InterpreterContext,
   schema: unknown,
@@ -753,9 +849,14 @@ export const interpret = (
 
   if (Array.isArray(s['enum'])) {
     const values = s['enum'] as unknown[]
+    // Membership is memoized per schema node: an all-primitive enum resolves to a
+    // `Set` for O(1) lookup instead of re-scanning `every(isPrimitiveEnumValue)`
+    // and doing a linear `includes` on every validation (a 100-value enum on a hot
+    // property previously cost ~200 comparisons per value).
+    const primitiveSet = getEnumSet(s, values)
     let found: boolean
-    if (values.every(isPrimitiveEnumValue)) {
-      found = values.includes(value)
+    if (primitiveSet !== null) {
+      found = primitiveSet.has(value)
     } else {
       found = false
       for (const candidate of values) {
@@ -815,7 +916,7 @@ export const interpret = (
 
   if (Array.isArray(s['allOf'])) {
     for (const sub of s['allOf']) {
-      interpret(ctx, sub, value, path, evalScope)
+      interpretInPlace(ctx, sub, value, path, evalScope)
       if (ctx.failed) return
     }
   }
@@ -857,9 +958,9 @@ export const interpret = (
 
   if ('if' in s) {
     if (matchesSchema(ctx, s['if'], value, evalScope)) {
-      if ('then' in s) interpret(ctx, s['then'], value, path, evalScope)
+      if ('then' in s) interpretInPlace(ctx, s['then'], value, path, evalScope)
     } else if ('else' in s) {
-      interpret(ctx, s['else'], value, path, evalScope)
+      interpretInPlace(ctx, s['else'], value, path, evalScope)
     }
   }
 
