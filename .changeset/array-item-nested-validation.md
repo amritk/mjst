@@ -41,8 +41,9 @@ throughput cost of the new element validation:
 - A *private* nested-object or array-item parser in strip mode hands a clean
   value (already exactly the declared shape, proven by its deep guard) back by
   reference instead of allocating a rebuild — the same sharing the parent
-  fast-path literal already performs. Exported root parsers still return a
-  fresh object.
+  fast-path literal already performs — and evaluates that guard as the shallow
+  guard plus only its residual terms, so a carries-extras value never runs the
+  same typed checks twice. Exported root parsers still return a fresh object.
 
 Two subtle semantic alignments come with this: the strict unknown-key check
 iterates own keys (`Object.keys`) rather than `for..in`, matching Ajv's
@@ -51,6 +52,8 @@ strip-mode output may share identity with clean nested input values (it always
 shared them for `{ ...input }` fast paths).
 
 Bench delta vs the previous release on the Order shape (array of closed
-3-field items): strict parse throughput is now on par instead of −23%, safe
-(strip) mode −6% instead of −19%, and the count form makes several closed
-shapes faster than before (`assert-strict` +80%).
+3-field items): strict parse throughput is now at or slightly above par
+instead of −23%, safe (strip) mode retains a single-digit cost (−4 to −12%
+across runs, from −19%) for stripping elements it previously ignored, and the
+count form makes several closed shapes faster than before (`User · strict`
++14%, `assert-strict` +80%).

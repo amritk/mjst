@@ -1304,21 +1304,38 @@ const generateObjectParser = (
     }).slice(1)
 
     if (shallowGuard) {
-      // A private sub-parser first tries the deep guard: input that is already
-      // exactly the declared shape (no extras at any level) is handed back by
-      // reference, so a clean array element or nested object costs no
-      // allocation. The common carries-extras input fails that guard fast (on
-      // the no-extras term) and takes the strip build below.
+      // A private sub-parser hands input that is already exactly the declared
+      // shape (no extras at any level) back by reference, so a clean array
+      // element or nested object costs no allocation. The deep guard is
+      // evaluated as the shallow guard plus only its *residual* terms (deeper
+      // per-property checks and the no-extras term), so a carries-extras input
+      // never runs the same typed checks twice before taking the strip build.
       if (!exported && deepGuard) {
-        lines.push(`  if (${deepGuard}) return input as ${typeName};`)
+        const residual: string[] = []
+        for (let i = 0; i < fastPathChecks.length; i++) {
+          if (fastPathChecks[i] !== shallowChecks[i]) residual.push(fastPathChecks[i] as string)
+        }
+        lines.push(`  if (${shallowGuard}) {`)
+        lines.push(
+          residual.length > 0
+            ? `    if (${residual.join(' && ')}) return input as ${typeName};`
+            : `    return input as ${typeName};`,
+        )
+        lines.push(`  } else {`)
+        for (const assertionLine of assertionLines) {
+          lines.push(`  ${assertionLine}`)
+        }
+        lines.push(`  }`)
+      } else {
+        // stripUnknown: a well-typed input skips the assertions and goes
+        // straight to the strip build (which removes extras and recurses into
+        // sub-parsers).
+        lines.push(`  if (!(${shallowGuard})) {`)
+        for (const assertionLine of assertionLines) {
+          lines.push(`  ${assertionLine}`)
+        }
+        lines.push(`  }`)
       }
-      // stripUnknown: a well-typed input skips the assertions and goes straight
-      // to the strip build (which removes extras and recurses into sub-parsers).
-      lines.push(`  if (!(${shallowGuard})) {`)
-      for (const assertionLine of assertionLines) {
-        lines.push(`  ${assertionLine}`)
-      }
-      lines.push(`  }`)
       emitReturn(lines, buildObjectLines(true))
     } else {
       if (deepGuard) {
