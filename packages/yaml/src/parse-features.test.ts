@@ -183,3 +183,41 @@ describe('explicit ? / : mapping entries', () => {
     expect(errors).toHaveLength(0)
   })
 })
+
+describe('resource-exhaustion guards', () => {
+  it('rejects alias-expansion (billion laughs) instead of hanging', () => {
+    // ~500-byte document whose aliases expand to ~10^10 nodes.
+    let src = 'a0: &a0 ["x","x","x","x","x","x","x","x","x","x"]\n'
+    for (let i = 1; i <= 10; i++) {
+      const prev = Array.from({ length: 10 }, () => `*a${i - 1}`).join(',')
+      src += `a${i}: &a${i} [${prev}]\n`
+    }
+    src += 'b: *a10\n'
+    const doc = parseDocument(src)
+    expect(() => doc.toJS()).toThrow(/alias expansion/i)
+  })
+
+  it('still expands reasonable alias use correctly', () => {
+    const out = parseDocument('base: &b { x: 1 }\nc: *b\nd: *b\n').toJS() as {
+      c: { x: number }
+      d: { x: number }
+    }
+    expect(out.c.x).toBe(1)
+    expect(out.d.x).toBe(1)
+  })
+
+  it('reports a depth-limit error on pathologically nested flow input instead of overflowing', () => {
+    const { errors } = parseDocument('['.repeat(100_000))
+    expect(errors.some((e) => e.code === 'DEPTH_LIMIT')).toBe(true)
+  })
+
+  it('reports a depth-limit error on pathologically nested block input instead of overflowing', () => {
+    const { errors } = parseDocument('- '.repeat(60_000))
+    expect(errors.some((e) => e.code === 'DEPTH_LIMIT')).toBe(true)
+  })
+
+  it('parses legitimately deep (but bounded) nesting without error', () => {
+    const { errors } = parseDocument('['.repeat(200) + ']'.repeat(200))
+    expect(errors.some((e) => e.code === 'DEPTH_LIMIT')).toBe(false)
+  })
+})

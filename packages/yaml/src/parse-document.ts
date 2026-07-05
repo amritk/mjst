@@ -62,6 +62,12 @@ type State = {
    */
   tabReportedAt: number
   /**
+   * Current nesting depth of {@link parseNode}. Guarded against {@link MAX_PARSE_DEPTH}
+   * so adversarial input like `[[[[…` cannot recurse the parser into a native
+   * stack overflow — it is reported as a parse error instead.
+   */
+  depth: number
+  /**
    * Reused by `peekLine` to avoid allocating a result object per line. Callers
    * read it immediately and never hold it across another `peekLine`, so a single
    * shared instance is safe and keeps large documents allocation-light.
@@ -585,6 +591,22 @@ const scanFlowPlain = (state: State): YamlScalar => {
 }
 
 const parseFlowNode = (state: State): YamlNode => {
+  // Flow collections recurse through here rather than `parseNode`, so they need
+  // their own depth guard against input like `[`-repeated-100000-times. Both
+  // paths share `state.depth`, so mixed block/flow nesting is bounded together.
+  if (state.depth >= MAX_PARSE_DEPTH) {
+    const pos = state.pos
+    pushError(state, 'DEPTH_LIMIT', `Exceeded maximum nesting depth of ${MAX_PARSE_DEPTH}`, pos, pos)
+    state.pos = state.len
+    return { kind: 'scalar', value: null, source: '', style: 'plain', start: pos, end: pos }
+  }
+  state.depth++
+  const node = parseFlowNodeInner(state)
+  state.depth--
+  return node
+}
+
+const parseFlowNodeInner = (state: State): YamlNode => {
   skipFlowWs(state)
   const props = scanProps(state)
   skipFlowWs(state)
@@ -933,7 +955,35 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
  * Parses a block node (mapping, sequence, or scalar) whose first token sits at
  * column `indent`. The cursor is assumed to be at that first token.
  */
+/**
+ * Hard cap on parser nesting. Every collection level adds a couple of stack
+ * frames, so this stays comfortably below the native limit while allowing far
+ * deeper structures than any real document uses.
+ */
+const MAX_PARSE_DEPTH = 1000
+
+/**
+ * Depth-guarded entry point for node parsing. Adversarial input such as
+ * `[`-repeated-100000-times would otherwise recurse until the JS engine throws a
+ * `RangeError`; instead we report a parse error, abandon the rest of the input,
+ * and return an empty scalar so callers unwind cleanly with a diagnostic.
+ */
 const parseNode = (state: State, indent: number): YamlNode => {
+  if (state.depth >= MAX_PARSE_DEPTH) {
+    const pos = state.pos
+    pushError(state, 'DEPTH_LIMIT', `Exceeded maximum nesting depth of ${MAX_PARSE_DEPTH}`, pos, pos)
+    // Consume the remaining input so every enclosing collection loop sees EOF and
+    // stops instead of spinning on the un-advanced position.
+    state.pos = state.len
+    return { kind: 'scalar', value: null, source: '', style: 'plain', start: pos, end: pos }
+  }
+  state.depth++
+  const node = parseNodeInner(state, indent)
+  state.depth--
+  return node
+}
+
+const parseNodeInner = (state: State, indent: number): YamlNode => {
   const { src, len } = state
   if (isSeqEntryDash(src, state.pos, len)) {
     return parseBlockSeq(state, indent)
@@ -1072,19 +1122,49 @@ const applyScalarTag = (node: YamlScalar): unknown => {
   }
 }
 
-const toJsValue = (node: YamlNode | null, anchors: Map<string, YamlNode>, merge: boolean): unknown => {
+/**
+ * Tracks how many nodes an alias-expanding projection is still allowed to
+ * materialize. Aliases are re-expanded into fresh values, so a document like
+ * `a: &x [*w,*w], b: &y [*x,*x], …` grows the output exponentially from a tiny
+ * source — the classic "billion laughs" resource-exhaustion attack. Every
+ * materialized node decrements the budget; hitting zero throws instead of
+ * hanging, matching how eemeli's `yaml` guards `maxAliasCount`.
+ */
+type ExpansionBudget = { left: number }
+
+/**
+ * Nodes an alias-free document may materialize per source byte, plus a floor for
+ * small documents. Only exponential alias expansion exceeds this — an ordinary
+ * document has at most ~one node per few source bytes.
+ */
+const ALIAS_NODES_PER_BYTE = 100
+const MIN_ALIAS_NODE_BUDGET = 100_000
+
+const newExpansionBudget = (sourceLength: number): ExpansionBudget => ({
+  left: Math.max(MIN_ALIAS_NODE_BUDGET, sourceLength * ALIAS_NODES_PER_BYTE),
+})
+
+const toJsValue = (
+  node: YamlNode | null,
+  anchors: Map<string, YamlNode>,
+  merge: boolean,
+  budget: ExpansionBudget,
+): unknown => {
+  if (budget.left-- <= 0) {
+    throw new Error('Excessive alias expansion — the document may be a resource-exhaustion attack')
+  }
   if (node === null) return null
   if (node.kind === 'scalar') return node.tag !== undefined ? applyScalarTag(node) : node.value
   if (node.kind === 'alias') {
     const target = anchors.get(node.source)
-    return target ? toJsValue(target, anchors, merge) : undefined
+    return target ? toJsValue(target, anchors, merge, budget) : undefined
   }
   if (node.kind === 'seq') {
     // Index loop into a pre-sized array: no per-seq closure (as `.map` allocates)
     // and the result array never reallocates as it grows.
     const items = node.items
     const out = new Array(items.length)
-    for (let i = 0; i < items.length; i++) out[i] = toJsValue(items[i] ?? null, anchors, merge)
+    for (let i = 0; i < items.length; i++) out[i] = toJsValue(items[i] ?? null, anchors, merge, budget)
     // `!!omap` is an ordered map written as a sequence of single-pair maps;
     // collapse it to a `Map` to match `yaml` (eemeli). One `=== 'omap'` check
     // per sequence keeps the untagged path effectively free.
@@ -1099,17 +1179,17 @@ const toJsValue = (node: YamlNode | null, anchors: Map<string, YamlNode>, merge:
     if (pair === undefined) continue
     const key = pair.key
     if (merge && key.kind === 'scalar' && key.source === '<<') {
-      applyMerge(obj, toJsValue(pair.value, anchors, merge))
+      applyMerge(obj, toJsValue(pair.value, anchors, merge, budget))
       continue
     }
-    obj[keyText(key)] = pair.value ? toJsValue(pair.value, anchors, merge) : null
+    obj[keyText(key)] = pair.value ? toJsValue(pair.value, anchors, merge, budget) : null
   }
   // `!!set` is a mapping whose keys are the members; project to a `Set`.
   if (node.tag === 'set') {
     const set = new Set<unknown>()
     for (let i = 0; i < items.length; i++) {
       const pair = items[i]
-      if (pair) set.add(toJsValue(pair.key, anchors, merge))
+      if (pair) set.add(toJsValue(pair.key, anchors, merge, budget))
     }
     return set
   }
@@ -1150,13 +1230,14 @@ const newState = (source: string, options: ParseOptions): State => ({
   uniqueKeys: options.uniqueKeys !== false,
   merge: options.merge !== false,
   tabReportedAt: -1,
+  depth: 0,
   line: { eof: false, indent: 0, contentPos: 0 },
 })
 
 /** Builds a document from the current `state`, closing over its anchors/problems. */
 const finishDocument = (state: State, contents: YamlNode | null): YamlDocument => {
-  const { errors, warnings, anchors, merge } = state
-  return { contents, errors, warnings, toJS: () => toJsValue(contents, anchors, merge) }
+  const { errors, warnings, anchors, merge, len } = state
+  return { contents, errors, warnings, toJS: () => toJsValue(contents, anchors, merge, newExpansionBudget(len)) }
 }
 
 /**
