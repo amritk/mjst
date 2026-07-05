@@ -1,5 +1,50 @@
 # @amritk/generate-examples
 
+## 0.4.2
+
+### Patch Changes
+
+- 1efd6e8: Close generated-parser gaps reported from downstream use:
+
+  - **Recursive discriminated `$ref` unions** are now validated. A top-level
+    `oneOf`/`anyOf` of `$ref` branches sharing a discriminator dispatches to the
+    branch parsers (e.g. `_disc === "lit" ? parseLit(input) : …`) in both strict and
+    non-strict mode, instead of emitting a blind `input as T` cast that let
+    mis-shaped values through. A `const` discriminator tag is also predicable now,
+    so a discriminated branch's shape validator is a real predicate rather than the
+    `=> false` stub.
+  - **Strict parsers enforce array constraints** (`minItems`/`maxItems`/
+    `uniqueItems`), which were silently unenforced even in `--strict`.
+  - **Node ESM imports**: all emitted relative imports carry a `.js` extension
+    (cross-file `$ref` imports, the index barrel, embedded `_helpers`, the
+    validators' `validation-result`, and the examples' arbitrary imports). Node's
+    ESM resolver rejects extensionless relative specifiers.
+  - **Embedded-mode packaging**: `@amritk/helpers` now publishes its `src/*.ts`
+    helper sources, and parser generation falls back to the always-published
+    compiled `dist/*.js` when they are absent — fixing the `bunx mjst` crash that
+    read an unpublished `src/is-object.ts`.
+
+- 4501ff0: Robustness fixes across the CLI and peripheral generators:
+
+  - **generate-examples**: recursive schemas now emit lazily-tied fast-check
+    arbitraries (`fc.letrec`) instead of code that crashed with a TDZ
+    `ReferenceError`; `pattern`s are escaped so a `/` no longer breaks the emitted
+    regex literal, and `minLength`/`maxLength` are honored alongside a pattern;
+    tuples, `allOf`, `additionalProperties`, and combined `minimum`+`exclusiveMinimum`
+    bounds are handled.
+  - **cli**: config files no longer silently drop the `helpers`/`typeSuffix`/`banner`
+    keys; unknown or value-missing flags now error instead of being ignored; schema
+    discovery skips `node_modules` and dot-directories; a missing `npx`/`tsc` is
+    distinguished from a real compile failure.
+  - **generate-markdown**: `x-icon` is HTML-escaped, and a README missing its
+    markers is no longer clobbered with a table-only file.
+  - **exports** maps now order the `types` condition before `default` so type
+    resolution works.
+
+- Updated dependencies [1efd6e8]
+- Updated dependencies [c288a90]
+  - @amritk/helpers@0.10.2
+
 ## 0.4.1
 
 ### Patch Changes
