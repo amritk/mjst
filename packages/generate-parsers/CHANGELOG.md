@@ -1,5 +1,43 @@
 # @amritk/generate-parsers
 
+## 0.13.0
+
+### Minor Changes
+
+- 02f6b05: Close the generated-parser validation gaps found by the 0.7.15 evaluation:
+
+  - File-level union definitions (e.g. a recursive `expr` oneOf) now generate a
+    real membership shape validator and a strict parser that throws on values
+    matching no branch — recursively through branch `$refs` — instead of a
+    `=> false` stub and a blind cast.
+  - A root `$ref` whose derived name collides with its definition (title `Expr`
+    → `#/$defs/expr`) now merges the definition into the root file instead of
+    emitting a self-importing wrapper that could not compile; non-colliding
+    alias roots delegate their parser and shape validator to the target.
+  - `oneOf`/`anyOf` object properties are validated in strict mode (throw when
+    no variant matches) and included in shape validators and fast paths, gated
+    on every branch being provably checkable so a conservative stub validator
+    can never reject valid input.
+  - Enum properties participate in shape validators and fast paths instead of
+    forcing the `=> false` stub, so `validate{Type}Shape` no longer rejects
+    valid input containing nested enums.
+  - Strict mode enforces array item types (scalars and enums) on the slow path
+    and for root-level array schemas — a `string[]` field can no longer carry
+    numbers past a strict parser.
+
+### Patch Changes
+
+- 18df9f7: Fix the published build shipping an unparseable regex. tsc-alias's
+  `--resolveFullPaths` pass rewrote the embedded-helper import-rewrite pattern
+  inside the compiled output, leaving v0.12.3 (and the mjst 0.7.15 CLI on top of
+  it) crashing with `SyntaxError: Invalid regular expression` on load. The
+  pattern now starts with a word boundary that keeps tsc-alias from matching it,
+  and a new dist smoke test (`bun run test:dist`) loads every compiled module
+  under plain Node and runs the CLI from `dist/` in CI and before every publish
+  so build-step corruption can no longer ship.
+- Updated dependencies [02f6b05]
+  - @amritk/helpers@0.10.3
+
 ## 0.12.3
 
 ### Patch Changes
