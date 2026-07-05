@@ -64,13 +64,14 @@ export const generateValidatorFile = (
   const validatorFunction = generateValidatorFunction(schema, typeName, typeSuffix)
   const booleanGuard = generateBooleanGuard(schema, typeName, typeSuffix)
 
-  let result = `import type { ValidationResult, ValidationError } from './validation-result'\n`
+  // `.js` extension so the relative import resolves under Node ESM, not only Bun.
+  let result = `import type { ValidationResult, ValidationError } from './validation-result.js'\n`
 
   // `const` checks on object/array values call the runtime `valuesEqual` helper.
   // Only import it when the generated body actually uses it, so files without a
   // structural `const` do not carry an unused import.
   if (validatorFunction.includes('valuesEqual(')) {
-    result += `import { valuesEqual } from './validation-result'\n`
+    result += `import { valuesEqual } from './validation-result.js'\n`
   }
 
   for (const imp of refImports) {

@@ -1202,7 +1202,7 @@ describe('generate-parser-function', () => {
   }
   const result = {
     ...input,
-    ...(input.default && { default: parseResponse(input.default) }),
+    ...(input.default !== undefined && { default: parseResponse(input.default) }),
   } as unknown as Responses;
   for (const key in input) {
     if (/^[1-5](?:[0-9]{2}|XX)$/.test(key)) {
@@ -1263,8 +1263,8 @@ describe('generate-parser-function', () => {
 
     const result = generateParserFunction(schema, 'InfoExtensions', { useRefImports: true })
 
-    expect(result).toContain("input['x-linkedin']")
-    expect(result).toContain("'x-linkedin':")
+    expect(result).toContain('input["x-linkedin"]')
+    expect(result).toContain('"x-linkedin":')
     expect(result).not.toContain('input.x-linkedin')
   })
 
@@ -1278,8 +1278,8 @@ describe('generate-parser-function', () => {
 
     const result = generateParserFunction(schema, 'Test')
 
-    expect(result).toContain("input['x-custom']")
-    expect(result).toContain("'x-custom':")
+    expect(result).toContain('input["x-custom"]')
+    expect(result).toContain('"x-custom":')
     expect(result).not.toContain('input.x-custom')
   })
 
@@ -1681,11 +1681,11 @@ describe('generate-parser-function', () => {
   const _page = input.page;
   const _perPage = input.perPage;
   const _search = input.search;
-  if ((_page === undefined || typeof _page === "number" && _page >= 1) && (_perPage === undefined || typeof _perPage === "number" && _perPage >= 1 && _perPage <= 100) && (_search === undefined || typeof _search === "string")) return { ...input } as PageParams;
+  if ((_page === undefined || typeof _page === "number" && Number.isInteger(_page) && _page >= 1) && (_perPage === undefined || typeof _perPage === "number" && Number.isInteger(_perPage) && _perPage >= 1 && _perPage <= 100) && (_search === undefined || typeof _search === "string")) return { ...input } as PageParams;
   return {
     ...input,
-    ...(_page !== undefined && { page: typeof _page === "number" && _page >= 1 ? _page : (Number.isFinite(Number(_page)) ? Number(_page) : 0) }),
-    ...(_perPage !== undefined && { perPage: typeof _perPage === "number" && _perPage >= 1 && _perPage <= 100 ? _perPage : (Number.isFinite(Number(_perPage)) ? Number(_perPage) : 0) }),
+    ...(_page !== undefined && { page: typeof _page === "number" && Number.isInteger(_page) && _page >= 1 ? _page : (Number.isFinite(Number(_page)) ? Number(_page) : 0) }),
+    ...(_perPage !== undefined && { perPage: typeof _perPage === "number" && Number.isInteger(_perPage) && _perPage >= 1 && _perPage <= 100 ? _perPage : (Number.isFinite(Number(_perPage)) ? Number(_perPage) : 0) }),
     ...(_search !== undefined && { search: typeof _search === "string" ? _search : String(_search) }),
   } as unknown as PageParams;
 }`,
@@ -1827,7 +1827,7 @@ describe('generate-parser-function', () => {
         required: ['name'],
       }
       const result = generateParserFunction(schema, 'User', { strict: true })
-      expect(result).toContain('if (!("name" in input)) throw new Error(\'[User] missing required property "name"\')')
+      expect(result).toContain('if (!("name" in input)) throw new Error("[User] missing required property \'name\'")')
     })
 
     it('throws on wrong primitive type for required property', () => {
@@ -1838,7 +1838,7 @@ describe('generate-parser-function', () => {
       }
       const result = generateParserFunction(schema, 'User', { strict: true })
       expect(result).toContain(
-        'if (typeof input.name !== "string") throw new Error(`[User] field "name" expected string, got ${typeof input.name}`)',
+        'if (typeof input.name !== "string") throw new Error("[User] field \'name\' expected string, got " + (typeof input.name))',
       )
     })
 
@@ -1849,7 +1849,7 @@ describe('generate-parser-function', () => {
       }
       const result = generateParserFunction(schema, 'User', { strict: true })
       expect(result).toContain(
-        'if (input.age !== undefined && (typeof input.age !== "number")) throw new Error(`[User] field "age" expected number, got ${typeof input.age}`)',
+        'if (input.age !== undefined && (typeof input.age !== "number")) throw new Error("[User] field \'age\' expected number, got " + (typeof input.age))',
       )
     })
 
@@ -1860,7 +1860,7 @@ describe('generate-parser-function', () => {
         required: ['role'],
       }
       const result = generateParserFunction(schema, 'User', { strict: true })
-      expect(result).toContain('must be one of: "admin", "user"')
+      expect(result).toContain('must be one of: \\"admin\\", \\"user\\"')
     })
 
     it('throws on pattern mismatch for strings', () => {
@@ -1896,6 +1896,23 @@ describe('generate-parser-function', () => {
       expect(result).toContain('must be a multiple of 1')
     })
 
+    it('throws on minItems / maxItems / uniqueItems violations', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { tags: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 5, uniqueItems: true } },
+        required: ['tags'],
+      }
+      const parse = evalGenerated<(input: unknown) => unknown>(
+        generateParserFunction(schema, 'Doc', { strict: true }),
+        'parseDoc',
+      )
+      expect(parse({ tags: ['a', 'b'] })).toEqual({ tags: ['a', 'b'] })
+      // Previously these array constraints were silently unenforced even in strict mode.
+      expect(() => parse({ tags: [] })).toThrow(/at least 1 items/)
+      expect(() => parse({ tags: ['a', 'b', 'c', 'd', 'e', 'f'] })).toThrow(/at most 5 items/)
+      expect(() => parse({ tags: ['a', 'a'] })).toThrow(/NOT have duplicate items/)
+    })
+
     it('does not generate strict assertions for $ref properties (delegated to nested parser)', () => {
       const schema: JSONSchema = {
         type: 'object',
@@ -1904,15 +1921,15 @@ describe('generate-parser-function', () => {
       }
       const result = generateParserFunction(schema, 'User', { strict: true, useRefImports: true })
       // The missing-required check is still emitted, but no inline type check.
-      expect(result).toContain('missing required property "contact"')
-      expect(result).not.toContain('field "contact" expected')
+      expect(result).toContain("missing required property 'contact'")
+      expect(result).not.toContain("field 'contact' expected")
     })
 
     it('throws on wrong type for non-object scalar schemas', () => {
       const schema: JSONSchema = { type: 'string' }
       const result = generateParserFunction(schema, 'Name', { strict: true })
       expect(result).toContain(
-        'if (typeof input !== "string") throw new Error(`[Name] expected string, got ${input === null ? "null" : typeof input}`)',
+        'if (typeof input !== "string") throw new Error("[Name] expected string, got " + (input === null ? "null" : typeof input))',
       )
       expect(result).toContain('return input as Name;')
     })
@@ -1933,6 +1950,32 @@ describe('generate-parser-function', () => {
       const result = generateParserFunction(schema, 'User')
       expect(result).not.toContain('throw new Error')
       expect(result).toContain('if (!isObject(input)) return')
+    })
+
+    it('does not allow schema-controlled names or enum values to inject code', () => {
+      // Property names and enum values are attacker-controlled; a naive template
+      // would let these break out of the emitted string literals and run code.
+      const marker = '__mjst_pwned__'
+      const payloadKey = `evil"]; (globalThis)["${marker}"] = true; //`
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          [payloadKey]: { enum: ['`+ ((globalThis)["' + marker + '"] = true) +`', "it's"] },
+        },
+        required: [payloadKey],
+      }
+
+      // evalGenerated transpiles the output — a broken/injected literal would throw here.
+      const parse = evalGenerated<(input: unknown) => unknown>(
+        generateParserFunction(schema, 'Pwn', { strict: true }),
+        'parsePwn',
+      )
+      // Trigger the required + enum error paths where the payload text lives.
+      expect(() => parse({})).toThrow()
+      expect(() => parse({ [payloadKey]: 'nope' })).toThrow()
+
+      // The payload was treated as inert string data, never executed.
+      expect((globalThis as Record<string, unknown>)[marker]).toBeUndefined()
     })
   })
 
@@ -1979,8 +2022,8 @@ describe('generate-parser-function', () => {
         'parseDemo',
       )
 
-      expect(() => parse({ a: 1, nested: { foo: 42 } })).toThrow('[DemoNested] field "foo" expected string, got number')
-      expect(() => parse({ a: 1, nested: {} })).toThrow('[DemoNested] missing required property "foo"')
+      expect(() => parse({ a: 1, nested: { foo: 42 } })).toThrow("[DemoNested] field 'foo' expected string, got number")
+      expect(() => parse({ a: 1, nested: {} })).toThrow("[DemoNested] missing required property 'foo'")
     })
 
     it('parses inline objects nested more than one level deep', () => {
@@ -2008,7 +2051,7 @@ describe('generate-parser-function', () => {
 
       expect(parse({ outer: { inner: { leaf: true } } })).toEqual({ outer: { inner: { leaf: true } } })
       expect(() => parse({ outer: { inner: { leaf: 'no' } } })).toThrow(
-        '[TreeOuterInner] field "leaf" expected boolean, got string',
+        "[TreeOuterInner] field 'leaf' expected boolean, got string",
       )
     })
 

@@ -42,6 +42,41 @@ describe('parse-document', () => {
     expect(parseDocument(`a: 'it''s here'\nb: "tab\\tend"\n`).toJS()).toEqual({ a: "it's here", b: 'tab\tend' })
   })
 
+  it('does not retain a stray carriage return when folding CRLF quoted scalars', () => {
+    // A folded CRLF continuation must fold to a single space with no leftover
+    // `\r` (matching eemeli), for both double- and single-quoted flow scalars.
+    expect(parseDocument('s: "first\r\n  second"\n').toJS()).toEqual({ s: 'first second' })
+    expect(parseDocument("s: 'first\r\n  second'\n").toJS()).toEqual({ s: 'first second' })
+  })
+
+  it('reports an error for an unterminated quoted scalar', () => {
+    // The missing closing quote otherwise swallows the rest of the document.
+    const { errors } = parseDocument('a: "never closed\nb: 1\n')
+    expect(errors.some((e) => e.code === 'UNTERMINATED_QUOTE')).toBe(true)
+  })
+
+  it('reports a duplicate key inside a flow mapping', () => {
+    const { errors } = parseDocument('{a: 1, a: 2}')
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.code).toBe('DUPLICATE_KEY')
+  })
+
+  it('allows duplicate flow-map keys when uniqueKeys is disabled', () => {
+    const { errors } = parseDocument('{a: 1, a: 2}', { uniqueKeys: false })
+    expect(errors).toHaveLength(0)
+  })
+
+  it('binds each alias to the anchor definition in scope at its position', () => {
+    // `x` is redefined mid-document: `b` (before the redefinition) must resolve to
+    // the first `&x 1`, and `d` (after) to `&x 2` — not both to the final one.
+    expect(parseDocument('a: &x 1\nb: *x\nc: &x 2\nd: *x\n').toJS()).toEqual({ a: 1, b: 1, c: 2, d: 2 })
+  })
+
+  it('strips every trailing newline with the `-` chomping indicator', () => {
+    // `|-` drops all trailing line breaks, not just one.
+    expect(parseDocument('text: |-\n  line1\n  line2\n\n\nnext: 1\n').toJS()).toEqual({ text: 'line1\nline2', next: 1 })
+  })
+
   it('does not treat a colon inside a URL as a mapping separator', () => {
     expect(parseDocument('url: https://example.com/path\n').toJS()).toEqual({ url: 'https://example.com/path' })
   })

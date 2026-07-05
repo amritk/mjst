@@ -24,9 +24,10 @@ export const resolveLocalRef = (ref: string, root: unknown): unknown => {
   // A bare "#" (or "#/") points at the whole document.
   if (pointer === '' || pointer === '/') return root
 
-  // A fragment that does not start with "/" is a plain `$anchor` name, not a
-  // JSON Pointer (which must be empty or begin with "/").
-  if (!pointer.startsWith('/')) return findAnchor(root, pointer, new Set())
+  // A fragment that does not start with "/" is a plain anchor name, not a JSON
+  // Pointer (which must be empty or begin with "/"). Per 2020-12 a `$dynamicAnchor`
+  // also creates an ordinary anchor, so a plain `#x` ref resolves to either.
+  if (!pointer.startsWith('/')) return findAnchor(root, pointer, ANCHOR_KEYWORDS, new Set())
 
   const parts = pointer.split('/').slice(1)
   let current: unknown = root
@@ -44,19 +45,27 @@ export const resolveLocalRef = (ref: string, root: unknown): unknown => {
   return current
 }
 
+/** Anchor keywords a plain `#name` fragment may bind to (see {@link resolveLocalRef}). */
+const ANCHOR_KEYWORDS = ['$anchor', '$dynamicAnchor'] as const
+
 /**
- * Depth-first search for the object carrying `$anchor: name`. `seen` guards
- * against pathological cyclic inputs; the schema tree itself is JSON-derived
- * and acyclic, and this runs at most once per ref (the caller memoizes it).
+ * Depth-first search for the object whose value for any of `keywords` equals
+ * `name` (e.g. `$anchor`/`$dynamicAnchor`). `seen` guards against pathological
+ * cyclic inputs; the schema tree itself is JSON-derived and acyclic, and this
+ * runs at most once per ref (the caller memoizes it). Shared by the static and
+ * dynamic resolvers so the traversal exists in exactly one place.
  */
-const findAnchor = (node: unknown, name: string, seen: Set<object>): unknown => {
+export const findAnchor = (node: unknown, name: string, keywords: readonly string[], seen: Set<object>): unknown => {
   if (node === null || typeof node !== 'object' || seen.has(node)) return undefined
   seen.add(node)
 
-  if (!Array.isArray(node) && (node as Record<string, unknown>)['$anchor'] === name) return node
+  if (!Array.isArray(node)) {
+    const record = node as Record<string, unknown>
+    for (const keyword of keywords) if (record[keyword] === name) return node
+  }
 
   for (const key in node) {
-    const found = findAnchor((node as Record<string, unknown>)[key], name, seen)
+    const found = findAnchor((node as Record<string, unknown>)[key], name, keywords, seen)
     if (found !== undefined) return found
   }
   return undefined

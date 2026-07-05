@@ -1,21 +1,33 @@
 import { refToFilename } from './ref-to-filename'
 
 /**
- * Converts a kebab-case filename to PascalCase, appending an optional suffix.
+ * Converts a filename-like string to a PascalCase TypeScript identifier,
+ * appending an optional suffix.
+ *
+ * Word boundaries are *any* run of characters that cannot appear in a JS
+ * identifier — not just `-` — so a dotted key like `io.k8s.api.core.v1.Pod`
+ * becomes `IoK8sApiCoreV1Pod` instead of the invalid `Io.k8s.api.core.v1.pod`.
+ * A leading digit is prefixed with `_`, and an otherwise-empty result falls back
+ * to `_`, so the output is always a usable identifier.
  *
  * @example
  * ```ts
  * kebabToPascal('server-variable') // 'ServerVariable'
  * kebabToPascal('channel') // 'Channel'
  * kebabToPascal('channel', 'Object') // 'ChannelObject'
+ * kebabToPascal('io.k8s.api.core.v1.pod') // 'IoK8sApiCoreV1Pod'
+ * kebabToPascal('123abc') // '_123abc'
  * ```
  */
 const kebabToPascal = (kebab: string, suffix: string): string => {
-  const words = kebab.split('-')
+  const words = kebab.split(/[^A-Za-z0-9]+/)
   let pascalCase = ''
   for (const word of words) {
+    if (word === '') continue
     pascalCase += word.charAt(0).toUpperCase() + word.slice(1)
   }
+  if (pascalCase === '') pascalCase = '_'
+  else if (/^[0-9]/.test(pascalCase)) pascalCase = `_${pascalCase}`
   return pascalCase + suffix
 }
 

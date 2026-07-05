@@ -18,7 +18,9 @@ const DEP_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies', 'opti
 type PackageJson = {
   name?: string
   version?: string
+  // The default (unnamed) catalog and any named catalogs (`catalog:<name>`).
   catalog?: Record<string, string>
+  catalogs?: Record<string, Record<string, string>>
 } & Partial<Record<(typeof DEP_FIELDS)[number], Record<string, string>>>
 
 const readJson = async (path: string): Promise<PackageJson> => JSON.parse(await readFile(path, 'utf-8'))
@@ -31,9 +33,25 @@ const resolveWorkspace = (spec: string, version: string): string => {
   return range
 }
 
+/**
+ * Resolves a `catalog:` / `catalog:<name>` specifier to a concrete range.
+ * The bare form reads the default `catalog`; a named form reads `catalogs[name]`.
+ * A specifier pointing at a missing catalog or entry throws — previously a
+ * `catalog:<name>` matched neither branch and shipped literally, breaking installs.
+ */
+const resolveCatalog = (spec: string, name: string, root: PackageJson): string => {
+  const catalogName = spec.slice('catalog:'.length)
+  const table = catalogName === '' ? (root.catalog ?? {}) : (root.catalogs?.[catalogName] ?? {})
+  const resolved = table[name]
+  if (!resolved) {
+    const where = catalogName === '' ? 'catalog' : `catalog "${catalogName}"`
+    throw new Error(`No ${where} entry for "${name}" in root package.json`)
+  }
+  return resolved
+}
+
 const run = async (): Promise<void> => {
   const root = await readJson(join(ROOT, 'package.json'))
-  const catalog = root.catalog ?? {}
 
   const packagesDir = join(ROOT, 'packages')
   const entries = await readdir(packagesDir, { withFileTypes: true })
@@ -50,6 +68,11 @@ const run = async (): Promise<void> => {
     manifests.push({ path, pkg })
   }
 
+  // Resolve every manifest fully *before* writing any of them. An unresolvable
+  // specifier throws here, leaving the working tree untouched — otherwise a
+  // mid-run failure would leave the tree half-rewritten with no restore path.
+  const pending: { path: string; content: string; name: string }[] = []
+
   for (const { path, pkg } of manifests) {
     let changed = false
 
@@ -58,10 +81,8 @@ const run = async (): Promise<void> => {
       if (!deps) continue
 
       for (const [name, spec] of Object.entries(deps)) {
-        if (spec === 'catalog:') {
-          const resolved = catalog[name]
-          if (!resolved) throw new Error(`No catalog entry for "${name}" in root package.json`)
-          deps[name] = resolved
+        if (spec.startsWith('catalog:')) {
+          deps[name] = resolveCatalog(spec, name, root)
           changed = true
         } else if (spec.startsWith('workspace:')) {
           const version = versions.get(name)
@@ -72,10 +93,12 @@ const run = async (): Promise<void> => {
       }
     }
 
-    if (changed) {
-      await writeFile(path, `${JSON.stringify(pkg, null, 2)}\n`, 'utf-8')
-      console.log(`Resolved protocols in ${pkg.name ?? path}`)
-    }
+    if (changed) pending.push({ path, content: `${JSON.stringify(pkg, null, 2)}\n`, name: pkg.name ?? path })
+  }
+
+  for (const { path, content, name } of pending) {
+    await writeFile(path, content, 'utf-8')
+    console.log(`Resolved protocols in ${name}`)
   }
 }
 

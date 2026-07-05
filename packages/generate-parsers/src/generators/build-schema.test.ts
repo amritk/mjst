@@ -65,7 +65,7 @@ describe('build-schema', () => {
     const parameterFile = result.find((file) => file.filename === 'parameter.ts')
     expect(parameterFile).toBeDefined()
     // The generated type should include the x-enabled extension property
-    expect(parameterFile?.content).toContain("'x-enabled'")
+    expect(parameterFile?.content).toContain('"x-enabled"')
     // The generated parser should validate the extension property
     expect(parameterFile?.content).toContain('x_enabled')
   })
@@ -122,7 +122,7 @@ describe('build-schema', () => {
 
     const documentFile = result.find((file) => file.filename === 'document.ts')
     expect(documentFile).toBeDefined()
-    expect(documentFile?.content).toContain("'x-generator'")
+    expect(documentFile?.content).toContain('"x-generator"')
   })
 
   it('works without extensions parameter', async () => {
@@ -193,7 +193,7 @@ describe('build-schema', () => {
     const result = await buildSchema(schema, 'Document', undefined, true)
     const documentFile = result.find((file) => file.filename === 'document.ts')
 
-    expect(documentFile?.content).toContain("import type { Contact } from './contact';")
+    expect(documentFile?.content).toContain("import type { Contact } from './contact.js';")
     expect(documentFile?.content).not.toContain('parseContact')
   })
 
@@ -271,7 +271,7 @@ describe('build-schema', () => {
 
     const parameterFile = result.find((file) => file.filename === 'parameter.ts')
     // Extension property should still appear in the type
-    expect(parameterFile?.content).toContain("'x-enabled'")
+    expect(parameterFile?.content).toContain('"x-enabled"')
     // But no parser should be generated
     expect(parameterFile?.content).not.toContain('parseParameter')
   })
@@ -439,7 +439,7 @@ describe('build-schema', () => {
     // The specification-extensions definition generates its own file
     expect(filenames).toContain('specification-extensions.ts')
     // x-custom property is NOT inlined into document.ts — it's in specification-extensions.ts
-    expect(documentFile?.content).not.toContain("'x-custom'")
+    expect(documentFile?.content).not.toContain('"x-custom"')
   })
 
   it('generates JSDoc from $comment plain text on nested $defs', async () => {
@@ -572,10 +572,10 @@ describe('build-schema', () => {
     expect(indexFile).toBeDefined()
     // Named type + parser + shape-validator exports for each file
     expect(indexFile?.content).toContain(
-      "export { type Contact, validateContactShape, parseContact } from './contact';",
+      "export { type Contact, validateContactShape, parseContact } from './contact.js';",
     )
     expect(indexFile?.content).toContain(
-      "export { type Document, validateDocumentShape, parseDocument } from './document';",
+      "export { type Document, validateDocumentShape, parseDocument } from './document.js';",
     )
     // No wildcard exports
     expect(indexFile?.content).not.toContain('export *')
@@ -601,8 +601,8 @@ describe('build-schema', () => {
 
     expect(indexFile).toBeDefined()
     // Types-only: export type { ... } syntax, no parsers
-    expect(indexFile?.content).toContain("export type { Contact } from './contact';")
-    expect(indexFile?.content).toContain("export type { Document } from './document';")
+    expect(indexFile?.content).toContain("export type { Contact } from './contact.js';")
+    expect(indexFile?.content).toContain("export type { Document } from './document.js';")
     expect(indexFile?.content).not.toContain('parseContact')
     expect(indexFile?.content).not.toContain('parseDocument')
     // No wildcard exports
@@ -676,9 +676,25 @@ describe('build-schema', () => {
       const filenames = result.map((f) => f.filename)
       const root = result.find((f) => f.filename === 'document.ts')
 
-      expect(root?.content).toContain("import { isObject } from './_helpers/is-object';")
+      expect(root?.content).toContain("import { isObject } from './_helpers/is-object.js';")
       expect(root?.content).not.toContain('@amritk/helpers')
       expect(filenames).toContain('_helpers/is-object.ts')
+    })
+
+    it('rewrites an embedded helper’s sibling import to carry a .js extension (Node ESM)', async () => {
+      // `validate-record` imports `./is-object`; embedded into `_helpers/`, that
+      // relative import must be `./is-object.js` to resolve under Node ESM, not
+      // only Bun. A record of $ref pulls in the `validate-record` helper.
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { ext: { type: 'object', additionalProperties: { $ref: '#/$defs/item' } } },
+        required: ['ext'],
+        $defs: { item: { type: 'object', properties: { n: { type: 'string' } }, required: ['n'] } },
+      }
+      const result = await buildSchema(schema, 'Doc', undefined, undefined, undefined, undefined, 'embedded')
+      const validateRecord = result.find((f) => f.filename === '_helpers/validate-record.ts')
+      expect(validateRecord?.content).toContain("import { isObject } from './is-object.js'")
+      expect(validateRecord?.content).not.toContain("from './is-object'\n")
     })
 
     it('honours a custom helpersImportPrefix so nested parsers import from a shared root _helpers/', async () => {
@@ -700,7 +716,7 @@ describe('build-schema', () => {
       const root = result.find((f) => f.filename === 'document.ts')
       const filenames = result.map((f) => f.filename)
 
-      expect(root?.content).toContain("import { isObject } from '../../_helpers/is-object';")
+      expect(root?.content).toContain("import { isObject } from '../../_helpers/is-object.js';")
       // Helper sources keep their canonical filenames; the orchestrator relocates them to the root.
       expect(filenames).toContain('_helpers/is-object.ts')
     })
@@ -774,7 +790,7 @@ describe('build-schema', () => {
 
       expect(filenames).toContain('_helpers/has-ref.ts')
       const conditional = result.find((f) => f.filename === 'parameter-or-reference.ts')
-      expect(conditional?.content).toContain("import { hasRef } from './_helpers/has-ref';")
+      expect(conditional?.content).toContain("import { hasRef } from './_helpers/has-ref.js';")
     })
 
     it('emits zero _helpers/*.ts files in types-only mode', async () => {
@@ -849,6 +865,49 @@ describe('build-schema', () => {
 
       expect(root?.content).toContain("from '@amritk/helpers/")
       expect(filenames.some((f) => f.startsWith('_helpers/'))).toBe(false)
+    })
+  })
+
+  describe('recursive discriminated $ref union', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { program: { $ref: '#/$defs/expr' } },
+      required: ['program'],
+      $defs: {
+        expr: { oneOf: [{ $ref: '#/$defs/lit' }, { $ref: '#/$defs/binop' }] },
+        lit: {
+          type: 'object',
+          properties: { kind: { const: 'lit' }, value: { type: 'number' } },
+          required: ['kind', 'value'],
+        },
+        binop: {
+          type: 'object',
+          properties: { kind: { const: 'binop' }, left: { $ref: '#/$defs/expr' }, right: { $ref: '#/$defs/expr' } },
+          required: ['kind', 'left', 'right'],
+        },
+      },
+    }
+
+    it('dispatches on the discriminator to the branch parsers instead of blind-casting', async () => {
+      const files = await buildSchema(schema, 'Root', undefined, undefined)
+      const expr = files.find((f) => f.filename === 'expr.ts')?.content ?? ''
+      // Previously this was `parseExpr = (input) => input as Expr;` (a blind cast).
+      expect(expr).not.toMatch(/parseExpr = \(input: unknown\): Expr => input as Expr;/)
+      expect(expr).toContain('=== "lit" ? parseLit(input)')
+      expect(expr).toContain('=== "binop" ? parseBinop(input)')
+    })
+
+    it('emits a real shape predicate for a discriminated branch (not the => false stub)', async () => {
+      const files = await buildSchema(schema, 'Root', undefined, undefined)
+      const lit = files.find((f) => f.filename === 'lit.ts')?.content ?? ''
+      expect(lit).not.toContain('validateLitShape = (_input: unknown): boolean => false;')
+      expect(lit).toContain('input.kind === "lit"')
+    })
+
+    it('throws on an unknown discriminant in strict mode', async () => {
+      const files = await buildSchema(schema, 'Root', undefined, undefined, undefined, true)
+      const expr = files.find((f) => f.filename === 'expr.ts')?.content ?? ''
+      expect(expr).toContain('does not match any union branch')
     })
   })
 })

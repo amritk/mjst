@@ -1,5 +1,6 @@
 import { getByPointer, pointerToPath } from './get-by-pointer'
-import type { OriginMap, ResolveResult } from './types'
+import { assignKey } from './safe-assign'
+import type { OriginMap, ResolveError, ResolveResult } from './types'
 
 // A ref currently mid-resolution is marked with this sentinel; revisiting it
 // means we have looped, so we return `{}` instead of recursing forever.
@@ -29,9 +30,10 @@ const resolveInternal = (
   root: unknown,
   cache: Map<string, CacheValue>,
   origins: OriginMap | undefined,
+  errors: ResolveError[],
 ): unknown => {
   if (node === null || typeof node !== 'object') return node
-  if (Array.isArray(node)) return node.map((item) => resolveInternal(item, root, cache, origins))
+  if (Array.isArray(node)) return node.map((item) => resolveInternal(item, root, cache, origins, errors))
 
   const obj = node as Record<string, unknown>
   if (typeof obj['$ref'] === 'string') {
@@ -44,7 +46,16 @@ const resolveInternal = (
       target = cached === CYCLE ? {} : cached
     } else {
       cache.set(ref, CYCLE)
-      target = resolveInternal(getByPointer(root, ref.slice(1)), root, cache, origins)
+      const pointed = getByPointer(root, ref.slice(1))
+      if (pointed === undefined) {
+        // An internal pointer that resolves to nothing (a typo'd or missing
+        // definition) was previously inlined as literal `undefined` with no trace.
+        // Record it and keep the original `$ref` node so the failure is visible.
+        errors.push({ message: `Cannot resolve internal $ref "${ref}"`, path: pointerToPath(ref.slice(1)) })
+        cache.set(ref, obj)
+        return obj
+      }
+      target = resolveInternal(pointed, root, cache, origins, errors)
       cache.set(ref, target)
       // Stamp the inlined node with the path it was defined at (see resolveAt).
       // First-write-wins so the deepest definition stamps before any outer ref that
@@ -62,7 +73,7 @@ const resolveInternal = (
     const siblingKeys = Object.keys(obj).filter((key) => key !== '$ref')
     if (siblingKeys.length === 0) return target
     const siblings: Record<string, unknown> = {}
-    for (const key of siblingKeys) siblings[key] = resolveInternal(obj[key], root, cache, origins)
+    for (const key of siblingKeys) assignKey(siblings, key, resolveInternal(obj[key], root, cache, origins, errors))
     const existingAllOf = Array.isArray(siblings['allOf']) ? siblings['allOf'] : []
     const merged = { ...siblings, allOf: [...existingAllOf, target] }
     // Stamp the wrapper too, so a consumer mapping the resolved node back to its
@@ -73,7 +84,7 @@ const resolveInternal = (
 
   const result: Record<string, unknown> = {}
   for (const key of Object.keys(obj)) {
-    result[key] = resolveInternal(obj[key], root, cache, origins)
+    assignKey(result, key, resolveInternal(obj[key], root, cache, origins, errors))
   }
   return result
 }
@@ -85,6 +96,7 @@ const resolveInternal = (
  */
 export const resolveRefs = (data: unknown, options: ResolveRefsOptions = {}): ResolveResult => {
   const origins: OriginMap | undefined = options.trackOrigins ? new Map() : undefined
-  const resolved = resolveInternal(data, data, new Map(), origins)
-  return origins ? { resolved, errors: [], origins } : { resolved, errors: [] }
+  const errors: ResolveError[] = []
+  const resolved = resolveInternal(data, data, new Map(), origins, errors)
+  return origins ? { resolved, errors, origins } : { resolved, errors }
 }

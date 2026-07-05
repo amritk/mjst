@@ -142,6 +142,7 @@ export const generateFile = (
   const parserFunction = generateParserFunction(schema, typeName, {
     useRefImports: true,
     typeSuffix,
+    ...(rootSchema !== undefined ? { rootSchema } : {}),
     ...(options?.logWarnings !== undefined ? { logWarnings: options.logWarnings } : {}),
     ...(options?.strict !== undefined ? { strict: options.strict } : {}),
     ...(options?.stripUnknown !== undefined ? { stripUnknown: options.stripUnknown } : {}),

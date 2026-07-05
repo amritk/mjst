@@ -4,7 +4,11 @@ import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
-const getImportPathForFilename = (filename: string): string => `./${filename}`
+// Emit an explicit `.js` extension on the relative specifier. Node's ESM resolver
+// requires it (extensionless relative imports only work under a bundler or Bun),
+// and `./x.js` pointing at a sibling `x.ts` is the standard TS NodeNext form —
+// accepted by Bun, esbuild, webpack, and tsc alike.
+const getImportPathForFilename = (filename: string): string => `./${filename}.js`
 
 /**
  * Options for controlling how imports are collected.

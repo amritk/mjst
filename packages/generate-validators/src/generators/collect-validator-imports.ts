@@ -1,15 +1,7 @@
 import { refToFilename } from '@amritk/helpers/ref-to-filename'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
-import {
-  hasAdditionalProperties,
-  hasAllOf,
-  hasAnyOf,
-  hasItems,
-  hasOneOf,
-  hasProperties,
-  hasRef,
-} from '@amritk/helpers/schema-guards'
+import { hasRef } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 /**
@@ -41,7 +33,9 @@ const buildImport = (ref: string, suffix: string): string => {
   const filename = refToFilename(ref)
   const typeName = refToName(ref, suffix)
   const validatorName = `validate${typeName}`
-  return `import { type ${typeName}, ${validatorName} } from './${filename}'`
+  // `.js` extension so the emitted import resolves under Node ESM (not just Bun);
+  // `./x.js` → sibling `x.ts` is the standard NodeNext form.
+  return `import { type ${typeName}, ${validatorName} } from './${filename}.js'`
 }
 
 /**
@@ -54,49 +48,58 @@ const canonicalFilename = (ref: string): string => {
 }
 
 /**
- * Walks one level of the schema and yields all direct $ref strings that should
- * become imports: properties, additionalProperties, items, and union branches.
+ * Recursively walks a schema and yields every `$ref` the validator emitter can
+ * turn into a `validateX(...)` call, in traversal order. The emitter recurses
+ * into far more than properties/items/additionalProperties/top-level
+ * combinators: it also delegates for `patternProperties`, `propertyNames`,
+ * `if`/`then`/`else`, `contains`, `prefixItems`, `dependentSchemas`, `not`, and
+ * objects nested inside any combinator branch. A `$ref` reached by *any* of those
+ * paths must become an import, or the generated file references an undefined
+ * `validateX`. (Mirrors the parsers package's `collect-imports` traversal.)
  */
-const collectDirectRefs = (schema: JSONSchema): string[] => {
-  if (typeof schema === 'boolean' || schema === null) return []
+const collectDirectRefs = (value: unknown, refs: string[] = []): string[] => {
+  if (typeof value !== 'object' || value === null) return refs
 
-  const refs: string[] = []
-
-  if (hasRef(schema)) {
-    refs.push(schema.$ref)
+  if (Array.isArray(value)) {
+    for (const item of value) collectDirectRefs(item, refs)
     return refs
   }
 
-  const propSchemas =
-    'properties' in schema && typeof schema.properties === 'object' && schema.properties !== null
-      ? Object.values(schema.properties as Record<string, JSONSchema>)
-      : []
+  const schema = value as Record<string, unknown>
 
-  for (const prop of propSchemas) {
-    if (hasRef(prop)) refs.push((prop as { $ref: string }).$ref)
-    if (hasItems(prop) && hasRef(prop.items)) refs.push((prop.items as { $ref: string }).$ref)
-    if (hasAdditionalProperties(prop) && hasRef(prop.additionalProperties as JSONSchema)) {
-      refs.push((prop.additionalProperties as { $ref: string }).$ref)
+  // A `$ref` is a leaf: the emitter delegates the whole value to the referenced
+  // validator, so record the ref and do not descend past it.
+  if (hasRef(schema)) {
+    refs.push(schema.$ref as string)
+    return refs
+  }
+
+  // Every keyword whose subschema(s) the emitter recurses into. `properties` and
+  // `patternProperties` hold subschemas as object *values*; the combinator/tuple
+  // keywords hold them in arrays; the rest are single subschemas. We deliberately
+  // do NOT descend into `$defs`/`definitions` — those are split into their own
+  // generated files, not inlined by this validator. `collectDirectRefs`
+  // self-guards on non-objects, so a keyword that is a boolean or missing is a
+  // harmless no-op.
+  const subSchemaMaps = ['properties', 'patternProperties']
+  for (const mapKey of subSchemaMaps) {
+    const map = schema[mapKey]
+    if (typeof map === 'object' && map !== null && !Array.isArray(map)) {
+      for (const sub of Object.values(map)) collectDirectRefs(sub, refs)
     }
-    // Inline nested objects are validated recursively by the generator, so any
-    // $refs anywhere inside them must become imports as well.
-    if (hasProperties(prop)) refs.push(...collectDirectRefs(prop))
   }
 
-  if (hasItems(schema) && hasRef(schema.items)) {
-    refs.push((schema.items as { $ref: string }).$ref)
+  const singleSubSchemas = ['items', 'additionalProperties', 'propertyNames', 'contains', 'if', 'then', 'else', 'not']
+  for (const key of singleSubSchemas) {
+    if (key in schema) collectDirectRefs(schema[key], refs)
   }
 
-  if (hasAdditionalProperties(schema) && hasRef(schema.additionalProperties as JSONSchema)) {
-    refs.push((schema.additionalProperties as { $ref: string }).$ref)
-  }
-
-  for (const branch of [
-    ...(hasOneOf(schema) ? schema.oneOf : []),
-    ...(hasAnyOf(schema) ? schema.anyOf : []),
-    ...(hasAllOf(schema) ? schema.allOf : []),
-  ]) {
-    if (hasRef(branch)) refs.push((branch as { $ref: string }).$ref)
+  const arraySubSchemas = ['oneOf', 'anyOf', 'allOf', 'prefixItems']
+  for (const key of arraySubSchemas) {
+    const arr = schema[key]
+    if (Array.isArray(arr)) {
+      for (const sub of arr) collectDirectRefs(sub, refs)
+    }
   }
 
   return refs

@@ -606,4 +606,98 @@ describe('validate', () => {
       expect(validator([{ a: 1 }, { a: 1 }])).not.toBe(true)
     })
   })
+
+  describe('spec-correctness fixes', () => {
+    it('multipleOf uses a magnitude-relative tolerance for large quotients', () => {
+      expect(validate({ type: 'number', multipleOf: 0.01 })(1234567.89)).toBe(true)
+      expect(validate({ type: 'number', multipleOf: 2 })(3)).not.toBe(true)
+    })
+
+    it('minLength/maxLength count Unicode code points, not UTF-16 units', () => {
+      expect(validate({ type: 'string', maxLength: 1 })('\u{1F4A9}')).toBe(true)
+      expect(validate({ type: 'string', minLength: 2 })('\u{1F4A9}')).not.toBe(true)
+      expect(validate({ type: 'string', maxLength: 3 })('abcd')).not.toBe(true)
+    })
+
+    it('compiles patterns as Unicode so `.` matches an astral character', () => {
+      expect(validate({ type: 'string', pattern: '^.$' })('\u{1F4A9}')).toBe(true)
+    })
+
+    it('escapes / and ~ in error-path JSON Pointers', () => {
+      const result = validate({ type: 'object', properties: { 'a/b': { type: 'number' } } })(JSON.parse('{"a/b":"x"}'))
+      expect(errorsOf(result)[0]?.path).toBe('/a~1b')
+    })
+
+    it('rejects structurally impossible date-time and honors the leap second', () => {
+      const dt = validate({ type: 'string', format: 'date-time' }, { formats: 'all' })
+      expect(dt('2020-01-15T10:30:00Z')).toBe(true)
+      expect(dt('1990-12-31T23:59:60Z')).toBe(true)
+      expect(dt('9999-99-99T99:99:99Z')).not.toBe(true)
+    })
+
+    it('resolves a plain #anchor ref to a $dynamicAnchor', () => {
+      const schema = { $defs: { node: { $dynamicAnchor: 'n', type: 'number' } }, $ref: '#n' }
+      const validator = validate(schema)
+      expect(validator(5)).toBe(true)
+      expect(validator('x')).not.toBe(true)
+    })
+
+    it('does not leak outer annotations into a nested unevaluatedProperties', () => {
+      // The inner allOf's `unevaluatedProperties: false` must see only its own
+      // subtree (nothing), so `a` — evaluated by the OUTER schema — is unevaluated
+      // for it and rejected. Matches Ajv.
+      const schema = {
+        type: 'object',
+        properties: { a: { type: 'string' } },
+        unevaluatedProperties: true,
+        allOf: [{ unevaluatedProperties: false }],
+      }
+      expect(validate(schema)({ a: 'x' })).not.toBe(true)
+    })
+  })
+
+  describe('property presence uses own-property membership', () => {
+    it('does not treat an inherited constructor as a present required property', () => {
+      const validator = validate({ type: 'object', required: ['constructor'] })
+      expect(validator({})).not.toBe(true)
+      expect(validator({ constructor: 1 })).toBe(true)
+    })
+
+    it('validates a real __proto__ property against its subschema', () => {
+      const validator = validate({ type: 'object', properties: { ['__proto__']: { type: 'string' } } })
+      // Empty object: no own __proto__, so the string subschema does not apply.
+      expect(validator({})).toBe(true)
+      // Own __proto__ data property must be checked like any other property.
+      expect(validator(JSON.parse('{"__proto__": "hi"}'))).toBe(true)
+      expect(validator(JSON.parse('{"__proto__": 5}'))).not.toBe(true)
+    })
+  })
+
+  describe('recursive $ref cycles', () => {
+    it('does not overflow the stack on a self-referential $ref', () => {
+      expect(validate({ $ref: '#' })({})).toBe(true)
+      expect(validate({ $defs: { a: { $ref: '#/$defs/a' } }, $ref: '#/$defs/a' })(42)).toBe(true)
+    })
+
+    it('does not overflow the stack on mutually recursive $refs', () => {
+      const schema = { $defs: { A: { $ref: '#/$defs/B' }, B: { $ref: '#/$defs/A' } }, $ref: '#/$defs/A' }
+      expect(validate(schema)(1)).toBe(true)
+    })
+
+    it('still validates deep-but-finite recursive data correctly', () => {
+      const schema = {
+        $defs: {
+          node: {
+            type: 'object',
+            properties: { children: { type: 'array', items: { $ref: '#/$defs/node' } } },
+            required: ['children'],
+          },
+        },
+        $ref: '#/$defs/node',
+      }
+      const validator = validate(schema)
+      expect(validator({ children: [{ children: [] }, { children: [{ children: [] }] }] })).toBe(true)
+      expect(validator({ children: [{ children: 'nope' }] })).not.toBe(true)
+    })
+  })
 })

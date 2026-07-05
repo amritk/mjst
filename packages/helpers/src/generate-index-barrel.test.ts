@@ -10,15 +10,15 @@ describe('generate-index-barrel', () => {
     ]
 
     expect(generateIndexBarrel(files)).toBe(
-      "export { type Address, parseAddress } from './address';\n" +
-        "export { type Contact, parseContact } from './contact';\n",
+      "export { type Address, parseAddress } from './address.js';\n" +
+        "export { type Contact, parseContact } from './contact.js';\n",
     )
   })
 
   it('emits type-only re-exports when typesOnly is set', () => {
     const files = [{ filename: 'contact.ts', content: 'export type Contact = {}\n' }]
 
-    expect(generateIndexBarrel(files, { typesOnly: true })).toBe("export type { Contact } from './contact';\n")
+    expect(generateIndexBarrel(files, { typesOnly: true })).toBe("export type { Contact } from './contact.js';\n")
   })
 
   it('never re-exports internal _helpers modules', () => {
@@ -27,7 +27,7 @@ describe('generate-index-barrel', () => {
       { filename: '_helpers/is-object.ts', content: 'export const isObject = () => {}\n' },
     ]
 
-    expect(generateIndexBarrel(files)).toBe("export { type Document } from './document';\n")
+    expect(generateIndexBarrel(files)).toBe("export { type Document } from './document.js';\n")
   })
 
   it('skips files that export nothing', () => {
@@ -36,6 +36,6 @@ describe('generate-index-barrel', () => {
       { filename: 'empty.ts', content: '// nothing here\n' },
     ]
 
-    expect(generateIndexBarrel(files)).toBe("export { type Document } from './document';\n")
+    expect(generateIndexBarrel(files)).toBe("export { type Document } from './document.js';\n")
   })
 })

@@ -4,16 +4,6 @@ import { resolveLocalRef } from '@/interpreter/resolve-local-ref'
 import type { ValidationError } from '@/types'
 
 /**
- * Mutable state threaded through a single validation run.
- *
- * Unlike a code-generating validator, the interpreter walks the schema afresh
- * on every call — there is no `new Function`, so it runs anywhere (a strict
- * CSP, Cloudflare Workers, React Native/Hermes) and costs nothing at startup.
- * The two genuinely reusable artifacts — compiled `RegExp`s and resolved
- * `$ref` targets — are cached on the context so a validator reused across calls
- * builds each at most once.
- */
-/**
  * The two genuinely reusable artifacts of a validation — compiled `RegExp`s and
  * resolved `$ref` targets — held in one place and shared across a run and its
  * nested branch contexts. Each map is allocated lazily on first use, so the
@@ -27,6 +17,15 @@ export type ValidatorCaches = {
 
 export const newValidatorCaches = (): ValidatorCaches => ({ regex: null, ref: null })
 
+/**
+ * Mutable state threaded through a single validation run.
+ *
+ * Unlike a code-generating validator, the interpreter walks the schema afresh
+ * on every call — there is no `new Function`, so it runs anywhere (a strict CSP,
+ * Cloudflare Workers, React Native/Hermes) and costs nothing at startup. The two
+ * genuinely reusable artifacts — compiled `RegExp`s and resolved `$ref` targets —
+ * are cached on {@link ValidatorCaches} so a reused validator builds each once.
+ */
 export type InterpreterContext = {
   /** The root schema document, used to resolve local `$ref` pointers. */
   readonly root: unknown
@@ -43,6 +42,13 @@ export type InterpreterContext = {
   errors: ValidationError[] | null
   /** Set in guard mode on the first failure so the walk can unwind. */
   failed: boolean
+  /**
+   * The active `$ref`/`$dynamicRef` recursion path as flattened `schema, value`
+   * pairs. Shared by reference with nested branch contexts so a cycle routed
+   * through `anyOf`/`oneOf` is still seen. Push/pop is balanced around each ref
+   * edge, so it only ever holds current ancestors — see {@link interpretRef}.
+   */
+  readonly refStack: unknown[]
 }
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
@@ -114,8 +120,10 @@ const allUnique = (arr: readonly unknown[]): boolean => {
   if (len < 2) return true
 
   // Fast path: when every element is a primitive, dedupe in one linear pass via
-  // a Set of type-tagged keys (so 1, "1", and true never collide) instead of the
-  // O(n²) pairwise deepEqual. Objects/arrays fall back to the exact comparison.
+  // a native Set. Set membership is SameValueZero, which is already type-sensitive
+  // (1, "1", and true are three distinct entries), so it matches JSON Schema's
+  // equality for primitives without allocating a stringified key per element.
+  // Objects/arrays fall back to the exact structural comparison below.
   let allPrimitive = true
   for (let i = 0; i < len; i++) {
     const v = arr[i]
@@ -124,15 +132,7 @@ const allUnique = (arr: readonly unknown[]): boolean => {
       break
     }
   }
-  if (allPrimitive) {
-    const seen = new Set<string>()
-    for (const v of arr) {
-      const key = `${typeof v}:${JSON.stringify(v)}`
-      if (seen.has(key)) return false
-      seen.add(key)
-    }
-    return true
-  }
+  if (allPrimitive) return new Set(arr).size === len
 
   for (let i = 0; i < len; i++) for (let j = i + 1; j < len; j++) if (deepEqual(arr[i], arr[j])) return false
   return true
@@ -182,9 +182,53 @@ const fail = (ctx: InterpreterContext, message: string, path: string): void => {
  * — so we skip the concatenation and thread the parent path down unchanged. That
  * keeps every property/item recursion allocation-free on the guard hot path,
  * where a single validation is otherwise dominated by these throwaway strings.
+ *
+ * When a path *is* built, a property name is escaped for JSON Pointer (RFC 6901):
+ * `~` → `~0`, `/` → `~1`, so `a/b` doesn't collide with `b` under `a`. The escape
+ * is gated behind a two-char scan that virtually every real key (and every array
+ * index) fails, so the common case stays a bare concatenation.
  */
-const childPath = (ctx: InterpreterContext, path: string, key: string | number): string =>
-  ctx.emitErrors ? `${path}/${key}` : path
+const escapePointer = (key: string): string =>
+  key.indexOf('/') !== -1 || key.indexOf('~') !== -1 ? key.replace(/~/g, '~0').replace(/\//g, '~1') : key
+
+const childPath = (ctx: InterpreterContext, path: string, key: string | number): string => {
+  if (!ctx.emitErrors) return path
+  return `${path}/${typeof key === 'string' ? escapePointer(key) : key}`
+}
+
+/**
+ * Counts Unicode code points in `value`, as JSON Schema's `minLength`/`maxLength`
+ * require — `String.length` counts UTF-16 code units, so a single astral
+ * character (e.g. an emoji) would otherwise count as 2. Iterating the string
+ * yields code points without allocating an intermediate array.
+ */
+const codePointLength = (value: string): number => {
+  let count = 0
+  for (let i = 0; i < value.length; i++) {
+    count++
+    const c = value.charCodeAt(i)
+    // A high surrogate followed by a low surrogate is one code point: skip the pair.
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < value.length) {
+      const next = value.charCodeAt(i + 1)
+      if (next >= 0xdc00 && next <= 0xdfff) i++
+    }
+  }
+  return count
+}
+
+/**
+ * Compiles a JSON Schema `pattern` source. 2020-12 regexes should be interpreted
+ * as Unicode (Ajv compiles with `u` by default): without it `^.$` rejects a single
+ * astral character and `\p{L}` is misread. Fall back to a non-Unicode compile for
+ * the rare legacy pattern that is only valid without the stricter `u` escapes.
+ */
+const compilePattern = (source: string): RegExp => {
+  try {
+    return new RegExp(source, 'u')
+  } catch {
+    return new RegExp(source)
+  }
+}
 
 /** Returns a cached compiled `RegExp` for the given source. */
 const getRegex = (ctx: InterpreterContext, source: string): RegExp => {
@@ -195,7 +239,7 @@ const getRegex = (ctx: InterpreterContext, source: string): RegExp => {
   }
   let re = cache.get(source)
   if (re === undefined) {
-    re = new RegExp(source)
+    re = compilePattern(source)
     cache.set(source, re)
   }
   return re
@@ -266,6 +310,7 @@ const matchesSchema = (
     caches: ctx.caches,
     errors: null,
     failed: false,
+    refStack: ctx.refStack,
   }
   // When the caller is tracking annotations, evaluate the branch into a private
   // tracker and fold it in only if the branch matched — annotations from a
@@ -287,9 +332,57 @@ const matchesSchema = (
 type ObjectMeta = {
   properties: Record<string, unknown> | undefined
   knownKeys: string[] | undefined
+  /** `knownKeys` pre-escaped for JSON Pointer, so the error-path build is a bare concat. */
+  escapedKeys: string[] | undefined
   requiredSet: Set<string>
   requiredNotInProps: string[]
-  patternEntries: [string, unknown][] | null
+  patternEntries: [RegExp, unknown][] | null
+  /**
+   * True when none of this node's declared/required keys is a name inherited from
+   * `Object.prototype` (`constructor`, `toString`, `__proto__`, …). For such keys
+   * presence can be tested with the cheap `obj[key] !== undefined` — a JSON object
+   * never inherits them — instead of the slower `Object.hasOwn`. Only a schema
+   * that actually declares a prototype-member key pays the `hasOwn` cost.
+   */
+  safeKeys: boolean
+}
+
+/**
+ * Names reachable on a plain object via its prototype chain, for which a bare
+ * `obj[key]` read could return an inherited value and wrongly report presence.
+ */
+const PROTO_MEMBER_NAMES = new Set<string>([
+  '__proto__',
+  'constructor',
+  'prototype',
+  'toString',
+  'toLocaleString',
+  'valueOf',
+  'hasOwnProperty',
+  'isPrototypeOf',
+  'propertyIsEnumerable',
+  '__defineGetter__',
+  '__defineSetter__',
+  '__lookupGetter__',
+  '__lookupSetter__',
+])
+
+/**
+ * Memoized enum membership. An all-primitive enum resolves to a `Set` (SameValueZero,
+ * so type-sensitive) for O(1) lookup; a mixed/structural enum returns `null`, and
+ * the caller falls back to `deepEqual`. Keyed on the schema node so the scan runs
+ * once per node rather than once per validation. `null` set means "not all
+ * primitive"; an entry is always present after the first touch.
+ */
+const enumSetCache = new WeakMap<object, Set<unknown> | null>()
+
+const getEnumSet = (s: object, values: unknown[]): Set<unknown> | null => {
+  let set = enumSetCache.get(s)
+  if (set === undefined) {
+    set = values.every(isPrimitiveEnumValue) ? new Set(values) : null
+    enumSetCache.set(s, set)
+  }
+  return set
 }
 
 /**
@@ -309,12 +402,22 @@ const getObjectMeta = (s: Record<string, unknown>): ObjectMeta => {
     const properties = isPlainObject(s['properties']) ? s['properties'] : undefined
     const patternProperties = isPlainObject(s['patternProperties']) ? s['patternProperties'] : undefined
     const required = Array.isArray(s['required']) ? (s['required'] as string[]) : []
+    const knownKeys = properties ? Object.keys(properties) : undefined
     meta = {
       properties,
-      knownKeys: properties ? Object.keys(properties) : undefined,
+      knownKeys,
+      escapedKeys: knownKeys?.map(escapePointer),
       requiredSet: new Set(required),
       requiredNotInProps: required.filter((k) => !(properties !== undefined && k in properties)),
-      patternEntries: patternProperties ? Object.entries(patternProperties) : null,
+      // Compile each `patternProperties` regex once here (a stateless RegExp is
+      // safe to share across contexts) so the per-key loop below skips both the
+      // shared-cache Map lookup and recompilation.
+      patternEntries: patternProperties
+        ? Object.entries(patternProperties).map(([source, schema]) => [compilePattern(source), schema])
+        : null,
+      safeKeys:
+        (knownKeys === undefined || knownKeys.every((k) => !PROTO_MEMBER_NAMES.has(k))) &&
+        required.every((k) => !PROTO_MEMBER_NAMES.has(k)),
     }
     objectMetaCache.set(s, meta)
   }
@@ -333,7 +436,8 @@ const interpretObject = (
   const obj = value as Record<string, unknown>
 
   const meta = getObjectMeta(s)
-  const { properties, knownKeys, requiredSet } = meta
+  const { properties, knownKeys, escapedKeys, requiredSet, safeKeys } = meta
+  const emitErrors = ctx.emitErrors
 
   const hasAdditional = 'additionalProperties' in s
   const additional = s['additionalProperties']
@@ -341,17 +445,26 @@ const interpretObject = (
   const minProps = typeof s['minProperties'] === 'number' ? s['minProperties'] : undefined
   const maxProps = typeof s['maxProperties'] === 'number' ? s['maxProperties'] : undefined
 
-  if (properties && knownKeys) {
-    for (const key of knownKeys) {
+  if (properties && knownKeys && escapedKeys) {
+    for (let i = 0; i < knownKeys.length; i++) {
+      const key = knownKeys[i] as string
+      // Read the value once and reuse it. Presence is own-property membership:
+      // `Object.hasOwn` is authoritative but has call overhead, so when no declared
+      // key is a prototype member (the common case, precomputed as `safeKeys`) the
+      // cheap `pv !== undefined` is equivalent — a JSON object can't inherit a
+      // non-prototype-member name.
       const pv = obj[key]
+      const present = safeKeys ? pv !== undefined : Object.hasOwn(obj, key)
       if (requiredSet.has(key)) {
-        if (pv === undefined) fail(ctx, `must have required property '${key}'`, path)
+        if (!present) fail(ctx, `must have required property '${key}'`, path)
         else {
-          interpret(ctx, properties[key], pv, childPath(ctx, path, key))
+          // Build the child path from the pre-escaped key (a bare concat, no
+          // per-call scan), only in error mode where it is actually read.
+          interpret(ctx, properties[key], pv, emitErrors ? `${path}/${escapedKeys[i]}` : path)
           evalScope?.props.add(key)
         }
-      } else if (pv !== undefined) {
-        interpret(ctx, properties[key], pv, childPath(ctx, path, key))
+      } else if (present) {
+        interpret(ctx, properties[key], pv, emitErrors ? `${path}/${escapedKeys[i]}` : path)
         evalScope?.props.add(key)
       }
       if (ctx.failed) return
@@ -360,7 +473,7 @@ const interpretObject = (
 
   // Required keys with no `properties` entry still need a presence check.
   for (const key of meta.requiredNotInProps) {
-    if (obj[key] === undefined) {
+    if (safeKeys ? obj[key] === undefined : !Object.hasOwn(obj, key)) {
       fail(ctx, `must have required property '${key}'`, path)
       if (ctx.failed) return
     }
@@ -369,9 +482,9 @@ const interpretObject = (
   if (dependentRequired) {
     for (const [trigger, deps] of Object.entries(dependentRequired)) {
       if (!Array.isArray(deps)) continue
-      if (obj[trigger] === undefined) continue
+      if (!Object.hasOwn(obj, trigger)) continue
       for (const dep of deps as string[]) {
-        if (obj[dep] === undefined) {
+        if (!Object.hasOwn(obj, dep)) {
           fail(ctx, `must have property '${dep}' when '${trigger}' is present`, path)
           if (ctx.failed) return
         }
@@ -384,8 +497,8 @@ const interpretObject = (
   const dependentSchemas = isPlainObject(s['dependentSchemas']) ? s['dependentSchemas'] : undefined
   if (dependentSchemas) {
     for (const [trigger, subSchema] of Object.entries(dependentSchemas)) {
-      if (obj[trigger] === undefined) continue
-      interpret(ctx, subSchema, obj, path, evalScope)
+      if (!Object.hasOwn(obj, trigger)) continue
+      interpretInPlace(ctx, subSchema, obj, path, evalScope)
       if (ctx.failed) return
     }
   }
@@ -396,16 +509,16 @@ const interpretObject = (
   const dependencies = isPlainObject(s['dependencies']) ? s['dependencies'] : undefined
   if (dependencies) {
     for (const [trigger, dep] of Object.entries(dependencies)) {
-      if (obj[trigger] === undefined) continue
+      if (!Object.hasOwn(obj, trigger)) continue
       if (Array.isArray(dep)) {
         for (const key of dep as string[]) {
-          if (obj[key] === undefined) {
+          if (!Object.hasOwn(obj, key)) {
             fail(ctx, `must have property '${key}' when '${trigger}' is present`, path)
             if (ctx.failed) return
           }
         }
       } else {
-        interpret(ctx, dep, obj, path, evalScope)
+        interpretInPlace(ctx, dep, obj, path, evalScope)
         if (ctx.failed) return
       }
     }
@@ -427,8 +540,8 @@ const interpretObject = (
       // fallback for keys reached by neither.
       const inProps = properties !== undefined && Object.hasOwn(properties, k)
       let matched = false
-      for (const [source, patternSchema] of patternEntries) {
-        if (getRegex(ctx, source).test(k)) {
+      for (const [regex, patternSchema] of patternEntries) {
+        if (regex.test(k)) {
           matched = true
           evalScope?.props.add(k)
           interpret(ctx, patternSchema, obj[k], childPath(ctx, path, k))
@@ -555,7 +668,8 @@ const interpretArray = (
     for (const item of arr) if (matchesSchema(ctx, containsSchema, item)) count++
     // Ajv parity for `unevaluatedItems`: a satisfied `contains` marks the *whole*
     // array as evaluated, not just the matching items — but `minContains: 0` opts
-    // out of contributing any evaluated-item annotation at all.
+    // out of contributing any evaluated-item annotation at all. (This intentionally
+    // tracks Ajv, the package's differential oracle, over the stricter spec letter.)
     if (evalScope && min !== 0 && count >= min && (max === undefined || count <= max)) {
       evalScope.allItems = true
     }
@@ -573,15 +687,29 @@ const interpretArray = (
 const interpretString = (ctx: InterpreterContext, s: Record<string, unknown>, value: unknown, path: string): void => {
   if (typeof value !== 'string') return
 
+  // Length is measured in code points per spec, but `value.length` (UTF-16 code
+  // units) is an upper bound on it — and equal unless the string holds a surrogate
+  // pair. So the cheap unit count is authoritative except in a narrow band near
+  // each bound, and the exact `codePointLength` scan is only paid there. This
+  // keeps the common ASCII / short-string path allocation- and scan-free.
   const minLength = s['minLength']
-  if (typeof minLength === 'number' && value.length < minLength) {
-    fail(ctx, `must have at least ${minLength} characters`, path)
-    if (ctx.failed) return
+  if (typeof minLength === 'number') {
+    const units = value.length
+    // units < min ⇒ code points < min (fail). units >= 2·min ⇒ code points >= min
+    // (each point is ≤ 2 units), so only the band [min, 2·min) needs the exact count.
+    if (units < minLength || (units < 2 * minLength && codePointLength(value) < minLength)) {
+      fail(ctx, `must have at least ${minLength} characters`, path)
+      if (ctx.failed) return
+    }
   }
   const maxLength = s['maxLength']
-  if (typeof maxLength === 'number' && value.length > maxLength) {
-    fail(ctx, `must have at most ${maxLength} characters`, path)
-    if (ctx.failed) return
+  if (typeof maxLength === 'number') {
+    // units <= max ⇒ code points <= max (pass); only an over-long unit count needs
+    // the exact scan, where surrogate pairs may still bring it within bounds.
+    if (value.length > maxLength && codePointLength(value) > maxLength) {
+      fail(ctx, `must have at most ${maxLength} characters`, path)
+      if (ctx.failed) return
+    }
   }
   const pattern = s['pattern']
   if (typeof pattern === 'string' && !getRegex(ctx, pattern).test(value)) {
@@ -639,12 +767,70 @@ const interpretNumber = (ctx: InterpreterContext, s: Record<string, unknown>, va
   const multipleOf = s['multipleOf']
   if (typeof multipleOf === 'number' && multipleOf > 0) {
     // Floating-point modulo is unreliable (0.3 % 0.1 !== 0), so divide and
-    // measure the distance to the nearest integer instead.
+    // measure the distance to the nearest integer instead. The tolerance scales
+    // with the quotient's magnitude: a fixed 1e-8 falsely rejects large values
+    // like `1234567.89` against `multipleOf: 0.01`, whose representation error in
+    // `q` (~q·2⁻⁵²) already exceeds 1e-8.
     const q = value / multipleOf
-    if (Math.abs(q - Math.round(q)) > 1e-8) {
+    const tolerance = 1e-8 * Math.max(1, Math.abs(q))
+    if (Math.abs(q - Math.round(q)) > tolerance) {
       fail(ctx, `must be a multiple of ${multipleOf}`, path)
     }
   }
+}
+
+/**
+ * Recurses into a `$ref` / `$dynamicRef` target while breaking reference cycles.
+ * A ref that resolves to the same (schema node, value) pair already being
+ * validated higher on the stack is an infinite loop no finite data can escape —
+ * e.g. `{ $ref: '#' }`, or mutually recursive `$defs` — so re-entering it would
+ * recurse forever and blow the stack. Because the outer frame is already checking
+ * that exact node against that exact value, stopping here changes no verdict; it
+ * only avoids the non-terminating re-descent. Legitimately deep *data* is
+ * unaffected: each level carries a distinct `value`, so no pair repeats.
+ */
+const interpretRef = (
+  ctx: InterpreterContext,
+  target: unknown,
+  value: unknown,
+  path: string,
+  evalScope: Evaluation | null,
+): void => {
+  const stack = ctx.refStack
+  for (let i = 0; i < stack.length; i += 2) {
+    if (stack[i] === target && stack[i + 1] === value) return
+  }
+  stack.push(target, value)
+  interpretInPlace(ctx, target, value, path, evalScope)
+  stack.length -= 2
+}
+
+/**
+ * Interprets an in-place applicator subschema (`$ref`/`$dynamicRef` target,
+ * `allOf` item, `then`/`else`, `dependentSchemas`) with correct `unevaluated*`
+ * scoping. The child evaluates into a FRESH annotation scope, so its own
+ * `unevaluated*` keyword sees only what its own subtree evaluated — never the
+ * parent's already-evaluated properties (the spec forbids that leak, and Ajv
+ * agrees). The child's annotations are then merged UP into the parent so the
+ * parent's `unevaluated*` still counts them. When no ancestor is tracking
+ * annotations (`parentScope === null`) this is a plain `interpret`, so the common
+ * unevaluated-free schema pays nothing. `anyOf`/`oneOf`/`if` already get this
+ * isolation via {@link matchesSchema}.
+ */
+const interpretInPlace = (
+  ctx: InterpreterContext,
+  schema: unknown,
+  value: unknown,
+  path: string,
+  parentScope: Evaluation | null,
+): void => {
+  if (parentScope === null) {
+    interpret(ctx, schema, value, path, null)
+    return
+  }
+  const childScope = newEvaluation()
+  interpret(ctx, schema, value, path, childScope)
+  mergeEvaluation(parentScope, childScope)
 }
 
 /**
@@ -686,12 +872,12 @@ export const interpret = (
   const nodeUnevaluated = 'unevaluatedProperties' in s || 'unevaluatedItems' in s
   const evalScope: Evaluation | null = evaluation ?? (nodeUnevaluated ? newEvaluation() : null)
 
-  // $ref — validate against the resolved target (handles recursion naturally,
-  // since the data shrinks with each level). Sibling keywords still apply per
-  // 2020-12, so we do not stop here.
+  // $ref — validate against the resolved target. {@link interpretRef} breaks
+  // reference cycles so a self- or mutually-recursive `$ref` cannot recurse
+  // forever. Sibling keywords still apply per 2020-12, so we do not stop here.
   const ref = s['$ref']
   if (typeof ref === 'string') {
-    interpret(ctx, resolveRef(ctx, ref), value, path, evalScope)
+    interpretRef(ctx, resolveRef(ctx, ref), value, path, evalScope)
     if (ctx.failed) return
   }
 
@@ -699,7 +885,7 @@ export const interpret = (
   // `$ref`, sibling keywords still apply, so we do not stop here.
   const dynRef = s['$dynamicRef']
   if (typeof dynRef === 'string') {
-    interpret(ctx, resolveDyn(ctx, dynRef), value, path, evalScope)
+    interpretRef(ctx, resolveDyn(ctx, dynRef), value, path, evalScope)
     if (ctx.failed) return
   }
 
@@ -715,9 +901,14 @@ export const interpret = (
 
   if (Array.isArray(s['enum'])) {
     const values = s['enum'] as unknown[]
+    // Membership is memoized per schema node: an all-primitive enum resolves to a
+    // `Set` for O(1) lookup instead of re-scanning `every(isPrimitiveEnumValue)`
+    // and doing a linear `includes` on every validation (a 100-value enum on a hot
+    // property previously cost ~200 comparisons per value).
+    const primitiveSet = getEnumSet(s, values)
     let found: boolean
-    if (values.every(isPrimitiveEnumValue)) {
-      found = values.includes(value)
+    if (primitiveSet !== null) {
+      found = primitiveSet.has(value)
     } else {
       found = false
       for (const candidate of values) {
@@ -777,7 +968,7 @@ export const interpret = (
 
   if (Array.isArray(s['allOf'])) {
     for (const sub of s['allOf']) {
-      interpret(ctx, sub, value, path, evalScope)
+      interpretInPlace(ctx, sub, value, path, evalScope)
       if (ctx.failed) return
     }
   }
@@ -819,9 +1010,9 @@ export const interpret = (
 
   if ('if' in s) {
     if (matchesSchema(ctx, s['if'], value, evalScope)) {
-      if ('then' in s) interpret(ctx, s['then'], value, path, evalScope)
+      if ('then' in s) interpretInPlace(ctx, s['then'], value, path, evalScope)
     } else if ('else' in s) {
-      interpret(ctx, s['else'], value, path, evalScope)
+      interpretInPlace(ctx, s['else'], value, path, evalScope)
     }
   }
 

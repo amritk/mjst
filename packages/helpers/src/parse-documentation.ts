@@ -48,10 +48,14 @@ export const parseDocumentation = (
     const subHeadingHashes = headingHashes + '#'
 
     // Find the section in the markdown
-    // Match the section heading and capture everything until the next same-level heading or end of file
+    // Match the section heading and capture everything until the next same-level heading or end of file.
+    // `sectionTitle` comes from the URL fragment, so escape any regex metacharacters
+    // before interpolating — otherwise a fragment containing `+`, `(`, etc. throws a
+    // SyntaxError that the outer catch then mislabels as a fetch failure.
     const escapedHashes = headingHashes.replace(/#/g, '\\#')
+    const escapedTitle = sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const sectionRegex = new RegExp(
-      `${escapedHashes}\\s+${sectionTitle}\\s*\\n([\\s\\S]*?)(?=\\n${escapedHashes}\\s|$)`,
+      `${escapedHashes}\\s+${escapedTitle}\\s*\\n([\\s\\S]*?)(?=\\n${escapedHashes}\\s|$)`,
       'i',
     )
     const sectionMatch = markdown.match(sectionRegex)

@@ -11,9 +11,9 @@ describe('generate-strict-assertion x-mjst instanceOf', () => {
     }
     const lines = generateObjectStrictAssertion(schema, 'Event').join('\n')
 
-    expect(lines).toContain('missing required property "createdAt"')
+    expect(lines).toContain("missing required property 'createdAt'")
     expect(lines).toContain('!(input.createdAt instanceof Date)')
-    expect(lines).toContain('field "createdAt" must be Date')
+    expect(lines).toContain("field 'createdAt' must be Date")
   })
 
   it('guards undefined before asserting instanceof for an optional Date property', () => {
@@ -43,9 +43,9 @@ describe('generate-strict-assertion x-mjst primitive', () => {
     }
     const lines = generateObjectStrictAssertion(schema, 'Account').join('\n')
 
-    expect(lines).toContain('missing required property "balance"')
+    expect(lines).toContain("missing required property 'balance'")
     expect(lines).toContain('typeof input.balance !== "bigint"')
-    expect(lines).toContain('field "balance" must be bigint')
+    expect(lines).toContain("field 'balance' must be bigint")
   })
 
   it('guards undefined before asserting typeof for an optional bigint property', () => {

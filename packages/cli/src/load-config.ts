@@ -9,6 +9,8 @@ const SOURCE_FORMATS: readonly string[] = ['json', 'typebox', 'zod', 'valibot', 
 const isSourceFormat = (value: unknown): value is SourceFormat =>
   typeof value === 'string' && SOURCE_FORMATS.includes(value)
 
+const isHelpersMode = (value: unknown): value is 'package' | 'embedded' => value === 'package' || value === 'embedded'
+
 /**
  * Loads a JSON config file and returns the relevant CLI config properties.
  * The config file should have the same keys as the CLI flags (schema, outDir).
@@ -37,5 +39,9 @@ export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>
     ...(typeof obj['strict'] === 'boolean' && { strict: obj['strict'] }),
     ...(typeof obj['stripUnknown'] === 'boolean' && { stripUnknown: obj['stripUnknown'] }),
     ...(typeof obj['readonly'] === 'boolean' && { readonly: obj['readonly'] }),
+    ...(isHelpersMode(obj['helpers']) && { helpers: obj['helpers'] }),
+    ...(typeof obj['typeSuffix'] === 'string' && { typeSuffix: obj['typeSuffix'] }),
+    // `banner` is a boolean toggle or a custom header string, mirroring the CLI flag.
+    ...((typeof obj['banner'] === 'boolean' || typeof obj['banner'] === 'string') && { banner: obj['banner'] }),
   }
 }

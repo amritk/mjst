@@ -260,7 +260,10 @@ const renderRow = (
 ): string => {
   const code = `<code>${escapeHtml(name)}</code>`
   const label = isObjectWithProperties(prop) ? `<a href="#${anchorId(path)}">${code}</a>` : code
-  const nameCell = prop['x-icon'] ? `${prop['x-icon']} ${label}` : label
+  // `x-icon` is schema-controlled text like every other field, so it must be
+  // escaped before interpolation — otherwise an icon value containing HTML
+  // (`<`, `&`) injects raw markup into the table.
+  const nameCell = prop['x-icon'] ? `${escapeHtml(prop['x-icon'])} ${label}` : label
 
   const cells = [`<td>${nameCell}</td>`]
   if (columns.cliFlag)
@@ -330,7 +333,9 @@ const END_MARKER = '<!-- config-table-end -->'
  *
  * If README.md already exists and contains <!-- config-table-start --> and
  * <!-- config-table-end --> markers, only the content between those markers is
- * replaced. Otherwise the whole file is overwritten with the table.
+ * replaced. If it exists but is missing one or both markers we refuse to write
+ * rather than destroy hand-written content. When no README exists yet the table
+ * is written on its own.
  */
 export const generateMarkdown = async (): Promise<void> => {
   const root = process.cwd()
@@ -343,18 +348,30 @@ export const generateMarkdown = async (): Promise<void> => {
   const table = renderConfigTable(schema)
   const readmePath = resolve(root, 'README.md')
 
-  let content: string
+  let existing: string | undefined
   try {
-    const existing = await readFile(readmePath, 'utf-8')
+    existing = await readFile(readmePath, 'utf-8')
+  } catch {
+    // No README yet — safe to create one holding just the table.
+    existing = undefined
+  }
+
+  let content: string
+  if (existing === undefined) {
+    content = table
+  } else {
     const startIdx = existing.indexOf(START_MARKER)
     const endIdx = existing.indexOf(END_MARKER)
-    if (startIdx !== -1 && endIdx !== -1) {
-      content = existing.slice(0, startIdx + START_MARKER.length) + '\n' + table + '\n' + existing.slice(endIdx)
-    } else {
-      content = table
+    // Both markers present: splice the table in and keep everything else. If a
+    // marker is missing, overwriting would silently wipe the existing README, so
+    // fail loudly and let the user add the markers where they want the table.
+    if (startIdx === -1 || endIdx === -1) {
+      throw new Error(
+        `README.md exists but is missing the ${START_MARKER} / ${END_MARKER} markers. ` +
+          'Add both markers where the config table should go, then re-run — refusing to overwrite the existing README.',
+      )
     }
-  } catch {
-    content = table
+    content = existing.slice(0, startIdx + START_MARKER.length) + '\n' + table + '\n' + existing.slice(endIdx)
   }
 
   await writeFile(readmePath, content)

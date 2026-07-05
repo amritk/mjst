@@ -1,5 +1,6 @@
 import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
+import { multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
@@ -61,8 +62,10 @@ export const scalarItemTypeCheck = (itemSchema: JSONSchema, accessor: string): s
     case 'string':
       return `typeof ${accessor} === "string"`
     case 'number':
-    case 'integer':
       return `typeof ${accessor} === "number"`
+    case 'integer':
+      // `integer` items reject non-integral numbers; a bare typeof accepts `1.5`.
+      return `typeof ${accessor} === "number" && Number.isInteger(${accessor})`
     case 'boolean':
       return `typeof ${accessor} === "boolean"`
     case 'null':
@@ -70,6 +73,44 @@ export const scalarItemTypeCheck = (itemSchema: JSONSchema, accessor: string): s
     default:
       return null
   }
+}
+
+/**
+ * A boolean type check for a single JSON Schema primitive type name. Unlike
+ * {@link scalarItemTypeCheck} this also covers `array`/`object` (as inline shape
+ * checks, so no `isObject` import is assumed) and enforces `integer` with
+ * `Number.isInteger` — a bare `typeof === "number"` accepts `1.5`. Used to build
+ * the disjunction for an array-form `type` (e.g. `["string","null"]`).
+ */
+const singleTypeCheck = (accessor: string, type: string): string | null => {
+  switch (type) {
+    case 'string':
+      return `typeof ${accessor} === "string"`
+    case 'number':
+      return `typeof ${accessor} === "number"`
+    case 'integer':
+      return `typeof ${accessor} === "number" && Number.isInteger(${accessor})`
+    case 'boolean':
+      return `typeof ${accessor} === "boolean"`
+    case 'null':
+      return `${accessor} === null`
+    case 'array':
+      return `Array.isArray(${accessor})`
+    case 'object':
+      return `typeof ${accessor} === "object" && ${accessor} !== null && !Array.isArray(${accessor})`
+    default:
+      return null
+  }
+}
+
+/**
+ * Returns the list of type names when `schema.type` is an array (the JSON Schema
+ * multi-type / nullable idiom, e.g. `["string","null"]`), or `null` for a single
+ * or absent type. Multi-type is validated as a *disjunction* of per-type checks.
+ */
+const getTypeArray = (schema: JSONSchema): string[] | null => {
+  if (!isSchemaObject(schema) || !('type' in schema) || !Array.isArray(schema.type)) return null
+  return schema.type as string[]
 }
 
 /**
@@ -226,6 +267,21 @@ export const generateValidationExpression = (
       : `${accessor} === ${constLiteral} ? ${accessor} : (${accessor} !== undefined ? ${constLiteral} : undefined)`
   }
 
+  // Array-form `type` (multi-type / nullable, e.g. `["string","null"]`). `hasType`
+  // is false for an array `type`, so without this the value would fall through
+  // every branch below and emit NO validation — not even a required-presence
+  // check. Emit a disjunction: the value is accepted when it matches ANY listed
+  // type, otherwise it is coerced to the default (required) or dropped (optional).
+  // A missing value fails every disjunct, so `required` presence is still enforced.
+  const typeArray = getTypeArray(schema)
+  if (typeArray && !hasEnum(schema)) {
+    const checks = typeArray.map((t) => singleTypeCheck(accessor, t)).filter((c): c is string => c !== null)
+    if (checks.length > 0) {
+      const combined = checks.map((c) => `(${c})`).join(' || ')
+      return isRequired ? `${combined} ? ${accessor} : ${defaultValue}` : `${combined} ? ${accessor} : undefined`
+    }
+  }
+
   if (!hasType(schema) && !hasEnum(schema)) {
     return `${accessor} ?? ${defaultValue}`
   }
@@ -275,6 +331,11 @@ export const generateValidationExpression = (
       case 'number':
       case 'integer': {
         checks.push(`typeof ${accessor} === "number"`)
+        // `integer` must reject non-integral numbers; a bare `typeof === "number"`
+        // accepts `1.5`. Matches the validators package (which uses Number.isInteger).
+        if (schema.type === 'integer') {
+          checks.push(`Number.isInteger(${accessor})`)
+        }
         if (hasMinimum(schema)) {
           checks.push(`${accessor} >= ${schema.minimum}`)
         }
@@ -288,7 +349,7 @@ export const generateValidationExpression = (
           checks.push(`${accessor} < ${schema.exclusiveMaximum}`)
         }
         if (hasMultipleOf(schema)) {
-          checks.push(`${accessor} % ${schema.multipleOf} === 0`)
+          checks.push(multipleOfPassExpr(accessor, schema.multipleOf))
         }
         break
       }
@@ -316,7 +377,7 @@ export const generateValidationExpression = (
         // Check required properties exist
         if (hasRequired(schema) && schema.required.length > 0) {
           for (const requiredKey of schema.required) {
-            checks.push(`"${requiredKey}" in ${accessor}`)
+            checks.push(`${JSON.stringify(requiredKey)} in ${accessor}`)
           }
         }
         // Check minProperties

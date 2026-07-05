@@ -165,14 +165,25 @@ const foldLines = (text: string): string => {
   return out
 }
 
+/**
+ * Normalizes YAML line breaks (`\r\n` and lone `\r`) to `\n` before folding. YAML
+ * treats all three as a single line break, but `foldLines` splits only on `\n`
+ * and `rstrip` trims only spaces/tabs — so without this a folded CRLF line would
+ * keep a stray `\r` in its content (`"first\r second"` instead of `"first second"`).
+ * The check is a cheap `indexOf` so the common LF-only case allocates nothing.
+ */
+const normalizeBreaks = (s: string): string => (s.indexOf('\r') === -1 ? s : s.replace(/\r\n?/g, '\n'))
+
 /** Resolves a single-quoted scalar: the only escape is `''` → `'`, plus folding. */
 export const resolveSingleQuoted = (inner: string): string => {
-  const folded = inner.indexOf('\n') === -1 ? inner : foldLines(inner)
+  const normalized = normalizeBreaks(inner)
+  const folded = normalized.indexOf('\n') === -1 ? normalized : foldLines(normalized)
   return folded.indexOf("''") === -1 ? folded : folded.replace(/''/g, "'")
 }
 
 /** Resolves a double-quoted scalar: full escape handling, line continuation, and folding. */
-export const resolveDoubleQuoted = (inner: string): string => {
+export const resolveDoubleQuoted = (rawInner: string): string => {
+  const inner = normalizeBreaks(rawInner)
   // Fast path: a plain double-quoted string with nothing to process.
   if (inner.indexOf('\\') === -1 && inner.indexOf('\n') === -1) return inner
 

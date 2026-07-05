@@ -487,7 +487,7 @@ const TIGHTEST = new Map<string, 'max' | 'min'>([
   ['maxProperties', 'min'],
 ])
 
-const mergeAllOf = (schema: JSONSchema): JSONSchema => {
+export const mergeAllOf = (schema: JSONSchema): JSONSchema => {
   const branches = hasAllOf(schema) ? schema.allOf : []
   const merged: Record<string, unknown> = {}
   const properties: Record<string, unknown[]> = {}

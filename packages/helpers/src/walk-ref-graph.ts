@@ -150,8 +150,10 @@ export const walkRefGraph = (
     ...extractDynamicAnchorDefs(upgraded as JSONSchema),
   ]
 
-  while (queue.length > 0) {
-    const ref = queue.shift()
+  // Advance a read cursor instead of `queue.shift()`, whose O(n) element move
+  // makes draining a large ref graph quadratic.
+  for (let head = 0; head < queue.length; head++) {
+    const ref = queue[head]
     if (!ref || processedRefs.has(ref)) continue
     processedRefs.add(ref)
 

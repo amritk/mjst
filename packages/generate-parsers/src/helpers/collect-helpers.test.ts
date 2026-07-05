@@ -72,10 +72,10 @@ describe('collect-helpers', () => {
         if (hasRef(schema)) { /* */ }
       `
       const result = collectHelpers(parser, 'embedded')
-      expect(result.imports).toContain("import { validateArray } from './_helpers/validate-array';")
-      expect(result.imports).toContain("import { validateRecord } from './_helpers/validate-record';")
-      expect(result.imports).toContain("import { isObject } from './_helpers/is-object';")
-      expect(result.imports).toContain("import { hasRef } from './_helpers/has-ref';")
+      expect(result.imports).toContain("import { validateArray } from './_helpers/validate-array.js';")
+      expect(result.imports).toContain("import { validateRecord } from './_helpers/validate-record.js';")
+      expect(result.imports).toContain("import { isObject } from './_helpers/is-object.js';")
+      expect(result.imports).toContain("import { hasRef } from './_helpers/has-ref.js';")
     })
 
     it('marks is-object as used when validateRecord is referenced (transitive dep)', () => {
@@ -88,7 +88,7 @@ describe('collect-helpers', () => {
 
     it('does not duplicate the isObject import line when only validateRecord is referenced', () => {
       const result = collectHelpers('const record = validateRecord(input, parseValue)', 'embedded')
-      expect(result.imports).toEqual(["import { validateRecord } from './_helpers/validate-record';"])
+      expect(result.imports).toEqual(["import { validateRecord } from './_helpers/validate-record.js';"])
     })
 
     it('emits both validateRecord and isObject import lines when both names appear', () => {
@@ -96,15 +96,15 @@ describe('collect-helpers', () => {
         'if (!isObject(input)) return {}; const r = validateRecord(input, parse)',
         'embedded',
       )
-      expect(result.imports).toContain("import { validateRecord } from './_helpers/validate-record';")
-      expect(result.imports).toContain("import { isObject } from './_helpers/is-object';")
+      expect(result.imports).toContain("import { validateRecord } from './_helpers/validate-record.js';")
+      expect(result.imports).toContain("import { isObject } from './_helpers/is-object.js';")
     })
 
     it('applies a custom import prefix so nested parsers can reach a shared _helpers/ at the root', () => {
       const parser = 'if (isObject(input)) { const arr = validateArray(input.items, parseItem) }'
       const result = collectHelpers(parser, 'embedded', '../../')
-      expect(result.imports).toContain("import { isObject } from '../../_helpers/is-object';")
-      expect(result.imports).toContain("import { validateArray } from '../../_helpers/validate-array';")
+      expect(result.imports).toContain("import { isObject } from '../../_helpers/is-object.js';")
+      expect(result.imports).toContain("import { validateArray } from '../../_helpers/validate-array.js';")
     })
 
     it('ignores the import prefix in package mode', () => {

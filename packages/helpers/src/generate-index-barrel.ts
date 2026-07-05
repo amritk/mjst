@@ -50,11 +50,12 @@ export const generateIndexBarrel = (files: IndexBarrelFile[], options: GenerateI
 
     if (typeNames.length === 0 && constNames.length === 0) continue
 
+    // `.js` extension so the barrel resolves under Node ESM, not only Bun.
     if (typesOnly) {
-      indexContent += `export type { ${typeNames.join(', ')} } from './${moduleName}';\n`
+      indexContent += `export type { ${typeNames.join(', ')} } from './${moduleName}.js';\n`
     } else {
       const typeExports = typeNames.map((name) => `type ${name}`)
-      indexContent += `export { ${[...typeExports, ...constNames].join(', ')} } from './${moduleName}';\n`
+      indexContent += `export { ${[...typeExports, ...constNames].join(', ')} } from './${moduleName}.js';\n`
     }
   }
 

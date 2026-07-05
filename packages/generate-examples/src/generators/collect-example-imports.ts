@@ -32,7 +32,8 @@ type CollectExampleImportsOptions = {
 const buildImport = (ref: string, suffix: string): string => {
   const filename = refToFilename(ref)
   const typeName = refToName(ref, suffix)
-  return `import { type ${typeName}, ${typeName}Arbitrary } from './${filename}'`
+  // `.js` extension so the emitted import resolves under Node ESM, not only Bun.
+  return `import { type ${typeName}, ${typeName}Arbitrary } from './${filename}.js'`
 }
 
 /**

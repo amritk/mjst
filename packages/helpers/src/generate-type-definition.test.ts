@@ -712,6 +712,18 @@ describe('generateTypeDefinition', () => {
     )
   })
 
+  it('unions the value types of multiple patternProperties', () => {
+    const schema: JSONSchema.Object = {
+      type: 'object',
+      patternProperties: {
+        '^a': { type: 'string' },
+        '^b': { type: 'number' },
+      },
+    }
+    const result = generateTypeDefinition(schema, 'Multi')
+    expect(result).toContain('Record<string, string | number>')
+  })
+
   it('generates type for object with patternProperties as Record type', () => {
     const paths: JSONSchema.Object = {
       $comment: 'https://spec.openapis.org/oas/v3.1#paths-object',
@@ -744,7 +756,7 @@ describe('generateTypeDefinition', () => {
       },
     }
     const result = generateTypeDefinition(schema, 'InfoExtensions')
-    expect(result).toContain("'x-linkedin'?: string;")
+    expect(result).toContain('"x-linkedin"?: string;')
     expect(result).toContain('name?: string;')
   })
 

@@ -24,10 +24,16 @@ export const FORMAT_CHECKS: Readonly<Record<string, RegExp>> = {
   // gatekeeping and far cheaper than RFC 5322.
   email: EMAIL,
   'idn-email': EMAIL,
-  'date-time': /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/,
-  date: /^\d{4}-\d{2}-\d{2}$/,
-  time: /^\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})?$/,
-  duration: /^P(?!$)(\d+Y)?(\d+M)?(\d+W)?(\d+D)?(T(?=\d)(\d+H)?(\d+M)?(\d+S)?)?$/,
+  // Range-checked so structurally impossible values (`9999-99-99T99:99:99Z`) are
+  // rejected. Seconds allow `60` for the RFC 3339 leap second; day-vs-month
+  // agreement (e.g. Feb 30) remains out of scope for a regex.
+  'date-time':
+    /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])[Tt]([01]\d|2[0-3]):[0-5]\d:([0-5]\d|60)(\.\d+)?([Zz]|[+-]([01]\d|2[0-3]):[0-5]\d)$/,
+  date: /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/,
+  time: /^([01]\d|2[0-3]):[0-5]\d:([0-5]\d|60)(\.\d+)?([Zz]|[+-]([01]\d|2[0-3]):[0-5]\d)?$/,
+  // RFC 3339 duration: the week form (`P4W`) may not be mixed with Y/M/D/T
+  // components; the leading `(?!$)` rejects a bare `P`.
+  duration: /^P(?!$)(?:\d+W|(?:\d+Y)?(?:\d+M)?(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+S)?)?)$/,
   uuid: /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/,
   uri: URI,
   iri: URI,

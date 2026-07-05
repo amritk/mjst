@@ -93,4 +93,26 @@ describe('load-config', () => {
 
     expect(result).toEqual({ schema: 's.json' })
   })
+
+  it('loads helpers, typeSuffix, and banner keys from a config file', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(
+      configPath,
+      JSON.stringify({ schema: 's.json', helpers: 'embedded', typeSuffix: 'Object', banner: 'Generated file' }),
+    )
+
+    const result = await loadConfig(configPath)
+
+    expect(result).toEqual({ schema: 's.json', helpers: 'embedded', typeSuffix: 'Object', banner: 'Generated file' })
+  })
+
+  it('loads a boolean banner and ignores an invalid helpers value', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ banner: true, helpers: 'bogus' }))
+
+    const result = await loadConfig(configPath)
+
+    // `banner: true` is kept; the unknown helpers mode is dropped rather than trusted.
+    expect(result).toEqual({ banner: true })
+  })
 })

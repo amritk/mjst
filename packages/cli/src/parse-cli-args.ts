@@ -44,6 +44,12 @@ const VALUE_KEYS = new Set<keyof MutableConfig>([
   'typeSuffix',
 ])
 
+// Recognized flags that don't map into CliConfig because they're consumed
+// earlier in the pipeline (e.g. `--config` is read by `extractConfigPath` to
+// load the config file before flags are overlaid). They still take a value, so
+// list them here to keep the unknown-flag guard from rejecting them.
+const EXTERNAL_VALUE_KEYS = new Set<string>(['config'])
+
 /** Normalizes a CLI flag name to its camelCase config key so both `--out-dir` and `--outDir` map to `outDir`. */
 const toCamelCase = (key: string): string => key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())
 
@@ -150,13 +156,19 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
         config.banner = value === 'false' ? false : value === 'true' ? true : value
       } else if (BOOLEAN_KEYS.has(key as keyof MutableConfig)) {
         assignBoolean(config, key, value !== 'false')
-      } else {
+      } else if (VALUE_KEYS.has(key as keyof MutableConfig)) {
         assignValue(config, key, value)
+      } else if (!EXTERNAL_VALUE_KEYS.has(key)) {
+        // An unrecognized flag is almost always a typo (e.g. `--strcit`). Silently
+        // dropping it means the user gets non-strict output while believing they
+        // asked for strict — fail loudly instead of guessing intent.
+        throw new Error(`Unknown flag "--${arg.slice(2, equalsIndex)}".`)
       }
       continue
     }
 
     const key = toCamelCase(arg.slice(2))
+    const flagName = arg.slice(2)
 
     // --banner: presence alone enables the default message; an immediately
     // following non-flag argument is treated as a custom message string.
@@ -177,14 +189,27 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
       continue
     }
 
-    // Value flag: consume the next argument when it is not another flag
+    // Value flag: consume the next argument. It must be present and must not be
+    // another flag — `--schema --out-dir dist` means `--schema` lost its value,
+    // which would otherwise silently fall back to a default.
     if (VALUE_KEYS.has(key as keyof MutableConfig)) {
       const value = args[i + 1]
-      if (value && !value.startsWith('--')) {
-        assignValue(config, key, value)
-        i++
+      if (value === undefined || value.startsWith('--')) {
+        throw new Error(`Flag "--${flagName}" expects a value.`)
       }
+      assignValue(config, key, value)
+      i++
+      continue
     }
+
+    // A flag consumed elsewhere (e.g. `--config`) still swallows its value here.
+    if (EXTERNAL_VALUE_KEYS.has(key)) {
+      const value = args[i + 1]
+      if (value !== undefined && !value.startsWith('--')) i++
+      continue
+    }
+
+    throw new Error(`Unknown flag "--${flagName}".`)
   }
 
   return config
