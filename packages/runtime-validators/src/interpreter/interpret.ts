@@ -43,6 +43,13 @@ export type InterpreterContext = {
   errors: ValidationError[] | null
   /** Set in guard mode on the first failure so the walk can unwind. */
   failed: boolean
+  /**
+   * The active `$ref`/`$dynamicRef` recursion path as flattened `schema, value`
+   * pairs. Shared by reference with nested branch contexts so a cycle routed
+   * through `anyOf`/`oneOf` is still seen. Push/pop is balanced around each ref
+   * edge, so it only ever holds current ancestors — see {@link interpretRef}.
+   */
+  readonly refStack: unknown[]
 }
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
@@ -266,6 +273,7 @@ const matchesSchema = (
     caches: ctx.caches,
     errors: null,
     failed: false,
+    refStack: ctx.refStack,
   }
   // When the caller is tracking annotations, evaluate the branch into a private
   // tracker and fold it in only if the branch matched — annotations from a
@@ -653,6 +661,32 @@ const interpretNumber = (ctx: InterpreterContext, s: Record<string, unknown>, va
  * through; the order of checks mirrors the schema's own keyword order so error
  * output is stable.
  */
+/**
+ * Recurses into a `$ref` / `$dynamicRef` target while breaking reference cycles.
+ * A ref that resolves to the same (schema node, value) pair already being
+ * validated higher on the stack is an infinite loop no finite data can escape —
+ * e.g. `{ $ref: '#' }`, or mutually recursive `$defs` — so re-entering it would
+ * recurse forever and blow the stack. Because the outer frame is already checking
+ * that exact node against that exact value, stopping here changes no verdict; it
+ * only avoids the non-terminating re-descent. Legitimately deep *data* is
+ * unaffected: each level carries a distinct `value`, so no pair repeats.
+ */
+const interpretRef = (
+  ctx: InterpreterContext,
+  target: unknown,
+  value: unknown,
+  path: string,
+  evalScope: Evaluation | null,
+): void => {
+  const stack = ctx.refStack
+  for (let i = 0; i < stack.length; i += 2) {
+    if (stack[i] === target && stack[i + 1] === value) return
+  }
+  stack.push(target, value)
+  interpret(ctx, target, value, path, evalScope)
+  stack.length -= 2
+}
+
 export const interpret = (
   ctx: InterpreterContext,
   schema: unknown,
@@ -686,12 +720,12 @@ export const interpret = (
   const nodeUnevaluated = 'unevaluatedProperties' in s || 'unevaluatedItems' in s
   const evalScope: Evaluation | null = evaluation ?? (nodeUnevaluated ? newEvaluation() : null)
 
-  // $ref — validate against the resolved target (handles recursion naturally,
-  // since the data shrinks with each level). Sibling keywords still apply per
-  // 2020-12, so we do not stop here.
+  // $ref — validate against the resolved target. {@link interpretRef} breaks
+  // reference cycles so a self- or mutually-recursive `$ref` cannot recurse
+  // forever. Sibling keywords still apply per 2020-12, so we do not stop here.
   const ref = s['$ref']
   if (typeof ref === 'string') {
-    interpret(ctx, resolveRef(ctx, ref), value, path, evalScope)
+    interpretRef(ctx, resolveRef(ctx, ref), value, path, evalScope)
     if (ctx.failed) return
   }
 
@@ -699,7 +733,7 @@ export const interpret = (
   // `$ref`, sibling keywords still apply, so we do not stop here.
   const dynRef = s['$dynamicRef']
   if (typeof dynRef === 'string') {
-    interpret(ctx, resolveDyn(ctx, dynRef), value, path, evalScope)
+    interpretRef(ctx, resolveDyn(ctx, dynRef), value, path, evalScope)
     if (ctx.failed) return
   }
 

@@ -606,4 +606,32 @@ describe('validate', () => {
       expect(validator([{ a: 1 }, { a: 1 }])).not.toBe(true)
     })
   })
+
+  describe('recursive $ref cycles', () => {
+    it('does not overflow the stack on a self-referential $ref', () => {
+      expect(validate({ $ref: '#' })({})).toBe(true)
+      expect(validate({ $defs: { a: { $ref: '#/$defs/a' } }, $ref: '#/$defs/a' })(42)).toBe(true)
+    })
+
+    it('does not overflow the stack on mutually recursive $refs', () => {
+      const schema = { $defs: { A: { $ref: '#/$defs/B' }, B: { $ref: '#/$defs/A' } }, $ref: '#/$defs/A' }
+      expect(validate(schema)(1)).toBe(true)
+    })
+
+    it('still validates deep-but-finite recursive data correctly', () => {
+      const schema = {
+        $defs: {
+          node: {
+            type: 'object',
+            properties: { children: { type: 'array', items: { $ref: '#/$defs/node' } } },
+            required: ['children'],
+          },
+        },
+        $ref: '#/$defs/node',
+      }
+      const validator = validate(schema)
+      expect(validator({ children: [{ children: [] }, { children: [{ children: [] }] }] })).toBe(true)
+      expect(validator({ children: [{ children: 'nope' }] })).not.toBe(true)
+    })
+  })
 })

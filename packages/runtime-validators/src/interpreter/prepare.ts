@@ -45,6 +45,7 @@ const makeValidator = (
       caches,
       errors: null,
       failed: false,
+      refStack: [],
     }
     interpret(ctx, schema, input, '')
     if (emitErrors) {
