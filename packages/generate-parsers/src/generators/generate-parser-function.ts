@@ -12,6 +12,7 @@ import {
   hasOneOf,
   hasProperties,
   hasRef,
+  hasRequired,
   hasType,
   isObjectSchema,
   isSchemaObject,
@@ -778,6 +779,32 @@ const hasStrictKeys = (schema: JSONSchema): boolean => {
 }
 
 /**
+ * When every declared property is required (and every required key is
+ * declared, with a real schema), the fast-path known-keys test can be an
+ * own-key *count* comparison instead of a per-key `for..in` walk: the typed
+ * property checks already prove all N declared keys are present, so
+ * `Object.keys(input).length === N` proves there are no undeclared extras —
+ * measurably cheaper on the hot path. Returns the declared-key count, or null
+ * when the cheaper form would be unsound (an optional or non-schema property
+ * breaks the presence proof).
+ */
+const exactKeyCountOf = (schema: JSONSchema): number | null => {
+  if (!isSchemaObject(schema) || !hasProperties(schema)) return null
+  const props = schema.properties as Record<string, JSONSchema>
+  const declared = Object.keys(props)
+  if (declared.length === 0) return null
+  const required = new Set<string>(hasRequired(schema) ? (schema.required as string[]) : [])
+  if (required.size !== declared.length) return null
+  for (const key of declared) {
+    // Every declared key must be required, and its check must prove presence —
+    // all schema-object checks fail on undefined, but a true/false schema
+    // literal emits no check at all.
+    if (!required.has(key) || !isSchemaObject(props[key] as JSONSchema)) return null
+  }
+  return declared.length
+}
+
+/**
  * Determines if a property needs a local variable or can be inlined.
  * Schema-object properties are always cached: the slow-path ternary chain
  * reads each value 3-4x (typeof check, valid branch, undefined check, coerce),
@@ -856,6 +883,11 @@ const generateObjectParser = (
     // NonNullable strips the `| undefined` an optional array property carries.
     preamble.push(`type ${subName} = NonNullable<${typeName}[${JSON.stringify(key)}]>[number];`)
     preamble.push(generateShapeValidator(itemSchema, subName, useRefImports, suffix, false, stripUnknown))
+    // Hand-rolled loop instead of Array.prototype.every on the guard path — the
+    // callback protocol costs a few percent on element-heavy hot paths.
+    preamble.push(
+      `const _every${subName} = (arr: readonly unknown[]): boolean => {\n  for (let i = 0; i < arr.length; i++) if (!${shapeValidatorName(subName)}(arr[i])) return false;\n  return true;\n};`,
+    )
     preamble.push(
       generateObjectParser(
         itemSchema,
@@ -882,17 +914,28 @@ const generateObjectParser = (
   // `strictKeys` makes an extra a hard error (the throw block further down).
   const strictKeys = hasStrictKeys(schema)
   const stripKeys = strictKeys || stripUnknown
+  // When every declared property is required, the fast-path no-extras test is
+  // the cheaper own-key count (see exactKeyCountOf) and the `_hasOnlyKnownKeys`
+  // predicate is not emitted at all — the shape validator derives the same
+  // decision from the schema, so the cross-function contract stays in sync.
+  const exactKeyCount = stripKeys ? exactKeyCountOf(schema) : null
   const strictKeyCheck = unknownKeyCheck(
     properties.map(([key]) => key),
     `_knownKeys${typeName}`,
   )
-  if (stripKeys) {
+  if (stripKeys && exactKeyCount === null) {
     for (const declaration of strictKeyCheck.declarations) {
       preamble.push(`${declaration};`)
     }
     preamble.push(
       `const _hasOnlyKnownKeys${typeName} = (input: Record<string, unknown>): boolean => {\n  for (const _k in input) if (${strictKeyCheck.isUnknown('_k')}) return false;\n  return true;\n};`,
     )
+  } else if (strict && strictKeys) {
+    // The unknown-key throw loop below still needs the hoisted Set (when the
+    // key list is long enough to use one).
+    for (const declaration of strictKeyCheck.declarations) {
+      preamble.push(`${declaration};`)
+    }
   }
 
   const fallbackObject = generateFallbackObject(schema, useRefImports, typeName, suffix, subTypeNames)
@@ -949,7 +992,7 @@ const generateObjectParser = (
       : generatePropertyTypeCheck(varName, propSchema, useRefImports, suffix)
     const itemSubName = subItemNames.get(key)
     if (check !== null && itemSubName) {
-      check = `${check} && ${varName}.every(${shapeValidatorName(itemSubName)})`
+      check = `${check} && _every${itemSubName}(${varName})`
     }
     if (check === null) {
       canFastPath = false
@@ -964,9 +1007,12 @@ const generateObjectParser = (
   // fire on inputs that carry no undeclared key. For strict + additionalProperties:
   // false the cold path rejects extras instead; folding the known-keys term into
   // the guard lets the guard run *before* that rejection, so a valid clean input
-  // never pays for the per-property assertions.
+  // never pays for the per-property assertions. With every declared property
+  // required, the own-key count is equivalent and cheaper than the per-key walk.
   if (stripKeys) {
-    fastPathChecks.push(`_hasOnlyKnownKeys${typeName}(input)`)
+    fastPathChecks.push(
+      exactKeyCount !== null ? `Object.keys(input).length === ${exactKeyCount}` : `_hasOnlyKnownKeys${typeName}(input)`,
+    )
   }
 
   // The deep guard proves the whole shape (so `{ ...input }` can be returned),
@@ -1204,6 +1250,18 @@ const generateObjectParser = (
       lines.push(`  if (${deepGuard}) return { ...input } as ${typeName};`)
       return
     }
+    // A *private* (nested-object / array-item) parser whose deep guard proved
+    // the input is exactly the declared shape — typed checks plus the
+    // no-undeclared-keys term, recursively via sub-predicates — can hand the
+    // input back by reference instead of allocating a literal. That is the
+    // same sharing the parent's own fast-path literal performs (`items:
+    // _items`), and it is what keeps clean array elements allocation-free.
+    // Exported root parsers keep returning a fresh object so callers never
+    // alias the value they passed in.
+    if (!exported) {
+      lines.push(`  if (${deepGuard}) return input as ${typeName};`)
+      return
+    }
     const fields: string[] = []
     for (const { key, varName, isRequired, propSchema } of propInfo) {
       if (!isSchemaObject(propSchema)) {
@@ -1246,6 +1304,14 @@ const generateObjectParser = (
     }).slice(1)
 
     if (shallowGuard) {
+      // A private sub-parser first tries the deep guard: input that is already
+      // exactly the declared shape (no extras at any level) is handed back by
+      // reference, so a clean array element or nested object costs no
+      // allocation. The common carries-extras input fails that guard fast (on
+      // the no-extras term) and takes the strip build below.
+      if (!exported && deepGuard) {
+        lines.push(`  if (${deepGuard}) return input as ${typeName};`)
+      }
       // stripUnknown: a well-typed input skips the assertions and goes straight
       // to the strip build (which removes extras and recurses into sub-parsers).
       lines.push(`  if (!(${shallowGuard})) {`)
@@ -1262,7 +1328,10 @@ const generateObjectParser = (
         lines.push(assertionLine)
       }
       if (strictKeys) {
-        lines.push(`  for (const _k in input) {`)
+        // Own keys only (not for..in): matches the fast-path no-extras test and
+        // Ajv, which validate the JSON data model — inherited JS properties are
+        // not part of the value being validated.
+        lines.push(`  for (const _k of Object.keys(input)) {`)
         lines.push(
           `    if (${strictKeyCheck.isUnknown('_k')}) throw new Error(\`[${typeName}] unknown property "\${_k}"\`);`,
         )
@@ -1978,10 +2047,16 @@ export const generateShapeValidator = (
   // When the parser strips extras (additionalProperties: false or stripUnknown),
   // an input carrying an undeclared key is *not* fast-path eligible — the parser
   // would strip it rather than return `{ ...input }` — so the shape only matches
-  // when every key is declared. (The `_hasOnlyKnownKeys` predicate this calls is
-  // emitted by the parser under the same `stripKeys` condition.)
+  // when every key is declared. With every declared property required, the
+  // no-extras test is the cheaper own-key count appended after the typed checks
+  // (which prove all N keys present); otherwise it is the `_hasOnlyKnownKeys`
+  // walk the parser emits under the same `stripKeys` condition.
+  const validatorStripKeys = hasStrictKeys(schema) || stripUnknown
+  const validatorKeyCount = validatorStripKeys ? exactKeyCountOf(schema) : null
   const strictKeysGuard =
-    hasStrictKeys(schema) || stripUnknown ? `\n  if (!_hasOnlyKnownKeys${typeName}(input)) return false;` : ''
+    validatorStripKeys && validatorKeyCount === null
+      ? `\n  if (!_hasOnlyKnownKeys${typeName}(input)) return false;`
+      : ''
   const checks: string[] = []
 
   for (const [key, propSchema] of properties) {
@@ -1996,11 +2071,12 @@ export const generateShapeValidator = (
     let check = subName
       ? `${shapeValidatorName(subName)}(${accessor})`
       : generatePropertyTypeCheck(accessor, propSchema, useRefImports, suffix)
-    // Arrays of inline objects prove every element via the private item
-    // predicate, matching the parser's fast-path guard.
+    // Arrays of inline objects prove every element via the private item loop
+    // helper (emitted alongside the item sub-parser), matching the parser's
+    // fast-path guard.
     const itemSubName = subItemNames.get(key)
     if (check !== null && itemSubName) {
-      check = `${check} && ${accessor}.every(${shapeValidatorName(itemSubName)})`
+      check = `${check} && _every${itemSubName}(${accessor})`
     }
     if (check === null) {
       return stub
@@ -2011,6 +2087,12 @@ export const generateShapeValidator = (
     } else {
       checks.push(`(${accessor} === undefined || ${check})`)
     }
+  }
+
+  // The count form is sound only in conjunction with the typed checks above
+  // (they prove every declared key present), so it joins the chain last.
+  if (validatorKeyCount !== null) {
+    checks.push(`Object.keys(input).length === ${validatorKeyCount}`)
   }
 
   if (checks.length === 0) {

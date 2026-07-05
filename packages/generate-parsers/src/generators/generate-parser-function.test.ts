@@ -405,17 +405,22 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'Strict', { strict: true })
 
     // The deep guard already proved the key set is exactly the declared
-    // properties (the `_hasOnlyKnownKeys` term), so the fast path builds an
-    // explicit literal — faster than a generic spread and a stable shape —
-    // rather than `{ ...input }`.
-    expect(result).toContain('_hasOnlyKnownKeysStrict(input)) return {')
+    // properties — with every property required, via the own-key count rather
+    // than a per-key walk — so the fast path builds an explicit literal
+    // (faster than a generic spread and a stable shape) rather than
+    // `{ ...input }`.
+    expect(result).toContain('Object.keys(input).length === 2) return {')
     expect(result).toContain('    id: _id,')
     expect(result).toContain('    name: _name,')
+    expect(result).not.toContain('_hasOnlyKnownKeysStrict')
     expect(result).not.toContain('return { ...input } as Strict;')
 
     const parse = evalGenerated<(input: unknown) => Record<string, unknown>>(result, 'parseStrict')
     expect(parse({ id: 1, name: 'a' })).toEqual({ id: 1, name: 'a' })
     expect(() => parse({ id: 1, name: 'a', extra: true })).toThrow('unknown property "extra"')
+    // The count matches (2 keys) but a required key is missing — the typed
+    // checks keep the count form sound and route this to the slow-path throw.
+    expect(() => parse({ id: 1, extra: true })).toThrow("missing required property 'name'")
   })
 
   it('handles complex object with multiple property types', () => {
@@ -2092,15 +2097,17 @@ describe('generate-parser-function', () => {
       // Private helpers stay private — only the root parser is exported.
       expect(result).not.toContain('export const parsePlanStepsItem')
       // Every element runs through the item sub-parser on the build path, and
-      // the fast path proves every element via the private predicate.
+      // the fast path proves every element via the private loop helper (a
+      // hand-rolled loop over the item predicate, cheaper than .every()).
       expect(result).toContain('steps: validateArray(_steps, parsePlanStepsItem),')
-      expect(result).toContain('_steps.every(validatePlanStepsItemShape)')
+      expect(result).toContain('const _everyPlanStepsItem = (arr: readonly unknown[]): boolean =>')
+      expect(result).toContain('_everyPlanStepsItem(_steps)')
     })
 
     it('exported shape validator proves every element via the private item predicate', () => {
       const validator = generateShapeValidator(stepsSchema, 'Plan', false)
 
-      expect(validator).toContain('input.steps.every(validatePlanStepsItemShape)')
+      expect(validator).toContain('_everyPlanStepsItem(input.steps)')
     })
 
     it('coerces an invalid nested enum value inside array items in lax mode', () => {
@@ -2128,6 +2135,24 @@ describe('generate-parser-function', () => {
         "[PlanStepsItem] field 'note' expected string, got number",
       )
       expect(() => parse({ steps: [{}] })).toThrow("[PlanStepsItem] missing required property 'kind'")
+    })
+
+    it('hands back clean array elements by reference in strip mode', () => {
+      const parse = evalGenerated<(input: unknown) => { steps: Record<string, unknown>[] }>(
+        generateParserFunction(stepsSchema, 'Plan', { strict: true, stripUnknown: true }),
+        'parsePlan',
+      )
+
+      // A clean element is already exactly the declared shape, so the private
+      // item parser returns it without allocating; a dirty one is rebuilt with
+      // its extras stripped.
+      const clean = { kind: 'assume' }
+      const result = parse({ steps: [clean], junk: 1 })
+      expect(result).toEqual({ steps: [{ kind: 'assume' }] })
+      expect(result.steps[0]).toBe(clean)
+
+      const dirty = parse({ steps: [{ kind: 'derive', extra: 2 }] })
+      expect(dirty.steps[0]).toEqual({ kind: 'derive' })
     })
 
     it('omits an absent optional array and still parses a present one', () => {
