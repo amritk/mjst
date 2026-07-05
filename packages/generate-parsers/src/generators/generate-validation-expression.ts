@@ -76,6 +76,17 @@ export const scalarItemTypeCheck = (itemSchema: JSONSchema, accessor: string): s
 }
 
 /**
+ * True when an array's `items` schema can be coerced element-by-element by the
+ * mapping slow path: single scalar types (via {@link scalarItemTypeCheck}) and
+ * enums (whose validation expression coerces a non-member to the first member).
+ * Anything richer (objects, unions, `$ref`s) needs a real item parser instead.
+ */
+export const isCoercibleItemSchema = (itemSchema: JSONSchema): boolean => {
+  if (scalarItemTypeCheck(itemSchema, '_it') !== null) return true
+  return isSchemaObject(itemSchema) && hasEnum(itemSchema) && itemSchema.enum.length > 0
+}
+
+/**
  * A boolean type check for a single JSON Schema primitive type name. Unlike
  * {@link scalarItemTypeCheck} this also covers `array`/`object` (as inline shape
  * checks, so no `isObject` import is assumed) and enforces `integer` with
@@ -286,16 +297,17 @@ export const generateValidationExpression = (
     return `${accessor} ?? ${defaultValue}`
   }
 
-  // An array of scalar items: coerce each element so e.g. `number[]` actually
-  // contains numbers. The fast path only takes a well-typed array, so a mistyped
-  // element reaches here. ($ref items use the caller's validateArray path;
-  // object/union items still pass through.)
+  // An array of scalar or enum items: coerce each element so e.g. `number[]`
+  // actually contains numbers and an enum member set holds. The fast path only
+  // takes a well-typed array, so a mistyped element reaches here. ($ref and
+  // inline-object items use the caller's validateArray path; union items still
+  // pass through.)
   if (
     hasType(schema) &&
     schema.type === 'array' &&
     hasItems(schema) &&
     !Array.isArray(schema.items) &&
-    scalarItemTypeCheck(schema.items, '_it') !== null
+    isCoercibleItemSchema(schema.items)
   ) {
     const itemSchema = schema.items
     const itemExpr = generateValidationExpression(

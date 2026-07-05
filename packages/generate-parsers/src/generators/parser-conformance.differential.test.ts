@@ -1,3 +1,4 @@
+import { validateArray } from '@amritk/helpers/validate-array'
 import Ajv from 'ajv/dist/2020'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
@@ -8,11 +9,13 @@ import { generateParserFunction } from './generate-parser-function'
  * The coercing parser's contract is that its output is a valid instance of the
  * generated TypeScript type. This fuzzes shape-only schemas (no value
  * constraints) and asserts the coerced output conforms to the schema's *shape*
- * with Ajv: type, `enum`, `const`, object `properties`/`required`, and scalar
- * unions. Array element *values* are out of scope — inline (non-`$ref`) array
- * items are not deeply coerced yet — so the oracle drops `items` (an array only
- * has to be an array). Extra object keys are allowed (the coercer keeps them),
- * so `additionalProperties: false` is never generated.
+ * with Ajv: type, `enum`, `const`, object `properties`/`required`, scalar
+ * unions, and array items with scalar, enum, or inline-object schemas (those
+ * elements are deeply coerced via the element map or a private item
+ * sub-parser). Items that are unions, `const`s, or nested arrays are still
+ * passed through, so the oracle drops those `items` (the array only has to be
+ * an array). Extra object keys are allowed (the coercer keeps them), so
+ * `additionalProperties: false` is never generated.
  */
 
 const evalParser = (code: string, name: string): ((input: unknown) => unknown) => {
@@ -22,7 +25,7 @@ const evalParser = (code: string, name: string): ((input: unknown) => unknown) =
   const moduleExports: Record<string, unknown> = {}
   const isObject = (v: unknown): v is Record<string, unknown> =>
     typeof v === 'object' && v !== null && !Array.isArray(v)
-  new Function('exports', 'isObject', js)(moduleExports, isObject)
+  new Function('exports', 'isObject', 'validateArray', js)(moduleExports, isObject, validateArray)
   return moduleExports[name] as (input: unknown) => unknown
 }
 
@@ -85,11 +88,22 @@ const isScalarItems = (items: unknown): boolean =>
   SCALAR_TYPES.has((items as Record<string, unknown>)['type'] as string) &&
   !('enum' in (items as object))
 
+const isEnumItems = (items: unknown): boolean =>
+  items !== null && typeof items === 'object' && !Array.isArray(items) && 'enum' in (items as object)
+
+const isInlineObjectItems = (items: unknown): boolean =>
+  items !== null &&
+  typeof items === 'object' &&
+  !Array.isArray(items) &&
+  (items as Record<string, unknown>)['type'] === 'object' &&
+  'properties' in (items as object)
+
 /**
  * The shape oracle: treat `integer` as `number` (the generated TS type is
- * `number`). Array `items` are kept when they are a single scalar type — those
- * elements are coerced, so they must conform — and dropped otherwise (object /
- * union / `$ref` element values are not deeply coerced and are out of scope).
+ * `number`). Array `items` are kept when their elements are deeply coerced —
+ * a single scalar type or enum (element map) or an inline object (private
+ * item sub-parser) — and dropped otherwise (union / `const` / nested-array
+ * element values are not coerced and are out of scope).
  */
 const shapeOracle = (schema: unknown): unknown => {
   if (schema === null || typeof schema !== 'object') return schema
@@ -97,7 +111,7 @@ const shapeOracle = (schema: unknown): unknown => {
   const out: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
     if (key === 'prefixItems') continue
-    if (key === 'items' && !isScalarItems(value)) continue
+    if (key === 'items' && !isScalarItems(value) && !isEnumItems(value) && !isInlineObjectItems(value)) continue
     out[key] = key === 'type' && value === 'integer' ? 'number' : shapeOracle(value)
   }
   return out

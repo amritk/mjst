@@ -28,9 +28,11 @@ import {
   generatePropertyTypeCheck,
   generateUnionCheck,
   getUnionBranches,
+  isInlineObjectArrayProperty,
+  isInlineObjectProperty,
   shapeValidatorName,
 } from './generate-type-checks'
-import { generateValidationExpression, scalarItemTypeCheck } from './generate-validation-expression'
+import { generateValidationExpression, isCoercibleItemSchema } from './generate-validation-expression'
 
 /**
  * Options for controlling parser function generation behavior.
@@ -595,6 +597,54 @@ const generateNonObjectParser = (
     }
   }
 
+  // Root-level arrays with rich item schemas delegate every element to a real
+  // parser, so nested enums and $refs inside array items are validated instead
+  // of spread through unchecked. $ref items call the imported parser; inline
+  // object items get a private item sub-parser in the same file. (Scalar and
+  // enum items are covered below: the lax switch coerces them element-wise and
+  // generateScalarStrictAssertion enforces them in strict mode.)
+  if (
+    isSchemaObject(schema) &&
+    hasType(schema) &&
+    schema.type === 'array' &&
+    hasItems(schema) &&
+    !Array.isArray(schema.items)
+  ) {
+    const items = schema.items
+    const notArrayThrow = `if (!Array.isArray(input)) throw new Error(\`[${typeName}] expected array, got \${input === null ? "null" : typeof input}\`);`
+    const delegated = (itemParserName: string): string =>
+      strict
+        ? `export const ${functionName} = (input: unknown): ${typeName} => {\n  ${notArrayThrow}\n  return validateArray(input, ${itemParserName}) as ${typeName};\n};`
+        : `export const ${functionName} = (input: unknown): ${typeName} => validateArray(input, ${itemParserName}) as ${typeName};`
+
+    if (unionCtx?.useRefImports && isSchemaObject(items) && hasRef(items)) {
+      return delegated(generateParserName(refToName((items as { $ref: string }).$ref, unionCtx.suffix)))
+    }
+
+    if (isInlineObjectProperty(items)) {
+      const itemName = `${typeName}Item`
+      const useRefImports = unionCtx?.useRefImports ?? false
+      const suffix = unionCtx?.suffix ?? ''
+      const stripUnknown = unionCtx?.stripUnknown ?? false
+      const preamble = [
+        `type ${itemName} = ${typeName}[number];`,
+        generateShapeValidator(items, itemName, useRefImports, suffix, false, stripUnknown),
+        generateObjectParser(
+          items,
+          itemName,
+          useRefImports,
+          suffix,
+          false,
+          strict,
+          false,
+          stripUnknown,
+          unionCtx?.rootSchema,
+        ),
+      ].join('\n\n')
+      return `${preamble}\n\n${delegated(generateParserName(itemName))}`
+    }
+  }
+
   if (!isSchemaObject(schema) || !hasType(schema)) {
     // Schema without type information cannot be validated beyond a cast
     return `export const ${functionName} = (input: unknown): ${typeName} => input as ${typeName};`
@@ -625,8 +675,8 @@ const generateNonObjectParser = (
     case 'boolean':
       return `export const ${functionName} = (input: unknown): ${typeName} => typeof input === "boolean" ? input as ${typeName} : false as ${typeName};`
     case 'array': {
-      // Coerce each element when the item schema is a single scalar type.
-      if (hasItems(schema) && !Array.isArray(schema.items) && scalarItemTypeCheck(schema.items, '_it') !== null) {
+      // Coerce each element when the item schema is a single scalar type or an enum.
+      if (hasItems(schema) && !Array.isArray(schema.items) && isCoercibleItemSchema(schema.items)) {
         const item = schema.items
         const itemExpr = generateValidationExpression(
           '',
@@ -669,50 +719,49 @@ const toVarName = (key: string): string => {
   return `_${safe}`
 }
 
-/**
- * Matches an inline nested object property — an object schema written directly
- * under `properties` with its own `properties`, rather than referenced via
- * `$ref`. These get a private sub-parser (and shape predicate) in the same
- * generated file so their fields are actually parsed; anything involving
- * composition, conditionals, enums, or record semantics keeps the existing
- * code paths.
- */
-const isInlineObjectProperty = (propSchema: JSONSchema): propSchema is JSONSchema.Object => {
-  if (!isSchemaObject(propSchema)) return false
-  if (hasRef(propSchema) || hasEnum(propSchema) || hasConst(propSchema)) return false
-  if (hasOneOf(propSchema) || hasAnyOf(propSchema) || hasAllOf(propSchema)) return false
-  if ('patternProperties' in propSchema || 'not' in propSchema || 'if' in propSchema) return false
-  // additionalProperties-as-schema records go through the record paths instead
-  if (hasAdditionalProperties(propSchema) && typeof propSchema.additionalProperties !== 'boolean') return false
-  return isObjectSchema(propSchema) && hasProperties(propSchema)
-}
+/** PascalCases a property key for use in a synthesized sub-type name. */
+const pascalCaseKey = (key: string): string =>
+  key
+    .replace(/[^a-zA-Z0-9_$]/g, '_')
+    .split('_')
+    .filter((part) => part.length > 0)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join('')
 
 /**
- * Builds the property-key → synthesized-type-name map for every inline nested
- * object property of a schema, e.g. parent `Order` + key `shipTo` →
- * `OrderShipTo`. Both the parser and the shape validator derive the map
+ * Property-key → synthesized-type-name maps for the private sub-parsers of a
+ * schema: inline nested object properties (parent `Order` + key `shipTo` →
+ * `OrderShipTo`) and array properties with inline object items (key `lines` →
+ * `OrderLinesItem`). Both the parser and the shape validator derive the maps
  * independently, so the naming (including collision suffixes) is a pure
  * function of the schema and parent type name.
  */
-const collectInlineObjectProperties = (schema: JSONSchema, typeName: string): Map<string, string> => {
-  const subTypeNames = new Map<string, string>()
-  if (!hasProperties(schema)) return subTypeNames
+type InlineSubTypeNames = {
+  readonly objects: Map<string, string>
+  readonly arrayItems: Map<string, string>
+}
+
+const collectInlineSubTypes = (schema: JSONSchema, typeName: string): InlineSubTypeNames => {
+  const objects = new Map<string, string>()
+  const arrayItems = new Map<string, string>()
+  if (!hasProperties(schema)) return { objects, arrayItems }
 
   const used = new Set<string>()
-  for (const [key, propSchema] of Object.entries(schema.properties)) {
-    if (!isInlineObjectProperty(propSchema)) continue
-    const pascal = key
-      .replace(/[^a-zA-Z0-9_$]/g, '_')
-      .split('_')
-      .filter((part) => part.length > 0)
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join('')
-    let subName = `${typeName}${pascal || 'Value'}`
+  const claim = (base: string): string => {
+    let subName = base
     while (used.has(subName)) subName = `${subName}_`
     used.add(subName)
-    subTypeNames.set(key, subName)
+    return subName
   }
-  return subTypeNames
+
+  for (const [key, propSchema] of Object.entries(schema.properties)) {
+    if (isInlineObjectProperty(propSchema)) {
+      objects.set(key, claim(`${typeName}${pascalCaseKey(key) || 'Value'}`))
+    } else if (isInlineObjectArrayProperty(propSchema)) {
+      arrayItems.set(key, claim(`${typeName}${pascalCaseKey(key) || 'Value'}Item`))
+    }
+  }
+  return { objects, arrayItems }
 }
 
 /**
@@ -775,8 +824,11 @@ const generateObjectParser = (
   // Inline nested object properties get a private sub-parser (plus shape
   // predicate and type alias) in the same file, so their fields are parsed for
   // real instead of only passing an isObject check. The sub-parser recurses
-  // through this same generator, so nesting works to any depth.
-  const subTypeNames = collectInlineObjectProperties(schema, typeName)
+  // through this same generator, so nesting works to any depth. Array
+  // properties with inline object items get the same treatment for their
+  // element type, so nested enums and $refs *inside array items* are validated
+  // too (each element runs through the item sub-parser via validateArray).
+  const { objects: subTypeNames, arrayItems: subItemNames } = collectInlineSubTypes(schema, typeName)
   const preamble: string[] = []
 
   for (const [key, subName] of subTypeNames) {
@@ -786,6 +838,27 @@ const generateObjectParser = (
     preamble.push(
       generateObjectParser(
         propSchema,
+        subName,
+        useRefImports,
+        suffix,
+        logWarnings,
+        strict,
+        false,
+        stripUnknown,
+        rootSchema,
+      ),
+    )
+  }
+
+  for (const [key, subName] of subItemNames) {
+    const propSchema = (schema as { properties: Record<string, JSONSchema> }).properties[key] as JSONSchema
+    const itemSchema = (propSchema as { items: JSONSchema }).items
+    // NonNullable strips the `| undefined` an optional array property carries.
+    preamble.push(`type ${subName} = NonNullable<${typeName}[${JSON.stringify(key)}]>[number];`)
+    preamble.push(generateShapeValidator(itemSchema, subName, useRefImports, suffix, false, stripUnknown))
+    preamble.push(
+      generateObjectParser(
+        itemSchema,
         subName,
         useRefImports,
         suffix,
@@ -869,10 +942,15 @@ const generateObjectParser = (
 
     const subName = subTypeNames.get(key)
     // Inline nested objects fast-path through their private shape predicate, the
-    // same way $ref properties use the imported one.
-    const check = subName
+    // same way $ref properties use the imported one. Arrays of inline objects
+    // additionally prove every element via the private item predicate.
+    let check = subName
       ? `${shapeValidatorName(subName)}(${varName})`
       : generatePropertyTypeCheck(varName, propSchema, useRefImports, suffix)
+    const itemSubName = subItemNames.get(key)
+    if (check !== null && itemSubName) {
+      check = `${check} && ${varName}.every(${shapeValidatorName(itemSubName)})`
+    }
     if (check === null) {
       canFastPath = false
     } else if (isRequired) {
@@ -1001,6 +1079,23 @@ const generateObjectParser = (
           objectLines.push(`    ${safeKey(key)}: ${subParserName}(${accessor}),`)
         } else {
           objectLines.push(`    ...(${accessor} !== undefined && { ${safeKey(key)}: ${subParserName}(${accessor}) }),`)
+        }
+        continue
+      }
+
+      // Arrays of inline objects run every element through the private item
+      // sub-parser, the same way arrays of $refs delegate via validateArray.
+      // In strict mode the item parser throws on a bad element; in coerce mode
+      // it repairs the element to a valid instance.
+      const itemSubName = subItemNames.get(key)
+      if (itemSubName) {
+        const itemParserName = generateParserName(itemSubName)
+        if (isRequired) {
+          objectLines.push(`    ${safeKey(key)}: validateArray(${accessor}, ${itemParserName}),`)
+        } else {
+          objectLines.push(
+            `    ...(${accessor} !== undefined && { ${safeKey(key)}: validateArray(${accessor}, ${itemParserName}) }),`,
+          )
         }
         continue
       }
@@ -1879,7 +1974,7 @@ export const generateShapeValidator = (
   const properties = Object.entries((schema as { properties: Record<string, JSONSchema> }).properties)
   // Same deterministic naming as the parser's sub-parser generation, so the
   // referenced private shape predicates exist in the same file.
-  const subTypeNames = collectInlineObjectProperties(schema, typeName)
+  const { objects: subTypeNames, arrayItems: subItemNames } = collectInlineSubTypes(schema, typeName)
   // When the parser strips extras (additionalProperties: false or stripUnknown),
   // an input carrying an undeclared key is *not* fast-path eligible — the parser
   // would strip it rather than return `{ ...input }` — so the shape only matches
@@ -1898,9 +1993,15 @@ export const generateShapeValidator = (
     const accessor = safeAccessor('input', key)
     const isRequired = isPropertyRequired(key, schema)
     const subName = subTypeNames.get(key)
-    const check = subName
+    let check = subName
       ? `${shapeValidatorName(subName)}(${accessor})`
       : generatePropertyTypeCheck(accessor, propSchema, useRefImports, suffix)
+    // Arrays of inline objects prove every element via the private item
+    // predicate, matching the parser's fast-path guard.
+    const itemSubName = subItemNames.get(key)
+    if (check !== null && itemSubName) {
+      check = `${check} && ${accessor}.every(${shapeValidatorName(itemSubName)})`
+    }
     if (check === null) {
       return stub
     }

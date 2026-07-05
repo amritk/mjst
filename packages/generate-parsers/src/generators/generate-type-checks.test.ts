@@ -143,6 +143,77 @@ describe('generate-type-checks', () => {
     expect(canEnforceUnion([{ $ref: '#/$defs/x' }], undefined)).toBe(false)
   })
 
+  it('trusts a ref target whose array items are provably checkable inline objects', () => {
+    // `plan.steps` items carry an enum — the emitted validatePlanShape walks
+    // every element through a real private item predicate, so the union may
+    // enforce membership strictly.
+    const rootSchema = {
+      $defs: {
+        plan: {
+          type: 'object',
+          properties: {
+            steps: {
+              type: 'array',
+              items: { type: 'object', properties: { kind: { enum: ['a', 'b'] } }, required: ['kind'] },
+            },
+          },
+          required: ['steps'],
+        },
+      },
+    }
+    const branches: JSONSchema[] = [{ $ref: '#/$defs/plan' }, { type: 'string' }]
+    expect(canEnforceUnion(branches, rootSchema)).toBe(true)
+  })
+
+  it('refuses strict enforcement when an array-item sub-predicate would be a stub', () => {
+    // The item schema carries an `allOf` property, so its private shape
+    // predicate is the `=> false` stub; validatePlanShape then returns false on
+    // *valid* input, and throwing on that would reject valid values.
+    const rootSchema = {
+      $defs: {
+        plan: {
+          type: 'object',
+          properties: {
+            steps: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: { weird: { allOf: [{ type: 'string' }] } },
+                required: ['weird'],
+              },
+            },
+          },
+          required: ['steps'],
+        },
+      },
+    }
+    const branches: JSONSchema[] = [{ $ref: '#/$defs/plan' }, { type: 'string' }]
+    expect(canEnforceUnion(branches, rootSchema)).toBe(false)
+  })
+
+  it('refuses strict enforcement when an inline object property hides a stub sub-predicate', () => {
+    // Deep mirror of generateShapeValidator: a nested inline object's private
+    // predicate is built from its own properties, so an uncheckable one (allOf)
+    // stubs it and poisons every validator built on top of it.
+    const rootSchema = {
+      $defs: {
+        plan: {
+          type: 'object',
+          properties: {
+            meta: {
+              type: 'object',
+              properties: { weird: { allOf: [{ type: 'string' }] } },
+              required: ['weird'],
+            },
+          },
+          required: ['meta'],
+        },
+      },
+    }
+    const branches: JSONSchema[] = [{ $ref: '#/$defs/plan' }, { type: 'string' }]
+    expect(canEnforceUnion(branches, rootSchema)).toBe(false)
+  })
+
   it('approves strict enforcement for inline-only branches without a root schema', () => {
     const branches: JSONSchema[] = [{ type: 'string' }, { type: 'number' }]
     expect(canEnforceUnion(branches, undefined)).toBe(true)

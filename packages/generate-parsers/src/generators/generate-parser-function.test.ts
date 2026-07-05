@@ -7,8 +7,8 @@ import { generateParserFunction, generateShapeValidator } from './generate-parse
 /**
  * Compiles generated parser source to JavaScript and returns the named export,
  * so tests can run real inputs through the emitted code instead of only
- * asserting on its text. The `isObject` runtime helper the generated code
- * imports is injected directly.
+ * asserting on its text. The `isObject` and `validateArray` runtime helpers
+ * the generated code imports are injected directly.
  */
 const evalGenerated = <T>(code: string, exportName: string): T => {
   const js = ts.transpileModule(code, {
@@ -17,7 +17,9 @@ const evalGenerated = <T>(code: string, exportName: string): T => {
   const moduleExports: Record<string, unknown> = {}
   const isObject = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null && !Array.isArray(value)
-  new Function('exports', 'isObject', js)(moduleExports, isObject)
+  const validateArray = (input: unknown, parser: (input: unknown) => unknown): unknown[] =>
+    Array.isArray(input) ? input.map((element) => parser(element)) : []
+  new Function('exports', 'isObject', 'validateArray', js)(moduleExports, isObject, validateArray)
   return moduleExports[exportName] as T
 }
 
@@ -2065,6 +2067,137 @@ describe('generate-parser-function', () => {
     })
   })
 
+  describe('inline object array items', () => {
+    const stepsSchema: JSONSchema = {
+      type: 'object',
+      properties: {
+        steps: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { kind: { type: 'string', enum: ['assume', 'derive'] }, note: { type: 'string' } },
+            required: ['kind'],
+          },
+        },
+      },
+      required: ['steps'],
+    }
+
+    it('emits a private item sub-parser and shape predicate for inline object items', () => {
+      const result = generateParserFunction(stepsSchema, 'Plan')
+
+      expect(result).toContain('type PlanStepsItem = NonNullable<Plan["steps"]>[number];')
+      expect(result).toContain('const parsePlanStepsItem = (input: unknown): PlanStepsItem =>')
+      expect(result).toContain('const validatePlanStepsItemShape = (input: unknown): boolean =>')
+      // Private helpers stay private — only the root parser is exported.
+      expect(result).not.toContain('export const parsePlanStepsItem')
+      // Every element runs through the item sub-parser on the build path, and
+      // the fast path proves every element via the private predicate.
+      expect(result).toContain('steps: validateArray(_steps, parsePlanStepsItem),')
+      expect(result).toContain('_steps.every(validatePlanStepsItemShape)')
+    })
+
+    it('exported shape validator proves every element via the private item predicate', () => {
+      const validator = generateShapeValidator(stepsSchema, 'Plan', false)
+
+      expect(validator).toContain('input.steps.every(validatePlanStepsItemShape)')
+    })
+
+    it('coerces an invalid nested enum value inside array items in lax mode', () => {
+      const parse = evalGenerated<(input: unknown) => unknown>(generateParserFunction(stepsSchema, 'Plan'), 'parsePlan')
+
+      // Valid elements pass through untouched.
+      expect(parse({ steps: [{ kind: 'assume' }, { kind: 'derive', note: 'n' }] })).toEqual({
+        steps: [{ kind: 'assume' }, { kind: 'derive', note: 'n' }],
+      })
+      // A non-member becomes a member of the enum instead of leaking through.
+      expect(parse({ steps: [{ kind: 'nonsense' }] })).toEqual({ steps: [{ kind: 'assume' }] })
+      // A non-object element is repaired to a valid instance.
+      expect(parse({ steps: [42] })).toEqual({ steps: [{ kind: 'assume' }] })
+    })
+
+    it('throws on invalid values inside array items in strict mode', () => {
+      const parse = evalGenerated<(input: unknown) => unknown>(
+        generateParserFunction(stepsSchema, 'Plan', { strict: true }),
+        'parsePlan',
+      )
+
+      expect(parse({ steps: [{ kind: 'derive' }] })).toEqual({ steps: [{ kind: 'derive' }] })
+      expect(() => parse({ steps: [{ kind: 'nonsense' }] })).toThrow("[PlanStepsItem] field 'kind' must be one of")
+      expect(() => parse({ steps: [{ kind: 'assume', note: 5 }] })).toThrow(
+        "[PlanStepsItem] field 'note' expected string, got number",
+      )
+      expect(() => parse({ steps: [{}] })).toThrow("[PlanStepsItem] missing required property 'kind'")
+    })
+
+    it('omits an absent optional array and still parses a present one', () => {
+      const optionalSchema: JSONSchema = {
+        type: 'object',
+        properties: {
+          steps: (stepsSchema as { properties: Record<string, JSONSchema> }).properties['steps'] as JSONSchema,
+        },
+      }
+      const parse = evalGenerated<(input: unknown) => unknown>(
+        generateParserFunction(optionalSchema, 'Plan'),
+        'parsePlan',
+      )
+
+      expect(parse({})).toEqual({})
+      expect(parse({ steps: [{ kind: 'zzz' }] })).toEqual({ steps: [{ kind: 'assume' }] })
+    })
+
+    it('delegates $ref properties nested inside array items to imported parsers', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          steps: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { who: { $ref: '#/$defs/person' } },
+              required: ['who'],
+            },
+          },
+        },
+        required: ['steps'],
+      }
+      const result = generateParserFunction(schema, 'Plan', { useRefImports: true })
+
+      expect(result).toContain('who: parsePerson(_who),')
+      expect(result).toContain('validatePersonShape(input.who)')
+    })
+
+    it('parses a root-level array of inline objects in both modes', () => {
+      const rootArray: JSONSchema = {
+        type: 'array',
+        items: { type: 'object', properties: { kind: { enum: ['a', 'b'] } }, required: ['kind'] },
+      }
+
+      const lax = evalGenerated<(input: unknown) => unknown>(generateParserFunction(rootArray, 'Steps'), 'parseSteps')
+      expect(lax([{ kind: 'b' }, { kind: 'z' }])).toEqual([{ kind: 'b' }, { kind: 'a' }])
+      expect(lax('nope')).toEqual([])
+
+      const strict = evalGenerated<(input: unknown) => unknown>(
+        generateParserFunction(rootArray, 'Steps', { strict: true }),
+        'parseSteps',
+      )
+      expect(strict([{ kind: 'a' }])).toEqual([{ kind: 'a' }])
+      expect(() => strict('nope')).toThrow('[Steps] expected array')
+      expect(() => strict([{ kind: 'z' }])).toThrow("[StepsItem] field 'kind' must be one of")
+    })
+
+    it('delegates root-level $ref array items to the imported parser', () => {
+      const schema: JSONSchema = { type: 'array', items: { $ref: '#/$defs/step' } }
+
+      const lax = generateParserFunction(schema, 'Steps', { useRefImports: true })
+      expect(lax).toBe('export const parseSteps = (input: unknown): Steps => validateArray(input, parseStep) as Steps;')
+
+      const strict = generateParserFunction(schema, 'Steps', { useRefImports: true, strict: true })
+      expect(strict).toContain('[Steps] expected array')
+      expect(strict).toContain('return validateArray(input, parseStep) as Steps;')
+    })
+  })
+
   describe('additionalProperties: false', () => {
     const strictKeysSchema: JSONSchema = {
       type: 'object',
@@ -2265,6 +2398,23 @@ describe('generate-parser-function', () => {
       })
       expect(obj({ tags: ['a', 1, true] })).toEqual({ tags: ['a', '1', 'true'] })
       expect(obj({ tags: ['a', 'b'] })).toEqual({ tags: ['a', 'b'] }) // already valid, untouched
+    })
+
+    it('coerces each element of an enum array to a member', () => {
+      // Root-level array of enum items.
+      expect(parse({ type: 'array', items: { type: 'string', enum: ['a', 'b'] } })(['a', 'z', 'b'])).toEqual([
+        'a',
+        'a',
+        'b',
+      ])
+      // Property-level array of enum items — including a type-less enum.
+      const obj = parse({
+        type: 'object',
+        properties: { kinds: { type: 'array', items: { enum: ['x', 'y'] } } },
+        required: ['kinds'],
+      })
+      expect(obj({ kinds: ['x', 'nope'] })).toEqual({ kinds: ['x', 'x'] })
+      expect(obj({ kinds: ['y', 'x'] })).toEqual({ kinds: ['y', 'x'] }) // already valid, untouched
     })
   })
 })
