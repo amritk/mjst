@@ -54,4 +54,16 @@ describe('ref-to-name', () => {
   it('treats an empty suffix the same as omitting it', () => {
     expect(refToName('#/$defs/contact', '')).toBe('Contact')
   })
+
+  it('produces a valid identifier for dotted keys (Kubernetes-style)', () => {
+    expect(refToName('#/$defs/io.k8s.api.core.v1.Pod')).toBe('IoK8sApiCoreV1Pod')
+  })
+
+  it('prefixes a leading digit so the name is a usable identifier', () => {
+    expect(refToName('#/$defs/123abc')).toBe('_123abc')
+  })
+
+  it('splits on spaces and other non-identifier characters', () => {
+    expect(refToName('#/$defs/foo bar')).toBe('FooBar')
+  })
 })

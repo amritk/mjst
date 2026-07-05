@@ -161,6 +161,39 @@ const recordType = (keyType: string, valueType: string, options: TypeOptions): s
   options.readonly ? `Readonly<Record<${keyType}, ${valueType}>>` : `Record<${keyType}, ${valueType}>`
 
 /**
+ * Builds the `Record<…>` type for a schema's `patternProperties`. Every pattern's
+ * value type is unioned (deduplicated) rather than only the first being used, so
+ * `{ '^a': string-schema, '^b': number-schema }` becomes `Record<string, string |
+ * number>` instead of silently dropping the second pattern. The template-literal
+ * `` `x-${string}` `` key is kept only when the sole pattern is the `^x-` vendor
+ * convention. Returns `undefined` when there are no usable patterns.
+ */
+const patternPropertiesRecordType = (
+  patternProperties: Record<string, JSONSchema | boolean>,
+  options: TypeOptions,
+): string | undefined => {
+  const entries = Object.entries(patternProperties)
+  if (entries.length === 0) return undefined
+
+  const seen = new Set<string>()
+  const valueTypes: string[] = []
+  for (const [, value] of entries) {
+    const valueType = typeof value === 'boolean' ? getBooleanSubSchemaType(value) : getTypeScriptType(value, options)
+    if (!seen.has(valueType)) {
+      seen.add(valueType)
+      valueTypes.push(valueType)
+    }
+  }
+  if (valueTypes.length === 0) return undefined
+
+  const valueType = valueTypes.join(' | ')
+  // The `^x-` vendor-extension convention maps to a template-literal key, but only
+  // when it is the single pattern (a union of key patterns can't be expressed).
+  const keyType = entries.length === 1 && entries[0]?.[0] === '^x-' ? '`x-${string}`' : 'string'
+  return recordType(keyType, valueType, options)
+}
+
+/**
  * Converts a JSON Schema type to its TypeScript equivalent, ignoring any brand.
  * Recursively handles nested objects and arrays.
  */
@@ -224,15 +257,6 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string
     return enumUnion
   }
 
-  // Handle multi-value enum - union of literal types
-  if (schema.enum && schema.enum.length > 1) {
-    let multiEnumUnion = JSON.stringify(schema.enum[0])
-    for (let i = 1; i < schema.enum.length; i++) {
-      multiEnumUnion += ' | ' + JSON.stringify(schema.enum[i])
-    }
-    return multiEnumUnion
-  }
-
   // Handle union types (oneOf, anyOf) - check this before returning unknown
   if (schema.oneOf && Array.isArray(schema.oneOf) && schema.oneOf.length > 0) {
     // schema.oneOf[0] is safe: we guard with .length > 0 above
@@ -281,20 +305,8 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string
     }
 
     if (schema.patternProperties && typeof schema.patternProperties === 'object') {
-      const firstEntry = Object.entries(schema.patternProperties)[0]
-      if (firstEntry) {
-        const [pattern, value] = firstEntry
-        if (value !== undefined) {
-          const valueType =
-            typeof value === 'boolean' ? getBooleanSubSchemaType(value) : getTypeScriptType(value, options)
-          // The ^x- pattern is a common JSON Schema convention for vendor extensions
-          // that maps naturally to the TypeScript template literal `x-${string}`
-          if (pattern === '^x-') {
-            return recordType('`x-${string}`', valueType, options)
-          }
-          return recordType('string', valueType, options)
-        }
-      }
+      const record = patternPropertiesRecordType(schema.patternProperties, options)
+      if (record !== undefined) return record
     }
 
     if (schema.default !== undefined) {
@@ -368,6 +380,9 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string
     case 'object':
       if (schema.properties) {
         const readonlyPrefix = options.readonly ? 'readonly ' : ''
+        // Build the required-key set once instead of an O(required) `includes`
+        // per property (O(properties × required) for a wide object).
+        const requiredSet = new Set<string>(Array.isArray(schema.required) ? schema.required : [])
         const hasDescriptions = Object.values(schema.properties).some(
           (p) => isSchemaObject(p) && (typeof p.description === 'string' || typeof p.$comment === 'string'),
         )
@@ -378,7 +393,7 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string
           for (const key in schema.properties) {
             // schema.properties[key] is safe: key comes from iterating schema.properties
             const propSchema = schema.properties[key]!
-            const isRequired = schema.required?.includes(key) ?? false
+            const isRequired = requiredSet.has(key)
             const optional = isRequired ? '' : '?'
             const propType = getTypeScriptType(propSchema, options)
             const inlineDescription =
@@ -411,7 +426,7 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string
         for (const key in schema.properties) {
           // schema.properties[key] is safe: key comes from iterating schema.properties
           const propSchema = schema.properties[key]!
-          const isRequired = schema.required?.includes(key) ?? false
+          const isRequired = requiredSet.has(key)
           const optional = isRequired ? '' : '?'
           const propType = getTypeScriptType(propSchema, options)
           if (!first) properties += '; '
@@ -427,17 +442,8 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string
       }
       // Handle patternProperties as a Record type
       if (schema.patternProperties && typeof schema.patternProperties === 'object') {
-        const firstEntry = Object.entries(schema.patternProperties)[0]
-        if (firstEntry) {
-          const [pattern, patternVal] = firstEntry
-          if (patternVal) {
-            const valueType = getTypeScriptType(patternVal, options)
-            if (pattern === '^x-') {
-              return recordType('`x-${string}`', valueType, options)
-            }
-            return recordType('string', valueType, options)
-          }
-        }
+        const record = patternPropertiesRecordType(schema.patternProperties, options)
+        if (record !== undefined) return record
       }
       return 'object'
 
@@ -498,28 +504,14 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
 
     // Handle objects with only patternProperties (no fixed properties)
     if (!hasProperties && hasPatternProperties && normalizedSchema.patternProperties) {
-      const firstEntry = Object.entries(normalizedSchema.patternProperties)[0]
-      const firstPattern = firstEntry?.[0]
-      const firstPatternProperty = firstEntry?.[1]
-
-      if (firstPatternProperty === undefined) {
-        return `export type ${typeName} = Record<string, unknown>;`
-      }
-
-      const patternPropType =
-        typeof firstPatternProperty === 'boolean'
-          ? getBooleanSubSchemaType(firstPatternProperty)
-          : getTypeScriptType(firstPatternProperty, options)
-
-      // The ^x- pattern is a common JSON Schema convention for vendor extensions
-      // that maps naturally to the TypeScript template literal `x-${string}`
-      const keyType = firstPattern === '^x-' ? '`x-${string}`' : 'string'
+      const record =
+        patternPropertiesRecordType(normalizedSchema.patternProperties, options) ?? 'Record<string, unknown>'
 
       let result = ''
       if (jsDocTitle && jsDocDescription) {
         result += buildJsDocBlock(jsDocTitle, jsDocDescription)
       }
-      result += `export type ${typeName} = ${recordType(keyType, patternPropType, options)};`
+      result += `export type ${typeName} = ${record};`
 
       return result
     }
@@ -538,12 +530,13 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
     }
 
     const schemaProps = normalizedSchema.properties ?? {}
+    const requiredSet = new Set<string>(Array.isArray(normalizedSchema.required) ? normalizedSchema.required : [])
     let properties = ''
     let isFirstProp = true
     for (const key in schemaProps) {
       // schemaProps[key] is safe: key comes from iterating schemaProps
       const propSchema = schemaProps[key]!
-      const isRequired = normalizedSchema.required?.includes(key) ?? false
+      const isRequired = requiredSet.has(key)
       const optional = isRequired ? '' : '?'
       const propType = getTypeScriptType(propSchema, options)
       const quotedKey = readonlyPrefix + safeKey(key)

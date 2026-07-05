@@ -14,6 +14,17 @@ describe('resolve-refs', () => {
     expect(resolved).toMatchObject({ properties: { contact: { type: 'string' } } })
   })
 
+  it('reports an unresolvable internal pointer instead of inlining undefined', () => {
+    const { resolved, errors } = resolveRefs({
+      properties: { a: { $ref: '#/$defs/missing' } },
+    })
+
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.message).toMatch(/Cannot resolve internal \$ref/)
+    // The original $ref node is preserved rather than replaced with `undefined`.
+    expect((resolved as { properties: { a: unknown } }).properties.a).toEqual({ $ref: '#/$defs/missing' })
+  })
+
   it('breaks a self-referential cycle with an empty object', () => {
     const { resolved } = resolveRefs({
       $defs: { node: { type: 'object', properties: { next: { $ref: '#/$defs/node' } } } },
