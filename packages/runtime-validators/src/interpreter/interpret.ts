@@ -351,15 +351,19 @@ const interpretObject = (
 
   if (properties && knownKeys) {
     for (const key of knownKeys) {
-      const pv = obj[key]
+      // Presence is own-property membership, not `value !== undefined`. Using
+      // the latter false-accepts an inherited `constructor`/`toString` for a
+      // `required` key and false-rejects a real `__proto__` property (whose
+      // bracket read on a prototype-less lookup returns `Object.prototype`).
+      const present = Object.hasOwn(obj, key)
       if (requiredSet.has(key)) {
-        if (pv === undefined) fail(ctx, `must have required property '${key}'`, path)
+        if (!present) fail(ctx, `must have required property '${key}'`, path)
         else {
-          interpret(ctx, properties[key], pv, childPath(ctx, path, key))
+          interpret(ctx, properties[key], obj[key], childPath(ctx, path, key))
           evalScope?.props.add(key)
         }
-      } else if (pv !== undefined) {
-        interpret(ctx, properties[key], pv, childPath(ctx, path, key))
+      } else if (present) {
+        interpret(ctx, properties[key], obj[key], childPath(ctx, path, key))
         evalScope?.props.add(key)
       }
       if (ctx.failed) return
@@ -368,7 +372,7 @@ const interpretObject = (
 
   // Required keys with no `properties` entry still need a presence check.
   for (const key of meta.requiredNotInProps) {
-    if (obj[key] === undefined) {
+    if (!Object.hasOwn(obj, key)) {
       fail(ctx, `must have required property '${key}'`, path)
       if (ctx.failed) return
     }
@@ -377,9 +381,9 @@ const interpretObject = (
   if (dependentRequired) {
     for (const [trigger, deps] of Object.entries(dependentRequired)) {
       if (!Array.isArray(deps)) continue
-      if (obj[trigger] === undefined) continue
+      if (!Object.hasOwn(obj, trigger)) continue
       for (const dep of deps as string[]) {
-        if (obj[dep] === undefined) {
+        if (!Object.hasOwn(obj, dep)) {
           fail(ctx, `must have property '${dep}' when '${trigger}' is present`, path)
           if (ctx.failed) return
         }
@@ -392,7 +396,7 @@ const interpretObject = (
   const dependentSchemas = isPlainObject(s['dependentSchemas']) ? s['dependentSchemas'] : undefined
   if (dependentSchemas) {
     for (const [trigger, subSchema] of Object.entries(dependentSchemas)) {
-      if (obj[trigger] === undefined) continue
+      if (!Object.hasOwn(obj, trigger)) continue
       interpret(ctx, subSchema, obj, path, evalScope)
       if (ctx.failed) return
     }
@@ -404,10 +408,10 @@ const interpretObject = (
   const dependencies = isPlainObject(s['dependencies']) ? s['dependencies'] : undefined
   if (dependencies) {
     for (const [trigger, dep] of Object.entries(dependencies)) {
-      if (obj[trigger] === undefined) continue
+      if (!Object.hasOwn(obj, trigger)) continue
       if (Array.isArray(dep)) {
         for (const key of dep as string[]) {
-          if (obj[key] === undefined) {
+          if (!Object.hasOwn(obj, key)) {
             fail(ctx, `must have property '${key}' when '${trigger}' is present`, path)
             if (ctx.failed) return
           }

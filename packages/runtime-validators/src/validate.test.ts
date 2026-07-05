@@ -607,6 +607,23 @@ describe('validate', () => {
     })
   })
 
+  describe('property presence uses own-property membership', () => {
+    it('does not treat an inherited constructor as a present required property', () => {
+      const validator = validate({ type: 'object', required: ['constructor'] })
+      expect(validator({})).not.toBe(true)
+      expect(validator({ constructor: 1 })).toBe(true)
+    })
+
+    it('validates a real __proto__ property against its subschema', () => {
+      const validator = validate({ type: 'object', properties: { ['__proto__']: { type: 'string' } } })
+      // Empty object: no own __proto__, so the string subschema does not apply.
+      expect(validator({})).toBe(true)
+      // Own __proto__ data property must be checked like any other property.
+      expect(validator(JSON.parse('{"__proto__": "hi"}'))).toBe(true)
+      expect(validator(JSON.parse('{"__proto__": 5}'))).not.toBe(true)
+    })
+  })
+
   describe('recursive $ref cycles', () => {
     it('does not overflow the stack on a self-referential $ref', () => {
       expect(validate({ $ref: '#' })({})).toBe(true)

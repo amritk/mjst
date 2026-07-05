@@ -1133,6 +1133,20 @@ const applyScalarTag = (node: YamlScalar): unknown => {
 type ExpansionBudget = { left: number }
 
 /**
+ * Assigns `value` under `key` on a projected mapping. A plain `obj[key] = value`
+ * would invoke the prototype setter for a `__proto__` key and corrupt the
+ * object's prototype (prototype pollution from an untrusted document); defining
+ * it as an own data property keeps it a normal key, as eemeli's `yaml` does.
+ */
+const setMapKey = (obj: Record<string, unknown>, key: string, value: unknown): void => {
+  if (key === '__proto__') {
+    Object.defineProperty(obj, key, { value, writable: true, enumerable: true, configurable: true })
+  } else {
+    obj[key] = value
+  }
+}
+
+/**
  * Nodes an alias-free document may materialize per source byte, plus a floor for
  * small documents. Only exponential alias expansion exceeds this — an ordinary
  * document has at most ~one node per few source bytes.
@@ -1182,7 +1196,7 @@ const toJsValue = (
       applyMerge(obj, toJsValue(pair.value, anchors, merge, budget))
       continue
     }
-    obj[keyText(key)] = pair.value ? toJsValue(pair.value, anchors, merge, budget) : null
+    setMapKey(obj, keyText(key), pair.value ? toJsValue(pair.value, anchors, merge, budget) : null)
   }
   // `!!set` is a mapping whose keys are the members; project to a `Set`.
   if (node.tag === 'set') {
@@ -1215,7 +1229,7 @@ const applyMerge = (target: Record<string, unknown>, value: unknown): void => {
   }
   if (value && typeof value === 'object') {
     for (const [k, v] of Object.entries(value)) {
-      if (!(k in target)) target[k] = v
+      if (!(k in target)) setMapKey(target, k, v)
     }
   }
 }

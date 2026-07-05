@@ -220,4 +220,14 @@ describe('resource-exhaustion guards', () => {
     const { errors } = parseDocument('['.repeat(200) + ']'.repeat(200))
     expect(errors.some((e) => e.code === 'DEPTH_LIMIT')).toBe(false)
   })
+
+  it('does not let a __proto__ mapping key pollute the projected object', () => {
+    const out = parseDocument('__proto__: { polluted: true }\nsafe: 1\n').toJS() as {
+      safe: number
+    }
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype)
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined()
+    expect(out.safe).toBe(1)
+    expect(Object.getOwnPropertyDescriptor(out, '__proto__')?.value).toEqual({ polluted: true })
+  })
 })

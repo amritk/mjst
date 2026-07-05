@@ -53,4 +53,18 @@ describe('validate-record', () => {
       e: '',
     })
   })
+
+  it('does not let a __proto__ key pollute the result prototype', () => {
+    // A JSON payload with a __proto__ key would otherwise trigger the prototype
+    // setter and corrupt the returned object (and, in nested use, more).
+    const input = JSON.parse('{"__proto__": {"polluted": true}, "safe": 1}')
+    const result = validateRecord(input, (value) => value)
+
+    expect(Object.getPrototypeOf(result)).toBe(Object.prototype)
+    expect((result as { polluted?: unknown }).polluted).toBeUndefined()
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined()
+    // The key survives as ordinary own data, not as a prototype mutation.
+    expect(Object.getOwnPropertyDescriptor(result, '__proto__')?.value).toEqual({ polluted: true })
+    expect((result as { safe?: unknown }).safe).toBe(1)
+  })
 })

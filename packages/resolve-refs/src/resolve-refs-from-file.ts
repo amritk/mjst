@@ -3,6 +3,7 @@ import { dirname, resolve as resolvePath } from 'node:path'
 
 import { getByPointer, pointerToPath } from './get-by-pointer'
 import { isPrivateHost } from './is-private-host'
+import { assignKey } from './safe-assign'
 import type { OriginMap, ResolveError, ResolveOptions, ResolveResult } from './types'
 
 // A ref currently mid-resolution is marked with this sentinel; revisiting it
@@ -312,7 +313,8 @@ const resolveAt = (
     const siblingKeys = Object.keys(obj).filter((key) => key !== '$ref')
     if (siblingKeys.length === 0) return resolved
     const siblings: Record<string, unknown> = {}
-    for (const key of siblingKeys) siblings[key] = resolveAt(obj[key], baseLocation, docCache, refCache, origins)
+    for (const key of siblingKeys)
+      assignKey(siblings, key, resolveAt(obj[key], baseLocation, docCache, refCache, origins))
     const existingAllOf = Array.isArray(siblings['allOf']) ? siblings['allOf'] : []
     const merged = { ...siblings, allOf: [...existingAllOf, resolved] }
     // Stamp the wrapper too, so origin lookups resolve for a `$ref`-with-siblings node.
@@ -322,7 +324,7 @@ const resolveAt = (
   }
   const result: Record<string, unknown> = {}
   for (const key of Object.keys(obj)) {
-    result[key] = resolveAt(obj[key], baseLocation, docCache, refCache, origins)
+    assignKey(result, key, resolveAt(obj[key], baseLocation, docCache, refCache, origins))
   }
   return result
 }

@@ -137,7 +137,9 @@ const generatePropertyAssertion = (
   const lines: string[] = []
 
   if (isRequired) {
-    lines.push(`  if (!(${JSON.stringify(key)} in input)) ${throwError(`[${typeName}] missing required property '${key}'`)};`)
+    lines.push(
+      `  if (!(${JSON.stringify(key)} in input)) ${throwError(`[${typeName}] missing required property '${key}'`)};`,
+    )
   }
 
   if (!isSchemaObject(propSchema)) return lines

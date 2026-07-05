@@ -1,4 +1,5 @@
 import { getByPointer, pointerToPath } from './get-by-pointer'
+import { assignKey } from './safe-assign'
 import type { OriginMap, ResolveResult } from './types'
 
 // A ref currently mid-resolution is marked with this sentinel; revisiting it
@@ -62,7 +63,7 @@ const resolveInternal = (
     const siblingKeys = Object.keys(obj).filter((key) => key !== '$ref')
     if (siblingKeys.length === 0) return target
     const siblings: Record<string, unknown> = {}
-    for (const key of siblingKeys) siblings[key] = resolveInternal(obj[key], root, cache, origins)
+    for (const key of siblingKeys) assignKey(siblings, key, resolveInternal(obj[key], root, cache, origins))
     const existingAllOf = Array.isArray(siblings['allOf']) ? siblings['allOf'] : []
     const merged = { ...siblings, allOf: [...existingAllOf, target] }
     // Stamp the wrapper too, so a consumer mapping the resolved node back to its
@@ -73,7 +74,7 @@ const resolveInternal = (
 
   const result: Record<string, unknown> = {}
   for (const key of Object.keys(obj)) {
-    result[key] = resolveInternal(obj[key], root, cache, origins)
+    assignKey(result, key, resolveInternal(obj[key], root, cache, origins))
   }
   return result
 }
