@@ -9,7 +9,7 @@
 ![JSON Schema](https://img.shields.io/badge/JSON%20Schema-2020--12-f97316?style=flat-square)
 ![node](https://img.shields.io/badge/node-%E2%89%A520-339933?style=flat-square&logo=node.js&logoColor=white)
 ![bun](https://img.shields.io/badge/bun-dev-FBF0DF?style=flat-square&logo=bun&logoColor=000000)
-![vibe coded](https://img.shields.io/badge/vibe%20coded-a855f7?style=flat-square)
+![vibe coded](https://img.shields.io/badge/vibe-coded-a855f7?style=flat-square)
 
 </div>
 
