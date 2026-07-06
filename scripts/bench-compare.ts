@@ -3,6 +3,8 @@ import { existsSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
+import { fmtOps, NOISY_SPREAD } from '../packages/generate-parsers/bench/measure.ts'
+
 /**
  * Benchmarks this checkout's mjst against another checkout (normally `main`)
  * and emits a markdown delta table, for the PR-description bench report in CI
@@ -30,7 +32,8 @@ import { pathToFileURL } from 'node:url'
 
 type Stats = { median: number; spread: number }
 
-type WorkerOutput = { parityOk?: boolean } & Record<string, Stats | boolean | string | undefined>
+/** The two metrics the bench workers emit; a field rename over there should fail loudly here. */
+type WorkerOutput = { parityOk?: boolean; valid?: Stats; invalid?: Stats }
 
 /**
  * A worker run is a result, `null` for a case the tree genuinely does not have
@@ -113,8 +116,8 @@ const runWorker = (tree: string, pkg: string, caseName: string): WorkerRun => {
 const betterOps = (a: WorkerRun, b: WorkerRun): WorkerRun => {
   if (a === null || a === 'failed') return b === null || b === 'failed' ? a : b
   if (b === null || b === 'failed') return a
-  const aMedian = (a['valid'] as Stats | undefined)?.median ?? 0
-  const bMedian = (b['valid'] as Stats | undefined)?.median ?? 0
+  const aMedian = a.valid?.median ?? 0
+  const bMedian = b.valid?.median ?? 0
   return aMedian >= bMedian ? a : b
 }
 
@@ -125,14 +128,21 @@ const betterMs = (a: Stats | 'failed', b: Stats | 'failed'): Stats | 'failed' =>
   return a.median <= b.median ? a : b
 }
 
-/** One order-balanced ABBA measurement of a case on both trees. */
-const runPair = (pkg: string, caseName: string): { base: WorkerRun; head: WorkerRun } => {
-  const base1 = runWorker(base, pkg, caseName)
-  const head1 = runWorker(head, pkg, caseName)
-  const head2 = runWorker(head, pkg, caseName)
-  const base2 = runWorker(base, pkg, caseName)
-  return { base: betterOps(base1, base2), head: betterOps(head1, head2) }
+/**
+ * One order-balanced ABBA measurement on both trees: base, head, head, base,
+ * keeping each side's better run — the single measurement protocol for every
+ * suite, so the whole table sits under the same bias regime.
+ */
+const abbaPair = <T>(runOn: (tree: string) => T, better: (a: T, b: T) => T): { base: T; head: T } => {
+  const base1 = runOn(base)
+  const head1 = runOn(head)
+  const head2 = runOn(head)
+  const base2 = runOn(base)
+  return { base: better(base1, base2), head: better(head1, head2) }
 }
+
+const runPair = (pkg: string, caseName: string): { base: WorkerRun; head: WorkerRun } =>
+  abbaPair((tree) => runWorker(tree, pkg, caseName), betterOps)
 
 /**
  * Times a tree's `buildSchema` (parser codegen) for one case in a fresh
@@ -158,12 +168,6 @@ const codegenStats = (tree: string, schema: unknown, mode: string): Stats | 'fai
   }
 }
 
-const fmtOps = (n: number): string => {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return n.toFixed(1)
-}
-
 const cell = (stats: Stats | null | 'failed', higherIsBetter: boolean): string => {
   if (stats === 'failed') return '⚠ worker failed'
   if (!stats) return 'n/a (new case)'
@@ -173,8 +177,6 @@ const cell = (stats: Stats | null | 'failed', higherIsBetter: boolean): string =
 
 /** Within this fraction the delta is called noise (⚪); beyond it, 🟢/🔴. */
 const SIGNIFICANT = 0.05
-/** A CV above this marks the measurement itself as unstable (~). */
-const NOISY_SPREAD = 0.1
 
 const delta = (row: Row): string => {
   const parity = row.parityOk === false ? ' ⚠parity' : ''
@@ -188,9 +190,9 @@ const delta = (row: Row): string => {
 }
 
 /** Extracts one metric from a worker run, propagating the failure sentinel. */
-const statOf = (workerRun: WorkerRun, metric: string): Stats | null | 'failed' => {
+const statOf = (workerRun: WorkerRun, metric: 'valid' | 'invalid'): Stats | null | 'failed' => {
   if (workerRun === 'failed') return 'failed'
-  return (workerRun?.[metric] as Stats | undefined) ?? null
+  return workerRun?.[metric] ?? null
 }
 
 /** Parity is only meaningful for real runs; null/'failed' don't vote. */
@@ -250,17 +252,14 @@ const run = async (): Promise<void> => {
 
   console.error('parser codegen (ms per buildSchema)…')
   for (const parseCase of parsersSchemas.PARSE_CASES) {
-    const base1 = codegenStats(base, parseCase.schema, parseCase.mode)
-    const head1 = codegenStats(head, parseCase.schema, parseCase.mode)
-    const head2 = codegenStats(head, parseCase.schema, parseCase.mode)
-    const base2 = codegenStats(base, parseCase.schema, parseCase.mode)
+    const pair = abbaPair((tree) => codegenStats(tree, parseCase.schema, parseCase.mode), betterMs)
     progress({
       suite: 'codegen',
       caseName: parseCase.name,
       metric: 'ms/parser',
       higherIsBetter: false,
-      base: betterMs(base1, base2),
-      head: betterMs(head1, head2),
+      base: pair.base,
+      head: pair.head,
     })
   }
 

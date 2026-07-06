@@ -5,6 +5,7 @@ import Ajv from 'ajv'
 import addFormats from 'ajv-formats'
 
 import { buildValidatorSchema } from '../src/index.ts'
+import { opsCell } from './measure.ts'
 import { BENCH_CASES } from './schemas.ts'
 import { LIBRARY_IDS, LIBRARY_LABELS, LIBRARY_PRELOADS, type LibraryId } from './validators.ts'
 import type { WorkerResult } from './worker.ts'
@@ -32,23 +33,8 @@ import type { WorkerResult } from './worker.ts'
 
 const WORKER = fileURLToPath(new URL('./worker.ts', import.meta.url))
 
-const fmt = (n: number): string => {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return n.toFixed(1)
-}
-
 const pad = (s: string, width: number): string => s.padEnd(width)
 const padStart = (s: string, width: number): string => s.padStart(width)
-
-/** A coefficient of variation above this is flagged as a noisy (less trustworthy) sample. */
-const NOISY_SPREAD = 0.1
-
-/** Throughput + stability for one cell of the table. */
-const cell = (median: number, spread: number): string => {
-  const flag = spread > NOISY_SPREAD ? '~' : ' '
-  return `${flag}${fmt(median)} (±${(spread * 100).toFixed(0)}%)`
-}
 
 const BENCH_DIR = fileURLToPath(new URL('.', import.meta.url))
 
@@ -104,8 +90,8 @@ const run = async (): Promise<void> => {
     for (const lib of LIBRARY_IDS) {
       const r = results.get(lib)
       if (!r) continue
-      const valid = padStart(cell(r.valid.median, r.valid.spread), 20)
-      const invalid = padStart(cell(r.invalid.median, r.invalid.spread), 20)
+      const valid = padStart(opsCell(r.valid.median, r.valid.spread), 20)
+      const invalid = padStart(opsCell(r.invalid.median, r.invalid.spread), 20)
       console.log(`  ${pad(LIBRARY_LABELS[lib], 20)}${valid}${invalid}`)
     }
 

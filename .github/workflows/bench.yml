@@ -9,6 +9,14 @@ name: Bench
 
 on:
   pull_request:
+    # Docs-only and changeset-only PRs cannot change performance; skip the
+    # ~8 minutes of double-checkout benching (and the meaningless all-noise
+    # table) for them.
+    paths-ignore:
+      - '**/*.md'
+      - '.changeset/**'
+      - 'docs/**'
+      - 'LICENSE'
 
 concurrency:
   group: bench-${{ github.event.pull_request.number }}

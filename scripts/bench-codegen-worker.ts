@@ -1,6 +1,8 @@
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
+import { statsOf } from '../packages/generate-parsers/bench/measure.ts'
+
 /**
  * One isolated codegen measurement for `bench-compare.ts`: times `buildSchema`
  * from the given checkout and prints median ms per parser as JSON. Spawned as
@@ -44,14 +46,9 @@ for (let t = 0; t < 9; t++) {
   samples.push((performance.now() - start) / ops)
 }
 
-samples.sort((a, b) => a - b)
-const median = samples[Math.floor(samples.length / 2)] ?? 0
-// The headline is the median, which is robust to GC-stalled windows; the
-// spread is computed over the trimmed samples (fastest and slowest window
-// dropped) so a single stall doesn't mark an otherwise stable run as noisy.
-const trimmed = samples.slice(1, -1)
-const mean = trimmed.reduce((sum, s) => sum + s, 0) / trimmed.length
-const variance = trimmed.reduce((sum, s) => sum + (s - mean) ** 2, 0) / trimmed.length
-const spread = mean > 0 ? Math.sqrt(variance) / mean : 0
+// The shared statistics core: median over all windows (robust to GC stalls),
+// spread over the trimmed samples so a single stall doesn't mark an otherwise
+// stable run as noisy.
+const { median, spread } = statsOf(samples, { trimOutliers: true })
 
 process.stdout.write(JSON.stringify({ median, spread }))

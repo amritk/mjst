@@ -1,28 +1,8 @@
-import { validateArray } from '@amritk/helpers/validate-array'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
+import { evalGenerated } from './differential.test-utils'
 import { generateParserFunction, generateShapeValidator } from './generate-parser-function'
-
-/**
- * Compiles generated parser source to JavaScript and returns the named export,
- * so tests can run real inputs through the emitted code instead of only
- * asserting on its text. The `isObject` and `validateArray` runtime helpers
- * the generated code imports are injected directly — validateArray is the
- * *real* helper, so tests exercise its identity-return fast path exactly as
- * shipped code does.
- */
-const evalGenerated = <T>(code: string, exportName: string): T => {
-  const js = ts.transpileModule(code, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText
-  const moduleExports: Record<string, unknown> = {}
-  const isObject = (value: unknown): value is Record<string, unknown> =>
-    typeof value === 'object' && value !== null && !Array.isArray(value)
-  new Function('exports', 'isObject', 'validateArray', js)(moduleExports, isObject, validateArray)
-  return moduleExports[exportName] as T
-}
 
 describe('generate-parser-function', () => {
   it('generates parser function for simple object schema', () => {

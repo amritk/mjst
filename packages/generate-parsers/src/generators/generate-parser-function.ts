@@ -1,4 +1,5 @@
 import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
+import { quoteJsString } from '@amritk/helpers/quote-js-string'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { safeAccessor, safeKey } from '@amritk/helpers/safe-accessor'
@@ -514,7 +515,7 @@ const generateRefUnionDispatch = (
   // first branch's parser, preserving the coercing parser's lenient contract while
   // still running real validation/coercion instead of a blind cast.
   const fallback = strict
-    ? `(() => { throw new Error(${JSON.stringify(`[${typeName}] value does not match any union branch`)}); })()`
+    ? `(() => { throw new Error(${quoteJsString(`[${typeName}] value does not match any union branch`)}); })()`
     : `${cases[0]?.parser}(input)`
   let expr = fallback
   for (let i = cases.length - 1; i >= 0; i--) {
@@ -565,7 +566,7 @@ const generateNonObjectParser = (
     if (branches && !unionCtx.stripUnknown && canEnforceUnion(branches, unionCtx.rootSchema)) {
       const check = generateUnionCheck('input', branches, unionCtx.useRefImports, unionCtx.suffix)
       if (check !== null) {
-        return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!(${check})) throw new Error(${JSON.stringify(`[${typeName}] value does not match any union branch`)});\n  return input as ${typeName};\n};`
+        return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!(${check})) throw new Error(${quoteJsString(`[${typeName}] value does not match any union branch`)});\n  return input as ${typeName};\n};`
       }
     }
   }
@@ -790,23 +791,16 @@ const collectInlineSubTypes = (
   if (!hasProperties(schema)) return EMPTY_SUB_TYPES
   const props = schema.properties as Record<string, JSONSchema>
 
-  // Cheap match scan first — most object nodes have neither inline object
-  // properties nor inline-object array items, and skipping the Map/Set/closure
-  // allocations for them is a measurable share of generation time.
-  let hasMatch = false
-  for (const key in props) {
-    const propSchema = props[key] as JSONSchema
-    if (isInlineObjectProperty(propSchema) || isInlineObjectArrayProperty(propSchema)) {
-      hasMatch = true
-      break
-    }
-  }
-  if (!hasMatch) return EMPTY_SUB_TYPES
-
-  const objects = new Map<string, string>()
-  const arrayItems = new Map<string, string>()
-  const used = new Set<string>()
+  // Single pass with lazy allocation: most object nodes have neither inline
+  // object properties nor inline-object array items, and this runs for every
+  // node in both the parser and the validator — so nothing is allocated until
+  // the first match, and the classification predicates run exactly once per
+  // property (an eager pre-scan would re-evaluate them for matching schemas).
+  let objects: Map<string, string> | null = null
+  let arrayItems: Map<string, string> | null = null
+  let used: Set<string> | null = null
   const claim = (base: string): string => {
+    used ??= new Set()
     let subName = base
     while (used.has(subName) || reservedNames.has(subName)) subName = `${subName}_`
     used.add(subName)
@@ -816,12 +810,15 @@ const collectInlineSubTypes = (
   for (const key in props) {
     const propSchema = props[key] as JSONSchema
     if (isInlineObjectProperty(propSchema)) {
+      objects ??= new Map()
       objects.set(key, claim(`${typeName}_${pascalCaseKey(key) || 'Value'}`))
     } else if (isInlineObjectArrayProperty(propSchema)) {
+      arrayItems ??= new Map()
       arrayItems.set(key, claim(`${typeName}_${pascalCaseKey(key) || 'Value'}Item`))
     }
   }
-  return { objects, arrayItems }
+  if (objects === null && arrayItems === null) return EMPTY_SUB_TYPES
+  return { objects: objects ?? EMPTY_SUB_TYPES.objects, arrayItems: arrayItems ?? EMPTY_SUB_TYPES.arrayItems }
 }
 
 /**
@@ -851,16 +848,20 @@ const exactKeyCountOf = (schema: JSONSchema): number | null => {
   if (!isSchemaObject(schema) || !hasProperties(schema) || !hasRequired(schema)) return null
   const props = schema.properties as Record<string, JSONSchema>
   const required = schema.required as readonly string[]
-  // Allocation-free on purpose: this runs for every object node, in both the
-  // parser and the validator, on every generation. Property counts are small,
-  // so the O(n²) `includes` beats building a Set.
+  // Allocation-free for the common small object: this runs for every object
+  // node, in both the parser and the validator, on every generation, and the
+  // O(n²) `includes` beats building a Set for a handful of keys. Wide schemas
+  // (generated API models) flip to a one-time Set so a 200-property object
+  // doesn't pay ~20k string comparisons per node.
+  const requiredLookup = required.length > 16 ? new Set(required) : null
   let declaredCount = 0
   for (const key in props) {
     declaredCount++
     // Every declared key must be required, and its check must prove presence —
     // all schema-object checks fail on undefined, but a true/false schema
     // literal emits no check at all.
-    if (!required.includes(key) || !isSchemaObject(props[key] as JSONSchema)) return null
+    const isRequired = requiredLookup !== null ? requiredLookup.has(key) : required.includes(key)
+    if (!isRequired || !isSchemaObject(props[key] as JSONSchema)) return null
   }
   // Every declared key is required (above) and the counts match, so the
   // required list is exactly the declared keys (a duplicated required entry
@@ -1392,7 +1393,16 @@ const generateObjectParser = (
       if (!exported && deepGuard) {
         const residual: string[] = []
         for (let i = 0; i < fastPathChecks.length; i++) {
-          if (fastPathChecks[i] !== shallowChecks[i]) residual.push(fastPathChecks[i] as string)
+          const deep = fastPathChecks[i] as string
+          const shallow = shallowChecks[i]
+          if (deep === shallow) continue
+          // When the deep check extends the shallow one by conjunction (e.g.
+          // `Array.isArray(_x) && _everyItem(_x)`), the shallow guard already
+          // proved the prefix — re-evaluating it per clean parse was pure
+          // waste on the hot path, so only the extension joins the residual.
+          residual.push(
+            shallow !== undefined && deep.startsWith(`${shallow} && `) ? deep.slice(shallow.length + 4) : deep,
+          )
         }
         lines.push(`  if (${shallowGuard}) {`)
         lines.push(

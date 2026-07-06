@@ -1,6 +1,7 @@
 import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { multipleOfFailExpr } from '@amritk/helpers/multiple-of-check'
+import { quoteJsString } from '@amritk/helpers/quote-js-string'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
   hasEnum,
@@ -79,25 +80,15 @@ const wrongTypeCondition = (accessor: string, type: string): string | null => {
  */
 const typeLabel = (type: string): string => (type === 'integer' ? 'number' : type)
 
-// Characters that force the JSON.stringify escaping path below: quote,
-// backslash, C0 controls, and the JS line separators. Anything else sits
-// verbatim inside a double-quoted literal.
-// biome-ignore lint/suspicious/noControlCharactersInRegex: the control range is the point
-const MESSAGE_NEEDS_ESCAPING = /["\\\u0000-\u001f\u2028\u2029]/
-
 /**
  * Emits `throw new Error(<message>[ + <suffixExpr>])`. The static message may
- * contain schema-controlled text (property names, patterns, enum values), so it
- * is serialized with `JSON.stringify` whenever it carries a character that
- * could break out of the string literal or inject code (a key like `it's` or a
- * pattern with a quote or newline). The common all-plain message skips the full
- * escaper — a strict parser emits one of these per assertion, and the
- * stringify calls were a measurable slice of generation time. `suffixExpr`,
- * when given, is a runtime expression appended to the message (e.g.
- * `typeof input`).
+ * contain schema-controlled text (property names, patterns, enum values), so
+ * it goes through the shared {@link quoteJsString} escape-or-quote decision.
+ * `suffixExpr`, when given, is a runtime expression appended to the message
+ * (e.g. `typeof input`).
  */
 const throwError = (message: string, suffixExpr?: string): string => {
-  const literal = MESSAGE_NEEDS_ESCAPING.test(message) ? JSON.stringify(message) : `"${message}"`
+  const literal = quoteJsString(message)
   return suffixExpr ? `throw new Error(${literal} + (${suffixExpr}))` : `throw new Error(${literal})`
 }
 

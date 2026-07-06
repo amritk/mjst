@@ -73,7 +73,11 @@ in one alternation pass instead of four full-text `.includes` scans,
 `escapeRegexPattern` memoizes its validating `new RegExp` compile, the
 per-node schema walks drop their Set/Map/tuple allocations
 (`exactKeyCountOf`, `collectInlineSubTypes`, `Object.entries` loops), and
-plain assertion messages skip the `JSON.stringify` escaper. These changes are
+plain assertion messages skip the `JSON.stringify` escaper via the new
+`@amritk/helpers` export `quoteJsString`, which centralizes the decision of
+how to emit schema-controlled text as a JS string literal (plain-text fast
+path, full escaping for anything carrying quotes, backslashes, controls, or
+line separators). These changes are
 output-identical (verified byte-for-byte against the previous generator);
 `buildSchema` on shapes without array items runs 15-30% faster than the
 previous release, and the array-item shapes build at roughly previous-release

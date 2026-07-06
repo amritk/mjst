@@ -1,8 +1,8 @@
-import { validateArray } from '@amritk/helpers/validate-array'
+import { isDeepStrictEqual } from 'node:util'
 import Ajv from 'ajv/dist/2020'
-import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
+import { evalGenerated, KEYS, makeRng, pick } from './differential.test-utils'
 import { generateParserFunction } from './generate-parser-function'
 
 /**
@@ -25,31 +25,6 @@ import { generateParserFunction } from './generate-parser-function'
  * mutated (extra keys, wrong types, dropped required keys, non-member enum
  * values, bad array elements) so both branches get dense coverage.
  */
-
-const evalParser = (code: string, name: string): ((input: unknown) => unknown) => {
-  const js = ts.transpileModule(code, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText
-  const moduleExports: Record<string, unknown> = {}
-  const isObject = (v: unknown): v is Record<string, unknown> =>
-    typeof v === 'object' && v !== null && !Array.isArray(v)
-  new Function('exports', 'isObject', 'validateArray', js)(moduleExports, isObject, validateArray)
-  return moduleExports[name] as (input: unknown) => unknown
-}
-
-const makeRng = (seed: number): (() => number) => {
-  let a = seed >>> 0
-  return () => {
-    a |= 0
-    a = (a + 0x6d2b79f5) | 0
-    let t = Math.imul(a ^ (a >>> 15), 1 | a)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
-const pick = <T>(rng: () => number, arr: readonly T[]): T => arr[Math.floor(rng() * arr.length)] as T
-
-const KEYS = ['id', 'name', 'tags', 'role', 'x']
 
 type Rng = () => number
 type SchemaNode = Record<string, unknown>
@@ -204,18 +179,7 @@ const stripByShape = (value: unknown, schema: SchemaNode): unknown => {
   return value
 }
 
-const deepEquals = (a: unknown, b: unknown): boolean => {
-  if (Object.is(a, b)) return true
-  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
-  if (Array.isArray(a) !== Array.isArray(b)) return false
-  const aKeys = Object.keys(a as Record<string, unknown>)
-  const bKeys = Object.keys(b as Record<string, unknown>)
-  if (aKeys.length !== bKeys.length) return false
-  for (const key of aKeys) {
-    if (!deepEquals((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])) return false
-  }
-  return true
-}
+const deepEquals = (a: unknown, b: unknown): boolean => isDeepStrictEqual(a, b)
 
 describe('strict parser conformance vs ajv', () => {
   it('strict mode throws exactly when ajv rejects, and returns the value unchanged', { timeout: 60_000 }, () => {
@@ -231,7 +195,10 @@ describe('strict parser conformance vs ajv', () => {
       } catch {
         continue
       }
-      const parse = evalParser(generateParserFunction(schema as never, 'Root', { strict: true }), 'parseRoot')
+      const parse = evalGenerated<(input: unknown) => unknown>(
+        generateParserFunction(schema as never, 'Root', { strict: true }),
+        'parseRoot',
+      )
 
       for (let t = 0; t < 8 && failures.length < 8; t++) {
         const input = mutate(rng, buildValid(rng, schema), schema)
@@ -273,7 +240,7 @@ describe('strict parser conformance vs ajv', () => {
       } catch {
         continue
       }
-      const parse = evalParser(
+      const parse = evalGenerated<(input: unknown) => unknown>(
         generateParserFunction(schema as never, 'Root', { strict: true, stripUnknown: true }),
         'parseRoot',
       )

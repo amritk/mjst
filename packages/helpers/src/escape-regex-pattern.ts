@@ -67,7 +67,12 @@ export const escapeRegexPattern = (pattern: string): string => {
     return match
   })
 
-  if (escapeCache.size >= ESCAPE_CACHE_LIMIT) escapeCache.clear()
+  if (escapeCache.size >= ESCAPE_CACHE_LIMIT) {
+    // Evict the single oldest entry (Maps iterate in insertion order) instead
+    // of clearing wholesale — a corpus slightly over the limit keeps its hot
+    // set instead of collapsing to a 0% hit rate every pass.
+    escapeCache.delete(escapeCache.keys().next().value as string)
+  }
   escapeCache.set(pattern, escaped)
   return escaped
 }

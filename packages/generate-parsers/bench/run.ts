@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 import { buildSchema } from '../src/index.ts'
+import { opsCell } from './measure.ts'
 import { LIBRARY_IDS, LIBRARY_LABELS, type LibraryId } from './parsers.ts'
 import { PARSE_CASES } from './schemas.ts'
 import type { WorkerResult } from './worker.ts'
@@ -30,23 +31,8 @@ import type { WorkerResult } from './worker.ts'
 const WORKER = fileURLToPath(new URL('./worker.ts', import.meta.url))
 const BENCH_DIR = fileURLToPath(new URL('.', import.meta.url))
 
-const fmt = (n: number): string => {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return n.toFixed(1)
-}
-
 const pad = (s: string, width: number): string => s.padEnd(width)
 const padStart = (s: string, width: number): string => s.padStart(width)
-
-/** A coefficient of variation above this is flagged as a noisy (less trustworthy) sample. */
-const NOISY_SPREAD = 0.1
-
-/** Throughput + stability for one cell of the table. */
-const cell = (median: number, spread: number): string => {
-  const flag = spread > NOISY_SPREAD ? '~' : ' '
-  return `${flag}${fmt(median)} (±${(spread * 100).toFixed(0)}%)`
-}
 
 /** Spawns an isolated worker to time one library against one case. */
 const runWorker = (caseName: string, lib: LibraryId): WorkerResult => {
@@ -103,7 +89,7 @@ const run = async (): Promise<void> => {
     for (const lib of LIBRARY_IDS) {
       const r = results.get(lib)
       if (!r) continue
-      console.log(`  ${pad(LIBRARY_LABELS[lib], 24)}${padStart(cell(r.valid.median, r.valid.spread), 20)}`)
+      console.log(`  ${pad(LIBRARY_LABELS[lib], 24)}${padStart(opsCell(r.valid.median, r.valid.spread), 20)}`)
     }
 
     // Headline ratio: mjst vs zod, the canonical parse-and-strip library.
