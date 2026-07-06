@@ -45,11 +45,14 @@ throughput cost of the new element validation:
   guard plus only its residual terms, so a carries-extras value never runs the
   same typed checks twice. Exported root parsers still return a fresh object.
 
-Two subtle semantic alignments come with this: the strict unknown-key check
-iterates own keys (`Object.keys`) rather than `for..in`, matching Ajv's
-JSON-data-model view (inherited JS properties are no longer rejected), and
-strip-mode output may share identity with clean nested input values (it always
-shared them for `{ ...input }` fast paths).
+Two subtle semantic notes come with this: the fast-path no-extras test uses
+own-key semantics (Ajv's JSON-data-model view — an object whose only extra is
+an inherited JS property takes the slow path, where the historical `for..in`
+rejection still applies), and strip-mode output may share identity with clean
+nested input values (it always shared them for `{ ...input }` fast paths).
+`validateArray` likewise returns the input array by reference when every
+element parses to itself, materializing a copy lazily on the first replaced
+element — clean arrays cost no allocation.
 
 Bench delta vs the previous release on the Order shape (array of closed
 3-field items): strict parse throughput is now at or slightly above par
@@ -59,13 +62,16 @@ count form makes several closed shapes faster than before (`User · strict`
 +14%, `assert-strict` +80%).
 
 Generation itself is also faster, offsetting the larger emitted output: the
-index barrel recovers export names with a single line-start walk instead of
-multiline-regex scans, the per-node schema walks drop their Set/Map/tuple
-allocations (`exactKeyCountOf`, `collectInlineSubTypes`, `Object.entries`
-loops), and plain assertion messages skip the `JSON.stringify` escaper. These
-changes are output-identical (verified byte-for-byte against the previous
-generator); `buildSchema` on shapes without array items runs 15-30% faster
-than the previous release, and the array-item shapes build at previous-release
+index barrel recovers export names with a single char-prefiltered line-start
+walk instead of multiline-regex scans, `collectHelpers` detects helper usage
+in one alternation pass instead of four full-text `.includes` scans,
+`escapeRegexPattern` memoizes its validating `new RegExp` compile, the
+per-node schema walks drop their Set/Map/tuple allocations
+(`exactKeyCountOf`, `collectInlineSubTypes`, `Object.entries` loops), and
+plain assertion messages skip the `JSON.stringify` escaper. These changes are
+output-identical (verified byte-for-byte against the previous generator);
+`buildSchema` on shapes without array items runs 15-30% faster than the
+previous release, and the array-item shapes build at roughly previous-release
 speed despite emitting ~30% more code.
 
 A new strict-mode differential fuzzer (700 random schemas × 8 mutated inputs

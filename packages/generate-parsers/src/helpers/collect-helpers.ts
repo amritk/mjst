@@ -45,6 +45,11 @@ const embeddedImport = (helper: RuntimeHelperName, prefix: string, ext: 'js' | '
  *   Defaults to `'js'` (the TS NodeNext form); `'ts'` makes the output runnable
  *   under Node's type stripping.
  */
+// One alternation pass over the generated source instead of four full-text
+// `.includes` scans — an absent helper name used to cost a complete rescan
+// each, which showed up at several percent of total generation time.
+const HELPER_USAGE = /validateArray|validateRecord|isObject|hasRef\(/g
+
 export const collectHelpers = (
   parserFunction: string,
   mode: HelpersMode,
@@ -56,12 +61,28 @@ export const collectHelpers = (
   const importFor = (helper: RuntimeHelperName): string =>
     mode === 'embedded' ? embeddedImport(helper, helpersImportPrefix, importExt) : PACKAGE_IMPORTS[helper]
 
-  if (parserFunction.includes('validateArray')) {
+  let sawValidateArray = false
+  let sawValidateRecord = false
+  let sawIsObject = false
+  let sawHasRef = false
+  HELPER_USAGE.lastIndex = 0
+  let match = HELPER_USAGE.exec(parserFunction)
+  while (match !== null) {
+    const token = match[0]
+    if (token === 'validateArray') sawValidateArray = true
+    else if (token === 'validateRecord') sawValidateRecord = true
+    else if (token === 'isObject') sawIsObject = true
+    else sawHasRef = true
+    if (sawValidateArray && sawValidateRecord && sawIsObject && sawHasRef) break
+    match = HELPER_USAGE.exec(parserFunction)
+  }
+
+  if (sawValidateArray) {
     imports.push(importFor('validate-array'))
     used.add('validate-array')
   }
 
-  if (parserFunction.includes('validateRecord')) {
+  if (sawValidateRecord) {
     imports.push(importFor('validate-record'))
     used.add('validate-record')
     // The embedded validate-record.ts imports is-object, so it must be shipped too —
@@ -70,12 +91,12 @@ export const collectHelpers = (
     used.add('is-object')
   }
 
-  if (parserFunction.includes('isObject')) {
+  if (sawIsObject) {
     imports.push(importFor('is-object'))
     used.add('is-object')
   }
 
-  if (parserFunction.includes('hasRef(')) {
+  if (sawHasRef) {
     imports.push(importFor('has-ref'))
     used.add('has-ref')
   }

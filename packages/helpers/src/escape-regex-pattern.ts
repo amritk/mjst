@@ -23,7 +23,26 @@
  * escapeRegexPattern('\\d{4}/\\d{2}') // → '\\d{4}\\/\\d{2}'  (i.e. \d{4}\/\d{2})
  * @throws if `pattern` is not a valid regular expression.
  */
+// Line terminators, keyed by code point, and the backslash escape each maps to.
+// These are the four characters disallowed *raw* inside a regex literal.
+const lineTerminatorEscapes: Record<number, string> = {
+  10: '\\n', // LF
+  13: '\\r', // CR
+  8232: '\\u2028', // LINE SEPARATOR
+  8233: '\\u2029', // PARAGRAPH SEPARATOR
+}
+
+// Memoized results: the same schema pattern is escaped once per parser, per
+// validator, and per assertion context, on every generation — and the dominant
+// cost is the validating `new RegExp` compile. Schemas carry a bounded set of
+// patterns; the cap only guards a pathological long-lived process.
+const escapeCache = new Map<string, string>()
+const ESCAPE_CACHE_LIMIT = 1000
+
 export const escapeRegexPattern = (pattern: string): string => {
+  const cached = escapeCache.get(pattern)
+  if (cached !== undefined) return cached
+
   // Validate at generation time — an invalid pattern must fail here, not emit
   // a `/([/` literal that breaks the generated file.
   try {
@@ -34,26 +53,21 @@ export const escapeRegexPattern = (pattern: string): string => {
     )
   }
 
-  // Line terminators, keyed by code point, and the backslash escape each maps to.
-  // These are the four characters disallowed *raw* inside a regex literal.
-  const lineTerminatorEscapes: Record<number, string> = {
-    10: '\\n', // LF
-    13: '\\r', // CR
-    8232: '\\u2028', // LINE SEPARATOR
-    8233: '\\u2029', // PARAGRAPH SEPARATOR
-  }
-
   // Match either an escape sequence (`\` + any char, kept verbatim) or a single
   // character that would corrupt the literal (a bare `/` or a line terminator).
   // The line terminators are written as `\u….` escapes so this source file is
   // itself free of the raw characters it guards against. Consuming escape pairs
   // first means the slash in `\/` is never seen as bare, so it is not
   // double-escaped.
-  return pattern.replace(/\\[\s\S]|[/\n\r\u2028\u2029]/g, (match) => {
+  const escaped = pattern.replace(/\\[\s\S]|[/\n\r\u2028\u2029]/g, (match) => {
     if (match === '/') return '\\/'
     const terminatorEscape = lineTerminatorEscapes[match.charCodeAt(0)]
     if (terminatorEscape !== undefined && match.length === 1) return terminatorEscape
     // An escape pair like `\/` or `\d`: keep exactly as authored.
     return match
   })
+
+  if (escapeCache.size >= ESCAPE_CACHE_LIMIT) escapeCache.clear()
+  escapeCache.set(pattern, escaped)
+  return escaped
 }

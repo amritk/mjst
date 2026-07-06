@@ -49,7 +49,10 @@ const exportNameAt = (content: string, at: number, prefix: string): string | nul
 const collectExportNames = (content: string, typeNames: string[], constNames: string[]): void => {
   let lineStart = 0
   while (lineStart !== -1 && lineStart < content.length) {
-    if (content.startsWith('export ', lineStart)) {
+    // charCode prefilter: almost every line starts with whitespace, a brace, or
+    // a keyword other than `export` — one integer compare skips the substring
+    // comparison for all of them (101 === 'e').
+    if (content.charCodeAt(lineStart) === 101 && content.startsWith('export ', lineStart)) {
       const typeName = exportNameAt(content, lineStart, 'export type ')
       if (typeName !== null) {
         typeNames.push(typeName)

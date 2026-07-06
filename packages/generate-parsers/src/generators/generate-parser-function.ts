@@ -1374,10 +1374,14 @@ const generateObjectParser = (
         lines.push(assertionLine)
       }
       if (strictKeys) {
-        // Own keys only (not for..in): matches the fast-path no-extras test and
-        // Ajv, which validate the JSON data model — inherited JS properties are
-        // not part of the value being validated.
-        lines.push(`  for (const _k of Object.keys(input)) {`)
+        // for..in (not Object.keys) deliberately: this loop is cold — the fast
+        // path already proved the key set — but swapping in the keys-array
+        // iterator here once regressed the *hot* path several percent on CI:
+        // the extra dead-path bytecode changed the engine's inlining of the
+        // whole parser. The fast-path no-extras test uses own-key semantics;
+        // an inherited-key mismatch merely lands here and keeps the historical
+        // for..in rejection.
+        lines.push(`  for (const _k in input) {`)
         lines.push(
           `    if (${strictKeyCheck.isUnknown('_k')}) throw new Error(\`[${typeName}] unknown property "\${_k}"\`);`,
         )

@@ -14,8 +14,10 @@ import { pathToFileURL } from 'node:url'
  * can't change from a PR, so they'd only add minutes and noise. Each
  * measurement reuses the benches' own isolation machinery: a fresh process per
  * (tree, case) via that tree's `bench/worker.ts`, median of 21 trials, CV as
- * the stability signal. Baseline and head workers for the same case run
- * back-to-back so machine-load drift hits both sides roughly equally.
+ * the stability signal. Each side runs twice per case in order-balanced ABBA
+ * sequence (base, head, head, base) and the better run is reported — warmup
+ * and thermal drift then cannot systematically favor either side, and a
+ * one-off interference spike costs a rerun instead of a false regression.
  *
  * Compared surfaces:
  *   - generate-parsers  — parse throughput (ops/s) per PARSE_CASE
@@ -89,6 +91,31 @@ const runWorker = (tree: string, pkg: string, caseName: string): WorkerOutput | 
   }
 }
 
+/** The better of two throughput runs: higher `valid` median wins. */
+const betterOps = (a: WorkerOutput | null, b: WorkerOutput | null): WorkerOutput | null => {
+  if (!a) return b
+  if (!b) return a
+  const aMedian = (a['valid'] as Stats | undefined)?.median ?? 0
+  const bMedian = (b['valid'] as Stats | undefined)?.median ?? 0
+  return aMedian >= bMedian ? a : b
+}
+
+/** The better of two codegen runs: lower ms median wins. */
+const betterMs = (a: Stats | null, b: Stats | null): Stats | null => {
+  if (!a) return b
+  if (!b) return a
+  return a.median <= b.median ? a : b
+}
+
+/** One order-balanced ABBA measurement of a case on both trees. */
+const runPair = (pkg: string, caseName: string): { base: WorkerOutput | null; head: WorkerOutput | null } => {
+  const base1 = runWorker(base, pkg, caseName)
+  const head1 = runWorker(head, pkg, caseName)
+  const head2 = runWorker(head, pkg, caseName)
+  const base2 = runWorker(base, pkg, caseName)
+  return { base: betterOps(base1, base2), head: betterOps(head1, head2) }
+}
+
 /**
  * Times a tree's `buildSchema` (parser codegen) for one case in a fresh
  * process (`bench-codegen-worker.ts`, always taken from the head tree but
@@ -154,8 +181,7 @@ const run = async (): Promise<void> => {
 
   console.error('generate-parsers (parse ops/s)…')
   for (const parseCase of parsersSchemas.PARSE_CASES) {
-    const baseResult = runWorker(base, 'generate-parsers', parseCase.name)
-    const headResult = runWorker(head, 'generate-parsers', parseCase.name)
+    const { base: baseResult, head: headResult } = runPair('generate-parsers', parseCase.name)
     progress({
       suite: 'parsers',
       caseName: parseCase.name,
@@ -175,8 +201,7 @@ const run = async (): Promise<void> => {
 
   console.error('generate-validators (validate ops/s)…')
   for (const benchCase of validatorsSchemas.BENCH_CASES) {
-    const baseResult = runWorker(base, 'generate-validators', benchCase.name)
-    const headResult = runWorker(head, 'generate-validators', benchCase.name)
+    const { base: baseResult, head: headResult } = runPair('generate-validators', benchCase.name)
     for (const metric of ['valid', 'invalid'] as const) {
       progress({
         suite: 'validators',
@@ -194,13 +219,17 @@ const run = async (): Promise<void> => {
 
   console.error('parser codegen (ms per buildSchema)…')
   for (const parseCase of parsersSchemas.PARSE_CASES) {
+    const base1 = codegenStats(base, parseCase.schema, parseCase.mode)
+    const head1 = codegenStats(head, parseCase.schema, parseCase.mode)
+    const head2 = codegenStats(head, parseCase.schema, parseCase.mode)
+    const base2 = codegenStats(base, parseCase.schema, parseCase.mode)
     progress({
       suite: 'codegen',
       caseName: parseCase.name,
       metric: 'ms/parser',
       higherIsBetter: false,
-      base: codegenStats(base, parseCase.schema, parseCase.mode),
-      head: codegenStats(head, parseCase.schema, parseCase.mode),
+      base: betterMs(base1, base2),
+      head: betterMs(head1, head2),
     })
   }
 
@@ -217,7 +246,7 @@ const run = async (): Promise<void> => {
   }
   lines.push('')
   lines.push(
-    '<sub>mjst only; each throughput number is the median of 21 isolated-process trials (±n% = coefficient of variation). ' +
+    '<sub>mjst only; each number is the better of two order-balanced (ABBA) runs, each the median of 21 isolated-process trials (±n% = coefficient of variation). ' +
       '⚪ within ±5% · 🟢 improvement · 🔴 regression · ~ marks an unstable sample (CV > 10%) · ⚠parity marks a correctness disagreement. ' +
       'On shared CI runners, deltas within ±10% are usually noise — trust direction only when it persists across pushes.</sub>',
   )
