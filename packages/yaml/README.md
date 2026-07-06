@@ -9,7 +9,7 @@
 ![license](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)&nbsp;
 ![dependencies](https://img.shields.io/badge/dependencies-0-f97316?style=flat-square)&nbsp;
 ![node](https://img.shields.io/badge/node-%E2%89%A520-339933?style=flat-square&logo=node.js&logoColor=white)&nbsp;
-![vibe coded](https://img.shields.io/badge/vibe%20coded-100%25-a855f7?style=flat-square)
+![vibe coded](https://img.shields.io/badge/vibe%20coded-a855f7?style=flat-square)
 
 </div>
 
