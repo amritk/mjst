@@ -1,5 +1,13 @@
 # @amritk/generate-examples
 
+## 0.4.4
+
+### Patch Changes
+
+- Updated dependencies [91dab2b]
+- Updated dependencies [9253843]
+  - @amritk/helpers@0.11.0
+
 ## 0.4.3
 
 ### Patch Changes
