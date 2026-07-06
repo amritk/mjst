@@ -110,11 +110,14 @@ describe('dist-smoke', () => {
 
     await runNode([CLI_BIN, '--schema', schemaPath, '--outDir', outDir, '--helpers', 'embedded'])
 
+    // The CLI defaults --import-ext to 'ts' (no --build here), so the rewritten
+    // sibling import lands on the literal on-disk path.
     const validateRecord = await readFile(join(outDir, '_helpers/validate-record.ts'), 'utf-8')
-    expect(validateRecord).toContain("from './is-object.js'")
+    expect(validateRecord).toContain("from './is-object.ts'")
 
-    // No title in the schema, so the root type falls back to "Document".
-    const root = await readFile(join(outDir, 'document.ts'), 'utf-8')
-    expect(root).toContain('Document')
+    // No title, and the schema file is named schema.json, so the root type is
+    // derived from the filename → "Schema".
+    const root = await readFile(join(outDir, 'schema.ts'), 'utf-8')
+    expect(root).toContain('Schema')
   })
 })

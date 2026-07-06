@@ -14,29 +14,41 @@ const titleToPascalCase = (title: string): string => {
 }
 
 /**
- * Derives the root type name for a generated schema from its `title` keyword.
+ * Derives the root type name for a generated schema.
  *
  * We name the root after the schema itself instead of a generic "Document" so
  * the generated types and parsers read naturally (e.g. an OpenAPI schema yields
- * `OpenApi` / `parseOpenApi`). When the schema has no usable `title`, we fall
- * back to "Document" to keep output deterministic.
+ * `OpenApi` / `parseOpenApi`, and a `spec-plan.json` file yields `SpecPlan` /
+ * `parseSpecPlan`). The schema's `title` keyword wins when present; otherwise
+ * the caller can supply the schema's filename (without extension) as a
+ * `fallbackName` so the name still reflects the source. When neither yields a
+ * usable identifier we fall back to "Document" to keep output deterministic.
  *
  * @param schema - The root JSON Schema. A boolean schema or one without a
- *   string `title` falls back to the default.
- * @returns A PascalCase type name derived from the title, or "Document".
+ *   string `title` uses `fallbackName`.
+ * @param fallbackName - Optional name (typically the schema's base filename)
+ *   used when the schema has no usable `title`. PascalCased the same way.
+ * @returns A PascalCase type name derived from the title or fallback, or
+ *   "Document".
  *
  * @example
  * ```ts
  * deriveRootTypeName({ title: 'OpenAPI Document' }) // 'OpenAPIDocument'
  * deriveRootTypeName({ title: 'my-config' }) // 'MyConfig'
+ * deriveRootTypeName({ type: 'object' }, 'spec-plan') // 'SpecPlan'
  * deriveRootTypeName({ type: 'object' }) // 'Document'
  * ```
  */
-export const deriveRootTypeName = (schema: unknown): string => {
-  if (!isObject(schema) || typeof schema['title'] !== 'string') {
-    return 'Document'
+export const deriveRootTypeName = (schema: unknown, fallbackName?: string): string => {
+  if (isObject(schema) && typeof schema['title'] === 'string') {
+    const fromTitle = titleToPascalCase(schema['title'])
+    if (fromTitle) return fromTitle
   }
 
-  const name = titleToPascalCase(schema['title'])
-  return name || 'Document'
+  if (typeof fallbackName === 'string') {
+    const fromFilename = titleToPascalCase(fallbackName)
+    if (fromFilename) return fromFilename
+  }
+
+  return 'Document'
 }

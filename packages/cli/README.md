@@ -71,15 +71,39 @@ npx mjst --schema-dir ./schemas --out-dir ./generated
 ```
 schemas/                  generated/
   user.json        ─▶       user/
-  api/                        document.ts, index.ts
+  api/                        user.ts, index.ts
     order.json     ─▶       api/order/
-                              document.ts, index.ts
+                              order.ts, index.ts
                             _helpers/        ← shared runtime helpers (embedded mode)
 ```
 
 Each schema lands in its own subdirectory so generated files never collide, and in embedded
 mode the runtime helpers are emitted **once** into `outDir/_helpers/` — every nested parser
-imports from that single shared location. `--build` compiles the whole tree in place.
+imports from that single shared location. `--build` compiles the whole tree in place. Each
+schema's root type is named after the schema (its `title`, else its filename in PascalCase),
+so `user.json` yields `User` / `parseUser` and `api/order.json` yields `Order` / `parseOrder`.
+
+### Running the generated output
+
+By default mjst emits relative imports with the literal `.ts` extension (e.g.
+`import { parseUser } from './user.ts'`), so the generated sources run **as-is** — no build
+step — under:
+
+- **Bun** (`bun run generated/index.ts`)
+- **Node ≥ 22.6** type stripping (`node generated/index.ts`; unflagged from 22.18/23, else pass
+  `--experimental-strip-types`)
+- **tsc**, provided your `tsconfig.json` sets `"allowImportingTsExtensions": true`
+
+If you'd rather compile the output first, pass `--build` (mjst switches the imports to the
+NodeNext `./user.js` form and runs `tsc` for you), or generate with `--import-ext js` to emit
+the compile-ready form without building. `--import-ext ts` together with `--build` is rejected,
+since tsc cannot emit from `.ts` specifiers.
+
+> [!NOTE]
+> **Breaking change (0.9.0):** the root type is no longer always named `Document`. It is derived
+> from the schema `title`, falling back to the schema filename (`spec-plan.json` → `SpecPlan`,
+> giving `parseSpecPlan` / `validateSpecPlanShape`). Pass `--root-type <Name>` to override it for
+> a single `--schema` run. Update any imports that referenced `Document` / `parseDocument`.
 
 ### Config file
 
@@ -220,7 +244,7 @@ npx mjst --config ./mjst.config.json
 <td align="center"></td>
 </tr>
 <tr>
-<td colspan="4">Controls how generated parsers reference their runtime helpers. 'package' emits imports from @amritk/helpers (requires it to be installed in the consumer project). 'embedded' ships the helper source under outDir/_helpers/ so the output is self-contained. When omitted, the CLI auto-detects: it picks 'package' if @amritk/helpers resolves from outDir, otherwise 'embedded'.<br><strong>Allowed:</strong> <code>"package"</code>, <code>"embedded"</code></td>
+<td colspan="4">Controls how generated parsers reference their runtime helpers. 'package' emits imports from @amritk/helpers (requires it to be installed in the consumer project). 'embedded' ships the helper source under outDir/_helpers/ so the output is self-contained. When omitted, the CLI auto-detects: it picks 'package' only when @amritk/helpers is a declared dependency (dependencies/devDependencies) of the nearest package.json above outDir, otherwise 'embedded'. Requiring a declaration (rather than mere resolvability) keeps auto-detected 'package' output portable across pnpm/isolated installs, where an undeclared transitive @amritk/helpers is not reachable at runtime.<br><strong>Allowed:</strong> <code>"package"</code>, <code>"embedded"</code></td>
 </tr>
 <tr>
 <td>🏷️ <code>typeSuffix</code></td>
@@ -235,10 +259,19 @@ npx mjst --config ./mjst.config.json
 <td>🔗 <code>importExt</code></td>
 <td><code>--import-ext &lt;ext&gt;</code></td>
 <td><code>string</code></td>
-<td align="center"><code>"js"</code></td>
+<td align="center"><code>"ts"</code></td>
 </tr>
 <tr>
-<td colspan="4">Extension emitted on every relative import specifier in the generated output (cross-file $ref imports, the index barrel, and embedded-helper imports). 'js' (default) is the standard TS NodeNext form ('./x.js' resolving to a sibling x.ts), accepted by tsc, Bun, and bundlers, and required by 'build'. 'ts' emits the literal on-disk paths so the generated .ts sources run directly under Node's type stripping (Node 22.6+ with --experimental-strip-types, on by default from Node 23). Incompatible with 'build' — tsc refuses to emit from .ts specifiers.<br><strong>Allowed:</strong> <code>"js"</code>, <code>"ts"</code></td>
+<td colspan="4">Extension emitted on every relative import specifier in the generated output (cross-file $ref imports, the index barrel, and embedded-helper imports). 'ts' (default) emits the literal on-disk paths so the generated .ts sources load directly under Bun, Node's type stripping (Node 22.6+ with --experimental-strip-types, unflagged from 22.18/23), and tsc when the consumer sets allowImportingTsExtensions — no build step required. 'js' is the standard TS NodeNext form ('./x.js' resolving to a sibling x.ts) for output you compile; it is selected automatically under 'build' since tsc refuses to emit from .ts specifiers. Passing --import-ext ts together with --build is an error.<br><strong>Allowed:</strong> <code>"js"</code>, <code>"ts"</code></td>
+</tr>
+<tr>
+<td>🌱 <code>rootType</code></td>
+<td><code>--root-type &lt;name&gt;</code></td>
+<td><code>string</code></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">Name for the root type of a single --schema run (e.g. 'Program' yields parseProgram / validateProgramShape). When omitted, the name is derived from the schema's title, falling back to the schema filename in PascalCase (spec-plan.json → SpecPlan) and then to 'Document'. Not supported with --schema-dir, where each schema derives its own root type from its filename.<br><strong>Examples:</strong> <code>"Program"</code></td>
 </tr>
 <tr>
 <td>⚙️ <code>config</code></td>
@@ -247,7 +280,7 @@ npx mjst --config ./mjst.config.json
 <td align="center"></td>
 </tr>
 <tr>
-<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, outFile, typesOnly, build, logWarnings, strict, readonly, helpers, typeSuffix, importExt). CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
+<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, outFile, typesOnly, build, logWarnings, strict, readonly, helpers, typeSuffix, importExt, rootType). CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
 </tr>
 </tbody>
 </table>

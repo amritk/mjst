@@ -13,14 +13,41 @@ const execFileAsync = promisify(execFile)
 import type { CliConfig } from './cli-config'
 import { combineGeneratedFiles } from './combine-files'
 import { detectHelpersMode } from './detect-helpers-mode'
+import { HELP_TEXT } from './help-text'
 import { loadConfig } from './load-config'
 import { loadSchemaModule } from './load-schema-module'
 import { parseCliArgs } from './parse-cli-args'
 import { readVersion } from './read-version'
+import { resolveImportExt } from './resolve-import-ext'
 
 /** True when the args request the CLI version (`version`, `--version`, or `-v`). */
 const isVersionRequest = (args: readonly string[]): boolean =>
   args[0] === 'version' || args.includes('--version') || args.includes('-v')
+
+/** True when the args request usage help (`help`, `--help`, or `-h`). */
+const isHelpRequest = (args: readonly string[]): boolean =>
+  args[0] === 'help' || args.includes('--help') || args.includes('-h')
+
+/** The schema's base filename without extension, used to derive the root type name. */
+const schemaBaseName = (schemaPath: string): string => basename(schemaPath).replace(/\.[^.]+$/, '')
+
+/**
+ * Resolves and reports the helpers mode. An explicit `--helpers` wins; otherwise
+ * it is auto-detected from the nearest package.json. When detection falls back to
+ * embedded, nudge the user toward declaring `@amritk/helpers` so multiple
+ * generated trees can share a single runtime helper copy.
+ */
+const resolveHelpersMode = (config: Partial<CliConfig>, outputDir: string): 'package' | 'embedded' => {
+  const helpersMode = config.helpers ?? detectHelpersMode(outputDir)
+  console.log(`Helpers mode: ${helpersMode}${config.helpers ? ' (explicit)' : ' (auto-detected)'}`)
+  if (!config.helpers && helpersMode === 'embedded') {
+    console.log(
+      'Tip: add @amritk/helpers as a dependency to share one runtime helper copy across generated trees ' +
+        '(or pass --helpers embedded to silence this).',
+    )
+  }
+  return helpersMode
+}
 
 /**
  * Extracts the --config flag value from process args before full parsing.
@@ -159,10 +186,9 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
 
   await mkdir(outputDir, { recursive: true })
 
-  const helpersMode = config.helpers ?? detectHelpersMode(outputDir)
-  console.log(`Helpers mode: ${helpersMode}${config.helpers ? ' (explicit)' : ' (auto-detected)'}`)
+  const helpersMode = resolveHelpersMode(config, outputDir)
 
-  const rootTypeName = deriveRootTypeName(schema)
+  const rootTypeName = config.rootType ?? deriveRootTypeName(schema, schemaBaseName(schemaPath))
   console.log(`Root type: ${rootTypeName}`)
 
   const files = await buildSchema(
@@ -177,7 +203,7 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
     config.readonly,
     config.stripUnknown,
     config.typeSuffix,
-    config.importExt,
+    resolveImportExt(config),
   )
 
   for (const file of files) {
@@ -208,7 +234,7 @@ const runSingleFile = async (config: Partial<CliConfig>, schemaPath: string, out
   const outputDir = dirname(outFilePath)
   await mkdir(outputDir, { recursive: true })
 
-  const rootTypeName = deriveRootTypeName(schema)
+  const rootTypeName = config.rootType ?? deriveRootTypeName(schema, schemaBaseName(schemaPath))
   console.log(`Root type: ${rootTypeName}`)
 
   const files = await buildSchema(
@@ -223,7 +249,7 @@ const runSingleFile = async (config: Partial<CliConfig>, schemaPath: string, out
     config.readonly,
     config.stripUnknown,
     config.typeSuffix,
-    config.importExt,
+    resolveImportExt(config),
   )
 
   const combined = combineGeneratedFiles(files)
@@ -258,8 +284,7 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
 
   await mkdir(outputDir, { recursive: true })
 
-  const helpersMode = config.helpers ?? detectHelpersMode(outputDir)
-  console.log(`Helpers mode: ${helpersMode}${config.helpers ? ' (explicit)' : ' (auto-detected)'}`)
+  const helpersMode = resolveHelpersMode(config, outputDir)
 
   // Helper sources are identical across schemas, so collect them by filename and
   // write the deduplicated set once at the output root.
@@ -276,7 +301,7 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
     const helpersImportPrefix = '../'.repeat(depth)
 
     const schema = await loadSchema(config, schemaFile)
-    const rootTypeName = deriveRootTypeName(schema)
+    const rootTypeName = deriveRootTypeName(schema, schemaBaseName(schemaFile))
     console.log(`\n${relPath} → ${relNoExt}/ (root type: ${rootTypeName})`)
 
     const files = await buildSchema(
@@ -291,7 +316,7 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
       config.readonly,
       config.stripUnknown,
       config.typeSuffix,
-      config.importExt,
+      resolveImportExt(config),
     )
 
     for (const file of files) {
@@ -330,6 +355,13 @@ const run = async (): Promise<void> => {
     return
   }
 
+  // Bare `mjst` and `mjst --help` both print usage rather than erroring on a
+  // missing --out-dir — a first-run user needs to see the flags, not a failure.
+  if (args.length === 0 || isHelpRequest(args)) {
+    console.log(HELP_TEXT)
+    return
+  }
+
   const configPath = extractConfigPath(args)
 
   // Start with config file values if provided, then overlay CLI flags on top
@@ -339,6 +371,13 @@ const run = async (): Promise<void> => {
 
   if (config.outDir && config.outFile) {
     console.error('Error: provide only one of --out-dir or --out-file, not both.')
+    process.exit(1)
+  }
+
+  // --root-type names a single root; under --schema-dir each schema derives its
+  // own root name, so a single override would be ambiguous.
+  if (config.rootType && config.schemaDir) {
+    console.error('Error: --root-type cannot be combined with --schema-dir; each schema derives its own root type.')
     process.exit(1)
   }
 

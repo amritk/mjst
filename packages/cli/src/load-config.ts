@@ -43,6 +43,7 @@ export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>
     ...(typeof obj['readonly'] === 'boolean' && { readonly: obj['readonly'] }),
     ...(isHelpersMode(obj['helpers']) && { helpers: obj['helpers'] }),
     ...(isImportExt(obj['importExt']) && { importExt: obj['importExt'] }),
+    ...(typeof obj['rootType'] === 'string' && { rootType: obj['rootType'] }),
     ...(typeof obj['typeSuffix'] === 'string' && { typeSuffix: obj['typeSuffix'] }),
     // `banner` is a boolean toggle or a custom header string, mirroring the CLI flag.
     ...((typeof obj['banner'] === 'boolean' || typeof obj['banner'] === 'string') && { banner: obj['banner'] }),

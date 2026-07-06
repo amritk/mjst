@@ -101,8 +101,11 @@ export type GeneratedFile = {
  *   is used verbatim and is not affected by this suffix.
  * @param importExt - Extension used on every relative import specifier in the generated
  *   output (cross-file `$ref` imports, the index barrel, and embedded-helper imports).
- *   `'js'` (default) is the standard TS NodeNext form; `'ts'` emits the literal on-disk
- *   paths so the generated sources run directly under Node's type stripping.
+ *   `'js'` (this function's default) is the standard TS NodeNext form; `'ts'` emits the
+ *   literal on-disk paths so the generated sources run directly under Node's type
+ *   stripping. Note the `mjst` CLI defaults this to `'ts'` (falling back to `'js'` only
+ *   under `--build`, where tsc must compile the sources) so generated output runs under
+ *   Node without a build step; direct callers of `buildSchema` opt in explicitly.
  * @returns An array of generated TypeScript files
  *
  * @example
@@ -168,6 +171,7 @@ export const buildSchema = async (
       readonly,
       typeSuffix,
       importExt,
+      isRoot: node.isRoot,
       ...(node.ref !== undefined ? { selfRef: node.ref } : {}),
       ...(logWarnings !== undefined ? { logWarnings } : {}),
       ...(strict !== undefined ? { strict } : {}),

@@ -87,6 +87,14 @@ type GenerateParserOptions = {
    * validate against the wrong schema.
    */
   readonly reservedNames?: ReadonlySet<string>
+  /**
+   * True when this schema is the root document (not a `$ref`-reached definition).
+   * The root type name is user-derived (schema `title`, filename, or `--root-type`),
+   * so the JSON Schema meta-schema special case — keyed on the literal name
+   * `Schema` — must not apply to it, or a common `schema.json` root would silently
+   * generate a validation-free pass-through parser.
+   */
+  readonly isRoot?: boolean
 }
 
 /**
@@ -1955,8 +1963,12 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   const suffix = options?.typeSuffix ?? ''
 
   // Special case for the self-referential JSON Schema meta-schema type (e.g.
-  // `Schema` / `SchemaObject`) - it can be any JSON Schema.
-  if (typeName === `Schema${suffix}`) {
+  // `Schema` / `SchemaObject`) - it can be any JSON Schema. This is an OpenAPI
+  // heuristic for a `$defs`/`components.schemas` entry named `schema`; it must
+  // never fire for the root document, whose name is user-derived (a `schema.json`
+  // file naturally yields the root type `Schema`) and would otherwise collapse
+  // to a validation-free pass-through parser.
+  if (!options?.isRoot && typeName === `Schema${suffix}`) {
     return generateSchemaObjectParser(typeName)
   }
 

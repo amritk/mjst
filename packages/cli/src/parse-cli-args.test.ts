@@ -274,6 +274,21 @@ describe('parse-cli-args', () => {
     expect(() => parseCliArgs(['--import-ext', 'mjs', '--schema', 's.json'])).toThrow(/Invalid --import-ext value/)
   })
 
+  it('parses the rootType flag in both spellings', () => {
+    expect(parseCliArgs(['--root-type', 'Program', '--schema', 's.json'])).toEqual({
+      rootType: 'Program',
+      schema: 's.json',
+    })
+    expect(parseCliArgs(['--rootType=SpecPlan', '--schema', 's.json'])).toEqual({
+      rootType: 'SpecPlan',
+      schema: 's.json',
+    })
+  })
+
+  it('requires a value for --root-type', () => {
+    expect(() => parseCliArgs(['--root-type', '--schema', 's.json'])).toThrow(/expects a value/)
+  })
+
   it('parses a valid --input value', () => {
     expect(parseCliArgs(['--input', 'zod'])).toEqual({ input: 'zod' })
   })
