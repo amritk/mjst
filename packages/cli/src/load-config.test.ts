@@ -115,6 +115,15 @@ describe('load-config', () => {
     expect(await loadConfig(configPath)).toEqual({ schema: 's.json' })
   })
 
+  it('loads rootType from a config file and ignores a non-string value', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}-root.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', rootType: 'Program' }))
+    expect(await loadConfig(configPath)).toEqual({ schema: 's.json', rootType: 'Program' })
+
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', rootType: 42 }))
+    expect(await loadConfig(configPath)).toEqual({ schema: 's.json' })
+  })
+
   it('loads a boolean banner and ignores an invalid helpers value', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
     await writeFile(configPath, JSON.stringify({ banner: true, helpers: 'bogus' }))

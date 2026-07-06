@@ -22,6 +22,7 @@ type MutableConfig = {
   typeSuffix?: string
   banner?: boolean | string
   importExt?: 'js' | 'ts'
+  rootType?: string
 }
 
 // Boolean flags toggle on by presence and accept `--flag=false` to opt out.
@@ -44,6 +45,7 @@ const VALUE_KEYS = new Set<keyof MutableConfig>([
   'helpers',
   'typeSuffix',
   'importExt',
+  'rootType',
 ])
 
 // Recognized flags that don't map into CliConfig because they're consumed
@@ -88,6 +90,9 @@ const assignValue = (config: MutableConfig, key: string, value: string): boolean
       return true
     case 'typeSuffix':
       config.typeSuffix = value
+      return true
+    case 'rootType':
+      config.rootType = value
       return true
     case 'input': {
       const parsed = parseInputValue(value)

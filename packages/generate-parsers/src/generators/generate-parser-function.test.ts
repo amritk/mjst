@@ -1243,6 +1243,26 @@ describe('generate-parser-function', () => {
     expect(result).toContain('return {} as Schema')
   })
 
+  it('does not apply the meta-schema pass-through to a root type named Schema', () => {
+    // A `schema.json` file with no title now derives the root type name
+    // `Schema`; the OpenAPI meta-schema heuristic (keyed on that literal name)
+    // must not turn the root parser into a validation-free pass-through.
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        count: { type: 'number' },
+      },
+      required: ['name'],
+    }
+
+    const result = generateParserFunction(schema, 'Schema', { useRefImports: true, strict: true, isRoot: true })
+
+    // Real object validation instead of the boolean/`{} as Schema` pass-through.
+    expect(result).not.toContain('return {} as Schema')
+    expect(result).toContain('name')
+  })
+
   it('uses bracket notation for hyphenated property keys with $ref', () => {
     const schema: JSONSchema = {
       type: 'object',

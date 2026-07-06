@@ -39,4 +39,22 @@ describe('derive-root-type-name', () => {
     expect(deriveRootTypeName(true)).toBe('Document')
     expect(deriveRootTypeName(false)).toBe('Document')
   })
+
+  it('derives the name from the fallback filename when the title is missing', () => {
+    expect(deriveRootTypeName({ type: 'object' }, 'spec-plan')).toBe('SpecPlan')
+    expect(deriveRootTypeName({ type: 'object' }, 'program')).toBe('Program')
+  })
+
+  it('prefers a usable title over the fallback filename', () => {
+    expect(deriveRootTypeName({ title: 'My Config' }, 'spec-plan')).toBe('MyConfig')
+  })
+
+  it('uses the fallback filename when the title has no usable characters', () => {
+    expect(deriveRootTypeName({ title: '   ---   ' }, 'spec-plan')).toBe('SpecPlan')
+  })
+
+  it('falls back to Document when neither title nor filename is usable', () => {
+    expect(deriveRootTypeName({ type: 'object' }, '   ')).toBe('Document')
+    expect(deriveRootTypeName(true, 'spec-plan')).toBe('SpecPlan')
+  })
 })

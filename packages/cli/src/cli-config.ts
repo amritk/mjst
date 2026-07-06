@@ -94,13 +94,22 @@ export type CliConfig = {
    * Extension emitted on every relative import specifier in the generated
    * output (cross-file `$ref` imports, the index barrel, and embedded-helper
    * imports).
-   * - `'js'` (default): the standard TS NodeNext form (`./x.js` resolving to a
-   *   sibling `x.ts`), accepted by tsc, Bun, and bundlers, and required by
-   *   `build`.
-   * - `'ts'`: the literal on-disk paths, so the generated `.ts` sources run
-   *   directly under Node's type stripping (Node 22.6+ with
-   *   `--experimental-strip-types`, default from Node 23). Incompatible with
-   *   `build` — tsc refuses to emit from `.ts` specifiers.
+   * - `'ts'` (default): the literal on-disk paths, so the generated `.ts`
+   *   sources load under Bun, Node's type stripping (Node 22.6+ with
+   *   `--experimental-strip-types`, unflagged from 22.18/23), and tsc with
+   *   `allowImportingTsExtensions`. Incompatible with `build` — tsc refuses
+   *   to emit from `.ts` specifiers.
+   * - `'js'`: the standard TS NodeNext form (`./x.js` resolving to a sibling
+   *   `x.ts`), for output that will be compiled. Used automatically when
+   *   `build` is set and no extension was chosen explicitly.
    */
   readonly importExt?: 'js' | 'ts'
+  /**
+   * Name for the root type of a single-`schema` run (e.g. `'Program'` yields
+   * `parseProgram` / `validateProgramShape`). When omitted, the name is
+   * derived from the schema's `title`, falling back to the schema filename in
+   * PascalCase (`spec-plan.json` → `SpecPlan`) and then to `'Document'`.
+   * Not supported with `schemaDir`, where each schema names its own root.
+   */
+  readonly rootType?: string
 }

@@ -80,6 +80,13 @@ type GenerateFileOptions = {
    * stripping.
    */
   readonly importExt?: ImportExtension
+  /**
+   * True when this file is the root document rather than a `$ref`-reached
+   * definition. Forwarded to the parser generator so the JSON Schema
+   * meta-schema special case (type name `Schema`) never applies to a
+   * user-named root.
+   */
+  readonly isRoot?: boolean
 }
 
 /** Result of generating a single parser file. */
@@ -156,6 +163,7 @@ export const generateFile = (
     useRefImports: true,
     typeSuffix,
     reservedNames,
+    ...(options?.isRoot !== undefined ? { isRoot: options.isRoot } : {}),
     ...(rootSchema !== undefined ? { rootSchema } : {}),
     ...(options?.logWarnings !== undefined ? { logWarnings: options.logWarnings } : {}),
     ...(options?.strict !== undefined ? { strict: options.strict } : {}),

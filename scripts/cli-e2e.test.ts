@@ -32,7 +32,8 @@ const [nodeMajor = 0, nodeMinor = 0] = execFileSync('node', ['--version'], { enc
   .map(Number)
 const supportsTypeStripping = nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 6)
 const stripTypesArgs = nodeMajor >= 23 ? [] : ['--experimental-strip-types']
-const itUnderTypeStripping = supportsTypeStripping ? it.fails : it.skip
+// Tests that need Node's type stripping only run on a runtime that supports it.
+const itWithTypeStripping = supportsTypeStripping ? it : it.skip
 
 /** Object with a nested inline object carrying an enum, plus a minItems array. */
 const PLAN_SCHEMA = {
@@ -147,6 +148,109 @@ describe('cli-e2e', () => {
     const { stdout } = await runNode(['--input-type=module', '-e', script])
     return JSON.parse(stdout.trim().split('\n').at(-1) ?? '{}') as Record<string, Probe>
   }
+
+  it('prints usage when invoked with no arguments', async () => {
+    const { stdout } = await runNode([CLI_BIN])
+    expect(stdout).toContain('Usage:')
+    expect(stdout).toContain('--schema')
+    expect(stdout).toContain('--import-ext')
+    expect(stdout).toContain('--root-type')
+  })
+
+  it('prints usage for --help and -h', async () => {
+    const long = await runNode([CLI_BIN, '--help'])
+    const short = await runNode([CLI_BIN, '-h'])
+    expect(long.stdout).toContain('Usage:')
+    expect(short.stdout).toContain('Usage:')
+  })
+
+  it('derives the root type name from the schema filename when there is no title', async () => {
+    const caseDir = join(workDir, 'filename-root')
+    await mkdir(caseDir, { recursive: true })
+    const schemaPath = join(caseDir, 'spec-plan.json')
+    await writeFile(
+      schemaPath,
+      JSON.stringify({ type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }),
+      'utf-8',
+    )
+    const outDir = join(caseDir, 'out')
+    await runNode([CLI_BIN, '--schema', schemaPath, '--outDir', outDir, '--helpers', 'embedded'])
+
+    // spec-plan.json → SpecPlan / parseSpecPlan, not the old generic Document.
+    const root = await readFile(join(outDir, 'specplan.ts'), 'utf-8')
+    expect(root).toContain('SpecPlan')
+    const index = await readFile(join(outDir, 'index.ts'), 'utf-8')
+    expect(index).toContain('parseSpecPlan')
+  })
+
+  it('overrides the root type name with --root-type on a single schema', async () => {
+    const caseDir = join(workDir, 'root-type-flag')
+    await mkdir(caseDir, { recursive: true })
+    const schemaPath = join(caseDir, 'schema.json')
+    await writeFile(schemaPath, JSON.stringify({ type: 'object', properties: { n: { type: 'string' } } }), 'utf-8')
+    const outDir = join(caseDir, 'out')
+    await runNode([
+      CLI_BIN,
+      '--schema',
+      schemaPath,
+      '--outDir',
+      outDir,
+      '--helpers',
+      'embedded',
+      '--root-type',
+      'Program',
+    ])
+
+    const index = await readFile(join(outDir, 'index.ts'), 'utf-8')
+    expect(index).toContain('parseProgram')
+  })
+
+  it('rejects --root-type combined with --schema-dir', async () => {
+    const caseDir = join(workDir, 'root-type-schema-dir')
+    await mkdir(join(caseDir, 'schemas'), { recursive: true })
+    await writeFile(join(caseDir, 'schemas/a.json'), JSON.stringify({ type: 'object' }), 'utf-8')
+    await expect(
+      runNode([
+        CLI_BIN,
+        '--schema-dir',
+        join(caseDir, 'schemas'),
+        '--outDir',
+        join(caseDir, 'out'),
+        '--root-type',
+        'Program',
+      ]),
+    ).rejects.toThrow(/--root-type cannot be combined with --schema-dir/)
+  })
+
+  it('auto-detects package mode from a declared @amritk/helpers dependency', async () => {
+    // A consumer project that declares @amritk/helpers: auto-detection must
+    // pick 'package' so generated code imports from the shared install.
+    const projectDir = join(workDir, 'declared-helpers')
+    await mkdir(projectDir, { recursive: true })
+    await writeFile(
+      join(projectDir, 'package.json'),
+      JSON.stringify({ name: 'consumer', dependencies: { '@amritk/helpers': '^0.1.0' } }),
+      'utf-8',
+    )
+    const schemaPath = join(projectDir, 'schema.json')
+    await writeFile(schemaPath, JSON.stringify({ title: 'Doc', type: 'object' }), 'utf-8')
+    const outDir = join(projectDir, 'out')
+    const { stdout } = await runNode([CLI_BIN, '--schema', schemaPath, '--outDir', outDir])
+    expect(stdout).toContain('Helpers mode: package (auto-detected)')
+  })
+
+  it('falls back to embedded mode with a tip when @amritk/helpers is undeclared', async () => {
+    // No package.json above the output dir → embedded, plus the nudge to
+    // declare @amritk/helpers.
+    const projectDir = join(workDir, 'undeclared-helpers')
+    await mkdir(projectDir, { recursive: true })
+    const schemaPath = join(projectDir, 'schema.json')
+    await writeFile(schemaPath, JSON.stringify({ title: 'Doc', type: 'object', properties: {} }), 'utf-8')
+    const outDir = join(projectDir, 'out')
+    const { stdout } = await runNode([CLI_BIN, '--schema', schemaPath, '--outDir', outDir])
+    expect(stdout).toContain('Helpers mode: embedded (auto-detected)')
+    expect(stdout).toContain('Tip: add @amritk/helpers as a dependency')
+  })
 
   // Pins the 0.7.15 fix: minItems used to be silently ignored, so empty
   // `ensures`/`axioms` arrays sailed through downstream parsers.
@@ -436,20 +540,39 @@ describe('cli-e2e', () => {
     expect(probes.garbage?.ok).toBe(false)
   })
 
-  // KNOWN GAP (accepted limitation from the 0.7.15 evaluation): by default the
-  // generated .ts sources import siblings as `./x.js`, which tsc and Bun
-  // resolve to the .ts files but Node type stripping does not — it wants the
-  // literal path on disk. `--import-ext ts` (below) is the opt-in that fixes
-  // this; the default stays `.js` so `--build` keeps working.
-  itUnderTypeStripping('generated .ts sources run directly under Node type stripping', async () => {
-    const outDir = await generate('type-stripping', PLAN_SCHEMA, ['--strict'])
-    await runNode([...stripTypesArgs, join(outDir, 'index.ts')])
+  // The default is now `--import-ext ts`: without --build the generated .ts
+  // sources import siblings as `./x.ts`, the literal on-disk path Node type
+  // stripping resolves. This is the main-fix regression pin — generated output
+  // must run under plain `node` with no build step and no explicit flag.
+  // WORKFLOW_SCHEMA has a cross-file $ref (steps[].owner → #/$defs/person), so
+  // the generated index imports a sibling module — the exact relative-import
+  // path that broke under Node before `.ts` became the default extension.
+  itWithTypeStripping('generated .ts sources run directly under Node type stripping by default', async () => {
+    const outDir = await generate('type-stripping', WORKFLOW_SCHEMA, ['--strict'])
+
+    // The sibling module is imported with the literal `.ts` path so Node type
+    // stripping resolves it (it does not remap `.js` → `.ts`).
+    const index = await readFile(join(outDir, 'index.ts'), 'utf-8')
+    expect(index).toContain(".ts'")
+    expect(index).not.toContain(".js'")
+
+    const script = `
+      import { parseWorkflow } from ${JSON.stringify(join(outDir, 'index.ts'))}
+      parseWorkflow({ steps: [{ kind: 'manual', owner: { name: 'a' } }] })
+      let threw = false
+      try { parseWorkflow({ steps: [{ kind: 'bogus' }] }) } catch { threw = true }
+      if (!threw) throw new Error('strict parser did not reject a bad nested enum')
+      console.log('ok')
+    `
+    const scriptPath = join(outDir, 'probe.ts')
+    await writeFile(scriptPath, script, 'utf-8')
+    const { stdout } = await runNode([...stripTypesArgs, scriptPath])
+    expect(stdout).toContain('ok')
   })
 
-  // --import-ext ts emits literal `.ts` specifiers (cross-file $refs, the index
-  // barrel, embedded _helpers) so the sources are directly runnable under Node
-  // type stripping — no tsc, no bundler.
-  const itWithTypeStripping = supportsTypeStripping ? it : it.skip
+  // --import-ext ts is now the default, but keep the explicit form working too:
+  // literal `.ts` specifiers (cross-file $refs, the index barrel, embedded
+  // _helpers) so the sources are directly runnable under Node type stripping.
   itWithTypeStripping('runs generated sources under Node type stripping with --import-ext ts', async () => {
     const outDir = await generate('import-ext-ts', WORKFLOW_SCHEMA, ['--strict', '--import-ext', 'ts'])
 
