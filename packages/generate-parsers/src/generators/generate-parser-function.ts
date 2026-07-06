@@ -742,11 +742,32 @@ type InlineSubTypeNames = {
   readonly arrayItems: Map<string, string>
 }
 
+/**
+ * Shared empty result for the common no-inline-sub-types case, so the per-node
+ * calls (parser and validator, for every object node, on every generation)
+ * allocate nothing. Callers only read from the maps.
+ */
+const EMPTY_SUB_TYPES: InlineSubTypeNames = { objects: new Map(), arrayItems: new Map() }
+
 const collectInlineSubTypes = (schema: JSONSchema, typeName: string): InlineSubTypeNames => {
+  if (!hasProperties(schema)) return EMPTY_SUB_TYPES
+  const props = schema.properties as Record<string, JSONSchema>
+
+  // Cheap match scan first — most object nodes have neither inline object
+  // properties nor inline-object array items, and skipping the Map/Set/closure
+  // allocations for them is a measurable share of generation time.
+  let hasMatch = false
+  for (const key in props) {
+    const propSchema = props[key] as JSONSchema
+    if (isInlineObjectProperty(propSchema) || isInlineObjectArrayProperty(propSchema)) {
+      hasMatch = true
+      break
+    }
+  }
+  if (!hasMatch) return EMPTY_SUB_TYPES
+
   const objects = new Map<string, string>()
   const arrayItems = new Map<string, string>()
-  if (!hasProperties(schema)) return { objects, arrayItems }
-
   const used = new Set<string>()
   const claim = (base: string): string => {
     let subName = base
@@ -755,7 +776,8 @@ const collectInlineSubTypes = (schema: JSONSchema, typeName: string): InlineSubT
     return subName
   }
 
-  for (const [key, propSchema] of Object.entries(schema.properties)) {
+  for (const key in props) {
+    const propSchema = props[key] as JSONSchema
     if (isInlineObjectProperty(propSchema)) {
       objects.set(key, claim(`${typeName}${pascalCaseKey(key) || 'Value'}`))
     } else if (isInlineObjectArrayProperty(propSchema)) {
@@ -789,19 +811,25 @@ const hasStrictKeys = (schema: JSONSchema): boolean => {
  * breaks the presence proof).
  */
 const exactKeyCountOf = (schema: JSONSchema): number | null => {
-  if (!isSchemaObject(schema) || !hasProperties(schema)) return null
+  if (!isSchemaObject(schema) || !hasProperties(schema) || !hasRequired(schema)) return null
   const props = schema.properties as Record<string, JSONSchema>
-  const declared = Object.keys(props)
-  if (declared.length === 0) return null
-  const required = new Set<string>(hasRequired(schema) ? (schema.required as string[]) : [])
-  if (required.size !== declared.length) return null
-  for (const key of declared) {
+  const required = schema.required as readonly string[]
+  // Allocation-free on purpose: this runs for every object node, in both the
+  // parser and the validator, on every generation. Property counts are small,
+  // so the O(n²) `includes` beats building a Set.
+  let declaredCount = 0
+  for (const key in props) {
+    declaredCount++
     // Every declared key must be required, and its check must prove presence —
     // all schema-object checks fail on undefined, but a true/false schema
     // literal emits no check at all.
-    if (!required.has(key) || !isSchemaObject(props[key] as JSONSchema)) return null
+    if (!required.includes(key) || !isSchemaObject(props[key] as JSONSchema)) return null
   }
-  return declared.length
+  // Every declared key is required (above) and the counts match, so the
+  // required list is exactly the declared keys (a duplicated required entry
+  // would leave some declared key uncovered and fail the loop).
+  if (declaredCount === 0 || required.length !== declaredCount) return null
+  return declaredCount
 }
 
 /**
@@ -846,7 +874,10 @@ const generateObjectParser = (
     return `${exportPrefix}const ${functionName} = (input: unknown): ${typeName} => isObject(input) ? input as ${typeName} : {} as ${typeName};`
   }
 
-  const properties = Object.entries((schema as { properties: Record<string, JSONSchema> }).properties)
+  const schemaProps = (schema as { properties: Record<string, JSONSchema> }).properties
+  // Keys once, values via lookup — Object.entries allocates a tuple per
+  // property and this runs for every object node on every generation.
+  const propertyKeys = Object.keys(schemaProps)
 
   // Inline nested object properties get a private sub-parser (plus shape
   // predicate and type alias) in the same file, so their fields are parsed for
@@ -859,7 +890,7 @@ const generateObjectParser = (
   const preamble: string[] = []
 
   for (const [key, subName] of subTypeNames) {
-    const propSchema = (schema as { properties: Record<string, JSONSchema> }).properties[key] as JSONSchema
+    const propSchema = schemaProps[key] as JSONSchema
     preamble.push(`type ${subName} = ${typeName}[${JSON.stringify(key)}];`)
     preamble.push(generateShapeValidator(propSchema, subName, useRefImports, suffix, false, stripUnknown))
     preamble.push(
@@ -878,7 +909,7 @@ const generateObjectParser = (
   }
 
   for (const [key, subName] of subItemNames) {
-    const propSchema = (schema as { properties: Record<string, JSONSchema> }).properties[key] as JSONSchema
+    const propSchema = schemaProps[key] as JSONSchema
     const itemSchema = (propSchema as { items: JSONSchema }).items
     // NonNullable strips the `| undefined` an optional array property carries.
     preamble.push(`type ${subName} = NonNullable<${typeName}[${JSON.stringify(key)}]>[number];`)
@@ -919,10 +950,7 @@ const generateObjectParser = (
   // predicate is not emitted at all — the shape validator derives the same
   // decision from the schema, so the cross-function contract stays in sync.
   const exactKeyCount = stripKeys ? exactKeyCountOf(schema) : null
-  const strictKeyCheck = unknownKeyCheck(
-    properties.map(([key]) => key),
-    `_knownKeys${typeName}`,
-  )
+  const strictKeyCheck = unknownKeyCheck(propertyKeys, `_knownKeys${typeName}`)
   if (stripKeys && exactKeyCount === null) {
     for (const declaration of strictKeyCheck.declarations) {
       preamble.push(`${declaration};`)
@@ -967,7 +995,8 @@ const generateObjectParser = (
   // declarations (TS2451). Dedupe by suffixing `_` until unique — the same
   // approach `collectInlineObjectProperties` uses — so each key gets its own var.
   const usedVarNames = new Set<string>()
-  for (const [key, propSchema] of properties) {
+  for (const key of propertyKeys) {
+    const propSchema = schemaProps[key] as JSONSchema
     const isRequired = isPropertyRequired(key, schema)
     let varName = toVarName(key)
     while (usedVarNames.has(varName)) varName = `${varName}_`
@@ -2057,7 +2086,8 @@ export const generateShapeValidator = (
     return stub
   }
 
-  const properties = Object.entries((schema as { properties: Record<string, JSONSchema> }).properties)
+  const schemaProps = (schema as { properties: Record<string, JSONSchema> }).properties
+  const propertyKeys = Object.keys(schemaProps)
   // Same deterministic naming as the parser's sub-parser generation, so the
   // referenced private shape predicates exist in the same file.
   const { objects: subTypeNames, arrayItems: subItemNames } = collectInlineSubTypes(schema, typeName)
@@ -2076,7 +2106,8 @@ export const generateShapeValidator = (
       : ''
   const checks: string[] = []
 
-  for (const [key, propSchema] of properties) {
+  for (const key of propertyKeys) {
+    const propSchema = schemaProps[key] as JSONSchema
     // Records of refs require iterating every value — too expensive for the fast path.
     if (shouldUseRecordRefImport(propSchema, useRefImports)) {
       return stub

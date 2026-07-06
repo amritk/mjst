@@ -2137,6 +2137,28 @@ describe('generate-parser-function', () => {
       expect(() => parse({ steps: [{}] })).toThrow("[PlanStepsItem] missing required property 'kind'")
     })
 
+    // Regression pin from the strict differential fuzzer: `wrongTypeCondition`
+    // had no `null` case, so a null-typed property was never enforced on the
+    // assertion path — a non-null value sailed through strict mode.
+    it('enforces null-typed properties in strict mode', () => {
+      const parse = evalGenerated<(input: unknown) => unknown>(
+        generateParserFunction(
+          {
+            type: 'object',
+            properties: { gone: { type: 'null' }, name: { type: 'string' } },
+            required: ['gone'],
+          },
+          'Tombstone',
+          { strict: true },
+        ),
+        'parseTombstone',
+      )
+
+      expect(parse({ gone: null })).toEqual({ gone: null })
+      expect(() => parse({ gone: false })).toThrow("[Tombstone] field 'gone' expected null, got boolean")
+      expect(() => parse({ gone: null, name: 42 })).toThrow("[Tombstone] field 'name' expected string, got number")
+    })
+
     it('hands back clean array elements by reference in strip mode', () => {
       const parse = evalGenerated<(input: unknown) => { steps: Record<string, unknown>[] }>(
         generateParserFunction(stepsSchema, 'Plan', { strict: true, stripUnknown: true }),

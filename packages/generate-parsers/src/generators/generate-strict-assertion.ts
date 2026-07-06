@@ -59,6 +59,11 @@ const wrongTypeCondition = (accessor: string, type: string): string | null => {
       return `(typeof ${accessor} !== "number" || !Number.isInteger(${accessor}))`
     case 'boolean':
       return `typeof ${accessor} !== "boolean"`
+    case 'null':
+      // Missing from this switch historically, which meant a null-typed
+      // property was never enforced on the assertion path — the strict-mode
+      // differential fuzzer caught non-null values sailing through.
+      return `${accessor} !== null`
     case 'array':
       return `!Array.isArray(${accessor})`
     case 'object':
@@ -74,16 +79,25 @@ const wrongTypeCondition = (accessor: string, type: string): string | null => {
  */
 const typeLabel = (type: string): string => (type === 'integer' ? 'number' : type)
 
+// Characters that force the JSON.stringify escaping path below: quote,
+// backslash, C0 controls, and the JS line separators. Anything else sits
+// verbatim inside a double-quoted literal.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: the control range is the point
+const MESSAGE_NEEDS_ESCAPING = /["\\\u0000-\u001f\u2028\u2029]/
+
 /**
  * Emits `throw new Error(<message>[ + <suffixExpr>])`. The static message may
  * contain schema-controlled text (property names, patterns, enum values), so it
- * is always serialized with `JSON.stringify` — a key like `it's` or a pattern
- * containing a quote or newline can no longer break out of the string literal or
- * inject code. `suffixExpr`, when given, is a runtime expression appended to the
- * message (e.g. `typeof input`).
+ * is serialized with `JSON.stringify` whenever it carries a character that
+ * could break out of the string literal or inject code (a key like `it's` or a
+ * pattern with a quote or newline). The common all-plain message skips the full
+ * escaper — a strict parser emits one of these per assertion, and the
+ * stringify calls were a measurable slice of generation time. `suffixExpr`,
+ * when given, is a runtime expression appended to the message (e.g.
+ * `typeof input`).
  */
 const throwError = (message: string, suffixExpr?: string): string => {
-  const literal = JSON.stringify(message)
+  const literal = MESSAGE_NEEDS_ESCAPING.test(message) ? JSON.stringify(message) : `"${message}"`
   return suffixExpr ? `throw new Error(${literal} + (${suffixExpr}))` : `throw new Error(${literal})`
 }
 
@@ -321,8 +335,9 @@ export const generateObjectStrictAssertion = (
 
   const required = new Set<string>(hasRequired(schema) ? schema.required : [])
 
-  for (const [key, propSchema] of Object.entries(schema.properties)) {
-    lines.push(...generatePropertyAssertion(key, propSchema, required.has(key), typeName, context))
+  const props = schema.properties as Record<string, JSONSchema>
+  for (const key in props) {
+    lines.push(...generatePropertyAssertion(key, props[key] as JSONSchema, required.has(key), typeName, context))
   }
 
   return lines

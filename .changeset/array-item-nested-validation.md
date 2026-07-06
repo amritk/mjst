@@ -57,3 +57,21 @@ instead of −23%, safe (strip) mode retains a single-digit cost (−4 to −12%
 across runs, from −19%) for stripping elements it previously ignored, and the
 count form makes several closed shapes faster than before (`User · strict`
 +14%, `assert-strict` +80%).
+
+Generation itself is also faster, offsetting the larger emitted output: the
+index barrel recovers export names with a single line-start walk instead of
+multiline-regex scans, the per-node schema walks drop their Set/Map/tuple
+allocations (`exactKeyCountOf`, `collectInlineSubTypes`, `Object.entries`
+loops), and plain assertion messages skip the `JSON.stringify` escaper. These
+changes are output-identical (verified byte-for-byte against the previous
+generator); `buildSchema` on shapes without array items runs 15-30% faster
+than the previous release, and the array-item shapes build at previous-release
+speed despite emitting ~30% more code.
+
+A new strict-mode differential fuzzer (700 random schemas × 8 mutated inputs
+per mode, Ajv as the oracle) pins the accept/reject contract of plain strict
+and strict+stripUnknown parsing across arbitrary shapes — and immediately
+caught a long-standing hole it now guards: `type: 'null'` properties were
+never enforced on the strict assertion path, so non-null values sailed
+through. Strict parsers now throw `expected null, got ...` like any other
+type mismatch.
