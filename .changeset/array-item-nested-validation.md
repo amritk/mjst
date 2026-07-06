@@ -1,5 +1,6 @@
 ---
 '@amritk/generate-parsers': minor
+'@amritk/helpers': minor
 ---
 
 Validate nested enums and $refs inside array items, closing the last
@@ -45,14 +46,18 @@ throughput cost of the new element validation:
   guard plus only its residual terms, so a carries-extras value never runs the
   same typed checks twice. Exported root parsers still return a fresh object.
 
-Two subtle semantic notes come with this: the fast-path no-extras test uses
-own-key semantics (Ajv's JSON-data-model view — an object whose only extra is
-an inherited JS property takes the slow path, where the historical `for..in`
-rejection still applies), and strip-mode output may share identity with clean
-nested input values (it always shared them for `{ ...input }` fast paths).
-`validateArray` likewise returns the input array by reference when every
-element parses to itself, materializing a copy lazily on the first replaced
-element — clean arrays cost no allocation.
+Two subtle semantic notes come with this: the own-key-count fast path only
+fires for plain objects (`Object.getPrototypeOf(input) === Object.prototype`),
+so a crafted prototype cannot satisfy the typed checks through inherited
+properties — non-plain inputs take the slow path, where the historical
+`for..in` rejection of inherited enumerable keys still applies. And strip-mode
+output may share identity with clean nested input values (it always shared
+them for `{ ...input }` fast paths). `validateArray` — a published
+`@amritk/helpers` API — likewise returns the input array by reference when
+every element parses to itself, materializing a copy lazily on the first
+replaced element, so clean arrays cost no allocation; exported root-array
+parsers still hand back a fresh container by copying exactly when that
+identity return happens.
 
 Bench delta vs the previous release on the Order shape (array of closed
 3-field items): strict parse throughput is now at or slightly above par

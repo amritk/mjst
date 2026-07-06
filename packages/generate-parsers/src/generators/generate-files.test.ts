@@ -3,6 +3,35 @@ import { describe, expect, it } from 'vitest'
 import { generateFile } from './generate-files'
 
 describe('generate-files', () => {
+  // Review pin: a root array named List whose items $ref '#/$defs/listItem'
+  // imports parseListItem — the private item machinery used to synthesize the
+  // same identifier and shadow the import (TS2440), silently validating the
+  // ref against the wrong schema. Synthesized names dedup against the file's
+  // import-derived names.
+  it('never shadows an imported identifier with a synthesized item sub-type name', () => {
+    const rootSchema = {
+      title: 'List',
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { ref: { $ref: '#/$defs/list-item' }, kind: { enum: ['a', 'b'] } },
+        required: ['kind'],
+      },
+      $defs: {
+        'list-item': { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      },
+    }
+
+    const result = generateFile(rootSchema as never, 'List', { strict: true, rootSchema: rootSchema as never })
+
+    expect(result.content).toContain('import { type ListItem, parseListItem, validateListItemShape } from')
+    // The local item machinery uses a non-colliding name…
+    expect(result.content).toContain('const parseList_Item')
+    // …and never redeclares the imported ones.
+    expect(result.content).not.toContain('const parseListItem ')
+    expect(result.content).not.toContain('type ListItem =')
+  })
+
   it('generates combined import for $ref property', () => {
     const schema = {
       type: 'object',

@@ -6,7 +6,7 @@ import {
   type HelpersMode,
   type RuntimeHelperName,
 } from '#helpers/collect-helpers'
-import { collectImports, type ImportExtension } from '#helpers/collect-imports'
+import { collectImports, collectImportTypeNames, type ImportExtension } from '#helpers/collect-imports'
 
 import { generateParserFunction, generateShapeValidator } from './generate-parser-function'
 
@@ -147,15 +147,21 @@ export const generateFile = (
   }
 
   const stripUnknown = options?.stripUnknown ?? false
+  // Names this file imports for its $refs: synthesized private sub-type names
+  // dedup against them so they can never shadow an imported identifier. The
+  // parser and the shape validator must receive the SAME set — their derived
+  // sub-names have to agree.
+  const reservedNames = collectImportTypeNames(schema, { selfRef, rootSchema, typeSuffix })
   const parserFunction = generateParserFunction(schema, typeName, {
     useRefImports: true,
     typeSuffix,
+    reservedNames,
     ...(rootSchema !== undefined ? { rootSchema } : {}),
     ...(options?.logWarnings !== undefined ? { logWarnings: options.logWarnings } : {}),
     ...(options?.strict !== undefined ? { strict: options.strict } : {}),
     ...(options?.stripUnknown !== undefined ? { stripUnknown: options.stripUnknown } : {}),
   })
-  const shapeValidator = generateShapeValidator(schema, typeName, true, typeSuffix, true, stripUnknown)
+  const shapeValidator = generateShapeValidator(schema, typeName, true, typeSuffix, true, stripUnknown, reservedNames)
   const combinedFunctions = `${shapeValidator}\n\n${parserFunction}`
   const helpers: CollectedHelpers = collectHelpers(
     combinedFunctions,

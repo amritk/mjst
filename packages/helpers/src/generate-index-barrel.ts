@@ -39,16 +39,18 @@ const exportNameAt = (content: string, at: number, prefix: string): string | nul
   return end > at + prefix.length ? content.slice(at + prefix.length, end) : null
 }
 
+/** True for every JS LineTerminator code unit — the same set the old `/m` regexes anchored after. */
+const isLineTerminator = (code: number): boolean => code === 10 || code === 13 || code === 8232 || code === 8233
+
 /**
- * Collects `export type` / `export const` names with a single indexOf walk over
- * the line starts. A multiline-anchored regex scan (`/^export .../gm`) does the
- * same job but showed up at several percent of total generation time in CPU
- * profiles — the regex engine re-anchors at every line of every generated file
- * on every build.
+ * Collects `export type` / `export const` names with a single line-start walk.
+ * A multiline-anchored regex scan (`/^export .../gm`) does the same job but
+ * showed up at several percent of total generation time in CPU profiles — the
+ * regex engine re-anchors at every line of every generated file on every build.
  */
 const collectExportNames = (content: string, typeNames: string[], constNames: string[]): void => {
   let lineStart = 0
-  while (lineStart !== -1 && lineStart < content.length) {
+  while (lineStart < content.length) {
     // charCode prefilter: almost every line starts with whitespace, a brace, or
     // a keyword other than `export` — one integer compare skips the substring
     // comparison for all of them (101 === 'e').
@@ -61,8 +63,14 @@ const collectExportNames = (content: string, typeNames: string[], constNames: st
         if (constName !== null) constNames.push(constName)
       }
     }
-    const next = content.indexOf('\n', lineStart)
-    lineStart = next === -1 ? -1 : next + 1
+    // Advance past the next line break of ANY JS flavor (LF, CR, CRLF,
+    // U+2028, U+2029) — matching the multiline regexes this walk replaced,
+    // which treated all of them as line starts.
+    let next = lineStart
+    while (next < content.length && !isLineTerminator(content.charCodeAt(next))) next++
+    if (next >= content.length) break
+    // \r\n counts as one break.
+    lineStart = content.charCodeAt(next) === 13 && content.charCodeAt(next + 1) === 10 ? next + 2 : next + 1
   }
 }
 

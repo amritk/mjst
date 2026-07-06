@@ -32,14 +32,25 @@ type Stats = { median: number; spread: number }
 
 type WorkerOutput = { parityOk?: boolean } & Record<string, Stats | boolean | string | undefined>
 
+/**
+ * A worker run is a result, `null` for a case the tree genuinely does not have
+ * (rendered "n/a (new case)"), or `'failed'` for a crashed/incompatible worker
+ * — kept distinct so harness breakage is loud (⚠ + nonzero exit) instead of
+ * masquerading as a benign new case.
+ */
+type WorkerRun = WorkerOutput | null | 'failed'
+
+/** Set when any worker run failed; the process exits nonzero so CI goes red. */
+let sawWorkerFailure = false
+
 type Row = {
   readonly suite: string
   readonly caseName: string
   readonly metric: string
   /** true → ops/s (bigger is better); false → ms (smaller is better) */
   readonly higherIsBetter: boolean
-  readonly base: Stats | null
-  readonly head: Stats | null
+  readonly base: Stats | null | 'failed'
+  readonly head: Stats | null | 'failed'
   /** false when either tree's worker reported a parity failure for this case. */
   readonly parityOk?: boolean
 }
@@ -75,7 +86,7 @@ const gitSha = (tree: string): string => {
  * worker, exactly as that tree's `bench/run.ts` would. Returns null when the
  * worker fails — most commonly a case name that doesn't exist in that tree.
  */
-const runWorker = (tree: string, pkg: string, caseName: string): WorkerOutput | null => {
+const runWorker = (tree: string, pkg: string, caseName: string): WorkerRun => {
   const benchDir = join(tree, 'packages', pkg, 'bench')
   const worker = join(benchDir, 'worker.ts')
   if (!existsSync(worker)) return null
@@ -86,29 +97,36 @@ const runWorker = (tree: string, pkg: string, caseName: string): WorkerOutput | 
       cwd: benchDir,
     })
     return JSON.parse(stdout) as WorkerOutput
-  } catch {
-    return null
+  } catch (error) {
+    // A tree that predates the case throws "unknown parse case" / "unknown
+    // bench case" — that is the benign "new case" outcome. Anything else is
+    // harness breakage and must be loud, not an "n/a" cell.
+    const detail = error instanceof Error ? `${error.message}\n${(error as { stderr?: string }).stderr ?? ''}` : ''
+    if (detail.includes('unknown parse case') || detail.includes('unknown bench case')) return null
+    sawWorkerFailure = true
+    console.error(`worker failed: ${pkg} · ${caseName} · ${tree}\n${detail.trim()}`)
+    return 'failed'
   }
 }
 
-/** The better of two throughput runs: higher `valid` median wins. */
-const betterOps = (a: WorkerOutput | null, b: WorkerOutput | null): WorkerOutput | null => {
-  if (!a) return b
-  if (!b) return a
+/** The better of two throughput runs: higher `valid` median wins; a real run beats null/'failed'. */
+const betterOps = (a: WorkerRun, b: WorkerRun): WorkerRun => {
+  if (a === null || a === 'failed') return b === null || b === 'failed' ? a : b
+  if (b === null || b === 'failed') return a
   const aMedian = (a['valid'] as Stats | undefined)?.median ?? 0
   const bMedian = (b['valid'] as Stats | undefined)?.median ?? 0
   return aMedian >= bMedian ? a : b
 }
 
-/** The better of two codegen runs: lower ms median wins. */
-const betterMs = (a: Stats | null, b: Stats | null): Stats | null => {
-  if (!a) return b
-  if (!b) return a
+/** The better of two codegen runs: lower ms median wins; a real run beats 'failed'. */
+const betterMs = (a: Stats | 'failed', b: Stats | 'failed'): Stats | 'failed' => {
+  if (a === 'failed') return b
+  if (b === 'failed') return a
   return a.median <= b.median ? a : b
 }
 
 /** One order-balanced ABBA measurement of a case on both trees. */
-const runPair = (pkg: string, caseName: string): { base: WorkerOutput | null; head: WorkerOutput | null } => {
+const runPair = (pkg: string, caseName: string): { base: WorkerRun; head: WorkerRun } => {
   const base1 = runWorker(base, pkg, caseName)
   const head1 = runWorker(head, pkg, caseName)
   const head2 = runWorker(head, pkg, caseName)
@@ -123,7 +141,7 @@ const runPair = (pkg: string, caseName: string): { base: WorkerOutput | null; he
  * unbuilt baseline resolves its workspace deps to sources via
  * `--conditions development`.
  */
-const codegenStats = (tree: string, schema: unknown, mode: string): Stats | null => {
+const codegenStats = (tree: string, schema: unknown, mode: string): Stats | 'failed' => {
   const worker = join(head, 'scripts', 'bench-codegen-worker.ts')
   try {
     const stdout = execFileSync(
@@ -132,8 +150,11 @@ const codegenStats = (tree: string, schema: unknown, mode: string): Stats | null
       { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 },
     )
     return JSON.parse(stdout) as Stats
-  } catch {
-    return null
+  } catch (error) {
+    sawWorkerFailure = true
+    const detail = error instanceof Error ? `${error.message}\n${(error as { stderr?: string }).stderr ?? ''}` : ''
+    console.error(`codegen worker failed: ${mode} · ${tree}\n${detail.trim()}`)
+    return 'failed'
   }
 }
 
@@ -143,7 +164,8 @@ const fmtOps = (n: number): string => {
   return n.toFixed(1)
 }
 
-const cell = (stats: Stats | null, higherIsBetter: boolean): string => {
+const cell = (stats: Stats | null | 'failed', higherIsBetter: boolean): string => {
+  if (stats === 'failed') return '⚠ worker failed'
   if (!stats) return 'n/a (new case)'
   const value = higherIsBetter ? fmtOps(stats.median) : `${stats.median.toFixed(2)}ms`
   return `${value} ±${(stats.spread * 100).toFixed(0)}%`
@@ -156,12 +178,25 @@ const NOISY_SPREAD = 0.1
 
 const delta = (row: Row): string => {
   const parity = row.parityOk === false ? ' ⚠parity' : ''
+  if (row.base === 'failed' || row.head === 'failed') return `—${parity}`
   if (!row.base || !row.head || row.base.median <= 0) return `—${parity}`
   const pct = (row.head.median - row.base.median) / row.base.median
   const improved = row.higherIsBetter ? pct > 0 : pct < 0
   const noisy = row.base.spread > NOISY_SPREAD || row.head.spread > NOISY_SPREAD
   const verdict = Math.abs(pct) < SIGNIFICANT ? '⚪' : improved ? '🟢' : '🔴'
   return `${pct >= 0 ? '+' : ''}${(pct * 100).toFixed(1)}% ${verdict}${noisy ? '~' : ''}${parity}`
+}
+
+/** Extracts one metric from a worker run, propagating the failure sentinel. */
+const statOf = (workerRun: WorkerRun, metric: string): Stats | null | 'failed' => {
+  if (workerRun === 'failed') return 'failed'
+  return (workerRun?.[metric] as Stats | undefined) ?? null
+}
+
+/** Parity is only meaningful for real runs; null/'failed' don't vote. */
+const pairParityOk = (baseRun: WorkerRun, headRun: WorkerRun): boolean => {
+  const bad = (r: WorkerRun): boolean => r !== null && r !== 'failed' && r.parityOk === false
+  return !bad(baseRun) && !bad(headRun)
 }
 
 const run = async (): Promise<void> => {
@@ -187,11 +222,9 @@ const run = async (): Promise<void> => {
       caseName: parseCase.name,
       metric: 'parse ops/s',
       higherIsBetter: true,
-      base: (baseResult?.['valid'] as Stats | undefined) ?? null,
-      head: (headResult?.['valid'] as Stats | undefined) ?? null,
-      parityOk:
-        (baseResult === null || baseResult.parityOk !== false) &&
-        (headResult === null || headResult.parityOk !== false),
+      base: statOf(baseResult, 'valid'),
+      head: statOf(headResult, 'valid'),
+      parityOk: pairParityOk(baseResult, headResult),
     })
   }
 
@@ -208,11 +241,9 @@ const run = async (): Promise<void> => {
         caseName: benchCase.name,
         metric: `${metric} ops/s`,
         higherIsBetter: true,
-        base: (baseResult?.[metric] as Stats | undefined) ?? null,
-        head: (headResult?.[metric] as Stats | undefined) ?? null,
-        parityOk:
-          (baseResult === null || baseResult.parityOk !== false) &&
-          (headResult === null || headResult.parityOk !== false),
+        base: statOf(baseResult, metric),
+        head: statOf(headResult, metric),
+        parityOk: pairParityOk(baseResult, headResult),
       })
     }
   }
@@ -255,6 +286,11 @@ const run = async (): Promise<void> => {
   const markdown = lines.join('\n')
   if (outputPath) writeFileSync(outputPath, `${markdown}\n`, 'utf-8')
   console.log(markdown)
+
+  if (sawWorkerFailure) {
+    console.error('one or more bench workers failed — the delta table above is incomplete')
+    process.exitCode = 1
+  }
 }
 
 await run()

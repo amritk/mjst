@@ -66,7 +66,13 @@ export const isInlineObjectProperty = (propSchema: JSONSchema): propSchema is JS
   if (!isSchemaObject(propSchema)) return false
   if (hasRef(propSchema) || hasEnum(propSchema) || hasConst(propSchema)) return false
   if (hasOneOf(propSchema) || hasAnyOf(propSchema) || hasAllOf(propSchema)) return false
-  if ('patternProperties' in propSchema || 'not' in propSchema || 'if' in propSchema) return false
+  // `then`/`else` must be excluded even without `if`: generateShapeValidator
+  // stubs any schema carrying them, so admitting one here would wire an
+  // always-false predicate into parent guards — and into validators the
+  // strict-union trust walk treats as false-sound, making a strict union
+  // reject valid input.
+  if ('patternProperties' in propSchema || 'not' in propSchema) return false
+  if ('if' in propSchema || 'then' in propSchema || 'else' in propSchema) return false
   // additionalProperties-as-schema records go through the record paths instead
   if (hasAdditionalProperties(propSchema) && typeof propSchema.additionalProperties !== 'boolean') return false
   return isObjectSchema(propSchema) && hasProperties(propSchema)

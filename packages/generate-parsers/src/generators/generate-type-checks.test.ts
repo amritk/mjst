@@ -165,6 +165,28 @@ describe('generate-type-checks', () => {
     expect(canEnforceUnion(branches, rootSchema)).toBe(true)
   })
 
+  it('stays sound when array items carry a bare then/else keyword', () => {
+    // generateShapeValidator stubs any schema with then/else; such items are
+    // excluded from the inline machinery, so the branch validator keeps a
+    // shallow (real) array check and strict enforcement remains safe.
+    const rootSchema = {
+      $defs: {
+        plan: {
+          type: 'object',
+          properties: {
+            list: {
+              type: 'array',
+              items: { type: 'object', properties: { x: { type: 'string' } }, then: { required: ['x'] } },
+            },
+          },
+          required: ['list'],
+        },
+      },
+    }
+    const branches: JSONSchema[] = [{ $ref: '#/$defs/plan' }, { type: 'string' }]
+    expect(canEnforceUnion(branches, rootSchema)).toBe(true)
+  })
+
   it('refuses strict enforcement when an array-item sub-predicate would be a stub', () => {
     // The item schema carries an `allOf` property, so its private shape
     // predicate is the `=> false` stub; validatePlanShape then returns false on
