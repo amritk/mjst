@@ -106,6 +106,15 @@ describe('load-config', () => {
     expect(result).toEqual({ schema: 's.json', helpers: 'embedded', typeSuffix: 'Object', banner: 'Generated file' })
   })
 
+  it('loads importExt and drops an invalid value', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}-ext.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', importExt: 'ts' }))
+    expect(await loadConfig(configPath)).toEqual({ schema: 's.json', importExt: 'ts' })
+
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', importExt: 'mjs' }))
+    expect(await loadConfig(configPath)).toEqual({ schema: 's.json' })
+  })
+
   it('loads a boolean banner and ignores an invalid helpers value', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
     await writeFile(configPath, JSON.stringify({ banner: true, helpers: 'bogus' }))

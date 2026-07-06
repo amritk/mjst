@@ -104,13 +104,49 @@ export const measure = (
   // boundary, so this guard keeps the accumulation (and the calls) alive.
   if (sink < 0) throw new Error('unreachable')
 
-  samples.sort((a, b) => a - b)
-  const min = samples[0] ?? 0
-  const max = samples[samples.length - 1] ?? 0
-  const median = samples[Math.floor(samples.length / 2)] ?? 0
-  const mean = samples.reduce((sum, s) => sum + s, 0) / samples.length
-  const variance = samples.reduce((sum, s) => sum + (s - mean) ** 2, 0) / samples.length
+  return statsOf(samples)
+}
+
+/**
+ * Reduces per-trial samples to {@link Stats}. Shared by {@link measure} and
+ * the out-of-tree measurement workers (scripts/bench-codegen-worker.ts), so
+ * every number in the bench tables is computed under the same statistics.
+ * `trimOutliers` drops the fastest and slowest sample before computing the
+ * spread — used by measurements whose windows can hit a GC stall that would
+ * otherwise mark an entirely stable run as noisy; the median is always over
+ * the full sample set.
+ */
+export const statsOf = (samples: readonly number[], options: { trimOutliers?: boolean } = {}): Stats => {
+  const sorted = [...samples].sort((a, b) => a - b)
+  const min = sorted[0] ?? 0
+  const max = sorted[sorted.length - 1] ?? 0
+  const median = sorted[Math.floor(sorted.length / 2)] ?? 0
+  const pool = options.trimOutliers && sorted.length > 2 ? sorted.slice(1, -1) : sorted
+  const mean = pool.reduce((sum, s) => sum + s, 0) / pool.length
+  const variance = pool.reduce((sum, s) => sum + (s - mean) ** 2, 0) / pool.length
   const spread = mean > 0 ? Math.sqrt(variance) / mean : 0
 
-  return { median, max, min, mean, spread, trials }
+  return { median, max, min, mean, spread, trials: samples.length }
+}
+
+/**
+ * Display conventions shared by the bench tables (both packages' run.ts and
+ * scripts/bench-compare.ts), so throughput numbers and noise flags always
+ * read the same everywhere.
+ */
+
+/** A coefficient of variation above this flags a sample as noisy (`~`). */
+export const NOISY_SPREAD = 0.1
+
+/** Human throughput: 1234567 → "1.23M", 12345 → "12.3k". */
+export const fmtOps = (n: number): string => {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return n.toFixed(1)
+}
+
+/** One table cell: throughput plus stability, `~`-flagged when noisy. */
+export const opsCell = (median: number, spread: number): string => {
+  const flag = spread > NOISY_SPREAD ? '~' : ' '
+  return `${flag}${fmtOps(median)} (±${(spread * 100).toFixed(0)}%)`
 }

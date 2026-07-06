@@ -550,4 +550,18 @@ describe('collect-imports', () => {
     expect(result).not.toContain("'./encoding'")
     expect(result).toContain("import type { Header } from './header.js';")
   })
+
+  it('emits .ts specifiers when importExt is ts', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { contact: { $ref: '#/$defs/contact' } },
+    }
+
+    expect(collectImports(schema, { importExt: 'ts' })).toEqual([
+      "import { type Contact, parseContact, validateContactShape } from './contact.ts';",
+    ])
+    expect(collectImports(schema, { typesOnly: true, importExt: 'ts' })).toEqual([
+      "import type { Contact } from './contact.ts';",
+    ])
+  })
 })

@@ -6,7 +6,7 @@ import {
   type HelpersMode,
   type RuntimeHelperName,
 } from '#helpers/collect-helpers'
-import { collectImports } from '#helpers/collect-imports'
+import { collectImports, collectImportTypeNames, type ImportExtension } from '#helpers/collect-imports'
 
 import { generateParserFunction, generateShapeValidator } from './generate-parser-function'
 
@@ -73,6 +73,13 @@ type GenerateFileOptions = {
    * Defaults to `''` (no suffix). Set to e.g. `'Object'` to emit `ContactObject`.
    */
   readonly typeSuffix?: string
+  /**
+   * Extension used on every relative import specifier (cross-file `$ref`
+   * imports and embedded-helper imports). Defaults to `'js'` (the TS NodeNext
+   * form); `'ts'` makes the generated sources runnable under Node's type
+   * stripping.
+   */
+  readonly importExt?: ImportExtension
 }
 
 /** Result of generating a single parser file. */
@@ -120,11 +127,12 @@ export const generateFile = (
   const rootSchema = options?.rootSchema
   const helpersMode: HelpersMode = options?.helpersMode ?? 'package'
   const typeSuffix = options?.typeSuffix ?? ''
+  const importExt: ImportExtension = options?.importExt ?? 'js'
   const typeDefinition = generateTypeDefinition(schema, typeName, { readonly: options?.readonly ?? false, typeSuffix })
 
   if (typesOnly) {
     // In types-only mode, skip the parser function and use type-only imports
-    const imports = collectImports(schema, { typesOnly: true, selfRef, rootSchema, typeSuffix })
+    const imports = collectImports(schema, { typesOnly: true, selfRef, rootSchema, typeSuffix, importExt })
     let result = ''
 
     if (imports.length > 0) {
@@ -139,18 +147,29 @@ export const generateFile = (
   }
 
   const stripUnknown = options?.stripUnknown ?? false
+  // Names this file imports for its $refs: synthesized private sub-type names
+  // dedup against them so they can never shadow an imported identifier. The
+  // parser and the shape validator must receive the SAME set — their derived
+  // sub-names have to agree.
+  const reservedNames = collectImportTypeNames(schema, { selfRef, rootSchema, typeSuffix })
   const parserFunction = generateParserFunction(schema, typeName, {
     useRefImports: true,
     typeSuffix,
+    reservedNames,
     ...(rootSchema !== undefined ? { rootSchema } : {}),
     ...(options?.logWarnings !== undefined ? { logWarnings: options.logWarnings } : {}),
     ...(options?.strict !== undefined ? { strict: options.strict } : {}),
     ...(options?.stripUnknown !== undefined ? { stripUnknown: options.stripUnknown } : {}),
   })
-  const shapeValidator = generateShapeValidator(schema, typeName, true, typeSuffix, true, stripUnknown)
+  const shapeValidator = generateShapeValidator(schema, typeName, true, typeSuffix, true, stripUnknown, reservedNames)
   const combinedFunctions = `${shapeValidator}\n\n${parserFunction}`
-  const helpers: CollectedHelpers = collectHelpers(combinedFunctions, helpersMode, options?.helpersImportPrefix)
-  const imports = [...collectImports(schema, { selfRef, rootSchema, typeSuffix }), ...helpers.imports]
+  const helpers: CollectedHelpers = collectHelpers(
+    combinedFunctions,
+    helpersMode,
+    options?.helpersImportPrefix,
+    importExt,
+  )
+  const imports = [...collectImports(schema, { selfRef, rootSchema, typeSuffix, importExt }), ...helpers.imports]
 
   // Build file output using string concatenation instead of array join for performance
   let result = ''

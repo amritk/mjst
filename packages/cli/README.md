@@ -232,13 +232,22 @@ npx mjst --config ./mjst.config.json
 <td colspan="4">Suffix appended to every generated type name derived from a $ref (e.g. 'Object' turns Contact into ContactObject). Defaults to no suffix. The root type name is used verbatim and is unaffected.</td>
 </tr>
 <tr>
+<td>🔗 <code>importExt</code></td>
+<td><code>--import-ext &lt;ext&gt;</code></td>
+<td><code>string</code></td>
+<td align="center"><code>"js"</code></td>
+</tr>
+<tr>
+<td colspan="4">Extension emitted on every relative import specifier in the generated output (cross-file $ref imports, the index barrel, and embedded-helper imports). 'js' (default) is the standard TS NodeNext form ('./x.js' resolving to a sibling x.ts), accepted by tsc, Bun, and bundlers, and required by 'build'. 'ts' emits the literal on-disk paths so the generated .ts sources run directly under Node's type stripping (Node 22.6+ with --experimental-strip-types, on by default from Node 23). Incompatible with 'build' — tsc refuses to emit from .ts specifiers.<br><strong>Allowed:</strong> <code>"js"</code>, <code>"ts"</code></td>
+</tr>
+<tr>
 <td>⚙️ <code>config</code></td>
 <td><code>--config &lt;path&gt;</code></td>
 <td><code>string</code></td>
 <td align="center"></td>
 </tr>
 <tr>
-<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, outFile, typesOnly, build, logWarnings, strict, readonly, helpers, typeSuffix). CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
+<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, outFile, typesOnly, build, logWarnings, strict, readonly, helpers, typeSuffix, importExt). CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
 </tr>
 </tbody>
 </table>

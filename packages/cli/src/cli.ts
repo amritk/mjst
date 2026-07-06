@@ -177,6 +177,7 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
     config.readonly,
     config.stripUnknown,
     config.typeSuffix,
+    config.importExt,
   )
 
   for (const file of files) {
@@ -222,6 +223,7 @@ const runSingleFile = async (config: Partial<CliConfig>, schemaPath: string, out
     config.readonly,
     config.stripUnknown,
     config.typeSuffix,
+    config.importExt,
   )
 
   const combined = combineGeneratedFiles(files)
@@ -289,6 +291,7 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
       config.readonly,
       config.stripUnknown,
       config.typeSuffix,
+      config.importExt,
     )
 
     for (const file of files) {
@@ -336,6 +339,14 @@ const run = async (): Promise<void> => {
 
   if (config.outDir && config.outFile) {
     console.error('Error: provide only one of --out-dir or --out-file, not both.')
+    process.exit(1)
+  }
+
+  // tsc cannot emit from `.ts` import specifiers (allowImportingTsExtensions
+  // requires noEmit), so compiled output and stripping-ready sources are
+  // mutually exclusive.
+  if (config.build && config.importExt === 'ts') {
+    console.error('Error: --import-ext ts cannot be combined with --build. Drop --build to keep runnable .ts sources.')
     process.exit(1)
   }
 

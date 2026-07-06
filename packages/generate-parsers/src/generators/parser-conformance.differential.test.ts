@@ -1,44 +1,21 @@
 import Ajv from 'ajv/dist/2020'
-import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
+import { evalGenerated, KEYS, makeRng, pick } from './differential.test-utils'
 import { generateParserFunction } from './generate-parser-function'
 
 /**
  * The coercing parser's contract is that its output is a valid instance of the
  * generated TypeScript type. This fuzzes shape-only schemas (no value
  * constraints) and asserts the coerced output conforms to the schema's *shape*
- * with Ajv: type, `enum`, `const`, object `properties`/`required`, and scalar
- * unions. Array element *values* are out of scope — inline (non-`$ref`) array
- * items are not deeply coerced yet — so the oracle drops `items` (an array only
- * has to be an array). Extra object keys are allowed (the coercer keeps them),
- * so `additionalProperties: false` is never generated.
+ * with Ajv: type, `enum`, `const`, object `properties`/`required`, scalar
+ * unions, and array items with scalar, enum, or inline-object schemas (those
+ * elements are deeply coerced via the element map or a private item
+ * sub-parser). Items that are unions, `const`s, or nested arrays are still
+ * passed through, so the oracle drops those `items` (the array only has to be
+ * an array). Extra object keys are allowed (the coercer keeps them), so
+ * `additionalProperties: false` is never generated.
  */
-
-const evalParser = (code: string, name: string): ((input: unknown) => unknown) => {
-  const js = ts.transpileModule(code, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText
-  const moduleExports: Record<string, unknown> = {}
-  const isObject = (v: unknown): v is Record<string, unknown> =>
-    typeof v === 'object' && v !== null && !Array.isArray(v)
-  new Function('exports', 'isObject', js)(moduleExports, isObject)
-  return moduleExports[name] as (input: unknown) => unknown
-}
-
-const makeRng = (seed: number): (() => number) => {
-  let a = seed >>> 0
-  return () => {
-    a |= 0
-    a = (a + 0x6d2b79f5) | 0
-    let t = Math.imul(a ^ (a >>> 15), 1 | a)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
-const pick = <T>(rng: () => number, arr: readonly T[]): T => arr[Math.floor(rng() * arr.length)] as T
-
-const KEYS = ['id', 'name', 'tags', 'role', 'x']
 
 const leaf = (rng: () => number): Record<string, unknown> => {
   const k = rng()
@@ -85,11 +62,22 @@ const isScalarItems = (items: unknown): boolean =>
   SCALAR_TYPES.has((items as Record<string, unknown>)['type'] as string) &&
   !('enum' in (items as object))
 
+const isEnumItems = (items: unknown): boolean =>
+  items !== null && typeof items === 'object' && !Array.isArray(items) && 'enum' in (items as object)
+
+const isInlineObjectItems = (items: unknown): boolean =>
+  items !== null &&
+  typeof items === 'object' &&
+  !Array.isArray(items) &&
+  (items as Record<string, unknown>)['type'] === 'object' &&
+  'properties' in (items as object)
+
 /**
  * The shape oracle: treat `integer` as `number` (the generated TS type is
- * `number`). Array `items` are kept when they are a single scalar type — those
- * elements are coerced, so they must conform — and dropped otherwise (object /
- * union / `$ref` element values are not deeply coerced and are out of scope).
+ * `number`). Array `items` are kept when their elements are deeply coerced —
+ * a single scalar type or enum (element map) or an inline object (private
+ * item sub-parser) — and dropped otherwise (union / `const` / nested-array
+ * element values are not coerced and are out of scope).
  */
 const shapeOracle = (schema: unknown): unknown => {
   if (schema === null || typeof schema !== 'object') return schema
@@ -97,7 +85,7 @@ const shapeOracle = (schema: unknown): unknown => {
   const out: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
     if (key === 'prefixItems') continue
-    if (key === 'items' && !isScalarItems(value)) continue
+    if (key === 'items' && !isScalarItems(value) && !isEnumItems(value) && !isInlineObjectItems(value)) continue
     out[key] = key === 'type' && value === 'integer' ? 'number' : shapeOracle(value)
   }
   return out
@@ -133,7 +121,10 @@ describe('parser coercion conformance vs ajv', () => {
       } catch {
         continue
       }
-      const parse = evalParser(generateParserFunction(schema as never, 'Root'), 'parseRoot')
+      const parse = evalGenerated<(input: unknown) => unknown>(
+        generateParserFunction(schema as never, 'Root'),
+        'parseRoot',
+      )
       for (let t = 0; t < 8 && failures.length < 8; t++) {
         const input = randVal(rng, 3)
         let output: unknown

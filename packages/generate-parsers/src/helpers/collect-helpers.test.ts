@@ -111,5 +111,10 @@ describe('collect-helpers', () => {
       const result = collectHelpers('if (isObject(input)) {', 'package', '../')
       expect(result.imports).toEqual(["import { isObject } from '@amritk/helpers/is-object';"])
     })
+
+    it('emits .ts specifiers when importExt is ts', () => {
+      const result = collectHelpers('if (isObject(input)) {', 'embedded', './', 'ts')
+      expect(result.imports).toEqual(["import { isObject } from './_helpers/is-object.ts';"])
+    })
   })
 })

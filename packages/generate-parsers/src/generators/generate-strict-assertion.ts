@@ -1,6 +1,7 @@
 import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { multipleOfFailExpr } from '@amritk/helpers/multiple-of-check'
+import { quoteJsString } from '@amritk/helpers/quote-js-string'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
   hasEnum,
@@ -59,6 +60,11 @@ const wrongTypeCondition = (accessor: string, type: string): string | null => {
       return `(typeof ${accessor} !== "number" || !Number.isInteger(${accessor}))`
     case 'boolean':
       return `typeof ${accessor} !== "boolean"`
+    case 'null':
+      // Missing from this switch historically, which meant a null-typed
+      // property was never enforced on the assertion path — the strict-mode
+      // differential fuzzer caught non-null values sailing through.
+      return `${accessor} !== null`
     case 'array':
       return `!Array.isArray(${accessor})`
     case 'object':
@@ -76,14 +82,13 @@ const typeLabel = (type: string): string => (type === 'integer' ? 'number' : typ
 
 /**
  * Emits `throw new Error(<message>[ + <suffixExpr>])`. The static message may
- * contain schema-controlled text (property names, patterns, enum values), so it
- * is always serialized with `JSON.stringify` — a key like `it's` or a pattern
- * containing a quote or newline can no longer break out of the string literal or
- * inject code. `suffixExpr`, when given, is a runtime expression appended to the
- * message (e.g. `typeof input`).
+ * contain schema-controlled text (property names, patterns, enum values), so
+ * it goes through the shared {@link quoteJsString} escape-or-quote decision.
+ * `suffixExpr`, when given, is a runtime expression appended to the message
+ * (e.g. `typeof input`).
  */
 const throwError = (message: string, suffixExpr?: string): string => {
-  const literal = JSON.stringify(message)
+  const literal = quoteJsString(message)
   return suffixExpr ? `throw new Error(${literal} + (${suffixExpr}))` : `throw new Error(${literal})`
 }
 
@@ -321,8 +326,9 @@ export const generateObjectStrictAssertion = (
 
   const required = new Set<string>(hasRequired(schema) ? schema.required : [])
 
-  for (const [key, propSchema] of Object.entries(schema.properties)) {
-    lines.push(...generatePropertyAssertion(key, propSchema, required.has(key), typeName, context))
+  const props = schema.properties as Record<string, JSONSchema>
+  for (const key in props) {
+    lines.push(...generatePropertyAssertion(key, props[key] as JSONSchema, required.has(key), typeName, context))
   }
 
   return lines

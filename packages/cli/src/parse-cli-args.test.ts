@@ -265,6 +265,15 @@ describe('parse-cli-args', () => {
     expect(() => parseCliArgs(['--helpers=foo', '--schema', 's.json'])).toThrow(/package, embedded/)
   })
 
+  it('parses the importExt flag in both spellings', () => {
+    expect(parseCliArgs(['--import-ext', 'ts', '--schema', 's.json'])).toEqual({ importExt: 'ts', schema: 's.json' })
+    expect(parseCliArgs(['--importExt=js', '--schema', 's.json'])).toEqual({ importExt: 'js', schema: 's.json' })
+  })
+
+  it('rejects an invalid importExt value', () => {
+    expect(() => parseCliArgs(['--import-ext', 'mjs', '--schema', 's.json'])).toThrow(/Invalid --import-ext value/)
+  })
+
   it('parses a valid --input value', () => {
     expect(parseCliArgs(['--input', 'zod'])).toEqual({ input: 'zod' })
   })

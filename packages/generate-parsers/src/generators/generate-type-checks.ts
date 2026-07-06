@@ -55,6 +55,44 @@ import { scalarItemTypeCheck } from './generate-validation-expression'
 export const shapeValidatorName = (typeName: string): string => `validate${typeName}Shape`
 
 /**
+ * Matches an inline nested object property — an object schema written directly
+ * under `properties` with its own `properties`, rather than referenced via
+ * `$ref`. These get a private sub-parser (and shape predicate) in the same
+ * generated file so their fields are actually parsed; anything involving
+ * composition, conditionals, enums, or record semantics keeps the existing
+ * code paths.
+ */
+export const isInlineObjectProperty = (propSchema: JSONSchema): propSchema is JSONSchema.Object => {
+  if (!isSchemaObject(propSchema)) return false
+  if (hasRef(propSchema) || hasEnum(propSchema) || hasConst(propSchema)) return false
+  if (hasOneOf(propSchema) || hasAnyOf(propSchema) || hasAllOf(propSchema)) return false
+  // `then`/`else` must be excluded even without `if`: generateShapeValidator
+  // stubs any schema carrying them, so admitting one here would wire an
+  // always-false predicate into parent guards — and into validators the
+  // strict-union trust walk treats as false-sound, making a strict union
+  // reject valid input.
+  if ('patternProperties' in propSchema || 'not' in propSchema) return false
+  if ('if' in propSchema || 'then' in propSchema || 'else' in propSchema) return false
+  // additionalProperties-as-schema records go through the record paths instead
+  if (hasAdditionalProperties(propSchema) && typeof propSchema.additionalProperties !== 'boolean') return false
+  return isObjectSchema(propSchema) && hasProperties(propSchema)
+}
+
+/**
+ * Matches an array property whose `items` is an inline object schema — the
+ * array-items analogue of {@link isInlineObjectProperty}. These get a private
+ * item sub-parser (and shape predicate) so element values — including nested
+ * enums and `$ref`s — are actually validated instead of only passing an
+ * `Array.isArray` check.
+ */
+export const isInlineObjectArrayProperty = (propSchema: JSONSchema): boolean => {
+  if (!isSchemaObject(propSchema)) return false
+  if (!('type' in propSchema) || propSchema.type !== 'array') return false
+  if (!hasItems(propSchema) || Array.isArray(propSchema.items)) return false
+  return isInlineObjectProperty(propSchema.items)
+}
+
+/**
  * Extracts the branch list of a `oneOf`/`anyOf` union, or `null` when the
  * schema is not a union (or mixes in other composition keywords we cannot
  * turn into a membership check).
@@ -347,6 +385,40 @@ const canTrustPropertyCheck = (
   }
 }
 
+/**
+ * Mirrors the per-property check {@link generateShapeValidator} emits for a
+ * generated file's exported validator, which is *deeper* than
+ * {@link generatePropertyTypeCheck}: inline object properties and arrays of
+ * inline object items are checked through private sub-predicates generated
+ * from the same schema, and a sub-predicate is a conservative `=> false` stub
+ * whenever some nested property check cannot be built. A validator built on a
+ * stub returns false on *valid* input, so trusting it requires every reachable
+ * sub-predicate to be a real check, recursively.
+ */
+const canTrustShapeProperty = (
+  propSchema: JSONSchema,
+  rootSchema: Record<string, unknown> | undefined,
+  visiting: Set<string>,
+): boolean => {
+  if (!isSchemaObject(propSchema)) return false
+
+  // Record-valued additionalProperties: records of refs stub the validator;
+  // stay conservative for any schema-valued record, matching the historical
+  // bail in canTrustReferencedValidator.
+  if (hasAdditionalProperties(propSchema) && typeof propSchema.additionalProperties !== 'boolean') return false
+
+  if (isInlineObjectProperty(propSchema)) {
+    return Object.values(propSchema.properties ?? {}).every((sub) => canTrustShapeProperty(sub, rootSchema, visiting))
+  }
+
+  if (isInlineObjectArrayProperty(propSchema)) {
+    const items = (propSchema as { items: JSONSchema.Object }).items
+    return Object.values(items.properties ?? {}).every((sub) => canTrustShapeProperty(sub, rootSchema, visiting))
+  }
+
+  return canTrustPropertyCheck(propSchema, rootSchema, visiting)
+}
+
 /** Mirrors {@link generateInlineObjectCheck}: non-null AND every property check is trustworthy. */
 const canTrustInlineObjectCheck = (
   schema: JSONSchema,
@@ -412,17 +484,13 @@ const canTrustReferencedValidator = (
     ) {
       return false
     }
-    return Object.values(resolved.properties).every((propSchema) => {
-      // Records of refs make generateShapeValidator bail to the stub.
-      if (
-        isSchemaObject(propSchema) &&
-        hasAdditionalProperties(propSchema) &&
-        typeof propSchema.additionalProperties !== 'boolean'
-      ) {
-        return false
-      }
-      return canTrustPropertyCheck(propSchema, rootSchema, visiting)
-    })
+    // Walk with the deep shape-validator mirror: the emitted validator routes
+    // inline object properties (and arrays of inline object items) through
+    // private sub-predicates, so trust must recurse the same way instead of
+    // stopping at a shallow isObject/Array.isArray reading.
+    return Object.values(resolved.properties).every((propSchema) =>
+      canTrustShapeProperty(propSchema, rootSchema, visiting),
+    )
   } finally {
     visiting.delete(ref)
   }

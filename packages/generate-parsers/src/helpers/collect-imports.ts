@@ -4,11 +4,15 @@ import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
-// Emit an explicit `.js` extension on the relative specifier. Node's ESM resolver
-// requires it (extensionless relative imports only work under a bundler or Bun),
-// and `./x.js` pointing at a sibling `x.ts` is the standard TS NodeNext form —
-// accepted by Bun, esbuild, webpack, and tsc alike.
-const getImportPathForFilename = (filename: string): string => `./${filename}.js`
+/** Extension emitted on every relative import specifier in generated code. */
+export type ImportExtension = 'js' | 'ts'
+
+// Emit an explicit extension on the relative specifier. Node's ESM resolver
+// requires one (extensionless relative imports only work under a bundler or
+// Bun). `./x.js` pointing at a sibling `x.ts` is the standard TS NodeNext form
+// — accepted by Bun, esbuild, webpack, and tsc alike — while `./x.ts` is the
+// literal on-disk path Node's type stripping needs to run the sources directly.
+const getImportPathForFilename = (filename: string, ext: ImportExtension): string => `./${filename}.${ext}`
 
 /**
  * Options for controlling how imports are collected.
@@ -37,6 +41,12 @@ type CollectImportsOptions = {
    * Defaults to `''` (no suffix).
    */
   readonly typeSuffix?: string
+  /**
+   * Extension used on every relative import specifier. Defaults to `'js'`
+   * (the TS NodeNext form); `'ts'` makes the output runnable under Node's
+   * type stripping.
+   */
+  readonly importExt?: ImportExtension
 }
 
 /**
@@ -80,6 +90,35 @@ type CollectImportsOptions = {
  */
 export const collectImports = (schema: JSONSchema, options?: CollectImportsOptions): string[] => {
   const typesOnly = options?.typesOnly === true
+  const importExt = options?.importExt ?? 'js'
+  const importMap = new Map<string, string>()
+
+  for (const [filename, typeName] of collectImportTargets(schema, options)) {
+    const importPath = getImportPathForFilename(filename, importExt)
+    // In types-only mode, omit the parser function import since there is no parser to call
+    const importStatement = typesOnly
+      ? `import type { ${typeName} } from '${importPath}';`
+      : `import { type ${typeName}, parse${typeName}, validate${typeName}Shape } from '${importPath}';`
+    importMap.set(filename, importStatement)
+  }
+
+  return Array.from(importMap.values()).sort()
+}
+
+/**
+ * The type names a generated file will import for its `$ref`s — the same
+ * dedup/skip rules as {@link collectImports}. Generators seed their private
+ * sub-type naming with this set so a synthesized name (e.g. a root array's
+ * `FooItem`) can never shadow an imported identifier.
+ */
+export const collectImportTypeNames = (schema: JSONSchema, options?: CollectImportsOptions): Set<string> => {
+  const names = new Set<string>()
+  for (const [, typeName] of collectImportTargets(schema, options)) names.add(typeName)
+  return names
+}
+
+/** Shared `$ref` walk: filename → derived type name for every import target. */
+const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOptions): Map<string, string> => {
   const selfFilename = options?.selfRef ? refToFilename(options.selfRef) : undefined
   const rootSchema = options?.rootSchema
   const typeSuffix = options?.typeSuffix
@@ -248,8 +287,8 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
     collectRefsFromValue(schema.else)
   }
 
-  // Convert refs to combined import statements, deduplicating by filename
-  const importMap = new Map<string, string>()
+  // Convert refs to import targets, deduplicating by filename.
+  const targets = new Map<string, string>()
 
   for (const ref of refs) {
     // For URI refs, skip if the base URI is not resolvable in the root schema.
@@ -266,14 +305,8 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
       continue
     }
 
-    const importPath = getImportPathForFilename(filename)
-
-    // In types-only mode, omit the parser function import since there is no parser to call
-    const importStatement = typesOnly
-      ? `import type { ${typeName} } from '${importPath}';`
-      : `import { type ${typeName}, parse${typeName}, validate${typeName}Shape } from '${importPath}';`
-    importMap.set(filename, importStatement)
+    targets.set(filename, typeName)
   }
 
-  return Array.from(importMap.values()).sort()
+  return targets
 }

@@ -1,0 +1,83 @@
+name: Bench
+
+# Benchmarks every PR's mjst against its base branch and writes the delta
+# table into the PR description (between the mjst-bench-delta markers), so
+# every push shows its performance impact next to the code. Numbers come from
+# scripts/bench-compare.ts — one isolated worker process per measurement,
+# baseline and head interleaved so runner-load drift hits both sides equally.
+# Shared runners are still noisy: deltas within ±10% are usually noise.
+
+on:
+  pull_request:
+    # Docs-only and changeset-only PRs cannot change performance; skip the
+    # ~8 minutes of double-checkout benching (and the meaningless all-noise
+    # table) for them.
+    paths-ignore:
+      - '**/*.md'
+      - '.changeset/**'
+      - 'docs/**'
+      - 'LICENSE'
+
+concurrency:
+  group: bench-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  bench:
+    name: Benchmark vs base
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          path: .bench-baseline
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies (PR)
+        run: bun install --frozen-lockfile
+
+      - name: Install dependencies (baseline)
+        run: bun install --frozen-lockfile
+        working-directory: .bench-baseline
+
+      - name: Benchmark mjst on baseline vs PR
+        run: >
+          bun run scripts/bench-compare.ts
+          --baseline .bench-baseline
+          --baseline-label "${{ github.event.pull_request.base.ref }}"
+          --output bench-delta.md
+
+      - name: Add delta table to the job summary
+        run: cat bench-delta.md >> "$GITHUB_STEP_SUMMARY"
+
+      # Forked PRs get a read-only token, so they keep the job-summary table
+      # above but skip the description update. The marker-splice logic lives in
+      # scripts/splice-bench-delta.cjs (unit-tested; repairs dangling markers
+      # instead of letting them eat the description on the next run).
+      - name: Update the PR description with the delta
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { readFileSync } = require('node:fs')
+            const { spliceBenchDelta } = require(`${process.env.GITHUB_WORKSPACE}/scripts/splice-bench-delta.cjs`)
+            const table = readFileSync('bench-delta.md', 'utf8')
+            const { owner, repo } = context.repo
+            const pull_number = context.payload.pull_request.number
+
+            // Re-fetch the body rather than trusting the event payload — the
+            // description may have been edited since this run was queued.
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number })
+            const body = pr.body ?? ''
+
+            const next = spliceBenchDelta(body, table)
+            if (next !== body) {
+              await github.rest.pulls.update({ owner, repo, pull_number, body: next })
+            }

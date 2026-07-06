@@ -34,6 +34,25 @@ describe('validate-array', () => {
     expect(result).toEqual(['HELLO', '42', 'unknown', 'unknown'])
   })
 
+  it('returns the input array by reference when every element parses to itself', () => {
+    const identity = (item: unknown) => item
+    const clean = [{ a: 1 }, { a: 2 }]
+    expect(validateArray(clean, identity)).toBe(clean)
+  })
+
+  it('materializes a copy the moment any element is replaced, keeping the prefix', () => {
+    const first = { keep: true }
+    const input = [first, 'coerce me', 'and me']
+    const parser = (item: unknown) => (typeof item === 'string' ? item.toUpperCase() : item)
+
+    const result = validateArray(input, parser)
+
+    expect(result).not.toBe(input)
+    expect(result).toEqual([first, 'COERCE ME', 'AND ME'])
+    expect((result as unknown[])[0]).toBe(first) // untouched prefix element shared
+    expect(input).toEqual([first, 'coerce me', 'and me']) // input never mutated
+  })
+
   it('propagates parser errors for invalid items', () => {
     // Parser that throws on invalid input
     const strictParser = (item: unknown) => {

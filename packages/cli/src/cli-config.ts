@@ -90,4 +90,17 @@ export type CliConfig = {
    * - `false` / omitted — no header.
    */
   readonly banner?: boolean | string
+  /**
+   * Extension emitted on every relative import specifier in the generated
+   * output (cross-file `$ref` imports, the index barrel, and embedded-helper
+   * imports).
+   * - `'js'` (default): the standard TS NodeNext form (`./x.js` resolving to a
+   *   sibling `x.ts`), accepted by tsc, Bun, and bundlers, and required by
+   *   `build`.
+   * - `'ts'`: the literal on-disk paths, so the generated `.ts` sources run
+   *   directly under Node's type stripping (Node 22.6+ with
+   *   `--experimental-strip-types`, default from Node 23). Incompatible with
+   *   `build` — tsc refuses to emit from `.ts` specifiers.
+   */
+  readonly importExt?: 'js' | 'ts'
 }
