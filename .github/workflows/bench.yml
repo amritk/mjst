@@ -29,6 +29,11 @@ permissions:
 jobs:
   bench:
     name: Benchmark vs base
+    # The changesets "Version Packages" PR only bumps package.json versions and
+    # CHANGELOG entries — no runtime code changes — so skip the ~8 minutes of
+    # double-checkout benching for it. paths-ignore can't catch this since the
+    # version bumps touch non-markdown package.json files.
+    if: github.head_ref != 'changeset-release/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
