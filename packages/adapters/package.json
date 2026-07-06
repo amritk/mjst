@@ -1,6 +1,6 @@
 {
   "name": "@amritk/adapters",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "description": "Convert schemas from external libraries (TypeBox, Zod, ...) into JSON Schema for mjst.",
   "type": "module",
   "license": "MIT",

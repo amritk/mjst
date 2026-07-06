@@ -1,5 +1,73 @@
 # @amritk/mjst
 
+## 0.9.0
+
+### Minor Changes
+
+- 1bb7a25: Add `--help` / `-h` and print usage when the CLI is invoked with no arguments.
+
+  Running `mjst` with no arguments (or `mjst --help` / `-h` / `help`) previously
+  errored with "--out-dir or --out-file is required". It now prints a usage
+  summary listing every flag — schema, schema-dir, out-dir, out-file, input,
+  export, types-only, build, strict, log-warnings, strip-unknown, readonly,
+  helpers, type-suffix, banner, import-ext, root-type, config, and version.
+
+- 1bb7a25: Select `package` helpers mode only when `@amritk/helpers` is a declared
+  dependency of the target project.
+
+  Auto-detection previously chose `package` mode whenever `@amritk/helpers` was
+  merely _resolvable_, which includes being hoisted into `node_modules` as a
+  transitive dependency of `@amritk/mjst`. The generated code then worked under
+  npm/bun's hoisted layouts but broke under pnpm/isolated installs, where an
+  undeclared package is unreachable at runtime. Detection now reads the nearest
+  `package.json` above the output directory and picks `package` only when
+  `@amritk/helpers` is listed in its dependencies (or dev/peer/optional);
+  otherwise it falls back to the self-contained `embedded` mode and prints a tip
+  to declare `@amritk/helpers` for a shared helper copy. The explicit
+  `--helpers package|embedded` override still skips detection.
+
+- 1bb7a25: Default generated relative imports to the literal `.ts` extension so the output
+  runs under Node without a build step.
+
+  Generated `.ts` files imported siblings as `./x.js` — the TS NodeNext form Bun
+  and tsc resolve to the `.ts` file, but Node's type stripping (Node ≥ 22.18)
+  throws `ERR_MODULE_NOT_FOUND` because it does not remap `.js` → `.ts`. The CLI
+  now defaults `--import-ext` (config key `importExt`) to `ts`, emitting the
+  literal on-disk paths, so `node generated/index.ts` loads and parses directly.
+
+  `js` remains available for consumers who compile the output, and `--build`
+  still selects `js` automatically (tsc cannot emit from `.ts` specifiers). tsc
+  consumers running the `.ts` sources directly must set
+  `allowImportingTsExtensions` — documented in the CLI README. `--import-ext ts`
+  combined with `--build` stays an error.
+
+- 1bb7a25: Derive the root type name from the schema instead of always using `Document`
+  (breaking).
+
+  The root type is now named after the schema — its `title`, falling back to the
+  schema filename in PascalCase (`program.json` → `Program`, `spec-plan.json` →
+  `SpecPlan`), and only then to `Document`. Generating from two schemas no longer
+  forces import aliasing: the functions become `parseProgram` /
+  `validateProgramShape` and nested types `SpecPlan_AxiomsItem`. A new
+  `--root-type <Name>` flag overrides the name for a single `--schema` run; it is
+  rejected with `--schema-dir`, where each schema derives its own root.
+
+  This is breaking for consumers importing `parseDocument` / `validateDocumentShape`
+  today — update those imports to the new schema-derived names.
+
+  Fixed a latent generator bug this surfaced: a JSON Schema meta-schema special
+  case (a pass-through, validation-free parser) fired on any type literally named
+  `Schema`. It now applies only to `$ref`-reached definitions, so a common
+  `schema.json` root gets a real parser instead of a silent pass-through.
+
+### Patch Changes
+
+- Updated dependencies [1bb7a25]
+- Updated dependencies [1bb7a25]
+  - @amritk/generate-parsers@0.15.0
+  - @amritk/helpers@0.12.0
+  - @amritk/adapters@0.2.16
+
 ## 0.8.0
 
 ### Minor Changes
