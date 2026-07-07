@@ -1,35 +1,12 @@
-import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { defineConfig } from 'vitest/config'
 
 const root = process.cwd().includes('/packages/') ? resolve(process.cwd(), '../..') : process.cwd()
 
-// Resolve a `@/`-prefixed import against the *importing file's* own package `src`
-// directory. This generalizes a fixed `${cwd}/src` alias so a package that uses
-// `@/` internally (e.g. `@amritk/runtime-validators`) still resolves correctly
-// when it is imported across package boundaries in a test run.
-const resolveAtSlash = (sub: string, importer: string | undefined): string => {
-  const match = importer?.match(/(.*\/packages\/[^/]+)\//)
-  const base = match ? `${match[1]}/src` : resolve(process.cwd(), 'src')
-  for (const candidate of [`${resolve(base, sub)}.ts`, resolve(base, sub, 'index.ts'), resolve(base, sub)]) {
-    if (existsSync(candidate)) return candidate
-  }
-  return `${resolve(base, sub)}.ts`
-}
-
 export default defineConfig({
-  plugins: [
-    {
-      name: 'at-slash-importer-aware',
-      enforce: 'pre',
-      resolveId(source, importer) {
-        if (!source.startsWith('@/')) return null
-        return resolveAtSlash(source.slice(2), importer)
-      },
-    },
-  ],
   resolve: {
     alias: [
+      { find: /^@\//, replacement: `${resolve(process.cwd(), 'src')}/` },
       { find: /^@amritk\/adapters\/(.*)$/, replacement: resolve(root, 'packages/adapters/src/$1.ts') },
       { find: /^@amritk\/helpers\/(.*)$/, replacement: resolve(root, 'packages/helpers/src/$1.ts') },
       { find: /^@amritk\/generate-examples$/, replacement: resolve(root, 'packages/generate-examples/src/index.ts') },
@@ -39,9 +16,12 @@ export default defineConfig({
         find: /^@amritk\/generate-validators$/,
         replacement: resolve(root, 'packages/generate-validators/src/index.ts'),
       },
+      // Consumed from its built dist (not src): runtime-validators uses `@/` path
+      // aliases internally, which only resolve once `tsc-alias` has rewritten them
+      // to relative paths in `dist`. Requires a prior build (see root `pretest`).
       {
         find: /^@amritk\/runtime-validators$/,
-        replacement: resolve(root, 'packages/runtime-validators/src/index.ts'),
+        replacement: resolve(root, 'packages/runtime-validators/dist/index.js'),
       },
       { find: /^@amritk\/resolve-refs$/, replacement: resolve(root, 'packages/resolve-refs/src/index.ts') },
       { find: /^@amritk\/yaml$/, replacement: resolve(root, 'packages/yaml/src/index.ts') },
