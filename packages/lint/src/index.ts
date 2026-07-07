@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, resolve as resolvePath } from 'node:path'
+
 import {
   createRuleset as createCoreRuleset,
   type FunctionRegistry,
@@ -13,18 +14,21 @@ import {
   type Ruleset,
   type RulesetDefinition,
   type RulesetFunction,
-} from '@amritk/lint-core'
-import {
-  type AppliedFix,
-  createFixPlugin,
-  FIX_PLUGIN_NAME,
-  type FixerRegistry,
-  type FixPluginData,
-} from '@amritk/lint-fix'
-import { builtinFunctions } from '@amritk/lint-functions'
-import { parseWithPointers } from '@amritk/lint-parsers'
+} from './core'
+import { type AppliedFix, createFixPlugin, FIX_PLUGIN_NAME, type FixerRegistry, type FixPluginData } from './fix'
+import { builtinFunctions } from './functions'
+import { parseWithPointers } from './parsers'
 
-export { builtinFunctions } from '@amritk/lint-functions'
+// Re-export the engine, built-in functions, and fix subsystem as the package's
+// public API. `export *` from `./core` also provides a low-level `createRuleset`,
+// but the higher-level wrapper defined below (which layers in the built-in
+// functions and file/package `extends` resolution) is the local export and wins.
+// Output formatters are intentionally NOT re-exported here — they live behind the
+// `@amritk/lint/formatters` subpath to keep `picocolors` out of this import graph.
+export * from './core'
+export * from './fix'
+export * from './functions'
+export { detectFormat, parseWithPointers } from './parsers'
 
 const require = createRequire(import.meta.url)
 

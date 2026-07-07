@@ -38,16 +38,22 @@
     "test": "NODE_ENV=production vitest run --root ../.. packages/lint/"
   },
   "exports": {
+    "./package.json": "./package.json",
     ".": {
       "development": "./src/index.ts",
-      "default": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./formatters": {
+      "development": "./src/formatters/index.ts",
+      "types": "./dist/formatters/index.d.ts",
+      "default": "./dist/formatters/index.js"
     }
   },
   "dependencies": {
-    "@amritk/lint-core": "workspace:*",
-    "@amritk/lint-fix": "workspace:*",
-    "@amritk/lint-functions": "workspace:*",
-    "@amritk/lint-parsers": "workspace:*"
+    "@amritk/runtime-validators": "workspace:*",
+    "@amritk/yaml": "workspace:*",
+    "jsonc-parser": "^3.3.1",
+    "picocolors": "^1.1.1"
   }
 }

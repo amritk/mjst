@@ -53,8 +53,12 @@
         "@amritk/generate-markdown": "workspace:*",
         "@amritk/generate-parsers": "workspace:*",
         "@amritk/helpers": "workspace:*",
+        "@amritk/lint": "workspace:*",
+        "fast-glob": "^3.3.2",
+        "yargs": "^17.7.2",
       },
       "devDependencies": {
+        "@types/yargs": "^17.0.33",
         "json-schema-typed": "catalog:",
       },
     },
@@ -121,67 +125,10 @@
       "name": "@amritk/lint",
       "version": "0.0.0",
       "dependencies": {
-        "@amritk/lint-core": "workspace:*",
-        "@amritk/lint-fix": "workspace:*",
-        "@amritk/lint-functions": "workspace:*",
-        "@amritk/lint-parsers": "workspace:*",
-      },
-    },
-    "packages/lint-cli": {
-      "name": "@amritk/lint-cli",
-      "version": "0.0.0",
-      "bin": {
-        "lint": "./dist/index.js",
-      },
-      "dependencies": {
-        "@amritk/lint": "workspace:*",
-        "@amritk/lint-core": "workspace:*",
-        "@amritk/lint-formatters": "workspace:*",
-        "@amritk/lint-parsers": "workspace:*",
-        "fast-glob": "^3.3.2",
-        "yargs": "^17.7.2",
-      },
-      "devDependencies": {
-        "@types/yargs": "^17.0.33",
-      },
-    },
-    "packages/lint-core": {
-      "name": "@amritk/lint-core",
-      "version": "0.0.0",
-      "dependencies": {
-        "@amritk/lint-parsers": "workspace:*",
-      },
-    },
-    "packages/lint-fix": {
-      "name": "@amritk/lint-fix",
-      "version": "0.0.0",
-      "dependencies": {
-        "@amritk/lint-core": "workspace:*",
-        "@amritk/lint-parsers": "workspace:*",
-      },
-    },
-    "packages/lint-formatters": {
-      "name": "@amritk/lint-formatters",
-      "version": "0.0.0",
-      "dependencies": {
-        "@amritk/lint-core": "workspace:*",
-        "picocolors": "^1.1.1",
-      },
-    },
-    "packages/lint-functions": {
-      "name": "@amritk/lint-functions",
-      "version": "0.0.0",
-      "dependencies": {
-        "@amritk/lint-core": "workspace:*",
         "@amritk/runtime-validators": "workspace:*",
-      },
-    },
-    "packages/lint-parsers": {
-      "name": "@amritk/lint-parsers",
-      "version": "0.0.0",
-      "dependencies": {
         "@amritk/yaml": "workspace:*",
         "jsonc-parser": "^3.3.1",
+        "picocolors": "^1.1.1",
       },
     },
     "packages/resolve-refs": {
@@ -226,18 +173,6 @@
     "@amritk/helpers": ["@amritk/helpers@workspace:packages/helpers"],
 
     "@amritk/lint": ["@amritk/lint@workspace:packages/lint"],
-
-    "@amritk/lint-cli": ["@amritk/lint-cli@workspace:packages/lint-cli"],
-
-    "@amritk/lint-core": ["@amritk/lint-core@workspace:packages/lint-core"],
-
-    "@amritk/lint-fix": ["@amritk/lint-fix@workspace:packages/lint-fix"],
-
-    "@amritk/lint-formatters": ["@amritk/lint-formatters@workspace:packages/lint-formatters"],
-
-    "@amritk/lint-functions": ["@amritk/lint-functions@workspace:packages/lint-functions"],
-
-    "@amritk/lint-parsers": ["@amritk/lint-parsers@workspace:packages/lint-parsers"],
 
     "@amritk/mjst": ["@amritk/mjst@workspace:packages/cli"],
 
