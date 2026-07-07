@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { dirname, isAbsolute, resolve } from 'node:path'
 import {
   DiagnosticSeverity,
@@ -7,7 +7,6 @@ import {
   type RulesetDefinition,
   validateRuleset,
 } from '@amritk/lint'
-import { getFormatter } from '@amritk/lint/formatters'
 import fg from 'fast-glob'
 import yargs from 'yargs'
 
@@ -20,11 +19,11 @@ const SEVERITY_BY_NAME: Record<string, DiagnosticSeverity> = {
   hint: DiagnosticSeverity.Hint,
 }
 
+const SEVERITY_LABEL = ['error', 'warning', 'info', 'hint'] as const
+
 type Args = {
   documents: string[]
   ruleset?: string
-  format: string[]
-  output?: string[]
   encoding: BufferEncoding
   failSeverity: string
   displayOnlyFailures: boolean
@@ -32,6 +31,24 @@ type Args = {
   quiet: boolean
   stdinFilepath?: string
   concurrency: number
+}
+
+/**
+ * Renders findings as a compact, dependency-free report — one `file:line:col`
+ * line per finding (1-based, editor-clickable), then a count summary. Structured
+ * output (JSON, SARIF, …) is a consumer concern: use the `@amritk/lint` library's
+ * `lintDocument`, which returns `IDiagnostic[]`.
+ */
+const formatReport = (findings: IDiagnostic[]): string => {
+  if (findings.length === 0) return 'No problems found\n'
+  const lines = findings.map((d) => {
+    const loc = `${d.source ?? '<stdin>'}:${d.range.start.line + 1}:${d.range.start.character + 1}`
+    return `${loc}  ${SEVERITY_LABEL[d.severity] ?? 'error'}  ${d.code}  ${d.message}`
+  })
+  const errors = findings.filter((d) => d.severity === DiagnosticSeverity.Error).length
+  const warnings = findings.filter((d) => d.severity === DiagnosticSeverity.Warning).length
+  lines.push('', `✖ ${findings.length} problem(s) (${errors} error(s), ${warnings} warning(s))`)
+  return `${lines.join('\n')}\n`
 }
 
 /** The outcome of a {@link run}: exit code plus the text it would print. */
@@ -85,13 +102,6 @@ export const run = async (argv: string[], options: { stdin?: string } = {}): Pro
     .usage('$0 [documents..]', 'Lint JSON/YAML documents against a ruleset')
     .positional('documents', { describe: 'Documents or globs to lint', type: 'string', array: true })
     .option('ruleset', { alias: 'r', type: 'string', describe: 'Path to a ruleset file' })
-    .option('format', { alias: 'f', type: 'string', array: true, default: ['stylish'], describe: 'Output format(s)' })
-    .option('output', {
-      alias: 'o',
-      type: 'string',
-      array: true,
-      describe: 'Write output to a file instead of stdout (repeatable; paired with --format by position)',
-    })
     .option('encoding', { type: 'string', default: 'utf8', describe: 'Input encoding' })
     .option('fail-severity', { alias: 'F', type: 'string', default: 'error', choices: Object.keys(SEVERITY_BY_NAME) })
     .option('display-only-failures', { alias: 'D', type: 'boolean', default: false })
@@ -191,14 +201,7 @@ export const run = async (argv: string[], options: { stdin?: string } = {}): Pro
   }
 
   const displayed = parsed.displayOnlyFailures ? filterBySeverity(allResults, failSeverity) : allResults
-
-  // Each --format writes to the --output at the same position, else to stdout.
-  for (let i = 0; i < parsed.format.length; i++) {
-    const output = getFormatter(parsed.format[i] as string)(displayed)
-    const file = parsed.output?.[i]
-    if (file) await writeFile(file, output)
-    else if (!parsed.quiet) out.push(`${output}\n`)
-  }
+  if (!parsed.quiet) out.push(formatReport(displayed))
 
   return {
     code: filterBySeverity(allResults, failSeverity).length > 0 ? 1 : 0,

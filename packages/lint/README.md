@@ -125,26 +125,24 @@ const { output, applied, remaining } = await fixDocument('host: api.example.com/
 
 The engine ships no built-in fixers (rule codes are yours to define), so the default registry is empty and `fixDocument` is a no-op until you supply one.
 
-### Formatters
+### Rendering findings
 
-Output formatters live behind the `@amritk/lint/formatters` subpath, so `picocolors` and friends stay out of the linting import graph:
+`lintDocument` returns structured `IDiagnostic[]` — each with a `code`, `message`, `path`, `severity`, `source`, and a zero-based `range`. **Rendering is the caller's job**: print them, serialize them to JSON, or map them to whatever your editor or CI consumes. The linter deliberately ships no output "formatter" layer (that is not the same thing as `prettier`/`biome format`, which reformat source).
 
 ```ts
-import { lintDocument } from '@amritk/lint'
-import { getFormatter } from '@amritk/lint/formatters'
-
 const findings = await lintDocument(source, { ruleset, source: 'doc.yaml' })
-process.stdout.write(getFormatter('stylish')(findings))
+for (const f of findings) {
+  const { line, character } = f.range.start
+  console.log(`${f.source}:${line + 1}:${character + 1}  ${f.code}  ${f.message}`)
+}
 ```
-
-Available: `stylish`, `json`, `pretty`, `text`, `junit`, `sarif`, `code-climate`, `gitlab`, `teamcity`, `github-actions`, `html`.
 
 ### CLI
 
-The [`mjst`](../cli) binary exposes the linter as a subcommand:
+The [`mjst`](../cli) binary exposes the linter as a subcommand, which prints a compact `file:line:col` report:
 
 ```bash
-mjst lint "**/*.{yaml,json}" -r .lint.yaml -f stylish
+mjst lint "**/*.{yaml,json}" -r .lint.yaml
 ```
 
 With no `-r`, it discovers a `.lint.{yaml,yml,json,js,mjs}` ruleset by walking up from each file. The exit code is derived from `--fail-severity` (default `error`). See the [CLI README](../cli/README.md#linting) for the full flag reference.
@@ -178,7 +176,6 @@ Built-in functions: `alphabetical`, `casing`, `defined`, `enumeration`, `falsy`,
 | `createRuleset(definition?, basePath?)` | Normalize a ruleset definition into a runnable `Ruleset`, layering the built-in functions and resolving `extends`. |
 | `resolveNamedRuleset(name, basePath?)` | Resolve an `extends` reference (file path or npm package) to its definition. |
 | `builtinFunctions` | The registry of built-in rule functions. |
-| `@amritk/lint/formatters` → `getFormatter(name)` / `formatters` | Output formatters for `IDiagnostic[]`. |
 
 The engine internals (`createDocument`, `lint`, `query`, `validateRuleset`, `parseWithPointers`, `createFixPlugin`, `DiagnosticSeverity`, and the rule/diagnostic types) are re-exported from the package root for advanced use.
 

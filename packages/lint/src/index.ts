@@ -23,8 +23,8 @@ import { parseWithPointers } from './parsers'
 // public API. `export *` from `./core` also provides a low-level `createRuleset`,
 // but the higher-level wrapper defined below (which layers in the built-in
 // functions and file/package `extends` resolution) is the local export and wins.
-// Output formatters are intentionally NOT re-exported here — they live behind the
-// `@amritk/lint/formatters` subpath to keep `picocolors` out of this import graph.
+// Rendering findings is a consumer concern: `lintDocument` returns structured
+// `IDiagnostic[]`, and the caller decides how to display or serialize them.
 export * from './core'
 export * from './fix'
 export * from './functions'

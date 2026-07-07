@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -53,9 +53,8 @@ describe('ruleset-loader', () => {
     writeFileSync(join(dir, '.lint.yaml'), 'extends:\n  - ./base.yaml\n')
     const doc = join(dir, 'doc.yaml')
     writeFileSync(doc, 'name: my-service\n')
-    const { stdout } = await run([doc, '-r', join(dir, '.lint.yaml'), '-f', 'json'])
-    const codes = JSON.parse(stdout).map((r: { code: string }) => r.code)
-    expect(codes).toContain('needs-title')
+    const { stdout } = await run([doc, '-r', join(dir, '.lint.yaml')])
+    expect(stdout).toContain('needs-title')
   })
 })
 
@@ -65,60 +64,58 @@ describe('cli', () => {
     writeFileSync(join(dir, '.lint.yaml'), RULESET)
     const file = join(dir, 'doc.yaml')
     writeFileSync(file, 'version: 1\n') // no `name` -> require-name (error)
-    const { stdout, code } = await run([file, '-f', 'json'])
+    const { stdout, code } = await run([file])
     expect(code).toBe(1)
-    expect(JSON.parse(stdout).map((r: { code: string }) => r.code)).toContain('require-name')
+    expect(stdout).toContain('require-name')
+    expect(stdout).toContain('error')
   })
 
-  it('exits 0 for a clean document (warnings do not fail by default)', async () => {
+  it('exits 0 and reports no problems for a clean document', async () => {
     const dir = tmp('lint-cli-')
     writeFileSync(join(dir, '.lint.yaml'), RULESET)
     const file = join(dir, 'doc.yaml')
     writeFileSync(file, 'name: my-service\n')
-    const { code } = await run([file])
+    const { stdout, code } = await run([file])
     expect(code).toBe(0)
+    expect(stdout).toContain('No problems found')
   })
 
-  it('reports a warning-level finding without failing the run', async () => {
-    const dir = tmp('lint-cli-')
+  it('points each finding at its exact file:line:col', async () => {
+    const dir = tmp('lint-loc-')
     writeFileSync(join(dir, '.lint.yaml'), RULESET)
     const file = join(dir, 'doc.yaml')
-    writeFileSync(file, 'name: MyService\n') // not kebab-case -> name-kebab (warn)
-    const { stdout, code } = await run([file, '-f', 'json'])
-    expect(code).toBe(0)
-    expect(JSON.parse(stdout).map((r: { code: string }) => r.code)).toContain('name-kebab')
-  })
-
-  it('writes each --format to the --output at the same position', async () => {
-    const dir = tmp('lint-out-')
-    writeFileSync(join(dir, '.lint.yaml'), RULESET)
-    const file = join(dir, 'doc.yaml')
-    writeFileSync(file, 'version: 1\n')
-    const jsonOut = join(dir, 'out.json')
-    const stylishOut = join(dir, 'out.txt')
-    await run([file, '-f', 'json', '-f', 'stylish', '-o', jsonOut, '-o', stylishOut])
-    // Each output file must hold its own format — the json file is parseable JSON,
-    // and the stylish file is not (regression test for the overwrite bug).
-    expect(() => JSON.parse(readFileSync(jsonOut, 'utf8'))).not.toThrow()
-    expect(() => JSON.parse(readFileSync(stylishOut, 'utf8'))).toThrow()
+    writeFileSync(file, 'name: MyService\n') // not kebab-case -> name-kebab (warn) on the value
+    const { stdout, code } = await run([file])
+    expect(code).toBe(0) // a warning does not fail by default
+    // `MyService` starts at line 1, column 7 (1-based).
+    expect(stdout).toContain(`${file}:1:7`)
+    expect(stdout).toContain('name-kebab')
   })
 
   it('lints stdin with --stdin-filepath and discovers a ruleset from its dir', async () => {
     const dir = tmp('lint-stdin-')
     writeFileSync(join(dir, '.lint.yaml'), RULESET)
-    const { stdout } = await run(['--stdin-filepath', join(dir, 'doc.yaml'), '-f', 'json'], { stdin: 'version: 1\n' })
-    const codes = JSON.parse(stdout).map((r: { code: string }) => r.code)
-    expect(codes).toContain('require-name')
+    const { stdout } = await run(['--stdin-filepath', join(dir, 'doc.yaml')], { stdin: 'version: 1\n' })
+    expect(stdout).toContain('require-name')
   })
 
   it('lints multiple files (parallel) and includes findings from each', async () => {
     const dir = tmp('lint-many-')
     writeFileSync(join(dir, '.lint.yaml'), RULESET)
     for (let i = 0; i < 6; i++) writeFileSync(join(dir, `doc${i}.yaml`), 'version: 1\n')
-    const { stdout } = await run([join(dir, 'doc*.yaml'), '-f', 'json'])
-    const results = JSON.parse(stdout) as { source?: string }[]
+    const { stdout } = await run([join(dir, 'doc*.yaml')])
     // Every file contributed a finding (require-name is missing on each).
-    expect(new Set(results.map((r) => r.source)).size).toBe(6)
+    for (let i = 0; i < 6; i++) expect(stdout).toContain(`doc${i}.yaml`)
+  })
+
+  it('suppresses the report under --quiet but keeps the exit code', async () => {
+    const dir = tmp('lint-quiet-')
+    writeFileSync(join(dir, '.lint.yaml'), RULESET)
+    const file = join(dir, 'doc.yaml')
+    writeFileSync(file, 'version: 1\n')
+    const { stdout, code } = await run([file, '-q'])
+    expect(code).toBe(1)
+    expect(stdout).toBe('')
   })
 
   it('warns about a structurally invalid ruleset on stderr without crashing', async () => {
@@ -128,7 +125,7 @@ describe('cli', () => {
     const rs = join(dir, 'bad.json')
     // `then` is missing its function — validateRuleset should warn (non-fatal).
     writeFileSync(rs, JSON.stringify({ rules: { broken: { given: '$' } } }))
-    const { code, stderr } = await run([file, '-r', rs, '-f', 'json'])
+    const { code, stderr } = await run([file, '-r', rs])
     expect(stderr).toContain('ruleset')
     expect(code).not.toBe(2)
   })

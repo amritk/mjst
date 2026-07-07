@@ -25,7 +25,6 @@ export default defineConfig({
       },
       { find: /^@amritk\/resolve-refs$/, replacement: resolve(root, 'packages/resolve-refs/src/index.ts') },
       { find: /^@amritk\/yaml$/, replacement: resolve(root, 'packages/yaml/src/index.ts') },
-      { find: /^@amritk\/lint\/formatters$/, replacement: resolve(root, 'packages/lint/src/formatters/index.ts') },
       { find: /^@amritk\/lint$/, replacement: resolve(root, 'packages/lint/src/index.ts') },
     ],
   },
