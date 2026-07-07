@@ -16,12 +16,16 @@ export default defineConfig({
         find: /^@amritk\/generate-validators$/,
         replacement: resolve(root, 'packages/generate-validators/src/index.ts'),
       },
+      // Consumed from its built dist (not src): runtime-validators uses `@/` path
+      // aliases internally, which only resolve once `tsc-alias` has rewritten them
+      // to relative paths in `dist`. Requires a prior build (see root `pretest`).
       {
         find: /^@amritk\/runtime-validators$/,
-        replacement: resolve(root, 'packages/runtime-validators/src/index.ts'),
+        replacement: resolve(root, 'packages/runtime-validators/dist/index.js'),
       },
       { find: /^@amritk\/resolve-refs$/, replacement: resolve(root, 'packages/resolve-refs/src/index.ts') },
       { find: /^@amritk\/yaml$/, replacement: resolve(root, 'packages/yaml/src/index.ts') },
+      { find: /^@amritk\/lint$/, replacement: resolve(root, 'packages/lint/src/index.ts') },
     ],
   },
   test: {

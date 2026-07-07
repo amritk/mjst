@@ -29,7 +29,7 @@ mjst is a monorepo of code-generation tools that turn a JSON Schema (Draft 2020-
 | **Type definitions** | `.d.ts` types matching the schema, with documentation comments |
 | **Markdown** | Reference docs derived from the schema |
 
-The CLI (`mjst`) is the primary entry point; the underlying generators are also published as standalone packages.
+The CLI (`mjst`) is the primary entry point; the underlying generators are also published as standalone packages. Beyond generation, `mjst lint` lints JSON/YAML against JSON Schema and custom style rules — see [`@amritk/lint`](./packages/lint).
 
 ---
 
@@ -136,7 +136,8 @@ See the [CLI README](./packages/cli/README.md) for the full flag reference and c
 
 | Package | Description |
 |:---|:---|
-| [`@amritk/mjst`](./packages/cli) | CLI — generates parsers, validators, and types from a schema |
+| [`@amritk/mjst`](./packages/cli) | CLI — generates parsers, validators, and types from a schema, and lints JSON/YAML (`mjst lint`) |
+| [`@amritk/lint`](./packages/lint) | Format-agnostic JSON/YAML style-guide linter — JSON Schema + custom rules, with exact `line:column` findings |
 | [`@amritk/generate-parsers`](./packages/generate-parsers) | Programmatic API for parser + type generation |
 | [`@amritk/generate-validators`](./packages/generate-validators) | Programmatic API for validator generation |
 | [`@amritk/runtime-validators`](./packages/runtime-validators) | Runtime JSON Schema validation for schemas not known ahead of time |

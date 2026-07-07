@@ -350,6 +350,17 @@ const run = async (): Promise<void> => {
   // Skip the first two args (node executable and script path)
   const args = process.argv.slice(2)
 
+  // `mjst lint <files>` delegates to the linter, which owns its own flag parsing
+  // and `--help` (yargs) — so this must run before the shared version/help checks,
+  // otherwise `mjst lint --help` would print the codegen help instead.
+  if (args[0] === 'lint') {
+    const { run: lintRun } = await import('./lint/run')
+    const result = await lintRun(args.slice(1))
+    if (result.stdout) process.stdout.write(result.stdout)
+    if (result.stderr) process.stderr.write(result.stderr)
+    process.exit(result.code)
+  }
+
   if (isVersionRequest(args)) {
     console.log(await readVersion())
     return

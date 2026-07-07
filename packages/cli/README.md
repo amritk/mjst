@@ -21,6 +21,8 @@
 
 Options can be supplied via CLI flags or a JSON config file. **CLI flags always take precedence over config file values.**
 
+It also carries a `lint` subcommand — `mjst lint <files>` — a format-agnostic JSON/YAML style-guide linter powered by [`@amritk/lint`](../lint). See [Linting](#linting).
+
 ---
 
 ## Installation
@@ -113,6 +115,45 @@ npx mjst --config ./mjst.config.json
 
 > [!NOTE]
 > Validate your config against the bundled JSON Schema: [`config.schema.json`](./config.schema.json)
+
+---
+
+## Linting
+
+`mjst lint` lints JSON/YAML documents against a ruleset — JSON Schema validation and custom style rules, with exact `line:column` findings. It has its own flags (and its own `--help`), independent of the generation flags above.
+
+```bash
+# Lint files against an explicit ruleset
+npx mjst lint "**/*.{yaml,json}" -r .lint.yaml
+
+# Auto-discover a .lint.* ruleset by walking up from each file
+npx mjst lint config/
+
+# Lint piped input
+cat service.yaml | npx mjst lint --stdin-filepath service.yaml
+```
+
+Findings are printed as a compact, editor-clickable report:
+
+```
+config/service.yaml:2:7  error  config-schema  /port must be integer
+
+✖ 1 problem(s) (1 error(s), 0 warning(s))
+```
+
+With no `-r`, mjst discovers a `.lint.{yaml,yml,json,js,mjs}` ruleset by walking up from each linted file. A ruleset maps a JSONPath (`given`) to a function (`then`) — `schema` (JSON Schema), `casing`, `pattern`, `truthy`, and more, plus your own. The [`@amritk/lint` README](../lint#ruleset-format) documents the ruleset format and built-in functions. For machine-readable output (JSON, SARIF, …), call the [`@amritk/lint`](../lint) library's `lintDocument`, which returns structured findings.
+
+| Flag | Description |
+| --- | --- |
+| `<documents..>` | Files or globs to lint (positional). |
+| `-r`, `--ruleset` | Path to a ruleset file. Defaults to `.lint.*` discovery. |
+| `-F`, `--fail-severity` | Minimum severity that fails the run: `error` (default), `warn`, `info`, `hint`. |
+| `-D`, `--display-only-failures` | Only show findings at or above `--fail-severity`. |
+| `--stdin-filepath` | Path to associate with piped input (labels findings and enables ruleset discovery). |
+| `--concurrency` | Max documents linted in parallel (default `8`). |
+| `-q`, `--quiet` | Suppress the findings report (the exit code still reflects findings). |
+
+The exit code is `0` when no finding reaches `--fail-severity`, `1` when one does, and `2` on a usage error. Run `mjst lint --help` for the full list.
 
 ---
 

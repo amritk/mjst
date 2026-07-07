@@ -44,9 +44,13 @@
     "@amritk/adapters": "workspace:*",
     "@amritk/generate-parsers": "workspace:*",
     "@amritk/generate-markdown": "workspace:*",
-    "@amritk/helpers": "workspace:*"
+    "@amritk/helpers": "workspace:*",
+    "@amritk/lint": "workspace:*",
+    "fast-glob": "^3.3.2",
+    "yargs": "^17.7.2"
   },
   "devDependencies": {
-    "json-schema-typed": "catalog:"
+    "json-schema-typed": "catalog:",
+    "@types/yargs": "^17.0.33"
   }
 }
