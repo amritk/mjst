@@ -2,14 +2,15 @@
 
 ## Overview
 
-`mjst` is a **Bun monorepo** that generates TypeScript type definitions, runtime parsers, and predicate validators from JSON Schema (Draft 2020-12). Generated CLI output runs under Node ≥ 20; the development toolchain (install, build, test) uses Bun.
+`mjst` is a **Bun monorepo** that generates TypeScript type definitions, runtime parsers, and predicate validators from JSON Schema (Draft 2020-12), and lints JSON/YAML documents against JSON Schema and custom style rules. Generated CLI output runs under Node ≥ 20; the development toolchain (install, build, test) uses Bun.
 
 ## Monorepo Structure
 
 ```
 mjst/
 ├── packages/
-│   ├── cli/                   # @amritk/mjst — command-line interface
+│   ├── cli/                   # @amritk/mjst — command-line interface (generate + lint)
+│   ├── lint/                  # @amritk/lint — format-agnostic JSON/YAML style-guide linter
 │   ├── generate-parsers/      # @amritk/generate-parsers — parser + type generator
 │   ├── generate-validators/   # @amritk/generate-validators — predicate validator generator
 │   ├── runtime-validators/    # @amritk/runtime-validators — eval-free runtime schema interpreter
@@ -29,11 +30,19 @@ mjst/
 
 ### `@amritk/mjst` (`packages/cli`)
 
-Command-line entry point. Reads CLI flags and/or a JSON config file, loads a schema, runs the generator, and writes TypeScript output.
+Command-line entry point. Reads CLI flags and/or a JSON config file, loads a schema, runs the generator, and writes TypeScript output. It also carries a `lint` subcommand (`mjst lint <files>`) that lints JSON/YAML documents via `@amritk/lint` and prints a compact `file:line:col` report.
 
-- **Depends on:** `@amritk/generate-parsers`, `@amritk/generate-markdown`
+- **Depends on:** `@amritk/generate-parsers`, `@amritk/generate-markdown`, `@amritk/lint`
 - **Bin:** `mjst` → `dist/cli.js` (built for the Node target)
-- **Config schema:** `config.schema.json` — also drives the CLI README table via `@amritk/generate-markdown`
+- **Config schema:** `config.schema.json` — also drives the CLI README table via `@amritk/generate-markdown`. The `lint` subcommand has its own independent flags (see the CLI README).
+
+### `@amritk/lint` (`packages/lint`)
+
+A fast, **format-agnostic** JSON/YAML style-guide linter — the library behind the `mjst lint` subcommand. A ruleset maps nodes selected by a **JSONPath** (`given`) to a **function** (`then`): structural validation against a **JSON Schema**, built-in style checks (`casing`, `pattern`, `alphabetical`, `length`, …), or a custom function. Every finding carries an exact `line:column` range because the parser keeps source positions on every node. The engine ships no built-in ruleset and knows nothing about OpenAPI or any other schema — you bring the rules.
+
+- **Depends on:** `@amritk/runtime-validators` (the built-in `schema` function runs an arbitrary Draft 2020-12 JSON Schema over a matched node) and `@amritk/yaml` (source-position-preserving YAML parsing so findings map back to `line:column`).
+- **Entry points:** `lintDocument(input, options?)` → `IDiagnostic[]`; `lintDocumentWithResult` (adds a plugin's rewritten `output`); `fixDocument` (applies a `FixerRegistry` to a fixpoint, then re-lints); `createRuleset` / `resolveNamedRuleset` (normalize a definition, layer built-in functions, resolve `extends`).
+- **Rendering is the caller's job:** `lintDocument` returns structured findings only — the library ships no output "formatter" layer, and the CLI supplies its own `file:line:col` report.
 
 ### `@amritk/generate-parsers` (`packages/generate-parsers`)
 
@@ -59,6 +68,7 @@ Generates lightweight predicate-style validators: each schema becomes a `validat
 The runtime counterpart to `generate-validators`. Instead of writing validator source files at build time, it validates a JSON Schema discovered **at runtime** (a plugin config, a user-supplied schema). It is an **eval-free interpreter** — it walks the schema directly, with no `new Function` and no compile step — so it has zero startup cost and runs anywhere `eval` is forbidden (strict CSP, Cloudflare Workers, React Native/Hermes). The trade-off vs Ajv is deliberate: it wins the cold one-shot path (validate a few values per schema) by ~90–1600×, and loses steady-state throughput (one schema, many values) by ~15–25× — use the build-time `generate-validators` for that.
 
 - **Depends on:** `json-schema-typed` (types only). Deliberately self-contained — no `@amritk/helpers` — so the runtime stays slim. `ajv` / `ajv-formats` are dev-only, for the benchmark suite and the differential fuzz test.
+- **Consumed by:** `@amritk/lint` — its built-in `schema` rule function validates a matched node against an arbitrary runtime-supplied JSON Schema through this interpreter.
 - **Entry points:** `validate(schema)` → error-collecting validator (`true | { valid: false, errors }`); `validateGuard(schema)` → zero-allocation boolean type guard. Both go through `src/interpreter/prepare.ts` (a `WeakMap` cache over the interpreter).
 - **Design notes:** a single recursive walker (`src/interpreter/interpret.ts`) evaluates the schema against the value; the error array is allocated lazily so valid input never allocates, and the guard path short-circuits on first failure. The only reusable work — compiling `pattern` regexes and resolving local `$ref`s (JSON-Pointer fragments and `$anchor` names) — is memoized per validator. Recursion via `$ref` terminates naturally as the data shrinks. Parity with Ajv is enforced by `src/differential.test.ts` (~144k random/mutated values). OpenAPI `nullable: true` is honored (null accepted regardless of type).
 
@@ -91,7 +101,7 @@ Resolves and inlines `$ref`s into a single dereferenced document — internal (`
 
 ### `@amritk/yaml` (`packages/yaml`)
 
-A tiny, dependency-free YAML parser built for diagnostics: every node maps back to an exact `line:column` source position. Used to load `.yaml`/`.yml` schema/config documents (e.g. via the `resolveRefsFromFile` `parse` callback) while preserving the locations needed to point at the offending node in an error.
+A tiny, dependency-free YAML parser built for diagnostics: every node maps back to an exact `line:column` source position. Used to load `.yaml`/`.yml` schema/config documents (e.g. via the `resolveRefsFromFile` `parse` callback) and by `@amritk/lint` to parse linted documents, while preserving the locations needed to point at the offending node in an error.
 
 - **Depends on:** nothing.
 - **Scope:** a pragmatic subset of YAML 1.2 sized for configs/OpenAPI — block & flow collections, block scalars (`|`/`>`), quoted/plain scalars, comments, and anchors. Out of scope by design: multi-document streams (only the first document is read), explicit `?` mapping keys, and exotic tags.
