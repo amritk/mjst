@@ -151,7 +151,13 @@ With no `-r`, mjst discovers a `.lint.{yaml,yml,json,js,mjs}` ruleset by walking
 | `-D`, `--display-only-failures` | Only show findings at or above `--fail-severity`. |
 | `--stdin-filepath` | Path to associate with piped input (labels findings and enables ruleset discovery). |
 | `--concurrency` | Max documents linted in parallel (default `8`). |
+| `--no-resolve` | Skip `$ref` dereferencing; rules see the raw document. |
+| `--resolve-remote` | Fetch `http(s)` `$ref`s while resolving (off by default; a lint run stays offline). |
+| `--allowed-hosts` | Restrict remote `$ref` fetches to these hosts (implies `--resolve-remote`). |
+| `--allow-private-hosts` | Permit remote `$ref`s to private/loopback hosts (SSRF guard, off by default). |
 | `-q`, `--quiet` | Suppress the findings report (the exit code still reflects findings). |
+
+By default `mjst lint` dereferences `$ref`, `$dynamicRef`/`$dynamicAnchor`, and `$recursiveRef`/`$recursiveAnchor` before running rules, so rules with `resolved: true` (the ruleset default) see through references. Internal and local cross-file refs resolve from disk — a finding on a cross-file node reports that file's own `line:column` — while remote refs are only fetched when you opt in with `--resolve-remote` or `--allowed-hosts`.
 
 The exit code is `0` when no finding reaches `--fail-severity`, `1` when one does, and `2` on a usage error. Run `mjst lint --help` for the full list.
 

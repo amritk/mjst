@@ -44,7 +44,7 @@
     },
     "packages/cli": {
       "name": "@amritk/mjst",
-      "version": "0.9.0",
+      "version": "0.10.0",
       "bin": {
         "mjst": "./dist/cli.js",
       },
@@ -54,6 +54,8 @@
         "@amritk/generate-parsers": "workspace:*",
         "@amritk/helpers": "workspace:*",
         "@amritk/lint": "workspace:*",
+        "@amritk/resolve-refs": "workspace:*",
+        "@amritk/yaml": "workspace:*",
         "fast-glob": "^3.3.2",
         "yargs": "^17.7.2",
       },
@@ -123,7 +125,7 @@
     },
     "packages/lint": {
       "name": "@amritk/lint",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@amritk/runtime-validators": "workspace:*",
         "@amritk/yaml": "workspace:*",

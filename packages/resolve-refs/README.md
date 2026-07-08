@@ -5,6 +5,11 @@ refs, and remote (http/https) documents — into a single dereferenced document.
 
 - **One-pass, cached.** Every unique ref is resolved once; cycles are broken with
   an empty object so the result is always finite.
+- **Anchors + dynamic refs.** Beyond JSON-pointer `$ref`s, plain-name `$anchor`
+  references (`#node`), `$dynamicRef`/`$dynamicAnchor` (2020-12), and
+  `$recursiveRef`/`$recursiveAnchor` (2019-09) are dereferenced too. The dynamic
+  forms bind to their document-global anchor — the single-bundle case; nested
+  `$id` base-URI re-scoping is not modelled.
 - **Cross-file + remote.** Relative refs resolve against the document they appear
   in (a ref inside a remote doc stays remote, one inside a local file stays
   local). Fetched remote documents are cached for the lifetime of the process.

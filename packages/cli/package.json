@@ -46,6 +46,8 @@
     "@amritk/generate-markdown": "workspace:*",
     "@amritk/helpers": "workspace:*",
     "@amritk/lint": "workspace:*",
+    "@amritk/resolve-refs": "workspace:*",
+    "@amritk/yaml": "workspace:*",
     "fast-glob": "^3.3.2",
     "yargs": "^17.7.2"
   },

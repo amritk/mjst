@@ -1,15 +1,16 @@
 import { readFileSync } from 'node:fs'
 import { dirname, resolve as resolvePath } from 'node:path'
 
-import { getByPointer, pointerToPath } from './get-by-pointer'
 import { isPrivateHost } from './is-private-host'
+import { readReference, resolveFragment } from './reference'
 import { assignKey } from './safe-assign'
-import type { OriginMap, ResolveError, ResolveOptions, ResolveResult } from './types'
+import type { JsonPath, OriginMap, ResolveError, ResolveOptions, ResolveResult } from './types'
 
 // A ref currently mid-resolution is marked with this sentinel; revisiting it
 // means a cycle, so we return `{}` instead of recursing forever.
 const CYCLE = Symbol('cycle')
-type CacheValue = unknown | typeof CYCLE
+// The inlined value plus the in-document path it came from (for `origins`).
+type CacheValue = { value: unknown; pointer: JsonPath } | typeof CYCLE
 
 // --- Document location helpers ---------------------------------------------
 //
@@ -27,12 +28,12 @@ const joinLocation = (base: string, ref: string): string => {
   return resolvePath(dirname(base), ref)
 }
 
-/** Splits a `$ref` into its document part and JSON-pointer part. */
-const splitRef = (ref: string): { filePart: string; pointer: string } => {
+/** Splits a `$ref` into its document part and its fragment (pointer or anchor name). */
+const splitRef = (ref: string): { filePart: string; fragment: string } => {
   const hashIdx = ref.indexOf('#')
   return {
     filePart: hashIdx === -1 ? ref : ref.slice(0, hashIdx),
-    pointer: hashIdx === -1 ? '' : ref.slice(hashIdx + 1),
+    fragment: hashIdx === -1 ? '' : ref.slice(hashIdx + 1),
   }
 }
 
@@ -222,14 +223,15 @@ const collectRefTargets = (node: unknown, out: Set<string>): Set<string> => {
     return out
   }
   const obj = node as Record<string, unknown>
-  if (typeof obj['$ref'] === 'string') {
-    const { filePart } = splitRef(obj['$ref'])
+  const reference = readReference(obj)
+  if (reference) {
+    const { filePart } = splitRef(reference.value)
     if (filePart !== '') out.add(filePart)
   }
-  // Recurse into every key — including a `$ref` node's siblings, which apply
+  // Recurse into every key — including a reference node's siblings, which apply
   // alongside the referenced schema (2020-12) and may carry their own refs.
   for (const key of Object.keys(obj)) {
-    if (key === '$ref') continue
+    if (reference && key === reference.keyword) continue
     collectRefTargets(obj[key], out)
   }
   return out
@@ -282,44 +284,56 @@ const resolveAt = (
     return node.map((item) => resolveAt(item, baseLocation, docCache, refCache, origins))
   }
   const obj = node as Record<string, unknown>
-  if (typeof obj['$ref'] === 'string') {
-    const { filePart, pointer } = splitRef(obj['$ref'])
+  const reference = readReference(obj)
+  if (reference) {
+    const { keyword, value } = reference
+    const { filePart, fragment } = splitRef(value)
     const targetLocation = filePart === '' ? baseLocation : joinLocation(baseLocation, filePart)
     const targetRoot = docCache.get(targetLocation) ?? {}
 
-    const cacheKey = `${targetLocation}#${pointer}`
+    // Cache/cycle key includes the keyword: `$ref #x` and `$dynamicRef #x` can
+    // bind to different targets, so they must not share a cache slot.
+    const cacheKey = `${keyword} ${targetLocation}#${fragment}`
     let resolved: unknown
-    if (refCache.has(cacheKey)) {
-      const cached = refCache.get(cacheKey)
-      resolved = cached === CYCLE ? {} : cached
+    let pointer: JsonPath
+    const cached = refCache.get(cacheKey)
+    if (cached === CYCLE) {
+      resolved = {}
+      pointer = []
+    } else if (cached !== undefined) {
+      resolved = cached.value
+      pointer = cached.pointer
     } else {
       refCache.set(cacheKey, CYCLE)
-      const target = pointer ? getByPointer(targetRoot, pointer) : targetRoot
-      resolved = resolveAt(target, targetLocation, docCache, refCache, origins)
-      refCache.set(cacheKey, resolved)
+      // `$anchor`/`$dynamicAnchor`/`$recursiveAnchor` are resolved within the
+      // target document; a plain pointer is a direct lookup. A fragment that
+      // resolves to nothing inlines as `undefined` (kept as-is for parity).
+      const found = resolveFragment(targetRoot, keyword, fragment)
+      pointer = found?.pointer ?? []
+      resolved = resolveAt(found?.value, targetLocation, docCache, refCache, origins)
+      refCache.set(cacheKey, { value: resolved, pointer })
       // Stamp the inlined node with where it was defined so a consumer can map a
       // resolved-tree node back to its source document/path. Only objects/arrays are
       // stamped (primitives can't key the map). First-write-wins: resolution recurses
-      // to the deepest `$ref` before returning, so the *definition* site stamps first;
+      // to the deepest ref before returning, so the *definition* site stamps first;
       // an outer ref that merely points (transitively) at the same object must not
       // overwrite it with an intermediate location.
       if (origins && resolved !== null && typeof resolved === 'object' && !origins.has(resolved)) {
-        origins.set(resolved, { location: targetLocation, pointer: pointerToPath(pointer) })
+        origins.set(resolved, { location: targetLocation, pointer })
       }
     }
 
-    // Keywords sibling to `$ref` apply alongside the referenced schema (2020-12),
-    // so preserve them by combining both in an `allOf` rather than dropping them.
-    const siblingKeys = Object.keys(obj).filter((key) => key !== '$ref')
+    // Keywords sibling to a reference apply alongside the referenced schema
+    // (2020-12), so preserve them by combining both in an `allOf`.
+    const siblingKeys = Object.keys(obj).filter((key) => key !== keyword)
     if (siblingKeys.length === 0) return resolved
     const siblings: Record<string, unknown> = {}
     for (const key of siblingKeys)
       assignKey(siblings, key, resolveAt(obj[key], baseLocation, docCache, refCache, origins))
     const existingAllOf = Array.isArray(siblings['allOf']) ? siblings['allOf'] : []
     const merged = { ...siblings, allOf: [...existingAllOf, resolved] }
-    // Stamp the wrapper too, so origin lookups resolve for a `$ref`-with-siblings node.
-    if (origins && !origins.has(merged))
-      origins.set(merged, { location: targetLocation, pointer: pointerToPath(pointer) })
+    // Stamp the wrapper too, so origin lookups resolve for a ref-with-siblings node.
+    if (origins && !origins.has(merged)) origins.set(merged, { location: targetLocation, pointer })
     return merged
   }
   const result: Record<string, unknown> = {}
