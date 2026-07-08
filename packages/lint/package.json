@@ -43,6 +43,11 @@
       "development": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./rules/openapi": {
+      "development": "./src/rules/openapi/index.ts",
+      "types": "./dist/rules/openapi/index.d.ts",
+      "default": "./dist/rules/openapi/index.js"
     }
   },
   "dependencies": {
