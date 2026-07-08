@@ -44,6 +44,26 @@ describe('resolve-refs-from-file', () => {
     expect(resolved).toMatchObject({ a: { value: 1 }, b: { value: 1 } })
   })
 
+  it('resolves a cross-file $ref to a plain-name $anchor', async () => {
+    writeFileSync(join(dir, 'pet.json'), JSON.stringify({ defs: { Pet: { $anchor: 'pet', type: 'object' } } }))
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ schemas: { Pet: { $ref: './pet.json#pet' } } }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    expect(errors).toEqual([])
+    expect(resolved).toEqual({ schemas: { Pet: { $anchor: 'pet', type: 'object' } } })
+  })
+
+  it('inlines a $dynamicRef bound to a $dynamicAnchor across files', async () => {
+    writeFileSync(join(dir, 'base.json'), JSON.stringify({ Node: { $dynamicAnchor: 'node', type: 'object' } }))
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ schema: { $dynamicRef: './base.json#node' } }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    expect(errors).toEqual([])
+    expect(resolved).toEqual({ schema: { $dynamicAnchor: 'node', type: 'object' } })
+  })
+
   it('keeps keywords sibling to a cross-file $ref via an allOf', async () => {
     writeFileSync(join(dir, 'pet.json'), JSON.stringify({ Pet: { type: 'object' } }))
     writeFileSync(

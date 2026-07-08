@@ -3,6 +3,7 @@ import { dirname, isAbsolute, resolve } from 'node:path'
 import {
   DiagnosticSeverity,
   type IDiagnostic,
+  type LintResolver,
   lintDocument,
   type RulesetDefinition,
   validateRuleset,
@@ -10,6 +11,7 @@ import {
 import fg from 'fast-glob'
 import yargs from 'yargs'
 
+import { createLintResolver } from './resolver'
 import { discoverRuleset, loadRuleset } from './ruleset-loader'
 
 const SEVERITY_BY_NAME: Record<string, DiagnosticSeverity> = {
@@ -31,6 +33,10 @@ type Args = {
   quiet: boolean
   stdinFilepath?: string
   concurrency: number
+  resolve: boolean
+  resolveRemote: boolean
+  allowedHosts?: string[]
+  allowPrivateHosts: boolean
 }
 
 /**
@@ -116,11 +122,41 @@ export const run = async (argv: string[], options: { stdin?: string } = {}): Pro
       default: 8,
       describe: 'Maximum number of documents to lint in parallel',
     })
+    .option('resolve', {
+      type: 'boolean',
+      default: true,
+      describe: 'Dereference $ref / $dynamicRef / $recursiveRef before linting (use --no-resolve to disable)',
+    })
+    .option('resolve-remote', {
+      type: 'boolean',
+      default: false,
+      describe: 'Allow fetching http(s) $refs while resolving (off by default; a lint run stays offline)',
+    })
+    .option('allowed-hosts', {
+      type: 'string',
+      array: true,
+      describe: 'Restrict remote $ref fetches to these hosts (implies --resolve-remote)',
+    })
+    .option('allow-private-hosts', {
+      type: 'boolean',
+      default: false,
+      describe: 'Permit remote $refs to private/loopback hosts (SSRF guard, off by default)',
+    })
     .help()
     .alias('help', 'h')
     .parse()) as unknown as Args
 
   const failSeverity = SEVERITY_BY_NAME[parsed.failSeverity] ?? DiagnosticSeverity.Error
+
+  // A non-empty --allowed-hosts is an explicit opt-in to remote fetching.
+  const allowRemote = parsed.resolveRemote || (parsed.allowedHosts?.length ?? 0) > 0
+  const resolver: LintResolver | undefined = parsed.resolve
+    ? createLintResolver({
+        remote: allowRemote,
+        ...(parsed.allowedHosts ? { allowedHosts: parsed.allowedHosts } : {}),
+        allowPrivateHosts: parsed.allowPrivateHosts,
+      })
+    : undefined
 
   const reportRulesetProblems = (definition: RulesetDefinition, label: string): void => {
     if (parsed.quiet) return
@@ -168,6 +204,7 @@ export const run = async (argv: string[], options: { stdin?: string } = {}): Pro
     const opts = {
       ...(definition ? { ruleset: definition } : {}),
       ...(basePath !== undefined ? { rulesetBasePath: basePath } : {}),
+      ...(resolver && definition ? { resolve: resolver } : {}),
       source: stdinPath ?? '<stdin>',
     }
     allResults.push(...(await lintDocument(content, opts)))
@@ -192,6 +229,7 @@ export const run = async (argv: string[], options: { stdin?: string } = {}): Pro
         ? {
             ruleset: definition,
             ...(basePath !== undefined ? { rulesetBasePath: basePath } : {}),
+            ...(resolver ? { resolve: resolver } : {}),
             source: file,
           }
         : { source: file }
