@@ -1,19 +1,25 @@
-// Official OpenAPI 3.1 JSON Schema, vendored verbatim from
-// https://spec.openapis.org/oas/3.1/schema/2025-11-23
+// Official OpenAPI 3.2 JSON Schema, vendored verbatim from
+// https://spec.openapis.org/oas/3.2/schema/2025-11-23
 // (dated 2025-11-23). Self-contained: no external $refs — Schema Objects are
 // left permissive via a local $dynamicRef/$dynamicAnchor ("#meta"), which
 // @amritk/runtime-validators resolves natively, so the whole document envelope
 // is validated against the official spec without a dialect engine or bundling.
 // To refresh: re-download the URL above and replace the object below verbatim.
-export const oas31Schema: object = {
-  $id: 'https://spec.openapis.org/oas/3.1/schema/2025-11-23',
+export const oas32Schema: object = {
+  $id: 'https://spec.openapis.org/oas/3.2/schema/2025-11-23',
   $schema: 'https://json-schema.org/draft/2020-12/schema',
-  description: 'The description of OpenAPI v3.1.x Documents without Schema Object validation',
+  description: 'The description of OpenAPI v3.2.x Documents without Schema Object validation',
   type: 'object',
   properties: {
     openapi: {
       type: 'string',
-      pattern: '^3\\.1\\.\\d+(-.+)?$',
+      pattern: '^3\\.2\\.\\d+(-.+)?$',
+    },
+    $self: {
+      type: 'string',
+      format: 'uri-reference',
+      $comment: 'MUST NOT contain a fragment',
+      pattern: '^[^#]*$',
     },
     info: {
       $ref: '#/$defs/info',
@@ -21,7 +27,7 @@ export const oas31Schema: object = {
     jsonSchemaDialect: {
       type: 'string',
       format: 'uri-reference',
-      default: 'https://spec.openapis.org/oas/3.1/dialect/2024-11-10',
+      default: 'https://spec.openapis.org/oas/3.2/dialect/2025-09-17',
     },
     servers: {
       type: 'array',
@@ -78,7 +84,7 @@ export const oas31Schema: object = {
   unevaluatedProperties: false,
   $defs: {
     info: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#info-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#info-object',
       type: 'object',
       properties: {
         title: {
@@ -109,7 +115,7 @@ export const oas31Schema: object = {
       unevaluatedProperties: false,
     },
     contact: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#contact-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#contact-object',
       type: 'object',
       properties: {
         name: {
@@ -128,7 +134,7 @@ export const oas31Schema: object = {
       unevaluatedProperties: false,
     },
     license: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#license-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#license-object',
       type: 'object',
       properties: {
         name: {
@@ -154,13 +160,16 @@ export const oas31Schema: object = {
       unevaluatedProperties: false,
     },
     server: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#server-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#server-object',
       type: 'object',
       properties: {
         url: {
           type: 'string',
         },
         description: {
+          type: 'string',
+        },
+        name: {
           type: 'string',
         },
         variables: {
@@ -175,7 +184,7 @@ export const oas31Schema: object = {
       unevaluatedProperties: false,
     },
     'server-variable': {
-      $comment: 'https://spec.openapis.org/oas/v3.1#server-variable-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#server-variable-object',
       type: 'object',
       properties: {
         enum: {
@@ -197,7 +206,7 @@ export const oas31Schema: object = {
       unevaluatedProperties: false,
     },
     components: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#components-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#components-object',
       type: 'object',
       properties: {
         schemas: {
@@ -260,21 +269,28 @@ export const oas31Schema: object = {
             $ref: '#/$defs/path-item',
           },
         },
-      },
-      patternProperties: {
-        '^(?:schemas|responses|parameters|examples|requestBodies|headers|securitySchemes|links|callbacks|pathItems)$': {
-          $comment:
-            'Enumerating all of the property names in the regex above is necessary for unevaluatedProperties to work as expected',
-          propertyNames: {
-            pattern: '^[a-zA-Z0-9._-]+$',
+        mediaTypes: {
+          type: 'object',
+          additionalProperties: {
+            $ref: '#/$defs/media-type-or-reference',
           },
         },
+      },
+      patternProperties: {
+        '^(?:schemas|responses|parameters|examples|requestBodies|headers|securitySchemes|links|callbacks|pathItems|mediaTypes)$':
+          {
+            $comment:
+              'Enumerating all of the property names in the regex above is necessary for unevaluatedProperties to work as expected',
+            propertyNames: {
+              pattern: '^[a-zA-Z0-9._-]+$',
+            },
+          },
       },
       $ref: '#/$defs/specification-extensions',
       unevaluatedProperties: false,
     },
     paths: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#paths-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#paths-object',
       type: 'object',
       patternProperties: {
         '^/': {
@@ -285,7 +301,7 @@ export const oas31Schema: object = {
       unevaluatedProperties: false,
     },
     'path-item': {
-      $comment: 'https://spec.openapis.org/oas/v3.1#path-item-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#path-item-object',
       type: 'object',
       properties: {
         $ref: {
@@ -305,9 +321,19 @@ export const oas31Schema: object = {
           },
         },
         parameters: {
-          type: 'array',
-          items: {
-            $ref: '#/$defs/parameter-or-reference',
+          $ref: '#/$defs/parameters',
+        },
+        additionalOperations: {
+          type: 'object',
+          additionalProperties: {
+            $ref: '#/$defs/operation',
+          },
+          propertyNames: {
+            $comment: 'RFC9110 restricts methods to "1*tchar" in ABNF',
+            pattern: "^[a-zA-Z0-9!#$%&'*+.^_`|~-]+$",
+            not: {
+              enum: ['GET', 'PUT', 'POST', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH', 'TRACE', 'QUERY'],
+            },
           },
         },
         get: {
@@ -334,12 +360,15 @@ export const oas31Schema: object = {
         trace: {
           $ref: '#/$defs/operation',
         },
+        query: {
+          $ref: '#/$defs/operation',
+        },
       },
       $ref: '#/$defs/specification-extensions',
       unevaluatedProperties: false,
     },
     operation: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#operation-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#operation-object',
       type: 'object',
       properties: {
         tags: {
@@ -361,10 +390,7 @@ export const oas31Schema: object = {
           type: 'string',
         },
         parameters: {
-          type: 'array',
-          items: {
-            $ref: '#/$defs/parameter-or-reference',
-          },
+          $ref: '#/$defs/parameters',
         },
         requestBody: {
           $ref: '#/$defs/request-body-or-reference',
@@ -399,7 +425,7 @@ export const oas31Schema: object = {
       unevaluatedProperties: false,
     },
     'external-documentation': {
-      $comment: 'https://spec.openapis.org/oas/v3.1#external-documentation-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#external-documentation-object',
       type: 'object',
       properties: {
         description: {
@@ -414,15 +440,58 @@ export const oas31Schema: object = {
       $ref: '#/$defs/specification-extensions',
       unevaluatedProperties: false,
     },
+    parameters: {
+      type: 'array',
+      items: {
+        $ref: '#/$defs/parameter-or-reference',
+      },
+      not: {
+        allOf: [
+          {
+            contains: {
+              type: 'object',
+              properties: {
+                in: {
+                  const: 'query',
+                },
+              },
+              required: ['in'],
+            },
+          },
+          {
+            contains: {
+              type: 'object',
+              properties: {
+                in: {
+                  const: 'querystring',
+                },
+              },
+              required: ['in'],
+            },
+          },
+        ],
+      },
+      contains: {
+        type: 'object',
+        properties: {
+          in: {
+            const: 'querystring',
+          },
+        },
+        required: ['in'],
+      },
+      minContains: 0,
+      maxContains: 1,
+    },
     parameter: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#parameter-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#parameter-object',
       type: 'object',
       properties: {
         name: {
           type: 'string',
         },
         in: {
-          enum: ['query', 'header', 'path', 'cookie'],
+          enum: ['query', 'querystring', 'header', 'path', 'cookie'],
         },
         description: {
           type: 'string',
@@ -453,21 +522,43 @@ export const oas31Schema: object = {
           required: ['content'],
         },
       ],
-      if: {
-        properties: {
-          in: {
-            const: 'query',
+      allOf: [
+        {
+          $ref: '#/$defs/examples',
+        },
+        {
+          $ref: '#/$defs/specification-extensions',
+        },
+        {
+          if: {
+            properties: {
+              in: {
+                const: 'query',
+              },
+            },
+          },
+          then: {
+            properties: {
+              allowEmptyValue: {
+                default: false,
+                type: 'boolean',
+              },
+            },
           },
         },
-      },
-      then: {
-        properties: {
-          allowEmptyValue: {
-            default: false,
-            type: 'boolean',
+        {
+          if: {
+            properties: {
+              in: {
+                const: 'querystring',
+              },
+            },
+          },
+          then: {
+            required: ['content'],
           },
         },
-      },
+      ],
       dependentSchemas: {
         schema: {
           properties: {
@@ -479,9 +570,6 @@ export const oas31Schema: object = {
             },
           },
           allOf: [
-            {
-              $ref: '#/$defs/examples',
-            },
             {
               $ref: '#/$defs/parameter/dependentSchemas/schema/$defs/styles-for-path',
             },
@@ -517,6 +605,10 @@ export const oas31Schema: object = {
                     const: true,
                   },
                   explode: {
+                    default: false,
+                  },
+                  allowReserved: {
+                    type: 'boolean',
                     default: false,
                   },
                 },
@@ -558,8 +650,8 @@ export const oas31Schema: object = {
                     enum: ['form', 'spaceDelimited', 'pipeDelimited', 'deepObject'],
                   },
                   allowReserved: {
-                    default: false,
                     type: 'boolean',
+                    default: false,
                   },
                 },
                 $ref: '#/$defs/explode-for-form',
@@ -577,16 +669,32 @@ export const oas31Schema: object = {
                 properties: {
                   style: {
                     default: 'form',
-                    const: 'form',
+                    enum: ['form', 'cookie'],
+                  },
+                  explode: {
+                    default: true,
                   },
                 },
-                $ref: '#/$defs/explode-for-form',
+                if: {
+                  properties: {
+                    style: {
+                      const: 'form',
+                    },
+                  },
+                },
+                then: {
+                  properties: {
+                    allowReserved: {
+                      type: 'boolean',
+                      default: false,
+                    },
+                  },
+                },
               },
             },
           },
         },
       },
-      $ref: '#/$defs/specification-extensions',
       unevaluatedProperties: false,
     },
     'parameter-or-reference': {
@@ -602,7 +710,7 @@ export const oas31Schema: object = {
       },
     },
     'request-body': {
-      $comment: 'https://spec.openapis.org/oas/v3.1#request-body-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#request-body-object',
       type: 'object',
       properties: {
         description: {
@@ -633,20 +741,26 @@ export const oas31Schema: object = {
       },
     },
     content: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#fixed-fields-10',
+      $comment: 'https://spec.openapis.org/oas/v3.2#fixed-fields-10',
       type: 'object',
       additionalProperties: {
-        $ref: '#/$defs/media-type',
+        $ref: '#/$defs/media-type-or-reference',
       },
       propertyNames: {
         format: 'media-range',
       },
     },
     'media-type': {
-      $comment: 'https://spec.openapis.org/oas/v3.1#media-type-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#media-type-object',
       type: 'object',
       properties: {
+        description: {
+          type: 'string',
+        },
         schema: {
+          $dynamicRef: '#meta',
+        },
+        itemSchema: {
           $dynamicRef: '#meta',
         },
         encoding: {
@@ -655,19 +769,48 @@ export const oas31Schema: object = {
             $ref: '#/$defs/encoding',
           },
         },
+        prefixEncoding: {
+          type: 'array',
+          items: {
+            $ref: '#/$defs/encoding',
+          },
+        },
+        itemEncoding: {
+          $ref: '#/$defs/encoding',
+        },
+      },
+      dependentSchemas: {
+        encoding: {
+          properties: {
+            prefixEncoding: false,
+            itemEncoding: false,
+          },
+        },
       },
       allOf: [
         {
-          $ref: '#/$defs/specification-extensions',
+          $ref: '#/$defs/examples',
         },
         {
-          $ref: '#/$defs/examples',
+          $ref: '#/$defs/specification-extensions',
         },
       ],
       unevaluatedProperties: false,
     },
+    'media-type-or-reference': {
+      if: {
+        type: 'object',
+        required: ['$ref'],
+      },
+      then: {
+        $ref: '#/$defs/reference',
+      },
+      else: {
+        $ref: '#/$defs/media-type',
+      },
+    },
     encoding: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#encoding-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#encoding-object',
       type: 'object',
       properties: {
         contentType: {
@@ -689,8 +832,29 @@ export const oas31Schema: object = {
         allowReserved: {
           type: 'boolean',
         },
+        encoding: {
+          type: 'object',
+          additionalProperties: {
+            $ref: '#/$defs/encoding',
+          },
+        },
+        prefixEncoding: {
+          type: 'array',
+          items: {
+            $ref: '#/$defs/encoding',
+          },
+        },
+        itemEncoding: {
+          $ref: '#/$defs/encoding',
+        },
       },
       dependentSchemas: {
+        encoding: {
+          properties: {
+            prefixEncoding: false,
+            itemEncoding: false,
+          },
+        },
         style: {
           properties: {
             allowReserved: {
@@ -722,7 +886,7 @@ export const oas31Schema: object = {
       unevaluatedProperties: false,
     },
     responses: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#responses-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#responses-object',
       type: 'object',
       properties: {
         default: {
@@ -748,9 +912,12 @@ export const oas31Schema: object = {
       },
     },
     response: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#response-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#response-object',
       type: 'object',
       properties: {
+        summary: {
+          type: 'string',
+        },
         description: {
           type: 'string',
         },
@@ -770,7 +937,6 @@ export const oas31Schema: object = {
           },
         },
       },
-      required: ['description'],
       $ref: '#/$defs/specification-extensions',
       unevaluatedProperties: false,
     },
@@ -787,7 +953,7 @@ export const oas31Schema: object = {
       },
     },
     callbacks: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#callback-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#callback-object',
       type: 'object',
       $ref: '#/$defs/specification-extensions',
       additionalProperties: {
@@ -807,7 +973,7 @@ export const oas31Schema: object = {
       },
     },
     example: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#example-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#example-object',
       type: 'object',
       properties: {
         summary: {
@@ -816,15 +982,38 @@ export const oas31Schema: object = {
         description: {
           type: 'string',
         },
+        dataValue: true,
+        serializedValue: {
+          type: 'string',
+        },
         value: true,
         externalValue: {
           type: 'string',
           format: 'uri-reference',
         },
       },
-      not: {
-        required: ['value', 'externalValue'],
-      },
+      allOf: [
+        {
+          not: {
+            required: ['value', 'externalValue'],
+          },
+        },
+        {
+          not: {
+            required: ['value', 'dataValue'],
+          },
+        },
+        {
+          not: {
+            required: ['value', 'serializedValue'],
+          },
+        },
+        {
+          not: {
+            required: ['serializedValue', 'externalValue'],
+          },
+        },
+      ],
       $ref: '#/$defs/specification-extensions',
       unevaluatedProperties: false,
     },
@@ -841,7 +1030,7 @@ export const oas31Schema: object = {
       },
     },
     link: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#link-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#link-object',
       type: 'object',
       properties: {
         operationRef: {
@@ -886,7 +1075,7 @@ export const oas31Schema: object = {
       },
     },
     header: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#header-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#header-object',
       type: 'object',
       properties: {
         description: {
@@ -929,10 +1118,16 @@ export const oas31Schema: object = {
               type: 'boolean',
             },
           },
-          $ref: '#/$defs/examples',
         },
       },
-      $ref: '#/$defs/specification-extensions',
+      allOf: [
+        {
+          $ref: '#/$defs/examples',
+        },
+        {
+          $ref: '#/$defs/specification-extensions',
+        },
+      ],
       unevaluatedProperties: false,
     },
     'header-or-reference': {
@@ -948,10 +1143,13 @@ export const oas31Schema: object = {
       },
     },
     tag: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#tag-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#tag-object',
       type: 'object',
       properties: {
         name: {
+          type: 'string',
+        },
+        summary: {
           type: 'string',
         },
         description: {
@@ -960,13 +1158,19 @@ export const oas31Schema: object = {
         externalDocs: {
           $ref: '#/$defs/external-documentation',
         },
+        parent: {
+          type: 'string',
+        },
+        kind: {
+          type: 'string',
+        },
       },
       required: ['name'],
       $ref: '#/$defs/specification-extensions',
       unevaluatedProperties: false,
     },
     reference: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#reference-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#reference-object',
       type: 'object',
       properties: {
         $ref: {
@@ -982,12 +1186,12 @@ export const oas31Schema: object = {
       },
     },
     schema: {
-      $comment: 'https://spec.openapis.org/oas/v3.1#schema-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#schema-object',
       $dynamicAnchor: 'meta',
       type: ['object', 'boolean'],
     },
     'security-scheme': {
-      $comment: 'https://spec.openapis.org/oas/v3.1#security-scheme-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#security-scheme-object',
       type: 'object',
       properties: {
         type: {
@@ -995,6 +1199,10 @@ export const oas31Schema: object = {
         },
         description: {
           type: 'string',
+        },
+        deprecated: {
+          default: false,
+          type: 'boolean',
         },
       },
       required: ['type'],
@@ -1091,6 +1299,10 @@ export const oas31Schema: object = {
               flows: {
                 $ref: '#/$defs/oauth-flows',
               },
+              oauth2MetadataUrl: {
+                type: 'string',
+                format: 'uri-reference',
+              },
             },
             required: ['flows'],
           },
@@ -1141,6 +1353,9 @@ export const oas31Schema: object = {
         },
         authorizationCode: {
           $ref: '#/$defs/oauth-flows/$defs/authorization-code',
+        },
+        deviceAuthorization: {
+          $ref: '#/$defs/oauth-flows/$defs/device-authorization',
         },
       },
       $ref: '#/$defs/specification-extensions',
@@ -1226,10 +1441,33 @@ export const oas31Schema: object = {
           $ref: '#/$defs/specification-extensions',
           unevaluatedProperties: false,
         },
+        'device-authorization': {
+          type: 'object',
+          properties: {
+            deviceAuthorizationUrl: {
+              type: 'string',
+              format: 'uri-reference',
+            },
+            tokenUrl: {
+              type: 'string',
+              format: 'uri-reference',
+            },
+            refreshUrl: {
+              type: 'string',
+              format: 'uri-reference',
+            },
+            scopes: {
+              $ref: '#/$defs/map-of-strings',
+            },
+          },
+          required: ['deviceAuthorizationUrl', 'tokenUrl', 'scopes'],
+          $ref: '#/$defs/specification-extensions',
+          unevaluatedProperties: false,
+        },
       },
     },
     'security-requirement': {
-      $comment: 'https://spec.openapis.org/oas/v3.1#security-requirement-object',
+      $comment: 'https://spec.openapis.org/oas/v3.2#security-requirement-object',
       type: 'object',
       additionalProperties: {
         type: 'array',
@@ -1239,7 +1477,7 @@ export const oas31Schema: object = {
       },
     },
     'specification-extensions': {
-      $comment: 'https://spec.openapis.org/oas/v3.1#specification-extensions',
+      $comment: 'https://spec.openapis.org/oas/v3.2#specification-extensions',
       patternProperties: {
         '^x-': true,
       },

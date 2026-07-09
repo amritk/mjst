@@ -2,6 +2,7 @@ import type { RuleEntry, RulesetDefinition } from '../../core'
 import { oas2Schema } from './schemas/oas2'
 import { oas3Schema } from './schemas/oas3'
 import { oas31Schema } from './schemas/oas31'
+import { oas32Schema } from './schemas/oas32'
 
 const OPERATIONS = '$.paths[*][get,put,post,delete,options,head,patch,trace]'
 const WEBHOOK_OPERATIONS = '$.webhooks[*][get,put,post,delete,options,head,patch,trace]'
@@ -400,9 +401,11 @@ const oas31Rules: Record<string, RuleEntry> = {
     then: { function: 'oasMutuallyExclusive', functionOptions: { properties: ['identifier', 'url'] } },
   },
   'oas3_1-schema': {
-    // 3.1 realigned Schema Objects with JSON Schema 2020-12, so this validates
-    // the document *envelope* (root / info / paths / components structure) and
-    // leaves Schema Objects permissive. The 3.0-only `oas3-schema` rule does not
+    // The official, self-contained OpenAPI 3.1 meta-schema (spec.openapis.org).
+    // 3.1 realigned Schema Objects with JSON Schema 2020-12, so the official
+    // schema validates the whole document *envelope* while leaving Schema Object
+    // internals permissive (a local `$dynamicRef` "#meta" that the runtime
+    // validator resolves natively). The 3.0-only `oas3-schema` rule does not
     // apply to 3.1 (different `openapi` version and structure).
     description: 'Validate structure of OpenAPI v3.1 specification.',
     formats: ['oas3_1'],
@@ -427,6 +430,18 @@ const oas31Rules: Record<string, RuleEntry> = {
 
 /** Rules for features introduced in OpenAPI 3.2. */
 const oas32Rules: Record<string, RuleEntry> = {
+  'oas3_2-schema': {
+    // The official, self-contained OpenAPI 3.2 meta-schema (spec.openapis.org).
+    // Like `oas3_1-schema`, it validates the document envelope and leaves Schema
+    // Object internals to JSON Schema 2020-12 via a local `$dynamicRef`.
+    description: 'Validate structure of OpenAPI v3.2 specification.',
+    formats: ['oas3_2'],
+    severity: 'error',
+    recommended: true,
+    resolved: false,
+    given: '$',
+    then: { function: 'schema', functionOptions: { schema: oas32Schema } },
+  },
   'oas3_2-additional-operations-standard-method': {
     // `additionalOperations` is for HTTP methods without a dedicated fixed
     // field; the spec forbids redefining a standard method there.

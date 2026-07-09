@@ -206,7 +206,9 @@ const findings = await lint(spec, { ruleset })
 | `oasFunctions` / `allFunctions` | The OpenAPI-specific functions; `allFunctions` = built-ins + OpenAPI. |
 | `oasFormats` | OpenAPI version detectors (`oas2`, `oas3`, `oas3.0`, `oas3.1`, `oas3.2`). |
 | `oasFixers` | Auto-fixers for the mechanically-repairable OpenAPI rules (pass to `fixDocument`). |
-| `oas2Schema` / `oas3Schema` / `oas31Schema` | The bundled OpenAPI structural meta-schemas. |
+| `oas2Schema` / `oas3Schema` / `oas31Schema` / `oas32Schema` | The bundled OpenAPI structural meta-schemas (2.0/3.0 adapted from the official draft-04 schemas; 3.1/3.2 are the official self-contained `spec.openapis.org` schemas). |
+
+The `oas3_1-schema` and `oas3_2-schema` structural rules validate against the **official self-contained `spec.openapis.org` meta-schemas** — vendored verbatim, no bundling. OpenAPI 3.1/3.2 express Schema Objects as JSON Schema 2020-12 via a local `$dynamicRef`/`$dynamicAnchor`, which `@amritk/runtime-validators` resolves natively, so the whole document envelope is validated against the official schema while Schema Object internals stay permissive. (The 2.0/3.0 schemas are the official draft-04 schemas with the two minimal adaptations the interpreter needs: external metaschema refs inlined, boolean `exclusiveMinimum` made numeric.)
 
 `$ref` resolution stays the caller's job: the preset doesn't pull in a resolver, so for rules that need the dereferenced document (`resolved: true`) pass a `resolve` function to the core `lintWithResult` (for example wrapping [`@amritk/resolve-refs`](../resolve-refs)). The `mjst lint` CLI already wires one up.
 
