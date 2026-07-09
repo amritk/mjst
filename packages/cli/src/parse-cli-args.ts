@@ -17,6 +17,7 @@ type MutableConfig = {
   logWarnings?: boolean
   strict?: boolean
   stripUnknown?: boolean
+  caseInsensitive?: boolean
   readonly?: boolean
   helpers?: 'package' | 'embedded'
   typeSuffix?: string
@@ -32,6 +33,7 @@ const BOOLEAN_KEYS = new Set<keyof MutableConfig>([
   'logWarnings',
   'strict',
   'stripUnknown',
+  'caseInsensitive',
   'readonly',
 ])
 // Value flags consume the following argument (or `--flag=value`).
@@ -140,6 +142,9 @@ const assignBoolean = (config: MutableConfig, key: string, value: boolean): bool
       return true
     case 'stripUnknown':
       config.stripUnknown = value
+      return true
+    case 'caseInsensitive':
+      config.caseInsensitive = value
       return true
     case 'readonly':
       config.readonly = value

@@ -32,6 +32,7 @@ Output:
 Validation:
   --strict              Throw on type/shape mismatches instead of coercing to defaults
   --strip-unknown       Silently drop undeclared input keys at every nesting level
+  --case-insensitive    Normalize mis-cased enum/const strings to their exact casing
   --log-warnings        console.warn on input keys not declared in the schema
 
 Misc:

@@ -23,6 +23,7 @@ describe('help-text', () => {
       '--readonly',
       '--strict',
       '--strip-unknown',
+      '--case-insensitive',
       '--log-warnings',
       '--config',
       '--version',

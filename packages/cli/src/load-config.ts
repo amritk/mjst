@@ -40,6 +40,7 @@ export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>
     ...(typeof obj['logWarnings'] === 'boolean' && { logWarnings: obj['logWarnings'] }),
     ...(typeof obj['strict'] === 'boolean' && { strict: obj['strict'] }),
     ...(typeof obj['stripUnknown'] === 'boolean' && { stripUnknown: obj['stripUnknown'] }),
+    ...(typeof obj['caseInsensitive'] === 'boolean' && { caseInsensitive: obj['caseInsensitive'] }),
     ...(typeof obj['readonly'] === 'boolean' && { readonly: obj['readonly'] }),
     ...(isHelpersMode(obj['helpers']) && { helpers: obj['helpers'] }),
     ...(isImportExt(obj['importExt']) && { importExt: obj['importExt'] }),

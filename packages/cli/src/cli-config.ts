@@ -63,6 +63,15 @@ export type CliConfig = {
    */
   readonly stripUnknown?: boolean
   /**
+   * When true, the generated coercing parsers normalize a mis-cased string to
+   * the exact casing of a declared `enum`/`const` member it matches
+   * case-insensitively (e.g. `hElLo` → `hello`) instead of coercing to the
+   * default. Coerce mode only — `strict` parsers still reject a casing
+   * mismatch. Correctly-cased input keeps the exact-match fast path, so the hot
+   * path is unaffected.
+   */
+  readonly caseInsensitive?: boolean
+  /**
    * Controls how generated parsers reference their runtime helpers.
    * - `'package'`: emit `import ... from '@amritk/helpers/...'`.
    * - `'embedded'`: ship the helper source under `outDir/_helpers/` and emit

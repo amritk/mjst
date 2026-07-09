@@ -24,6 +24,7 @@ import { findDiscriminator } from '#helpers/find-discriminator'
 import { getDefaultValue } from '#helpers/get-default-value'
 import { getDiscriminatorValue } from '#helpers/get-discriminator-value'
 
+import { generateEnumCaseInsensitiveCoercion } from './generate-enum-check'
 import { generateObjectStrictAssertion, generateScalarStrictAssertion } from './generate-strict-assertion'
 import {
   canEnforceUnion,
@@ -95,6 +96,15 @@ type GenerateParserOptions = {
    * generate a validation-free pass-through parser.
    */
   readonly isRoot?: boolean
+  /**
+   * When true, a mis-cased string that matches a declared `enum`/`const` member
+   * case-insensitively is normalized to that member's exact casing (e.g. `hElLo`
+   * → `hello`) instead of coercing to the default. Coerce mode only — strict
+   * parsers still reject a casing mismatch. The normalization lives on the
+   * failure branch of the coercion ternary, so a correctly-cased value keeps the
+   * exact `===` fast path and the hot path is unaffected.
+   */
+  readonly caseInsensitive?: boolean
 }
 
 /**
@@ -262,6 +272,7 @@ const generatePropertyValue = (
   isRequired: boolean,
   useRefImports: boolean,
   suffix: string,
+  caseInsensitive = false,
 ): string => {
   // Handle direct $ref properties
   if (shouldUseRefImport(propSchema, useRefImports)) {
@@ -292,14 +303,29 @@ const generatePropertyValue = (
 
   // Generate standard validation expression
   const defaultValue = getDefaultValue(propSchema)
-  const valueExpression = generateValidationExpression(key, propSchema, defaultValue, isRequired)
+  const valueExpression = generateValidationExpression(
+    key,
+    propSchema,
+    defaultValue,
+    isRequired,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    caseInsensitive,
+  )
   return isRequired ? valueExpression : generateOptionalInlineProperty(key, valueExpression)
 }
 
 /**
  * Generates property entries for all properties in the schema.
  */
-const generatePropertyEntries = (schema: JSONSchema, useRefImports: boolean, suffix: string): PropertyEntry[] => {
+const generatePropertyEntries = (
+  schema: JSONSchema,
+  useRefImports: boolean,
+  suffix: string,
+  caseInsensitive = false,
+): PropertyEntry[] => {
   if (!hasProperties(schema)) {
     return []
   }
@@ -308,7 +334,7 @@ const generatePropertyEntries = (schema: JSONSchema, useRefImports: boolean, suf
 
   for (const [key, propSchema] of Object.entries(schema.properties)) {
     const isRequired = isPropertyRequired(key, schema)
-    const value = generatePropertyValue(key, propSchema, isRequired, useRefImports, suffix)
+    const value = generatePropertyValue(key, propSchema, isRequired, useRefImports, suffix, caseInsensitive)
 
     // Determine if the property uses spread syntax (making it optional in the object literal)
     const isOptional = value.startsWith('...')
@@ -470,6 +496,8 @@ type UnionParserContext = {
    * reject the value — throwing on that predicate would be wrong.
    */
   readonly stripUnknown?: boolean
+  /** See GenerateParserOptions.caseInsensitive. */
+  readonly caseInsensitive?: boolean
 }
 
 /**
@@ -599,7 +627,11 @@ const generateNonObjectParser = (
     if (hasEnum(schema) && schema.enum.length > 0) {
       const values = JSON.stringify(schema.enum)
       const fallback = JSON.stringify(schema.enum[0])
-      return `export const ${functionName} = (input: unknown): ${typeName} => ${values}.includes(input as never) ? input as ${typeName} : ${fallback} as ${typeName};`
+      // Case-insensitive normalization sits on the non-member branch only, so an
+      // exact member still returns via the `includes` fast path untouched.
+      const ci = unionCtx?.caseInsensitive ? generateEnumCaseInsensitiveCoercion('input', schema.enum, fallback) : null
+      const coerced = ci ? `(${ci})` : fallback
+      return `export const ${functionName} = (input: unknown): ${typeName} => ${values}.includes(input as never) ? input as ${typeName} : ${coerced} as ${typeName};`
     }
     // A top-level union must validate membership: an unmatched value is not of
     // the declared union type, so coerce it to a member-shaped default. Reuse the
@@ -674,6 +706,7 @@ const generateNonObjectParser = (
           stripUnknown,
           unionCtx?.rootSchema,
           reserved,
+          unionCtx?.caseInsensitive ?? false,
         ),
       ].join('\n\n')
       return `${preamble}\n\n${delegated(generateParserName(itemName))}`
@@ -722,6 +755,7 @@ const generateNonObjectParser = (
           undefined,
           '_it',
           true,
+          unionCtx?.caseInsensitive,
         )
         return `export const ${functionName} = (input: unknown): ${typeName} => Array.isArray(input) ? (input as unknown[]).map((_it) => ${itemExpr}) as ${typeName} : [] as ${typeName};`
       }
@@ -910,6 +944,7 @@ const generateObjectParser = (
   stripUnknown = false,
   rootSchema?: Record<string, unknown>,
   reservedNames: ReadonlySet<string> = NO_RESERVED_NAMES,
+  caseInsensitive = false,
 ): string => {
   const functionName = generateParserName(typeName)
   const exportPrefix = exported ? 'export ' : ''
@@ -954,6 +989,7 @@ const generateObjectParser = (
         stripUnknown,
         rootSchema,
         reservedNames,
+        caseInsensitive,
       ),
     )
   }
@@ -983,6 +1019,7 @@ const generateObjectParser = (
         stripUnknown,
         rootSchema,
         reservedNames,
+        caseInsensitive,
       ),
     )
   }
@@ -1303,6 +1340,7 @@ const generateObjectParser = (
           undefined,
           shouldCache ? varName : undefined,
           knownNotUndefined,
+          caseInsensitive,
         )
       }
 
@@ -1553,9 +1591,10 @@ const generateCombinedObjectParser = (
   logWarnings?: boolean,
   strict?: boolean,
   stripUnknown = false,
+  caseInsensitive = false,
 ): string => {
   const functionName = generateParserName(typeName)
-  const entries = generatePropertyEntries(schema, useRefImports, suffix)
+  const entries = generatePropertyEntries(schema, useRefImports, suffix, caseInsensitive)
 
   // Build the known property lines for the initial object
   const propertyLines = entries.map((entry) => {
@@ -1567,7 +1606,19 @@ const generateCombinedObjectParser = (
 
   // Find the first pattern with a $ref for parser delegation
   if (!isSchemaObject(schema) || !('patternProperties' in schema)) {
-    return generateObjectParser(schema, typeName, useRefImports, suffix, logWarnings, strict, true, stripUnknown)
+    return generateObjectParser(
+      schema,
+      typeName,
+      useRefImports,
+      suffix,
+      logWarnings,
+      strict,
+      true,
+      stripUnknown,
+      undefined,
+      NO_RESERVED_NAMES,
+      caseInsensitive,
+    )
   }
 
   const patternProps = schema.patternProperties as Record<string, JSONSchema>
@@ -1593,7 +1644,19 @@ const generateCombinedObjectParser = (
   }
 
   if (!refPattern || !useRefImports) {
-    return generateObjectParser(schema, typeName, useRefImports, suffix, logWarnings, strict, true, stripUnknown)
+    return generateObjectParser(
+      schema,
+      typeName,
+      useRefImports,
+      suffix,
+      logWarnings,
+      strict,
+      true,
+      stripUnknown,
+      undefined,
+      NO_RESERVED_NAMES,
+      caseInsensitive,
+    )
   }
 
   const [pattern, patternSchema] = refPattern
@@ -1812,6 +1875,7 @@ const generateConditionalParser = (
   typeName: string,
   suffix: string,
   stripUnknown = false,
+  caseInsensitive = false,
 ): string => {
   const functionName = generateParserName(typeName)
 
@@ -1830,7 +1894,19 @@ const generateConditionalParser = (
     // regular object parser from the merged property set.
     const mergedSchema = getConditionalObjectSchema(schema)
     if (mergedSchema) {
-      return generateObjectParser(mergedSchema, typeName, false, suffix, false, false, true, stripUnknown)
+      return generateObjectParser(
+        mergedSchema,
+        typeName,
+        false,
+        suffix,
+        false,
+        false,
+        true,
+        stripUnknown,
+        undefined,
+        NO_RESERVED_NAMES,
+        caseInsensitive,
+      )
     }
     return generateEmptyObjectParser(typeName)
   }
@@ -1847,7 +1923,19 @@ const generateConditionalParser = (
     // Condition is not a $ref check — flatten into an object parser
     const mergedSchema = getConditionalObjectSchema(schema)
     if (mergedSchema) {
-      return generateObjectParser(mergedSchema, typeName, false, suffix, false, false, true, stripUnknown)
+      return generateObjectParser(
+        mergedSchema,
+        typeName,
+        false,
+        suffix,
+        false,
+        false,
+        true,
+        stripUnknown,
+        undefined,
+        NO_RESERVED_NAMES,
+        caseInsensitive,
+      )
     }
     return generateEmptyObjectParser(typeName)
   }
@@ -1960,6 +2048,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   const logWarnings = options?.logWarnings ?? false
   const strict = options?.strict ?? false
   const stripUnknown = options?.stripUnknown ?? false
+  const caseInsensitive = options?.caseInsensitive ?? false
   const suffix = options?.typeSuffix ?? ''
 
   // Special case for the self-referential JSON Schema meta-schema type (e.g.
@@ -1982,6 +2071,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
       useRefImports,
       suffix,
       stripUnknown,
+      caseInsensitive,
       logWarnings,
       ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
       ...(options?.reservedNames !== undefined ? { reservedNames: options.reservedNames } : {}),
@@ -1992,7 +2082,16 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   // This generates a parser that handles known properties and also iterates
   // pattern-matched keys (e.g. responses with "default" + "200", "4XX").
   if (hasProperties(schema) && isSchemaObject(schema) && 'patternProperties' in schema) {
-    return generateCombinedObjectParser(schema, typeName, useRefImports, suffix, logWarnings, strict, stripUnknown)
+    return generateCombinedObjectParser(
+      schema,
+      typeName,
+      useRefImports,
+      suffix,
+      logWarnings,
+      strict,
+      stripUnknown,
+      caseInsensitive,
+    )
   }
 
   // Handle schemas that have explicit properties — generate a full object parser.
@@ -2011,12 +2110,13 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
       stripUnknown,
       options?.rootSchema,
       options?.reservedNames,
+      caseInsensitive,
     )
   }
 
   // Handle conditional schemas (if/then/else) for schemas without explicit properties.
   if (isSchemaObject(schema) && 'if' in schema && 'then' in schema && 'else' in schema) {
-    return generateConditionalParser(schema as JSONSchema.Object, typeName, suffix, stripUnknown)
+    return generateConditionalParser(schema as JSONSchema.Object, typeName, suffix, stripUnknown, caseInsensitive)
   }
 
   // Handle conditional schemas that only define if/then object fragments.
@@ -2032,6 +2132,9 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
       strict,
       true,
       stripUnknown,
+      undefined,
+      NO_RESERVED_NAMES,
+      caseInsensitive,
     )
   }
 
@@ -2041,6 +2144,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
       useRefImports,
       suffix,
       stripUnknown,
+      caseInsensitive,
       logWarnings,
       ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
       ...(options?.reservedNames !== undefined ? { reservedNames: options.reservedNames } : {}),

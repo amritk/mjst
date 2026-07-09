@@ -237,6 +237,22 @@ describe('parse-cli-args', () => {
     })
   })
 
+  it('parses --case-insensitive boolean flag (kebab-case)', () => {
+    const result = parseCliArgs(['--case-insensitive'])
+
+    expect(result).toEqual({
+      caseInsensitive: true,
+    })
+  })
+
+  it('parses --case-insensitive=false with equals syntax', () => {
+    const result = parseCliArgs(['--case-insensitive=false'])
+
+    expect(result).toEqual({
+      caseInsensitive: false,
+    })
+  })
+
   it('parses --strict alongside other flags', () => {
     const result = parseCliArgs(['--schema', 'schema.json', '--outDir', 'dist', '--strict'])
 

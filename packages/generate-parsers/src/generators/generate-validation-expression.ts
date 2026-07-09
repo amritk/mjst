@@ -35,7 +35,7 @@ import { findDiscriminator } from '#helpers/find-discriminator'
 import { getDefaultValue } from '#helpers/get-default-value'
 
 import { generateDiscriminatedUnionValidation } from './generate-discriminated-union-validation'
-import { generateEnumCheck } from './generate-enum-check'
+import { generateEnumCaseInsensitiveCoercion, generateEnumCheck } from './generate-enum-check'
 import { generateNonDiscriminatedUnionValidation } from './generate-non-discriminated-union-validation'
 import { generateSchemaChecks } from './generate-schema-checks'
 
@@ -169,6 +169,7 @@ export const generateValidationExpression = (
   visitedRefs?: Set<string>,
   accessorOverride?: string,
   knownNotUndefined?: boolean,
+  caseInsensitive?: boolean,
 ): string => {
   const accessor = accessorOverride ?? safeAccessor('input?', key)
   const checks: string[] = []
@@ -219,7 +220,17 @@ export const generateValidationExpression = (
       const visited = new Set(visitedRefs)
       visited.add(ref)
 
-      return generateValidationExpression(key, resolvedSchema, defaultValue, isRequired, rootSchema, visited)
+      return generateValidationExpression(
+        key,
+        resolvedSchema,
+        defaultValue,
+        isRequired,
+        rootSchema,
+        visited,
+        undefined,
+        undefined,
+        caseInsensitive,
+      )
     }
   }
 
@@ -319,6 +330,7 @@ export const generateValidationExpression = (
       visitedRefs,
       '_it',
       true,
+      caseInsensitive,
     )
     const mapped = `(Array.isArray(${accessor}) ? (${accessor} as unknown[]).map((_it) => ${itemExpr}) : ${defaultValue})`
     return isRequired ? mapped : `(${accessor} !== undefined ? ${mapped} : undefined)`
@@ -436,6 +448,16 @@ export const generateValidationExpression = (
   // a valid member of the declared literal-union type.
   const typeCoercion = hasEnum(schema) ? null : getTypeCoercion(accessor, schema, defaultValue)
 
+  // Case-insensitive enum normalization is spliced into the *failure* branch of
+  // the ternary only, so an already-valid (exactly-cased) member takes the
+  // `${accessor}` fast branch untouched. A mis-cased string folds to the exact
+  // member; anything else falls through to the branch's normal fallback. `null`
+  // when the flag is off or no member is a string, so the plain fallback stands.
+  const enumFallback = (fallback: string): string =>
+    (caseInsensitive && hasEnum(schema) && schema.enum.length > 0
+      ? generateEnumCaseInsensitiveCoercion(accessor, schema.enum, fallback)
+      : null) ?? fallback
+
   if (isRequired) {
     // For required fields: valid ? use_value : (exists ? coerce : default)
     if (typeCoercion) {
@@ -446,7 +468,7 @@ export const generateValidationExpression = (
       }
       return `${combinedCheck} ? ${accessor} : (${accessor} !== undefined ? ${typeCoercion} : ${defaultValue})`
     }
-    return `${combinedCheck} ? ${accessor} : ${defaultValue}`
+    return `${combinedCheck} ? ${accessor} : ${enumFallback(defaultValue)}`
   } else {
     // For optional fields: valid ? use_value : (exists ? coerce : undefined)
     if (typeCoercion) {
@@ -456,6 +478,6 @@ export const generateValidationExpression = (
       }
       return `${combinedCheck} ? ${accessor} : (${accessor} !== undefined ? ${typeCoercion} : undefined)`
     }
-    return `${combinedCheck} ? ${accessor} : undefined`
+    return `${combinedCheck} ? ${accessor} : ${enumFallback('undefined')}`
   }
 }
