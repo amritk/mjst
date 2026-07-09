@@ -87,6 +87,13 @@ type GenerateFileOptions = {
    * user-named root.
    */
   readonly isRoot?: boolean
+  /**
+   * When true, a mis-cased string that matches a declared `enum`/`const` member
+   * case-insensitively is normalized to that member's exact casing (coerce mode
+   * only). The normalization is emitted on the coercion failure branch, so
+   * already-valid input keeps the exact-match fast path.
+   */
+  readonly caseInsensitive?: boolean
 }
 
 /** Result of generating a single parser file. */
@@ -168,6 +175,7 @@ export const generateFile = (
     ...(options?.logWarnings !== undefined ? { logWarnings: options.logWarnings } : {}),
     ...(options?.strict !== undefined ? { strict: options.strict } : {}),
     ...(options?.stripUnknown !== undefined ? { stripUnknown: options.stripUnknown } : {}),
+    ...(options?.caseInsensitive !== undefined ? { caseInsensitive: options.caseInsensitive } : {}),
   })
   const shapeValidator = generateShapeValidator(schema, typeName, true, typeSuffix, true, stripUnknown, reservedNames)
   const combinedFunctions = `${shapeValidator}\n\n${parserFunction}`

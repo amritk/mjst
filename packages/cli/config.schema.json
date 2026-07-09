@@ -86,6 +86,13 @@
       "default": false,
       "description": "Build each parser's result from the schema's declared properties only, silently dropping undeclared input keys at every nesting level (zod's .strip()). Extras are never a validation error, so this composes with strict (which still throws on wrong types and missing required properties) and yields to additionalProperties: false, which rejects rather than strips in strict mode."
     },
+    "caseInsensitive": {
+      "type": "boolean",
+      "x-cli-flag": "--case-insensitive",
+      "x-icon": "🔡",
+      "default": false,
+      "description": "Normalize a mis-cased string to the exact casing of a declared enum/const member it matches case-insensitively (e.g. hElLo → hello) instead of coercing to the default. Coerce mode only — strict parsers still reject a casing mismatch. Correctly-cased input keeps the exact-match fast path, so the hot path is unaffected."
+    },
     "readonly": {
       "type": "boolean",
       "x-cli-flag": "--readonly",

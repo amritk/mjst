@@ -67,6 +67,24 @@ describe('load-config', () => {
     expect(result).toEqual({ schema: 's.json', outDir: 'o', stripUnknown: true })
   })
 
+  it('loads caseInsensitive boolean from config file', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', outDir: 'o', caseInsensitive: true }))
+
+    const result = await loadConfig(configPath)
+
+    expect(result).toEqual({ schema: 's.json', outDir: 'o', caseInsensitive: true })
+  })
+
+  it('ignores non-boolean caseInsensitive value', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', caseInsensitive: 'yes' }))
+
+    const result = await loadConfig(configPath)
+
+    expect(result).toEqual({ schema: 's.json' })
+  })
+
   it('ignores non-boolean stripUnknown value', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
     await writeFile(configPath, JSON.stringify({ schema: 's.json', stripUnknown: 'yes' }))

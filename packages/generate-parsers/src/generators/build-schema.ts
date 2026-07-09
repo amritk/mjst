@@ -106,6 +106,12 @@ export type GeneratedFile = {
  *   stripping. Note the `mjst` CLI defaults this to `'ts'` (falling back to `'js'` only
  *   under `--build`, where tsc must compile the sources) so generated output runs under
  *   Node without a build step; direct callers of `buildSchema` opt in explicitly.
+ * @param caseInsensitive - When true, the generated coercing parsers normalize a mis-cased
+ *   string to the exact casing of a declared `enum`/`const` member it matches
+ *   case-insensitively (e.g. `hElLo` → `hello`) instead of coercing to the default. Coerce
+ *   mode only — strict parsers still reject a casing mismatch. The normalization lives on
+ *   the coercion failure branch, so correctly-cased input keeps the exact-match fast path
+ *   and the hot path is unaffected.
  * @returns An array of generated TypeScript files
  *
  * @example
@@ -151,6 +157,7 @@ export const buildSchema = async (
   stripUnknown = false,
   typeSuffix = '',
   importExt: ImportExtension = 'js',
+  caseInsensitive = false,
 ): Promise<GeneratedFile[]> => {
   const files: GeneratedFile[] = []
   const usedHelpers = new Set<RuntimeHelperName>()
@@ -176,6 +183,7 @@ export const buildSchema = async (
       ...(logWarnings !== undefined ? { logWarnings } : {}),
       ...(strict !== undefined ? { strict } : {}),
       ...(stripUnknown ? { stripUnknown } : {}),
+      ...(caseInsensitive ? { caseInsensitive } : {}),
     })
 
     files.push({ filename: `${node.filename}.ts`, content: result.content })

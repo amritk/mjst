@@ -204,6 +204,7 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
     config.stripUnknown,
     config.typeSuffix,
     resolveImportExt(config),
+    config.caseInsensitive,
   )
 
   for (const file of files) {
@@ -250,6 +251,7 @@ const runSingleFile = async (config: Partial<CliConfig>, schemaPath: string, out
     config.stripUnknown,
     config.typeSuffix,
     resolveImportExt(config),
+    config.caseInsensitive,
   )
 
   const combined = combineGeneratedFiles(files)
@@ -317,6 +319,7 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
       config.stripUnknown,
       config.typeSuffix,
       resolveImportExt(config),
+      config.caseInsensitive,
     )
 
     for (const file of files) {

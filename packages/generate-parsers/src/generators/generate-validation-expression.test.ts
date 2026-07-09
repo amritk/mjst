@@ -836,4 +836,53 @@ describe('generate-validation-expression', () => {
 
     expect(result).toBe('typeof input?.balance === "bigint" ? input?.balance : undefined')
   })
+
+  describe('caseInsensitive enum normalization', () => {
+    const schema = { type: 'string' as const, enum: ['Active', 'Inactive'] }
+
+    it('keeps the exact === fast branch and only normalizes on the failure branch', () => {
+      const result = generateValidationExpression(
+        'status',
+        schema,
+        '"Active"',
+        true,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+      )
+      // The valid branch is untouched: exactly-cased members short-circuit here.
+      expect(result).toContain('(input?.status === "Active" || input?.status === "Inactive") ? input?.status :')
+      // The normalization is spliced into the else branch only.
+      expect(result).toContain('(input?.status as string).toLowerCase()')
+      expect(result).toContain('{"active":"Active","inactive":"Inactive"}')
+      // Non-member / non-string still lands on the plain default.
+      expect(result).toContain('?? "Active")')
+    })
+
+    it('emits no toLowerCase when the flag is off (unchanged fast path)', () => {
+      const result = generateValidationExpression('status', schema, '"Active"', true)
+      expect(result).not.toContain('toLowerCase')
+      expect(result).toBe(
+        'typeof input?.status === "string" && (input?.status === "Active" || input?.status === "Inactive") ? input?.status : "Active"',
+      )
+    })
+
+    it('normalizes an optional enum toward undefined when no member matches', () => {
+      const result = generateValidationExpression(
+        'status',
+        { enum: ['Active', 'Inactive'] },
+        'undefined',
+        false,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+      )
+      expect(result).toContain('(input?.status as string).toLowerCase()')
+      expect(result).toContain('?? undefined) : undefined)')
+    })
+  })
 })
