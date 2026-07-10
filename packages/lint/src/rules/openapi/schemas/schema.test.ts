@@ -3,8 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import { lint } from '../../../core'
 import { createOpenApiRuleset } from '../index'
-import { oas31Schema } from './oas31'
-import { oas32Schema } from './oas32'
+import { oas31Schema, oas32Schema } from './index'
 
 // The 3.1 and 3.2 structural schemas are the official, self-contained
 // spec.openapis.org meta-schemas. They validate the document envelope while

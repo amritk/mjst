@@ -20,10 +20,7 @@ export { oasFixers } from './fixers'
 export { oas2, oas3, oas3_0, oas3_1, oas3_2, oasFormats } from './formats'
 export { oasFunctions } from './functions/index'
 export { oas } from './oas'
-export { oas2Schema } from './schemas/oas2'
-export { oas3Schema } from './schemas/oas3'
-export { oas31Schema } from './schemas/oas31'
-export { oas32Schema } from './schemas/oas32'
+export { oas2Schema, oas3Schema, oas31Schema, oas32Schema } from './schemas'
 
 /** The built-in `@amritk/lint` functions plus the OpenAPI-specific ones, keyed by name. */
 export const allFunctions: FunctionRegistry = { ...builtinFunctions, ...oasFunctions }

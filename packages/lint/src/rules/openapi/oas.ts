@@ -1,8 +1,5 @@
 import type { RuleEntry, RulesetDefinition } from '../../core'
-import { oas2Schema } from './schemas/oas2'
-import { oas3Schema } from './schemas/oas3'
-import { oas31Schema } from './schemas/oas31'
-import { oas32Schema } from './schemas/oas32'
+import { oas2Schema, oas3Schema, oas31Schema, oas32Schema } from './schemas'
 
 const OPERATIONS = '$.paths[*][get,put,post,delete,options,head,patch,trace]'
 const WEBHOOK_OPERATIONS = '$.webhooks[*][get,put,post,delete,options,head,patch,trace]'
