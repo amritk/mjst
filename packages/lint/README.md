@@ -206,7 +206,7 @@ const findings = await lint(spec, { ruleset })
 | `oasFunctions` / `allFunctions` | The OpenAPI-specific functions; `allFunctions` = built-ins + OpenAPI. |
 | `oasFormats` | OpenAPI version detectors (`oas2`, `oas3`, `oas3.0`, `oas3.1`, `oas3.2`). |
 | `oasFixers` | Auto-fixers for the mechanically-repairable OpenAPI rules (pass to `fixDocument`). |
-| `oas2Schema` / `oas3Schema` / `oas31Schema` / `oas32Schema` | The official OpenAPI structural meta-schemas, vendored as raw `.json` from `spec.openapis.org` (3.0/3.1/3.2 verbatim; 2.0 with its external draft-04 metaschema refs inlined). See [`schemas/README.md`](./src/rules/openapi/schemas/README.md). |
+| `loadOasSchema(version)` | Lazily load one OpenAPI version's official structural meta-schema (`'2.0'` / `'3.0'` / `'3.1'` / `'3.2'`), vendored as raw `.json` from `spec.openapis.org` (3.0/3.1/3.2 verbatim; 2.0 with its external draft-04 metaschema refs inlined). See [`schemas/README.md`](./src/rules/openapi/schemas/README.md). |
 
 The structural rules validate against the **official `spec.openapis.org` meta-schemas, vendored as raw `.json`** ([`schemas/`](./src/rules/openapi/schemas/)). 3.0/3.1/3.2 are byte-for-byte verbatim; only 2.0 differs (its external draft-04 metaschema refs are inlined, since the offline interpreter never fetches remote refs). OpenAPI 3.1/3.2 express Schema Objects as JSON Schema 2020-12 via a local `$dynamicRef`/`$dynamicAnchor`, which `@amritk/runtime-validators` resolves natively — so the whole document envelope is validated against the official schema with no bundling or dialect engine, while Schema Object internals stay permissive.
 

@@ -10,6 +10,7 @@ import { oasOpParams } from './oas-op-params'
 import { oasOpSecurityDefined } from './oas-op-security-defined'
 import { oasOpSuccessResponse } from './oas-op-success-response'
 import { oasPathParam } from './oas-path-param'
+import { oasSchema } from './oas-schema'
 import { oasSchemaExampleDeprecated } from './oas-schema-example-deprecated'
 import { oasServerNameUnique } from './oas-server-name-unique'
 import { oasServerVariables } from './oas-server-variables'
@@ -31,6 +32,7 @@ export { oasOpParams } from './oas-op-params'
 export { oasOpSecurityDefined } from './oas-op-security-defined'
 export { oasOpSuccessResponse } from './oas-op-success-response'
 export { oasPathParam } from './oas-path-param'
+export { type IOasSchemaOptions, oasSchema } from './oas-schema'
 export { oasSchemaExampleDeprecated } from './oas-schema-example-deprecated'
 export { oasServerNameUnique } from './oas-server-name-unique'
 export { oasServerVariables } from './oas-server-variables'
@@ -58,6 +60,7 @@ export const oasFunctions: FunctionRegistry = {
   oasMediaExample,
   oasUnusedComponent,
   oasMutuallyExclusive: oasMutuallyExclusive as RulesetFunction,
+  oasSchema: oasSchema as RulesetFunction,
   oasAdditionalOperations,
   oasServerNameUnique,
   oasTagParentDefined,

@@ -1,5 +1,4 @@
 import type { RuleEntry, RulesetDefinition } from '../../core'
-import { oas2Schema, oas3Schema, oas31Schema, oas32Schema } from './schemas'
 
 const OPERATIONS = '$.paths[*][get,put,post,delete,options,head,patch,trace]'
 const WEBHOOK_OPERATIONS = '$.webhooks[*][get,put,post,delete,options,head,patch,trace]'
@@ -273,7 +272,7 @@ const oas2Rules: Record<string, RuleEntry> = {
     recommended: true,
     resolved: false,
     given: '$',
-    then: { function: 'schema', functionOptions: { schema: oas2Schema } },
+    then: { function: 'oasSchema', functionOptions: { version: '2.0' } },
   },
 }
 
@@ -361,7 +360,7 @@ const oas3Rules: Record<string, RuleEntry> = {
     recommended: true,
     resolved: false,
     given: '$',
-    then: { function: 'schema', functionOptions: { schema: oas3Schema } },
+    then: { function: 'oasSchema', functionOptions: { version: '3.0' } },
   },
 }
 
@@ -410,7 +409,7 @@ const oas31Rules: Record<string, RuleEntry> = {
     recommended: true,
     resolved: false,
     given: '$',
-    then: { function: 'schema', functionOptions: { schema: oas31Schema } },
+    then: { function: 'oasSchema', functionOptions: { version: '3.1' } },
   },
   'oas3_1-schema-example-deprecated': {
     // JSON Schema 2020-12 deprecates a Schema Object's singular `example` in
@@ -437,7 +436,7 @@ const oas32Rules: Record<string, RuleEntry> = {
     recommended: true,
     resolved: false,
     given: '$',
-    then: { function: 'schema', functionOptions: { schema: oas32Schema } },
+    then: { function: 'oasSchema', functionOptions: { version: '3.2' } },
   },
   'oas3_2-additional-operations-standard-method': {
     // `additionalOperations` is for HTTP methods without a dedicated fixed
