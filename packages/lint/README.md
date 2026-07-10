@@ -214,6 +214,22 @@ The structural rules validate against the **official `spec.openapis.org` meta-sc
 
 ---
 
+## Benchmarks
+
+The `bench/` suite runs the full `mjst lint` path — **parse (with a source map) → dereference `$ref`s → run the recommended OpenAPI ruleset** — over real-world specs, the same fixtures the test suite lints: Swagger's petstore, the DigitalOcean API, and the OpenAI API (~17 KB to ~2.8 MB, so the numbers span a small config and a genuinely large document). `$ref`s are dereferenced in memory with [`@amritk/resolve-refs`](../resolve-refs), exactly as the CLI does. Representative numbers (Bun 1.3, Linux x64 — your hardware will differ, run `bun run bench` yourself):
+
+| document | size | findings | lint | throughput |
+| --- | ---: | ---: | ---: | ---: |
+| petstore (Swagger) | 17 KB | 2 | ~5 ms | ~3.4 MB/s |
+| digitalocean | 105 KB | 3507 | ~24 ms | ~4.5 MB/s |
+| openai | 2.8 MB | 1176 | ~0.9 s | ~3.0 MB/s |
+
+`lint` is the mean wall time of one whole pass — every rule, not a subset — so the figure is dominated by real work: JSONPath matching, the built-in and OpenAPI rule functions, and the dereference pass. **Assembling the ruleset** (`createOpenApiRuleset`, which compiles every rule's JSONPath and wires up the functions and format detectors) is timed separately at **~0.06 ms**, because a process pays it once and then lints many documents against the result.
+
+Throughput lands in a steady few-MB-per-second band from a small spec to a multi-megabyte one, so lint time tracks document size rather than degrading on the large end. The benchmark warms up before timing and reports the mean over a fixed time budget; micro-benchmark figures vary by machine and runtime.
+
+---
+
 ## License
 
 MIT
