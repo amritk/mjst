@@ -1,5 +1,32 @@
 # @amritk/mjst
 
+## 0.11.0
+
+### Minor Changes
+
+- 161c2fc: Add a `caseInsensitive` option for case-insensitive `enum`/`const` coercion.
+
+  When enabled, a coercing parser normalizes a mis-cased string to the exact casing of the declared `enum`/`const` member it matches case-insensitively (e.g. `hElLo` → `hello`) instead of coercing it to the default. It applies to object properties, array items, and top-level enum/const parsers. Coerce mode only — strict parsers still reject a casing mismatch.
+
+  Performance is unaffected on already-valid input: the exact `===` fast path (and the shape validators / deep guards built on it) is unchanged, and the case-insensitive lookup is emitted only on the coercion failure branch, so a correctly-cased value never runs it.
+
+  `buildSchema` takes a new trailing `caseInsensitive` argument; `mjst` exposes it as the `--case-insensitive` flag and the `caseInsensitive` config key.
+
+- 7147396: Resolve `$ref`, `$dynamicRef`/`$dynamicAnchor`, and `$recursiveRef`/`$recursiveAnchor` when linting.
+
+  `@amritk/resolve-refs` now dereferences plain-name anchors (`#node` → `$anchor`/`$dynamicAnchor`) and the dynamic/recursive reference keywords, in both the in-memory and cross-file resolvers. Dynamic/recursive references bind to their document-global anchor (the single-bundle case; nested `$id` base-URI re-scoping is not modelled).
+
+  `mjst lint` now dereferences documents before running rules, so rules with `resolved: true` (the ruleset default) see through references — including cross-file refs, whose findings are attributed to the referenced file's own `line:column`. New flags: `--no-resolve` to disable, and `--resolve-remote` / `--allowed-hosts` / `--allow-private-hosts` to opt into fetching remote (`http(s)`) refs (off by default so a lint run stays offline).
+
+### Patch Changes
+
+- Updated dependencies [161c2fc]
+- Updated dependencies [273bbce]
+- Updated dependencies [7147396]
+  - @amritk/generate-parsers@0.16.0
+  - @amritk/lint@0.2.0
+  - @amritk/resolve-refs@0.3.0
+
 ## 0.10.0
 
 ### Minor Changes
