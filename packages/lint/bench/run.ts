@@ -1,35 +1,45 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { resolveRefs } from '@amritk/resolve-refs'
+import { Spectral, Document as SpectralDocument } from '@stoplight/spectral-core'
+import { Json as SpectralJson, Yaml as SpectralYaml } from '@stoplight/spectral-parsers'
+import { oas as spectralOas } from '@stoplight/spectral-rulesets'
 
 import type { LintResolver } from '../src/core'
 import { lint } from '../src/index'
 import { createOpenApiRuleset } from '../src/rules/openapi/index'
 
 /**
- * Benchmarks the end-to-end `mjst lint` path over real-world OpenAPI documents:
- * parse (with a source map) → dereference `$ref`s → run the recommended OpenAPI
- * ruleset. The specs — Swagger's petstore, the DigitalOcean API, and the OpenAI
- * API — are the actual fixtures the test suite lints, spanning ~17 KB to ~2.8 MB
- * so the numbers cover both a small config and a genuinely large document.
+ * Benchmarks `@amritk/lint` head-to-head against **Spectral** — the OpenAPI
+ * linter this package is modelled on (hence the `spectral:oas` alias) — over
+ * real-world specs. Both lint the same fixtures (Swagger's petstore, the
+ * DigitalOcean API, the OpenAI API — ~17 KB to ~2.8 MB) with their respective
+ * *recommended OpenAPI ruleset*, doing the same job: parse a document, resolve
+ * its internal `$ref`s, and run the full preset.
  *
  * Two things are timed separately, because they answer different questions:
  *
- *   - **build** — assembling the ruleset once (`createOpenApiRuleset`): compiling
- *     every rule's JSONPath expression and wiring up the functions/formats. A
- *     process pays this once, then lints many documents against the result, so it
- *     is reported on its own rather than folded into per-document throughput.
- *   - **lint** — one full `lint()` call against a prepared ruleset, with an
- *     in-memory `$ref` resolver (the linter's real default: rules marked
- *     `resolved: true` see through references). This is the representative "how
- *     fast does mjst lint my spec" number — parse, dereference, and every rule.
+ *   - **build** — assembling the ruleset once (mjst's `createOpenApiRuleset`
+ *     vs `new Spectral()` + `setRuleset(oas)`): compiling every rule's JSONPath
+ *     and wiring up functions/formats. A process pays this once, then lints many
+ *     documents, so it is reported on its own.
+ *   - **lint** — one full pass over a document: parse → dereference `$ref`s →
+ *     run every rule. mjst dereferences in memory via `@amritk/resolve-refs`
+ *     (the linter's real default); Spectral uses its own default resolver. A
+ *     fresh document is parsed each iteration on both sides, matching how the
+ *     tools are actually called.
+ *
+ * The two rulesets are *not* byte-identical — rule implementations and `$ref`
+ * resolution differ — so the finding counts differ and this is a **throughput**
+ * comparison, not a correctness parity check. Each count is printed so the work
+ * each tool did is visible. Spectral's JSONPath engine (`nimma`) currently
+ * throws on the 2.8 MB OpenAI spec under Bun, so that row is mjst-only; the
+ * Spectral side is guarded and reports `errored` rather than aborting the run.
  *
  * Each measurement warms up (to let V8 optimise the hot paths), times a single
- * run to size the sample, then reports the mean over a fixed time budget. Timing
- * a whole `lint()` — I/O-free, already-in-memory — means the figures are
- * dominated by real work: JSONPath matching, the built-in/OpenAPI functions, and
- * the dereference pass. Micro-benchmark figures vary by machine and runtime —
- * reproduce with `bun run bench`.
+ * run to size the sample, then reports the mean over a fixed time budget.
+ * Micro-benchmark figures vary by machine and runtime — reproduce with
+ * `bun run bench`.
  */
 
 const FIXTURE_DIR = fileURLToPath(new URL('../../../fixtures/openapi/real-world/', import.meta.url))
@@ -69,43 +79,77 @@ const measure = async (
   return { meanMs: (performance.now() - start) / iterations, iterations }
 }
 
+/** A tool's result on one document: its finding count and mean lint time, or an error marker. */
+type Sample = { findings: number; meanMs: number } | { error: string }
+
+/** Runs `count` + `measure` for a tool, catching a throw (e.g. Spectral's nimma engine) into an error marker. */
+const sample = async (count: () => Promise<number>, time: () => Promise<unknown>): Promise<Sample> => {
+  try {
+    const findings = await count()
+    const { meanMs } = await measure(time)
+    return { findings, meanMs }
+  } catch (error) {
+    return { error: error instanceof Error ? error.name : 'error' }
+  }
+}
+
 const pad = (s: string, width: number): string => s.padEnd(width)
 const padStart = (s: string, width: number): string => s.padStart(width)
 
 const fmtMs = (ms: number): string =>
   ms >= 100 ? `${ms.toFixed(0)} ms` : ms >= 1 ? `${ms.toFixed(1)} ms` : `${ms.toFixed(3)} ms`
-/** Throughput in MB of source linted per second — a size-independent way to compare documents. */
-const fmtThroughput = (bytes: number, ms: number): string => `${(bytes / 1_000_000 / (ms / 1000)).toFixed(1)} MB/s`
 
 const run = async (): Promise<void> => {
-  console.log('\n=== @amritk/lint — recommended OpenAPI ruleset over real-world specs ===\n')
+  console.log('\n=== @amritk/lint vs Spectral — recommended OpenAPI ruleset over real-world specs ===\n')
   console.log(`Node/Bun: ${typeof Bun !== 'undefined' ? `Bun ${Bun.version}` : process.version}`)
   console.log('build = assemble the ruleset once   lint = one full parse → resolve → rules pass')
-  console.log('$refs are dereferenced in memory, as the mjst lint default does.\n')
+  console.log('Finding counts differ (the rulesets are not byte-identical); this is a throughput comparison.\n')
 
-  // One-shot: assembling the recommended ruleset (compiles every JSONPath, wires functions/formats).
-  const build = await measure(() => void createOpenApiRuleset(), 1000, 500)
-  console.log(`ruleset build (one-shot): ${fmtMs(build.meanMs)}\n`)
+  // One-shot ruleset build: mjst compiles JSONPath + wires functions/formats; Spectral compiles its ruleset.
+  const mjstBuild = await measure(() => void createOpenApiRuleset(), 1000, 500)
+  const spectralBuild = await measure(
+    () => {
+      const s = new Spectral()
+      s.setRuleset(spectralOas as never)
+    },
+    1000,
+    500,
+  )
+  console.log(`ruleset build (one-shot):  mjst ${fmtMs(mjstBuild.meanMs)}   spectral ${fmtMs(spectralBuild.meanMs)}\n`)
 
   const ruleset = createOpenApiRuleset()
+  const spectral = new Spectral()
+  spectral.setRuleset(spectralOas as never)
 
   console.log(
-    `  ${pad('document', 22)}${padStart('size', 10)}${padStart('findings', 10)}${padStart('lint', 12)}${padStart('throughput', 14)}`,
+    `  ${pad('document', 22)}${padStart('size', 9)}${padStart('mjst', 11)}${padStart('spectral', 12)}${padStart('speedup', 10)}${padStart('findings m/s', 18)}`,
   )
 
   for (const { label, file } of FIXTURES) {
     const input = readFileSync(`${FIXTURE_DIR}${file}`, 'utf8')
-    const bytes = Buffer.byteLength(input, 'utf8')
+    const kb = `${(Buffer.byteLength(input, 'utf8') / 1024).toFixed(0)} KB`
+    const parser = file.endsWith('.json') ? SpectralJson : SpectralYaml
 
-    const findings = (await lint(input, { ruleset, resolve: resolver, source: file })).length
-    const timing = await measure(() => lint(input, { ruleset, resolve: resolver, source: file }))
+    const mjst = await sample(
+      async () => (await lint(input, { ruleset, resolve: resolver, source: file })).length,
+      () => lint(input, { ruleset, resolve: resolver, source: file }),
+    )
+    const spec = await sample(
+      async () => (await spectral.run(new SpectralDocument(input, parser as never, file))).length,
+      () => spectral.run(new SpectralDocument(input, parser as never, file)),
+    )
+
+    const mjstCell = 'error' in mjst ? mjst.error : fmtMs(mjst.meanMs)
+    const specCell = 'error' in spec ? 'errored' : fmtMs(spec.meanMs)
+    const speedup = 'error' in mjst || 'error' in spec ? '—' : `${(spec.meanMs / mjst.meanMs).toFixed(1)}x`
+    const counts = `${'error' in mjst ? '—' : mjst.findings} / ${'error' in spec ? '—' : spec.findings}`
 
     console.log(
-      `  ${pad(label, 22)}${padStart(`${(bytes / 1024).toFixed(0)} KB`, 10)}${padStart(String(findings), 10)}${padStart(fmtMs(timing.meanMs), 12)}${padStart(fmtThroughput(bytes, timing.meanMs), 14)}`,
+      `  ${pad(label, 22)}${padStart(kb, 9)}${padStart(mjstCell, 11)}${padStart(specCell, 12)}${padStart(speedup, 10)}${padStart(counts, 18)}`,
     )
   }
 
-  console.log('\n  lint is the mean wall time of one full parse → resolve → rules pass over the whole document.\n')
+  console.log('\n  speedup is spectral ÷ mjst mean lint time; findings m/s is the mjst / spectral finding count.\n')
 }
 
 await run()
