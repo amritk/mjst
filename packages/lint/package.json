@@ -33,7 +33,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f",
+    "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f && node scripts/copy-schema-json.mjs",
     "types:check": "tsgo -p . --noEmit",
     "test": "NODE_ENV=production vitest run --root ../.. packages/lint/"
   },
@@ -43,6 +43,11 @@
       "development": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./rules/openapi": {
+      "development": "./src/rules/openapi/index.ts",
+      "types": "./dist/rules/openapi/index.d.ts",
+      "default": "./dist/rules/openapi/index.js"
     }
   },
   "dependencies": {

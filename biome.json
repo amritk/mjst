@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!fixtures/openapi/**/*.json"]
+    "includes": ["**", "!fixtures/openapi/**/*.json", "!packages/lint/src/rules/openapi/schemas/*.json"]
   },
   "formatter": {
     "enabled": true,

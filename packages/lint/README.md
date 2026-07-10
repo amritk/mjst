@@ -19,7 +19,9 @@
 
 `@amritk/lint` lints **any** JSON or YAML document against a ruleset you define. A rule matches nodes with a **JSONPath** (`given`) and runs a **function** (`then`) over each match — structural validation against a **JSON Schema**, style checks (`casing`, `pattern`, `alphabetical`, `length`, …), or your own custom function. Every finding carries an exact `line:column` range, because the parser keeps source positions on every node.
 
-It is **format-agnostic**: the engine ships no built-in ruleset and knows nothing about OpenAPI or any other schema — you bring the rules. This is JSON/YAML style-guide linting with JSON Schema and custom rules, and nothing else.
+It is **format-agnostic**: the core engine ships no built-in ruleset and knows nothing about OpenAPI or any other schema — you bring the rules. This is JSON/YAML style-guide linting with JSON Schema and custom rules at its core.
+
+For OpenAPI specifically, the `@amritk/lint/rules/openapi` subpath ships a ready-made preset on top of that engine — see [OpenAPI ruleset](#openapi-ruleset) below.
 
 The CLI lives in the [`mjst`](../cli) binary as `mjst lint`; this package is the programmatic library behind it.
 
@@ -178,6 +180,37 @@ Built-in functions: `alphabetical`, `casing`, `defined`, `enumeration`, `falsy`,
 | `builtinFunctions` | The registry of built-in rule functions. |
 
 The engine internals (`createDocument`, `lint`, `query`, `validateRuleset`, `parseWithPointers`, `createFixPlugin`, `DiagnosticSeverity`, and the rule/diagnostic types) are re-exported from the package root for advanced use.
+
+---
+
+## OpenAPI ruleset
+
+The core package is format-agnostic, but OpenAPI is common enough to ship a ready-made preset. It lives at the **`@amritk/lint/rules/openapi`** subpath — a self-contained layer on top of the engine that adds **no dependencies** beyond what `@amritk/lint` already uses.
+
+```ts
+import { lint } from '@amritk/lint'
+import { createOpenApiRuleset } from '@amritk/lint/rules/openapi'
+
+// Defaults to `extends: [oas]` (recommended rules only, like `spectral:oas`).
+const ruleset = createOpenApiRuleset()
+const findings = await lint(spec, { ruleset })
+```
+
+`createOpenApiRuleset(definition?, basePath?)` builds a runnable `Ruleset` with the OpenAPI functions and format detectors layered over the built-ins, and with `extends` resolution that understands the `oas` / `loupe:oas` / `spectral:oas` names (the last two accepted so existing Spectral-style rulesets extend unchanged). Enable every rule with `createOpenApiRuleset({ extends: [['oas', 'all']] })`, or pass your own definition to override severities, add rules, or point `extends` at a file/npm package.
+
+| Export | What it does |
+| --- | --- |
+| `createOpenApiRuleset(definition?, basePath?)` | Build a runnable OpenAPI `Ruleset` (functions + formats + `extends` resolution). |
+| `resolveOpenApiRuleset(name, basePath?)` | Resolve an `extends` reference, including the `oas` / `loupe:oas` / `spectral:oas` names. |
+| `oas` | The built-in OpenAPI ruleset definition. |
+| `oasFunctions` / `allFunctions` | The OpenAPI-specific functions; `allFunctions` = built-ins + OpenAPI. |
+| `oasFormats` | OpenAPI version detectors (`oas2`, `oas3`, `oas3.0`, `oas3.1`, `oas3.2`). |
+| `oasFixers` | Auto-fixers for the mechanically-repairable OpenAPI rules (pass to `fixDocument`). |
+| `loadOasSchema(version)` | Lazily load one OpenAPI version's official structural meta-schema (`'2.0'` / `'3.0'` / `'3.1'` / `'3.2'`), vendored as raw `.json` from `spec.openapis.org` (3.0/3.1/3.2 verbatim; 2.0 with its external draft-04 metaschema refs inlined). See [`schemas/README.md`](./src/rules/openapi/schemas/README.md). |
+
+The structural rules validate against the **official `spec.openapis.org` meta-schemas, vendored as raw `.json`** ([`schemas/`](./src/rules/openapi/schemas/)). 3.0/3.1/3.2 are byte-for-byte verbatim; only 2.0 differs (its external draft-04 metaschema refs are inlined, since the offline interpreter never fetches remote refs). OpenAPI 3.1/3.2 express Schema Objects as JSON Schema 2020-12 via a local `$dynamicRef`/`$dynamicAnchor`, which `@amritk/runtime-validators` resolves natively — so the whole document envelope is validated against the official schema with no bundling or dialect engine, while Schema Object internals stay permissive.
+
+`$ref` resolution stays the caller's job: the preset doesn't pull in a resolver, so for rules that need the dereferenced document (`resolved: true`) pass a `resolve` function to the core `lintWithResult` (for example wrapping [`@amritk/resolve-refs`](../resolve-refs)). The `mjst lint` CLI already wires one up.
 
 ---
 
