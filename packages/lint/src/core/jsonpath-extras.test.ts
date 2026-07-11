@@ -126,6 +126,14 @@ describe('jsonpath engine: escapes and filter tokens', () => {
     expect(rooted).toHaveLength(1)
     expect(rooted[0]?.path).toEqual(['parent', 'a'])
   })
+
+  it('exposes @parentProperty inside a filter', () => {
+    // For items of `$.list`, @parentProperty is the container's key ("list").
+    const nested = { list: [{ id: 1 }, { id: 2 }], other: [{ id: 3 }] }
+    const matches = query(nested, "$.list[?(@parentProperty === 'list')]")
+    expect(matches).toHaveLength(2)
+    expect(query(nested, "$.list[?(@parentProperty === 'other')]")).toHaveLength(0)
+  })
 })
 
 describe('jsonpath engine: malformed expressions', () => {
