@@ -1,5 +1,5 @@
 import type { IFunctionResult, JsonPath, RulesetFunction } from '../../../core'
-import { HTTP_METHODS, isObject } from './helpers'
+import { isObject, OPERATION_METHODS } from './helpers'
 
 /** Walks `path` into `root`, returning the nested value or undefined. */
 const getIn = (root: unknown, path: string[]): unknown => {
@@ -39,7 +39,7 @@ export const oasOpSecurityDefined: RulesetFunction<Record<string, unknown>, { sc
   for (const [path, item] of Object.entries(paths)) {
     if (!isObject(item)) continue
     for (const [method, operation] of Object.entries(item)) {
-      if (HTTP_METHODS.has(method) && isObject(operation)) {
+      if (OPERATION_METHODS.has(method) && isObject(operation)) {
         check(operation['security'], [...context.path, 'paths', path, method, 'security'])
       }
     }

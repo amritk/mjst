@@ -1,4 +1,4 @@
-import { isMap, isPair, isScalar, isSeq, parseDocument, type YamlNode } from '@amritk/yaml'
+import { isAlias, isMap, isPair, isScalar, isSeq, parseDocument, type YamlNode } from '@amritk/yaml'
 
 import { createLineMap } from './lines'
 import {
@@ -11,7 +11,29 @@ import {
   type JsonPath,
 } from './types'
 
-const pathKey = (path: JsonPath): string => path.join('\0')
+/**
+ * Encodes a path into a lookup key. Each segment is tagged by kind (`.` for a
+ * key, `[]` for an index) so distinct paths cannot collide: a plain `join` turns
+ * a `null` map key into `''` (colliding with the root path `[]`) and cannot tell
+ * the numeric index `0` from the string key `"0"`. The tags keep them apart.
+ */
+const pathKey = (path: JsonPath): string =>
+  path.map((segment) => (typeof segment === 'number' ? `[${segment}]` : `.${segment}`)).join('')
+
+/**
+ * Stringifies a mapping key exactly as `toJS` does, so the position index keys
+ * agree with the keys the projected data exposes: a null key is `null`, a
+ * bool/number key is its `String()` form, an alias key is `*name`, and a complex
+ * (map/seq) key is empty — never `[object Object]`.
+ */
+const keyToString = (key: YamlNode): string => {
+  if (isScalar(key)) {
+    const v = key.value
+    return typeof v === 'string' ? v : v === null ? 'null' : String(v)
+  }
+  if (isAlias(key)) return `*${key.source}`
+  return ''
+}
 
 /**
  * Parses YAML (a JSON superset, so this handles both) into data plus a source
@@ -19,7 +41,11 @@ const pathKey = (path: JsonPath): string => path.join('\0')
  */
 export const parseYaml = <T = unknown>(source: string, options: IParserOptions = {}): IParseResult<T> => {
   const lineMap = createLineMap(source)
-  const dedupe = options.duplicateKeys === 'off' || options.duplicateKeys === false
+  const duplicateKeys = options.duplicateKeys
+  const dedupe = duplicateKeys === 'off' || duplicateKeys === false
+  // A configured severity (Warning/Information/Hint) still detects duplicates; we
+  // just re-map the reported severity below. Only `off`/`false` turns detection off.
+  const dupSeverity = typeof duplicateKeys === 'number' ? duplicateKeys : DiagnosticSeverity.Error
   const doc = parseDocument(source, { uniqueKeys: !dedupe })
   const index = new Map<string, IRange>()
 
@@ -35,9 +61,7 @@ export const parseYaml = <T = unknown>(source: string, options: IParserOptions =
     if (isMap(node)) {
       for (const item of node.items) {
         if (!isPair(item)) continue
-        const key = item.key
-        const keyName = isScalar(key) ? (key.value as string | number) : String(key)
-        walk(item.value, [...path, keyName])
+        walk(item.value, [...path, keyToString(item.key)])
       }
     } else if (isSeq(node)) {
       node.items.forEach((item, i) => {
@@ -59,7 +83,10 @@ export const parseYaml = <T = unknown>(source: string, options: IParserOptions =
     })
   }
   for (const err of doc.errors) {
-    pushError(DiagnosticSeverity.Error, err.message, err.start, err.end)
+    // Duplicate keys honor the configured severity; every other parser error is
+    // a hard error.
+    const severity = err.code === 'DUPLICATE_KEY' ? dupSeverity : DiagnosticSeverity.Error
+    pushError(severity, err.message, err.start, err.end)
   }
   for (const warn of doc.warnings) {
     pushError(DiagnosticSeverity.Warning, warn.message, warn.start, warn.end)

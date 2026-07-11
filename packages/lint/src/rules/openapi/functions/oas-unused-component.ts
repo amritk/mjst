@@ -3,6 +3,7 @@ import { isObject } from './helpers'
 
 // Reusable component types that are referenced via `$ref` (securitySchemes are
 // referenced by name in `security`, not via `$ref`, so they are excluded).
+// `pathItems` was added in OpenAPI 3.1 (referenced from `webhooks` / `callbacks`).
 const REUSABLE_COMPONENT_TYPES = [
   'schemas',
   'responses',
@@ -12,6 +13,7 @@ const REUSABLE_COMPONENT_TYPES = [
   'headers',
   'links',
   'callbacks',
+  'pathItems',
 ] as const
 
 /** Collects every `$ref` string anywhere in `node` into `into`. */
@@ -37,12 +39,22 @@ export const oasUnusedComponent: RulesetFunction = (components, _options, contex
   if (!isObject(components)) return []
   const refs = new Set<string>()
   collectRefs(context.document.data, refs)
+  // A component counts as used when a `$ref` targets it OR points *into* it
+  // (e.g. `#/components/schemas/Pet/properties/id` still uses `Pet`), so match by
+  // prefix rather than exact string — an interior ref must not leave the parent
+  // flagged as unused.
+  const isReferenced = (base: string): boolean => {
+    for (const ref of refs) {
+      if (ref === base || ref.startsWith(`${base}/`)) return true
+    }
+    return false
+  }
   const results: IFunctionResult[] = []
   for (const type of REUSABLE_COMPONENT_TYPES) {
     const group = components[type]
     if (!isObject(group)) continue
     for (const key of Object.keys(group)) {
-      if (!refs.has(`#/components/${type}/${key}`)) {
+      if (!isReferenced(`#/components/${type}/${key}`)) {
         results.push({ message: 'Potentially unused component has been detected.', path: [...context.path, type, key] })
       }
     }

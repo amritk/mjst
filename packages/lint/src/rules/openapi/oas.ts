@@ -1,8 +1,20 @@
 import type { RuleEntry, RulesetDefinition } from '../../core'
 
-const OPERATIONS = '$.paths[*][get,put,post,delete,options,head,patch,trace]'
-const WEBHOOK_OPERATIONS = '$.webhooks[*][get,put,post,delete,options,head,patch,trace]'
+// `query` is a fixed operation field from OpenAPI 3.2 onward. Including it in the
+// operation selectors is harmless on older versions (which never carry a `query`
+// operation) and lets the operation-scoped rules cover 3.2 `query` operations.
+const OPERATIONS = '$.paths[*][get,put,post,delete,options,head,patch,trace,query]'
+const WEBHOOK_OPERATIONS = '$.webhooks[*][get,put,post,delete,options,head,patch,trace,query]'
 const OPERATION_ID_URL_SAFE = "^[A-Za-z0-9-._~:/?#\\[\\]@!\\$&'()*+,;=]*$"
+
+// Matches every Schema Object that carries an inline `example` or `default` and
+// looks like a schema (it has a JSON Schema keyword), while skipping the
+// `properties`/`patternProperties` *maps* — whose keys can coincidentally be
+// named like schema keywords. A single filter given (rather than a `$..example^`
+// / `$..default^` union) keeps each schema node matched exactly once, so the
+// `oasSchemaExample` finding for a schema is never duplicated.
+const SCHEMA_EXAMPLE_GIVEN =
+  "$..[?(@property !== 'properties' && @property !== 'patternProperties' && @ && (@.example !== void 0 || @.default !== void 0) && (@.type || @.enum || @.format || @.$ref || @.properties || @.items || @.allOf || @.anyOf || @.oneOf))]"
 
 /** Rules shared across OpenAPI v2 and v3. */
 const sharedRules: Record<string, RuleEntry> = {
@@ -59,12 +71,13 @@ const sharedRules: Record<string, RuleEntry> = {
   },
   'no-eval-in-markdown': {
     description: 'Markdown descriptions must not contain "eval(".',
-    given: '$..description',
+    // Spectral scans both `description` and `title` markdown fields.
+    given: ['$..description', '$..title'],
     then: { function: 'pattern', functionOptions: { notMatch: 'eval\\(' } },
   },
   'no-script-tags-in-markdown': {
     description: 'Markdown descriptions must not contain <script> tags.',
-    given: '$..description',
+    given: ['$..description', '$..title'],
     then: { function: 'pattern', functionOptions: { notMatch: '<script' } },
   },
   'openapi-tags': {
@@ -169,7 +182,12 @@ const sharedRules: Record<string, RuleEntry> = {
     then: { function: 'typedEnum' },
   },
   'array-items': {
-    description: 'Schemas of type array must define items.',
+    // Not part of `spectral:oas` — a Loupe extension. `type: array` without
+    // `items` is valid in JSON Schema 2020-12 (OpenAPI 3.1/3.2), so this is gated
+    // to the versions where `items` is genuinely required (2.0 and 3.0.x) to
+    // avoid false positives on valid 3.1+ tuple/unconstrained-array schemas.
+    description: 'Schemas of type array must define items (OpenAPI 2.0 / 3.0 only; Loupe extension).',
+    formats: ['oas2', 'oas3_0'],
     given: "$..[?(@ && @.type === 'array')]",
     severity: 'error',
     then: { field: 'items', function: 'defined' },
@@ -199,8 +217,15 @@ const oas2Rules: Record<string, RuleEntry> = {
   'oas2-api-schemes': {
     description: 'OpenAPI schemes must be present and non-empty.',
     formats: ['oas2'],
-    given: '$.schemes',
-    then: { function: 'length', functionOptions: { min: 1 } },
+    // Target the root and the `schemes` field so a *missing* `schemes` (not just
+    // an empty array) is reported — `given: '$.schemes'` matches nothing when the
+    // key is absent, so the rule never fired for a document with no schemes.
+    given: '$',
+    then: {
+      field: 'schemes',
+      function: 'schema',
+      functionOptions: { schema: { type: 'array', minItems: 1 } },
+    },
   },
   'oas2-discriminator': {
     description: 'Discriminator must reference a required property.',
@@ -254,16 +279,18 @@ const oas2Rules: Record<string, RuleEntry> = {
   'oas2-valid-schema-example': {
     description: 'Schema examples must be valid against their schema.',
     formats: ['oas2'],
-    given: '$..example^',
+    given: SCHEMA_EXAMPLE_GIVEN,
     severity: 'error',
     then: { function: 'oasSchemaExample' },
   },
   'oas2-valid-media-example': {
     description: 'Media type examples must be valid against their schema.',
     formats: ['oas2'],
-    given: ['$..responses[*]', '$..parameters[*]'],
+    // In OpenAPI 2.0 examples live on the Response Object as a MIME-type → value
+    // map alongside a sibling `schema`, so target responses that have both.
+    given: '$..responses..[?(@ && @.schema && @.examples)]',
     severity: 'error',
-    then: { function: 'oasMediaExample' },
+    then: { function: 'oasMediaExample', functionOptions: { oasVersion: 2 } },
   },
   'oas2-schema': {
     description: 'Validate structure of OpenAPI v2 specification.',
@@ -281,14 +308,26 @@ const oas3Rules: Record<string, RuleEntry> = {
   'oas3-api-servers': {
     description: 'OpenAPI 3 documents must have a non-empty servers array.',
     formats: ['oas3'],
-    given: '$.servers',
-    then: { function: 'length', functionOptions: { min: 1 } },
+    // Target the root and the `servers` field so a *missing* `servers` (not just
+    // an empty array) is reported — `given: '$.servers'` matches nothing when the
+    // key is absent, so the rule never fired for a document with no servers.
+    given: '$',
+    then: {
+      field: 'servers',
+      function: 'schema',
+      functionOptions: { schema: { type: 'array', minItems: 1, items: { type: 'object' } } },
+    },
   },
   'oas3-examples-value-or-externalValue': {
     description: 'Example objects must use either value or externalValue, not both.',
     formats: ['oas3'],
-    given: ['$.components.examples[*]', '$..content[*].examples[*]', '$..parameters[*].examples[*]'],
-    then: { function: 'xor', functionOptions: { properties: ['value', 'externalValue'] } },
+    given: [
+      '$.components.examples[*]',
+      '$..content[*].examples[*]',
+      '$..parameters[*].examples[*]',
+      '$..headers[*].examples[*]',
+    ],
+    then: { function: 'oasExampleExternalValue' },
   },
   'oas3-operation-security-defined': {
     description: 'Operation security must reference defined securitySchemes.',
@@ -321,7 +360,16 @@ const oas3Rules: Record<string, RuleEntry> = {
   'oas3-server-variables': {
     description: 'Server variables must be defined and used.',
     formats: ['oas3'],
-    given: '$.servers[*]',
+    // Servers can appear at the root, on a path item, on an operation, and on a
+    // Link Object, so cover every location rather than just the root servers.
+    given: [
+      '$.servers[*]',
+      '$.paths[*].servers[*]',
+      '$.paths[*][*].servers[*]',
+      '$..links[*].server',
+      '$.webhooks[*].servers[*]',
+      '$.webhooks[*][*].servers[*]',
+    ],
     severity: 'error',
     then: { function: 'oasServerVariables' },
   },
@@ -342,16 +390,17 @@ const oas3Rules: Record<string, RuleEntry> = {
   'oas3-valid-schema-example': {
     description: 'Schema examples must be valid against their schema.',
     formats: ['oas3'],
-    given: '$..example^',
+    given: SCHEMA_EXAMPLE_GIVEN,
     severity: 'error',
     then: { function: 'oasSchemaExample' },
   },
   'oas3-valid-media-example': {
     description: 'Media type examples must be valid against their schema.',
     formats: ['oas3'],
-    given: '$..content[*]',
+    // Spectral validates examples on media types, parameters, and headers.
+    given: ['$..content[*]', '$..parameters[*]', '$..headers[*]'],
     severity: 'error',
-    then: { function: 'oasMediaExample' },
+    then: { function: 'oasMediaExample', functionOptions: { oasVersion: 3 } },
   },
   'oas3-schema': {
     description: 'Validate structure of OpenAPI v3.0.x specification.',
@@ -368,24 +417,29 @@ const oas3Rules: Record<string, RuleEntry> = {
 const oas31Rules: Record<string, RuleEntry> = {
   'oas3_1-servers-in-webhook': {
     description: 'Webhooks must not define servers.',
-    formats: ['oas3_1'],
-    given: WEBHOOK_OPERATIONS,
+    // Servers can sit on the webhook Path Item itself (`$.webhooks[*]`) as well as
+    // on each operation, so target both. Also applies to 3.2.
+    formats: ['oas3_1', 'oas3_2'],
+    given: [WEBHOOK_OPERATIONS, '$.webhooks[*]'],
     then: { field: 'servers', function: 'falsy' },
   },
   'oas3_1-callbacks-in-webhook': {
     description: 'Webhooks must not define callbacks.',
-    formats: ['oas3_1'],
+    formats: ['oas3_1', 'oas3_2'],
     given: WEBHOOK_OPERATIONS,
     then: { field: 'callbacks', function: 'falsy' },
   },
   'oas3_1-no-nullable': {
     // `nullable` was removed in OpenAPI 3.1 (JSON Schema 2020-12 uses a `null`
     // type instead) and stays gone in 3.2 — mirroring the oas2-anyOf/oneOf
-    // "feature not available in this version" rules.
+    // "feature not available in this version" rules. A custom function (targeting
+    // the parent of a `nullable` key) is used instead of `$..nullable` + `falsy`
+    // so a property literally named `nullable` is not flagged and `nullable: false`
+    // still is (so the migration fixer can drop it).
     description: 'nullable is not available in OpenAPI 3.1 or later; use a "null" type instead.',
     formats: ['oas3_1', 'oas3_2'],
-    given: '$..nullable',
-    then: { function: 'falsy' },
+    given: '$..nullable^',
+    then: { function: 'oasNoNullable' },
   },
   'oas3_1-license-identifier': {
     // The License Object's `identifier` (SPDX) field was added in 3.1 and is
@@ -481,7 +535,12 @@ const oas32Rules: Record<string, RuleEntry> = {
     // 3.x-wide oas3-examples-value-or-externalValue rule.)
     description: 'Example object dataValue/serializedValue must not be combined with value or externalValue.',
     formats: ['oas3_2'],
-    given: ['$.components.examples[*]', '$..content[*].examples[*]', '$..parameters[*].examples[*]'],
+    given: [
+      '$.components.examples[*]',
+      '$..content[*].examples[*]',
+      '$..parameters[*].examples[*]',
+      '$..headers[*].examples[*]',
+    ],
     severity: 'error',
     then: { function: 'oasExampleValue' },
   },

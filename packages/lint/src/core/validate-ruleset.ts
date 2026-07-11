@@ -1,3 +1,4 @@
+import { compileQuery } from './jsonpath'
 import type { JsonPath, RuleEntry, RulesetDefinition } from './types'
 
 /** A problem found in a ruleset definition (structural, not a document finding). */
@@ -52,6 +53,19 @@ const validateRule = (name: string, entry: RuleEntry, path: JsonPath, problems: 
     problems.push({ message: `Rule "${name}" is missing \`given\``, path: [...path, 'given'] })
   } else if (typeof entry['given'] !== 'string' && !Array.isArray(entry['given'])) {
     problems.push({ message: `Rule "${name}" \`given\` must be a string or array`, path: [...path, 'given'] })
+  } else {
+    // Flag a malformed JSONPath expression so it does not silently match nothing
+    // at run time. Alias references (`#Alias`) are only valid once expanded, so
+    // they are skipped here.
+    const givens = Array.isArray(entry['given']) ? entry['given'] : [entry['given']]
+    givens.forEach((given, index) => {
+      if (typeof given !== 'string' || given.startsWith('#')) return
+      const error = compileQuery(given).error
+      if (error !== undefined) {
+        const at = Array.isArray(entry['given']) ? [...path, 'given', index] : [...path, 'given']
+        problems.push({ message: `Rule "${name}" has an invalid \`given\` "${given}": ${error}`, path: at })
+      }
+    })
   }
   if (entry['then'] === undefined) {
     problems.push({ message: `Rule "${name}" is missing \`then\``, path: [...path, 'then'] })

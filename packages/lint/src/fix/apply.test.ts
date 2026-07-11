@@ -35,6 +35,37 @@ const fixers: FixerRegistry = {
     safe: false,
     fix: ({ diagnostic: d }) => ({ op: 'removeProperty', path: d.path }),
   },
+  // Alphabetize the tags array by name (mirrors openapi-tags-alphabetical).
+  'sort-tags': {
+    fix: ({ data }) => {
+      const tags = (data as { tags: string[] }).tags
+      const order = tags.map((_, index) => index).sort((a, b) => String(tags[a]).localeCompare(String(tags[b])))
+      if (order.every((value, index) => value === index)) return undefined
+      return { op: 'reorderArray', path: ['tags'], order }
+    },
+  },
+  // Remove later duplicate tags, deriving indices from the current data each pass
+  // (mirrors openapi-tags-uniqueness).
+  'dedupe-tags': {
+    fix: ({ data }) => {
+      const tags = (data as { tags: string[] }).tags
+      const seen = new Set<string>()
+      const duplicates: number[] = []
+      tags.forEach((tag, index) => {
+        if (seen.has(tag)) duplicates.push(index)
+        else seen.add(tag)
+      })
+      if (duplicates.length === 0) return undefined
+      return { op: 'removeItems', path: ['tags'], indices: duplicates }
+    },
+  },
+  // Two edits: one lands, one targets a missing path and no-ops.
+  partial: {
+    fix: () => [
+      { op: 'setValue', path: ['a'], value: 2 },
+      { op: 'setValue', path: ['missing'], value: 3 },
+    ],
+  },
 }
 
 describe('apply', () => {
@@ -99,6 +130,35 @@ describe('apply', () => {
     })
     expect(result?.output).toBe('host: api.example.com\n')
     expect(result?.data).toEqual({ applied: [{ code: 'strip-slash', path: ['host'] }] })
+  })
+
+  // H4: two ops reshaping the same array in one batch would use stale indices, so
+  // the second is deferred to the next pass, which re-derives indices from fresh
+  // data. Here reorder + dedupe on `[z, a, a]` must end at `[a, z]`, not delete
+  // the unique tag.
+  it('defers a second op that reshapes an array an earlier op already changed', () => {
+    const input = 'tags: [z, a, a]\n'
+    const findings = [diagnostic('sort-tags', ['tags', 0]), diagnostic('dedupe-tags', ['tags', 0])]
+
+    // Pass one: only the reorder lands; the dedupe is deferred (and unreported).
+    const pass1 = applyFixes(input, 'yaml', { tags: ['z', 'a', 'a'] }, findings, fixers)
+    expect(pass1.output).toBe('tags: [a, a, z]\n')
+    expect(pass1.applied).toEqual([{ code: 'sort-tags', path: ['tags', 0] }])
+
+    // Pass two re-derives from the reordered data, so the dedupe removes the real
+    // duplicate and keeps the unique tag.
+    const pass2 = applyFixes(pass1.output, 'yaml', { tags: ['a', 'a', 'z'] }, findings, fixers)
+    expect(pass2.output).toBe('tags: [a, z]\n')
+    expect(pass2.applied).toEqual([{ code: 'dedupe-tags', path: ['tags', 0] }])
+  })
+
+  // L6: a multi-op fixer counts as applied only when every one of its edits lands;
+  // a partially-applied fixer is left unreported so the fixpoint loop retries it.
+  it('does not report a fixer as applied when one of its edits no-ops', () => {
+    const result = applyFixes('a: 1\n', 'yaml', { a: 1 }, [diagnostic('partial', ['a'])], fixers)
+    expect(result.output).toBe('a: 2\n')
+    expect(result.changed).toBe(true)
+    expect(result.applied).toEqual([])
   })
 
   it('returns nothing from the plugin when there is no change', () => {

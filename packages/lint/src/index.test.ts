@@ -119,6 +119,46 @@ describe('createRuleset', () => {
     expect(ok.map((r) => r.code)).not.toContain('name-upper')
   })
 
+  it('terminates on a circular extends between ruleset files (no stack overflow)', async () => {
+    // a.yaml and b.yaml extend each other; the cycle must be broken while still
+    // loading a custom function declared in the cycle.
+    const dir = tmp('lint-cycle-')
+    mkdirSync(join(dir, 'functions'))
+    writeFileSync(
+      join(dir, 'functions', 'fnA.cjs'),
+      "module.exports = (input) => (input ? [] : [{ message: 'needs value' }])\n",
+    )
+    writeFileSync(
+      join(dir, 'a.yaml'),
+      [
+        'extends: ["./b.yaml"]',
+        'functions: ["fnA"]',
+        'rules:',
+        '  ruleA:',
+        '    given: "$.a"',
+        '    severity: error',
+        '    then: { function: fnA }',
+      ].join('\n'),
+    )
+    writeFileSync(
+      join(dir, 'b.yaml'),
+      [
+        'extends: ["./a.yaml"]',
+        'rules:',
+        '  ruleB:',
+        '    given: "$.b"',
+        '    severity: error',
+        '    then: { function: truthy }',
+      ].join('\n'),
+    )
+    const ruleset = createRuleset({ extends: ['./a.yaml'] }, dir)
+    expect(ruleset.rules.map((r) => r.name).sort()).toEqual(['ruleA', 'ruleB'])
+    // The custom function from inside the cycle is available.
+    expect(ruleset.getFunction('fnA')).toBeDefined()
+    const results = await lintDocument('a: 0\nb: 0\n', { ruleset: { extends: ['./a.yaml'] }, rulesetBasePath: dir })
+    expect(results.map((r) => r.code).sort()).toEqual(['ruleA', 'ruleB'])
+  })
+
   it('resolves an `extends` reference to a local ruleset file', async () => {
     const dir = tmp('lint-ext-')
     writeFileSync(

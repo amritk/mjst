@@ -1,10 +1,10 @@
 import type { IFunctionResult, RulesetFunction } from '../../../core'
-import { HTTP_METHODS, isObject } from './helpers'
+import { isObject, OPERATION_METHODS } from './helpers'
 
-// HTTP methods that have a dedicated fixed field on the Path Item Object. In
-// OpenAPI 3.2 `query` joined the original eight, and these MUST NOT be redefined
-// inside the new `additionalOperations` map (which is for non-standard methods).
-const FIXED_PATH_ITEM_METHODS = new Set([...HTTP_METHODS, 'query'])
+// Methods that have a dedicated fixed field on the Path Item Object (the eight
+// standard methods plus 3.2's `query`). These MUST NOT be redefined inside the
+// new `additionalOperations` map, which is reserved for non-standard methods.
+const FIXED_PATH_ITEM_METHODS = OPERATION_METHODS
 
 /**
  * Flags standard HTTP methods inside an OpenAPI 3.2 `additionalOperations` map.
