@@ -17,6 +17,24 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 const stripTrailingSlash = (value: string): string => value.replace(/\/+$/, '')
 
 /**
+ * A deterministic, order-independent serialization used as an equality key. Plain
+ * `JSON.stringify` is sensitive to object key order (`{a,b}` vs `{b,a}`), so two
+ * deeply-equal enum entries could be seen as different and left un-deduplicated —
+ * disagreeing with the `duplicated-entry-in-enum` rule (which compares by value)
+ * and preventing `--fix` from converging. Sorting keys recursively fixes that.
+ */
+const canonicalKey = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(canonicalKey).join(',')}]`
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalKey((value as Record<string, unknown>)[key])}`)
+    return `{${entries.join(',')}}`
+  }
+  return JSON.stringify(value) ?? 'null'
+}
+
+/**
  * `oas2-host-trailing-slash` / `oas3-server-trailing-slash`: drop the trailing
  * slash from a string value (host or server URL).
  */
@@ -34,11 +52,16 @@ const trailingSlashValue: Fixer = {
 /** `path-keys-no-trailing-slash`: rename a `paths` key to drop its trailing slash. */
 const pathKeyTrailingSlash: Fixer = {
   safe: true,
-  fix: ({ diagnostic }) => {
+  fix: ({ diagnostic, data }) => {
     const key = diagnostic.path[diagnostic.path.length - 1]
     if (typeof key !== 'string') return undefined
     const stripped = stripTrailingSlash(key)
     if (stripped === key || stripped === '') return undefined
+    // Renaming `/foo/` onto an existing `/foo` would collide and silently drop a
+    // path, so skip when the stripped key already exists (same guard as
+    // `pathKeyQueryString`).
+    const paths = getAtPath(data, diagnostic.path.slice(0, -1))
+    if (isObject(paths) && stripped in paths) return undefined
     return { op: 'renameProperty', path: diagnostic.path, newKey: stripped }
   },
 }
@@ -61,13 +84,21 @@ const duplicatedEnum: Fixer = {
     const seen = new Set<string>()
     const duplicates: number[] = []
     array.forEach((item, index) => {
-      const key = JSON.stringify(item)
+      const key = canonicalKey(item)
       if (seen.has(key)) duplicates.push(index)
       else seen.add(key)
     })
     if (duplicates.length === 0) return undefined
     return { op: 'removeItems', path: diagnostic.path, indices: duplicates }
   },
+}
+
+// Mirror the `alphabetical` built-in's comparator exactly so that sorting here
+// produces an order the rule considers sorted — otherwise `--fix` could reorder
+// into a sequence the rule still flags and never converge.
+const compareAlphabetical = (a: unknown, b: unknown): number => {
+  if (typeof a === 'number' && typeof b === 'number') return a - b
+  return String(a).localeCompare(String(b))
 }
 
 /** `openapi-tags-alphabetical`: reorder the top-level `tags` array by `name`. */
@@ -78,9 +109,9 @@ const tagsAlphabetical: Fixer = {
     const arrayPath = diagnostic.path.slice(0, -1)
     const array = getAtPath(data, arrayPath)
     if (!Array.isArray(array)) return undefined
-    const nameOf = (item: unknown): string =>
-      item != null && typeof item === 'object' ? String((item as Record<string, unknown>)['name']) : String(item)
-    const order = array.map((_, index) => index).sort((a, b) => nameOf(array[a]).localeCompare(nameOf(array[b])))
+    const nameOf = (item: unknown): unknown =>
+      item != null && typeof item === 'object' ? (item as Record<string, unknown>)['name'] : item
+    const order = array.map((_, index) => index).sort((a, b) => compareAlphabetical(nameOf(array[a]), nameOf(array[b])))
     if (order.every((value, index) => value === index)) return undefined
     return { op: 'reorderArray', path: arrayPath, order }
   },
@@ -165,6 +196,28 @@ const noNullable: Fixer = {
 }
 
 /**
+ * `oas3_1-schema-example-deprecated`: migrate a Schema Object's singular
+ * `example` to the JSON Schema 2020-12 `examples` array (`example: X` →
+ * `examples: [X]`). Safe and mechanical, but skipped when an `examples` array is
+ * already present so an existing one is never clobbered. The finding points at
+ * the `example` key, whose parent is the schema.
+ */
+const schemaExampleDeprecated: Fixer = {
+  safe: true,
+  fix: ({ diagnostic, data }) => {
+    const schemaPath = diagnostic.path.slice(0, -1)
+    const schema = getAtPath(data, schemaPath)
+    if (!isObject(schema) || !('example' in schema)) return undefined
+    // Do not overwrite an already-present `examples` array.
+    if ('examples' in schema) return undefined
+    return [
+      { op: 'setValue', path: [...schemaPath, 'examples'], value: [schema['example']] },
+      { op: 'removeProperty', path: diagnostic.path },
+    ]
+  },
+}
+
+/**
  * Auto-fixers for the mechanically-repairable OpenAPI rules, keyed by rule
  * code. Pass these to `@amritk/lint`'s `fixDocument` (as its `fixers`), or wrap
  * them with `createFixPlugin` for a lower-level plugin.
@@ -181,4 +234,5 @@ export const oasFixers: FixerRegistry = {
   'oas3-unused-component': unusedComponent,
   'oas2-unused-definition': unusedComponent,
   'oas3_1-no-nullable': noNullable,
+  'oas3_1-schema-example-deprecated': schemaExampleDeprecated,
 }
