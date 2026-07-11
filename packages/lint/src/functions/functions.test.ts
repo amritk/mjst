@@ -76,4 +76,23 @@ describe('typedEnum', () => {
     expect(results).toHaveLength(1)
     expect(results?.[0]?.path).toEqual(['enum', 1])
   })
+
+  it('honors nullable and x-nullable so a null enum entry is allowed', () => {
+    expect(typedEnum({ type: 'string', nullable: true, enum: ['a', null] }, undefined as never, ctx())).toHaveLength(0)
+    expect(
+      typedEnum({ type: 'string', 'x-nullable': true, enum: ['a', null] }, undefined as never, ctx()),
+    ).toHaveLength(0)
+    // without a nullable flag, null is still a type mismatch
+    expect(typedEnum({ type: 'string', enum: ['a', null] }, undefined as never, ctx())).toHaveLength(1)
+  })
+
+  it('accepts a type array where each enum entry matches one of the types', () => {
+    expect(typedEnum({ type: ['string', 'number'], enum: ['a', 2] }, undefined as never, ctx())).toHaveLength(0)
+    expect(typedEnum({ type: ['string', 'number'], enum: ['a', true] }, undefined as never, ctx())).toHaveLength(1)
+  })
+
+  it('skips non-object input', () => {
+    expect(typedEnum('nope' as never, undefined as never, ctx())).toHaveLength(0)
+    expect(typedEnum(null as never, undefined as never, ctx())).toHaveLength(0)
+  })
 })
