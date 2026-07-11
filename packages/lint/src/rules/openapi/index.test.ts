@@ -58,4 +58,25 @@ describe('createOpenApiRuleset', () => {
     expect(oasFormats['oas2']?.({ swagger: '2.0' })).toBe(true)
     expect(oasFixers['no-$ref-siblings']).toBeDefined()
   })
+
+  it('resolves every function the shipped ruleset references (no unknown functions)', () => {
+    // The core runner is moving to throw on unknown function names, so the shipped
+    // `oas` ruleset must never reference a function that is not registered.
+    const ruleset = createOpenApiRuleset({ extends: [[oas, 'all']] })
+    for (const rule of ruleset.rules) {
+      for (const then of rule.then) {
+        if (typeof then.function === 'string') {
+          expect(ruleset.getFunction(then.function), `${rule.name} → ${then.function}`).toBeDefined()
+        }
+      }
+    }
+  })
+
+  it('every auto-fixer targets a rule that exists in the shipped ruleset', () => {
+    const ruleset = createOpenApiRuleset({ extends: [[oas, 'all']] })
+    const ruleNames = new Set(ruleset.rules.map((rule) => rule.name))
+    for (const code of Object.keys(oasFixers)) {
+      expect(ruleNames.has(code), code).toBe(true)
+    }
+  })
 })
