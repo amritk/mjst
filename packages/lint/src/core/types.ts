@@ -29,12 +29,27 @@ export type IFunctionContext = {
 /**
  * A rule function: given the matched `input`, its authored `options`, and the
  * run `context`, returns any findings (or `undefined`/`[]` for none).
+ *
+ * The declared return type is synchronous because the built-in functions are,
+ * but the runner also awaits a thenable result at run time, so a Spectral-style
+ * async function works when passed as a reference (see {@link AsyncRulesetFunction}).
  */
 export type RulesetFunction<I = unknown, O = unknown> = (
   input: I,
   options: O,
   context: IFunctionContext,
 ) => IFunctionResult[] | undefined
+
+/**
+ * A rule function that resolves its findings asynchronously. The runner awaits a
+ * thenable result, so such a function may be passed by reference in a JS ruleset;
+ * cast it to {@link RulesetFunction} at the `then.function` site.
+ */
+export type AsyncRulesetFunction<I = unknown, O = unknown> = (
+  input: I,
+  options: O,
+  context: IFunctionContext,
+) => Promise<IFunctionResult[] | undefined>
 
 /** Functions a ruleset can invoke by name in `then.function`, keyed by that name. */
 export type FunctionRegistry = Record<string, RulesetFunction>
@@ -71,11 +86,16 @@ export type IRuleDefinition = {
 /** Shorthand a rule may take in `rules`: a definition, a boolean, or a severity. */
 export type RuleEntry = IRuleDefinition | boolean | HumanReadableSeverity
 
+/**
+ * A per-file override: `files` globs select the documents it applies to, and
+ * `rules` re-toggles or re-severities rules for them. Spectral's `extends` and
+ * `formats` on an override are intentionally omitted here — they were never
+ * applied by the engine, so carrying them in the type only advertised support
+ * that did not exist. Re-add them alongside a real implementation if needed.
+ */
 export type IRulesetOverride = {
   files: string[]
   rules?: Record<string, RuleEntry>
-  extends?: RulesetExtends
-  formats?: string[]
 }
 
 /**

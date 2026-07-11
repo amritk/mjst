@@ -60,8 +60,12 @@ const toParserSeverity = (value: DiagnosticSeverity | string | undefined): Parse
   return names[value]
 }
 
-const byPosition = (a: IDiagnostic, b: IDiagnostic): number =>
-  a.range.start.line - b.range.start.line || a.range.start.character - b.range.start.character
+const byPosition = (a: IDiagnostic, b: IDiagnostic): number => {
+  const sa = a.source ?? ''
+  const sb = b.source ?? ''
+  if (sa !== sb) return sa < sb ? -1 : 1
+  return a.range.start.line - b.range.start.line || a.range.start.character - b.range.start.character
+}
 
 /**
  * Lints `input` against a normalized `ruleset`, returning the full
@@ -94,7 +98,7 @@ export const lintWithResult = async (input: string, options: LintOptions): Promi
     sources = result.sources
   }
 
-  const ruleResults = createLinter(ruleset).run(document, { resolved, ...(sources ? { sources } : {}) })
+  const ruleResults = await createLinter(ruleset).run(document, { resolved, ...(sources ? { sources } : {}) })
 
   const parserResults = document.diagnostics.map((diagnostic): IDiagnostic => {
     const result: IDiagnostic = {

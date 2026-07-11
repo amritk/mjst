@@ -11,8 +11,9 @@ export type IQueryMatch = {
 //
 // It replaces `jsonpath-plus` for the subset of JSONPath that Linter rulesets
 // use (`$`, child/`['child']`, `..` recursive descent, `[*]`/`.*` wildcards,
-// `[a,b]` unions, `[n]` indices, `[?(@ ...)]` filters, `^` parent and `~`
-// property-name selectors). Two properties matter for performance:
+// `[a,b]` unions, `[n]` indices, `[start:end:step]` slices, `[?(@ ...)]`
+// filters, `^` parent and `~` property-name selectors). Two properties matter
+// for performance:
 //
 //   1. Expressions are *compiled once* into a flat list of steps and cached by
 //      string, so repeated `given`s (the ruleset has many) parse a single time.
@@ -28,7 +29,9 @@ type FilterFn = (
   property: string | number | undefined,
   parent: unknown,
   root: unknown,
-  path: JsonPath,
+  // `@path` is materialized as the jsonpath-plus string form (`$['a'][0]`),
+  // matching what ruleset filters written for Spectral expect.
+  path: string,
   parentProperty: string | number | undefined,
 ) => boolean
 
@@ -37,9 +40,14 @@ type Selector =
   | { kind: 'index'; index: number }
   | { kind: 'wildcard' }
   | { kind: 'union'; names: (string | number)[] }
+  | { kind: 'slice'; start?: number; end?: number; step?: number }
+  | { kind: 'scriptIndex'; offset: number }
   | { kind: 'filter'; test: FilterFn; source: string; usesPath: boolean }
   | { kind: 'parent' }
   | { kind: 'keys' }
+  // A segment that could not be parsed. The owning path carries the recorded
+  // error and evaluates to no matches.
+  | { kind: 'none' }
 
 /** One compiled segment of a path: a selector and whether it follows a `..` descent. */
 export type Step = {
@@ -54,6 +62,12 @@ export type CompiledPath = {
   readonly steps: Step[]
   /** True when the path contains at least one `..` step. */
   readonly hasDescent: boolean
+  /**
+   * A parse error, when the expression is malformed (an unterminated bracket, a
+   * missing `$` root, an unsupported script subscript, …). A compiled path with
+   * an error matches nothing; callers such as {@link createRuleset} surface it.
+   */
+  readonly error?: string
 }
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -70,6 +84,20 @@ const normalizeSegment = (segment: string | number): string | number => {
 
 const normalizePath = (path: (string | number)[]): JsonPath => path.map(normalizeSegment)
 
+/**
+ * Renders a concrete path as the jsonpath-plus string form (`$['a'][0]`). This
+ * is what `@path` exposes inside a filter, so ruleset filters authored for
+ * Spectral (which run on jsonpath-plus) see the same value.
+ */
+const pathToJsonPathString = (path: (string | number)[]): string => {
+  let out = '$'
+  for (const segment of path) {
+    if (typeof segment === 'number') out += `[${segment}]`
+    else out += `['${segment.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}']`
+  }
+  return out
+}
+
 // ---------------------------------------------------------------------------
 // Compilation
 // ---------------------------------------------------------------------------
@@ -77,18 +105,63 @@ const normalizePath = (path: (string | number)[]): JsonPath => path.map(normaliz
 const compileCache = new Map<string, CompiledPath>()
 const filterCache = new Map<string, FilterFn>()
 
+/**
+ * Rewrites jsonpath-plus' `@`-context tokens onto real identifiers, skipping any
+ * `@` that sits inside a quoted string literal (so an expression like
+ * `@.name.indexOf("@")` keeps the literal `@` intact). Longer tokens are matched
+ * first so `@parentProperty` is not eaten by `@parent`.
+ */
+const substituteContext = (source: string): string => {
+  let out = ''
+  let quote = ''
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i] as string
+    if (quote) {
+      out += ch
+      if (ch === '\\' && i + 1 < source.length) {
+        out += source[i + 1]
+        i++
+      } else if (ch === quote) {
+        quote = ''
+      }
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      out += ch
+      continue
+    }
+    if (ch === '@') {
+      const rest = source.slice(i)
+      if (rest.startsWith('@parentProperty')) {
+        out += '_pp'
+        i += '@parentProperty'.length - 1
+      } else if (rest.startsWith('@parent')) {
+        out += '_parent'
+        i += '@parent'.length - 1
+      } else if (rest.startsWith('@property')) {
+        out += '_prop'
+        i += '@property'.length - 1
+      } else if (rest.startsWith('@path')) {
+        out += '_path'
+        i += '@path'.length - 1
+      } else if (rest.startsWith('@root')) {
+        out += '_root'
+        i += '@root'.length - 1
+      } else {
+        out += '_v'
+      }
+      continue
+    }
+    out += ch
+  }
+  return out
+}
+
 const compileFilter = (source: string): FilterFn => {
   const cached = filterCache.get(source)
   if (cached) return cached
-  // Map jsonpath-plus' `@`-context tokens onto real identifiers, longest first
-  // so `@parentProperty` is not eaten by `@parent`.
-  const body = source
-    .replace(/@parentProperty/g, '_pp')
-    .replace(/@parent/g, '_parent')
-    .replace(/@property/g, '_prop')
-    .replace(/@path/g, '_path')
-    .replace(/@root/g, '_root')
-    .replace(/@/g, '_v')
+  const body = substituteContext(source)
   let fn: FilterFn
   try {
     // `_pp` (`@parentProperty`) is supplied directly by the caller rather than
@@ -111,7 +184,7 @@ const compileFilter = (source: string): FilterFn => {
   return fn
 }
 
-/** Splits bracket content on top-level commas, respecting quotes. */
+/** Splits bracket content on top-level commas, respecting quotes (and their escapes). */
 const splitUnion = (content: string): string[] => {
   const parts: string[] = []
   let depth = 0
@@ -120,6 +193,11 @@ const splitUnion = (content: string): string[] => {
   for (let i = 0; i < content.length; i++) {
     const ch = content[i] as string
     if (quote) {
+      if (ch === '\\' && i + 1 < content.length) {
+        current += ch + content[i + 1]
+        i++
+        continue
+      }
       if (ch === quote) quote = ''
       current += ch
       continue
@@ -142,15 +220,53 @@ const splitUnion = (content: string): string[] => {
   return parts
 }
 
+/** Unquotes a `'...'` / `"..."` token, honoring backslash escapes; returns null when not a quoted literal. */
 const unquote = (token: string): string | null => {
   const t = token.trim()
-  if (t.length >= 2 && (t[0] === '"' || t[0] === "'") && t[t.length - 1] === t[0]) {
-    return t.slice(1, -1)
+  const quote = t[0]
+  if (t.length < 2 || (quote !== '"' && quote !== "'")) return null
+  let out = ''
+  let i = 1
+  let closed = false
+  while (i < t.length) {
+    const ch = t[i] as string
+    if (ch === '\\' && i + 1 < t.length) {
+      out += t[i + 1]
+      i += 2
+      continue
+    }
+    if (ch === quote) {
+      closed = true
+      i++
+      break
+    }
+    out += ch
+    i++
   }
-  return null
+  // A valid literal closes exactly at the end of the token.
+  if (!closed || i !== t.length) return null
+  return out
 }
 
-const bracketSelector = (content: string): Selector => {
+// A slice is `start:end` or `start:end:step`, each part optional and possibly
+// negative, e.g. `0:2`, `-1:`, `::2`, `:`.
+const SLICE_RE = /^-?\d*:-?\d*(:-?\d+)?$/
+
+const buildSlice = (trimmed: string): Selector => {
+  const [s, e, st] = trimmed.split(':')
+  const num = (value: string | undefined): number | undefined =>
+    value === undefined || value === '' ? undefined : Number(value)
+  const selector: { kind: 'slice'; start?: number; end?: number; step?: number } = { kind: 'slice' }
+  const start = num(s)
+  const end = num(e)
+  const step = num(st)
+  if (start !== undefined) selector.start = start
+  if (end !== undefined) selector.end = end
+  if (step !== undefined) selector.step = step
+  return selector
+}
+
+const bracketSelector = (content: string, onError: (message: string) => void): Selector => {
   const trimmed = content.trim()
   if (trimmed === '*') return { kind: 'wildcard' }
   if (trimmed.startsWith('?')) {
@@ -160,6 +276,20 @@ const bracketSelector = (content: string): Selector => {
     const expr = open !== -1 && close > open ? trimmed.slice(open + 1, close) : trimmed.slice(1)
     return { kind: 'filter', test: compileFilter(expr), source: expr, usesPath: expr.includes('@path') }
   }
+  if (trimmed.startsWith('(') && trimmed.endsWith(')')) {
+    // Script subscript `[(expr)]`. We support the common `(@.length - N)` form
+    // (a from-the-end index); anything else is rejected loudly so a typo does not
+    // silently match nothing.
+    const inner = trimmed.slice(1, -1).trim()
+    const lengthOnly = /^@\.length$/.test(inner)
+    const withOffset = /^@\.length\s*-\s*(\d+)$/.exec(inner)
+    if (lengthOnly) return { kind: 'scriptIndex', offset: 0 }
+    if (withOffset) return { kind: 'scriptIndex', offset: -Number(withOffset[1]) }
+    onError(`Unsupported script subscript "[${content}]"`)
+    return { kind: 'none' }
+  }
+  // A slice is only a slice when it is a single (comma-free) `:`-delimited token.
+  if (!content.includes(',') && SLICE_RE.test(trimmed)) return buildSlice(trimmed)
   const parts = splitUnion(content)
   const names: (string | number)[] = []
   for (const part of parts) {
@@ -180,13 +310,18 @@ const bracketSelector = (content: string): Selector => {
   return { kind: 'union', names }
 }
 
-/** Finds the index of the `]` that closes the `[` at `start`, respecting quotes/nesting. */
+/** Finds the index of the `]` that closes the `[` at `start`, respecting quotes (and escapes) and nesting. */
 const findBracketEnd = (expression: string, start: number): number => {
   let depth = 0
   let quote = ''
   for (let i = start; i < expression.length; i++) {
     const ch = expression[i]
     if (quote) {
+      if (ch === '\\') {
+        // Skip the escaped character so an escaped quote does not end the string.
+        i++
+        continue
+      }
       if (ch === quote) quote = ''
       continue
     }
@@ -213,9 +348,16 @@ export const compileQuery = (expression: string): CompiledPath => {
   if (cached) return cached
 
   const steps: Step[] = []
+  const errors: string[] = []
+  const onError = (message: string): void => {
+    errors.push(message)
+  }
   let hasDescent = false
   let i = 0
+  // Every well-formed JSONPath is rooted at `$`. Without it the expression would
+  // otherwise compile to zero steps and match the document root — a silent bug.
   if (expression[0] === '$') i = 1
+  else onError('JSONPath must start with "$"')
   let recursive = false
 
   while (i < expression.length) {
@@ -243,20 +385,27 @@ export const compileQuery = (expression: string): CompiledPath => {
     }
     if (ch === '[') {
       const end = findBracketEnd(expression, i)
-      if (end === -1) break
+      if (end === -1) {
+        onError(`Unterminated "[" in "${expression}"`)
+        break
+      }
       const content = expression.slice(i + 1, end)
-      steps.push({ recursive, selector: bracketSelector(content) })
+      steps.push({ recursive, selector: bracketSelector(content, onError) })
       recursive = false
       i = end + 1
       continue
     }
     if (ch === '^') {
-      steps.push({ recursive: false, selector: { kind: 'parent' } })
+      // Honor a pending `..` so `$..^` selects every node's parent (fixing a
+      // flag leak where the descent was dropped and the selector matched nothing).
+      steps.push({ recursive, selector: { kind: 'parent' } })
+      recursive = false
       i++
       continue
     }
     if (ch === '~') {
-      steps.push({ recursive: false, selector: { kind: 'keys' } })
+      steps.push({ recursive, selector: { kind: 'keys' } })
+      recursive = false
       i++
       continue
     }
@@ -279,7 +428,12 @@ export const compileQuery = (expression: string): CompiledPath => {
     i++
   }
 
-  const compiled: CompiledPath = { expression, steps, hasDescent }
+  const compiled: CompiledPath = {
+    expression,
+    steps,
+    hasDescent,
+    ...(errors.length > 0 ? { error: errors.join('; ') } : {}),
+  }
   compileCache.set(expression, compiled)
   return compiled
 }
@@ -299,8 +453,6 @@ type Node = {
   parent: Node | undefined
   key: string | number | undefined
 }
-
-const EMPTY_PATH: JsonPath = []
 
 /** Materializes the concrete (un-normalized) path from root to `node`. */
 const pathOf = (node: Node): (string | number)[] => {
@@ -357,19 +509,46 @@ const applySelector = (node: Node, selector: Selector, root: unknown, out: Node[
       }
       return
     }
+    case 'slice': {
+      if (!Array.isArray(value)) return
+      const len = value.length
+      const step = selector.step ?? 1
+      if (step === 0) return
+      const clamp = (raw: number | undefined, fallback: number): number => {
+        if (raw === undefined) return fallback
+        return raw < 0 ? raw + len : raw
+      }
+      if (step > 0) {
+        const start = Math.max(0, clamp(selector.start, 0))
+        const end = Math.min(len, clamp(selector.end, len))
+        for (let idx = start; idx < end; idx += step) out.push({ value: value[idx], parent: node, key: idx })
+      } else {
+        const start = Math.min(len - 1, clamp(selector.start, len - 1))
+        const end = Math.max(-1, clamp(selector.end, -1))
+        for (let idx = start; idx > end; idx += step) out.push({ value: value[idx], parent: node, key: idx })
+      }
+      return
+    }
+    case 'scriptIndex': {
+      // `[(@.length - N)]` indexes from the end; N === 0 (`@.length`) is out of range.
+      if (!Array.isArray(value)) return
+      const idx = value.length + selector.offset
+      if (idx >= 0 && idx < value.length) out.push({ value: value[idx], parent: node, key: idx })
+      return
+    }
     case 'filter': {
       // `@parentProperty` is `node.key`; `@path` is materialized only when used.
       const pp = node.key
       if (Array.isArray(value)) {
         for (let idx = 0; idx < value.length; idx++) {
           const child: Node = { value: value[idx], parent: node, key: idx }
-          const path = selector.usesPath ? pathOf(child) : EMPTY_PATH
+          const path = selector.usesPath ? pathToJsonPathString(pathOf(child)) : ''
           if (selector.test(value[idx], idx, value, root, path, pp)) out.push(child)
         }
       } else if (isObject(value)) {
         for (const key of Object.keys(value)) {
           const child: Node = { value: value[key], parent: node, key }
-          const path = selector.usesPath ? pathOf(child) : EMPTY_PATH
+          const path = selector.usesPath ? pathToJsonPathString(pathOf(child)) : ''
           if (selector.test(value[key], key, value, root, path, pp)) out.push(child)
         }
       }
@@ -385,6 +564,8 @@ const applySelector = (node: Node, selector: Selector, root: unknown, out: Node[
       out.push({ value: node.key, parent: node.parent, key: node.key })
       return
     }
+    case 'none':
+      return
   }
 }
 
@@ -428,6 +609,8 @@ const toMatches = (nodes: Node[]): IQueryMatch[] => {
 
 /** Evaluates a pre-compiled path against `data`. */
 export const queryCompiled = (data: unknown, compiled: CompiledPath): IQueryMatch[] => {
+  // A malformed path matches nothing rather than falling back to the root.
+  if (compiled.error !== undefined) return []
   if (data === null || data === undefined) return []
   return toMatches(runSteps(data, compiled.steps))
 }
@@ -452,6 +635,11 @@ export const queryMany = (data: unknown, compiled: CompiledPath[]): IQueryMatch[
   const recursive: number[] = []
   for (let i = 0; i < compiled.length; i++) {
     const c = compiled[i] as CompiledPath
+    // Skip malformed paths entirely; they contribute no matches.
+    if (c.error !== undefined) {
+      out[i] = []
+      continue
+    }
     const first = c.steps[0]
     if (first?.recursive) recursive.push(i)
     else out[i] = queryCompiled(data, c)

@@ -5,8 +5,20 @@ import type { IDocumentRegistry, IOriginMap, ISourceOrigin, JsonPath } from './t
 const isContainer = (value: unknown): value is Record<string, unknown> | unknown[] =>
   typeof value === 'object' && value !== null
 
+/**
+ * Decodes one JSON-pointer segment the way `getByPointer` does: percent-escapes
+ * first (pointers arrive inside URI-reference `$ref`s), then the JSON-pointer
+ * escapes `~1`/`~0`, then all-digit segments become numbers. Shared by both the
+ * `#/...` and fragment parsers so they decode identically.
+ */
 const decodeSegment = (segment: string): string | number => {
-  const decoded = segment.replace(/~1/g, '/').replace(/~0/g, '~')
+  let decoded = segment
+  try {
+    decoded = decodeURIComponent(segment)
+  } catch {
+    // Leave invalid percent-escapes as-is rather than throwing.
+  }
+  decoded = decoded.replace(/~1/g, '/').replace(/~0/g, '~')
   return /^\d+$/.test(decoded) ? Number(decoded) : decoded
 }
 
@@ -46,19 +58,7 @@ const splitRef = (ref: string): { filePart: string; fragment: string } => {
  */
 const fragmentToPath = (fragment: string): JsonPath => {
   if (fragment === '' || fragment === '/') return []
-  return fragment
-    .replace(/^\//, '')
-    .split('/')
-    .map((segment) => {
-      let decoded = segment
-      try {
-        decoded = decodeURIComponent(segment)
-      } catch {
-        // leave invalid percent-escapes as-is
-      }
-      decoded = decoded.replace(/~1/g, '/').replace(/~0/g, '~')
-      return /^\d+$/.test(decoded) ? Number(decoded) : decoded
-    })
+  return fragment.replace(/^\//, '').split('/').map(decodeSegment)
 }
 
 const getAtPath = (root: unknown, path: JsonPath): unknown => {

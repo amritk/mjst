@@ -1,7 +1,26 @@
 import { describe, expect, it } from 'vitest'
 
-import { resolveSourceOrigin, resolveSourceOriginFromMap, resolveSourcePath } from './pointers'
+import { pointerToPath, resolveSourceOrigin, resolveSourceOriginFromMap, resolveSourcePath } from './pointers'
 import type { IDocumentRegistry, IOriginMap, ISourceDocument, JsonPath } from './types'
+
+describe('pointerToPath', () => {
+  it('returns the root path for #', () => {
+    expect(pointerToPath('#')).toEqual([])
+  })
+
+  it('returns undefined for an external ref', () => {
+    expect(pointerToPath('./ext.yaml#/foo')).toBeUndefined()
+  })
+
+  it('decodes JSON-pointer escapes and normalizes numeric segments', () => {
+    expect(pointerToPath('#/a~1b/~0c/0')).toEqual(['a/b', '~c', 0])
+  })
+
+  it('percent-decodes segments, matching the fragment decoder', () => {
+    // Pointers arrive inside URI-reference `$ref`s, so `%20` must decode to a space.
+    expect(pointerToPath('#/paths/~1users~1%7Bid%7D')).toEqual(['paths', '/users/{id}'])
+  })
+})
 
 /** A minimal registry: `resolveSourceOrigin` only reads each document's `data`. */
 function registry(rootLocation: string, docs: Record<string, unknown>): IDocumentRegistry {
