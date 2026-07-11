@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { detectFormat, parseJson, parseWithPointers, parseYaml } from './index'
+import { DiagnosticSeverity, detectFormat, parseJson, parseWithPointers, parseYaml } from './index'
 
 describe('parseYaml', () => {
   const source = ['openapi: 3.1.0', 'info:', '  title: My API', '  version: 1.0.0', 'paths: {}'].join('\n')
@@ -46,6 +46,32 @@ describe('parseYaml', () => {
   it('disables duplicate-key detection when configured', () => {
     const { diagnostics } = parseYaml('a: 1\na: 2\n', { duplicateKeys: 'off' })
     expect(diagnostics).toHaveLength(0)
+  })
+
+  // M7: the configured severity must actually be applied to the duplicate-key
+  // diagnostic, not ignored in favor of a hard error.
+  it('reports duplicate keys at the configured severity', () => {
+    const { diagnostics } = parseYaml('a: 1\na: 2\n', { duplicateKeys: DiagnosticSeverity.Warning })
+    expect(diagnostics).toHaveLength(1)
+    expect(diagnostics[0]?.severity).toBe(DiagnosticSeverity.Warning)
+  })
+
+  // L1: a null map key used to render as `''` and collide with the root path;
+  // distinct paths must now resolve to distinct locations.
+  it('does not collide a null map key with the document root', () => {
+    const { data, getLocationForJsonPath } = parseYaml<Record<string, unknown>>('null: 1\nother: 2\n')
+    expect(data).toEqual({ null: 1, other: 2 })
+    const rootStart = getLocationForJsonPath([])?.range.start
+    const nullKeyStart = getLocationForJsonPath(['null'])?.range.start
+    expect(rootStart).toEqual({ line: 0, character: 0 })
+    expect(nullKeyStart).toEqual({ line: 0, character: 6 })
+    expect(nullKeyStart).not.toEqual(rootStart)
+  })
+
+  it('locates a numeric-looking map key', () => {
+    const { data, getLocationForJsonPath } = parseYaml('200: ok\n')
+    expect(data).toEqual({ 200: 'ok' })
+    expect(getLocationForJsonPath(['200'])?.range.start).toEqual({ line: 0, character: 5 })
   })
 })
 

@@ -1,5 +1,5 @@
-import { isMap, isScalar, isSeq, parseDocument, type YamlNode, type YamlSeq } from '@amritk/yaml'
-import { applyEdits, findNodeAtLocation, getNodeValue, modify, type Node, parseTree } from 'jsonc-parser'
+import { isAlias, isMap, isScalar, isSeq, parseDocument, type YamlNode, type YamlSeq } from '@amritk/yaml'
+import { applyEdits, findNodeAtLocation, modify, type Node, parseTree } from 'jsonc-parser'
 
 import type { ParserFormat } from './index'
 import type { JsonPath } from './types'
@@ -9,6 +9,21 @@ import type { JsonPath } from './types'
  * paths and values rather than raw character offsets. {@link applyEditOps} lowers
  * each op to a minimal text edit so that untouched parts of the source — including
  * comments, key order, and quoting — keep their original formatting.
+ *
+ * A few edits are deliberately conservative no-ops rather than risky rewrites:
+ *
+ * - Edits that traverse a YAML alias (`*ref`) or a `<<` merge key resolve to a
+ *   node the edit model cannot address structurally, so they are dropped. This is
+ *   safe — the source is left untouched — but it does mean a finding on data that
+ *   only exists via an alias/merge is not auto-fixed.
+ * - `setValue` on an *anchored* node (`&anchor`) rewrites the anchor's own text,
+ *   which every `*alias` to it re-reads; the change therefore propagates to every
+ *   alias use-site. That is the correct YAML semantics, but callers should be
+ *   aware the edit is not local to one path.
+ * - Multi-line *flow* collections (`[\n  a,\n  b\n]`) are rebuilt onto a single
+ *   line by {@link rewriteYamlSeq} and the flow-map insert, and any comments that
+ *   lived between their members are dropped. Block collections keep their layout
+ *   and comments; only flow ones are collapsed.
  */
 export type EditOp =
   /** Replace the scalar value at `path` (the existing quoting style is preserved). */
@@ -29,19 +44,48 @@ export type EditOp =
 const splice = (text: string, start: number, end: number, replacement: string): string =>
   text.slice(0, start) + replacement + text.slice(end)
 
+/** The offset of the start of the line containing `offset`. */
+const lineStart = (text: string, offset: number): number => {
+  let s = offset
+  while (s > 0 && text.charCodeAt(s - 1) !== 10) s--
+  return s
+}
+
 /** Expands `[start, end)` to cover whole lines: back to the line start, forward past the trailing newline. */
 const expandLine = (text: string, start: number, end: number): [number, number] => {
-  let s = start
-  while (s > 0 && text.charCodeAt(s - 1) !== 10) s--
+  const s = lineStart(text, start)
   let e = end
   while (e < text.length && text.charCodeAt(e) !== 10) e++
   if (e < text.length) e++
   return [s, e]
 }
 
+/**
+ * The document's dominant line ending. We look at the first break so inserted
+ * lines match the file rather than always emitting a bare `\n` (which would leave
+ * a CRLF file with mixed endings).
+ */
+const detectEol = (text: string): string => {
+  const i = text.indexOf('\n')
+  return i > 0 && text.charCodeAt(i - 1) === 13 ? '\r\n' : '\n'
+}
+
 // --- YAML ------------------------------------------------------------------
 
-const keyName = (key: unknown): string => (isScalar(key) ? String(key.value) : String(key))
+/**
+ * Stringifies a key the way `toJS` does, so the paths we address by match the
+ * keys the projected data exposes: a null key is `null`, a bool/number key is its
+ * `String()` form, an alias key is `*name`, and a complex (map/seq) key is empty.
+ */
+const keyName = (key: unknown): string => {
+  if (isScalar(key)) {
+    const v = key.value
+    return typeof v === 'string' ? v : v === null ? 'null' : String(v)
+  }
+  if (isAlias(key)) return `*${key.source}`
+  if (isMap(key) || isSeq(key)) return ''
+  return String(key)
+}
 
 /** Navigates the YAML CST to the node at `path`, or `undefined` if absent. */
 const yamlNodeAt = (root: YamlNode | null, path: JsonPath): YamlNode | undefined => {
@@ -50,7 +94,10 @@ const yamlNodeAt = (root: YamlNode | null, path: JsonPath): YamlNode | undefined
     if (current === undefined) return undefined
     if (isMap(current)) {
       const target = String(segment)
-      const pair = current.items.find((item) => keyName(item.key) === target)
+      // Last-wins: duplicate keys resolve to the final occurrence, matching how
+      // `toJS` and the position index treat them, so an edit is not a silent no-op
+      // that lands on a shadowed earlier copy.
+      const pair = current.items.findLast((item) => keyName(item.key) === target)
       current = pair?.value ?? undefined
     } else if (isSeq(current)) {
       current = current.items[Number(segment)]
@@ -66,10 +113,26 @@ const yamlPairAt = (root: YamlNode | null, path: JsonPath): { key?: YamlNode; va
   const parent = yamlNodeAt(root, path.slice(0, -1))
   if (!parent || !isMap(parent)) return {}
   const last = String(path[path.length - 1])
-  const pair = parent.items.find((item) => keyName(item.key) === last)
+  const pair = parent.items.findLast((item) => keyName(item.key) === last)
   if (!pair) return {}
   return { key: pair.key, ...(pair.value ? { value: pair.value } : {}) }
 }
+
+/**
+ * Checks that writing `plain` bare into YAML round-trips back to the string
+ * `value`. A bare scalar can silently change meaning — `true` becomes a boolean,
+ * `1.0` a number, an empty string a null — and text carrying `: ` or ` #` or a
+ * newline reshapes the line, so we parse the candidate on its own and require it
+ * to come back as exactly the same string before trusting it unquoted.
+ */
+const plainStringRoundTrips = (plain: string, value: string): boolean => {
+  const doc = parseDocument(plain)
+  return doc.errors.length === 0 && isScalar(doc.contents) && doc.contents.value === value
+}
+
+// Keys made only of these characters are safe to write bare in YAML; anything
+// else (spaces, colons, flow indicators) gets double-quoted to stay valid.
+const SAFE_YAML_KEY = /^[\w./-]+$/
 
 /** Serializes a scalar, preserving the quoting style of the value it replaces. */
 const yamlScalar = (value: unknown, original: string): string => {
@@ -77,19 +140,20 @@ const yamlScalar = (value: unknown, original: string): string => {
   const quote = original.charCodeAt(0)
   if (quote === 34 /* " */) return JSON.stringify(value)
   if (quote === 39 /* ' */) return `'${value.replace(/'/g, "''")}'`
-  return value
+  // Plain (unquoted) original: keep it bare only when the bare text still means
+  // this exact string; otherwise fall back to a double-quoted literal so we never
+  // turn a string into a bool/number/null or corrupt the line.
+  return plainStringRoundTrips(value, value) ? value : JSON.stringify(value)
 }
 
 const yamlKey = (key: string, original: string): string => {
   const quote = original.charCodeAt(0)
   if (quote === 34) return JSON.stringify(key)
   if (quote === 39) return `'${key.replace(/'/g, "''")}'`
-  return key
+  // A plain key that would resolve to a non-string (e.g. `true`, `1.0`) or is not
+  // otherwise safe bare gets quoted, matching the value-side treatment.
+  return SAFE_YAML_KEY.test(key) && plainStringRoundTrips(key, key) ? key : JSON.stringify(key)
 }
-
-// Keys made only of these characters are safe to write bare in YAML; anything
-// else (spaces, colons, flow indicators) gets double-quoted to stay valid.
-const SAFE_YAML_KEY = /^[\w./-]+$/
 
 /** Serializes a key for an inserted property, quoting it only when it needs to be. */
 const yamlInsertKey = (key: string): string => (SAFE_YAML_KEY.test(key) ? key : JSON.stringify(key))
@@ -102,21 +166,52 @@ const yamlInsertKey = (key: string): string => (SAFE_YAML_KEY.test(key) ? key : 
  */
 const yamlInsertValue = (value: unknown): string => JSON.stringify(value) ?? 'null'
 
+/** Serializes a fresh scalar (no original to mirror), quoting strings only when bare would change meaning. */
+const yamlFreshScalar = (value: unknown): string => {
+  if (value !== null && typeof value === 'object') return yamlInsertValue(value)
+  if (typeof value === 'string') return plainStringRoundTrips(value, value) ? value : JSON.stringify(value)
+  return value === null ? 'null' : String(value)
+}
+
 /** Returns the leading whitespace of the line containing `offset` (its indentation). */
 const lineIndent = (text: string, offset: number): string => {
-  let start = offset
-  while (start > 0 && text.charCodeAt(start - 1) !== 10) start--
+  const start = lineStart(text, offset)
   let end = start
   while (end < text.length && (text.charCodeAt(end) === 32 || text.charCodeAt(end) === 9)) end++
   return text.slice(start, end)
 }
 
+/**
+ * The indentation a new block-sequence item should carry, measured from the
+ * column of the first item's own `- ` dash. Using the dash column (not the line's
+ * leading whitespace) keeps a nested sequence correct: for `- - 1` the inner
+ * item's dash sits at column 2, so a new inner item indents to match it rather
+ * than appending to the outer sequence.
+ */
+const seqItemIndent = (text: string, firstItem: YamlNode): string => {
+  const start = lineStart(text, firstItem.start)
+  let dash = firstItem.start - 1
+  while (dash > start && text.charCodeAt(dash) !== 45 /* - */) dash--
+  return text.charCodeAt(dash) === 45 ? ' '.repeat(dash - start) : lineIndent(text, firstItem.start)
+}
+
 const applyYamlOp = (text: string, op: EditOp): string => {
   const root = parseDocument(text).contents as YamlNode | null
+  const eol = detectEol(text)
   switch (op.op) {
     case 'setValue': {
       const node = yamlNodeAt(root, op.path)
-      if (!node) return text
+      if (!node) {
+        // The target may be an explicit-empty key (`key:` with a null value). The
+        // value node does not exist yet, so splice a scalar in right after the
+        // colon rather than silently doing nothing.
+        const { key, value } = yamlPairAt(root, op.path)
+        if (key && value === undefined) {
+          const colon = text.indexOf(':', key.end)
+          if (colon !== -1) return splice(text, colon + 1, colon + 1, ` ${yamlFreshScalar(op.value)}`)
+        }
+        return text
+      }
       // Scalars keep the node's original quoting; objects/arrays are written as
       // inline flow JSON (valid YAML) so a scalar can be widened to a collection.
       const replacement =
@@ -134,7 +229,7 @@ const applyYamlOp = (text: string, op: EditOp): string => {
       const parent = yamlNodeAt(root, op.path.slice(0, -1))
       if (!parent || !isMap(parent)) return text
       const last = String(op.path[op.path.length - 1])
-      const index = parent.items.findIndex((item) => keyName(item.key) === last)
+      const index = parent.items.findLastIndex((item) => keyName(item.key) === last)
       if (index === -1) return text
       const pair = parent.items[index]
       const key = pair?.key as YamlNode
@@ -152,6 +247,16 @@ const applyYamlOp = (text: string, op: EditOp): string => {
         const prev = parent.items[index - 1]
         const prevEnd = ((prev?.value ?? prev?.key) as YamlNode).end
         return splice(text, prevEnd, (value ?? key).end, '')
+      }
+      // Compact sequence-entry map (`- a: 1\n    b: 2`): the first pair shares its
+      // line with the parent seq's `- ` dash. Dropping the whole line would swallow
+      // the dash and merge this item into its sibling, so splice only the pair's own
+      // span. A lone key falls through to whole-line removal (the item disappears).
+      const dashPrefix = text.slice(lineStart(text, key.start), key.start)
+      if (/^\s*-\s+$/.test(dashPrefix) && parent.items.length > 1) {
+        const next = parent.items[index + 1]?.key as YamlNode | undefined
+        if (next) return splice(text, key.start, next.start, '')
+        return splice(text, key.start, (value ?? key).end, '')
       }
       // Block map: drop the whole line(s) the property occupies.
       const [start, end] = expandLine(text, key.start, value ? value.end : key.end)
@@ -175,7 +280,21 @@ const applyYamlOp = (text: string, op: EditOp): string => {
     }
     case 'insertProperty': {
       const parent = yamlNodeAt(root, op.path)
-      if (!parent || !isMap(parent)) return text
+      if (!parent) {
+        // The target may be an explicit-empty key (`parent:` with a null value).
+        // Turn it into a one-key block map on the next line rather than no-op.
+        const { key, value } = yamlPairAt(root, op.path)
+        if (key && value === undefined) {
+          const colon = text.indexOf(':', key.end)
+          if (colon !== -1) {
+            const indent = ' '.repeat(key.start - lineStart(text, key.start) + 2)
+            const pair = `${yamlInsertKey(op.key)}: ${yamlInsertValue(op.value)}`
+            return splice(text, colon + 1, colon + 1, `${eol}${indent}${pair}`)
+          }
+        }
+        return text
+      }
+      if (!isMap(parent)) return text
       // Inserting is additive only; if the key is already there we leave it alone.
       if (parent.items.some((item) => keyName(item.key) === op.key)) return text
       const pair = `${yamlInsertKey(op.key)}: ${yamlInsertValue(op.value)}`
@@ -193,10 +312,15 @@ const applyYamlOp = (text: string, op: EditOp): string => {
       const last = parent.items[parent.items.length - 1]
       const lastKey = last?.key as YamlNode | undefined
       if (!lastKey) return text
-      const indent = lineIndent(text, lastKey.start)
+      // Indent from the key's *column*, not the line's leading whitespace: in a
+      // compact seq-item map the last key sits after a `- ` dash, so the line
+      // indent (2) would place the new key outside the item — use the column (4).
+      const keyLineStart = lineStart(text, lastKey.start)
+      const prefix = text.slice(keyLineStart, lastKey.start)
+      const indent = /^\s*$/.test(prefix) ? prefix : ' '.repeat(lastKey.start - keyLineStart)
       const [, end] = expandLine(text, lastKey.start, ((last?.value ?? lastKey) as YamlNode).end)
-      const lead = end > 0 && text.charCodeAt(end - 1) !== 10 ? '\n' : ''
-      return splice(text, end, end, `${lead}${indent}${pair}\n`)
+      const lead = end > 0 && text.charCodeAt(end - 1) !== 10 ? eol : ''
+      return splice(text, end, end, `${lead}${indent}${pair}${eol}`)
     }
     case 'insertItem': {
       const seq = yamlNodeAt(root, op.path)
@@ -209,11 +333,12 @@ const applyYamlOp = (text: string, op: EditOp): string => {
       }
       // Block sequence: we need an existing `- item` line to mirror its indentation and style.
       if (seq.items.length === 0) return text
-      const blocks = seq.items.map((item) => expandLine(text, (item as YamlNode).start, (item as YamlNode).end))
+      const blocks = seqBlocks(text, seq.items)
       const regionStart = (blocks[0] as [number, number])[0]
       const regionEnd = (blocks[blocks.length - 1] as [number, number])[1]
       const lines = seq.items.map((_, index) => text.slice(...(blocks[index] as [number, number])))
-      lines.splice(clampIndex(op.index, lines.length), 0, `${lineIndent(text, regionStart)}- ${value}\n`)
+      const newLine = `${seqItemIndent(text, seq.items[0] as YamlNode)}- ${value}${eol}`
+      lines.splice(clampIndex(op.index, lines.length), 0, newLine)
       return splice(text, regionStart, regionEnd, lines.join(''))
     }
   }
@@ -223,10 +348,29 @@ const applyYamlOp = (text: string, op: EditOp): string => {
 const clampIndex = (index: number | undefined, length: number): number => Math.max(0, Math.min(index ?? length, length))
 
 /**
+ * Whole-line spans for each block-sequence item, with any comment-only or blank
+ * lines that precede an item folded into that item's block. Attaching leading
+ * comments to the following item means a reorder carries them along and a removal
+ * takes only the comments that belong to the dropped item — honoring the module's
+ * promise to preserve comments rather than dropping every line between items.
+ */
+const seqBlocks = (text: string, items: readonly YamlNode[]): [number, number][] => {
+  const blocks: [number, number][] = []
+  items.forEach((item, i) => {
+    const [start, end] = expandLine(text, item.start, item.end)
+    // For every item after the first, start the block at the end of the previous
+    // item's line so the comment/blank lines between the two travel with this item.
+    blocks.push([i === 0 ? start : (blocks[i - 1] as [number, number])[1], end])
+  })
+  return blocks
+}
+
+/**
  * Rewrites a YAML sequence to contain exactly `newItems` (a subset and/or
  * reordering of the original nodes), preserving each kept item's own text. Flow
  * sequences (`[a, b]`) are rebuilt inside their brackets; block sequences (one
- * `- item` per line) are rebuilt from their whole-line spans.
+ * `- item` per line) are rebuilt from their whole-line spans, carrying each item's
+ * preceding comments with it.
  */
 const rewriteYamlSeq = (text: string, seq: YamlSeq, newItems: YamlNode[]): string => {
   const isFlow = text.charCodeAt(seq.start) === 91 /* [ */
@@ -235,7 +379,7 @@ const rewriteYamlSeq = (text: string, seq: YamlSeq, newItems: YamlNode[]): strin
     return splice(text, seq.start + 1, seq.end - 1, inner)
   }
   if (seq.items.length === 0) return text
-  const blocks = seq.items.map((item) => expandLine(text, item.start, item.end))
+  const blocks = seqBlocks(text, seq.items)
   const regionStart = (blocks[0] as [number, number])[0]
   const regionEnd = (blocks[blocks.length - 1] as [number, number])[1]
   const blockText = new Map(seq.items.map((item, index) => [item, text.slice(...(blocks[index] as [number, number]))]))
@@ -245,7 +389,12 @@ const rewriteYamlSeq = (text: string, seq: YamlSeq, newItems: YamlNode[]): strin
 
 // --- JSON ------------------------------------------------------------------
 
-const JSON_FORMAT = { insertSpaces: true, tabSize: 2, eol: '\n' } as const
+/** Formatting options for jsonc-parser edits, carrying the file's own line ending. */
+const jsonFormat = (eol: string): { insertSpaces: true; tabSize: 2; eol: string } => ({
+  insertSpaces: true,
+  tabSize: 2,
+  eol,
+})
 
 /**
  * jsonc-parser keys path segments by JS type — strings index objects, numbers
@@ -265,43 +414,75 @@ const normalizeJsonPath = (root: Node, path: JsonPath): (string | number)[] => {
   return result
 }
 
+/**
+ * Rewrites a JSON array to contain exactly `keptChildren`, slicing each element's
+ * original source so numeric literals (`1.50`), escapes, and Unicode survive byte
+ * for byte. Separators, leading, and trailing whitespace are taken from the
+ * original array, so a one-line array stays on one line and a multi-line array
+ * keeps its indentation instead of being re-serialized with a hardcoded style.
+ */
+const rewriteJsonArray = (text: string, node: Node, keptChildren: Node[]): string => {
+  const children = node.children ?? []
+  const open = node.offset + 1
+  const close = node.offset + node.length - 1
+  if (children.length === 0) return text
+  const first = children[0] as Node
+  const last = children[children.length - 1] as Node
+  if (keptChildren.length === 0) return splice(text, open, close, '')
+  const leading = text.slice(open, first.offset)
+  const trailing = text.slice(last.offset + last.length, close)
+  // The separator between two elements, captured from the source so we reuse the
+  // file's own comma, newline, and indentation rather than inventing them.
+  const separator = children.length > 1 ? text.slice(first.offset + first.length, (children[1] as Node).offset) : ', '
+  const inner = keptChildren.map((child) => text.slice(child.offset, child.offset + child.length)).join(separator)
+  return splice(text, open, close, leading + inner + trailing)
+}
+
 const applyJsonOp = (text: string, op: EditOp): string => {
   const root = parseTree(text)
   if (!root) return text
   const path = normalizeJsonPath(root, op.path)
+  const format = jsonFormat(detectEol(text))
   switch (op.op) {
     case 'setValue':
-      return applyEdits(text, modify(text, path, op.value, { formattingOptions: JSON_FORMAT }))
+      // `modify` would happily *create* a missing path (and every ancestor along
+      // it), which violates the contract that an unresolved path is a no-op — so
+      // only edit when the node actually exists.
+      if (!findNodeAtLocation(root, path)) return text
+      return applyEdits(text, modify(text, path, op.value, { formattingOptions: format }))
     case 'removeProperty':
-      return applyEdits(text, modify(text, path, undefined, { formattingOptions: JSON_FORMAT }))
+      if (!findNodeAtLocation(root, path)) return text
+      return applyEdits(text, modify(text, path, undefined, { formattingOptions: format }))
     case 'renameProperty': {
       const valueNode = findNodeAtLocation(root, path)
-      const keyNode = valueNode?.parent?.children?.[0] as Node | undefined
+      // Only a real object member can be renamed. An array-index path has an
+      // `array` parent, whose first child is element 0 — renaming there would
+      // overwrite that element, so bail instead.
+      if (valueNode?.parent?.type !== 'property') return text
+      const keyNode = valueNode.parent.children?.[0] as Node | undefined
       if (!keyNode) return text
       return splice(text, keyNode.offset, keyNode.offset + keyNode.length, JSON.stringify(op.newKey))
     }
     case 'removeItems': {
-      // jsonc-parser's per-index array removal is unreliable, so rewrite the
-      // whole array with the kept elements instead.
       const node = findNodeAtLocation(root, path)
-      if (!node) return text
+      if (!node || node.type !== 'array') return text
       const removed = new Set(op.indices)
-      const kept = (getNodeValue(node) as unknown[]).filter((_, index) => !removed.has(index))
-      return applyEdits(text, modify(text, path, kept, { formattingOptions: JSON_FORMAT }))
+      const kept = (node.children ?? []).filter((_, index) => !removed.has(index))
+      return rewriteJsonArray(text, node, kept)
     }
     case 'reorderArray': {
       const node = findNodeAtLocation(root, path)
-      if (!node) return text
-      const array = getNodeValue(node) as unknown[]
-      const reordered = op.order.map((index) => array[index])
-      return applyEdits(text, modify(text, path, reordered, { formattingOptions: JSON_FORMAT }))
+      if (!node || node.type !== 'array') return text
+      const children = node.children ?? []
+      const reordered = op.order.map((index) => children[index]).filter((child): child is Node => child != null)
+      return rewriteJsonArray(text, node, reordered)
     }
     case 'insertProperty': {
       const node = findNodeAtLocation(root, path)
       if (!node || node.type !== 'object') return text
       // Additive only: writing to an existing key would replace its value, so bail.
       if (node.children?.some((property) => property.children?.[0]?.value === op.key)) return text
-      return applyEdits(text, modify(text, [...path, op.key], op.value, { formattingOptions: JSON_FORMAT }))
+      return applyEdits(text, modify(text, [...path, op.key], op.value, { formattingOptions: format }))
     }
     case 'insertItem': {
       const node = findNodeAtLocation(root, path)
@@ -309,7 +490,7 @@ const applyJsonOp = (text: string, op: EditOp): string => {
       const index = clampIndex(op.index, node.children?.length ?? 0)
       return applyEdits(
         text,
-        modify(text, [...path, index], op.value, { formattingOptions: JSON_FORMAT, isArrayInsertion: true }),
+        modify(text, [...path, index], op.value, { formattingOptions: format, isArrayInsertion: true }),
       )
     }
   }
