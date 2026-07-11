@@ -83,7 +83,17 @@ describe('engine', () => {
       },
     }
     expect(lint('a: 1', definition)).toHaveLength(1)
-    expect(lint('a: 1', { rules: { ...definition.rules, 'always-fail': 'off' } })).toHaveLength(0)
+    // Disabling an inherited rule via the `off` shorthand suppresses it.
+    const disabled: RulesetDefinition = { extends: [[definition, 'all']], rules: { 'always-fail': 'off' } }
+    expect(lint('a: 1', disabled)).toHaveLength(0)
+  })
+
+  it('throws when a shorthand targets a rule that exists nowhere', () => {
+    // Spectral parity: a bare severity/boolean for an undefined rule is a loud
+    // "Cannot extend non-existing rule" error rather than a silent no-op.
+    expect(() => createRuleset({ rules: { 'ghost-rule': 'off' } }, { functions: builtinFunctions })).toThrow(
+      /non-existing rule/,
+    )
   })
 
   it('extends another ruleset and overrides severity', () => {

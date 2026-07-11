@@ -34,6 +34,19 @@ describe('validateRuleset', () => {
     expect(problems.some((p) => p.message.includes('invalid severity'))).toBe(true)
   })
 
+  it('flags a malformed given expression', () => {
+    const problems = validateRuleset({ rules: { r: { given: 'info.title', then: { function: 'truthy' } } } })
+    expect(problems.some((p) => p.message.includes('invalid `given`'))).toBe(true)
+  })
+
+  it('accepts an alias reference in given without flagging it', () => {
+    const problems = validateRuleset({
+      aliases: { Info: ['$.info'] },
+      rules: { r: { given: '#Info', then: { function: 'truthy' } } },
+    })
+    expect(problems.some((p) => p.message.includes('invalid `given`'))).toBe(false)
+  })
+
   it('flags a then without a function', () => {
     const problems = validateRuleset({ rules: { r: { given: '$', then: { field: 'x' } } } })
     expect(problems.some((p) => p.path.join('.') === 'rules.r.then.function')).toBe(true)

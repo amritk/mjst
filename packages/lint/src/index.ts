@@ -90,7 +90,10 @@ const collectCustomFunctions = (
   definition: RulesetDefinition,
   basePath: string,
   into: FunctionRegistry,
-  seen: Set<RulesetDefinition>,
+  // Keyed by (basePath, reference) for string extends and by object identity for
+  // inline ones. `loadRulesetFile` returns a fresh object per read, so object
+  // identity alone would never dedupe a file cycle — we key on the resolved edge.
+  seen: Set<unknown>,
 ): void => {
   if (seen.has(definition)) return
   seen.add(definition)
@@ -99,6 +102,9 @@ const collectCustomFunctions = (
     for (const entry of entries) {
       const target = Array.isArray(entry) ? entry[0] : entry
       if (typeof target === 'string') {
+        const key = `${basePath}\0${target}`
+        if (seen.has(key)) continue
+        seen.add(key)
         const resolved = resolveNamedRuleset(target, basePath)
         collectCustomFunctions(resolved.definition, resolved.basePath, into, seen)
       } else {

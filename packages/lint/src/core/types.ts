@@ -71,11 +71,16 @@ export type IRuleDefinition = {
 /** Shorthand a rule may take in `rules`: a definition, a boolean, or a severity. */
 export type RuleEntry = IRuleDefinition | boolean | HumanReadableSeverity
 
+/**
+ * A per-file override: `files` globs select the documents it applies to, and
+ * `rules` re-toggles or re-severities rules for them. Spectral's `extends` and
+ * `formats` on an override are intentionally omitted here — they were never
+ * applied by the engine, so carrying them in the type only advertised support
+ * that did not exist. Re-add them alongside a real implementation if needed.
+ */
 export type IRulesetOverride = {
   files: string[]
   rules?: Record<string, RuleEntry>
-  extends?: RulesetExtends
-  formats?: string[]
 }
 
 /**
