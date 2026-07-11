@@ -17,7 +17,13 @@ export const typedEnum: RulesetFunction<Record<string, unknown>, never> = (input
   const values = input['enum']
   if (declaredType === undefined || !Array.isArray(values)) return []
 
-  const types = Array.isArray(declaredType) ? declaredType : [declaredType]
+  const types = Array.isArray(declaredType) ? [...declaredType] : [declaredType]
+  // A schema marked nullable (OpenAPI 3 `nullable` or the Swagger 2 `x-nullable`
+  // vendor extension) is allowed to hold `null` in addition to its declared
+  // type, so `null` must not be flagged as a type mismatch.
+  if ((input['nullable'] === true || input['x-nullable'] === true) && !types.includes('null')) {
+    types.push('null')
+  }
   const checkers = types
     .map((type) => JS_TYPES[String(type)])
     .filter((fn): fn is (v: unknown) => boolean => Boolean(fn))
