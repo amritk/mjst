@@ -50,8 +50,20 @@ export type IParseResult<T = unknown> = {
 
 /** Tuning for how strictly the parser treats YAML/JSON edge cases. */
 export type IParserOptions = {
-  /** Severity for duplicate object keys. Default: error. `false`/`"off"` disables. */
+  /**
+   * Severity for duplicate object keys. Default: error. `false`/`"off"` disables
+   * detection entirely; any {@link DiagnosticSeverity} reports the duplicate at
+   * that level instead of the default error.
+   */
   duplicateKeys?: DiagnosticSeverity | 'off' | false
-  /** Severity for YAML values incompatible with JSON (e.g. bigints). Default: error. */
+  /**
+   * Reserved: severity for YAML values that cannot round-trip through JSON.
+   *
+   * TODO: not yet implemented. The workspace YAML parser projects to core-schema
+   * JavaScript values only (numbers, never bigints), so it currently cannot
+   * produce a JSON-incompatible value — there is nothing to report. The option is
+   * kept so the surface stays stable if a future schema (e.g. a `!!bigint` tag)
+   * makes incompatible values possible; until then it has no effect.
+   */
   incompatibleValues?: DiagnosticSeverity | 'off' | false
 }
