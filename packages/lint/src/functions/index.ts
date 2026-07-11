@@ -5,6 +5,7 @@ import { defined } from './defined'
 import { enumeration } from './enumeration'
 import { falsy } from './falsy'
 import { length } from './length'
+import { or } from './or'
 import { pattern } from './pattern'
 import { schema } from './schema'
 import { truthy } from './truthy'
@@ -19,6 +20,7 @@ export { defined } from './defined'
 export { enumeration } from './enumeration'
 export { falsy } from './falsy'
 export { length } from './length'
+export { type IOrOptions, or } from './or'
 export { pattern } from './pattern'
 export { type ISchemaOptions, schema } from './schema'
 export { truthy } from './truthy'
@@ -35,6 +37,7 @@ export const builtinFunctions: FunctionRegistry = {
   enumeration: enumeration as FunctionRegistry[string],
   falsy,
   length: length as FunctionRegistry[string],
+  or: or as FunctionRegistry[string],
   pattern: pattern as FunctionRegistry[string],
   schema: schema as FunctionRegistry[string],
   truthy,
