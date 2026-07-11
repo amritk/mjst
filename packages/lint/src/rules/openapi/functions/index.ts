@@ -2,8 +2,10 @@ import type { FunctionRegistry, RulesetFunction } from '../../../core'
 import { oasMediaExample, oasSchemaExample } from './example-validation'
 import { oasAdditionalOperations } from './oas-additional-operations'
 import { oasDiscriminator } from './oas-discriminator'
+import { oasExampleExternalValue } from './oas-example-external-value'
 import { oasExampleValue } from './oas-example-value'
 import { oasMutuallyExclusive } from './oas-mutually-exclusive'
+import { oasNoNullable } from './oas-no-nullable'
 import { oasOpFormDataConsumeCheck } from './oas-op-form-data-consume-check'
 import { oasOpIdUnique } from './oas-op-id-unique'
 import { oasOpParams } from './oas-op-params'
@@ -21,11 +23,13 @@ import { oasTagsUnique } from './oas-tags-unique'
 import { oasUnusedComponent } from './oas-unused-component'
 import { refSiblings } from './ref-siblings'
 
-export { oasMediaExample, oasSchemaExample } from './example-validation'
+export { type IOasExampleOptions, oasMediaExample, oasSchemaExample } from './example-validation'
 export { oasAdditionalOperations } from './oas-additional-operations'
 export { oasDiscriminator } from './oas-discriminator'
+export { oasExampleExternalValue } from './oas-example-external-value'
 export { oasExampleValue } from './oas-example-value'
 export { oasMutuallyExclusive } from './oas-mutually-exclusive'
+export { oasNoNullable } from './oas-no-nullable'
 export { oasOpFormDataConsumeCheck } from './oas-op-form-data-consume-check'
 export { oasOpIdUnique } from './oas-op-id-unique'
 export { oasOpParams } from './oas-op-params'
@@ -57,9 +61,10 @@ export const oasFunctions: FunctionRegistry = {
   oasDiscriminator,
   oasServerVariables,
   oasSchemaExample,
-  oasMediaExample,
+  oasMediaExample: oasMediaExample as RulesetFunction,
   oasUnusedComponent,
   oasMutuallyExclusive: oasMutuallyExclusive as RulesetFunction,
+  oasNoNullable,
   oasSchema: oasSchema as RulesetFunction,
   oasAdditionalOperations,
   oasServerNameUnique,
@@ -67,4 +72,5 @@ export const oasFunctions: FunctionRegistry = {
   oasSchemaExampleDeprecated,
   oasTagKind,
   oasExampleValue,
+  oasExampleExternalValue,
 }
