@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { compileQuery, query } from './jsonpath'
+import { compileQuery, query, queryMany } from './jsonpath'
 
 const doc = {
   openapi: '3.1.0',
@@ -86,5 +86,35 @@ describe('jsonpath engine', () => {
   it('returns nothing for null/undefined roots', () => {
     expect(query(null, '$.info')).toEqual([])
     expect(query(undefined, '$..x')).toEqual([])
+  })
+
+  it('selects negative array indices from the end', () => {
+    const data = { list: ['a', 'b', 'c'] }
+    expect(query(data, '$.list[-1]')[0]?.value).toBe('c')
+    expect(query(data, '$.list[-2]')[0]?.value).toBe('b')
+    // A negative index inside a union resolves the same way.
+    expect(query(data, '$.list[0,-1]').map((m) => m.value)).toEqual(['a', 'c'])
+  })
+})
+
+describe('jsonpath queryMany', () => {
+  it('evaluates several paths in one pass, index-aligned with the input', () => {
+    // A mix of direct and recursive-descent paths returns one match array each.
+    const compiled = [compileQuery('$.info.title'), compileQuery('$..description'), compileQuery('$.components.schemas.Tag')]
+    const [titles, descriptions, tag] = queryMany(doc, compiled)
+    expect(titles?.map((m) => m.value)).toEqual(['API'])
+    expect(descriptions?.map((m) => m.value).sort()).toEqual(['created', 'ok'])
+    expect(tag?.[0]?.value).toEqual({ type: 'array' })
+  })
+
+  it('returns empty arrays for a null root, one per path', () => {
+    const out = queryMany(null, [compileQuery('$.a'), compileQuery('$..b')])
+    expect(out).toEqual([[], []])
+  })
+
+  it('yields no matches for a malformed path while others still resolve', () => {
+    const out = queryMany(doc, [compileQuery('info.title'), compileQuery('$.info.title')])
+    expect(out[0]).toEqual([])
+    expect(out[1]?.map((m) => m.value)).toEqual(['API'])
   })
 })

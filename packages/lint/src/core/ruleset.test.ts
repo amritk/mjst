@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { createRuleset, DiagnosticSeverity, type FunctionRegistry, type RulesetDefinition } from './index'
+import {
+  createRuleset,
+  DiagnosticSeverity,
+  type ExtendResolver,
+  type FunctionRegistry,
+  type RulesetDefinition,
+} from './index'
 
 // A minimal function registry — these tests exercise ruleset merging/resolution,
 // not the functions themselves.
@@ -215,5 +221,29 @@ describe('malformed given', () => {
     expect(() => build({ rules: { r: { given: 'info.title', then: { function: 'truthy' } } } })).toThrow(
       /invalid `given`/,
     )
+  })
+})
+
+describe('string extends via a resolver', () => {
+  it('chains through resolved rulesets, threading each ruleset\'s basePath to its nested extends', () => {
+    const base: RulesetDefinition = { rules: { baseRule: rule({ recommended: false }) } }
+    const mid: RulesetDefinition = { extends: ['./base'], rules: { midRule: rule() } }
+    const seen: { name: string; basePath: string }[] = []
+    const resolve: ExtendResolver = (name, basePath) => {
+      seen.push({ name, basePath })
+      // `./mid` resolves from the root; its own `./base` extend must resolve from
+      // mid's directory, proving basePath threads through the chain.
+      if (name === './mid' && basePath === '/root') return { definition: mid, basePath: '/rulesets' }
+      if (name === './base' && basePath === '/rulesets') return { definition: base, basePath: '/rulesets' }
+      throw new Error(`unexpected resolve("${name}", "${basePath}")`)
+    }
+    const rs = createRuleset({ extends: [['./mid', 'all']] }, { functions, resolve, basePath: '/root' })
+    expect(rs.rules.map((r) => r.name).sort()).toEqual(['baseRule', 'midRule'])
+    // The outer `all` cascades through the string extends chain onto the base.
+    expect(rs.enabledRules.map((r) => r.name)).toEqual(expect.arrayContaining(['baseRule', 'midRule']))
+    expect(seen).toEqual([
+      { name: './mid', basePath: '/root' },
+      { name: './base', basePath: '/rulesets' },
+    ])
   })
 })

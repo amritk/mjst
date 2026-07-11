@@ -60,6 +60,12 @@ export type PluginRunResult = {
  * Runs `plugins` in order over `diagnostics`. Each plugin sees the (possibly
  * already transformed) diagnostics from the previous one; when a plugin returns
  * `output`, later plugins and the context see that rewritten text as `input`.
+ *
+ * Note: only `input` (and the diagnostics) are refreshed between plugins. The
+ * `document` and `resolved` tree in the context are the *originally* parsed ones,
+ * so after a plugin rewrites `output` those become stale relative to the new
+ * text. A plugin that must operate on the up-to-date parsed tree should re-parse
+ * `context.input` itself rather than trust `document`/`resolved`.
  */
 export const runPlugins = (
   plugins: readonly LintPlugin[],
