@@ -156,6 +156,51 @@ The generator handles:
 
 ---
 
+## Benchmarks
+
+Generated parsers are plain, straight-line TypeScript — no schema walking and no
+generic dispatch at runtime, because the schema was already spent at build time.
+Each parser reads the exact keys it declares, coerces or asserts them inline, and
+returns a fresh typed object, so on valid input it runs several times faster than
+libraries that interpret a schema (or a schema-shaped object graph) on every
+call. The `bench/` suite replicates the `parseSafe` (assert + strip undeclared
+keys) and `parseStrict` (assert + reject undeclared keys) halves of
+[`moltar/typescript-runtime-type-benchmarks`](https://github.com/moltar/typescript-runtime-type-benchmarks)
+against the other *pure* parsers — the ones that return a new typed value rather
+than mutating in place — [zod](https://zod.dev) and
+[TypeBox](https://github.com/sinclairzx81/typebox). Measured on Bun 1.3 (Linux
+x64), parsing valid input at steady state:
+
+| case | mode | mjst (generated) | zod | typebox |
+|:--|:--|--:|--:|--:|
+| user (4 fields) | parseSafe | **~11M** ops/s | ~2.5M ops/s | ~1.0M ops/s |
+| order (nested + array) | parseSafe | **~3.9M** ops/s | ~0.46M ops/s | ~0.13M ops/s |
+| user (4 fields) | parseStrict | **~9M** ops/s | ~1.4M ops/s | ~1.3M ops/s |
+| order (nested + array) | parseStrict | **~5.4M** ops/s | ~0.27M ops/s | ~0.20M ops/s |
+
+The upstream `assert` case (seven scalar roots plus a nested object) runs faster
+still — tens of millions of ops/s — but at that size the numbers swing enough
+run-to-run that the ratio, not the absolute, is the honest signal: mjst lands
+~5–30× ahead of zod across every case above.
+
+The trade is a one-shot **prepare** cost that only mjst pays — generating the
+parser source — which measures **~0.1–0.8 ms** per schema here (zod and TypeBox
+author or interpret their parsers with no separate build step, so there is
+nothing to time). That is trivially amortized: you generate once at build time
+and run the emitted code forever.
+
+Every library is checked for agreement — same stripped/rejected output, same
+throws on bad input — before it is timed, and each is timed in its own isolated
+process over a pool of distinct inputs, reporting the median of many trials, so
+the optimiser can't hoist the work away. Micro-benchmark figures vary by machine
+and runtime — reproduce with:
+
+```bash
+bun run bench
+```
+
+---
+
 ## Related packages
 
 - [`@amritk/mjst`](../cli) — CLI wrapping this generator

@@ -25,10 +25,24 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
 
       - name: Upgrade npm for trusted publishing
         run: npm install -g npm
+
+      # Don't use setup-node's `registry-url`: it writes an .npmrc carrying a
+      # deprecated `always-auth` line (hence the "Unknown user config
+      # always-auth" warnings) and a `//registry.npmjs.org/:_authToken=` line
+      # fed by NODE_AUTH_TOKEN — which is empty here, since publishing goes
+      # through trusted publishing (OIDC), not a token. That empty auth token
+      # made changesets' "is this version already on npm?" pre-check read the
+      # registry as an authenticated request and fail, so `changeset publish`
+      # fell back to trying to republish every already-published package and the
+      # run went red on "cannot publish over the previously published versions".
+      # A clean registry-only .npmrc leaves those reads anonymous (public), so
+      # the pre-check correctly skips packages already on npm; OIDC still
+      # supplies auth at publish time.
+      - name: Write a clean npmrc for trusted publishing
+        run: echo "registry=https://registry.npmjs.org/" > "$HOME/.npmrc"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
