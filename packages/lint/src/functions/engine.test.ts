@@ -7,8 +7,8 @@ import {
   createRuleset,
   DiagnosticSeverity,
   type RuleEntry,
-  type RulesetFunction,
   type RulesetDefinition,
+  type RulesetFunction,
 } from '../core'
 import { builtinFunctions } from './index'
 

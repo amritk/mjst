@@ -185,7 +185,7 @@ describe('ruleset-level formats', () => {
     expect([...(rs.rules.find((r) => r.name === 'b')?.formats ?? [])]).toEqual(['oas2'])
   })
 
-  it('applies each ruleset\'s own formats to its rules across extends', () => {
+  it("applies each ruleset's own formats to its rules across extends", () => {
     const base: RulesetDefinition = { formats: ['oas2'], rules: { baseRule: rule() } }
     const rs = build({ formats: ['oas3'], extends: [[base, 'all']], rules: { childRule: rule() } })
     expect([...(rs.rules.find((r) => r.name === 'baseRule')?.formats ?? [])]).toEqual(['oas2'])
@@ -199,7 +199,7 @@ describe('documentationUrl and parserOptions', () => {
     expect(rs.rules.find((x) => x.name === 'r')?.documentationUrl).toBe('https://docs.test/rules#r')
   })
 
-  it('lets a rule\'s own documentationUrl win', () => {
+  it("lets a rule's own documentationUrl win", () => {
     const rs = build({
       documentationUrl: 'https://docs.test',
       rules: { r: rule({ documentationUrl: 'https://custom.test/r' }) },
@@ -225,7 +225,7 @@ describe('malformed given', () => {
 })
 
 describe('string extends via a resolver', () => {
-  it('chains through resolved rulesets, threading each ruleset\'s basePath to its nested extends', () => {
+  it("chains through resolved rulesets, threading each ruleset's basePath to its nested extends", () => {
     const base: RulesetDefinition = { rules: { baseRule: rule({ recommended: false }) } }
     const mid: RulesetDefinition = { extends: ['./base'], rules: { midRule: rule() } }
     const seen: { name: string; basePath: string }[] = []

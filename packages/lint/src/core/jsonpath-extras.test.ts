@@ -115,7 +115,7 @@ describe('jsonpath engine: escapes and filter tokens', () => {
   })
 
   it('exposes @path as the jsonpath-plus string form', () => {
-    const matches = query(doc, "$.items[?(@path === \"$['items'][1]\")]")
+    const matches = query(doc, '$.items[?(@path === "$[\'items\'][1]")]')
     expect(matches).toHaveLength(1)
     expect(matches[0]?.path).toEqual(['items', 1])
   })

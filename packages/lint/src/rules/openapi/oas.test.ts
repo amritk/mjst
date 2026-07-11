@@ -9,7 +9,10 @@ const allRules = createOpenApiRuleset({ extends: [[oas, 'all']] })
 // Default preset: `extends: [oas]`, so only `recommended` rules run.
 const recommendedOnly = createOpenApiRuleset()
 
-const codesWith = async (ruleset: ReturnType<typeof createOpenApiRuleset>, doc: unknown): Promise<Set<string | number>> =>
+const codesWith = async (
+  ruleset: ReturnType<typeof createOpenApiRuleset>,
+  doc: unknown,
+): Promise<Set<string | number>> =>
   new Set((await lint(JSON.stringify(doc), { ruleset })).map((finding) => finding.code))
 
 const has = async (doc: unknown, code: string): Promise<boolean> => (await codesWith(allRules, doc)).has(code)
@@ -32,7 +35,11 @@ const base2 = (): Record<string, unknown> => ({
 describe('oas', () => {
   // H4: field-targeting reports a MISSING key, not just an empty array ---------
   it('oas3-api-servers fires when servers is missing or empty (H4)', async () => {
-    const missing = { openapi: '3.0.0', info: { title: 'T', version: '1.0.0', contact: { name: 'x' }, description: 'd' }, paths: {} }
+    const missing = {
+      openapi: '3.0.0',
+      info: { title: 'T', version: '1.0.0', contact: { name: 'x' }, description: 'd' },
+      paths: {},
+    }
     expect(await has(missing, 'oas3-api-servers')).toBe(true)
     const empty = { ...base3(), servers: [] }
     expect(await has(empty, 'oas3-api-servers')).toBe(true)
@@ -40,7 +47,12 @@ describe('oas', () => {
   })
 
   it('oas2-api-schemes fires when schemes is missing or empty (H4)', async () => {
-    const missing = { swagger: '2.0', info: { title: 'T', version: '1', contact: { name: 'x' }, description: 'd' }, host: 'api.test', paths: {} }
+    const missing = {
+      swagger: '2.0',
+      info: { title: 'T', version: '1', contact: { name: 'x' }, description: 'd' },
+      host: 'api.test',
+      paths: {},
+    }
     expect(await has(missing, 'oas2-api-schemes')).toBe(true)
     const empty = { ...base2(), schemes: [] }
     expect(await has(empty, 'oas2-api-schemes')).toBe(true)
@@ -68,7 +80,9 @@ describe('oas', () => {
       info: { title: 'T', version: '1.0.0', contact: { name: 'x' }, description: 'd' },
       servers: [{ url: 'https://api.example.test' }],
       paths: {},
-      webhooks: { hook: { post: { servers: [{ url: 'https://x.test' }], responses: { '200': { description: 'ok' } } } } },
+      webhooks: {
+        hook: { post: { servers: [{ url: 'https://x.test' }], responses: { '200': { description: 'ok' } } } },
+      },
     }
     expect(await has(opLevel, 'oas3_1-servers-in-webhook')).toBe(true)
 
@@ -118,9 +132,9 @@ describe('oas', () => {
 
   // L1: markdown rules also scan `title` -----------------------------------
   it('no-eval-in-markdown and no-script-tags-in-markdown scan title too (L1)', async () => {
-    const evalTitle = { ...base3(), info: { ...base3()['info'] as object, title: 'eval(x)' } }
+    const evalTitle = { ...base3(), info: { ...(base3()['info'] as object), title: 'eval(x)' } }
     expect(await has(evalTitle, 'no-eval-in-markdown')).toBe(true)
-    const scriptTitle = { ...base3(), info: { ...base3()['info'] as object, title: '<script>x</script>' } }
+    const scriptTitle = { ...base3(), info: { ...(base3()['info'] as object), title: '<script>x</script>' } }
     expect(await has(scriptTitle, 'no-script-tags-in-markdown')).toBe(true)
   })
 
@@ -136,7 +150,12 @@ describe('oas', () => {
   it('lints a complete OAS2 document with no recommended findings', async () => {
     const doc = {
       swagger: '2.0',
-      info: { title: 'Petstore', version: '1.0.0', contact: { name: 'x', url: 'https://x.test', email: 'a@b.test' }, description: 'A store' },
+      info: {
+        title: 'Petstore',
+        version: '1.0.0',
+        contact: { name: 'x', url: 'https://x.test', email: 'a@b.test' },
+        description: 'A store',
+      },
       host: 'api.test',
       basePath: '/v1',
       schemes: ['https'],
@@ -155,7 +174,13 @@ describe('oas', () => {
     }
     const codes = await codesWith(recommendedOnly, doc)
     // None of the structural / correctness recommended rules should fire.
-    for (const code of ['oas2-schema', 'operation-description', 'operation-success-response', 'path-params', 'oas2-api-schemes']) {
+    for (const code of [
+      'oas2-schema',
+      'operation-description',
+      'operation-success-response',
+      'path-params',
+      'oas2-api-schemes',
+    ]) {
       expect(codes.has(code)).toBe(false)
     }
   })

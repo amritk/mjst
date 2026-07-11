@@ -80,13 +80,16 @@ describe('fixers', () => {
 
   it('pathKeyQueryString strips a query string from a path key', async () => {
     const out = JSON.parse(
-      await runFix({ ...base3(), paths: { '/pets?limit=1': { get: { responses: { '200': { description: 'ok' } } } } } }),
+      await runFix({
+        ...base3(),
+        paths: { '/pets?limit=1': { get: { responses: { '200': { description: 'ok' } } } } },
+      }),
     )
     expect(Object.keys(out.paths)).toEqual(['/pets'])
   })
 
   it('refSibling removes a sibling key next to $ref', async () => {
-    const doc = { ...base3(), components: { schemas: { A: { $ref: '#/components/schemas/B', description: 'sib' } }, } }
+    const doc = { ...base3(), components: { schemas: { A: { $ref: '#/components/schemas/B', description: 'sib' } } } }
     // B must exist so A is "used"; keep the doc otherwise minimal.
     ;(doc.components.schemas as Record<string, unknown>)['B'] = { type: 'string' }
     const out = JSON.parse(await runFix(doc))
@@ -96,7 +99,18 @@ describe('fixers', () => {
   it('duplicatedEnum removes repeated enum entries, including key-reordered objects', async () => {
     const doc = {
       ...base3(),
-      components: { schemas: { A: { type: 'object', enum: [{ a: 1, b: 2 }, { b: 2, a: 1 }, { a: 1, b: 2 }] } } },
+      components: {
+        schemas: {
+          A: {
+            type: 'object',
+            enum: [
+              { a: 1, b: 2 },
+              { b: 2, a: 1 },
+              { a: 1, b: 2 },
+            ],
+          },
+        },
+      },
     }
     const out = JSON.parse(await runFix(doc))
     // All three entries are deep-equal, so only one survives — and the fix loop
@@ -134,8 +148,14 @@ describe('fixers', () => {
         '/a': {
           get: {
             responses: {
-              '200': { description: 'ok', content: { 'application/json': { schema: { $ref: '#/components/schemas/A' } } } },
-              '201': { description: 'ok', content: { 'application/json': { schema: { $ref: '#/components/schemas/B' } } } },
+              '200': {
+                description: 'ok',
+                content: { 'application/json': { schema: { $ref: '#/components/schemas/A' } } },
+              },
+              '201': {
+                description: 'ok',
+                content: { 'application/json': { schema: { $ref: '#/components/schemas/B' } } },
+              },
             },
           },
         },

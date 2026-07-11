@@ -293,7 +293,12 @@ describe('oas-functions', () => {
       schemes: ['https'],
       paths: {},
       definitions: {
-        Pet: { type: 'object', discriminator: 'petType', required: ['petType'], properties: { petType: { type: 'string' } } },
+        Pet: {
+          type: 'object',
+          discriminator: 'petType',
+          required: ['petType'],
+          properties: { petType: { type: 'string' } },
+        },
       },
     }
     expect(await has(ok, 'oas2-discriminator')).toBe(false)
@@ -355,7 +360,10 @@ describe('oas-functions', () => {
   })
 
   it('oasSchemaExample asserts string formats (M3)', async () => {
-    const bad = { ...base3(), components: { schemas: { A: { type: 'string', format: 'email', example: 'not-email' } } } }
+    const bad = {
+      ...base3(),
+      components: { schemas: { A: { type: 'string', format: 'email', example: 'not-email' } } },
+    }
     expect(await has(bad, 'oas3-valid-schema-example')).toBe(true)
   })
 
@@ -431,7 +439,14 @@ describe('oas-functions', () => {
       ...base3(),
       paths: {
         '/a': {
-          get: { responses: { '200': { description: 'ok', content: { 'application/json': { schema: { $ref: '#/components/schemas/Used' } } } } } },
+          get: {
+            responses: {
+              '200': {
+                description: 'ok',
+                content: { 'application/json': { schema: { $ref: '#/components/schemas/Used' } } },
+              },
+            },
+          },
         },
       },
       components: { schemas: { Used: { type: 'string' } } },
@@ -446,7 +461,10 @@ describe('oas-functions', () => {
         '/a': {
           get: {
             responses: {
-              '200': { description: 'ok', content: { 'application/json': { schema: { $ref: '#/components/schemas/Pet/properties/id' } } } },
+              '200': {
+                description: 'ok',
+                content: { 'application/json': { schema: { $ref: '#/components/schemas/Pet/properties/id' } } },
+              },
             },
           },
         },
@@ -471,7 +489,13 @@ describe('oas-functions', () => {
   it('oasMutuallyExclusive flags a license with both identifier and url (3.1)', async () => {
     const doc = {
       openapi: '3.1.0',
-      info: { title: 'T', version: '1.0.0', contact: { name: 'x' }, description: 'd', license: { name: 'MIT', identifier: 'MIT', url: 'https://x.test' } },
+      info: {
+        title: 'T',
+        version: '1.0.0',
+        contact: { name: 'x' },
+        description: 'd',
+        license: { name: 'MIT', identifier: 'MIT', url: 'https://x.test' },
+      },
       servers: [{ url: 'https://api.example.test' }],
       paths: {},
     }

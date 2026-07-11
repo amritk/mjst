@@ -130,11 +130,26 @@ describe('createRuleset', () => {
     )
     writeFileSync(
       join(dir, 'a.yaml'),
-      ['extends: ["./b.yaml"]', 'functions: ["fnA"]', 'rules:', '  ruleA:', '    given: "$.a"', '    severity: error', '    then: { function: fnA }'].join('\n'),
+      [
+        'extends: ["./b.yaml"]',
+        'functions: ["fnA"]',
+        'rules:',
+        '  ruleA:',
+        '    given: "$.a"',
+        '    severity: error',
+        '    then: { function: fnA }',
+      ].join('\n'),
     )
     writeFileSync(
       join(dir, 'b.yaml'),
-      ['extends: ["./a.yaml"]', 'rules:', '  ruleB:', '    given: "$.b"', '    severity: error', '    then: { function: truthy }'].join('\n'),
+      [
+        'extends: ["./a.yaml"]',
+        'rules:',
+        '  ruleB:',
+        '    given: "$.b"',
+        '    severity: error',
+        '    then: { function: truthy }',
+      ].join('\n'),
     )
     const ruleset = createRuleset({ extends: ['./a.yaml'] }, dir)
     expect(ruleset.rules.map((r) => r.name).sort()).toEqual(['ruleA', 'ruleB'])

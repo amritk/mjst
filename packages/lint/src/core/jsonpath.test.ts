@@ -100,7 +100,11 @@ describe('jsonpath engine', () => {
 describe('jsonpath queryMany', () => {
   it('evaluates several paths in one pass, index-aligned with the input', () => {
     // A mix of direct and recursive-descent paths returns one match array each.
-    const compiled = [compileQuery('$.info.title'), compileQuery('$..description'), compileQuery('$.components.schemas.Tag')]
+    const compiled = [
+      compileQuery('$.info.title'),
+      compileQuery('$..description'),
+      compileQuery('$.components.schemas.Tag'),
+    ]
     const [titles, descriptions, tag] = queryMany(doc, compiled)
     expect(titles?.map((m) => m.value)).toEqual(['API'])
     expect(descriptions?.map((m) => m.value).sort()).toEqual(['created', 'ok'])

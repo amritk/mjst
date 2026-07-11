@@ -165,7 +165,12 @@ describe('runner: resolved rules with a source set', () => {
     const ruleset = createRuleset(
       {
         rules: {
-          'pet-name': { given: '$.pet', severity: 'error', resolved: true, then: { field: 'name', function: 'truthy' } },
+          'pet-name': {
+            given: '$.pet',
+            severity: 'error',
+            resolved: true,
+            then: { field: 'name', function: 'truthy' },
+          },
         },
       },
       { functions: builtinFunctions },

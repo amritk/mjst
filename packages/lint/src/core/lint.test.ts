@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
+import { builtinFunctions } from '../functions'
 import { createRuleset, type RulesetDefinition } from './index'
 import { lintWithResult } from './lint'
-import { builtinFunctions } from '../functions'
 
 const build = (definition: RulesetDefinition) => createRuleset(definition, { functions: builtinFunctions })
 

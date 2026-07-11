@@ -211,7 +211,10 @@ const schemaExampleDeprecated: Fixer = {
     // Do not overwrite an already-present `examples` array.
     if ('examples' in schema) return undefined
     return [
-      { op: 'setValue', path: [...schemaPath, 'examples'], value: [schema['example']] },
+      // `insertProperty` (not `setValue`) because `examples` is a new key: an
+      // op whose path doesn't already resolve is a no-op, and only
+      // `insertProperty` adds a missing key to the existing schema object.
+      { op: 'insertProperty', path: schemaPath, key: 'examples', value: [schema['example']] },
       { op: 'removeProperty', path: diagnostic.path },
     ]
   },
