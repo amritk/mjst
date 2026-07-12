@@ -45,8 +45,14 @@ import { generateSchemaChecks } from './generate-schema-checks'
  * epoch number); other classes have no safe generic coercion, so we return null
  * and the caller falls back to the default.
  */
-const getInstanceCoercion = (accessor: string, instanceOf: string): string | null => {
-  if (instanceOf === 'Date') return `new Date(${accessor} as string | number | Date)`
+const getInstanceCoercion = (accessor: string, instanceOf: string, defaultValue: string): string | null => {
+  // A bare `new Date(bad)` yields an `Invalid Date` — an object that is
+  // `instanceof Date` yet whose every operation is `NaN`, silently poisoning
+  // downstream code. Construct once, then fall back to the default when the
+  // result is invalid. This sits on the coercion (failure) branch only, so the
+  // hot path never pays for it.
+  if (instanceOf === 'Date')
+    return `((_d) => Number.isNaN(_d.getTime()) ? ${defaultValue} : _d)(new Date(${accessor} as string | number | Date))`
   return null
 }
 
@@ -184,13 +190,15 @@ export const generateValidationExpression = (
   const instanceOf = getMjstInstanceOf(schema)
   if (instanceOf) {
     const valid = `${accessor} instanceof ${instanceOf}`
-    const coercion = getInstanceCoercion(accessor, instanceOf)
-
+    // The coercer's own invalid-value fallback matches the branch it sits on:
+    // the default for a required property, `undefined` for an optional one.
     if (isRequired) {
+      const coercion = getInstanceCoercion(accessor, instanceOf, defaultValue)
       return coercion
         ? `${valid} ? ${accessor} : (${accessor} !== undefined ? ${coercion} : ${defaultValue})`
         : `${valid} ? ${accessor} : ${defaultValue}`
     }
+    const coercion = getInstanceCoercion(accessor, instanceOf, 'undefined')
     return coercion
       ? `${valid} ? ${accessor} : (${accessor} !== undefined ? ${coercion} : undefined)`
       : `${valid} ? ${accessor} : undefined`

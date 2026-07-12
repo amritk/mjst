@@ -125,6 +125,17 @@ const generateParserName = (typeName: string): string => {
 }
 
 /**
+ * Object-literal key form that is safe for the runtime-dangerous name
+ * `__proto__`. In an object literal `{ __proto__: v }` / `{ "__proto__": v }` is
+ * the special prototype-setter syntax — it never creates an own property — so a
+ * schema property literally named `__proto__` would silently vanish (and, for an
+ * object value, reassign the result's prototype). The computed form
+ * `{ ["__proto__"]: v }` creates a normal own property. Every other key keeps
+ * the plain `safeKey` output, so the common path is unchanged.
+ */
+const safeLiteralKey = (key: string): string => (key === '__proto__' ? '["__proto__"]' : safeKey(key))
+
+/**
  * Checks if a property is required based on the schema's required array.
  */
 const isPropertyRequired = (key: string, schema: JSONSchema): boolean => {
@@ -157,7 +168,7 @@ const generateOptionalRefCall = (key: string, ref: string, suffix: string): stri
   // Gate on presence, not truthiness: a `&&` guard skips parsing when the value
   // is `false`/`0`/`""`/`null`, spreading it raw. `!== undefined` still omits an
   // absent optional property but coerces every present one, matching the main path.
-  return `...(${acc} !== undefined && { ${safeKey(key)}: ${parserName}(${acc}) })`
+  return `...(${acc} !== undefined && { ${safeLiteralKey(key)}: ${parserName}(${acc}) })`
 }
 
 /**
@@ -177,7 +188,7 @@ const generateOptionalArrayRefCall = (key: string, ref: string, suffix: string):
   const parserName = generateParserName(refToName(ref, suffix))
   const acc = safeAccessor('input', key)
   // Presence gating (not truthiness) so a falsy-but-present value is still parsed.
-  return `...(${acc} !== undefined && { ${safeKey(key)}: validateArray(${acc}, ${parserName}) })`
+  return `...(${acc} !== undefined && { ${safeLiteralKey(key)}: validateArray(${acc}, ${parserName}) })`
 }
 
 /**
@@ -198,7 +209,7 @@ const generateOptionalRecordRefCall = (key: string, ref: string, suffix: string)
   const acc = safeAccessor('input', key)
   const parserName = generateParserName(refToName(ref, suffix))
   // Presence gating (not truthiness) so a falsy-but-present value is still parsed.
-  return `...(${acc} !== undefined && { ${safeKey(key)}: validateRecord(${acc}, ${parserName}) })`
+  return `...(${acc} !== undefined && { ${safeLiteralKey(key)}: validateRecord(${acc}, ${parserName}) })`
 }
 
 /**
@@ -206,7 +217,7 @@ const generateOptionalRecordRefCall = (key: string, ref: string, suffix: string)
  * The value expression is evaluated once and omitted when undefined.
  */
 const generateOptionalInlineProperty = (key: string, valueExpression: string): string => {
-  return `...((value => value === undefined ? {} : { ${safeKey(key)}: value })(${valueExpression}))`
+  return `...((value => value === undefined ? {} : { ${safeLiteralKey(key)}: value })(${valueExpression}))`
 }
 
 /**
@@ -424,7 +435,7 @@ const generateFallbackObject = (
       if (fallbackValue === 'undefined') {
         return `{} as ${typeName}`
       }
-      requiredProps.push(`        ${safeKey(key)}: ${fallbackValue},`)
+      requiredProps.push(`        ${safeLiteralKey(key)}: ${fallbackValue},`)
     }
   }
 
@@ -1247,9 +1258,11 @@ const generateObjectParser = (
       if (subName) {
         const subParserName = generateParserName(subName)
         if (isRequired) {
-          objectLines.push(`    ${safeKey(key)}: ${subParserName}(${accessor}),`)
+          objectLines.push(`    ${safeLiteralKey(key)}: ${subParserName}(${accessor}),`)
         } else {
-          objectLines.push(`    ...(${accessor} !== undefined && { ${safeKey(key)}: ${subParserName}(${accessor}) }),`)
+          objectLines.push(
+            `    ...(${accessor} !== undefined && { ${safeLiteralKey(key)}: ${subParserName}(${accessor}) }),`,
+          )
         }
         continue
       }
@@ -1262,10 +1275,10 @@ const generateObjectParser = (
       if (itemSubName) {
         const itemParserName = generateParserName(itemSubName)
         if (isRequired) {
-          objectLines.push(`    ${safeKey(key)}: validateArray(${accessor}, ${itemParserName}),`)
+          objectLines.push(`    ${safeLiteralKey(key)}: validateArray(${accessor}, ${itemParserName}),`)
         } else {
           objectLines.push(
-            `    ...(${accessor} !== undefined && { ${safeKey(key)}: validateArray(${accessor}, ${itemParserName}) }),`,
+            `    ...(${accessor} !== undefined && { ${safeLiteralKey(key)}: validateArray(${accessor}, ${itemParserName}) }),`,
           )
         }
         continue
@@ -1276,9 +1289,11 @@ const generateObjectParser = (
         const ref = (propSchema as { $ref: string }).$ref
         const parserName = generateParserName(refToName(ref, suffix))
         if (isRequired) {
-          objectLines.push(`    ${safeKey(key)}: ${parserName}(${accessor}),`)
+          objectLines.push(`    ${safeLiteralKey(key)}: ${parserName}(${accessor}),`)
         } else {
-          objectLines.push(`    ...(${accessor} !== undefined && { ${safeKey(key)}: ${parserName}(${accessor}) }),`)
+          objectLines.push(
+            `    ...(${accessor} !== undefined && { ${safeLiteralKey(key)}: ${parserName}(${accessor}) }),`,
+          )
         }
         continue
       }
@@ -1289,10 +1304,10 @@ const generateObjectParser = (
         const ref = items.$ref
         const parserName = generateParserName(refToName(ref, suffix))
         if (isRequired) {
-          objectLines.push(`    ${safeKey(key)}: validateArray(${accessor}, ${parserName}),`)
+          objectLines.push(`    ${safeLiteralKey(key)}: validateArray(${accessor}, ${parserName}),`)
         } else {
           objectLines.push(
-            `    ...(${accessor} !== undefined && { ${safeKey(key)}: validateArray(${accessor}, ${parserName}) }),`,
+            `    ...(${accessor} !== undefined && { ${safeLiteralKey(key)}: validateArray(${accessor}, ${parserName}) }),`,
           )
         }
         continue
@@ -1304,10 +1319,10 @@ const generateObjectParser = (
         const ref = additionalProps.$ref
         const parserName = generateParserName(refToName(ref, suffix))
         if (isRequired) {
-          objectLines.push(`    ${safeKey(key)}: validateRecord(${accessor}, ${parserName}),`)
+          objectLines.push(`    ${safeLiteralKey(key)}: validateRecord(${accessor}, ${parserName}),`)
         } else {
           objectLines.push(
-            `    ...(${accessor} !== undefined && { ${safeKey(key)}: validateRecord(${accessor}, ${parserName}) }),`,
+            `    ...(${accessor} !== undefined && { ${safeLiteralKey(key)}: validateRecord(${accessor}, ${parserName}) }),`,
           )
         }
         continue
@@ -1316,7 +1331,7 @@ const generateObjectParser = (
       // Handle non-schema-object properties
       if (!isSchemaObject(propSchema)) {
         if (isRequired) {
-          objectLines.push(`    ${safeKey(key)}: undefined,`)
+          objectLines.push(`    ${safeLiteralKey(key)}: undefined,`)
         }
         continue
       }
@@ -1345,9 +1360,9 @@ const generateObjectParser = (
       }
 
       if (isRequired) {
-        objectLines.push(`    ${safeKey(key)}: ${valueExpr},`)
+        objectLines.push(`    ${safeLiteralKey(key)}: ${valueExpr},`)
       } else {
-        objectLines.push(`    ...(${accessor} !== undefined && { ${safeKey(key)}: ${valueExpr} }),`)
+        objectLines.push(`    ...(${accessor} !== undefined && { ${safeLiteralKey(key)}: ${valueExpr} }),`)
       }
     }
 
@@ -1391,7 +1406,7 @@ const generateObjectParser = (
     const fields: string[] = []
     for (const { key, varName, isRequired, propSchema } of propInfo) {
       if (!isSchemaObject(propSchema)) {
-        if (isRequired) fields.push(`    ${safeKey(key)}: undefined,`)
+        if (isRequired) fields.push(`    ${safeLiteralKey(key)}: undefined,`)
         continue
       }
       const accessor = shouldCacheVariable(propSchema, canFastPath, useRefImports)
@@ -1399,8 +1414,8 @@ const generateObjectParser = (
         : safeAccessor('input', key)
       fields.push(
         isRequired
-          ? `    ${safeKey(key)}: ${accessor},`
-          : `    ...(${accessor} !== undefined && { ${safeKey(key)}: ${accessor} }),`,
+          ? `    ${safeLiteralKey(key)}: ${accessor},`
+          : `    ...(${accessor} !== undefined && { ${safeLiteralKey(key)}: ${accessor} }),`,
       )
     }
     lines.push(`  if (${deepGuard}) return {`)
@@ -1519,6 +1534,23 @@ const generateObjectParser = (
  * its imported parser when ref imports are on), and every other key is rejected
  * in strict mode or stripped in coerce mode — matching the interpreter.
  */
+/**
+ * Emits a prototype-safe `result[key] = value` for the dynamic `for..in` copy
+ * loops in the pattern-property parsers. A bare `result[key] = v` is a `[[Set]]`
+ * — and for the key `"__proto__"` (own-enumerable when the input came from
+ * `JSON.parse`) it invokes the inherited `Object.prototype` setter and reassigns
+ * `result`'s prototype to attacker-controlled data, the same vector
+ * `validateRecord` guards against. `"__proto__"` is the only own-enumerable key
+ * whose name resolves to an accessor on `Object.prototype` (`constructor` et al.
+ * are writable data properties, so a `[[Set]]` there just creates an own key),
+ * so a single-keyed guard is sufficient. Each loop already runs a `.test(key)`
+ * regex per iteration, which dominates the cost, so the extra `===` on the
+ * common path is immeasurable. Assumes the target variable is named `result`,
+ * as it is in every parser that calls this.
+ */
+const safeResultAssign = (keyVar: string, valueExpr: string): string =>
+  `if (${keyVar} === "__proto__") { Object.defineProperty(result, ${keyVar}, { value: ${valueExpr}, writable: true, enumerable: true, configurable: true }); } else { (result as Record<string, unknown>)[${keyVar}] = ${valueExpr}; }`
+
 const generateStrictCombinedParser = (
   schema: JSONSchema,
   typeName: string,
@@ -1541,7 +1573,7 @@ const generateStrictCombinedParser = (
   if (refPattern) {
     const parserName = generateParserName(refToName((refPattern[1] as { $ref: string }).$ref, suffix))
     loopLines.push(`    if (/${escapeRegexPattern(refPattern[0])}/.test(key)) {`)
-    loopLines.push(`      (result as Record<string, unknown>)[key] = ${parserName}(input[key]);`)
+    loopLines.push(`      ${safeResultAssign('key', `${parserName}(input[key])`)}`)
     loopLines.push(`      continue;`)
     loopLines.push(`    }`)
   }
@@ -1551,7 +1583,7 @@ const generateStrictCombinedParser = (
     .map(([p]) => `/${escapeRegexPattern(p)}/.test(key)`)
   if (keepConditions.length > 0) {
     loopLines.push(`    if (${keepConditions.join(' || ')}) {`)
-    loopLines.push(`      (result as Record<string, unknown>)[key] = input[key];`)
+    loopLines.push(`      ${safeResultAssign('key', 'input[key]')}`)
     loopLines.push(`      continue;`)
     loopLines.push(`    }`)
   }
@@ -1601,7 +1633,7 @@ const generateCombinedObjectParser = (
     if (entry.isOptional) {
       return `    ${entry.value},`
     }
-    return `    ${safeKey(entry.key)}: ${entry.value},`
+    return `    ${safeLiteralKey(entry.key)}: ${entry.value},`
   })
 
   // Find the first pattern with a $ref for parser delegation
@@ -1758,8 +1790,11 @@ const generateInlineValueParser = (schema: JSONSchema): string | null => {
     case 'string':
       return '(value: unknown) => typeof value === "string" ? value : ""'
     case 'number':
-    case 'integer':
       return '(value: unknown) => typeof value === "number" ? value : 0'
+    case 'integer':
+      // `integer` rejects non-integral numbers; a bare typeof accepts `1.5`,
+      // matching every other integer site in this package (and strict mode).
+      return '(value: unknown) => typeof value === "number" && Number.isInteger(value) ? value : 0'
     case 'boolean':
       return '(value: unknown) => typeof value === "boolean" ? value : false'
     case 'array':
@@ -1796,15 +1831,20 @@ const generatePatternPropertiesParser = (
 
   const [pattern, patternSchema] = patterns[0] as [string, JSONSchema]
   let patternAssignment = '(result as Record<string, unknown>)[key] = value;'
+  // The value-expression form, used by the strictKeys path (which builds from
+  // `{}`) to emit a prototype-safe assignment. `null` when no value is allowed.
+  let patternValueExpr: string | null = 'value'
 
   // Use imported parser when pattern schema points to a $ref.
   if (useRefImports && isSchemaObject(patternSchema) && hasRef(patternSchema)) {
     const ref = patternSchema.$ref
     const parserName = generateParserName(refToName(ref, suffix))
     patternAssignment = `(result as Record<string, unknown>)[key] = ${parserName}(value);`
+    patternValueExpr = `${parserName}(value)`
   } else if (patternSchema === false) {
     // `false` means no values are allowed for matching keys.
     patternAssignment = ''
+    patternValueExpr = null
   }
 
   // Escape the pattern for safe inclusion in generated code
@@ -1820,16 +1860,16 @@ const generatePatternPropertiesParser = (
   const strictKeys = hasAdditionalProperties(schema) && schema.additionalProperties === false
   if (strictKeys) {
     const loopLines: string[] = [`    if (/${escapedPattern}/.test(key)) {`]
-    if (patternAssignment) {
+    if (patternValueExpr) {
       loopLines.push(`      const value = input[key];`)
-      loopLines.push(`      ${patternAssignment}`)
+      loopLines.push(`      ${safeResultAssign('key', patternValueExpr)}`)
     }
     loopLines.push(`      continue;`)
     loopLines.push(`    }`)
     const keepConditions = patterns.slice(1).map(([p]) => `/${escapeRegexPattern(p)}/.test(key)`)
     if (keepConditions.length > 0) {
       loopLines.push(`    if (${keepConditions.join(' || ')}) {`)
-      loopLines.push(`      (result as Record<string, unknown>)[key] = input[key];`)
+      loopLines.push(`      ${safeResultAssign('key', 'input[key]')}`)
       loopLines.push(`      continue;`)
       loopLines.push(`    }`)
     }
