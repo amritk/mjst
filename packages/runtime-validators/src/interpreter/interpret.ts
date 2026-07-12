@@ -87,13 +87,27 @@ const mergeEvaluation = (into: Evaluation, from: Evaluation): void => {
 }
 
 /**
+ * Guards {@link deepEqual} against cyclic input. JSON data is acyclic, but this
+ * validator is a plain function applied to arbitrary in-memory values, so a
+ * self-referential object reaching `const`/`enum`/`uniqueItems` would otherwise
+ * recurse until the stack overflows. A generous depth cap turns that crash into
+ * an ordinary "not equal" without ever tripping on real (finite) data.
+ */
+const MAX_EQUAL_DEPTH = 512
+
+/**
  * Deep structural equality, matching the comparison the generated validator
  * used for `const`, `enum`, and `uniqueItems`: arrays compare element-wise,
- * objects compare own enumerable keys, everything else uses `===`.
+ * objects compare own enumerable keys, everything else uses SameValueZero (so
+ * `NaN` equals `NaN`, matching the native `Set` fast path in {@link allUnique}
+ * and {@link getEnumSet}). Depth-capped so cyclic input fails rather than throws.
  */
-const deepEqual = (a: unknown, b: unknown): boolean => {
-  if (a === b) return true
+const deepEqual = (a: unknown, b: unknown, depth = 0): boolean => {
+  // SameValueZero: `a === b` covers everything except NaN, which we treat as
+  // equal to itself so the structural and Set-based paths agree.
+  if (a === b || (Number.isNaN(a) && Number.isNaN(b))) return true
   if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  if (depth >= MAX_EQUAL_DEPTH) return false
   const aArr = Array.isArray(a)
   const bArr = Array.isArray(b)
   if (aArr !== bArr) return false
@@ -101,7 +115,7 @@ const deepEqual = (a: unknown, b: unknown): boolean => {
     const aa = a as unknown[]
     const bb = b as unknown[]
     if (aa.length !== bb.length) return false
-    for (let i = 0; i < aa.length; i++) if (!deepEqual(aa[i], bb[i])) return false
+    for (let i = 0; i < aa.length; i++) if (!deepEqual(aa[i], bb[i], depth + 1)) return false
     return true
   }
   const ao = a as Record<string, unknown>
@@ -109,7 +123,7 @@ const deepEqual = (a: unknown, b: unknown): boolean => {
   const keys = Object.keys(ao)
   if (keys.length !== Object.keys(bo).length) return false
   for (const k of keys) {
-    if (!Object.hasOwn(bo, k) || !deepEqual(ao[k], bo[k])) return false
+    if (!Object.hasOwn(bo, k) || !deepEqual(ao[k], bo[k], depth + 1)) return false
   }
   return true
 }
@@ -368,6 +382,19 @@ const PROTO_MEMBER_NAMES = new Set<string>([
 ])
 
 /**
+ * Uniform property-presence test, matching how `required`/`properties` decide a
+ * key is present (Ajv's default `!== undefined`, so `{ a: undefined }` counts as
+ * absent). A prototype-member name is checked with `Object.hasOwn` so an inherited
+ * `toString`/`constructor` is never mistaken for a real property. Used by the
+ * presence-gated dependency keywords (`dependentRequired`, `dependentSchemas`,
+ * `dependencies`) so they agree with `required`/`properties` instead of splitting
+ * between `!== undefined` and `hasOwn`. (`required` itself keeps its precomputed
+ * `safeKeys` fast path, which is equivalent to this for its declared keys.)
+ */
+const hasProperty = (obj: Record<string, unknown>, key: string): boolean =>
+  PROTO_MEMBER_NAMES.has(key) ? Object.hasOwn(obj, key) : obj[key] !== undefined
+
+/**
  * Memoized enum membership. An all-primitive enum resolves to a `Set` (SameValueZero,
  * so type-sensitive) for O(1) lookup; a mixed/structural enum returns `null`, and
  * the caller falls back to `deepEqual`. Keyed on the schema node so the scan runs
@@ -482,9 +509,9 @@ const interpretObject = (
   if (dependentRequired) {
     for (const [trigger, deps] of Object.entries(dependentRequired)) {
       if (!Array.isArray(deps)) continue
-      if (!Object.hasOwn(obj, trigger)) continue
+      if (!hasProperty(obj, trigger)) continue
       for (const dep of deps as string[]) {
-        if (!Object.hasOwn(obj, dep)) {
+        if (!hasProperty(obj, dep)) {
           fail(ctx, `must have property '${dep}' when '${trigger}' is present`, path)
           if (ctx.failed) return
         }
@@ -497,7 +524,7 @@ const interpretObject = (
   const dependentSchemas = isPlainObject(s['dependentSchemas']) ? s['dependentSchemas'] : undefined
   if (dependentSchemas) {
     for (const [trigger, subSchema] of Object.entries(dependentSchemas)) {
-      if (!Object.hasOwn(obj, trigger)) continue
+      if (!hasProperty(obj, trigger)) continue
       interpretInPlace(ctx, subSchema, obj, path, evalScope)
       if (ctx.failed) return
     }
@@ -509,10 +536,10 @@ const interpretObject = (
   const dependencies = isPlainObject(s['dependencies']) ? s['dependencies'] : undefined
   if (dependencies) {
     for (const [trigger, dep] of Object.entries(dependencies)) {
-      if (!Object.hasOwn(obj, trigger)) continue
+      if (!hasProperty(obj, trigger)) continue
       if (Array.isArray(dep)) {
         for (const key of dep as string[]) {
-          if (!Object.hasOwn(obj, key)) {
+          if (!hasProperty(obj, key)) {
             fail(ctx, `must have property '${key}' when '${trigger}' is present`, path)
             if (ctx.failed) return
           }
@@ -735,13 +762,19 @@ const interpretString = (ctx: InterpreterContext, s: Record<string, unknown>, va
 const interpretNumber = (ctx: InterpreterContext, s: Record<string, unknown>, value: unknown, path: string): void => {
   if (typeof value !== 'number') return
 
+  // Bounds are written as *pass* conditions and negated so `NaN` — which compares
+  // `false` against every operator — fails them, matching Ajv (its `strict:false`
+  // oracle rejects `NaN` against a bound). A bare `type: 'number'` with no bound
+  // still accepts non-finite numbers, as Ajv does; only a bound (or `multipleOf`)
+  // rejects them. `±Infinity` follows the ordinary comparison (e.g. `Infinity`
+  // passes `minimum: 0` but fails `maximum: 10`), again matching Ajv.
   const minimum = s['minimum']
   if (typeof minimum === 'number') {
     // Draft-04 used a boolean `exclusiveMinimum: true` alongside `minimum` to
     // make the bound strict; draft-06+ replaced it with a standalone numeric
     // keyword (handled below). Honour both forms.
     const strict = s['exclusiveMinimum'] === true
-    if (strict ? value <= minimum : value < minimum) {
+    if (!(strict ? value > minimum : value >= minimum)) {
       fail(ctx, strict ? `must be > ${minimum}` : `must be >= ${minimum}`, path)
       if (ctx.failed) return
     }
@@ -749,33 +782,42 @@ const interpretNumber = (ctx: InterpreterContext, s: Record<string, unknown>, va
   const maximum = s['maximum']
   if (typeof maximum === 'number') {
     const strict = s['exclusiveMaximum'] === true
-    if (strict ? value >= maximum : value > maximum) {
+    if (!(strict ? value < maximum : value <= maximum)) {
       fail(ctx, strict ? `must be < ${maximum}` : `must be <= ${maximum}`, path)
       if (ctx.failed) return
     }
   }
   const exclusiveMinimum = s['exclusiveMinimum']
-  if (typeof exclusiveMinimum === 'number' && value <= exclusiveMinimum) {
+  if (typeof exclusiveMinimum === 'number' && !(value > exclusiveMinimum)) {
     fail(ctx, `must be > ${exclusiveMinimum}`, path)
     if (ctx.failed) return
   }
   const exclusiveMaximum = s['exclusiveMaximum']
-  if (typeof exclusiveMaximum === 'number' && value >= exclusiveMaximum) {
+  if (typeof exclusiveMaximum === 'number' && !(value < exclusiveMaximum)) {
     fail(ctx, `must be < ${exclusiveMaximum}`, path)
     if (ctx.failed) return
   }
   const multipleOf = s['multipleOf']
   if (typeof multipleOf === 'number' && multipleOf > 0) {
-    // Floating-point modulo is unreliable (0.3 % 0.1 !== 0), so divide and
-    // measure the distance to the nearest integer instead. The tolerance scales
-    // with the quotient's magnitude: a fixed 1e-8 falsely rejects large values
-    // like `1234567.89` against `multipleOf: 0.01`, whose representation error in
-    // `q` (~q·2⁻⁵²) already exceeds 1e-8.
-    const q = value / multipleOf
-    const tolerance = 1e-8 * Math.max(1, Math.abs(q))
-    if (Math.abs(q - Math.round(q)) > tolerance) {
-      fail(ctx, `must be a multiple of ${multipleOf}`, path)
+    let ok: boolean
+    if (Number.isInteger(multipleOf)) {
+      // For an integer divisor `%` on doubles is exact, so this accepts huge true
+      // multiples (`1e21 % 1 === 0`) that a quotient check would misjudge, and
+      // rejects `NaN`/`±Infinity` (`Number.isInteger` is `false` for them), which
+      // is Ajv's verdict for `multipleOf` on any non-finite value.
+      ok = Number.isInteger(value) && value % multipleOf === 0
+    } else {
+      // Floating-point modulo is unreliable (`0.3 % 0.1 !== 0`), so divide and
+      // measure the distance to the nearest integer. The tolerance tracks the
+      // actual representation error in `q` (~`|q|·2⁻⁵²`); the previous `1e-8·|q|`
+      // was ~10⁷× larger and accepted clear non-multiples like `1000000.005`
+      // against `multipleOf: 0.01`. A non-finite value yields a `NaN` distance,
+      // so the `<=` is `false` and it fails.
+      const q = value / multipleOf
+      const tolerance = 2 * Number.EPSILON * Math.max(1, Math.abs(q))
+      ok = Math.abs(q - Math.round(q)) <= tolerance
     }
+    if (!ok) fail(ctx, `must be a multiple of ${multipleOf}`, path)
   }
 }
 
