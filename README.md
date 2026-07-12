@@ -2,7 +2,7 @@
 
 # mjst — More JSON Schema Tools
 
-**Generate fast, type-safe TypeScript parsers, validators, and type definitions from JSON Schemas.**
+**Fast, type-safe TypeScript parsers, validators, types, docs, and test data — generated from JSON Schema. Plus a JSON/YAML linter to keep the schemas themselves in shape.**
 
 ![status](https://img.shields.io/badge/status-pre--alpha-ef4444?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)
@@ -20,16 +20,25 @@
 
 ## What is mjst?
 
-mjst is a monorepo of code-generation tools that turn a JSON Schema (Draft 2020-12) into TypeScript:
+mjst is a monorepo of JSON Schema (Draft 2020-12) tooling for TypeScript. At its core are code generators that turn a schema into:
 
 | Output | Description |
 |:---|:---|
 | **Parsers** | Runtime functions that validate and coerce unknown input into typed values |
-| **Validators** | Lightweight predicate-style validation functions |
+| **Validators** | Error-collecting `validateX` functions plus flat `isX` boolean type guards |
 | **Type definitions** | `.d.ts` types matching the schema, with documentation comments |
+| **Test data** | fast-check arbitraries for property testing, plus concrete example values |
 | **Markdown** | Reference docs derived from the schema |
 
-The CLI (`mjst`) is the primary entry point; the underlying generators are also published as standalone packages. Beyond generation, `mjst lint` lints JSON/YAML against JSON Schema and custom style rules — see [`@amritk/lint`](./packages/lint).
+Around the generators sits a wider toolbox:
+
+- **Linting** — `mjst lint` checks JSON/YAML documents against JSON Schema and custom style rules, with exact `line:column` findings
+- **Adapters** — consume schemas authored in TypeBox, Zod, Valibot, or Effect as input
+- **`$ref` resolution** — resolve and inline JSON Schema / OpenAPI `$ref`s, with a default-deny SSRF guard
+- **Runtime validation** — fast validation for schemas you don't know ahead of time
+- **YAML parsing** — a tiny, dependency-free YAML parser that keeps exact source positions
+
+The CLI (`mjst`) is the primary entry point; everything above is also published as a standalone package — see [Packages](#packages) below.
 
 ---
 
@@ -44,7 +53,7 @@ The CLI (`mjst`) is the primary entry point; the underlying generators are also 
 | [`@amritk/runtime-validators`](./packages/runtime-validators) | Runtime JSON Schema validation for schemas not known ahead of time |
 | [`@amritk/generate-examples`](./packages/generate-examples) | Programmatic API for fast-check arbitraries + example data generation |
 | [`@amritk/generate-markdown`](./packages/generate-markdown) | Programmatic API for markdown documentation generation |
-| [`@amritk/adapters`](./packages/adapters) | Convert schemas from external libraries (TypeBox, Zod, …) into JSON Schema |
+| [`@amritk/adapters`](./packages/adapters) | Convert schemas from external libraries (TypeBox, Zod, Valibot, Effect) into JSON Schema |
 | [`@amritk/resolve-refs`](./packages/resolve-refs) | Resolve and inline JSON Schema / OpenAPI `$ref`s, with a default-deny SSRF guard |
 | [`@amritk/yaml`](./packages/yaml) | Tiny, dependency-free YAML parser with exact source positions for diagnostics |
 | [`@amritk/helpers`](./packages/helpers) | Shared runtime helpers used by generated code |
