@@ -8,6 +8,11 @@ describe('is-private-host', () => {
     expect(isPrivateHost('api.localhost')).toBe(true)
   })
 
+  it('treats the FQDN-root (trailing dot) form of localhost as private', () => {
+    expect(isPrivateHost('localhost.')).toBe(true)
+    expect(isPrivateHost('api.localhost.')).toBe(true)
+  })
+
   it('flags loopback and RFC 1918 / CGNAT IPv4 ranges', () => {
     expect(isPrivateHost('127.0.0.1')).toBe(true)
     expect(isPrivateHost('10.1.2.3')).toBe(true)

@@ -58,7 +58,13 @@ const ipv4Octets = (host: string): [number, number] | null => {
 }
 
 export const isPrivateHost = (hostname: string): boolean => {
-  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase()
+  // Strip IPv6 brackets and any trailing dot(s): `localhost.` is the FQDN-root
+  // form of `localhost` and resolves to the same loopback address, so it must
+  // not slip past the by-name checks below.
+  const host = hostname
+    .replace(/^\[|\]$/g, '')
+    .replace(/\.+$/, '')
+    .toLowerCase()
   if (host === 'localhost' || host.endsWith('.localhost')) return true
 
   if (host.includes(':')) {

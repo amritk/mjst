@@ -290,6 +290,28 @@ describe('resolve-refs-from-file', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2)
   })
 
+  it('re-checks the SSRF policy on a session-cache hit (cache must not leak across options)', async () => {
+    const url = 'http://10.0.0.5/s.json'
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ Foo: { type: 'string' } }), { status: 200 }))
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ x: { $ref: `${url}#/Foo` } }))
+
+    // A permissive call fetches and caches the private-host document.
+    const permissive = await resolveRefsFromFile(join(dir, 'api.json'), { allowPrivateHosts: true })
+    expect(permissive.errors).toEqual([])
+    expect(permissive.resolved).toMatchObject({ x: { type: 'string' } })
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+
+    // A later strict call for the same URL must NOT be served from the session
+    // cache — the default private-host guard has to refuse it.
+    const strict = await resolveRefsFromFile(join(dir, 'api.json'))
+    expect((strict.resolved as { x: unknown }).x).toBeUndefined()
+    expect(strict.errors[0]?.message).toMatch(/Refusing to resolve remote \$ref/)
+    // No additional fetch was made for the refused call.
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
   it('coalesces two concurrent resolves of the same remote URL into one fetch', async () => {
     let resolveFetch: ((r: Response) => void) | undefined
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
