@@ -981,6 +981,19 @@ const generateDependentRequiredChecks = (schema: JSONSchema, ctx: NestingContext
  * input, never weakening a verdict. `objAcc` is the expression yielding the
  * parent object (already narrowed to a record); `key` indexes into it.
  */
+/**
+ * Whether an object schema carries a combinator keyword (`allOf`, `anyOf`,
+ * `oneOf`, `not`, `if`) that the error-collecting slow path enforces but neither
+ * flat guard can mirror. When present, both guards must bail so their early
+ * `return true` never accepts a document the combinator would reject.
+ */
+const hasObjectLevelCombinator = (schema: JSONSchema): boolean => {
+  if (!isSchemaObject(schema)) return false
+  return (
+    hasAllOf(schema) || hasAnyOf(schema) || hasOneOf(schema) || 'not' in schema || 'if' in schema
+  )
+}
+
 const guardPropConditions = (key: string, propSchema: JSONSchema, objAcc: string): string[] | null => {
   if (!isSchemaObject(propSchema)) return null
 
@@ -1090,6 +1103,10 @@ const guardObjectConditions = (schema: JSONSchema, raw: string, objAcc: string):
   if (!isObjectSchema(schema)) return null
   if (hasDependentRequired(schema) || hasPropertyNames(schema)) return null
   if (isSchemaObject(schema) && 'patternProperties' in schema) return null
+  // Object-level combinators are enforced by the slow path but cannot be mirrored
+  // by this flat guard, so bail — otherwise the guard's early `return true` would
+  // accept documents the combinators reject.
+  if (hasObjectLevelCombinator(schema)) return null
 
   let strict = false
   if (hasAdditionalProperties(schema)) {
@@ -1417,6 +1434,9 @@ const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string): st
   // These need per-key loops or cross-references the flat form can't express.
   if (hasDependentRequired(schema) || hasPropertyNames(schema)) return null
   if (isSchemaObject(schema) && 'patternProperties' in schema) return null
+  // Object-level combinators change the verdict but can't be expressed flat, so
+  // defer to the validator rather than emit a guard that ignores them.
+  if (hasObjectLevelCombinator(schema)) return null
 
   let strict = false
   if (hasAdditionalProperties(schema)) {
