@@ -172,15 +172,20 @@ const loadDoc = async (
   if (docCache.has(location)) return true
 
   if (isRemote(location)) {
-    if (remoteCache.has(location)) {
-      docCache.set(location, remoteCache.get(location))
-      return true
-    }
+    // Evaluate the policy before serving anything for a remote location —
+    // including a cache hit. `remoteCache` is process-global and outlives a
+    // single resolve call, so a URL fetched earlier under permissive options
+    // must not be handed to a later call whose options (a disabled `remote`,
+    // a stricter `allowedHosts`, no `allowPrivateHosts`) would refuse it.
     const reason = denialReason(location, options)
     if (reason !== null) {
       errors.push({ message: `Refusing to resolve remote $ref (${reason}): ${location}`, path: [] })
       docCache.set(location, {})
       return false
+    }
+    if (remoteCache.has(location)) {
+      docCache.set(location, remoteCache.get(location))
+      return true
     }
     // Coalesce concurrent loads of the same URL onto one in-flight request; the
     // owner (first caller) clears the slot once it settles.
