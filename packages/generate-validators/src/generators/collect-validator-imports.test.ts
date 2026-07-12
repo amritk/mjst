@@ -31,6 +31,18 @@ describe('collect-validator-imports', () => {
     ])
   })
 
+  it('collects a $ref inside dependentSchemas', () => {
+    // The validator emits `dependentSchemas` subschema checks, so a $ref reached
+    // only through one must still be imported.
+    const schema = {
+      type: 'object' as const,
+      properties: { a: { type: 'string' as const } },
+      dependentSchemas: { a: { $ref: '#/$defs/extra' } },
+    }
+
+    expect(collectValidatorImports(schema)).toEqual(["import { type Extra, validateExtra } from './extra.js'"])
+  })
+
   it('deduplicates a ref that appears both directly and inside a nested object', () => {
     const schema = {
       properties: {

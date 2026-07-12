@@ -506,28 +506,32 @@ const generateConstraintChecks = (
     }
   }
 
-  // Array with typed items
+  // Array items. A `$ref` item delegates to the referenced validator; any other
+  // item subschema is validated in full via `generateValueChecks` — the same
+  // recursion every other value gets — so nested object properties, string/number
+  // constraints, enums, tuples, etc. on items are enforced, matching the runtime
+  // interpreter (which recurses into every item). The loop variables carry the
+  // nesting depth so item loops can nest (array-of-arrays) without colliding.
   if (hasItems(propSchema)) {
     const itemSchema = propSchema.items
+    const iv = `_i${ctx.depth}`
+    const itemPath = `\`${path.slice(1, -1)}/\${${iv}}\``
     if (hasRef(itemSchema)) {
       const vName = validatorName(refToName(itemSchema.$ref, suffix))
       lines.push(`  if (Array.isArray(${raw})) {`)
-      lines.push(`    for (let _i = 0; _i < ${raw}.length; _i++) {`)
-      lines.push(`      const _ir = ${vName}(${raw}[_i], \`${path.slice(1, -1)}/\${_i}\`)`)
+      lines.push(`    for (let ${iv} = 0; ${iv} < ${raw}.length; ${iv}++) {`)
+      lines.push(`      const _ir = ${vName}(${raw}[${iv}], ${itemPath})`)
       lines.push(`      if (_ir !== true) errors.push(..._ir.errors)`)
       lines.push(`    }`)
       lines.push(`  }`)
-    } else if (hasType(itemSchema)) {
-      const itemType = itemSchema.type as string
-      const itemWrong = wrongTypeCondition('_item', itemType)
-      const itemLabel = typeofString(itemType)
-      if (itemWrong) {
+    } else if (isSchemaObject(itemSchema)) {
+      const itemVar = `_item${ctx.depth}`
+      const itemChecks = generateValueChecks('', itemVar, itemPath, itemSchema, suffix, ctx, true)
+      if (itemChecks.length > 0) {
         lines.push(`  if (Array.isArray(${raw})) {`)
-        lines.push(`    for (let _i = 0; _i < ${raw}.length; _i++) {`)
-        lines.push(`      const _item = ${raw}[_i]`)
-        lines.push(
-          `      if (${itemWrong}) errors.push({ message: 'items must be ${itemLabel}', path: \`${path.slice(1, -1)}/\${_i}\` })`,
-        )
+        lines.push(`    for (let ${iv} = 0; ${iv} < ${raw}.length; ${iv}++) {`)
+        lines.push(`      const ${itemVar} = ${raw}[${iv}]`)
+        lines.push(...itemChecks.map((l) => `    ${l}`))
         lines.push(`    }`)
         lines.push(`  }`)
       }
@@ -618,35 +622,52 @@ const generateConstraintChecks = (
 
 /**
  * Validates a value located at a *dynamic* key (a `patternProperties` or
- * `additionalProperties` schema value) against `propSchema`. Mirrors the
- * optional-property branch of {@link generatePropertyChecks} — the value is
- * always present, so each check is the same `!== undefined`-guarded form — but
- * `raw` and `path` are caller-supplied expressions (e.g. `obj[_k]` and
- * `` `${_path}/${_k}` ``) so the checks read a runtime key.
+ * `additionalProperties` value), an array item, a combinator branch, or a
+ * `dependentSchemas` subschema against `propSchema`. `raw` and `path` are
+ * caller-supplied expressions (e.g. `obj[_k]` and `` `${_path}/${_k}` ``) so the
+ * checks read a runtime location. By default the leaf checks are
+ * `!== undefined`-guarded (an absent optional value is valid); pass
+ * `required = true` for values that must be present (array items — a sparse hole
+ * reads as `undefined` and must fail), which drops that guard. `_key` is unused
+ * (the location is fully encoded by `path`) but kept for positional-call parity
+ * with the combinator generators.
  */
 const generateValueChecks = (
-  key: string,
+  _key: string,
   raw: string,
   path: string,
   propSchema: JSONSchema,
   suffix: string,
   ctx: NestingContext,
+  required = false,
 ): string[] => {
   if (!isSchemaObject(propSchema)) return []
   const lines: string[] = []
 
+  // Optional values (property values, `patternProperties`/`additionalProperties`
+  // values) skip validation when absent, so their leaf checks are `!== undefined`-
+  // guarded. Array items are unconditionally present — a sparse hole reads as
+  // `undefined` and must FAIL its type/const/enum check (matching the interpreter
+  // and the `Array.from(...).every(...)` guard) — so `required` drops the guard.
+  const presence = required ? '' : `${raw} !== undefined && `
+
   if (hasRef(propSchema)) {
     const vName = validatorName(refToName(propSchema.$ref, suffix))
-    lines.push(`  if (${raw} !== undefined) {`)
-    lines.push(`    const _r = ${vName}(${raw}, ${path})`)
-    lines.push(`    if (_r !== true) errors.push(..._r.errors)`)
-    lines.push(`  }`)
+    if (required) {
+      lines.push(`  const _r = ${vName}(${raw}, ${path})`)
+      lines.push(`  if (_r !== true) errors.push(..._r.errors)`)
+    } else {
+      lines.push(`  if (${raw} !== undefined) {`)
+      lines.push(`    const _r = ${vName}(${raw}, ${path})`)
+      lines.push(`    if (_r !== true) errors.push(..._r.errors)`)
+      lines.push(`  }`)
+    }
     return lines
   }
 
   const instanceOf = getMjstInstanceOf(propSchema)
   if (instanceOf) {
-    lines.push(`  if (${raw} !== undefined && !(${raw} instanceof ${instanceOf})) {`)
+    lines.push(`  if (${presence}!(${raw} instanceof ${instanceOf})) {`)
     lines.push(`    errors.push({ message: 'must be ${instanceOf}', path: ${path} })`)
     lines.push(`  }`)
     return lines
@@ -654,7 +675,7 @@ const generateValueChecks = (
 
   const primitive = getMjstPrimitive(propSchema)
   if (primitive) {
-    lines.push(`  if (${raw} !== undefined && typeof ${raw} !== "${primitive}") {`)
+    lines.push(`  if (${presence}typeof ${raw} !== "${primitive}") {`)
     lines.push(`    errors.push({ message: 'must be ${primitive}', path: ${path} })`)
     lines.push(`  }`)
     return lines
@@ -663,7 +684,7 @@ const generateValueChecks = (
   if (hasConst(propSchema)) {
     const mismatch = constMismatchCondition(raw, propSchema.const)
     const msg = JSON.stringify(`must be ${JSON.stringify(propSchema.const)}`)
-    lines.push(`  if (${raw} !== undefined && ${mismatch}) {`)
+    lines.push(`  if (${presence}${mismatch}) {`)
     lines.push(`    errors.push({ message: ${msg}, path: ${path} })`)
     lines.push(`  }`)
     return lines
@@ -672,7 +693,7 @@ const generateValueChecks = (
   if (hasEnum(propSchema)) {
     const allowed = JSON.stringify(propSchema.enum)
     const label = (propSchema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
-    lines.push(`  if (${raw} !== undefined && !(${allowed} as unknown[]).includes(${raw})) {`)
+    lines.push(`  if (${presence}!(${allowed} as unknown[]).includes(${raw})) {`)
     lines.push(`    errors.push({ message: ${JSON.stringify(`must be one of: ${label}`)}, path: ${path} })`)
     lines.push(`  }`)
     return lines
@@ -683,7 +704,7 @@ const generateValueChecks = (
     const wrongType = wrongTypeCondition(raw, t)
     const typLabel = typeofString(t)
     if (wrongType) {
-      lines.push(`  if (${raw} !== undefined && (${wrongType})) {`)
+      lines.push(`  if (${presence}(${wrongType})) {`)
       lines.push(`    errors.push({ message: 'must be ${typLabel}', path: ${path} })`)
       lines.push(`  }`)
     }
@@ -693,8 +714,20 @@ const generateValueChecks = (
   // gate on keyword presence + a runtime-type guard, so a type-less subschema
   // (a combinator branch like `{ required: [...] }` or `{ minItems: 2 }`) is
   // still validated rather than collapsing to "matches everything".
-  lines.push(...generateConstraintChecks(key, raw, path, propSchema, suffix, ctx))
-  lines.push(...generateCombinatorChecks(key, raw, path, propSchema, suffix, ctx))
+  //
+  // This value lives at `path` (a template literal), so anchor the recursion's
+  // context there and one nesting level deeper: any nested object/array it emits
+  // then builds paths relative to THIS value and mints collision-free variable
+  // names, independent of the caller's context. `key` is intentionally dropped
+  // (set to `''`) because `path` already locates the value.
+  const valueCtx: NestingContext = {
+    objVar: ctx.objVar,
+    pathPrefix: path.slice(1, -1),
+    depth: ctx.depth + 1,
+    hoisted: ctx.hoisted,
+  }
+  lines.push(...generateConstraintChecks('', raw, path, propSchema, suffix, valueCtx))
+  lines.push(...generateCombinatorChecks('', raw, path, propSchema, suffix, valueCtx))
 
   return lines
 }
@@ -866,7 +899,10 @@ const generateInlineObjectChecks = (
 
   const child: NestingContext = {
     objVar: `_obj${ctx.depth + 1}`,
-    pathPrefix: `${ctx.pathPrefix}/${key}`,
+    // When `key` is empty the value is located AT `ctx.pathPrefix` already (e.g. an
+    // inline object reached through a combinator branch or a dynamic-key value), so
+    // appending `/${key}` would emit a spurious `//` or trailing `/` in error paths.
+    pathPrefix: key === '' ? ctx.pathPrefix : `${ctx.pathPrefix}/${key}`,
     depth: ctx.depth + 1,
     hoisted: ctx.hoisted,
   }
@@ -886,6 +922,7 @@ const generateInlineObjectChecks = (
   innerLines.push(...generatePatternAndAdditionalChecks(propSchema, suffix, child))
   innerLines.push(...generateStrictKeyChecks(propSchema, child))
   innerLines.push(...generateDependentRequiredChecks(propSchema, child))
+  innerLines.push(...generateDependentSchemasChecks(propSchema, suffix, child))
   if (hasPropertyNames(propSchema) && isSchemaObject(propSchema.propertyNames)) {
     innerLines.push(...generatePropertyNameChecks(propSchema.propertyNames, suffix, child))
   }
@@ -973,6 +1010,44 @@ const generateDependentRequiredChecks = (schema: JSONSchema, ctx: NestingContext
 }
 
 /**
+ * Emits `dependentSchemas` checks (2020-12): when a trigger property is present,
+ * the *whole object* must also match the associated subschema. Mirrors the
+ * interpreter, which applies the subschema in place against the object. A `true`
+ * subschema permits everything (no-op); a `false` subschema makes the trigger's
+ * presence always invalid.
+ */
+const generateDependentSchemasChecks = (schema: JSONSchema, suffix: string, ctx: NestingContext): string[] => {
+  if (!isSchemaObject(schema)) return []
+  const dep = (schema as Record<string, unknown>)['dependentSchemas']
+  if (typeof dep !== 'object' || dep === null || Array.isArray(dep)) return []
+
+  const obj = ctx.objVar
+  const at = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
+  const objPath = `\`${ctx.pathPrefix}\``
+  const lines: string[] = []
+
+  for (const [trigger, sub] of Object.entries(dep)) {
+    if (sub === true) continue
+    if (sub === false) {
+      const msg = JSON.stringify(`must NOT have property '${trigger}'`)
+      lines.push(`  if (${JSON.stringify(trigger)} in ${obj}) {`)
+      lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
+      lines.push(`  }`)
+      continue
+    }
+    if (!isSchemaObject(sub as JSONSchema)) continue
+    // The subschema applies to the object itself, so validate the current object
+    // variable against it and gate the whole block on the trigger's presence.
+    const checks = generateValueChecks('', obj, objPath, sub as JSONSchema, suffix, ctx)
+    if (checks.length === 0) continue
+    lines.push(`  if (${JSON.stringify(trigger)} in ${obj}) {`)
+    lines.push(...checks.map((line) => `  ${line}`))
+    lines.push(`  }`)
+  }
+  return lines
+}
+
+/**
  * Builds the `&&` conditions that prove a single property is valid, or `null`
  * when the property carries any keyword the slow path enforces beyond a bare
  * type check (pattern, min/max, enum, const, `$ref`, items, x-mjst, …). A `null`
@@ -989,9 +1064,7 @@ const generateDependentRequiredChecks = (schema: JSONSchema, ctx: NestingContext
  */
 const hasObjectLevelCombinator = (schema: JSONSchema): boolean => {
   if (!isSchemaObject(schema)) return false
-  return (
-    hasAllOf(schema) || hasAnyOf(schema) || hasOneOf(schema) || 'not' in schema || 'if' in schema
-  )
+  return hasAllOf(schema) || hasAnyOf(schema) || hasOneOf(schema) || 'not' in schema || 'if' in schema
 }
 
 const guardPropConditions = (key: string, propSchema: JSONSchema, objAcc: string): string[] | null => {
@@ -1101,7 +1174,7 @@ const arrayRejectedByRequiredProp = (
  */
 const guardObjectConditions = (schema: JSONSchema, raw: string, objAcc: string): string[] | null => {
   if (!isObjectSchema(schema)) return null
-  if (hasDependentRequired(schema) || hasPropertyNames(schema)) return null
+  if (hasDependentRequired(schema) || hasPropertyNames(schema) || 'dependentSchemas' in schema) return null
   if (isSchemaObject(schema) && 'patternProperties' in schema) return null
   // Object-level combinators are enforced by the slow path but cannot be mirrored
   // by this flat guard, so bail — otherwise the guard's early `return true` would
@@ -1182,6 +1255,10 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: s
 
   // dependentRequired — when a trigger property is present, its dependencies must be too.
   propertyLines.push(...generateDependentRequiredChecks(schema, ctx))
+
+  // dependentSchemas — when a trigger property is present, the whole object must
+  // also match the associated subschema.
+  propertyLines.push(...generateDependentSchemasChecks(schema, suffix, ctx))
 
   // propertyNames — every key (always a string) must satisfy the subschema. This
   // mirrors the interpreter, which runs the full subschema against each key.
@@ -1266,33 +1343,6 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: s
  * e.g. "InfoObject" → "isInfoObject"
  */
 const guardName = (typeName: string): string => `is${typeName}`
-
-/**
- * Positive type check for a value — the negation of {@link wrongTypeCondition}.
- * Used by the boolean type-guard, which proves validity with `&&` conditions
- * rather than collecting errors. Object is a shape-only check (matching the
- * validator, which never recurses into array items or untyped object values).
- */
-const rightTypeCondition = (accessor: string, type: string): string | null => {
-  switch (type) {
-    case 'string':
-      return `typeof ${accessor} === 'string'`
-    case 'number':
-      return `typeof ${accessor} === 'number'`
-    case 'integer':
-      return `typeof ${accessor} === 'number' && Number.isInteger(${accessor})`
-    case 'boolean':
-      return `typeof ${accessor} === 'boolean'`
-    case 'array':
-      return `Array.isArray(${accessor})`
-    case 'null':
-      return `${accessor} === null`
-    case 'object':
-      return `typeof ${accessor} === 'object' && ${accessor} !== null && !Array.isArray(${accessor})`
-    default:
-      return null
-  }
-}
 
 /**
  * Builds the membership test for an `enum`, matching the slow path's
@@ -1417,10 +1467,14 @@ const booleanArrayExpr = (schema: JSONSchema, acc: string): string | null => {
   const items = schema.items
   if (!isSchemaObject(items)) return base
   if (hasRef(items)) return null
-  if (!hasType(items)) return base
-  const itemCheck = rightTypeCondition('_it', items.type as string)
-  if (itemCheck === null) return base
-  return `${base} && Array.from(${acc} as unknown[]).every((_it) => ${itemCheck})`
+  // Mirror the validator's per-item validation exactly. `booleanLeafExpr` yields a
+  // flat boolean with the same verdict as the item's slow-path checks (including
+  // nested object properties and scalar constraints), or `null` for item schemas
+  // it can't express — in which case the whole array guard bails and the validator
+  // decides, so the guard never accepts what the slow path would reject.
+  const itemExpr = booleanLeafExpr(items, '_it')
+  if (itemExpr === null) return null
+  return `${base} && Array.from(${acc} as unknown[]).every((_it) => (${itemExpr}))`
 }
 
 /**
@@ -1432,7 +1486,7 @@ const booleanArrayExpr = (schema: JSONSchema, acc: string): string | null => {
 const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string): string[] | null => {
   if (!isObjectSchema(schema)) return null
   // These need per-key loops or cross-references the flat form can't express.
-  if (hasDependentRequired(schema) || hasPropertyNames(schema)) return null
+  if (hasDependentRequired(schema) || hasPropertyNames(schema) || 'dependentSchemas' in schema) return null
   if (isSchemaObject(schema) && 'patternProperties' in schema) return null
   // Object-level combinators change the verdict but can't be expressed flat, so
   // defer to the validator rather than emit a guard that ignores them.

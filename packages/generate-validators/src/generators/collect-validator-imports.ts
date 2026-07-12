@@ -81,7 +81,7 @@ const collectDirectRefs = (value: unknown, refs: string[] = []): string[] => {
   // generated files, not inlined by this validator. `collectDirectRefs`
   // self-guards on non-objects, so a keyword that is a boolean or missing is a
   // harmless no-op.
-  const subSchemaMaps = ['properties', 'patternProperties']
+  const subSchemaMaps = ['properties', 'patternProperties', 'dependentSchemas']
   for (const mapKey of subSchemaMaps) {
     const map = schema[mapKey]
     if (typeof map === 'object' && map !== null && !Array.isArray(map)) {

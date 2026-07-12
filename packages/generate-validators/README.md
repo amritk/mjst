@@ -92,6 +92,22 @@ Returns: `Promise<GeneratedFile[]>` where `GeneratedFile = { filename: string; c
 
 ---
 
+## Semantics
+
+Generated validators produce the same verdict as the `@amritk/runtime-validators`
+interpreter, which is the reference this package tracks.
+
+One behaviour is worth calling out: a `NaN` value satisfies a **constrained
+number** schema. Because the numeric bound checks are the exact negation of the
+error condition (e.g. `!(x < minimum)`), and every comparison against `NaN` is
+`false`, a `NaN` passes `minimum`/`maximum`/`exclusive*`/`multipleOf`. This
+matches the interpreter and keeps the fast-path guard and `validateX` in lockstep,
+but differs from validators (e.g. Ajv) that reject `NaN` outright for
+`type: "number"`. `NaN` never appears in parsed JSON; guard against it upstream if
+your values can be non-JSON.
+
+---
+
 ## Benchmarks
 
 Generated validators are straight-line, monomorphic TypeScript with no generic
