@@ -806,6 +806,9 @@ describe('generate-validation-expression', () => {
 
     expect(result).toContain('input?.createdAt instanceof Date')
     expect(result).toContain('new Date(input?.createdAt as string | number | Date)')
+    // An `Invalid Date` falls back to the required default rather than passing
+    // through as an `instanceof Date` object whose every operation is NaN.
+    expect(result).toContain('Number.isNaN(_d.getTime()) ? {} : _d')
   })
 
   it('checks instanceof and coerces an optional x-mjst Date field', () => {
@@ -813,7 +816,12 @@ describe('generate-validation-expression', () => {
     const result = generateValidationExpression('createdAt', schema, 'undefined', false)
 
     expect(result).toContain('input?.createdAt instanceof Date')
-    expect(result).toContain('? input?.createdAt : (input?.createdAt !== undefined ? new Date')
+    // A present-but-invalid value is coerced via `new Date(...)`, but an
+    // `Invalid Date` (NaN time) falls back to `undefined` instead of poisoning
+    // downstream code with an object whose every operation is NaN.
+    expect(result).toContain(
+      'input?.createdAt !== undefined ? ((_d) => Number.isNaN(_d.getTime()) ? undefined : _d)(new Date(',
+    )
   })
 
   it('falls back to the default for an unknown instanceOf with no coercion', () => {
