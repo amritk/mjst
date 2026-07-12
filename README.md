@@ -33,6 +33,24 @@ The CLI (`mjst`) is the primary entry point; the underlying generators are also 
 
 ---
 
+## Packages
+
+| Package | Description |
+|:---|:---|
+| [`@amritk/mjst`](./packages/cli) | CLI — generates parsers, validators, and types from a schema, and lints JSON/YAML (`mjst lint`) |
+| [`@amritk/lint`](./packages/lint) | Format-agnostic JSON/YAML style-guide linter — JSON Schema + custom rules, with exact `line:column` findings |
+| [`@amritk/generate-parsers`](./packages/generate-parsers) | Programmatic API for parser + type generation |
+| [`@amritk/generate-validators`](./packages/generate-validators) | Programmatic API for validator generation |
+| [`@amritk/runtime-validators`](./packages/runtime-validators) | Runtime JSON Schema validation for schemas not known ahead of time |
+| [`@amritk/generate-examples`](./packages/generate-examples) | Programmatic API for fast-check arbitraries + example data generation |
+| [`@amritk/generate-markdown`](./packages/generate-markdown) | Programmatic API for markdown documentation generation |
+| [`@amritk/adapters`](./packages/adapters) | Convert schemas from external libraries (TypeBox, Zod, …) into JSON Schema |
+| [`@amritk/resolve-refs`](./packages/resolve-refs) | Resolve and inline JSON Schema / OpenAPI `$ref`s, with a default-deny SSRF guard |
+| [`@amritk/yaml`](./packages/yaml) | Tiny, dependency-free YAML parser with exact source positions for diagnostics |
+| [`@amritk/helpers`](./packages/helpers) | Shared runtime helpers used by generated code |
+
+---
+
 ## How mjst compares
 
 Most tools in this space pick a single lane — types **or** validation **or** docs. mjst generates the whole TypeScript surface from one schema, and it can also *consume* schemas authored in other libraries as input.
@@ -129,24 +147,6 @@ npx @amritk/mjst --config ./mjst.config.json
 > Then use the shorter `mjst` command in npm scripts or via `npx mjst`.
 
 See the [CLI README](./packages/cli/README.md) for the full flag reference and config file examples.
-
----
-
-## Packages
-
-| Package | Description |
-|:---|:---|
-| [`@amritk/mjst`](./packages/cli) | CLI — generates parsers, validators, and types from a schema, and lints JSON/YAML (`mjst lint`) |
-| [`@amritk/lint`](./packages/lint) | Format-agnostic JSON/YAML style-guide linter — JSON Schema + custom rules, with exact `line:column` findings |
-| [`@amritk/generate-parsers`](./packages/generate-parsers) | Programmatic API for parser + type generation |
-| [`@amritk/generate-validators`](./packages/generate-validators) | Programmatic API for validator generation |
-| [`@amritk/runtime-validators`](./packages/runtime-validators) | Runtime JSON Schema validation for schemas not known ahead of time |
-| [`@amritk/generate-examples`](./packages/generate-examples) | Programmatic API for fast-check arbitraries + example data generation |
-| [`@amritk/generate-markdown`](./packages/generate-markdown) | Programmatic API for markdown documentation generation |
-| [`@amritk/adapters`](./packages/adapters) | Convert schemas from external libraries (TypeBox, Zod, …) into JSON Schema |
-| [`@amritk/resolve-refs`](./packages/resolve-refs) | Resolve and inline JSON Schema / OpenAPI `$ref`s, with a default-deny SSRF guard |
-| [`@amritk/yaml`](./packages/yaml) | Tiny, dependency-free YAML parser with exact source positions for diagnostics |
-| [`@amritk/helpers`](./packages/helpers) | Shared runtime helpers used by generated code |
 
 ---
 
