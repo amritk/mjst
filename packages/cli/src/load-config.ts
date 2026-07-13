@@ -13,6 +13,9 @@ const isHelpersMode = (value: unknown): value is 'package' | 'embedded' => value
 
 const isImportExt = (value: unknown): value is 'js' | 'ts' => value === 'js' || value === 'ts'
 
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((entry) => typeof entry === 'string')
+
 /**
  * Loads a JSON config file and returns the relevant CLI config properties.
  * The config file should have the same keys as the CLI flags (schema, outDir).
@@ -48,5 +51,8 @@ export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>
     ...(typeof obj['typeSuffix'] === 'string' && { typeSuffix: obj['typeSuffix'] }),
     // `banner` is a boolean toggle or a custom header string, mirroring the CLI flag.
     ...((typeof obj['banner'] === 'boolean' || typeof obj['banner'] === 'string') && { banner: obj['banner'] }),
+    ...(typeof obj['resolveRemote'] === 'boolean' && { resolveRemote: obj['resolveRemote'] }),
+    ...(isStringArray(obj['allowedHosts']) && { allowedHosts: obj['allowedHosts'] }),
+    ...(typeof obj['allowPrivateHosts'] === 'boolean' && { allowPrivateHosts: obj['allowPrivateHosts'] }),
   }
 }
