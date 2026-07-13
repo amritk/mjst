@@ -94,17 +94,23 @@ Returns: `Promise<GeneratedFile[]>` where `GeneratedFile = { filename: string; c
 
 ## Semantics
 
-Generated validators produce the same verdict as the `@amritk/runtime-validators`
-interpreter, which is the reference this package tracks.
+Generated validators track the `@amritk/runtime-validators` interpreter, with two
+deliberate divergences worth calling out:
 
-One behaviour is worth calling out: a `NaN` value satisfies a **constrained
-number** schema. Because the numeric bound checks are the exact negation of the
-error condition (e.g. `!(x < minimum)`), and every comparison against `NaN` is
-`false`, a `NaN` passes `minimum`/`maximum`/`exclusive*`/`multipleOf`. This
-matches the interpreter and keeps the fast-path guard and `validateX` in lockstep,
-but differs from validators (e.g. Ajv) that reject `NaN` outright for
-`type: "number"`. `NaN` never appears in parsed JSON; guard against it upstream if
-your values can be non-JSON.
+- **Array items are shape-checked only.** An item's *type* (or `$ref`) is checked,
+  but object items are not recursed into and item-level constraints
+  (`minLength`, nested `properties`, …) are not enforced. This is a throughput
+  tradeoff — deep per-item validation roughly halves throughput on array-heavy
+  schemas. The boolean guard (`isX`) mirrors this exact shallowness, so it never
+  disagrees with `validateX`. Validate against the interpreter if you need full
+  item validation.
+- **`NaN` satisfies a constrained number.** Because the numeric bound checks are
+  the exact negation of the error condition (e.g. `!(x < minimum)`), and every
+  comparison against `NaN` is `false`, a `NaN` passes
+  `minimum`/`maximum`/`exclusive*`/`multipleOf`. This matches the interpreter but
+  differs from validators (e.g. Ajv) that reject `NaN` for `type: "number"`.
+  `NaN` never appears in parsed JSON; guard against it upstream if your values can
+  be non-JSON.
 
 ---
 
