@@ -58,6 +58,13 @@
       "default": false,
       "description": "Generate only TypeScript type definitions without parser functions. Useful when you only need the type shapes and do not need runtime validation."
     },
+    "examples": {
+      "type": "boolean",
+      "x-cli-flag": "--examples",
+      "x-icon": "🎲",
+      "default": false,
+      "description": "Also emit test-data files for every schema into an examples/ subdirectory of the output destination: a fast-check arbitrary (FooArbitrary) that produces schema-valid values and a concrete fooExample value. Under schemaDir the examples mirror the schema layout so they never collide with the parser output. The generated arbitraries import fast-check, which consumers must install as a (dev) dependency; the static example values have no runtime dependencies."
+    },
     "build": {
       "type": "boolean",
       "x-cli-flag": "--build",
@@ -133,7 +140,7 @@
       "type": "string",
       "x-cli-flag": "--config <path>",
       "x-icon": "⚙️",
-      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, outFile, typesOnly, build, logWarnings, strict, readonly, helpers, typeSuffix, importExt, rootType). CLI flags take precedence over config file values.",
+      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, outFile, typesOnly, examples, build, logWarnings, strict, readonly, helpers, typeSuffix, importExt, rootType). CLI flags take precedence over config file values.",
       "examples": ["./mjst.config.json"]
     }
   },

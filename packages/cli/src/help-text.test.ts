@@ -14,6 +14,7 @@ describe('help-text', () => {
       '--out-dir',
       '--out-file',
       '--types-only',
+      '--examples',
       '--build',
       '--import-ext',
       '--helpers',
