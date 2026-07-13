@@ -73,6 +73,43 @@ describe('parseYaml', () => {
     expect(data).toEqual({ 200: 'ok' })
     expect(getLocationForJsonPath(['200'])?.range.start).toEqual({ line: 0, character: 5 })
   })
+
+  describe('multi-document streams', () => {
+    // `---`-separated documents used to be invisible past the first: only the
+    // first document was parsed, so later documents produced no data, no
+    // positions, and no diagnostics.
+    const multi = ['openapi: 3.1.0', '---', 'openapi: 3.0.0', 'info:', '  title: Second'].join('\n')
+
+    it('projects each document as an array element', () => {
+      const { data } = parseYaml<unknown[]>(multi)
+      expect(data).toEqual([{ openapi: '3.1.0' }, { openapi: '3.0.0', info: { title: 'Second' } }])
+    })
+
+    it('locates a value in the second document at its real line', () => {
+      const { getLocationForJsonPath } = parseYaml(multi)
+      // The path is prefixed with the zero-based document index.
+      const loc = getLocationForJsonPath([1, 'info', 'title'])
+      expect(loc?.range.start).toEqual({ line: 4, character: 9 })
+      expect(loc?.range.end).toEqual({ line: 4, character: 15 })
+    })
+
+    it('reports a duplicate-key violation in the second document with the correct range', () => {
+      const source = ['a: 1', '---', 'b: 1', 'b: 2'].join('\n')
+      const { data, diagnostics } = parseYaml<unknown[]>(source)
+      expect(data).toEqual([{ a: 1 }, { b: 2 }])
+      expect(diagnostics).toHaveLength(1)
+      expect(diagnostics[0]?.severity).toBe(DiagnosticSeverity.Error)
+      // The duplicate `b` sits on the last line of the stream, not line 0 — proof
+      // the diagnostic carries a real range from the second document.
+      expect(diagnostics[0]?.range.start.line).toBe(3)
+    })
+
+    it('keeps the flat shape for a single document', () => {
+      const { data, getLocationForJsonPath } = parseYaml<Record<string, unknown>>('openapi: 3.1.0\n')
+      expect(data).toEqual({ openapi: '3.1.0' })
+      expect(getLocationForJsonPath(['openapi'])?.range.start).toEqual({ line: 0, character: 9 })
+    })
+  })
 })
 
 describe('parseJson', () => {
