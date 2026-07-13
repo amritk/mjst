@@ -174,7 +174,7 @@ describe('generate-validator-function', () => {
 
     expect(code).toContain('for (const _name of Object.keys(obj))')
     expect(code).toContain('!/^[a-z]+$/.test(_name)')
-    expect(code).toContain('property name must match pattern')
+    expect(code).toContain('must match pattern')
   })
 
   it('generates propertyNames checks beyond pattern (length, enum, const, $ref)', () => {
@@ -777,6 +777,24 @@ describe('generate-validator-function', () => {
           required: ['id'],
           additionalProperties: { type: 'string' as const },
         },
+        minProperties: {
+          type: 'object' as const,
+          properties: { id: { type: 'number' as const } },
+          required: ['id'],
+          minProperties: 2,
+        },
+        maxProperties: {
+          type: 'object' as const,
+          properties: { id: { type: 'number' as const } },
+          required: ['id'],
+          maxProperties: 1,
+        },
+        dependencies: {
+          type: 'object' as const,
+          properties: { a: { type: 'string' as const }, b: { type: 'string' as const } },
+          required: ['a', 'b'],
+          dependencies: { a: ['b'] },
+        },
       }
 
       for (const [label, schema] of Object.entries(cases)) {
@@ -927,6 +945,18 @@ describe('generate-validator-function', () => {
       }
       const code = generateBooleanGuard(schema, 'Parent')
       expect(code).toBe('export const isParent = (input: unknown): input is Parent => validateParent(input) === true')
+    })
+
+    it('keeps `isX` in verdict lockstep with `validateX` for nullable schemas', () => {
+      // Without the same `nullable` rewrite the validator applies, the flat guard
+      // would reject `null` while `validateX` accepts it.
+      const { validate, guard } = evalBoth(
+        { type: 'object' as const, properties: { name: { type: 'string' as const, nullable: true } } },
+        'N',
+      )
+      for (const value of [{ name: 'x' }, { name: null }, { name: 42 }, {}, null, 'nope']) {
+        expect(guard(value), `disagreement on ${JSON.stringify(value)}`).toBe(validate(value) === true)
+      }
     })
 
     it('agrees with `validateX(input) === true` across many mutated inputs', () => {

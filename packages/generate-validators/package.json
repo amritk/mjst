@@ -50,6 +50,7 @@
     "@amritk/helpers": "workspace:*"
   },
   "devDependencies": {
+    "@amritk/runtime-validators": "workspace:*",
     "@ryoppippi/unplugin-typia": "^2.6.5",
     "@scalar/openapi-parser": "^0.26.1",
     "@sinclair/typebox": "^0.34.49",
