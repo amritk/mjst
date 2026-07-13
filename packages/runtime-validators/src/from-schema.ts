@@ -97,8 +97,9 @@ type NameToType<Name, S> = Name extends 'string'
             ? ObjectShape<S>
             : Name extends 'array'
               ? ArrayShape<S>
-              : // An unmodelled `type` keyword matches anything, mirroring the
-                // interpreter's "treat unknown types as always valid" stance.
+              : // An unmodelled `type` keyword is a schema error — the interpreter
+                // throws on it — so no value type is right; `unknown` keeps the
+                // inferred type usable instead of collapsing the union to `never`.
                 unknown
 
 /**

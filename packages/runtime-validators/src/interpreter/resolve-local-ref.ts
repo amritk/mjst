@@ -65,12 +65,13 @@ const ANCHOR_KEYWORDS = ['$anchor', '$dynamicAnchor'] as const
 
 /**
  * Depth-first search for the object whose value for any of `keywords` equals
- * `name` (e.g. `$anchor`/`$dynamicAnchor`). `seen` guards against pathological
- * cyclic inputs; the schema tree itself is JSON-derived and acyclic, and this
- * runs at most once per ref (the caller memoizes it). Shared by the static and
- * dynamic resolvers so the traversal exists in exactly one place.
+ * `name` (e.g. `$anchor`/`$dynamicAnchor`, or `true` for `$recursiveAnchor`).
+ * `seen` guards against pathological cyclic inputs; the schema tree itself is
+ * JSON-derived and acyclic, and this runs at most once per ref (the caller
+ * memoizes it). Shared by the static and dynamic resolvers so the traversal
+ * exists in exactly one place.
  */
-export const findAnchor = (node: unknown, name: string, keywords: readonly string[], seen: Set<object>): unknown => {
+export const findAnchor = (node: unknown, name: unknown, keywords: readonly string[], seen: Set<object>): unknown => {
   if (node === null || typeof node !== 'object' || seen.has(node)) return undefined
   seen.add(node)
 

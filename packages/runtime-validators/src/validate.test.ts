@@ -397,12 +397,54 @@ describe('validate', () => {
       ['uri-template', 'http://x/{id}', 'has space'],
       ['iri', 'https://例え.テスト/path', 'no scheme'],
       ['idn-email', 'аdа@example.com', 'not-an-email'],
+      ['idn-hostname', '例え.テスト', '-leading-dash.example'],
+      ['hostname', 'api.example.com', '-nope.example'],
     ]
     for (const [format, ok, bad] of cases) {
       const v = validate({ type: 'string', format }, { formats: 'all' })
       expect(v(ok), `${format} should accept ${ok}`).toBe(true)
       expect(v(bad), `${format} should reject ${bad}`).not.toBe(true)
     }
+  })
+
+  it('throws on an unknown `type` keyword instead of matching everything', () => {
+    // A typo'd type is a schema error; silently treating it as "always valid"
+    // would disable the constraint. Same loud contract as an unresolvable $ref.
+    const single = validate({ type: 'strng' })
+    expect(() => single('anything')).toThrow(/Unknown type "strng"/)
+
+    // In a type union the unknown member throws when it is consulted (i.e. when
+    // no earlier member matched the value).
+    const union = validate({ type: ['string', 'bogus'] })
+    expect(union('ok')).toBe(true)
+    expect(() => union(42)).toThrow(/Unknown type "bogus"/)
+  })
+
+  it('validates through a $recursiveRef bound to its $recursiveAnchor (2019-09)', () => {
+    const validator = validate({
+      $recursiveAnchor: true,
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        child: { $recursiveRef: '#' },
+      },
+    })
+
+    expect(validator({ name: 'root', child: { name: 'leaf' } })).toBe(true)
+    expect(validator({ name: 'root', child: { name: 42 } })).toEqual({
+      valid: false,
+      errors: [{ message: 'must be string', path: '/child/name' }],
+    })
+  })
+
+  it('falls back to the document root for $recursiveRef with no $recursiveAnchor', () => {
+    const validator = validate({
+      type: 'object',
+      properties: { next: { $recursiveRef: '#' }, id: { type: 'integer' } },
+    })
+
+    expect(validator({ id: 1, next: { id: 2 } })).toBe(true)
+    expect(validator({ id: 1, next: { id: 'nope' } })).not.toBe(true)
   })
 
   it('validates the `regex` format by compiling the string', () => {

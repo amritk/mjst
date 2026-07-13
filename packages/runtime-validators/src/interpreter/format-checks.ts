@@ -46,6 +46,10 @@ export const FORMAT_CHECKS: Readonly<Record<string, RegExp>> = {
   // Relative JSON Pointer: a non-negative integer prefix, then `#` or a pointer.
   'relative-json-pointer': /^(?:0|[1-9]\d*)(?:#|(?:\/(?:[^~/]|~[01])*)*)$/,
   hostname: /^(?=.{1,253}$)(?!-)[a-zA-Z0-9-]{1,63}(?<!-)(\.(?!-)[a-zA-Z0-9-]{1,63}(?<!-))*$/,
+  // Internationalized hostname: the ASCII shape above with Unicode letters,
+  // digits, and combining marks allowed in labels. Label/total length is counted
+  // in code points, not punycode octets (RFC 5890 exactness is out of scope).
+  'idn-hostname': /^(?=.{1,253}$)(?!-)[\p{L}\p{N}\p{M}-]{1,63}(?<!-)(\.(?!-)[\p{L}\p{N}\p{M}-]{1,63}(?<!-))*$/u,
   ipv4: /^((25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(25[0-5]|2[0-4]\d|1?\d?\d)$/,
   ipv6: /^(::|([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|::([0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(:[0-9a-fA-F]{1,4}){1,6})$/,
 }
