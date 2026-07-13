@@ -564,12 +564,12 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Post')
 
-    expect(code).toContain('`${_path}/tags/${_i}`')
+    expect(code).toContain('`${_path}/tags/${_i0}`')
 
     const validate = evalValidator(code)
     expect(validate({ tags: ['a', 42] })).toEqual({
       valid: false,
-      errors: [{ message: 'items must be string', path: '/tags/1' }],
+      errors: [{ message: 'must be string', path: '/tags/1' }],
     })
   })
 
@@ -885,7 +885,7 @@ describe('generate-validator-function', () => {
       expect(guard({ n: 20 })).toBe(false)
     })
 
-    it("matches the validator's shallow array-item check (no deep item validation)", () => {
+    it('deeply validates object array items — validator and guard agree', () => {
       const { validate, guard } = evalBoth(
         {
           type: 'object' as const,
@@ -904,12 +904,16 @@ describe('generate-validator-function', () => {
         },
         'T',
       )
-      // Array items are shape-checked only (a deliberate performance tradeoff), so
-      // a bad item field is accepted by both — the guard must not be stricter than
-      // the validator.
-      const withBadItem = { items: [{ sku: 123, extra: true }] }
-      expect(validate(withBadItem)).toBe(true)
-      expect(guard(withBadItem)).toBe(true)
+      // Every item is validated in full (matching the interpreter). A wrong-typed
+      // field, an extra key, or a missing required field all fail — and the guard
+      // must reach the identical verdict.
+      for (const bad of [{ items: [{ sku: 123 }] }, { items: [{ sku: 'a', extra: true }] }, { items: [{}] }]) {
+        expect(validate(bad)).not.toBe(true)
+        expect(guard(bad)).toBe(false)
+      }
+      const ok = { items: [{ sku: 'a' }] }
+      expect(validate(ok)).toBe(true)
+      expect(guard(ok)).toBe(true)
       expect(guard({ items: ['not-an-object'] })).toBe(false)
       expect(guard({ items: 'not-an-array' })).toBe(false)
     })
@@ -1276,6 +1280,69 @@ describe('generate-validator-function', () => {
 
       // If the payload had executed, this global would be set.
       expect((globalThis as Record<string, unknown>)[marker]).toBeUndefined()
+    })
+  })
+
+  describe('array item validation', () => {
+    it('enforces scalar item constraints and reports the item index', () => {
+      const validate = evalValidator(
+        generateValidatorFunction(
+          {
+            type: 'object' as const,
+            properties: { tags: { type: 'array' as const, items: { type: 'string' as const, minLength: 3 } } },
+          },
+          'T',
+        ),
+      )
+      expect(validate({ tags: ['abc'] })).toBe(true)
+      expect(validate({ tags: ['abc', 'de'] })).toEqual({
+        valid: false,
+        errors: [{ message: 'must have at least 3 characters', path: '/tags/1' }],
+      })
+    })
+
+    it('recurses into nested arrays without variable collisions', () => {
+      const validate = evalValidator(
+        generateValidatorFunction(
+          { type: 'array' as const, items: { type: 'array' as const, items: { type: 'number' as const } } },
+          'M',
+        ),
+      )
+      expect(validate([[1, 2], [3]])).toBe(true)
+      expect(validate([[1, 'x']])).toEqual({
+        valid: false,
+        errors: [{ message: 'must be number', path: '/0/1' }],
+      })
+    })
+
+    it('rejects a sparse hole as an invalid item (matching the interpreter)', () => {
+      const validate = evalValidator(
+        generateValidatorFunction({ type: 'array' as const, items: { type: 'string' as const } }, 'A'),
+      )
+      const sparse = ['a', 'b']
+      delete sparse[0] // hole → reads as undefined, must fail the string check
+      expect(validate(sparse)).not.toBe(true)
+    })
+
+    it('validates object item fields, required, and additionalProperties', () => {
+      const validate = evalValidator(
+        generateValidatorFunction(
+          {
+            type: 'array' as const,
+            items: {
+              type: 'object' as const,
+              properties: { sku: { type: 'string' as const } },
+              required: ['sku'],
+              additionalProperties: false,
+            },
+          },
+          'T',
+        ),
+      )
+      expect(validate([{ sku: 'a' }])).toBe(true)
+      expect(validate([{ sku: 1 }])).not.toBe(true) // wrong field type
+      expect(validate([{}])).not.toBe(true) // missing required
+      expect(validate([{ sku: 'a', extra: 1 }])).not.toBe(true) // extra key
     })
   })
 

@@ -94,23 +94,22 @@ Returns: `Promise<GeneratedFile[]>` where `GeneratedFile = { filename: string; c
 
 ## Semantics
 
-Generated validators track the `@amritk/runtime-validators` interpreter, with two
-deliberate divergences worth calling out:
+Generated validators track the `@amritk/runtime-validators` interpreter. Array
+items are validated in full — an item's type, `$ref`, nested `properties` /
+`required`, and scalar constraints (`minLength`, `minimum`, …) are all enforced,
+recursing to any depth — and the boolean guard (`isX`) reaches the identical
+verdict. Validating array item *contents* costs throughput proportional to the
+per-item work (a bare `string[]` is free; a closed object with several fields is
+meaningfully slower), which is why array-heavy schemas validate more slowly than
+scalar/object ones.
 
-- **Array items are shape-checked only.** An item's *type* (or `$ref`) is checked,
-  but object items are not recursed into and item-level constraints
-  (`minLength`, nested `properties`, …) are not enforced. This is a throughput
-  tradeoff — deep per-item validation roughly halves throughput on array-heavy
-  schemas. The boolean guard (`isX`) mirrors this exact shallowness, so it never
-  disagrees with `validateX`. Validate against the interpreter if you need full
-  item validation.
-- **`NaN` satisfies a constrained number.** Because the numeric bound checks are
-  the exact negation of the error condition (e.g. `!(x < minimum)`), and every
-  comparison against `NaN` is `false`, a `NaN` passes
-  `minimum`/`maximum`/`exclusive*`/`multipleOf`. This matches the interpreter but
-  differs from validators (e.g. Ajv) that reject `NaN` for `type: "number"`.
-  `NaN` never appears in parsed JSON; guard against it upstream if your values can
-  be non-JSON.
+One divergence is worth calling out: **`NaN` satisfies a constrained number.**
+Because the numeric bound checks are the exact negation of the error condition
+(e.g. `!(x < minimum)`), and every comparison against `NaN` is `false`, a `NaN`
+passes `minimum`/`maximum`/`exclusive*`/`multipleOf`. This matches the interpreter
+but differs from validators (e.g. Ajv) that reject `NaN` for `type: "number"`.
+`NaN` never appears in parsed JSON; guard against it upstream if your values can
+be non-JSON.
 
 ---
 
