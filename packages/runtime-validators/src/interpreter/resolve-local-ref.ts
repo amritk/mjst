@@ -21,7 +21,9 @@ export const resolveLocalRef = (ref: string, root: unknown): unknown => {
   if (!ref.startsWith('#')) return undefined
 
   const pointer = ref.slice(1)
-  // A bare "#" (or "#/") points at the whole document.
+  // A bare "#" (or "#/") points at the whole document. Strict RFC 6901 would read
+  // "#/" as the member with the empty-string key, but Ajv — our differential
+  // oracle — treats it as root, and so do we.
   if (pointer === '' || pointer === '/') return root
 
   // A fragment that does not start with "/" is a plain anchor name, not a JSON
@@ -37,9 +39,22 @@ export const resolveLocalRef = (ref: string, root: unknown): unknown => {
     const part = rawPart.replace(/~1/g, '/').replace(/~0/g, '~')
 
     if (current === null || typeof current !== 'object') return undefined
-    const container = current as Record<string, unknown>
-    if (!(part in container)) return undefined
-    current = container[part]
+    if (Array.isArray(current)) {
+      // Into an array a token must be a non-negative index (RFC 6901). This also
+      // stops `length`/`constructor` etc. from resolving to array internals.
+      if (!/^(?:0|[1-9]\d*)$/.test(part)) return undefined
+      const index = Number(part)
+      if (index >= current.length) return undefined
+      current = current[index]
+    } else {
+      // Own-property only: `in` would walk the prototype chain, so a mistyped
+      // pointer like `#/$defs/toString` would resolve to `Object.prototype`'s
+      // method and be silently treated as an accept-anything schema. `hasOwn`
+      // makes an unresolvable ref fail loudly instead.
+      const container = current as Record<string, unknown>
+      if (!Object.hasOwn(container, part)) return undefined
+      current = container[part]
+    }
   }
 
   return current

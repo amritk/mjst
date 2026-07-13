@@ -613,6 +613,82 @@ describe('validate', () => {
       expect(validate({ type: 'number', multipleOf: 2 })(3)).not.toBe(true)
     })
 
+    it('multipleOf rejects near-misses whose offset the old 1e-8 tolerance swallowed', () => {
+      // A half-cent past a whole dollar amount: `q ≈ 1e8`, where a `1e-8·|q|`
+      // tolerance reaches 1 and wrongly accepts any offset up to a full unit.
+      expect(validate({ type: 'number', multipleOf: 0.01 })(1000000.005)).not.toBe(true)
+      expect(validate({ type: 'number', multipleOf: 1 })(1e15 + 0.5)).not.toBe(true)
+      expect(validate({ type: 'number', multipleOf: 1 })(3.00000002)).not.toBe(true)
+    })
+
+    it('multipleOf accepts huge exact integer multiples', () => {
+      // `1e21 / 1` loses integer precision as a quotient; the exact `%` path for
+      // integer divisors keeps this a true multiple.
+      expect(validate({ type: 'number', multipleOf: 1 })(1e21)).toBe(true)
+    })
+
+    it('fails NaN against numeric bounds and multipleOf, matching the Ajv oracle', () => {
+      // Ajv's `strict:false` oracle rejects NaN against any bound (it compares
+      // `false`) and against `multipleOf`. A bare `type:'number'` with no bound
+      // still accepts non-finite numbers, exactly as Ajv does — so the bound is
+      // what does the rejecting here.
+      for (const schema of [
+        { type: 'number', minimum: 0 },
+        { type: 'number', maximum: 10 },
+        { type: 'number', exclusiveMinimum: 0 },
+        { type: 'number', exclusiveMaximum: 10 },
+        { type: 'number', minimum: 0, exclusiveMinimum: true },
+        { type: 'number', multipleOf: 2 },
+      ] as const) {
+        expect(validate(schema)(Number.NaN), `NaN vs ${JSON.stringify(schema)}`).not.toBe(true)
+      }
+      // `multipleOf` rejects every non-finite value; `Infinity` follows ordinary
+      // comparison against ordering bounds (passes `minimum: 0`, fails `maximum`).
+      expect(validate({ type: 'number', multipleOf: 2 })(Number.POSITIVE_INFINITY)).not.toBe(true)
+      expect(validate({ type: 'number', multipleOf: 2 })(Number.NEGATIVE_INFINITY)).not.toBe(true)
+      expect(validate({ type: 'number', maximum: 10 })(Number.POSITIVE_INFINITY)).not.toBe(true)
+      expect(validate({ type: 'number', minimum: 0 })(Number.POSITIVE_INFINITY)).toBe(true)
+      expect(validate({ type: 'number' })(Number.POSITIVE_INFINITY)).toBe(true)
+    })
+
+    it('resolves array-index refs but fails loudly on prototype-member pointers', () => {
+      expect(validate({ $ref: '#/prefixItems/0', prefixItems: [{ type: 'string' }] })('ok')).toBe(true)
+      // A mistyped pointer landing on an inherited member must throw, not silently
+      // resolve to `Object.prototype.toString` and accept anything.
+      expect(() => validate({ $ref: '#/$defs/toString', $defs: {} })({ anything: true })).toThrow(/Cannot resolve/)
+    })
+
+    it('treats uniqueItems NaN consistently across its fast and slow paths', () => {
+      // All-primitive (Set) and mixed (deepEqual) paths must agree that NaN === NaN.
+      expect(validate({ type: 'array', uniqueItems: true })([Number.NaN, Number.NaN])).not.toBe(true)
+      expect(validate({ type: 'array', uniqueItems: true })([Number.NaN, Number.NaN, {}])).not.toBe(true)
+    })
+
+    it('fails rather than throws on cyclic input reaching a deep comparison', () => {
+      const a: Record<string, unknown> = {}
+      a['self'] = a
+      const b: Record<string, unknown> = {}
+      b['self'] = b
+      expect(() => validate({ type: 'array', uniqueItems: true })([a, b])).not.toThrow()
+      expect(() => validate({ const: b })(a)).not.toThrow()
+    })
+
+    it('accepts the unspecified IPv6 address `::`', () => {
+      const v = validate({ type: 'string', format: 'ipv6' }, { formats: 'all' })
+      expect(v('::')).toBe(true)
+      expect(v('::1')).toBe(true)
+      expect(v('nope::zz')).not.toBe(true)
+    })
+
+    it('applies presence-gated keywords with the same `!== undefined` rule as required', () => {
+      // `{ a: undefined }` counts as absent for `required`, so it must not trigger
+      // `dependentRequired` either — the two keywords now agree.
+      const v = validate({ type: 'object', dependentRequired: { a: ['b'] } })
+      expect(v({ a: undefined })).toBe(true)
+      expect(v({ a: 1 })).not.toBe(true)
+      expect(v({ a: 1, b: 2 })).toBe(true)
+    })
+
     it('minLength/maxLength count Unicode code points, not UTF-16 units', () => {
       expect(validate({ type: 'string', maxLength: 1 })('\u{1F4A9}')).toBe(true)
       expect(validate({ type: 'string', minLength: 2 })('\u{1F4A9}')).not.toBe(true)
