@@ -19,6 +19,9 @@ describe('openapi-fixtures', () => {
   })
 
   for (const { fixture, schemas } of corpus) {
+    // Generating validators for the whole real-world corpus (notably the large
+    // `openai.yaml`) runs right at the 5s default and flakes on slower CI runners.
+    // Give it the same generous headroom the heavy differential suites use.
     it(`generates validator files for every schema in ${fixture}`, async () => {
       for (const { name, schema } of schemas) {
         const files = await buildValidatorSchema(schema as JSONSchema, 'Schema')
@@ -28,6 +31,6 @@ describe('openapi-fixtures', () => {
           expect(file.content.trim().length, `${name} → ${file.filename} was empty`).toBeGreaterThan(0)
         }
       }
-    })
+    }, 30_000)
   }
 })
