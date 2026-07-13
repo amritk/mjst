@@ -8,6 +8,7 @@ import {
   hasAllOf,
   hasAnyOf,
   hasConst,
+  hasDependentRequired,
   hasEnum,
   hasExclusiveMaximum,
   hasExclusiveMinimum,
@@ -106,6 +107,22 @@ export const getUnionBranches = (schema: JSONSchema): readonly JSONSchema[] | nu
 }
 
 /**
+ * True when a schema carries a keyword the strict slow path enforces but which
+ * no flat type check can mirror: `contains` (array item counting),
+ * `dependentRequired` / `dependentSchemas` (cross-property presence), or
+ * `propertyNames` (per-key constraints). A fast path or shape validator that
+ * accepted such a value on a bare type check would skip the enforcement, so
+ * both must bail when this is true — the slow path then runs the real checks.
+ */
+export const hasFastPathBlockingKeyword = (schema: JSONSchema): boolean => {
+  if (!isSchemaObject(schema)) return false
+  const record = schema as Record<string, unknown>
+  return (
+    'contains' in record || 'dependentSchemas' in record || 'propertyNames' in record || hasDependentRequired(schema)
+  )
+}
+
+/**
  * Generates a fast-path type check expression for a property.
  * Returns null if the schema is too complex for a simple type check.
  *
@@ -120,6 +137,11 @@ export const generatePropertyTypeCheck = (
   suffix: string,
 ): string | null => {
   if (!isSchemaObject(schema)) return null
+
+  // Keywords the strict slow path enforces but no flat check can prove: bail so
+  // neither the fast path nor the shape validator accepts a value they would
+  // otherwise wave through untested.
+  if (hasFastPathBlockingKeyword(schema)) return null
 
   // $ref via shape predicate (deep fast-path through nested types).
   if (useRefImports && hasRef(schema)) {

@@ -24,13 +24,20 @@ import { findDiscriminator } from '#helpers/find-discriminator'
 import { getDefaultValue } from '#helpers/get-default-value'
 import { getDiscriminatorValue } from '#helpers/get-discriminator-value'
 
+import { assertNoUnsupportedKeywords } from './assert-supported-keywords'
 import { generateEnumCaseInsensitiveCoercion } from './generate-enum-check'
-import { generateObjectStrictAssertion, generateScalarStrictAssertion } from './generate-strict-assertion'
+import {
+  generateContainsCheck,
+  generateObjectKeywordChecks,
+  generateObjectStrictAssertion,
+  generateScalarStrictAssertion,
+} from './generate-strict-assertion'
 import {
   canEnforceUnion,
   generatePropertyTypeCheck,
   generateUnionCheck,
   getUnionBranches,
+  hasFastPathBlockingKeyword,
   isInlineObjectArrayProperty,
   isInlineObjectProperty,
   shapeValidatorName,
@@ -677,6 +684,10 @@ const generateNonObjectParser = (
   ) {
     const items = schema.items
     const notArrayThrow = `if (!Array.isArray(input)) throw new Error(\`[${typeName}] expected array, got \${input === null ? "null" : typeof input}\`);`
+    // This delegating path bypasses generateScalarStrictAssertion, so enforce the
+    // array-level `contains` constraint here too — otherwise a root array of
+    // objects/$refs would silently ignore it in strict mode.
+    const strictArrayChecks = strict ? generateContainsCheck('input', schema, `[${typeName}]`).join('\n') : ''
     // validateArray identity-returns the input array when every element parses
     // to itself; this parser is EXPORTED, and exported parsers never alias the
     // value the caller passed in (matching the scalar root-array path's
@@ -686,7 +697,7 @@ const generateNonObjectParser = (
       `  const _parsed = validateArray(input, ${itemParserName});\n  return (_parsed === input ? [..._parsed] : _parsed) as ${typeName};`
     const delegated = (itemParserName: string): string =>
       strict
-        ? `export const ${functionName} = (input: unknown): ${typeName} => {\n  ${notArrayThrow}\n${delegatedBody(itemParserName)}\n};`
+        ? `export const ${functionName} = (input: unknown): ${typeName} => {\n  ${notArrayThrow}${strictArrayChecks ? `\n${strictArrayChecks}` : ''}\n${delegatedBody(itemParserName)}\n};`
         : `export const ${functionName} = (input: unknown): ${typeName} => {\n${delegatedBody(itemParserName)}\n};`
 
     if (unionCtx?.useRefImports && isSchemaObject(items) && hasRef(items)) {
@@ -778,14 +789,32 @@ const generateNonObjectParser = (
 }
 
 /**
+ * Object-level keyword checks (`propertyNames` / `dependentSchemas` /
+ * `dependentRequired`) rendered as a newline-prefixed prelude for the
+ * specialized strict object parsers (empty-object, pattern-properties,
+ * additionalProperties, combined) that build their result outside
+ * generateObjectStrictAssertion. Each of those emits its own
+ * `if (!isObject(input)) throw` first, so the checks run against a proven object
+ * (`guard = false`). Returns `''` when the schema carries none of the keywords,
+ * so existing output for every other schema is byte-for-byte unchanged.
+ */
+const strictObjectKeywordPrelude = (schema: JSONSchema, typeName: string): string => {
+  if (!isSchemaObject(schema)) return ''
+  const lines = generateObjectKeywordChecks('input', schema, `[${typeName}]`, false)
+  return lines.length > 0 ? `\n${lines.join('\n')}` : ''
+}
+
+/**
  * Generates a parser for empty object schemas or schemas with only additionalProperties.
  * Validates the input is an object before casting, falling back to an empty object.
- * Returns a shallow copy to avoid mutating the original input.
+ * Returns a shallow copy to avoid mutating the original input. `schema`, when
+ * given, supplies any object-level keyword checks the strict parser must enforce.
  */
-const generateEmptyObjectParser = (typeName: string, strict?: boolean): string => {
+const generateEmptyObjectParser = (typeName: string, strict?: boolean, schema?: JSONSchema): string => {
   const functionName = generateParserName(typeName)
   if (strict) {
-    return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);\n  return { ...input } as ${typeName};\n};`
+    const prelude = schema !== undefined ? strictObjectKeywordPrelude(schema, typeName) : ''
+    return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);${prelude}\n  return { ...input } as ${typeName};\n};`
   }
   return `export const ${functionName} = (input: unknown): ${typeName} => isObject(input) ? { ...input } as ${typeName} : {} as ${typeName};`
 }
@@ -962,7 +991,7 @@ const generateObjectParser = (
 
   if (!hasProperties(schema)) {
     if (strict) {
-      return `${exportPrefix}const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);\n  return input as ${typeName};\n};`
+      return `${exportPrefix}const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);${strictObjectKeywordPrelude(schema, typeName)}\n  return input as ${typeName};\n};`
     }
     return `${exportPrefix}const ${functionName} = (input: unknown): ${typeName} => isObject(input) ? input as ${typeName} : {} as ${typeName};`
   }
@@ -1088,7 +1117,12 @@ const generateObjectParser = (
     hasAllOf(schema) &&
     schema.allOf.some((entry) => isSchemaObject(entry) && hasRef(entry))
 
-  let canFastPath = !hasAllOfRefParsers
+  // Object-level keywords the fast path cannot mirror (dependentRequired,
+  // dependentSchemas, propertyNames) force the slow path so the strict assertion
+  // actually runs them; returning `{ ...input }` on a bare shape match would skip
+  // the enforcement. (A property-level blocker like `contains` is already caught
+  // per-property by generatePropertyTypeCheck returning null.)
+  let canFastPath = !hasAllOfRefParsers && !hasFastPathBlockingKeyword(schema)
   const fastPathChecks: string[] = []
 
   // `toVarName` collapses distinct keys that differ only in non-identifier chars
@@ -1162,7 +1196,7 @@ const generateObjectParser = (
   // stripUnknown input — which carries extras the build removes, and nested
   // extras each sub-parser removes — while the cold path's per-property
   // assertions still produce the precise error on a genuine mismatch.
-  let canShallowGuard = strict && stripUnknown && !strictKeys
+  let canShallowGuard = strict && stripUnknown && !strictKeys && !hasFastPathBlockingKeyword(schema)
   const shallowChecks: string[] = []
   if (canShallowGuard) {
     for (const { key, varName, isRequired, propSchema } of propInfo) {
@@ -1598,11 +1632,12 @@ const generateStrictCombinedParser = (
   const resultBody = propertyLines.length > 0 ? `{\n${propertyLines.join('\n')}\n  }` : '{}'
   // Only the Set form needs a declaration; the inline === chain is stateless.
   const knownKeysDeclaration = knownKeyCheck.declarations.map((decl) => `  ${decl};\n`).join('')
+  const keywordPrelude = strict ? strictObjectKeywordPrelude(schema, typeName) : ''
 
   return `export const ${functionName} = (input: unknown): ${typeName} => {
   if (!isObject(input)) {
 ${notObjectBranch}
-  }
+  }${keywordPrelude}
 ${knownKeysDeclaration}  const result = ${resultBody} as unknown as ${typeName};
   for (const key in input) {
 ${loopLines.join('\n')}
@@ -1710,10 +1745,12 @@ const generateCombinedObjectParser = (
     ? `    throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);`
     : `    return {} as unknown as ${typeName};`
 
+  const keywordPrelude = strict ? strictObjectKeywordPrelude(schema, typeName) : ''
+
   return `export const ${functionName} = (input: unknown): ${typeName} => {
   if (!isObject(input)) {
 ${notObjectBranch}
-  }
+  }${keywordPrelude}
   const result = {
 ${objectProperties}
   } as unknown as ${typeName};
@@ -1742,8 +1779,10 @@ const generateAdditionalPropertiesParser = (
 
   // Check if additionalProps is defined before using it
   if (!additionalProps) {
-    return generateEmptyObjectParser(typeName, strict)
+    return generateEmptyObjectParser(typeName, strict, schema)
   }
+
+  const keywordPrelude = strict ? strictObjectKeywordPrelude(schema, typeName) : ''
 
   // If additionalProperties is a $ref and useRefImports is true, generate a loop
   if (useRefImports && isSchemaObject(additionalProps) && hasRef(additionalProps)) {
@@ -1751,7 +1790,7 @@ const generateAdditionalPropertiesParser = (
     const parserName = generateParserName(refToName(ref, suffix))
 
     if (strict) {
-      return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);\n  return validateRecord(input, ${parserName}) as ${typeName};\n};`
+      return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);${keywordPrelude}\n  return validateRecord(input, ${parserName}) as ${typeName};\n};`
     }
     return `export const ${functionName} = (input: unknown): ${typeName} => validateRecord(input, ${parserName}) as ${typeName};`
   }
@@ -1761,7 +1800,7 @@ const generateAdditionalPropertiesParser = (
     const inlineParser = generateInlineValueParser(additionalProps)
     if (inlineParser) {
       if (strict) {
-        return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);\n  return validateRecord(input, ${inlineParser}) as ${typeName};\n};`
+        return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);${keywordPrelude}\n  return validateRecord(input, ${inlineParser}) as ${typeName};\n};`
       }
       return `export const ${functionName} = (input: unknown): ${typeName} => validateRecord(input, ${inlineParser}) as ${typeName};`
     }
@@ -1769,7 +1808,7 @@ const generateAdditionalPropertiesParser = (
 
   // Otherwise, just validate the input type and shallow copy
   if (strict) {
-    return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);\n  return { ...input } as ${typeName};\n};`
+    return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);${keywordPrelude}\n  return { ...input } as ${typeName};\n};`
   }
   return `export const ${functionName} = (input: unknown): ${typeName} => isObject(input) ? { ...input } as ${typeName} : {};`
 }
@@ -1818,7 +1857,7 @@ const generatePatternPropertiesParser = (
   const functionName = generateParserName(typeName)
 
   if (!('patternProperties' in schema) || typeof schema.patternProperties !== 'object') {
-    return generateEmptyObjectParser(typeName, strict)
+    return generateEmptyObjectParser(typeName, strict, schema)
   }
 
   const patternProps = schema.patternProperties as Record<string, JSONSchema>
@@ -1826,7 +1865,7 @@ const generatePatternPropertiesParser = (
   // Find the first pattern and its schema
   const patterns = Object.entries(patternProps)
   if (patterns.length === 0) {
-    return generateEmptyObjectParser(typeName, strict)
+    return generateEmptyObjectParser(typeName, strict, schema)
   }
 
   const [pattern, patternSchema] = patterns[0] as [string, JSONSchema]
@@ -1853,6 +1892,7 @@ const generatePatternPropertiesParser = (
   const notObjectBranch = strict
     ? `    throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);`
     : `    return {} as unknown as ${typeName};`
+  const keywordPrelude = strict ? strictObjectKeywordPrelude(schema, typeName) : ''
 
   // With `additionalProperties: false`, only keys matching a pattern survive:
   // others are rejected (strict) or stripped (coerce). Start from an empty
@@ -1878,7 +1918,7 @@ const generatePatternPropertiesParser = (
     return `export const ${functionName} = (input: unknown): ${typeName} => {
   if (!isObject(input)) {
 ${notObjectBranch}
-  }
+  }${keywordPrelude}
   const result = {} as unknown as ${typeName};
   for (const key in input) {
 ${loopLines.join('\n')}
@@ -1891,7 +1931,7 @@ ${loopLines.join('\n')}
   return `export const ${functionName} = (input: unknown): ${typeName} => {
   if (!isObject(input)) {
 ${notObjectBranch}
-  }
+  }${keywordPrelude}
   const result = {
     ...input,
   } as unknown as ${typeName};
@@ -2202,7 +2242,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
 
     // If additionalProperties is true or false, validate it is an object
     if (additionalProps === true || additionalProps === false) {
-      return generateEmptyObjectParser(typeName, strict)
+      return generateEmptyObjectParser(typeName, strict, schema)
     }
 
     // Otherwise, handle as a schema (could be a $ref or object schema)
@@ -2211,11 +2251,11 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
 
   // Handle empty object schemas
   if ('type' in schema && schema.type === 'object' && !hasProperties(schema)) {
-    return generateEmptyObjectParser(typeName, strict)
+    return generateEmptyObjectParser(typeName, strict, schema)
   }
 
   // Default fallback - validate it is an object since we passed the isObjectSchema check
-  return generateEmptyObjectParser(typeName, strict)
+  return generateEmptyObjectParser(typeName, strict, schema)
 }
 
 /**
@@ -2232,6 +2272,11 @@ export const generateParserFunction = (
   typeName: string,
   options?: GenerateParserOptions,
 ): string => {
+  // Strict parsers promise to throw on violations, so any keyword we cannot
+  // enforce must fail loudly at generation rather than emit a permissive parser.
+  // Coercing parsers are documented to repair rather than reject, so the guard
+  // does not apply to them.
+  if (options?.strict) assertNoUnsupportedKeywords(schema, typeName)
   return selectParserStrategy(schema, typeName, options)
 }
 
@@ -2268,6 +2313,12 @@ export const generateShapeValidator = (
   const stub = `${exportPrefix}const ${fnName} = (_input: unknown): boolean => false;`
 
   if (!isSchemaObject(schema)) return stub
+
+  // Keywords the parser's fast path cannot mirror (contains, dependentRequired,
+  // dependentSchemas, propertyNames) make a bare shape match insufficient: a
+  // parent that fast-pathed through this predicate would skip their enforcement,
+  // so stub out and force the parent's slow path (which calls the real parser).
+  if (hasFastPathBlockingKeyword(schema)) return stub
 
   // An alias definition (a bare `$ref` with no shape of its own) delegates to
   // the referenced type's validator. Guarded against self-reference.
