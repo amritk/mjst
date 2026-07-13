@@ -35,7 +35,13 @@ import {
   isInlineObjectProperty,
   shapeValidatorName,
 } from './generate-type-checks'
-import { generateValidationExpression, isCoercibleItemSchema } from './generate-validation-expression'
+import {
+  generatePrefixItemsMap,
+  generateValidationExpression,
+  getPrefixItems,
+  isCoercibleItemSchema,
+  prefixItemsCapsLength,
+} from './generate-validation-expression'
 
 /**
  * Options for controlling parser function generation behavior.
@@ -734,7 +740,7 @@ const generateNonObjectParser = (
   }
 
   if (strict) {
-    const assertion = generateScalarStrictAssertion(schema, typeName)
+    const assertion = generateScalarStrictAssertion(schema, typeName, unionCtx?.rootSchema)
     if (assertion === null) {
       return `export const ${functionName} = (input: unknown): ${typeName} => input as ${typeName};`
     }
@@ -754,6 +760,20 @@ const generateNonObjectParser = (
     case 'boolean':
       return `export const ${functionName} = (input: unknown): ${typeName} => typeof input === "boolean" ? input as ${typeName} : false as ${typeName};`
     case 'array': {
+      // Tuple `prefixItems`: coerce each declared position and, under items:false,
+      // drop elements past the tuple length. A non-array coerces to an empty array.
+      const prefixItems = getPrefixItems(schema)
+      if (prefixItems) {
+        const mapped = generatePrefixItemsMap(
+          'input',
+          prefixItems,
+          prefixItemsCapsLength(schema),
+          unionCtx?.rootSchema,
+          undefined,
+          unionCtx?.caseInsensitive,
+        )
+        return `export const ${functionName} = (input: unknown): ${typeName} => Array.isArray(input) ? ${mapped} as ${typeName} : [] as ${typeName};`
+      }
       // Coerce each element when the item schema is a single scalar type or an enum.
       if (hasItems(schema) && !Array.isArray(schema.items) && isCoercibleItemSchema(schema.items)) {
         const item = schema.items
