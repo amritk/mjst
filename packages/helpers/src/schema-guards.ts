@@ -192,4 +192,43 @@ export const hasPropertyNames = (schema: JSONSchema): schema is SchemaObject & {
   return isSchemaObject(schema) && 'propertyNames' in schema
 }
 
+/** Type guard to check if schema has dependentSchemas (2020-12). */
+export const hasDependentSchemas = (
+  schema: JSONSchema,
+): schema is SchemaObject & { dependentSchemas: Record<string, JSONSchema> } => {
+  return (
+    isSchemaObject(schema) &&
+    'dependentSchemas' in schema &&
+    typeof schema.dependentSchemas === 'object' &&
+    schema.dependentSchemas !== null
+  )
+}
+
+/** Type guard to check if schema has patternProperties. */
+export const hasPatternProperties = (
+  schema: JSONSchema,
+): schema is SchemaObject & { patternProperties: Record<string, JSONSchema> } => {
+  return (
+    isSchemaObject(schema) &&
+    'patternProperties' in schema &&
+    typeof schema.patternProperties === 'object' &&
+    schema.patternProperties !== null
+  )
+}
+
+/** Type guard to check if schema has a `contains` subschema (array). */
+export const hasContains = (schema: JSONSchema): schema is SchemaObject & { contains: JSONSchema } => {
+  return isSchemaObject(schema) && 'contains' in schema
+}
+
+/** Type guard to check if schema has a `not` subschema. */
+export const hasNot = (schema: JSONSchema): schema is SchemaObject & { not: JSONSchema } => {
+  return isSchemaObject(schema) && 'not' in schema
+}
+
+/** Type guard to check if schema has an `if` subschema (with optional then/else). */
+export const hasIf = (schema: JSONSchema): schema is SchemaObject & { if: JSONSchema } => {
+  return isSchemaObject(schema) && 'if' in schema
+}
+
 export { hasRef } from './has-ref'

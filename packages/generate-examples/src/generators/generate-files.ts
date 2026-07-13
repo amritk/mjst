@@ -3,7 +3,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { collectExampleImports } from './collect-example-imports'
 import { generateExampleConst } from './derive-example'
-import { generateArbitrary } from './generate-arbitrary'
+import { generateArbitrary, VALIDATE_IMPORT_NAME, VALIDATE_IMPORT_STATEMENT } from './generate-arbitrary'
 
 /**
  * Options for controlling what gets generated in an example file.
@@ -58,10 +58,16 @@ export const generateExampleFile = (
   })
 
   const typeDefinition = generateTypeDefinition(schema, typeName, { typeSuffix })
-  const arbitrary = generateArbitrary(schema, typeName, typeSuffix)
+  const arbitrary = generateArbitrary(schema, typeName, typeSuffix, options?.rootSchema)
   const example = generateExampleConst(schema, typeName, options?.rootSchema)
 
   let result = `import * as fc from 'fast-check'\n`
+
+  // The arbitrary embeds a runtime validator only for schemas whose keywords no
+  // `fc.*` combinator captures; import it just for those files.
+  if (arbitrary.includes(`${VALIDATE_IMPORT_NAME}(`)) {
+    result += VALIDATE_IMPORT_STATEMENT + '\n'
+  }
 
   for (const imp of refImports) {
     result += imp + '\n'

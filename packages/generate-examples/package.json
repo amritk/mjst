@@ -48,7 +48,8 @@
   },
   "dependencies": {
     "json-schema-typed": "catalog:",
-    "@amritk/helpers": "workspace:*"
+    "@amritk/helpers": "workspace:*",
+    "@amritk/runtime-validators": "workspace:*"
   },
   "devDependencies": {
     "ajv": "^8.17.1"
