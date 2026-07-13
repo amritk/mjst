@@ -92,6 +92,27 @@ Returns: `Promise<GeneratedFile[]>` where `GeneratedFile = { filename: string; c
 
 ---
 
+## Semantics
+
+Generated validators track the `@amritk/runtime-validators` interpreter. Array
+items are validated in full — an item's type, `$ref`, nested `properties` /
+`required`, and scalar constraints (`minLength`, `minimum`, …) are all enforced,
+recursing to any depth — and the boolean guard (`isX`) reaches the identical
+verdict. Validating array item *contents* costs throughput proportional to the
+per-item work (a bare `string[]` is free; a closed object with several fields is
+meaningfully slower), which is why array-heavy schemas validate more slowly than
+scalar/object ones.
+
+One divergence is worth calling out: **`NaN` satisfies a constrained number.**
+Because the numeric bound checks are the exact negation of the error condition
+(e.g. `!(x < minimum)`), and every comparison against `NaN` is `false`, a `NaN`
+passes `minimum`/`maximum`/`exclusive*`/`multipleOf`. This matches the interpreter
+but differs from validators (e.g. Ajv) that reject `NaN` for `type: "number"`.
+`NaN` never appears in parsed JSON; guard against it upstream if your values can
+be non-JSON.
+
+---
+
 ## Benchmarks
 
 Generated validators are straight-line, monomorphic TypeScript with no generic
