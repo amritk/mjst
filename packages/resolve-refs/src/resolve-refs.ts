@@ -26,8 +26,8 @@ export type ResolveRefsOptions = {
  * Single-pass internal-only `$ref` resolver. Each unique ref string is resolved
  * exactly once (the `cache`); revisiting a ref that is still mid-resolution
  * means a cycle, so we return `{}` (the CYCLE sentinel). Non-`#` refs (external
- * files, HTTP) are left untouched — callers that need those should use
- * `resolveRefsFromFile`.
+ * files, HTTP) are left in place but recorded as an error — callers that need
+ * those should use `resolveRefsFromFile`.
  */
 const resolveInternal = (
   node: unknown,
@@ -43,7 +43,17 @@ const resolveInternal = (
   const reference = readReference(obj)
   if (reference) {
     const { keyword, value: ref } = reference
-    if (!ref.startsWith('#')) return obj // external ref — leave as-is
+    if (!ref.startsWith('#')) {
+      // An external ref (another file or an http(s) URL) can't be dereferenced
+      // by the in-memory resolver — it has no access to other documents. Record
+      // a diagnostic and keep the original node, so callers see a half-resolved
+      // document flagged rather than a silently-unresolved ref.
+      errors.push({
+        message: `Cannot resolve external ${keyword} "${ref}": external ref requires resolveRefsFromFile`,
+        path: [],
+      })
+      return obj
+    }
 
     // Cache/cycle key includes the keyword: `$ref #x` and `$dynamicRef #x` can
     // bind to different targets, so they must not share a cache slot.
@@ -110,8 +120,10 @@ const resolveInternal = (
 
 /**
  * Resolves all internal (`#/...`) `$ref`s in an in-memory document, inlining
- * each target. External and remote refs are left as-is. Cycles are broken with
- * an empty object so the result is always finite.
+ * each target. External and remote refs are left in place and reported on
+ * `errors` (this resolver can't load other documents — use `resolveRefsFromFile`
+ * for those). Cycles are broken with an empty object so the result is always
+ * finite.
  */
 export const resolveRefs = (data: unknown, options: ResolveRefsOptions = {}): ResolveResult => {
   const origins: OriginMap | undefined = options.trackOrigins ? new Map() : undefined
