@@ -85,6 +85,30 @@ imports from that single shared location. `--build` compiles the whole tree in p
 schema's root type is named after the schema (its `title`, else its filename in PascalCase),
 so `user.json` yields `User` / `parseUser` and `api/order.json` yields `Order` / `parseOrder`.
 
+### Validators
+
+Pass `--validators` to also emit runtime validation functions beside the parsers. For every
+generated type `X` you get a `validateX(input)` — returning a rich `ValidationResult` with
+JSON-Pointer error paths — and an `isX(input)` boolean type guard:
+
+```bash
+npx mjst --schema ./schema.json --out-dir ./generated --validators
+```
+
+The validators carry the same schema-derived filenames as the parsers, so they land in a
+`validators/` subdirectory to avoid colliding:
+
+```
+generated/
+  schema.ts, index.ts            ← parsers + types
+  validators/
+    schema.ts, index.ts          ← validateX / isX
+    validation-result.ts         ← ValidationResult / ValidationError contract
+```
+
+This works with `--schema-dir` too (the `validators/` tree mirrors the parser layout) and with
+`--build`. It cannot be combined with `--types-only` or `--out-file`, which emit no runtime code.
+
 ### Running the generated output
 
 By default mjst emits relative imports with the literal `.ts` extension (e.g.
@@ -240,6 +264,15 @@ The exit code is `0` when no finding reaches `--fail-severity`, `1` when one doe
 <td colspan="4">Generate only TypeScript type definitions without parser functions. Useful when you only need the type shapes and do not need runtime validation.</td>
 </tr>
 <tr>
+<td>✅ <code>validators</code></td>
+<td><code>--validators</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Also emit validation functions alongside the parsers. For every generated type X the CLI writes a validateX (returning a rich ValidationResult with JSON-Pointer error paths) and an isX boolean type guard. The files land in a validators/ subdirectory of the output so they never collide with the parser files, which share the same schema-derived names. Works with both schema and schemaDir. Incompatible with typesOnly and outFile, which produce no runtime code.</td>
+</tr>
+<tr>
 <td>🔨 <code>build</code></td>
 <td><code>--build</code></td>
 <td><code>boolean</code></td>
@@ -336,7 +369,7 @@ The exit code is `0` when no finding reaches `--fail-severity`, `1` when one doe
 <td align="center"></td>
 </tr>
 <tr>
-<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, outFile, typesOnly, build, logWarnings, strict, readonly, helpers, typeSuffix, importExt, rootType). CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
+<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, outDir, outFile, typesOnly, validators, build, logWarnings, strict, readonly, helpers, typeSuffix, importExt, rootType). CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
 </tr>
 </tbody>
 </table>

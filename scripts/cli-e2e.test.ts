@@ -443,6 +443,92 @@ describe('cli-e2e', () => {
     expect(planProbes.badKind?.ok).toBe(false)
   })
 
+  // --validators emits validateX/isX beside the parsers. The files carry the
+  // same schema-derived names as the parsers, so they land in a validators/
+  // subdirectory; prove they compile and enforce the schema at runtime.
+  it('emits working validators into a validators/ subdir with --validators', async () => {
+    const outDir = await generate('validators-single', WORKFLOW_SCHEMA, ['--validators', '--build'])
+
+    // Parsers still land at the output root; validators mirror them under validators/.
+    const rootIndex = await readFile(join(outDir, 'index.js'), 'utf-8')
+    expect(rootIndex).toContain('parseWorkflow')
+
+    const probes = await runProbes(join(outDir, 'validators/index.js'), {
+      valid: "m.validateWorkflow({ steps: [{ kind: 'manual', owner: { name: 'a' } }] })",
+      invalid: "m.validateWorkflow({ steps: [{ kind: 'bogus' }] })",
+      guardTrue: "m.isWorkflow({ steps: [{ kind: 'manual' }] })",
+      guardFalse: 'm.isWorkflow({ steps: 7 })',
+    })
+
+    expect(probes.valid?.value).toBe(true)
+    // An invalid input returns { valid: false, errors: [...] } with JSON-Pointer paths.
+    const invalid = probes.invalid?.value as { valid: false; errors: { path: string }[] }
+    expect(invalid.valid).toBe(false)
+    expect(invalid.errors.length).toBeGreaterThan(0)
+    expect(probes.guardTrue?.value).toBe(true)
+    expect(probes.guardFalse?.value).toBe(false)
+  })
+
+  it('mirrors the schema-dir layout under validators/ with --validators', async () => {
+    const caseDir = join(workDir, 'validators-schema-dir')
+    await mkdir(join(caseDir, 'schemas/nested'), { recursive: true })
+    await writeFile(
+      join(caseDir, 'schemas/doc.json'),
+      JSON.stringify({ title: 'Doc', type: 'object', properties: { id: { type: 'string' } }, required: ['id'] }),
+      'utf-8',
+    )
+    await writeFile(join(caseDir, 'schemas/nested/plan.json'), JSON.stringify(PLAN_SCHEMA), 'utf-8')
+    const outDir = join(caseDir, 'out')
+    await runNode(
+      [
+        CLI_BIN,
+        '--schema-dir',
+        join(caseDir, 'schemas'),
+        '--outDir',
+        outDir,
+        '--helpers',
+        'embedded',
+        '--validators',
+        '--build',
+      ],
+      { cwd: ROOT },
+    )
+
+    const docProbes = await runProbes(join(outDir, 'validators/doc/index.js'), {
+      valid: "m.validateDoc({ id: 'x' })",
+      invalid: 'm.isDoc({})',
+    })
+    const planProbes = await runProbes(join(outDir, 'validators/nested/plan/index.js'), {
+      guard: "m.isPlan({ axiom: { kind: 'assume' } })",
+    })
+
+    expect(docProbes.valid?.value).toBe(true)
+    expect(docProbes.invalid?.value).toBe(false)
+    expect(planProbes.guard?.value).toBe(true)
+  })
+
+  it('rejects --validators combined with --types-only', async () => {
+    const caseDir = join(workDir, 'validators-types-only')
+    await mkdir(caseDir, { recursive: true })
+    const schemaPath = join(caseDir, 'schema.json')
+    await writeFile(schemaPath, JSON.stringify(PLAN_SCHEMA), 'utf-8')
+
+    await expect(
+      runNode([CLI_BIN, '--schema', schemaPath, '--outDir', join(caseDir, 'out'), '--validators', '--types-only']),
+    ).rejects.toThrow(/--validators cannot be combined with --types-only/)
+  })
+
+  it('rejects --validators combined with --out-file', async () => {
+    const caseDir = join(workDir, 'validators-out-file')
+    await mkdir(caseDir, { recursive: true })
+    const schemaPath = join(caseDir, 'schema.json')
+    await writeFile(schemaPath, JSON.stringify(PLAN_SCHEMA), 'utf-8')
+
+    await expect(
+      runNode([CLI_BIN, '--schema', schemaPath, '--out-file', join(caseDir, 'out.ts'), '--types-only', '--validators']),
+    ).rejects.toThrow(/--validators cannot be combined/)
+  })
+
   it('emits a compilable single-file types-only output with --out-file', async () => {
     const caseDir = join(workDir, 'types-only')
     await mkdir(caseDir, { recursive: true })

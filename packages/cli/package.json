@@ -43,6 +43,7 @@
   "dependencies": {
     "@amritk/adapters": "workspace:*",
     "@amritk/generate-parsers": "workspace:*",
+    "@amritk/generate-validators": "workspace:*",
     "@amritk/generate-markdown": "workspace:*",
     "@amritk/helpers": "workspace:*",
     "@amritk/lint": "workspace:*",

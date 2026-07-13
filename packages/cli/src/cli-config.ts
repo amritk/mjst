@@ -38,6 +38,16 @@ export type CliConfig = {
    */
   readonly typesOnly?: boolean
   /**
+   * When true, also emit validation functions alongside the parsers. For every
+   * generated type `X` the CLI writes a `validateX` (returning a rich
+   * `ValidationResult` with JSON-Pointer error paths) and an `isX` boolean type
+   * guard. The files land in a `validators/` subdirectory of the output so they
+   * never collide with the parser files, which share the same schema-derived
+   * names. Works with both `schema` and `schemaDir`. Incompatible with
+   * `typesOnly` and `outFile`, which produce no runtime code.
+   */
+  readonly validators?: boolean
+  /**
    * When true, compile the generated TypeScript files to .js and .d.ts output.
    * The .ts source files are removed after compilation.
    */

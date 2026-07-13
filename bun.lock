@@ -52,6 +52,7 @@
         "@amritk/adapters": "workspace:*",
         "@amritk/generate-markdown": "workspace:*",
         "@amritk/generate-parsers": "workspace:*",
+        "@amritk/generate-validators": "workspace:*",
         "@amritk/helpers": "workspace:*",
         "@amritk/lint": "workspace:*",
         "@amritk/resolve-refs": "workspace:*",
