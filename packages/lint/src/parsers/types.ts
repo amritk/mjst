@@ -57,13 +57,13 @@ export type IParserOptions = {
    */
   duplicateKeys?: DiagnosticSeverity | 'off' | false
   /**
-   * Reserved: severity for YAML values that cannot round-trip through JSON.
+   * Severity for YAML values that cannot round-trip through JSON. The core
+   * schema projects `.nan`/`.inf`/`-.inf` to the non-finite numbers `NaN`,
+   * `Infinity`, and `-Infinity`, which `JSON.stringify` silently rewrites to
+   * `null`; each such value is reported at the configured severity.
    *
-   * TODO: not yet implemented. The workspace YAML parser projects to core-schema
-   * JavaScript values only (numbers, never bigints), so it currently cannot
-   * produce a JSON-incompatible value — there is nothing to report. The option is
-   * kept so the surface stays stable if a future schema (e.g. a `!!bigint` tag)
-   * makes incompatible values possible; until then it has no effect.
+   * Detection is opt-in. Default (`undefined`), `false`, and `"off"` disable it;
+   * any {@link DiagnosticSeverity} enables detection and reports at that level.
    */
   incompatibleValues?: DiagnosticSeverity | 'off' | false
 }
