@@ -146,6 +146,45 @@ describe('generate-validator-function', () => {
     expect(code).toContain('!valuesEqual(obj["meta"], {"a":1})')
   })
 
+  it('dedupes scalar-item uniqueItems by a JSON projection', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { tags: { type: 'array' as const, items: { type: 'string' as const }, uniqueItems: true } },
+    }
+    const code = generateValidatorFunction(schema, 'Doc')
+
+    expect(code).toContain('map((_u) => JSON.stringify(_u))')
+    expect(code).not.toContain('allUnique(')
+  })
+
+  it('dedupes object-item uniqueItems structurally via allUnique', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: {
+        rows: {
+          type: 'array' as const,
+          items: { type: 'object' as const, properties: { a: { type: 'number' as const } } },
+          uniqueItems: true,
+        },
+      },
+    }
+    const code = generateValidatorFunction(schema, 'Doc')
+
+    expect(code).toContain('!allUnique(obj["rows"] as unknown[])')
+    // The key-order-sensitive stringify projection must NOT drive the dedupe here.
+    expect(code).not.toContain('map((_u) => JSON.stringify(_u))')
+  })
+
+  it('uses structural allUnique when array items are unconstrained', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { anything: { type: 'array' as const, uniqueItems: true } },
+    }
+    const code = generateValidatorFunction(schema, 'Doc')
+
+    expect(code).toContain('!allUnique(obj["anything"] as unknown[])')
+  })
+
   it('generates a top-level const validator', () => {
     const code = generateValidatorFunction({ const: 'fixed' }, 'Tag')
 

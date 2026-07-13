@@ -64,6 +64,42 @@ const constMismatchCondition = (accessor: string, value: unknown): string => {
   return `!valuesEqual(${accessor}, ${JSON.stringify(value)})`
 }
 
+const SCALAR_ITEM_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'null'])
+
+/**
+ * True when a schema's values are provably JSON scalars — its `type` is present
+ * and every listed type is a primitive. Conservative: a `$ref`, a boolean/absent
+ * schema, an `object`/`array` type, or a missing `type` all fail this test.
+ */
+const schemaIsScalarOnly = (schema: unknown): boolean => {
+  if (!isSchemaObject(schema)) return false
+  const t = (schema as Record<string, unknown>)['type']
+  if (t === undefined) return false
+  const types = Array.isArray(t) ? t : [t]
+  return types.length > 0 && types.every((x) => typeof x === 'string' && SCALAR_ITEM_TYPES.has(x))
+}
+
+/**
+ * True when an array's elements can only be JSON scalars, so a `uniqueItems`
+ * check can dedupe by the cheap `JSON.stringify` projection. When items may be
+ * objects or arrays this returns false, and the check must instead compare
+ * structurally (the `allUnique` runtime helper): `JSON.stringify` is key-order
+ * sensitive and would treat `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` as distinct,
+ * disagreeing with the interpreter's order-independent deep equality.
+ */
+const arrayItemsAreScalarOnly = (schema: Record<string, unknown>): boolean => {
+  const prefix = schema['prefixItems']
+  if (Array.isArray(prefix)) {
+    if (!prefix.every((p) => schemaIsScalarOnly(p))) return false
+    // Tuple tail: a closed tuple (`items`/`additionalItems: false`) has no tail;
+    // otherwise the tail schema must itself be scalar-only.
+    const tail = 'items' in schema ? schema['items'] : schema['additionalItems']
+    if (tail === false) return true
+    return schemaIsScalarOnly(tail)
+  }
+  return schemaIsScalarOnly(schema['items'])
+}
+
 /**
  * Generates the inline condition that is TRUE when a value is the wrong type.
  */
@@ -540,9 +576,11 @@ const generateConstraintChecks = (
     }
   }
 
-  // Array length / uniqueness. `uniqueItems` dedupes by a JSON projection — exact
-  // for primitives (what the type guard also uses); deep-but-key-ordered for
-  // objects, the same pragmatic trade-off the rest of the generator makes.
+  // Array length / uniqueness. `uniqueItems` dedupes scalar items by a cheap
+  // `JSON.stringify` projection (exact for primitives, what the type guard also
+  // uses), but falls back to the structural `allUnique` helper when items may be
+  // objects/arrays — `JSON.stringify` is key-order sensitive and would disagree
+  // with the interpreter's order-independent deep equality.
   if (
     hasMinItems(propSchema) ||
     hasMaxItems(propSchema) ||
@@ -561,9 +599,10 @@ const generateConstraintChecks = (
       lines.push(`  }`)
     }
     if (hasUniqueItems(propSchema) && propSchema.uniqueItems === true) {
-      lines.push(
-        `  if (Array.isArray(${raw}) && new Set((${raw} as unknown[]).map((_u) => JSON.stringify(_u))).size !== ${raw}.length) {`,
-      )
+      const dupCond = arrayItemsAreScalarOnly(sp)
+        ? `new Set((${raw} as unknown[]).map((_u) => JSON.stringify(_u))).size !== ${raw}.length`
+        : `!allUnique(${raw} as unknown[])`
+      lines.push(`  if (Array.isArray(${raw}) && ${dupCond}) {`)
       lines.push(`    errors.push({ message: 'must NOT have duplicate items', path: ${path} })`)
       lines.push(`  }`)
     }
@@ -1460,7 +1499,13 @@ const booleanArrayExpr = (schema: JSONSchema, acc: string): string | null => {
   if (hasMinItems(schema)) parts.push(`${acc}.length >= ${schema.minItems}`)
   if (hasMaxItems(schema)) parts.push(`${acc}.length <= ${schema.maxItems}`)
   if (hasUniqueItems(schema) && schema.uniqueItems === true) {
-    parts.push(`new Set((${acc} as unknown[]).map((_u) => JSON.stringify(_u))).size === ${acc}.length`)
+    // Same scalar-vs-structural split as the validator, so the guard's verdict
+    // matches the slow path's for object items in a reordered key order.
+    parts.push(
+      arrayItemsAreScalarOnly(schema as Record<string, unknown>)
+        ? `new Set((${acc} as unknown[]).map((_u) => JSON.stringify(_u))).size === ${acc}.length`
+        : `allUnique(${acc} as unknown[])`,
+    )
   }
   const base = parts.join(' && ')
 
