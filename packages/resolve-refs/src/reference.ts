@@ -74,10 +74,10 @@ const search = (root: unknown, predicate: (obj: Record<string, unknown>) => bool
  *   none (2019-09).
  *
  * Anchor search is document-global: we bind to the single matching anchor in
- * `root` rather than walking the dynamic scope. For one bundled document — what a
- * linter dereferences — there is exactly one anchor per name, so this agrees with
- * the full dynamic-scope algorithm. Nested `$id` base-URI re-scoping is not
- * modelled (the common bundled case does not rely on it).
+ * `root` rather than walking the dynamic scope. This is the *fallback* path —
+ * the resolvers first try `$id`-scoped resolution via `resource-registry.ts`,
+ * which binds duplicate anchor names to the resource they are declared in, and
+ * only land here for anchors declared outside any registered scope.
  */
 export const resolveFragment = (root: unknown, keyword: RefKeyword, fragment: string): ResolvedTarget | undefined => {
   if (keyword === '$recursiveRef') {

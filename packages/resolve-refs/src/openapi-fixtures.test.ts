@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
 import { loadOpenApiFixtures } from '../../../fixtures/openapi/load-fixtures'
+import { resolveFragment } from './reference'
 import { resolveRefs } from './resolve-refs'
 
 /**
  * Exercises the `$ref` resolver against the vendored, real-world OpenAPI corpus
  * (see `fixtures/openapi/README.md`). Every internal `#/...` pointer in these
  * documents — whether it points at a schema, parameter, response, or callback —
- * must inline cleanly, leaving no internal refs behind and no errors recorded.
+ * must either inline cleanly or, at a reference cycle, be kept as a `$ref` that
+ * still resolves within the output. No dangling refs, no errors recorded.
  */
 const fixtures = loadOpenApiFixtures()
 
@@ -32,12 +34,19 @@ describe('openapi-fixtures', () => {
   })
 
   for (const { name, document } of fixtures) {
-    it(`inlines every internal $ref in ${name}`, () => {
+    it(`inlines or keeps-resolvable every internal $ref in ${name}`, () => {
       const { resolved, errors } = resolveRefs(document)
       expect(errors).toEqual([])
       const leftover: string[] = []
       findInternalRefs(resolved, '', leftover)
-      expect(leftover).toEqual([])
+      // Leftover refs are intentional cycle breakers: each must still resolve
+      // within the resolved document (its target survived inlining), otherwise
+      // it is a genuine dangling ref and the resolver has a bug.
+      const dangling = leftover.filter((entry) => {
+        const ref = entry.split(' → ')[1] as string
+        return resolveFragment(resolved, '$ref', ref.slice(1)) === undefined
+      })
+      expect(dangling).toEqual([])
     })
   }
 })

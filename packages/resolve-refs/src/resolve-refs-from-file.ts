@@ -2,15 +2,27 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve as resolvePath } from 'node:path'
 
 import { isPrivateHost } from './is-private-host'
-import { readReference, resolveFragment } from './reference'
+import { type ResolvedTarget, readReference, resolveFragment } from './reference'
+import {
+  baseOfNode,
+  buildResourceRegistry,
+  type ResourceRegistry,
+  resolveRefInScope,
+  SYNTHETIC_BASE,
+} from './resource-registry'
 import { assignKey } from './safe-assign'
 import type { JsonPath, OriginMap, ResolveError, ResolveOptions, ResolveResult } from './types'
 
 // A ref currently mid-resolution is marked with this sentinel; revisiting it
-// means a cycle, so we return `{}` instead of recursing forever.
+// means a cycle, so the reference is kept (rewritten to a root-document ref,
+// hoisting the target into `$defs` when it lives in another file) instead of
+// recursing forever.
 const CYCLE = Symbol('cycle')
 // The inlined value plus the in-document path it came from (for `origins`).
 type CacheValue = { value: unknown; pointer: JsonPath } | typeof CYCLE
+
+/** See {@link ANNOTATION_ONLY_SIBLINGS} in resolve-refs.ts — same rule here. */
+const ANNOTATION_ONLY_SIBLINGS = new Set(['summary', 'description'])
 
 // --- Document location helpers ---------------------------------------------
 //
@@ -18,6 +30,8 @@ type CacheValue = { value: unknown; pointer: JsonPath } | typeof CYCLE
 // path or an absolute http(s) URL. Refs are resolved relative to the location
 // of the document they appear in, so a relative ref inside a remote document
 // resolves to another remote URL, and one inside a local file to another path.
+// A document's `$id` never changes which file/URL a ref loads from — it only
+// scopes *in-document* resolution (see resource-registry.ts).
 
 const isRemote = (location: string): boolean => /^https?:\/\//i.test(location)
 
@@ -43,7 +57,8 @@ const splitRef = (ref: string): { filePart: string; fragment: string } => {
 // process ("the session"). Local files are intentionally NOT cached across
 // resolve passes — they can change on disk during a long-lived session (e.g.
 // an editor/LSP), so each pass re-reads them. Remote documents are assumed
-// stable for the session; call `clearRemoteCache()` to drop them.
+// stable for the session; call `clearRemoteCache()` to drop them, or pass
+// `cache: false` to bypass the session cache for a single call.
 
 const remoteCache = new Map<string, unknown>()
 
@@ -68,14 +83,14 @@ const FETCH_TIMEOUT_MS = 30_000
 const MAX_REMOTE_BYTES = 16 * 1024 * 1024
 
 /**
- * Reads a response body, refusing to buffer more than {@link MAX_REMOTE_BYTES}.
- * A `Content-Length` over the limit is rejected up front; a missing/lying header
+ * Reads a response body, refusing to buffer more than `maxBytes`. A
+ * `Content-Length` over the limit is rejected up front; a missing/lying header
  * is caught while streaming so a chunked response can't exhaust memory either.
  */
-const readCapped = async (response: Response): Promise<string> => {
+const readCapped = async (response: Response, maxBytes: number): Promise<string> => {
   const declared = Number(response.headers.get('content-length'))
-  if (Number.isFinite(declared) && declared > MAX_REMOTE_BYTES) {
-    throw new Error(`remote document exceeds ${MAX_REMOTE_BYTES} bytes`)
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new Error(`remote document exceeds ${maxBytes} bytes`)
   }
 
   const body = response.body
@@ -86,10 +101,16 @@ const readCapped = async (response: Response): Promise<string> => {
   let total = 0
   for await (const chunk of body as unknown as AsyncIterable<Uint8Array>) {
     total += chunk.byteLength
-    if (total > MAX_REMOTE_BYTES) throw new Error(`remote document exceeds ${MAX_REMOTE_BYTES} bytes`)
+    if (total > maxBytes) throw new Error(`remote document exceeds ${maxBytes} bytes`)
     text += decoder.decode(chunk, { stream: true })
   }
   return text + decoder.decode()
+}
+
+/** The caller-supplied headers for `url`, if any. */
+const headersFor = (url: string, options: ResolveOptions): Record<string, string> | undefined => {
+  if (options.headers === undefined) return undefined
+  return typeof options.headers === 'function' ? options.headers(url) : options.headers
 }
 
 /**
@@ -98,17 +119,27 @@ const readCapped = async (response: Response): Promise<string> => {
  * which would let an allow-listed public URL bounce to a private/loopback
  * address (e.g. the `169.254.169.254` metadata endpoint) — so we set
  * `redirect: 'manual'` and re-run {@link denialReason} on each `Location`.
+ * Caller-supplied headers are only sent on hops that share the original URL's
+ * origin, so a cross-origin redirect can't exfiltrate credentials.
  */
 const fetchRemote = async (location: string, options: ResolveOptions): Promise<unknown> => {
+  const maxRedirects = options.maxRedirects ?? MAX_REDIRECTS
+  const timeoutMs = options.timeoutMs ?? FETCH_TIMEOUT_MS
+  const maxBytes = options.maxBytes ?? MAX_REMOTE_BYTES
+  const doFetch = options.fetch ?? fetch
+  const origin = new URL(location).origin
+
   let current = location
-  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+  for (let hop = 0; hop <= maxRedirects; hop++) {
     const reason = denialReason(current, options)
     if (reason !== null) throw new Error(`refusing to follow redirect (${reason}): ${current}`)
 
-    const response = await fetch(current, {
+    const headers = new URL(current).origin === origin ? headersFor(location, options) : undefined
+    const response = await doFetch(current, {
       redirect: 'manual',
       // Cap the wait for a response so a stalling host can't hang resolution forever.
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
+      ...(headers !== undefined ? { headers } : {}),
     })
     if (response.status >= 300 && response.status < 400) {
       const next = response.headers.get('location')
@@ -121,9 +152,9 @@ const fetchRemote = async (location: string, options: ResolveOptions): Promise<u
     const parse = options.parse ?? ((c: string) => JSON.parse(c) as unknown)
     // Parse against the original request location so the caller's format sniffing
     // (e.g. `.yaml` vs `.json`) and any relative refs key off a stable identity.
-    return parse(await readCapped(response), location)
+    return parse(await readCapped(response, maxBytes), location)
   }
-  throw new Error(`too many redirects (>${MAX_REDIRECTS}): ${location}`)
+  throw new Error(`too many redirects (>${maxRedirects}): ${location}`)
 }
 
 /** Returns why a remote location may not be fetched, or `null` if it is allowed. */
@@ -158,10 +189,10 @@ const denialReason = (location: string, options: ResolveOptions): string | null 
 
 /**
  * Loads a document into `docCache`, fetching/reading it if needed. Remote
- * documents are additionally cached for the session in `remoteCache`. On
- * failure an error is recorded and the location is cached as `{}` so that
- * pointer lookups degrade gracefully instead of throwing. Returns whether the
- * document loaded successfully.
+ * documents are additionally cached for the session in `remoteCache` (unless
+ * `cache: false`). On failure an error is recorded and the location is cached
+ * as `{}` so that pointer lookups degrade gracefully instead of throwing.
+ * Returns whether the document loaded successfully.
  */
 const loadDoc = async (
   location: string,
@@ -183,9 +214,23 @@ const loadDoc = async (
       docCache.set(location, {})
       return false
     }
-    if (remoteCache.has(location)) {
+    const useSessionCache = options.cache !== false
+    if (useSessionCache && remoteCache.has(location)) {
       docCache.set(location, remoteCache.get(location))
       return true
+    }
+    if (!useSessionCache) {
+      // A cache-bypassing call must not serve (or poison) concurrent callers'
+      // in-flight loads either — fetch independently.
+      try {
+        const doc = await fetchRemote(location, options)
+        docCache.set(location, doc)
+        return true
+      } catch (err) {
+        errors.push({ message: `Failed to fetch ${location}: ${String(err)}`, path: [] })
+        docCache.set(location, {})
+        return false
+      }
     }
     // Coalesce concurrent loads of the same URL onto one in-flight request; the
     // owner (first caller) clears the slot once it settles.
@@ -220,138 +265,35 @@ const loadDoc = async (
   }
 }
 
-/** Collects the distinct document parts of every `$ref` directly under `node`. */
-const collectRefTargets = (node: unknown, out: Set<string>): Set<string> => {
-  if (node === null || typeof node !== 'object') return out
-  if (Array.isArray(node)) {
-    for (const item of node) collectRefTargets(item, out)
-    return out
-  }
-  const obj = node as Record<string, unknown>
-  const reference = readReference(obj)
-  if (reference) {
-    const { filePart } = splitRef(reference.value)
-    if (filePart !== '') out.add(filePart)
-  }
-  // Recurse into every key — including a reference node's siblings, which apply
-  // alongside the referenced schema (2020-12) and may carry their own refs.
-  for (const key of Object.keys(obj)) {
-    if (reference && key === reference.keyword) continue
-    collectRefTargets(obj[key], out)
-  }
-  return out
-}
+/** Escapes a JSON Pointer segment (RFC 6901): `~` → `~0`, `/` → `~1`. */
+const escapeSegment = (segment: string): string => segment.replace(/~/g, '~0').replace(/\//g, '~1')
 
-/**
- * Walks every reachable document starting from `rootLocation`, loading each one
- * so the synchronous resolve pass can look them up. This is the only async part
- * of resolution: remote documents are fetched here (in dependency order) and
- * cached for the session.
- */
-const prefetch = async (
-  rootLocation: string,
-  docCache: Map<string, unknown>,
-  options: ResolveOptions,
-  errors: ResolveError[],
-): Promise<void> => {
-  const seen = new Set<string>([rootLocation])
-  const queue: string[] = [rootLocation]
-  while (queue.length > 0) {
-    const location = queue.shift() as string
-    for (const filePart of collectRefTargets(docCache.get(location), new Set())) {
-      const target = joinLocation(location, filePart)
-      if (seen.has(target)) continue
-      seen.add(target)
-      await loadDoc(target, docCache, options, errors)
-      queue.push(target)
-    }
-  }
-}
+/** Renders a {@link JsonPath} as a `#/...` ref string. */
+const pathToRef = (path: JsonPath): string =>
+  path.length === 0 ? '#' : `#/${path.map((segment) => escapeSegment(String(segment))).join('/')}`
 
-/**
- * Single-pass resolver that inlines internal and external (`$ref` to other
- * file/URL) references. Every reachable document has already been loaded into
- * `docCache` by `prefetch`, so this stays synchronous. Refs are resolved once
- * (`refCache`); the CYCLE sentinel short-circuits re-entrant resolution.
- *
- * `baseLocation` is the location of the document `node` belongs to, used to
- * resolve relative refs and `#/...` pointers within it.
- */
-const resolveAt = (
-  node: unknown,
-  baseLocation: string,
-  docCache: Map<string, unknown>,
-  refCache: Map<string, CacheValue>,
-  origins: OriginMap | undefined,
-): unknown => {
-  if (node === null || typeof node !== 'object') return node
-  if (Array.isArray(node)) {
-    return node.map((item) => resolveAt(item, baseLocation, docCache, refCache, origins))
-  }
-  const obj = node as Record<string, unknown>
-  const reference = readReference(obj)
-  if (reference) {
-    const { keyword, value } = reference
-    const { filePart, fragment } = splitRef(value)
-    const targetLocation = filePart === '' ? baseLocation : joinLocation(baseLocation, filePart)
-    const targetRoot = docCache.get(targetLocation) ?? {}
-
-    // Cache/cycle key includes the keyword: `$ref #x` and `$dynamicRef #x` can
-    // bind to different targets, so they must not share a cache slot.
-    const cacheKey = `${keyword} ${targetLocation}#${fragment}`
-    let resolved: unknown
-    let pointer: JsonPath
-    const cached = refCache.get(cacheKey)
-    if (cached === CYCLE) {
-      resolved = {}
-      pointer = []
-    } else if (cached !== undefined) {
-      resolved = cached.value
-      pointer = cached.pointer
-    } else {
-      refCache.set(cacheKey, CYCLE)
-      // `$anchor`/`$dynamicAnchor`/`$recursiveAnchor` are resolved within the
-      // target document; a plain pointer is a direct lookup. A fragment that
-      // resolves to nothing inlines as `undefined` (kept as-is for parity).
-      const found = resolveFragment(targetRoot, keyword, fragment)
-      pointer = found?.pointer ?? []
-      resolved = resolveAt(found?.value, targetLocation, docCache, refCache, origins)
-      refCache.set(cacheKey, { value: resolved, pointer })
-      // Stamp the inlined node with where it was defined so a consumer can map a
-      // resolved-tree node back to its source document/path. Only objects/arrays are
-      // stamped (primitives can't key the map). First-write-wins: resolution recurses
-      // to the deepest ref before returning, so the *definition* site stamps first;
-      // an outer ref that merely points (transitively) at the same object must not
-      // overwrite it with an intermediate location.
-      if (origins && resolved !== null && typeof resolved === 'object' && !origins.has(resolved)) {
-        origins.set(resolved, { location: targetLocation, pointer })
-      }
-    }
-
-    // Keywords sibling to a reference apply alongside the referenced schema
-    // (2020-12), so preserve them by combining both in an `allOf`.
-    const siblingKeys = Object.keys(obj).filter((key) => key !== keyword)
-    if (siblingKeys.length === 0) return resolved
-    const siblings: Record<string, unknown> = {}
-    for (const key of siblingKeys)
-      assignKey(siblings, key, resolveAt(obj[key], baseLocation, docCache, refCache, origins))
-    const existingAllOf = Array.isArray(siblings['allOf']) ? siblings['allOf'] : []
-    const merged = { ...siblings, allOf: [...existingAllOf, resolved] }
-    // Stamp the wrapper too, so origin lookups resolve for a ref-with-siblings node.
-    if (origins && !origins.has(merged)) origins.set(merged, { location: targetLocation, pointer })
-    return merged
-  }
-  const result: Record<string, unknown> = {}
-  for (const key of Object.keys(obj)) {
-    assignKey(result, key, resolveAt(obj[key], baseLocation, docCache, refCache, origins))
-  }
-  return result
+/** Derives a readable `$defs` key for a hoisted cycle target. */
+const hoistName = (targetLocation: string, fragment: string, taken: Set<string>): string => {
+  const fragmentTail = fragment.split('/').filter(Boolean).pop()
+  const locationTail = targetLocation
+    .split('/')
+    .filter(Boolean)
+    .pop()
+    ?.replace(/\.[a-z0-9]+$/i, '')
+  const raw = fragmentTail || locationTail || 'cycle'
+  const sanitized = raw.replace(/[^A-Za-z0-9_.-]/g, '-') || 'cycle'
+  let name = sanitized
+  for (let n = 2; taken.has(name); n++) name = `${sanitized}-${n}`
+  taken.add(name)
+  return name
 }
 
 /**
  * Resolves `$ref`s in a document on disk (or at a URL), including cross-file
  * and remote refs. Remote documents are fetched on the fly and cached in memory
- * for the session; `options` governs whether/which remote hosts are allowed.
+ * for the session; `options` governs whether/which remote hosts are allowed,
+ * how they are fetched (`headers`, `fetch`, `timeoutMs`, `maxRedirects`,
+ * `maxBytes`), and whether the session cache is used (`cache`).
  */
 export const resolveRefsFromFile = async (filename: string, options: ResolveOptions = {}): Promise<ResolveResult> => {
   const rootLocation = isRemote(filename) ? filename : resolvePath(filename)
@@ -361,8 +303,264 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
   if (!(await loadDoc(rootLocation, docCache, options, errors))) {
     return { resolved: {}, errors }
   }
-  await prefetch(rootLocation, docCache, options, errors)
+
+  // Per-document `$id` registries, built lazily. A document's registry scopes
+  // anchor lookups and lets URI refs match embedded resources without fetching.
+  const registries = new Map<string, ResourceRegistry>()
+  const registryFor = (location: string): ResourceRegistry => {
+    let registry = registries.get(location)
+    if (registry === undefined) {
+      registry = buildResourceRegistry(docCache.get(location), isRemote(location) ? location : SYNTHETIC_BASE)
+      registries.set(location, registry)
+    }
+    return registry
+  }
+
+  /** Collects the document parts of refs under `node` that are NOT `$id`-internal. */
+  const collectRefTargets = (node: unknown, location: string, base: string, out: Set<string>): void => {
+    if (node === null || typeof node !== 'object') return
+    if (Array.isArray(node)) {
+      for (const item of node) collectRefTargets(item, location, base, out)
+      return
+    }
+    const obj = node as Record<string, unknown>
+    const registry = registryFor(location)
+    const nodeBase = typeof obj['$id'] === 'string' ? baseOfNode(registry, obj, base) : base
+    const reference = readReference(obj)
+    if (reference && reference.keyword !== '$recursiveRef') {
+      const scoped = resolveRefInScope(registry, reference.keyword, reference.value, nodeBase)
+      if (scoped === 'external') {
+        const { filePart } = splitRef(reference.value)
+        if (filePart !== '') out.add(filePart)
+      }
+    }
+    // Recurse into every key — including a reference node's siblings, which apply
+    // alongside the referenced schema (2020-12) and may carry their own refs.
+    for (const key of Object.keys(obj)) {
+      if (reference && key === reference.keyword) continue
+      collectRefTargets(obj[key], location, nodeBase, out)
+    }
+  }
+
+  /**
+   * Walks every reachable document starting from the root, loading each one so
+   * the synchronous resolve pass can look them up. This is the only async part
+   * of resolution: remote documents are fetched here (in dependency order) and
+   * cached for the session.
+   */
+  const prefetch = async (): Promise<void> => {
+    const seen = new Set<string>([rootLocation])
+    const queue: string[] = [rootLocation]
+    while (queue.length > 0) {
+      const location = queue.shift() as string
+      const out = new Set<string>()
+      collectRefTargets(docCache.get(location), location, registryFor(location).rootBase, out)
+      for (const filePart of out) {
+        const target = joinLocation(location, filePart)
+        if (seen.has(target)) continue
+        seen.add(target)
+        await loadDoc(target, docCache, options, errors)
+        queue.push(target)
+      }
+    }
+  }
+
+  await prefetch()
+
   const origins: OriginMap | undefined = options.trackOrigins ? new Map() : undefined
-  const resolved = resolveAt(docCache.get(rootLocation), rootLocation, docCache, new Map(), origins)
+  const refCache = new Map<string, CacheValue>()
+  // Cycle targets living in other documents are hoisted into the root's `$defs`
+  // under these names once resolution completes (see the CYCLE branch).
+  const hoists = new Map<string, string>()
+  const hoistTaken = new Set<string>()
+
+  /**
+   * Single-pass resolver that inlines internal and external (`$ref` to other
+   * file/URL) references. Every reachable document has already been loaded into
+   * `docCache` by `prefetch`, so this stays synchronous. Refs are resolved once
+   * (`refCache`); the CYCLE sentinel short-circuits re-entrant resolution.
+   *
+   * `baseLocation` is the location of the document `node` belongs to; `base` is
+   * the current `$id` base URI within that document.
+   */
+  const resolveAt = (node: unknown, baseLocation: string, base: string): unknown => {
+    if (node === null || typeof node !== 'object') return node
+    if (Array.isArray(node)) {
+      return node.map((item) => resolveAt(item, baseLocation, base))
+    }
+    const obj = node as Record<string, unknown>
+    const registry = registryFor(baseLocation)
+    const nodeBase = typeof obj['$id'] === 'string' ? baseOfNode(registry, obj, base) : base
+    const reference = readReference(obj)
+    if (reference) {
+      const { keyword, value } = reference
+
+      // Classify the ref: `$id`-internal (this document), or external (another
+      // document, or a fragment resolved the legacy way against this one).
+      let scoped: ReturnType<typeof resolveRefInScope>
+      let targetLocation = baseLocation
+      let fragment = ''
+      if (keyword === '$recursiveRef') {
+        fragment = value.startsWith('#') ? value.slice(1) : value
+      } else {
+        scoped = resolveRefInScope(registry, keyword, value, nodeBase)
+        if (scoped === 'external' || scoped === undefined) {
+          const parts = splitRef(value)
+          fragment = parts.fragment
+          if (scoped === 'external' && parts.filePart !== '') {
+            targetLocation = joinLocation(baseLocation, parts.filePart)
+          }
+          scoped = undefined
+        }
+      }
+
+      // Cache/cycle key includes the keyword (`$ref #x` and `$dynamicRef #x`
+      // can bind to different targets) and, for scoped refs, the base URI (the
+      // same anchor name can bind differently inside different resources).
+      const cacheKey =
+        scoped !== undefined
+          ? `${keyword} ${baseLocation} ${nodeBase} ${value}`
+          : `${keyword} ${targetLocation}#${fragment}`
+      let resolved: unknown
+      let pointer: JsonPath
+      const cached = refCache.get(cacheKey)
+      if (cached === CYCLE) {
+        // Mid-resolution revisit — a reference cycle. Keep a reference instead
+        // of collapsing the branch to `{}`:
+        // - target in the ROOT document → a root-relative ref (the target still
+        //   exists in the resolved output);
+        // - target in ANOTHER document → `#/$defs/<name>`, and the resolved
+        //   target is attached there once resolution completes.
+        let keptRef: string
+        if (scoped !== undefined && baseLocation === rootLocation) {
+          keptRef = pathToRef(scoped.pointer)
+        } else if (scoped === undefined && targetLocation === rootLocation) {
+          keptRef = `#${fragment}`
+        } else {
+          let name = hoists.get(cacheKey)
+          if (name === undefined) {
+            name = hoistName(targetLocation, fragment, hoistTaken)
+            hoists.set(cacheKey, name)
+          }
+          keptRef = `#/$defs/${name}`
+        }
+        const kept: Record<string, unknown> = {}
+        for (const key of Object.keys(obj)) {
+          if (key === keyword) continue
+          assignKey(kept, key, resolveAt(obj[key], baseLocation, nodeBase))
+        }
+        // Always rewritten to a static `$ref`: the dynamic binding was already
+        // decided when the cycle was entered.
+        assignKey(kept, '$ref', keptRef)
+        return kept
+      }
+      if (cached !== undefined) {
+        resolved = cached.value
+        pointer = cached.pointer
+      } else {
+        refCache.set(cacheKey, CYCLE)
+        let found: ResolvedTarget | undefined
+        let targetBase: string
+        if (scoped !== undefined) {
+          found = scoped
+          targetBase = scoped.base
+        } else {
+          // `$anchor`/`$dynamicAnchor`/`$recursiveAnchor` resolve within the
+          // target document — scoped by its own `$id`s where possible, falling
+          // back to the document-global search. A fragment that resolves to
+          // nothing inlines as `undefined` (kept as-is for parity).
+          const targetRegistry = registryFor(targetLocation)
+          const targetRoot = docCache.get(targetLocation) ?? {}
+          if (keyword === '$recursiveRef') {
+            found = resolveFragment(targetRoot, keyword, fragment)
+            targetBase = targetRegistry.rootBase
+          } else {
+            const scopedFragment = resolveRefInScope(targetRegistry, keyword, `#${fragment}`, targetRegistry.rootBase)
+            if (scopedFragment !== 'external' && scopedFragment !== undefined) {
+              found = scopedFragment
+              targetBase = scopedFragment.base
+            } else {
+              found = resolveFragment(targetRoot, keyword, fragment)
+              targetBase = targetRegistry.rootBase
+            }
+          }
+        }
+        pointer = found?.pointer ?? []
+        resolved = resolveAt(found?.value, targetLocation, targetBase)
+        refCache.set(cacheKey, { value: resolved, pointer })
+        // Stamp the inlined node with where it was defined so a consumer can map a
+        // resolved-tree node back to its source document/path. Only objects/arrays are
+        // stamped (primitives can't key the map). First-write-wins: resolution recurses
+        // to the deepest ref before returning, so the *definition* site stamps first;
+        // an outer ref that merely points (transitively) at the same object must not
+        // overwrite it with an intermediate location.
+        if (origins && resolved !== null && typeof resolved === 'object' && !origins.has(resolved)) {
+          origins.set(resolved, { location: targetLocation, pointer })
+        }
+      }
+
+      const siblingKeys = Object.keys(obj).filter((key) => key !== keyword)
+      if (siblingKeys.length === 0) return resolved
+      const siblings: Record<string, unknown> = {}
+      for (const key of siblingKeys) assignKey(siblings, key, resolveAt(obj[key], baseLocation, nodeBase))
+
+      // Annotation-only siblings (OpenAPI Reference Objects): inline the target
+      // with the annotations overriding — never wrap in `allOf`, which is not
+      // valid where those references appear (Path Item, Response, Parameter).
+      if (siblingKeys.every((key) => ANNOTATION_ONLY_SIBLINGS.has(key))) {
+        if (resolved !== null && typeof resolved === 'object' && !Array.isArray(resolved)) {
+          const overridden: Record<string, unknown> = {}
+          for (const key of Object.keys(resolved)) {
+            assignKey(overridden, key, (resolved as Record<string, unknown>)[key])
+          }
+          for (const key of Object.keys(siblings)) assignKey(overridden, key, siblings[key])
+          if (origins && !origins.has(overridden)) origins.set(overridden, { location: targetLocation, pointer })
+          return overridden
+        }
+        // A non-object target (boolean schema, primitive) has no members to
+        // override; the annotations have nowhere to live, so return the target.
+        return resolved
+      }
+
+      // Keywords sibling to a reference apply alongside the referenced schema
+      // (2020-12), so preserve them by combining both in an `allOf`.
+      const existingAllOf = Array.isArray(siblings['allOf']) ? siblings['allOf'] : []
+      const merged = { ...siblings, allOf: [...existingAllOf, resolved] }
+      // Stamp the wrapper too, so origin lookups resolve for a ref-with-siblings node.
+      if (origins && !origins.has(merged)) origins.set(merged, { location: targetLocation, pointer })
+      return merged
+    }
+    const result: Record<string, unknown> = {}
+    for (const key of Object.keys(obj)) {
+      assignKey(result, key, resolveAt(obj[key], baseLocation, nodeBase))
+    }
+    return result
+  }
+
+  const rootRegistry = registryFor(rootLocation)
+  const resolved = resolveAt(docCache.get(rootLocation), rootLocation, rootRegistry.rootBase)
+
+  // Attach cross-document cycle targets under `$defs` so every `#/$defs/<name>`
+  // ref emitted by the CYCLE branch resolves within the output document.
+  if (hoists.size > 0) {
+    if (resolved !== null && typeof resolved === 'object' && !Array.isArray(resolved)) {
+      const container = resolved as Record<string, unknown>
+      const defs =
+        container['$defs'] !== null && typeof container['$defs'] === 'object' && !Array.isArray(container['$defs'])
+          ? (container['$defs'] as Record<string, unknown>)
+          : {}
+      for (const [cacheKey, name] of hoists) {
+        const cached = refCache.get(cacheKey)
+        assignKey(defs, name, cached !== undefined && cached !== CYCLE ? (cached.value ?? {}) : {})
+      }
+      assignKey(container, '$defs', defs)
+    } else {
+      errors.push({
+        message: 'Cannot attach hoisted cycle definitions: the resolved root document is not an object',
+        path: [],
+      })
+    }
+  }
+
   return origins ? { resolved, errors, origins } : { resolved, errors }
 }

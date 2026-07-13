@@ -85,4 +85,37 @@ export type ResolveOptions = {
    * to their source without re-walking the `$ref` chain. Defaults to `false`.
    */
   trackOrigins?: boolean
+  /**
+   * Extra HTTP headers sent with remote `$ref` requests (e.g. an `Authorization`
+   * token for a private schema registry) — a static record, or a function
+   * returning headers per URL so different hosts can carry different
+   * credentials. To avoid leaking credentials, headers are only sent on redirect
+   * hops whose origin matches the originally requested URL — the same policy
+   * browsers apply to `Authorization` across cross-origin redirects.
+   */
+  headers?: Record<string, string> | ((url: string) => Record<string, string> | undefined)
+  /**
+   * Custom fetch implementation for remote documents (an instrumented client, a
+   * proxy-aware one, a test stub). Called once per redirect hop with
+   * `redirect: 'manual'` and a timeout signal. The SSRF guard still evaluates
+   * every hop before this is called — a custom fetch widens *how* documents are
+   * fetched, never *which* hosts may be. Defaults to the global `fetch`.
+   */
+  fetch?: (
+    url: string,
+    init: { redirect: 'manual'; signal: AbortSignal; headers?: Record<string, string> },
+  ) => Promise<Response>
+  /** Milliseconds before an unresponsive remote fetch is aborted. Defaults to `30_000`. */
+  timeoutMs?: number
+  /** Maximum redirect hops to follow per remote document. Defaults to `5`. */
+  maxRedirects?: number
+  /** Maximum bytes buffered per remote document. Defaults to `16` MiB. */
+  maxBytes?: number
+  /**
+   * Whether fetched remote documents may be served from (and stored into) the
+   * process-wide session cache. Pass `false` to bypass it for one call: every
+   * remote document is re-fetched and nothing new is cached — useful when a
+   * remote schema is known to have changed mid-session. Defaults to `true`.
+   */
+  cache?: boolean
 }
