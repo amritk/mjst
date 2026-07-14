@@ -134,8 +134,13 @@ const rootSchema = {
   $defs: { foo: { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] } },
 }
 
+// Spinning up a real `ts` program loads the default lib files from disk, which
+// is slow on a cold CI runner (subsequent programs reuse the warm fs cache), so
+// give each case room beyond the 5s default rather than time out on the first.
+const COMPILE_TIMEOUT = 30_000
+
 describe('collect-example-imports compile check', () => {
-  it('emits an import for a $ref nested inside a tuple (prefixItems)', () => {
+  it('emits an import for a $ref nested inside a tuple (prefixItems)', { timeout: COMPILE_TIMEOUT }, () => {
     const schema: JSONSchema = {
       type: 'array',
       prefixItems: [{ $ref: '#/$defs/foo' }, { type: 'string' }],
@@ -145,7 +150,7 @@ describe('collect-example-imports compile check', () => {
     expect(compileErrors(code)).toEqual([])
   })
 
-  it('emits an import for a $ref inside a property-level oneOf', () => {
+  it('emits an import for a $ref inside a property-level oneOf', { timeout: COMPILE_TIMEOUT }, () => {
     const schema: JSONSchema = {
       type: 'object',
       properties: { pick: { oneOf: [{ $ref: '#/$defs/foo' }, { type: 'string' }] } },
@@ -156,7 +161,7 @@ describe('collect-example-imports compile check', () => {
     expect(compileErrors(code)).toEqual([])
   })
 
-  it('emits an import for a $ref inside patternProperties', () => {
+  it('emits an import for a $ref inside patternProperties', { timeout: COMPILE_TIMEOUT }, () => {
     const schema: JSONSchema = {
       type: 'object',
       patternProperties: { '^x-': { $ref: '#/$defs/foo' } },
