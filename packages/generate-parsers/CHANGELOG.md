@@ -1,5 +1,99 @@
 # @amritk/generate-parsers
 
+## 0.16.1
+
+### Patch Changes
+
+- 47fe796: Fix bugs surfaced by a security/correctness audit of the parser generator:
+
+  - Prototype safety: the parsers generated for `patternProperties` (and
+    `properties` + `patternProperties`) with `additionalProperties: false` now
+    guard their dynamic `for..in` key copy against `__proto__`, matching the
+    existing `validateRecord` hardening. Previously a `__proto__` input key
+    (own-enumerable via `JSON.parse`) matching a pattern reassigned the result
+    object's prototype instead of being stored as an own property.
+  - `Record<string, integer>` coercion now rejects non-integral numbers
+    (`Number.isInteger`) instead of passing `1.5` through unchanged, matching
+    every other integer site and strict mode.
+  - `x-mjst` `Date` coercion no longer yields an `Invalid Date`: a value that
+    cannot be parsed falls back to the default (required) or `undefined`
+    (optional) rather than producing an `instanceof Date` object whose every
+    operation is `NaN`.
+  - A declared property literally named `__proto__` is emitted as a computed key
+    (`["__proto__"]:`) so it becomes a real own property instead of triggering
+    the object-literal prototype-setter form.
+
+  All fixes sit on cold/coercion branches or add a single `===` to a loop already
+  running a regex test per key, so hot paths are unaffected.
+
+- c74cd35: fix: enforce JSON Schema keywords that strict parsers previously ignored.
+
+  Strict-mode parsers silently accepted input violating `contains` /
+  `minContains` / `maxContains`, `dependentRequired`, `dependentSchemas`, and
+  `propertyNames` — none of these keywords appeared anywhere in the generator, so
+  a strict parser contradicted its "throws on violations" contract. Ported the
+  enforcement from `@amritk/generate-validators`:
+
+  - **`contains` / `minContains` / `maxContains`** — a strict parser now throws
+    unless the number of array items matching the `contains` subschema is within
+    `[minContains (default 1), maxContains (default ∞)]`. `minContains: 0` makes
+    the lower bound trivially satisfied. Enforced on both array properties and
+    root arrays (including arrays of `$ref`/object items).
+  - **`dependentRequired`** — when a trigger key is present, its declared
+    dependencies must be present too.
+  - **`dependentSchemas`** — when a trigger property is present, the whole object
+    must match the associated subschema (`false` forbids the trigger; `true` is a
+    no-op).
+  - **`propertyNames`** — every object key must satisfy the name subschema,
+    including the common constrained-key-map form (`{ type: 'object',
+propertyNames: { … } }`) with no declared `properties`.
+
+  Enforcement is backed by a self-contained, both-directions-sound subschema
+  matcher (type-aware, so `propertyNames: { maxLength: 3 }` correctly constrains
+  keys). The parser fast path, shallow guard, and shape validator all bail when a
+  schema carries one of these keywords, so a clean-input fast path can never skip
+  the checks.
+
+  Also adds a generation-time guard (strict mode only, mirroring the validators'
+  `assertNoUnsupportedKeywords`): generating a strict parser now throws for
+  `unevaluatedProperties` / `unevaluatedItems` with a constraining value, and for
+  a `contains` / `propertyNames` / `dependentSchemas` subschema the generator
+  cannot prove inline (a `$ref`, a combinator, …) — instead of silently emitting a
+  permissive parser. Coercing (non-strict) parsers are unchanged: they are
+  documented to repair rather than reject, so they still ignore these keywords.
+
+- 297ccba: Parse and assert JSON Schema 2020-12 tuples (`prefixItems`) per position. The
+  generated parsers previously left tuple positions untouched — every `items`
+  code path bailed on the array form, so a mistyped position was never coerced
+  (safe mode) or rejected (strict mode) and the value fell through to a generic
+  cast, despite the README listing tuples as handled.
+
+  Now, mirroring the validators' tuple handling:
+
+  - Safe mode coerces each declared position through its own subschema and, when
+    a sibling `items: false` (or draft `additionalItems: false`) caps the length,
+    drops any element past the tuple. A shorter input keeps its absent trailing
+    positions; a non-array coerces to an empty array.
+  - Strict mode asserts each present position against its subschema (scalar type,
+    enum, or a `$ref`/inline schema resolved via the root document) and throws on
+    extra elements when the length is capped.
+  - The fast-path type check and shape validators require a tuple's present
+    positions to be well-typed, so a mistyped tuple is routed to the coercing or
+    asserting slow path instead of short-circuiting through the fast path.
+
+- 8e4cd38: fix: infer a branch's type from its keywords when generating union
+  discrimination checks. Previously a `oneOf`/`anyOf` branch written without an
+  explicit `type` (e.g. `{ properties, required }` or `{ minLength: 1 }`) emitted
+  no checks and matched anything, breaking discrimination. `generateSchemaChecks`
+  now infers `object` from `properties`/`required`/etc., `array` from
+  `items`/`minItems`/`maxItems`, `string` from `minLength`/`pattern`, `number`
+  from `minimum`/`multipleOf`, `boolean`/`null` from `const`, and `null` from an
+  all-null `enum`, scoring keyword categories and resolving ties in
+  `object > array > string > number` order.
+- Updated dependencies [9bf3330]
+- Updated dependencies [e612130]
+  - @amritk/helpers@0.13.0
+
 ## 0.16.0
 
 ### Minor Changes

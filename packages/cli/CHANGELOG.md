@@ -1,5 +1,100 @@
 # @amritk/mjst
 
+## 0.12.0
+
+### Minor Changes
+
+- 15602f2: Add an `--examples` flag (config `"examples": true`) that wires
+  `@amritk/generate-examples` into the CLI.
+
+  When set, alongside the parser output mjst also emits a `fast-check` arbitrary
+  (`FooArbitrary`) and a concrete example value (`fooExample`) for every schema.
+  The test-data files are written into an `examples/` subdirectory of the output
+  destination so they never collide with the parser files (both otherwise produce
+  `<name>.ts` / `index.ts`). The flag works with both `--schema` and
+  `--schema-dir` — under `--schema-dir` the examples mirror the schema layout
+  beneath `examples/`.
+
+  The generated arbitraries import `fast-check`, which consumers must install as a
+  (dev) dependency; the static example values have no runtime dependencies. The
+  example sources are intentionally left out of `--build`.
+
+- 5293b35: Add a `--validators` flag (config key `"validators": true`) to the `mjst` CLI.
+  When set, the CLI also emits validation functions alongside the generated
+  parsers: for every generated type `X` you get a `validateX` (returning a rich
+  `ValidationResult` with JSON-Pointer error paths) and an `isX` boolean type
+  guard, produced by `@amritk/generate-validators`. The validator files carry the
+  same schema-derived filenames as the parsers, so they land in a `validators/`
+  subdirectory of the output to avoid colliding. This works with both `--schema`
+  and `--schema-dir` (the `validators/` tree mirrors the parser layout) and with
+  `--build`; it cannot be combined with `--types-only` or `--out-file`, which emit
+  no runtime code. The README overview previously claimed the CLI produced
+  validators — it now does.
+- fbb3ef0: Resolve external and remote `$ref`s when generating parsers. The codegen path
+  previously did a bare `JSON.parse`, so a schema referencing another file
+  (`{ "$ref": "./address.json" }`) or a remote URL failed. Schema loading now
+  dereferences cross-file and remote references with `@amritk/resolve-refs`,
+  inlining them into a single schema before generation. Same-document
+  (`#/$defs/...`) refs are left untouched so named-type output is unchanged.
+
+  The same safety flags as `mjst lint` are exposed — `--resolve-remote`,
+  `--allowed-hosts`, and `--allow-private-hosts` — with remote fetching off by
+  default (a schema with a remote `$ref` fails rather than making a network call
+  unless opted in). Unresolvable references (a missing file, a refused host, a bad
+  URL) fail the run with the underlying reason. Works with `--schema-dir`, where
+  each schema resolves its own references.
+
+- a0e1fbb: Surface `$ref` resolution failures as lint findings. `mjst lint` previously
+  discarded the resolver's `errors` array, so a typo'd `$ref`, a missing file, or
+  a refused/failed remote fetch produced no diagnostic at all. A `LintResolver`
+  may now return `diagnostics`, and the CLI resolver maps each resolution error to
+  a finding — anchored to the offending ref's position in the source document
+  where recoverable, or reported at document level otherwise.
+
+### Patch Changes
+
+- 345aeb7: Document the `--banner` flag in the bundled `config.schema.json` so config-file
+  users can discover and validate it, and regenerate the CLI README config table
+  to include it. Also refresh the stale `config` property description, which
+  enumerated the supported keys but omitted `input`, `export`, `stripUnknown`,
+  `caseInsensitive`, and `banner`.
+- Updated dependencies [815f9ab]
+- Updated dependencies [a6f4606]
+- Updated dependencies [88b549a]
+- Updated dependencies [e8d97e7]
+- Updated dependencies [9c98116]
+- Updated dependencies [7b37ec2]
+- Updated dependencies [9bf3330]
+- Updated dependencies [47fe796]
+- Updated dependencies [1dbe5bc]
+- Updated dependencies [317a940]
+- Updated dependencies [e612130]
+- Updated dependencies [2bf31d3]
+- Updated dependencies [ce0d515]
+- Updated dependencies [9d05033]
+- Updated dependencies [a0e1fbb]
+- Updated dependencies [ef43b87]
+- Updated dependencies [2392836]
+- Updated dependencies [acfe75e]
+- Updated dependencies [c74cd35]
+- Updated dependencies [297ccba]
+- Updated dependencies [641afa9]
+- Updated dependencies [4715e6f]
+- Updated dependencies [22c4b8f]
+- Updated dependencies [8e4cd38]
+- Updated dependencies [29b7a18]
+- Updated dependencies [ce79384]
+- Updated dependencies [a834a17]
+- Updated dependencies [5d89429]
+  - @amritk/adapters@0.3.0
+  - @amritk/generate-examples@0.5.0
+  - @amritk/lint@0.3.0
+  - @amritk/helpers@0.13.0
+  - @amritk/generate-parsers@0.16.1
+  - @amritk/generate-validators@0.11.6
+  - @amritk/resolve-refs@0.4.0
+  - @amritk/yaml@0.3.0
+
 ## 0.11.0
 
 ### Minor Changes

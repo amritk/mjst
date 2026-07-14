@@ -1,5 +1,11 @@
 # @amritk/yaml
 
+## 0.3.0
+
+### Minor Changes
+
+- a834a17: feat(yaml): fold plain scalars that wrap across lines inside flow collections. A plain scalar spanning multiple lines within `[ … ]` / `{ … }` is now folded per YAML 1.2 flow line folding — a single line break becomes a space, a run of _n_ breaks yields _n − 1_ newlines, and each wrapped line's leading indentation is trimmed — matching `yaml` (eemeli). Previously such a scalar was truncated at the first line break and its value could be silently wrong.
+
 ## 0.2.3
 
 ### Patch Changes

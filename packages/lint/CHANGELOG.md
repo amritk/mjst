@@ -1,5 +1,108 @@
 # @amritk/lint
 
+## 0.3.0
+
+### Minor Changes
+
+- 2bf31d3: Make the built-in rule functions defensive and align them with Spectral 1.10.5:
+
+  - `casing`: report a clear finding for an unknown `type`, accept digit-leading
+    segments after a separator (e.g. `foo-2fa`), and treat a lone separator char
+    as valid when `allowLeading` is set.
+  - `xor`: no-op on missing/malformed `properties` instead of flagging every node.
+  - `enumeration`: no-op without a `values` array and skip non-primitive input.
+  - `pattern`: report an invalid regex instead of throwing, and cache compiled
+    regexes.
+  - `schema`: surface a clearly-invalid schema as a finding, honor `allErrors`,
+    and document that the dialect is auto-detected.
+  - `typedEnum`: honor `nullable` / `x-nullable` so a `null` enum entry is allowed.
+  - `alphabetical`: order integer-like keys numerically, compare numeric-string
+    arrays like Spectral, and emit explicit findings for non-object / non-primitive
+    items under `keyedBy`.
+  - `unreferencedReusableObject`: JSON-pointer-escape keys and match deep
+    references so escaped and nested `$ref`s count as uses.
+  - `length`: no-op with no bounds and ignore non-number bounds.
+  - Add a new `or` built-in function (flags when none of the listed properties is
+    present).
+
+- ce0d515: Harden the core lint engine for Spectral compatibility and robustness. The
+  runner now isolates a throwing rule function into an error diagnostic instead of
+  aborting the run, reports an unknown named function once per rule, and awaits
+  Spectral-style async functions (the runner's `run` is now async). Field
+  targeting mirrors Spectral's `getLintTargets` (arrays are indexable, `@key`
+  yields indices, a field against a primitive lints the value). Findings sort by
+  source then position.
+
+  The JSONPath engine gains array slices (`[0:2]`, `[-1:]`, `[::2]`), the
+  `[(@.length-N)]` script subscript, backslash-escape handling in quoted
+  segments, quote-aware `@`-token substitution, `@path` materialized as the
+  jsonpath-plus string form, recursive `^`/`~` selectors, and loud parse errors
+  for malformed expressions (surfaced by `createRuleset` and `validateRuleset`).
+
+  Ruleset resolution fixes circular `extends`, resolves aliases inherited from
+  extended rulesets (throwing on undefined aliases), propagates `all`/`off`
+  modifiers through nested extends, throws when a shorthand targets a
+  non-existing rule, falls back an invalid severity to Warning, applies
+  ruleset-level `formats` per declaring ruleset, derives per-rule
+  `documentationUrl`, and threads `parserOptions` from extended bases. Glob
+  matching adds brace expansion, RegExp caching, and suffix matching of relative
+  patterns against absolute sources. Dead `extends`/`formats` fields are removed
+  from the override type.
+
+- a0e1fbb: Surface `$ref` resolution failures as lint findings. `mjst lint` previously
+  discarded the resolver's `errors` array, so a typo'd `$ref`, a missing file, or
+  a refused/failed remote fetch produced no diagnostic at all. A `LintResolver`
+  may now return `diagnostics`, and the CLI resolver maps each resolution error to
+  a finding — anchored to the offending ref's position in the source document
+  where recoverable, or reported at document level otherwise.
+- acfe75e: fix(openapi): close correctness and coverage gaps in the `oas` ruleset for closer `spectral:oas` parity.
+
+  - `oasPathParam` now evaluates path parameters per operation (path-item + operation params), adding the missing "unused definition", "required: true", and "duplicate definition" checks.
+  - `oasMediaExample` is version-split so OpenAPI 2.0 response examples (a MIME-type → value map) are validated against the sibling `schema`.
+  - Example/schema validation now asserts standard JSON Schema formats (matching Spectral's `ajv-formats`), validates `default`, skips `properties`/`patternProperties` maps, and never crashes on an unresolvable `$ref` in an example schema.
+  - `oas3-api-servers` / `oas2-api-schemes` now report a missing (not just empty) `servers`/`schemes`.
+  - `oasOpSuccessResponse` no longer counts `default` as success and accepts `2XX`/`3XX` wildcards; `oasOpParams` adds the OAS2 multiple-`in:body` check; `oasUnusedComponent` matches refs by prefix and covers `components.pathItems`; `oasServerVariables` checks default/enum; `oasOpIdUnique` is gated to real operation methods.
+  - 3.2 `query` operations, webhook path-item servers, `title` markdown scanning, and anchored 3.x version detection are all handled; `nullable` detection uses a schema-aware function.
+  - Fixers: `path-keys-no-trailing-slash` gains a collision guard, `duplicated-entry-in-enum` uses an order-independent dedup key, `openapi-tags-alphabetical` matches the `alphabetical` comparator, and a new `oas3_1-schema-example-deprecated` fixer migrates `example` to `examples`.
+
+### Patch Changes
+
+- e8d97e7: fix: repair document-corruption bugs in the parsers and auto-fix engine. JSON `setValue`/`removeProperty` on a missing path no longer create the property; removing or inserting members of compact sequence-entry maps (`- a: 1\n    b: 2`) keeps the `- ` dash and correct indentation; batched array ops (reorder + dedupe) no longer act on stale indices; plain YAML scalars are re-quoted when a bare value would change type or break the line; duplicate-key edits target the last (winning) occurrence; block-sequence comments survive reorder/remove; JSON array edits preserve original element text, Unicode, and layout; CRLF files keep CRLF on inserted lines; explicit-empty keys (`foo:`) are now editable; and the configured `duplicateKeys` severity is honored.
+- 9d05033: feat: implement the `incompatibleValues` parser option. It was accepted on
+  `IParserOptions` (and threaded through `parserOptions.incompatibleValues` in the
+  ruleset) but `parseYaml` never read it, so callers who configured it got a silent
+  no-op. The core schema projects `.nan`/`.inf`/`-.inf` to the non-finite numbers
+  `NaN`, `Infinity`, and `-Infinity`, which `JSON.stringify` silently rewrites to
+  `null`; each such value is now reported at the configured severity with an
+  `INCOMPATIBLE_VALUE` code, its range pointing at the offending value. Detection
+  is opt-in: `undefined`, `false`, and `"off"` leave it disabled.
+- ef43b87: Close two precision gaps in the YAML position index. Complex (map/seq) mapping
+  keys no longer collapse to `''` and collide in the index — each gets a canonical
+  structural serialization, so distinct complex keys resolve to distinct source
+  ranges instead of clobbering one another. Subtrees reachable only through a
+  `*alias` or a `<<` merge are now indexed too: paths reached through an alias
+  resolve to the anchored node, and merged keys resolve to their source location
+  (with explicit keys still winning), rather than falling back to the nearest
+  ancestor.
+- 2392836: Parse multi-document (`---`-separated) YAML streams instead of silently
+  dropping everything after the first document.
+
+  `parseYaml` called `parseDocument`, which reads only the first document of a
+  stream, so any data, positions, or diagnostics in later documents were invisible
+  to the linter. It now uses `parseAllDocuments` and lints each document
+  independently: a multi-document source projects to an array of per-document
+  values, and every position key and finding path is prefixed with the zero-based
+  document index, so a violation in a later document resolves to its own
+  line:column range. Single-document sources are unchanged — `data` is still the
+  document value and paths stay unprefixed — so existing callers and rulesets are
+  unaffected.
+
+- Updated dependencies [74498a7]
+- Updated dependencies [175e4f0]
+- Updated dependencies [a834a17]
+  - @amritk/runtime-validators@0.7.0
+  - @amritk/yaml@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes

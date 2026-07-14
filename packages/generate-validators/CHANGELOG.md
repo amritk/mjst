@@ -1,5 +1,74 @@
 # @amritk/generate-validators
 
+## 0.11.6
+
+### Patch Changes
+
+- 1dbe5bc: Close verdict gaps where a generated validator was silently more permissive than
+  `@amritk/runtime-validators` for the same schema. The generator now emits checks
+  for keywords the interpreter already enforced but the generator skipped:
+
+  - `minProperties` / `maxProperties` — the object's key count is now bounded.
+  - draft-07 dual-form `dependencies` — the array form requires the listed keys and
+    the schema form applies the subschema to the whole object when the trigger key
+    is present (a `false` subschema makes the trigger's mere presence invalid).
+  - OpenAPI 3.0 `nullable: true` — a `null` value is accepted regardless of the
+    declared `type` (and short-circuits sibling keywords), folded into the `anyOf`
+    form the generator already enforces so nested and property-level `nullable`
+    work too.
+  - Full `propertyNames` subschemas — every key is validated against the entire
+    subschema (combinators, `type`, `multipleOf`, …), not just
+    `pattern`/`minLength`/`maxLength`/`enum`/`const`/`$ref`.
+
+  The allocation-free happy-path guard (and the `isX` boolean guard) bail to the
+  error-collecting path for `minProperties`/`maxProperties`/`dependencies` — and,
+  via the `nullable`→`anyOf` rewrite, for `nullable` — so their fast-path verdict
+  can never disagree with the validator. Differential tests assert generator vs
+  interpreter verdict parity across these keywords.
+
+- 317a940: Fix `uniqueItems` in generated validators to match runtime `deepEqual`
+  semantics. The generated dedupe check previously projected every item through
+  `JSON.stringify`, which is key-order sensitive — so an array of two objects with
+  the same entries in a different key order (`{ a: 1, b: 2 }` vs `{ b: 2, a: 1 }`)
+  was wrongly accepted, while `@amritk/runtime-validators` (and Ajv) treated them
+  as duplicates via order-independent structural equality.
+
+  The generator now emits a structural `allUnique` helper from
+  `validation-result.ts` and calls it whenever an array's items may be objects or
+  arrays (or are unconstrained), keeping the cheap `JSON.stringify` projection only
+  for provably scalar-only items. Both the error-collecting validator and the
+  boolean type-guard take the same split, so their verdicts stay in lockstep.
+
+- ce79384: fix: close correctness gaps in the validator generator.
+
+  - **Array items are now validated in full**, matching the interpreter: an item's
+    nested `properties`/`required`/`additionalProperties`, scalar constraints
+    (`minLength`, `minimum`, …), and nested arrays are all enforced, recursing to
+    any depth. Previously only the item's top-level type was checked, so e.g.
+    `items: { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] }`
+    accepted `[{ a: 123 }]` and `[{}]`. A sparse hole is correctly rejected. `isX`
+    reaches the identical verdict. (Bare-type item arrays like `string[]` are
+    unaffected; validating richer item contents costs throughput proportional to
+    the per-item work.)
+  - **Object-level combinators are no longer ignored by the flat guards.** For a
+    schema pairing `properties` with `allOf`/`anyOf`/`oneOf`/`not`/`if`, the
+    fast-path guard and `isX` previously short-circuited to `true`, accepting
+    documents the combinator rejects. Such schemas now fall through to the
+    enforcing validator.
+  - **`dependentSchemas` is now implemented** (previously silently ignored): when a
+    trigger property is present the whole object is validated against the
+    associated subschema. `$ref`s reached only through `dependentSchemas` are now
+    imported, and both flat guards bail on the keyword.
+  - **Cleaner error paths.** Errors inside `if`/`then`/`else`, combinator branches,
+    and dynamic-key values no longer contain `//` or a trailing `/`.
+
+  Also documents that a `NaN` value satisfies a constrained-number schema (matching
+  the interpreter).
+
+- Updated dependencies [9bf3330]
+- Updated dependencies [e612130]
+  - @amritk/helpers@0.13.0
+
 ## 0.11.5
 
 ### Patch Changes
