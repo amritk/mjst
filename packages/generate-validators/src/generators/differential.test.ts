@@ -21,12 +21,59 @@ import { generateValidatorFunction } from './generate-validator-function'
  * `additionalProperties` are exercised heavily.
  */
 
+// Reference implementations of the runtime helpers the generated code imports
+// from `validation-result.js` (structural `const` → `valuesEqual`, structural
+// `uniqueItems` → `allUnique`). The generator emits them as free identifiers, so
+// the harness injects them into the eval scope. Mirrors build-schema.ts; any
+// drift surfaces as a divergence from Ajv, which is the whole point of this test.
+const valuesEqual = (a: unknown, b: unknown): boolean => {
+  if (a === b) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  const aArray = Array.isArray(a)
+  const bArray = Array.isArray(b)
+  if (aArray !== bArray) return false
+  if (aArray) {
+    const aa = a as unknown[]
+    const bb = b as unknown[]
+    if (aa.length !== bb.length) return false
+    for (let i = 0; i < aa.length; i++) if (!valuesEqual(aa[i], bb[i])) return false
+    return true
+  }
+  const ao = a as Record<string, unknown>
+  const bo = b as Record<string, unknown>
+  const keys = Object.keys(ao)
+  if (keys.length !== Object.keys(bo).length) return false
+  for (const key of keys) {
+    if (!Object.hasOwn(bo, key) || !valuesEqual(ao[key], bo[key])) return false
+  }
+  return true
+}
+const allUnique = (arr: readonly unknown[]): boolean => {
+  const len = arr.length
+  if (len < 2) return true
+  let allPrimitive = true
+  for (let i = 0; i < len; i++) {
+    const v = arr[i]
+    if (v !== null && typeof v === 'object') {
+      allPrimitive = false
+      break
+    }
+  }
+  if (allPrimitive) return new Set(arr).size === len
+  for (let i = 0; i < len; i++) {
+    for (let j = i + 1; j < len; j++) {
+      if (valuesEqual(arr[i], arr[j])) return false
+    }
+  }
+  return true
+}
+
 const evalValidator = (code: string): ((input: unknown) => unknown) => {
   const js = ts.transpileModule(code, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText
   const moduleExports: Record<string, unknown> = {}
-  new Function('exports', js)(moduleExports)
+  new Function('exports', 'valuesEqual', 'allUnique', js)(moduleExports, valuesEqual, allUnique)
   const name = Object.keys(moduleExports).find((n) => n.startsWith('validate'))
   return moduleExports[name ?? ''] as (input: unknown) => unknown
 }
@@ -112,14 +159,15 @@ const randomTyped = (rng: () => number, depth: number): Record<string, unknown> 
     if (rng() < 0.2) s.exclusiveMinimum = 0
     if (rng() < 0.2) s.exclusiveMaximum = 10
   } else if (t === 'array') {
-    // Scalar item types only: `uniqueItems` dedupes by a JSON projection, which
-    // matches Ajv's deep equality for primitives but not for objects.
+    // Items may be scalars or objects. `uniqueItems` dedupes structurally
+    // (order-independent) for object items, so it agrees with Ajv's deep equality
+    // even when two equal objects list their keys in a different order.
     const useTuple = rng() < 0.3
     if (useTuple) {
       s.prefixItems = [{ type: pick(rng, ['string', 'number']) }, { type: 'boolean' }]
       if (rng() < 0.5) s.items = false
     } else if (rng() < 0.7) {
-      s.items = { type: pick(rng, ['string', 'number', 'boolean']) }
+      s.items = rng() < 0.5 ? { type: pick(rng, ['string', 'number', 'boolean']) } : { type: 'object' }
     }
     // `contains` only on non-tuple arrays: Ajv has a known quirk where
     // `prefixItems` + `contains` wrongly accepts an empty array, and the
@@ -225,5 +273,45 @@ describe('differential fuzz vs ajv', () => {
     }
 
     expect(divergences, divergences.join('\n\n')).toEqual([])
+  })
+
+  it('uniqueItems on object items agrees with ajv across key orders', () => {
+    const ajv = new Ajv2020({ allErrors: false, strict: false })
+    const schema = {
+      type: 'array',
+      uniqueItems: true,
+      items: {
+        type: 'object',
+        properties: { a: { type: 'number' }, b: { type: 'number' }, c: { type: 'number' } },
+      },
+    }
+    const ajvValidate = ajv.compile(schema)
+    const ours = evalValidator(generateValidatorFunction(schema as never, 'Root'))
+
+    // Same two objects, keys in a different order → structurally equal, so both
+    // are duplicates. A key-order-sensitive `JSON.stringify` dedupe would wrongly
+    // accept these; the structural check rejects them, matching Ajv.
+    const reordered = [
+      { a: 1, b: 2 },
+      { b: 2, a: 1 },
+    ]
+    const nestedReordered = [
+      { a: 1, b: { c: 3, a: 4 } },
+      { b: { a: 4, c: 3 }, a: 1 },
+    ]
+    // Genuinely distinct objects (different values) → unique, both accept.
+    const distinct = [
+      { a: 1, b: 2 },
+      { a: 1, b: 3 },
+      { a: 2, b: 2 },
+    ]
+
+    for (const value of [reordered, nestedReordered, distinct, [], [{ a: 1 }]]) {
+      expect(ours(value) === true, `disagreement on ${JSON.stringify(value)}`).toBe(ajvValidate(value) === true)
+    }
+    // Concretely: the reordered pair is rejected (not `true`), not silently accepted.
+    expect(ours(reordered)).not.toBe(true)
+    expect(ours(nestedReordered)).not.toBe(true)
+    expect(ours(distinct)).toBe(true)
   })
 })

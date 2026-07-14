@@ -67,11 +67,14 @@ export const generateValidatorFile = (
   // `.js` extension so the relative import resolves under Node ESM, not only Bun.
   let result = `import type { ValidationResult, ValidationError } from './validation-result.js'\n`
 
-  // `const` checks on object/array values call the runtime `valuesEqual` helper.
-  // Only import it when the generated body actually uses it, so files without a
-  // structural `const` do not carry an unused import.
-  if (validatorFunction.includes('valuesEqual(')) {
-    result += `import { valuesEqual } from './validation-result.js'\n`
+  // Structural `const` checks call the runtime `valuesEqual` helper; structural
+  // `uniqueItems` checks call `allUnique`. Both live in `validation-result.js`;
+  // import each only when the generated body (validator or boolean guard) uses
+  // it, so files that need neither carry no unused import.
+  const body = validatorFunction + booleanGuard
+  const runtimeHelpers = (['valuesEqual', 'allUnique'] as const).filter((name) => body.includes(`${name}(`))
+  if (runtimeHelpers.length > 0) {
+    result += `import { ${runtimeHelpers.join(', ')} } from './validation-result.js'\n`
   }
 
   for (const imp of refImports) {
