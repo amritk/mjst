@@ -32,7 +32,7 @@ import {
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { generateEnumCheck } from './generate-enum-check'
-import { scalarItemTypeCheck } from './generate-validation-expression'
+import { getPrefixItems, prefixItemsCapsLength, scalarItemTypeCheck } from './generate-validation-expression'
 
 /**
  * Boolean type-check expression builders shared by the shape validators, the
@@ -237,6 +237,22 @@ export const generatePropertyTypeCheck = (
             ? generateEnumCheck('_it', items.enum)
             : null)
         if (itemCheck) checks.push(`${varName}.every((_it) => ${itemCheck})`)
+      }
+      // Tuple `prefixItems`: every present position must already match its
+      // subschema, and a sibling `items: false` bars extra elements. Positions
+      // are checked with ref imports disabled, so no imported shape-validator
+      // call is introduced here — a position needing one returns null and simply
+      // disables the fast path, keeping the union trust-walk sound without a
+      // mirrored prefixItems traversal. A mistyped tuple then routes to the slow
+      // path (coerced) or the strict assertion (thrown).
+      const prefix = getPrefixItems(schema)
+      if (prefix) {
+        for (let i = 0; i < prefix.length; i++) {
+          const posCheck = generatePropertyTypeCheck(`${varName}[${i}]`, prefix[i] as JSONSchema, false, suffix)
+          if (posCheck === null) return null
+          checks.push(`(${varName}.length <= ${i} || (${posCheck}))`)
+        }
+        if (prefixItemsCapsLength(schema)) checks.push(`${varName}.length <= ${prefix.length}`)
       }
       break
     }

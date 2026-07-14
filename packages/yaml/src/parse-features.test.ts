@@ -184,6 +184,47 @@ describe('explicit ? / : mapping entries', () => {
   })
 })
 
+describe('multi-line plain scalars in flow collections', () => {
+  it('folds a plain scalar that wraps across lines in a flow sequence', () => {
+    expect(parseDocument('[a\nb, c]\n').toJS()).toEqual(['a b', 'c'])
+    expect(parseDocument('[\n  a\n  b,\n  c\n]\n').toJS()).toEqual(['a b', 'c'])
+  })
+
+  it('folds a wrapped plain scalar down to a space regardless of its indentation', () => {
+    // Every continuation line trims to its content, so the varied indentation
+    // here collapses to single spaces: "a b c".
+    expect(parseDocument('[a\n      b\n  c]\n').toJS()).toEqual(['a b c'])
+  })
+
+  it('collapses a run of blank lines to one fewer newline, matching quoted folding', () => {
+    // Two blank lines between `a` and `b` → one literal newline.
+    expect(parseDocument('[a\n\n\n  b]\n').toJS()).toEqual(['a\n\nb'])
+  })
+
+  it('folds wrapped plain scalars as both keys and values of a flow mapping', () => {
+    expect(parseDocument('{key\n  two: val\n  ue}\n').toJS()).toEqual({ 'key two': 'val ue' })
+    expect(parseDocument('{k: a\n  b, m: 2}\n').toJS()).toEqual({ k: 'a b', m: 2 })
+  })
+
+  it('stops the scalar at the first flow indicator on a continuation line', () => {
+    // The `]` opening the third line ends the (folded) scalar; nothing after it
+    // is swallowed, and the sequence closes cleanly.
+    const doc = parseDocument('[a\n  b\n]\n')
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.toJS()).toEqual(['a b'])
+  })
+
+  it('spans the source range from the first line to the last folded line', () => {
+    const node = parseDocument('[a\n  b, c]\n').contents
+    if (node?.kind === 'seq') {
+      const first = node.items[0]
+      // `a` starts at offset 1; the folded scalar ends after `b` on line 2
+      // (offset 6), with the trailing break and `, c]` left to the sequence.
+      expect([first?.start, first?.end]).toEqual([1, 6])
+    }
+  })
+})
+
 describe('resource-exhaustion guards', () => {
   it('rejects alias-expansion (billion laughs) instead of hanging', () => {
     // ~500-byte document whose aliases expand to ~10^10 nodes.

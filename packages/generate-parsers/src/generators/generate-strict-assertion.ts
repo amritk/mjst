@@ -2,6 +2,7 @@ import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { multipleOfFailExpr } from '@amritk/helpers/multiple-of-check'
 import { quoteJsString } from '@amritk/helpers/quote-js-string'
+import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
   hasDependentRequired,
@@ -29,7 +30,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { generateEnumCheck } from './generate-enum-check'
 import { canEnforceUnion, generateUnionCheck, getUnionBranches, isInlineObjectProperty } from './generate-type-checks'
-import { scalarItemTypeCheck } from './generate-validation-expression'
+import { getPrefixItems, prefixItemsCapsLength, scalarItemTypeCheck } from './generate-validation-expression'
 import { subschemaMatchExpr } from './subschema-match'
 
 /**
@@ -99,7 +100,13 @@ const throwError = (message: string, suffixExpr?: string): string => {
  * Generates strict-mode constraint checks for a typed property
  * (pattern, length, min/max, multipleOf).
  */
-const generateConstraintChecks = (acc: string, propSchema: JSONSchema, typeName: string, key: string): string[] => {
+const generateConstraintChecks = (
+  acc: string,
+  propSchema: JSONSchema,
+  typeName: string,
+  key: string,
+  context: StrictAssertionContext = {},
+): string[] => {
   if (!isSchemaObject(propSchema) || !hasType(propSchema)) return []
   const t = propSchema.type as string
   const lines: string[] = []
@@ -181,6 +188,8 @@ const generateConstraintChecks = (acc: string, propSchema: JSONSchema, typeName:
         `  if (Array.isArray(${acc}) && !${acc}.every((_it) => ${itemCheck.check})) ${throwError(`${field} ${itemCheck.message}`)};`,
       )
     }
+    // Tuple `prefixItems`: assert each position and cap length under items:false.
+    lines.push(...generatePrefixItemsAssertion(acc, field, propSchema, context.rootSchema))
   }
 
   return lines
@@ -275,6 +284,75 @@ const generateDependentSchemasChecks = (obj: string, schema: JSONSchema, label: 
       `  if (${JSON.stringify(trigger)} in ${obj} && !(${match})) ${throwError(`${label} does not satisfy the schema required when '${trigger}' is present`)};`,
     )
   }
+  return lines
+}
+
+/**
+ * Resolves a tuple position's schema through a single `$ref` (via `rootSchema`)
+ * so the assertion can read its `type`/`enum`. A `$ref` with no resolvable target
+ * (or no root document) is returned as-is, leaving the position unasserted.
+ */
+const resolvePositionSchema = (pos: JSONSchema, rootSchema: Record<string, unknown> | undefined): JSONSchema => {
+  if (isSchemaObject(pos) && hasRef(pos) && rootSchema) {
+    const resolved = resolveRef((pos as { $ref: string }).$ref, rootSchema)
+    if (resolved) return resolved as JSONSchema
+  }
+  return pos
+}
+
+/**
+ * Strict-mode assertion lines for a tuple `prefixItems`: each present position is
+ * asserted against its subschema (a scalar type, an enum, or a `$ref`/inline
+ * schema resolved to one via `rootSchema`), and a sibling `items: false` /
+ * `additionalItems: false` rejects any extra element. `acc` is the array
+ * accessor and `field` the error-message prefix (`[Type] field 'k'` or
+ * `[Type]`). Mirrors the validators' tuple pass, but throws on the first
+ * violation instead of collecting errors. Positions whose schema is richer than
+ * a scalar/enum are left to their own downstream handling (like array `items`).
+ */
+const generatePrefixItemsAssertion = (
+  acc: string,
+  field: string,
+  schema: JSONSchema,
+  rootSchema: Record<string, unknown> | undefined,
+): string[] => {
+  const prefix = getPrefixItems(schema)
+  if (!prefix) return []
+  const lines: string[] = []
+
+  for (let i = 0; i < prefix.length; i++) {
+    const pos = resolvePositionSchema(prefix[i] as JSONSchema, rootSchema)
+    const el = `${acc}[${i}]`
+    // A shorter input simply has no element at this position — `prefixItems`
+    // does not require presence (that is `minItems`' job), so guard on length.
+    const present = `Array.isArray(${acc}) && ${acc}.length > ${i}`
+
+    if (isSchemaObject(pos) && hasEnum(pos) && pos.enum.length > 0) {
+      const allowed = JSON.stringify(pos.enum)
+      const label = (pos.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
+      lines.push(
+        `  if (${present} && !(${allowed} as readonly unknown[]).includes(${el})) ${throwError(`${field}[${i}] must be one of: ${label}`)};`,
+      )
+      continue
+    }
+
+    if (isSchemaObject(pos) && hasType(pos)) {
+      const pt = pos.type as string
+      const wrong = wrongTypeCondition(el, pt)
+      if (wrong) {
+        lines.push(
+          `  if (${present} && (${wrong})) ${throwError(`${field}[${i}] expected ${typeLabel(pt)}, got `, `typeof ${el}`)};`,
+        )
+      }
+    }
+  }
+
+  if (prefixItemsCapsLength(schema)) {
+    lines.push(
+      `  if (Array.isArray(${acc}) && ${acc}.length > ${prefix.length}) ${throwError(`${field} must NOT have more than ${prefix.length} items`)};`,
+    )
+  }
+
   return lines
 }
 
@@ -414,7 +492,7 @@ const generatePropertyAssertion = (
         lines.push(`  if (${acc} !== undefined && (${wrongType})) ${expected};`)
       }
     }
-    lines.push(...generateConstraintChecks(acc, propSchema, typeName, key))
+    lines.push(...generateConstraintChecks(acc, propSchema, typeName, key, context))
   }
 
   // Type-independent constraints, each runtime-gated on the value's shape:
@@ -475,7 +553,11 @@ export const generateObjectStrictAssertion = (
  * Generates a single strict-mode assertion line for a non-object scalar parser.
  * Returns null when the schema has no type information to assert on.
  */
-export const generateScalarStrictAssertion = (schema: JSONSchema, typeName: string): string | null => {
+export const generateScalarStrictAssertion = (
+  schema: JSONSchema,
+  typeName: string,
+  rootSchema?: Record<string, unknown>,
+): string | null => {
   const got = 'input === null ? "null" : typeof input'
 
   const instanceOf = getMjstInstanceOf(schema)
@@ -504,6 +586,8 @@ export const generateScalarStrictAssertion = (schema: JSONSchema, typeName: stri
       )
     }
     lines.push(...generateContainsCheck('input', schema, `[${typeName}]`))
+    // Tuple `prefixItems`: assert each position and cap length under items:false.
+    lines.push(...generatePrefixItemsAssertion('input', `[${typeName}]`, schema, rootSchema))
   }
 
   return lines.join('\n')
