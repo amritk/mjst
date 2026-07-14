@@ -1,4 +1,5 @@
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
+import { refToFilename } from '@amritk/helpers/ref-to-filename'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import {
   hasAdditionalProperties,
@@ -44,12 +45,29 @@ const arbitraryName = (typeName: string): string => `${typeName}Arbitrary`
  * identifier would reference a `const` mid-initialization and throw a TDZ
  * `ReferenceError` at import. `usedTie` records whether that happened so the
  * caller knows to wrap the expression in `fc.letrec`.
+ *
+ * `lazyRefFilenames` holds the filenames of *other* types this one shares a
+ * cross-file `$ref` cycle with (A→B→A across modules). A reference to one of
+ * them must be emitted lazily too — an eager top-level identifier would read a
+ * still-uninitialized `const` from the sibling module (circular-ESM TDZ) at
+ * import. Unlike a self-reference, these live in another file, so `fc.letrec`'s
+ * `tie` cannot reach them; they are deferred at generation time instead.
  */
 type ExprCtx = {
   readonly suffix: string
   readonly selfArbName: string
   readonly usedTie: { value: boolean }
+  readonly lazyRefFilenames: ReadonlySet<string>
 }
+
+/**
+ * Wraps a cross-module arbitrary reference so the imported binding is read at
+ * generation time rather than at module-init time. `fc.constant(null).chain`
+ * stores the thunk and only invokes it when a value is generated — by which
+ * point every module in the cycle has finished initializing — so the otherwise
+ * eager identifier never touches a `const` in its TDZ.
+ */
+const lazyRef = (arbName: string): string => `fc.constant(null).chain(() => ${arbName})`
 
 /** The letrec key used for a type's own (self-referential) arbitrary. */
 const SELF_KEY = 'self'
@@ -310,6 +328,12 @@ const arbitraryExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
       ctx.usedTie.value = true
       return `tie(${JSON.stringify(SELF_KEY)})`
     }
+    // A reference to a sibling this type shares a cross-file cycle with is the
+    // same TDZ hazard one module over, and `tie` cannot reach across modules —
+    // defer the imported binding until generation time instead.
+    if (ctx.lazyRefFilenames.has(refToFilename(schema.$ref))) {
+      return lazyRef(name)
+    }
     return name
   }
 
@@ -355,15 +379,24 @@ const arbitraryExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
  * tied lazily — a plain `const NodeArbitrary = fc.record({ next: NodeArbitrary })`
  * would throw a TDZ `ReferenceError` the moment the module is imported.
  *
+ * `lazyRefFilenames` names the sibling files this type shares a cross-file `$ref`
+ * cycle with; references to those are deferred so mutually recursive modules do
+ * not read each other's `const` before it is initialized (see {@link ExprCtx}).
+ *
  * @example
  * ```typescript
  * generateArbitrary({ type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }, 'Info')
  * // export const InfoArbitrary: fc.Arbitrary<Info> = fc.record({ "name": fc.string() })
  * ```
  */
-export const generateArbitrary = (schema: JSONSchema, typeName: string, suffix = ''): string => {
+export const generateArbitrary = (
+  schema: JSONSchema,
+  typeName: string,
+  suffix = '',
+  lazyRefFilenames: ReadonlySet<string> = new Set(),
+): string => {
   const selfArbName = arbitraryName(typeName)
-  const ctx: ExprCtx = { suffix, selfArbName, usedTie: { value: false } }
+  const ctx: ExprCtx = { suffix, selfArbName, usedTie: { value: false }, lazyRefFilenames }
   const expr = arbitraryExpr(schema, ctx)
 
   if (ctx.usedTie.value) {
