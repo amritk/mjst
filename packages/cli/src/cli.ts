@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process'
-import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
-import { getAdapter } from '@amritk/adapters/get-adapter'
 import { buildSchema } from '@amritk/generate-parsers'
 import { buildValidatorSchema } from '@amritk/generate-validators'
 import { deriveRootTypeName } from '@amritk/helpers/derive-root-type-name'
@@ -17,7 +16,7 @@ import { detectHelpersMode } from './detect-helpers-mode'
 import { emitExamples } from './emit-examples'
 import { HELP_TEXT } from './help-text'
 import { loadConfig } from './load-config'
-import { loadSchemaModule } from './load-schema-module'
+import { loadSchema } from './load-schema'
 import { parseCliArgs } from './parse-cli-args'
 import { readVersion } from './read-version'
 import { resolveImportExt } from './resolve-import-ext'
@@ -69,19 +68,6 @@ const extractConfigPath = (args: readonly string[]): string | undefined => {
   }
 
   return undefined
-}
-
-/** Reads a JSON Schema off disk, or loads a module and converts it via its adapter. */
-const loadSchema = async (config: Partial<CliConfig>, schemaPath: string): Promise<unknown> => {
-  const inputFormat = config.input ?? 'json'
-
-  if (inputFormat === 'json') {
-    return JSON.parse(await readFile(schemaPath, 'utf-8'))
-  }
-
-  console.log(`Input format: ${inputFormat}`)
-  const source = await loadSchemaModule(schemaPath, config.export)
-  return getAdapter(inputFormat).toJSONSchema(source)
 }
 
 const DEFAULT_BANNER_TEXT =

@@ -15,6 +15,8 @@ import {
 import { type OriginMap, type ResolveError, resolveRefs, resolveRefsFromFile } from '@amritk/resolve-refs'
 import { parse as parseYaml } from '@amritk/yaml'
 
+import { hasExternalRefs } from '../has-external-refs'
+
 /** How `mjst lint` dereferences `$ref` (and `$dynamicRef`/`$recursiveRef`). */
 export type ResolverOptions = {
   /**
@@ -43,25 +45,6 @@ const parseDoc = (content: string, location: string): unknown => {
   } catch {
     return parseYaml(content)
   }
-}
-
-/** The reference keywords whose value may point at another document (a non-`#` target). */
-const REF_KEYWORDS = ['$ref', '$dynamicRef', '$recursiveRef'] as const
-
-/**
- * Whether `data` contains a reference into another document (a `$ref` value that
- * is not a same-document `#...` fragment). Internal-only documents resolve fully
- * in memory, so we avoid the disk round-trip unless an external target exists.
- */
-const hasExternalRefs = (data: unknown): boolean => {
-  if (data === null || typeof data !== 'object') return false
-  if (Array.isArray(data)) return data.some(hasExternalRefs)
-  const obj = data as Record<string, unknown>
-  for (const keyword of REF_KEYWORDS) {
-    const value = obj[keyword]
-    if (typeof value === 'string' && !value.startsWith('#')) return true
-  }
-  return Object.values(obj).some(hasExternalRefs)
 }
 
 /** Whether the file at `absolute` reads back byte-for-byte as `input` (the document we linted). */

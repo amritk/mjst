@@ -140,4 +140,25 @@ export type CliConfig = {
    * Not supported with `schemaDir`, where each schema names its own root.
    */
   readonly rootType?: string
+  /**
+   * Allow fetching `http(s)` `$ref`s while dereferencing a schema that contains
+   * cross-file or remote references. Defaults to `false`: generation stays
+   * offline unless asked, so a schema with a remote `$ref` fails rather than
+   * making a network call. A non-empty `allowedHosts` implies this.
+   */
+  readonly resolveRemote?: boolean
+  /**
+   * If set, only these hosts (e.g. `api.example.com`) may be fetched for remote
+   * `$ref`s. Restricting to an allow-list is itself an opt-in to remote fetching
+   * (it implies `resolveRemote`), and each listed host bypasses the private-host
+   * guard.
+   */
+  readonly allowedHosts?: readonly string[]
+  /**
+   * Permit remote `$ref`s to private, loopback, and link-local hosts. Defaults
+   * to `false`: such targets are refused as a best-effort SSRF guard (notably the
+   * `169.254.169.254` cloud-metadata endpoint). An explicit `allowedHosts` entry
+   * always bypasses this guard.
+   */
+  readonly allowPrivateHosts?: boolean
 }

@@ -108,4 +108,29 @@ describe('generated-code-syntax', () => {
     const code = generateParserFunction(schema, 'Everything')
     expect(syntaxErrors(code)).toEqual([])
   })
+
+  it('emits a parseable strict parser for contains / dependent* / propertyNames', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: {
+        xs: {
+          type: 'array',
+          items: { type: 'number' },
+          contains: { type: 'number', minimum: 5 },
+          minContains: 1,
+          maxContains: 3,
+        },
+        card: { type: 'string' },
+      },
+      dependentRequired: { card: ['addr'] },
+      dependentSchemas: { card: { required: ['addr'], properties: { addr: { type: 'string' } } } },
+      propertyNames: { pattern: '^[a-zA-Z]+$', maxLength: 20 },
+    }
+    expect(syntaxErrors(generateParserFunction(schema, 'KeywordHeavy', { strict: true }))).toEqual([])
+  })
+
+  it('emits a parseable strict parser for a property-less constrained-key map', () => {
+    const schema: JSONSchema = { type: 'object', propertyNames: { maxLength: 3 } }
+    expect(syntaxErrors(generateParserFunction(schema, 'KeyMap', { strict: true }))).toEqual([])
+  })
 })
