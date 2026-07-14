@@ -65,8 +65,22 @@ export const parseYaml = <T = unknown>(source: string, options: IParserOptions =
   // A configured severity (Warning/Information/Hint) still detects duplicates; we
   // just re-map the reported severity below. Only `off`/`false` turns detection off.
   const dupSeverity = typeof duplicateKeys === 'number' ? duplicateKeys : DiagnosticSeverity.Error
+  // Incompatible-value detection is opt-in: it runs only when a severity is
+  // configured. `undefined`/`off`/`false` leaves it disabled.
+  const incompatibleValues = options.incompatibleValues
+  const incompatSeverity = typeof incompatibleValues === 'number' ? incompatibleValues : undefined
   const docs = parseAllDocuments(source, { uniqueKeys: !dedupe })
   const index = new Map<string, IRange>()
+
+  const diagnostics: IDiagnostic[] = []
+  const pushError = (severity: DiagnosticSeverity, message: string, start: number, end: number, code?: string) => {
+    diagnostics.push({
+      ...(code !== undefined ? { code } : {}),
+      message,
+      severity,
+      range: { start: lineMap.positionAt(start), end: lineMap.positionAt(end) },
+    })
+  }
 
   const rangeOf = (node: YamlNode): IRange => ({
     start: lineMap.positionAt(node.start),
@@ -77,7 +91,21 @@ export const parseYaml = <T = unknown>(source: string, options: IParserOptions =
     if (node == null) return
     index.set(pathKey(path), rangeOf(node))
 
-    if (isMap(node)) {
+    if (isScalar(node)) {
+      // The core schema projects `.nan`/`.inf`/`-.inf` to non-finite JS numbers,
+      // which `JSON.stringify` silently rewrites to `null`. Report them when the
+      // caller opted in, so a value that won't survive a JSON round-trip is caught.
+      const value = node.value
+      if (incompatSeverity !== undefined && typeof value === 'number' && !Number.isFinite(value)) {
+        pushError(
+          incompatSeverity,
+          `Value ${String(value)} cannot be represented in JSON and will serialize to null.`,
+          node.start,
+          node.end,
+          'INCOMPATIBLE_VALUE',
+        )
+      }
+    } else if (isMap(node)) {
       for (const item of node.items) {
         if (!isPair(item)) continue
         walk(item.value, [...path, keyToString(item.key)])
@@ -89,14 +117,6 @@ export const parseYaml = <T = unknown>(source: string, options: IParserOptions =
     }
   }
 
-  const diagnostics: IDiagnostic[] = []
-  const pushError = (severity: DiagnosticSeverity, message: string, start: number, end: number) => {
-    diagnostics.push({
-      message,
-      severity,
-      range: { start: lineMap.positionAt(start), end: lineMap.positionAt(end) },
-    })
-  }
   const collectProblems = (doc: YamlDocument) => {
     for (const err of doc.errors) {
       // Duplicate keys honor the configured severity; every other parser error is

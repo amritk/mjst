@@ -56,6 +56,28 @@ describe('parseYaml', () => {
     expect(diagnostics[0]?.severity).toBe(DiagnosticSeverity.Warning)
   })
 
+  it('ignores JSON-incompatible values unless detection is enabled', () => {
+    // `.inf`/`.nan` are valid core-schema floats, so a bare parse stays clean.
+    const { diagnostics } = parseYaml('a: .inf\nb: .nan\n')
+    expect(diagnostics).toHaveLength(0)
+  })
+
+  it('reports non-finite numbers at the configured severity', () => {
+    const { diagnostics } = parseYaml('pos: .inf\nneg: -.inf\nnan: .nan\nok: 1.5\n', {
+      incompatibleValues: DiagnosticSeverity.Warning,
+    })
+    expect(diagnostics).toHaveLength(3)
+    expect(diagnostics.every((d) => d.severity === DiagnosticSeverity.Warning)).toBe(true)
+    expect(diagnostics.every((d) => d.code === 'INCOMPATIBLE_VALUE')).toBe(true)
+    // The diagnostic points at the offending value, not the key.
+    expect(diagnostics[0]?.range.start).toEqual({ line: 0, character: 5 })
+  })
+
+  it('leaves incompatible-value detection off when set to "off"', () => {
+    const { diagnostics } = parseYaml('a: .inf\n', { incompatibleValues: 'off' })
+    expect(diagnostics).toHaveLength(0)
+  })
+
   // L1: a null map key used to render as `''` and collide with the root path;
   // distinct paths must now resolve to distinct locations.
   it('does not collide a null map key with the document root', () => {

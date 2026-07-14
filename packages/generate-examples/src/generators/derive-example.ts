@@ -6,6 +6,8 @@ import {
   hasAnyOf,
   hasConst,
   hasDefault,
+  hasDependentRequired,
+  hasDependentSchemas,
   hasEnum,
   hasExamples,
   hasExclusiveMaximum,
@@ -15,6 +17,7 @@ import {
   hasMaxItems,
   hasMaximum,
   hasMaxLength,
+  hasMaxProperties,
   hasMinItems,
   hasMinimum,
   hasMinLength,
@@ -22,7 +25,9 @@ import {
   hasMultipleOf,
   hasOneOf,
   hasPattern,
+  hasPatternProperties,
   hasProperties,
+  hasPropertyNames,
   hasRef,
   hasRequired,
   hasType,
@@ -30,6 +35,8 @@ import {
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
+import { makeInstanceCheck, needsValidationFilter } from './schema-validation'
 
 /** Lowercases the first character of a name. e.g. "User" → "user" */
 const lowerFirst = (name: string): string => name.charAt(0).toLowerCase() + name.slice(1)
@@ -236,7 +243,20 @@ export const deriveExample = (
   seen: ReadonlySet<string> = new Set(),
 ): unknown => {
   if (!isSchemaObject(schema)) return null
+  const base = deriveBase(schema, rootSchema, seen)
+  // Keywords the structural deriver can't fully honour (`if`/`then`/`else`,
+  // `not`, `oneOf` exclusivity) are reconciled by validating candidates against a
+  // real validator and picking the first that passes.
+  return needsValidationFilter(schema) ? refineExample(schema, base, rootSchema, seen) : base
+}
 
+/** Structural derivation for a node, before any validating refinement. */
+const deriveBase = (
+  schema: JSONSchema,
+  rootSchema: Record<string, unknown> | undefined,
+  seen: ReadonlySet<string>,
+): unknown => {
+  if (!isSchemaObject(schema)) return null
   if (hasConst(schema)) return schema.const
   if (hasExamples(schema) && Array.isArray(schema.examples) && schema.examples.length > 0) return schema.examples[0]
   if (hasDefault(schema)) return schema.default
@@ -279,6 +299,54 @@ export const deriveExample = (
   return null
 }
 
+/** The applicator keywords whose satisfaction is reconciled by {@link refineExample}. */
+const REFINED_APPLICATORS = ['if', 'then', 'else', 'not', 'oneOf'] as const
+
+/** A shallow copy of `schema` with the refined applicator keywords removed. */
+const structuralOnly = (schema: JSONSchema): JSONSchema => {
+  const clone = { ...(schema as Record<string, unknown>) }
+  for (const key of REFINED_APPLICATORS) delete clone[key]
+  return clone as JSONSchema
+}
+
+/**
+ * Reconciles keywords the structural deriver can't satisfy on its own
+ * (`if`/`then`/`else`, `not`, `oneOf` exclusivity). It validates the structural
+ * `base` against the full schema and, if it fails, tries alternative candidates —
+ * each `oneOf` branch, and the `then`/`else` branches merged with the structural
+ * siblings — returning the first that validates. Falls back to `base` when none
+ * do (a best-effort for schemas that can't be satisfied structurally, e.g. an
+ * adversarial `not`).
+ */
+const refineExample = (
+  schema: JSONSchema,
+  base: unknown,
+  rootSchema: Record<string, unknown> | undefined,
+  seen: ReadonlySet<string>,
+): unknown => {
+  const check = makeInstanceCheck(schema, rootSchema)
+  if (check(base)) return base
+
+  const raw = schema as Record<string, unknown>
+  const structural = structuralOnly(schema)
+  const combine = (branch: unknown): unknown =>
+    deriveExample({ allOf: [structural, branch as JSONSchema] } as JSONSchema, rootSchema, seen)
+
+  const candidates: unknown[] = []
+  if (hasOneOf(schema)) {
+    for (const branch of schema.oneOf) if (branch !== undefined) candidates.push(combine(branch))
+  }
+  if ('if' in raw) {
+    if (raw['then'] !== undefined) candidates.push(combine(raw['then']))
+    if (raw['else'] !== undefined) candidates.push(combine(raw['else']))
+    // `if` failing (so neither `then` nor a matched `else` applies) is also valid.
+    candidates.push(deriveExample(structural, rootSchema, seen))
+  }
+
+  for (const candidate of candidates) if (check(candidate)) return candidate
+  return base
+}
+
 /**
  * True when a candidate value (e.g. an `enum`/`const` member) satisfies the
  * node's simple string-length and numeric-range constraints. Used to pick an
@@ -317,38 +385,165 @@ const deriveForType = (
       return null
     case 'array':
       return deriveArray(schema, rootSchema, seen)
-    case 'object': {
-      const out: Record<string, unknown> = {}
-      if (hasProperties(schema)) {
-        for (const [key, propSchema] of Object.entries(schema.properties)) {
-          out[key] = deriveExample(propSchema, rootSchema, seen)
-        }
-      }
-      const additional = hasAdditionalProperties(schema) ? schema.additionalProperties : false
-      const additionalSchema = isSchemaObject(additional) ? additional : undefined
-      // Extra keys are allowed unless `additionalProperties: false` forbids them.
-      const extrasAllowed = !(hasAdditionalProperties(schema) && schema.additionalProperties === false)
-      // A required key with no `properties` entry still needs a value. Use the
-      // `additionalProperties` schema when one constrains it, else a null.
-      if (hasRequired(schema)) {
-        for (const key of schema.required) {
-          if (key in out) continue
-          out[key] = additionalSchema ? deriveExample(additionalSchema, rootSchema, seen) : null
-        }
-      }
-      // Synthesize filler keys to reach `minProperties` when extras are allowed.
-      if (hasMinProperties(schema) && extrasAllowed) {
-        let n = 0
-        while (Object.keys(out).length < schema.minProperties) {
-          const key = `extra${n++}`
-          if (key in out) continue
-          out[key] = additionalSchema ? deriveExample(additionalSchema, rootSchema, seen) : null
-        }
-      }
-      return out
-    }
+    case 'object':
+      return deriveObject(schema, rootSchema, seen)
     default:
       return null
+  }
+}
+
+/**
+ * Builds an object value honouring `properties`/`required`/`additionalProperties`
+ * plus the presence-gated and key-shaped keywords: `patternProperties` and
+ * `additionalProperties` pick the value schema for synthesized keys,
+ * `propertyNames` constrains those keys, `dependentRequired`/`dependentSchemas`
+ * add keys once their trigger is present, and `minProperties`/`maxProperties`
+ * bound the key count.
+ */
+const deriveObject = (
+  schema: JSONSchema,
+  rootSchema: Record<string, unknown> | undefined,
+  seen: ReadonlySet<string>,
+): Record<string, unknown> => {
+  const out: Record<string, unknown> = {}
+
+  const patternEntries: Array<[RegExp, JSONSchema]> = hasPatternProperties(schema)
+    ? Object.entries(schema.patternProperties).flatMap(([source, sub]) => {
+        try {
+          return [[new RegExp(source), sub]] as Array<[RegExp, JSONSchema]>
+        } catch {
+          return []
+        }
+      })
+    : []
+  const additional = hasAdditionalProperties(schema) ? schema.additionalProperties : false
+  const additionalSchema = isSchemaObject(additional) ? additional : undefined
+  const additionalClosed = hasAdditionalProperties(schema) && schema.additionalProperties === false
+  // With `additionalProperties: false`, extra keys are still allowed when they
+  // match a `patternProperties` entry; only a fully closed object forbids all.
+  const extrasAllowed = !additionalClosed || patternEntries.length > 0
+  const nameCheck = hasPropertyNames(schema) ? makeInstanceCheck(schema.propertyNames, rootSchema) : undefined
+
+  // The value schema for a key not declared in `properties`: the matching
+  // `patternProperties` (intersected when several match), else `additionalProperties`.
+  const valueSchemaFor = (key: string): JSONSchema | undefined => {
+    const matches = patternEntries.filter(([re]) => re.test(key)).map(([, sub]) => sub)
+    if (matches.length === 1) return matches[0]
+    if (matches.length > 1) return { allOf: matches } as JSONSchema
+    return additionalSchema
+  }
+  const addKey = (key: string): void => {
+    const sub = valueSchemaFor(key)
+    out[key] = sub !== undefined ? deriveExample(sub, rootSchema, seen) : null
+  }
+
+  if (hasProperties(schema)) {
+    for (const [key, propSchema] of Object.entries(schema.properties)) {
+      out[key] = deriveExample(propSchema, rootSchema, seen)
+    }
+  }
+  // A required key with no `properties` entry still needs a value.
+  if (hasRequired(schema)) {
+    for (const key of schema.required) if (!(key in out)) addKey(key)
+  }
+  // `dependentRequired`: once a trigger key is present, its dependencies must be too.
+  if (hasDependentRequired(schema)) {
+    for (const [trigger, deps] of Object.entries(schema.dependentRequired)) {
+      if (!(trigger in out)) continue
+      for (const dep of deps) if (!(dep in out)) addKey(dep)
+    }
+  }
+  // `dependentSchemas`: once a trigger key is present, the object must also
+  // satisfy the dependency subschema — apply its `properties`/`required`.
+  if (hasDependentSchemas(schema)) {
+    for (const [trigger, sub] of Object.entries(schema.dependentSchemas)) {
+      if (trigger in out && isSchemaObject(sub)) applyDependentSchema(out, sub, rootSchema, seen)
+    }
+  }
+  // Synthesize filler keys to reach `minProperties` when extras are allowed.
+  if (hasMinProperties(schema) && extrasAllowed) {
+    let n = 0
+    let guard = 0
+    while (Object.keys(out).length < schema.minProperties && guard++ < schema.minProperties + 50) {
+      const key = synthKey(n++, patternEntries, schema, nameCheck)
+      if (key === undefined || key in out) continue
+      addKey(key)
+    }
+  }
+  // Enforce `maxProperties` by dropping keys that aren't required (directly or via
+  // a present `dependentRequired` trigger) until the count fits.
+  if (hasMaxProperties(schema)) enforceMaxProperties(out, schema, schema.maxProperties)
+
+  return out
+}
+
+/** Applies a `dependentSchemas` branch's object shape (`properties`/`required`) in place. */
+const applyDependentSchema = (
+  out: Record<string, unknown>,
+  sub: JSONSchema,
+  rootSchema: Record<string, unknown> | undefined,
+  seen: ReadonlySet<string>,
+): void => {
+  if (hasProperties(sub)) {
+    for (const [key, propSchema] of Object.entries(sub.properties)) {
+      if (!(key in out)) out[key] = deriveExample(propSchema, rootSchema, seen)
+    }
+  }
+  if (hasRequired(sub)) {
+    const propSchemas = hasProperties(sub) ? sub.properties : {}
+    for (const key of sub.required) {
+      if (key in out) continue
+      const propSchema = propSchemas[key]
+      out[key] = propSchema !== undefined ? deriveExample(propSchema, rootSchema, seen) : null
+    }
+  }
+}
+
+/**
+ * Produces a candidate key name for the i-th synthesized property. Prefers a key
+ * matching a `patternProperties` entry (so the entry supplies its value schema),
+ * then one matching `propertyNames`, then a plain `extraN`. Returns `undefined`
+ * when the candidate can't satisfy a `propertyNames` constraint.
+ */
+const synthKey = (
+  i: number,
+  patternEntries: ReadonlyArray<readonly [RegExp, JSONSchema]>,
+  schema: JSONSchema,
+  nameCheck: ((value: unknown) => boolean) | undefined,
+): string | undefined => {
+  // Distinct keys are produced by *repeating* a base seed (`x-` → `x-x-`) rather
+  // than appending a digit: repetition is far likelier to keep matching a key
+  // pattern (`^[a-z]+$`, `^x-`) that a digit suffix would break.
+  const vary = (seed: string): string => seed.repeat(i + 1)
+  const seeds: string[] = []
+  for (const [re] of patternEntries) {
+    const sampled = sampleFromPattern(re.source, 0)
+    if (sampled !== undefined && sampled.length > 0) seeds.push(vary(sampled))
+  }
+  const propertyNames = isSchemaObject(schema) && hasPropertyNames(schema) ? schema.propertyNames : undefined
+  if (propertyNames !== undefined && isSchemaObject(propertyNames) && hasPattern(propertyNames)) {
+    const sampled = sampleFromPattern(propertyNames.pattern, 0)
+    if (sampled !== undefined && sampled.length > 0) seeds.push(vary(sampled))
+  }
+  seeds.push(vary('extra'))
+  for (const seed of seeds) {
+    if (!nameCheck || nameCheck(seed)) return seed
+  }
+  return undefined
+}
+
+/** Drops non-required keys until `out` has at most `max` properties. */
+const enforceMaxProperties = (out: Record<string, unknown>, schema: JSONSchema, max: number): void => {
+  if (Object.keys(out).length <= max) return
+  const protectedKeys = new Set<string>(hasRequired(schema) ? schema.required : [])
+  if (hasDependentRequired(schema)) {
+    for (const [trigger, deps] of Object.entries(schema.dependentRequired)) {
+      if (trigger in out) for (const dep of deps) protectedKeys.add(dep)
+    }
+  }
+  for (const key of Object.keys(out)) {
+    if (Object.keys(out).length <= max) break
+    if (!protectedKeys.has(key)) delete out[key]
   }
 }
 
