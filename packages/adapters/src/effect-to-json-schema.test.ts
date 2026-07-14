@@ -80,8 +80,91 @@ describe('effectToJsonSchema', () => {
     expect(await effectToJsonSchema(Schema.DateFromSelf)).toEqual({ 'x-mjst': { instanceOf: 'Date' } })
   })
 
-  it('throws an actionable error for a nested unrepresentable type', async () => {
+  it('rescues a nested BigIntFromSelf inside a struct', async () => {
     const schema = Schema.Struct({ a: Schema.BigIntFromSelf, b: Schema.String })
-    await expect(effectToJsonSchema(schema)).rejects.toThrow(/BigIntFromSelf \/ DateFromSelf/)
+
+    const result = await effectToJsonSchema(schema)
+
+    expect(result).toMatchObject({
+      type: 'object',
+      properties: {
+        a: { 'x-mjst': { primitive: 'bigint' } },
+        b: { type: 'string' },
+      },
+      required: ['a', 'b'],
+    })
+  })
+
+  it('rescues a nested DateFromSelf inside a struct', async () => {
+    const schema = Schema.Struct({ when: Schema.DateFromSelf, label: Schema.String })
+
+    const result = await effectToJsonSchema(schema)
+
+    expect(result).toMatchObject({
+      properties: {
+        when: { 'x-mjst': { instanceOf: 'Date' } },
+        label: { type: 'string' },
+      },
+    })
+  })
+
+  it('rescues a BigIntFromSelf nested in an array', async () => {
+    const schema = Schema.Struct({ ids: Schema.Array(Schema.BigIntFromSelf) })
+
+    const result = await effectToJsonSchema(schema)
+
+    expect(result).toMatchObject({
+      properties: {
+        ids: { type: 'array', items: { 'x-mjst': { primitive: 'bigint' } } },
+      },
+    })
+  })
+
+  it('rescues a DateFromSelf nested in a union', async () => {
+    const schema = Schema.Struct({ value: Schema.Union(Schema.String, Schema.DateFromSelf) })
+
+    const result = await effectToJsonSchema(schema)
+
+    expect(result).toMatchObject({
+      properties: {
+        value: { anyOf: [{ type: 'string' }, { 'x-mjst': { instanceOf: 'Date' } }] },
+      },
+    })
+  })
+
+  it('rescues a deeply nested unrepresentable type', async () => {
+    const schema = Schema.Struct({ outer: Schema.Struct({ inner: Schema.DateFromSelf }) })
+
+    const result = await effectToJsonSchema(schema)
+
+    expect(result).toMatchObject({
+      properties: {
+        outer: {
+          type: 'object',
+          properties: { inner: { 'x-mjst': { instanceOf: 'Date' } } },
+        },
+      },
+    })
+  })
+
+  it('keeps Schema.Date as an encoded string alongside a rescued sibling', async () => {
+    // Schema.Date decodes from a string, so it stays a string schema (referenced
+    // via the hoisted $defs) even when a sibling field forces the recursive walk.
+    const schema = Schema.Struct({ when: Schema.Date, big: Schema.BigIntFromSelf })
+
+    const result = await effectToJsonSchema(schema)
+
+    expect(result).toMatchObject({
+      properties: {
+        big: { 'x-mjst': { primitive: 'bigint' } },
+      },
+      $defs: { Date: { type: 'string' } },
+    })
+    expect(JSON.stringify(result)).toContain('#/$defs/Date')
+  })
+
+  it('throws an actionable error for a genuinely unrepresentable nested type', async () => {
+    const schema = Schema.Struct({ sym: Schema.SymbolFromSelf, ok: Schema.String })
+    await expect(effectToJsonSchema(schema)).rejects.toThrow(/no JSON Schema representation/)
   })
 })

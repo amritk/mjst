@@ -174,4 +174,29 @@ describe('build-schema', () => {
     expect(docFile?.content).toContain("import { valuesEqual } from './validation-result.js'")
     expect(docFile?.content).toContain('!valuesEqual(obj["meta"], {"a":1})')
   })
+
+  it('emits the structural allUnique helper in validation-result.ts', async () => {
+    const schema: JSONSchema = { type: 'object' }
+    const files = await buildValidatorSchema(schema, 'Doc')
+    const vrFile = files.find((f) => f.filename === 'validation-result.ts')
+
+    expect(vrFile?.content).toContain('export const allUnique')
+  })
+
+  it('imports allUnique only into files with a structural uniqueItems check', async () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: {
+        rows: { type: 'array', items: { type: 'object' }, uniqueItems: true },
+        tags: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+      },
+    }
+    const files = await buildValidatorSchema(schema, 'Doc')
+    const docFile = files.find((f) => f.filename === 'doc.ts')
+
+    expect(docFile?.content).toContain("import { allUnique } from './validation-result.js'")
+    expect(docFile?.content).toContain('!allUnique(obj["rows"] as unknown[])')
+    // Scalar-item arrays keep the cheap JSON-projection dedupe.
+    expect(docFile?.content).toContain('map((_u) => JSON.stringify(_u))')
+  })
 })
