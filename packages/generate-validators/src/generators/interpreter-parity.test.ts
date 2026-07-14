@@ -61,10 +61,11 @@ describe('generator/interpreter verdict parity', () => {
     assertParity({ type: 'object', minProperties: 2 }, values)
     assertParity({ type: 'object', maxProperties: 2 }, values)
     assertParity({ type: 'object', minProperties: 1, maxProperties: 3 }, values)
-    assertParity(
-      { type: 'object', properties: { id: { type: 'number' } }, required: ['id'], minProperties: 2 },
-      [...values, { id: 1 }, { id: 1, extra: true }],
-    )
+    assertParity({ type: 'object', properties: { id: { type: 'number' } }, required: ['id'], minProperties: 2 }, [
+      ...values,
+      { id: 1 },
+      { id: 1, extra: true },
+    ])
   })
 
   it('agrees on draft-07 dependencies (array + schema + boolean forms)', () => {
