@@ -107,6 +107,38 @@ since tsc cannot emit from `.ts` specifiers.
 > giving `parseSpecPlan` / `validateSpecPlanShape`). Pass `--root-type <Name>` to override it for
 > a single `--schema` run. Update any imports that referenced `Document` / `parseDocument`.
 
+### External and remote `$ref`s
+
+A schema can split its definitions across files. When a schema references another
+document — `{ "$ref": "./address.json" }` or `{ "$ref": "./common.json#/$defs/id" }` —
+mjst dereferences those cross-file targets before generating, inlining them into a
+single schema so the generated parsers cover the whole shape:
+
+```bash
+npx mjst --schema ./order.json --out-dir ./generated
+```
+
+Same-document refs (`#/$defs/...`) are left untouched — the generator resolves those
+itself into named type files, so nothing changes for schemas that only reference
+themselves. Local cross-file refs resolve from disk with no extra flags. Remote
+(`http(s)`) refs stay **offline by default**: a schema with a remote `$ref` fails
+rather than making a network call unless you opt in.
+
+```bash
+# Allow remote $ref fetches
+npx mjst --schema ./order.json --out-dir ./generated --resolve-remote
+
+# …restricted to specific hosts (implies --resolve-remote)
+npx mjst --schema ./order.json --out-dir ./generated --allowed-hosts schemas.example.com
+
+# …permitting private/loopback hosts (off by default as an SSRF guard)
+npx mjst --schema ./order.json --out-dir ./generated --resolve-remote --allow-private-hosts
+```
+
+Unresolvable references (a missing file, a refused host, a bad URL) fail the run with
+the underlying reason rather than emitting a half-resolved schema. This works with
+`--schema-dir` too — each schema resolves its own external references.
+
 ### Config file
 
 ```bash
@@ -348,13 +380,40 @@ The exit code is `0` when no finding reaches `--fail-severity`, `1` when one doe
 <td colspan="4">Name for the root type of a single --schema run (e.g. 'Program' yields parseProgram / validateProgramShape). When omitted, the name is derived from the schema's title, falling back to the schema filename in PascalCase (spec-plan.json → SpecPlan) and then to 'Document'. Not supported with --schema-dir, where each schema derives its own root type from its filename.<br><strong>Examples:</strong> <code>"Program"</code></td>
 </tr>
 <tr>
+<td>🌐 <code>resolveRemote</code></td>
+<td><code>--resolve-remote</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Allow fetching http(s) $refs while dereferencing a schema that contains cross-file or remote references. Off by default, so generation stays offline unless asked: a schema with a remote $ref fails rather than making a network call. Local cross-file $refs are always resolved and do not need this flag. A non-empty allowedHosts implies this.</td>
+</tr>
+<tr>
+<td>🛡️ <code>allowedHosts</code></td>
+<td><code>--allowed-hosts &lt;hosts&gt;</code></td>
+<td><code>array</code></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">Restrict remote $ref fetches to these hosts (e.g. api.example.com). Accepts a comma-separated list or the flag repeated. Providing an allow-list is itself an opt-in to remote fetching (it implies resolveRemote), and each listed host bypasses the private-host guard.<br><strong>Examples:</strong> <code>["schemas.example.com"]</code></td>
+</tr>
+<tr>
+<td>🔓 <code>allowPrivateHosts</code></td>
+<td><code>--allow-private-hosts</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Permit remote $refs to private, loopback, and link-local hosts. Off by default: such targets are refused as a best-effort SSRF guard (notably the 169.254.169.254 cloud-metadata endpoint). An explicit allowedHosts entry always bypasses this guard.</td>
+</tr>
+<tr>
 <td>⚙️ <code>config</code></td>
 <td><code>--config &lt;path&gt;</code></td>
 <td><code>string</code></td>
 <td align="center"></td>
 </tr>
 <tr>
-<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, examples, build, logWarnings, strict, stripUnknown, caseInsensitive, readonly, helpers, typeSuffix, banner, importExt, rootType). CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
+<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, examples, build, logWarnings, strict, stripUnknown, caseInsensitive, readonly, helpers, typeSuffix, banner, importExt, rootType, resolveRemote, allowedHosts, allowPrivateHosts). CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
 </tr>
 </tbody>
 </table>
