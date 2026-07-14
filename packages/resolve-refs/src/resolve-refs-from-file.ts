@@ -8,6 +8,7 @@ import {
   buildResourceRegistry,
   type ResourceRegistry,
   resolveRefInScope,
+  type ScopedTarget,
   SYNTHETIC_BASE,
 } from './resource-registry'
 import { assignKey } from './safe-assign'
@@ -397,20 +398,25 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
 
       // Classify the ref: `$id`-internal (this document), or external (another
       // document, or a fragment resolved the legacy way against this one).
-      let scoped: ReturnType<typeof resolveRefInScope>
+      // A resolved in-scope target, or undefined when the ref is external / an
+      // anchor to look up in the target document below. Typed narrowly (never
+      // `'external'`) so the later `scoped !== undefined` branches read as
+      // `ScopedTarget`; the `'external'` case is handled here and never escapes.
+      let scoped: ScopedTarget | undefined
       let targetLocation = baseLocation
       let fragment = ''
       if (keyword === '$recursiveRef') {
         fragment = value.startsWith('#') ? value.slice(1) : value
       } else {
-        scoped = resolveRefInScope(registry, keyword, value, nodeBase)
-        if (scoped === 'external' || scoped === undefined) {
+        const inScope = resolveRefInScope(registry, keyword, value, nodeBase)
+        if (inScope === 'external' || inScope === undefined) {
           const parts = splitRef(value)
           fragment = parts.fragment
-          if (scoped === 'external' && parts.filePart !== '') {
+          if (inScope === 'external' && parts.filePart !== '') {
             targetLocation = joinLocation(baseLocation, parts.filePart)
           }
-          scoped = undefined
+        } else {
+          scoped = inScope
         }
       }
 
