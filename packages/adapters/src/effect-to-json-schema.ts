@@ -19,7 +19,11 @@ type EffectAst = {
   readonly _tag?: string
   readonly annotations?: Record<string | symbol, unknown>
   // `TypeLiteral` (a struct): `{ name: type }` fields.
-  readonly propertySignatures?: ReadonlyArray<{ readonly name: string; readonly isOptional: boolean; readonly type: EffectAst }>
+  readonly propertySignatures?: ReadonlyArray<{
+    readonly name: string
+    readonly isOptional: boolean
+    readonly type: EffectAst
+  }>
   // `TupleType`: fixed `elements` followed by a variadic `rest` (e.g. `Schema.Array`).
   readonly elements?: ReadonlyArray<{ readonly isOptional: boolean; readonly type: EffectAst }>
   readonly rest?: ReadonlyArray<{ readonly type: EffectAst }>
