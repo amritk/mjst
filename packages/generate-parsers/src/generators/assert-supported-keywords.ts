@@ -44,11 +44,12 @@ export const assertNoUnsupportedKeywords = (schema: JSONSchema, typeName: string
     }
     const record = node as Record<string, unknown>
 
-    for (const keyword of ['unevaluatedProperties', 'unevaluatedItems'] as const) {
-      // `true` permits everything → no constraint → safe to ignore.
-      if (keyword in record && record[keyword] !== true) {
-        fail(keyword, 'does not implement it')
-      }
+    // `true` permits everything → no constraint → safe to ignore.
+    if ('unevaluatedProperties' in record && record['unevaluatedProperties'] !== true) {
+      fail('unevaluatedProperties', 'does not implement it')
+    }
+    if ('unevaluatedItems' in record && record['unevaluatedItems'] !== true) {
+      fail('unevaluatedItems', 'does not implement it')
     }
 
     if ('contains' in record && !canMatchSubschema(record['contains'] as JSONSchema)) {
@@ -72,7 +73,9 @@ export const assertNoUnsupportedKeywords = (schema: JSONSchema, typeName: string
       }
     }
 
-    for (const value of Object.values(record)) visit(value)
+    // `for..in` (not `Object.values`) to recurse without allocating an array per
+    // node — this walk runs for every strict parser generated.
+    for (const key in record) visit(record[key])
   }
 
   visit(schema)

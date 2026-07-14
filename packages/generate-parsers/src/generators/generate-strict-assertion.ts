@@ -498,12 +498,20 @@ const generatePropertyAssertion = (
   // Type-independent constraints, each runtime-gated on the value's shape:
   //   - `contains` asserts on arrays (no-op otherwise),
   //   - the object-level keywords assert on objects.
-  // Inline object properties are deep-validated by their own sub-parser, which
-  // runs these same object-level checks, so emitting them here too would be
-  // premature (the value has not yet been narrowed) and redundant — skip them.
-  lines.push(...generateContainsCheck(acc, propSchema, field))
-  if (!isInlineObjectProperty(propSchema)) {
-    lines.push(...generateObjectKeywordChecks(acc, propSchema, field, true))
+  // Gated on a single `isSchemaObject` + a few `in` checks so a plain scalar
+  // property — the common case — skips the costlier `isInlineObjectProperty`
+  // probe and the check builders entirely. Inline object properties are
+  // deep-validated by their own sub-parser (which runs these same object-level
+  // checks), so emitting them here too would be premature and redundant.
+  if (isSchemaObject(propSchema)) {
+    const r = propSchema as Record<string, unknown>
+    if ('contains' in r) lines.push(...generateContainsCheck(acc, propSchema, field))
+    if (
+      ('dependentRequired' in r || 'dependentSchemas' in r || 'propertyNames' in r) &&
+      !isInlineObjectProperty(propSchema)
+    ) {
+      lines.push(...generateObjectKeywordChecks(acc, propSchema, field, true))
+    }
   }
 
   return lines
@@ -543,8 +551,12 @@ export const generateObjectStrictAssertion = (
   // Object-level keywords for the object itself. `input` is already proven an
   // object above, so no runtime guard is needed. Emitted even when the schema
   // has no `properties` (e.g. a constrained-key map: `{ type: 'object',
-  // propertyNames: {...} }`).
-  lines.push(...generateObjectKeywordChecks('input', schema, `[${typeName}]`, false))
+  // propertyNames: {...} }`). Gated on a cheap presence check so a keyword-free
+  // object skips the three check builders.
+  const sr = schema as Record<string, unknown>
+  if ('dependentRequired' in sr || 'dependentSchemas' in sr || 'propertyNames' in sr) {
+    lines.push(...generateObjectKeywordChecks('input', schema, `[${typeName}]`, false))
+  }
 
   return lines
 }

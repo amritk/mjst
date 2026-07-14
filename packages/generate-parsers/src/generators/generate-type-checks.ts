@@ -8,7 +8,6 @@ import {
   hasAllOf,
   hasAnyOf,
   hasConst,
-  hasDependentRequired,
   hasEnum,
   hasExclusiveMaximum,
   hasExclusiveMinimum,
@@ -117,8 +116,11 @@ export const getUnionBranches = (schema: JSONSchema): readonly JSONSchema[] | nu
 export const hasFastPathBlockingKeyword = (schema: JSONSchema): boolean => {
   if (!isSchemaObject(schema)) return false
   const record = schema as Record<string, unknown>
+  // Plain `in` checks (not the typed `hasDependentRequired`): this runs several
+  // times per property during codegen, and a present-but-malformed keyword still
+  // belongs on the slow path, where the typed guards handle it.
   return (
-    'contains' in record || 'dependentSchemas' in record || 'propertyNames' in record || hasDependentRequired(schema)
+    'contains' in record || 'dependentSchemas' in record || 'propertyNames' in record || 'dependentRequired' in record
   )
 }
 
@@ -140,8 +142,19 @@ export const generatePropertyTypeCheck = (
 
   // Keywords the strict slow path enforces but no flat check can prove: bail so
   // neither the fast path nor the shape validator accepts a value they would
-  // otherwise wave through untested.
-  if (hasFastPathBlockingKeyword(schema)) return null
+  // otherwise wave through untested. Inlined here (rather than calling
+  // hasFastPathBlockingKeyword) to reuse the isSchemaObject narrowing above —
+  // this is a codegen hot path hit several times per property. Keep in sync with
+  // hasFastPathBlockingKeyword.
+  const record = schema as Record<string, unknown>
+  if (
+    'contains' in record ||
+    'dependentSchemas' in record ||
+    'propertyNames' in record ||
+    'dependentRequired' in record
+  ) {
+    return null
+  }
 
   // $ref via shape predicate (deep fast-path through nested types).
   if (useRefImports && hasRef(schema)) {
