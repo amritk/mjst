@@ -51,6 +51,14 @@ const CASES: string[] = [
   "s: 'para one\n  still one\n\n  '\n",
   's: "para one\n  still one\n\n  "\n',
   "s: 'a\n\n\n  '\nt: 'a\n  b\n\n  c'\n",
+  // Multi-line *plain* scalars inside flow collections: line folding must match
+  // quoted-scalar folding — a single break is a space, a run of n breaks yields
+  // n-1 newlines, and each wrapped line's leading indentation is not content.
+  '[a\nb, c]\n',
+  '[\n  a\n  b,\n  c\n]\n',
+  '{k: a\n  b, m: 2}\n',
+  '[a\n\n\n  b]\n',
+  '{key\n  two: val\n  ue}\n',
   // A bare `-` at end of line is an entry with an empty (null) value, not the
   // end of the sequence — so a trailing empty item must be preserved, and a
   // block sequence written entirely as bare dashes must still parse as a list.

@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs'
 import { resolve as resolvePath } from 'node:path'
 import {
   createDocument,
+  DiagnosticSeverity,
   type Document,
+  type IDiagnostic,
   type IOriginMap,
   type ISourceDocument,
   type ISourceSet,
@@ -10,7 +12,7 @@ import {
   type LintResolver,
   resolveSourceOriginFromMap,
 } from '@amritk/lint'
-import { type OriginMap, resolveRefs, resolveRefsFromFile } from '@amritk/resolve-refs'
+import { type OriginMap, type ResolveError, resolveRefs, resolveRefsFromFile } from '@amritk/resolve-refs'
 import { parse as parseYaml } from '@amritk/yaml'
 
 import { hasExternalRefs } from '../has-external-refs'
@@ -92,6 +94,30 @@ const buildSourceSet = (
   }
 }
 
+/** A zero-width range at the document start, for resolve errors with no recoverable position. */
+const DOCUMENT_START = { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }
+
+/**
+ * Maps resolver failures ({@link ResolveError}) into lint findings so an
+ * unresolvable `$ref` — a typo'd pointer, a missing file, a refused/failed
+ * remote fetch — surfaces as a diagnostic instead of being silently dropped. An
+ * error carrying a JSON path is anchored to that node's position in the root
+ * document (best effort, `closest`); otherwise the finding is document-level.
+ */
+const toFindings = (errors: ResolveError[], root: Document): IDiagnostic[] =>
+  errors.map((error) => {
+    const location = error.path.length > 0 ? root.getLocationForJsonPath(error.path, true) : undefined
+    const finding: IDiagnostic = {
+      code: 'unresolved-ref',
+      message: error.message,
+      path: error.path,
+      severity: DiagnosticSeverity.Error,
+      range: location?.range ?? DOCUMENT_START,
+    }
+    if (root.source !== undefined) finding.source = root.source
+    return finding
+  })
+
 /**
  * Builds a {@link LintResolver} backed by `@amritk/resolve-refs`, dereferencing
  * `$ref`, `$dynamicRef`/`$dynamicAnchor`, and `$recursiveRef`/`$recursiveAnchor`
@@ -116,11 +142,19 @@ export const createLintResolver = (options: ResolverOptions = {}): LintResolver 
     if (source && hasExternalRefs(document.data)) {
       const absolute = resolvePath(source)
       if (readsBackAs(absolute, input)) {
-        const { resolved, origins } = await resolveRefsFromFile(absolute, fromFileOptions)
-        return { resolved, sources: buildSourceSet(document, resolved, origins, absolute) }
+        const { resolved, origins, errors } = await resolveRefsFromFile(absolute, fromFileOptions)
+        return {
+          resolved,
+          sources: buildSourceSet(document, resolved, origins, absolute),
+          ...(errors.length > 0 ? { diagnostics: toFindings(errors, document) } : {}),
+        }
       }
     }
-    const { resolved, origins } = resolveRefs(document.data, { trackOrigins: true })
-    return { resolved, sources: buildSourceSet(document, resolved, origins, '') }
+    const { resolved, origins, errors } = resolveRefs(document.data, { trackOrigins: true })
+    return {
+      resolved,
+      sources: buildSourceSet(document, resolved, origins, ''),
+      ...(errors.length > 0 ? { diagnostics: toFindings(errors, document) } : {}),
+    }
   }
 }

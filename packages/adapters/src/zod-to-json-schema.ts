@@ -1,6 +1,9 @@
 import { MJST_EXTENSION_KEY } from '@amritk/helpers/mjst-extension'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import type { AdapterOptions } from './adapter'
+import { reportLossyConstructs } from './report-lossy-constructs'
+
 // Zod 4's `toJSONSchema` does the heavy lifting. We only describe the slice of
 // its surface we touch so the adapter does not need a hard dependency on Zod's
 // types — `zod` stays an optional peer dependency loaded at runtime.
@@ -136,7 +139,7 @@ const mergeClosedObjectAllOf = (node: unknown): unknown => {
   return out
 }
 
-export const zodToJsonSchema = async (source: unknown): Promise<JSONSchema> => {
+export const zodToJsonSchema = async (source: unknown, options?: AdapterOptions): Promise<JSONSchema> => {
   if (typeof source !== 'object' || source === null) {
     const received = source === null ? 'null' : typeof source
     throw new Error(`Zod adapter expected a Zod schema but received ${received}.`)
@@ -171,11 +174,10 @@ export const zodToJsonSchema = async (source: unknown): Promise<JSONSchema> => {
     throw new Error(`Zod adapter failed to convert the schema. Is it a valid Zod schema?\n${String(error)}`)
   }
 
-  if (droppedTypes.size > 0) {
-    console.warn(
-      `[mjst] Zod adapter: ${[...droppedTypes].sort().join(', ')} ${droppedTypes.size === 1 ? 'has' : 'have'} no JSON Schema representation and became "accept anything". The generated type will be wider than the Zod schema.`,
-    )
-  }
+  // Surface every widened type in one batched, branded notice (or throw in
+  // strict mode) so the loss is not silent — the same treatment the Valibot
+  // adapter gives its own unrepresentable constructs.
+  reportLossyConstructs('Zod', droppedTypes, options?.strict)
 
   // The dialect marker is noise for the generators, which already target 2020-12.
   delete json['$schema']
