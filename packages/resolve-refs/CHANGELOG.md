@@ -1,5 +1,54 @@
 # @amritk/resolve-refs
 
+## 0.4.0
+
+### Minor Changes
+
+- 641afa9: Close four resolution gaps:
+
+  - **Cycles keep their recursive branch.** A reference cycle no longer collapses
+    to an empty `{}` stub. The cycle point stays a `$ref` that resolves within
+    the output document — a cross-file cycle target is hoisted into the root's
+    `$defs` — so recursive schemas survive dereferencing intact.
+  - **`$id` base-URI scoping.** A ref whose URI (resolved against the enclosing
+    base) matches an embedded resource's `$id` now resolves to it without
+    fetching, and `$anchor`/`$dynamicAnchor` names bind within the resource that
+    declares them before any document-global fallback — so bundled schemas and
+    duplicate anchor names resolve correctly. Plain `#/pointer` fragments stay
+    document-root-relative, and document retrieval remains location-based; the
+    exact subset is documented in the README.
+  - **OpenAPI Reference Objects.** A `$ref` whose only siblings are `summary` /
+    `description` inlines the target with those annotations overriding, instead
+    of an `allOf` wrapper that is invalid in Path Item / Response / Parameter
+    positions.
+  - **Remote fetch options.** New `ResolveOptions`: `headers` (record or per-URL
+    function; never sent across cross-origin redirects), `fetch` (custom
+    implementation — the SSRF guard still checks every hop), `timeoutMs`,
+    `maxRedirects`, `maxBytes`, and `cache: false` to bypass the session cache
+    for one call.
+
+### Patch Changes
+
+- 4715e6f: `resolveRefs` now records an error for each external (non-`#`) `$ref` it
+  encounters instead of silently leaving the node unresolved. The in-memory
+  resolver can't load other documents, so an external ref (another file or an
+  http(s) URL) is kept in place and surfaced on `result.errors` with a message
+  pointing callers at `resolveRefsFromFile` — matching how unresolvable internal
+  pointers are already reported, so a half-resolved document no longer passes
+  without a diagnostic.
+- 22c4b8f: Fix two SSRF-guard gaps in remote `$ref` resolution:
+
+  - Trailing-dot hostnames (`localhost.`, `api.localhost.`) — the FQDN-root form
+    that resolves to the same address — bypassed the by-name loopback check.
+    `isPrivateHost` now strips a trailing dot before matching, so these are
+    refused by default like their dotless forms.
+  - The process-global remote document cache was consulted before the SSRF/policy
+    check, so a URL fetched once under permissive options (`allowPrivateHosts`, a
+    broad `allowedHosts`) could be served to a later call whose options
+    (`remote: false`, a stricter host set, or the default private-host guard)
+    should refuse it. The policy is now re-evaluated on every remote serve,
+    including cache hits.
+
 ## 0.3.0
 
 ### Minor Changes

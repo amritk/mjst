@@ -1,5 +1,30 @@
 # @amritk/helpers
 
+## 0.13.0
+
+### Minor Changes
+
+- 9bf3330: feat: honour previously-ignored schema constraints so generated examples and
+  arbitraries validate against their own schema. Both codepaths now implement
+  `patternProperties`, `propertyNames`, `dependentRequired`, `dependentSchemas`,
+  `minProperties`, `maxProperties`, and `contains` (the arbitrary path previously
+  skipped `minProperties`/`contains`), and filter `enum` members by their sibling
+  length/range/pattern constraints. `if`/`then`/`else`, `not`, and `oneOf`
+  exclusivity — which no structural generator captures — are reconciled by a
+  post-generation validating filter built with `@amritk/runtime-validators`:
+  `deriveExample` re-derives and rejects candidates until one validates, and the
+  generated arbitrary appends a `.filter(...)` backed by a runtime validator (that
+  file then imports `@amritk/runtime-validators`; files that need no filter don't).
+  `@amritk/helpers` gains `hasPatternProperties`, `hasDependentSchemas`,
+  `hasContains`, `hasNot`, and `hasIf` schema guards.
+- e612130: `buildDynamicRefMap` and `extractDynamicAnchorDefs` now scan the whole schema
+  document instead of only direct `$defs` entries, so a `$dynamicAnchor` declared
+  anywhere in the tree gets its `$dynamicRef`s rewritten and its target file
+  generated. Previously those bindings were silently lost. Anchor names map to
+  the JSON Pointer of the declaring subschema (first occurrence wins); a
+  `$dynamicAnchor` on the document root itself is still skipped, since a
+  `$ref: "#"` self-reference has no generatable output file.
+
 ## 0.12.0
 
 ### Minor Changes

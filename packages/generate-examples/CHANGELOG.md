@@ -1,5 +1,60 @@
 # @amritk/generate-examples
 
+## 0.5.0
+
+### Minor Changes
+
+- 9bf3330: feat: honour previously-ignored schema constraints so generated examples and
+  arbitraries validate against their own schema. Both codepaths now implement
+  `patternProperties`, `propertyNames`, `dependentRequired`, `dependentSchemas`,
+  `minProperties`, `maxProperties`, and `contains` (the arbitrary path previously
+  skipped `minProperties`/`contains`), and filter `enum` members by their sibling
+  length/range/pattern constraints. `if`/`then`/`else`, `not`, and `oneOf`
+  exclusivity — which no structural generator captures — are reconciled by a
+  post-generation validating filter built with `@amritk/runtime-validators`:
+  `deriveExample` re-derives and rejects candidates until one validates, and the
+  generated arbitrary appends a `.filter(...)` backed by a runtime validator (that
+  file then imports `@amritk/runtime-validators`; files that need no filter don't).
+  `@amritk/helpers` gains `hasPatternProperties`, `hasDependentSchemas`,
+  `hasContains`, `hasNot`, and `hasIf` schema guards.
+
+### Patch Changes
+
+- a6f4606: Collect `$ref` imports from the full schema surface the generators traverse.
+
+  `collectExampleImports` only harvested `$ref`s from top-level
+  `properties`/`items`/`additionalProperties` and top-level combinator branches,
+  but `arbitraryExpr` (and the type generator) recurse deeper — into tuple
+  `prefixItems`, array-form `items`, `patternProperties`, and combinators nested
+  under a property. A `$ref` hidden in any of those emitted a bare `XxxArbitrary`
+  identifier (or a bare `Xxx` type) with no matching import, producing an example
+  file that failed to compile. Import collection now recurses over that same
+  surface via a single ref-walking helper, so every referenced ref is imported.
+
+- 9c98116: Emit lazy references for cross-file `$ref` cycles so mutually recursive schemas
+  no longer crash on import.
+
+  Previously only direct self-references were tied lazily (via `fc.letrec`). A
+  mutual cycle spanning files (`a → b → a`) emitted eager top-level references
+  between the generated modules, which threw a circular-ESM TDZ `ReferenceError`
+  the moment the arbitraries were imported. The builder now detects strongly
+  connected components in the ref graph and defers references between cycle
+  members (`fc.constant(null).chain(() => OtherArbitrary)`), breaking the import
+  cycle while leaving non-cycle references eager.
+
+- 7b37ec2: fix(generate-examples): construct `type: number` + `multipleOf` arbitraries
+  analytically instead of filtering random doubles. The old
+  `fc.double(...).filter((n) => n % m === 0)` almost never passed, so fast-check
+  threw "too many filtered values" at sample time. The arbitrary now draws an
+  integer `k` and emits `k * multipleOf`, honouring `exclusiveMinimum` /
+  `exclusiveMaximum` and clamping back into bounds to absorb floating-point drift.
+- Updated dependencies [9bf3330]
+- Updated dependencies [e612130]
+- Updated dependencies [74498a7]
+- Updated dependencies [175e4f0]
+  - @amritk/helpers@0.13.0
+  - @amritk/runtime-validators@0.7.0
+
 ## 0.4.5
 
 ### Patch Changes

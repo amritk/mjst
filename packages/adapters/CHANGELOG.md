@@ -1,5 +1,60 @@
 # @amritk/adapters
 
+## 0.3.0
+
+### Minor Changes
+
+- 29b7a18: Bring the Valibot adapter to parity with Zod for lossy conversions, and add an
+  opt-in strict mode to both.
+
+  - The Valibot adapter previously ran `@valibot/to-json-schema` in
+    `errorMode: 'warn'` and let that library log widening in its own words, one
+    line per construct — from mjst's side, Valibot widening was effectively
+    invisible. It now runs the converter in `errorMode: 'ignore'`, collects the
+    constructs it could not represent (unrepresentable schema types that degrade
+    to an open schema, plus refinements like flagged regexes that JSON Schema
+    cannot express) via the converter's override hooks, and emits a single
+    batched, `[mjst]`-branded `console.warn` — the same style the Zod adapter
+    already uses. `date` and `bigint` remain rescued into the shared `x-mjst`
+    hint and are never reported as lossy.
+  - Both `zodToJsonSchema` and `valibotToJsonSchema` now accept an
+    `{ strict?: boolean }` options argument (surfaced on the shared `Adapter`
+    type as `AdapterOptions`). In strict mode a construct that cannot be fully
+    represented throws instead of silently widening the generated type.
+
+- 5d89429: Add a Zod 3 fallback to the Zod adapter. When the installed `zod` lacks the
+  native `toJSONSchema` (Zod 3), the adapter now routes conversion through the
+  optional `zod-to-json-schema` peer dependency, applying the same `x-mjst`
+  date/bigint mapping and lossy-type warnings as the Zod 4 path. If neither Zod 4's
+  `toJSONSchema` nor `zod-to-json-schema` is available, a clear error explains what
+  to install.
+
+### Patch Changes
+
+- 815f9ab: Declare `@sinclair/typebox` as an optional peer dependency (`>=0.34`).
+
+  The TypeBox pass-through adapter (`typebox-to-json-schema`) relied on TypeBox's
+  plain-object schema shape but had no `peerDependencies` entry, so there was no
+  version signal or guard for it. Adding the optional peer (mirroring the
+  `peerDependenciesMeta` pattern already used for zod, valibot,
+  `@valibot/to-json-schema`, and effect) records the supported range and lets
+  package managers surface an incompatible TypeBox version instead of failing
+  silently on a future shape change.
+
+- 88b549a: fix: the Effect adapter now rescues nested `Schema.BigIntFromSelf` /
+  `Schema.DateFromSelf` instead of throwing. Previously only a top-level bigint or
+  runtime `Date` was mapped to an `x-mjst` hint, so a `BigIntFromSelf` /
+  `DateFromSelf` buried inside a struct, array, or union made `JSONSchema.make`
+  fail outright — unlike the Zod, Valibot, and TypeBox adapters, which handle
+  nested date/bigint fine. The rescue is now recursive: representable subtrees are
+  still converted verbatim by Effect, and only the branches leading to an
+  unrepresentable leaf are walked to attach `x-mjst` `primitive: 'bigint'` /
+  `instanceOf: 'Date'` hints at the corresponding nested paths. The documented
+  encoded-representation semantics for `Schema.Date` (a string) are unchanged.
+- Updated dependencies [9bf3330]
+- Updated dependencies [e612130]
+  - @amritk/helpers@0.13.0
+
 ## 0.2.16
 
 ### Patch Changes
