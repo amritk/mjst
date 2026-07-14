@@ -72,7 +72,7 @@ const SCALAR_ITEM_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'nu
  * schema, an `object`/`array` type, or a missing `type` all fail this test.
  */
 const schemaIsScalarOnly = (schema: unknown): boolean => {
-  if (!isSchemaObject(schema)) return false
+  if (!isSchemaObject(schema as JSONSchema)) return false
   const t = (schema as Record<string, unknown>)['type']
   if (t === undefined) return false
   const types = Array.isArray(t) ? t : [t]
