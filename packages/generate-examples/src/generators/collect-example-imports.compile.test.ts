@@ -23,43 +23,59 @@ const MAIN_FILE = `${VFS_DIR}/main.ts`
 
 /**
  * A `fast-check` stub exporting the generic `Arbitrary<T>` type plus every
- * combinator the generator can emit, each typed `any` so call shapes never
- * matter — only that `fc.<member>` resolves.
+ * combinator the generator can emit. `Arbitrary<T>` carries the `.map`/`.filter`
+ * methods the generator chains onto arbitraries (format `.map`, pattern-length
+ * `.filter`, the `additionalProperties` merge, and the validating `.filter`), so
+ * their callback parameters are contextually typed rather than implicitly `any`.
+ * Combinators return `Arbitrary<any>` — call shapes never matter, only that
+ * `fc.<member>` resolves and chains.
  */
 const FAST_CHECK_STUB = `
-export type Arbitrary<T> = { readonly __arb: T }
-export const string: any
-export const emailAddress: any
-export const uuid: any
-export const webUrl: any
-export const date: any
-export const domain: any
-export const ipV4: any
-export const ipV6: any
-export const stringMatching: any
-export const integer: any
-export const double: any
-export const boolean: any
-export const constant: any
-export const constantFrom: any
-export const array: any
-export const uniqueArray: any
-export const tuple: any
-export const record: any
-export const dictionary: any
-export const object: any
-export const oneof: any
-export const anything: any
-export const bigInt: any
+export type Arbitrary<T> = {
+  readonly __arb: T
+  filter(predicate: (value: T) => boolean): Arbitrary<T>
+  map<U>(mapper: (value: T) => U): Arbitrary<U>
+  chain<U>(chainer: (value: T) => Arbitrary<U>): Arbitrary<U>
+}
+type Comb = (...args: any[]) => Arbitrary<any>
+export const string: Comb
+export const emailAddress: Comb
+export const uuid: Comb
+export const webUrl: Comb
+export const date: Comb
+export const domain: Comb
+export const ipV4: Comb
+export const ipV6: Comb
+export const stringMatching: Comb
+export const integer: Comb
+export const double: Comb
+export const boolean: Comb
+export const constant: Comb
+export const constantFrom: Comb
+export const array: Comb
+export const uniqueArray: Comb
+export const tuple: Comb
+export const record: Comb
+export const dictionary: Comb
+export const object: Comb
+export const oneof: Comb
+export const anything: Comb
+export const bigInt: Comb
 export const letrec: any
 `
+
+/** A `@amritk/runtime-validators` stub exporting the `validate` a filtered arbitrary calls. */
+const RUNTIME_VALIDATORS_STUB = `export const validate: any\n`
+
+/** Bare module specifiers stubbed directly, so they aren't treated as `$ref` modules. */
+const STUBBED_MODULES = new Set(['fast-check', '@amritk/runtime-validators'])
 
 /** Parses `import { type Foo, FooArbitrary } from './foo.js'` lines out of generated code. */
 const parseRefImports = (code: string): { module: string; bindings: string[] }[] =>
   code
     .split('\n')
     .map((line) => /^import\s*\{([^}]*)\}\s*from\s*'([^']+)'/.exec(line))
-    .filter((match): match is RegExpExecArray => match !== null && match[2] !== 'fast-check')
+    .filter((match): match is RegExpExecArray => match !== null && !STUBBED_MODULES.has(match[2] as string))
     .map((match) => ({
       module: match[2] as string,
       bindings: (match[1] as string)
@@ -83,8 +99,12 @@ const compileErrors = (code: string): string[] => {
   const files: Record<string, string> = {
     [MAIN_FILE]: code,
     [`${VFS_DIR}/fast-check.d.ts`]: FAST_CHECK_STUB,
+    [`${VFS_DIR}/runtime-validators.d.ts`]: RUNTIME_VALIDATORS_STUB,
   }
-  const moduleMap: Record<string, string> = { 'fast-check': `${VFS_DIR}/fast-check.d.ts` }
+  const moduleMap: Record<string, string> = {
+    'fast-check': `${VFS_DIR}/fast-check.d.ts`,
+    '@amritk/runtime-validators': `${VFS_DIR}/runtime-validators.d.ts`,
+  }
 
   for (const { module, bindings } of parseRefImports(code)) {
     // './foo.js' → foo.ts

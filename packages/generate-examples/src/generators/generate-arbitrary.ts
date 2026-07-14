@@ -6,6 +6,9 @@ import {
   hasAllOf,
   hasAnyOf,
   hasConst,
+  hasContains,
+  hasDependentRequired,
+  hasDependentSchemas,
   hasEnum,
   hasExclusiveMaximum,
   hasExclusiveMinimum,
@@ -14,13 +17,17 @@ import {
   hasMaxItems,
   hasMaximum,
   hasMaxLength,
+  hasMaxProperties,
   hasMinItems,
   hasMinimum,
   hasMinLength,
+  hasMinProperties,
   hasMultipleOf,
   hasOneOf,
   hasPattern,
+  hasPatternProperties,
   hasProperties,
+  hasPropertyNames,
   hasRef,
   hasRequired,
   hasType,
@@ -30,12 +37,28 @@ import {
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { mergeAllOf } from './derive-example'
+import { needsValidationFilter, withResolvableDefs } from './schema-validation'
 
 /**
  * Derives the arbitrary const name from a type name.
  * e.g. "User" → "UserArbitrary"
  */
 const arbitraryName = (typeName: string): string => `${typeName}Arbitrary`
+
+/**
+ * Local alias the generated file binds `@amritk/runtime-validators`' `validate`
+ * to. Namespaced (leading underscores) so it can't collide with a schema-derived
+ * type name. {@link generateArbitrary} emits references to it; the file assembler
+ * adds the matching import when any arbitrary uses it.
+ */
+export const VALIDATE_IMPORT_NAME = '__mjstValidate'
+
+/**
+ * The import line the generated file needs when an arbitrary embeds a validating
+ * filter. Emitted by the file assembler only when {@link VALIDATE_IMPORT_NAME}
+ * appears in the generated source.
+ */
+export const VALIDATE_IMPORT_STATEMENT = `import { validate as ${VALIDATE_IMPORT_NAME} } from '@amritk/runtime-validators'`
 
 /**
  * Threaded through `arbitraryExpr` while building one type's arbitrary.
@@ -235,14 +258,42 @@ const arrayExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
     return `fc.tuple(${exprs.join(', ')})`
   }
 
-  const items = hasItems(schema) && isSchemaObject(schema.items) ? arbitraryExpr(schema.items, ctx) : 'fc.anything()'
+  // With no `items`, a `contains` subschema is the only element constraint, so
+  // generate from it (and guarantee at least one such element via `minLength`) —
+  // otherwise an empty array would fail `contains`.
+  const containsSchema = hasContains(schema) && isSchemaObject(schema.contains) ? schema.contains : undefined
+  const items =
+    hasItems(schema) && isSchemaObject(schema.items)
+      ? arbitraryExpr(schema.items, ctx)
+      : containsSchema
+        ? arbitraryExpr(containsSchema, ctx)
+        : 'fc.anything()'
+
+  const minContains =
+    containsSchema !== undefined && typeof raw['minContains'] === 'number' ? (raw['minContains'] as number) : 1
+  const minLength = Math.max(
+    hasMinItems(schema) ? schema.minItems : 0,
+    containsSchema !== undefined ? Math.max(1, minContains) : 0,
+  )
 
   const opts: string[] = []
-  if (hasMinItems(schema)) opts.push(`minLength: ${schema.minItems}`)
+  if (minLength > 0) opts.push(`minLength: ${minLength}`)
   if (hasMaxItems(schema)) opts.push(`maxLength: ${schema.maxItems}`)
 
   const fn = hasUniqueItems(schema) && schema.uniqueItems === true ? 'fc.uniqueArray' : 'fc.array'
   return opts.length > 0 ? `${fn}(${items}, { ${opts.join(', ')} })` : `${fn}(${items})`
+}
+
+/** The arbitrary for keys of the open-map (extra-property) part of an object. */
+const extraKeyArb = (schema: JSONSchema, firstPatternSource: string | undefined): string => {
+  // Keys must satisfy `patternProperties` (so the value schema applies) or, failing
+  // that, a `propertyNames` pattern. Both map onto `fc.stringMatching`.
+  if (firstPatternSource !== undefined) return `fc.stringMatching(new RegExp(${JSON.stringify(firstPatternSource)}))`
+  const propertyNames = hasPropertyNames(schema) ? schema.propertyNames : undefined
+  if (propertyNames !== undefined && isSchemaObject(propertyNames) && hasPattern(propertyNames)) {
+    return `fc.stringMatching(new RegExp(${JSON.stringify(propertyNames.pattern)}))`
+  }
+  return 'fc.string()'
 }
 
 /** Builds a `fc.record(...)` / `fc.dictionary(...)` expression for an object schema. */
@@ -251,34 +302,96 @@ const objectExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
   // real subschema rather than the boolean true/false form).
   const additional = hasAdditionalProperties(schema) ? schema.additionalProperties : false
   const additionalArb = isSchemaObject(additional) ? arbitraryExpr(additional, ctx) : undefined
+  const additionalClosed = hasAdditionalProperties(schema) && schema.additionalProperties === false
 
-  if (!hasProperties(schema)) {
-    // A map-style object (no declared properties) with a typed `additionalProperties`
-    // is a dictionary of that value type; otherwise fall back to a free-form object.
-    return additionalArb ? `fc.dictionary(fc.string(), ${additionalArb})` : 'fc.object()'
+  // The first `patternProperties` entry drives the open-map value/key shape.
+  const patternEntries = hasPatternProperties(schema) ? Object.entries(schema.patternProperties) : []
+  const firstPattern = patternEntries[0]
+  const patternValueArb =
+    firstPattern && isSchemaObject(firstPattern[1]) ? arbitraryExpr(firstPattern[1], ctx) : undefined
+  // Extra keys are allowed unless a fully closed object (no `additionalProperties`
+  // and no `patternProperties` outlet) forbids them.
+  const extrasAllowed = !additionalClosed || patternEntries.length > 0
+  const extraValueArb = additionalArb ?? patternValueArb
+  const keyArb = extraKeyArb(schema, firstPattern?.[0])
+
+  const minProps = hasMinProperties(schema) ? schema.minProperties : undefined
+  const maxProps = hasMaxProperties(schema) ? schema.maxProperties : undefined
+  const dictKeyOpts = (minKeys?: number, maxKeys?: number): string => {
+    const opts: string[] = []
+    if (minKeys !== undefined && minKeys > 0) opts.push(`minKeys: ${minKeys}`)
+    if (maxKeys !== undefined) opts.push(`maxKeys: ${maxKeys}`)
+    return opts.length > 0 ? `, { ${opts.join(', ')} }` : ''
   }
 
+  // Each declared key maps to the arbitrary that generates its value.
+  const propArbs = new Map<string, string>()
+  if (hasProperties(schema)) {
+    for (const [key, propSchema] of Object.entries(schema.properties)) propArbs.set(key, arbitraryExpr(propSchema, ctx))
+  }
   const required = new Set(hasRequired(schema) ? schema.required : [])
-  const keys = Object.keys(schema.properties)
-  const entries = Object.entries(schema.properties).map(
-    ([key, propSchema]) => `${JSON.stringify(key)}: ${arbitraryExpr(propSchema, ctx)}`,
-  )
+  // The value arbitrary for a key not declared in `properties` (a dependency key).
+  const openValueArb = extraValueArb ?? 'fc.anything()'
 
-  if (entries.length === 0) return 'fc.record({})'
+  // Fold presence-gated dependency keywords into the always-present set. Requiring
+  // a dependency (or a `dependentSchemas` shape) unconditionally is stricter than
+  // the keyword — but a value that always carries the dependency is always valid,
+  // and it keeps the generated candidate from being rejected by the filter.
+  if (hasDependentRequired(schema)) {
+    for (const [, deps] of Object.entries(schema.dependentRequired)) {
+      for (const dep of deps) {
+        if (!propArbs.has(dep)) propArbs.set(dep, openValueArb)
+        required.add(dep)
+      }
+    }
+  }
+  if (hasDependentSchemas(schema)) {
+    for (const [, sub] of Object.entries(schema.dependentSchemas)) {
+      if (!isSchemaObject(sub)) continue
+      if (hasProperties(sub)) {
+        for (const [key, propSchema] of Object.entries(sub.properties)) {
+          if (!propArbs.has(key)) propArbs.set(key, arbitraryExpr(propSchema, ctx))
+        }
+      }
+      if (hasRequired(sub)) for (const key of sub.required) required.add(key)
+    }
+  }
+  // A `dependentSchemas`/`dependentRequired` key may be required without a declared
+  // value schema; give it the open-map value arbitrary.
+  for (const key of required) if (!propArbs.has(key)) propArbs.set(key, openValueArb)
+
+  const keys = [...propArbs.keys()]
+
+  // A map-style object (no declared keys) is a dictionary; its bounds come from
+  // `min`/`maxProperties` and its value/key shape from `additionalProperties` /
+  // `patternProperties` / `propertyNames`.
+  if (keys.length === 0) {
+    if (extraValueArb) return `fc.dictionary(${keyArb}, ${extraValueArb}${dictKeyOpts(minProps, maxProps)})`
+    if (minProps !== undefined || maxProps !== undefined) {
+      return `fc.dictionary(${keyArb}, fc.anything()${dictKeyOpts(minProps, maxProps)})`
+    }
+    return 'fc.object()'
+  }
+
+  const entries = keys.map((key) => `${JSON.stringify(key)}: ${propArbs.get(key)}`)
 
   const model = `{ ${entries.join(', ')} }`
-
   // fc.record treats all keys as required by default. Only emit requiredKeys
   // when at least one property is optional.
   const record = keys.every((key) => required.has(key))
     ? `fc.record(${model})`
     : `fc.record(${model}, { requiredKeys: [${[...required].map((key) => JSON.stringify(key)).join(', ')}] })`
 
-  // When both declared properties and a typed `additionalProperties` are present,
-  // fold in a dictionary of extra keys so the value exercises the open-map part of
-  // the schema too. The declared keys win on collision (merged last).
-  if (additionalArb) {
-    return `fc.tuple(${record}, fc.dictionary(fc.string(), ${additionalArb})).map(([base, extra]) => ({ ...extra, ...base }))`
+  // Fold in a dictionary of extra keys when the open-map part is typed, or when
+  // `minProperties` needs more keys than the declared set guarantees. `minKeys`
+  // fills only the gap above the always-present (required) keys so the floor is met
+  // without overshooting. Declared keys win on collision (merged last).
+  const needExtras =
+    extrasAllowed && (extraValueArb !== undefined || (minProps !== undefined && minProps > required.size))
+  if (needExtras) {
+    const valueArb = extraValueArb ?? 'fc.anything()'
+    const minKeys = minProps !== undefined ? Math.max(0, minProps - required.size) : undefined
+    return `fc.tuple(${record}, fc.dictionary(${keyArb}, ${valueArb}${dictKeyOpts(minKeys, undefined)})).map(([base, extra]) => ({ ...extra, ...base }))`
   }
   return record
 }
@@ -311,6 +424,28 @@ const scalarExpr = (type: string, schema: JSONSchema, ctx: ExprCtx): string => {
   }
 }
 
+/** True when an `enum` member satisfies the node's sibling length/range/pattern constraints. */
+const enumMemberFits = (schema: JSONSchema, value: unknown): boolean => {
+  if (typeof value === 'string') {
+    if (hasMinLength(schema) && value.length < schema.minLength) return false
+    if (hasMaxLength(schema) && value.length > schema.maxLength) return false
+    if (hasPattern(schema)) {
+      try {
+        if (!new RegExp(schema.pattern).test(value)) return false
+      } catch {
+        // An invalid pattern can't reject anything.
+      }
+    }
+  } else if (typeof value === 'number') {
+    if (hasMinimum(schema) && value < schema.minimum) return false
+    if (hasMaximum(schema) && value > schema.maximum) return false
+    if (hasExclusiveMinimum(schema) && value <= schema.exclusiveMinimum) return false
+    if (hasExclusiveMaximum(schema) && value >= schema.exclusiveMaximum) return false
+    if (hasMultipleOf(schema) && schema.multipleOf > 0 && value % schema.multipleOf !== 0) return false
+  }
+  return true
+}
+
 /**
  * Recursively builds the fast-check arbitrary expression for a schema node.
  * `$ref`s resolve to the referenced file's exported arbitrary; a self-`$ref`
@@ -340,7 +475,13 @@ const arbitraryExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
   if (hasConst(schema)) return `fc.constant(${JSON.stringify(schema.const)})`
 
   if (hasEnum(schema)) {
-    const values = (schema.enum as unknown[]).map((value) => JSON.stringify(value)).join(', ')
+    // Drop enum members that violate a sibling length/range/pattern constraint so
+    // the arbitrary never emits an out-of-range member. Keep all when none fit
+    // (an unsatisfiable schema) rather than emitting an empty `constantFrom`.
+    const members = schema.enum as unknown[]
+    const fitting = members.filter((value) => enumMemberFits(schema, value))
+    const chosen = fitting.length > 0 ? fitting : members
+    const values = chosen.map((value) => JSON.stringify(value)).join(', ')
     return `fc.constantFrom(${values})`
   }
 
@@ -394,14 +535,28 @@ export const generateArbitrary = (
   typeName: string,
   suffix = '',
   lazyRefFilenames: ReadonlySet<string> = new Set(),
+  rootSchema?: Record<string, unknown>,
 ): string => {
   const selfArbName = arbitraryName(typeName)
   const ctx: ExprCtx = { suffix, selfArbName, usedTie: { value: false }, lazyRefFilenames }
   const expr = arbitraryExpr(schema, ctx)
 
-  if (ctx.usedTie.value) {
-    return `export const ${selfArbName}: fc.Arbitrary<${typeName}> = fc.letrec<{ ${SELF_KEY}: ${typeName} }>((tie) => ({\n  ${SELF_KEY}: ${expr},\n})).${SELF_KEY}`
+  const body = ctx.usedTie.value
+    ? `fc.letrec<{ ${SELF_KEY}: ${typeName} }>((tie) => ({\n  ${SELF_KEY}: ${expr},\n})).${SELF_KEY}`
+    : expr
+
+  // Keywords no `fc.*` combinator captures on its own (`if`/`then`/`else`, `not`,
+  // `oneOf` exclusivity, the presence-gated object keywords) are enforced by a
+  // post-generation filter: the arbitrary samples a candidate and rejects it
+  // unless a runtime validator built from the same schema accepts it.
+  if (needsValidationFilter(schema)) {
+    const validatorName = `${selfArbName}Validator`
+    const embedded = JSON.stringify(withResolvableDefs(schema, rootSchema))
+    return (
+      `const ${validatorName} = ${VALIDATE_IMPORT_NAME}(${embedded})\n` +
+      `export const ${selfArbName}: fc.Arbitrary<${typeName}> = (${body}).filter((value) => ${validatorName}(value) === true)`
+    )
   }
 
-  return `export const ${selfArbName}: fc.Arbitrary<${typeName}> = ${expr}`
+  return `export const ${selfArbName}: fc.Arbitrary<${typeName}> = ${body}`
 }

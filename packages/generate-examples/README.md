@@ -32,8 +32,11 @@ An `index.ts` barrel re-exports everything.
 
 > [!NOTE]
 > The generated arbitraries import `fast-check`, so consumers need it installed
-> (`npm i -D fast-check`). The static `fooExample` values have no runtime
-> dependencies.
+> (`npm i -D fast-check`). An arbitrary whose schema uses a keyword no `fc.*`
+> combinator captures on its own (`if`/`then`/`else`, `not`, exclusive `oneOf`,
+> and the presence-gated object keywords) also imports `@amritk/runtime-validators`
+> for a post-generation validating filter; files that need no such filter don't.
+> The static `fooExample` values have no runtime dependencies.
 
 ---
 
@@ -125,10 +128,14 @@ const res = await fetch('/users', { method: 'POST', body: JSON.stringify(userExa
 `required`, `items`, `minItems`/`maxItems`, `uniqueItems`,
 `minLength`/`maxLength`, `pattern`, `format` (`email`, `uuid`, `uri`/`url`,
 `date`, `date-time`, `time`, `hostname`, `ipv4`, `ipv6`), `minimum`/`maximum`,
-`exclusiveMinimum`/`exclusiveMaximum`, `multipleOf`, `enum`, `const`,
-`oneOf`/`anyOf`, `$ref`, and the `x-mjst` extension (`Date`, `bigint`).
-Unsupported constructs degrade to `fc.anything()` in arbitraries and `null` in
-static examples.
+`exclusiveMinimum`/`exclusiveMaximum`, `multipleOf`, `enum` (filtered by sibling
+constraints), `const`, `minProperties`/`maxProperties`, `patternProperties`,
+`propertyNames`, `dependentRequired`, `dependentSchemas`, `contains`,
+`oneOf`/`anyOf`, `if`/`then`/`else`, `not`, `$ref`, and the `x-mjst` extension
+(`Date`, `bigint`). `if`/`then`/`else`, `not`, and `oneOf` exclusivity are
+enforced by validating generated candidates against the schema and
+retrying/rejecting. Unsupported constructs degrade to `fc.anything()` in
+arbitraries and `null` in static examples.
 
 > [!TIP]
 > A static example constrained only by `pattern` is not guaranteed to match the
