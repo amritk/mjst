@@ -273,6 +273,15 @@ The exit code is `0` when no finding reaches `--fail-severity`, `1` when one doe
 <td colspan="4">Also emit validation functions alongside the parsers. For every generated type X the CLI writes a validateX (returning a rich ValidationResult with JSON-Pointer error paths) and an isX boolean type guard. The files land in a validators/ subdirectory of the output so they never collide with the parser files, which share the same schema-derived names. Works with both schema and schemaDir. Incompatible with typesOnly and outFile, which produce no runtime code.</td>
 </tr>
 <tr>
+<td>🎲 <code>examples</code></td>
+<td><code>--examples</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Also emit test-data files for every schema into an examples/ subdirectory of the output destination: a fast-check arbitrary (FooArbitrary) that produces schema-valid values and a concrete fooExample value. Under schemaDir the examples mirror the schema layout so they never collide with the parser output. The generated arbitraries import fast-check, which consumers must install as a (dev) dependency; the static example values have no runtime dependencies.</td>
+</tr>
+<tr>
 <td>🔨 <code>build</code></td>
 <td><code>--build</code></td>
 <td><code>boolean</code></td>
@@ -378,7 +387,7 @@ The exit code is `0` when no finding reaches `--fail-severity`, `1` when one doe
 <td align="center"></td>
 </tr>
 <tr>
-<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, validators, build, logWarnings, strict, stripUnknown, caseInsensitive, readonly, helpers, typeSuffix, banner, importExt, rootType). CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
+<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, validators, examples, build, logWarnings, strict, stripUnknown, caseInsensitive, readonly, helpers, typeSuffix, banner, importExt, rootType). CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
 </tr>
 </tbody>
 </table>

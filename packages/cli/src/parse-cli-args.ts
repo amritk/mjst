@@ -14,6 +14,7 @@ type MutableConfig = {
   export?: string
   typesOnly?: boolean
   validators?: boolean
+  examples?: boolean
   build?: boolean
   logWarnings?: boolean
   strict?: boolean
@@ -31,6 +32,7 @@ type MutableConfig = {
 const BOOLEAN_KEYS = new Set<keyof MutableConfig>([
   'typesOnly',
   'validators',
+  'examples',
   'build',
   'logWarnings',
   'strict',
@@ -135,6 +137,9 @@ const assignBoolean = (config: MutableConfig, key: string, value: boolean): bool
       return true
     case 'validators':
       config.validators = value
+      return true
+    case 'examples':
+      config.examples = value
       return true
     case 'build':
       config.build = value

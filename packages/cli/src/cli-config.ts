@@ -48,6 +48,15 @@ export type CliConfig = {
    */
   readonly validators?: boolean
   /**
+   * When true, also emit test-data files for every schema: a `fast-check`
+   * arbitrary (`FooArbitrary`) that produces schema-valid values and a concrete
+   * `fooExample` value. The files are written into an `examples/` subdirectory of
+   * the output destination (mirroring the schema layout under `--schema-dir`) so
+   * they never collide with the parser output. The generated arbitraries import
+   * `fast-check`, which consumers must install as a (dev) dependency.
+   */
+  readonly examples?: boolean
+  /**
    * When true, compile the generated TypeScript files to .js and .d.ts output.
    * The .ts source files are removed after compilation.
    */

@@ -65,6 +65,13 @@
       "default": false,
       "description": "Also emit validation functions alongside the parsers. For every generated type X the CLI writes a validateX (returning a rich ValidationResult with JSON-Pointer error paths) and an isX boolean type guard. The files land in a validators/ subdirectory of the output so they never collide with the parser files, which share the same schema-derived names. Works with both schema and schemaDir. Incompatible with typesOnly and outFile, which produce no runtime code."
     },
+    "examples": {
+      "type": "boolean",
+      "x-cli-flag": "--examples",
+      "x-icon": "🎲",
+      "default": false,
+      "description": "Also emit test-data files for every schema into an examples/ subdirectory of the output destination: a fast-check arbitrary (FooArbitrary) that produces schema-valid values and a concrete fooExample value. Under schemaDir the examples mirror the schema layout so they never collide with the parser output. The generated arbitraries import fast-check, which consumers must install as a (dev) dependency; the static example values have no runtime dependencies."
+    },
     "build": {
       "type": "boolean",
       "x-cli-flag": "--build",
@@ -147,7 +154,7 @@
       "type": "string",
       "x-cli-flag": "--config <path>",
       "x-icon": "⚙️",
-      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, validators, build, logWarnings, strict, stripUnknown, caseInsensitive, readonly, helpers, typeSuffix, banner, importExt, rootType). CLI flags take precedence over config file values.",
+      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, validators, examples, build, logWarnings, strict, stripUnknown, caseInsensitive, readonly, helpers, typeSuffix, banner, importExt, rootType). CLI flags take precedence over config file values.",
       "examples": ["./mjst.config.json"]
     }
   },

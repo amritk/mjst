@@ -146,6 +146,23 @@ describe('parse-cli-args', () => {
     })
   })
 
+  it('parses --examples boolean flag', () => {
+    expect(parseCliArgs(['--examples'])).toEqual({ examples: true })
+  })
+
+  it('parses --examples=true and --examples=false with equals syntax', () => {
+    expect(parseCliArgs(['--examples=true'])).toEqual({ examples: true })
+    expect(parseCliArgs(['--examples=false'])).toEqual({ examples: false })
+  })
+
+  it('parses --examples alongside other flags', () => {
+    expect(parseCliArgs(['--schema', 'schema.json', '--out-dir', 'dist', '--examples'])).toEqual({
+      schema: 'schema.json',
+      outDir: 'dist',
+      examples: true,
+    })
+  })
+
   it('parses --build boolean flag', () => {
     const result = parseCliArgs(['--build'])
 
