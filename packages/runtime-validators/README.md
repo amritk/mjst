@@ -132,11 +132,11 @@ Pick the right tool for the shape of your workload. There are two regimes, and t
 
 | schema | `validate` (cold) | Ajv (compile + run) | speedup |
 |:---|---:|---:|---:|
-| small | ~0.005 ms | ~8 ms | **~1600×** |
-| wide (40 props) | ~0.016 ms | ~11 ms | **~700×** |
-| deep (`$ref`) | ~0.12 ms | ~11 ms | **~90×** |
+| small | ~0.009 ms | ~10 ms | **~1100×** |
+| wide (40 props) | ~0.016 ms | ~14 ms | **~870×** |
+| deep (`$ref`) | ~0.12 ms | ~13 ms | **~110×** |
 
-**Steady state — one schema, many values.** Here Ajv wins, and it is not close: once compiled, its JIT'd function outruns a tree-walking interpreter by roughly **15–25×** per call. If you validate the same schema against a high-throughput stream, compile it once with Ajv (or use this repo's build-time [`@amritk/generate-validators`](../generate-validators)) — an interpreter is the wrong tool for that job, and this package does not pretend otherwise.
+**Steady state — one schema, many values.** Here Ajv wins, and it is not close: once compiled, its JIT'd function outruns a tree-walking interpreter by roughly **6–10×** per call. If you validate the same schema against a high-throughput stream, compile it once with Ajv (or use this repo's build-time [`@amritk/generate-validators`](../generate-validators)) — an interpreter is the wrong tool for that job, and this package does not pretend otherwise.
 
 So the rule of thumb: **few values per schema → interpret** (no compile cost to amortize, and it runs eval-free anywhere); **many values per schema → compile**.
 

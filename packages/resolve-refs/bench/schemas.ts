@@ -6,9 +6,10 @@
  *
  *  - **reuse-heavy** — one `$def` referenced from dozens of sites. The
  *    single-pass cache resolves it once; a naive inliner re-walks it every
- *    time. This is where memoization earns its keep.
- *  - **chain** — a long `$ref` → `$ref` → … chain. Measures the cost of
- *    following deep indirection.
+ *    time — but each walk is cheap, so the resolver's up-front registry pass
+ *    dominates and the naive baseline wins on this shape.
+ *  - **chain** — a long `$ref` → `$ref` → … chain. Deep indirection is
+ *    expensive to re-resolve, so this is the shape where memoization wins.
  *  - **wide-distinct** — many `$def`s each referenced exactly once. The cache
  *    almost never hits here, so this isolates its bookkeeping overhead.
  *  - **cyclic** — a self-referential node (a tree). Exercises the cycle
