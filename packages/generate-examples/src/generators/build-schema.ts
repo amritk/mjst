@@ -2,6 +2,7 @@ import { generateIndexBarrel } from '@amritk/helpers/generate-index-barrel'
 import { walkRefGraph } from '@amritk/helpers/walk-ref-graph'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { findSchemaCycles } from './find-schema-cycles'
 import { generateExampleFile } from './generate-files'
 
 /**
@@ -43,15 +44,23 @@ export const buildExampleSchema = async (
 ): Promise<GeneratedFile[]> => {
   const files: GeneratedFile[] = []
 
+  // Cross-file `$ref` cycles (A→B→A across modules) must emit lazy references
+  // for their cycle edges; eager top-level references would crash with a
+  // circular-ESM TDZ error at import. Detect the cycles up front so each file
+  // knows which siblings to defer.
+  const cycles = findSchemaCycles(rootSchema, rootTypeName, typeSuffix)
+
   walkRefGraph(rootSchema, rootTypeName, { typeSuffix }, (node) => {
     // `index` is reserved for the barrel below, so never let a definition of
     // that name overwrite it.
     if (node.filename === 'index') return
 
+    const lazyRefFilenames = cycles.get(node.filename)
     const content = generateExampleFile(node.schema, node.typeName, {
       rootSchema: node.rootSchema,
       typeSuffix,
       ...(node.ref !== undefined ? { selfRef: node.ref } : {}),
+      ...(lazyRefFilenames !== undefined ? { lazyRefFilenames } : {}),
     })
     files.push({ filename: `${node.filename}.ts`, content })
   })

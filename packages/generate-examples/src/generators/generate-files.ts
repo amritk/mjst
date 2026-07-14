@@ -24,6 +24,12 @@ type GenerateExampleFileOptions = {
    * Defaults to `''` (no suffix).
    */
   readonly typeSuffix?: string
+  /**
+   * Filenames of the other types this file shares a cross-file `$ref` cycle
+   * with. References to them are emitted lazily so mutually recursive modules
+   * do not crash with a circular-ESM TDZ error at import. Defaults to empty.
+   */
+  readonly lazyRefFilenames?: ReadonlySet<string>
 }
 
 /**
@@ -58,7 +64,7 @@ export const generateExampleFile = (
   })
 
   const typeDefinition = generateTypeDefinition(schema, typeName, { typeSuffix })
-  const arbitrary = generateArbitrary(schema, typeName, typeSuffix, options?.rootSchema)
+  const arbitrary = generateArbitrary(schema, typeName, typeSuffix, options?.lazyRefFilenames, options?.rootSchema)
   const example = generateExampleConst(schema, typeName, options?.rootSchema)
 
   let result = `import * as fc from 'fast-check'\n`

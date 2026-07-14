@@ -203,3 +203,60 @@ describe('generate-strict-assertion array items and unions', () => {
     expect(lines.join('\n')).not.toContain('does not match any allowed variant')
   })
 })
+
+describe('generate-strict-assertion tuple prefixItems', () => {
+  it('asserts each tuple position and caps length under items:false', () => {
+    const lines = generateObjectStrictAssertion(
+      {
+        type: 'object',
+        properties: { pair: { type: 'array', prefixItems: [{ type: 'string' }, { type: 'number' }], items: false } },
+        required: ['pair'],
+      },
+      'Doc',
+    ).join('\n')
+
+    expect(lines).toContain("field 'pair'[0] expected string")
+    expect(lines).toContain("field 'pair'[1] expected number")
+    expect(lines).toContain("field 'pair' must NOT have more than 2 items")
+    // Each position check is length-guarded — a shorter array must not throw.
+    expect(lines).toContain('input.pair.length > 0')
+    expect(lines).toContain('input.pair.length > 1')
+  })
+
+  it('does not emit a length cap without items:false', () => {
+    const lines = generateObjectStrictAssertion(
+      {
+        type: 'object',
+        properties: { pair: { type: 'array', prefixItems: [{ type: 'string' }] } },
+        required: ['pair'],
+      },
+      'Doc',
+    ).join('\n')
+
+    expect(lines).toContain("field 'pair'[0] expected string")
+    expect(lines).not.toContain('must NOT have more than')
+  })
+
+  it('asserts a root-level tuple', () => {
+    const line = generateScalarStrictAssertion(
+      { type: 'array', prefixItems: [{ type: 'string' }, { type: 'integer' }], items: false },
+      'Pair',
+    )
+
+    expect(line).toContain('[Pair][0] expected string')
+    expect(line).toContain('[Pair][1] expected number')
+    expect(line).toContain('[Pair] must NOT have more than 2 items')
+  })
+
+  it('resolves $ref tuple positions against the root schema', () => {
+    const rootSchema = {
+      $defs: { Tag: { type: 'string', enum: ['a', 'b'] } },
+      type: 'object',
+      properties: { entry: { type: 'array', prefixItems: [{ $ref: '#/$defs/Tag' }], items: false } },
+      required: ['entry'],
+    }
+    const lines = generateObjectStrictAssertion(rootSchema as never, 'Root', { rootSchema }).join('\n')
+
+    expect(lines).toContain("field 'entry'[0] must be one of:")
+  })
+})
