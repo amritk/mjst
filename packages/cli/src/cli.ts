@@ -4,6 +4,7 @@ import { mkdir, readdir, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { buildSchema } from '@amritk/generate-parsers'
+import { buildValidatorSchema } from '@amritk/generate-validators'
 import { deriveRootTypeName } from '@amritk/helpers/derive-root-type-name'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
@@ -199,6 +200,34 @@ const findJsonSchemas = async (dir: string): Promise<string[]> => {
   return results
 }
 
+/**
+ * Emits validator files (`validateX` / `isX`) for one schema into `validatorsSubDir`
+ * (a path relative to `outputDir`). The validators carry the same schema-derived
+ * filenames as the parsers, so they live in their own subdirectory to avoid
+ * colliding. Returns the written `.ts` paths relative to `outputDir` so the caller
+ * can fold them into a `--build` compilation.
+ */
+const runValidators = async (
+  config: Partial<CliConfig>,
+  schema: unknown,
+  rootTypeName: string,
+  outputDir: string,
+  validatorsSubDir: string,
+): Promise<string[]> => {
+  const files = await buildValidatorSchema(schema as JSONSchema, rootTypeName, config.typeSuffix)
+  const written: string[] = []
+
+  for (const file of files) {
+    const content = config.banner ? resolveBanner(config.banner) + file.content : file.content
+    const relFilename = join(validatorsSubDir, file.filename)
+    await writeGeneratedFile(outputDir, relFilename, content)
+    written.push(relFilename)
+    console.log(`Generated: ${relFilename}`)
+  }
+
+  return written
+}
+
 /** Generates parsers for a single schema (the original one-schema-in, one-outDir-out flow). */
 const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputDir: string): Promise<void> => {
   const schema = await loadSchema(config, schemaPath)
@@ -233,18 +262,18 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
     console.log(`Generated: ${file.filename}`)
   }
 
+  const validatorFiles = config.validators
+    ? await runValidators(config, schema, rootTypeName, outputDir, 'validators')
+    : []
+
   if (config.examples) {
     await runExamples(config, schema, rootTypeName, outputDir)
   }
 
   if (config.build) {
-    await buildOutput(
-      outputDir,
-      files.map((f) => f.filename),
-      config.typesOnly,
-    )
+    await buildOutput(outputDir, [...files.map((f) => f.filename), ...validatorFiles], config.typesOnly)
   } else {
-    console.log(`\nTotal files generated: ${files.length}`)
+    console.log(`\nTotal files generated: ${files.length + validatorFiles.length}`)
   }
 }
 
@@ -362,6 +391,14 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
       console.log(`Generated: ${relativeFilename}`)
     }
 
+    if (config.validators) {
+      // Mirror the parser layout under a top-level `validators/` tree so each
+      // schema's validators sit beside their parser counterparts without sharing
+      // a filename.
+      const validatorFiles = await runValidators(config, schema, rootTypeName, outputDir, join('validators', relNoExt))
+      writtenTsFiles.push(...validatorFiles)
+    }
+
     if (config.examples) {
       await runExamples(config, schema, rootTypeName, outputDir, relNoExt)
     }
@@ -431,6 +468,18 @@ const run = async (): Promise<void> => {
   // mutually exclusive.
   if (config.build && config.importExt === 'ts') {
     console.error('Error: --import-ext ts cannot be combined with --build. Drop --build to keep runnable .ts sources.')
+    process.exit(1)
+  }
+
+  // Validators are runtime code (validateX / isX), so they have nothing to emit
+  // in the type-only flows.
+  if (config.validators && config.typesOnly) {
+    console.error('Error: --validators cannot be combined with --types-only, which emits no runtime code.')
+    process.exit(1)
+  }
+
+  if (config.validators && config.outFile) {
+    console.error('Error: --validators cannot be combined with --out-file. Use --out-dir to emit validator files.')
     process.exit(1)
   }
 

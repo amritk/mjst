@@ -129,6 +129,23 @@ describe('parse-cli-args', () => {
     })
   })
 
+  it('parses --validators boolean flag', () => {
+    expect(parseCliArgs(['--validators'])).toEqual({ validators: true })
+  })
+
+  it('parses --validators=true and --validators=false with equals syntax', () => {
+    expect(parseCliArgs(['--validators=true'])).toEqual({ validators: true })
+    expect(parseCliArgs(['--validators=false'])).toEqual({ validators: false })
+  })
+
+  it('parses --validators alongside other flags', () => {
+    expect(parseCliArgs(['--schema', 'schema.json', '--out-dir', 'dist', '--validators'])).toEqual({
+      schema: 'schema.json',
+      outDir: 'dist',
+      validators: true,
+    })
+  })
+
   it('parses --examples boolean flag', () => {
     expect(parseCliArgs(['--examples'])).toEqual({ examples: true })
   })
