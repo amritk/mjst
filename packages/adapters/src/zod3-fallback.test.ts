@@ -82,6 +82,19 @@ describe('zodToJsonSchema (Zod 3 fallback via zod-to-json-schema)', () => {
     }
   })
 
+  it('throws instead of widening a lossy type in strict mode', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(zodToJsonSchema(z.object({ id: z.string(), sym: z.symbol() }), { strict: true })).rejects.toThrow(
+        /Zod adapter \(strict mode\): symbol/,
+      )
+      // Strict mode throws rather than logging.
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('converts enums to a string schema with an enum list', async () => {
     const result = await zodToJsonSchema(z.object({ role: z.enum(['admin', 'user']) }))
 

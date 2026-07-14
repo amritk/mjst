@@ -1,6 +1,9 @@
 import { MJST_EXTENSION_KEY } from '@amritk/helpers/mjst-extension'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import type { AdapterOptions } from './adapter'
+import { reportLossyConstructs } from './report-lossy-constructs'
+
 // Zod 4's `toJSONSchema` does the heavy lifting. We only describe the slice of
 // its surface we touch so the adapter does not need a hard dependency on Zod's
 // types — `zod` stays an optional peer dependency loaded at runtime.
@@ -285,16 +288,19 @@ const mergeClosedObjectAllOf = (node: unknown): unknown => {
 
 /**
  * Shared post-processing applied to both the Zod 4 and Zod 3 conversion output:
- * warn about widened lossy types, drop the dialect marker, normalise draft-07
- * tuples, restore tuple length bounds, and collapse unsatisfiable object
- * intersections.
+ * report widened lossy types (a batched warning, or a throw in strict mode),
+ * drop the dialect marker, normalise draft-07 tuples, restore tuple length
+ * bounds, and collapse unsatisfiable object intersections.
  */
-const finalize = (json: Record<string, unknown>, droppedTypes: Set<string>): JSONSchema => {
-  if (droppedTypes.size > 0) {
-    console.warn(
-      `[mjst] Zod adapter: ${[...droppedTypes].sort().join(', ')} ${droppedTypes.size === 1 ? 'has' : 'have'} no JSON Schema representation and became "accept anything". The generated type will be wider than the Zod schema.`,
-    )
-  }
+const finalize = (
+  json: Record<string, unknown>,
+  droppedTypes: Set<string>,
+  strict: boolean | undefined,
+): JSONSchema => {
+  // Surface every widened type in one batched, branded notice (or throw in
+  // strict mode) so the loss is not silent — the same treatment the Valibot
+  // adapter gives its own unrepresentable constructs.
+  reportLossyConstructs('Zod', droppedTypes, strict)
 
   // The dialect marker is noise for the generators, which already target 2020-12.
   delete json['$schema']
@@ -314,10 +320,10 @@ const finalize = (json: Record<string, unknown>, droppedTypes: Set<string>): JSO
  *
  * Prefers Zod 4's native `toJSONSchema`. When the installed Zod lacks it (Zod 3),
  * falls back to the optional `zod-to-json-schema` package, routing through the
- * same `x-mjst` date/bigint mapping and lossy-type warnings. If neither path is
+ * same `x-mjst` date/bigint mapping and lossy-type reporting. If neither path is
  * available, throws a clear error explaining what to install.
  */
-export const zodToJsonSchema = async (source: unknown): Promise<JSONSchema> => {
+export const zodToJsonSchema = async (source: unknown, options?: AdapterOptions): Promise<JSONSchema> => {
   if (typeof source !== 'object' || source === null) {
     const received = source === null ? 'null' : typeof source
     throw new Error(`Zod adapter expected a Zod schema but received ${received}.`)
@@ -327,12 +333,12 @@ export const zodToJsonSchema = async (source: unknown): Promise<JSONSchema> => {
 
   const toJSONSchema = await loadToJsonSchema()
   if (toJSONSchema) {
-    return finalize(convertWithZod4(source, toJSONSchema, droppedTypes), droppedTypes)
+    return finalize(convertWithZod4(source, toJSONSchema, droppedTypes), droppedTypes, options?.strict)
   }
 
   const fallback = await loadFallbackConverter()
   if (fallback) {
-    return finalize(convertWithFallback(source, fallback, droppedTypes), droppedTypes)
+    return finalize(convertWithFallback(source, fallback, droppedTypes), droppedTypes, options?.strict)
   }
 
   throw new Error(

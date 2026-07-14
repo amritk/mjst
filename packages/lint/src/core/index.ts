@@ -2,7 +2,14 @@ export { createDocument, type Document, type IDocumentOptions } from './document
 export { detectFormats, type Format } from './formats'
 export { globToRegExp, matchesGlob } from './glob'
 export { type CompiledPath, compileQuery, type IQueryMatch, query, queryCompiled, queryMany } from './jsonpath'
-export { type LintOptions, type LintResolver, type LintResult, lint, lintWithResult } from './lint'
+export {
+  type LintOptions,
+  type LintResolver,
+  type LintResolverResult,
+  type LintResult,
+  lint,
+  lintWithResult,
+} from './lint'
 export {
   type LintPlugin,
   type LintPluginContext,
