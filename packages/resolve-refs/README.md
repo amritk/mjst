@@ -3,18 +3,28 @@
 Resolve and inline JSON Schema / OpenAPI `$ref`s — internal pointers, cross-file
 refs, and remote (http/https) documents — into a single dereferenced document.
 
-- **One-pass, cached.** Every unique ref is resolved once; cycles are broken with
-  an empty object so the result is always finite.
-- **Anchors + dynamic refs.** Beyond JSON-pointer `$ref`s, plain-name `$anchor`
-  references (`#node`), `$dynamicRef`/`$dynamicAnchor` (2020-12), and
-  `$recursiveRef`/`$recursiveAnchor` (2019-09) are dereferenced too. The dynamic
-  forms bind to their document-global anchor — the single-bundle case; nested
-  `$id` base-URI re-scoping is not modelled.
+- **One-pass, cached.** Every unique ref is resolved once; the result is always
+  finite. At a reference **cycle** the recursive branch is *kept*, not lost: the
+  cycle point stays a `$ref` that resolves within the output document (a
+  cross-file cycle target is hoisted into the root's `$defs`), so recursive
+  schemas survive dereferencing intact.
+- **Anchors + dynamic refs, `$id`-scoped.** Beyond JSON-pointer `$ref`s,
+  plain-name `$anchor` references (`#node`), `$dynamicRef`/`$dynamicAnchor`
+  (2020-12), and `$recursiveRef`/`$recursiveAnchor` (2019-09) are dereferenced
+  too. `$id` base-URI scoping is modelled for the bundled-document case: a ref
+  whose URI matches an embedded resource's `$id` resolves to it without
+  fetching, and anchors bind within the resource that declares them (falling
+  back to a document-global search). See *`$id` scoping* below for the exact
+  subset.
 - **Cross-file + remote.** Relative refs resolve against the document they appear
   in (a ref inside a remote doc stays remote, one inside a local file stays
   local). Fetched remote documents are cached for the lifetime of the process.
 - **Default-deny SSRF guard.** Remote refs to loopback, private, link-local, and
   cloud-metadata (`169.254.169.254`) hosts are refused unless you opt in.
+- **OpenAPI Reference Objects.** A `$ref` whose only siblings are `summary` /
+  `description` inlines the target with those annotations overriding — matching
+  OpenAPI 3.1 Reference Object semantics, where an `allOf` wrapper would be
+  invalid. Any other sibling keyword keeps the spec-correct `allOf` combination.
 
 ## Usage
 
@@ -40,6 +50,14 @@ const remote = await resolveRefsFromFile('https://api.example.com/schema.json', 
 | `remote` | `true` | Whether http(s) refs may be fetched at all. |
 | `allowedHosts` | `[]` | If non-empty, only these hosts may be fetched. An explicit entry bypasses the private-host guard. |
 | `allowPrivateHosts` | `false` | Allow loopback/private/link-local targets. Left off, these are refused as an SSRF guard. |
+| `headers` | — | Extra headers for remote requests (record, or `(url) => headers` for per-host credentials). Never sent across a cross-origin redirect. |
+| `fetch` | global `fetch` | Custom fetch implementation. The SSRF guard still evaluates every hop before it is called. |
+| `timeoutMs` | `30_000` | Abort an unresponsive remote fetch after this many milliseconds. |
+| `maxRedirects` | `5` | Redirect hops to follow per remote document (each hop re-runs the SSRF guard). |
+| `maxBytes` | `16` MiB | Refuse to buffer a remote document larger than this. |
+| `cache` | `true` | Pass `false` to bypass the process-wide session cache for this call — everything is re-fetched, nothing is stored. |
+| `parse` | `JSON.parse` | Custom content parser (e.g. YAML-aware). |
+| `trackOrigins` | `false` | Record a per-node origin map on the result. |
 
 Errors (a missing file, a refused host, a bad URL) are collected on
 `result.errors` rather than thrown; the corresponding ref resolves to `{}` so the
@@ -47,6 +65,29 @@ rest of the document still resolves.
 
 `clearRemoteCache()` drops every cached remote document — useful in tests or
 long-lived sessions where remote schemas may change.
+
+## `$id` scoping
+
+The supported subset, chosen for the bundled-document reality rather than the
+full spec:
+
+- A subschema with `$id` is an **embedded resource**: its `$id` (resolved
+  against the enclosing base) becomes the base URI for everything inside it.
+- A ref whose URI — resolved against the enclosing base — **matches an embedded
+  resource's `$id`** resolves to that resource without fetching. A pointer or
+  anchor fragment on such a ref applies *within* that resource.
+- **Anchors** bind within the resource that declares them first; an anchor not
+  found in scope falls back to a document-global search (compatibility with
+  documents that reference across sibling resources).
+- A plain `#/pointer` fragment stays **document-root-relative** — the behavior
+  bundled real-world documents rely on — even inside an embedded resource.
+- `$dynamicRef` prefers a `$dynamicAnchor` in scope, then degrades to `$ref`
+  semantics. The full dynamic-scope algorithm (outermost anchor along the
+  runtime reference chain) is not modelled.
+- Document **retrieval is unaffected**: which file/URL an external ref loads
+  from is derived from the referencing document's *location*, never its `$id` —
+  a root `$id` naming a remote URL cannot turn a local sibling-file ref into a
+  network fetch.
 
 ## Documents
 

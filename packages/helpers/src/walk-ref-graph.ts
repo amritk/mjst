@@ -1,7 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { buildDynamicRefMap } from './build-dynamic-ref-map'
-import { extractDynamicAnchorDefs } from './extract-dynamic-anchor-defs'
 import { extractRefs } from './extract-refs'
 import { refToFilename } from './ref-to-filename'
 import { refToName } from './ref-to-name'
@@ -200,10 +199,10 @@ export const walkRefGraph = (
     isRoot: true,
   })
 
-  const queue: string[] = [
-    ...cachedExtractRefs(cache, upgraded as JSONSchema),
-    ...extractDynamicAnchorDefs(upgraded as JSONSchema),
-  ]
+  // Seed dynamic-anchor targets from the memoized map instead of calling
+  // extractDynamicAnchorDefs (which would re-walk the whole document — the map
+  // already holds exactly those refs as its values).
+  const queue: string[] = [...cachedExtractRefs(cache, upgraded as JSONSchema), ...Object.values(dynamicRefMap)]
 
   // Advance a read cursor instead of `queue.shift()`, whose O(n) element move
   // makes draining a large ref graph quadratic.

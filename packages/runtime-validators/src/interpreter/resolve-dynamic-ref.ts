@@ -40,3 +40,17 @@ export const resolveDynamicRef = (ref: string, root: unknown): unknown => {
   // static resolver so `$dynamicRef` degrades gracefully to `$ref` semantics.
   return resolveLocalRef(ref, root)
 }
+
+/**
+ * Resolves a draft 2019-09 `$recursiveRef` against the root document. The only
+ * spec-legal value is `"#"`: it late-binds to the subschema carrying
+ * `$recursiveAnchor: true`, falling back to the document root when none exists.
+ *
+ * Like {@link resolveDynamicRef} this is the document-global approximation of
+ * the dynamic-scope algorithm — correct for the single bundled document the
+ * interpreter operates on, where at most one `$recursiveAnchor` is in play.
+ */
+export const resolveRecursiveRef = (root: unknown): unknown =>
+  findAnchor(root, true, RECURSIVE_ANCHOR_KEYWORDS, new Set()) ?? root
+
+const RECURSIVE_ANCHOR_KEYWORDS = ['$recursiveAnchor'] as const

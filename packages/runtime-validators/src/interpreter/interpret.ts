@@ -1,5 +1,5 @@
 import { FORMAT_CHECKS, isValidRegex } from '@/interpreter/format-checks'
-import { resolveDynamicRef } from '@/interpreter/resolve-dynamic-ref'
+import { resolveDynamicRef, resolveRecursiveRef } from '@/interpreter/resolve-dynamic-ref'
 import { resolveLocalRef } from '@/interpreter/resolve-local-ref'
 import type { ValidationError } from '@/types'
 
@@ -170,9 +170,13 @@ const matchesType = (type: string, value: unknown): boolean => {
     case 'array':
       return Array.isArray(value)
     default:
-      // Unknown type keyword — treat as "always matches" so we never reject
-      // valid data because of a type we do not model.
-      return true
+      // Unknown type keyword — a schema error, not a data error. Silently
+      // matching everything would disable the constraint (a typo'd
+      // `type: "strng"` accepting any value), so fail loudly instead, the same
+      // contract as an unresolvable `$ref`.
+      throw new Error(
+        `Unknown type "${type}" in schema — expected one of: string, number, integer, boolean, null, object, array`,
+      )
   }
 }
 
@@ -300,6 +304,27 @@ const resolveDyn = (ctx: InterpreterContext, ref: string): unknown => {
     if (resolved === undefined) {
       throw new Error(`Cannot resolve $dynamicRef "${ref}". Only local refs into the same document are supported.`)
     }
+    cache.set(key, resolved)
+  }
+  return resolved
+}
+
+/**
+ * Resolves the document's `$recursiveRef` target, caching it. There is only one
+ * possible target per document (the `$recursiveAnchor: true` subschema, or the
+ * root), so a single cache slot suffices. Never fails: the root is always a
+ * valid fallback per 2019-09.
+ */
+const resolveRec = (ctx: InterpreterContext): unknown => {
+  const key = 'rec:#'
+  let cache = ctx.caches.ref
+  if (cache === null) {
+    cache = new Map()
+    ctx.caches.ref = cache
+  }
+  let resolved = cache.get(key)
+  if (resolved === undefined) {
+    resolved = resolveRecursiveRef(ctx.root)
     cache.set(key, resolved)
   }
   return resolved
@@ -928,6 +953,14 @@ export const interpret = (
   const dynRef = s['$dynamicRef']
   if (typeof dynRef === 'string') {
     interpretRef(ctx, resolveDyn(ctx, dynRef), value, path, evalScope)
+    if (ctx.failed) return
+  }
+
+  // `$recursiveRef` (2019-09) — the predecessor of `$dynamicRef`. Its only legal
+  // value is `"#"`: late-binds to the `$recursiveAnchor: true` subschema,
+  // falling back to the document root.
+  if (typeof s['$recursiveRef'] === 'string') {
+    interpretRef(ctx, resolveRec(ctx), value, path, evalScope)
     if (ctx.failed) return
   }
 

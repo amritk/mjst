@@ -58,12 +58,12 @@ describe('anchors and dynamic references', () => {
       properties: { child: { $recursiveRef: '#' } },
     })
     // The recursive anchor is the root, so `child` inlines a copy of the root
-    // schema one level deep; the cycle guard then breaks the next level with `{}`,
-    // keeping the tree finite.
+    // schema one level deep; the cycle guard then keeps the reference at the
+    // next level, keeping the tree finite without losing the recursion.
     const child = (resolved as { properties: { child: { type: string; properties: { child: unknown } } } }).properties
       .child
     expect(child.type).toBe('object')
-    expect(child.properties.child).toEqual({})
+    expect(child.properties.child).toEqual({ $recursiveRef: '#' })
   })
 
   it('falls back to the document root when $recursiveRef finds no $recursiveAnchor', () => {
@@ -77,7 +77,7 @@ describe('anchors and dynamic references', () => {
     const child = (resolved as { properties: { child: { type: string; properties: { child: unknown } } } }).properties
       .child
     expect(child.type).toBe('object')
-    expect(child.properties.child).toEqual({})
+    expect(child.properties.child).toEqual({ $recursiveRef: '#' })
   })
 
   it('terminates on a self-referential schema reached through a $dynamicAnchor', () => {
@@ -95,9 +95,9 @@ describe('anchors and dynamic references', () => {
     const root = (resolved as { properties: { root: { type: string; items: { type: string; items: unknown } } } })
       .properties.root
     expect(root.type).toBe('array')
-    // One level of recursion is inlined, then the cycle guard breaks it.
+    // One level of recursion is inlined, then the cycle guard keeps the ref.
     expect(root.items.type).toBe('array')
-    expect(root.items.items).toEqual({})
+    expect(root.items.items).toEqual({ $dynamicRef: '#tree' })
   })
 
   it('reports a missing anchor and keeps the original reference node', () => {
@@ -118,13 +118,27 @@ describe('anchors and dynamic references', () => {
     expect(errors).toHaveLength(1)
   })
 
-  it('applies keywords sibling to a $dynamicRef via allOf', () => {
+  it('inlines an annotation-only sibling (description) as an override, not an allOf', () => {
+    // `summary`/`description` are the only siblings OpenAPI 3.1 Reference
+    // Objects allow, and they override the target's — no `allOf` wrapper.
     const { resolved } = resolveRefs({
       a: { $dynamicRef: '#base', description: 'local' },
+      $defs: { base: { $dynamicAnchor: 'base', type: 'object', description: 'from target' } },
+    })
+    expect((resolved as { a: unknown }).a).toEqual({
+      $dynamicAnchor: 'base',
+      type: 'object',
+      description: 'local',
+    })
+  })
+
+  it('still combines constraint-carrying siblings of a $dynamicRef via allOf', () => {
+    const { resolved } = resolveRefs({
+      a: { $dynamicRef: '#base', minProperties: 1 },
       $defs: { base: { $dynamicAnchor: 'base', type: 'object' } },
     })
     expect(resolved as { a: unknown }).toMatchObject({
-      a: { description: 'local', allOf: [{ type: 'object' }] },
+      a: { minProperties: 1, allOf: [{ type: 'object' }] },
     })
   })
 })

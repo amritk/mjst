@@ -25,15 +25,18 @@ describe('resolve-refs', () => {
     expect((resolved as { properties: { a: unknown } }).properties.a).toEqual({ $ref: '#/$defs/missing' })
   })
 
-  it('breaks a self-referential cycle with an empty object', () => {
-    const { resolved } = resolveRefs({
+  it('breaks a self-referential cycle by keeping the reference', () => {
+    const { resolved, errors } = resolveRefs({
       $defs: { node: { type: 'object', properties: { next: { $ref: '#/$defs/node' } } } },
       properties: { head: { $ref: '#/$defs/node' } },
     })
 
+    expect(errors).toEqual([])
     const head = (resolved as { properties: { head: { properties: { next: unknown } } } }).properties.head
-    // The first level resolves; the recursive self-reference terminates at `{}`.
-    expect(head.properties.next).toEqual({})
+    // The first level resolves; the recursive self-reference keeps its `$ref`,
+    // which still resolves within the output (`$defs.node` is preserved), so
+    // the recursive branch survives instead of collapsing to `{}`.
+    expect(head.properties.next).toEqual({ $ref: '#/$defs/node' })
   })
 
   it('breaks a mutual cycle (A → B → A) without infinite recursion', () => {
@@ -45,12 +48,15 @@ describe('resolve-refs', () => {
       properties: { root: { $ref: '#/$defs/a' } },
     })
 
-    // Resolution terminates; `a` is in the cache by the time `properties.root` is
-    // processed, so we get the partially-resolved shape where the back-reference
-    // leg terminated at `{}` rather than looping forever.
+    // Resolution terminates; whichever leg re-enters the cycle first keeps its
+    // `$ref` rather than looping forever — and that ref still resolves against
+    // the preserved `$defs`, so no information is lost.
     const root = (resolved as { properties: { root: { type: string; properties: { b: unknown } } } }).properties.root
     expect(root.type).toBe('object')
-    expect(root.properties.b).toEqual({})
+    expect(root.properties.b).toEqual({ $ref: '#/$defs/b' })
+    // The kept ref's target survives in the output with its full shape.
+    const defs = (resolved as { $defs: { b: { type: string; properties: { a: unknown } } } }).$defs
+    expect(defs.b.type).toBe('object')
   })
 
   it('leaves external (non-#) refs in place but records an error', () => {
