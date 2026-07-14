@@ -8,14 +8,14 @@ describe('generate-schema-checks', () => {
     expect(result).toEqual([])
   })
 
-  it.todo('infers object type from properties keyword', () => {
+  it('infers object type from properties keyword', () => {
     const result = generateSchemaChecks('value', {
       properties: { id: { type: 'string' } },
     })
     expect(result).toEqual(['typeof value === "object" && value !== null && !Array.isArray(value)'])
   })
 
-  it.todo('infers object type from required keyword', () => {
+  it('infers object type from required keyword', () => {
     const result = generateSchemaChecks('value', {
       required: ['id', 'name'],
     })
@@ -26,14 +26,14 @@ describe('generate-schema-checks', () => {
     ])
   })
 
-  it.todo('infers array type from items keyword', () => {
+  it('infers array type from items keyword', () => {
     const result = generateSchemaChecks('value', {
       items: { type: 'string' },
     })
     expect(result).toEqual(['Array.isArray(value)'])
   })
 
-  it.todo('infers array type from minItems/maxItems keywords', () => {
+  it('infers array type from minItems/maxItems keywords', () => {
     const result = generateSchemaChecks('value', {
       minItems: 1,
       maxItems: 10,
@@ -41,49 +41,49 @@ describe('generate-schema-checks', () => {
     expect(result).toEqual(['Array.isArray(value)', 'value.length >= 1', 'value.length <= 10'])
   })
 
-  it.todo('infers string type from minLength keyword', () => {
+  it('infers string type from minLength keyword', () => {
     const result = generateSchemaChecks('value', {
       minLength: 1,
     })
     expect(result).toEqual(['typeof value === "string"', 'value.length >= 1'])
   })
 
-  it.todo('infers string type from pattern keyword', () => {
+  it('infers string type from pattern keyword', () => {
     const result = generateSchemaChecks('value', {
       pattern: '^[a-z]+$',
     })
     expect(result).toEqual(['typeof value === "string"', '/^[a-z]+$/.test(value)'])
   })
 
-  it.todo('infers number type from minimum keyword', () => {
+  it('infers number type from minimum keyword', () => {
     const result = generateSchemaChecks('value', {
       minimum: 0,
     })
     expect(result).toEqual(['typeof value === "number"', 'value >= 0'])
   })
 
-  it.todo('infers number type from multipleOf keyword', () => {
+  it('infers number type from multipleOf keyword', () => {
     const result = generateSchemaChecks('value', {
       multipleOf: 5,
     })
     expect(result).toEqual(['typeof value === "number"', 'value % 5 === 0'])
   })
 
-  it.todo('infers boolean type from const boolean value', () => {
+  it('infers boolean type from const boolean value', () => {
     const result = generateSchemaChecks('value', {
       const: true,
     })
     expect(result).toEqual(['typeof value === "boolean"'])
   })
 
-  it.todo('infers null type from const null value', () => {
+  it('infers null type from const null value', () => {
     const result = generateSchemaChecks('value', {
       const: null,
     })
     expect(result).toEqual(['value === null'])
   })
 
-  it.todo('infers null type from all-null enum', () => {
+  it('infers null type from all-null enum', () => {
     const result = generateSchemaChecks('value', {
       enum: [null, null],
     })
@@ -91,7 +91,7 @@ describe('generate-schema-checks', () => {
   })
 
   // When object and array keywords tie, object wins (matches inferSchemaType priority)
-  it.todo('prefers object over array when keyword scores tie', () => {
+  it('prefers object over array when keyword scores tie', () => {
     const result = generateSchemaChecks('value', {
       minProperties: 1,
       minItems: 1,
@@ -101,7 +101,7 @@ describe('generate-schema-checks', () => {
   })
 
   // Array keywords outnumber string keywords so array wins
-  it.todo('selects highest scoring type when multiple keyword categories present', () => {
+  it('selects highest scoring type when multiple keyword categories present', () => {
     const result = generateSchemaChecks('value', {
       minItems: 1,
       maxItems: 3,
@@ -111,7 +111,7 @@ describe('generate-schema-checks', () => {
     expect(result).not.toContain('typeof value === "string"')
   })
 
-  it.todo('applies inferred type constraints alongside explicit enum check', () => {
+  it('applies inferred type constraints alongside explicit enum check', () => {
     const result = generateSchemaChecks('value', {
       minimum: 0,
       maximum: 10,

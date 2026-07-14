@@ -2615,4 +2615,138 @@ describe('generate-parser-function', () => {
       expect(obj({ kinds: ['y', 'x'] })).toEqual({ kinds: ['y', 'x'] }) // already valid, untouched
     })
   })
+
+  describe('tuple prefixItems', () => {
+    const coerce = (schema: JSONSchema, rootSchema?: Record<string, unknown>) =>
+      evalGenerated<(input: unknown) => unknown>(
+        generateParserFunction(schema, 'Root', rootSchema ? { rootSchema } : undefined),
+        'parseRoot',
+      )
+    const strict = (schema: JSONSchema, rootSchema?: Record<string, unknown>) =>
+      evalGenerated<(input: unknown) => unknown>(
+        generateParserFunction(schema, 'Root', { strict: true, ...(rootSchema ? { rootSchema } : {}) }),
+        'parseRoot',
+      )
+
+    const tupleProp: JSONSchema = {
+      type: 'object',
+      properties: { pair: { type: 'array', prefixItems: [{ type: 'string' }, { type: 'number' }], items: false } },
+      required: ['pair'],
+    }
+
+    describe('coerce mode', () => {
+      it('coerces each position through its own subschema', () => {
+        // Position 0 is a string (a number is String()-coerced), position 1 a
+        // number (a numeric string is Number()-coerced).
+        expect(coerce(tupleProp)({ pair: [42, '7'] })).toEqual({ pair: ['42', 7] })
+      })
+
+      it('leaves an already well-typed tuple untouched (fast path)', () => {
+        expect(coerce(tupleProp)({ pair: ['hi', 3] })).toEqual({ pair: ['hi', 3] })
+      })
+
+      it('caps extra elements when items is false', () => {
+        expect(coerce(tupleProp)({ pair: ['hi', 3, 'extra', 9] })).toEqual({ pair: ['hi', 3] })
+      })
+
+      it('keeps extra elements when items is not false', () => {
+        const open: JSONSchema = {
+          type: 'object',
+          properties: { pair: { type: 'array', prefixItems: [{ type: 'string' }, { type: 'number' }] } },
+          required: ['pair'],
+        }
+        // Prefix positions are still coerced; trailing elements pass through.
+        expect(coerce(open)({ pair: [1, '2', 'tail'] })).toEqual({ pair: ['1', 2, 'tail'] })
+      })
+
+      it('keeps absent trailing positions of a shorter array', () => {
+        expect(coerce(tupleProp)({ pair: [5] })).toEqual({ pair: ['5'] })
+      })
+
+      it('coerces a non-array to an empty array', () => {
+        expect(coerce(tupleProp)({ pair: 'nope' })).toEqual({ pair: [] })
+      })
+
+      it('coerces a root-level tuple', () => {
+        const root: JSONSchema = {
+          type: 'array',
+          prefixItems: [{ type: 'string' }, { type: 'integer' }],
+          items: false,
+        }
+        expect(coerce(root)([9, '4', 'x'])).toEqual(['9', 4])
+        expect(coerce(root)('notarray')).toEqual([])
+      })
+
+      it('resolves and coerces $refs inside root tuple positions', () => {
+        const rootSchema = {
+          $defs: { Id: { type: 'integer' }, Tag: { type: 'string', enum: ['a', 'b'] } },
+          type: 'array',
+          prefixItems: [{ $ref: '#/$defs/Id' }, { $ref: '#/$defs/Tag' }],
+          items: false,
+        }
+        const p = coerce(rootSchema as unknown as JSONSchema, rootSchema)
+        // Id position coerces "7" → 7; Tag position defaults a non-member to 'a'.
+        expect(p(['7', 'zzz', 'extra'])).toEqual([7, 'a'])
+      })
+    })
+
+    describe('strict mode', () => {
+      it('accepts a well-typed tuple unchanged', () => {
+        expect(strict(tupleProp)({ pair: ['hi', 3] })).toEqual({ pair: ['hi', 3] })
+      })
+
+      it('throws on a wrong-typed position', () => {
+        expect(() => strict(tupleProp)({ pair: ['hi', 'notnum'] })).toThrow(/'pair'\[1\] expected number/)
+        expect(() => strict(tupleProp)({ pair: [1, 3] })).toThrow(/'pair'\[0\] expected string/)
+      })
+
+      it('throws on extra elements when items is false', () => {
+        expect(() => strict(tupleProp)({ pair: ['hi', 3, 'extra'] })).toThrow(/must NOT have more than 2 items/)
+      })
+
+      it('accepts extra elements when items is not false', () => {
+        const open: JSONSchema = {
+          type: 'object',
+          properties: { pair: { type: 'array', prefixItems: [{ type: 'string' }, { type: 'number' }] } },
+          required: ['pair'],
+        }
+        expect(strict(open)({ pair: ['hi', 3, 'extra'] })).toEqual({ pair: ['hi', 3, 'extra'] })
+      })
+
+      it('accepts a shorter array (prefixItems does not require presence)', () => {
+        expect(strict(tupleProp)({ pair: ['hi'] })).toEqual({ pair: ['hi'] })
+        expect(strict(tupleProp)({ pair: [] })).toEqual({ pair: [] })
+      })
+
+      it('asserts a root-level tuple', () => {
+        const root: JSONSchema = {
+          type: 'array',
+          prefixItems: [{ type: 'string' }, { type: 'integer' }],
+          items: false,
+        }
+        expect(strict(root)(['hi', 2])).toEqual(['hi', 2])
+        expect(() => strict(root)(['hi', 2.5])).toThrow(/\[1\] expected number/)
+        expect(() => strict(root)(['hi', 2, 3])).toThrow(/must NOT have more than 2 items/)
+      })
+
+      it('resolves and asserts $refs inside tuple positions', () => {
+        const rootSchema = {
+          $defs: { Id: { type: 'integer' }, Tag: { type: 'string', enum: ['a', 'b'] } },
+          type: 'object',
+          properties: {
+            entry: {
+              type: 'array',
+              prefixItems: [{ $ref: '#/$defs/Id' }, { $ref: '#/$defs/Tag' }],
+              items: false,
+            },
+          },
+          required: ['entry'],
+        }
+        const p = strict(rootSchema as unknown as JSONSchema, rootSchema)
+        expect(p({ entry: [7, 'a'] })).toEqual({ entry: [7, 'a'] })
+        expect(() => p({ entry: ['notint', 'a'] })).toThrow(/'entry'\[0\] expected number/)
+        expect(() => p({ entry: [7, 'zzz'] })).toThrow(/'entry'\[1\] must be one of/)
+      })
+    })
+  })
 })
