@@ -177,7 +177,7 @@ schema** for scalar typing. The exact boundaries:
 
 - Plain (unquoted), single-quoted (`''` escape), and double-quoted scalars (full escapes — `\n`, `\t`, `\xNN`, `\uNNNN`, `\UNNNNNNNN` — line continuation, and folding).
 - Literal `|` and folded `>` block scalars with chomping (`-` strip, `+` keep, default clip) and explicit indentation indicators.
-- Multi-line plain scalars (folded) in block context.
+- Multi-line plain scalars (folded) in both block context and flow context (`[ … ]` / `{ … }`), where a wrapped line's indentation is trimmed and line breaks fold per YAML 1.2 (single break → space, a run of *n* breaks → *n − 1* newlines).
 
 **Type resolution (YAML 1.2 core schema)**
 
@@ -206,7 +206,6 @@ schema** for scalar typing. The exact boundaries:
 - **Schema selection.** Always the 1.2 core schema — no JSON, failsafe, or YAML 1.1 schema switch.
 - **YAML 1.1-only scalar forms.** `yes`/`no`/`on`/`off` booleans, sexagesimal numbers (`1:30:00`), and underscore digit groups (`1_000`) stay strings, per the 1.2 core schema.
 - **Implicit timestamps.** An untagged ISO date string stays a string; only an explicit `!!timestamp` produces a `Date`.
-- **Multi-line plain scalars inside flow collections.** A plain scalar that *wraps across lines* within `[ … ]` / `{ … }` is not folded (the collection itself may still span lines at token boundaries).
 - **Reserved indicators.** A plain scalar beginning with the reserved `@` or `` ` `` is accepted as text rather than rejected.
 
 If you need full YAML 1.2 conformance, use [`yaml`](https://www.npmjs.com/package/yaml). If you need a small, fast, position-aware parser for diagnostics, use this.
