@@ -272,6 +272,15 @@ The exit code is `0` when no finding reaches `--fail-severity`, `1` when one doe
 <td colspan="4">Generate only TypeScript type definitions without parser functions. Useful when you only need the type shapes and do not need runtime validation.</td>
 </tr>
 <tr>
+<td>🎲 <code>examples</code></td>
+<td><code>--examples</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Also emit test-data files for every schema into an examples/ subdirectory of the output destination: a fast-check arbitrary (FooArbitrary) that produces schema-valid values and a concrete fooExample value. Under schemaDir the examples mirror the schema layout so they never collide with the parser output. The generated arbitraries import fast-check, which consumers must install as a (dev) dependency; the static example values have no runtime dependencies.</td>
+</tr>
+<tr>
 <td>🔨 <code>build</code></td>
 <td><code>--build</code></td>
 <td><code>boolean</code></td>
@@ -404,7 +413,7 @@ The exit code is `0` when no finding reaches `--fail-severity`, `1` when one doe
 <td align="center"></td>
 </tr>
 <tr>
-<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, build, logWarnings, strict, stripUnknown, caseInsensitive, readonly, helpers, typeSuffix, banner, importExt, rootType, resolveRemote, allowedHosts, allowPrivateHosts). CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
+<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, examples, build, logWarnings, strict, stripUnknown, caseInsensitive, readonly, helpers, typeSuffix, banner, importExt, rootType, resolveRemote, allowedHosts, allowPrivateHosts). CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
 </tr>
 </tbody>
 </table>

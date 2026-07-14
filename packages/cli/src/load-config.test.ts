@@ -127,6 +127,24 @@ describe('load-config', () => {
     expect(result).toEqual({ schema: 's.json' })
   })
 
+  it('loads examples boolean from config file', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', outDir: 'o', examples: true }))
+
+    const result = await loadConfig(configPath)
+
+    expect(result).toEqual({ schema: 's.json', outDir: 'o', examples: true })
+  })
+
+  it('ignores non-boolean examples value', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', examples: 'yes' }))
+
+    const result = await loadConfig(configPath)
+
+    expect(result).toEqual({ schema: 's.json' })
+  })
+
   it('loads schemaDir from a config file', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
     await writeFile(configPath, JSON.stringify({ schemaDir: './schemas', outDir: 'output' }))

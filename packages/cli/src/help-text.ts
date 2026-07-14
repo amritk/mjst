@@ -21,6 +21,7 @@ Output:
   --out-dir <dir>       Output directory for the generated files
   --out-file <file>     Single-file output instead of a directory (requires --types-only)
   --types-only          Generate type definitions only, without parser functions
+  --examples            Also emit fast-check arbitraries + example values under examples/
   --build               Compile the generated files to .js/.d.ts (implies --import-ext js)
   --import-ext <ext>    Extension on generated relative imports: ts (default) or js
   --helpers <mode>      Runtime helpers: package or embedded (default: auto-detect from package.json)
