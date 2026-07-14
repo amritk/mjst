@@ -79,7 +79,8 @@
   },
   "peerDependencies": {
     "@sinclair/typebox": ">=0.34",
-    "zod": ">=4",
+    "zod": ">=3",
+    "zod-to-json-schema": ">=3",
     "valibot": ">=1",
     "@valibot/to-json-schema": ">=1",
     "effect": ">=3"
@@ -89,6 +90,9 @@
       "optional": true
     },
     "zod": {
+      "optional": true
+    },
+    "zod-to-json-schema": {
       "optional": true
     },
     "valibot": {
