@@ -106,6 +106,25 @@ export const getUnionBranches = (schema: JSONSchema): readonly JSONSchema[] | nu
 }
 
 /**
+ * True when a schema carries a keyword the strict slow path enforces but which
+ * no flat type check can mirror: `contains` (array item counting),
+ * `dependentRequired` / `dependentSchemas` (cross-property presence), or
+ * `propertyNames` (per-key constraints). A fast path or shape validator that
+ * accepted such a value on a bare type check would skip the enforcement, so
+ * both must bail when this is true — the slow path then runs the real checks.
+ */
+export const hasFastPathBlockingKeyword = (schema: JSONSchema): boolean => {
+  if (!isSchemaObject(schema)) return false
+  const record = schema as Record<string, unknown>
+  // Plain `in` checks (not the typed `hasDependentRequired`): this runs several
+  // times per property during codegen, and a present-but-malformed keyword still
+  // belongs on the slow path, where the typed guards handle it.
+  return (
+    'contains' in record || 'dependentSchemas' in record || 'propertyNames' in record || 'dependentRequired' in record
+  )
+}
+
+/**
  * Generates a fast-path type check expression for a property.
  * Returns null if the schema is too complex for a simple type check.
  *
@@ -120,6 +139,22 @@ export const generatePropertyTypeCheck = (
   suffix: string,
 ): string | null => {
   if (!isSchemaObject(schema)) return null
+
+  // Keywords the strict slow path enforces but no flat check can prove: bail so
+  // neither the fast path nor the shape validator accepts a value they would
+  // otherwise wave through untested. Inlined here (rather than calling
+  // hasFastPathBlockingKeyword) to reuse the isSchemaObject narrowing above —
+  // this is a codegen hot path hit several times per property. Keep in sync with
+  // hasFastPathBlockingKeyword.
+  const record = schema as Record<string, unknown>
+  if (
+    'contains' in record ||
+    'dependentSchemas' in record ||
+    'propertyNames' in record ||
+    'dependentRequired' in record
+  ) {
+    return null
+  }
 
   // $ref via shape predicate (deep fast-path through nested types).
   if (useRefImports && hasRef(schema)) {
