@@ -119,16 +119,84 @@ const integerExpr = (schema: JSONSchema): string => {
   return hasMultipleOf(schema) ? `${base}.filter((n) => n % ${schema.multipleOf} === 0)` : base
 }
 
+/**
+ * Builds a multiple-of-respecting number arbitrary analytically: pick an integer
+ * `k` whose multiple `k * multipleOf` lands inside the (possibly exclusive)
+ * bounds, then emit that product. Random doubles essentially never satisfy
+ * `n % m === 0`, so a `.filter` here starves fast-check ("too many filtered
+ * values") at sample time; deriving the multiple directly cannot fail. This
+ * mirrors the static path's `deriveNumber`.
+ *
+ * The trailing `.map` clamps `k * m` back inside the finite bounds to absorb
+ * floating-point drift (e.g. `3 * 0.1 === 0.30000000000000004`, which would
+ * otherwise slip just past a `maximum` of `0.3`).
+ */
+const numberMultipleOfExpr = (schema: JSONSchema & { multipleOf: number }): string => {
+  const m = Number(schema.multipleOf)
+  const EPS = 1e-9
+
+  // Effective lower bound: the tighter (larger) of minimum / exclusiveMinimum,
+  // tracking whether the binding bound is exclusive.
+  let lo = Number.NEGATIVE_INFINITY
+  let loExclusive = false
+  if (hasMinimum(schema)) lo = Number(schema.minimum)
+  if (hasExclusiveMinimum(schema) && Number(schema.exclusiveMinimum) >= lo) {
+    lo = Number(schema.exclusiveMinimum)
+    loExclusive = true
+  }
+
+  // Effective upper bound: the tighter (smaller) of maximum / exclusiveMaximum.
+  let hi = Number.POSITIVE_INFINITY
+  let hiExclusive = false
+  if (hasMaximum(schema)) hi = Number(schema.maximum)
+  if (hasExclusiveMaximum(schema) && Number(schema.exclusiveMaximum) <= hi) {
+    hi = Number(schema.exclusiveMaximum)
+    hiExclusive = true
+  }
+
+  // Translate value bounds into integer-`k` bounds, where the emitted value is
+  // `k * m`. An exclusive bound must be strictly cleared, so a `k` landing exactly
+  // on it is nudged one step inward; `EPS` keeps a mathematically-integer ratio
+  // (e.g. `0.3 / 0.1`) from being mis-rounded by floating-point error.
+  let kMin: number | undefined
+  let kMax: number | undefined
+  if (Number.isFinite(lo)) {
+    const raw = lo / m
+    kMin = loExclusive ? Math.floor(raw + EPS) + 1 : Math.ceil(raw - EPS)
+  }
+  if (Number.isFinite(hi)) {
+    const raw = hi / m
+    kMax = hiExclusive ? Math.ceil(raw - EPS) - 1 : Math.floor(raw + EPS)
+  }
+  // An unsatisfiable range (no multiple fits) would make `fc.integer` throw on
+  // `min > max`; collapse to a single best-effort value instead.
+  if (kMin !== undefined && kMax !== undefined && kMin > kMax) kMax = kMin
+
+  const kOpts: string[] = []
+  if (kMin !== undefined) kOpts.push(`min: ${kMin}`)
+  if (kMax !== undefined) kOpts.push(`max: ${kMax}`)
+  const k = kOpts.length > 0 ? `fc.integer({ ${kOpts.join(', ')} })` : 'fc.integer()'
+
+  let value = `k * ${m}`
+  if (Number.isFinite(lo)) value = `Math.max(${value}, ${lo})`
+  if (Number.isFinite(hi)) value = `Math.min(${value}, ${hi})`
+
+  return `${k}.map((k) => ${value})`
+}
+
 /** Builds a `fc.double({ ... })` expression honouring range and multiple-of constraints. */
 const numberExpr = (schema: JSONSchema): string => {
+  // A positive `multipleOf` is satisfied analytically rather than by filtering
+  // random doubles, which would starve fast-check at sample time.
+  if (hasMultipleOf(schema) && schema.multipleOf > 0) return numberMultipleOfExpr(schema)
+
   const opts: string[] = ['noNaN: true', 'noDefaultInfinity: true']
   if (hasMinimum(schema)) opts.push(`min: ${schema.minimum}`)
   else if (hasExclusiveMinimum(schema)) opts.push(`min: ${schema.exclusiveMinimum}`, 'minExcluded: true')
   if (hasMaximum(schema)) opts.push(`max: ${schema.maximum}`)
   else if (hasExclusiveMaximum(schema)) opts.push(`max: ${schema.exclusiveMaximum}`, 'maxExcluded: true')
 
-  const base = `fc.double({ ${opts.join(', ')} })`
-  return hasMultipleOf(schema) ? `${base}.filter((n) => n % ${schema.multipleOf} === 0)` : base
+  return `fc.double({ ${opts.join(', ')} })`
 }
 
 /** Builds a `fc.array(...)` / `fc.uniqueArray(...)` / `fc.tuple(...)` expression for an array schema. */
