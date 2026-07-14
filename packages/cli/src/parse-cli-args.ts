@@ -13,6 +13,7 @@ type MutableConfig = {
   input?: SourceFormat
   export?: string
   typesOnly?: boolean
+  examples?: boolean
   build?: boolean
   logWarnings?: boolean
   strict?: boolean
@@ -24,17 +25,23 @@ type MutableConfig = {
   banner?: boolean | string
   importExt?: 'js' | 'ts'
   rootType?: string
+  resolveRemote?: boolean
+  allowedHosts?: string[]
+  allowPrivateHosts?: boolean
 }
 
 // Boolean flags toggle on by presence and accept `--flag=false` to opt out.
 const BOOLEAN_KEYS = new Set<keyof MutableConfig>([
   'typesOnly',
+  'examples',
   'build',
   'logWarnings',
   'strict',
   'stripUnknown',
   'caseInsensitive',
   'readonly',
+  'resolveRemote',
+  'allowPrivateHosts',
 ])
 // Value flags consume the following argument (or `--flag=value`).
 const VALUE_KEYS = new Set<keyof MutableConfig>([
@@ -71,6 +78,20 @@ const parseImportExtValue = (value: string): 'js' | 'ts' | undefined => {
 
 const parseInputValue = (value: string): SourceFormat | undefined =>
   (SOURCE_FORMATS as readonly string[]).includes(value) ? (value as SourceFormat) : undefined
+
+/**
+ * Appends the hosts in `value` (comma-separated) onto `allowedHosts`. Repeating
+ * `--allowed-hosts` accumulates, so `--allowed-hosts a.com --allowed-hosts b.com`
+ * and `--allowed-hosts a.com,b.com` are equivalent. Blank entries are dropped.
+ */
+const appendAllowedHosts = (config: MutableConfig, value: string): void => {
+  const hosts = value
+    .split(',')
+    .map((host) => host.trim())
+    .filter((host) => host.length > 0)
+  if (hosts.length === 0) return
+  config.allowedHosts = [...(config.allowedHosts ?? []), ...hosts]
+}
 
 /** Assigns a value-flag onto the config. Returns false for unknown keys. */
 const assignValue = (config: MutableConfig, key: string, value: string): boolean => {
@@ -131,6 +152,9 @@ const assignBoolean = (config: MutableConfig, key: string, value: boolean): bool
     case 'typesOnly':
       config.typesOnly = value
       return true
+    case 'examples':
+      config.examples = value
+      return true
     case 'build':
       config.build = value
       return true
@@ -148,6 +172,12 @@ const assignBoolean = (config: MutableConfig, key: string, value: boolean): bool
       return true
     case 'readonly':
       config.readonly = value
+      return true
+    case 'resolveRemote':
+      config.resolveRemote = value
+      return true
+    case 'allowPrivateHosts':
+      config.allowPrivateHosts = value
       return true
     default:
       return false
@@ -179,6 +209,8 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
       if (key === 'banner') {
         // --banner=false → false, --banner=true → true, --banner=<text> → custom string
         config.banner = value === 'false' ? false : value === 'true' ? true : value
+      } else if (key === 'allowedHosts') {
+        appendAllowedHosts(config, value)
       } else if (BOOLEAN_KEYS.has(key as keyof MutableConfig)) {
         assignBoolean(config, key, value !== 'false')
       } else if (VALUE_KEYS.has(key as keyof MutableConfig)) {
@@ -205,6 +237,17 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
       } else {
         config.banner = true
       }
+      continue
+    }
+
+    // --allowed-hosts takes a value (comma-separated) and accumulates when repeated.
+    if (key === 'allowedHosts') {
+      const value = args[i + 1]
+      if (value === undefined || value.startsWith('--')) {
+        throw new Error(`Flag "--${flagName}" expects a value.`)
+      }
+      appendAllowedHosts(config, value)
+      i++
       continue
     }
 

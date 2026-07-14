@@ -39,8 +39,8 @@ const ANNOTATION_ONLY_SIBLINGS = new Set(['summary', 'description'])
  * mid-resolution means a cycle, so the original reference node is kept — its
  * target still exists in the resolved document, preserving the recursive
  * branch instead of collapsing it to `{}`. Refs that resolve to nothing in
- * this document (external files, HTTP) are left untouched — callers that need
- * those should use `resolveRefsFromFile`.
+ * this document (external files, HTTP) are left in place but recorded as an
+ * error — callers that need those should use `resolveRefsFromFile`.
  *
  * `base` is the current `$id` base URI, used to scope anchor lookups and to
  * match refs against embedded resources (see `resource-registry.ts`).
@@ -66,6 +66,20 @@ const resolveInternal = (
   if (reference) {
     const { keyword, value: ref } = reference
 
+    // An external ref (another file or an http(s) URL) can't be dereferenced by
+    // the in-memory resolver — it has no access to other documents. Record a
+    // diagnostic and keep the original node, so callers see a half-resolved
+    // document flagged rather than a silently-unresolved ref. Note this is
+    // decided *after* `$id`-scope matching below: a non-`#` ref whose URI
+    // matches an embedded resource's `$id` is internal, not external.
+    const externalRef = (): unknown => {
+      errors.push({
+        message: `Cannot resolve external ${keyword} "${ref}": external ref requires resolveRefsFromFile`,
+        path: [],
+      })
+      return obj
+    }
+
     // Resolve within the document's `$id` scope. `$recursiveRef` ignores its
     // fragment and binds document-globally, so it skips the scoped path.
     let found: ResolvedTarget | undefined
@@ -75,7 +89,7 @@ const resolveInternal = (
       targetBase = registry.rootBase
     } else {
       const scoped = resolveRefInScope(registry, keyword, ref, nodeBase)
-      if (scoped === 'external') return obj // external ref — leave as-is
+      if (scoped === 'external') return externalRef()
       if (scoped !== undefined) {
         found = scoped
         targetBase = scoped.base
@@ -86,7 +100,7 @@ const resolveInternal = (
         found = resolveFragment(root, keyword, ref.slice(1))
         targetBase = registry.rootBase
       } else {
-        return obj
+        return externalRef()
       }
     }
 
@@ -188,8 +202,10 @@ const resolveInternal = (
  * Resolves all internal `$ref`s in an in-memory document — plain `#/...`
  * pointers, `$anchor`/`$dynamicAnchor` names (scoped by `$id`), and refs whose
  * URI matches an embedded resource's `$id` — inlining each target. Refs to
- * other files/URLs are left as-is. Cycles are broken by keeping the original
- * reference node, so recursive schemas keep their recursive branch.
+ * other files/URLs are left in place and reported on `errors` (this resolver
+ * can't load other documents — use `resolveRefsFromFile` for those). Cycles are
+ * broken by keeping the original reference node, so recursive schemas keep
+ * their recursive branch.
  */
 export const resolveRefs = (data: unknown, options: ResolveRefsOptions = {}): ResolveResult => {
   const origins: OriginMap | undefined = options.trackOrigins ? new Map() : undefined

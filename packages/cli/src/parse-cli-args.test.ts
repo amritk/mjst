@@ -129,6 +129,23 @@ describe('parse-cli-args', () => {
     })
   })
 
+  it('parses --examples boolean flag', () => {
+    expect(parseCliArgs(['--examples'])).toEqual({ examples: true })
+  })
+
+  it('parses --examples=true and --examples=false with equals syntax', () => {
+    expect(parseCliArgs(['--examples=true'])).toEqual({ examples: true })
+    expect(parseCliArgs(['--examples=false'])).toEqual({ examples: false })
+  })
+
+  it('parses --examples alongside other flags', () => {
+    expect(parseCliArgs(['--schema', 'schema.json', '--out-dir', 'dist', '--examples'])).toEqual({
+      schema: 'schema.json',
+      outDir: 'dist',
+      examples: true,
+    })
+  })
+
   it('parses --build boolean flag', () => {
     const result = parseCliArgs(['--build'])
 
@@ -362,5 +379,37 @@ describe('parse-cli-args', () => {
 
   it('parses --banner followed by a flag as true (default message)', () => {
     expect(parseCliArgs(['--banner', '--out-dir', 'dist'])).toEqual({ banner: true, outDir: 'dist' })
+  })
+
+  it('parses --resolve-remote and --allow-private-hosts boolean flags', () => {
+    expect(parseCliArgs(['--resolve-remote'])).toEqual({ resolveRemote: true })
+    expect(parseCliArgs(['--allow-private-hosts'])).toEqual({ allowPrivateHosts: true })
+    expect(parseCliArgs(['--resolve-remote=false'])).toEqual({ resolveRemote: false })
+    expect(parseCliArgs(['--allow-private-hosts=false'])).toEqual({ allowPrivateHosts: false })
+  })
+
+  it('accepts camelCase spellings of the resolution flags', () => {
+    expect(parseCliArgs(['--resolveRemote', '--allowPrivateHosts'])).toEqual({
+      resolveRemote: true,
+      allowPrivateHosts: true,
+    })
+  })
+
+  it('parses --allowed-hosts as a comma-separated list', () => {
+    expect(parseCliArgs(['--allowed-hosts', 'a.com,b.com'])).toEqual({ allowedHosts: ['a.com', 'b.com'] })
+    expect(parseCliArgs(['--allowed-hosts=a.com,b.com'])).toEqual({ allowedHosts: ['a.com', 'b.com'] })
+  })
+
+  it('accumulates repeated --allowed-hosts flags and trims blanks', () => {
+    expect(parseCliArgs(['--allowed-hosts', 'a.com', '--allowed-hosts', ' b.com , c.com '])).toEqual({
+      allowedHosts: ['a.com', 'b.com', 'c.com'],
+    })
+  })
+
+  it('requires a value for --allowed-hosts', () => {
+    expect(() => parseCliArgs(['--allowed-hosts', '--out-dir', 'dist'])).toThrow(
+      /Flag "--allowed-hosts" expects a value/,
+    )
+    expect(() => parseCliArgs(['--allowed-hosts'])).toThrow(/expects a value/)
   })
 })

@@ -107,16 +107,31 @@ describe('$id base-URI scoping', () => {
     expect(defs.a.properties.it.type).toBe('boolean')
   })
 
-  it('leaves a URI ref matching no embedded resource untouched (external)', () => {
+  it('leaves a URI ref matching no embedded resource untouched, reported as external', () => {
     const { resolved, errors } = resolveRefs({
       $id: 'https://example.com/root.json',
       properties: { other: { $ref: 'https://elsewhere.example.com/s.json#/Foo' } },
     })
 
-    expect(errors).toEqual([])
+    // Kept in place, but flagged: the in-memory resolver can't load other
+    // documents, and a genuinely-external ref should not pass silently.
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.message).toMatch(/external ref requires resolveRefsFromFile/)
     expect((resolved as { properties: { other: unknown } }).properties.other).toEqual({
       $ref: 'https://elsewhere.example.com/s.json#/Foo',
     })
+  })
+
+  it('records no external-ref error for an $id-bundled ref', () => {
+    // The bundle case must NOT be flagged external: the ref's URI matches an
+    // embedded resource, so it resolves entirely in-document.
+    const { errors } = resolveRefs({
+      $id: 'https://example.com/root.json',
+      properties: { addr: { $ref: 'https://example.com/address.json' } },
+      $defs: { Address: { $id: 'https://example.com/address.json', type: 'object' } },
+    })
+
+    expect(errors).toEqual([])
   })
 
   describe('from-file resolver', () => {

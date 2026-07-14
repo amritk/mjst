@@ -1,7 +1,15 @@
 import { refToFilename } from '@amritk/helpers/ref-to-filename'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
-import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from '@amritk/helpers/schema-guards'
+import {
+  hasAdditionalProperties,
+  hasAllOf,
+  hasAnyOf,
+  hasOneOf,
+  hasProperties,
+  hasRef,
+  isSchemaObject,
+} from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 /**
@@ -37,47 +45,53 @@ const buildImport = (ref: string, suffix: string): string => {
 }
 
 /**
- * Walks one level of the schema and yields all direct $ref strings that should
- * become imports: properties, additionalProperties, items, and union branches.
+ * Recursively collects every `$ref` string reachable through the schema surface
+ * that the type and arbitrary generators traverse. A generated file's single
+ * import block must cover every ref those generators emit, so this walks the
+ * *same* nested surface `arbitraryExpr` (generate-arbitrary.ts) descends into —
+ * combinator branches, object `properties`/`patternProperties`/
+ * `additionalProperties`, and array `items`/`prefixItems` (both the single-schema
+ * and tuple array forms) — not just the top level. Missing any of these emits a
+ * bare `XxxArbitrary` identifier (or a bare `Xxx` type) with no matching import,
+ * producing TypeScript that fails to compile.
+ *
+ * `$ref` nodes short-circuit (matching `arbitraryExpr`, which resolves a `$ref`
+ * and ignores sibling keywords), so recursion is bounded by the schema's own
+ * structural nesting and cannot loop on a self-referential ref.
  */
-const collectDirectRefs = (schema: JSONSchema): string[] => {
-  if (typeof schema === 'boolean' || schema === null) return []
+const collectRefs = (schema: JSONSchema): string[] => {
+  if (!isSchemaObject(schema)) return []
+  if (hasRef(schema)) return [schema.$ref]
 
   const refs: string[] = []
-
-  if (hasRef(schema)) {
-    refs.push(schema.$ref)
-    return refs
+  const visit = (sub: JSONSchema): void => {
+    refs.push(...collectRefs(sub))
   }
 
-  const propSchemas =
-    'properties' in schema && typeof schema.properties === 'object' && schema.properties !== null
-      ? Object.values(schema.properties as Record<string, JSONSchema>)
-      : []
+  if (hasOneOf(schema)) schema.oneOf.forEach(visit)
+  if (hasAnyOf(schema)) schema.anyOf.forEach(visit)
+  if (hasAllOf(schema)) schema.allOf.forEach(visit)
 
-  for (const prop of propSchemas) {
-    if (hasRef(prop)) refs.push((prop as { $ref: string }).$ref)
-    if (hasItems(prop) && hasRef(prop.items)) refs.push((prop.items as { $ref: string }).$ref)
-    if (hasAdditionalProperties(prop) && hasRef(prop.additionalProperties as JSONSchema)) {
-      refs.push((prop.additionalProperties as { $ref: string }).$ref)
-    }
+  if (hasProperties(schema)) Object.values(schema.properties).forEach(visit)
+
+  const raw = schema as Record<string, unknown>
+
+  const patternProperties = raw['patternProperties']
+  if (typeof patternProperties === 'object' && patternProperties !== null) {
+    Object.values(patternProperties as Record<string, JSONSchema>).forEach(visit)
   }
 
-  if (hasItems(schema) && hasRef(schema.items)) {
-    refs.push((schema.items as { $ref: string }).$ref)
+  if (hasAdditionalProperties(schema) && isSchemaObject(schema.additionalProperties as JSONSchema)) {
+    visit(schema.additionalProperties as JSONSchema)
   }
 
-  if (hasAdditionalProperties(schema) && hasRef(schema.additionalProperties as JSONSchema)) {
-    refs.push((schema.additionalProperties as { $ref: string }).$ref)
-  }
+  const prefixItems = raw['prefixItems']
+  if (Array.isArray(prefixItems)) (prefixItems as JSONSchema[]).forEach(visit)
 
-  for (const branch of [
-    ...(hasOneOf(schema) ? schema.oneOf : []),
-    ...(hasAnyOf(schema) ? schema.anyOf : []),
-    ...(hasAllOf(schema) ? schema.allOf : []),
-  ]) {
-    if (hasRef(branch)) refs.push((branch as { $ref: string }).$ref)
-  }
+  const items = raw['items']
+  // `items` is either a tuple (draft-07 array form) or a single item schema.
+  if (Array.isArray(items)) (items as JSONSchema[]).forEach(visit)
+  else if (isSchemaObject(items as JSONSchema)) visit(items as JSONSchema)
 
   return refs
 }
@@ -98,7 +112,7 @@ export const collectExampleImports = (schema: JSONSchema, options?: CollectExamp
   const rootSchema = options?.rootSchema
   const typeSuffix = options?.typeSuffix ?? ''
 
-  const refs = collectDirectRefs(schema)
+  const refs = collectRefs(schema)
   const seen = new Set<string>()
   const imports: string[] = []
 

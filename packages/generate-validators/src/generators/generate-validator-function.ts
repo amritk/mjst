@@ -16,9 +16,11 @@ import {
   hasMaxItems,
   hasMaximum,
   hasMaxLength,
+  hasMaxProperties,
   hasMinItems,
   hasMinimum,
   hasMinLength,
+  hasMinProperties,
   hasMultipleOf,
   hasOneOf,
   hasPattern,
@@ -62,6 +64,42 @@ const constMismatchCondition = (accessor: string, value: unknown): string => {
     return `${accessor} !== ${JSON.stringify(value)}`
   }
   return `!valuesEqual(${accessor}, ${JSON.stringify(value)})`
+}
+
+const SCALAR_ITEM_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'null'])
+
+/**
+ * True when a schema's values are provably JSON scalars — its `type` is present
+ * and every listed type is a primitive. Conservative: a `$ref`, a boolean/absent
+ * schema, an `object`/`array` type, or a missing `type` all fail this test.
+ */
+const schemaIsScalarOnly = (schema: unknown): boolean => {
+  if (!isSchemaObject(schema as JSONSchema)) return false
+  const t = (schema as Record<string, unknown>)['type']
+  if (t === undefined) return false
+  const types = Array.isArray(t) ? t : [t]
+  return types.length > 0 && types.every((x) => typeof x === 'string' && SCALAR_ITEM_TYPES.has(x))
+}
+
+/**
+ * True when an array's elements can only be JSON scalars, so a `uniqueItems`
+ * check can dedupe by the cheap `JSON.stringify` projection. When items may be
+ * objects or arrays this returns false, and the check must instead compare
+ * structurally (the `allUnique` runtime helper): `JSON.stringify` is key-order
+ * sensitive and would treat `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` as distinct,
+ * disagreeing with the interpreter's order-independent deep equality.
+ */
+const arrayItemsAreScalarOnly = (schema: Record<string, unknown>): boolean => {
+  const prefix = schema['prefixItems']
+  if (Array.isArray(prefix)) {
+    if (!prefix.every((p) => schemaIsScalarOnly(p))) return false
+    // Tuple tail: a closed tuple (`items`/`additionalItems: false`) has no tail;
+    // otherwise the tail schema must itself be scalar-only.
+    const tail = 'items' in schema ? schema['items'] : schema['additionalItems']
+    if (tail === false) return true
+    return schemaIsScalarOnly(tail)
+  }
+  return schemaIsScalarOnly(schema['items'])
 }
 
 /**
@@ -540,9 +578,11 @@ const generateConstraintChecks = (
     }
   }
 
-  // Array length / uniqueness. `uniqueItems` dedupes by a JSON projection — exact
-  // for primitives (what the type guard also uses); deep-but-key-ordered for
-  // objects, the same pragmatic trade-off the rest of the generator makes.
+  // Array length / uniqueness. `uniqueItems` dedupes scalar items by a cheap
+  // `JSON.stringify` projection (exact for primitives, what the type guard also
+  // uses), but falls back to the structural `allUnique` helper when items may be
+  // objects/arrays — `JSON.stringify` is key-order sensitive and would disagree
+  // with the interpreter's order-independent deep equality.
   if (
     hasMinItems(propSchema) ||
     hasMaxItems(propSchema) ||
@@ -561,9 +601,10 @@ const generateConstraintChecks = (
       lines.push(`  }`)
     }
     if (hasUniqueItems(propSchema) && propSchema.uniqueItems === true) {
-      lines.push(
-        `  if (Array.isArray(${raw}) && new Set((${raw} as unknown[]).map((_u) => JSON.stringify(_u))).size !== ${raw}.length) {`,
-      )
+      const dupCond = arrayItemsAreScalarOnly(sp)
+        ? `new Set((${raw} as unknown[]).map((_u) => JSON.stringify(_u))).size !== ${raw}.length`
+        : `!allUnique(${raw} as unknown[])`
+      lines.push(`  if (Array.isArray(${raw}) && ${dupCond}) {`)
       lines.push(`    errors.push({ message: 'must NOT have duplicate items', path: ${path} })`)
       lines.push(`  }`)
     }
@@ -924,6 +965,8 @@ const generateInlineObjectChecks = (
   innerLines.push(...generateStrictKeyChecks(propSchema, child))
   innerLines.push(...generateDependentRequiredChecks(propSchema, child))
   innerLines.push(...generateDependentSchemasChecks(propSchema, suffix, child))
+  innerLines.push(...generateDependenciesChecks(propSchema, suffix, child))
+  innerLines.push(...generateMinMaxPropertiesChecks(propSchema, child))
   if (hasPropertyNames(propSchema) && isSchemaObject(propSchema.propertyNames)) {
     innerLines.push(...generatePropertyNameChecks(propSchema.propertyNames, suffix, child))
   }
@@ -941,51 +984,28 @@ const generateInlineObjectChecks = (
 }
 
 /**
- * Generates the `propertyNames` loop: every object key is a string, so we apply
- * the string-relevant constraints of the subschema (or delegate to a `$ref`'s
- * validator). This keeps the generator in step with the interpreter, which runs
- * the whole subschema against each key — not just the `pattern` form.
+ * Generates the `propertyNames` loop: every object key is a string, and the
+ * *whole* subschema is validated against each key — not just the
+ * `pattern`/length/`enum`/`const`/`$ref` subset. Delegating to
+ * {@link generateValueChecks} keeps the generator in lockstep with the
+ * interpreter, which runs `matchesSchema(nameSchema, key)` per key, so a
+ * subschema carrying a combinator, `type`, `multipleOf`, etc. is enforced too.
+ * A key is always a present string, so the value checks run in `required` mode
+ * (no `!== undefined` guard).
  */
 const generatePropertyNameChecks = (nameSchema: JSONSchema, suffix: string, ctx: NestingContext): string[] => {
   if (!isSchemaObject(nameSchema)) return []
 
   const at = `\`${ctx.pathPrefix}/\${_name}\``
-  const checks: string[] = []
-
-  if (hasRef(nameSchema)) {
-    const vName = validatorName(refToName(nameSchema.$ref, suffix))
-    checks.push(`    const _nr = ${vName}(_name, ${at})`)
-    checks.push(`    if (_nr !== true) errors.push(..._nr.errors)`)
-  } else {
-    if (hasPattern(nameSchema)) {
-      const re = escapeRegexPattern(nameSchema.pattern)
-      const msg = JSON.stringify(`property name must match pattern ${nameSchema.pattern}`)
-      checks.push(`    if (!/${re}/.test(_name)) errors.push({ message: ${msg}, path: ${at} })`)
-    }
-    if (hasMinLength(nameSchema)) {
-      const msg = JSON.stringify(`property name must have at least ${nameSchema.minLength} characters`)
-      checks.push(`    if (_name.length < ${nameSchema.minLength}) errors.push({ message: ${msg}, path: ${at} })`)
-    }
-    if (hasMaxLength(nameSchema)) {
-      const msg = JSON.stringify(`property name must have at most ${nameSchema.maxLength} characters`)
-      checks.push(`    if (_name.length > ${nameSchema.maxLength}) errors.push({ message: ${msg}, path: ${at} })`)
-    }
-    if (hasEnum(nameSchema)) {
-      const allowed = JSON.stringify(nameSchema.enum)
-      const label = (nameSchema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
-      const msg = JSON.stringify(`property name must be one of: ${label}`)
-      checks.push(`    if (!(${allowed} as unknown[]).includes(_name)) errors.push({ message: ${msg}, path: ${at} })`)
-    }
-    if (hasConst(nameSchema)) {
-      const msg = JSON.stringify(`property name must be ${JSON.stringify(nameSchema.const)}`)
-      checks.push(
-        `    if (_name !== ${JSON.stringify(nameSchema.const)}) errors.push({ message: ${msg}, path: ${at} })`,
-      )
-    }
+  const nameCtx: NestingContext = {
+    objVar: ctx.objVar,
+    pathPrefix: `${ctx.pathPrefix}/\${_name}`,
+    depth: ctx.depth + 1,
+    hoisted: ctx.hoisted,
   }
-
+  const checks = generateValueChecks('', '_name', at, nameSchema, suffix, nameCtx, true)
   if (checks.length === 0) return []
-  return [`  for (const _name of Object.keys(${ctx.objVar})) {`, ...checks, `  }`]
+  return [`  for (const _name of Object.keys(${ctx.objVar})) {`, ...checks.map((line) => `  ${line}`), `  }`]
 }
 
 /**
@@ -1043,6 +1063,87 @@ const generateDependentSchemasChecks = (schema: JSONSchema, suffix: string, ctx:
     if (checks.length === 0) continue
     lines.push(`  if (${JSON.stringify(trigger)} in ${obj}) {`)
     lines.push(...checks.map((line) => `  ${line}`))
+    lines.push(`  }`)
+  }
+  return lines
+}
+
+/**
+ * Emits draft-07 `dependencies` — the dual-form predecessor of
+ * `dependentRequired` + `dependentSchemas`. When a trigger property is present,
+ * an array value requires each listed key, and a schema value is applied to the
+ * *whole object*. Mirrors the interpreter, which branches on the value's shape.
+ * A `false` subschema makes the trigger's mere presence invalid; a `true`
+ * subschema is a no-op.
+ */
+const generateDependenciesChecks = (schema: JSONSchema, suffix: string, ctx: NestingContext): string[] => {
+  if (!isSchemaObject(schema)) return []
+  const dep = (schema as Record<string, unknown>)['dependencies']
+  if (typeof dep !== 'object' || dep === null || Array.isArray(dep)) return []
+
+  const obj = ctx.objVar
+  const at = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
+  const objPath = `\`${ctx.pathPrefix}\``
+  const lines: string[] = []
+
+  for (const [trigger, value] of Object.entries(dep)) {
+    // Array form: each listed key must be present when the trigger is.
+    if (Array.isArray(value)) {
+      for (const key of value as unknown[]) {
+        if (typeof key !== 'string') continue
+        const msg = JSON.stringify(`must have property '${key}' when '${trigger}' is present`)
+        lines.push(`  if (${JSON.stringify(trigger)} in ${obj} && !(${JSON.stringify(key)} in ${obj})) {`)
+        lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
+        lines.push(`  }`)
+      }
+      continue
+    }
+    // Schema form: the subschema applies to the object itself.
+    if (value === true) continue
+    if (value === false) {
+      const msg = JSON.stringify(`must NOT have property '${trigger}'`)
+      lines.push(`  if (${JSON.stringify(trigger)} in ${obj}) {`)
+      lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
+      lines.push(`  }`)
+      continue
+    }
+    if (!isSchemaObject(value as JSONSchema)) continue
+    const checks = generateValueChecks('', obj, objPath, value as JSONSchema, suffix, ctx)
+    if (checks.length === 0) continue
+    lines.push(`  if (${JSON.stringify(trigger)} in ${obj}) {`)
+    lines.push(...checks.map((line) => `  ${line}`))
+    lines.push(`  }`)
+  }
+  return lines
+}
+
+/**
+ * Emits `minProperties` / `maxProperties` bounds on the object's key count,
+ * mirroring the interpreter (which counts the object's own enumerable keys and
+ * reports at the object node). Counting once into a depth-scoped local keeps the
+ * two bounds from re-walking the keys.
+ */
+const generateMinMaxPropertiesChecks = (schema: JSONSchema, ctx: NestingContext): string[] => {
+  if (!isSchemaObject(schema)) return []
+  const hasMin = hasMinProperties(schema)
+  const hasMax = hasMaxProperties(schema)
+  if (!hasMin && !hasMax) return []
+
+  const obj = ctx.objVar
+  const at = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
+  const count = `_pc${ctx.depth}`
+  const lines: string[] = [`  const ${count} = Object.keys(${obj}).length`]
+
+  if (hasMin) {
+    const msg = JSON.stringify(`must have at least ${schema.minProperties} properties`)
+    lines.push(`  if (${count} < ${schema.minProperties}) {`)
+    lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
+    lines.push(`  }`)
+  }
+  if (hasMax) {
+    const msg = JSON.stringify(`must have at most ${schema.maxProperties} properties`)
+    lines.push(`  if (${count} > ${schema.maxProperties}) {`)
+    lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
     lines.push(`  }`)
   }
   return lines
@@ -1176,6 +1277,7 @@ const arrayRejectedByRequiredProp = (
 const guardObjectConditions = (schema: JSONSchema, raw: string, objAcc: string): string[] | null => {
   if (!isObjectSchema(schema)) return null
   if (hasDependentRequired(schema) || hasPropertyNames(schema) || 'dependentSchemas' in schema) return null
+  if (hasMinProperties(schema) || hasMaxProperties(schema) || 'dependencies' in schema) return null
   if (isSchemaObject(schema) && 'patternProperties' in schema) return null
   // Object-level combinators are enforced by the slow path but cannot be mirrored
   // by this flat guard, so bail — otherwise the guard's early `return true` would
@@ -1260,6 +1362,13 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: s
   // dependentSchemas — when a trigger property is present, the whole object must
   // also match the associated subschema.
   propertyLines.push(...generateDependentSchemasChecks(schema, suffix, ctx))
+
+  // dependencies (draft-07) — the dual-form predecessor of dependentRequired +
+  // dependentSchemas.
+  propertyLines.push(...generateDependenciesChecks(schema, suffix, ctx))
+
+  // minProperties / maxProperties — bound the object's key count.
+  propertyLines.push(...generateMinMaxPropertiesChecks(schema, ctx))
 
   // propertyNames — every key (always a string) must satisfy the subschema. This
   // mirrors the interpreter, which runs the full subschema against each key.
@@ -1460,7 +1569,13 @@ const booleanArrayExpr = (schema: JSONSchema, acc: string): string | null => {
   if (hasMinItems(schema)) parts.push(`${acc}.length >= ${schema.minItems}`)
   if (hasMaxItems(schema)) parts.push(`${acc}.length <= ${schema.maxItems}`)
   if (hasUniqueItems(schema) && schema.uniqueItems === true) {
-    parts.push(`new Set((${acc} as unknown[]).map((_u) => JSON.stringify(_u))).size === ${acc}.length`)
+    // Same scalar-vs-structural split as the validator, so the guard's verdict
+    // matches the slow path's for object items in a reordered key order.
+    parts.push(
+      arrayItemsAreScalarOnly(schema as Record<string, unknown>)
+        ? `new Set((${acc} as unknown[]).map((_u) => JSON.stringify(_u))).size === ${acc}.length`
+        : `allUnique(${acc} as unknown[])`,
+    )
   }
   const base = parts.join(' && ')
 
@@ -1487,6 +1602,7 @@ const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string): st
   if (!isObjectSchema(schema)) return null
   // These need per-key loops or cross-references the flat form can't express.
   if (hasDependentRequired(schema) || hasPropertyNames(schema) || 'dependentSchemas' in schema) return null
+  if (hasMinProperties(schema) || hasMaxProperties(schema) || 'dependencies' in schema) return null
   if (isSchemaObject(schema) && 'patternProperties' in schema) return null
   // Object-level combinators change the verdict but can't be expressed flat, so
   // defer to the validator rather than emit a guard that ignores them.
@@ -1551,8 +1667,13 @@ export const generateBooleanGuard = (schema: JSONSchema, typeName: string, _suff
   const name = guardName(typeName)
   const fallback = `export const ${name} = (input: unknown): input is ${typeName} => ${validatorName(typeName)}(input) === true`
 
-  if (isObjectSchema(schema)) {
-    const parts = booleanObjectParts(schema, 'input', 'obj')
+  // Fold `nullable: true` into `anyOf` so the guard's verdict matches the
+  // validator's (which applies the same rewrite). Without this a nullable node's
+  // guard would reject `null` while the validator accepts it.
+  const rewritten = rewriteNullable(schema) as JSONSchema
+
+  if (isObjectSchema(rewritten)) {
+    const parts = booleanObjectParts(rewritten, 'input', 'obj')
     if (parts === null) return fallback
     return [
       `export const ${name} = (input: unknown): input is ${typeName} => {`,
@@ -1565,7 +1686,7 @@ export const generateBooleanGuard = (schema: JSONSchema, typeName: string, _suff
   }
 
   // Non-object roots (scalar, enum, array) can often be expressed inline too.
-  const expr = booleanLeafExpr(schema, 'input')
+  const expr = booleanLeafExpr(rewritten, 'input')
   if (expr === null) return fallback
   return `export const ${name} = (input: unknown): input is ${typeName} => ${expr}`
 }
@@ -1785,6 +1906,71 @@ const assertNoUnsupportedKeywords = (schema: JSONSchema, typeName: string): void
   visit(schema)
 }
 
+/** Keywords whose value is a single subschema (or a boolean schema). */
+const SINGLE_SUBSCHEMA_KEYS = new Set([
+  'additionalProperties',
+  'additionalItems',
+  'contains',
+  'propertyNames',
+  'not',
+  'if',
+  'then',
+  'else',
+  'unevaluatedProperties',
+  'unevaluatedItems',
+])
+/** Keywords whose value is an array of subschemas. */
+const SUBSCHEMA_LIST_KEYS = new Set(['allOf', 'anyOf', 'oneOf', 'prefixItems'])
+/** Keywords whose value is a map of names to subschemas. */
+const SUBSCHEMA_MAP_KEYS = new Set(['properties', 'patternProperties', 'dependentSchemas', '$defs', 'definitions'])
+
+/**
+ * Rewrites OpenAPI 3.0 `nullable: true` into a form the generator already
+ * enforces. A node `{ nullable: true, ...rest }` accepts a value iff the value is
+ * `null` OR it matches `rest` — exactly `{ anyOf: [{ type: 'null' }, rest] }`.
+ * Emitting that lets the existing `anyOf` machinery (and its guard bail-outs)
+ * mirror the interpreter, which short-circuits every keyword when a `nullable`
+ * node sees `null`.
+ *
+ * The walk descends only into genuine subschema positions (never into `enum` /
+ * `const` / `default` data), so a data value that merely looks like a schema is
+ * never rewritten. Returns a fresh tree; the caller's schema is untouched.
+ */
+const rewriteNullable = (node: unknown): unknown => {
+  if (typeof node !== 'object' || node === null || Array.isArray(node)) return node
+  const src = node as Record<string, unknown>
+
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(src)) {
+    if (key === 'nullable') continue // folded into the `anyOf` wrapper below
+    if (SINGLE_SUBSCHEMA_KEYS.has(key)) {
+      out[key] = rewriteNullable(value)
+    } else if (key === 'items') {
+      // `items` is either a single subschema (2020-12) or a tuple array (draft).
+      out[key] = Array.isArray(value) ? value.map(rewriteNullable) : rewriteNullable(value)
+    } else if (SUBSCHEMA_LIST_KEYS.has(key) && Array.isArray(value)) {
+      out[key] = value.map(rewriteNullable)
+    } else if (SUBSCHEMA_MAP_KEYS.has(key) && typeof value === 'object' && value !== null) {
+      const mapped: Record<string, unknown> = {}
+      for (const [name, sub] of Object.entries(value as Record<string, unknown>)) mapped[name] = rewriteNullable(sub)
+      out[key] = mapped
+    } else if (key === 'dependencies' && typeof value === 'object' && value !== null) {
+      // Dual-form: an array value lists required keys (data), a schema value is a
+      // subschema.
+      const mapped: Record<string, unknown> = {}
+      for (const [name, sub] of Object.entries(value as Record<string, unknown>)) {
+        mapped[name] = Array.isArray(sub) ? sub : rewriteNullable(sub)
+      }
+      out[key] = mapped
+    } else {
+      out[key] = value
+    }
+  }
+
+  if (src['nullable'] === true) return { anyOf: [{ type: 'null' }, out] }
+  return out
+}
+
 /**
  * Generates a TypeScript validator function from a JSON Schema.
  *
@@ -1810,9 +1996,13 @@ const assertNoUnsupportedKeywords = (schema: JSONSchema, typeName: string): void
 export const generateValidatorFunction = (schema: JSONSchema, typeName: string, suffix = ''): string => {
   assertNoUnsupportedKeywords(schema, typeName)
 
-  if (isObjectSchema(schema)) {
-    return generateObjectValidator(schema, typeName, suffix)
+  // Fold OpenAPI `nullable: true` into the `anyOf` form the generator already
+  // enforces, so the emitted checks match the interpreter's null short-circuit.
+  const rewritten = rewriteNullable(schema) as JSONSchema
+
+  if (isObjectSchema(rewritten)) {
+    return generateObjectValidator(rewritten, typeName, suffix)
   }
 
-  return generateScalarValidator(schema, typeName, suffix)
+  return generateScalarValidator(rewritten, typeName, suffix)
 }

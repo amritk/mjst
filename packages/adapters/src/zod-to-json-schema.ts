@@ -1,6 +1,9 @@
 import { MJST_EXTENSION_KEY } from '@amritk/helpers/mjst-extension'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import type { AdapterOptions } from './adapter'
+import { reportLossyConstructs } from './report-lossy-constructs'
+
 // Zod 4's `toJSONSchema` does the heavy lifting. We only describe the slice of
 // its surface we touch so the adapter does not need a hard dependency on Zod's
 // types — `zod` stays an optional peer dependency loaded at runtime.
@@ -16,18 +19,55 @@ type ZodToJsonSchemaOptions = {
   readonly override?: (ctx: OverrideContext) => void
 }
 
+// Minimal structural view of the `zod-to-json-schema` package (the Zod 3
+// fallback). Its `override` callback receives a Zod 3 type def whose `typeName`
+// is a `ZodFirstPartyTypeKind` string (e.g. `'ZodDate'`); returning a schema
+// replaces the node, and returning the module's `ignoreOverride` symbol falls
+// through to the default parsing.
+type FallbackDef = { readonly typeName?: string }
+
+type FallbackOptions = {
+  readonly definitionPath?: string
+  readonly override?: (def: FallbackDef) => Record<string, unknown> | symbol
+}
+
+type FallbackConvert = (schema: unknown, options?: FallbackOptions) => Record<string, unknown>
+
+type FallbackConverter = {
+  readonly convert: FallbackConvert
+  readonly ignoreOverride: symbol
+}
+
+// Zod types that have no JSON Schema equivalent and become "accept anything"
+// (`{}`) — the same widening the Zod 4 path performs with `unrepresentable:
+// 'any'`. Reported through a warning so the loss is never silent. The Zod 4
+// path keys these by Zod's lowercase type name; the fallback keys them by Zod
+// 3's `ZodFirstPartyTypeKind`, mapped here to the same friendly labels.
+const LOSSY_TYPES = new Set(['symbol', 'nan', 'void', 'undefined', 'never', 'map', 'set', 'promise', 'function'])
+const LOSSY_TYPENAMES: Record<string, string> = {
+  ZodSymbol: 'symbol',
+  ZodNaN: 'nan',
+  ZodVoid: 'void',
+  ZodUndefined: 'undefined',
+  ZodNever: 'never',
+  ZodMap: 'map',
+  ZodSet: 'set',
+  ZodPromise: 'promise',
+  ZodFunction: 'function',
+}
+
 /**
  * Resolves Zod's `toJSONSchema` from a runtime import, tolerating both the
  * named export (`import { toJSONSchema }`) and the `z` namespace
- * (`z.toJSONSchema`). Throws a clear error when Zod is missing or too old,
- * since `toJSONSchema` only exists in Zod 4 and later.
+ * (`z.toJSONSchema`). Returns `null` when Zod is missing or too old (Zod 3 has
+ * no `toJSONSchema`) so the caller can fall back to `zod-to-json-schema`.
  */
-const loadToJsonSchema = async (): Promise<ToJsonSchema> => {
+const loadToJsonSchema = async (): Promise<ToJsonSchema | null> => {
   let mod: Record<string, unknown>
   try {
     mod = (await import('zod')) as Record<string, unknown>
   } catch {
-    throw new Error("The Zod adapter requires 'zod' (v4 or later) to be installed in your project.")
+    return null
   }
 
   const named = mod['toJSONSchema']
@@ -36,16 +76,35 @@ const loadToJsonSchema = async (): Promise<ToJsonSchema> => {
   const converter =
     typeof named === 'function' ? named : typeof fromNamespace === 'function' ? fromNamespace : undefined
 
-  if (!converter) {
-    throw new Error("Zod's 'toJSONSchema' was not found. The Zod adapter requires zod v4 or later.")
-  }
-
-  return converter as ToJsonSchema
+  return converter ? (converter as ToJsonSchema) : null
 }
 
 /**
- * Converts a Zod schema into a Draft 2020-12 JSON Schema using Zod 4's native
- * `toJSONSchema`.
+ * Resolves the `zod-to-json-schema` package — the Zod 3 fallback used when the
+ * installed Zod lacks the native `toJSONSchema`. Returns `null` when the
+ * package is absent or does not expose the expected shape.
+ */
+const loadFallbackConverter = async (): Promise<FallbackConverter | null> => {
+  let mod: Record<string, unknown>
+  try {
+    mod = (await import('zod-to-json-schema')) as Record<string, unknown>
+  } catch {
+    return null
+  }
+
+  const named = mod['zodToJsonSchema']
+  const fromDefault = mod['default']
+  const convert = typeof named === 'function' ? named : typeof fromDefault === 'function' ? fromDefault : undefined
+  const ignoreOverride = mod['ignoreOverride']
+
+  if (typeof convert !== 'function' || typeof ignoreOverride !== 'symbol') return null
+
+  return { convert: convert as FallbackConvert, ignoreOverride }
+}
+
+/**
+ * Runs the Zod 4 native `toJSONSchema`, mapping `z.date()`/`z.bigint()` into the
+ * shared `x-mjst` hints and recording lossy (unrepresentable) types.
  *
  * Zod's `z.date()` has no JSON Schema representation and would otherwise throw.
  * We pass `unrepresentable: 'any'` so conversion never fails on it, then use the
@@ -53,6 +112,97 @@ const loadToJsonSchema = async (): Promise<ToJsonSchema> => {
  * same extension TypeBox dates use — so generated types and runtime checks treat
  * them as `Date`.
  */
+const convertWithZod4 = (
+  source: unknown,
+  toJSONSchema: ToJsonSchema,
+  droppedTypes: Set<string>,
+): Record<string, unknown> => {
+  try {
+    return toJSONSchema(source, {
+      unrepresentable: 'any',
+      override: (ctx) => {
+        const type = ctx.zodSchema?._zod?.def?.type
+        if (type === 'date') {
+          for (const key of Object.keys(ctx.jsonSchema)) delete ctx.jsonSchema[key]
+          ctx.jsonSchema[MJST_EXTENSION_KEY] = { instanceOf: 'Date' }
+        } else if (type === 'bigint') {
+          for (const key of Object.keys(ctx.jsonSchema)) delete ctx.jsonSchema[key]
+          ctx.jsonSchema[MJST_EXTENSION_KEY] = { primitive: 'bigint' }
+        } else if (type && LOSSY_TYPES.has(type)) {
+          droppedTypes.add(type)
+        }
+      },
+    })
+  } catch (error) {
+    throw new Error(`Zod adapter failed to convert the schema. Is it a valid Zod schema?\n${String(error)}`)
+  }
+}
+
+/**
+ * Runs the `zod-to-json-schema` fallback for Zod 3, reaching the same outcome as
+ * {@link convertWithZod4}: `z.date()`/`z.bigint()` become the shared `x-mjst`
+ * hints and lossy types are recorded for the warning. Zod 3's date/bigint would
+ * otherwise degrade to a string/integer schema, so the `override` hook rewrites
+ * them, and lossy leaf types (which the fallback silently drops) are turned into
+ * an open `{}` schema so the field survives — matching the Zod 4 widening.
+ *
+ * Emits refs under `$defs` (via `definitionPath`) to match the Zod 4 path; the
+ * shared finalize step normalises the fallback's draft-07 tuple form afterwards.
+ */
+const convertWithFallback = (
+  source: unknown,
+  fallback: FallbackConverter,
+  droppedTypes: Set<string>,
+): Record<string, unknown> => {
+  try {
+    return fallback.convert(source, {
+      definitionPath: '$defs',
+      override: (def) => {
+        const typeName = def?.typeName
+        if (typeName === 'ZodDate') return { [MJST_EXTENSION_KEY]: { instanceOf: 'Date' } }
+        if (typeName === 'ZodBigInt') return { [MJST_EXTENSION_KEY]: { primitive: 'bigint' } }
+        const friendly = typeName ? LOSSY_TYPENAMES[typeName] : undefined
+        if (friendly) {
+          droppedTypes.add(friendly)
+          return {}
+        }
+        return fallback.ignoreOverride
+      },
+    })
+  } catch (error) {
+    throw new Error(`Zod adapter failed to convert the schema. Is it a valid Zod schema?\n${String(error)}`)
+  }
+}
+
+/**
+ * `zod-to-json-schema` (the Zod 3 fallback) emits tuples in draft-07 form —
+ * `items` as an array plus `additionalItems` for the rest element. Rewrite those
+ * nodes into 2020-12 form (`prefixItems`, with `additionalItems` becoming
+ * `items`) so the rest of the pipeline — and {@link enforceTupleLength} below —
+ * sees the same shape the Zod 4 path produces. No-op on Zod 4 output, which
+ * already uses `prefixItems`.
+ */
+const normalizeDraftTuples = (node: unknown): void => {
+  if (node === null || typeof node !== 'object') return
+  if (Array.isArray(node)) {
+    for (const item of node) normalizeDraftTuples(item)
+    return
+  }
+  const obj = node as Record<string, unknown>
+  if (Array.isArray(obj['items'])) {
+    obj['prefixItems'] = obj['items']
+    if ('additionalItems' in obj) {
+      // A rest element (`.rest(...)`) — its schema (or `false`) becomes `items`.
+      obj['items'] = obj['additionalItems']
+      delete obj['additionalItems']
+    } else {
+      // No rest element: drop `items` so `enforceTupleLength` forbids extras.
+      delete obj['items']
+    }
+  }
+  for (const value of Object.values(obj)) normalizeDraftTuples(value)
+}
+
 /**
  * Zod 4's `toJSONSchema` emits a fixed tuple as a bare `prefixItems` array with
  * no length bound, so the result accepts a too-short array (positions past the
@@ -136,53 +286,63 @@ const mergeClosedObjectAllOf = (node: unknown): unknown => {
   return out
 }
 
-export const zodToJsonSchema = async (source: unknown): Promise<JSONSchema> => {
-  if (typeof source !== 'object' || source === null) {
-    const received = source === null ? 'null' : typeof source
-    throw new Error(`Zod adapter expected a Zod schema but received ${received}.`)
-  }
-
-  const toJSONSchema = await loadToJsonSchema()
-
-  // Zod types with no JSON Schema equivalent that we do *not* rescue into an
-  // `x-mjst` hint. `unrepresentable: 'any'` turns these into `{}` (accepts
-  // anything), which silently widens the generated type — so we surface them.
-  const LOSSY_TYPES = new Set(['symbol', 'nan', 'void', 'undefined', 'never', 'map', 'set', 'promise', 'function'])
-  const droppedTypes = new Set<string>()
-
-  let json: Record<string, unknown>
-  try {
-    json = toJSONSchema(source, {
-      unrepresentable: 'any',
-      override: (ctx) => {
-        const type = ctx.zodSchema?._zod?.def?.type
-        if (type === 'date') {
-          for (const key of Object.keys(ctx.jsonSchema)) delete ctx.jsonSchema[key]
-          ctx.jsonSchema[MJST_EXTENSION_KEY] = { instanceOf: 'Date' }
-        } else if (type === 'bigint') {
-          for (const key of Object.keys(ctx.jsonSchema)) delete ctx.jsonSchema[key]
-          ctx.jsonSchema[MJST_EXTENSION_KEY] = { primitive: 'bigint' }
-        } else if (type && LOSSY_TYPES.has(type)) {
-          droppedTypes.add(type)
-        }
-      },
-    })
-  } catch (error) {
-    throw new Error(`Zod adapter failed to convert the schema. Is it a valid Zod schema?\n${String(error)}`)
-  }
-
-  if (droppedTypes.size > 0) {
-    console.warn(
-      `[mjst] Zod adapter: ${[...droppedTypes].sort().join(', ')} ${droppedTypes.size === 1 ? 'has' : 'have'} no JSON Schema representation and became "accept anything". The generated type will be wider than the Zod schema.`,
-    )
-  }
+/**
+ * Shared post-processing applied to both the Zod 4 and Zod 3 conversion output:
+ * report widened lossy types (a batched warning, or a throw in strict mode),
+ * drop the dialect marker, normalise draft-07 tuples, restore tuple length
+ * bounds, and collapse unsatisfiable object intersections.
+ */
+const finalize = (
+  json: Record<string, unknown>,
+  droppedTypes: Set<string>,
+  strict: boolean | undefined,
+): JSONSchema => {
+  // Surface every widened type in one batched, branded notice (or throw in
+  // strict mode) so the loss is not silent — the same treatment the Valibot
+  // adapter gives its own unrepresentable constructs.
+  reportLossyConstructs('Zod', droppedTypes, strict)
 
   // The dialect marker is noise for the generators, which already target 2020-12.
   delete json['$schema']
+
+  // The Zod 3 fallback emits draft-07 tuples; rewrite them to 2020-12 form.
+  normalizeDraftTuples(json)
 
   // Zod under-constrains fixed tuples (bare `prefixItems`); restore their length.
   enforceTupleLength(json)
 
   // Collapse an unsatisfiable `allOf` of closed objects (object intersections).
   return mergeClosedObjectAllOf(json) as JSONSchema
+}
+
+/**
+ * Converts a Zod schema into a Draft 2020-12 JSON Schema.
+ *
+ * Prefers Zod 4's native `toJSONSchema`. When the installed Zod lacks it (Zod 3),
+ * falls back to the optional `zod-to-json-schema` package, routing through the
+ * same `x-mjst` date/bigint mapping and lossy-type reporting. If neither path is
+ * available, throws a clear error explaining what to install.
+ */
+export const zodToJsonSchema = async (source: unknown, options?: AdapterOptions): Promise<JSONSchema> => {
+  if (typeof source !== 'object' || source === null) {
+    const received = source === null ? 'null' : typeof source
+    throw new Error(`Zod adapter expected a Zod schema but received ${received}.`)
+  }
+
+  const droppedTypes = new Set<string>()
+
+  const toJSONSchema = await loadToJsonSchema()
+  if (toJSONSchema) {
+    return finalize(convertWithZod4(source, toJSONSchema, droppedTypes), droppedTypes, options?.strict)
+  }
+
+  const fallback = await loadFallbackConverter()
+  if (fallback) {
+    return finalize(convertWithFallback(source, fallback, droppedTypes), droppedTypes, options?.strict)
+  }
+
+  throw new Error(
+    "The Zod adapter requires either 'zod' v4+ (for its native toJSONSchema) or the 'zod-to-json-schema' " +
+      'package (a fallback for Zod 3). Neither was found — install one in your project.',
+  )
 }

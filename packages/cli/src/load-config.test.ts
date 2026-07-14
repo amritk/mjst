@@ -94,6 +94,57 @@ describe('load-config', () => {
     expect(result).toEqual({ schema: 's.json' })
   })
 
+  it('loads the reference-resolution keys from a config file', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        schema: 's.json',
+        outDir: 'o',
+        resolveRemote: true,
+        allowedHosts: ['a.com', 'b.com'],
+        allowPrivateHosts: true,
+      }),
+    )
+
+    const result = await loadConfig(configPath)
+
+    expect(result).toEqual({
+      schema: 's.json',
+      outDir: 'o',
+      resolveRemote: true,
+      allowedHosts: ['a.com', 'b.com'],
+      allowPrivateHosts: true,
+    })
+  })
+
+  it('ignores an allowedHosts value that is not an array of strings', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', allowedHosts: ['ok', 42] }))
+
+    const result = await loadConfig(configPath)
+
+    expect(result).toEqual({ schema: 's.json' })
+  })
+
+  it('loads examples boolean from config file', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', outDir: 'o', examples: true }))
+
+    const result = await loadConfig(configPath)
+
+    expect(result).toEqual({ schema: 's.json', outDir: 'o', examples: true })
+  })
+
+  it('ignores non-boolean examples value', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', examples: 'yes' }))
+
+    const result = await loadConfig(configPath)
+
+    expect(result).toEqual({ schema: 's.json' })
+  })
+
   it('loads schemaDir from a config file', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
     await writeFile(configPath, JSON.stringify({ schemaDir: './schemas', outDir: 'output' }))

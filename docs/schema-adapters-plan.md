@@ -21,7 +21,7 @@ reimplementations:
 | Source     | Conversion mechanism                          | Status |
 |:-----------|:----------------------------------------------|:-------|
 | TypeBox    | schemas *are* JSON Schema objects (pass-through + draft normalize) | ✅ implemented |
-| Zod        | Zod 4 `z.toJSONSchema()` (optional peer dep)  | ✅ implemented |
+| Zod        | Zod 4 `z.toJSONSchema()`, with a `zod-to-json-schema` fallback for Zod 3 (optional peer deps) | ✅ implemented |
 | Valibot    | `@valibot/to-json-schema` (optional peer dep) | ✅ implemented |
 | Effect     | `JSONSchema.make` (optional peer dep)         | ✅ implemented |
 
@@ -101,8 +101,10 @@ Per `.claude/testing.md` (Vitest, colocated `*.test.ts`, minimal mocking):
 1. ✅ **TypeBox adapter** — lowest effort (near pass-through); proved the
    interface + CLI wiring end to end.
 2. ✅ **Zod adapter** — Zod 4 via native `toJSONSchema`. Zod 3 (which lacks
-   `toJSONSchema`) is not yet supported; a `zod-to-json-schema` fallback could
-   be added later.
+   `toJSONSchema`) is supported through a `zod-to-json-schema` fallback: when the
+   installed Zod has no `toJSONSchema`, the adapter routes through that optional
+   peer dep, applying the same `x-mjst` date/bigint mapping and lossy-type
+   warnings. A clear error is thrown when neither path is available.
 3. ✅ **Valibot** — via `@valibot/to-json-schema`; `v.date()` mapped to the
    `x-mjst` Date extension through its `overrideSchema` hook.
 4. ✅ **Effect** — via `JSONSchema.make`; passes through Effect's encoded
@@ -155,7 +157,8 @@ The Zod adapter reaches the same outcome differently: Zod 4's `toJSONSchema`
 throws on `z.date()`, so the adapter runs with `unrepresentable: 'any'` and uses
 the `override` hook to rewrite date schemas into the `x-mjst` instanceOf
 extension. Both adapters therefore feed identical `Date` handling into the
-generators.
+generators. The Zod 3 fallback (`zod-to-json-schema`) mirrors this through its
+own `override` hook, keyed on Zod 3's `ZodFirstPartyTypeKind` type names.
 
 ## Open questions
 

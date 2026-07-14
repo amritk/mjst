@@ -2,8 +2,10 @@ import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { multipleOfFailExpr } from '@amritk/helpers/multiple-of-check'
 import { quoteJsString } from '@amritk/helpers/quote-js-string'
+import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
+  hasDependentRequired,
   hasEnum,
   hasExclusiveMaximum,
   hasExclusiveMinimum,
@@ -17,6 +19,7 @@ import {
   hasMultipleOf,
   hasPattern,
   hasProperties,
+  hasPropertyNames,
   hasRef,
   hasRequired,
   hasType,
@@ -26,8 +29,9 @@ import {
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { generateEnumCheck } from './generate-enum-check'
-import { canEnforceUnion, generateUnionCheck, getUnionBranches } from './generate-type-checks'
-import { scalarItemTypeCheck } from './generate-validation-expression'
+import { canEnforceUnion, generateUnionCheck, getUnionBranches, isInlineObjectProperty } from './generate-type-checks'
+import { getPrefixItems, prefixItemsCapsLength, scalarItemTypeCheck } from './generate-validation-expression'
+import { subschemaMatchExpr } from './subschema-match'
 
 /**
  * Context for assertions that reach beyond the property's own schema: union
@@ -96,7 +100,13 @@ const throwError = (message: string, suffixExpr?: string): string => {
  * Generates strict-mode constraint checks for a typed property
  * (pattern, length, min/max, multipleOf).
  */
-const generateConstraintChecks = (acc: string, propSchema: JSONSchema, typeName: string, key: string): string[] => {
+const generateConstraintChecks = (
+  acc: string,
+  propSchema: JSONSchema,
+  typeName: string,
+  key: string,
+  context: StrictAssertionContext = {},
+): string[] => {
   if (!isSchemaObject(propSchema) || !hasType(propSchema)) return []
   const t = propSchema.type as string
   const lines: string[] = []
@@ -178,6 +188,8 @@ const generateConstraintChecks = (acc: string, propSchema: JSONSchema, typeName:
         `  if (Array.isArray(${acc}) && !${acc}.every((_it) => ${itemCheck.check})) ${throwError(`${field} ${itemCheck.message}`)};`,
       )
     }
+    // Tuple `prefixItems`: assert each position and cap length under items:false.
+    lines.push(...generatePrefixItemsAssertion(acc, field, propSchema, context.rootSchema))
   }
 
   return lines
@@ -200,6 +212,191 @@ const generateItemCheck = (schema: JSONSchema): { check: string; message: string
   const scalarCheck = scalarItemTypeCheck(items, '_it')
   if (scalarCheck === null || !isSchemaObject(items) || !hasType(items)) return null
   return { check: scalarCheck, message: `items expected ${typeLabel(items.type as string)}` }
+}
+
+/**
+ * Strict-mode `contains` / `minContains` / `maxContains`: at least `minContains`
+ * (default 1) and at most `maxContains` (default ∞) items of the array must
+ * match the `contains` subschema. Runtime-gated on `Array.isArray` so a
+ * non-array value is left to the type check, and wrapped in a block so the
+ * per-array count variable never collides with a sibling check. `minContains: 0`
+ * makes the lower bound trivially satisfied. Emits nothing when there is no
+ * `contains` or its subschema is not matchable inline (the generation-time guard
+ * rejects the latter, so a strict parser never silently drops the constraint).
+ */
+export const generateContainsCheck = (acc: string, schema: JSONSchema, label: string): string[] => {
+  if (!isSchemaObject(schema)) return []
+  const sp = schema as Record<string, unknown>
+  if (!('contains' in sp)) return []
+  const match = subschemaMatchExpr('_c', sp['contains'] as JSONSchema)
+  if (match === null) return []
+  const min = typeof sp['minContains'] === 'number' ? (sp['minContains'] as number) : 1
+  const max = typeof sp['maxContains'] === 'number' ? (sp['maxContains'] as number) : undefined
+  const bound = max !== undefined ? `_cn < ${min} || _cn > ${max}` : `_cn < ${min}`
+  return [
+    `  if (Array.isArray(${acc})) {`,
+    `    const _cn = (${acc} as unknown[]).filter((_c) => ${match}).length;`,
+    `    if (${bound}) ${throwError(`${label} array does not contain the required matching items`)};`,
+    `  }`,
+  ]
+}
+
+/**
+ * Strict-mode `dependentRequired`: when a trigger key is present, every declared
+ * dependency key must be present too.
+ */
+const generateDependentRequiredChecks = (obj: string, schema: JSONSchema, label: string): string[] => {
+  if (!hasDependentRequired(schema)) return []
+  const lines: string[] = []
+  for (const [trigger, deps] of Object.entries(schema.dependentRequired)) {
+    if (!Array.isArray(deps)) continue
+    for (const dep of deps) {
+      lines.push(
+        `  if (${JSON.stringify(trigger)} in ${obj} && !(${JSON.stringify(dep)} in ${obj})) ${throwError(`${label} must have property '${dep}' when '${trigger}' is present`)};`,
+      )
+    }
+  }
+  return lines
+}
+
+/**
+ * Strict-mode `dependentSchemas` (2020-12): when a trigger property is present,
+ * the *whole object* must also match the associated subschema. A `true`
+ * subschema is a no-op; a `false` subschema makes the trigger's presence always
+ * invalid. Object subschemas are enforced via {@link subschemaMatchExpr}; a
+ * subschema it cannot match inline is rejected at generation time by the guard.
+ */
+const generateDependentSchemasChecks = (obj: string, schema: JSONSchema, label: string): string[] => {
+  const dep = (schema as Record<string, unknown>)['dependentSchemas']
+  if (typeof dep !== 'object' || dep === null || Array.isArray(dep)) return []
+  const lines: string[] = []
+  for (const [trigger, sub] of Object.entries(dep as Record<string, unknown>)) {
+    if (sub === true) continue
+    if (sub === false) {
+      lines.push(
+        `  if (${JSON.stringify(trigger)} in ${obj}) ${throwError(`${label} must NOT have property '${trigger}'`)};`,
+      )
+      continue
+    }
+    const match = subschemaMatchExpr(obj, sub as JSONSchema)
+    if (match === null || match === 'true') continue
+    lines.push(
+      `  if (${JSON.stringify(trigger)} in ${obj} && !(${match})) ${throwError(`${label} does not satisfy the schema required when '${trigger}' is present`)};`,
+    )
+  }
+  return lines
+}
+
+/**
+ * Resolves a tuple position's schema through a single `$ref` (via `rootSchema`)
+ * so the assertion can read its `type`/`enum`. A `$ref` with no resolvable target
+ * (or no root document) is returned as-is, leaving the position unasserted.
+ */
+const resolvePositionSchema = (pos: JSONSchema, rootSchema: Record<string, unknown> | undefined): JSONSchema => {
+  if (isSchemaObject(pos) && hasRef(pos) && rootSchema) {
+    const resolved = resolveRef((pos as { $ref: string }).$ref, rootSchema)
+    if (resolved) return resolved as JSONSchema
+  }
+  return pos
+}
+
+/**
+ * Strict-mode assertion lines for a tuple `prefixItems`: each present position is
+ * asserted against its subschema (a scalar type, an enum, or a `$ref`/inline
+ * schema resolved to one via `rootSchema`), and a sibling `items: false` /
+ * `additionalItems: false` rejects any extra element. `acc` is the array
+ * accessor and `field` the error-message prefix (`[Type] field 'k'` or
+ * `[Type]`). Mirrors the validators' tuple pass, but throws on the first
+ * violation instead of collecting errors. Positions whose schema is richer than
+ * a scalar/enum are left to their own downstream handling (like array `items`).
+ */
+const generatePrefixItemsAssertion = (
+  acc: string,
+  field: string,
+  schema: JSONSchema,
+  rootSchema: Record<string, unknown> | undefined,
+): string[] => {
+  const prefix = getPrefixItems(schema)
+  if (!prefix) return []
+  const lines: string[] = []
+
+  for (let i = 0; i < prefix.length; i++) {
+    const pos = resolvePositionSchema(prefix[i] as JSONSchema, rootSchema)
+    const el = `${acc}[${i}]`
+    // A shorter input simply has no element at this position — `prefixItems`
+    // does not require presence (that is `minItems`' job), so guard on length.
+    const present = `Array.isArray(${acc}) && ${acc}.length > ${i}`
+
+    if (isSchemaObject(pos) && hasEnum(pos) && pos.enum.length > 0) {
+      const allowed = JSON.stringify(pos.enum)
+      const label = (pos.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
+      lines.push(
+        `  if (${present} && !(${allowed} as readonly unknown[]).includes(${el})) ${throwError(`${field}[${i}] must be one of: ${label}`)};`,
+      )
+      continue
+    }
+
+    if (isSchemaObject(pos) && hasType(pos)) {
+      const pt = pos.type as string
+      const wrong = wrongTypeCondition(el, pt)
+      if (wrong) {
+        lines.push(
+          `  if (${present} && (${wrong})) ${throwError(`${field}[${i}] expected ${typeLabel(pt)}, got `, `typeof ${el}`)};`,
+        )
+      }
+    }
+  }
+
+  if (prefixItemsCapsLength(schema)) {
+    lines.push(
+      `  if (Array.isArray(${acc}) && ${acc}.length > ${prefix.length}) ${throwError(`${field} must NOT have more than ${prefix.length} items`)};`,
+    )
+  }
+
+  return lines
+}
+
+/**
+ * Strict-mode `propertyNames`: every own key of the object (keys are always
+ * strings) must satisfy the name subschema. A trivially-true matcher imposes no
+ * constraint, so no loop is emitted; an unmatchable subschema is rejected at
+ * generation time by the guard.
+ */
+const generatePropertyNameChecks = (obj: string, schema: JSONSchema, label: string): string[] => {
+  if (!hasPropertyNames(schema) || !isSchemaObject(schema.propertyNames)) return []
+  const match = subschemaMatchExpr('_name', schema.propertyNames)
+  if (match === null || match === 'true') return []
+  return [
+    `  for (const _name of Object.keys(${obj})) {`,
+    `    if (!(${match})) ${throwError(`${label} invalid property name: `, '_name')};`,
+    `  }`,
+  ]
+}
+
+/**
+ * Emits the object-level keyword checks (`dependentRequired`, `dependentSchemas`,
+ * `propertyNames`) for the object reached by `obj`. When `guard` is true the
+ * whole block is wrapped in a runtime `isObject` check — used for object-typed
+ * *properties*, whose value may be absent or a non-object (the type check
+ * reports that separately). The root object and inline sub-parsers pass
+ * `guard = false` because the enclosing parser has already proven the value is
+ * an object.
+ */
+export const generateObjectKeywordChecks = (
+  obj: string,
+  schema: JSONSchema,
+  label: string,
+  guard: boolean,
+): string[] => {
+  if (!isSchemaObject(schema)) return []
+  const inner = [
+    ...generateDependentRequiredChecks(obj, schema, label),
+    ...generateDependentSchemasChecks(obj, schema, label),
+    ...generatePropertyNameChecks(obj, schema, label),
+  ]
+  if (inner.length === 0) return []
+  if (!guard) return inner
+  return [`  if (isObject(${obj})) {`, ...inner.map((line) => `  ${line}`), `  }`]
 }
 
 /**
@@ -295,7 +492,26 @@ const generatePropertyAssertion = (
         lines.push(`  if (${acc} !== undefined && (${wrongType})) ${expected};`)
       }
     }
-    lines.push(...generateConstraintChecks(acc, propSchema, typeName, key))
+    lines.push(...generateConstraintChecks(acc, propSchema, typeName, key, context))
+  }
+
+  // Type-independent constraints, each runtime-gated on the value's shape:
+  //   - `contains` asserts on arrays (no-op otherwise),
+  //   - the object-level keywords assert on objects.
+  // Gated on a single `isSchemaObject` + a few `in` checks so a plain scalar
+  // property — the common case — skips the costlier `isInlineObjectProperty`
+  // probe and the check builders entirely. Inline object properties are
+  // deep-validated by their own sub-parser (which runs these same object-level
+  // checks), so emitting them here too would be premature and redundant.
+  if (isSchemaObject(propSchema)) {
+    const r = propSchema as Record<string, unknown>
+    if ('contains' in r) lines.push(...generateContainsCheck(acc, propSchema, field))
+    if (
+      ('dependentRequired' in r || 'dependentSchemas' in r || 'propertyNames' in r) &&
+      !isInlineObjectProperty(propSchema)
+    ) {
+      lines.push(...generateObjectKeywordChecks(acc, propSchema, field, true))
+    }
   }
 
   return lines
@@ -322,13 +538,24 @@ export const generateObjectStrictAssertion = (
     `  if (!isObject(input)) ${throwError(`[${typeName}] expected object, got `, 'input === null ? "null" : typeof input')};`,
   )
 
-  if (!hasProperties(schema) || !isSchemaObject(schema)) return lines
+  if (!isSchemaObject(schema)) return lines
 
-  const required = new Set<string>(hasRequired(schema) ? schema.required : [])
+  if (hasProperties(schema)) {
+    const required = new Set<string>(hasRequired(schema) ? schema.required : [])
+    const props = schema.properties as Record<string, JSONSchema>
+    for (const key in props) {
+      lines.push(...generatePropertyAssertion(key, props[key] as JSONSchema, required.has(key), typeName, context))
+    }
+  }
 
-  const props = schema.properties as Record<string, JSONSchema>
-  for (const key in props) {
-    lines.push(...generatePropertyAssertion(key, props[key] as JSONSchema, required.has(key), typeName, context))
+  // Object-level keywords for the object itself. `input` is already proven an
+  // object above, so no runtime guard is needed. Emitted even when the schema
+  // has no `properties` (e.g. a constrained-key map: `{ type: 'object',
+  // propertyNames: {...} }`). Gated on a cheap presence check so a keyword-free
+  // object skips the three check builders.
+  const sr = schema as Record<string, unknown>
+  if ('dependentRequired' in sr || 'dependentSchemas' in sr || 'propertyNames' in sr) {
+    lines.push(...generateObjectKeywordChecks('input', schema, `[${typeName}]`, false))
   }
 
   return lines
@@ -338,7 +565,11 @@ export const generateObjectStrictAssertion = (
  * Generates a single strict-mode assertion line for a non-object scalar parser.
  * Returns null when the schema has no type information to assert on.
  */
-export const generateScalarStrictAssertion = (schema: JSONSchema, typeName: string): string | null => {
+export const generateScalarStrictAssertion = (
+  schema: JSONSchema,
+  typeName: string,
+  rootSchema?: Record<string, unknown>,
+): string | null => {
   const got = 'input === null ? "null" : typeof input'
 
   const instanceOf = getMjstInstanceOf(schema)
@@ -358,7 +589,7 @@ export const generateScalarStrictAssertion = (schema: JSONSchema, typeName: stri
   const lines = [`  if (${wrongType}) ${throwError(`[${typeName}] expected ${typeLabel(t)}, got `, got)};`]
 
   // Root-level arrays enforce scalar/enum item types too — the same gap the
-  // property path closes in generateConstraintChecks.
+  // property path closes in generateConstraintChecks — plus `contains`.
   if (t === 'array') {
     const itemCheck = generateItemCheck(schema)
     if (itemCheck) {
@@ -366,6 +597,9 @@ export const generateScalarStrictAssertion = (schema: JSONSchema, typeName: stri
         `  if (!(input as readonly unknown[]).every((_it) => ${itemCheck.check})) ${throwError(`[${typeName}] ${itemCheck.message}`)};`,
       )
     }
+    lines.push(...generateContainsCheck('input', schema, `[${typeName}]`))
+    // Tuple `prefixItems`: assert each position and cap length under items:false.
+    lines.push(...generatePrefixItemsAssertion('input', `[${typeName}]`, schema, rootSchema))
   }
 
   return lines.join('\n')

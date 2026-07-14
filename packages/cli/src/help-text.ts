@@ -21,6 +21,7 @@ Output:
   --out-dir <dir>       Output directory for the generated files
   --out-file <file>     Single-file output instead of a directory (requires --types-only)
   --types-only          Generate type definitions only, without parser functions
+  --examples            Also emit fast-check arbitraries + example values under examples/
   --build               Compile the generated files to .js/.d.ts (implies --import-ext js)
   --import-ext <ext>    Extension on generated relative imports: ts (default) or js
   --helpers <mode>      Runtime helpers: package or embedded (default: auto-detect from package.json)
@@ -34,6 +35,11 @@ Validation:
   --strip-unknown       Silently drop undeclared input keys at every nesting level
   --case-insensitive    Normalize mis-cased enum/const strings to their exact casing
   --log-warnings        console.warn on input keys not declared in the schema
+
+Reference resolution:
+  --resolve-remote      Fetch http(s) $refs while resolving cross-file/remote refs (off by default)
+  --allowed-hosts <h>   Restrict remote $ref fetches to these hosts (comma-separated; implies --resolve-remote)
+  --allow-private-hosts Permit remote $refs to private/loopback hosts (SSRF guard, off by default)
 
 Misc:
   --config <path>       JSON config file with the same keys; CLI flags take precedence

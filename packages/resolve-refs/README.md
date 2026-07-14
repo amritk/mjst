@@ -31,8 +31,10 @@ refs, and remote (http/https) documents — into a single dereferenced document.
 ```ts
 import { resolveRefs, resolveRefsFromFile } from '@amritk/resolve-refs'
 
-// In-memory, internal (#/...) refs only:
-const { resolved } = resolveRefs(myDocument)
+// In-memory, internal (#/...) refs only. External refs (another file or an
+// http(s) URL) are left in place and reported on `errors`, since this resolver
+// can't load other documents — use resolveRefsFromFile for those:
+const { resolved, errors } = resolveRefs(myDocument)
 
 // From disk or a URL, including cross-file and remote refs:
 const result = await resolveRefsFromFile('./schema.json')

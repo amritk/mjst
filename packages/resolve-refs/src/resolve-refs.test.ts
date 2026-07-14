@@ -59,10 +59,31 @@ describe('resolve-refs', () => {
     expect(defs.b.type).toBe('object')
   })
 
-  it('leaves external (non-#) refs untouched', () => {
-    const { resolved } = resolveRefs({ properties: { pet: { $ref: 'pet.json#/Pet' } } })
+  it('leaves external (non-#) refs in place but records an error', () => {
+    const { resolved, errors } = resolveRefs({ properties: { pet: { $ref: 'pet.json#/Pet' } } })
 
+    // The node is preserved (the in-memory resolver can't load other documents)…
     expect(resolved).toEqual({ properties: { pet: { $ref: 'pet.json#/Pet' } } })
+    // …but the unresolved external ref is surfaced as a diagnostic.
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.message).toMatch(/external ref requires resolveRefsFromFile/)
+  })
+
+  it('records an error for each distinct external ref encountered', () => {
+    const { errors } = resolveRefs({
+      properties: {
+        pet: { $ref: 'pet.json#/Pet' },
+        owner: { $ref: 'https://api.example.com/owner.json' },
+      },
+    })
+
+    expect(errors).toHaveLength(2)
+    expect(errors.map((e) => e.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('pet.json#/Pet'),
+        expect.stringContaining('https://api.example.com/owner.json'),
+      ]),
+    )
   })
 
   it('omits the origin map unless trackOrigins is set', () => {
