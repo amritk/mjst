@@ -56,6 +56,35 @@ export const valuesEqual = (a: unknown, b: unknown): boolean => {
   }
   return true
 }
+
+/**
+ * True when every element of \`arr\` is distinct under structural equality
+ * ({@link valuesEqual}). Backs generated \`uniqueItems\` checks whose items may be
+ * objects or arrays, where a \`JSON.stringify\` dedupe key would be key-order
+ * sensitive and let a reordered-but-equal duplicate (\`{ a: 1, b: 2 }\` vs
+ * \`{ b: 2, a: 1 }\`) slip through. A native \`Set\` dedupes the all-primitive case
+ * in one linear pass; object/array elements fall back to an exact pairwise
+ * structural comparison.
+ */
+export const allUnique = (arr: readonly unknown[]): boolean => {
+  const len = arr.length
+  if (len < 2) return true
+  let allPrimitive = true
+  for (let i = 0; i < len; i++) {
+    const v = arr[i]
+    if (v !== null && typeof v === 'object') {
+      allPrimitive = false
+      break
+    }
+  }
+  if (allPrimitive) return new Set(arr).size === len
+  for (let i = 0; i < len; i++) {
+    for (let j = i + 1; j < len; j++) {
+      if (valuesEqual(arr[i], arr[j])) return false
+    }
+  }
+  return true
+}
 `
 
 /**
