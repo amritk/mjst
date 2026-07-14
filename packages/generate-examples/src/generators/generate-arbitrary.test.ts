@@ -199,6 +199,53 @@ describe('generate-arbitrary', () => {
     expect(code).not.toContain('fc.array(NodeArbitrary)')
   })
 
+  it('builds a number multipleOf analytically instead of a starving filter', () => {
+    const schema = { type: 'number' as const, minimum: 0, maximum: 10, multipleOf: 0.5 }
+    const code = generateArbitrary(schema, 'HalfStep')
+    // Random doubles almost never satisfy `n % m === 0`, so no `.filter` — the
+    // multiple is derived from an integer `k` instead.
+    expect(code).not.toContain('.filter(')
+    expect(code).toContain('fc.integer({ min: 0, max: 20 })')
+    expect(code).toContain('.map((k) => Math.min(Math.max(k * 0.5, 0), 10))')
+  })
+
+  it('samples schema-valid multiples for a number multipleOf without over-filtering', async () => {
+    const fc = await import('fast-check')
+    const schema = { type: 'number' as const, minimum: 0, maximum: 10, multipleOf: 0.5 }
+    const code = generateArbitrary(schema, 'HalfStep')
+
+    // Eval the generated RHS with `fc` in scope, mimicking the compiled module.
+    // The pre-fix `.filter` construction throws "too many filtered values" here.
+    const rhs = code.slice(code.indexOf('=') + 1)
+    const arbitrary = new Function('fc', `return (${rhs})`)(fc) as import('fast-check').Arbitrary<number>
+    const samples = fc.sample(arbitrary, 100)
+
+    expect(samples).toHaveLength(100)
+    for (const n of samples) {
+      expect(n).toBeGreaterThanOrEqual(0)
+      expect(n).toBeLessThanOrEqual(10)
+      // Every sample is a multiple of 0.5.
+      expect(Math.abs(n / 0.5 - Math.round(n / 0.5))).toBeLessThan(1e-9)
+    }
+  })
+
+  it('respects exclusive bounds when deriving a number multipleOf', async () => {
+    const fc = await import('fast-check')
+    // exclusiveMinimum 0 + multipleOf 2 → smallest valid k is 1 (value 2); the
+    // upper end excludes 10, so the largest is k = 4 (value 8).
+    const schema = { type: 'number' as const, exclusiveMinimum: 0, exclusiveMaximum: 10, multipleOf: 2 }
+    const code = generateArbitrary(schema, 'Strict')
+    expect(code).toContain('fc.integer({ min: 1, max: 4 })')
+
+    const rhs = code.slice(code.indexOf('=') + 1)
+    const arbitrary = new Function('fc', `return (${rhs})`)(fc) as import('fast-check').Arbitrary<number>
+    for (const n of fc.sample(arbitrary, 50)) {
+      expect(n).toBeGreaterThan(0)
+      expect(n).toBeLessThan(10)
+      expect(n % 2).toBe(0)
+    }
+  })
+
   it('produces recursive arbitrary code that imports and samples without crashing', async () => {
     const fc = await import('fast-check')
     const schema = {

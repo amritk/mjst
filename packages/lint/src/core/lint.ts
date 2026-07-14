@@ -7,15 +7,29 @@ import { createLinter } from './runner'
 import { DiagnosticSeverity, type IDiagnostic, type ISourceSet } from './types'
 
 /**
+ * What a {@link LintResolver} returns: the dereferenced tree, an optional source
+ * set mapping inlined nodes back to their origin, and any diagnostics raised
+ * while resolving (e.g. a `$ref` that could not be dereferenced). Surfacing
+ * resolution failures as diagnostics keeps a typo'd ref or a failed fetch
+ * visible instead of silently dropping it.
+ */
+export type LintResolverResult = {
+  resolved: unknown
+  sources?: ISourceSet
+  diagnostics?: IDiagnostic[]
+}
+
+/**
  * How a resolved (`$ref`-dereferenced) tree is produced from a parsed document.
  * The engine stays free of any `$ref` resolver: a caller may inject one (for
  * example wrapping `@amritk/resolve-refs`). Returning no `sources` means
- * findings map back to the root document only.
+ * findings map back to the root document only; `diagnostics` reports refs that
+ * failed to resolve.
  */
 export type LintResolver = (
   document: Document,
   context: { input: string },
-) => { resolved: unknown; sources?: ISourceSet } | Promise<{ resolved: unknown; sources?: ISourceSet }>
+) => LintResolverResult | Promise<LintResolverResult>
 
 /** Options for {@link lint} / {@link lintWithResult}. */
 export type LintOptions = IDocumentOptions & {
@@ -92,10 +106,12 @@ export const lintWithResult = async (input: string, options: LintOptions): Promi
 
   let resolved: unknown = document.data
   let sources: ISourceSet | undefined
+  let resolverDiagnostics: IDiagnostic[] = []
   if (resolve) {
     const result = await resolve(document, { input })
     resolved = result.resolved
     sources = result.sources
+    if (result.diagnostics) resolverDiagnostics = result.diagnostics
   }
 
   const ruleResults = await createLinter(ruleset).run(document, { resolved, ...(sources ? { sources } : {}) })
@@ -112,7 +128,7 @@ export const lintWithResult = async (input: string, options: LintOptions): Promi
     return result
   })
 
-  const diagnostics = [...parserResults, ...ruleResults].sort(byPosition)
+  const diagnostics = [...parserResults, ...resolverDiagnostics, ...ruleResults].sort(byPosition)
 
   if (!plugins || plugins.length === 0) return { diagnostics, pluginData: {} }
 

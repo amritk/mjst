@@ -82,13 +82,24 @@ describe('$ref resolution in mjst lint', () => {
     expect(stdout).toContain('shared.json')
   })
 
-  it('does not fetch remote $refs by default (offline, no crash)', async () => {
+  it('does not fetch remote $refs by default, and reports the refusal (offline, no crash)', async () => {
     // With remote resolution off (the default), the http $ref is refused rather
-    // than fetched, so the target never inlines and the rule cannot match — and
-    // crucially the run completes without a network call.
+    // than fetched, so the target never inlines — and crucially the run completes
+    // without a network call. The refusal surfaces as a finding rather than being
+    // silently dropped.
     const { file } = setup('doc.json', JSON.stringify({ config: { $ref: 'https://example.test/s.json#/c' } }))
     const { stdout, code } = await run([file])
-    expect(code).toBe(0)
-    expect(stdout).toContain('No problems found')
+    expect(code).toBe(1)
+    expect(stdout).toContain('Refusing to resolve remote $ref')
+  })
+
+  it('reports a finding for an unresolvable internal $ref instead of dropping it', async () => {
+    // `#/defs/missing` points at nothing: previously the resolver discarded the
+    // error and lint reported no problem. Now the failed resolution is a finding.
+    const { file } = setup('doc.json', JSON.stringify({ config: { $ref: '#/defs/missing' } }))
+    const { stdout, code } = await run([file])
+    expect(code).toBe(1)
+    expect(stdout).toContain('unresolved-ref')
+    expect(stdout).toContain('#/defs/missing')
   })
 })

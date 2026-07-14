@@ -596,11 +596,14 @@ const skipFlowWs = (state: State): void => {
   state.pos = p
 }
 
-/** Reads a plain scalar inside a flow collection (terminated by flow indicators). */
-const scanFlowPlain = (state: State): YamlScalar => {
-  const { src, len } = state
-  const start = state.pos
-  let i = start
+/**
+ * Advances to where a flow plain scalar ends *on the current line* — the first
+ * flow indicator (`,` `[` `]` `{` `}`), a `:` that separates a key from a value,
+ * a ` #` comment, or a line break. `lineStart` is the offset the current line's
+ * content began at, so the ` #` comment rule only fires when a space precedes it.
+ */
+const flowPlainLineEnd = (src: string, from: number, lineStart: number, len: number): number => {
+  let i = from
   while (i < len) {
     const c = src.charCodeAt(i)
     if (c === COMMA || c === LBRACKET || c === RBRACKET || c === LBRACE || c === RBRACE || c === NL || c === CR) break
@@ -608,14 +611,75 @@ const scanFlowPlain = (state: State): YamlScalar => {
       const n = src.charCodeAt(i + 1)
       if (i + 1 >= len || isSpace(n) || n === COMMA || n === RBRACKET || n === RBRACE || n === NL || n === CR) break
     }
-    if (c === HASH && i > start && isSpace(src.charCodeAt(i - 1))) break
+    if (c === HASH && i > lineStart && isSpace(src.charCodeAt(i - 1))) break
     i++
   }
-  let end = i
-  while (end > start && isSpace(src.charCodeAt(end - 1))) end--
-  const text = src.slice(start, end)
-  state.pos = i
-  return { kind: 'scalar', value: resolvePlainValue(text), source: text, style: 'plain', start, end }
+  return i
+}
+
+/**
+ * Reads a plain scalar inside a flow collection. It runs until a flow indicator,
+ * so — unlike a block plain scalar — it can wrap across lines with no leading
+ * `-`/`:` to stop it. Continuation lines are folded per YAML 1.2 flow folding
+ * (single break → space, a run of *n* breaks → *n − 1* newlines), the same rule
+ * {@link foldSegments} applies to block plain scalars; leading indentation on
+ * each wrapped line is not significant and is trimmed away.
+ */
+const scanFlowPlain = (state: State): YamlScalar => {
+  const { src, len } = state
+  const start = state.pos
+  const i = flowPlainLineEnd(src, start, start, len)
+  let firstEnd = i
+  while (firstEnd > start && isSpace(src.charCodeAt(firstEnd - 1))) firstEnd--
+
+  // Fast path — the scalar fits on one line (the overwhelmingly common case), so
+  // it stopped on a flow indicator, not a line break. No segment array needed.
+  const stop = i < len ? src.charCodeAt(i) : 0
+  if (stop !== NL && stop !== CR) {
+    const text = src.slice(start, firstEnd)
+    state.pos = i
+    return { kind: 'scalar', value: resolvePlainValue(text), source: text, style: 'plain', start, end: firstEnd }
+  }
+
+  // The scalar wraps. Gather each continuation line as a segment, staging blank
+  // lines so a run of them collapses to the right number of newlines.
+  const segments: string[] = [src.slice(start, firstEnd)]
+  let valueEnd = firstEnd
+  let scan = nextLineStart(src, i, len)
+  for (;;) {
+    if (scan >= len) break
+    let j = scan
+    while (j < len && src.charCodeAt(j) === SPACE) j++
+    const c = j < len ? src.charCodeAt(j) : 0
+    if (c === NL || c === CR) {
+      segments.push('')
+      scan = nextLineStart(src, j, len)
+      continue
+    }
+    // A line that opens on a flow indicator ends the scalar; the collection
+    // parser resumes at that indicator (or an unterminated-flow report there).
+    if (j >= len || c === COMMA || c === LBRACKET || c === RBRACKET || c === LBRACE || c === RBRACE) break
+    const lineEnd = flowPlainLineEnd(src, j, j, len)
+    let e = lineEnd
+    while (e > j && isSpace(src.charCodeAt(e - 1))) e--
+    segments.push(src.slice(j, e))
+    valueEnd = e
+    // Stop unless this line ended at a bare line break; a mid-line flow
+    // indicator (e.g. the `,` in `b,`) closes the scalar right here.
+    if (lineEnd >= len || (src.charCodeAt(lineEnd) !== NL && src.charCodeAt(lineEnd) !== CR)) {
+      state.pos = lineEnd
+      const source = src.slice(start, valueEnd)
+      return { kind: 'scalar', value: foldSegments(segments), source, style: 'plain', start, end: valueEnd }
+    }
+    scan = nextLineStart(src, lineEnd, len)
+  }
+
+  // Reached end of input (or a leading flow indicator) with the scalar still
+  // open. Drop trailing blank segments; the flow parser handles what follows.
+  while (segments.length > 1 && segments[segments.length - 1] === '') segments.pop()
+  state.pos = valueEnd
+  const source = src.slice(start, valueEnd)
+  return { kind: 'scalar', value: foldSegments(segments), source, style: 'plain', start, end: valueEnd }
 }
 
 const parseFlowNode = (state: State): YamlNode => {
