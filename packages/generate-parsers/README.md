@@ -173,10 +173,10 @@ x64), parsing valid input at steady state:
 
 | case | mode | mjst (generated) | zod | typebox |
 |:--|:--|--:|--:|--:|
-| user (4 fields) | parseSafe | **~11M** ops/s | ~2.5M ops/s | ~1.0M ops/s |
-| order (nested + array) | parseSafe | **~3.9M** ops/s | ~0.46M ops/s | ~0.13M ops/s |
-| user (4 fields) | parseStrict | **~9M** ops/s | ~1.4M ops/s | ~1.3M ops/s |
-| order (nested + array) | parseStrict | **~5.4M** ops/s | ~0.27M ops/s | ~0.20M ops/s |
+| user (4 fields) | parseSafe | **~16M** ops/s | ~3.3M ops/s | ~1.3M ops/s |
+| order (nested + array) | parseSafe | **~5.8M** ops/s | ~0.6M ops/s | ~0.18M ops/s |
+| user (4 fields) | parseStrict | **~13M** ops/s | ~1.8M ops/s | ~1.85M ops/s |
+| order (nested + array) | parseStrict | **~7.5M** ops/s | ~0.36M ops/s | ~0.28M ops/s |
 
 The upstream `assert` case (seven scalar roots plus a nested object) runs faster
 still — tens of millions of ops/s — but at that size the numbers swing enough

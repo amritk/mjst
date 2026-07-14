@@ -134,25 +134,25 @@ Run it yourself with `bun run bench`. Representative numbers (Bun, Linux):
 
 | fixture | @amritk/yaml | yaml (eemeli) | speedup |
 | --- | --- | --- | --- |
-| small (155 B) | 416k ops/s | 16.8k ops/s | **24.8×** |
-| medium (2 KB) | 35.9k ops/s | 1.3k ops/s | **27.4×** |
-| large (100 KB) | 747 ops/s | 24.0 ops/s | **31.2×** |
+| small (155 B) | 297k ops/s | 11.4k ops/s | **25.9×** |
+| medium (2 KB) | 27.7k ops/s | 918 ops/s | **30.2×** |
+| large (100 KB) | 529 ops/s | 21.1 ops/s | **25.1×** |
 
 **Parse to plain data** — all three can do this.
 
 | fixture | @amritk/yaml | yaml | js-yaml | vs yaml | vs js-yaml |
 | --- | --- | --- | --- | --- | --- |
-| small | 262k | 14.3k | 147k | 18.3× | 1.78× |
-| medium | 24.7k | 1.1k | 12.9k | 23.3× | 1.92× |
-| large | 538 | 26.7 | 275 | 20.1× | 1.96× |
+| small | 238k | 12.0k | 115k | 19.8× | 2.08× |
+| medium | 20.0k | 918 | 10.1k | 21.8× | 1.99× |
+| large | 315 | 18.5 | 218 | 17.0× | 1.44× |
 
 **Bundle size** (minified + gzipped):
 
 | | size | |
 | --- | --- | --- |
-| **@amritk/yaml** | **6.0 KB** | — |
-| yaml | 35.6 KB | 5.9× larger |
-| js-yaml | 13.5 KB | 2.3× larger |
+| **@amritk/yaml** | **6.6 KB** | — |
+| yaml | 35.6 KB | 5.4× larger |
+| js-yaml | 13.5 KB | 2.0× larger |
 
 Correctness is pinned to `yaml` by a differential test suite (`src/differential.test.ts`) that parses a battery of documents — including full OpenAPI specs — and asserts byte-identical data output. Where `js-yaml` diverges (its `!!timestamp` type turns ISO strings into `Date`s, which is wrong for a JSON superset), we instead agree with `yaml`.
 

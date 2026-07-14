@@ -220,15 +220,15 @@ The `bench/` suite pits `@amritk/lint` head-to-head against **[Spectral](https:/
 
 | document | size | mjst | Spectral | speedup | findings (mjst / Spectral) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| petstore (Swagger) | 17 KB | ~6 ms | ~124 ms | **~19×** | 2 / 2 |
-| digitalocean | 105 KB | ~37 ms | ~477 ms | **~13×** | 3507 / 4319 |
-| openai | 2.8 MB | ~1.3 s | errored¹ | — | 1176 / — |
+| petstore (Swagger) | 17 KB | ~7 ms | ~100 ms | **~14×** | 2 / 2 |
+| digitalocean | 105 KB | ~31 ms | ~355 ms | **~12×** | 2411 / 4319 |
+| openai | 2.8 MB | ~1.4 s | errored¹ | — | 1278 / — |
 
 ¹ Spectral's JSONPath engine (`nimma`) throws on the 2.8 MB OpenAI spec under Bun, so that row is mjst-only; mjst lints it end to end.
 
 Each `lint` figure is the mean wall time of one whole pass — **every rule, not a subset** — dominated by real work: JSONPath matching, the rule functions, and the dereference pass. A fresh document is parsed on every iteration on both sides, matching how the tools are actually called. The finding counts differ because the two rulesets are not byte-identical (different rule implementations and `$ref` resolution), so this is a **throughput** comparison rather than a correctness parity check — but on petstore both land on the same two findings.
 
-**Assembling the ruleset** is timed separately, because a process pays it once and then lints many documents: `createOpenApiRuleset` (compiling every rule's JSONPath and wiring up functions and format detectors) measures **~0.06 ms**, versus **~0.4 ms** for `new Spectral()` + `setRuleset(oas)`. The benchmark warms up before timing and reports the mean over a fixed time budget; micro-benchmark figures vary by machine and runtime.
+**Assembling the ruleset** is timed separately, because a process pays it once and then lints many documents: `createOpenApiRuleset` (compiling every rule's JSONPath and wiring up functions and format detectors) measures **~0.09 ms**, versus **~0.35 ms** for `new Spectral()` + `setRuleset(oas)`. The benchmark warms up before timing and reports the mean over a fixed time budget; micro-benchmark figures vary by machine and runtime.
 
 ---
 

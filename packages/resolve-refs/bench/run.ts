@@ -16,13 +16,12 @@ import { REF_BENCH_CASES } from './schemas'
  *   bun run bench
  */
 
-const CYCLE = {}
-
 /**
  * Naive resolver: inlines internal refs with no cross-call memoization. `seen`
- * tracks the refs currently on the resolution path so a cycle returns `{}`
- * (matching `resolveRefs`) instead of recursing forever; shared, non-cyclic
- * refs are re-walked on every occurrence.
+ * tracks the refs currently on the resolution path so a cycle keeps the
+ * reference node in place — the `$ref` verbatim, siblings resolved — exactly as
+ * `resolveRefs` does (it no longer collapses cycles to `{}`), instead of
+ * recursing forever; shared, non-cyclic refs are re-walked on every occurrence.
  */
 const naiveResolve = (node: unknown, root: unknown, seen: Set<string>): unknown => {
   if (node === null || typeof node !== 'object') return node
@@ -32,7 +31,15 @@ const naiveResolve = (node: unknown, root: unknown, seen: Set<string>): unknown 
   if (typeof obj['$ref'] === 'string') {
     const ref = obj['$ref']
     if (!ref.startsWith('#')) return obj
-    if (seen.has(ref)) return CYCLE
+    if (seen.has(ref)) {
+      // Cycle: keep the reference node, resolving any siblings but leaving the
+      // `$ref` verbatim, matching `resolveRefs`'s cycle branch.
+      const kept: Record<string, unknown> = {}
+      for (const key of Object.keys(obj)) {
+        kept[key] = key === '$ref' ? obj[key] : naiveResolve(obj[key], root, seen)
+      }
+      return kept
+    }
     seen.add(ref)
     const resolved = naiveResolve(getByPointer(root, ref.slice(1)), root, seen)
     seen.delete(ref)
