@@ -69,8 +69,22 @@ export const parseYaml = <T = unknown>(source: string, options: IParserOptions =
   // A configured severity (Warning/Information/Hint) still detects duplicates; we
   // just re-map the reported severity below. Only `off`/`false` turns detection off.
   const dupSeverity = typeof duplicateKeys === 'number' ? duplicateKeys : DiagnosticSeverity.Error
+  // Incompatible-value detection is opt-in: it runs only when a severity is
+  // configured. `undefined`/`off`/`false` leaves it disabled.
+  const incompatibleValues = options.incompatibleValues
+  const incompatSeverity = typeof incompatibleValues === 'number' ? incompatibleValues : undefined
   const doc = parseDocument(source, { uniqueKeys: !dedupe })
   const index = new Map<string, IRange>()
+
+  const diagnostics: IDiagnostic[] = []
+  const pushError = (severity: DiagnosticSeverity, message: string, start: number, end: number, code?: string) => {
+    diagnostics.push({
+      ...(code !== undefined ? { code } : {}),
+      message,
+      severity,
+      range: { start: lineMap.positionAt(start), end: lineMap.positionAt(end) },
+    })
+  }
 
   const rangeOf = (node: YamlNode): IRange => ({
     start: lineMap.positionAt(node.start),
@@ -115,6 +129,23 @@ export const parseYaml = <T = unknown>(source: string, options: IParserOptions =
     if (node == null || budget-- <= 0) return
     index.set(pathKey(path), rangeOf(node))
 
+    if (isScalar(node)) {
+      // The core schema projects `.nan`/`.inf`/`-.inf` to non-finite JS numbers,
+      // which `JSON.stringify` silently rewrites to `null`. Report them when the
+      // caller opted in, so a value that won't survive a JSON round-trip is caught.
+      const value = node.value
+      if (incompatSeverity !== undefined && typeof value === 'number' && !Number.isFinite(value)) {
+        pushError(
+          incompatSeverity,
+          `Value ${String(value)} cannot be represented in JSON and will serialize to null.`,
+          node.start,
+          node.end,
+          'INCOMPATIBLE_VALUE',
+        )
+      }
+      return
+    }
+
     // Follow an alias to its anchor definition so paths reachable only through the
     // alias resolve to the anchored node (the alias itself keeps the range set
     // above); an unresolved alias has no target and simply stops here.
@@ -144,14 +175,6 @@ export const parseYaml = <T = unknown>(source: string, options: IParserOptions =
 
   const data = doc.toJS() as T
 
-  const diagnostics: IDiagnostic[] = []
-  const pushError = (severity: DiagnosticSeverity, message: string, start: number, end: number) => {
-    diagnostics.push({
-      message,
-      severity,
-      range: { start: lineMap.positionAt(start), end: lineMap.positionAt(end) },
-    })
-  }
   for (const err of doc.errors) {
     // Duplicate keys honor the configured severity; every other parser error is
     // a hard error.

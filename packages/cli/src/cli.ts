@@ -13,6 +13,7 @@ const execFileAsync = promisify(execFile)
 import type { CliConfig } from './cli-config'
 import { combineGeneratedFiles } from './combine-files'
 import { detectHelpersMode } from './detect-helpers-mode'
+import { emitExamples } from './emit-examples'
 import { HELP_TEXT } from './help-text'
 import { loadConfig } from './load-config'
 import { loadSchemaModule } from './load-schema-module'
@@ -96,6 +97,38 @@ const writeGeneratedFile = async (baseDir: string, filename: string, content: st
   const filePath = join(baseDir, filename)
   await mkdir(dirname(filePath), { recursive: true })
   await writeFile(filePath, content, 'utf-8')
+}
+
+/**
+ * Emits fast-check arbitrary + example files for one schema (delegating to
+ * {@link emitExamples}) and logs each written path. The files land in an
+ * `examples/` subdirectory of `outputDir` so they never collide with the parser
+ * files, which share the same `<name>.ts` / `index.ts` names. `subDir` mirrors a
+ * schema's nested location under `--schema-dir`. The example sources are left out
+ * of `--build`: they import the `fast-check` peer dependency and are meant to be
+ * consumed by tests, not compiled alongside the runtime parsers.
+ */
+const runExamples = async (
+  config: Partial<CliConfig>,
+  schema: unknown,
+  rootTypeName: string,
+  outputDir: string,
+  subDir = '',
+): Promise<void> => {
+  const written = await emitExamples({
+    schema: schema as JSONSchema,
+    rootTypeName,
+    outputDir,
+    subDir,
+    bannerPrefix: config.banner ? resolveBanner(config.banner) : '',
+    // Spread conditionally: `exactOptionalPropertyTypes` rejects an explicit
+    // `undefined` for the optional `typeSuffix`.
+    ...(config.typeSuffix !== undefined ? { typeSuffix: config.typeSuffix } : {}),
+  })
+
+  for (const path of written) {
+    console.log(`Generated example: ${path}`)
+  }
 }
 
 /**
@@ -214,6 +247,10 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
     console.log(`Generated: ${file.filename}`)
   }
 
+  if (config.examples) {
+    await runExamples(config, schema, rootTypeName, outputDir)
+  }
+
   if (config.build) {
     await buildOutput(
       outputDir,
@@ -257,6 +294,10 @@ const runSingleFile = async (config: Partial<CliConfig>, schemaPath: string, out
   const combined = combineGeneratedFiles(files)
   await writeFile(outFilePath, config.banner ? resolveBanner(config.banner) + combined : combined, 'utf-8')
   console.log(`Generated: ${relative(process.cwd(), outFilePath)}`)
+
+  if (config.examples) {
+    await runExamples(config, schema, rootTypeName, outputDir)
+  }
 
   if (config.build) {
     await buildOutput(outputDir, [basename(outFilePath)], config.typesOnly)
@@ -333,6 +374,10 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
       const relativeFilename = join(relNoExt, file.filename)
       writtenTsFiles.push(relativeFilename)
       console.log(`Generated: ${relativeFilename}`)
+    }
+
+    if (config.examples) {
+      await runExamples(config, schema, rootTypeName, outputDir, relNoExt)
     }
   }
 

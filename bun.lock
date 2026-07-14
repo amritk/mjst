@@ -20,6 +20,8 @@
         "valibot": "^1.4.0",
         "vitest": "^4.1.5",
         "zod": "^4.4.3",
+        "zod-to-json-schema": "^3.24.6",
+        "zod-v3": "npm:zod@^3.25.76",
       },
     },
     "packages/adapters": {
@@ -30,16 +32,20 @@
         "json-schema-typed": "catalog:",
       },
       "peerDependencies": {
+        "@sinclair/typebox": ">=0.34",
         "@valibot/to-json-schema": ">=1",
         "effect": ">=3",
         "valibot": ">=1",
-        "zod": ">=4",
+        "zod": ">=3",
+        "zod-to-json-schema": ">=3",
       },
       "optionalPeers": [
+        "@sinclair/typebox",
         "@valibot/to-json-schema",
         "effect",
         "valibot",
         "zod",
+        "zod-to-json-schema",
       ],
     },
     "packages/cli": {
@@ -50,6 +56,7 @@
       },
       "dependencies": {
         "@amritk/adapters": "workspace:*",
+        "@amritk/generate-examples": "workspace:*",
         "@amritk/generate-markdown": "workspace:*",
         "@amritk/generate-parsers": "workspace:*",
         "@amritk/helpers": "workspace:*",
@@ -69,6 +76,7 @@
       "version": "0.4.5",
       "dependencies": {
         "@amritk/helpers": "workspace:*",
+        "@amritk/runtime-validators": "workspace:*",
         "json-schema-typed": "catalog:",
       },
       "devDependencies": {
@@ -1188,6 +1196,10 @@
     "yocto-queue": ["yocto-queue@1.2.2", "", {}, "sha512-4LCcse/U2MHZ63HAJVE+v71o7yOdIe4cZ70Wpf8D/IyjDKYQLV5GD46B+hSTjJsvV5PztjvHoU580EftxjDZFQ=="],
 
     "zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
+
+    "zod-to-json-schema": ["zod-to-json-schema@3.25.2", "", { "peerDependencies": { "zod": "^3.25.28 || ^4" } }, "sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA=="],
+
+    "zod-v3": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
 
     "@manypkg/find-root/@types/node": ["@types/node@12.20.55", "", {}, "sha512-J8xLz7q2OFulZ2cyGTLE1TbbZcjpno7FaN6zdJNrgAdrJ+DZzh/uFR6YrTb4C+nXakvud8Q4+rbhoIWlYQbUFQ=="],
 

@@ -93,6 +93,29 @@ export const isCoercibleItemSchema = (itemSchema: JSONSchema): boolean => {
 }
 
 /**
+ * The tuple `prefixItems` array when the schema declares one, else `null`.
+ * `prefixItems` (JSON Schema 2020-12) positions each element against its own
+ * subschema; the draft array-form `items` is handled by the existing item
+ * paths, not here.
+ */
+export const getPrefixItems = (schema: JSONSchema): readonly JSONSchema[] | null => {
+  if (!isSchemaObject(schema)) return null
+  const prefix = (schema as Record<string, unknown>)['prefixItems']
+  return Array.isArray(prefix) ? (prefix as JSONSchema[]) : null
+}
+
+/**
+ * True when a sibling `items: false` (2020-12) or `additionalItems: false`
+ * (draft) caps a tuple's length — any element past the declared prefix is
+ * disallowed, so the coercer drops it and strict mode rejects it.
+ */
+export const prefixItemsCapsLength = (schema: JSONSchema): boolean => {
+  if (!isSchemaObject(schema)) return false
+  const s = schema as Record<string, unknown>
+  return s['items'] === false || s['additionalItems'] === false
+}
+
+/**
  * A boolean type check for a single JSON Schema primitive type name. Unlike
  * {@link scalarItemTypeCheck} this also covers `array`/`object` (as inline shape
  * checks, so no `isObject` import is assumed) and enforces `integer` with
@@ -316,6 +339,25 @@ export const generateValidationExpression = (
     return `${accessor} ?? ${defaultValue}`
   }
 
+  // Tuple `prefixItems`: coerce each declared position through its own subschema
+  // and, with a sibling `items: false`/`additionalItems: false`, drop any element
+  // past the tuple length. A shorter input keeps its absent trailing positions.
+  // The fast path only takes a tuple whose present positions are already
+  // well-typed, so a mistyped position reaches here.
+  const prefixItems = getPrefixItems(schema)
+  if (hasType(schema) && schema.type === 'array' && prefixItems) {
+    const mapped = generatePrefixItemsMap(
+      accessor,
+      prefixItems,
+      prefixItemsCapsLength(schema),
+      rootSchema,
+      visitedRefs,
+      caseInsensitive,
+    )
+    const built = `(Array.isArray(${accessor}) ? ${mapped} : ${defaultValue})`
+    return isRequired ? built : `(${accessor} !== undefined ? ${built} : undefined)`
+  }
+
   // An array of scalar or enum items: coerce each element so e.g. `number[]`
   // actually contains numbers and an enum member set holds. The fast path only
   // takes a well-typed array, so a mistyped element reaches here. ($ref and
@@ -488,4 +530,48 @@ export const generateValidationExpression = (
     }
     return `${combinedCheck} ? ${accessor} : ${enumFallback('undefined')}`
   }
+}
+
+/**
+ * Builds the coercion transform for a tuple `prefixItems` array: an index-matched
+ * `.map` where each declared position runs through its own subschema's coercion
+ * (present positions only — a shorter input keeps its absent trailing positions),
+ * and every element past the tuple passes through unchanged. When `capLength` is
+ * set (a sibling `items: false`), a trailing `.slice(0, N)` drops those extras.
+ * `accessor` must already be known to be an array (the caller guards with
+ * `Array.isArray`). `$ref` positions resolve against `rootSchema` when provided.
+ */
+export const generatePrefixItemsMap = (
+  accessor: string,
+  prefix: readonly JSONSchema[],
+  capLength: boolean,
+  rootSchema?: Record<string, unknown>,
+  visitedRefs?: Set<string>,
+  caseInsensitive?: boolean,
+): string => {
+  const branches = prefix.map((rawPos, i) => {
+    // Resolve a position `$ref` to its target here: generateValidationExpression's
+    // own ref path rebuilds the accessor from the property key, which would
+    // discard the `_el` element accessor an override needs — so hand it the
+    // concrete schema directly instead.
+    let pos = rawPos
+    if (isSchemaObject(pos) && hasRef(pos) && rootSchema) {
+      const resolved = resolveRef((pos as { $ref: string }).$ref, rootSchema)
+      if (resolved) pos = resolved as JSONSchema
+    }
+    const posExpr = generateValidationExpression(
+      '',
+      pos,
+      getDefaultValue(pos),
+      true,
+      rootSchema,
+      visitedRefs,
+      '_el',
+      true,
+      caseInsensitive,
+    )
+    return `_i === ${i} ? ${posExpr}`
+  })
+  const mapped = `(${accessor} as unknown[]).map((_el, _i) => ${[...branches, '_el'].join(' : ')})`
+  return capLength ? `${mapped}.slice(0, ${prefix.length})` : mapped
 }

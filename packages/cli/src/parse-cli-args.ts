@@ -13,6 +13,7 @@ type MutableConfig = {
   input?: SourceFormat
   export?: string
   typesOnly?: boolean
+  examples?: boolean
   build?: boolean
   logWarnings?: boolean
   strict?: boolean
@@ -29,6 +30,7 @@ type MutableConfig = {
 // Boolean flags toggle on by presence and accept `--flag=false` to opt out.
 const BOOLEAN_KEYS = new Set<keyof MutableConfig>([
   'typesOnly',
+  'examples',
   'build',
   'logWarnings',
   'strict',
@@ -130,6 +132,9 @@ const assignBoolean = (config: MutableConfig, key: string, value: boolean): bool
   switch (key) {
     case 'typesOnly':
       config.typesOnly = value
+      return true
+    case 'examples':
+      config.examples = value
       return true
     case 'build':
       config.build = value
