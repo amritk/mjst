@@ -269,3 +269,22 @@ describe('generation-time guard (strict only)', () => {
     ).not.toThrow()
   })
 })
+
+describe('strict parser: typed record (additionalProperties)', () => {
+  it('throws on a wrong-typed record value instead of coercing it', () => {
+    const parse = strictParser({ type: 'object', additionalProperties: { type: 'number' } })
+    expect(parse({ a: 1, b: 2 })).toEqual({ a: 1, b: 2 })
+    expect(() => parse({ a: 'not-a-number' })).toThrow(/record value must be number/)
+  })
+
+  it('enforces integrality for an integer-valued record', () => {
+    const parse = strictParser({ type: 'object', additionalProperties: { type: 'integer' } })
+    expect(parse({ a: 3 })).toEqual({ a: 3 })
+    expect(() => parse({ a: 1.5 })).toThrow(/record value must be integer/)
+  })
+
+  it('coerce mode still repairs a wrong-typed record value', () => {
+    const parse = coerceParser({ type: 'object', additionalProperties: { type: 'number' } })
+    expect(parse({ a: 'not-a-number' })).toEqual({ a: 0 })
+  })
+})

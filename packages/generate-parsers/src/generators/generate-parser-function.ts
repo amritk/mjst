@@ -675,6 +675,19 @@ const generateNonObjectParser = (
     }
   }
 
+  // Strict counterpart of the block above for a *type-less* `const`/`enum` root
+  // (`{ enum: [...] }` / `{ const: ... }` with no `type`): the no-`type` bail
+  // below would otherwise return a bare cast, so strict mode has to assert
+  // membership here. A typed `const`/`enum` (`{ type: 'string', enum: [...] }`)
+  // keeps flowing to the strict scalar path, which asserts it via
+  // generateScalarStrictAssertion.
+  if (strict && isSchemaObject(schema) && !hasType(schema) && (hasConst(schema) || hasEnum(schema))) {
+    const assertion = generateScalarStrictAssertion(schema, typeName, unionCtx?.rootSchema)
+    if (assertion !== null) {
+      return `export const ${functionName} = (input: unknown): ${typeName} => {\n${assertion}\n  return input as ${typeName};\n};`
+    }
+  }
+
   // Root-level arrays with rich item schemas delegate every element to a real
   // parser, so nested enums and $refs inside array items are validated instead
   // of spread through unchecked. $ref items call the imported parser; inline
@@ -1817,7 +1830,7 @@ const generateAdditionalPropertiesParser = (
 
   // Handle additionalProperties with a known type by generating inline validation
   if (isSchemaObject(additionalProps) && hasType(additionalProps)) {
-    const inlineParser = generateInlineValueParser(additionalProps)
+    const inlineParser = generateInlineValueParser(additionalProps, strict, `[${typeName}]`)
     if (inlineParser) {
       if (strict) {
         return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);${keywordPrelude}\n  return validateRecord(input, ${inlineParser}) as ${typeName};\n};`
@@ -1840,9 +1853,30 @@ const generateAdditionalPropertiesParser = (
  * Used to generate parsers for Record-like types where values have a known
  * primitive or array type (e.g. Record<string, string> or Record<string, string[]>).
  */
-const generateInlineValueParser = (schema: JSONSchema): string | null => {
+const generateInlineValueParser = (schema: JSONSchema, strict = false, label = ''): string | null => {
   if (!isSchemaObject(schema) || !hasType(schema)) {
     return null
+  }
+
+  // Strict mode must *throw* on a wrong-typed record value, not repair it — the
+  // coercing branch below would silently turn `{ a: 'x' }` into `{ a: 0 }` for a
+  // `Record<string, number>`, which strict mode is documented never to do.
+  if (strict) {
+    const err = (t: string): string => `throw new Error(${JSON.stringify(`${label} record value must be ${t}`)})`
+    switch (schema.type) {
+      case 'string':
+        return `(value: unknown) => { if (typeof value !== "string") ${err('string')}; return value; }`
+      case 'number':
+        return `(value: unknown) => { if (typeof value !== "number") ${err('number')}; return value; }`
+      case 'integer':
+        return `(value: unknown) => { if (typeof value !== "number" || !Number.isInteger(value)) ${err('integer')}; return value; }`
+      case 'boolean':
+        return `(value: unknown) => { if (typeof value !== "boolean") ${err('boolean')}; return value; }`
+      case 'array':
+        return `(value: unknown) => { if (!Array.isArray(value)) ${err('array')}; return value; }`
+      default:
+        return null
+    }
   }
 
   switch (schema.type) {
