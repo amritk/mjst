@@ -78,7 +78,7 @@ export const getDefaultValue = (schema: JSONSchema): string => {
   // without this a required-but-missing value would default to `undefined` —
   // violating both `required` and the declared type. Derive the default from the
   // first listed type so the fallback is a valid member.
-  const rawType = (schema as Record<string, unknown>).type
+  const rawType = (schema as Record<string, unknown>)['type']
   if (Array.isArray(rawType) && rawType.length > 0 && typeof rawType[0] === 'string') {
     return getDefaultValue({ ...schema, type: rawType[0] } as JSONSchema)
   }
