@@ -161,6 +161,30 @@ describe('strict parser: nested inline objects', () => {
 })
 
 describe('strict parser: object-level keywords alongside patternProperties / additionalProperties', () => {
+  it('asserts declared properties (type + required) in the combined props/patternProperties parser', () => {
+    // The combined parser builds its result from the coercing property lines, so
+    // strict mode used to repair a wrong type / default a missing required key
+    // instead of throwing. It must now assert declared properties.
+    const parse = evalGenerated<(input: unknown) => unknown>(
+      generateParserFunction(
+        {
+          type: 'object',
+          properties: { count: { type: 'number' } },
+          patternProperties: { '^x-': { type: 'string' } },
+          additionalProperties: false,
+          required: ['count'],
+        } as never,
+        'Root',
+        { strict: true, useRefImports: true },
+      ),
+      'parseRoot',
+    )
+    expect(parse({ count: 5, 'x-a': 'ok' })).toEqual({ count: 5, 'x-a': 'ok' })
+    expect(() => parse({ count: 'nope' })).toThrow(/field 'count' expected number/)
+    expect(() => parse({})).toThrow(/missing required property 'count'/)
+    expect(() => parse({ count: 5, junk: 1 })).toThrow(/unknown property "junk"/)
+  })
+
   it('enforces propertyNames with patternProperties + additionalProperties: false', () => {
     const parse = evalGenerated<(input: unknown) => unknown>(
       generateParserFunction(

@@ -1665,7 +1665,18 @@ const generateStrictCombinedParser = (
   const resultBody = propertyLines.length > 0 ? `{\n${propertyLines.join('\n')}\n  }` : '{}'
   // Only the Set form needs a declaration; the inline === chain is stateless.
   const knownKeysDeclaration = knownKeyCheck.declarations.map((decl) => `  ${decl};\n`).join('')
-  const keywordPrelude = strict ? strictObjectKeywordPrelude(schema, typeName) : ''
+  // In strict mode assert the declared properties (type, required, enum,
+  // constraints) — the `result` below is built from the *coercing* property
+  // lines, which silently repair a wrong type and default a missing required key
+  // instead of throwing. `generateObjectStrictAssertion` throws first; the
+  // coercing build then runs only on already-valid input (a no-op there). It also
+  // covers the object-level keyword checks, so it replaces the keyword-only
+  // prelude. `.slice(1)` drops its `isObject` check (emitted just below). Coerce
+  // mode (stripUnknown) keeps its lighter prelude.
+  const assertionPrelude = strict
+    ? generateObjectStrictAssertion(schema, typeName, { useRefImports, suffix }).slice(1)
+    : []
+  const keywordPrelude = assertionPrelude.length > 0 ? `\n${assertionPrelude.join('\n')}` : ''
 
   return `export const ${functionName} = (input: unknown): ${typeName} => {
   if (!isObject(input)) {
