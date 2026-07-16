@@ -54,7 +54,7 @@ describe('generateEnumCaseInsensitiveCoercion', () => {
   it('maps each string member by its lowercased form to its exact casing', () => {
     const result = generateEnumCaseInsensitiveCoercion('value', ['Hello', 'World'], '"Hello"')
     expect(result).toBe(
-      '(typeof value === "string" ? (({"hello":"Hello","world":"World"} as Record<string, string>)[(value as string).toLowerCase()] ?? "Hello") : "Hello")',
+      '(typeof value === "string" ? (new Map([["hello","Hello"],["world","World"]]).get((value as string).toLowerCase()) ?? "Hello") : "Hello")',
     )
   })
 
@@ -67,13 +67,13 @@ describe('generateEnumCaseInsensitiveCoercion', () => {
 
   it('ignores non-string members (no case to fold)', () => {
     const result = generateEnumCaseInsensitiveCoercion('value', ['On', 1, true, null], '1')
-    expect(result).toContain('{"on":"On"}')
+    expect(result).toContain('new Map([["on","On"]])')
   })
 
   it('lets declaration order win when two members fold to the same key', () => {
     const result = generateEnumCaseInsensitiveCoercion('value', ['on', 'ON'], '"on"')
     // First writer wins: the map key `on` resolves to the first member's casing.
-    expect(result).toContain('{"on":"on"}')
+    expect(result).toContain('new Map([["on","on"]])')
   })
 
   it('returns null when no member is a string', () => {

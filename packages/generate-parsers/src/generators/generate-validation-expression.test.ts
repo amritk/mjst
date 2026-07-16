@@ -446,7 +446,7 @@ describe('generate-validation-expression', () => {
     const result = generateValidationExpression('count', schema, '0', true)
 
     expect(result).toBe(
-      'typeof input?.count === "number" && Number.isInteger(input?.count) ? input?.count : (input?.count !== undefined ? (Number.isFinite(Number(input?.count)) ? Number(input?.count) : 0) : 0)',
+      'typeof input?.count === "number" && Number.isInteger(input?.count) ? input?.count : (input?.count !== undefined ? (Number.isInteger(Number(input?.count)) ? Number(input?.count) : 0) : 0)',
     )
   })
 
@@ -864,7 +864,7 @@ describe('generate-validation-expression', () => {
       expect(result).toContain('(input?.status === "Active" || input?.status === "Inactive") ? input?.status :')
       // The normalization is spliced into the else branch only.
       expect(result).toContain('(input?.status as string).toLowerCase()')
-      expect(result).toContain('{"active":"Active","inactive":"Inactive"}')
+      expect(result).toContain('new Map([["active","Active"],["inactive","Inactive"]])')
       // Non-member / non-string still lands on the plain default.
       expect(result).toContain('?? "Active")')
     })
