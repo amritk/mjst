@@ -242,6 +242,13 @@ routes.
 - **Example generation.** `@amritk/generate-examples` can derive request/
   response examples for the OpenAPI document and fast-check arbitraries for
   contract fuzzing — same contract, two more outputs.
+  Verified end to end against the real packages (2026-07): Better Auth
+  (memory adapter) mounted at `/api/auth` issues a session via its own
+  sign-up endpoint; the session flows through the app context; a
+  contract-declared 401 guards `/profile`; and Drizzle (`bun:sqlite`) serves
+  an owner-scoped query from the same context — with the 401 appearing in
+  the generated OpenAPI document like any other response.
+
 - ~~Route-level middleware/auth.~~ Superseded by two shipped primitives that
   cover the real-world cases without a middleware chain: a **typed app
   context** (`createApi({ context })` + `routeFactory<Context>()`, receiving
