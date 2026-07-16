@@ -130,6 +130,50 @@ const api = createApi({
 })
 ```
 
+### Production: the compiled engine
+
+`compileToModule` is the production counterpart to `createApi` — it emits a
+fused fetch-handler module from the same contracts: routing as string
+compares, guards and coercions inlined from the schemas (interpreter fallback
+outside the provably-identical subset), schema-derived response serializers
+(for responses marked `additionalProperties: false`), and the OpenAPI
+document precomputed to a static JSON string. The output is plain source — no
+`eval`, no `new Function` — so it runs on Cloudflare Workers and under strict
+CSP, where every runtime-compilation trick other frameworks use is banned.
+
+The intended split: **runtime engine in development** (instant, no build step,
+`validateResponses` available), **compiled module in production**. The two
+engines are held observationally identical by a differential test that runs
+the same request corpus through both, so switching is just an import swap.
+
+```ts
+// scripts/compile-api.ts — the build step
+import { writeFileSync } from 'node:fs'
+import { compileToModule } from '@amritk/api'
+import * as routes from '../src/routes'
+
+writeFileSync('src/api.compiled.ts', compileToModule({ routesImport: './routes', routes }))
+```
+
+```ts
+// src/worker.ts — Cloudflare Workers entry
+import compiled from './api.compiled'
+export default compiled // { fetch }
+
+// dev server instead: toFetchHandler(createApi({ routes: Object.values(routes), validateResponses: true }))
+```
+
+Measured under Node/V8 (same engine as workerd), Request → Response, against
+the standard Workers stack:
+
+| case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
+|:--|--:|--:|--:|--:|
+| static GET | ~225k ops/s | ~244k | ~187k | **~312k** |
+| dynamic GET, params validated | ~195k ¹ | ~145k | ~174k | **~266k** |
+| POST, body validated | ~49k ¹ | ~33k | ~51k | **~63k** |
+
+<sub>¹ hono-bare does no validation; every @amritk/api column validates.</sub>
+
 ### Schemas from Zod, TypeBox, Valibot, Effect
 
 Contracts take plain JSON Schema. Schemas authored in other libraries convert

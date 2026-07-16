@@ -173,7 +173,32 @@ validated routes. The compiled prototype — hand-written in the exact shape a
 build step would emit — beats even unvalidated Hono by 30–45% everywhere,
 *with validation on*.
 
-### What `mjst compile` would emit
+### Shipped: `compileToModule`
+
+The compiled engine described below now exists as
+`compileToModule(options): string` (`packages/api/src/compile/`). It emits the
+fused module from route contract *values* — no AST work, no TS checker — and a
+differential test (`compile-to-module.test.ts`) holds the compiled and runtime
+engines observationally identical across a corpus covering valid/invalid
+inputs, coercion, encoded segments, trailing slashes, thrown handlers, custom
+headers, empty replies, and the OpenAPI document. Guards and serializers only
+inline for the schema subset they can reproduce exactly (bare primitive
+object shapes; serializers additionally require `additionalProperties:
+false`) and fall back to the interpreter otherwise, so semantics never fork.
+
+Measured with the real emitted output (Node/V8, Request → Response):
+
+| case | hono (no validation) | hono + zod | runtime (dev) | **compiled (prod)** |
+|:--|--:|--:|--:|--:|
+| static GET | ~225k | ~244k | ~187k | **~312k** |
+| dynamic GET, validated | ~195k | ~145k | ~174k | **~266k** |
+| POST, validated | ~49k | ~33k | ~51k | **~63k** |
+
+The intended workflow is runtime engine in development, compiled module in
+production, switched by an import — the differential test is what makes that
+swap safe.
+
+### What the compiled module contains
 
 One monomorphic module per route, all plain TypeScript source (tree-shakeable,
 no eval, small bundle → faster cold start):

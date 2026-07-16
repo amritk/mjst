@@ -1,3 +1,4 @@
+import { decodeSegment } from './decode-segment'
 import type { CompiledRoute, PathSegment, RouteTable } from './types'
 
 /**
@@ -55,20 +56,4 @@ const matchSegments = (
     }
   }
   return params ?? EMPTY_PARAMS
-}
-
-/**
- * Percent-decodes a captured parameter. Literal segments are compared raw (a
- * route pattern should not contain characters that need encoding), but a
- * captured value like `/users/ada%40example.com` should reach the handler
- * decoded. Malformed sequences fall back to the raw text rather than turning
- * the whole request into a 500.
- */
-const decodeSegment = (segment: string): string => {
-  if (!segment.includes('%')) return segment
-  try {
-    return decodeURIComponent(segment)
-  } catch {
-    return segment
-  }
 }
