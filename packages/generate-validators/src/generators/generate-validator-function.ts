@@ -290,10 +290,22 @@ const generatePropertyChecks = (
   const parentPath = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
   const lines: string[] = []
 
-  // $ref — delegate to the imported validator
+  // $ref — delegate to the imported validator. Per 2020-12, sibling keywords
+  // alongside `$ref` still apply to the same value, so any constraint/combinator
+  // siblings (e.g. `{ $ref, minLength: 5 }`) run after the delegation. A bare
+  // `{ $ref }` produces no siblings, leaving the output unchanged.
   if (hasRef(propSchema)) {
     const ref = propSchema.$ref
     const vName = validatorName(refToName(ref, suffix))
+    const siblings = [
+      ...generateConstraintChecks(key, raw, path, propSchema, suffix, ctx),
+      ...generateCombinatorChecks(key, raw, path, propSchema, suffix, ctx),
+    ]
+    const delegate = [
+      `    const _r = ${vName}(${raw}, ${path})`,
+      `    if (_r !== true) errors.push(..._r.errors)`,
+      ...siblings,
+    ]
 
     if (isRequired) {
       lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
@@ -301,13 +313,11 @@ const generatePropertyChecks = (
         `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
       )
       lines.push(`  } else {`)
-      lines.push(`    const _r = ${vName}(${raw}, ${path})`)
-      lines.push(`    if (_r !== true) errors.push(..._r.errors)`)
+      lines.push(...delegate)
       lines.push(`  }`)
     } else {
       lines.push(`  if (${raw} !== undefined) {`)
-      lines.push(`    const _r = ${vName}(${raw}, ${path})`)
-      lines.push(`    if (_r !== true) errors.push(..._r.errors)`)
+      lines.push(...delegate)
       lines.push(`  }`)
     }
     return lines
