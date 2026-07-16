@@ -2,6 +2,7 @@ import { MJST_EXTENSION_KEY } from '@amritk/helpers/mjst-extension'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import type { AdapterOptions } from './adapter'
+import { enforceTupleLength, normalizeDraftTuples } from './normalize-tuples'
 import { reportLossyConstructs } from './report-lossy-constructs'
 
 // Zod 4's `toJSONSchema` does the heavy lifting. We only describe the slice of
@@ -172,62 +173,6 @@ const convertWithFallback = (
   } catch (error) {
     throw new Error(`Zod adapter failed to convert the schema. Is it a valid Zod schema?\n${String(error)}`)
   }
-}
-
-/**
- * `zod-to-json-schema` (the Zod 3 fallback) emits tuples in draft-07 form —
- * `items` as an array plus `additionalItems` for the rest element. Rewrite those
- * nodes into 2020-12 form (`prefixItems`, with `additionalItems` becoming
- * `items`) so the rest of the pipeline — and {@link enforceTupleLength} below —
- * sees the same shape the Zod 4 path produces. No-op on Zod 4 output, which
- * already uses `prefixItems`.
- */
-const normalizeDraftTuples = (node: unknown): void => {
-  if (node === null || typeof node !== 'object') return
-  if (Array.isArray(node)) {
-    for (const item of node) normalizeDraftTuples(item)
-    return
-  }
-  const obj = node as Record<string, unknown>
-  if (Array.isArray(obj['items'])) {
-    obj['prefixItems'] = obj['items']
-    if ('additionalItems' in obj) {
-      // A rest element (`.rest(...)`) — its schema (or `false`) becomes `items`.
-      obj['items'] = obj['additionalItems']
-      delete obj['additionalItems']
-    } else {
-      // No rest element: drop `items` so `enforceTupleLength` forbids extras.
-      delete obj['items']
-    }
-  }
-  for (const value of Object.values(obj)) normalizeDraftTuples(value)
-}
-
-/**
- * Zod 4's `toJSONSchema` emits a fixed tuple as a bare `prefixItems` array with
- * no length bound, so the result accepts a too-short array (positions past the
- * end are simply unconstrained) and a too-long one (nothing forbids extra
- * items). A Zod tuple requires exactly its fixed elements, so we restore that:
- * `minItems` forces the fixed elements to be present, and — when the tuple has
- * no `.rest(...)` (no `items`) — `items: false` forbids extras. Applied to every
- * `prefixItems` node in the tree. Existing tighter bounds are never loosened.
- */
-const enforceTupleLength = (node: unknown): void => {
-  if (node === null || typeof node !== 'object') return
-  if (Array.isArray(node)) {
-    for (const item of node) enforceTupleLength(item)
-    return
-  }
-  const obj = node as Record<string, unknown>
-  if (Array.isArray(obj['prefixItems'])) {
-    const fixed = obj['prefixItems'].length
-    const min = typeof obj['minItems'] === 'number' ? obj['minItems'] : 0
-    if (min < fixed) obj['minItems'] = fixed
-    // No `items` keyword means no rest element: the array may not exceed the
-    // fixed tuple, so forbid additional items.
-    if (!('items' in obj)) obj['items'] = false
-  }
-  for (const value of Object.values(obj)) enforceTupleLength(value)
 }
 
 // Keys a branch may carry and still be treated as a plain "closed object" that

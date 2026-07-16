@@ -1,6 +1,8 @@
 import { MJST_EXTENSION_KEY } from '@amritk/helpers/mjst-extension'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { enforceTupleLength, normalizeDraftTuples } from './normalize-tuples'
+
 // Minimal structural view of `effect`'s `JSONSchema.make`, loaded at runtime so
 // `effect` stays an optional peer dependency. It accepts anything with an `ast`
 // property, so we can call it on a bare AST node (`{ ast }`) to convert a
@@ -194,6 +196,13 @@ export const effectToJsonSchema = async (source: unknown): Promise<JSONSchema> =
   const json = walk(make, ast, rootDefs)
   // Reattach the hoisted definitions once the whole tree is assembled.
   if (Object.keys(rootDefs).length > 0) json['$defs'] = rootDefs
+
+  // `JSONSchema.make` (and the structural rescue path) emit fixed tuples in
+  // draft-07 form (`items: [...]` + `additionalItems`), which the generators do
+  // not recognize as a tuple — element types and length would go unvalidated.
+  // Normalize to 2020-12 `prefixItems`, then restore the length bound.
+  normalizeDraftTuples(json)
+  enforceTupleLength(json)
 
   return json as JSONSchema
 }

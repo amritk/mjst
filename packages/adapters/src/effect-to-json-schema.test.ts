@@ -45,6 +45,29 @@ describe('effectToJsonSchema', () => {
     })
   })
 
+  it('emits 2020-12 prefixItems for a fixed tuple, not draft-07 array-items', async () => {
+    // Effect's JSONSchema.make emits draft-07 tuples (`items: [...]`), which the
+    // generators do not recognize as a tuple; the adapter must normalize to
+    // `prefixItems` + a length bound so element types and length are validated.
+    const result = await effectToJsonSchema(Schema.Struct({ pair: Schema.Tuple(Schema.String, Schema.Number) }))
+
+    const pair = (result as { properties: { pair: Record<string, unknown> } }).properties.pair
+    expect(pair).toMatchObject({
+      type: 'array',
+      prefixItems: [{ type: 'string' }, { type: 'number' }],
+      minItems: 2,
+      items: false,
+    })
+    // The draft-07 array-form `items` must be gone.
+    expect(Array.isArray(pair['items'])).toBe(false)
+  })
+
+  it('keeps a variadic Schema.Array as a plain array, not a tuple', async () => {
+    const result = await effectToJsonSchema(Schema.Struct({ xs: Schema.Array(Schema.Number) }))
+    expect(result).toMatchObject({ properties: { xs: { type: 'array', items: { type: 'number' } } } })
+    expect((result as { properties: { xs: Record<string, unknown> } }).properties.xs).not.toHaveProperty('prefixItems')
+  })
+
   it('represents Schema.Date as its encoded string form', async () => {
     // Effect models Schema.Date as a string-to-Date decode, so the JSON Schema
     // (the wire representation) is a string referenced via $defs.
