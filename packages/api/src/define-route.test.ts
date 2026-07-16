@@ -79,4 +79,45 @@ describe('define-route', () => {
       handler: () => ({ status: 200, body: {} }),
     })
   })
+
+  it('rejects the wrong body for a status, per status', () => {
+    const userSchema = {
+      type: 'object',
+      properties: { id: { type: 'integer' }, name: { type: 'string' } },
+      required: ['id', 'name'],
+    } as const
+
+    // Discriminant narrowing needs no `as const` on the returned statuses:
+    // contextual typing from the responses map keeps them literal.
+    defineRoute({
+      method: 'get',
+      path: '/ok',
+      responses: { 200: { body: userSchema }, 404: {} },
+      handler: () => (Math.random() > 0.5 ? { status: 200, body: { id: 1, name: 'Ada' } } : { status: 404 }),
+    })
+
+    defineRoute({
+      method: 'get',
+      path: '/wrong-type',
+      responses: { 200: { body: userSchema }, 404: {} },
+      // @ts-expect-error — name must be a string, not a number
+      handler: () => ({ status: 200, body: { id: 1, name: 42 } }),
+    })
+
+    defineRoute({
+      method: 'get',
+      path: '/body-on-empty',
+      responses: { 200: { body: userSchema }, 404: {} },
+      // @ts-expect-error — 404 declares no body, so returning one is rejected
+      handler: () => ({ status: 404, body: { id: 1, name: 'Ada' } }),
+    })
+
+    defineRoute({
+      method: 'get',
+      path: '/async-wrong',
+      responses: { 200: { body: userSchema } },
+      // @ts-expect-error — the check reaches through Promise-returning handlers
+      handler: async () => ({ status: 200, body: { id: 'not-a-number', name: 'Ada' } }),
+    })
+  })
 })
