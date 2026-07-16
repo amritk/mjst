@@ -1,4 +1,6 @@
 import { defineRoute } from '../define-route'
+import { routeFactory } from '../route-factory'
+import type { ContextFactoryInput } from '../types'
 
 /**
  * The differential corpus: routes chosen so every emitter path is exercised —
@@ -102,6 +104,26 @@ export const boom = defineRoute({
     throw new Error('nope')
   },
 })
+
+/** The app context both engines build per request — async on purpose. */
+export type CorpusContext = { readonly tenant: string; readonly viaHeader: string | null }
+
+export const createAppContext = async ({ request, env }: ContextFactoryInput): Promise<CorpusContext> => ({
+  tenant: (env as { tenant?: string } | undefined)?.tenant ?? 'none',
+  viaHeader: request.header('x-ctx') ?? null,
+})
+
+/** Exercises the app context: env binding + request access through the factory. */
+export const whoami = routeFactory<CorpusContext>()({
+  method: 'get',
+  path: '/whoami',
+  responses: { 200: { body: { type: 'object' } } },
+  handler: ({ context }) => ({ status: 200, body: { tenant: context.tenant, viaHeader: context.viaHeader } }),
+})
+
+/** A Better-Auth-style self-contained sub-handler for prefix mounting. */
+export const mountEcho = (request: Request): Response =>
+  Response.json({ mounted: true, url: request.url }, { status: 418 })
 
 /** Reads the raw request (header lookup) and replies with custom headers. */
 export const echoHeader = defineRoute({

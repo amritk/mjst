@@ -9,8 +9,20 @@ import type { AnyRouteContract } from '../types'
 import { compileToModule } from './compile-to-module'
 import * as corpus from './compile-to-module.test-utils'
 
-const routes: Record<string, AnyRouteContract> = { ...corpus }
+const routes: Record<string, AnyRouteContract> = {
+  health: corpus.health,
+  getUser: corpus.getUser,
+  listUsers: corpus.listUsers,
+  createUser: corpus.createUser,
+  removeThing: corpus.removeThing,
+  boom: corpus.boom,
+  echoHeader: corpus.echoHeader,
+  whoami: corpus.whoami,
+}
 const info = { title: 'Differential', version: '1.0.0' }
+
+/** Workers-style bindings passed to both engines on every request. */
+const ENV = { tenant: 'acme' }
 
 const emit = (): string =>
   compileToModule({
@@ -19,6 +31,8 @@ const emit = (): string =>
     validatorsImport: '@amritk/runtime-validators',
     routes,
     info,
+    contextExport: 'createAppContext',
+    mounts: { '/mounted': 'mountEcho' },
   })
 
 /**
@@ -48,9 +62,12 @@ describe('compile-to-module', () => {
       // A computed specifier keeps the type checker from resolving a module
       // that only exists while this test runs.
       const compiledModule = (await import(fixturePath)) as {
-        fetch: (request: Request) => Response | Promise<Response>
+        fetch: (request: Request, env?: unknown) => Response | Promise<Response>
       }
-      const runtime = toFetchHandler(createApi({ routes: Object.values(routes), info }))
+      const runtime = toFetchHandler(
+        createApi({ routes: Object.values(routes), info, context: corpus.createAppContext }),
+        { mounts: { '/mounted': corpus.mountEcho } },
+      )
 
       const cases: ReadonlyArray<() => Request> = [
         () => new Request('http://localhost/health'),
@@ -81,11 +98,18 @@ describe('compile-to-module', () => {
         () => new Request('http://localhost/openapi.json'),
         () => new Request('http://localhost/missing'),
         () => new Request('http://localhost/users/7', { method: 'PATCH' }),
+        // App context: env binding + header through the async factory.
+        () => new Request('http://localhost/whoami', { headers: { 'x-ctx': 'from-header' } }),
+        () => new Request('http://localhost/whoami'),
+        // Prefix mount: exact prefix, nested path, and a non-match sibling.
+        () => new Request('http://localhost/mounted'),
+        () => new Request('http://localhost/mounted/deep/path?q=1', { method: 'POST' }),
+        () => new Request('http://localhost/mountedsibling'),
       ]
 
       for (const makeRequest of cases) {
-        const fromRuntime = await runtime(makeRequest())
-        const fromCompiled = await compiledModule.fetch(makeRequest())
+        const fromRuntime = await runtime(makeRequest(), ENV)
+        const fromCompiled = await compiledModule.fetch(makeRequest(), ENV)
         const label = makeRequest().method + ' ' + new URL(makeRequest().url).pathname
 
         expect(fromCompiled.status, label).toBe(fromRuntime.status)

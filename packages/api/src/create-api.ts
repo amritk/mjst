@@ -70,11 +70,12 @@ export const createApi = (options: ApiOptions): Api => {
     table: { staticRoutes, dynamicRoutes },
     openApiPath,
     openApi,
+    createContext: options.context,
     onError: options.onError,
   }
 
   return {
-    handle: (request) => handleRequest(internals, request),
+    handle: (request, env, executionContext) => handleRequest(internals, request, env, executionContext),
     matches: (method, path) => {
       const upper = method.toUpperCase()
       if (openApiPath !== undefined && upper === 'GET' && path === openApiPath) return true

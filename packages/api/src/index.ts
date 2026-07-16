@@ -9,8 +9,10 @@ export { defineRoute } from './define-route'
 export type { RouteMatch } from './match-route'
 export { matchRoute } from './match-route'
 export { parsePathPattern } from './parse-path-pattern'
+export { routeFactory } from './route-factory'
+export type { FetchHandler, FetchHandlerOptions } from './to-fetch-handler'
 export { toFetchHandler } from './to-fetch-handler'
-export type { NodeHandler } from './to-node-handler'
+export type { NodeHandler, NodeHandlerOptions } from './to-node-handler'
 export { toNodeHandler } from './to-node-handler'
 export { toOpenApi } from './to-open-api'
 export type {
@@ -23,6 +25,8 @@ export type {
   CompiledInput,
   CompiledRoute,
   CompiledValidation,
+  ContextFactory,
+  ContextFactoryInput,
   HttpMethod,
   OpenApiDocument,
   OpenApiInfo,

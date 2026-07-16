@@ -14,6 +14,18 @@ export type NodeHandler = (
 ) => Promise<void>
 
 /**
+ * Options for {@link toNodeHandler}.
+ */
+export type NodeHandlerOptions = {
+  /**
+   * Passed to the `createApi({ context })` factory as `env` on every request.
+   * Node has no per-request platform bindings, so this is a fixed value —
+   * typically `process.env` or an app config object.
+   */
+  readonly env?: unknown
+}
+
+/**
  * Wraps an API in a Node `http` request listener — usable directly with
  * `http.createServer`, mounted as Express/Connect middleware, or attached to
  * Fastify via its raw request hooks.
@@ -32,7 +44,7 @@ export type NodeHandler = (
  * app.use(toNodeHandler(api))
  * ```
  */
-export const toNodeHandler = (api: Api): NodeHandler => {
+export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandler => {
   return async (incoming, outgoing, next) => {
     const target = incoming.url ?? '/'
     const queryIndex = target.indexOf('?')
@@ -44,16 +56,19 @@ export const toNodeHandler = (api: Api): NodeHandler => {
       return
     }
 
-    const response = await api.handle({
-      method,
-      path,
-      searchParams: () => new URLSearchParams(queryIndex === -1 ? '' : target.slice(queryIndex + 1)),
-      header: (name) => {
-        const value = incoming.headers[name]
-        return Array.isArray(value) ? value[0] : value
+    const response = await api.handle(
+      {
+        method,
+        path,
+        searchParams: () => new URLSearchParams(queryIndex === -1 ? '' : target.slice(queryIndex + 1)),
+        header: (name) => {
+          const value = incoming.headers[name]
+          return Array.isArray(value) ? value[0] : value
+        },
+        readBody: () => readJsonBody(incoming),
       },
-      readBody: () => readJsonBody(incoming),
-    })
+      options?.env,
+    )
 
     const headers: Record<string, string> = { ...response.headers }
     if (response.body === undefined) {

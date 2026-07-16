@@ -174,6 +174,87 @@ the standard Workers stack:
 
 <sub>¹ hono-bare does no validation; every @amritk/api column validates.</sub>
 
+### App context: Drizzle, sessions, anything per-request
+
+Handlers receive a `context` value built by an app-supplied factory — the
+home for database handles, sessions, and loggers. The factory runs **after
+validation**, only for matched requests, and receives the platform `env`
+(Cloudflare bindings; whatever you pass the Node adapter). Type it once with
+`routeFactory` so every handler sees the real shape:
+
+```ts
+// app-context.ts — the factory and the type live together so they cannot drift
+import { drizzle } from 'drizzle-orm/d1'
+import { routeFactory, type ContextFactoryInput } from '@amritk/api'
+
+export type AppContext = { db: ReturnType<typeof drizzle> }
+export const defineAppRoute = routeFactory<AppContext>()
+export const createContext = ({ env }: ContextFactoryInput): AppContext => ({
+  db: drizzle((env as Env).DB),
+})
+```
+
+```ts
+// routes.ts
+export const listUsers = defineAppRoute({
+  method: 'get',
+  path: '/users',
+  responses: { 200: { body: { type: 'array' } } },
+  handler: async ({ context }) => ({ status: 200, body: await context.db.select().from(users) }),
+})
+```
+
+```ts
+const api = createApi({ routes: [listUsers], context: createContext })
+// Workers: env arrives per request automatically — toFetchHandler(api)
+// Node:    toNodeHandler(api, { env: process.env })
+// Compiled: compileToModule({ routesImport: './routes', routes, contextExport: 'createContext' })
+```
+
+### Auth: Better Auth
+
+Two touch points, both first-class. Better Auth's own endpoints are a
+self-contained fetch handler that owns `/api/auth/*` — mount it by prefix and
+the raw `Request`/`Response` pass straight through (streaming intact):
+
+```ts
+export const auth = betterAuth({ /* ... */ })
+
+const handler = toFetchHandler(api, {
+  mounts: { '/api/auth': (request) => auth.handler(request) },
+})
+// Express instead: app.all('/api/auth/*', toNodeHandler(auth)); app.use(toNodeHandler(api))
+// Compiled: compileToModule({ ..., mounts: { '/api/auth': 'authMountHandler' } })
+```
+
+Sessions flow through the app context, and guarding is part of the contract —
+a protected route *declares* its 401, so the auth behavior shows up in the
+OpenAPI document like everything else:
+
+```ts
+export const createContext = async ({ request }: ContextFactoryInput) => ({
+  session: await auth.api.getSession({
+    headers: new Headers({ cookie: request.header('cookie') ?? '' }),
+  }),
+})
+
+export const getProfile = defineAppRoute({
+  method: 'get',
+  path: '/profile',
+  responses: {
+    200: { body: profileSchema },
+    401: { body: { type: 'object', properties: { error: { type: 'string' } }, required: ['error'] } },
+  },
+  handler: ({ context }) =>
+    context.session === null
+      ? { status: 401, body: { error: 'unauthorized' } }
+      : { status: 200, body: toProfile(context.session.user) },
+})
+```
+
+If only some routes need the session, make the context lazy (`session: () =>
+memoizedLookup()`) so public routes never pay for the cookie check.
+
 ### Schemas from Zod, TypeBox, Valibot, Effect
 
 Contracts take plain JSON Schema. Schemas authored in other libraries convert

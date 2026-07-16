@@ -6,6 +6,7 @@ import { matchRoute } from './match-route'
 import type {
   ApiRequest,
   ApiResponse,
+  ContextFactory,
   ErasedRequestContext,
   OpenApiDocument,
   RouteReplyValue,
@@ -22,6 +23,7 @@ export type ApiInternals = {
   readonly table: RouteTable
   readonly openApiPath: string | undefined
   readonly openApi: () => OpenApiDocument
+  readonly createContext: ContextFactory | undefined
   readonly onError: ((error: unknown, request: ApiRequest) => ApiResponse) | undefined
 }
 
@@ -39,7 +41,12 @@ const INVALID_JSON: ApiResponse = Object.freeze({ status: 400, body: Object.free
  * path, and the error-collecting validator only executes after a guard has
  * already rejected — so a valid request does no error bookkeeping at all.
  */
-export const handleRequest = async (internals: ApiInternals, request: ApiRequest): Promise<ApiResponse> => {
+export const handleRequest = async (
+  internals: ApiInternals,
+  request: ApiRequest,
+  env?: unknown,
+  executionContext?: unknown,
+): Promise<ApiResponse> => {
   if (internals.openApiPath !== undefined && request.method === 'GET' && request.path === internals.openApiPath) {
     return { status: 200, body: internals.openApi() }
   }
@@ -72,10 +79,17 @@ export const handleRequest = async (internals: ApiInternals, request: ApiRequest
 
   let reply: RouteReplyValue
   try {
+    // The app context is built after validation so the factory (a session
+    // lookup, a database handle) never runs for requests that will be 400ed
+    // anyway. A factory error takes the same path as a handler error.
+    const appContext =
+      internals.createContext === undefined
+        ? undefined
+        : await internals.createContext({ request, env, executionContext })
     // The erased handler type exists for contract assignability (see
     // AnyRouteContract); the values really do match the contract's schemas at
     // this point, which is what the cast asserts.
-    const context = { params, query, body, request } as ErasedRequestContext
+    const context = { params, query, body, context: appContext, request } as ErasedRequestContext
     reply = await route.contract.handler(context)
   } catch (error) {
     return internals.onError !== undefined ? internals.onError(error, request) : INTERNAL_ERROR

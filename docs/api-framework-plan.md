@@ -242,5 +242,11 @@ routes.
 - **Example generation.** `@amritk/generate-examples` can derive request/
   response examples for the OpenAPI document and fast-check arbitraries for
   contract fuzzing — same contract, two more outputs.
-- **Route-level middleware/auth.** Deliberately excluded so far; the erased
-  handler boundary is where a typed middleware chain would slot in.
+- ~~Route-level middleware/auth.~~ Superseded by two shipped primitives that
+  cover the real-world cases without a middleware chain: a **typed app
+  context** (`createApi({ context })` + `routeFactory<Context>()`, receiving
+  platform `env`/`executionContext` — Drizzle handles, Better Auth sessions)
+  and **prefix mounts** (`toFetchHandler(api, { mounts })` /
+  `compileToModule({ mounts })` — Better Auth's own endpoints pass through as
+  raw Request/Response). Auth *outcomes* stay contract-declared: a protected
+  route declares its 401, so it documents itself.

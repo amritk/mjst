@@ -68,4 +68,25 @@ describe('to-fetch-handler', () => {
     const document = (await response.json()) as { openapi: string }
     expect(document.openapi).toBe('3.1.0')
   })
+
+  it('routes mount prefixes to the sub-handler with the raw Request', async () => {
+    const mounted = toFetchHandler(createApi({ routes: [empty] }), {
+      // A Better-Auth-style self-contained handler owning /api/auth/*.
+      mounts: { '/api/auth': (request) => Response.json({ auth: true, url: request.url }, { status: 418 }) },
+    })
+    const exact = await mounted(new Request('http://localhost/api/auth'))
+    expect(exact.status).toBe(418)
+    const nested = await mounted(new Request('http://localhost/api/auth/sign-in/email?flow=1', { method: 'POST' }))
+    expect(nested.status).toBe(418)
+    expect(await nested.json()).toEqual({ auth: true, url: 'http://localhost/api/auth/sign-in/email?flow=1' })
+    // A sibling path that merely shares the prefix text is not mounted.
+    const sibling = await mounted(new Request('http://localhost/api/authors'))
+    expect(sibling.status).toBe(404)
+  })
+
+  it('rejects mount prefixes without a leading slash at construction', () => {
+    expect(() =>
+      toFetchHandler(createApi({ routes: [empty] }), { mounts: { 'api/auth': () => new Response(null) } }),
+    ).toThrow(/must start with/)
+  })
 })

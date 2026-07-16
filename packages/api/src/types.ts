@@ -68,14 +68,16 @@ export type ApiResponse = {
 }
 
 /**
- * What a handler receives: the validated (and coerced) request slots plus the
- * raw {@link ApiRequest} for anything the contract does not model (headers,
- * out-of-band query access, and so on).
+ * What a handler receives: the validated (and coerced) request slots, the
+ * per-request app context (database handles, sessions — whatever the
+ * {@link ApiOptions.context} factory returns), and the raw {@link ApiRequest}
+ * for anything the contract does not model.
  */
-export type RequestContext<Params, Query, Body> = {
+export type RequestContext<Params, Query, Body, Context = undefined> = {
   readonly params: SchemaValue<Params>
   readonly query: SchemaValue<Query>
   readonly body: SchemaValue<Body>
+  readonly context: Context
   readonly request: ApiRequest
 }
 
@@ -103,8 +105,8 @@ export type RouteReply<Responses extends ResponseContracts> = {
  * A route's implementation. It only runs after every declared request schema
  * has validated, so the context values are safe to use without further checks.
  */
-export type RouteHandler<Params, Query, Body, Responses extends ResponseContracts> = (
-  context: RequestContext<Params, Query, Body>,
+export type RouteHandler<Params, Query, Body, Responses extends ResponseContracts, Context = undefined> = (
+  context: RequestContext<Params, Query, Body, Context>,
 ) => RouteReply<Responses> | Promise<RouteReply<Responses>>
 
 /**
@@ -121,6 +123,7 @@ export type RouteContract<
   Query = undefined,
   Body = undefined,
   Responses extends ResponseContracts = ResponseContracts,
+  Context = undefined,
 > = {
   readonly method: HttpMethod
   readonly path: string
@@ -141,7 +144,7 @@ export type RouteContract<
     readonly body?: Body
   }
   readonly responses: Responses
-  readonly handler: RouteHandler<Params, Query, Body, Responses>
+  readonly handler: RouteHandler<Params, Query, Body, Responses, Context>
 }
 
 /**
@@ -165,6 +168,7 @@ export type ErasedRequestContext = {
   readonly params: never
   readonly query: never
   readonly body: never
+  readonly context: never
   readonly request: ApiRequest
 }
 
@@ -277,6 +281,27 @@ export type OpenApiDocument = {
 }
 
 /**
+ * What the {@link ApiOptions.context} factory receives, once per matched
+ * request, after validation and just before the handler runs. `env` and
+ * `executionContext` are the platform arguments the adapter was invoked with —
+ * on Cloudflare Workers, the bindings object and the execution context; on
+ * Node, whatever was passed to the adapter's `env` option.
+ */
+export type ContextFactoryInput = {
+  readonly request: ApiRequest
+  readonly env: unknown
+  readonly executionContext: unknown
+}
+
+/**
+ * Builds the per-request app context handlers see as `context` — database
+ * handles (Drizzle), sessions (Better Auth), loggers, whatever the app needs.
+ * May be async. Pair it with {@link routeFactory} so handlers see the same
+ * type this returns; a thrown error here becomes a 500 (or `onError`).
+ */
+export type ContextFactory = (input: ContextFactoryInput) => unknown
+
+/**
  * Options for {@link createApi}.
  */
 export type ApiOptions = {
@@ -290,6 +315,12 @@ export type ApiOptions = {
   readonly openApiPath?: string | false
   /** Swap the validation engine. See {@link ValidatorCompiler}. */
   readonly compile?: ValidatorCompiler
+  /**
+   * Per-request app context factory. Runs after validation, only for matched
+   * requests, and its return value reaches handlers as `context`. Declare the
+   * matching handler type with {@link routeFactory}.
+   */
+  readonly context?: ContextFactory
   /**
    * Validate handler reply bodies against the declared response schemas and
    * turn mismatches into a 500. Off by default: it is a development/test net,
@@ -305,8 +336,12 @@ export type ApiOptions = {
  * that translate their framework's request/response types around it.
  */
 export type Api = {
-  /** Match, validate, run the handler, and produce a response. */
-  readonly handle: (request: ApiRequest) => Promise<ApiResponse>
+  /**
+   * Match, validate, run the handler, and produce a response. `env` and
+   * `executionContext` are optional platform values (Workers bindings and
+   * execution context) forwarded to the {@link ContextFactory}.
+   */
+  readonly handle: (request: ApiRequest, env?: unknown, executionContext?: unknown) => Promise<ApiResponse>
   /**
    * Whether a method + path would be handled (routes or the OpenAPI document
    * path). Lets middleware-style adapters pass unmatched requests along
