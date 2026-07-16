@@ -74,6 +74,13 @@ export type ApiRequest = {
   readonly path: string
   /** Lazily parsed query parameters. */
   readonly searchParams: () => URLSearchParams
+  /**
+   * The raw query string (no leading `?`), when the transport has it cheaply.
+   * The pipeline prefers this over `searchParams` — plain queries then skip
+   * URLSearchParams construction entirely, the biggest single cost on
+   * query-validated routes. Optional so hand-written adapters keep working.
+   */
+  readonly queryString?: () => string
   /** Case-insensitive header lookup; call with a lowercase name. */
   readonly header: (name: string) => string | undefined
   /** Reads and JSON-parses the request body. */
@@ -404,14 +411,35 @@ export type ApiOptions = {
    * and skipping it keeps production replies free of a second validation pass.
    */
   readonly validateResponses?: boolean
-  /** Maps a thrown handler error to a response. Defaults to a bare 500. */
-  readonly onError?: (error: unknown, request: ApiRequest) => ApiResponse
+  /**
+   * Maps a thrown handler (or context factory) error to a response. Defaults
+   * to a bare 500. `details` carries what error reporting needs: the matched
+   * route contract (its `path` pattern is the grouping key Sentry-style tools
+   * want — raw URLs with IDs in them group terribly) and the platform
+   * `env`/`executionContext` (Workers Sentry clients read their DSN from env
+   * and flush via `waitUntil`). See `createSentry` for the packaged form.
+   */
+  readonly onError?: (error: unknown, request: ApiRequest, details: OnErrorDetails) => ApiResponse
   /**
    * Overrides the built-in error response bodies, for apps with an existing
    * error envelope their clients already parse. Each formatter replaces one
    * cold-path default; anything not supplied keeps the built-in shape.
    */
   readonly errors?: ErrorFormatters
+}
+
+/**
+ * Context handed to `onError` alongside the failing request. Exists so error
+ * reporting needs nothing beyond the pipeline's own seam: the route contract
+ * for grouping, and the platform values for client construction and flushing.
+ */
+export type OnErrorDetails = {
+  /** The matched route's contract. Its `path` pattern groups errors cleanly. */
+  readonly route: AnyRouteContract
+  /** The platform bindings the adapter was invoked with (Workers `env`). */
+  readonly env: unknown
+  /** The platform execution context (Workers `ctx`, for `waitUntil` flushes). */
+  readonly executionContext: unknown
 }
 
 /**

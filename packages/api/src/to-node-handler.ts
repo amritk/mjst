@@ -74,6 +74,7 @@ export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandl
       method,
       path,
       searchParams: () => new URLSearchParams(queryIndex === -1 ? '' : target.slice(queryIndex + 1)),
+      queryString: () => (queryIndex === -1 ? '' : target.slice(queryIndex + 1)),
       header: (name) => {
         const value = incoming.headers[name]
         return Array.isArray(value) ? value[0] : value

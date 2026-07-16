@@ -44,6 +44,7 @@ const emit = (): string =>
     onRequestExports: ['gateTeapot'],
     onResponseExports: ['stampHeader'],
     errorsExport: 'corpusErrors',
+    onErrorExport: 'corpusOnError',
     maxBodyBytes: MAX_BODY_BYTES,
   })
 
@@ -90,6 +91,7 @@ describe('compile-to-module', () => {
           info,
           context: corpus.createAppContext,
           errors: corpus.corpusErrors,
+          onError: corpus.corpusOnError,
         }),
         {
           mounts: { '/mounted': corpus.mountEcho },
@@ -112,6 +114,10 @@ describe('compile-to-module', () => {
         () => new Request('http://localhost/users?limit=5&tags=a&tags=b'),
         () => new Request('http://localhost/users?limit=0'),
         () => new Request('http://localhost/users'),
+        // Encoded queries exercise the URLSearchParams fallback of the fast
+        // string parser in both engines.
+        () => new Request('http://localhost/users?tags=a%20b&tags=c+d&limit=7'),
+        () => new Request('http://localhost/users?tags=%E2%9C%93'),
         () => post({ name: 'Ada', age: 30 }),
         () => post({ name: 'Ada' }),
         () => post({ name: '' }),

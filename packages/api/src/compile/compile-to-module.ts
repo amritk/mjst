@@ -56,6 +56,13 @@ export type CompileModuleOptions = {
    */
   readonly errorsExport?: string
   /**
+   * Export name (in the routes module) of the `onError` handler — the same
+   * function passed to `createApi({ onError })` in development. It receives
+   * `(error, apiRequest, { route, env, executionContext })`, which is what
+   * error reporting (`createSentry`) needs in production.
+   */
+  readonly onErrorExport?: string
+  /**
    * Rejects request bodies larger than this many bytes with a 413 — the
    * compiled equivalent of `toFetchHandler`'s `maxBodyBytes` option, enforced
    * with the same shared capped reader.
@@ -93,10 +100,18 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   assertIdentifier(contextExport, 'contextExport')
   const errorsExport = options.errorsExport
   assertIdentifier(errorsExport, 'errorsExport')
+  const onErrorExport = options.onErrorExport
+  assertIdentifier(onErrorExport, 'onErrorExport')
   const onRequestExports = options.onRequestExports ?? []
   const onResponseExports = options.onResponseExports ?? []
   for (const name of [...onRequestExports, ...onResponseExports]) assertIdentifier(name, 'hook export')
   const maxBodyBytes = options.maxBodyBytes
+  // The onError contract includes env/executionContext, so route functions
+  // must thread the platform arguments even without an app context factory.
+  const emitContext: EmitContext = {
+    contextExport,
+    needsPlatform: contextExport !== undefined || onErrorExport !== undefined,
+  }
 
   const mounts = Object.entries(options.mounts ?? {}).map(([prefix, exportName]) => {
     if (!prefix.startsWith('/')) throw new Error(`Mount prefix must start with '/': '${prefix}'`)
@@ -116,7 +131,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
 
   const declarations: string[] = []
   for (const route of routes) {
-    declarations.push(...emitRouteDeclarations(route, used, contextExport))
+    declarations.push(...emitRouteDeclarations(route, used, emitContext))
   }
 
   const statuses = new Set<number>([400, 404, 413, 500])
@@ -137,7 +152,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
         )
 
   const helperImports = [
-    used.buildQueryObject ? 'buildQueryObject' : undefined,
+    used.buildQueryObject ? 'buildQueryObjectFromString' : undefined,
     used.coercePrimitive ? 'coercePrimitive' : undefined,
     routes.some((route) => !route.isStatic) ? 'decodeSegment' : undefined,
     // The thrown-error path always distinguishes 413s, matching the runtime
@@ -154,6 +169,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     ...routes.map((route) => route.name),
     ...(contextExport === undefined ? [] : [contextExport]),
     ...(errorsExport === undefined ? [] : [errorsExport]),
+    ...(onErrorExport === undefined ? [] : [onErrorExport]),
     ...onRequestExports,
     ...onResponseExports,
     ...mounts.map(([, exportName]) => exportName),
@@ -195,6 +211,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     '  method: request.method,',
     '  path: rawPath,',
     "  searchParams: () => new URLSearchParams(queryIndex === -1 ? '' : url.slice(queryIndex + 1)),",
+    "  queryString: () => (queryIndex === -1 ? '' : url.slice(queryIndex + 1)),",
     '  header: (name) => request.headers.get(name) ?? undefined,',
     `  readBody: () => ${readBodyExpression},`,
     maxBodyBytes === undefined ? '  readText: () => request.text(),' : '  readText: () => readTextCapped(request),',
@@ -217,12 +234,12 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     // a non-Unicode fallback for legacy patterns the u flag rejects.
     lines.push("const compileRx = (src) => { try { return new RegExp(src, 'u') } catch { return new RegExp(src) } }")
   }
-  lines.push(...emitErrorHelpers(errorsExport, used))
+  lines.push(...emitErrorHelpers(errorsExport, onErrorExport, used))
   if (openApiJson !== undefined) {
     lines.push(`const OPENAPI_JSON = ${JSON.stringify(openApiJson)}`)
   }
   lines.push('', ...declarations)
-  lines.push(...emitDispatch(routes, openApiPath, contextExport, mounts, onRequestExports, onResponseExports))
+  lines.push(...emitDispatch(routes, openApiPath, emitContext, mounts, onRequestExports, onResponseExports))
   lines.push('', 'export default { fetch }', '')
   return lines.join('\n')
 }
@@ -240,16 +257,13 @@ const assertIdentifier = (name: string | undefined, label: string): void => {
  * frozen defaults. Call sites always pass the request context — the default
  * builders simply ignore it, which keeps every call site identical.
  */
-const emitErrorHelpers = (errorsExport: string | undefined, used: Record<string, boolean>): string[] => {
+const emitErrorHelpers = (
+  errorsExport: string | undefined,
+  onErrorExport: string | undefined,
+  used: Record<string, boolean>,
+): string[] => {
   const lines: string[] = []
-  if (errorsExport === undefined) {
-    lines.push(
-      'const notFound = () => new Response(\'{"error":"not_found"}\', initFor(404))',
-      'const internalError = () => new Response(\'{"error":"internal_error"}\', initFor(500))',
-      'const invalidJson = () => new Response(\'{"error":"invalid_json"}\', initFor(400))',
-      'const payloadTooLarge = () => new Response(\'{"error":"payload_too_large"}\', initFor(413))',
-    )
-  } else {
+  if (errorsExport !== undefined || onErrorExport !== undefined) {
     lines.push(
       // Mirrors the fetch adapter's ApiResponse → Response translation so a
       // formatter's reply (headers, raw contentType and all) serializes the
@@ -265,15 +279,35 @@ const emitErrorHelpers = (errorsExport: string | undefined, used: Record<string,
       '    ? new Response(null, { status: r.status, headers: { ...r.headers } })',
       '    : new Response(JSON.stringify(r.body), { status: r.status, headers: { ...JSON_HEADERS, ...r.headers } })',
       '}',
+    )
+  }
+  lines.push('const internalError = () => new Response(\'{"error":"internal_error"}\', initFor(500))')
+  if (errorsExport === undefined) {
+    lines.push(
+      'const notFound = () => new Response(\'{"error":"not_found"}\', initFor(404))',
+      'const invalidJson = () => new Response(\'{"error":"invalid_json"}\', initFor(400))',
+      'const payloadTooLarge = () => new Response(\'{"error":"payload_too_large"}\', initFor(413))',
+    )
+  } else {
+    lines.push(
       `const notFound = (request, url, rawPath, queryIndex) => ${errorsExport}.notFound !== undefined ? toResponse(${errorsExport}.notFound(makeApiRequest(request, url, rawPath, queryIndex))) : new Response('{"error":"not_found"}', initFor(404))`,
-      'const internalError = () => new Response(\'{"error":"internal_error"}\', initFor(500))',
       `const invalidJson = (request, url, rawPath, queryIndex) => ${errorsExport}.invalidJson !== undefined ? toResponse(${errorsExport}.invalidJson(makeApiRequest(request, url, rawPath, queryIndex))) : new Response('{"error":"invalid_json"}', initFor(400))`,
       `const payloadTooLarge = (request, url, rawPath, queryIndex) => ${errorsExport}.payloadTooLarge !== undefined ? toResponse(${errorsExport}.payloadTooLarge(makeApiRequest(request, url, rawPath, queryIndex))) : new Response('{"error":"payload_too_large"}', initFor(413))`,
     )
   }
-  lines.push(
-    'const thrown = (error, request, url, rawPath, queryIndex) => isPayloadTooLargeError(error) ? payloadTooLarge(request, url, rawPath, queryIndex) : internalError()',
-  )
+  // The 413 check runs first in both variants: an oversized body is the
+  // transport's outcome, not an application error to report.
+  if (onErrorExport === undefined) {
+    lines.push(
+      'const thrown = (error, route, request, url, rawPath, queryIndex) => isPayloadTooLargeError(error) ? payloadTooLarge(request, url, rawPath, queryIndex) : internalError()',
+    )
+  } else {
+    lines.push(
+      'const thrown = (error, route, request, url, rawPath, queryIndex, env, executionContext) => isPayloadTooLargeError(error)',
+      '  ? payloadTooLarge(request, url, rawPath, queryIndex)',
+      `  : toResponse(${onErrorExport}(error, makeApiRequest(request, url, rawPath, queryIndex), { route, env, executionContext }))`,
+    )
+  }
   if (used['validate']) {
     if (errorsExport === undefined) {
       lines.push(
@@ -344,7 +378,7 @@ const assertNoDuplicates = (routes: readonly CompiledEntry[]): void => {
 const emitRouteDeclarations = (
   route: CompiledEntry,
   used: Record<string, boolean>,
-  contextExport: string | undefined,
+  emitContext: EmitContext,
 ): string[] => {
   const lines: string[] = []
   const request = route.contract.request
@@ -413,7 +447,7 @@ const emitRouteDeclarations = (
     '}',
   )
 
-  lines.push(...emitRouteFunction(route, used, contextExport), '')
+  lines.push(...emitRouteFunction(route, used, emitContext), '')
   return lines
 }
 
@@ -424,15 +458,26 @@ const slotSuffix = (slot: 'params' | 'query' | 'headers' | 'body', name: string)
 const ERROR_ARGS = 'request, url, rawPath, queryIndex'
 
 /**
+ * What the emitters need to know about the module-wide wiring: the context
+ * factory's export name, and whether route functions must accept the platform
+ * `env`/`executionContext` arguments (required by the context factory and by
+ * the onError contract alike).
+ */
+type EmitContext = {
+  readonly contextExport: string | undefined
+  readonly needsPlatform: boolean
+}
+
+/**
  * Emits the route function itself: coerce + guard the declared slots in the
  * same order as the runtime pipeline (params, query, headers, then body),
  * build the context, call the untouched user handler, and map the reply.
  */
-const emitRouteFunction = (
-  route: CompiledEntry,
-  used: Record<string, boolean>,
-  contextExport: string | undefined,
-): string[] => {
+const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, emitContext: EmitContext): string[] => {
+  const { contextExport, needsPlatform } = emitContext
+  // What thrown() receives: the imported contract (onError's grouping key)
+  // plus the request context and, when threaded, the platform arguments.
+  const thrownArguments = `${route.name}, ${ERROR_ARGS}${needsPlatform ? ', env, executionContext' : ''}`
   const request = route.contract.request
   const lines: string[] = []
   const parameters = [
@@ -440,7 +485,7 @@ const emitRouteFunction = (
     'url',
     'rawPath',
     'queryIndex',
-    ...(contextExport === undefined ? [] : ['env', 'executionContext']),
+    ...(needsPlatform ? ['env', 'executionContext'] : []),
     ...route.paramNames.map((_, i) => 'p' + i),
   ]
   lines.push(`const route_${route.name} = (${parameters.join(', ')}) => {`)
@@ -468,7 +513,7 @@ const emitRouteFunction = (
   if (request?.query !== undefined) {
     const suffix = slotSuffix('query', route.name)
     lines.push(
-      `  const query = buildQueryObject(new URLSearchParams(queryIndex === -1 ? '' : url.slice(queryIndex + 1)), coercions${suffix})`,
+      `  const query = buildQueryObjectFromString(queryIndex === -1 ? '' : url.slice(queryIndex + 1), coercions${suffix})`,
       `  if (!guard${suffix}(query)) return failValidation('query', collect${suffix}, query, ${ERROR_ARGS})`,
     )
     queryValue = 'query'
@@ -507,9 +552,9 @@ const emitRouteFunction = (
     `${indent}const context = { params: ${paramsValue}, query: ${queryValue}, body: ${bodyValue}, headers: ${headersValue}, context: ${appContextValue}, request: apiRequest }`,
     `${indent}try {`,
     `${indent}  const reply = ${route.name}.handler(context)`,
-    `${indent}  return typeof reply?.then === 'function' ? reply.then(respond_${route.name}, (error) => thrown(error, ${ERROR_ARGS})) : respond_${route.name}(reply)`,
+    `${indent}  return typeof reply?.then === 'function' ? reply.then(respond_${route.name}, (error) => thrown(error, ${thrownArguments})) : respond_${route.name}(reply)`,
     `${indent}} catch (error) {`,
-    `${indent}  return thrown(error, ${ERROR_ARGS})`,
+    `${indent}  return thrown(error, ${thrownArguments})`,
     `${indent}}`,
   ]
 
@@ -530,9 +575,9 @@ const emitRouteFunction = (
       `${indent}try {`,
       `${indent}  appContext = ${contextExport}({ request: apiRequest, env, executionContext })`,
       `${indent}} catch (error) {`,
-      `${indent}  return thrown(error, ${ERROR_ARGS})`,
+      `${indent}  return thrown(error, ${thrownArguments})`,
       `${indent}}`,
-      `${indent}return typeof appContext?.then === 'function' ? appContext.then(proceed, (error) => thrown(error, ${ERROR_ARGS})) : proceed(appContext)`,
+      `${indent}return typeof appContext?.then === 'function' ? appContext.then(proceed, (error) => thrown(error, ${thrownArguments})) : proceed(appContext)`,
     )
     return lines
   }
@@ -568,13 +613,13 @@ const emitRouteFunction = (
 const emitDispatch = (
   routes: readonly CompiledEntry[],
   openApiPath: string | undefined,
-  contextExport: string | undefined,
+  emitContext: EmitContext,
   mounts: ReadonlyArray<readonly [prefix: string, exportName: string]>,
   onRequestExports: readonly string[],
   onResponseExports: readonly string[],
 ): string[] => {
   const hooked = onRequestExports.length > 0 || onResponseExports.length > 0
-  const extraArguments = contextExport === undefined ? '' : ', env, executionContext'
+  const extraArguments = emitContext.needsPlatform ? ', env, executionContext' : ''
   const dispatchName = hooked ? 'handleFetch' : 'fetch'
   const lines: string[] = [
     `${hooked ? 'const' : 'export const'} ${dispatchName} = (request${extraArguments}) => {`,
@@ -654,7 +699,7 @@ const emitDispatch = (
     }
   }
   lines.push(
-    `  return ${finish(`await handleFetch(request${contextExport === undefined ? '' : ', env, executionContext'})`)}`,
+    `  return ${finish(`await handleFetch(request${emitContext.needsPlatform ? ', env, executionContext' : ''})`)}`,
     '}',
   )
   return lines

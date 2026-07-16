@@ -62,8 +62,12 @@ const request = (method: string, path: string, search = '', body?: unknown): Api
   method,
   path,
   searchParams: () => new URLSearchParams(search),
+  // The raw-string fast path, like the real adapters provide.
+  queryString: () => search,
   header: () => undefined,
   readBody: () => Promise.resolve(body),
+  readText: () => Promise.resolve(JSON.stringify(body)),
+  readBytes: () => Promise.resolve(new TextEncoder().encode(JSON.stringify(body))),
 })
 
 const staticRequest = request('GET', '/health')

@@ -267,12 +267,37 @@ The gaps identified in `docs/ummo-readiness.md` are closed, in both engines
   replaces framework-coupled RPC clients (Hono's `hc`) — the client is
   generated from the same schemas that validate requests.
 
+## Shipped: release hardening (2026-07, second pass)
+
+- **Error reporting seam.** `onError` now receives
+  `(error, request, { route, env, executionContext })` in both engines
+  (`onErrorExport` in the compiled module) — the route *pattern* for issue
+  grouping plus the platform values Workers Sentry clients need.
+  `createSentry({ capture })` packages it with zero dependencies (structural
+  typing fits `@sentry/node`, `@sentry/cloudflare`, Toucan); a throwing
+  capture is swallowed, validation failures are not reported.
+- **Query fast path.** `buildQueryObjectFromString` parses plain query
+  strings in one pass and falls back to `URLSearchParams` for anything
+  percent-encoded (parity held by comparison tests against the real thing).
+  Both adapters expose the raw string (`ApiRequest.queryString`) and the
+  compiled module calls it directly. Measured on Bun: the dynamic
+  params+query case went **~355k → ~519k ops/s (+46%)**; other cases
+  unchanged.
+- **README.** `packages/api/README.md` now covers the full surface with
+  integration recipes (Drizzle, Better Auth, Sentry, Hey API) — the
+  integration philosophy is *recipes over plugins*: the core keeps its single
+  dependency and third parties connect through `context`/`mounts`/hooks/
+  `onError` seams rather than bundled SDKs.
+
 ## Roadmap / open questions
 
 - **Generated-validator integration sugar.** A `mjst` CLI mode that reads
   route files and emits a ready-made `compile` function (schema-identity →
   generated validator), closing the loop with `@amritk/generate-validators`
   automatically.
+- **405 Method Not Allowed.** An unmatched method on a known path currently
+  404s; answering 405 with an `allow` header would be more correct and is
+  cheap to derive from the route table.
 - **Cookie schemas.** `in: 'cookie'` parameters (header schemas shipped
   above; cookies still mean parsing the `cookie` header yourself).
 - **Content negotiation, inbound.** Raw *outbound* statuses shipped

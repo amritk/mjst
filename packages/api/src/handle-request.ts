@@ -3,6 +3,7 @@ import type { Validator } from '@amritk/runtime-validators'
 import { buildHeadersObject } from './build-headers-object'
 import { buildParamsObject } from './build-params-object'
 import { buildQueryObject } from './build-query-object'
+import { buildQueryObjectFromString } from './build-query-object-from-string'
 import { matchRoute } from './match-route'
 import { isPayloadTooLargeError } from './payload-too-large'
 import type {
@@ -11,6 +12,7 @@ import type {
   ContextFactory,
   ErasedRequestContext,
   ErrorFormatters,
+  OnErrorDetails,
   OpenApiDocument,
   RouteReplyValue,
   RouteTable,
@@ -27,7 +29,7 @@ export type ApiInternals = {
   readonly openApiPath: string | undefined
   readonly openApi: () => OpenApiDocument
   readonly createContext: ContextFactory | undefined
-  readonly onError: ((error: unknown, request: ApiRequest) => ApiResponse) | undefined
+  readonly onError: ((error: unknown, request: ApiRequest, details: OnErrorDetails) => ApiResponse) | undefined
   readonly errors: ErrorFormatters | undefined
 }
 
@@ -72,7 +74,12 @@ export const handleRequest = async (
 
   let query: unknown
   if (route.query !== undefined) {
-    query = buildQueryObject(request.searchParams(), route.query.coercions)
+    // The raw query string (when the adapter has it) skips URLSearchParams
+    // construction for plain queries — the encoded ones fall back inside.
+    query =
+      request.queryString !== undefined
+        ? buildQueryObjectFromString(request.queryString(), route.query.coercions)
+        : buildQueryObject(request.searchParams(), route.query.coercions)
     if (!route.query.guard(query)) return validationFailure('query', route.query.collect, query, errors, request)
   }
 
@@ -114,7 +121,9 @@ export const handleRequest = async (
     // hits the size limit as a thrown error — that is the transport's 413,
     // not a handler crash.
     if (isPayloadTooLargeError(error)) return errors?.payloadTooLarge?.(request) ?? PAYLOAD_TOO_LARGE
-    return internals.onError !== undefined ? internals.onError(error, request) : INTERNAL_ERROR
+    return internals.onError !== undefined
+      ? internals.onError(error, request, { route: route.contract, env, executionContext })
+      : INTERNAL_ERROR
   }
 
   if (route.responses !== undefined) {

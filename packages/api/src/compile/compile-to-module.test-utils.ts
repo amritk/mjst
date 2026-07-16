@@ -1,7 +1,7 @@
 import { defineRoute } from '../define-route'
 import { routeFactory } from '../route-factory'
 import type { FetchOnRequest, FetchOnResponse } from '../to-fetch-handler'
-import type { ContextFactoryInput, ErrorFormatters } from '../types'
+import type { ApiRequest, ApiResponse, ContextFactoryInput, ErrorFormatters, OnErrorDetails } from '../types'
 
 /**
  * The differential corpus: routes chosen so every emitter path is exercised —
@@ -242,6 +242,22 @@ export const stampHeader: FetchOnResponse = (response) => {
   response.headers.set('x-stamped', 'yes')
   return undefined
 }
+
+/**
+ * A createSentry-style onError: proves both engines hand thrown errors the
+ * same route contract and platform values, since everything it reads shows
+ * up in the response the differential test compares.
+ */
+export const corpusOnError = (error: unknown, _request: ApiRequest, details: OnErrorDetails): ApiResponse => ({
+  status: 500,
+  body: {
+    error: 'handled',
+    message: error instanceof Error ? error.message : 'unknown',
+    route: details.route.path,
+    method: details.route.method,
+    tenant: (details.env as { tenant?: string } | undefined)?.tenant ?? null,
+  },
+})
 
 /** Custom error envelopes — both engines must shape cold paths identically. */
 export const corpusErrors: ErrorFormatters = {

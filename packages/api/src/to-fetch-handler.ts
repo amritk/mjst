@@ -141,6 +141,7 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
       method: request.method,
       path,
       searchParams: () => new URLSearchParams(queryIndex === -1 ? '' : url.slice(queryIndex + 1)),
+      queryString: () => (queryIndex === -1 ? '' : url.slice(queryIndex + 1)),
       header: (name) => request.headers.get(name) ?? undefined,
       readBody:
         maxBodyBytes === undefined
