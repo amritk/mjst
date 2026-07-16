@@ -18,6 +18,7 @@ const routes: Record<string, AnyRouteContract> = {
   boom: corpus.boom,
   echoHeader: corpus.echoHeader,
   whoami: corpus.whoami,
+  submitMetric: corpus.submitMetric,
 }
 const info = { title: 'Differential', version: '1.0.0' }
 
@@ -43,9 +44,17 @@ const emit = (): string =>
 describe('compile-to-module', () => {
   it('emits inlined guards for the safe subset and interpreter fallbacks outside it', () => {
     const source = emit()
-    // getUser params (bare integer) inlines; listUsers query (minimum/array) does not.
-    expect(source).toContain("typeof v0 !== 'number' || !Number.isInteger(v0)")
-    expect(source).toContain('const guardQuery_listUsers = validateGuard(schemaQuery_listUsers)')
+    // getUser params (bare integer) and listUsers query (bounds + typed array)
+    // both inline; createUser body carries `additionalProperties: true`, which
+    // is outside the subset, so it falls back to the interpreter.
+    expect(source).toContain('!Number.isInteger(')
+    expect(source).toMatch(/const guardQuery_listUsers = \(input\) =>/)
+    expect(source).toContain('const guardBody_createUser = validateGuard(schemaBody_createUser)')
+    // The widened subset — enum, bounds, code point lengths, pattern, nested
+    // closed object, nullable — compiles fully inline with its helpers.
+    expect(source).toMatch(/const guardBody_submitMetric = \(input\) =>/)
+    expect(source).toContain('codePoints(')
+    expect(source).toContain('compileRx(')
     // health 200 serializes positionally; listUsers 200 (open schema) has no serializer.
     expect(source).toContain('serialize_health_200')
     expect(source).not.toContain('serialize_listUsers_200')
@@ -105,6 +114,22 @@ describe('compile-to-module', () => {
         () => new Request('http://localhost/mounted'),
         () => new Request('http://localhost/mounted/deep/path?q=1', { method: 'POST' }),
         () => new Request('http://localhost/mountedsibling'),
+        // The widened inline-guard subset: both engines must agree on every
+        // verdict, valid and invalid alike.
+        () => metric({ kind: 'latency', value: 12.5, unit: 'ms', labels: ['api', 'edge'], note: null }),
+        () => metric({ kind: 'latency', value: 0, meta: { host: 'a1' } }),
+        () => metric({ kind: 'throughput', value: 1 }), // enum violation
+        () => metric({ kind: 'error', value: -1 }), // minimum violation
+        () => metric({ kind: 'error', value: 10000 }), // exclusiveMaximum boundary
+        () => metric({ kind: 'error', value: 1, unit: '' }), // minLength violation
+        () => metric({ kind: 'error', value: 1, unit: 'microsecs' }), // maxLength violation
+        () => metric({ kind: 'error', value: 1, unit: '🚀' }), // astral char: one code point, two UTF-16 units
+        () => metric({ kind: 'error', value: 1, labels: ['UPPER'] }), // pattern violation
+        () => metric({ kind: 'error', value: 1, labels: ['a', 'b', 'c', 'd'] }), // maxItems violation
+        () => metric({ kind: 'error', value: 1, meta: { host: 'x', extra: true } }), // closed nested object
+        () => metric({ kind: 'error', value: 1, meta: {} }), // missing nested required
+        () => metric({ kind: 'error', value: 1, rogue: true }), // closed root object
+        () => metric({ kind: 'error', value: 1, note: 7 }), // nullable does not admit non-null junk
       ]
 
       for (const makeRequest of cases) {
@@ -148,6 +173,13 @@ describe('compile-to-module', () => {
 
 const post = (body: unknown): Request =>
   new Request('http://localhost/users', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+const metric = (body: unknown): Request =>
+  new Request('http://localhost/metrics', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),

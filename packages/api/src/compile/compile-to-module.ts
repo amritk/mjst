@@ -81,6 +81,8 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     decodeSegment: false,
     validate: false,
     validateGuard: false,
+    codePoints: false,
+    compileRx: false,
   }
 
   const declarations: string[] = []
@@ -143,6 +145,18 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     'const internalError = () => new Response(\'{"error":"internal_error"}\', initFor(500))',
     'const invalidJson = () => new Response(\'{"error":"invalid_json"}\', initFor(400))',
   )
+  if (used.codePoints) {
+    // Mirrors the interpreter's codePointLength: JSON Schema string lengths
+    // count Unicode code points, not UTF-16 units.
+    lines.push(
+      'const codePoints = (s) => { let n = 0; for (let i = 0; i < s.length; i++) { n++; const c = s.charCodeAt(i); if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) { const d = s.charCodeAt(i + 1); if (d >= 0xdc00 && d <= 0xdfff) i++ } } return n }',
+    )
+  }
+  if (used.compileRx) {
+    // Mirrors the interpreter's pattern compilation: Unicode mode first, with
+    // a non-Unicode fallback for legacy patterns the u flag rejects.
+    lines.push("const compileRx = (src) => { try { return new RegExp(src, 'u') } catch { return new RegExp(src) } }")
+  }
   if (used.validate) {
     lines.push(
       'const failValidation = (source, collect, value) => {',
@@ -216,12 +230,15 @@ const emitRouteDeclarations = (
     if (schema === undefined) continue
     const suffix = slotSuffix(slot, route.name)
     lines.push(`const schema${suffix} = ${JSON.stringify(schema)}`)
-    const guardSource = generateGuardSource(schema)
-    if (guardSource === undefined) {
+    const generated = generateGuardSource(schema, 'g' + suffix)
+    if (generated === undefined) {
       used['validateGuard'] = true
       lines.push(`const guard${suffix} = validateGuard(schema${suffix})`)
     } else {
-      lines.push(`const guard${suffix} = ${guardSource}`)
+      used['codePoints'] = used['codePoints'] || generated.usesCodePoints
+      used['compileRx'] = used['compileRx'] || generated.usesCompileRx
+      lines.push(...generated.declarations)
+      lines.push(`const guard${suffix} = ${generated.expression}`)
     }
     used['validate'] = true
     lines.push(

@@ -60,7 +60,11 @@ export const listUsers = defineRoute({
   handler: ({ query }) => ({ status: 200, body: { limit: query.limit ?? null, tags: query.tags ?? [] } }),
 })
 
-/** Body guard bails (minLength); 201 serializer has an optional property. */
+/**
+ * Body guard bails to the interpreter: `additionalProperties: true` is outside
+ * the inline subset (harmless semantically — it is the default — which makes
+ * it a safe way to keep the fallback path covered).
+ */
 export const createUser = defineRoute({
   method: 'post',
   path: '/users',
@@ -69,6 +73,7 @@ export const createUser = defineRoute({
       type: 'object',
       properties: { name: { type: 'string', minLength: 1 }, age: { type: 'integer' } },
       required: ['name'],
+      additionalProperties: true,
     },
   },
   responses: {
@@ -103,6 +108,39 @@ export const boom = defineRoute({
   handler: () => {
     throw new Error('nope')
   },
+})
+
+/**
+ * The widened inline-guard subset in one schema: enum, numeric bounds, code
+ * point string lengths, pattern, primitive arrays with bounds, a nested
+ * closed object, and OpenAPI nullable. This must compile to an inline guard
+ * (no interpreter) and still agree with the runtime engine on every verdict.
+ */
+export const submitMetric = defineRoute({
+  method: 'post',
+  path: '/metrics',
+  request: {
+    body: {
+      type: 'object',
+      properties: {
+        kind: { enum: ['latency', 'error'] },
+        value: { type: 'number', minimum: 0, exclusiveMaximum: 10000 },
+        unit: { type: 'string', minLength: 1, maxLength: 8 },
+        labels: { type: 'array', items: { type: 'string', pattern: '^[a-z]+$' }, maxItems: 3 },
+        meta: {
+          type: 'object',
+          properties: { host: { type: 'string' } },
+          required: ['host'],
+          additionalProperties: false,
+        },
+        note: { type: 'string', nullable: true },
+      },
+      required: ['kind', 'value'],
+      additionalProperties: false,
+    },
+  },
+  responses: { 201: {} },
+  handler: () => ({ status: 201 }),
 })
 
 /** The app context both engines build per request — async on purpose. */

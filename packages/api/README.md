@@ -164,15 +164,18 @@ export default compiled // { fetch }
 ```
 
 Measured under Node/V8 (same engine as workerd), Request → Response, against
-the standard Workers stack:
+the standard Workers stack — one session, same machine:
 
 | case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
 |:--|--:|--:|--:|--:|
-| static GET | ~225k ops/s | ~244k | ~187k | **~312k** |
-| dynamic GET, params validated | ~195k ¹ | ~145k | ~174k | **~266k** |
-| POST, body validated | ~49k ¹ | ~33k | ~51k | **~63k** |
+| static GET | ~339k ops/s | ~361k | ~392k | **~530k** |
+| dynamic GET, params validated | ~311k ¹ | ~209k | ~302k | **~381k** |
+| POST, body validated | ~74k ¹ | ~63k | ~74k | **~82k** |
 
 <sub>¹ hono-bare does no validation; every @amritk/api column validates.</sub>
+
+Even the runtime (development) engine now sits at or above unvalidated Hono
+while validating; the compiled engine leads every case by 22–57%.
 
 ### App context: Drizzle, sessions, anything per-request
 

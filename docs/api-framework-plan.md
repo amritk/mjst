@@ -114,10 +114,10 @@ Measured overhead (Bun, `packages/api/bench/run.ts`, interpreter engine):
 
 | case | throughput |
 |:--|--:|
-| bare async handler (baseline) | ~7.5M ops/s |
-| static route, no validation | ~1.5M ops/s |
-| post route + body validation | ~0.8M ops/s |
-| dynamic route + params/query validation | ~0.3M ops/s |
+| bare async handler (baseline) | ~7.3M ops/s |
+| static route, no validation | ~1.6M ops/s |
+| post route + body validation | ~1.0M ops/s |
+| dynamic route + params/query validation | ~0.34M ops/s |
 
 The dynamic case pays for `URLSearchParams` construction plus two validations;
 swapping in generated validators moves it substantially, and both numbers sit
@@ -157,21 +157,30 @@ way to get compiled-validator speed on a platform where runtime compilation is
 illegal — nothing about the platform constrains what a build step may emit.
 
 Measured on V8/Node (same engine as workerd), pure `Request → Response`, all
-subjects eval-free and Workers-deployable as benchmarked
-(`bench-workers` scratch, 2026-07):
+subjects eval-free and Workers-deployable as benchmarked (one session, same
+machine, 2026-07, after the runtime performance pass):
 
-| case | hono (no validation) | hono + zod | @amritk/api today | + generated validators | compiled prototype |
-|:--|--:|--:|--:|--:|--:|
-| static GET | ~254k | ~253k | ~208k | ~217k | **~346k** |
-| dynamic GET, params validated | ~221k ¹ | ~177k | ~180k | ~190k | **~317k** |
-| POST, body validated | ~61k ¹ | ~51k | ~60k | ~62k | **~73k** |
+| case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
+|:--|--:|--:|--:|--:|
+| static GET | ~339k | ~361k | ~392k | **~530k** |
+| dynamic GET, params validated | ~311k ¹ | ~209k | ~302k | **~381k** |
+| POST, body validated | ~74k ¹ | ~63k | ~74k | **~82k** |
 
 <sub>¹ hono-bare rows do no validation at all; every @amritk/api row validates.</sub>
 
-Today's package already matches or beats the real-world Hono+zod stack on
-validated routes. The compiled prototype — hand-written in the exact shape a
-build step would emit — beats even unvalidated Hono by 30–45% everywhere,
-*with validation on*.
+The runtime (development) engine sits at or above unvalidated Hono while
+validating; the compiled engine leads every case by 22–57%. The single
+biggest runtime-engine win was response construction: replacing
+`Response.json` with `new Response(JSON.stringify(...), cachedInit)` (one
+`ResponseInit` per status, reused) measured ~40% through the whole pipeline —
+`Response.json` builds a Headers object per call. A nested-map router variant
+was measured and *rejected* (the `method + ' ' + path` concat key is faster
+than two map hops).
+
+Honest counterpoint: under Bun/JSC, Elysia's AOT still dominates static
+routes (~1.4M ops/s to our ~423k) — that is its home turf and it caches
+static responses. We still win validated POSTs there. The Workers claim is
+the strategic one because that is where Elysia's compiler is banned.
 
 ### Shipped: `compileToModule`
 
@@ -182,21 +191,19 @@ differential test (`compile-to-module.test.ts`) holds the compiled and runtime
 engines observationally identical across a corpus covering valid/invalid
 inputs, coercion, encoded segments, trailing slashes, thrown handlers, custom
 headers, empty replies, and the OpenAPI document. Guards and serializers only
-inline for the schema subset they can reproduce exactly (bare primitive
-object shapes; serializers additionally require `additionalProperties:
-false`) and fall back to the interpreter otherwise, so semantics never fork.
+inline for the schema subset they can reproduce exactly, and fall back to the
+interpreter otherwise, so semantics never fork. The guard subset covers
+explicit primitive/object/array types, string lengths (counted in code
+points, like the interpreter), `pattern` (Unicode-first compile), numeric
+bounds, primitive `enum`/`const`, OpenAPI `nullable: true`,
+`additionalProperties: false`, `required`, and nested objects/arrays of the
+same subset; serializers additionally require `additionalProperties: false`.
+Anything else — `multipleOf`, `uniqueItems`, combinators, `$ref`,
+prototype-member property names — bails to the interpreter.
 
-Measured with the real emitted output (Node/V8, Request → Response):
-
-| case | hono (no validation) | hono + zod | runtime (dev) | **compiled (prod)** |
-|:--|--:|--:|--:|--:|
-| static GET | ~225k | ~244k | ~187k | **~312k** |
-| dynamic GET, validated | ~195k | ~145k | ~174k | **~266k** |
-| POST, validated | ~49k | ~33k | ~51k | **~63k** |
-
-The intended workflow is runtime engine in development, compiled module in
-production, switched by an import — the differential test is what makes that
-swap safe.
+Current numbers live in the table above (§ Cloudflare Workers). The intended
+workflow is runtime engine in development, compiled module in production,
+switched by an import — the differential test is what makes that swap safe.
 
 ### What the compiled module contains
 
