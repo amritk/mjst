@@ -83,6 +83,25 @@ describe('generate-validator-function', () => {
     expect(code).toContain('`${_path}/title`')
   })
 
+  it('applies 2020-12 sibling keywords alongside a property $ref', () => {
+    // `{ $ref, minLength }` must enforce BOTH the referenced validator and the
+    // sibling constraint. Stub the referenced validator (a separate file) as
+    // always-valid so the test exercises the sibling `minLength`.
+    const schema = {
+      type: 'object' as const,
+      properties: { s: { $ref: '#/$defs/str', minLength: 5 } },
+      required: ['s'],
+    }
+    const code = `const validateStr = () => true as const;\n${generateValidatorFunction(schema, 'Root')}`
+    const validate = evalValidator(code)
+
+    expect(validate({ s: 'abcde' })).toBe(true)
+    expect(validate({ s: 'ab' })).toEqual({
+      valid: false,
+      errors: [{ message: 'must have at least 5 characters', path: '/s' }],
+    })
+  })
+
   it('escapes property names in error paths against template-literal breakout and injection', () => {
     // A key with a backtick / `${` must neither break the generated template
     // literal (a build failure) nor inject an interpolation (a ReferenceError).
