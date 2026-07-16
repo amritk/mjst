@@ -1743,6 +1743,24 @@ const generateCombinedObjectParser = (
     )
   }
 
+  // `stripUnknown` (coerce mode) must keep keys a `patternProperties` regex
+  // declares and drop only the genuinely-undeclared ones. Delegating to
+  // `generateObjectParser` below would strip the pattern-matching keys too — its
+  // strip logic only knows the declared `properties`. The selective combined
+  // copy keeps declared + pattern-matching keys, exactly like the interpreter.
+  if (stripUnknown && !strict) {
+    return generateStrictCombinedParser(
+      schema,
+      typeName,
+      functionName,
+      propertyLines,
+      patterns,
+      useRefImports,
+      suffix,
+      false,
+    )
+  }
+
   if (!refPattern || !useRefImports) {
     return generateObjectParser(
       schema,

@@ -2502,6 +2502,18 @@ describe('generate-parser-function', () => {
       expect(parse(withExtras)).toEqual({ a: 'x', nested: { b: 2 } })
     })
 
+    it('keeps keys declared via patternProperties and drops only the truly-undeclared', () => {
+      const withPatterns: JSONSchema = {
+        type: 'object',
+        properties: { a: { type: 'string' } },
+        patternProperties: { '^x-': { type: 'string' } },
+        required: ['a'],
+      }
+      const parse = parserFor(withPatterns, { stripUnknown: true })
+      // `x-keep` matches the pattern → declared → kept; `junk` → dropped.
+      expect(parse({ a: 'ok', 'x-keep': 'yes', junk: 'x' })).toEqual({ a: 'ok', 'x-keep': 'yes' })
+    })
+
     it('strips extras on both the fast path (no extras) and the slow path (extras present)', () => {
       const parse = parserFor(nestedSchema, { stripUnknown: true })
       // No extras: declared-only input still parses correctly.
