@@ -163,6 +163,23 @@ type NestingContext = {
 const createRootContext = (): NestingContext => ({ objVar: 'obj', pathPrefix: '${_path}', depth: 0, hoisted: [] })
 
 /**
+ * Renders a schema-controlled property name as a static error-path segment.
+ *
+ * The name is appended to a backtick template-literal path (`` `${_path}/…` ``),
+ * so two independent escapings apply. First the JSON Pointer escape (`~`→`~0`,
+ * `/`→`~1`, `~` first) so a key containing `/` or `~` reads back unambiguously —
+ * matching the paths the runtime-validators interpreter emits. Then a
+ * template-literal escape of `` ` ``, `\`, and `$`, so a key like `` a`b `` or
+ * `${x}` cannot terminate the literal (a build failure) or inject an
+ * interpolation (a runtime `ReferenceError` / arbitrary expression).
+ */
+const pointerSegment = (key: string): string =>
+  key
+    .replace(/~/g, '~0')
+    .replace(/\//g, '~1')
+    .replace(/[\\`$]/g, '\\$&')
+
+/**
  * Returns the `patternProperties` regex sources, or an empty array when the
  * schema declares none. The keys of `patternProperties` are the patterns.
  */
@@ -252,7 +269,7 @@ const generatePropertyChecks = (
   if (!isSchemaObject(propSchema)) return []
 
   const raw = `${ctx.objVar}[${JSON.stringify(key)}]`
-  const path = `\`${ctx.pathPrefix}/${key}\``
+  const path = `\`${ctx.pathPrefix}/${pointerSegment(key)}\``
   // Missing-property errors report at the parent object's path. At the root
   // that is the `_path` parameter itself; inside nested objects it is the
   // parent's accumulated static path.
@@ -944,7 +961,7 @@ const generateInlineObjectChecks = (
     // When `key` is empty the value is located AT `ctx.pathPrefix` already (e.g. an
     // inline object reached through a combinator branch or a dynamic-key value), so
     // appending `/${key}` would emit a spurious `//` or trailing `/` in error paths.
-    pathPrefix: key === '' ? ctx.pathPrefix : `${ctx.pathPrefix}/${key}`,
+    pathPrefix: key === '' ? ctx.pathPrefix : `${ctx.pathPrefix}/${pointerSegment(key)}`,
     depth: ctx.depth + 1,
     hoisted: ctx.hoisted,
   }

@@ -67,6 +67,15 @@ export const escapeRegexPattern = (pattern: string): string => {
     return match
   })
 
+  // The empty pattern is valid JSON Schema (it matches everything), but an empty
+  // regex body would emit `//` \u2014 a line comment, not a literal \u2014 and break the
+  // generated file. Emit `(?:)` instead, exactly what `new RegExp('').source`
+  // yields: an empty non-capturing group that still matches everything.
+  if (escaped === '') {
+    escapeCache.set(pattern, '(?:)')
+    return '(?:)'
+  }
+
   if (escapeCache.size >= ESCAPE_CACHE_LIMIT) {
     // Evict the single oldest entry (Maps iterate in insertion order) instead
     // of clearing wholesale — a corpus slightly over the limit keeps its hot

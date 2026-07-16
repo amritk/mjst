@@ -24,6 +24,14 @@ describe('escape-regex-pattern', () => {
     expect(escapeRegexPattern('^[a-z]+$')).toBe('^[a-z]+$')
   })
 
+  it('emits (?:) for the empty pattern so the literal does not become a comment', () => {
+    // An empty body would emit `//` — a line comment, not a regex literal — and
+    // break the generated file. `(?:)` matches everything, like the empty pattern.
+    const escaped = escapeRegexPattern('')
+    expect(escaped).toBe('(?:)')
+    expect(new RegExp(escaped).test('anything')).toBe(true)
+  })
+
   it('round-trips: the escaped body parses to a regex equivalent to the source pattern', () => {
     for (const pattern of ['\\d{4}/\\d{2}', 'a/b/c', '^https?:\\/\\/', '\\w+@\\w+']) {
       // Build the literal the generator emits and read its source back out.

@@ -19,6 +19,26 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const URI = /^[a-zA-Z][a-zA-Z0-9+\-.]*:\/?\/?[^\s]*$/
 const URI_REFERENCE = /^(?:[a-zA-Z][a-zA-Z0-9+\-.]*:)?\/?\/?[^\s]*$/
 
+// IPv6 per RFC 4291, assembled from its grammar's building blocks so the
+// IPv4-embedded forms (`x:x:x:x:x:x:d.d.d.d`, e.g. `::ffff:192.168.0.1`) are
+// accepted — a single hand-written alternation reliably omits them. `h16` is a
+// 16-bit hex group; `ls32` is the least-significant 32 bits, either two groups
+// or a dotted-quad IPv4.
+const H16 = '[0-9a-fA-F]{1,4}'
+const IPV4_OCTETS = '(?:(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)'
+const LS32 = `(?:${H16}:${H16}|${IPV4_OCTETS})`
+const IPV6 = new RegExp(
+  `^(?:${H16}:){6}${LS32}$|` +
+    `^::(?:${H16}:){5}${LS32}$|` +
+    `^(?:${H16})?::(?:${H16}:){4}${LS32}$|` +
+    `^(?:(?:${H16}:){0,1}${H16})?::(?:${H16}:){3}${LS32}$|` +
+    `^(?:(?:${H16}:){0,2}${H16})?::(?:${H16}:){2}${LS32}$|` +
+    `^(?:(?:${H16}:){0,3}${H16})?::(?:${H16}:)${LS32}$|` +
+    `^(?:(?:${H16}:){0,4}${H16})?::${LS32}$|` +
+    `^(?:(?:${H16}:){0,5}${H16})?::${H16}$|` +
+    `^(?:(?:${H16}:){0,6}${H16})?::$`,
+)
+
 export const FORMAT_CHECKS: Readonly<Record<string, RegExp>> = {
   // Pragmatic email: one @, no spaces, a dot in the domain. Good enough for
   // gatekeeping and far cheaper than RFC 5322.
@@ -51,7 +71,7 @@ export const FORMAT_CHECKS: Readonly<Record<string, RegExp>> = {
   // in code points, not punycode octets (RFC 5890 exactness is out of scope).
   'idn-hostname': /^(?=.{1,253}$)(?!-)[\p{L}\p{N}\p{M}-]{1,63}(?<!-)(\.(?!-)[\p{L}\p{N}\p{M}-]{1,63}(?<!-))*$/u,
   ipv4: /^((25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(25[0-5]|2[0-4]\d|1?\d?\d)$/,
-  ipv6: /^(::|([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|::([0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(:[0-9a-fA-F]{1,4}){1,6})$/,
+  ipv6: IPV6,
 }
 
 /**

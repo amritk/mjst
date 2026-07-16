@@ -630,6 +630,22 @@ describe('validate', () => {
       // No number at all → contains itself fails.
       expect(validator(['x'])).not.toBe(true)
     })
+
+    it('treats contains as evaluating the array when minContains:0 has a maxContains', () => {
+      // `minContains: 0` alone opts out of the evaluated annotation, but with
+      // `maxContains` present a satisfied `contains` still marks the array
+      // evaluated (Ajv parity), so `unevaluatedItems: false` must accept.
+      const validator = validate({
+        type: 'array',
+        contains: { type: 'string' },
+        minContains: 0,
+        maxContains: 1,
+        unevaluatedItems: false,
+      })
+
+      expect(validator(['a'])).toBe(true)
+      expect(validator([1])).toBe(true)
+    })
   })
 
   describe('uniqueItems', () => {
@@ -720,6 +736,23 @@ describe('validate', () => {
       expect(v('::')).toBe(true)
       expect(v('::1')).toBe(true)
       expect(v('nope::zz')).not.toBe(true)
+    })
+
+    it('accepts IPv4-mapped and IPv4-embedded IPv6 addresses', () => {
+      const v = validate({ type: 'string', format: 'ipv6' }, { formats: 'all' })
+      expect(v('::ffff:192.168.0.1')).toBe(true)
+      expect(v('1:2::192.168.0.1')).toBe(true)
+      expect(v('1000:1000:1000:1000:1000:1000:255.255.255.255')).toBe(true)
+      // A malformed embedded IPv4 is still rejected.
+      expect(v('::ffff:999.1.1.1')).not.toBe(true)
+    })
+
+    it('percent-decodes local $ref fragments before pointer evaluation', () => {
+      // RFC 6901 §6: `#/$defs/a%20b` addresses the key `a b`, not `a%20b`.
+      const schema = { $defs: { 'a b': { type: 'number' } }, $ref: '#/$defs/a%20b' }
+      const v = validate(schema)
+      expect(v(1)).toBe(true)
+      expect(v('x')).not.toBe(true)
     })
 
     it('applies presence-gated keywords with the same `!== undefined` rule as required', () => {

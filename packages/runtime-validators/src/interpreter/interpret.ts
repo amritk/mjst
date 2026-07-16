@@ -719,10 +719,12 @@ const interpretArray = (
     let count = 0
     for (const item of arr) if (matchesSchema(ctx, containsSchema, item)) count++
     // Ajv parity for `unevaluatedItems`: a satisfied `contains` marks the *whole*
-    // array as evaluated, not just the matching items — but `minContains: 0` opts
-    // out of contributing any evaluated-item annotation at all. (This intentionally
-    // tracks Ajv, the package's differential oracle, over the stricter spec letter.)
-    if (evalScope && min !== 0 && count >= min && (max === undefined || count <= max)) {
+    // array as evaluated, not just the matching items — but a bare `minContains: 0`
+    // (with no `maxContains`) opts out of contributing any evaluated-item annotation
+    // at all. When `maxContains` is also present, Ajv still marks the array evaluated,
+    // so only `minContains: 0` *without* `maxContains` suppresses it. (This
+    // intentionally tracks Ajv, the differential oracle, over the stricter spec letter.)
+    if (evalScope && (min !== 0 || max !== undefined) && count >= min && (max === undefined || count <= max)) {
       evalScope.allItems = true
     }
     if (count < min) {

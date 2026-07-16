@@ -21,6 +21,7 @@ type ValibotActionOverrideContext = {
 
 type ValibotConfig = {
   readonly errorMode?: 'throw' | 'warn' | 'ignore'
+  readonly target?: 'draft-07' | 'draft-2020-12'
   readonly overrideSchema?: (ctx: ValibotSchemaOverrideContext) => Record<string, unknown> | undefined
   readonly overrideAction?: (ctx: ValibotActionOverrideContext) => Record<string, unknown> | undefined
 }
@@ -86,6 +87,11 @@ export const valibotToJsonSchema = async (source: unknown, options?: AdapterOpti
   try {
     json = toJsonSchema(source, {
       errorMode: 'ignore',
+      // The converter defaults to draft-07, which emits fixed tuples as
+      // `items: [...]`; the generators key tuple validation off 2020-12
+      // `prefixItems`, so a draft-07 tuple would be silently under-validated
+      // (element types and length unchecked). Target 2020-12 explicitly.
+      target: 'draft-2020-12',
       overrideSchema: (ctx) => {
         // Rescued constructs are represented, not widened — return before we
         // record anything so `date`/`bigint` never show up as lossy.
@@ -109,7 +115,8 @@ export const valibotToJsonSchema = async (source: unknown, options?: AdapterOpti
   // strict mode).
   reportLossyConstructs('Valibot', droppedConstructs, options?.strict)
 
-  // Valibot emits a draft-07 dialect marker; the generators target 2020-12.
+  // Drop the dialect marker the converter emits; the generators infer the
+  // dialect from structure, not `$schema`.
   delete json['$schema']
 
   return json as JSONSchema

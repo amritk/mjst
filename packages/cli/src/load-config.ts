@@ -38,6 +38,7 @@ export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>
     ...(typeof obj['outFile'] === 'string' && { outFile: obj['outFile'] }),
     ...(isSourceFormat(obj['input']) && { input: obj['input'] }),
     ...(typeof obj['export'] === 'string' && { export: obj['export'] }),
+    ...(typeof obj['validators'] === 'boolean' && { validators: obj['validators'] }),
     ...(typeof obj['typesOnly'] === 'boolean' && { typesOnly: obj['typesOnly'] }),
     ...(typeof obj['examples'] === 'boolean' && { examples: obj['examples'] }),
     ...(typeof obj['build'] === 'boolean' && { build: obj['build'] }),
