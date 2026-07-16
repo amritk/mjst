@@ -5,6 +5,7 @@ import { quoteJsString } from '@amritk/helpers/quote-js-string'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
+  hasConst,
   hasDependentRequired,
   hasEnum,
   hasExclusiveMaximum,
@@ -103,15 +104,12 @@ const throwError = (message: string, suffixExpr?: string): string => {
 const generateConstraintChecks = (
   acc: string,
   propSchema: JSONSchema,
-  typeName: string,
-  key: string,
+  field: string,
   context: StrictAssertionContext = {},
 ): string[] => {
   if (!isSchemaObject(propSchema) || !hasType(propSchema)) return []
   const t = propSchema.type as string
   const lines: string[] = []
-
-  const field = `[${typeName}] field '${key}'`
 
   if (t === 'string') {
     if (hasPattern(propSchema)) {
@@ -492,7 +490,7 @@ const generatePropertyAssertion = (
         lines.push(`  if (${acc} !== undefined && (${wrongType})) ${expected};`)
       }
     }
-    lines.push(...generateConstraintChecks(acc, propSchema, typeName, key, context))
+    lines.push(...generateConstraintChecks(acc, propSchema, field, context))
   }
 
   // Type-independent constraints, each runtime-gated on the value's shape:
@@ -582,25 +580,55 @@ export const generateScalarStrictAssertion = (
     return `  if (typeof input !== "${primitive}") ${throwError(`[${typeName}] expected ${primitive}, got `, got)};`
   }
 
-  if (!isSchemaObject(schema) || !hasType(schema)) return null
-  const t = schema.type as string
-  const wrongType = wrongTypeCondition('input', t)
-  if (!wrongType) return null
-  const lines = [`  if (${wrongType}) ${throwError(`[${typeName}] expected ${typeLabel(t)}, got `, got)};`]
+  if (!isSchemaObject(schema)) return null
 
-  // Root-level arrays enforce scalar/enum item types too — the same gap the
-  // property path closes in generateConstraintChecks — plus `contains`.
-  if (t === 'array') {
-    const itemCheck = generateItemCheck(schema)
-    if (itemCheck) {
-      lines.push(
-        `  if (!(input as readonly unknown[]).every((_it) => ${itemCheck.check})) ${throwError(`[${typeName}] ${itemCheck.message}`)};`,
-      )
-    }
-    lines.push(...generateContainsCheck('input', schema, `[${typeName}]`))
-    // Tuple `prefixItems`: assert each position and cap length under items:false.
-    lines.push(...generatePrefixItemsAssertion('input', `[${typeName}]`, schema, rootSchema))
+  const label = `[${typeName}]`
+  const lines: string[] = []
+
+  // `const` / `enum` apply to a root value regardless of a declared `type` — a
+  // root `{ enum: [...] }` or `{ const: ... }` must reject a non-member, not
+  // silently coerce it. `const` is compared through `JSON.stringify` so it works
+  // for any JSON value; the value must match exactly.
+  if (hasConst(schema)) {
+    const wanted = JSON.stringify(JSON.stringify(schema.const))
+    lines.push(
+      `  if (JSON.stringify(input) !== ${wanted}) ${throwError(`${label} must be ${JSON.stringify(schema.const)}`)};`,
+    )
+  } else if (hasEnum(schema)) {
+    const allowed = JSON.stringify(schema.enum)
+    const enumLabel = (schema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
+    lines.push(
+      `  if (!(${allowed} as readonly unknown[]).includes(input)) ${throwError(`${label} must be one of: ${enumLabel}`)};`,
+    )
   }
 
-  return lines.join('\n')
+  if (hasType(schema)) {
+    const t = schema.type as string
+    const wrongType = wrongTypeCondition('input', t)
+    if (wrongType) {
+      lines.push(`  if (${wrongType}) ${throwError(`${label} expected ${typeLabel(t)}, got `, got)};`)
+    }
+
+    // Root-level arrays enforce scalar/enum item types too — the same gap the
+    // property path closes in generateConstraintChecks — plus `contains`.
+    if (t === 'array') {
+      const itemCheck = generateItemCheck(schema)
+      if (itemCheck) {
+        lines.push(
+          `  if (!(input as readonly unknown[]).every((_it) => ${itemCheck.check})) ${throwError(`${label} ${itemCheck.message}`)};`,
+        )
+      }
+      lines.push(...generateContainsCheck('input', schema, label))
+      // Tuple `prefixItems`: assert each position and cap length under items:false.
+      lines.push(...generatePrefixItemsAssertion('input', label, schema, rootSchema))
+    }
+
+    // String (pattern, min/maxLength), number/integer (bounds, multipleOf) and
+    // array (length, uniqueItems) constraints — previously enforced only for
+    // named properties, so a root scalar accepted e.g. `{type:'string',minLength:5}`
+    // violations.
+    lines.push(...generateConstraintChecks('input', schema, label, rootSchema ? { rootSchema } : {}))
+  }
+
+  return lines.length > 0 ? lines.join('\n') : null
 }
