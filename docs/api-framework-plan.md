@@ -147,6 +147,57 @@ coercion plans, guard-first pipeline, response validation (opt-in), OpenAPI
 `next()` fall-through), `compile` hook, `onError` hook, bench harness, 80
 tests including type-level assertions.
 
+## Cloudflare Workers: the strategic target
+
+Workers ban `new Function`/`eval`, which disarms every runtime-compilation
+trick the fast frameworks rely on: Elysia must run with AOT off, Ajv cannot
+compile, TypeBox's `TypeCompiler` is unavailable. The practical incumbent is
+Hono (usually with zod validation). mjst's **build-time** codegen is the one
+way to get compiled-validator speed on a platform where runtime compilation is
+illegal — nothing about the platform constrains what a build step may emit.
+
+Measured on V8/Node (same engine as workerd), pure `Request → Response`, all
+subjects eval-free and Workers-deployable as benchmarked
+(`bench-workers` scratch, 2026-07):
+
+| case | hono (no validation) | hono + zod | @amritk/api today | + generated validators | compiled prototype |
+|:--|--:|--:|--:|--:|--:|
+| static GET | ~254k | ~253k | ~208k | ~217k | **~346k** |
+| dynamic GET, params validated | ~221k ¹ | ~177k | ~180k | ~190k | **~317k** |
+| POST, body validated | ~61k ¹ | ~51k | ~60k | ~62k | **~73k** |
+
+<sub>¹ hono-bare rows do no validation at all; every @amritk/api row validates.</sub>
+
+Today's package already matches or beats the real-world Hono+zod stack on
+validated routes. The compiled prototype — hand-written in the exact shape a
+build step would emit — beats even unvalidated Hono by 30–45% everywhere,
+*with validation on*.
+
+### What `mjst compile` would emit
+
+One monomorphic module per route, all plain TypeScript source (tree-shakeable,
+no eval, small bundle → faster cold start):
+
+- **Fused adapter** — no intermediate `ApiRequest` object or per-request
+  closures; the pathname is sliced from `request.url` by hand (a `new URL()`
+  parse benchmarked at ~a fifth of adapter cost and is now avoided in
+  `toFetchHandler` too).
+- **Inlined validation** — `@amritk/generate-validators` output pasted into
+  the route body; param coercion unrolled per key from the coercion plan.
+- **Schema-derived serializers** — fast-json-stringify-style string building
+  from the response schemas (`'{"id":' + body.id + …`), with `JSON.stringify`
+  only where escaping matters. Needs a new `@amritk/generate-serializers`
+  generator; user handlers are wrapped, never rewritten.
+- **Static router** — the method/path dispatch emitted as a plain `if`/switch
+  over string compares, shared `ResponseInit` constants.
+- **Precomputed OpenAPI** — the document serialized to a static JSON string at
+  build time, served with zero per-request work.
+
+The runtime package stays the no-build-step path (and the fallback for routes
+the compile step cannot see); `mjst compile` becomes the opt-in ceiling. Same
+contract, three engines: interpreter → generated validators → fully compiled
+routes.
+
 ## Roadmap / open questions
 
 - **Generated-validator integration sugar.** A `mjst` CLI mode that reads
