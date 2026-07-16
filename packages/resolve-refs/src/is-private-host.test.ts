@@ -51,6 +51,26 @@ describe('is-private-host', () => {
     expect(isPrivateHost('::ffff:8.8.8.8')).toBe(false)
   })
 
+  it('flags IPv4-compatible / translated / NAT64 IPv6 embeddings the URL parser produces', () => {
+    // `new URL('http://[::127.0.0.1]/')` → `::7f00:1` (no `ffff:` marker), which a
+    // mapped-only regex missed — the reachable SSRF gap this closes.
+    expect(isPrivateHost('::7f00:1')).toBe(true) // ::127.0.0.1
+    expect(isPrivateHost('::a9fe:a9fe')).toBe(true) // ::169.254.169.254 (metadata)
+    expect(isPrivateHost('::ffff:0:7f00:1')).toBe(true) // IPv4-translated ::ffff:0:127.0.0.1
+    expect(isPrivateHost('64:ff9b::7f00:1')).toBe(true) // NAT64-embedded 127.0.0.1
+    // The dotted forms a direct caller might pass are caught too.
+    expect(isPrivateHost('::127.0.0.1')).toBe(true)
+    expect(isPrivateHost('::169.254.169.254')).toBe(true)
+    // A compatible/mapped *public* address is still allowed.
+    expect(isPrivateHost('::ffff:1.1.1.1')).toBe(false)
+    expect(isPrivateHost('2001:db8::a9fe:a9fe')).toBe(false)
+  })
+
+  it('flags the fully-expanded IPv6 loopback', () => {
+    expect(isPrivateHost('0:0:0:0:0:0:0:1')).toBe(true)
+    expect(isPrivateHost('0000:0000:0000:0000:0000:0000:0000:0001')).toBe(true)
+  })
+
   it('flags decimal/octal/hex IPv4 encodings (defense-in-depth)', () => {
     expect(isPrivateHost('2130706433')).toBe(true) // 127.0.0.1
     expect(isPrivateHost('0177.0.0.1')).toBe(true)
