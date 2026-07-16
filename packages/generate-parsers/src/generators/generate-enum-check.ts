@@ -45,15 +45,24 @@ export const generateEnumCaseInsensitiveCoercion = (
   enumValues: readonly unknown[],
   fallback: string,
 ): string | null => {
-  const byLower: Record<string, string> = {}
+  const entries: [string, string][] = []
+  const seen = new Set<string>()
   for (const value of enumValues) {
     if (typeof value !== 'string') continue
     const lower = value.toLowerCase()
     // First writer wins, so declaration order breaks ties between members that
-    // fold to the same key (e.g. `"on"` and `"ON"`).
-    if (!(lower in byLower)) byLower[lower] = value
+    // fold to the same key (e.g. `"on"` and `"ON"`). `Set` membership is used
+    // instead of `lower in obj` so a member folding to an inherited name like
+    // `constructor` or `toString` is not wrongly treated as already-present.
+    if (seen.has(lower)) continue
+    seen.add(lower)
+    entries.push([lower, value])
   }
-  if (Object.keys(byLower).length === 0) return null
-  const map = JSON.stringify(byLower)
-  return `(typeof ${accessor} === "string" ? ((${map} as Record<string, string>)[(${accessor} as string).toLowerCase()] ?? ${fallback}) : ${fallback})`
+  if (entries.length === 0) return null
+  // A `Map` — not a plain object — so a folded key that collides with an
+  // inherited member (`constructor`, `toString`, `__proto__`, …) resolves to
+  // `undefined` (→ `fallback`) rather than an `Object.prototype` value. A
+  // plain-object lookup would return the inherited function/object for such a key.
+  const map = `new Map(${JSON.stringify(entries)})`
+  return `(typeof ${accessor} === "string" ? (${map}.get((${accessor} as string).toLowerCase()) ?? ${fallback}) : ${fallback})`
 }

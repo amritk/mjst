@@ -164,12 +164,19 @@ const getTypeCoercion = (accessor: string, schema: JSONSchema, defaultValue: str
   switch (schema.type) {
     case 'string':
       return `String(${accessor})`
-    case 'number':
-    case 'integer': {
+    case 'number': {
       // Number() of a non-numeric string produces NaN, which silently poisons
       // arithmetic. Guard with Number.isFinite and fall back to the default.
       const n = `Number(${accessor})`
       return `(Number.isFinite(${n}) ? ${n} : ${defaultValue})`
+    }
+    case 'integer': {
+      // An `integer` must coerce to a whole number, or the "repaired" value still
+      // fails validation (a bare `Number.isFinite` accepts `1.5`). Require
+      // integrality and fall back to the default otherwise — matching the
+      // root-level integer parser, which yields the default for a non-integer.
+      const n = `Number(${accessor})`
+      return `(Number.isInteger(${n}) ? ${n} : ${defaultValue})`
     }
     case 'boolean':
       return `Boolean(${accessor})`

@@ -43,6 +43,28 @@ describe('caseInsensitive coercion (end-to-end)', () => {
       const parse = compile(schema, false)
       expect(parse({ role: 'GUEST' })).toEqual({ role: 'admin' })
     })
+
+    it('does not leak Object.prototype members through the case-fold lookup', () => {
+      // A non-member input that collides with an inherited name (`constructor`,
+      // `toString`) must coerce to the default, not to the `Object.prototype`
+      // function a plain-object lookup would return.
+      const parse = compile(schema, true)
+      expect(parse({ role: 'constructor' })).toEqual({ role: 'admin' })
+      expect(parse({ role: 'toString' })).toEqual({ role: 'admin' })
+    })
+
+    it('normalizes a member whose folded key collides with an inherited name', () => {
+      // `constructor` is a legitimate enum member here; a mis-cased input must
+      // still normalize to it (a plain-object map would have dropped it).
+      const withProto = {
+        type: 'object' as const,
+        properties: { kind: { type: 'string' as const, enum: ['constructor', 'toString'] } },
+        required: ['kind'],
+      }
+      const parse = compile(withProto, true)
+      expect(parse({ kind: 'CONSTRUCTOR' })).toEqual({ kind: 'constructor' })
+      expect(parse({ kind: 'TOSTRING' })).toEqual({ kind: 'toString' })
+    })
   })
 
   describe('optional property enum', () => {

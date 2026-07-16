@@ -1694,8 +1694,8 @@ describe('generate-parser-function', () => {
   if ((_page === undefined || typeof _page === "number" && Number.isInteger(_page) && _page >= 1) && (_perPage === undefined || typeof _perPage === "number" && Number.isInteger(_perPage) && _perPage >= 1 && _perPage <= 100) && (_search === undefined || typeof _search === "string")) return { ...input } as PageParams;
   return {
     ...input,
-    ...(_page !== undefined && { page: typeof _page === "number" && Number.isInteger(_page) && _page >= 1 ? _page : (Number.isFinite(Number(_page)) ? Number(_page) : 0) }),
-    ...(_perPage !== undefined && { perPage: typeof _perPage === "number" && Number.isInteger(_perPage) && _perPage >= 1 && _perPage <= 100 ? _perPage : (Number.isFinite(Number(_perPage)) ? Number(_perPage) : 0) }),
+    ...(_page !== undefined && { page: typeof _page === "number" && Number.isInteger(_page) && _page >= 1 ? _page : (Number.isInteger(Number(_page)) ? Number(_page) : 0) }),
+    ...(_perPage !== undefined && { perPage: typeof _perPage === "number" && Number.isInteger(_perPage) && _perPage >= 1 && _perPage <= 100 ? _perPage : (Number.isInteger(Number(_perPage)) ? Number(_perPage) : 0) }),
     ...(_search !== undefined && { search: typeof _search === "string" ? _search : String(_search) }),
   } as unknown as PageParams;
 }`,
