@@ -43,6 +43,19 @@ describe('collect-validator-imports', () => {
     expect(collectValidatorImports(schema)).toEqual(["import { type Extra, validateExtra } from './extra.js'"])
   })
 
+  it('collects a $ref inside a draft-07 schema-form dependency', () => {
+    // The emitter delegates schema-form `dependencies` via `validateX`, so a $ref
+    // reached only through one must be imported (else the file calls an undefined
+    // symbol). The array form carries only strings and contributes no import.
+    const schema = {
+      type: 'object' as const,
+      properties: { a: { type: 'string' as const } },
+      dependencies: { a: { $ref: '#/$defs/needB' }, b: ['a'] },
+    }
+
+    expect(collectValidatorImports(schema)).toEqual(["import { type NeedB, validateNeedB } from './need-b.js'"])
+  })
+
   it('deduplicates a ref that appears both directly and inside a nested object', () => {
     const schema = {
       properties: {

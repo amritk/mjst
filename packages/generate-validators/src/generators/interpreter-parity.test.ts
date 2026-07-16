@@ -129,6 +129,38 @@ describe('generator/interpreter verdict parity', () => {
     )
   })
 
+  it('agrees on required properties with an empty or boolean-true schema', () => {
+    // `{ a: undefined }` is intentionally excluded: it is not representable JSON,
+    // and there the generated `'a' in obj` and the interpreter's `!== undefined`
+    // presence tests legitimately differ (a separate, deferred concern).
+    const values = [{}, { a: 1 }, { a: null }, { a: 'x' }, 'not-object', null]
+    // An empty `{}` property schema accepts any value, but the key must be present.
+    assertParity({ type: 'object', properties: { a: {} }, required: ['a'] }, values)
+    // A boolean `true` property schema is likewise accept-anything-but-present.
+    assertParity({ type: 'object', properties: { a: true }, required: ['a'] }, values)
+    // Optional empty/true schemas impose nothing.
+    assertParity({ type: 'object', properties: { a: {} } }, values)
+    assertParity({ type: 'object', properties: { a: true } }, values)
+  })
+
+  it('agrees on a root scalar type combined with a combinator', () => {
+    assertParity({ type: 'string', not: { const: 'x' } }, ['y', 'x', 42, null, true])
+    assertParity({ type: 'number', minimum: 10, allOf: [{ maximum: 100 }] }, [50, 5, 200, 'abc', null])
+    assertParity({ type: 'string', minLength: 2, anyOf: [{ maxLength: 4 }, { const: 'longer' }] }, [
+      'ab',
+      'a',
+      'abcde',
+      'longer',
+      42,
+    ])
+  })
+
+  it('agrees on items: false (array must be empty)', () => {
+    assertParity({ type: 'array', items: false }, [[], [1], [1, 2], 'not-array', null])
+    // With prefixItems, items:false caps the length instead of forbidding all.
+    assertParity({ type: 'array', prefixItems: [{ type: 'string' }], items: false }, [[], ['a'], ['a', 'b'], [1]])
+  })
+
   it('agrees on full propertyNames subschemas (beyond the pattern/length subset)', () => {
     const values = [
       {},
