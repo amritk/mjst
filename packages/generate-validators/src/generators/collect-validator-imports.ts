@@ -81,7 +81,11 @@ const collectDirectRefs = (value: unknown, refs: string[] = []): string[] => {
   // generated files, not inlined by this validator. `collectDirectRefs`
   // self-guards on non-objects, so a keyword that is a boolean or missing is a
   // harmless no-op.
-  const subSchemaMaps = ['properties', 'patternProperties', 'dependentSchemas']
+  // `dependencies` (draft-07) is dual-form: a string array (dependentRequired) or
+  // a subschema (dependentSchemas). The emitter delegates the schema form via
+  // `validateX`, so a `$ref` inside it must be imported; the string-array form is
+  // a harmless no-op here (its values are strings, not schemas).
+  const subSchemaMaps = ['properties', 'patternProperties', 'dependentSchemas', 'dependencies']
   for (const mapKey of subSchemaMaps) {
     const map = schema[mapKey]
     if (typeof map === 'object' && map !== null && !Array.isArray(map)) {

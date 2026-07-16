@@ -266,7 +266,21 @@ const generatePropertyChecks = (
   suffix: string,
   ctx: NestingContext,
 ): string[] => {
-  if (!isSchemaObject(propSchema)) return []
+  if (!isSchemaObject(propSchema)) {
+    // A boolean `true` (accept-anything) schema carries no shape checks, but a
+    // required key must still be present. `false` never validates a present value,
+    // which the strict-key / additionalProperties path handles; here we only need
+    // to enforce presence for `true`.
+    if (isRequired && propSchema === true) {
+      const parentPath = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
+      return [
+        `  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`,
+        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+        `  }`,
+      ]
+    }
+    return []
+  }
 
   const raw = `${ctx.objVar}[${JSON.stringify(key)}]`
   const path = `\`${ctx.pathPrefix}/${pointerSegment(key)}\``
@@ -451,21 +465,33 @@ const generatePropertyChecks = (
         ...generateConstraintChecks(key, raw, path, propSchema, suffix, ctx),
         ...generateCombinatorChecks(key, raw, path, propSchema, suffix, ctx),
       ]
-  if (extraLines.length > 0) {
-    if (!hasType(propSchema) && isRequired) {
-      // No `type` to anchor a missing-property check, so enforce presence here.
-      lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
-      lines.push(
-        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
-      )
-      lines.push(`  } else {`)
-      lines.push(...extraLines)
-      lines.push(`  }`)
-    } else {
+
+  if (hasType(propSchema)) {
+    // Presence was already enforced in the `hasType` branch; only wrap the
+    // combinator siblings so they run when the value is present.
+    if (extraLines.length > 0) {
       lines.push(`  if (${raw} !== undefined) {`)
       lines.push(...extraLines)
       lines.push(`  }`)
     }
+  } else if (isRequired) {
+    // Type-less required property. Presence must be enforced even when the schema
+    // contributes no other checks (e.g. `{}` — an accept-anything schema), so a
+    // missing required key is still an error. Any extra checks run in the `else`.
+    lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
+    lines.push(
+      `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+    )
+    if (extraLines.length > 0) {
+      lines.push(`  } else {`)
+      lines.push(...extraLines)
+    }
+    lines.push(`  }`)
+  } else if (extraLines.length > 0) {
+    // Type-less optional property: run any checks only when the value is present.
+    lines.push(`  if (${raw} !== undefined) {`)
+    lines.push(...extraLines)
+    lines.push(`  }`)
   }
 
   return lines
@@ -605,8 +631,17 @@ const generateConstraintChecks = (
     hasMaxItems(propSchema) ||
     (hasUniqueItems(propSchema) && propSchema.uniqueItems === true) ||
     isSchemaObject(sp['contains'] as JSONSchema) ||
-    Array.isArray(sp['prefixItems'])
+    Array.isArray(sp['prefixItems']) ||
+    (sp['items'] === false && !Array.isArray(sp['prefixItems']))
   ) {
+    // `items: false` with no `prefixItems` forbids every element, so the array
+    // must be empty. (With `prefixItems`, the tuple block below caps the length
+    // instead.) Without this the constraint was silently ignored.
+    if (sp['items'] === false && !Array.isArray(sp['prefixItems'])) {
+      lines.push(`  if (Array.isArray(${raw}) && ${raw}.length > 0) {`)
+      lines.push(`    errors.push({ message: 'must NOT have more than 0 items', path: ${path} })`)
+      lines.push(`  }`)
+    }
     if (hasMinItems(propSchema)) {
       lines.push(`  if (Array.isArray(${raw}) && ${raw}.length < ${propSchema.minItems}) {`)
       lines.push(`    errors.push({ message: 'must have at least ${propSchema.minItems} items', path: ${path} })`)
@@ -1790,10 +1825,45 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
   // (exactly one) and inline branches included, not just `$ref` branches.
   if (hasAllOf(schema) || hasAnyOf(schema) || hasOneOf(schema) || 'not' in schema || 'if' in schema) {
     const ctx = createRootContext()
-    const checks = generateCombinatorChecks('', 'input', '`${_path}`', schema, suffix, ctx)
+    const checks: string[] = []
+    // The root path expression the shared emitters use, as a template literal body.
+    const rootPath = '`${_path}`'
+
+    // A `type` (and its sibling value constraints) alongside a combinator still
+    // applies — the value must satisfy BOTH. Emit the type/constraint checks first,
+    // then the combinator checks, so a schema like `{ type: 'string', not: {…} }`
+    // or `{ type: 'number', minimum: 10, allOf: [{ maximum: 100 }] }` no longer
+    // drops the `type` check and its siblings.
+    const rootTypeArray = getTypeArray(schema)
+    if (rootTypeArray) {
+      const allWrong = rootTypeArray
+        .map((t) => wrongTypeCondition('input', t))
+        .filter((c) => c !== '')
+        .map((c) => `(${c})`)
+        .join(' && ')
+      if (allWrong) {
+        const label = rootTypeArray.map((t) => typeofString(t)).join(' or ')
+        checks.push(`  if (${allWrong}) {`)
+        checks.push(`    errors.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${rootPath} })`)
+        checks.push(`  }`)
+      }
+      checks.push(...generateConstraintChecks('', 'input', rootPath, schema, suffix, ctx))
+    } else if (hasType(schema)) {
+      const t = schema.type as string
+      const wrongType = wrongTypeCondition('input', t)
+      if (wrongType) {
+        checks.push(`  if (${wrongType}) {`)
+        checks.push(`    errors.push({ message: 'must be ${typeofString(t)}', path: ${rootPath} })`)
+        checks.push(`  }`)
+      }
+      checks.push(...generateConstraintChecks('', 'input', rootPath, schema, suffix, ctx))
+    }
+
+    checks.push(...generateCombinatorChecks('', 'input', rootPath, schema, suffix, ctx))
     const body = checks.join('\n').replaceAll('errors.push(', '(errors ??= []).push(')
+    const hoistedBlock = ctx.hoisted.length > 0 ? `${ctx.hoisted.join('\n')}\n\n` : ''
     return [
-      `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+      `${hoistedBlock}export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
       `  let errors: ValidationError[] | undefined`,
       body,
       `  return errors !== undefined ? { valid: false, errors } : true`,
