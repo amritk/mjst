@@ -26,7 +26,7 @@
     },
     "packages/adapters": {
       "name": "@amritk/adapters",
-      "version": "0.2.16",
+      "version": "0.3.0",
       "dependencies": {
         "@amritk/helpers": "workspace:*",
         "json-schema-typed": "catalog:",
@@ -48,9 +48,16 @@
         "zod-to-json-schema",
       ],
     },
+    "packages/api": {
+      "name": "@amritk/api",
+      "version": "0.0.0",
+      "dependencies": {
+        "@amritk/runtime-validators": "workspace:*",
+      },
+    },
     "packages/cli": {
       "name": "@amritk/mjst",
-      "version": "0.11.0",
+      "version": "0.12.0",
       "bin": {
         "mjst": "./dist/cli.js",
       },
@@ -74,7 +81,7 @@
     },
     "packages/generate-examples": {
       "name": "@amritk/generate-examples",
-      "version": "0.4.5",
+      "version": "0.5.0",
       "dependencies": {
         "@amritk/helpers": "workspace:*",
         "@amritk/runtime-validators": "workspace:*",
@@ -96,7 +103,7 @@
     },
     "packages/generate-parsers": {
       "name": "@amritk/generate-parsers",
-      "version": "0.16.0",
+      "version": "0.16.1",
       "dependencies": {
         "@amritk/generate-markdown": "workspace:*",
         "@amritk/helpers": "workspace:*",
@@ -110,7 +117,7 @@
     },
     "packages/generate-validators": {
       "name": "@amritk/generate-validators",
-      "version": "0.11.5",
+      "version": "0.11.6",
       "dependencies": {
         "@amritk/helpers": "workspace:*",
         "json-schema-typed": "catalog:",
@@ -128,14 +135,14 @@
     },
     "packages/helpers": {
       "name": "@amritk/helpers",
-      "version": "0.12.0",
+      "version": "0.13.0",
       "dependencies": {
         "json-schema-typed": "catalog:",
       },
     },
     "packages/lint": {
       "name": "@amritk/lint",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "dependencies": {
         "@amritk/runtime-validators": "workspace:*",
         "@amritk/yaml": "workspace:*",
@@ -150,11 +157,11 @@
     },
     "packages/resolve-refs": {
       "name": "@amritk/resolve-refs",
-      "version": "0.3.0",
+      "version": "0.4.0",
     },
     "packages/runtime-validators": {
       "name": "@amritk/runtime-validators",
-      "version": "0.6.4",
+      "version": "0.7.0",
       "dependencies": {
         "json-schema-typed": "catalog:",
       },
@@ -166,7 +173,7 @@
     },
     "packages/yaml": {
       "name": "@amritk/yaml",
-      "version": "0.2.3",
+      "version": "0.3.0",
       "devDependencies": {
         "js-yaml": "^4.1.0",
         "yaml": "^2.6.0",
@@ -178,6 +185,8 @@
   },
   "packages": {
     "@amritk/adapters": ["@amritk/adapters@workspace:packages/adapters"],
+
+    "@amritk/api": ["@amritk/api@workspace:packages/api"],
 
     "@amritk/generate-examples": ["@amritk/generate-examples@workspace:packages/generate-examples"],
 
