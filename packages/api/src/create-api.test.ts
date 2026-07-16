@@ -2,19 +2,26 @@ import { describe, expect, it } from 'vitest'
 
 import { createApi } from './create-api'
 import { defineRoute } from './define-route'
+import { payloadTooLargeError } from './payload-too-large'
 import type { ApiRequest, ValidationFailureBody } from './types'
 
 /**
  * Builds the framework-neutral request an adapter would produce, so the whole
  * pipeline is exercised without any HTTP transport.
  */
-const request = (method: string, path: string, options: { search?: string; body?: unknown } = {}): ApiRequest => ({
+const request = (
+  method: string,
+  path: string,
+  options: { search?: string; body?: unknown; headers?: Readonly<Record<string, string>> } = {},
+): ApiRequest => ({
   method,
   path,
   searchParams: () => new URLSearchParams(options.search ?? ''),
-  header: () => undefined,
+  header: (name) => options.headers?.[name],
   readBody: () =>
     'body' in options ? Promise.resolve(options.body) : Promise.reject(new SyntaxError('Unexpected end of input')),
+  readText: () => Promise.resolve(JSON.stringify(options.body)),
+  readBytes: () => Promise.resolve(new TextEncoder().encode(JSON.stringify(options.body))),
 })
 
 const getUser = defineRoute({
@@ -263,5 +270,119 @@ describe('create-api', () => {
     const response = await api.handle(request('POST', '/users', { body: { name: 'ok' } }))
     expect(response.status).toBe(201)
     expect(compiled.length).toBeGreaterThan(0)
+  })
+
+  it('validates declared request headers and hands them to the handler', async () => {
+    const authed = defineRoute({
+      method: 'get',
+      path: '/tenant',
+      request: {
+        headers: {
+          type: 'object',
+          properties: { 'x-api-key': { type: 'string', minLength: 8 } },
+          required: ['x-api-key'],
+        },
+      },
+      responses: { 200: { body: { type: 'object', properties: { key: { type: 'string' } } } } },
+      handler: ({ headers }) => ({ status: 200, body: { key: headers['x-api-key'] } }),
+    })
+    const api = createApi({ routes: [authed] })
+
+    const ok = await api.handle(request('GET', '/tenant', { headers: { 'x-api-key': 'secret-key' } }))
+    expect(ok.status).toBe(200)
+    expect(ok.body).toEqual({ key: 'secret-key' })
+
+    const missing = await api.handle(request('GET', '/tenant'))
+    expect(missing.status).toBe(400)
+    expect((missing.body as ValidationFailureBody).source).toBe('headers')
+
+    const tooShort = await api.handle(request('GET', '/tenant', { headers: { 'x-api-key': 'nope' } }))
+    expect(tooShort.status).toBe(400)
+  })
+
+  it('replaces built-in error bodies via the errors formatters', async () => {
+    const api = createApi({
+      routes: [getUser],
+      errors: {
+        notFound: () => ({ status: 404, body: { error: 'no such thing' } }),
+        validationFailed: (failure) => ({
+          status: 400,
+          body: { error: `bad ${failure.source}: ${failure.errors[0]?.message ?? 'invalid'}` },
+        }),
+      },
+    })
+
+    const missing = await api.handle(request('GET', '/nowhere'))
+    expect(missing.body).toEqual({ error: 'no such thing' })
+
+    const invalid = await api.handle(request('GET', '/users/not-a-number'))
+    expect(invalid.status).toBe(400)
+    expect((invalid.body as { error: string }).error).toMatch(/^bad params: /)
+  })
+
+  it('keeps built-in defaults for formatters that are not supplied', async () => {
+    const api = createApi({
+      routes: [getUser],
+      errors: { notFound: () => ({ status: 404, body: { error: 'custom' } }) },
+    })
+    const invalid = await api.handle(request('GET', '/users/not-a-number'))
+    expect((invalid.body as ValidationFailureBody).error).toBe('validation_failed')
+  })
+
+  it('tags raw statuses with their declared contentType', async () => {
+    const stream = defineRoute({
+      method: 'get',
+      path: '/stream',
+      responses: { 200: { contentType: 'text/plain; charset=utf-8' } },
+      handler: () => ({ status: 200, body: 'raw text' }),
+    })
+    const api = createApi({ routes: [stream], validateResponses: true })
+    const response = await api.handle(request('GET', '/stream'))
+    expect(response.status).toBe(200)
+    expect(response.contentType).toBe('text/plain; charset=utf-8')
+    // The string body passes through even with response validation on — raw
+    // statuses have no JSON value to validate.
+    expect(response.body).toBe('raw text')
+  })
+
+  it('maps payload-too-large read errors to 413', async () => {
+    const upload = defineRoute({
+      method: 'post',
+      path: '/upload',
+      request: { body: { type: 'object' } },
+      responses: { 200: {} },
+      handler: () => ({ status: 200 }),
+    })
+    const api = createApi({ routes: [upload] })
+    const tooLarge: ApiRequest = {
+      ...request('POST', '/upload'),
+      readBody: () => Promise.reject(payloadTooLargeError(16)),
+    }
+    const response = await api.handle(tooLarge)
+    expect(response.status).toBe(413)
+    expect(response.body).toEqual({ error: 'payload_too_large' })
+  })
+
+  it('maps payload-too-large errors thrown inside handlers to 413', async () => {
+    const webhook = defineRoute({
+      method: 'post',
+      path: '/webhook',
+      responses: { 200: {} },
+      handler: async ({ request: incoming }) => {
+        await incoming.readText()
+        return { status: 200 }
+      },
+    })
+    const api = createApi({
+      routes: [webhook],
+      errors: { payloadTooLarge: () => ({ status: 413, body: { error: 'too big, sorry' } }) },
+    })
+    const tooLarge: ApiRequest = {
+      ...request('POST', '/webhook'),
+      readText: () => Promise.reject(payloadTooLargeError(8)),
+    }
+    const response = await api.handle(tooLarge)
+    expect(response.status).toBe(413)
+    expect(response.body).toEqual({ error: 'too big, sorry' })
   })
 })

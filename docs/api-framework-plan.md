@@ -230,16 +230,54 @@ the compile step cannot see); `mjst compile` becomes the opt-in ceiling. Same
 contract, three engines: interpreter → generated validators → fully compiled
 routes.
 
+## Shipped: the agent-ummo readiness set (2026-07)
+
+The gaps identified in `docs/ummo-readiness.md` are closed, in both engines
+(every feature below is exercised by the differential test):
+
+- **Raw request bodies + size cap.** `ApiRequest.readText` / `readBytes` read
+  the body exactly as it arrived (webhook HMAC verification, CSV uploads);
+  the pipeline never consumes the stream unless a body schema is declared.
+  `maxBodyBytes` (adapter option / compile option) rejects oversized bodies
+  with a 413 via a shared capped reader — checked against `content-length`
+  up front and enforced while the body streams, including handler-initiated
+  reads.
+- **Streaming / raw replies + abort signal.** A response contract may declare
+  `contentType`; the handler then returns a `ReadableStream`, `Uint8Array`,
+  or string that adapters send untouched (the agent-chat token stream shape).
+  `ApiRequest.signal` aborts on client disconnect.
+- **Hook chains + CORS.** `toFetchHandler({ onRequest, onResponse })`: gates
+  run before mounts and routing (first `Response` short-circuits), decorators
+  run on every outgoing response — including 404s, gate replies, and mounted
+  routers — which is where security headers, rate limits, and feature flags
+  live. `createCors(options)` returns such a hook pair (preflight +
+  decoration). Compiled equivalents: `onRequestExports` /
+  `onResponseExports`.
+- **Custom error envelopes.** `createApi({ errors })` formatters for
+  `notFound` / `invalidJson` / `payloadTooLarge` / `validationFailed`, so an
+  app migrating onto the framework keeps its wire-visible error shape.
+  Compiled equivalent: `errorsExport`.
+- **Header schemas.** `request.headers` validates like params/query (declared
+  names only, string coercion, `source: 'headers'` failures) and unrolls into
+  `in: 'header'` OpenAPI parameters.
+- **Typed client via Hey API.** The OpenAPI document is verified as
+  [openapi-ts](https://heyapi.dev) input: `hey-api-client.test.ts` generates
+  a fetch SDK from `toOpenApi` output and asserts the contract's types come
+  through (typed path params, required headers, per-status responses). This
+  replaces framework-coupled RPC clients (Hono's `hc`) — the client is
+  generated from the same schemas that validate requests.
+
 ## Roadmap / open questions
 
 - **Generated-validator integration sugar.** A `mjst` CLI mode that reads
   route files and emits a ready-made `compile` function (schema-identity →
   generated validator), closing the loop with `@amritk/generate-validators`
   automatically.
-- **Header/cookie schemas.** `request.headers` validation and the matching
-  `in: 'header'` parameters.
-- **Content negotiation.** Non-JSON bodies (multipart, text, streams) and
-  per-status content types.
+- **Cookie schemas.** `in: 'cookie'` parameters (header schemas shipped
+  above; cookies still mean parsing the `cookie` header yourself).
+- **Content negotiation, inbound.** Raw *outbound* statuses shipped
+  (`contentType` above); multipart/form-data request bodies remain manual
+  via `readBytes`.
 - **`$ref` / components.** Shared schemas could be hoisted into
   `components.schemas` (via `@amritk/resolve-refs` knowledge of the ref graph)
   instead of inlined per operation, shrinking large documents.

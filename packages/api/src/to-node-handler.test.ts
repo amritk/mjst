@@ -93,4 +93,58 @@ describe('to-node-handler', () => {
       expect((await fetch(origin + '/missing')).status).toBe(418)
     })
   })
+
+  it('streams a contentType response over node:http', async () => {
+    const chat = defineRoute({
+      method: 'get',
+      path: '/stream',
+      responses: { 200: { contentType: 'text/plain; charset=utf-8' } },
+      handler: () => {
+        const encoder = new TextEncoder()
+        const body = new ReadableStream<Uint8Array>({
+          start: (controller) => {
+            controller.enqueue(encoder.encode('chunk-1 '))
+            controller.enqueue(encoder.encode('chunk-2'))
+            controller.close()
+          },
+        })
+        return { status: 200, body }
+      },
+    })
+    const handler = toNodeHandler(createApi({ routes: [chat] }))
+    await withServer(createServer(handler), async (origin) => {
+      const response = await fetch(origin + '/stream')
+      expect(response.status).toBe(200)
+      expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+      expect(await response.text()).toBe('chunk-1 chunk-2')
+    })
+  })
+
+  it('gives handlers the raw body text', async () => {
+    const webhook = defineRoute({
+      method: 'post',
+      path: '/webhook',
+      responses: { 200: { body: { type: 'object', properties: { raw: { type: 'string' } } } } },
+      handler: async ({ request }) => ({ status: 200, body: { raw: await request.readText() } }),
+    })
+    const handler = toNodeHandler(createApi({ routes: [webhook] }))
+    await withServer(createServer(handler), async (origin) => {
+      const payload = '{ "exact":   "bytes" }'
+      const response = await fetch(origin + '/webhook', { method: 'POST', body: payload })
+      expect(await response.json()).toEqual({ raw: payload })
+    })
+  })
+
+  it('answers 413 when the body exceeds maxBodyBytes', async () => {
+    const handler = toNodeHandler(createApi({ routes: [createUser] }), { maxBodyBytes: 16 })
+    await withServer(createServer(handler), async (origin) => {
+      const response = await fetch(origin + '/users', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'a name well beyond sixteen bytes' }),
+      })
+      expect(response.status).toBe(413)
+      expect(await response.json()).toEqual({ error: 'payload_too_large' })
+    })
+  })
 })

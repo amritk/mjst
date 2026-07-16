@@ -14,6 +14,8 @@ const request = (method: string, path: string): ApiRequest => ({
   searchParams: () => new URLSearchParams(),
   header: () => undefined,
   readBody: () => Promise.reject(new Error('no body')),
+  readText: () => Promise.reject(new Error('no body')),
+  readBytes: () => Promise.reject(new Error('no body')),
 })
 
 describe('route-factory', () => {

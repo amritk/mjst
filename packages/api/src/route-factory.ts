@@ -28,8 +28,9 @@ export const routeFactory = <Context>() => {
     const Params = undefined,
     const Query = undefined,
     const Body = undefined,
+    const Headers = undefined,
     const Responses extends ResponseContracts = ResponseContracts,
   >(
-    route: RouteContract<Params, Query, Body, Responses, Context>,
-  ): RouteContract<Params, Query, Body, Responses, Context> => route
+    route: RouteContract<Params, Query, Body, Headers, Responses, Context>,
+  ): RouteContract<Params, Query, Body, Headers, Responses, Context> => route
 }

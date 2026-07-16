@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { createApi } from './create-api'
+import { createCors } from './create-cors'
 import { defineRoute } from './define-route'
 import { toFetchHandler } from './to-fetch-handler'
 
@@ -88,5 +89,181 @@ describe('to-fetch-handler', () => {
     expect(() =>
       toFetchHandler(createApi({ routes: [empty] }), { mounts: { 'api/auth': () => new Response(null) } }),
     ).toThrow(/must start with/)
+  })
+
+  it('streams a contentType response body through untouched', async () => {
+    const chat = defineRoute({
+      method: 'post',
+      path: '/chat',
+      responses: { 200: { contentType: 'text/plain; charset=utf-8' } },
+      handler: () => {
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream<Uint8Array>({
+          start: (controller) => {
+            controller.enqueue(encoder.encode('hello '))
+            controller.enqueue(encoder.encode('stream'))
+            controller.close()
+          },
+        })
+        return { status: 200, headers: { 'x-frame-protocol': '1' }, body: stream }
+      },
+    })
+    const streaming = toFetchHandler(createApi({ routes: [chat] }))
+    const response = await streaming(new Request('http://localhost/chat', { method: 'POST' }))
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+    expect(response.headers.get('x-frame-protocol')).toBe('1')
+    expect(await response.text()).toBe('hello stream')
+  })
+
+  it('sends string and byte bodies for contentType statuses without JSON encoding', async () => {
+    const csv = defineRoute({
+      method: 'get',
+      path: '/export',
+      responses: { 200: { contentType: 'text/csv' } },
+      handler: () => ({ status: 200, body: 'a,b\n1,2' }),
+    })
+    const exporter = toFetchHandler(createApi({ routes: [csv] }))
+    const response = await exporter(new Request('http://localhost/export'))
+    // JSON.stringify would have wrapped the payload in quotes.
+    expect(await response.text()).toBe('a,b\n1,2')
+    expect(response.headers.get('content-type')).toBe('text/csv')
+  })
+
+  it('gives handlers the raw body text for signature verification', async () => {
+    const webhook = defineRoute({
+      method: 'post',
+      path: '/webhook',
+      responses: { 200: { body: { type: 'object', properties: { raw: { type: 'string' } } } } },
+      // No body schema — the pipeline must not consume the stream first.
+      handler: async ({ request }) => ({ status: 200, body: { raw: await request.readText() } }),
+    })
+    const hooked = toFetchHandler(createApi({ routes: [webhook] }))
+    const payload = '{"spacing": "matters  for  hmac"}'
+    const response = await hooked(new Request('http://localhost/webhook', { method: 'POST', body: payload }))
+    expect(await response.json()).toEqual({ raw: payload })
+  })
+
+  it('exposes the request abort signal to handlers', async () => {
+    let seen: AbortSignal | undefined
+    const probe = defineRoute({
+      method: 'get',
+      path: '/signal',
+      responses: { 204: {} },
+      handler: ({ request }) => {
+        seen = request.signal
+        return { status: 204 }
+      },
+    })
+    const controller = new AbortController()
+    const handlerWithSignal = toFetchHandler(createApi({ routes: [probe] }))
+    await handlerWithSignal(new Request('http://localhost/signal', { signal: controller.signal }))
+    expect(seen).toBeInstanceOf(AbortSignal)
+  })
+
+  it('answers 413 when the declared body exceeds maxBodyBytes', async () => {
+    const capped = toFetchHandler(createApi({ routes: [echo] }), { maxBodyBytes: 16 })
+    const response = await capped(
+      new Request('http://localhost/echo/1', {
+        method: 'POST',
+        body: JSON.stringify({ message: 'far too long for a 16 byte limit' }),
+      }),
+    )
+    expect(response.status).toBe(413)
+    expect(await response.json()).toEqual({ error: 'payload_too_large' })
+  })
+
+  it('answers 413 when a handler-initiated raw read exceeds maxBodyBytes', async () => {
+    const webhook = defineRoute({
+      method: 'post',
+      path: '/webhook',
+      responses: { 200: {} },
+      handler: async ({ request }) => {
+        await request.readText()
+        return { status: 200 }
+      },
+    })
+    const capped = toFetchHandler(createApi({ routes: [webhook] }), { maxBodyBytes: 8 })
+    const response = await capped(
+      new Request('http://localhost/webhook', { method: 'POST', body: 'well beyond eight bytes' }),
+    )
+    expect(response.status).toBe(413)
+  })
+
+  it('runs onRequest gates in order and short-circuits into onResponse', async () => {
+    const order: string[] = []
+    const gated = toFetchHandler(createApi({ routes: [empty] }), {
+      onRequest: [
+        (request) => {
+          order.push('gate-1')
+          return request.headers.get('x-blocked') === '1'
+            ? new Response(JSON.stringify({ error: 'rate_limited' }), { status: 429 })
+            : undefined
+        },
+        () => {
+          order.push('gate-2')
+          return undefined
+        },
+      ],
+      onResponse: [
+        (response) => {
+          order.push('decorate')
+          response.headers.set('x-stamped', 'yes')
+          return undefined
+        },
+      ],
+    })
+
+    const blocked = await gated(new Request('http://localhost/things/1', { headers: { 'x-blocked': '1' } }))
+    expect(blocked.status).toBe(429)
+    // The 429 still gets decorated, and gate-2 never ran.
+    expect(blocked.headers.get('x-stamped')).toBe('yes')
+    expect(order).toEqual(['gate-1', 'decorate'])
+
+    order.length = 0
+    const passed = await gated(new Request('http://localhost/things/1', { method: 'DELETE' }))
+    expect(passed.status).toBe(204)
+    expect(passed.headers.get('x-stamped')).toBe('yes')
+    expect(order).toEqual(['gate-1', 'gate-2', 'decorate'])
+  })
+
+  it('decorates 404s and mount responses too', async () => {
+    const stamped = toFetchHandler(createApi({ routes: [empty] }), {
+      mounts: { '/api/auth': () => new Response(null, { status: 200 }) },
+      onResponse: (response) => {
+        response.headers.set('x-security', 'on')
+        return undefined
+      },
+    })
+    const missing = await stamped(new Request('http://localhost/nope'))
+    expect(missing.status).toBe(404)
+    expect(missing.headers.get('x-security')).toBe('on')
+    const mounted = await stamped(new Request('http://localhost/api/auth/session'))
+    expect(mounted.headers.get('x-security')).toBe('on')
+  })
+
+  it('wires createCors preflight and decoration through the hook chain', async () => {
+    const cors = createCors({ origin: (origin) => origin, credentials: true, exposeHeaders: ['x-demo-used'] })
+    const handlerWithCors = toFetchHandler(createApi({ routes: [empty] }), {
+      onRequest: [cors.onRequest],
+      onResponse: [cors.onResponse],
+    })
+
+    const preflight = await handlerWithCors(
+      new Request('http://localhost/things/9', {
+        method: 'OPTIONS',
+        headers: { origin: 'https://shop.example', 'access-control-request-method': 'DELETE' },
+      }),
+    )
+    expect(preflight.status).toBe(204)
+    expect(preflight.headers.get('access-control-allow-origin')).toBe('https://shop.example')
+
+    const actual = await handlerWithCors(
+      new Request('http://localhost/things/9', { method: 'DELETE', headers: { origin: 'https://shop.example' } }),
+    )
+    expect(actual.status).toBe(204)
+    expect(actual.headers.get('access-control-allow-origin')).toBe('https://shop.example')
+    expect(actual.headers.get('access-control-allow-credentials')).toBe('true')
+    expect(actual.headers.get('access-control-expose-headers')).toBe('x-demo-used')
   })
 })

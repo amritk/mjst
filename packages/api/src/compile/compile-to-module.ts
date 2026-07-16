@@ -35,6 +35,32 @@ export type CompileModuleOptions = {
    * compiled equivalent of `toFetchHandler`'s `mounts` option.
    */
   readonly mounts?: Readonly<Record<string, string>>
+  /**
+   * Export names (in the routes module) of `FetchOnRequest` gates, run in
+   * order before mounts and routing — the compiled equivalent of
+   * `toFetchHandler`'s `onRequest` option. A gate returning a `Response`
+   * short-circuits the request; the response still flows through the
+   * `onResponseExports` hooks.
+   */
+  readonly onRequestExports?: readonly string[]
+  /**
+   * Export names (in the routes module) of `FetchOnResponse` decorators, run
+   * in order on every outgoing response — the compiled equivalent of
+   * `toFetchHandler`'s `onResponse` option.
+   */
+  readonly onResponseExports?: readonly string[]
+  /**
+   * Export name (in the routes module) of the `ErrorFormatters` object — the
+   * same value passed to `createApi({ errors })` in development, so both
+   * engines shape their cold-path responses identically.
+   */
+  readonly errorsExport?: string
+  /**
+   * Rejects request bodies larger than this many bytes with a 413 — the
+   * compiled equivalent of `toFetchHandler`'s `maxBodyBytes` option, enforced
+   * with the same shared capped reader.
+   */
+  readonly maxBodyBytes?: number
   /** Import specifier for the @amritk/api helpers (override for tests/vendoring). */
   readonly runtimeImport?: string
   /** Import specifier for @amritk/runtime-validators (override for tests/vendoring). */
@@ -64,14 +90,17 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   assertNoDuplicates(routes)
 
   const contextExport = options.contextExport
-  if (contextExport !== undefined && !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(contextExport)) {
-    throw new Error(`contextExport '${contextExport}' must be a valid identifier`)
-  }
+  assertIdentifier(contextExport, 'contextExport')
+  const errorsExport = options.errorsExport
+  assertIdentifier(errorsExport, 'errorsExport')
+  const onRequestExports = options.onRequestExports ?? []
+  const onResponseExports = options.onResponseExports ?? []
+  for (const name of [...onRequestExports, ...onResponseExports]) assertIdentifier(name, 'hook export')
+  const maxBodyBytes = options.maxBodyBytes
+
   const mounts = Object.entries(options.mounts ?? {}).map(([prefix, exportName]) => {
     if (!prefix.startsWith('/')) throw new Error(`Mount prefix must start with '/': '${prefix}'`)
-    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(exportName)) {
-      throw new Error(`Mount export '${exportName}' must be a valid identifier`)
-    }
+    assertIdentifier(exportName, 'Mount export')
     return [prefix.length > 1 && prefix.endsWith('/') ? prefix.slice(0, -1) : prefix, exportName] as const
   })
 
@@ -90,7 +119,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     declarations.push(...emitRouteDeclarations(route, used, contextExport))
   }
 
-  const statuses = new Set<number>([400, 404, 500])
+  const statuses = new Set<number>([400, 404, 413, 500])
   for (const route of routes) {
     for (const status of Object.keys(route.contract.responses)) statuses.add(Number(status))
   }
@@ -111,6 +140,10 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     used.buildQueryObject ? 'buildQueryObject' : undefined,
     used.coercePrimitive ? 'coercePrimitive' : undefined,
     routes.some((route) => !route.isStatic) ? 'decodeSegment' : undefined,
+    // The thrown-error path always distinguishes 413s, matching the runtime
+    // pipeline for handlers that read (or reject on) an oversized body.
+    'isPayloadTooLargeError',
+    maxBodyBytes === undefined ? undefined : 'readBytesCapped',
   ].filter((name) => name !== undefined)
   const validatorImports = [
     used.validate ? 'validate' : undefined,
@@ -120,6 +153,9 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   const routeModuleImports = [
     ...routes.map((route) => route.name),
     ...(contextExport === undefined ? [] : [contextExport]),
+    ...(errorsExport === undefined ? [] : [errorsExport]),
+    ...onRequestExports,
+    ...onResponseExports,
     ...mounts.map(([, exportName]) => exportName),
   ]
   const lines: string[] = [
@@ -141,10 +177,34 @@ export const compileToModule = (options: CompileModuleOptions): string => {
       .map((status) => `[${status}, { status: ${status}, headers: JSON_HEADERS }]`)
       .join(', ')}])`,
     'const initFor = (status) => INITS.get(status) ?? { status, headers: JSON_HEADERS }',
-    'const notFound = () => new Response(\'{"error":"not_found"}\', initFor(404))',
-    'const internalError = () => new Response(\'{"error":"internal_error"}\', initFor(500))',
-    'const invalidJson = () => new Response(\'{"error":"invalid_json"}\', initFor(400))',
   )
+
+  // The framework-neutral request the app context factory, handlers, and
+  // error formatters see. Body readers are built once here so the byte-limit
+  // behavior matches toFetchHandler exactly.
+  if (maxBodyBytes !== undefined) {
+    lines.push(
+      'const DECODER = new TextDecoder()',
+      `const readTextCapped = (request) => readBytesCapped(request.body, request.headers.get('content-length'), ${maxBodyBytes}).then((bytes) => DECODER.decode(bytes))`,
+    )
+  }
+  const readBodyExpression =
+    maxBodyBytes === undefined ? 'request.json()' : 'readTextCapped(request).then((text) => JSON.parse(text))'
+  lines.push(
+    'const makeApiRequest = (request, url, rawPath, queryIndex) => ({',
+    '  method: request.method,',
+    '  path: rawPath,',
+    "  searchParams: () => new URLSearchParams(queryIndex === -1 ? '' : url.slice(queryIndex + 1)),",
+    '  header: (name) => request.headers.get(name) ?? undefined,',
+    `  readBody: () => ${readBodyExpression},`,
+    maxBodyBytes === undefined ? '  readText: () => request.text(),' : '  readText: () => readTextCapped(request),',
+    maxBodyBytes === undefined
+      ? '  readBytes: () => request.arrayBuffer().then((buffer) => new Uint8Array(buffer)),'
+      : `  readBytes: () => readBytesCapped(request.body, request.headers.get('content-length'), ${maxBodyBytes}),`,
+    '  signal: request.signal,',
+    '})',
+  )
+
   if (used.codePoints) {
     // Mirrors the interpreter's codePointLength: JSON Schema string lengths
     // count Unicode code points, not UTF-16 units.
@@ -157,21 +217,85 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     // a non-Unicode fallback for legacy patterns the u flag rejects.
     lines.push("const compileRx = (src) => { try { return new RegExp(src, 'u') } catch { return new RegExp(src) } }")
   }
-  if (used.validate) {
-    lines.push(
-      'const failValidation = (source, collect, value) => {',
-      '  const result = collect()(value)',
-      "  return new Response(JSON.stringify({ error: 'validation_failed', source, errors: result === true ? [] : result.errors }), initFor(400))",
-      '}',
-    )
-  }
+  lines.push(...emitErrorHelpers(errorsExport, used))
   if (openApiJson !== undefined) {
     lines.push(`const OPENAPI_JSON = ${JSON.stringify(openApiJson)}`)
   }
   lines.push('', ...declarations)
-  lines.push(...emitDispatch(routes, openApiPath, contextExport, mounts))
+  lines.push(...emitDispatch(routes, openApiPath, contextExport, mounts, onRequestExports, onResponseExports))
   lines.push('', 'export default { fetch }', '')
   return lines.join('\n')
+}
+
+const assertIdentifier = (name: string | undefined, label: string): void => {
+  if (name !== undefined && !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) {
+    throw new Error(`${label} '${name}' must be a valid identifier`)
+  }
+}
+
+/**
+ * Emits the cold-path response builders. With an `errorsExport` each one
+ * consults the app's formatter first (building the same `ApiRequest` the
+ * runtime pipeline would hand it); without one they collapse to the shared
+ * frozen defaults. Call sites always pass the request context — the default
+ * builders simply ignore it, which keeps every call site identical.
+ */
+const emitErrorHelpers = (errorsExport: string | undefined, used: Record<string, boolean>): string[] => {
+  const lines: string[] = []
+  if (errorsExport === undefined) {
+    lines.push(
+      'const notFound = () => new Response(\'{"error":"not_found"}\', initFor(404))',
+      'const internalError = () => new Response(\'{"error":"internal_error"}\', initFor(500))',
+      'const invalidJson = () => new Response(\'{"error":"invalid_json"}\', initFor(400))',
+      'const payloadTooLarge = () => new Response(\'{"error":"payload_too_large"}\', initFor(413))',
+    )
+  } else {
+    lines.push(
+      // Mirrors the fetch adapter's ApiResponse → Response translation so a
+      // formatter's reply (headers, raw contentType and all) serializes the
+      // same way in both engines.
+      'const toResponse = (r) => {',
+      '  if (r.contentType !== undefined) {',
+      "    return new Response(r.body ?? null, { status: r.status, headers: { 'content-type': r.contentType, ...r.headers } })",
+      '  }',
+      '  if (r.headers === undefined) {',
+      '    return r.body === undefined ? new Response(null, { status: r.status }) : new Response(JSON.stringify(r.body), initFor(r.status))',
+      '  }',
+      '  return r.body === undefined',
+      '    ? new Response(null, { status: r.status, headers: { ...r.headers } })',
+      '    : new Response(JSON.stringify(r.body), { status: r.status, headers: { ...JSON_HEADERS, ...r.headers } })',
+      '}',
+      `const notFound = (request, url, rawPath, queryIndex) => ${errorsExport}.notFound !== undefined ? toResponse(${errorsExport}.notFound(makeApiRequest(request, url, rawPath, queryIndex))) : new Response('{"error":"not_found"}', initFor(404))`,
+      'const internalError = () => new Response(\'{"error":"internal_error"}\', initFor(500))',
+      `const invalidJson = (request, url, rawPath, queryIndex) => ${errorsExport}.invalidJson !== undefined ? toResponse(${errorsExport}.invalidJson(makeApiRequest(request, url, rawPath, queryIndex))) : new Response('{"error":"invalid_json"}', initFor(400))`,
+      `const payloadTooLarge = (request, url, rawPath, queryIndex) => ${errorsExport}.payloadTooLarge !== undefined ? toResponse(${errorsExport}.payloadTooLarge(makeApiRequest(request, url, rawPath, queryIndex))) : new Response('{"error":"payload_too_large"}', initFor(413))`,
+    )
+  }
+  lines.push(
+    'const thrown = (error, request, url, rawPath, queryIndex) => isPayloadTooLargeError(error) ? payloadTooLarge(request, url, rawPath, queryIndex) : internalError()',
+  )
+  if (used['validate']) {
+    if (errorsExport === undefined) {
+      lines.push(
+        'const failValidation = (source, collect, value) => {',
+        '  const result = collect()(value)',
+        "  return new Response(JSON.stringify({ error: 'validation_failed', source, errors: result === true ? [] : result.errors }), initFor(400))",
+        '}',
+      )
+    } else {
+      lines.push(
+        'const failValidation = (source, collect, value, request, url, rawPath, queryIndex) => {',
+        '  const result = collect()(value)',
+        '  const errors = result === true ? [] : result.errors',
+        `  if (${errorsExport}.validationFailed !== undefined) {`,
+        `    return toResponse(${errorsExport}.validationFailed({ source, errors }, makeApiRequest(request, url, rawPath, queryIndex)))`,
+        '  }',
+        "  return new Response(JSON.stringify({ error: 'validation_failed', source, errors }), initFor(400))",
+        '}',
+      )
+    }
+  }
+  return lines
 }
 
 /** Everything the emitter derives once per route. */
@@ -225,7 +349,7 @@ const emitRouteDeclarations = (
   const lines: string[] = []
   const request = route.contract.request
 
-  for (const slot of ['params', 'query', 'body'] as const) {
+  for (const slot of ['params', 'query', 'headers', 'body'] as const) {
     const schema = request?.[slot]
     if (schema === undefined) continue
     const suffix = slotSuffix(slot, route.name)
@@ -253,7 +377,14 @@ const emitRouteDeclarations = (
   }
 
   const serialized: number[] = []
+  const rawStatuses: Array<readonly [status: number, contentType: string]> = []
   for (const [status, response] of Object.entries(route.contract.responses)) {
+    if (response.contentType !== undefined) {
+      // Raw statuses skip serialization entirely — the body goes straight to
+      // the Response constructor, streaming intact.
+      rawStatuses.push([Number(status), response.contentType])
+      continue
+    }
     if (response.body === undefined) continue
     const source = generateSerializerSource(response.body)
     if (source !== undefined) {
@@ -265,8 +396,13 @@ const emitRouteDeclarations = (
   const bodyExpression = serialized
     .map((status) => `reply.status === ${status} ? serialize_${route.name}_${status}(reply.body) : `)
     .join('')
+  lines.push(`const respond_${route.name} = (reply) => {`)
+  for (const [status, contentType] of rawStatuses) {
+    lines.push(
+      `  if (reply.status === ${status}) return new Response(reply.body ?? null, { status: ${status}, headers: { 'content-type': ${JSON.stringify(contentType)}, ...reply.headers } })`,
+    )
+  }
   lines.push(
-    `const respond_${route.name} = (reply) => {`,
     `  const body = ${bodyExpression}reply.body === undefined ? null : JSON.stringify(reply.body)`,
     '  if (reply.headers === undefined) {',
     '    return body === null ? new Response(null, { status: reply.status }) : new Response(body, initFor(reply.status))',
@@ -281,13 +417,16 @@ const emitRouteDeclarations = (
   return lines
 }
 
-const slotSuffix = (slot: 'params' | 'query' | 'body', name: string): string =>
+const slotSuffix = (slot: 'params' | 'query' | 'headers' | 'body', name: string): string =>
   slot.charAt(0).toUpperCase() + slot.slice(1) + '_' + name
+
+/** The request-context arguments every cold-path helper receives. */
+const ERROR_ARGS = 'request, url, rawPath, queryIndex'
 
 /**
  * Emits the route function itself: coerce + guard the declared slots in the
- * same order as the runtime pipeline (params, query, then body), build the
- * context, call the untouched user handler, and map the reply.
+ * same order as the runtime pipeline (params, query, headers, then body),
+ * build the context, call the untouched user handler, and map the reply.
  */
 const emitRouteFunction = (
   route: CompiledEntry,
@@ -320,7 +459,7 @@ const emitRouteFunction = (
     const suffix = slotSuffix('params', route.name)
     lines.push(
       `  const params = { ${fields.join(', ')} }`,
-      `  if (!guard${suffix}(params)) return failValidation('params', collect${suffix}, params)`,
+      `  if (!guard${suffix}(params)) return failValidation('params', collect${suffix}, params, ${ERROR_ARGS})`,
     )
     paramsValue = 'params'
   }
@@ -330,31 +469,52 @@ const emitRouteFunction = (
     const suffix = slotSuffix('query', route.name)
     lines.push(
       `  const query = buildQueryObject(new URLSearchParams(queryIndex === -1 ? '' : url.slice(queryIndex + 1)), coercions${suffix})`,
-      `  if (!guard${suffix}(query)) return failValidation('query', collect${suffix}, query)`,
+      `  if (!guard${suffix}(query)) return failValidation('query', collect${suffix}, query, ${ERROR_ARGS})`,
     )
     queryValue = 'query'
   }
 
+  let headersValue = 'undefined'
+  if (request?.headers !== undefined) {
+    const suffix = slotSuffix('headers', route.name)
+    const schema = request.headers
+    const plan = buildCoercionPlan(schema)
+    const properties =
+      typeof schema === 'object' && schema !== null ? (schema as { properties?: unknown }).properties : undefined
+    const names = typeof properties === 'object' && properties !== null ? Object.keys(properties) : []
+    // Headers are lookup-only on the transport, so the declared names are
+    // unrolled here — one get per name, coerced per the startup plan, absent
+    // headers omitted so `required` can reject them (same as the runtime's
+    // buildHeadersObject).
+    lines.push('  const headers = {}')
+    names.forEach((name, index) => {
+      const kind = plan.get(name)
+      const valueExpression =
+        kind === 'number' || kind === 'boolean' ? `coercePrimitive(h${index}, '${kind}')` : `h${index}`
+      if (kind === 'number' || kind === 'boolean') used['coercePrimitive'] = true
+      lines.push(
+        `  const h${index} = request.headers.get(${JSON.stringify(name.toLowerCase())})`,
+        `  if (h${index} !== null) headers[${JSON.stringify(name)}] = ${valueExpression}`,
+      )
+    })
+    lines.push(
+      `  if (!guard${suffix}(headers)) return failValidation('headers', collect${suffix}, headers, ${ERROR_ARGS})`,
+    )
+    headersValue = 'headers'
+  }
+
   const invokeLines = (bodyValue: string, appContextValue: string, indent: string): string[] => [
-    `${indent}const context = { params: ${paramsValue}, query: ${queryValue}, body: ${bodyValue}, context: ${appContextValue}, request: apiRequest }`,
+    `${indent}const context = { params: ${paramsValue}, query: ${queryValue}, body: ${bodyValue}, headers: ${headersValue}, context: ${appContextValue}, request: apiRequest }`,
     `${indent}try {`,
     `${indent}  const reply = ${route.name}.handler(context)`,
-    `${indent}  return typeof reply?.then === 'function' ? reply.then(respond_${route.name}, internalError) : respond_${route.name}(reply)`,
-    `${indent}} catch {`,
-    `${indent}  return internalError()`,
+    `${indent}  return typeof reply?.then === 'function' ? reply.then(respond_${route.name}, (error) => thrown(error, ${ERROR_ARGS})) : respond_${route.name}(reply)`,
+    `${indent}} catch (error) {`,
+    `${indent}  return thrown(error, ${ERROR_ARGS})`,
     `${indent}}`,
   ]
 
   const runLines = (bodyValue: string, indent: string): string[] => {
-    const lines: string[] = [
-      `${indent}const apiRequest = {`,
-      `${indent}  method: request.method,`,
-      `${indent}  path: rawPath,`,
-      `${indent}  searchParams: () => new URLSearchParams(queryIndex === -1 ? '' : url.slice(queryIndex + 1)),`,
-      `${indent}  header: (name) => request.headers.get(name) ?? undefined,`,
-      `${indent}  readBody: () => request.json(),`,
-      `${indent}}`,
-    ]
+    const lines: string[] = []
     if (contextExport === undefined) {
       lines.push(...invokeLines(bodyValue, 'undefined', indent))
       return lines
@@ -369,21 +529,25 @@ const emitRouteFunction = (
       `${indent}let appContext`,
       `${indent}try {`,
       `${indent}  appContext = ${contextExport}({ request: apiRequest, env, executionContext })`,
-      `${indent}} catch {`,
-      `${indent}  return internalError()`,
+      `${indent}} catch (error) {`,
+      `${indent}  return thrown(error, ${ERROR_ARGS})`,
       `${indent}}`,
-      `${indent}return typeof appContext?.then === 'function' ? appContext.then(proceed, internalError) : proceed(appContext)`,
+      `${indent}return typeof appContext?.then === 'function' ? appContext.then(proceed, (error) => thrown(error, ${ERROR_ARGS})) : proceed(appContext)`,
     )
     return lines
   }
 
+  // The apiRequest is built after the zero-cost guards (params, query,
+  // headers) so guard-rejected requests allocate nothing, and before the body
+  // read so exactly one object owns the single-use body stream.
+  lines.push(`  const apiRequest = makeApiRequest(${ERROR_ARGS})`)
   if (request?.body !== undefined) {
     const suffix = slotSuffix('body', route.name)
     lines.push(
-      '  return request.json().then((body) => {',
-      `    if (!guard${suffix}(body)) return failValidation('body', collect${suffix}, body)`,
+      '  return apiRequest.readBody().then((body) => {',
+      `    if (!guard${suffix}(body)) return failValidation('body', collect${suffix}, body, ${ERROR_ARGS})`,
       ...runLines('body', '    '),
-      '  }, invalidJson)',
+      `  }, (error) => isPayloadTooLargeError(error) ? payloadTooLarge(${ERROR_ARGS}) : invalidJson(${ERROR_ARGS}))`,
     )
   } else {
     lines.push(...runLines('undefined', '  '))
@@ -397,17 +561,23 @@ const emitRouteFunction = (
  * URL parse, the OpenAPI document answered from its precomputed string, then
  * per-method dispatch — static paths as direct compares, parameterized paths
  * as one split plus literal segment checks, in the same precedence order as
- * the runtime router (static first, then registration order).
+ * the runtime router (static first, then registration order). With hooks the
+ * dispatch becomes an inner function wrapped by the gate/decorator chain,
+ * mirroring `toFetchHandler`.
  */
 const emitDispatch = (
   routes: readonly CompiledEntry[],
   openApiPath: string | undefined,
   contextExport: string | undefined,
   mounts: ReadonlyArray<readonly [prefix: string, exportName: string]>,
+  onRequestExports: readonly string[],
+  onResponseExports: readonly string[],
 ): string[] => {
+  const hooked = onRequestExports.length > 0 || onResponseExports.length > 0
   const extraArguments = contextExport === undefined ? '' : ', env, executionContext'
+  const dispatchName = hooked ? 'handleFetch' : 'fetch'
   const lines: string[] = [
-    `export const fetch = (request${extraArguments}) => {`,
+    `${hooked ? 'const' : 'export const'} ${dispatchName} = (request${extraArguments}) => {`,
     '  const url = request.url',
     "  const schemeEnd = url.indexOf('://')",
     "  const pathStart = url.indexOf('/', schemeEnd === -1 ? 0 : schemeEnd + 3)",
@@ -455,8 +625,37 @@ const emitDispatch = (
         )
       }
     }
-    lines.push('    return notFound()', '  }')
+    lines.push(`    return notFound(${ERROR_ARGS})`, '  }')
   }
-  lines.push('  return notFound()', '}')
+  lines.push(`  return notFound(${ERROR_ARGS})`, '}')
+
+  if (!hooked) return lines
+
+  // The hook wrapper: gates in order (first Response wins), then dispatch,
+  // and every outcome — short-circuit, mount, routed reply, 404 — through the
+  // decorators. Identical semantics to toFetchHandler's chains.
+  if (onResponseExports.length > 0) {
+    lines.push('const finishResponse = async (response, request) => {', '  let current = response', '  let next')
+    for (const name of onResponseExports) {
+      lines.push(`  next = await ${name}(current, request)`, '  if (next !== undefined) current = next')
+    }
+    lines.push('  return current', '}')
+  }
+  const finish = (expression: string): string =>
+    onResponseExports.length > 0 ? `finishResponse(${expression}, request)` : expression
+  lines.push('export const fetch = async (request, env, executionContext) => {')
+  if (onRequestExports.length > 0) {
+    lines.push('  let early')
+    for (const name of onRequestExports) {
+      lines.push(
+        `  early = await ${name}(request, env, executionContext)`,
+        `  if (early !== undefined) return ${finish('early')}`,
+      )
+    }
+  }
+  lines.push(
+    `  return ${finish(`await handleFetch(request${contextExport === undefined ? '' : ', env, executionContext'})`)}`,
+    '}',
+  )
   return lines
 }

@@ -4,6 +4,16 @@ An audit (2026-07) of every HTTP surface in the agent-ummo monorepo against
 what `@amritk/api` ships today, to answer one question: **what must the
 framework grow before agent-ummo's apps can move onto it?**
 
+> **Status update (2026-07, later the same month): every P0 and P1 gap below
+> is now shipped**, in both the runtime and compiled engines, with
+> differential coverage. Raw bodies + `maxBodyBytes` (413), streaming
+> `contentType` replies + `ApiRequest.signal`, `onRequest`/`onResponse` hook
+> chains + `createCors`, `errors` formatters, `request.headers` schemas, and
+> a Hey API (openapi-ts) typed-client integration test replacing the `hc`
+> dependency. See `api-framework-plan.md` § "Shipped: the agent-ummo
+> readiness set". The sequencing plan at the bottom is now unblocked from
+> step 1 through step 5.
+
 ## What agent-ummo runs today
 
 Five Hono 4 servers, all deployable as Cloudflare Workers, three also run

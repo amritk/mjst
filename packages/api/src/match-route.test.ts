@@ -15,7 +15,9 @@ const route = (method: string, path: string): CompiledRoute => ({
   params: undefined,
   query: undefined,
   body: undefined,
+  headers: undefined,
   responses: undefined,
+  rawContentTypes: undefined,
 })
 
 const table = (routes: readonly CompiledRoute[]): RouteTable => {

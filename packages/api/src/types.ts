@@ -18,6 +18,16 @@ export type ResponseContract = {
   readonly description?: string
   /** JSON Schema for the response body. Omit for an empty-body response. */
   readonly body?: unknown
+  /**
+   * Marks this status as a raw (non-JSON) response and sets its content type,
+   * e.g. `'text/plain; charset=utf-8'` or `'text/event-stream'`. The handler
+   * then returns a {@link StreamingBody} for this status, and adapters send it
+   * untouched — no `JSON.stringify`, streaming intact. A `body` schema may
+   * still be declared purely for OpenAPI documentation; runtime response
+   * validation always skips raw statuses because there is no JSON value to
+   * check.
+   */
+  readonly contentType?: string
 }
 
 /**
@@ -26,6 +36,14 @@ export type ResponseContract = {
  * return status codes the contract declares.
  */
 export type ResponseContracts = { readonly [status: number]: ResponseContract }
+
+/**
+ * What a handler returns as `body` for a status declared with `contentType`:
+ * raw payloads the adapters pass through without JSON serialization. A
+ * `ReadableStream` keeps flowing to the client as the handler produces it —
+ * this is how server-sent events and AI token streams are modeled.
+ */
+export type StreamingBody = ReadableStream<Uint8Array> | Uint8Array | string
 
 /**
  * The value a handler sees for one request slot: the schema's inferred type
@@ -43,6 +61,11 @@ export type SchemaValue<S> = [S] extends [undefined] ? undefined : FromSchema<S>
  * Everything that costs work is lazy: `searchParams` is only called when the
  * matched route declares a query schema, and `readBody` only when it declares a
  * body schema — so routes that do not use them never pay for parsing.
+ *
+ * The underlying body is a stream, so exactly one of `readBody`, `readText`,
+ * or `readBytes` may be called, once, per request. A route that verifies a
+ * webhook signature declares no body schema (so the pipeline does not consume
+ * the stream) and calls `readText` itself.
  */
 export type ApiRequest = {
   /** Uppercase HTTP method, e.g. `'GET'`. Adapters are responsible for casing. */
@@ -53,18 +76,36 @@ export type ApiRequest = {
   readonly searchParams: () => URLSearchParams
   /** Case-insensitive header lookup; call with a lowercase name. */
   readonly header: (name: string) => string | undefined
-  /** Reads and JSON-parses the request body. Called at most once per request. */
+  /** Reads and JSON-parses the request body. */
   readonly readBody: () => Promise<unknown>
+  /**
+   * Reads the request body as text, exactly as it arrived — the form webhook
+   * signature verification needs (Stripe, Shopify HMAC), where re-serialized
+   * JSON would never match the signed bytes.
+   */
+  readonly readText: () => Promise<string>
+  /** Reads the request body as raw bytes (file uploads, binary payloads). */
+  readonly readBytes: () => Promise<Uint8Array>
+  /**
+   * Aborts when the client disconnects, so long-running handlers (streaming
+   * chat replies) can stop work that nobody is listening to. Optional because
+   * not every transport can observe disconnects.
+   */
+  readonly signal?: AbortSignal
 }
 
 /**
  * The framework-neutral response {@link Api.handle} resolves with. Adapters
- * serialize `body` as JSON; `undefined` means an empty body.
+ * serialize `body` as JSON; `undefined` means an empty body. When
+ * `contentType` is set (the reply's status was declared with a raw
+ * `contentType` in its contract), `body` is a {@link StreamingBody} and
+ * adapters send it untouched under that content type instead of serializing.
  */
 export type ApiResponse = {
   readonly status: number
   readonly headers?: Readonly<Record<string, string>>
   readonly body?: unknown
+  readonly contentType?: string
 }
 
 /**
@@ -73,10 +114,11 @@ export type ApiResponse = {
  * {@link ApiOptions.context} factory returns), and the raw {@link ApiRequest}
  * for anything the contract does not model.
  */
-export type RequestContext<Params, Query, Body, Context = undefined> = {
+export type RequestContext<Params, Query, Body, Headers, Context = undefined> = {
   readonly params: SchemaValue<Params>
   readonly query: SchemaValue<Query>
   readonly body: SchemaValue<Body>
+  readonly headers: SchemaValue<Headers>
   readonly context: Context
   readonly request: ApiRequest
 }
@@ -88,25 +130,31 @@ export type RequestContext<Params, Query, Body, Context = undefined> = {
  * declared one, is a type error at the contract.
  */
 export type RouteReply<Responses extends ResponseContracts> = {
-  [Status in keyof Responses]: Responses[Status] extends { body: infer B }
+  [Status in keyof Responses]: Responses[Status] extends { contentType: string }
     ? {
         readonly status: Status
         readonly headers?: Readonly<Record<string, string>>
-        readonly body: FromSchema<B>
+        readonly body: StreamingBody
       }
-    : {
-        readonly status: Status
-        readonly headers?: Readonly<Record<string, string>>
-        readonly body?: undefined
-      }
+    : Responses[Status] extends { body: infer B }
+      ? {
+          readonly status: Status
+          readonly headers?: Readonly<Record<string, string>>
+          readonly body: FromSchema<B>
+        }
+      : {
+          readonly status: Status
+          readonly headers?: Readonly<Record<string, string>>
+          readonly body?: undefined
+        }
 }[keyof Responses]
 
 /**
  * A route's implementation. It only runs after every declared request schema
  * has validated, so the context values are safe to use without further checks.
  */
-export type RouteHandler<Params, Query, Body, Responses extends ResponseContracts, Context = undefined> = (
-  context: RequestContext<Params, Query, Body, Context>,
+export type RouteHandler<Params, Query, Body, Headers, Responses extends ResponseContracts, Context = undefined> = (
+  context: RequestContext<Params, Query, Body, Headers, Context>,
 ) => RouteReply<Responses> | Promise<RouteReply<Responses>>
 
 /**
@@ -122,6 +170,7 @@ export type RouteContract<
   Params = undefined,
   Query = undefined,
   Body = undefined,
+  Headers = undefined,
   Responses extends ResponseContracts = ResponseContracts,
   Context = undefined,
 > = {
@@ -142,9 +191,18 @@ export type RouteContract<
     readonly query?: Query
     /** JSON Schema for the JSON request body. Declaring it makes a JSON body required. */
     readonly body?: Body
+    /**
+     * JSON Schema (object) for request headers. Property names are header
+     * names (write them lowercase — lookup is case-insensitive but the
+     * validated object's keys are exactly the schema's). Only declared
+     * properties are read; values are coerced from strings first, like query
+     * parameters. Each property becomes an `in: 'header'` parameter in
+     * OpenAPI.
+     */
+    readonly headers?: Headers
   }
   readonly responses: Responses
-  readonly handler: RouteHandler<Params, Query, Body, Responses, Context>
+  readonly handler: RouteHandler<Params, Query, Body, Headers, Responses, Context>
 }
 
 /**
@@ -168,6 +226,7 @@ export type ErasedRequestContext = {
   readonly params: never
   readonly query: never
   readonly body: never
+  readonly headers: never
   readonly context: never
   readonly request: ApiRequest
 }
@@ -189,6 +248,7 @@ export type AnyRouteContract = {
     readonly params?: unknown
     readonly query?: unknown
     readonly body?: unknown
+    readonly headers?: unknown
   }
   readonly responses: ResponseContracts
   readonly handler: (context: ErasedRequestContext) => RouteReplyValue | Promise<RouteReplyValue>
@@ -229,6 +289,16 @@ export type CompiledInput = CompiledValidation & {
 }
 
 /**
+ * A compiled headers slot. Unlike params and query, headers cannot be
+ * enumerated from an {@link ApiRequest} (it only offers lookup), so the
+ * schema's declared property names — paired with their lowercase lookup form —
+ * are captured at startup and drive the per-request reads.
+ */
+export type CompiledHeaders = CompiledInput & {
+  readonly names: ReadonlyArray<readonly [property: string, lookup: string]>
+}
+
+/**
  * One segment of a compiled route path: a literal string, or a named parameter
  * capturing the whole segment.
  */
@@ -246,8 +316,15 @@ export type CompiledRoute = {
   readonly params: CompiledInput | undefined
   readonly query: CompiledInput | undefined
   readonly body: CompiledValidation | undefined
+  readonly headers: CompiledHeaders | undefined
   /** Response-body validators, present only when `validateResponses` is on. */
   readonly responses: ReadonlyMap<number, CompiledValidation> | undefined
+  /**
+   * Statuses declared with a raw `contentType`, so the reply path can tag the
+   * {@link ApiResponse} without touching the contract per request. Undefined
+   * for the common all-JSON route.
+   */
+  readonly rawContentTypes: ReadonlyMap<number, string> | undefined
 }
 
 /**
@@ -329,6 +406,38 @@ export type ApiOptions = {
   readonly validateResponses?: boolean
   /** Maps a thrown handler error to a response. Defaults to a bare 500. */
   readonly onError?: (error: unknown, request: ApiRequest) => ApiResponse
+  /**
+   * Overrides the built-in error response bodies, for apps with an existing
+   * error envelope their clients already parse. Each formatter replaces one
+   * cold-path default; anything not supplied keeps the built-in shape.
+   */
+  readonly errors?: ErrorFormatters
+}
+
+/**
+ * What a request failed validation on, handed to the `validationFailed`
+ * formatter so it can shape the 400 however the app's clients expect.
+ */
+export type ValidationFailure = {
+  readonly source: 'params' | 'query' | 'headers' | 'body'
+  readonly errors: readonly ValidationError[]
+}
+
+/**
+ * Custom formatters for the pipeline's own responses. These exist because an
+ * API being migrated onto this framework usually has a wire-visible error
+ * shape already — deployed clients parse it — and changing every 400/404 body
+ * at once is a breaking change nobody asked for.
+ */
+export type ErrorFormatters = {
+  /** Replaces the default `404 {error:'not_found'}`. */
+  readonly notFound?: (request: ApiRequest) => ApiResponse
+  /** Replaces the default `400 {error:'invalid_json'}` for unparseable bodies. */
+  readonly invalidJson?: (request: ApiRequest) => ApiResponse
+  /** Replaces the default `413 {error:'payload_too_large'}`. */
+  readonly payloadTooLarge?: (request: ApiRequest) => ApiResponse
+  /** Replaces the default `400` {@link ValidationFailureBody}. */
+  readonly validationFailed?: (failure: ValidationFailure, request: ApiRequest) => ApiResponse
 }
 
 /**
@@ -361,6 +470,6 @@ export type Api = {
  */
 export type ValidationFailureBody = {
   readonly error: 'validation_failed'
-  readonly source: 'params' | 'query' | 'body'
+  readonly source: 'params' | 'query' | 'headers' | 'body'
   readonly errors: readonly ValidationError[]
 }
