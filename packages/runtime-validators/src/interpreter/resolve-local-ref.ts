@@ -35,8 +35,18 @@ export const resolveLocalRef = (ref: string, root: unknown): unknown => {
   let current: unknown = root
 
   for (const rawPart of parts) {
+    // A `$ref` fragment is a URI, so each token is percent-decoded (RFC 6901 §6)
+    // before the JSON Pointer `~1`/`~0` unescaping — otherwise `#/$defs/a%20b`
+    // would look for the literal key `a%20b` instead of `a b` and fail to resolve.
+    // A malformed sequence (a stray `%`) is treated as a literal token, not an error.
+    let decoded = rawPart
+    try {
+      decoded = decodeURIComponent(rawPart)
+    } catch {
+      // Not valid percent-encoding — use the token verbatim.
+    }
     // JSON Pointer escaping: ~1 → "/" and ~0 → "~".
-    const part = rawPart.replace(/~1/g, '/').replace(/~0/g, '~')
+    const part = decoded.replace(/~1/g, '/').replace(/~0/g, '~')
 
     if (current === null || typeof current !== 'object') return undefined
     if (Array.isArray(current)) {

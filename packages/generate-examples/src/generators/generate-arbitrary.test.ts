@@ -87,6 +87,27 @@ describe('generate-arbitrary', () => {
     expect(code).toContain('max: 1')
   })
 
+  it('rounds fractional integer bounds to satisfiable integers', () => {
+    // fc.integer rejects non-integral bounds, so 2.5 must round up to 3 and an
+    // exclusive 5.5 up to 6 (smallest integer that still satisfies the bound).
+    expect(generateArbitrary({ type: 'integer', minimum: 2.5 }, 'A')).toContain('fc.integer({ min: 3 })')
+    expect(generateArbitrary({ type: 'integer', exclusiveMinimum: 5.5 }, 'B')).toContain('fc.integer({ min: 6 })')
+    expect(generateArbitrary({ type: 'integer', maximum: 7.5 }, 'C')).toContain('fc.integer({ max: 7 })')
+    expect(generateArbitrary({ type: 'integer', exclusiveMaximum: 7.5 }, 'D')).toContain('fc.integer({ max: 7 })')
+  })
+
+  it('honours the tighter number bound when inclusive and exclusive are both present', () => {
+    // exclusiveMinimum 5 is tighter than minimum 0, so the exclusive bound must
+    // win rather than being shadowed by the inclusive one.
+    const low = generateArbitrary({ type: 'number', minimum: 0, exclusiveMinimum: 5 }, 'Low')
+    expect(low).toContain('min: 5, minExcluded: true')
+    expect(low).not.toContain('min: 0')
+
+    const high = generateArbitrary({ type: 'number', maximum: 10, exclusiveMaximum: 3 }, 'High')
+    expect(high).toContain('max: 3, maxExcluded: true')
+    expect(high).not.toContain('max: 10')
+  })
+
   it('generates fc.constantFrom for enums and fc.constant for const', () => {
     expect(generateArbitrary({ enum: ['a', 'b'] }, 'Choice')).toContain('fc.constantFrom("a", "b")')
     expect(generateArbitrary({ const: 42 }, 'Answer')).toContain('fc.constant(42)')

@@ -145,15 +145,20 @@ const integerExpr = (schema: JSONSchema): string => {
   const opts: string[] = []
   // With both `minimum` and `exclusiveMinimum` present the effective lower bound
   // is the tighter (larger) of the two, so combine them rather than letting one
-  // shadow the other via else-if.
+  // shadow the other via else-if. `fc.integer` also requires integral bounds, but
+  // the schema keywords may be fractional (`minimum: 2.5`, `exclusiveMinimum: 5.5`),
+  // so round each toward the satisfiable side: the smallest integer that still
+  // meets the lower bound, and the largest that still meets the upper.
+  // `Math.floor(x) + 1` is the smallest integer strictly greater than `x` (so it
+  // also handles integral exclusives); `Math.ceil(x) - 1` is the largest strictly less.
   const mins: number[] = []
-  if (hasMinimum(schema)) mins.push(Number(schema.minimum))
-  if (hasExclusiveMinimum(schema)) mins.push(Number(schema.exclusiveMinimum) + 1)
+  if (hasMinimum(schema)) mins.push(Math.ceil(Number(schema.minimum)))
+  if (hasExclusiveMinimum(schema)) mins.push(Math.floor(Number(schema.exclusiveMinimum)) + 1)
   if (mins.length > 0) opts.push(`min: ${Math.max(...mins)}`)
 
   const maxs: number[] = []
-  if (hasMaximum(schema)) maxs.push(Number(schema.maximum))
-  if (hasExclusiveMaximum(schema)) maxs.push(Number(schema.exclusiveMaximum) - 1)
+  if (hasMaximum(schema)) maxs.push(Math.floor(Number(schema.maximum)))
+  if (hasExclusiveMaximum(schema)) maxs.push(Math.ceil(Number(schema.exclusiveMaximum)) - 1)
   if (maxs.length > 0) opts.push(`max: ${Math.min(...maxs)}`)
 
   const base = opts.length > 0 ? `fc.integer({ ${opts.join(', ')} })` : 'fc.integer()'
@@ -232,10 +237,26 @@ const numberExpr = (schema: JSONSchema): string => {
   if (hasMultipleOf(schema) && schema.multipleOf > 0) return numberMultipleOfExpr(schema)
 
   const opts: string[] = ['noNaN: true', 'noDefaultInfinity: true']
-  if (hasMinimum(schema)) opts.push(`min: ${schema.minimum}`)
-  else if (hasExclusiveMinimum(schema)) opts.push(`min: ${schema.exclusiveMinimum}`, 'minExcluded: true')
-  if (hasMaximum(schema)) opts.push(`max: ${schema.maximum}`)
-  else if (hasExclusiveMaximum(schema)) opts.push(`max: ${schema.exclusiveMaximum}`, 'maxExcluded: true')
+  // With both an inclusive and an exclusive bound on the same side, honour the
+  // tighter one instead of letting `minimum`/`maximum` shadow the exclusive via
+  // else-if (which would emit values that violate the exclusive bound). The
+  // exclusive bound wins ties, since it additionally excludes the endpoint.
+  if (
+    hasMinimum(schema) &&
+    (!hasExclusiveMinimum(schema) || Number(schema.minimum) > Number(schema.exclusiveMinimum))
+  ) {
+    opts.push(`min: ${schema.minimum}`)
+  } else if (hasExclusiveMinimum(schema)) {
+    opts.push(`min: ${schema.exclusiveMinimum}`, 'minExcluded: true')
+  }
+  if (
+    hasMaximum(schema) &&
+    (!hasExclusiveMaximum(schema) || Number(schema.maximum) < Number(schema.exclusiveMaximum))
+  ) {
+    opts.push(`max: ${schema.maximum}`)
+  } else if (hasExclusiveMaximum(schema)) {
+    opts.push(`max: ${schema.exclusiveMaximum}`, 'maxExcluded: true')
+  }
 
   return `fc.double({ ${opts.join(', ')} })`
 }

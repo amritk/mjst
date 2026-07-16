@@ -83,6 +83,38 @@ describe('generate-validator-function', () => {
     expect(code).toContain('`${_path}/title`')
   })
 
+  it('escapes property names in error paths against template-literal breakout and injection', () => {
+    // A key with a backtick / `${` must neither break the generated template
+    // literal (a build failure) nor inject an interpolation (a ReferenceError).
+    const schema = {
+      type: 'object' as const,
+      properties: { 'a`b': { type: 'string' as const }, 'p${x}z': { type: 'string' as const } },
+    }
+    const code = generateValidatorFunction(schema, 'Evil')
+
+    // The generated source must still compile and run without throwing.
+    const validate = evalValidator(code)
+    expect(validate({ 'a`b': 1, 'p${x}z': 2 })).toEqual({
+      valid: false,
+      errors: [
+        { message: 'must be string', path: '/a`b' },
+        { message: 'must be string', path: '/p${x}z' },
+      ],
+    })
+  })
+
+  it('JSON-Pointer-escapes ~ and / in error paths to match the interpreter', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { 'a/b~c': { type: 'string' as const } },
+    }
+    const validate = evalValidator(generateValidatorFunction(schema, 'Ptr'))
+    expect(validate({ 'a/b~c': 1 })).toEqual({
+      valid: false,
+      errors: [{ message: 'must be string', path: '/a~1b~0c' }],
+    })
+  })
+
   it('generates an enum validator', () => {
     const schema = {
       enum: ['get', 'post', 'put', 'delete'],

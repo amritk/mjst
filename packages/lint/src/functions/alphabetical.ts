@@ -23,7 +23,7 @@ const compare = (a: unknown, b: unknown): number => {
   if (isIntegerLike(a) && isIntegerLike(b)) return Math.sign(Number(a) - Number(b))
   // Match Spectral: when either side is a real number or a numeric string,
   // compare numerically so mixed inputs like [2, "10"] read as ordered.
-  if ((typeof a === 'number' || Number.isNaN(Number(a))) && (typeof b === 'number' || !Number.isNaN(Number(b)))) {
+  if ((typeof a === 'number' || !Number.isNaN(Number(a))) && (typeof b === 'number' || !Number.isNaN(Number(b)))) {
     return Math.min(1, Math.max(-1, Number(a) - Number(b)))
   }
   if (typeof a !== 'string' || typeof b !== 'string') return 0

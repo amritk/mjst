@@ -24,6 +24,23 @@ describe('valibotToJsonSchema', () => {
     expect((result as { required: string[] }).required).not.toContain('age')
   })
 
+  it('emits 2020-12 prefixItems for tuples, not draft-07 array-items', async () => {
+    // The converter defaults to draft-07 (`items: [...]`), which the generators
+    // do not recognize as a tuple; the adapter must target 2020-12 so element
+    // types and length are validated downstream.
+    const result = await valibotToJsonSchema(v.object({ pair: v.tuple([v.string(), v.number()]) }))
+
+    expect(result).toMatchObject({
+      properties: {
+        pair: { type: 'array', prefixItems: [{ type: 'string' }, { type: 'number' }] },
+      },
+    })
+    expect((result as { properties: { pair: Record<string, unknown> } }).properties.pair).not.toHaveProperty('items', [
+      { type: 'string' },
+      { type: 'number' },
+    ])
+  })
+
   it('converts picklists to a string schema with an enum list', async () => {
     const result = await valibotToJsonSchema(v.object({ role: v.picklist(['admin', 'user']) }))
 

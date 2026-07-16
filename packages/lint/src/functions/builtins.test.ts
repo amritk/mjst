@@ -210,6 +210,14 @@ describe('alphabetical (order and keyedBy)', () => {
     expect(alphabetical(['10', '2'], {}, ctx())).toHaveLength(1)
   })
 
+  it('compares decimal numeric strings numerically, not lexically', () => {
+    // "9.5" < "10" numerically, so an ascending pair must not be flagged, and a
+    // descending one must be. Lexical comparison would invert both.
+    expect(alphabetical(['9.5', '10'], {}, ctx())).toHaveLength(0)
+    expect(alphabetical(['10', '9.5'], {}, ctx())).toHaveLength(1)
+    expect(alphabetical(['10', 2], {}, ctx())).toHaveLength(1)
+  })
+
   it('reports non-object items under keyedBy', () => {
     const results = alphabetical([{ name: 'a' }, 5], { keyedBy: 'name' }, ctx())
     expect(results).toHaveLength(1)
