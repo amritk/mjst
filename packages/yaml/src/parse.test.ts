@@ -36,4 +36,14 @@ describe('parse', () => {
       s: 'hello',
     })
   })
+
+  it('resolves a scalar type even when a blank line follows it', () => {
+    // A blank line before the next entry must not turn `1`/`true` into strings.
+    expect(parse('port: 8080\n\nhost: x\n')).toEqual({ port: 8080, host: 'x' })
+    expect(parse('a: 1\n\nb: true\n\nc: 1.5\n\nd: null\n')).toEqual({ a: 1, b: true, c: 1.5, d: null })
+    // Multiple blank lines behave the same.
+    expect(parse('k: 42\n\n\n\nj: 7\n')).toEqual({ k: 42, j: 7 })
+    // A genuinely multi-line plain scalar still folds to a string.
+    expect(parse('m: foo\n  bar\n\nn: 2\n')).toEqual({ m: 'foo bar', n: 2 })
+  })
 })

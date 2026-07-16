@@ -443,7 +443,13 @@ const scanPlainScalar = (state: State, parentIndent: number): YamlScalar => {
   while (segments.length > 1 && segments[segments.length - 1] === '') segments.pop()
   const folded = foldSegments(segments)
   const source = src.slice(start, valueEnd)
-  return { kind: 'scalar', value: folded, source, style: 'plain', start, end: valueEnd }
+  // Resolve the folded text through the core schema, just like the single-line
+  // path above. Staging a following blank line forces this branch even for a
+  // one-line scalar (e.g. `a: 1` before a blank line), so skipping resolution
+  // here turned `1`/`true` into the strings `"1"`/`"true"`. A genuinely
+  // multi-line plain scalar folds to spaced text that no int/bool/float pattern
+  // matches, so it correctly stays a string.
+  return { kind: 'scalar', value: resolvePlainValue(folded), source, style: 'plain', start, end: valueEnd }
 }
 
 /** Folds plain-scalar continuation lines: single break → space, blank line → newline. */
