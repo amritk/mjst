@@ -194,6 +194,21 @@ export const tenantInfo = defineRoute({
   }),
 })
 
+/** A validated cookies slot: required session, coerced counter, tracking noise ignored. */
+export const dashboard = defineRoute({
+  method: 'get',
+  path: '/dashboard',
+  request: {
+    cookies: {
+      type: 'object',
+      properties: { session: { type: 'string', minLength: 4 }, visits: { type: 'integer' } },
+      required: ['session'],
+    },
+  },
+  responses: { 200: { body: { type: 'object' } } },
+  handler: ({ cookies }) => ({ status: 200, body: { session: cookies.session, visits: cookies.visits ?? 0 } }),
+})
+
 /** A raw streaming status — the agent-chat shape. */
 export const streamChat = defineRoute({
   method: 'post',

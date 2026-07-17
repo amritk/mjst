@@ -54,6 +54,26 @@ describe('define-route', () => {
     })
   })
 
+  it('types the cookies slot from its schema', () => {
+    defineRoute({
+      method: 'get',
+      path: '/dashboard',
+      request: {
+        cookies: {
+          type: 'object',
+          properties: { session: { type: 'string' }, visits: { type: 'integer' } },
+          required: ['session'],
+        },
+      },
+      responses: { 204: {} },
+      handler: ({ cookies }) => {
+        expectTypeOf(cookies.session).toEqualTypeOf<string>()
+        expectTypeOf(cookies.visits).toEqualTypeOf<number | undefined>()
+        return { status: 204 }
+      },
+    })
+  })
+
   it('types raw contentType statuses as streaming bodies', () => {
     defineRoute({
       method: 'post',

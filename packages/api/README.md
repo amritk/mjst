@@ -104,7 +104,7 @@ Writing an adapter for anything else is ~15 lines: construct one
 | `context` | — | Per-request app context factory (database handles, sessions). See [App context](#app-context-drizzle-sessions-anything-per-request). |
 | `validateResponses` | `false` | Validate reply bodies against the declared response schemas; mismatches become a 500. A development/test net. |
 | `onError` | bare 500 | Map a thrown handler error to a response. Receives `(error, request, { route, env, executionContext })` — everything error reporting needs. The default never leaks the error message. |
-| `errors` | built-in bodies | Reshape the pipeline's own cold-path responses (`notFound`, `invalidJson`, `payloadTooLarge`, `validationFailed`) to match an existing wire format. |
+| `errors` | built-in bodies | Reshape the pipeline's own cold-path responses (`notFound`, `invalidJson`, `payloadTooLarge`, `validationFailed`, `methodNotAllowed`) to match an existing wire format. |
 
 ### Validation semantics
 
@@ -122,6 +122,13 @@ Writing an adapter for anything else is ~15 lines: construct one
   headers are read, values coerce like query parameters, and each property
   becomes an `in: 'header'` OpenAPI parameter — so `x-api-key`-style auth
   requirements document themselves.
+- `request.cookies` works the same way for the `cookie` header: only declared
+  names are read (tracking cookies never reach validation), values are
+  unquoted and percent-decoded per the usual middleware conventions, and
+  each property becomes an `in: 'cookie'` OpenAPI parameter.
+- A known path requested with the wrong method answers
+  `405 { error: 'method_not_allowed' }` with a sorted `allow` header;
+  unknown paths stay 404.
 - Validation failures answer `400` with `{ error: 'validation_failed', source,
   errors }` where `errors` carries the same `{ message, path }` shape as
   `@amritk/runtime-validators` and `source` is `params`, `query`, `headers`,

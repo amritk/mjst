@@ -114,6 +114,27 @@ describe('to-open-api', () => {
     ])
   })
 
+  it('unrolls cookie schemas into in:cookie parameters', () => {
+    const dashboard = defineRoute({
+      method: 'get',
+      path: '/dashboard',
+      request: {
+        cookies: {
+          type: 'object',
+          properties: { session: { type: 'string' } },
+          required: ['session'],
+        },
+      },
+      responses: { 200: {} },
+      handler: () => ({ status: 200 }),
+    })
+    const document = toOpenApi([dashboard], info)
+    const operation = (document.paths['/dashboard'] as Record<string, Record<string, unknown>>)['get']
+    expect(operation?.['parameters']).toEqual([
+      { name: 'session', in: 'cookie', required: true, schema: { type: 'string' } },
+    ])
+  })
+
   it('documents raw statuses under their content type, without media parameters', () => {
     const chat = defineRoute({
       method: 'post',

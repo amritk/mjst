@@ -16,6 +16,7 @@ const route = (method: string, path: string): CompiledRoute => ({
   query: undefined,
   body: undefined,
   headers: undefined,
+  cookies: undefined,
   responses: undefined,
   rawContentTypes: undefined,
 })
@@ -32,7 +33,7 @@ const table = (routes: readonly CompiledRoute[]): RouteTable => {
       dynamicRoutes.set(compiled.method, list)
     }
   }
-  return { staticRoutes, dynamicRoutes }
+  return { staticRoutes, dynamicRoutes, methods: [...new Set(routes.map((compiled) => compiled.method))] }
 }
 
 describe('match-route', () => {

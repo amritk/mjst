@@ -122,6 +122,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   const used = {
     coercePrimitive: false,
     buildQueryObject: false,
+    buildCookiesObject: false,
     decodeSegment: false,
     validate: false,
     validateGuard: false,
@@ -153,6 +154,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
 
   const helperImports = [
     used.buildQueryObject ? 'buildQueryObjectFromString' : undefined,
+    used.buildCookiesObject ? 'buildCookiesObject' : undefined,
     used.coercePrimitive ? 'coercePrimitive' : undefined,
     routes.some((route) => !route.isStatic) ? 'decodeSegment' : undefined,
     // The thrown-error path always distinguishes 413s, matching the runtime
@@ -282,17 +284,23 @@ const emitErrorHelpers = (
     )
   }
   lines.push('const internalError = () => new Response(\'{"error":"internal_error"}\', initFor(500))')
+  // The default 405 merges the allow header into the standard JSON headers —
+  // exactly what the fetch adapter does with the runtime pipeline's reply.
+  const defaultMethodNotAllowed =
+    'new Response(\'{"error":"method_not_allowed"}\', { status: 405, headers: { ...JSON_HEADERS, allow: allow.join(\', \') } })'
   if (errorsExport === undefined) {
     lines.push(
       'const notFound = () => new Response(\'{"error":"not_found"}\', initFor(404))',
       'const invalidJson = () => new Response(\'{"error":"invalid_json"}\', initFor(400))',
       'const payloadTooLarge = () => new Response(\'{"error":"payload_too_large"}\', initFor(413))',
+      `const methodNotAllowed = (allow) => ${defaultMethodNotAllowed}`,
     )
   } else {
     lines.push(
       `const notFound = (request, url, rawPath, queryIndex) => ${errorsExport}.notFound !== undefined ? toResponse(${errorsExport}.notFound(makeApiRequest(request, url, rawPath, queryIndex))) : new Response('{"error":"not_found"}', initFor(404))`,
       `const invalidJson = (request, url, rawPath, queryIndex) => ${errorsExport}.invalidJson !== undefined ? toResponse(${errorsExport}.invalidJson(makeApiRequest(request, url, rawPath, queryIndex))) : new Response('{"error":"invalid_json"}', initFor(400))`,
       `const payloadTooLarge = (request, url, rawPath, queryIndex) => ${errorsExport}.payloadTooLarge !== undefined ? toResponse(${errorsExport}.payloadTooLarge(makeApiRequest(request, url, rawPath, queryIndex))) : new Response('{"error":"payload_too_large"}', initFor(413))`,
+      `const methodNotAllowed = (allow, request, url, rawPath, queryIndex) => ${errorsExport}.methodNotAllowed !== undefined ? toResponse(${errorsExport}.methodNotAllowed(allow, makeApiRequest(request, url, rawPath, queryIndex))) : ${defaultMethodNotAllowed}`,
     )
   }
   // The 413 check runs first in both variants: an oversized body is the
@@ -383,7 +391,7 @@ const emitRouteDeclarations = (
   const lines: string[] = []
   const request = route.contract.request
 
-  for (const slot of ['params', 'query', 'headers', 'body'] as const) {
+  for (const slot of ['params', 'query', 'headers', 'cookies', 'body'] as const) {
     const schema = request?.[slot]
     if (schema === undefined) continue
     const suffix = slotSuffix(slot, route.name)
@@ -407,6 +415,17 @@ const emitRouteDeclarations = (
       used['buildQueryObject'] = true
       const plan = [...buildCoercionPlan(schema)]
       lines.push(`const coercions${suffix} = new Map(${JSON.stringify(plan.map(([key, kind]) => [key, kind]))})`)
+    }
+    if (slot === 'cookies') {
+      used['buildCookiesObject'] = true
+      const plan = [...buildCoercionPlan(schema)]
+      const properties =
+        typeof schema === 'object' && schema !== null ? (schema as { properties?: unknown }).properties : undefined
+      const names = typeof properties === 'object' && properties !== null ? Object.keys(properties) : []
+      lines.push(
+        `const names${suffix} = new Set(${JSON.stringify(names)})`,
+        `const coercions${suffix} = new Map(${JSON.stringify(plan.map(([key, kind]) => [key, kind]))})`,
+      )
     }
   }
 
@@ -451,7 +470,7 @@ const emitRouteDeclarations = (
   return lines
 }
 
-const slotSuffix = (slot: 'params' | 'query' | 'headers' | 'body', name: string): string =>
+const slotSuffix = (slot: 'params' | 'query' | 'headers' | 'cookies' | 'body', name: string): string =>
   slot.charAt(0).toUpperCase() + slot.slice(1) + '_' + name
 
 /** The request-context arguments every cold-path helper receives. */
@@ -548,8 +567,18 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
     headersValue = 'headers'
   }
 
+  let cookiesValue = 'undefined'
+  if (request?.cookies !== undefined) {
+    const suffix = slotSuffix('cookies', route.name)
+    lines.push(
+      `  const cookies = buildCookiesObject(request.headers.get('cookie') ?? undefined, names${suffix}, coercions${suffix})`,
+      `  if (!guard${suffix}(cookies)) return failValidation('cookies', collect${suffix}, cookies, ${ERROR_ARGS})`,
+    )
+    cookiesValue = 'cookies'
+  }
+
   const invokeLines = (bodyValue: string, appContextValue: string, indent: string): string[] => [
-    `${indent}const context = { params: ${paramsValue}, query: ${queryValue}, body: ${bodyValue}, headers: ${headersValue}, context: ${appContextValue}, request: apiRequest }`,
+    `${indent}const context = { params: ${paramsValue}, query: ${queryValue}, body: ${bodyValue}, headers: ${headersValue}, cookies: ${cookiesValue}, context: ${appContextValue}, request: apiRequest }`,
     `${indent}try {`,
     `${indent}  const reply = ${route.name}.handler(context)`,
     `${indent}  return typeof reply?.then === 'function' ? reply.then(respond_${route.name}, (error) => thrown(error, ${thrownArguments})) : respond_${route.name}(reply)`,
@@ -647,6 +676,8 @@ const emitDispatch = (
     const group = routes.filter((route) => route.method === method)
     const statics = group.filter((route) => route.isStatic)
     const dynamics = group.filter((route) => !route.isStatic)
+    // No return at the end of the block: an unmatched method falls through to
+    // the shared 405/404 tail below, like the runtime pipeline.
     lines.push(`  if (method === '${method}') {`)
     for (const route of statics) {
       lines.push(
@@ -670,9 +701,42 @@ const emitDispatch = (
         )
       }
     }
-    lines.push(`    return notFound(${ERROR_ARGS})`, '  }')
+    lines.push('  }')
   }
-  lines.push(`  return notFound(${ERROR_ARGS})`, '}')
+
+  // The 405/404 tail. A request only gets here when its own method has no
+  // matching route, so any method collected below is a genuine alternative.
+  const staticAllow = new Map<string, string[]>()
+  for (const route of routes.filter((entry) => entry.isStatic)) {
+    const list = staticAllow.get(route.staticPath) ?? []
+    list.push(route.method)
+    staticAllow.set(route.staticPath, list)
+  }
+  const dynamics = routes.filter((entry) => !entry.isStatic)
+  if (staticAllow.size > 0) {
+    lines.unshift(`const ALLOW_STATIC = new Map(${JSON.stringify([...staticAllow.entries()])})`)
+    lines.push('  const allow = [...(ALLOW_STATIC.get(path) ?? [])]')
+  } else {
+    lines.push('  const allow = []')
+  }
+  if (dynamics.length > 0) {
+    lines.push("  const allowSegments = path === '/' ? [] : path.slice(1).split('/')")
+    for (const route of dynamics) {
+      const conditions = [`allowSegments.length === ${route.segments.length}`]
+      route.segments.forEach((segment, index) => {
+        if (typeof segment === 'string') {
+          conditions.push(`allowSegments[${index}] === ${JSON.stringify(segment)}`)
+        }
+      })
+      conditions.push(`!allow.includes('${route.method}')`)
+      lines.push(`  if (${conditions.join(' && ')}) allow.push('${route.method}')`)
+    }
+  }
+  lines.push(
+    `  if (allow.length > 0) return methodNotAllowed(allow.sort(), ${ERROR_ARGS})`,
+    `  return notFound(${ERROR_ARGS})`,
+    '}',
+  )
 
   if (!hooked) return lines
 

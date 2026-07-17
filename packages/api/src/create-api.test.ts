@@ -127,10 +127,10 @@ describe('create-api', () => {
     expect(response.body).toEqual({ error: 'invalid_json' })
   })
 
-  it('answers 404 for unknown paths and methods', async () => {
+  it('answers 404 for unknown paths and 405 for known paths under another method', async () => {
     const api = createApi({ routes: [getUser] })
     expect((await api.handle(request('GET', '/nope'))).status).toBe(404)
-    expect((await api.handle(request('DELETE', '/users/1'))).status).toBe(404)
+    expect((await api.handle(request('DELETE', '/users/1'))).status).toBe(405)
   })
 
   it('serves the OpenAPI document at the default path', async () => {
@@ -361,6 +361,63 @@ describe('create-api', () => {
     const response = await api.handle(tooLarge)
     expect(response.status).toBe(413)
     expect(response.body).toEqual({ error: 'payload_too_large' })
+  })
+
+  it('answers 405 with a sorted allow header when only the method is wrong', async () => {
+    const remove = defineRoute({
+      method: 'delete',
+      path: '/users/{id}',
+      responses: { 204: {} },
+      handler: () => ({ status: 204 }),
+    })
+    const api = createApi({ routes: [getUser, remove] })
+
+    const response = await api.handle(request('PATCH', '/users/7'))
+    expect(response.status).toBe(405)
+    expect(response.headers).toEqual({ allow: 'DELETE, GET' })
+    expect(response.body).toEqual({ error: 'method_not_allowed' })
+
+    // A path no method serves stays a 404.
+    expect((await api.handle(request('PATCH', '/nowhere'))).status).toBe(404)
+  })
+
+  it('lets the methodNotAllowed formatter reshape the 405', async () => {
+    const api = createApi({
+      routes: [getUser],
+      errors: {
+        methodNotAllowed: (allow) => ({ status: 405, body: { error: `try one of: ${allow.join('/')}` } }),
+      },
+    })
+    const response = await api.handle(request('POST', '/users/7'))
+    expect(response.status).toBe(405)
+    expect(response.body).toEqual({ error: 'try one of: GET' })
+  })
+
+  it('validates declared cookies and hands them to the handler', async () => {
+    const dashboard = defineRoute({
+      method: 'get',
+      path: '/dashboard',
+      request: {
+        cookies: {
+          type: 'object',
+          properties: { session: { type: 'string', minLength: 4 }, visits: { type: 'integer' } },
+          required: ['session'],
+        },
+      },
+      responses: { 200: { body: { type: 'object' } } },
+      handler: ({ cookies }) => ({ status: 200, body: { session: cookies.session, visits: cookies.visits ?? 0 } }),
+    })
+    const api = createApi({ routes: [dashboard] })
+
+    const ok = await api.handle(
+      request('GET', '/dashboard', { headers: { cookie: 'visits=3; session=abc123; _ga=tracker' } }),
+    )
+    expect(ok.status).toBe(200)
+    expect(ok.body).toEqual({ session: 'abc123', visits: 3 })
+
+    const missing = await api.handle(request('GET', '/dashboard'))
+    expect(missing.status).toBe(400)
+    expect((missing.body as ValidationFailureBody).source).toBe('cookies')
   })
 
   it('maps payload-too-large errors thrown inside handlers to 413', async () => {

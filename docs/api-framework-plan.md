@@ -288,6 +288,16 @@ The gaps identified in `docs/ummo-readiness.md` are closed, in both engines
   integration philosophy is *recipes over plugins*: the core keeps its single
   dependency and third parties connect through `context`/`mounts`/hooks/
   `onError` seams rather than bundled SDKs.
+- **405 Method Not Allowed.** A known path under the wrong method now answers
+  405 with a sorted `allow` header (both engines; `errors.methodNotAllowed`
+  reshapes it). The compiled dispatch grew a shared 405/404 tail: static
+  paths answer from a build-time path→methods map, parameterized paths from
+  re-emitted segment checks.
+- **Cookie schemas.** `request.cookies` validates like headers — declared
+  names only (browser tracking noise never reaches validation), RFC 6265
+  unquoting + percent-decoding, string coercion, `source: 'cookies'`
+  failures, `in: 'cookie'` OpenAPI parameters — via a shared
+  `buildCookiesObject` both engines import.
 
 ## Roadmap / open questions
 
@@ -295,11 +305,6 @@ The gaps identified in `docs/ummo-readiness.md` are closed, in both engines
   route files and emits a ready-made `compile` function (schema-identity →
   generated validator), closing the loop with `@amritk/generate-validators`
   automatically.
-- **405 Method Not Allowed.** An unmatched method on a known path currently
-  404s; answering 405 with an `allow` header would be more correct and is
-  cheap to derive from the route table.
-- **Cookie schemas.** `in: 'cookie'` parameters (header schemas shipped
-  above; cookies still mean parsing the `cookie` header yourself).
 - **Content negotiation, inbound.** Raw *outbound* statuses shipped
   (`contentType` above); multipart/form-data request bodies remain manual
   via `readBytes`.

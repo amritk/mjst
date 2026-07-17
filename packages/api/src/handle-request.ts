@@ -1,5 +1,6 @@
 import type { Validator } from '@amritk/runtime-validators'
 
+import { buildCookiesObject } from './build-cookies-object'
 import { buildHeadersObject } from './build-headers-object'
 import { buildParamsObject } from './build-params-object'
 import { buildQueryObject } from './build-query-object'
@@ -63,7 +64,28 @@ export const handleRequest = async (
 
   const errors = internals.errors
   const match = matchRoute(internals.table, request.method, request.path)
-  if (match === undefined) return errors?.notFound?.(request) ?? NOT_FOUND
+  if (match === undefined) {
+    // The path may be served under other methods — that is a 405 with an
+    // `allow` header, not a 404. Cold path, so scanning the method list is
+    // cheaper than maintaining a per-path index for every request.
+    const allow: string[] = []
+    for (const method of internals.table.methods) {
+      if (method !== request.method && matchRoute(internals.table, method, request.path) !== undefined) {
+        allow.push(method)
+      }
+    }
+    if (allow.length > 0) {
+      allow.sort()
+      return (
+        errors?.methodNotAllowed?.(allow, request) ?? {
+          status: 405,
+          headers: { allow: allow.join(', ') },
+          body: { error: 'method_not_allowed' },
+        }
+      )
+    }
+    return errors?.notFound?.(request) ?? NOT_FOUND
+  }
   const route = match.route
 
   let params: unknown
@@ -91,6 +113,14 @@ export const handleRequest = async (
     }
   }
 
+  let cookies: unknown
+  if (route.cookies !== undefined) {
+    cookies = buildCookiesObject(request.header('cookie'), route.cookies.names, route.cookies.coercions)
+    if (!route.cookies.guard(cookies)) {
+      return validationFailure('cookies', route.cookies.collect, cookies, errors, request)
+    }
+  }
+
   let body: unknown
   if (route.body !== undefined) {
     try {
@@ -114,7 +144,7 @@ export const handleRequest = async (
     // The erased handler type exists for contract assignability (see
     // AnyRouteContract); the values really do match the contract's schemas at
     // this point, which is what the cast asserts.
-    const context = { params, query, body, headers, context: appContext, request } as ErasedRequestContext
+    const context = { params, query, body, headers, cookies, context: appContext, request } as ErasedRequestContext
     reply = await route.contract.handler(context)
   } catch (error) {
     // A handler that read the body itself (webhook verification, uploads)

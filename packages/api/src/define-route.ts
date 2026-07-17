@@ -37,7 +37,8 @@ export const defineRoute = <
   const Query = undefined,
   const Body = undefined,
   const Headers = undefined,
+  const Cookies = undefined,
   const Responses extends ResponseContracts = ResponseContracts,
 >(
-  route: RouteContract<Params, Query, Body, Headers, Responses>,
-): RouteContract<Params, Query, Body, Headers, Responses> => route
+  route: RouteContract<Params, Query, Body, Headers, Cookies, Responses>,
+): RouteContract<Params, Query, Body, Headers, Cookies, Responses> => route

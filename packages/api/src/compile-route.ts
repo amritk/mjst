@@ -2,6 +2,7 @@ import { buildCoercionPlan } from './build-coercion-plan'
 import { parsePathPattern } from './parse-path-pattern'
 import type {
   AnyRouteContract,
+  CompiledCookies,
   CompiledHeaders,
   CompiledInput,
   CompiledRoute,
@@ -55,6 +56,7 @@ export const compileRoute = (
     query: compileInput(request?.query, compile),
     body: request?.body !== undefined ? compile(request.body) : undefined,
     headers: compileHeaders(request?.headers, compile),
+    cookies: compileCookies(request?.cookies, compile),
     responses,
     rawContentTypes,
   }
@@ -72,11 +74,22 @@ const compileInput = (schema: unknown, compile: ValidatorCompiler): CompiledInpu
  */
 const compileHeaders = (schema: unknown, compile: ValidatorCompiler): CompiledHeaders | undefined => {
   if (schema === undefined) return undefined
+  const names = declaredProperties(schema).map((property) => [property, property.toLowerCase()] as const)
+  return { ...compile(schema), coercions: buildCoercionPlan(schema), names }
+}
+
+/**
+ * Cookies filter by declared name too, but as a set: the parser walks the
+ * whole `cookie` header (which carries everything the browser holds) and
+ * keeps only these.
+ */
+const compileCookies = (schema: unknown, compile: ValidatorCompiler): CompiledCookies | undefined => {
+  if (schema === undefined) return undefined
+  return { ...compile(schema), coercions: buildCoercionPlan(schema), names: new Set(declaredProperties(schema)) }
+}
+
+const declaredProperties = (schema: unknown): string[] => {
   const properties =
     typeof schema === 'object' && schema !== null ? (schema as { properties?: unknown }).properties : undefined
-  const names =
-    typeof properties === 'object' && properties !== null
-      ? Object.keys(properties).map((property) => [property, property.toLowerCase()] as const)
-      : []
-  return { ...compile(schema), coercions: buildCoercionPlan(schema), names }
+  return typeof properties === 'object' && properties !== null ? Object.keys(properties) : []
 }

@@ -23,6 +23,7 @@ const routes: Record<string, AnyRouteContract> = {
   streamChat: corpus.streamChat,
   csvExport: corpus.csvExport,
   rawEcho: corpus.rawEcho,
+  dashboard: corpus.dashboard,
 }
 const info = { title: 'Differential', version: '1.0.0' }
 
@@ -173,6 +174,19 @@ describe('compile-to-module', () => {
         // The onRequest gate short-circuits before mounts and routing.
         () => new Request('http://localhost/health', { headers: { 'x-block': '1' } }),
         () => new Request('http://localhost/mounted/deep', { headers: { 'x-block': '1' } }),
+        // Cookies: valid with tracking noise, coercion failure, missing required,
+        // quoted + percent-encoded values.
+        () => new Request('http://localhost/dashboard', { headers: { cookie: '_ga=x; session=abc123; visits=2' } }),
+        () => new Request('http://localhost/dashboard', { headers: { cookie: 'session=abc123; visits=lots' } }),
+        () => new Request('http://localhost/dashboard', { headers: { cookie: 'visits=2' } }),
+        () => new Request('http://localhost/dashboard'),
+        () => new Request('http://localhost/dashboard', { headers: { cookie: 'session="abc%20123"' } }),
+        // 405: wrong method on static and dynamic paths (multi-method allow
+        // lists come from /users, which serves GET and POST).
+        () => new Request('http://localhost/users', { method: 'PUT' }),
+        () => new Request('http://localhost/users/7', { method: 'PUT' }),
+        () => new Request('http://localhost/health', { method: 'DELETE' }),
+        () => new Request('http://localhost/chat'),
       ]
 
       for (const makeRequest of cases) {
@@ -182,7 +196,7 @@ describe('compile-to-module', () => {
 
         expect(fromCompiled.status, label).toBe(fromRuntime.status)
         expect(contentType(fromCompiled), label).toBe(contentType(fromRuntime))
-        for (const header of ['x-deleted', 'x-served-by', 'x-stamped', 'x-frame-protocol']) {
+        for (const header of ['x-deleted', 'x-served-by', 'x-stamped', 'x-frame-protocol', 'allow']) {
           expect(fromCompiled.headers.get(header), label).toBe(fromRuntime.headers.get(header))
         }
         const [runtimeText, compiledText] = [await fromRuntime.text(), await fromCompiled.text()]

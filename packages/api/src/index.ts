@@ -1,4 +1,5 @@
 export { buildCoercionPlan } from './build-coercion-plan'
+export { buildCookiesObject } from './build-cookies-object'
 export { buildHeadersObject } from './build-headers-object'
 export { assignQueryPair, buildQueryObject } from './build-query-object'
 export { buildQueryObjectFromString } from './build-query-object-from-string'
@@ -30,6 +31,7 @@ export type {
   ApiRequest,
   ApiResponse,
   Coercion,
+  CompiledCookies,
   CompiledHeaders,
   CompiledInput,
   CompiledRoute,

@@ -121,11 +121,12 @@ export type ApiResponse = {
  * {@link ApiOptions.context} factory returns), and the raw {@link ApiRequest}
  * for anything the contract does not model.
  */
-export type RequestContext<Params, Query, Body, Headers, Context = undefined> = {
+export type RequestContext<Params, Query, Body, Headers, Cookies, Context = undefined> = {
   readonly params: SchemaValue<Params>
   readonly query: SchemaValue<Query>
   readonly body: SchemaValue<Body>
   readonly headers: SchemaValue<Headers>
+  readonly cookies: SchemaValue<Cookies>
   readonly context: Context
   readonly request: ApiRequest
 }
@@ -160,8 +161,16 @@ export type RouteReply<Responses extends ResponseContracts> = {
  * A route's implementation. It only runs after every declared request schema
  * has validated, so the context values are safe to use without further checks.
  */
-export type RouteHandler<Params, Query, Body, Headers, Responses extends ResponseContracts, Context = undefined> = (
-  context: RequestContext<Params, Query, Body, Headers, Context>,
+export type RouteHandler<
+  Params,
+  Query,
+  Body,
+  Headers,
+  Cookies,
+  Responses extends ResponseContracts,
+  Context = undefined,
+> = (
+  context: RequestContext<Params, Query, Body, Headers, Cookies, Context>,
 ) => RouteReply<Responses> | Promise<RouteReply<Responses>>
 
 /**
@@ -178,6 +187,7 @@ export type RouteContract<
   Query = undefined,
   Body = undefined,
   Headers = undefined,
+  Cookies = undefined,
   Responses extends ResponseContracts = ResponseContracts,
   Context = undefined,
 > = {
@@ -207,9 +217,17 @@ export type RouteContract<
      * OpenAPI.
      */
     readonly headers?: Headers
+    /**
+     * JSON Schema (object) for request cookies. Property names are cookie
+     * names (case-sensitive, per RFC 6265). Only declared cookies are read
+     * from the `cookie` header; values are unquoted, percent-decoded, and
+     * coerced from strings first. Each property becomes an `in: 'cookie'`
+     * parameter in OpenAPI.
+     */
+    readonly cookies?: Cookies
   }
   readonly responses: Responses
-  readonly handler: RouteHandler<Params, Query, Body, Headers, Responses, Context>
+  readonly handler: RouteHandler<Params, Query, Body, Headers, Cookies, Responses, Context>
 }
 
 /**
@@ -234,6 +252,7 @@ export type ErasedRequestContext = {
   readonly query: never
   readonly body: never
   readonly headers: never
+  readonly cookies: never
   readonly context: never
   readonly request: ApiRequest
 }
@@ -256,6 +275,7 @@ export type AnyRouteContract = {
     readonly query?: unknown
     readonly body?: unknown
     readonly headers?: unknown
+    readonly cookies?: unknown
   }
   readonly responses: ResponseContracts
   readonly handler: (context: ErasedRequestContext) => RouteReplyValue | Promise<RouteReplyValue>
@@ -306,6 +326,15 @@ export type CompiledHeaders = CompiledInput & {
 }
 
 /**
+ * A compiled cookies slot. The `cookie` header carries every pair, so the
+ * schema's declared names — captured at startup as a set — filter what the
+ * route reads; undeclared cookies (analytics, ads) never reach validation.
+ */
+export type CompiledCookies = CompiledInput & {
+  readonly names: ReadonlySet<string>
+}
+
+/**
  * One segment of a compiled route path: a literal string, or a named parameter
  * capturing the whole segment.
  */
@@ -324,6 +353,7 @@ export type CompiledRoute = {
   readonly query: CompiledInput | undefined
   readonly body: CompiledValidation | undefined
   readonly headers: CompiledHeaders | undefined
+  readonly cookies: CompiledCookies | undefined
   /** Response-body validators, present only when `validateResponses` is on. */
   readonly responses: ReadonlyMap<number, CompiledValidation> | undefined
   /**
@@ -341,6 +371,12 @@ export type CompiledRoute = {
 export type RouteTable = {
   readonly staticRoutes: ReadonlyMap<string, CompiledRoute>
   readonly dynamicRoutes: ReadonlyMap<string, readonly CompiledRoute[]>
+  /**
+   * Every distinct (uppercase) method any route declares. The 405 path scans
+   * these to build the `allow` header — a cold path, so a scan beats keeping
+   * a per-path method index alive.
+   */
+  readonly methods: readonly string[]
 }
 
 /**
@@ -447,7 +483,7 @@ export type OnErrorDetails = {
  * formatter so it can shape the 400 however the app's clients expect.
  */
 export type ValidationFailure = {
-  readonly source: 'params' | 'query' | 'headers' | 'body'
+  readonly source: 'params' | 'query' | 'headers' | 'cookies' | 'body'
   readonly errors: readonly ValidationError[]
 }
 
@@ -466,6 +502,12 @@ export type ErrorFormatters = {
   readonly payloadTooLarge?: (request: ApiRequest) => ApiResponse
   /** Replaces the default `400` {@link ValidationFailureBody}. */
   readonly validationFailed?: (failure: ValidationFailure, request: ApiRequest) => ApiResponse
+  /**
+   * Replaces the default `405 {error:'method_not_allowed'}`. `allow` is the
+   * sorted list of methods that do serve this path; include it as an `allow`
+   * header (the default does) to stay spec-correct.
+   */
+  readonly methodNotAllowed?: (allow: readonly string[], request: ApiRequest) => ApiResponse
 }
 
 /**
@@ -498,6 +540,6 @@ export type Api = {
  */
 export type ValidationFailureBody = {
   readonly error: 'validation_failed'
-  readonly source: 'params' | 'query' | 'headers' | 'body'
+  readonly source: 'params' | 'query' | 'headers' | 'cookies' | 'body'
   readonly errors: readonly ValidationError[]
 }

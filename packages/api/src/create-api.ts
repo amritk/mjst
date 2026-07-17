@@ -66,8 +66,10 @@ export const createApi = (options: ApiOptions): Api => {
     return document
   }
 
+  const methods = [...new Set(options.routes.map((contract) => contract.method.toUpperCase()))]
+
   const internals: ApiInternals = {
-    table: { staticRoutes, dynamicRoutes },
+    table: { staticRoutes, dynamicRoutes, methods },
     openApiPath,
     openApi,
     createContext: options.context,

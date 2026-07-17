@@ -27,6 +27,7 @@ export const toOpenApi = (routes: ReadonlyArray<AnyRouteContract>, info: OpenApi
       ...toParameters(route.request?.params, 'path'),
       ...toParameters(route.request?.query, 'query'),
       ...toParameters(route.request?.headers, 'header'),
+      ...toParameters(route.request?.cookies, 'cookie'),
     ]
     if (parameters.length > 0) operation['parameters'] = parameters
 
@@ -69,7 +70,7 @@ export const toOpenApi = (routes: ReadonlyArray<AnyRouteContract>, info: OpenApi
   }
 }
 
-const toParameters = (schema: unknown, location: 'path' | 'query' | 'header'): unknown[] => {
+const toParameters = (schema: unknown, location: 'path' | 'query' | 'header' | 'cookie'): unknown[] => {
   if (typeof schema !== 'object' || schema === null) return []
   const { properties, required } = schema as {
     properties?: Record<string, unknown>
