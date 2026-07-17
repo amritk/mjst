@@ -19,6 +19,13 @@ export type ResponseContract = {
   /** JSON Schema for the response body. Omit for an empty-body response. */
   readonly body?: unknown
   /**
+   * JSON Schemas for notable response headers, keyed by header name
+   * (`{ 'x-ratelimit-remaining': { type: 'integer' } }`). Documented as
+   * OpenAPI response headers; with `validateResponses` on, reply headers are
+   * validated against them too (as an open object — undeclared headers pass).
+   */
+  readonly headers?: Readonly<Record<string, unknown>>
+  /**
    * Marks this status as a raw (non-JSON) response and sets its content type,
    * e.g. `'text/plain; charset=utf-8'` or `'text/event-stream'`. The handler
    * then returns a {@link StreamingBody} for this status, and adapters send it
@@ -203,13 +210,33 @@ export type RouteContract<
   readonly tags?: readonly string[]
   /** Explicit OpenAPI operationId. Omitted from the document when not set. */
   readonly operationId?: string
+  /** Marks the operation deprecated in the OpenAPI document. */
+  readonly deprecated?: boolean
+  /**
+   * OpenAPI security requirements for this operation, e.g.
+   * `[{ bearerAuth: [] }]`. Scheme names refer to the API-level
+   * `securitySchemes`; an empty array (`[]`) marks the operation public when
+   * an API-level default `security` exists.
+   */
+  readonly security?: SecurityRequirements
   readonly request?: {
     /** JSON Schema (object) for path parameters. Values are coerced from strings first. */
     readonly params?: Params
     /** JSON Schema (object) for query parameters. Values are coerced from strings first. */
     readonly query?: Query
-    /** JSON Schema for the JSON request body. Declaring it makes a JSON body required. */
+    /** JSON Schema for the request body. Declaring it makes a body required. */
     readonly body?: Body
+    /**
+     * How the body arrives on the wire. `'json'` (the default) parses JSON;
+     * `'form'` parses `application/x-www-form-urlencoded` with query-style
+     * coercion (typed keys coerce, array keys accumulate); `'multipart'`
+     * parses `multipart/form-data` — string parts coerce like form fields,
+     * file parts reach the handler as `File` objects (declare them in the
+     * schema without a `type` keyword). A request whose `content-type`
+     * contradicts the declared type answers 415. Selects the OpenAPI
+     * requestBody content key.
+     */
+    readonly bodyType?: BodyType
     /**
      * JSON Schema (object) for request headers. Property names are header
      * names (write them lowercase — lookup is case-insensitive but the
@@ -272,10 +299,13 @@ export type AnyRouteContract = {
   readonly description?: string
   readonly tags?: readonly string[]
   readonly operationId?: string
+  readonly deprecated?: boolean
+  readonly security?: SecurityRequirements
   readonly request?: {
     readonly params?: unknown
     readonly query?: unknown
     readonly body?: unknown
+    readonly bodyType?: BodyType
     readonly headers?: unknown
     readonly cookies?: unknown
   }
@@ -303,6 +333,12 @@ export type CompiledValidation = {
 export type ValidatorCompiler = (schema: unknown) => CompiledValidation
 
 /**
+ * The transport encodings a request body schema can validate. Selects the
+ * parser, the 415 media-type check, and the OpenAPI requestBody content key.
+ */
+export type BodyType = 'json' | 'form' | 'multipart'
+
+/**
  * How a string path/query value is converted before validation. HTTP delivers
  * every parameter as a string, so the plan (derived from the schema's declared
  * types at startup) restores numbers, booleans, and arrays without inspecting
@@ -315,6 +351,27 @@ export type Coercion = 'number' | 'boolean' | 'number-array' | 'boolean-array' |
  */
 export type CompiledInput = CompiledValidation & {
   readonly coercions: ReadonlyMap<string, Coercion>
+}
+
+/**
+ * A compiled body slot: validators plus the wire encoding and — for form and
+ * multipart bodies, whose fields arrive as strings — the coercion plan that
+ * restores their schema-declared types before validation.
+ */
+export type CompiledBody = CompiledValidation & {
+  readonly bodyType: BodyType
+  readonly coercions: ReadonlyMap<string, Coercion>
+}
+
+/**
+ * The reply validators for one declared status, built only when
+ * `validateResponses` is on: the body schema's validators, and — when the
+ * status declares response header schemas — validators over the reply's
+ * headers object.
+ */
+export type CompiledResponse = {
+  readonly body?: CompiledValidation | undefined
+  readonly headers?: CompiledValidation | undefined
 }
 
 /**
@@ -338,9 +395,10 @@ export type CompiledCookies = CompiledInput & {
 
 /**
  * One segment of a compiled route path: a literal string, or a named parameter
- * capturing the whole segment.
+ * capturing the whole segment. A greedy parameter (`{name+}`, always last)
+ * captures the remaining segments joined with `/`.
  */
-export type PathSegment = string | { readonly name: string }
+export type PathSegment = string | { readonly name: string; readonly greedy?: boolean }
 
 /**
  * A route after startup compilation: uppercase method, parsed path segments,
@@ -353,11 +411,11 @@ export type CompiledRoute = {
   readonly segments: readonly PathSegment[]
   readonly params: CompiledInput | undefined
   readonly query: CompiledInput | undefined
-  readonly body: CompiledValidation | undefined
+  readonly body: CompiledBody | undefined
   readonly headers: CompiledHeaders | undefined
   readonly cookies: CompiledCookies | undefined
-  /** Response-body validators, present only when `validateResponses` is on. */
-  readonly responses: ReadonlyMap<number, CompiledValidation> | undefined
+  /** Per-status reply validators, present only when `validateResponses` is on. */
+  readonly responses: ReadonlyMap<number, CompiledResponse> | undefined
   /**
    * Statuses declared with a raw `contentType`, so the reply path can tag the
    * {@link ApiResponse} without touching the contract per request. Undefined
@@ -390,16 +448,54 @@ export type OpenApiInfo = {
   readonly description?: string
 }
 
+/** One entry of the OpenAPI `servers` array. */
+export type OpenApiServer = {
+  readonly url: string
+  readonly description?: string
+}
+
+/**
+ * OpenAPI security requirements: each entry maps a scheme name (declared in
+ * `securitySchemes`) to its required scopes. Alternatives OR together.
+ */
+export type SecurityRequirements = ReadonlyArray<Readonly<Record<string, readonly string[]>>>
+
+/**
+ * The document-level OpenAPI settings beyond `info`: where the API is served,
+ * how callers authenticate, and the default security requirement. Shared by
+ * `createApi` and `compileToModule` so both engines document identically.
+ */
+export type OpenApiExtras = {
+  /** The OpenAPI `servers` array (base URLs the API is served from). */
+  readonly servers?: readonly OpenApiServer[] | undefined
+  /**
+   * Named Security Scheme Objects, emitted under `components.securitySchemes`
+   * (e.g. `{ bearerAuth: { type: 'http', scheme: 'bearer' } }`). Passed
+   * through verbatim — any scheme OpenAPI 3.1 supports works.
+   */
+  readonly securitySchemes?: Readonly<Record<string, unknown>> | undefined
+  /**
+   * The document-level default security requirement, applied to every
+   * operation that does not declare its own `security`. A route opts out with
+   * `security: []`.
+   */
+  readonly security?: SecurityRequirements | undefined
+}
+
 /**
  * The generated OpenAPI 3.1 document. Route schemas pass through verbatim —
  * OpenAPI 3.1's schema dialect *is* JSON Schema Draft 2020-12, which is why no
- * conversion layer exists here.
+ * conversion layer exists here. Schemas carrying a `title` that are reused
+ * across contracts are hoisted into `components.schemas` and referenced.
  */
 export type OpenApiDocument = {
   readonly openapi: '3.1.0'
   readonly jsonSchemaDialect: string
   readonly info: OpenApiInfo
+  readonly servers?: readonly OpenApiServer[]
+  readonly security?: SecurityRequirements
   readonly paths: Readonly<Record<string, unknown>>
+  readonly components?: Readonly<Record<string, unknown>>
 }
 
 /**
@@ -426,7 +522,7 @@ export type ContextFactory = (input: ContextFactoryInput) => unknown
 /**
  * Options for {@link createApi}.
  */
-export type ApiOptions = {
+export type ApiOptions = OpenApiExtras & {
   readonly routes: ReadonlyArray<AnyRouteContract>
   /** OpenAPI `info` block. Defaults to a placeholder title/version. */
   readonly info?: OpenApiInfo
@@ -464,6 +560,36 @@ export type ApiOptions = {
    * cold-path default; anything not supplied keeps the built-in shape.
    */
   readonly errors?: ErrorFormatters
+  /**
+   * Called once per matched request with the route contract, the outcome
+   * status, and the pipeline duration — the seam for per-route latency
+   * metrics and structured request logs (`GET /users/{id} → 200 in 3ms`).
+   * Runs for every matched outcome, validation failures and handler errors
+   * included; unmatched requests (404/405) and the OpenAPI document are not
+   * observed. A thrown observer is swallowed — it must never fail the
+   * request it watched. Keep it synchronous-fast: fire-and-forget any I/O.
+   */
+  readonly observe?: (observation: RequestObservation) => void
+}
+
+/**
+ * What {@link ApiOptions.observe} receives for one matched request. `route`
+ * carries the contract — its `path` pattern (`/users/{id}`, not `/users/8`)
+ * is the dimension metrics and logs group by.
+ */
+export type RequestObservation = {
+  /** The matched route's contract. */
+  readonly route: AnyRouteContract
+  /** The request as the pipeline saw it. */
+  readonly request: ApiRequest
+  /** The status of the response the pipeline produced. */
+  readonly status: number
+  /** Milliseconds from match to response, handler included. */
+  readonly durationMs: number
+  /** The platform bindings the adapter was invoked with (Workers `env`). */
+  readonly env: unknown
+  /** The platform execution context (Workers `ctx`, for `waitUntil`). */
+  readonly executionContext: unknown
 }
 
 /**
@@ -498,8 +624,15 @@ export type ValidationFailure = {
 export type ErrorFormatters = {
   /** Replaces the default `404 {error:'not_found'}`. */
   readonly notFound?: (request: ApiRequest) => ApiResponse
-  /** Replaces the default `400 {error:'invalid_json'}` for unparseable bodies. */
+  /** Replaces the default `400 {error:'invalid_json'}` for unparseable JSON bodies. */
   readonly invalidJson?: (request: ApiRequest) => ApiResponse
+  /** Replaces the default `400 {error:'invalid_body'}` for unparseable form/multipart bodies. */
+  readonly invalidBody?: (request: ApiRequest) => ApiResponse
+  /**
+   * Replaces the default `415 {error:'unsupported_media_type'}`, answered
+   * when a request's `content-type` contradicts the declared `bodyType`.
+   */
+  readonly unsupportedMediaType?: (contentType: string, request: ApiRequest) => ApiResponse
   /** Replaces the default `413 {error:'payload_too_large'}`. */
   readonly payloadTooLarge?: (request: ApiRequest) => ApiResponse
   /** Replaces the default `400` {@link ValidationFailureBody}. */

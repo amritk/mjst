@@ -155,4 +155,141 @@ describe('to-open-api', () => {
       content: { 'text/csv': { schema: { type: 'string' } } },
     })
   })
+
+  it('emits servers, securitySchemes, and the document-level security default', () => {
+    const document = toOpenApi([getUser], info, {
+      servers: [{ url: 'https://api.example.com', description: 'production' }],
+      securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer' } },
+      security: [{ bearerAuth: [] }],
+    })
+    expect(document.servers).toEqual([{ url: 'https://api.example.com', description: 'production' }])
+    expect(document.security).toEqual([{ bearerAuth: [] }])
+    expect(document.components).toEqual({ securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer' } } })
+  })
+
+  it('emits per-operation security and deprecated flags', () => {
+    const legacy = defineRoute({
+      method: 'get',
+      path: '/legacy',
+      deprecated: true,
+      security: [{ apiKey: [] }],
+      responses: { 200: {} },
+      handler: () => ({ status: 200 }),
+    })
+    const document = toOpenApi([legacy, getUser], info)
+    const operation = (document.paths['/legacy'] as Record<string, Record<string, unknown>>)['get']
+    expect(operation?.['deprecated']).toBe(true)
+    expect(operation?.['security']).toEqual([{ apiKey: [] }])
+    const plain = (document.paths['/users/{id}'] as Record<string, Record<string, unknown>>)['get']
+    expect(plain?.['deprecated']).toBeUndefined()
+    expect(plain?.['security']).toBeUndefined()
+  })
+
+  it('documents declared response headers', () => {
+    const limited = defineRoute({
+      method: 'get',
+      path: '/limited',
+      responses: {
+        200: {
+          body: { type: 'object' },
+          headers: { 'x-ratelimit-remaining': { type: 'integer' }, 'x-request-id': { type: 'string' } },
+        },
+      },
+      handler: () => ({ status: 200, headers: { 'x-ratelimit-remaining': '9', 'x-request-id': 'a' }, body: {} }),
+    })
+    const document = toOpenApi([limited], info)
+    const operation = (document.paths['/limited'] as Record<string, Record<string, unknown>>)['get']
+    const responses = operation?.['responses'] as Record<string, Record<string, unknown>>
+    expect(responses['200']?.['headers']).toEqual({
+      'x-ratelimit-remaining': { schema: { type: 'integer' } },
+      'x-request-id': { schema: { type: 'string' } },
+    })
+  })
+
+  it('hoists titled schemas reused across contracts into components.schemas', () => {
+    const user = { title: 'User', type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] } as const
+    const get = defineRoute({
+      method: 'get',
+      path: '/users/{id}',
+      responses: { 200: { body: user } },
+      handler: () => ({ status: 200, body: { id: 1 } }),
+    })
+    const create = defineRoute({
+      method: 'post',
+      path: '/users',
+      request: { body: user },
+      responses: { 201: { body: user } },
+      handler: ({ body }) => ({ status: 201, body }),
+    })
+    const document = toOpenApi([get, create], info)
+    expect((document.components as Record<string, unknown>)['schemas']).toEqual({ User: user })
+    const ref = { $ref: '#/components/schemas/User' }
+    const getOperation = (document.paths['/users/{id}'] as Record<string, Record<string, unknown>>)['get']
+    const createOperation = (document.paths['/users'] as Record<string, Record<string, unknown>>)['post']
+    expect(getOperation?.['responses']).toEqual({
+      '200': { description: 'Status 200', content: { 'application/json': { schema: ref } } },
+    })
+    expect(createOperation?.['requestBody']).toEqual({
+      required: true,
+      content: { 'application/json': { schema: ref } },
+    })
+  })
+
+  it('hoists distinct-but-identical titled schemas and leaves conflicts and singles inline', () => {
+    const cloneA = { title: 'Thing', type: 'object', properties: { n: { type: 'integer' } } }
+    const cloneB = { title: 'Thing', type: 'object', properties: { n: { type: 'integer' } } }
+    const conflictA = { title: 'Clash', type: 'object' }
+    const conflictB = { title: 'Clash', type: 'string' }
+    const single = { title: 'Lonely', type: 'object' }
+    const route = (path: string, body: unknown) =>
+      defineRoute({
+        method: 'post',
+        path,
+        request: { body },
+        responses: { 201: {} },
+        handler: () => ({ status: 201 }),
+      })
+    const document = toOpenApi(
+      [route('/a', cloneA), route('/b', cloneB), route('/c', conflictA), route('/d', conflictB), route('/e', single)],
+      info,
+    )
+    const schemas = (document.components as Record<string, unknown>)['schemas'] as Record<string, unknown>
+    // JSON-identical clones share one component; a title claimed by different
+    // shapes hoists nothing; a single titled use stays inline.
+    expect(Object.keys(schemas)).toEqual(['Thing'])
+    const bodySchema = (path: string) =>
+      (
+        (document.paths[path] as Record<string, Record<string, unknown>>)['post']?.['requestBody'] as {
+          content: Record<string, { schema: unknown }>
+        }
+      ).content['application/json']?.schema
+    expect(bodySchema('/a')).toEqual({ $ref: '#/components/schemas/Thing' })
+    expect(bodySchema('/b')).toEqual({ $ref: '#/components/schemas/Thing' })
+    expect(bodySchema('/c')).toBe(conflictA)
+    expect(bodySchema('/d')).toBe(conflictB)
+    expect(bodySchema('/e')).toBe(single)
+  })
+
+  it('sanitizes component keys derived from titles', () => {
+    const shared = { title: 'User Profile (v2)', type: 'object' }
+    const document = toOpenApi(
+      [
+        defineRoute({
+          method: 'get',
+          path: '/p1',
+          responses: { 200: { body: shared } },
+          handler: () => ({ status: 200, body: {} }),
+        }),
+        defineRoute({
+          method: 'get',
+          path: '/p2',
+          responses: { 200: { body: shared } },
+          handler: () => ({ status: 200, body: {} }),
+        }),
+      ],
+      info,
+    )
+    const schemas = (document.components as Record<string, unknown>)['schemas'] as Record<string, unknown>
+    expect(Object.keys(schemas)).toEqual(['User_Profile__v2_'])
+  })
 })

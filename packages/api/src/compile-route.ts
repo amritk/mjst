@@ -2,11 +2,13 @@ import { buildCoercionPlan } from './build-coercion-plan'
 import { parsePathPattern } from './parse-path-pattern'
 import type {
   AnyRouteContract,
+  Coercion,
+  CompiledBody,
   CompiledCookies,
   CompiledHeaders,
   CompiledInput,
+  CompiledResponse,
   CompiledRoute,
-  CompiledValidation,
   ValidatorCompiler,
 } from './types'
 
@@ -27,15 +29,21 @@ export const compileRoute = (
   const segments = parsePathPattern(contract.path)
   const request = contract.request
 
-  let responses: Map<number, CompiledValidation> | undefined
+  let responses: Map<number, CompiledResponse> | undefined
   if (validateResponses) {
     responses = new Map()
     for (const [status, response] of Object.entries(contract.responses)) {
       // Raw statuses carry a stream or text, not a JSON value — any body
       // schema they declare exists purely for OpenAPI, so there is nothing
       // for response validation to check.
-      if (response.body !== undefined && response.contentType === undefined) {
-        responses.set(Number(status), compile(response.body))
+      const body =
+        response.body !== undefined && response.contentType === undefined ? compile(response.body) : undefined
+      // Declared response headers validate as an open object: undeclared
+      // headers pass, declared ones must match their schema when present.
+      const headers =
+        response.headers !== undefined ? compile({ type: 'object', properties: response.headers }) : undefined
+      if (body !== undefined || headers !== undefined) {
+        responses.set(Number(status), { body, headers })
       }
     }
   }
@@ -54,7 +62,7 @@ export const compileRoute = (
     segments,
     params: compileInput(request?.params, compile),
     query: compileInput(request?.query, compile),
-    body: request?.body !== undefined ? compile(request.body) : undefined,
+    body: compileBody(request?.body, request?.bodyType, compile),
     headers: compileHeaders(request?.headers, compile),
     cookies: compileCookies(request?.cookies, compile),
     responses,
@@ -65,6 +73,21 @@ export const compileRoute = (
 const compileInput = (schema: unknown, compile: ValidatorCompiler): CompiledInput | undefined => {
   if (schema === undefined) return undefined
   return { ...compile(schema), coercions: buildCoercionPlan(schema) }
+}
+
+/** Empty plan shared by JSON bodies, whose values arrive already typed. */
+const NO_COERCIONS: ReadonlyMap<string, Coercion> = new Map<string, Coercion>()
+
+const compileBody = (
+  schema: unknown,
+  bodyType: CompiledBody['bodyType'] | undefined,
+  compile: ValidatorCompiler,
+): CompiledBody | undefined => {
+  if (schema === undefined) return undefined
+  const type = bodyType ?? 'json'
+  // Form and multipart fields arrive as strings, so they coerce exactly like
+  // query parameters; JSON values are already typed and skip the plan.
+  return { ...compile(schema), bodyType: type, coercions: type === 'json' ? NO_COERCIONS : buildCoercionPlan(schema) }
 }
 
 /**

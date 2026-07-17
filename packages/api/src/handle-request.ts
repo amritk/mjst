@@ -5,7 +5,9 @@ import { buildHeadersObject } from './build-headers-object'
 import { buildParamsObject } from './build-params-object'
 import { buildQueryObject } from './build-query-object'
 import { buildQueryObjectFromString } from './build-query-object-from-string'
+import type { RouteMatch } from './match-route'
 import { matchRoute } from './match-route'
+import { matchesBodyType, parseFormBody, parseMultipartBody } from './parse-body'
 import { isPayloadTooLargeError } from './payload-too-large'
 import type {
   ApiRequest,
@@ -15,6 +17,7 @@ import type {
   ErrorFormatters,
   OnErrorDetails,
   OpenApiDocument,
+  RequestObservation,
   RouteReplyValue,
   RouteTable,
   ValidationFailureBody,
@@ -32,6 +35,7 @@ export type ApiInternals = {
   readonly createContext: ContextFactory | undefined
   readonly onError: ((error: unknown, request: ApiRequest, details: OnErrorDetails) => ApiResponse) | undefined
   readonly errors: ErrorFormatters | undefined
+  readonly observe: ((observation: RequestObservation) => void) | undefined
 }
 
 /**
@@ -40,6 +44,11 @@ export type ApiInternals = {
 const NOT_FOUND: ApiResponse = Object.freeze({ status: 404, body: Object.freeze({ error: 'not_found' }) })
 const INTERNAL_ERROR: ApiResponse = Object.freeze({ status: 500, body: Object.freeze({ error: 'internal_error' }) })
 const INVALID_JSON: ApiResponse = Object.freeze({ status: 400, body: Object.freeze({ error: 'invalid_json' }) })
+const INVALID_BODY: ApiResponse = Object.freeze({ status: 400, body: Object.freeze({ error: 'invalid_body' }) })
+const UNSUPPORTED_MEDIA_TYPE: ApiResponse = Object.freeze({
+  status: 415,
+  body: Object.freeze({ error: 'unsupported_media_type' }),
+})
 const PAYLOAD_TOO_LARGE: ApiResponse = Object.freeze({
   status: 413,
   body: Object.freeze({ error: 'payload_too_large' }),
@@ -52,18 +61,21 @@ const PAYLOAD_TOO_LARGE: ApiResponse = Object.freeze({
  * path, and the error-collecting validator only executes after a guard has
  * already rejected — so a valid request does no error bookkeeping at all.
  */
-export const handleRequest = async (
+export const handleRequest = (
   internals: ApiInternals,
   request: ApiRequest,
   env?: unknown,
   executionContext?: unknown,
 ): Promise<ApiResponse> => {
+  // Deliberately not an async function: the matched path hands off to
+  // `runRoute` (async) untouched, so a request pays for exactly one async
+  // frame — a second one here measurably taxes the whole pipeline.
   if (
     internals.openApiPath !== undefined &&
     (request.method === 'GET' || request.method === 'HEAD') &&
     request.path === internals.openApiPath
   ) {
-    return { status: 200, body: internals.openApi() }
+    return Promise.resolve({ status: 200, body: internals.openApi() })
   }
 
   const errors = internals.errors
@@ -89,16 +101,53 @@ export const handleRequest = async (
       // allow list advertises it whenever GET appears.
       if (allow.includes('GET') && !allow.includes('HEAD')) allow.push('HEAD')
       allow.sort()
-      return (
+      return Promise.resolve(
         errors?.methodNotAllowed?.(allow, request) ?? {
           status: 405,
           headers: { allow: allow.join(', ') },
           body: { error: 'method_not_allowed' },
-        }
+        },
       )
     }
-    return errors?.notFound?.(request) ?? NOT_FOUND
+    return Promise.resolve(errors?.notFound?.(request) ?? NOT_FOUND)
   }
+
+  const observe = internals.observe
+  if (observe === undefined) return runRoute(internals, match, request, env, executionContext)
+
+  const start = performance.now()
+  const routeMatch = match
+  return runRoute(internals, match, request, env, executionContext).then((response) => {
+    try {
+      observe({
+        route: routeMatch.route.contract,
+        request,
+        status: response.status,
+        durationMs: performance.now() - start,
+        env,
+        executionContext,
+      })
+    } catch {
+      // A throwing observer must never fail the request it watched.
+    }
+    return response
+  })
+}
+
+/**
+ * The matched-route section of the pipeline: coerce + validate declared
+ * inputs, run the handler, (optionally) validate the reply. Split out so the
+ * observe wrapper above times exactly this — the part whose duration belongs
+ * to the route.
+ */
+const runRoute = async (
+  internals: ApiInternals,
+  match: RouteMatch,
+  request: ApiRequest,
+  env: unknown,
+  executionContext: unknown,
+): Promise<ApiResponse> => {
+  const errors = internals.errors
   const route = match.route
 
   let params: unknown
@@ -136,11 +185,25 @@ export const handleRequest = async (
 
   let body: unknown
   if (route.body !== undefined) {
+    const bodyType = route.body.bodyType
+    // Enforced only when the client actually declared a media type: a present
+    // but contradictory content-type is a 415, an absent one gets the benefit
+    // of the doubt and fails on the parse instead (keeps bare curl working).
+    const contentType = request.header('content-type')
+    if (contentType !== undefined && !matchesBodyType(contentType, bodyType)) {
+      return errors?.unsupportedMediaType?.(contentType, request) ?? UNSUPPORTED_MEDIA_TYPE
+    }
     try {
-      body = await request.readBody()
+      body =
+        bodyType === 'json'
+          ? await request.readBody()
+          : bodyType === 'form'
+            ? parseFormBody(await request.readText(), route.body.coercions)
+            : await parseMultipartBody(await request.readBytes(), contentType, route.body.coercions)
     } catch (error) {
       if (isPayloadTooLargeError(error)) return errors?.payloadTooLarge?.(request) ?? PAYLOAD_TOO_LARGE
-      return errors?.invalidJson?.(request) ?? INVALID_JSON
+      if (bodyType === 'json') return errors?.invalidJson?.(request) ?? INVALID_JSON
+      return errors?.invalidBody?.(request) ?? INVALID_BODY
     }
     if (!route.body.guard(body)) return validationFailure('body', route.body.collect, body, errors, request)
   }
@@ -171,8 +234,8 @@ export const handleRequest = async (
 
   if (route.responses !== undefined) {
     const compiled = route.responses.get(reply.status)
-    if (compiled !== undefined && !compiled.guard(reply.body)) {
-      const result = compiled.collect(reply.body)
+    if (compiled?.body !== undefined && !compiled.body.guard(reply.body)) {
+      const result = compiled.body.collect(reply.body)
       return {
         status: 500,
         body: {
@@ -180,6 +243,21 @@ export const handleRequest = async (
           status: reply.status,
           errors: result === true ? [] : result.errors,
         },
+      }
+    }
+    if (compiled?.headers !== undefined) {
+      const replyHeaders = reply.headers ?? {}
+      if (!compiled.headers.guard(replyHeaders)) {
+        const result = compiled.headers.collect(replyHeaders)
+        return {
+          status: 500,
+          body: {
+            error: 'invalid_response',
+            status: reply.status,
+            source: 'headers',
+            errors: result === true ? [] : result.errors,
+          },
+        }
       }
     }
     if (compiled === undefined && route.contract.responses[reply.status] === undefined) {

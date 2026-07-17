@@ -15,6 +15,7 @@ export { decodeSegment } from './decode-segment'
 export { defineRoute } from './define-route'
 export type { RouteMatch } from './match-route'
 export { matchRoute } from './match-route'
+export { matchesBodyType, parseFormBody, parseMultipartBody } from './parse-body'
 export { parsePathPattern } from './parse-path-pattern'
 export { isPayloadTooLargeError, payloadTooLargeError } from './payload-too-large'
 export { readBytesCapped } from './read-bytes-capped'
@@ -30,10 +31,13 @@ export type {
   ApiOptions,
   ApiRequest,
   ApiResponse,
+  BodyType,
   Coercion,
+  CompiledBody,
   CompiledCookies,
   CompiledHeaders,
   CompiledInput,
+  CompiledResponse,
   CompiledRoute,
   CompiledValidation,
   ContextFactory,
@@ -42,9 +46,12 @@ export type {
   HttpMethod,
   OnErrorDetails,
   OpenApiDocument,
+  OpenApiExtras,
   OpenApiInfo,
+  OpenApiServer,
   PathSegment,
   RequestContext,
+  RequestObservation,
   ResponseContract,
   ResponseContracts,
   RouteContract,
@@ -53,6 +60,7 @@ export type {
   RouteReplyValue,
   RouteTable,
   SchemaValue,
+  SecurityRequirements,
   StreamingBody,
   ValidationFailure,
   ValidationFailureBody,

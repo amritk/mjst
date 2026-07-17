@@ -24,9 +24,21 @@ const routes: Record<string, AnyRouteContract> = {
   csvExport: corpus.csvExport,
   rawEcho: corpus.rawEcho,
   doubleRead: corpus.doubleRead,
+  fileProxy: corpus.fileProxy,
+  submitForm: corpus.submitForm,
+  uploadFile: corpus.uploadFile,
+  buildInfo: corpus.buildInfo,
+  releaseInfo: corpus.releaseInfo,
   dashboard: corpus.dashboard,
 }
 const info = { title: 'Differential', version: '1.0.0' }
+
+/** Document-level OpenAPI extras, passed identically to both engines. */
+const OPENAPI_EXTRAS = {
+  servers: [{ url: 'https://api.example.com' }],
+  securitySchemes: { apiKey: { type: 'apiKey', name: 'x-api-key', in: 'header' } },
+  security: [{ apiKey: [] }],
+} as const
 
 /** Workers-style bindings passed to both engines on every request. */
 const ENV = { tenant: 'acme' }
@@ -41,12 +53,14 @@ const emit = (): string =>
     validatorsImport: '@amritk/runtime-validators',
     routes,
     info,
+    ...OPENAPI_EXTRAS,
     contextExport: 'createAppContext',
     mounts: { '/mounted': 'mountEcho' },
     onRequestExports: ['gateTeapot'],
     onResponseExports: ['stampHeader'],
     errorsExport: 'corpusErrors',
     onErrorExport: 'corpusOnError',
+    observeExport: 'recordObservation',
     maxBodyBytes: MAX_BODY_BYTES,
   })
 
@@ -91,9 +105,11 @@ describe('compile-to-module', () => {
         createApi({
           routes: Object.values(routes),
           info,
+          ...OPENAPI_EXTRAS,
           context: corpus.createAppContext,
           errors: corpus.corpusErrors,
           onError: corpus.corpusOnError,
+          observe: corpus.recordObservation,
         }),
         {
           mounts: { '/mounted': corpus.mountEcho },
@@ -211,16 +227,62 @@ describe('compile-to-module', () => {
           }),
         // Query keys named like object plumbing stay ordinary data.
         () => new Request('http://localhost/users?limit=5&__proto__=evil'),
+        // Greedy tail: single and nested segments, per-segment decoding,
+        // the min-length validation failure, the bare prefix (404), and the
+        // HEAD fallback over a greedy route.
+        () => new Request('http://localhost/files/report.pdf'),
+        () => new Request('http://localhost/files/docs/2026/report.pdf'),
+        () => new Request('http://localhost/files/dir%20one/nested%2Ename'),
+        () => new Request('http://localhost/files/ab'),
+        () => new Request('http://localhost/files'),
+        () => new Request('http://localhost/files/docs/x.txt', { method: 'HEAD' }),
+        () => new Request('http://localhost/files/docs/x.txt', { method: 'POST' }),
+        // Form bodies: valid with coercion + arrays, a coercion-driven
+        // validation failure (error lists must match exactly), and the 415
+        // for a JSON payload on a form route.
+        () => form('name=Ada&age=30&tags=a&tags=b'),
+        () => form('name=Ada&age=seventeen'),
+        () => form('{"name":"Ada"}', 'application/json'),
+        // 415 for a mislabeled body on a JSON route.
+        () =>
+          new Request('http://localhost/users', {
+            method: 'POST',
+            headers: { 'content-type': 'text/plain' },
+            body: '{"name":"Ada"}',
+          }),
+        // Multipart: coerced fields + a File part the handler reads, a
+        // missing required part, and garbage bytes under a multipart header.
+        () => multipart({ title: 'report', attachment: new File([new Uint8Array(5)], 'r.bin') }),
+        () => multipart({ title: 'no-file' }),
+        () =>
+          new Request('http://localhost/upload', {
+            method: 'POST',
+            headers: { 'content-type': 'multipart/form-data; boundary=nope' },
+            body: 'not multipart',
+          }),
+        // OpenAPI annotations (deprecated, security, shared titled schema,
+        // response headers) flow through the /openapi.json case above; these
+        // exercise the routes themselves.
+        () => new Request('http://localhost/build-info'),
+        () => new Request('http://localhost/release-info'),
       ]
 
       for (const makeRequest of cases) {
+        corpus.observations.length = 0
         const fromRuntime = await runtime(makeRequest(), ENV)
+        const runtimeObservations = corpus.observations.splice(0)
         const fromCompiled = await compiledModule.fetch(makeRequest(), ENV)
+        const compiledObservations = corpus.observations.splice(0)
         const label = makeRequest().method + ' ' + new URL(makeRequest().url).pathname
+
+        // The observe hook must fire for the same requests with the same
+        // route pattern and outcome status in both engines (durations differ,
+        // so only their well-formedness is compared).
+        expect(compiledObservations, label + ' observations').toEqual(runtimeObservations)
 
         expect(fromCompiled.status, label).toBe(fromRuntime.status)
         expect(contentType(fromCompiled), label).toBe(contentType(fromRuntime))
-        for (const header of ['x-deleted', 'x-served-by', 'x-stamped', 'x-frame-protocol', 'allow']) {
+        for (const header of ['x-deleted', 'x-served-by', 'x-stamped', 'x-frame-protocol', 'x-cache', 'allow']) {
           expect(fromCompiled.headers.get(header), label).toBe(fromRuntime.headers.get(header))
         }
         const [runtimeText, compiledText] = [await fromRuntime.text(), await fromCompiled.text()]
@@ -266,5 +328,15 @@ const metric = (body: unknown): Request =>
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
+
+const form = (body: string, mediaType = 'application/x-www-form-urlencoded'): Request =>
+  new Request('http://localhost/form', { method: 'POST', headers: { 'content-type': mediaType }, body })
+
+const multipart = (parts: Readonly<Record<string, string | File>>): Request => {
+  const data = new FormData()
+  for (const [key, value] of Object.entries(parts)) data.append(key, value)
+  // The Request constructor stamps the boundary-carrying multipart header.
+  return new Request('http://localhost/upload', { method: 'POST', body: data })
+}
 
 const contentType = (response: Response): string => (response.headers.get('content-type') ?? '').split(';')[0] ?? ''

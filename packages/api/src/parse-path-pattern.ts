@@ -19,13 +19,20 @@ export const parsePathPattern = (path: string): readonly PathSegment[] => {
   return normalized
     .slice(1)
     .split('/')
-    .map((segment) => {
+    .map((segment, index, all) => {
       if (segment.startsWith('{') && segment.endsWith('}')) {
-        const name = segment.slice(1, -1)
-        if (name === '' || name.includes('{') || name.includes('}')) {
+        const raw = segment.slice(1, -1)
+        // `{name+}` (the AWS API Gateway greedy-path convention) captures the
+        // rest of the path: one or more segments, joined with '/'.
+        const greedy = raw.endsWith('+')
+        const name = greedy ? raw.slice(0, -1) : raw
+        if (name === '' || name.includes('{') || name.includes('}') || name.includes('+')) {
           throw new Error(`Invalid path parameter '${segment}' in '${path}'`)
         }
-        return { name }
+        if (greedy && index !== all.length - 1) {
+          throw new Error(`Greedy path parameter '${segment}' must be the last segment in '${path}'`)
+        }
+        return greedy ? { name, greedy: true } : { name }
       }
       // A parameter owns its whole segment; '/files/{name}.json' style partial
       // captures are not supported (and would not round-trip into OpenAPI).

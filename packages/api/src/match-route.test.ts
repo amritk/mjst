@@ -88,4 +88,24 @@ describe('match-route', () => {
     const match = matchRoute(table([user]), 'GET', '/users/%zz')
     expect(match?.params).toEqual({ id: '%zz' })
   })
+
+  it('captures the remaining segments for a greedy tail', () => {
+    const files = route('GET', '/files/{path+}')
+    expect(matchRoute(table([files]), 'GET', '/files/a')?.params).toEqual({ path: 'a' })
+    expect(matchRoute(table([files]), 'GET', '/files/a/b/c')?.params).toEqual({ path: 'a/b/c' })
+    // Greedy means one or more — the bare prefix is not a match.
+    expect(matchRoute(table([files]), 'GET', '/files')).toBeUndefined()
+  })
+
+  it('percent-decodes greedy captures per segment before rejoining', () => {
+    const files = route('GET', '/files/{path+}')
+    const match = matchRoute(table([files]), 'GET', '/files/dir%20one/file%2Ename.txt')
+    expect(match?.params).toEqual({ path: 'dir one/file.name.txt' })
+  })
+
+  it('checks literal segments before a greedy tail', () => {
+    const files = route('GET', '/files/v2/{path+}')
+    expect(matchRoute(table([files]), 'GET', '/files/v1/a/b')).toBeUndefined()
+    expect(matchRoute(table([files]), 'GET', '/files/v2/a/b')?.params).toEqual({ path: 'a/b' })
+  })
 })

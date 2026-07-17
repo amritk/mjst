@@ -1,7 +1,14 @@
 import { defineRoute } from '../define-route'
 import { routeFactory } from '../route-factory'
 import type { FetchOnRequest, FetchOnResponse } from '../to-fetch-handler'
-import type { ApiRequest, ApiResponse, ContextFactoryInput, ErrorFormatters, OnErrorDetails } from '../types'
+import type {
+  ApiRequest,
+  ApiResponse,
+  ContextFactoryInput,
+  ErrorFormatters,
+  OnErrorDetails,
+  RequestObservation,
+} from '../types'
 
 /**
  * The differential corpus: routes chosen so every emitter path is exercised —
@@ -243,6 +250,85 @@ export const rawEcho = defineRoute({
   handler: async ({ request }) => ({ status: 200, body: { raw: await request.readText() } }),
 })
 
+/** Shared titled schema: both engines must hoist it into components.schemas. */
+const buildInfoSchema = {
+  title: 'BuildInfo',
+  type: 'object',
+  properties: { sha: { type: 'string' } },
+  required: ['sha'],
+} as const
+
+/** Deprecated + per-operation security: OpenAPI annotations must match. */
+export const buildInfo = defineRoute({
+  method: 'get',
+  path: '/build-info',
+  deprecated: true,
+  security: [{ apiKey: [] }],
+  responses: { 200: { body: buildInfoSchema } },
+  handler: () => ({ status: 200, body: { sha: 'abc123' } }),
+})
+
+/** Documented response headers on a reply that actually sets them. */
+export const releaseInfo = defineRoute({
+  method: 'get',
+  path: '/release-info',
+  responses: { 200: { body: buildInfoSchema, headers: { 'x-cache': { type: 'string' } } } },
+  handler: () => ({ status: 200, headers: { 'x-cache': 'hit' }, body: { sha: 'abc123' } }),
+})
+
+/** A form-encoded body: coerced fields, array accumulation, 415 on JSON. */
+export const submitForm = defineRoute({
+  method: 'post',
+  path: '/form',
+  request: {
+    body: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', minLength: 1 },
+        age: { type: 'integer', minimum: 18 },
+        tags: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['name', 'age'],
+    },
+    bodyType: 'form',
+  },
+  responses: { 201: { body: { type: 'object' } } },
+  handler: ({ body }) => ({ status: 201, body }),
+})
+
+/** A multipart body: coerced string parts plus a File part read by the handler. */
+export const uploadFile = defineRoute({
+  method: 'post',
+  path: '/upload',
+  request: {
+    body: {
+      type: 'object',
+      properties: { title: { type: 'string', minLength: 1 }, attachment: {} },
+      required: ['title', 'attachment'],
+    },
+    bodyType: 'multipart',
+  },
+  responses: { 200: { body: { type: 'object' } } },
+  handler: async ({ body }) => {
+    const { title, attachment } = body as { title: string; attachment: File }
+    return {
+      status: 200,
+      body: { title, filename: attachment.name, byteLength: (await attachment.arrayBuffer()).byteLength },
+    }
+  },
+})
+
+/** A greedy tail capture: the rest of the path, decoded and rejoined. */
+export const fileProxy = defineRoute({
+  method: 'get',
+  path: '/files/{path+}',
+  request: {
+    params: { type: 'object', properties: { path: { type: 'string', minLength: 3 } }, required: ['path'] },
+  },
+  responses: { 200: { body: { type: 'object', properties: { path: {} } } } },
+  handler: ({ params }) => ({ status: 200, body: { path: params.path } }),
+})
+
 /**
  * Reads the body three ways after the pipeline already consumed the declared
  * schema — the webhook-HMAC-plus-parsed-access shape. Exercises the shared
@@ -258,6 +344,20 @@ export const doubleRead = defineRoute({
     body: { parsed: body.name, raw: await request.readText(), byteLength: (await request.readBytes()).byteLength },
   }),
 })
+
+/** What the corpus observer keeps per observation, engine-comparable. */
+export type RecordedObservation = { route: string; status: number; durationOk: boolean }
+
+/** Both engines record here; the differential test splices per request. */
+export const observations: RecordedObservation[] = []
+
+export const recordObservation = (observation: RequestObservation): void => {
+  observations.push({
+    route: observation.route.path,
+    status: observation.status,
+    durationOk: Number.isFinite(observation.durationMs) && observation.durationMs >= 0,
+  })
+}
 
 /** An onRequest gate: blocks flagged requests before mounts and routing. */
 export const gateTeapot: FetchOnRequest = (request) =>

@@ -234,6 +234,93 @@ describe('create-api', () => {
     expect(response.body).toMatchObject({ error: 'invalid_response', status: 302 })
   })
 
+  it('validates declared response headers when validateResponses is on', async () => {
+    const limited = defineRoute({
+      method: 'get',
+      path: '/limited',
+      responses: {
+        200: { headers: { 'x-ratelimit-remaining': { type: 'string', pattern: '^[0-9]+$' } } },
+      },
+      handler: ({ request: incoming }) => ({
+        status: 200,
+        headers: { 'x-ratelimit-remaining': incoming.header('x-fake') ?? '9' },
+      }),
+    })
+    const api = createApi({ routes: [limited], validateResponses: true })
+
+    expect((await api.handle(request('GET', '/limited'))).status).toBe(200)
+
+    const broken = await api.handle(request('GET', '/limited', { headers: { 'x-fake': 'lots' } }))
+    expect(broken.status).toBe(500)
+    expect(broken.body).toMatchObject({ error: 'invalid_response', status: 200, source: 'headers' })
+
+    // Declared headers validate as an open object: omitting one is fine.
+    const bare = defineRoute({
+      method: 'get',
+      path: '/bare',
+      responses: { 200: { headers: { 'x-request-id': { type: 'string' } } } },
+      handler: () => ({ status: 200 }),
+    })
+    const bareApi = createApi({ routes: [bare], validateResponses: true })
+    expect((await bareApi.handle(request('GET', '/bare'))).status).toBe(200)
+  })
+
+  it('observes matched requests with route, status, duration, and platform values', async () => {
+    const seen: Array<{ route: string; status: number; durationMs: number; env: unknown }> = []
+    const api = createApi({
+      routes: [getUser],
+      observe: ({ route, status, durationMs, env }) => {
+        seen.push({ route: route.path, status, durationMs, env })
+      },
+    })
+
+    await api.handle(request('GET', '/users/1'), { binding: true })
+    // Validation failures are matched outcomes and are observed too.
+    await api.handle(request('GET', '/users/abc'))
+    // Unmatched requests and the served document are not.
+    await api.handle(request('GET', '/missing'))
+    await api.handle(request('POST', '/users/1'))
+    await api.handle(request('GET', '/openapi.json'))
+
+    expect(seen).toHaveLength(2)
+    expect(seen[0]).toMatchObject({ route: '/users/{id}', status: 200, env: { binding: true } })
+    expect(seen[1]).toMatchObject({ route: '/users/{id}', status: 400 })
+    expect(seen[0]?.durationMs).toBeGreaterThanOrEqual(0)
+  })
+
+  it('swallows a throwing observer and still answers the request', async () => {
+    const api = createApi({
+      routes: [getUser],
+      observe: () => {
+        throw new Error('observer bug')
+      },
+    })
+    const response = await api.handle(request('GET', '/users/1'))
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({ id: 1, name: 'Ada' })
+  })
+
+  it('observes handler errors with the status onError produced', async () => {
+    const boom = defineRoute({
+      method: 'get',
+      path: '/boom',
+      responses: { 200: {} },
+      handler: () => {
+        throw new Error('kaboom')
+      },
+    })
+    const statuses: number[] = []
+    const api = createApi({
+      routes: [boom],
+      onError: () => ({ status: 503, body: { error: 'unavailable' } }),
+      observe: ({ status }) => {
+        statuses.push(status)
+      },
+    })
+    expect((await api.handle(request('GET', '/boom'))).status).toBe(503)
+    expect(statuses).toEqual([503])
+  })
+
   it('skips response validation by default', async () => {
     const lying = defineRoute({
       method: 'get',
@@ -380,6 +467,133 @@ describe('create-api', () => {
 
     // A path no method serves stays a 404.
     expect((await api.handle(request('PATCH', '/nowhere'))).status).toBe(404)
+  })
+
+  it('parses, coerces, and validates form-encoded bodies', async () => {
+    const signup = defineRoute({
+      method: 'post',
+      path: '/signup',
+      request: {
+        body: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', minLength: 1 },
+            age: { type: 'integer', minimum: 18 },
+            tags: { type: 'array', items: { type: 'string' } },
+          },
+          required: ['name', 'age'],
+        },
+        bodyType: 'form',
+      },
+      responses: { 201: { body: { type: 'object' } } },
+      handler: ({ body }) => ({ status: 201, body }),
+    })
+    const api = createApi({ routes: [signup] })
+    const post = (text: string, contentType = 'application/x-www-form-urlencoded') =>
+      api.handle({
+        ...request('POST', '/signup'),
+        header: (name) => (name === 'content-type' ? contentType : undefined),
+        readText: () => Promise.resolve(text),
+      })
+
+    const created = await post('name=Ada&age=30&tags=a&tags=b')
+    expect(created.status).toBe(201)
+    expect(created.body).toEqual({ name: 'Ada', age: 30, tags: ['a', 'b'] })
+
+    // Coercion failure surfaces as a body validation error, not a parse error.
+    const underage = await post('name=Ada&age=seventeen')
+    expect(underage.status).toBe(400)
+    expect((underage.body as ValidationFailureBody).source).toBe('body')
+
+    // A JSON payload on a form route is refused up front.
+    const mislabeled = await post('{"name":"Ada"}', 'application/json')
+    expect(mislabeled.status).toBe(415)
+    expect(mislabeled.body).toEqual({ error: 'unsupported_media_type' })
+  })
+
+  it('parses multipart bodies: coerced fields, File parts, and the invalid-body 400', async () => {
+    const upload = defineRoute({
+      method: 'post',
+      path: '/upload',
+      request: {
+        body: {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            size: { type: 'integer' },
+            // File parts carry no `type` keyword — a File is not a string.
+            attachment: {},
+          },
+          required: ['title', 'attachment'],
+        },
+        bodyType: 'multipart',
+      },
+      responses: { 200: { body: { type: 'object' } } },
+      handler: async ({ body }) => {
+        const file = (body as { attachment: File }).attachment
+        return {
+          status: 200,
+          body: {
+            title: (body as { title: string }).title,
+            filename: file.name,
+            bytes: (await file.arrayBuffer()).byteLength,
+          },
+        }
+      },
+    })
+    const api = createApi({ routes: [upload] })
+
+    const form = new FormData()
+    form.append('title', 'report')
+    form.append('size', '3')
+    form.append('attachment', new File([new Uint8Array([9, 9, 9])], 'r.bin', { type: 'application/octet-stream' }))
+    const encoded = new Request('http://localhost/upload', { method: 'POST', body: form })
+    const bytes = new Uint8Array(await encoded.arrayBuffer())
+    const contentType = encoded.headers.get('content-type') ?? ''
+
+    const response = await api.handle({
+      ...request('POST', '/upload'),
+      header: (name) => (name === 'content-type' ? contentType : undefined),
+      readBytes: () => Promise.resolve(bytes),
+    })
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({ title: 'report', filename: 'r.bin', bytes: 3 })
+
+    // Garbage bytes under a multipart content-type are the invalid-body 400.
+    const garbage = await api.handle({
+      ...request('POST', '/upload'),
+      header: (name) => (name === 'content-type' ? 'multipart/form-data; boundary=nope' : undefined),
+      readBytes: () => Promise.resolve(new TextEncoder().encode('not multipart')),
+    })
+    expect(garbage.status).toBe(400)
+    expect(garbage.body).toEqual({ error: 'invalid_body' })
+  })
+
+  it('routes greedy tail parameters through validation to the handler', async () => {
+    const files = defineRoute({
+      method: 'get',
+      path: '/files/{path+}',
+      request: {
+        params: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+      },
+      responses: { 200: { body: { type: 'object', properties: { path: {} } } } },
+      handler: ({ params }) => ({ status: 200, body: { path: params.path } }),
+    })
+    const api = createApi({ routes: [files] })
+
+    const nested = await api.handle(request('GET', '/files/docs/2026/report.pdf'))
+    expect(nested.status).toBe(200)
+    expect(nested.body).toEqual({ path: 'docs/2026/report.pdf' })
+
+    // One or more segments: the bare prefix is a 404, not an empty capture.
+    expect((await api.handle(request('GET', '/files'))).status).toBe(404)
+  })
+
+  it('rejects duplicate greedy patterns but allows greedy alongside single-segment params', () => {
+    const greedy = (path: string) =>
+      defineRoute({ method: 'get', path, responses: { 204: {} }, handler: () => ({ status: 204 }) })
+    expect(() => createApi({ routes: [greedy('/files/{a+}'), greedy('/files/{b+}')] })).toThrow(/Duplicate route/)
+    expect(() => createApi({ routes: [greedy('/files/{a+}'), greedy('/files/{b}')] })).not.toThrow()
   })
 
   it('runs the GET pipeline for HEAD requests (adapters discard the body)', async () => {
