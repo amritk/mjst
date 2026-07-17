@@ -2,6 +2,8 @@ import { buildCoercionPlan } from './build-coercion-plan'
 import { parsePathPattern } from './parse-path-pattern'
 import type {
   AnyRouteContract,
+  Coercion,
+  CompiledBody,
   CompiledCookies,
   CompiledHeaders,
   CompiledInput,
@@ -54,7 +56,7 @@ export const compileRoute = (
     segments,
     params: compileInput(request?.params, compile),
     query: compileInput(request?.query, compile),
-    body: request?.body !== undefined ? compile(request.body) : undefined,
+    body: compileBody(request?.body, request?.bodyType, compile),
     headers: compileHeaders(request?.headers, compile),
     cookies: compileCookies(request?.cookies, compile),
     responses,
@@ -65,6 +67,21 @@ export const compileRoute = (
 const compileInput = (schema: unknown, compile: ValidatorCompiler): CompiledInput | undefined => {
   if (schema === undefined) return undefined
   return { ...compile(schema), coercions: buildCoercionPlan(schema) }
+}
+
+/** Empty plan shared by JSON bodies, whose values arrive already typed. */
+const NO_COERCIONS: ReadonlyMap<string, Coercion> = new Map<string, Coercion>()
+
+const compileBody = (
+  schema: unknown,
+  bodyType: CompiledBody['bodyType'] | undefined,
+  compile: ValidatorCompiler,
+): CompiledBody | undefined => {
+  if (schema === undefined) return undefined
+  const type = bodyType ?? 'json'
+  // Form and multipart fields arrive as strings, so they coerce exactly like
+  // query parameters; JSON values are already typed and skip the plan.
+  return { ...compile(schema), bodyType: type, coercions: type === 'json' ? NO_COERCIONS : buildCoercionPlan(schema) }
 }
 
 /**

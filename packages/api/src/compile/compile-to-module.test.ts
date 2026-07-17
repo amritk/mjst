@@ -25,6 +25,8 @@ const routes: Record<string, AnyRouteContract> = {
   rawEcho: corpus.rawEcho,
   doubleRead: corpus.doubleRead,
   fileProxy: corpus.fileProxy,
+  submitForm: corpus.submitForm,
+  uploadFile: corpus.uploadFile,
   dashboard: corpus.dashboard,
 }
 const info = { title: 'Differential', version: '1.0.0' }
@@ -222,6 +224,29 @@ describe('compile-to-module', () => {
         () => new Request('http://localhost/files'),
         () => new Request('http://localhost/files/docs/x.txt', { method: 'HEAD' }),
         () => new Request('http://localhost/files/docs/x.txt', { method: 'POST' }),
+        // Form bodies: valid with coercion + arrays, a coercion-driven
+        // validation failure (error lists must match exactly), and the 415
+        // for a JSON payload on a form route.
+        () => form('name=Ada&age=30&tags=a&tags=b'),
+        () => form('name=Ada&age=seventeen'),
+        () => form('{"name":"Ada"}', 'application/json'),
+        // 415 for a mislabeled body on a JSON route.
+        () =>
+          new Request('http://localhost/users', {
+            method: 'POST',
+            headers: { 'content-type': 'text/plain' },
+            body: '{"name":"Ada"}',
+          }),
+        // Multipart: coerced fields + a File part the handler reads, a
+        // missing required part, and garbage bytes under a multipart header.
+        () => multipart({ title: 'report', attachment: new File([new Uint8Array(5)], 'r.bin') }),
+        () => multipart({ title: 'no-file' }),
+        () =>
+          new Request('http://localhost/upload', {
+            method: 'POST',
+            headers: { 'content-type': 'multipart/form-data; boundary=nope' },
+            body: 'not multipart',
+          }),
       ]
 
       for (const makeRequest of cases) {
@@ -277,5 +302,15 @@ const metric = (body: unknown): Request =>
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
+
+const form = (body: string, mediaType = 'application/x-www-form-urlencoded'): Request =>
+  new Request('http://localhost/form', { method: 'POST', headers: { 'content-type': mediaType }, body })
+
+const multipart = (parts: Readonly<Record<string, string | File>>): Request => {
+  const data = new FormData()
+  for (const [key, value] of Object.entries(parts)) data.append(key, value)
+  // The Request constructor stamps the boundary-carrying multipart header.
+  return new Request('http://localhost/upload', { method: 'POST', body: data })
+}
 
 const contentType = (response: Response): string => (response.headers.get('content-type') ?? '').split(';')[0] ?? ''

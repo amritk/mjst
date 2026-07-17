@@ -382,6 +382,102 @@ describe('create-api', () => {
     expect((await api.handle(request('PATCH', '/nowhere'))).status).toBe(404)
   })
 
+  it('parses, coerces, and validates form-encoded bodies', async () => {
+    const signup = defineRoute({
+      method: 'post',
+      path: '/signup',
+      request: {
+        body: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', minLength: 1 },
+            age: { type: 'integer', minimum: 18 },
+            tags: { type: 'array', items: { type: 'string' } },
+          },
+          required: ['name', 'age'],
+        },
+        bodyType: 'form',
+      },
+      responses: { 201: { body: { type: 'object' } } },
+      handler: ({ body }) => ({ status: 201, body }),
+    })
+    const api = createApi({ routes: [signup] })
+    const post = (text: string, contentType = 'application/x-www-form-urlencoded') =>
+      api.handle({
+        ...request('POST', '/signup'),
+        header: (name) => (name === 'content-type' ? contentType : undefined),
+        readText: () => Promise.resolve(text),
+      })
+
+    const created = await post('name=Ada&age=30&tags=a&tags=b')
+    expect(created.status).toBe(201)
+    expect(created.body).toEqual({ name: 'Ada', age: 30, tags: ['a', 'b'] })
+
+    // Coercion failure surfaces as a body validation error, not a parse error.
+    const underage = await post('name=Ada&age=seventeen')
+    expect(underage.status).toBe(400)
+    expect((underage.body as ValidationFailureBody).source).toBe('body')
+
+    // A JSON payload on a form route is refused up front.
+    const mislabeled = await post('{"name":"Ada"}', 'application/json')
+    expect(mislabeled.status).toBe(415)
+    expect(mislabeled.body).toEqual({ error: 'unsupported_media_type' })
+  })
+
+  it('parses multipart bodies: coerced fields, File parts, and the invalid-body 400', async () => {
+    const upload = defineRoute({
+      method: 'post',
+      path: '/upload',
+      request: {
+        body: {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            size: { type: 'integer' },
+            // File parts carry no `type` keyword — a File is not a string.
+            attachment: {},
+          },
+          required: ['title', 'attachment'],
+        },
+        bodyType: 'multipart',
+      },
+      responses: { 200: { body: { type: 'object' } } },
+      handler: async ({ body }) => {
+        const file = (body as { attachment: File }).attachment
+        return {
+          status: 200,
+          body: { title: (body as { title: string }).title, filename: file.name, bytes: (await file.arrayBuffer()).byteLength },
+        }
+      },
+    })
+    const api = createApi({ routes: [upload] })
+
+    const form = new FormData()
+    form.append('title', 'report')
+    form.append('size', '3')
+    form.append('attachment', new File([new Uint8Array([9, 9, 9])], 'r.bin', { type: 'application/octet-stream' }))
+    const encoded = new Request('http://localhost/upload', { method: 'POST', body: form })
+    const bytes = new Uint8Array(await encoded.arrayBuffer())
+    const contentType = encoded.headers.get('content-type') ?? ''
+
+    const response = await api.handle({
+      ...request('POST', '/upload'),
+      header: (name) => (name === 'content-type' ? contentType : undefined),
+      readBytes: () => Promise.resolve(bytes),
+    })
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({ title: 'report', filename: 'r.bin', bytes: 3 })
+
+    // Garbage bytes under a multipart content-type are the invalid-body 400.
+    const garbage = await api.handle({
+      ...request('POST', '/upload'),
+      header: (name) => (name === 'content-type' ? 'multipart/form-data; boundary=nope' : undefined),
+      readBytes: () => Promise.resolve(new TextEncoder().encode('not multipart')),
+    })
+    expect(garbage.status).toBe(400)
+    expect(garbage.body).toEqual({ error: 'invalid_body' })
+  })
+
   it('routes greedy tail parameters through validation to the handler', async () => {
     const files = defineRoute({
       method: 'get',

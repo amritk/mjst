@@ -6,6 +6,7 @@ import { buildParamsObject } from './build-params-object'
 import { buildQueryObject } from './build-query-object'
 import { buildQueryObjectFromString } from './build-query-object-from-string'
 import { matchRoute } from './match-route'
+import { matchesBodyType, parseFormBody, parseMultipartBody } from './parse-body'
 import { isPayloadTooLargeError } from './payload-too-large'
 import type {
   ApiRequest,
@@ -40,6 +41,11 @@ export type ApiInternals = {
 const NOT_FOUND: ApiResponse = Object.freeze({ status: 404, body: Object.freeze({ error: 'not_found' }) })
 const INTERNAL_ERROR: ApiResponse = Object.freeze({ status: 500, body: Object.freeze({ error: 'internal_error' }) })
 const INVALID_JSON: ApiResponse = Object.freeze({ status: 400, body: Object.freeze({ error: 'invalid_json' }) })
+const INVALID_BODY: ApiResponse = Object.freeze({ status: 400, body: Object.freeze({ error: 'invalid_body' }) })
+const UNSUPPORTED_MEDIA_TYPE: ApiResponse = Object.freeze({
+  status: 415,
+  body: Object.freeze({ error: 'unsupported_media_type' }),
+})
 const PAYLOAD_TOO_LARGE: ApiResponse = Object.freeze({
   status: 413,
   body: Object.freeze({ error: 'payload_too_large' }),
@@ -136,11 +142,25 @@ export const handleRequest = async (
 
   let body: unknown
   if (route.body !== undefined) {
+    const bodyType = route.body.bodyType
+    // Enforced only when the client actually declared a media type: a present
+    // but contradictory content-type is a 415, an absent one gets the benefit
+    // of the doubt and fails on the parse instead (keeps bare curl working).
+    const contentType = request.header('content-type')
+    if (contentType !== undefined && !matchesBodyType(contentType, bodyType)) {
+      return errors?.unsupportedMediaType?.(contentType, request) ?? UNSUPPORTED_MEDIA_TYPE
+    }
     try {
-      body = await request.readBody()
+      body =
+        bodyType === 'json'
+          ? await request.readBody()
+          : bodyType === 'form'
+            ? parseFormBody(await request.readText(), route.body.coercions)
+            : await parseMultipartBody(await request.readBytes(), contentType, route.body.coercions)
     } catch (error) {
       if (isPayloadTooLargeError(error)) return errors?.payloadTooLarge?.(request) ?? PAYLOAD_TOO_LARGE
-      return errors?.invalidJson?.(request) ?? INVALID_JSON
+      if (bodyType === 'json') return errors?.invalidJson?.(request) ?? INVALID_JSON
+      return errors?.invalidBody?.(request) ?? INVALID_BODY
     }
     if (!route.body.guard(body)) return validationFailure('body', route.body.collect, body, errors, request)
   }

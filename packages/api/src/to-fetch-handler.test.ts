@@ -53,9 +53,25 @@ describe('to-fetch-handler', () => {
   })
 
   it('answers 400 for a malformed JSON body', async () => {
-    const response = await handler(new Request('http://localhost/echo/7', { method: 'POST', body: 'not json' }))
+    const response = await handler(
+      new Request('http://localhost/echo/7', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: 'not json',
+      }),
+    )
     expect(response.status).toBe(400)
     expect(await response.json()).toEqual({ error: 'invalid_json' })
+  })
+
+  it('answers 415 when the content-type contradicts the declared body type', async () => {
+    // A string body without an explicit header gets fetch's text/plain — the
+    // declared JSON body then refuses it up front instead of parse-guessing.
+    const response = await handler(
+      new Request('http://localhost/echo/7', { method: 'POST', body: JSON.stringify({ message: 'hi' }) }),
+    )
+    expect(response.status).toBe(415)
+    expect(await response.json()).toEqual({ error: 'unsupported_media_type' })
   })
 
   it('answers 404 for unknown paths', async () => {
@@ -166,6 +182,7 @@ describe('to-fetch-handler', () => {
     const response = await capped(
       new Request('http://localhost/echo/1', {
         method: 'POST',
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ message: 'far too long for a 16 byte limit' }),
       }),
     )
@@ -340,7 +357,13 @@ describe('to-fetch-handler', () => {
     })
     const hooked = toFetchHandler(createApi({ routes: [signed] }))
     const payload = '{"message":  "spacing kept"}'
-    const response = await hooked(new Request('http://localhost/signed', { method: 'POST', body: payload }))
+    const response = await hooked(
+      new Request('http://localhost/signed', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: payload,
+      }),
+    )
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ parsed: 'spacing kept', raw: payload })
   })

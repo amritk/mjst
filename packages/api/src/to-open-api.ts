@@ -34,7 +34,7 @@ export const toOpenApi = (routes: ReadonlyArray<AnyRouteContract>, info: OpenApi
     if (route.request?.body !== undefined) {
       operation['requestBody'] = {
         required: true,
-        content: { 'application/json': { schema: route.request.body } },
+        content: { [BODY_MEDIA_TYPES[route.request.bodyType ?? 'json']]: { schema: route.request.body } },
       }
     }
 
@@ -69,6 +69,13 @@ export const toOpenApi = (routes: ReadonlyArray<AnyRouteContract>, info: OpenApi
     paths,
   }
 }
+
+/** The OpenAPI requestBody content key for each declared body type. */
+const BODY_MEDIA_TYPES = {
+  json: 'application/json',
+  form: 'application/x-www-form-urlencoded',
+  multipart: 'multipart/form-data',
+} as const
 
 const toParameters = (schema: unknown, location: 'path' | 'query' | 'header' | 'cookie'): unknown[] => {
   if (typeof schema !== 'object' || schema === null) return []

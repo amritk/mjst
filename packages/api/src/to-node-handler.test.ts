@@ -64,9 +64,19 @@ describe('to-node-handler', () => {
       expect(created.status).toBe(201)
       expect(await created.json()).toEqual({ name: 'Ada' })
 
-      const invalid = await fetch(origin + '/users', { method: 'POST', body: 'not json' })
+      const invalid = await fetch(origin + '/users', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: 'not json',
+      })
       expect(invalid.status).toBe(400)
       expect(await invalid.json()).toEqual({ error: 'invalid_json' })
+
+      // fetch stamps a bare string body text/plain — the declared JSON body
+      // now refuses the contradiction with a 415 instead of parse-guessing.
+      const mislabeled = await fetch(origin + '/users', { method: 'POST', body: JSON.stringify({ name: 'Ada' }) })
+      expect(mislabeled.status).toBe(415)
+      expect(await mislabeled.json()).toEqual({ error: 'unsupported_media_type' })
     })
   })
 
@@ -204,7 +214,11 @@ describe('to-node-handler', () => {
     const handler = toNodeHandler(createApi({ routes: [signed] }))
     await withServer(createServer(handler), async (origin) => {
       const payload = '{"name":  "Ada"}'
-      const response = await fetch(origin + '/signed', { method: 'POST', body: payload })
+      const response = await fetch(origin + '/signed', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: payload,
+      })
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({ parsed: 'Ada', raw: payload, again: payload.length })
     })

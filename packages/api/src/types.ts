@@ -208,8 +208,19 @@ export type RouteContract<
     readonly params?: Params
     /** JSON Schema (object) for query parameters. Values are coerced from strings first. */
     readonly query?: Query
-    /** JSON Schema for the JSON request body. Declaring it makes a JSON body required. */
+    /** JSON Schema for the request body. Declaring it makes a body required. */
     readonly body?: Body
+    /**
+     * How the body arrives on the wire. `'json'` (the default) parses JSON;
+     * `'form'` parses `application/x-www-form-urlencoded` with query-style
+     * coercion (typed keys coerce, array keys accumulate); `'multipart'`
+     * parses `multipart/form-data` — string parts coerce like form fields,
+     * file parts reach the handler as `File` objects (declare them in the
+     * schema without a `type` keyword). A request whose `content-type`
+     * contradicts the declared type answers 415. Selects the OpenAPI
+     * requestBody content key.
+     */
+    readonly bodyType?: BodyType
     /**
      * JSON Schema (object) for request headers. Property names are header
      * names (write them lowercase — lookup is case-insensitive but the
@@ -276,6 +287,7 @@ export type AnyRouteContract = {
     readonly params?: unknown
     readonly query?: unknown
     readonly body?: unknown
+    readonly bodyType?: BodyType
     readonly headers?: unknown
     readonly cookies?: unknown
   }
@@ -303,6 +315,12 @@ export type CompiledValidation = {
 export type ValidatorCompiler = (schema: unknown) => CompiledValidation
 
 /**
+ * The transport encodings a request body schema can validate. Selects the
+ * parser, the 415 media-type check, and the OpenAPI requestBody content key.
+ */
+export type BodyType = 'json' | 'form' | 'multipart'
+
+/**
  * How a string path/query value is converted before validation. HTTP delivers
  * every parameter as a string, so the plan (derived from the schema's declared
  * types at startup) restores numbers, booleans, and arrays without inspecting
@@ -314,6 +332,16 @@ export type Coercion = 'number' | 'boolean' | 'number-array' | 'boolean-array' |
  * A compiled request slot: validators plus the coercion plan for its keys.
  */
 export type CompiledInput = CompiledValidation & {
+  readonly coercions: ReadonlyMap<string, Coercion>
+}
+
+/**
+ * A compiled body slot: validators plus the wire encoding and — for form and
+ * multipart bodies, whose fields arrive as strings — the coercion plan that
+ * restores their schema-declared types before validation.
+ */
+export type CompiledBody = CompiledValidation & {
+  readonly bodyType: BodyType
   readonly coercions: ReadonlyMap<string, Coercion>
 }
 
@@ -354,7 +382,7 @@ export type CompiledRoute = {
   readonly segments: readonly PathSegment[]
   readonly params: CompiledInput | undefined
   readonly query: CompiledInput | undefined
-  readonly body: CompiledValidation | undefined
+  readonly body: CompiledBody | undefined
   readonly headers: CompiledHeaders | undefined
   readonly cookies: CompiledCookies | undefined
   /** Response-body validators, present only when `validateResponses` is on. */
@@ -499,8 +527,15 @@ export type ValidationFailure = {
 export type ErrorFormatters = {
   /** Replaces the default `404 {error:'not_found'}`. */
   readonly notFound?: (request: ApiRequest) => ApiResponse
-  /** Replaces the default `400 {error:'invalid_json'}` for unparseable bodies. */
+  /** Replaces the default `400 {error:'invalid_json'}` for unparseable JSON bodies. */
   readonly invalidJson?: (request: ApiRequest) => ApiResponse
+  /** Replaces the default `400 {error:'invalid_body'}` for unparseable form/multipart bodies. */
+  readonly invalidBody?: (request: ApiRequest) => ApiResponse
+  /**
+   * Replaces the default `415 {error:'unsupported_media_type'}`, answered
+   * when a request's `content-type` contradicts the declared `bodyType`.
+   */
+  readonly unsupportedMediaType?: (contentType: string, request: ApiRequest) => ApiResponse
   /** Replaces the default `413 {error:'payload_too_large'}`. */
   readonly payloadTooLarge?: (request: ApiRequest) => ApiResponse
   /** Replaces the default `400` {@link ValidationFailureBody}. */

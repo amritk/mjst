@@ -128,6 +128,11 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     validateGuard: false,
     codePoints: false,
     compileRx: false,
+    matchesBodyType: false,
+    parseFormBody: false,
+    parseMultipartBody: false,
+    invalidBody: false,
+    unsupportedMediaType: false,
   }
 
   const declarations: string[] = []
@@ -135,7 +140,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     declarations.push(...emitRouteDeclarations(route, used, emitContext))
   }
 
-  const statuses = new Set<number>([400, 404, 413, 500])
+  const statuses = new Set<number>([400, 404, 413, 415, 500])
   for (const route of routes) {
     for (const status of Object.keys(route.contract.responses)) statuses.add(Number(status))
   }
@@ -156,6 +161,9 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     used.buildQueryObject ? 'buildQueryObjectFromString' : undefined,
     used.buildCookiesObject ? 'buildCookiesObject' : undefined,
     used.coercePrimitive ? 'coercePrimitive' : undefined,
+    used.matchesBodyType ? 'matchesBodyType' : undefined,
+    used.parseFormBody ? 'parseFormBody' : undefined,
+    used.parseMultipartBody ? 'parseMultipartBody' : undefined,
     routes.some((route) => !route.isStatic) ? 'decodeSegment' : undefined,
     // The thrown-error path always distinguishes 413s, matching the runtime
     // pipeline for handlers that read (or reject on) an oversized body.
@@ -302,6 +310,14 @@ const emitErrorHelpers = (
       'const payloadTooLarge = () => new Response(\'{"error":"payload_too_large"}\', initFor(413))',
       `const methodNotAllowed = (allow) => ${defaultMethodNotAllowed}`,
     )
+    if (used['invalidBody']) {
+      lines.push('const invalidBody = () => new Response(\'{"error":"invalid_body"}\', initFor(400))')
+    }
+    if (used['unsupportedMediaType']) {
+      lines.push(
+        'const unsupportedMediaType = () => new Response(\'{"error":"unsupported_media_type"}\', initFor(415))',
+      )
+    }
   } else {
     lines.push(
       `const notFound = (request, url, rawPath, queryIndex) => ${errorsExport}.notFound !== undefined ? toResponse(${errorsExport}.notFound(makeApiRequest(request, url, rawPath, queryIndex))) : new Response('{"error":"not_found"}', initFor(404))`,
@@ -309,6 +325,16 @@ const emitErrorHelpers = (
       `const payloadTooLarge = (request, url, rawPath, queryIndex) => ${errorsExport}.payloadTooLarge !== undefined ? toResponse(${errorsExport}.payloadTooLarge(makeApiRequest(request, url, rawPath, queryIndex))) : new Response('{"error":"payload_too_large"}', initFor(413))`,
       `const methodNotAllowed = (allow, request, url, rawPath, queryIndex) => ${errorsExport}.methodNotAllowed !== undefined ? toResponse(${errorsExport}.methodNotAllowed(allow, makeApiRequest(request, url, rawPath, queryIndex))) : ${defaultMethodNotAllowed}`,
     )
+    if (used['invalidBody']) {
+      lines.push(
+        `const invalidBody = (request, url, rawPath, queryIndex) => ${errorsExport}.invalidBody !== undefined ? toResponse(${errorsExport}.invalidBody(makeApiRequest(request, url, rawPath, queryIndex))) : new Response('{"error":"invalid_body"}', initFor(400))`,
+      )
+    }
+    if (used['unsupportedMediaType']) {
+      lines.push(
+        `const unsupportedMediaType = (contentType, request, url, rawPath, queryIndex) => ${errorsExport}.unsupportedMediaType !== undefined ? toResponse(${errorsExport}.unsupportedMediaType(contentType, makeApiRequest(request, url, rawPath, queryIndex))) : new Response('{"error":"unsupported_media_type"}', initFor(415))`,
+      )
+    }
   }
   // The 413 check runs first in both variants: an oversized body is the
   // transport's outcome, not an application error to report.
@@ -468,6 +494,13 @@ const emitRouteDeclarations = (
         `const names${suffix} = new Set(${JSON.stringify(names)})`,
         `const coercions${suffix} = new Map(${JSON.stringify(plan.map(([key, kind]) => [key, kind]))})`,
       )
+    }
+    // Form and multipart fields arrive as strings, so the body slot carries a
+    // coercion plan exactly like query parameters; JSON values are already
+    // typed and need none.
+    if (slot === 'body' && (request?.bodyType ?? 'json') !== 'json') {
+      const plan = [...buildCoercionPlan(schema)]
+      lines.push(`const coercions${suffix} = new Map(${JSON.stringify(plan.map(([key, kind]) => [key, kind]))})`)
     }
   }
 
@@ -664,13 +697,47 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
   // read so exactly one object owns the single-use body stream.
   lines.push(`  const apiRequest = makeApiRequest(${ERROR_ARGS})`)
   if (request?.body !== undefined) {
+    const bodyType = request.bodyType ?? 'json'
     const suffix = slotSuffix('body', route.name)
+    used['matchesBodyType'] = true
+    used['unsupportedMediaType'] = true
+    // A present-but-contradictory content-type is a 415 before any read; an
+    // absent one falls through to the parse — same rule as the runtime.
     lines.push(
-      '  return apiRequest.readBody().then((body) => {',
+      "  const bodyContentType = request.headers.get('content-type')",
+      `  if (bodyContentType !== null && !matchesBodyType(bodyContentType, '${bodyType}')) return unsupportedMediaType(bodyContentType, ${ERROR_ARGS})`,
+    )
+    const guardAndRun = [
       `    if (!guard${suffix}(body)) return failValidation('body', collect${suffix}, body, ${ERROR_ARGS})`,
       ...runLines('body', '    '),
-      `  }, (error) => isPayloadTooLargeError(error) ? payloadTooLarge(${ERROR_ARGS}) : invalidJson(${ERROR_ARGS}))`,
-    )
+    ]
+    if (bodyType === 'json') {
+      lines.push(
+        '  return apiRequest.readBody().then((body) => {',
+        ...guardAndRun,
+        `  }, (error) => isPayloadTooLargeError(error) ? payloadTooLarge(${ERROR_ARGS}) : invalidJson(${ERROR_ARGS}))`,
+      )
+    } else if (bodyType === 'form') {
+      used['parseFormBody'] = true
+      used['invalidBody'] = true
+      lines.push(
+        '  return apiRequest.readText().then((text) => {',
+        '    let body',
+        `    try { body = parseFormBody(text, coercions${suffix}) } catch { return invalidBody(${ERROR_ARGS}) }`,
+        ...guardAndRun,
+        `  }, (error) => isPayloadTooLargeError(error) ? payloadTooLarge(${ERROR_ARGS}) : invalidBody(${ERROR_ARGS}))`,
+      )
+    } else {
+      used['parseMultipartBody'] = true
+      used['invalidBody'] = true
+      // The second .then's rejection handler covers both the read and the
+      // multipart parse, matching the runtime's single try block.
+      lines.push(
+        `  return apiRequest.readBytes().then((bytes) => parseMultipartBody(bytes, bodyContentType ?? undefined, coercions${suffix})).then((body) => {`,
+        ...guardAndRun,
+        `  }, (error) => isPayloadTooLargeError(error) ? payloadTooLarge(${ERROR_ARGS}) : invalidBody(${ERROR_ARGS}))`,
+      )
+    }
   } else {
     lines.push(...runLines('undefined', '  '))
   }

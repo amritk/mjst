@@ -243,6 +243,48 @@ export const rawEcho = defineRoute({
   handler: async ({ request }) => ({ status: 200, body: { raw: await request.readText() } }),
 })
 
+/** A form-encoded body: coerced fields, array accumulation, 415 on JSON. */
+export const submitForm = defineRoute({
+  method: 'post',
+  path: '/form',
+  request: {
+    body: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', minLength: 1 },
+        age: { type: 'integer', minimum: 18 },
+        tags: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['name', 'age'],
+    },
+    bodyType: 'form',
+  },
+  responses: { 201: { body: { type: 'object' } } },
+  handler: ({ body }) => ({ status: 201, body }),
+})
+
+/** A multipart body: coerced string parts plus a File part read by the handler. */
+export const uploadFile = defineRoute({
+  method: 'post',
+  path: '/upload',
+  request: {
+    body: {
+      type: 'object',
+      properties: { title: { type: 'string', minLength: 1 }, attachment: {} },
+      required: ['title', 'attachment'],
+    },
+    bodyType: 'multipart',
+  },
+  responses: { 200: { body: { type: 'object' } } },
+  handler: async ({ body }) => {
+    const { title, attachment } = body as { title: string; attachment: File }
+    return {
+      status: 200,
+      body: { title, filename: attachment.name, byteLength: (await attachment.arrayBuffer()).byteLength },
+    }
+  },
+})
+
 /** A greedy tail capture: the rest of the path, decoded and rejoined. */
 export const fileProxy = defineRoute({
   method: 'get',
