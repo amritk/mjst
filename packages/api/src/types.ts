@@ -62,10 +62,12 @@ export type SchemaValue<S> = [S] extends [undefined] ? undefined : FromSchema<S>
  * matched route declares a query schema, and `readBody` only when it declares a
  * body schema — so routes that do not use them never pay for parsing.
  *
- * The underlying body is a stream, so exactly one of `readBody`, `readText`,
- * or `readBytes` may be called, once, per request. A route that verifies a
- * webhook signature declares no body schema (so the pipeline does not consume
- * the stream) and calls `readText` itself.
+ * The built-in adapters back all three body readers with one shared buffered
+ * read, so they may be called repeatedly and in any combination — including
+ * after the pipeline consumed a declared body schema (webhook signature
+ * verification alongside parsed access). A hand-written adapter should
+ * provide the same guarantee: the underlying body is a single-use stream, so
+ * uncached readers would fail (or hang, on Node) at the second call.
  */
 export type ApiRequest = {
   /** Uppercase HTTP method, e.g. `'GET'`. Adapters are responsible for casing. */

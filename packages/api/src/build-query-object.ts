@@ -12,7 +12,10 @@ export const buildQueryObject = (
   searchParams: URLSearchParams,
   coercions: ReadonlyMap<string, Coercion>,
 ): Record<string, unknown> => {
-  const query: Record<string, unknown> = {}
+  // Null prototype: query keys are attacker-controlled, and on a plain object
+  // a key like `__proto__` would hit the prototype setter — silently dropped
+  // instead of landing as an own property for the schema to judge.
+  const query: Record<string, unknown> = Object.create(null) as Record<string, unknown>
   for (const [key, raw] of searchParams) {
     assignQueryPair(query, key, raw, coercions)
   }

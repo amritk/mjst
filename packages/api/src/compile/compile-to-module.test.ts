@@ -23,6 +23,7 @@ const routes: Record<string, AnyRouteContract> = {
   streamChat: corpus.streamChat,
   csvExport: corpus.csvExport,
   rawEcho: corpus.rawEcho,
+  doubleRead: corpus.doubleRead,
   dashboard: corpus.dashboard,
 }
 const info = { title: 'Differential', version: '1.0.0' }
@@ -182,11 +183,34 @@ describe('compile-to-module', () => {
         () => new Request('http://localhost/dashboard'),
         () => new Request('http://localhost/dashboard', { headers: { cookie: 'session="abc%20123"' } }),
         // 405: wrong method on static and dynamic paths (multi-method allow
-        // lists come from /users, which serves GET and POST).
+        // lists come from /users, which serves GET and POST; HEAD rides along
+        // with GET).
         () => new Request('http://localhost/users', { method: 'PUT' }),
         () => new Request('http://localhost/users/7', { method: 'PUT' }),
         () => new Request('http://localhost/health', { method: 'DELETE' }),
         () => new Request('http://localhost/chat'),
+        // HEAD falls back to GET routes with the body stripped: static,
+        // dynamic, query-validated, raw contentType, and the failure shapes
+        // (validation error, 404, POST-only 405) plus the OpenAPI document.
+        () => new Request('http://localhost/health', { method: 'HEAD' }),
+        () => new Request('http://localhost/users/7', { method: 'HEAD' }),
+        () => new Request('http://localhost/users/abc', { method: 'HEAD' }),
+        () => new Request('http://localhost/users?limit=5', { method: 'HEAD' }),
+        () => new Request('http://localhost/export', { method: 'HEAD' }),
+        () => new Request('http://localhost/openapi.json', { method: 'HEAD' }),
+        () => new Request('http://localhost/missing', { method: 'HEAD' }),
+        () => new Request('http://localhost/chat', { method: 'HEAD' }),
+        () => new Request('http://localhost/health', { method: 'HEAD', headers: { 'x-block': '1' } }),
+        // The shared buffered body read: pipeline validation plus two raw
+        // handler reads of the same stream.
+        () =>
+          new Request('http://localhost/double-read', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: '{"name":  "Ada"}',
+          }),
+        // Query keys named like object plumbing stay ordinary data.
+        () => new Request('http://localhost/users?limit=5&__proto__=evil'),
       ]
 
       for (const makeRequest of cases) {

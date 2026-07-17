@@ -243,6 +243,22 @@ export const rawEcho = defineRoute({
   handler: async ({ request }) => ({ status: 200, body: { raw: await request.readText() } }),
 })
 
+/**
+ * Reads the body three ways after the pipeline already consumed the declared
+ * schema — the webhook-HMAC-plus-parsed-access shape. Exercises the shared
+ * buffered read in both engines.
+ */
+export const doubleRead = defineRoute({
+  method: 'post',
+  path: '/double-read',
+  request: { body: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
+  responses: { 200: { body: { type: 'object' } } },
+  handler: async ({ body, request }) => ({
+    status: 200,
+    body: { parsed: body.name, raw: await request.readText(), byteLength: (await request.readBytes()).byteLength },
+  }),
+})
+
 /** An onRequest gate: blocks flagged requests before mounts and routing. */
 export const gateTeapot: FetchOnRequest = (request) =>
   request.headers.get('x-block') === '1'

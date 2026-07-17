@@ -18,12 +18,14 @@ export const buildQueryObjectFromString = (
 ): Record<string, unknown> => {
   // URLSearchParams tolerates one leading '?', so this does too.
   const source = queryString.charCodeAt(0) === 63 ? queryString.slice(1) : queryString
-  if (source === '') return {}
+  if (source === '') return Object.create(null) as Record<string, unknown>
   if (source.includes('%') || source.includes('+')) {
     return buildQueryObject(new URLSearchParams(source), coercions)
   }
 
-  const query: Record<string, unknown> = {}
+  // Null prototype for the same reason as buildQueryObject: `__proto__` and
+  // friends must land as own properties for the schema to judge.
+  const query: Record<string, unknown> = Object.create(null) as Record<string, unknown>
   const length = source.length
   let start = 0
   while (start < length) {

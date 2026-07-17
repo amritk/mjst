@@ -242,6 +242,156 @@ describe('to-fetch-handler', () => {
     expect(mounted.headers.get('x-security')).toBe('on')
   })
 
+  it('answers HEAD via the GET route with the same headers and no body', async () => {
+    const users = defineRoute({
+      method: 'get',
+      path: '/users/{id}',
+      request: { params: { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] } },
+      responses: { 200: { body: { type: 'object', properties: { id: {} } } } },
+      handler: ({ params }) => ({ status: 200, headers: { 'x-lookup': 'hit' }, body: { id: params.id } }),
+    })
+    const heady = toFetchHandler(createApi({ routes: [users] }))
+    const response = await heady(new Request('http://localhost/users/7', { method: 'HEAD' }))
+    expect(response.status).toBe(200)
+    expect(response.headers.get('x-lookup')).toBe('hit')
+    expect(response.headers.get('content-type')).toContain('application/json')
+    expect(await response.text()).toBe('')
+  })
+
+  it('validates HEAD requests exactly like GET', async () => {
+    const users = defineRoute({
+      method: 'get',
+      path: '/users/{id}',
+      request: { params: { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] } },
+      responses: { 200: {} },
+      handler: () => ({ status: 200 }),
+    })
+    const heady = toFetchHandler(createApi({ routes: [users] }))
+    const response = await heady(new Request('http://localhost/users/not-a-number', { method: 'HEAD' }))
+    expect(response.status).toBe(400)
+    expect(await response.text()).toBe('')
+  })
+
+  it('cancels a streaming body instead of leaking it on HEAD', async () => {
+    let cancelled = false
+    const csv = defineRoute({
+      method: 'get',
+      path: '/export',
+      responses: { 200: { contentType: 'text/csv' } },
+      handler: () => ({
+        status: 200,
+        body: new ReadableStream<Uint8Array>({
+          pull: (controller) => controller.enqueue(new TextEncoder().encode('a,b\n')),
+          cancel: () => {
+            cancelled = true
+          },
+        }),
+      }),
+    })
+    const exporter = toFetchHandler(createApi({ routes: [csv] }))
+    const response = await exporter(new Request('http://localhost/export', { method: 'HEAD' }))
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('text/csv')
+    expect(await response.text()).toBe('')
+    expect(cancelled).toBe(true)
+  })
+
+  it('serves HEAD on the OpenAPI path and keeps HEAD 404s and 405s intact', async () => {
+    const openapi = await handler(new Request('http://localhost/openapi.json', { method: 'HEAD' }))
+    expect(openapi.status).toBe(200)
+    expect(await openapi.text()).toBe('')
+
+    const missing = await handler(new Request('http://localhost/missing', { method: 'HEAD' }))
+    expect(missing.status).toBe(404)
+    expect(await missing.text()).toBe('')
+
+    // /echo/{id} only serves POST — HEAD gets the 405, not the GET fallback.
+    const wrongMethod = await handler(new Request('http://localhost/echo/7', { method: 'HEAD' }))
+    expect(wrongMethod.status).toBe(405)
+    expect(wrongMethod.headers.get('allow')).toBe('POST')
+    expect(await wrongMethod.text()).toBe('')
+  })
+
+  it('advertises HEAD in allow lists whenever GET is allowed', async () => {
+    const users = defineRoute({
+      method: 'get',
+      path: '/users',
+      responses: { 200: {} },
+      handler: () => ({ status: 200 }),
+    })
+    const heady = toFetchHandler(createApi({ routes: [users] }))
+    const response = await heady(new Request('http://localhost/users', { method: 'PUT' }))
+    expect(response.status).toBe(405)
+    expect(response.headers.get('allow')).toBe('GET, HEAD')
+  })
+
+  it('lets a handler read the body after the pipeline validated it', async () => {
+    const signed = defineRoute({
+      method: 'post',
+      path: '/signed',
+      request: { body: { type: 'object', properties: { message: { type: 'string' } }, required: ['message'] } },
+      responses: { 200: { body: { type: 'object', properties: { parsed: {}, raw: {} } } } },
+      // Both the declared schema and the raw bytes — the webhook-HMAC shape
+      // combined with parsed access. All reads share one buffered body.
+      handler: async ({ body, request }) => ({
+        status: 200,
+        body: { parsed: body.message, raw: await request.readText() },
+      }),
+    })
+    const hooked = toFetchHandler(createApi({ routes: [signed] }))
+    const payload = '{"message":  "spacing kept"}'
+    const response = await hooked(new Request('http://localhost/signed', { method: 'POST', body: payload }))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ parsed: 'spacing kept', raw: payload })
+  })
+
+  it('serves repeated and mixed raw reads from the same buffered body', async () => {
+    const greedy = defineRoute({
+      method: 'post',
+      path: '/greedy',
+      responses: { 200: { body: { type: 'object', properties: { first: {}, second: {}, byteLength: {} } } } },
+      handler: async ({ request }) => {
+        const first = await request.readText()
+        const second = await request.readText()
+        const bytes = await request.readBytes()
+        return { status: 200, body: { first, second, byteLength: bytes.byteLength } }
+      },
+    })
+    const hooked = toFetchHandler(createApi({ routes: [greedy] }))
+    const response = await hooked(new Request('http://localhost/greedy', { method: 'POST', body: 'read me twice' }))
+    expect(await response.json()).toEqual({ first: 'read me twice', second: 'read me twice', byteLength: 13 })
+  })
+
+  it('answers 500 when the reply body cannot be serialized', async () => {
+    const cyclic = defineRoute({
+      method: 'get',
+      path: '/cyclic',
+      responses: { 200: { body: { type: 'object' } } },
+      handler: () => {
+        const body: Record<string, unknown> = {}
+        body['self'] = body
+        return { status: 200, body }
+      },
+    })
+    const broken = toFetchHandler(createApi({ routes: [cyclic] }))
+    const response = await broken(new Request('http://localhost/cyclic'))
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({ error: 'internal_error' })
+  })
+
+  it('answers 500 when a reply header name is invalid', async () => {
+    const badHeader = defineRoute({
+      method: 'get',
+      path: '/bad-header',
+      responses: { 204: {} },
+      handler: () => ({ status: 204, headers: { 'bad header\n': 'x' } }),
+    })
+    const broken = toFetchHandler(createApi({ routes: [badHeader] }))
+    const response = await broken(new Request('http://localhost/bad-header'))
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({ error: 'internal_error' })
+  })
+
   it('wires createCors preflight and decoration through the hook chain', async () => {
     const cors = createCors({ origin: (origin) => origin, credentials: true, exposeHeaders: ['x-demo-used'] })
     const handlerWithCors = toFetchHandler(createApi({ routes: [empty] }), {

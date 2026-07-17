@@ -6,13 +6,15 @@ import { join } from 'node:path'
  *
  * Locally we resolve packages to their TypeScript source via the `development`
  * export condition (see the `dev` scripts and `--conditions development`). That
- * condition points at `./src/*.ts`, and `src` ships in the published tarball —
- * so any consumer or bundler that happens to resolve `development` would load
- * raw, uncompiled TypeScript instead of the built JS in `dist`.
+ * condition points at `./src/*.ts` — for @amritk/helpers, whose `files` ships
+ * `src`, a consumer or bundler resolving `development` would load raw,
+ * uncompiled TypeScript instead of the built JS in `dist`; for every other
+ * package (`files: ["dist"]`) the condition would dangle at paths that do not
+ * exist in the tarball at all.
  *
- * Removing the condition from the published manifests closes that hole while
- * leaving the source maps in `src` intact. Like resolve-workspace-protocol,
- * this runs in the ephemeral publish job and is never committed.
+ * Removing the condition from the published manifests closes both holes. Like
+ * resolve-workspace-protocol, this runs in the ephemeral publish job and is
+ * never committed.
  */
 
 const ROOT = join(import.meta.dir, '..')

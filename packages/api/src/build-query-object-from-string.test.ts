@@ -52,6 +52,17 @@ const CASES: readonly string[] = [
 ]
 
 describe('build-query-object-from-string', () => {
+  it('keeps __proto__ as an own property on both the fast path and the fallback', () => {
+    // Plain string takes the hand-rolled parser; the encoded variant falls
+    // back to URLSearchParams — both must land the key as ordinary data.
+    for (const source of ['__proto__=evil', '__proto%5F%5F=x&__proto__=evil']) {
+      const query = buildQueryObjectFromString(source, new Map())
+      expect(Object.getPrototypeOf(query)).toBe(null)
+      expect(query['__proto__']).toBe('evil')
+      expect(({} as Record<string, unknown>)['evil']).toBeUndefined()
+    }
+  })
+
   it('matches URLSearchParams on every case and plan', () => {
     for (const plan of PLANS) {
       for (const queryString of CASES) {

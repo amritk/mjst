@@ -1,5 +1,5 @@
 import { readBytesCapped } from './read-bytes-capped'
-import type { Api, ApiRequest, StreamingBody } from './types'
+import type { Api, ApiRequest, ApiResponse, StreamingBody } from './types'
 
 /**
  * The handler shape every fetch runtime accepts. Cloudflare Workers invokes it
@@ -137,45 +137,60 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
       if (path === prefix || path.startsWith(prefix + '/')) return mount(request)
     }
 
+    // All three readers share one buffered read, so the body can be read
+    // repeatedly and in any combination — a handler calling `readText` after
+    // the pipeline consumed a declared body schema would otherwise hit the
+    // stream's single-use limit.
+    let bytes: Promise<Uint8Array> | undefined
+    const readAllBytes =
+      maxBodyBytes === undefined
+        ? () => (bytes ??= request.arrayBuffer().then((buffer) => new Uint8Array(buffer)))
+        : () => (bytes ??= readBytesCapped(request.body, request.headers.get('content-length'), maxBodyBytes))
+
     const apiRequest: ApiRequest = {
       method: request.method,
       path,
       searchParams: () => new URLSearchParams(queryIndex === -1 ? '' : url.slice(queryIndex + 1)),
       queryString: () => (queryIndex === -1 ? '' : url.slice(queryIndex + 1)),
       header: (name) => request.headers.get(name) ?? undefined,
-      readBody:
-        maxBodyBytes === undefined
-          ? () => request.json()
-          : () => readTextCapped(request, maxBodyBytes).then((text) => JSON.parse(text) as unknown),
-      readText: maxBodyBytes === undefined ? () => request.text() : () => readTextCapped(request, maxBodyBytes),
-      readBytes:
-        maxBodyBytes === undefined
-          ? () => request.arrayBuffer().then((buffer) => new Uint8Array(buffer))
-          : () => readBytesCapped(request.body, request.headers.get('content-length'), maxBodyBytes),
+      readBody: () => readAllBytes().then((buffer) => JSON.parse(DECODER.decode(buffer)) as unknown),
+      readText: () => readAllBytes().then((buffer) => DECODER.decode(buffer)),
+      readBytes: readAllBytes,
       signal: request.signal,
     }
     const response = await api.handle(apiRequest, env, executionContext)
 
-    // Raw statuses (contract-declared contentType) pass the body straight to
-    // the Response constructor: a string, bytes, or a live ReadableStream.
-    if (response.contentType !== undefined) {
-      return new Response((response.body ?? null) as StreamingBody | null, {
+    // Translating an ApiResponse into a Response can itself throw — a circular
+    // reply body breaks JSON.stringify, an invalid header name breaks the
+    // Headers constructor — and `onError` never sees it because the handler
+    // already returned. Without this boundary the rejection escapes to the
+    // platform instead of becoming the pipeline's own 500 shape.
+    try {
+      if (request.method === 'HEAD') return headResponse(response)
+
+      // Raw statuses (contract-declared contentType) pass the body straight to
+      // the Response constructor: a string, bytes, or a live ReadableStream.
+      if (response.contentType !== undefined) {
+        return new Response((response.body ?? null) as StreamingBody | null, {
+          status: response.status,
+          headers: { 'content-type': response.contentType, ...response.headers },
+        })
+      }
+      if (response.headers === undefined) {
+        if (response.body === undefined) return new Response(null, { status: response.status })
+        return new Response(JSON.stringify(response.body), initFor(response.status))
+      }
+      if (response.body === undefined) {
+        return new Response(null, { status: response.status, headers: { ...response.headers } })
+      }
+      // Custom headers win over the default content-type, matching Response.json.
+      return new Response(JSON.stringify(response.body), {
         status: response.status,
-        headers: { 'content-type': response.contentType, ...response.headers },
+        headers: { ...JSON_HEADERS, ...response.headers },
       })
+    } catch {
+      return new Response('{"error":"internal_error"}', initFor(500))
     }
-    if (response.headers === undefined) {
-      if (response.body === undefined) return new Response(null, { status: response.status })
-      return new Response(JSON.stringify(response.body), initFor(response.status))
-    }
-    if (response.body === undefined) {
-      return new Response(null, { status: response.status, headers: { ...response.headers } })
-    }
-    // Custom headers win over the default content-type, matching Response.json.
-    return new Response(JSON.stringify(response.body), {
-      status: response.status,
-      headers: { ...JSON_HEADERS, ...response.headers },
-    })
   }
 
   if (onRequest.length === 0 && onResponse.length === 0) return handler
@@ -195,7 +210,28 @@ const JSON_HEADERS: Readonly<Record<string, string>> = Object.freeze({ 'content-
 const toArray = <T>(value: T | ReadonlyArray<T> | undefined): ReadonlyArray<T> =>
   value === undefined ? [] : Array.isArray(value) ? value : [value as T]
 
-const readTextCapped = (request: Request, limit: number): Promise<string> =>
-  readBytesCapped(request.body, request.headers.get('content-length'), limit).then((bytes) => DECODER.decode(bytes))
+/**
+ * A HEAD reply: the status and headers the GET pipeline produced, no body
+ * (RFC 9110). Headers match the equivalent GET branch — content-type
+ * included — and a streaming body is cancelled rather than leaked, since
+ * nothing will ever pump it.
+ */
+const headResponse = (response: ApiResponse): Response => {
+  const body: unknown = response.body
+  if (body instanceof ReadableStream) void body.cancel().catch(() => undefined)
+  if (response.contentType !== undefined) {
+    return new Response(null, {
+      status: response.status,
+      headers: { 'content-type': response.contentType, ...response.headers },
+    })
+  }
+  if (response.headers === undefined) {
+    if (body === undefined) return new Response(null, { status: response.status })
+    return new Response(null, { status: response.status, headers: JSON_HEADERS })
+  }
+  return body === undefined
+    ? new Response(null, { status: response.status, headers: { ...response.headers } })
+    : new Response(null, { status: response.status, headers: { ...JSON_HEADERS, ...response.headers } })
+}
 
 const DECODER = new TextDecoder()
