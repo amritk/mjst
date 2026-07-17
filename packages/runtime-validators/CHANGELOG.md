@@ -1,5 +1,11 @@
 # @amritk/runtime-validators
 
+## 0.7.2
+
+### Patch Changes
+
+- 4e23c02: Packaging fixes across all published packages: the `types` export condition now precedes runtime conditions (`default`/`import`) so TypeScript resolves the declared `.d.ts` explicitly instead of relying on file adjacency, and published tarballs now include the LICENSE file (copied in during the publish job).
+
 ## 0.7.1
 
 ### Patch Changes

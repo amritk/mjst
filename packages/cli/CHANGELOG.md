@@ -1,5 +1,21 @@
 # @amritk/mjst
 
+## 0.12.2
+
+### Patch Changes
+
+- 4e23c02: Packaging fixes across all published packages: the `types` export condition now precedes runtime conditions (`default`/`import`) so TypeScript resolves the declared `.d.ts` explicitly instead of relying on file adjacency, and published tarballs now include the LICENSE file (copied in during the publish job).
+- Updated dependencies [4e23c02]
+  - @amritk/adapters@0.3.2
+  - @amritk/generate-examples@0.5.2
+  - @amritk/generate-markdown@0.4.2
+  - @amritk/generate-parsers@0.16.3
+  - @amritk/generate-validators@0.11.8
+  - @amritk/helpers@0.13.2
+  - @amritk/lint@0.3.2
+  - @amritk/resolve-refs@0.4.2
+  - @amritk/yaml@0.3.2
+
 ## 0.12.1
 
 ### Patch Changes

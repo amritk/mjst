@@ -1,6 +1,6 @@
 {
   "name": "@amritk/api",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Framework-agnostic, contract-first API layer built on mjst JSON Schema tooling. Typed routes, fast request/response validation, and OpenAPI 3.1 generation with no extra code — adapters for fetch (Hono, Next.js, Bun, Workers) and Node (Express, Fastify).",
   "module": "./dist/index.js",
   "type": "module",
