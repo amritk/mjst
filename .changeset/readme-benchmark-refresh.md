@@ -1,4 +1,0 @@
----
----
-
-docs: refresh the benchmark numbers across the package and root READMEs from a fresh `bun run bench` on Bun 1.3.11. Updates the `@amritk/generate-validators`, `@amritk/generate-parsers`, `@amritk/yaml`, `@amritk/runtime-validators`, `@amritk/lint`, and root-README tables, softens the generate-validators typia claim (mjst leads on `assert-strict` and is neck-and-neck on `assert-loose`), and updates the lint finding counts. Also fixes the `@amritk/resolve-refs` benchmark: its naive comparator now keeps reference cycles in place to match production `resolveRefs` (the parity check was failing on the cyclic case), and the README's benchmark narrative is rewritten to reflect that `resolveRefs` is no longer a pure memoized inliner — it walks the whole document once to build the `$id`/`$anchor` registry, so memoization only overtakes the bare inliner on the deep-`chain` shape.

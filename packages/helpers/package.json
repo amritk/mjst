@@ -1,6 +1,6 @@
 {
   "name": "@amritk/helpers",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "Shared utilities for the mjst code generation ecosystem.",
   "type": "module",
   "license": "MIT",

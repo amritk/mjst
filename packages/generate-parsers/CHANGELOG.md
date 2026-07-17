@@ -1,5 +1,25 @@
 # @amritk/generate-parsers
 
+## 0.16.2
+
+### Patch Changes
+
+- f2857b6: Fix cases where the coercing parser "repaired" input into a value that was still invalid, and a prototype-pollution hazard in case-insensitive enum coercion:
+
+  - **`integer` coercion** now yields a whole number (or the default) instead of leaving a non-integral value like `1.5` in place — the repaired value previously still failed the schema's integrality check. This matches the root-level integer parser.
+  - **Array-form `type`** (e.g. `["string","null"]`) now derives its default from the first listed type, so a missing/mistyped required value coerces to a valid member instead of `undefined` (which violated both `required` and the declared type).
+  - **`caseInsensitive` enum coercion** now uses a `Map` rather than a plain object. A folded key that collides with an inherited member (`constructor`, `toString`, `__proto__`, …) no longer skips the member at generation time or returns an `Object.prototype` value at runtime; it resolves to the fallback (or the correct member).
+
+- 248a412: Fix strict mode silently coercing declared properties in the combined `properties` + `patternProperties` parser. That parser builds its result from the _coercing_ property lines, so in strict mode a wrong-typed declared property was repaired and a missing required key was defaulted instead of throwing (e.g. `{ count: 'nope' }` → `{ count: 0 }`). It now asserts the declared properties (type, required, enum, constraints) via the shared strict assertion before building the result, so strict mode throws as documented. Unknown-key rejection (`additionalProperties: false`) and coerce mode are unchanged. (Note: `patternProperties` _values_ are still not type-asserted in strict mode — a separate, narrower gap.)
+- 69b9841: Close two cases where a strict-mode parser silently coerced input instead of throwing (strict mode is documented to reject any violation):
+
+  - **Root scalar constraints.** A root (non-object) scalar parser asserted only the `typeof`, so `{ type: 'string', minLength: 5 }`, `{ type: 'number', minimum: 10 }`, `pattern`, `multipleOf`, a typed or type-less `enum`, and `const` all passed through unvalidated. Root scalars now assert their full constraint set (and a type-less `enum`/`const` root asserts membership).
+  - **Typed records.** `{ type: 'object', additionalProperties: { type: 'number' } }` in strict mode wrapped the _coercing_ value parser, so `{ a: 'x' }` became `{ a: 0 }`. Strict record values now throw on the wrong type (and integer values enforce integrality); coerce mode still repairs as before.
+
+- a676e8d: Fix `stripUnknown` dropping keys that `patternProperties` declares. For a schema with `patternProperties` (and no `additionalProperties: false`, no `$ref` pattern), the parser fell back to the plain object parser, whose strip logic only knows the declared `properties` — so `stripUnknown` removed pattern-matching keys along with genuinely-undeclared ones. `{ a, patternProperties: { '^x-': ... } }` with input `{ a: 'ok', 'x-keep': 'yes', junk: 'x' }` dropped `x-keep`. The coerce-mode `stripUnknown` path now uses the selective combined copy, keeping declared and pattern-matching keys and dropping only the truly-undeclared ones — matching the interpreter.
+- Updated dependencies [797a156]
+  - @amritk/helpers@0.13.1
+
 ## 0.16.1
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@amritk/lint",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A fast, format-agnostic JSON/YAML style-guide linter with JSON Schema and custom rules.",
   "module": "./dist/index.js",
   "type": "module",
