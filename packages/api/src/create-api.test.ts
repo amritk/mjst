@@ -234,6 +234,37 @@ describe('create-api', () => {
     expect(response.body).toMatchObject({ error: 'invalid_response', status: 302 })
   })
 
+  it('validates declared response headers when validateResponses is on', async () => {
+    const limited = defineRoute({
+      method: 'get',
+      path: '/limited',
+      responses: {
+        200: { headers: { 'x-ratelimit-remaining': { type: 'string', pattern: '^[0-9]+$' } } },
+      },
+      handler: ({ request: incoming }) => ({
+        status: 200,
+        headers: { 'x-ratelimit-remaining': incoming.header('x-fake') ?? '9' },
+      }),
+    })
+    const api = createApi({ routes: [limited], validateResponses: true })
+
+    expect((await api.handle(request('GET', '/limited'))).status).toBe(200)
+
+    const broken = await api.handle(request('GET', '/limited', { headers: { 'x-fake': 'lots' } }))
+    expect(broken.status).toBe(500)
+    expect(broken.body).toMatchObject({ error: 'invalid_response', status: 200, source: 'headers' })
+
+    // Declared headers validate as an open object: omitting one is fine.
+    const bare = defineRoute({
+      method: 'get',
+      path: '/bare',
+      responses: { 200: { headers: { 'x-request-id': { type: 'string' } } } },
+      handler: () => ({ status: 200 }),
+    })
+    const bareApi = createApi({ routes: [bare], validateResponses: true })
+    expect((await bareApi.handle(request('GET', '/bare'))).status).toBe(200)
+  })
+
   it('skips response validation by default', async () => {
     const lying = defineRoute({
       method: 'get',

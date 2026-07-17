@@ -65,7 +65,11 @@ export const createApi = (options: ApiOptions): Api => {
 
   let document: OpenApiDocument | undefined
   const openApi = (): OpenApiDocument => {
-    document ??= toOpenApi(options.routes, info)
+    document ??= toOpenApi(options.routes, info, {
+      servers: options.servers,
+      securitySchemes: options.securitySchemes,
+      security: options.security,
+    })
     return document
   }
 

@@ -191,8 +191,8 @@ export const handleRequest = async (
 
   if (route.responses !== undefined) {
     const compiled = route.responses.get(reply.status)
-    if (compiled !== undefined && !compiled.guard(reply.body)) {
-      const result = compiled.collect(reply.body)
+    if (compiled?.body !== undefined && !compiled.body.guard(reply.body)) {
+      const result = compiled.body.collect(reply.body)
       return {
         status: 500,
         body: {
@@ -200,6 +200,21 @@ export const handleRequest = async (
           status: reply.status,
           errors: result === true ? [] : result.errors,
         },
+      }
+    }
+    if (compiled?.headers !== undefined) {
+      const replyHeaders = reply.headers ?? {}
+      if (!compiled.headers.guard(replyHeaders)) {
+        const result = compiled.headers.collect(replyHeaders)
+        return {
+          status: 500,
+          body: {
+            error: 'invalid_response',
+            status: reply.status,
+            source: 'headers',
+            errors: result === true ? [] : result.errors,
+          },
+        }
       }
     }
     if (compiled === undefined && route.contract.responses[reply.status] === undefined) {

@@ -46,7 +46,7 @@ describe('compile-route', () => {
     const compiled = compileRoute(route, compile, true)
     // Only the 200 carries a body schema; the bare 404 has nothing to validate.
     expect(compiled.responses?.size).toBe(1)
-    expect(compiled.responses?.get(200)?.guard({ ok: true })).toBe(true)
-    expect(compiled.responses?.get(200)?.guard({ ok: 'yes' })).toBe(false)
+    expect(compiled.responses?.get(200)?.body?.guard({ ok: true })).toBe(true)
+    expect(compiled.responses?.get(200)?.body?.guard({ ok: 'yes' })).toBe(false)
   })
 })

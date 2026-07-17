@@ -27,9 +27,18 @@ const routes: Record<string, AnyRouteContract> = {
   fileProxy: corpus.fileProxy,
   submitForm: corpus.submitForm,
   uploadFile: corpus.uploadFile,
+  buildInfo: corpus.buildInfo,
+  releaseInfo: corpus.releaseInfo,
   dashboard: corpus.dashboard,
 }
 const info = { title: 'Differential', version: '1.0.0' }
+
+/** Document-level OpenAPI extras, passed identically to both engines. */
+const OPENAPI_EXTRAS = {
+  servers: [{ url: 'https://api.example.com' }],
+  securitySchemes: { apiKey: { type: 'apiKey', name: 'x-api-key', in: 'header' } },
+  security: [{ apiKey: [] }],
+} as const
 
 /** Workers-style bindings passed to both engines on every request. */
 const ENV = { tenant: 'acme' }
@@ -44,6 +53,7 @@ const emit = (): string =>
     validatorsImport: '@amritk/runtime-validators',
     routes,
     info,
+    ...OPENAPI_EXTRAS,
     contextExport: 'createAppContext',
     mounts: { '/mounted': 'mountEcho' },
     onRequestExports: ['gateTeapot'],
@@ -94,6 +104,7 @@ describe('compile-to-module', () => {
         createApi({
           routes: Object.values(routes),
           info,
+          ...OPENAPI_EXTRAS,
           context: corpus.createAppContext,
           errors: corpus.corpusErrors,
           onError: corpus.corpusOnError,
@@ -247,6 +258,11 @@ describe('compile-to-module', () => {
             headers: { 'content-type': 'multipart/form-data; boundary=nope' },
             body: 'not multipart',
           }),
+        // OpenAPI annotations (deprecated, security, shared titled schema,
+        // response headers) flow through the /openapi.json case above; these
+        // exercise the routes themselves.
+        () => new Request('http://localhost/build-info'),
+        () => new Request('http://localhost/release-info'),
       ]
 
       for (const makeRequest of cases) {
@@ -256,7 +272,7 @@ describe('compile-to-module', () => {
 
         expect(fromCompiled.status, label).toBe(fromRuntime.status)
         expect(contentType(fromCompiled), label).toBe(contentType(fromRuntime))
-        for (const header of ['x-deleted', 'x-served-by', 'x-stamped', 'x-frame-protocol', 'allow']) {
+        for (const header of ['x-deleted', 'x-served-by', 'x-stamped', 'x-frame-protocol', 'x-cache', 'allow']) {
           expect(fromCompiled.headers.get(header), label).toBe(fromRuntime.headers.get(header))
         }
         const [runtimeText, compiledText] = [await fromRuntime.text(), await fromCompiled.text()]

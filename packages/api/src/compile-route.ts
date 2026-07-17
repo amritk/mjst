@@ -7,8 +7,8 @@ import type {
   CompiledCookies,
   CompiledHeaders,
   CompiledInput,
+  CompiledResponse,
   CompiledRoute,
-  CompiledValidation,
   ValidatorCompiler,
 } from './types'
 
@@ -29,15 +29,23 @@ export const compileRoute = (
   const segments = parsePathPattern(contract.path)
   const request = contract.request
 
-  let responses: Map<number, CompiledValidation> | undefined
+  let responses: Map<number, CompiledResponse> | undefined
   if (validateResponses) {
     responses = new Map()
     for (const [status, response] of Object.entries(contract.responses)) {
       // Raw statuses carry a stream or text, not a JSON value — any body
       // schema they declare exists purely for OpenAPI, so there is nothing
       // for response validation to check.
-      if (response.body !== undefined && response.contentType === undefined) {
-        responses.set(Number(status), compile(response.body))
+      const body =
+        response.body !== undefined && response.contentType === undefined ? compile(response.body) : undefined
+      // Declared response headers validate as an open object: undeclared
+      // headers pass, declared ones must match their schema when present.
+      const headers =
+        response.headers !== undefined
+          ? compile({ type: 'object', properties: response.headers })
+          : undefined
+      if (body !== undefined || headers !== undefined) {
+        responses.set(Number(status), { body, headers })
       }
     }
   }

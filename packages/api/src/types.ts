@@ -19,6 +19,13 @@ export type ResponseContract = {
   /** JSON Schema for the response body. Omit for an empty-body response. */
   readonly body?: unknown
   /**
+   * JSON Schemas for notable response headers, keyed by header name
+   * (`{ 'x-ratelimit-remaining': { type: 'integer' } }`). Documented as
+   * OpenAPI response headers; with `validateResponses` on, reply headers are
+   * validated against them too (as an open object — undeclared headers pass).
+   */
+  readonly headers?: Readonly<Record<string, unknown>>
+  /**
    * Marks this status as a raw (non-JSON) response and sets its content type,
    * e.g. `'text/plain; charset=utf-8'` or `'text/event-stream'`. The handler
    * then returns a {@link StreamingBody} for this status, and adapters send it
@@ -203,6 +210,15 @@ export type RouteContract<
   readonly tags?: readonly string[]
   /** Explicit OpenAPI operationId. Omitted from the document when not set. */
   readonly operationId?: string
+  /** Marks the operation deprecated in the OpenAPI document. */
+  readonly deprecated?: boolean
+  /**
+   * OpenAPI security requirements for this operation, e.g.
+   * `[{ bearerAuth: [] }]`. Scheme names refer to the API-level
+   * `securitySchemes`; an empty array (`[]`) marks the operation public when
+   * an API-level default `security` exists.
+   */
+  readonly security?: SecurityRequirements
   readonly request?: {
     /** JSON Schema (object) for path parameters. Values are coerced from strings first. */
     readonly params?: Params
@@ -283,6 +299,8 @@ export type AnyRouteContract = {
   readonly description?: string
   readonly tags?: readonly string[]
   readonly operationId?: string
+  readonly deprecated?: boolean
+  readonly security?: SecurityRequirements
   readonly request?: {
     readonly params?: unknown
     readonly query?: unknown
@@ -346,6 +364,17 @@ export type CompiledBody = CompiledValidation & {
 }
 
 /**
+ * The reply validators for one declared status, built only when
+ * `validateResponses` is on: the body schema's validators, and — when the
+ * status declares response header schemas — validators over the reply's
+ * headers object.
+ */
+export type CompiledResponse = {
+  readonly body?: CompiledValidation | undefined
+  readonly headers?: CompiledValidation | undefined
+}
+
+/**
  * A compiled headers slot. Unlike params and query, headers cannot be
  * enumerated from an {@link ApiRequest} (it only offers lookup), so the
  * schema's declared property names — paired with their lowercase lookup form —
@@ -385,8 +414,8 @@ export type CompiledRoute = {
   readonly body: CompiledBody | undefined
   readonly headers: CompiledHeaders | undefined
   readonly cookies: CompiledCookies | undefined
-  /** Response-body validators, present only when `validateResponses` is on. */
-  readonly responses: ReadonlyMap<number, CompiledValidation> | undefined
+  /** Per-status reply validators, present only when `validateResponses` is on. */
+  readonly responses: ReadonlyMap<number, CompiledResponse> | undefined
   /**
    * Statuses declared with a raw `contentType`, so the reply path can tag the
    * {@link ApiResponse} without touching the contract per request. Undefined
@@ -419,16 +448,54 @@ export type OpenApiInfo = {
   readonly description?: string
 }
 
+/** One entry of the OpenAPI `servers` array. */
+export type OpenApiServer = {
+  readonly url: string
+  readonly description?: string
+}
+
+/**
+ * OpenAPI security requirements: each entry maps a scheme name (declared in
+ * `securitySchemes`) to its required scopes. Alternatives OR together.
+ */
+export type SecurityRequirements = ReadonlyArray<Readonly<Record<string, readonly string[]>>>
+
+/**
+ * The document-level OpenAPI settings beyond `info`: where the API is served,
+ * how callers authenticate, and the default security requirement. Shared by
+ * `createApi` and `compileToModule` so both engines document identically.
+ */
+export type OpenApiExtras = {
+  /** The OpenAPI `servers` array (base URLs the API is served from). */
+  readonly servers?: readonly OpenApiServer[] | undefined
+  /**
+   * Named Security Scheme Objects, emitted under `components.securitySchemes`
+   * (e.g. `{ bearerAuth: { type: 'http', scheme: 'bearer' } }`). Passed
+   * through verbatim — any scheme OpenAPI 3.1 supports works.
+   */
+  readonly securitySchemes?: Readonly<Record<string, unknown>> | undefined
+  /**
+   * The document-level default security requirement, applied to every
+   * operation that does not declare its own `security`. A route opts out with
+   * `security: []`.
+   */
+  readonly security?: SecurityRequirements | undefined
+}
+
 /**
  * The generated OpenAPI 3.1 document. Route schemas pass through verbatim —
  * OpenAPI 3.1's schema dialect *is* JSON Schema Draft 2020-12, which is why no
- * conversion layer exists here.
+ * conversion layer exists here. Schemas carrying a `title` that are reused
+ * across contracts are hoisted into `components.schemas` and referenced.
  */
 export type OpenApiDocument = {
   readonly openapi: '3.1.0'
   readonly jsonSchemaDialect: string
   readonly info: OpenApiInfo
+  readonly servers?: readonly OpenApiServer[]
+  readonly security?: SecurityRequirements
   readonly paths: Readonly<Record<string, unknown>>
+  readonly components?: Readonly<Record<string, unknown>>
 }
 
 /**
@@ -455,7 +522,7 @@ export type ContextFactory = (input: ContextFactoryInput) => unknown
 /**
  * Options for {@link createApi}.
  */
-export type ApiOptions = {
+export type ApiOptions = OpenApiExtras & {
   readonly routes: ReadonlyArray<AnyRouteContract>
   /** OpenAPI `info` block. Defaults to a placeholder title/version. */
   readonly info?: OpenApiInfo

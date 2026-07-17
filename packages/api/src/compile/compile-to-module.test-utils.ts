@@ -243,6 +243,32 @@ export const rawEcho = defineRoute({
   handler: async ({ request }) => ({ status: 200, body: { raw: await request.readText() } }),
 })
 
+/** Shared titled schema: both engines must hoist it into components.schemas. */
+const buildInfoSchema = {
+  title: 'BuildInfo',
+  type: 'object',
+  properties: { sha: { type: 'string' } },
+  required: ['sha'],
+} as const
+
+/** Deprecated + per-operation security: OpenAPI annotations must match. */
+export const buildInfo = defineRoute({
+  method: 'get',
+  path: '/build-info',
+  deprecated: true,
+  security: [{ apiKey: [] }],
+  responses: { 200: { body: buildInfoSchema } },
+  handler: () => ({ status: 200, body: { sha: 'abc123' } }),
+})
+
+/** Documented response headers on a reply that actually sets them. */
+export const releaseInfo = defineRoute({
+  method: 'get',
+  path: '/release-info',
+  responses: { 200: { body: buildInfoSchema, headers: { 'x-cache': { type: 'string' } } } },
+  handler: () => ({ status: 200, headers: { 'x-cache': 'hit' }, body: { sha: 'abc123' } }),
+})
+
 /** A form-encoded body: coerced fields, array accumulation, 415 on JSON. */
 export const submitForm = defineRoute({
   method: 'post',

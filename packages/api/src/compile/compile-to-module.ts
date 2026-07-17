@@ -1,14 +1,14 @@
 import { buildCoercionPlan } from '../build-coercion-plan'
 import { parsePathPattern } from '../parse-path-pattern'
 import { toOpenApi } from '../to-open-api'
-import type { AnyRouteContract, OpenApiInfo, PathSegment } from '../types'
+import type { AnyRouteContract, OpenApiExtras, OpenApiInfo, PathSegment } from '../types'
 import { generateGuardSource } from './generate-guard-source'
 import { generateSerializerSource } from './generate-serializer-source'
 
 /**
  * Options for {@link compileToModule}.
  */
-export type CompileModuleOptions = {
+export type CompileModuleOptions = OpenApiExtras & {
   /**
    * Import specifier for the module that exports the route contracts. The keys
    * of `routes` must be that module's export names — the generated module
@@ -154,6 +154,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
           toOpenApi(
             routes.map((route) => route.contract),
             info,
+            { servers: options.servers, securitySchemes: options.securitySchemes, security: options.security },
           ),
         )
 
