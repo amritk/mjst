@@ -61,6 +61,15 @@ export type StreamingBody = ReadableStream<Uint8Array> | Uint8Array | string
 export type SchemaValue<S> = [S] extends [undefined] ? undefined : FromSchema<S>
 
 /**
+ * The per-request scratch space shared by `onRequest` gates, `onResponse`
+ * decorators, the context factory, and handlers (as `request.locals`). An auth
+ * gate resolves a tenant once and the handler reads it; a rate-limit gate
+ * computes counters and the response decorator stamps them onto headers. Plain
+ * string keys, no reserved names — the bag belongs entirely to the app.
+ */
+export type RequestLocals = Record<string, unknown>
+
+/**
  * The framework-neutral request an adapter hands to {@link Api.handle}. Adapters
  * (fetch, Node) construct this; writing your own adapter means producing one of
  * these per incoming request.
@@ -108,7 +117,35 @@ export type ApiRequest = {
    * not every transport can observe disconnects.
    */
   readonly signal?: AbortSignal
+  /**
+   * The platform's native request object, exactly as the adapter received it —
+   * the escape hatch for data the neutral seam does not model. The fetch
+   * adapter (and compiled engine) put the Web `Request` here, so on Cloudflare
+   * Workers `(request.raw as Request & { cf: IncomingRequestCfProperties }).cf`
+   * exposes geo/ASN data; the Node adapter puts the `IncomingMessage` here.
+   * Deliberately `unknown`: reading it is platform-specific by design, and the
+   * cast at the use site is the honest record of that coupling. Optional so
+   * hand-written adapters keep working.
+   */
+  readonly raw?: unknown
+  /**
+   * The per-request {@link RequestLocals} bag. Built-in adapters always
+   * provide it (created lazily, so untouched requests never allocate);
+   * optional so hand-written adapters keep working.
+   */
+  readonly locals?: RequestLocals
 }
+
+/**
+ * A reply header value: one string, or several for headers that legitimately
+ * repeat on the wire — `set-cookie` above all, where joining values into one
+ * comma-separated string corrupts cookies (RFC 6265 forbids folding). Adapters
+ * send an array as that many separate header lines.
+ */
+export type ResponseHeaderValue = string | readonly string[]
+
+/** The reply headers a handler (or error formatter) may set. */
+export type ResponseHeaders = Readonly<Record<string, ResponseHeaderValue>>
 
 /**
  * The framework-neutral response {@link Api.handle} resolves with. Adapters
@@ -119,7 +156,7 @@ export type ApiRequest = {
  */
 export type ApiResponse = {
   readonly status: number
-  readonly headers?: Readonly<Record<string, string>>
+  readonly headers?: ResponseHeaders
   readonly body?: unknown
   readonly contentType?: string
 }
@@ -150,18 +187,18 @@ export type RouteReply<Responses extends ResponseContracts> = {
   [Status in keyof Responses]: Responses[Status] extends { contentType: string }
     ? {
         readonly status: Status
-        readonly headers?: Readonly<Record<string, string>>
+        readonly headers?: ResponseHeaders
         readonly body: StreamingBody
       }
     : Responses[Status] extends { body: infer B }
       ? {
           readonly status: Status
-          readonly headers?: Readonly<Record<string, string>>
+          readonly headers?: ResponseHeaders
           readonly body: FromSchema<B>
         }
       : {
           readonly status: Status
-          readonly headers?: Readonly<Record<string, string>>
+          readonly headers?: ResponseHeaders
           readonly body?: undefined
         }
 }[keyof Responses]
@@ -183,22 +220,54 @@ export type RouteHandler<
 ) => RouteReply<Responses> | Promise<RouteReply<Responses>>
 
 /**
- * A single route: method + path + schemas + handler. Create these with
- * {@link defineRoute} so the schema literals are inferred and the handler is
- * typed from them. The schema slots are `unknown` (not `JSONSchema`) for the
- * same literal-preserving reason as {@link ResponseContract}.
+ * One problem a {@link Contract.refine} hook reports. Shaped after the
+ * validators' `ValidationError` so refinement failures ride the standard
+ * `validation_failed` envelope deployed clients already parse.
+ */
+export type RefineIssue = {
+  /**
+   * Which request slot the constraint belongs to; becomes the envelope's
+   * `source`. Defaults to `'body'` (the first issue's source labels the
+   * envelope when several slots are involved).
+   */
+  readonly source?: 'params' | 'query' | 'headers' | 'cookies' | 'body'
+  /** JSON-pointer-style location within the slot, e.g. `/messages/3/content`. */
+  readonly path?: string
+  readonly message: string
+}
+
+/**
+ * What a `refine` hook receives: every validated (and coerced) request slot at
+ * once, which is exactly what cross-field constraints need and per-slot JSON
+ * Schema cannot see.
+ */
+export type RefineInput<Params, Query, Body, Headers, Cookies> = {
+  readonly params: SchemaValue<Params>
+  readonly query: SchemaValue<Query>
+  readonly body: SchemaValue<Body>
+  readonly headers: SchemaValue<Headers>
+  readonly cookies: SchemaValue<Cookies>
+}
+
+/**
+ * A route's contract: method + path + schemas + response map, with **no
+ * handler** — pure data, safe to import from a browser bundle. Create these
+ * with {@link defineContract} (then bind the server implementation with
+ * `implementRoute`), or declare contract and handler in one shot with
+ * {@link defineRoute}, whose {@link RouteContract} is this type plus the
+ * handler. The schema slots are `unknown` (not `JSONSchema`) for the same
+ * literal-preserving reason as {@link ResponseContract}.
  *
  * `path` uses OpenAPI syntax — `/users/{id}` — so the contract maps into the
  * generated document verbatim. A parameter owns its whole segment.
  */
-export type RouteContract<
+export type Contract<
   Params = undefined,
   Query = undefined,
   Body = undefined,
   Headers = undefined,
   Cookies = undefined,
   Responses extends ResponseContracts = ResponseContracts,
-  Context = undefined,
 > = {
   readonly method: HttpMethod
   readonly path: string
@@ -255,9 +324,79 @@ export type RouteContract<
      */
     readonly cookies?: Cookies
   }
+  /**
+   * Post-validation refinement for cross-field constraints JSON Schema cannot
+   * express ("sum of all message lengths ≤ 64k", "start before end"). Runs
+   * synchronously after every declared slot has validated, before the context
+   * factory and handler. Return issues to reject the request — they answer
+   * through the standard `validation_failed` envelope (and the
+   * `validationFailed` error formatter) — or `undefined` / an empty array to
+   * accept it. A thrown refine takes the handler-error path (`onError`).
+   */
+  readonly refine?: (input: RefineInput<Params, Query, Body, Headers, Cookies>) => readonly RefineIssue[] | undefined
+  readonly responses: Responses
+}
+
+/**
+ * A single route: a {@link Contract} plus its server handler. Create these
+ * with {@link defineRoute} (one shot) or `implementRoute(contract, handler)`.
+ *
+ * Deliberately a standalone object type rather than `Contract & { handler }`:
+ * with an intersection as the contextual type, TypeScript stops enforcing the
+ * handler's reply *body* shapes against the response schemas (the
+ * `@ts-expect-error` cases in define-route.test.ts go green). Keep the shared
+ * fields in sync with {@link Contract} — the `ContractFieldsStayInSync`
+ * assertion below fails to compile if they drift.
+ */
+export type RouteContract<
+  Params = undefined,
+  Query = undefined,
+  Body = undefined,
+  Headers = undefined,
+  Cookies = undefined,
+  Responses extends ResponseContracts = ResponseContracts,
+  Context = undefined,
+> = {
+  readonly method: HttpMethod
+  readonly path: string
+  /** Short OpenAPI summary. */
+  readonly summary?: string
+  /** Longer OpenAPI description. */
+  readonly description?: string
+  /** OpenAPI tags for grouping operations. */
+  readonly tags?: readonly string[]
+  /** Explicit OpenAPI operationId. Omitted from the document when not set. */
+  readonly operationId?: string
+  /** Marks the operation deprecated in the OpenAPI document. */
+  readonly deprecated?: boolean
+  /** OpenAPI security requirements for this operation. See {@link Contract.security}. */
+  readonly security?: SecurityRequirements
+  /** Request schemas. See {@link Contract.request} for per-slot semantics. */
+  readonly request?: {
+    readonly params?: Params
+    readonly query?: Query
+    readonly body?: Body
+    readonly bodyType?: BodyType
+    readonly headers?: Headers
+    readonly cookies?: Cookies
+  }
+  /** Post-validation cross-field refinement. See {@link Contract.refine}. */
+  readonly refine?: (input: RefineInput<Params, Query, Body, Headers, Cookies>) => readonly RefineIssue[] | undefined
   readonly responses: Responses
   readonly handler: RouteHandler<Params, Query, Body, Headers, Cookies, Responses, Context>
 }
+
+/**
+ * Compile-time guard that {@link RouteContract} carries exactly
+ * {@link Contract}'s fields plus `handler` — the price of the deliberate
+ * duplication documented on RouteContract. Drift makes the `Expect`
+ * constraints below fail to compile.
+ */
+type Expect<T extends true> = T
+export type ContractFieldsStayInSync = [
+  Expect<Omit<RouteContract, 'handler'> extends Contract ? true : false>,
+  Expect<Contract extends Omit<RouteContract, 'handler'> ? true : false>,
+]
 
 /**
  * A reply with the types erased — what the pipeline works with once a contract
@@ -265,7 +404,7 @@ export type RouteContract<
  */
 export type RouteReplyValue = {
   readonly status: number
-  readonly headers?: Readonly<Record<string, string>>
+  readonly headers?: ResponseHeaders
   readonly body?: unknown
 }
 
@@ -287,12 +426,26 @@ export type ErasedRequestContext = {
 }
 
 /**
- * The type-erased form of {@link RouteContract} that {@link createApi} accepts.
- * Any contract produced by {@link defineRoute} is assignable to this, whatever
- * its schema literals — erasure is what lets one array hold differently-typed
- * routes.
+ * The refine input with the types erased, mirroring
+ * {@link ErasedRequestContext}: `never` slots keep every concretely-typed
+ * refine assignable.
  */
-export type AnyRouteContract = {
+export type ErasedRefineInput = {
+  readonly params: never
+  readonly query: never
+  readonly body: never
+  readonly headers: never
+  readonly cookies: never
+}
+
+/**
+ * The type-erased form of {@link Contract} — what `createClient` and the
+ * OpenAPI generator work over. Any contract produced by {@link defineContract}
+ * (or any route from {@link defineRoute}, which carries a handler on top) is
+ * assignable to this, whatever its schema literals — erasure is what lets one
+ * record hold differently-typed contracts.
+ */
+export type AnyContract = {
   readonly method: HttpMethod
   readonly path: string
   readonly summary?: string
@@ -309,7 +462,15 @@ export type AnyRouteContract = {
     readonly headers?: unknown
     readonly cookies?: unknown
   }
+  readonly refine?: (input: ErasedRefineInput) => readonly RefineIssue[] | undefined
   readonly responses: ResponseContracts
+}
+
+/**
+ * The type-erased form of {@link RouteContract} that {@link createApi} accepts:
+ * an {@link AnyContract} plus the erased handler.
+ */
+export type AnyRouteContract = AnyContract & {
   readonly handler: (context: ErasedRequestContext) => RouteReplyValue | Promise<RouteReplyValue>
 }
 
@@ -509,6 +670,13 @@ export type ContextFactoryInput = {
   readonly request: ApiRequest
   readonly env: unknown
   readonly executionContext: unknown
+  /**
+   * The per-request {@link RequestLocals} bag — the same object `onRequest`
+   * gates and `onResponse` decorators see, so an auth gate's resolved tenant
+   * is already here when the factory runs. `undefined` only under hand-written
+   * adapters that do not provide `ApiRequest.locals`.
+   */
+  readonly locals: RequestLocals | undefined
 }
 
 /**
@@ -570,6 +738,35 @@ export type ApiOptions = OpenApiExtras & {
    * request it watched. Keep it synchronous-fast: fire-and-forget any I/O.
    */
   readonly observe?: (observation: RequestObservation) => void
+  /**
+   * The unmatched-request counterpart to `observe`, called once per request
+   * that matched no route (404) or only routes under other methods (405) —
+   * request-logging parity with framework middleware, without wrapping the
+   * adapter. Kept separate from `observe` so its observation can honestly
+   * carry `route: undefined` (one logger can serve both via
+   * `observation.route?.path`). The OpenAPI document path is still not
+   * observed, and a thrown observer is swallowed.
+   */
+  readonly observeUnmatched?: (observation: UnmatchedObservation) => void
+}
+
+/**
+ * What {@link ApiOptions.observeUnmatched} receives for one unmatched request.
+ * `route` is always `undefined` — the field exists so one observer function
+ * can serve both hooks and discriminate on it.
+ */
+export type UnmatchedObservation = {
+  readonly route: undefined
+  /** The request as the pipeline saw it. */
+  readonly request: ApiRequest
+  /** 404, or 405 when the path is served under other methods. */
+  readonly status: number
+  /** Milliseconds spent matching and shaping the miss response. */
+  readonly durationMs: number
+  /** The platform bindings the adapter was invoked with (Workers `env`). */
+  readonly env: unknown
+  /** The platform execution context (Workers `ctx`, for `waitUntil`). */
+  readonly executionContext: unknown
 }
 
 /**

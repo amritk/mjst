@@ -259,4 +259,60 @@ describe('to-node-handler', () => {
       expect((await fetch(origin + '/bad-header')).status).toBe(500)
     })
   })
+
+  it('exposes the IncomingMessage through request.raw and a lazy locals bag', async () => {
+    const platform = defineRoute({
+      method: 'get',
+      path: '/platform',
+      responses: { 200: { body: { type: 'object' } } },
+      handler: ({ request }) => {
+        const raw = request.raw as import('node:http').IncomingMessage
+        const locals = request.locals ?? {}
+        locals['seen'] = true
+        return {
+          status: 200,
+          body: { hasSocket: raw.socket !== undefined, url: raw.url, seen: locals['seen'] },
+        }
+      },
+    })
+    const handler = toNodeHandler(createApi({ routes: [platform] }))
+    await withServer(createServer(handler), async (origin) => {
+      const response = await fetch(origin + '/platform?q=1')
+      expect(await response.json()).toEqual({ hasSocket: true, url: '/platform?q=1', seen: true })
+    })
+  })
+
+  it('writes string[] header values as repeated header lines', async () => {
+    const login = defineRoute({
+      method: 'post',
+      path: '/login',
+      responses: { 200: { body: { type: 'object' } } },
+      handler: () => ({
+        status: 200,
+        headers: { 'set-cookie': ['a=1; Path=/', 'b=2; HttpOnly'] },
+        body: { ok: true },
+      }),
+    })
+    const handler = toNodeHandler(createApi({ routes: [login] }))
+    await withServer(createServer(handler), async (origin) => {
+      const response = await fetch(origin + '/login', { method: 'POST' })
+      expect(response.headers.getSetCookie()).toEqual(['a=1; Path=/', 'b=2; HttpOnly'])
+      expect(await response.json()).toEqual({ ok: true })
+    })
+  })
+
+  it('validates every element of a string[] header before writeHead', async () => {
+    const bad = defineRoute({
+      method: 'get',
+      path: '/bad-multi',
+      responses: { 204: {} },
+      handler: () => ({ status: 204, headers: { 'set-cookie': ['fine=1', 'broken\r\nvalue'] } }),
+    })
+    const handler = toNodeHandler(createApi({ routes: [bad] }))
+    await withServer(createServer(handler), async (origin) => {
+      const response = await fetch(origin + '/bad-multi')
+      expect(response.status).toBe(500)
+      expect(await response.json()).toEqual({ error: 'internal_error' })
+    })
+  })
 })

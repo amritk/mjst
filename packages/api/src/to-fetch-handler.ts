@@ -1,5 +1,6 @@
+import { buildResponseHeaders } from './build-response-headers'
 import { readBytesCapped } from './read-bytes-capped'
-import type { Api, ApiRequest, ApiResponse, StreamingBody } from './types'
+import type { Api, ApiRequest, ApiResponse, RequestLocals, StreamingBody } from './types'
 
 /**
  * The handler shape every fetch runtime accepts. Cloudflare Workers invokes it
@@ -16,22 +17,33 @@ export type FetchHandler = (request: Request, env?: unknown, executionContext?: 
  * gets the same security headers as everything else. Returning `undefined`
  * lets the request continue. This is where CORS preflight, origin checks,
  * rate limits, and feature-flag gates live.
+ *
+ * `locals` is the per-request {@link RequestLocals} bag, shared with later
+ * gates, the context factory, handlers (`request.locals`), and `onResponse`
+ * decorators — how an auth gate hands its resolved tenant to the handler
+ * instead of resolving it twice. `env` and `executionContext` are typed
+ * `unknown` (not optional) so hooks that ignore them keep their old
+ * signatures while `locals` stays non-optional.
  */
 export type FetchOnRequest = (
   request: Request,
-  env?: unknown,
-  executionContext?: unknown,
+  env: unknown,
+  executionContext: unknown,
+  locals: RequestLocals,
 ) => Response | undefined | Promise<Response | undefined>
 
 /**
  * A response decorator, run on every outgoing response — routed replies,
  * mount replies, 404s, and gate short-circuits alike. Mutate the response's
  * headers in place and return nothing, or return a replacement `Response`.
- * Runs in array order, so later hooks see earlier hooks' changes.
+ * Runs in array order, so later hooks see earlier hooks' changes. `locals`
+ * is the same per-request bag the gates and handler wrote — how a rate-limit
+ * gate's computed counters end up stamped onto the outgoing response.
  */
 export type FetchOnResponse = (
   response: Response,
   request: Request,
+  locals: RequestLocals,
 ) => Response | undefined | Promise<Response | undefined>
 
 /**
@@ -112,15 +124,20 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     return init
   }
 
-  const finish = async (response: Response, request: Request): Promise<Response> => {
+  const finish = async (response: Response, request: Request, locals: RequestLocals): Promise<Response> => {
     let current = response
     for (const hook of onResponse) {
-      current = (await hook(current, request)) ?? current
+      current = (await hook(current, request, locals)) ?? current
     }
     return current
   }
 
-  const handler = async (request: Request, env?: unknown, executionContext?: unknown): Promise<Response> => {
+  const handler = async (
+    request: Request,
+    env?: unknown,
+    executionContext?: unknown,
+    sharedLocals?: RequestLocals,
+  ): Promise<Response> => {
     // The pathname is sliced out by hand instead of via `new URL(...)`: a URL
     // object parses and normalizes the entire URL (origin, auth, escaping),
     // which benchmarked at roughly a fifth of this adapter's per-request cost.
@@ -147,6 +164,10 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
         ? () => (bytes ??= request.arrayBuffer().then((buffer) => new Uint8Array(buffer)))
         : () => (bytes ??= readBytesCapped(request.body, request.headers.get('content-length'), maxBodyBytes))
 
+    // The hook wrapper's shared bag when hooks are configured; otherwise
+    // created lazily on first `locals` access, so the zero-hook fast path
+    // never allocates for it.
+    let locals = sharedLocals
     const apiRequest: ApiRequest = {
       method: request.method,
       path,
@@ -157,6 +178,11 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
       readText: () => readAllBytes().then((buffer) => DECODER.decode(buffer)),
       readBytes: readAllBytes,
       signal: request.signal,
+      raw: request,
+      get locals(): RequestLocals {
+        locals ??= {}
+        return locals
+      },
     }
     const response = await api.handle(apiRequest, env, executionContext)
 
@@ -173,7 +199,10 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
       if (response.contentType !== undefined) {
         return new Response((response.body ?? null) as StreamingBody | null, {
           status: response.status,
-          headers: { 'content-type': response.contentType, ...response.headers },
+          headers:
+            response.headers === undefined
+              ? { 'content-type': response.contentType }
+              : buildResponseHeaders(response.headers, response.contentType),
         })
       }
       if (response.headers === undefined) {
@@ -181,12 +210,12 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
         return new Response(JSON.stringify(response.body), initFor(response.status))
       }
       if (response.body === undefined) {
-        return new Response(null, { status: response.status, headers: { ...response.headers } })
+        return new Response(null, { status: response.status, headers: buildResponseHeaders(response.headers) })
       }
       // Custom headers win over the default content-type, matching Response.json.
       return new Response(JSON.stringify(response.body), {
         status: response.status,
-        headers: { ...JSON_HEADERS, ...response.headers },
+        headers: buildResponseHeaders(response.headers, 'application/json'),
       })
     } catch {
       return new Response('{"error":"internal_error"}', initFor(500))
@@ -196,11 +225,14 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
   if (onRequest.length === 0 && onResponse.length === 0) return handler
 
   return async (request: Request, env?: unknown, executionContext?: unknown): Promise<Response> => {
+    // One locals bag per request, created before the first gate so every
+    // stage — gates, context factory, handler, decorators — shares it.
+    const locals: RequestLocals = {}
     for (const gate of onRequest) {
-      const early = await gate(request, env, executionContext)
-      if (early !== undefined) return finish(early, request)
+      const early = await gate(request, env, executionContext, locals)
+      if (early !== undefined) return finish(early, request, locals)
     }
-    return finish(await handler(request, env, executionContext), request)
+    return finish(await handler(request, env, executionContext, locals), request, locals)
   }
 }
 
@@ -222,7 +254,10 @@ const headResponse = (response: ApiResponse): Response => {
   if (response.contentType !== undefined) {
     return new Response(null, {
       status: response.status,
-      headers: { 'content-type': response.contentType, ...response.headers },
+      headers:
+        response.headers === undefined
+          ? { 'content-type': response.contentType }
+          : buildResponseHeaders(response.headers, response.contentType),
     })
   }
   if (response.headers === undefined) {
@@ -230,8 +265,11 @@ const headResponse = (response: ApiResponse): Response => {
     return new Response(null, { status: response.status, headers: JSON_HEADERS })
   }
   return body === undefined
-    ? new Response(null, { status: response.status, headers: { ...response.headers } })
-    : new Response(null, { status: response.status, headers: { ...JSON_HEADERS, ...response.headers } })
+    ? new Response(null, { status: response.status, headers: buildResponseHeaders(response.headers) })
+    : new Response(null, {
+        status: response.status,
+        headers: buildResponseHeaders(response.headers, 'application/json'),
+      })
 }
 
 const DECODER = new TextDecoder()

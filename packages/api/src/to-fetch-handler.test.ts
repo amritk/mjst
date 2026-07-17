@@ -439,4 +439,101 @@ describe('to-fetch-handler', () => {
     expect(actual.headers.get('access-control-allow-credentials')).toBe('true')
     expect(actual.headers.get('access-control-expose-headers')).toBe('x-demo-used')
   })
+
+  it('exposes the platform Request through request.raw', async () => {
+    const platform = defineRoute({
+      method: 'get',
+      path: '/platform',
+      responses: { 200: { body: { type: 'object' } } },
+      handler: ({ request }) => ({
+        status: 200,
+        // On Workers this is where request.cf (geo, ASN) lives — platform-specific by design.
+        body: { isRequest: request.raw instanceof Request, url: (request.raw as Request).url },
+      }),
+    })
+    const rawHandler = toFetchHandler(createApi({ routes: [platform] }))
+    const response = await rawHandler(new Request('http://localhost/platform?x=1'))
+    expect(await response.json()).toEqual({ isRequest: true, url: 'http://localhost/platform?x=1' })
+  })
+
+  it('shares one locals bag across gates, handler, and decorators', async () => {
+    const localsEcho = defineRoute({
+      method: 'get',
+      path: '/locals',
+      responses: { 200: { body: { type: 'object' } } },
+      handler: ({ request }) => {
+        const locals = request.locals ?? {}
+        locals['note'] = 'from-handler'
+        return { status: 200, body: { tenant: locals['tenant'] ?? null } }
+      },
+    })
+    const wired = toFetchHandler(createApi({ routes: [localsEcho] }), {
+      onRequest: [
+        (request, _env, _executionContext, locals) => {
+          locals['tenant'] = request.headers.get('x-tenant') ?? 'anonymous'
+          return undefined
+        },
+      ],
+      onResponse: [
+        (response, _request, locals) => {
+          response.headers.set('x-locals', `${String(locals['tenant'])}:${String(locals['note'] ?? 'none')}`)
+          return undefined
+        },
+      ],
+    })
+
+    const routed = await wired(new Request('http://localhost/locals', { headers: { 'x-tenant': 'acme' } }))
+    expect(await routed.json()).toEqual({ tenant: 'acme' })
+    expect(routed.headers.get('x-locals')).toBe('acme:from-handler')
+
+    // Decorators see gate-written locals on unrouted outcomes (404s) too.
+    const missed = await wired(new Request('http://localhost/nope'))
+    expect(missed.headers.get('x-locals')).toBe('anonymous:none')
+  })
+
+  it('lazily provides request.locals even without any hooks configured', async () => {
+    const scratch = defineRoute({
+      method: 'get',
+      path: '/scratch',
+      responses: { 200: { body: { type: 'object' } } },
+      handler: ({ request }) => {
+        const locals = request.locals ?? {}
+        locals['count'] = ((locals['count'] as number | undefined) ?? 0) + 1
+        return { status: 200, body: { count: locals['count'] } }
+      },
+    })
+    const bare = toFetchHandler(createApi({ routes: [scratch] }))
+    // Each request gets a fresh bag — no leakage between requests.
+    expect(await (await bare(new Request('http://localhost/scratch'))).json()).toEqual({ count: 1 })
+    expect(await (await bare(new Request('http://localhost/scratch'))).json()).toEqual({ count: 1 })
+  })
+
+  it('sends string[] header values as repeated header lines', async () => {
+    const login = defineRoute({
+      method: 'post',
+      path: '/login',
+      responses: { 200: { body: { type: 'object' } }, 204: {} },
+      handler: () => ({
+        status: 200,
+        headers: { 'set-cookie': ['session=abc; Path=/; HttpOnly', 'csrf=xyz; Path=/'], 'x-one': 'single' },
+        body: { ok: true },
+      }),
+    })
+    const logout = defineRoute({
+      method: 'delete',
+      path: '/session',
+      responses: { 204: {} },
+      handler: () => ({ status: 204, headers: { 'set-cookie': ['session=; Max-Age=0', 'csrf=; Max-Age=0'] } }),
+    })
+    const cookieHandler = toFetchHandler(createApi({ routes: [login, logout] }))
+
+    const response = await cookieHandler(new Request('http://localhost/login', { method: 'POST' }))
+    expect(response.headers.getSetCookie()).toEqual(['session=abc; Path=/; HttpOnly', 'csrf=xyz; Path=/'])
+    expect(response.headers.get('x-one')).toBe('single')
+    expect(await response.json()).toEqual({ ok: true })
+
+    // The bodyless branch builds headers the same way.
+    const cleared = await cookieHandler(new Request('http://localhost/session', { method: 'DELETE' }))
+    expect(cleared.headers.getSetCookie()).toEqual(['session=; Max-Age=0', 'csrf=; Max-Age=0'])
+  })
 })

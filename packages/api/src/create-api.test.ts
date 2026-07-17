@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createApi } from './create-api'
 import { defineRoute } from './define-route'
 import { payloadTooLargeError } from './payload-too-large'
+import { routeFactory } from './route-factory'
 import type { ApiRequest, ValidationFailureBody } from './types'
 
 /**
@@ -695,5 +696,142 @@ describe('create-api', () => {
     const response = await api.handle(tooLarge)
     expect(response.status).toBe(413)
     expect(response.body).toEqual({ error: 'too big, sorry' })
+  })
+
+  it('rejects requests through refine with the standard validation envelope', async () => {
+    const bookSlot = defineRoute({
+      method: 'post',
+      path: '/slots',
+      request: {
+        body: {
+          type: 'object',
+          properties: { start: { type: 'integer' }, end: { type: 'integer' } },
+          required: ['start', 'end'],
+        },
+      },
+      refine: ({ body }) =>
+        body.start < body.end ? undefined : [{ path: '/end', message: 'end must be after start' }],
+      responses: { 201: {} },
+      handler: () => ({ status: 201 }),
+    })
+    const api = createApi({ routes: [bookSlot] })
+
+    expect((await api.handle(request('POST', '/slots', { body: { start: 1, end: 5 } }))).status).toBe(201)
+
+    const rejected = await api.handle(request('POST', '/slots', { body: { start: 5, end: 2 } }))
+    expect(rejected.status).toBe(400)
+    expect(rejected.body).toEqual({
+      error: 'validation_failed',
+      source: 'body',
+      errors: [{ message: 'end must be after start', path: '/end' }],
+    })
+  })
+
+  it('runs refine only after schema validation and routes it through the validationFailed formatter', async () => {
+    let refined = 0
+    const bookSlot = defineRoute({
+      method: 'post',
+      path: '/slots',
+      request: {
+        body: { type: 'object', properties: { start: { type: 'integer' } }, required: ['start'] },
+      },
+      refine: ({ body }) => {
+        refined += 1
+        return body.start > 0 ? undefined : [{ source: 'body', message: 'start must be positive' }]
+      },
+      responses: { 201: {} },
+      handler: () => ({ status: 201 }),
+    })
+    const api = createApi({
+      routes: [bookSlot],
+      errors: { validationFailed: (failure) => ({ status: 422, body: { from: failure.source } }) },
+    })
+
+    // Schema failure first: refine never sees invalid values.
+    const invalid = await api.handle(request('POST', '/slots', { body: { start: 'soon' } }))
+    expect(invalid.status).toBe(422)
+    expect(refined).toBe(0)
+
+    const rejected = await api.handle(request('POST', '/slots', { body: { start: 0 } }))
+    expect(rejected).toEqual({ status: 422, body: { from: 'body' } })
+    expect(refined).toBe(1)
+  })
+
+  it('sends a throwing refine down the onError path', async () => {
+    const bookSlot = defineRoute({
+      method: 'post',
+      path: '/slots',
+      request: { body: { type: 'object', properties: { start: { type: 'integer' } }, required: ['start'] } },
+      refine: () => {
+        throw new Error('refine crashed')
+      },
+      responses: { 201: {} },
+      handler: () => ({ status: 201 }),
+    })
+    const api = createApi({
+      routes: [bookSlot],
+      onError: (error) => ({ status: 500, body: { handled: error instanceof Error ? error.message : '?' } }),
+    })
+    const response = await api.handle(request('POST', '/slots', { body: { start: 1 } }))
+    expect(response).toEqual({ status: 500, body: { handled: 'refine crashed' } })
+  })
+
+  it('observes unmatched requests only through observeUnmatched', async () => {
+    const seen: Array<{ route: string | null; status: number }> = []
+    const api = createApi({
+      routes: [getUser],
+      observe: (observation) => seen.push({ route: observation.route.path, status: observation.status }),
+      observeUnmatched: (observation) => seen.push({ route: observation.route ?? null, status: observation.status }),
+    })
+
+    await api.handle(request('GET', '/users/1'))
+    await api.handle(request('GET', '/missing'))
+    await api.handle(request('POST', '/users/1'))
+    // The OpenAPI document stays unobserved by both hooks.
+    await api.handle(request('GET', '/openapi.json'))
+
+    expect(seen).toEqual([
+      { route: '/users/{id}', status: 200 },
+      { route: null, status: 404 },
+      { route: null, status: 405 },
+    ])
+  })
+
+  it('keeps unmatched requests unobserved without observeUnmatched, and survives a throwing observer', async () => {
+    const seen: number[] = []
+    const silent = createApi({
+      routes: [getUser],
+      observe: (observation) => seen.push(observation.status),
+    })
+    expect((await silent.handle(request('GET', '/missing'))).status).toBe(404)
+    expect(seen).toEqual([])
+
+    const throwing = createApi({
+      routes: [getUser],
+      observeUnmatched: () => {
+        throw new Error('observer bug')
+      },
+    })
+    expect((await throwing.handle(request('GET', '/missing'))).status).toBe(404)
+  })
+
+  it('hands the request locals bag to the context factory', async () => {
+    const whoami = routeFactory<{ tenant: string }>()({
+      method: 'get',
+      path: '/whoami',
+      responses: { 200: { body: { type: 'object' } } },
+      handler: ({ context }) => ({ status: 200, body: { tenant: context.tenant } }),
+    })
+    const api = createApi({
+      routes: [whoami],
+      context: ({ locals }) => ({ tenant: (locals?.['tenant'] as string | undefined) ?? 'none' }),
+    })
+
+    const bag: Record<string, unknown> = { tenant: 'acme' }
+    const withLocals: ApiRequest = { ...request('GET', '/whoami'), locals: bag }
+    expect(await api.handle(withLocals)).toEqual({ status: 200, body: { tenant: 'acme' } })
+
+    // Hand-written adapters without locals still work — the factory sees undefined.
+    expect(await api.handle(request('GET', '/whoami'))).toEqual({ status: 200, body: { tenant: 'none' } })
   })
 })

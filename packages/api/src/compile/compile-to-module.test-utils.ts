@@ -8,6 +8,7 @@ import type {
   ErrorFormatters,
   OnErrorDetails,
   RequestObservation,
+  UnmatchedObservation,
 } from '../types'
 
 /**
@@ -152,11 +153,18 @@ export const submitMetric = defineRoute({
 })
 
 /** The app context both engines build per request — async on purpose. */
-export type CorpusContext = { readonly tenant: string; readonly viaHeader: string | null }
+export type CorpusContext = {
+  readonly tenant: string
+  readonly viaHeader: string | null
+  readonly gateTenant: string | null
+}
 
-export const createAppContext = async ({ request, env }: ContextFactoryInput): Promise<CorpusContext> => ({
+export const createAppContext = async ({ request, env, locals }: ContextFactoryInput): Promise<CorpusContext> => ({
   tenant: (env as { tenant?: string } | undefined)?.tenant ?? 'none',
   viaHeader: request.header('x-ctx') ?? null,
+  // What the onRequest gate resolved into the shared locals bag — proves the
+  // factory sees the same object the gates wrote.
+  gateTenant: (locals?.['tenant'] as string | undefined) ?? null,
 })
 
 /** Exercises the app context: env binding + request access through the factory. */
@@ -164,7 +172,74 @@ export const whoami = routeFactory<CorpusContext>()({
   method: 'get',
   path: '/whoami',
   responses: { 200: { body: { type: 'object' } } },
-  handler: ({ context }) => ({ status: 200, body: { tenant: context.tenant, viaHeader: context.viaHeader } }),
+  handler: ({ context }) => ({
+    status: 200,
+    body: { tenant: context.tenant, viaHeader: context.viaHeader, gateTenant: context.gateTenant },
+  }),
+})
+
+/** Reads the platform request through the escape hatch — both engines run on fetch, so both must see a Request. */
+export const platformInfo = defineRoute({
+  method: 'get',
+  path: '/platform',
+  responses: { 200: { body: { type: 'object' } } },
+  handler: ({ request }) => ({
+    status: 200,
+    body: {
+      isRequest: request.raw instanceof Request,
+      rawUrlPath: request.raw instanceof Request ? new URL(request.raw.url).pathname : null,
+    },
+  }),
+})
+
+/** Repeated set-cookie headers: arrays must serialize as separate header lines. */
+export const login = defineRoute({
+  method: 'post',
+  path: '/login',
+  responses: { 200: { body: { type: 'object' } } },
+  handler: () => ({
+    status: 200,
+    headers: {
+      'set-cookie': ['session=abc123; Path=/; HttpOnly', 'csrf=xyz789; Path=/'],
+      'x-single': 'one',
+    },
+    body: { ok: true },
+  }),
+})
+
+/**
+ * Post-validation refinement: a cross-field constraint JSON Schema cannot
+ * express, plus a throwing refine (start = 13) that must take the onError
+ * path in both engines.
+ */
+export const bookSlot = defineRoute({
+  method: 'post',
+  path: '/slots',
+  request: {
+    body: {
+      type: 'object',
+      properties: { start: { type: 'integer' }, end: { type: 'integer' } },
+      required: ['start', 'end'],
+    },
+  },
+  refine: ({ body }) => {
+    if (body.start === 13) throw new Error('refine crashed')
+    return body.start < body.end ? undefined : [{ path: '/end', message: 'end must be after start' }]
+  },
+  responses: { 201: {} },
+  handler: () => ({ status: 201 }),
+})
+
+/** Reads the shared locals bag the gate populated; writes its own note for the decorator. */
+export const localsEcho = defineRoute({
+  method: 'get',
+  path: '/locals-echo',
+  responses: { 200: { body: { type: 'object' } } },
+  handler: ({ request }) => {
+    const locals = request.locals ?? {}
+    locals['handlerNote'] = 'seen'
+    return { status: 200, body: { tenant: (locals['tenant'] as string | undefined) ?? null } }
+  },
 })
 
 /** A Better-Auth-style self-contained sub-handler for prefix mounting. */
@@ -345,8 +420,8 @@ export const doubleRead = defineRoute({
   }),
 })
 
-/** What the corpus observer keeps per observation, engine-comparable. */
-export type RecordedObservation = { route: string; status: number; durationOk: boolean }
+/** What the corpus observer keeps per observation, engine-comparable. `route` is null for unmatched requests. */
+export type RecordedObservation = { route: string | null; status: number; durationOk: boolean }
 
 /** Both engines record here; the differential test splices per request. */
 export const observations: RecordedObservation[] = []
@@ -354,6 +429,15 @@ export const observations: RecordedObservation[] = []
 export const recordObservation = (observation: RequestObservation): void => {
   observations.push({
     route: observation.route.path,
+    status: observation.status,
+    durationOk: Number.isFinite(observation.durationMs) && observation.durationMs >= 0,
+  })
+}
+
+/** The unmatched (404/405) observer — `route` is always undefined here. */
+export const recordUnmatched = (observation: UnmatchedObservation): void => {
+  observations.push({
+    route: observation.route ?? null,
     status: observation.status,
     durationOk: Number.isFinite(observation.durationMs) && observation.durationMs >= 0,
   })
@@ -368,9 +452,21 @@ export const gateTeapot: FetchOnRequest = (request) =>
       })
     : undefined
 
+/** An auth-gate stand-in: resolves the tenant once into the shared locals bag. */
+export const gateResolveTenant: FetchOnRequest = (request, _env, _executionContext, locals) => {
+  locals['tenant'] = request.headers.get('x-tenant') ?? 'anonymous'
+  return undefined
+}
+
 /** An onResponse decorator: stamps every outgoing response. */
 export const stampHeader: FetchOnResponse = (response) => {
   response.headers.set('x-stamped', 'yes')
+  return undefined
+}
+
+/** Stamps what the gate and handler left in locals — the rate-limit-counter shape. */
+export const stampLocals: FetchOnResponse = (response, _request, locals) => {
+  response.headers.set('x-locals', `${String(locals['tenant'] ?? 'none')}:${String(locals['handlerNote'] ?? 'none')}`)
   return undefined
 }
 
@@ -379,7 +475,7 @@ export const stampHeader: FetchOnResponse = (response) => {
  * same route contract and platform values, since everything it reads shows
  * up in the response the differential test compares.
  */
-export const corpusOnError = (error: unknown, _request: ApiRequest, details: OnErrorDetails): ApiResponse => ({
+export const corpusOnError = (error: unknown, request: ApiRequest, details: OnErrorDetails): ApiResponse => ({
   status: 500,
   body: {
     error: 'handled',
@@ -387,15 +483,30 @@ export const corpusOnError = (error: unknown, _request: ApiRequest, details: OnE
     route: details.route.path,
     method: details.route.method,
     tenant: (details.env as { tenant?: string } | undefined)?.tenant ?? null,
+    // The locals the gate resolved must be visible here too — the error path
+    // shares the same per-request bag as the pipeline.
+    gateTenant: (request.locals?.['tenant'] as string | undefined) ?? null,
   },
 })
 
 /** Custom error envelopes — both engines must shape cold paths identically. */
 export const corpusErrors: ErrorFormatters = {
-  notFound: (request) => ({ status: 404, body: { error: 'nothing at ' + request.path } }),
-  validationFailed: (failure) => ({
+  notFound: (request) => ({
+    status: 404,
+    body: {
+      error: 'nothing at ' + request.path,
+      gateTenant: (request.locals?.['tenant'] as string | undefined) ?? null,
+    },
+  }),
+  validationFailed: (failure, request) => ({
     status: 422,
-    body: { problem: failure.source, count: failure.errors.length },
+    body: {
+      problem: failure.source,
+      count: failure.errors.length,
+      // Refinement failures flow through this formatter too, custom paths intact.
+      paths: failure.errors.map((error) => error.path),
+      gateTenant: (request.locals?.['tenant'] as string | undefined) ?? null,
+    },
   }),
   payloadTooLarge: () => ({ status: 413, body: { error: 'over the corpus limit' } }),
 }

@@ -15,7 +15,12 @@ const preflight = (origin: string, method = 'POST', requestHeaders?: string): Re
 describe('create-cors', () => {
   it('answers a preflight for an allowed origin', async () => {
     const cors = createCors({ origin: 'https://app.example', maxAge: 600 })
-    const response = await cors.onRequest(preflight('https://app.example', 'POST', 'content-type,x-api-key'))
+    const response = await cors.onRequest(
+      preflight('https://app.example', 'POST', 'content-type,x-api-key'),
+      undefined,
+      undefined,
+      {},
+    )
     expect(response?.status).toBe(204)
     expect(response?.headers.get('access-control-allow-origin')).toBe('https://app.example')
     expect(response?.headers.get('access-control-allow-methods')).toContain('POST')
@@ -26,13 +31,13 @@ describe('create-cors', () => {
 
   it('lets a preflight from a denied origin fall through to routing', async () => {
     const cors = createCors({ origin: 'https://app.example' })
-    expect(await cors.onRequest(preflight('https://evil.example'))).toBeUndefined()
+    expect(await cors.onRequest(preflight('https://evil.example'), undefined, undefined, {})).toBeUndefined()
   })
 
   it('ignores plain OPTIONS requests that are not preflights', async () => {
     const cors = createCors({ origin: '*' })
     const plain = new Request('http://localhost/chat', { method: 'OPTIONS' })
-    expect(await cors.onRequest(plain)).toBeUndefined()
+    expect(await cors.onRequest(plain, undefined, undefined, {})).toBeUndefined()
   })
 
   it('decorates responses for allowed origins with credentials and exposed headers', async () => {
@@ -42,7 +47,7 @@ describe('create-cors', () => {
       exposeHeaders: ['x-demo-used', 'x-demo-max'],
     })
     const request = new Request('http://localhost/chat', { headers: { origin: 'https://admin.example' } })
-    const response = (await cors.onResponse(new Response('{}', { status: 200 }), request)) as Response
+    const response = (await cors.onResponse(new Response('{}', { status: 200 }), request, {})) as Response
     expect(response.headers.get('access-control-allow-origin')).toBe('https://admin.example')
     expect(response.headers.get('access-control-allow-credentials')).toBe('true')
     expect(response.headers.get('access-control-expose-headers')).toBe('x-demo-used,x-demo-max')
@@ -52,14 +57,14 @@ describe('create-cors', () => {
   it('supports a reflecting origin function', async () => {
     const cors = createCors({ origin: (origin) => (origin.endsWith('.example') ? origin : undefined) })
     const allowed = new Request('http://localhost/x', { headers: { origin: 'https://any.example' } })
-    const response = (await cors.onResponse(new Response(null), allowed)) as Response
+    const response = (await cors.onResponse(new Response(null), allowed, {})) as Response
     expect(response.headers.get('access-control-allow-origin')).toBe('https://any.example')
   })
 
   it('adds vary but no allow-origin for a denied origin', async () => {
     const cors = createCors({ origin: 'https://app.example' })
     const request = new Request('http://localhost/x', { headers: { origin: 'https://evil.example' } })
-    const response = (await cors.onResponse(new Response(null), request)) as Response
+    const response = (await cors.onResponse(new Response(null), request, {})) as Response
     expect(response.headers.get('access-control-allow-origin')).toBeNull()
     // Caches must still know the answer depends on the origin header.
     expect(response.headers.get('vary')).toBe('origin')
@@ -69,7 +74,7 @@ describe('create-cors', () => {
     const cors = createCors({ origin: (origin) => origin })
     const request = new Request('http://localhost/x', { headers: { origin: 'https://a.example' } })
     const original = new Response(null, { headers: { vary: 'accept-encoding' } })
-    const response = (await cors.onResponse(original, request)) as Response
+    const response = (await cors.onResponse(original, request, {})) as Response
     expect(response.headers.get('vary')).toBe('accept-encoding, origin')
   })
 
@@ -77,13 +82,13 @@ describe('create-cors', () => {
     const cors = createCors({ origin: '*' })
     const request = new Request('http://localhost/x')
     const response = new Response(null)
-    expect(await cors.onResponse(response, request)).toBeUndefined()
+    expect(await cors.onResponse(response, request, {})).toBeUndefined()
   })
 
   it('sends the literal wildcard for origin *', async () => {
     const cors = createCors({ origin: '*' })
     const request = new Request('http://localhost/x', { headers: { origin: 'https://anyone.example' } })
-    const response = (await cors.onResponse(new Response(null), request)) as Response
+    const response = (await cors.onResponse(new Response(null), request, {})) as Response
     expect(response.headers.get('access-control-allow-origin')).toBe('*')
     // A wildcard answer does not vary by origin.
     expect(response.headers.get('vary')).toBeNull()
