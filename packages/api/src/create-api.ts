@@ -82,6 +82,7 @@ export const createApi = (options: ApiOptions): Api => {
     createContext: options.context,
     onError: options.onError,
     errors: options.errors,
+    observe: options.observe,
   }
 
   return {

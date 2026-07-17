@@ -63,6 +63,15 @@ export type CompileModuleOptions = OpenApiExtras & {
    */
   readonly onErrorExport?: string
   /**
+   * Export name (in the routes module) of the observe hook — the same
+   * function passed to `createApi({ observe })` in development. Called once
+   * per matched request with `{ route, request, status, durationMs, env,
+   * executionContext }`; unmatched requests and the OpenAPI document are not
+   * observed, and a thrown observer is swallowed. No wrapper code is emitted
+   * when unset, so the hot path pays nothing.
+   */
+  readonly observeExport?: string
+  /**
    * Rejects request bodies larger than this many bytes with a 413 — the
    * compiled equivalent of `toFetchHandler`'s `maxBodyBytes` option, enforced
    * with the same shared capped reader.
@@ -102,15 +111,17 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   assertIdentifier(errorsExport, 'errorsExport')
   const onErrorExport = options.onErrorExport
   assertIdentifier(onErrorExport, 'onErrorExport')
+  const observeExport = options.observeExport
+  assertIdentifier(observeExport, 'observeExport')
   const onRequestExports = options.onRequestExports ?? []
   const onResponseExports = options.onResponseExports ?? []
   for (const name of [...onRequestExports, ...onResponseExports]) assertIdentifier(name, 'hook export')
   const maxBodyBytes = options.maxBodyBytes
-  // The onError contract includes env/executionContext, so route functions
-  // must thread the platform arguments even without an app context factory.
+  // The onError and observe contracts include env/executionContext, so route
+  // functions must thread the platform arguments even without a context factory.
   const emitContext: EmitContext = {
     contextExport,
-    needsPlatform: contextExport !== undefined || onErrorExport !== undefined,
+    needsPlatform: contextExport !== undefined || onErrorExport !== undefined || observeExport !== undefined,
   }
 
   const mounts = Object.entries(options.mounts ?? {}).map(([prefix, exportName]) => {
@@ -181,6 +192,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     ...(contextExport === undefined ? [] : [contextExport]),
     ...(errorsExport === undefined ? [] : [errorsExport]),
     ...(onErrorExport === undefined ? [] : [onErrorExport]),
+    ...(observeExport === undefined ? [] : [observeExport]),
     ...onRequestExports,
     ...onResponseExports,
     ...mounts.map(([, exportName]) => exportName),
@@ -251,7 +263,9 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     lines.push(`const OPENAPI_JSON = ${JSON.stringify(openApiJson)}`)
   }
   lines.push('', ...declarations)
-  lines.push(...emitDispatch(routes, openApiPath, emitContext, mounts, onRequestExports, onResponseExports))
+  lines.push(
+    ...emitDispatch(routes, openApiPath, emitContext, mounts, onRequestExports, onResponseExports, observeExport),
+  )
   lines.push('', 'export default { fetch }', '')
   return lines.join('\n')
 }
@@ -420,9 +434,7 @@ const dynamicMatch = (
   const tail = route.segments[route.segments.length - 1]
   const greedy = typeof tail === 'object' && tail.greedy === true
   const conditions = [
-    greedy
-      ? `${segmentsVar}.length >= ${route.segments.length}`
-      : `${segmentsVar}.length === ${route.segments.length}`,
+    greedy ? `${segmentsVar}.length >= ${route.segments.length}` : `${segmentsVar}.length === ${route.segments.length}`,
   ]
   const captures: string[] = []
   route.segments.forEach((segment, index) => {
@@ -762,11 +774,39 @@ const emitDispatch = (
   mounts: ReadonlyArray<readonly [prefix: string, exportName: string]>,
   onRequestExports: readonly string[],
   onResponseExports: readonly string[],
+  observeExport: string | undefined,
 ): string[] => {
   const hooked = onRequestExports.length > 0 || onResponseExports.length > 0
   const extraArguments = emitContext.needsPlatform ? ', env, executionContext' : ''
   const dispatchName = hooked ? 'handleFetch' : 'fetch'
-  const lines: string[] = [
+  // With an observer, every route invocation flows through `observed`, which
+  // times the route function (validation + handler + serialization — the
+  // same span the runtime engine measures) and reports the outcome status.
+  // Without one, calls stay direct and the hot path pays nothing.
+  const invoke =
+    observeExport === undefined
+      ? (_route: CompiledEntry, call: string): string => call
+      : (route: CompiledEntry, call: string): string =>
+          `observed(${route.name}, () => ${call}, request, url, rawPath, queryIndex${extraArguments})`
+  const lines: string[] = []
+  if (observeExport !== undefined) {
+    lines.push(
+      'const observed = (contract, run, request, url, rawPath, queryIndex, env, executionContext) => {',
+      '  const start = performance.now()',
+      '  const finish = (response) => {',
+      '    try {',
+      `      ${observeExport}({ route: contract, request: makeApiRequest(request, url, rawPath, queryIndex), status: response.status, durationMs: performance.now() - start, env, executionContext })`,
+      '    } catch {',
+      '      // A throwing observer must never fail the request it watched.',
+      '    }',
+      '    return response',
+      '  }',
+      '  const reply = run()',
+      "  return typeof reply?.then === 'function' ? reply.then(finish) : finish(reply)",
+      '}',
+    )
+  }
+  lines.push(
     `${hooked ? 'const' : 'export const'} ${dispatchName} = (request${extraArguments}) => {`,
     '  const url = request.url',
     "  const schemeEnd = url.indexOf('://')",
@@ -774,7 +814,7 @@ const emitDispatch = (
     "  const queryIndex = pathStart === -1 ? -1 : url.indexOf('?', pathStart)",
     "  const rawPath = pathStart === -1 ? '/' : queryIndex === -1 ? url.slice(pathStart) : url.slice(pathStart, queryIndex)",
     '  const method = request.method',
-  ]
+  )
   for (const [prefix, exportName] of mounts) {
     lines.push(
       `  if (rawPath === ${JSON.stringify(prefix)} || rawPath.startsWith(${JSON.stringify(prefix + '/')})) return ${exportName}(request)`,
@@ -797,7 +837,7 @@ const emitDispatch = (
     lines.push(`  if (method === '${method}') {`)
     for (const route of statics) {
       lines.push(
-        `    if (path === ${JSON.stringify(route.staticPath)}) return route_${route.name}(request, url, rawPath, queryIndex${extraArguments})`,
+        `    if (path === ${JSON.stringify(route.staticPath)}) return ${invoke(route, `route_${route.name}(request, url, rawPath, queryIndex${extraArguments})`)}`,
       )
     }
     if (dynamics.length > 0) {
@@ -805,7 +845,7 @@ const emitDispatch = (
       for (const route of dynamics) {
         const { conditions, captures } = dynamicMatch(route, 'segments')
         lines.push(
-          `    if (${conditions.join(' && ')}) return route_${route.name}(request, url, rawPath, queryIndex${extraArguments}, ${captures.join(', ')})`,
+          `    if (${conditions.join(' && ')}) return ${invoke(route, `route_${route.name}(request, url, rawPath, queryIndex${extraArguments}, ${captures.join(', ')})`)}`,
         )
       }
     }
@@ -829,7 +869,7 @@ const emitDispatch = (
     lines.push("  if (method === 'HEAD') {")
     for (const route of gets.filter((entry) => entry.isStatic)) {
       lines.push(
-        `    if (path === ${JSON.stringify(route.staticPath)}) return headOf(route_${route.name}(request, url, rawPath, queryIndex${extraArguments}))`,
+        `    if (path === ${JSON.stringify(route.staticPath)}) return headOf(${invoke(route, `route_${route.name}(request, url, rawPath, queryIndex${extraArguments})`)})`,
       )
     }
     const dynamicGets = gets.filter((entry) => !entry.isStatic)
@@ -838,7 +878,7 @@ const emitDispatch = (
       for (const route of dynamicGets) {
         const { conditions, captures } = dynamicMatch(route, 'segments')
         lines.push(
-          `    if (${conditions.join(' && ')}) return headOf(route_${route.name}(request, url, rawPath, queryIndex${extraArguments}, ${captures.join(', ')}))`,
+          `    if (${conditions.join(' && ')}) return headOf(${invoke(route, `route_${route.name}(request, url, rawPath, queryIndex${extraArguments}, ${captures.join(', ')})`)})`,
         )
       }
     }

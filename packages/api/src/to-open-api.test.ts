@@ -226,8 +226,13 @@ describe('to-open-api', () => {
     const ref = { $ref: '#/components/schemas/User' }
     const getOperation = (document.paths['/users/{id}'] as Record<string, Record<string, unknown>>)['get']
     const createOperation = (document.paths['/users'] as Record<string, Record<string, unknown>>)['post']
-    expect(getOperation?.['responses']).toEqual({ '200': { description: 'Status 200', content: { 'application/json': { schema: ref } } } })
-    expect(createOperation?.['requestBody']).toEqual({ required: true, content: { 'application/json': { schema: ref } } })
+    expect(getOperation?.['responses']).toEqual({
+      '200': { description: 'Status 200', content: { 'application/json': { schema: ref } } },
+    })
+    expect(createOperation?.['requestBody']).toEqual({
+      required: true,
+      content: { 'application/json': { schema: ref } },
+    })
   })
 
   it('hoists distinct-but-identical titled schemas and leaves conflicts and singles inline', () => {
@@ -253,9 +258,11 @@ describe('to-open-api', () => {
     // shapes hoists nothing; a single titled use stays inline.
     expect(Object.keys(schemas)).toEqual(['Thing'])
     const bodySchema = (path: string) =>
-      ((document.paths[path] as Record<string, Record<string, unknown>>)['post']?.['requestBody'] as {
-        content: Record<string, { schema: unknown }>
-      }).content['application/json']?.schema
+      (
+        (document.paths[path] as Record<string, Record<string, unknown>>)['post']?.['requestBody'] as {
+          content: Record<string, { schema: unknown }>
+        }
+      ).content['application/json']?.schema
     expect(bodySchema('/a')).toEqual({ $ref: '#/components/schemas/Thing' })
     expect(bodySchema('/b')).toEqual({ $ref: '#/components/schemas/Thing' })
     expect(bodySchema('/c')).toBe(conflictA)
@@ -267,8 +274,18 @@ describe('to-open-api', () => {
     const shared = { title: 'User Profile (v2)', type: 'object' }
     const document = toOpenApi(
       [
-        defineRoute({ method: 'get', path: '/p1', responses: { 200: { body: shared } }, handler: () => ({ status: 200, body: {} }) }),
-        defineRoute({ method: 'get', path: '/p2', responses: { 200: { body: shared } }, handler: () => ({ status: 200, body: {} }) }),
+        defineRoute({
+          method: 'get',
+          path: '/p1',
+          responses: { 200: { body: shared } },
+          handler: () => ({ status: 200, body: {} }),
+        }),
+        defineRoute({
+          method: 'get',
+          path: '/p2',
+          responses: { 200: { body: shared } },
+          handler: () => ({ status: 200, body: {} }),
+        }),
       ],
       info,
     )

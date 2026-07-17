@@ -51,6 +51,7 @@ export type {
   OpenApiServer,
   PathSegment,
   RequestContext,
+  RequestObservation,
   ResponseContract,
   ResponseContracts,
   RouteContract,

@@ -560,6 +560,36 @@ export type ApiOptions = OpenApiExtras & {
    * cold-path default; anything not supplied keeps the built-in shape.
    */
   readonly errors?: ErrorFormatters
+  /**
+   * Called once per matched request with the route contract, the outcome
+   * status, and the pipeline duration — the seam for per-route latency
+   * metrics and structured request logs (`GET /users/{id} → 200 in 3ms`).
+   * Runs for every matched outcome, validation failures and handler errors
+   * included; unmatched requests (404/405) and the OpenAPI document are not
+   * observed. A thrown observer is swallowed — it must never fail the
+   * request it watched. Keep it synchronous-fast: fire-and-forget any I/O.
+   */
+  readonly observe?: (observation: RequestObservation) => void
+}
+
+/**
+ * What {@link ApiOptions.observe} receives for one matched request. `route`
+ * carries the contract — its `path` pattern (`/users/{id}`, not `/users/8`)
+ * is the dimension metrics and logs group by.
+ */
+export type RequestObservation = {
+  /** The matched route's contract. */
+  readonly route: AnyRouteContract
+  /** The request as the pipeline saw it. */
+  readonly request: ApiRequest
+  /** The status of the response the pipeline produced. */
+  readonly status: number
+  /** Milliseconds from match to response, handler included. */
+  readonly durationMs: number
+  /** The platform bindings the adapter was invoked with (Workers `env`). */
+  readonly env: unknown
+  /** The platform execution context (Workers `ctx`, for `waitUntil`). */
+  readonly executionContext: unknown
 }
 
 /**

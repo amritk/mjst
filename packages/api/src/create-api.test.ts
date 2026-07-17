@@ -265,6 +265,62 @@ describe('create-api', () => {
     expect((await bareApi.handle(request('GET', '/bare'))).status).toBe(200)
   })
 
+  it('observes matched requests with route, status, duration, and platform values', async () => {
+    const seen: Array<{ route: string; status: number; durationMs: number; env: unknown }> = []
+    const api = createApi({
+      routes: [getUser],
+      observe: ({ route, status, durationMs, env }) => {
+        seen.push({ route: route.path, status, durationMs, env })
+      },
+    })
+
+    await api.handle(request('GET', '/users/1'), { binding: true })
+    // Validation failures are matched outcomes and are observed too.
+    await api.handle(request('GET', '/users/abc'))
+    // Unmatched requests and the served document are not.
+    await api.handle(request('GET', '/missing'))
+    await api.handle(request('POST', '/users/1'))
+    await api.handle(request('GET', '/openapi.json'))
+
+    expect(seen).toHaveLength(2)
+    expect(seen[0]).toMatchObject({ route: '/users/{id}', status: 200, env: { binding: true } })
+    expect(seen[1]).toMatchObject({ route: '/users/{id}', status: 400 })
+    expect(seen[0]?.durationMs).toBeGreaterThanOrEqual(0)
+  })
+
+  it('swallows a throwing observer and still answers the request', async () => {
+    const api = createApi({
+      routes: [getUser],
+      observe: () => {
+        throw new Error('observer bug')
+      },
+    })
+    const response = await api.handle(request('GET', '/users/1'))
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({ id: 1, name: 'Ada' })
+  })
+
+  it('observes handler errors with the status onError produced', async () => {
+    const boom = defineRoute({
+      method: 'get',
+      path: '/boom',
+      responses: { 200: {} },
+      handler: () => {
+        throw new Error('kaboom')
+      },
+    })
+    const statuses: number[] = []
+    const api = createApi({
+      routes: [boom],
+      onError: () => ({ status: 503, body: { error: 'unavailable' } }),
+      observe: ({ status }) => {
+        statuses.push(status)
+      },
+    })
+    expect((await api.handle(request('GET', '/boom'))).status).toBe(503)
+    expect(statuses).toEqual([503])
+  })
+
   it('skips response validation by default', async () => {
     const lying = defineRoute({
       method: 'get',
@@ -477,7 +533,11 @@ describe('create-api', () => {
         const file = (body as { attachment: File }).attachment
         return {
           status: 200,
-          body: { title: (body as { title: string }).title, filename: file.name, bytes: (await file.arrayBuffer()).byteLength },
+          body: {
+            title: (body as { title: string }).title,
+            filename: file.name,
+            bytes: (await file.arrayBuffer()).byteLength,
+          },
         }
       },
     })

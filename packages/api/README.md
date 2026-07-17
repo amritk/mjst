@@ -102,9 +102,11 @@ Writing an adapter for anything else is ~15 lines: construct one
 | `openApiPath` | `/openapi.json` | Where the document is served. `false` disables serving. |
 | `compile` | runtime-validators | Swap the validation engine — see below. |
 | `context` | — | Per-request app context factory (database handles, sessions). See [App context](#app-context-drizzle-sessions-anything-per-request). |
-| `validateResponses` | `false` | Validate reply bodies against the declared response schemas; mismatches become a 500. A development/test net. |
+| `validateResponses` | `false` | Validate reply bodies (and declared reply headers) against the response contracts; mismatches become a 500. A development/test net. |
 | `onError` | bare 500 | Map a thrown handler error to a response. Receives `(error, request, { route, env, executionContext })` — everything error reporting needs. The default never leaks the error message. |
-| `errors` | built-in bodies | Reshape the pipeline's own cold-path responses (`notFound`, `invalidJson`, `payloadTooLarge`, `validationFailed`, `methodNotAllowed`) to match an existing wire format. |
+| `errors` | built-in bodies | Reshape the pipeline's own cold-path responses (`notFound`, `invalidJson`, `invalidBody`, `unsupportedMediaType`, `payloadTooLarge`, `validationFailed`, `methodNotAllowed`) to match an existing wire format. |
+| `observe` | — | Called once per matched request with `{ route, request, status, durationMs, env, executionContext }` — the seam for per-route latency metrics and structured request logs. See [Observability](#observability-metrics-and-request-logs). |
+| `servers` / `securitySchemes` / `security` | — | Document-level OpenAPI settings: base URLs, named auth schemes (`components.securitySchemes`), and the default security requirement. Routes add `security` / `deprecated` per operation. |
 
 ### Validation semantics
 
@@ -115,8 +117,15 @@ Writing an adapter for anything else is ~15 lines: construct one
 - Repeated query keys (`?tag=a&tag=b`) accumulate into arrays when the schema
   declares an array; undeclared keys pass through as strings so
   `additionalProperties` rules still apply.
-- Declaring `request.body` makes a JSON body required; a body that fails to
-  parse is a `400 { error: 'invalid_json' }`.
+- Declaring `request.body` makes a body required. The default encoding is
+  JSON; `bodyType: 'form'` and `bodyType: 'multipart'` switch it (see below).
+  A JSON body that fails to parse is a `400 { error: 'invalid_json' }`; a
+  form/multipart body that fails to parse is a `400 { error: 'invalid_body' }`.
+- A request whose `content-type` contradicts the declared body type answers
+  `415 { error: 'unsupported_media_type' }` before any read. A request with
+  *no* content-type gets the benefit of the doubt and fails on the parse
+  instead, so bare `curl` and hand-rolled clients keep working. JSON accepts
+  `application/json` and `+json` structured suffixes.
 - `request.headers` takes an object schema whose property names are header
   names (lookup is case-insensitive; write them lowercase). Only declared
   headers are read, values coerce like query parameters, and each property
@@ -138,6 +147,59 @@ Writing an adapter for anything else is ~15 lines: construct one
   `@amritk/runtime-validators` and `source` is `params`, `query`, `headers`,
   or `body`. The `errors` option reshapes this (and the other built-in
   bodies) when deployed clients already parse a different envelope.
+
+### Form and multipart bodies
+
+`bodyType` selects how the declared body schema arrives on the wire — the
+parser, the 415 check, and the OpenAPI requestBody content key all follow it:
+
+```ts
+const signup = defineRoute({
+  method: 'post',
+  path: '/signup',
+  request: {
+    // application/x-www-form-urlencoded: fields coerce like query parameters
+    // (typed keys coerce from strings, array keys accumulate repeats).
+    body: {
+      type: 'object',
+      properties: { name: { type: 'string', minLength: 1 }, age: { type: 'integer', minimum: 18 } },
+      required: ['name', 'age'],
+    },
+    bodyType: 'form',
+  },
+  responses: { 201: {} },
+  handler: ({ body }) => /* body.age is a number */ ({ status: 201 }),
+})
+
+const upload = defineRoute({
+  method: 'post',
+  path: '/upload',
+  request: {
+    // multipart/form-data: string parts coerce like form fields, file parts
+    // reach the handler as File objects. Declare file properties WITHOUT a
+    // `type` keyword ({} or { contentMediaType: 'image/png' }) — a File is
+    // not a string, so `type: 'string'` would reject it.
+    body: {
+      type: 'object',
+      properties: { title: { type: 'string' }, attachment: {} },
+      required: ['title', 'attachment'],
+    },
+    bodyType: 'multipart',
+  },
+  responses: { 200: {} },
+  handler: async ({ body }) => {
+    const file = body.attachment as File
+    await save(file.name, new Uint8Array(await file.arrayBuffer()))
+    return { status: 200 }
+  },
+})
+```
+
+Multipart parsing is delegated to the platform's `Response#formData` (undici
+on Node, native on Workers/Bun/Deno) over the same shared buffered read as
+everything else — `maxBodyBytes` still caps uploads. Repeated file keys keep
+the last file; repeated string keys accumulate when the schema declares an
+array.
 
 ### Streaming and raw responses
 
@@ -265,7 +327,8 @@ the same request corpus through both, so switching is just an import swap.
 Everything `createApi`/`toFetchHandler` accept has a compiled equivalent that
 references *exports of your routes module*, so both engines execute the same
 values: `contextExport`, `mounts`, `onRequestExports`, `onResponseExports`,
-`errorsExport`, `onErrorExport`, and `maxBodyBytes`.
+`errorsExport`, `onErrorExport`, `observeExport`, `maxBodyBytes`, and the
+OpenAPI extras (`servers`, `securitySchemes`, `security`).
 
 ```ts
 // scripts/compile-api.ts — the build step
@@ -379,6 +442,52 @@ export const getProfile = defineAppRoute({
 If only some routes need the session, make the context lazy (`session: () =>
 memoizedLookup()`) so public routes never pay for the cookie check.
 
+### Observability: metrics and request logs
+
+`observe` is called once per matched request — validation failures and
+handler errors included — with the route *pattern* (`/users/{id}`, the
+dimension metrics group by), the outcome status, and the pipeline duration.
+Unmatched requests (404/405) and the OpenAPI document are not observed, a
+throwing observer is swallowed, and when unset the hot path pays nothing:
+
+```ts
+const api = createApi({
+  routes,
+  observe: ({ route, status, durationMs }) => {
+    metrics.histogram('http.server.duration', durationMs, { route: route.path, status })
+  },
+})
+// Compiled: compileToModule({ ..., observeExport: 'observe' })
+```
+
+Keep the observer synchronous-fast — fire-and-forget any I/O (or hand it to
+`executionContext.waitUntil` on Workers, which the observation carries).
+
+### OpenAPI: servers, auth schemes, shared components
+
+Document-level settings pass through `createApi` (and `compileToModule`)
+verbatim; routes annotate their own operations:
+
+```ts
+const api = createApi({
+  routes,
+  servers: [{ url: 'https://api.example.com' }],
+  securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer' } },
+  security: [{ bearerAuth: [] }], // default for every operation
+})
+
+const login = defineRoute({ method: 'post', path: '/login', security: [], /* public */ ... })
+const legacy = defineRoute({ method: 'get', path: '/v1/users', deprecated: true, ... })
+```
+
+Give a shared schema a `title` and reuse the same object across contracts —
+it is hoisted into `components.schemas` and referenced with `$ref`, so
+generated clients get one `User` type instead of N structurally identical
+copies. Titles that collide with *different* contents stay inline (never a
+wrong `$ref`). Response contracts may also declare notable headers —
+`responses: { 200: { headers: { 'x-ratelimit-remaining': { type: 'integer' } } } }`
+— documented as OpenAPI header objects and checked under `validateResponses`.
+
 ### Error reporting: Sentry
 
 `onError` receives the matched route contract and the platform values, which
@@ -444,6 +553,7 @@ yours:
 | Drizzle / any ORM | `context` factory builds the handle per request from `env` |
 | Better Auth / any self-contained router | `mounts` passthrough + session lookup in `context` |
 | Sentry / error reporting | `onError` (`createSentry` packages it) |
+| Metrics, request logging | `observe` (route pattern, status, duration per matched request) |
 | Rate limits, feature flags, CSRF, origin checks | `onRequest` gates |
 | Security headers, CORS | `onResponse` decorators / `createCors` |
 | Typed clients | generated from the OpenAPI document (Hey API) |
@@ -465,11 +575,14 @@ yours:
 
 ## Scope notes
 
-- Request bodies are JSON (`application/json`) as far as *validation* goes;
-  raw bytes are always available via `readText`/`readBytes` (webhooks,
-  uploads), and raw/streaming **responses** are first-class via `contentType`.
-  Multipart parsing is not built in.
+- Request bodies validate as JSON, form-encoded, or multipart per the
+  contract's `bodyType`; raw bytes are always available via
+  `readText`/`readBytes` (webhook signatures), and raw/streaming
+  **responses** are first-class via `contentType`.
 - Route paths use OpenAPI syntax (`/users/{id}`); a parameter owns its whole
-  segment.
+  segment. A greedy tail parameter — `/files/{path+}`, the AWS API Gateway
+  convention — captures one or more remaining segments, decoded individually
+  and joined with `/` (`/files/docs/2026/q1.pdf` → `path: 'docs/2026/q1.pdf'`).
+  It must be the last segment; the bare prefix (`/files`) stays a 404.
 - Static paths always win over parameterized ones; parameterized routes match
   in registration order.

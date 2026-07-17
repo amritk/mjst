@@ -41,9 +41,7 @@ export const compileRoute = (
       // Declared response headers validate as an open object: undeclared
       // headers pass, declared ones must match their schema when present.
       const headers =
-        response.headers !== undefined
-          ? compile({ type: 'object', properties: response.headers })
-          : undefined
+        response.headers !== undefined ? compile({ type: 'object', properties: response.headers }) : undefined
       if (body !== undefined || headers !== undefined) {
         responses.set(Number(status), { body, headers })
       }

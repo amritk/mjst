@@ -60,6 +60,7 @@ const emit = (): string =>
     onResponseExports: ['stampHeader'],
     errorsExport: 'corpusErrors',
     onErrorExport: 'corpusOnError',
+    observeExport: 'recordObservation',
     maxBodyBytes: MAX_BODY_BYTES,
   })
 
@@ -108,6 +109,7 @@ describe('compile-to-module', () => {
           context: corpus.createAppContext,
           errors: corpus.corpusErrors,
           onError: corpus.corpusOnError,
+          observe: corpus.recordObservation,
         }),
         {
           mounts: { '/mounted': corpus.mountEcho },
@@ -266,9 +268,17 @@ describe('compile-to-module', () => {
       ]
 
       for (const makeRequest of cases) {
+        corpus.observations.length = 0
         const fromRuntime = await runtime(makeRequest(), ENV)
+        const runtimeObservations = corpus.observations.splice(0)
         const fromCompiled = await compiledModule.fetch(makeRequest(), ENV)
+        const compiledObservations = corpus.observations.splice(0)
         const label = makeRequest().method + ' ' + new URL(makeRequest().url).pathname
+
+        // The observe hook must fire for the same requests with the same
+        // route pattern and outcome status in both engines (durations differ,
+        // so only their well-formedness is compared).
+        expect(compiledObservations, label + ' observations').toEqual(runtimeObservations)
 
         expect(fromCompiled.status, label).toBe(fromRuntime.status)
         expect(contentType(fromCompiled), label).toBe(contentType(fromRuntime))

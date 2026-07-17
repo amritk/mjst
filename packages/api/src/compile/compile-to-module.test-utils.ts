@@ -1,7 +1,14 @@
 import { defineRoute } from '../define-route'
 import { routeFactory } from '../route-factory'
 import type { FetchOnRequest, FetchOnResponse } from '../to-fetch-handler'
-import type { ApiRequest, ApiResponse, ContextFactoryInput, ErrorFormatters, OnErrorDetails } from '../types'
+import type {
+  ApiRequest,
+  ApiResponse,
+  ContextFactoryInput,
+  ErrorFormatters,
+  OnErrorDetails,
+  RequestObservation,
+} from '../types'
 
 /**
  * The differential corpus: routes chosen so every emitter path is exercised —
@@ -337,6 +344,20 @@ export const doubleRead = defineRoute({
     body: { parsed: body.name, raw: await request.readText(), byteLength: (await request.readBytes()).byteLength },
   }),
 })
+
+/** What the corpus observer keeps per observation, engine-comparable. */
+export type RecordedObservation = { route: string; status: number; durationOk: boolean }
+
+/** Both engines record here; the differential test splices per request. */
+export const observations: RecordedObservation[] = []
+
+export const recordObservation = (observation: RequestObservation): void => {
+  observations.push({
+    route: observation.route.path,
+    status: observation.status,
+    durationOk: Number.isFinite(observation.durationMs) && observation.durationMs >= 0,
+  })
+}
 
 /** An onRequest gate: blocks flagged requests before mounts and routing. */
 export const gateTeapot: FetchOnRequest = (request) =>
