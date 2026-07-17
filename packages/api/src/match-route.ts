@@ -43,9 +43,15 @@ const matchSegments = (
   pattern: readonly PathSegment[],
   segments: readonly string[],
 ): Record<string, string> | undefined => {
-  if (pattern.length !== segments.length) return undefined
+  // A greedy tail ({name+}) owns the rest of the path — one or more segments,
+  // so /files/{path+} matches /files/a but never bare /files.
+  const tail = pattern[pattern.length - 1]
+  const greedy = typeof tail === 'object' && tail.greedy === true
+  if (greedy ? segments.length < pattern.length : pattern.length !== segments.length) return undefined
+
   let params: Record<string, string> | undefined
-  for (let index = 0; index < pattern.length; index++) {
+  const fixed = greedy ? pattern.length - 1 : pattern.length
+  for (let index = 0; index < fixed; index++) {
     const expected = pattern[index]
     const actual = segments[index] ?? ''
     if (typeof expected === 'string') {
@@ -54,6 +60,15 @@ const matchSegments = (
       params ??= {}
       params[expected.name] = decodeSegment(actual)
     }
+  }
+  if (greedy && typeof tail === 'object') {
+    params ??= {}
+    // Decoded per segment then rejoined, so an encoded '/' inside one segment
+    // cannot masquerade as a separator during matching.
+    params[tail.name] = segments
+      .slice(pattern.length - 1)
+      .map(decodeSegment)
+      .join('/')
   }
   return params ?? EMPTY_PARAMS
 }

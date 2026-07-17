@@ -338,9 +338,10 @@ export type CompiledCookies = CompiledInput & {
 
 /**
  * One segment of a compiled route path: a literal string, or a named parameter
- * capturing the whole segment.
+ * capturing the whole segment. A greedy parameter (`{name+}`, always last)
+ * captures the remaining segments joined with `/`.
  */
-export type PathSegment = string | { readonly name: string }
+export type PathSegment = string | { readonly name: string; readonly greedy?: boolean }
 
 /**
  * A route after startup compilation: uppercase method, parsed path segments,

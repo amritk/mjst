@@ -24,6 +24,7 @@ const routes: Record<string, AnyRouteContract> = {
   csvExport: corpus.csvExport,
   rawEcho: corpus.rawEcho,
   doubleRead: corpus.doubleRead,
+  fileProxy: corpus.fileProxy,
   dashboard: corpus.dashboard,
 }
 const info = { title: 'Differential', version: '1.0.0' }
@@ -211,6 +212,16 @@ describe('compile-to-module', () => {
           }),
         // Query keys named like object plumbing stay ordinary data.
         () => new Request('http://localhost/users?limit=5&__proto__=evil'),
+        // Greedy tail: single and nested segments, per-segment decoding,
+        // the min-length validation failure, the bare prefix (404), and the
+        // HEAD fallback over a greedy route.
+        () => new Request('http://localhost/files/report.pdf'),
+        () => new Request('http://localhost/files/docs/2026/report.pdf'),
+        () => new Request('http://localhost/files/dir%20one/nested%2Ename'),
+        () => new Request('http://localhost/files/ab'),
+        () => new Request('http://localhost/files'),
+        () => new Request('http://localhost/files/docs/x.txt', { method: 'HEAD' }),
+        () => new Request('http://localhost/files/docs/x.txt', { method: 'POST' }),
       ]
 
       for (const makeRequest of cases) {

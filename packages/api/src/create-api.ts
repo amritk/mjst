@@ -41,7 +41,10 @@ export const createApi = (options: ApiOptions): Api => {
     // Rebuilding the path from parsed segments normalizes trailing slashes,
     // so '/users' and '/users/' collide here instead of shadowing at runtime.
     const normalizedPath =
-      '/' + route.segments.map((segment) => (typeof segment === 'string' ? segment : '{…}')).join('/')
+      '/' +
+      route.segments
+        .map((segment) => (typeof segment === 'string' ? segment : segment.greedy === true ? '{…+}' : '{…}'))
+        .join('/')
     const key = route.method + ' ' + normalizedPath
     const isStatic = route.segments.every((segment) => typeof segment === 'string')
     if (isStatic) {
@@ -101,6 +104,6 @@ const samePattern = (a: CompiledRoute, b: CompiledRoute): boolean => {
   return a.segments.every((segment, index) => {
     const other = b.segments[index]
     if (typeof segment === 'string') return segment === other
-    return typeof other === 'object'
+    return typeof other === 'object' && (segment.greedy === true) === (other.greedy === true)
   })
 }

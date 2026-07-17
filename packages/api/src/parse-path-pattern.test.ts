@@ -39,4 +39,17 @@ describe('parse-path-pattern', () => {
   it('rejects empty segments', () => {
     expect(() => parsePathPattern('/users//posts')).toThrow(/Empty path segment/)
   })
+
+  it('parses a greedy tail parameter', () => {
+    expect(parsePathPattern('/files/{path+}')).toEqual(['files', { name: 'path', greedy: true }])
+  })
+
+  it('rejects a greedy parameter that is not the last segment', () => {
+    expect(() => parsePathPattern('/files/{path+}/meta')).toThrow(/must be the last segment/)
+  })
+
+  it('rejects an empty or malformed greedy parameter name', () => {
+    expect(() => parsePathPattern('/files/{+}')).toThrow(/Invalid path parameter/)
+    expect(() => parsePathPattern('/files/{pa+th+}')).toThrow(/Invalid path parameter/)
+  })
 })

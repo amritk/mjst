@@ -243,6 +243,17 @@ export const rawEcho = defineRoute({
   handler: async ({ request }) => ({ status: 200, body: { raw: await request.readText() } }),
 })
 
+/** A greedy tail capture: the rest of the path, decoded and rejoined. */
+export const fileProxy = defineRoute({
+  method: 'get',
+  path: '/files/{path+}',
+  request: {
+    params: { type: 'object', properties: { path: { type: 'string', minLength: 3 } }, required: ['path'] },
+  },
+  responses: { 200: { body: { type: 'object', properties: { path: {} } } } },
+  handler: ({ params }) => ({ status: 200, body: { path: params.path } }),
+})
+
 /**
  * Reads the body three ways after the pipeline already consumed the declared
  * schema — the webhook-HMAC-plus-parsed-access shape. Exercises the shared

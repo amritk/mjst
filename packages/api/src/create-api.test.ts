@@ -382,6 +382,33 @@ describe('create-api', () => {
     expect((await api.handle(request('PATCH', '/nowhere'))).status).toBe(404)
   })
 
+  it('routes greedy tail parameters through validation to the handler', async () => {
+    const files = defineRoute({
+      method: 'get',
+      path: '/files/{path+}',
+      request: {
+        params: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+      },
+      responses: { 200: { body: { type: 'object', properties: { path: {} } } } },
+      handler: ({ params }) => ({ status: 200, body: { path: params.path } }),
+    })
+    const api = createApi({ routes: [files] })
+
+    const nested = await api.handle(request('GET', '/files/docs/2026/report.pdf'))
+    expect(nested.status).toBe(200)
+    expect(nested.body).toEqual({ path: 'docs/2026/report.pdf' })
+
+    // One or more segments: the bare prefix is a 404, not an empty capture.
+    expect((await api.handle(request('GET', '/files'))).status).toBe(404)
+  })
+
+  it('rejects duplicate greedy patterns but allows greedy alongside single-segment params', () => {
+    const greedy = (path: string) =>
+      defineRoute({ method: 'get', path, responses: { 204: {} }, handler: () => ({ status: 204 }) })
+    expect(() => createApi({ routes: [greedy('/files/{a+}'), greedy('/files/{b+}')] })).toThrow(/Duplicate route/)
+    expect(() => createApi({ routes: [greedy('/files/{a+}'), greedy('/files/{b}')] })).not.toThrow()
+  })
+
   it('runs the GET pipeline for HEAD requests (adapters discard the body)', async () => {
     const api = createApi({ routes: [getUser] })
 

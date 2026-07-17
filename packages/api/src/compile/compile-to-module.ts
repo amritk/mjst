@@ -370,9 +370,44 @@ const compileEntry = (name: string, contract: AnyRouteContract): CompiledEntry =
     method: contract.method.toUpperCase(),
     segments,
     isStatic,
-    staticPath: '/' + segments.map((segment) => (typeof segment === 'string' ? segment : '{}')).join('/'),
+    staticPath:
+      '/' +
+      segments
+        .map((segment) => (typeof segment === 'string' ? segment : segment.greedy === true ? '{}+' : '{}'))
+        .join('/'),
     paramNames: segments.flatMap((segment) => (typeof segment === 'string' ? [] : [segment.name])),
   }
+}
+
+/**
+ * The match test and captures for one dynamic route over a split-segments
+ * variable — shared by the per-method dispatch, the HEAD fallback, and the
+ * 405 allow scan so all three agree on greedy-tail semantics: a `{name+}`
+ * tail matches one or more remaining segments, decoded individually and
+ * rejoined (same as the runtime matcher).
+ */
+const dynamicMatch = (
+  route: CompiledEntry,
+  segmentsVar: string,
+): { readonly conditions: string[]; readonly captures: string[] } => {
+  const tail = route.segments[route.segments.length - 1]
+  const greedy = typeof tail === 'object' && tail.greedy === true
+  const conditions = [
+    greedy
+      ? `${segmentsVar}.length >= ${route.segments.length}`
+      : `${segmentsVar}.length === ${route.segments.length}`,
+  ]
+  const captures: string[] = []
+  route.segments.forEach((segment, index) => {
+    if (typeof segment === 'string') {
+      conditions.push(`${segmentsVar}[${index}] === ${JSON.stringify(segment)}`)
+    } else if (segment.greedy === true) {
+      captures.push(`${segmentsVar}.slice(${index}).map(decodeSegment).join('/')`)
+    } else {
+      captures.push(`decodeSegment(${segmentsVar}[${index}])`)
+    }
+  })
+  return { conditions, captures }
 }
 
 const assertNoDuplicates = (routes: readonly CompiledEntry[]): void => {
@@ -700,15 +735,7 @@ const emitDispatch = (
     if (dynamics.length > 0) {
       lines.push("    const segments = path === '/' ? [] : path.slice(1).split('/')")
       for (const route of dynamics) {
-        const conditions = [`segments.length === ${route.segments.length}`]
-        const captures: string[] = []
-        route.segments.forEach((segment, index) => {
-          if (typeof segment === 'string') {
-            conditions.push(`segments[${index}] === ${JSON.stringify(segment)}`)
-          } else {
-            captures.push(`decodeSegment(segments[${index}])`)
-          }
-        })
+        const { conditions, captures } = dynamicMatch(route, 'segments')
         lines.push(
           `    if (${conditions.join(' && ')}) return route_${route.name}(request, url, rawPath, queryIndex${extraArguments}, ${captures.join(', ')})`,
         )
@@ -741,15 +768,7 @@ const emitDispatch = (
     if (dynamicGets.length > 0) {
       lines.push("    const segments = path === '/' ? [] : path.slice(1).split('/')")
       for (const route of dynamicGets) {
-        const conditions = [`segments.length === ${route.segments.length}`]
-        const captures: string[] = []
-        route.segments.forEach((segment, index) => {
-          if (typeof segment === 'string') {
-            conditions.push(`segments[${index}] === ${JSON.stringify(segment)}`)
-          } else {
-            captures.push(`decodeSegment(segments[${index}])`)
-          }
-        })
+        const { conditions, captures } = dynamicMatch(route, 'segments')
         lines.push(
           `    if (${conditions.join(' && ')}) return headOf(route_${route.name}(request, url, rawPath, queryIndex${extraArguments}, ${captures.join(', ')}))`,
         )
@@ -776,12 +795,7 @@ const emitDispatch = (
   if (dynamics.length > 0) {
     lines.push("  const allowSegments = path === '/' ? [] : path.slice(1).split('/')")
     for (const route of dynamics) {
-      const conditions = [`allowSegments.length === ${route.segments.length}`]
-      route.segments.forEach((segment, index) => {
-        if (typeof segment === 'string') {
-          conditions.push(`allowSegments[${index}] === ${JSON.stringify(segment)}`)
-        }
-      })
+      const conditions = dynamicMatch(route, 'allowSegments').conditions
       conditions.push(`!allow.includes('${route.method}')`)
       lines.push(`  if (${conditions.join(' && ')}) allow.push('${route.method}')`)
     }
