@@ -23,7 +23,12 @@ export const toOpenApi = (routes: ReadonlyArray<AnyRouteContract>, info: OpenApi
     if (route.tags !== undefined) operation['tags'] = route.tags
     if (route.operationId !== undefined) operation['operationId'] = route.operationId
 
-    const parameters = [...toParameters(route.request?.params, 'path'), ...toParameters(route.request?.query, 'query')]
+    const parameters = [
+      ...toParameters(route.request?.params, 'path'),
+      ...toParameters(route.request?.query, 'query'),
+      ...toParameters(route.request?.headers, 'header'),
+      ...toParameters(route.request?.cookies, 'cookie'),
+    ]
     if (parameters.length > 0) operation['parameters'] = parameters
 
     if (route.request?.body !== undefined) {
@@ -39,7 +44,13 @@ export const toOpenApi = (routes: ReadonlyArray<AnyRouteContract>, info: OpenApi
         // OpenAPI requires a description on every response object.
         description: contract.description ?? 'Status ' + status,
       }
-      if (contract.body !== undefined) {
+      if (contract.contentType !== undefined) {
+        // Raw statuses document under their declared content type. Media-type
+        // parameters (`; charset=utf-8`) are stripped: OpenAPI keys content
+        // by media type alone.
+        const mediaType = contract.contentType.split(';')[0]?.trim() ?? contract.contentType
+        response['content'] = { [mediaType]: contract.body !== undefined ? { schema: contract.body } : {} }
+      } else if (contract.body !== undefined) {
         response['content'] = { 'application/json': { schema: contract.body } }
       }
       responses[status] = response
@@ -59,7 +70,7 @@ export const toOpenApi = (routes: ReadonlyArray<AnyRouteContract>, info: OpenApi
   }
 }
 
-const toParameters = (schema: unknown, location: 'path' | 'query'): unknown[] => {
+const toParameters = (schema: unknown, location: 'path' | 'query' | 'header' | 'cookie'): unknown[] => {
   if (typeof schema !== 'object' || schema === null) return []
   const { properties, required } = schema as {
     properties?: Record<string, unknown>

@@ -34,6 +34,78 @@ describe('define-route', () => {
     expect(route.path).toBe('/users/{id}')
   })
 
+  it('types the headers slot from its schema', () => {
+    defineRoute({
+      method: 'get',
+      path: '/tenant',
+      request: {
+        headers: {
+          type: 'object',
+          properties: { 'x-api-key': { type: 'string' }, 'x-retry-count': { type: 'integer' } },
+          required: ['x-api-key'],
+        },
+      },
+      responses: { 204: {} },
+      handler: ({ headers }) => {
+        expectTypeOf(headers['x-api-key']).toEqualTypeOf<string>()
+        expectTypeOf(headers['x-retry-count']).toEqualTypeOf<number | undefined>()
+        return { status: 204 }
+      },
+    })
+  })
+
+  it('types the cookies slot from its schema', () => {
+    defineRoute({
+      method: 'get',
+      path: '/dashboard',
+      request: {
+        cookies: {
+          type: 'object',
+          properties: { session: { type: 'string' }, visits: { type: 'integer' } },
+          required: ['session'],
+        },
+      },
+      responses: { 204: {} },
+      handler: ({ cookies }) => {
+        expectTypeOf(cookies.session).toEqualTypeOf<string>()
+        expectTypeOf(cookies.visits).toEqualTypeOf<number | undefined>()
+        return { status: 204 }
+      },
+    })
+  })
+
+  it('types raw contentType statuses as streaming bodies', () => {
+    defineRoute({
+      method: 'post',
+      path: '/chat',
+      responses: { 200: { contentType: 'text/plain; charset=utf-8' }, 400: {} },
+      handler: () => ({ status: 200, body: 'plain text is a valid streaming body' }),
+    })
+
+    defineRoute({
+      method: 'post',
+      path: '/chat-stream',
+      responses: { 200: { contentType: 'text/event-stream' } },
+      handler: () => ({ status: 200, body: new ReadableStream<Uint8Array>() }),
+    })
+
+    defineRoute({
+      method: 'post',
+      path: '/chat-wrong',
+      responses: { 200: { contentType: 'text/plain' } },
+      // @ts-expect-error — a raw status body must be a stream/text/bytes, not an object
+      handler: () => ({ status: 200, body: { message: 'not raw' } }),
+    })
+
+    defineRoute({
+      method: 'post',
+      path: '/chat-missing',
+      responses: { 200: { contentType: 'text/plain' } },
+      // @ts-expect-error — a raw status requires a body
+      handler: () => ({ status: 200 }),
+    })
+  })
+
   it('types undeclared slots as undefined', () => {
     defineRoute({
       method: 'get',

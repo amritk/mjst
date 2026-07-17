@@ -1,4 +1,5 @@
-import type { Api } from './types'
+import { readBytesCapped } from './read-bytes-capped'
+import type { Api, ApiRequest, StreamingBody } from './types'
 
 /**
  * The handler shape every fetch runtime accepts. Cloudflare Workers invokes it
@@ -7,6 +8,31 @@ import type { Api } from './types'
  * `createApi({ context })` factory untouched.
  */
 export type FetchHandler = (request: Request, env?: unknown, executionContext?: unknown) => Promise<Response>
+
+/**
+ * A pre-routing gate. Returning a `Response` short-circuits the request —
+ * remaining gates, mounts, and routing are skipped — but the response still
+ * flows through every {@link FetchOnResponse} hook, so a rate-limited 429
+ * gets the same security headers as everything else. Returning `undefined`
+ * lets the request continue. This is where CORS preflight, origin checks,
+ * rate limits, and feature-flag gates live.
+ */
+export type FetchOnRequest = (
+  request: Request,
+  env?: unknown,
+  executionContext?: unknown,
+) => Response | undefined | Promise<Response | undefined>
+
+/**
+ * A response decorator, run on every outgoing response — routed replies,
+ * mount replies, 404s, and gate short-circuits alike. Mutate the response's
+ * headers in place and return nothing, or return a replacement `Response`.
+ * Runs in array order, so later hooks see earlier hooks' changes.
+ */
+export type FetchOnResponse = (
+  response: Response,
+  request: Request,
+) => Response | undefined | Promise<Response | undefined>
 
 /**
  * Options for {@link toFetchHandler}.
@@ -22,8 +48,25 @@ export type FetchHandlerOptions = {
    * ```typescript
    * toFetchHandler(api, { mounts: { '/api/auth': (request) => auth.handler(request) } })
    * ```
+   *
+   * Mounts still sit inside the hook chains: gates run before them and
+   * response decorators after, so a mounted router is not a hole in the
+   * app's headers or rate limits. A gate that must not apply to a mount
+   * (a CSRF check exempting the auth routes, say) checks the path itself.
    */
   readonly mounts?: Readonly<Record<string, (request: Request) => Response | Promise<Response>>>
+  /** Gate(s) run before mounts and routing, in order. See {@link FetchOnRequest}. */
+  readonly onRequest?: FetchOnRequest | ReadonlyArray<FetchOnRequest>
+  /** Decorator(s) run on every outgoing response, in order. See {@link FetchOnResponse}. */
+  readonly onResponse?: FetchOnResponse | ReadonlyArray<FetchOnResponse>
+  /**
+   * Rejects request bodies larger than this many bytes with a 413, checked
+   * against the declared `content-length` up front and enforced while the
+   * body streams in (so a lying or chunked client is still cut off). Applies
+   * to the pipeline's own body parsing and to handler-initiated
+   * `readText`/`readBytes` calls alike. Unset means no limit.
+   */
+  readonly maxBodyBytes?: number
 }
 
 /**
@@ -50,6 +93,9 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     if (!prefix.startsWith('/')) throw new Error(`Mount prefix must start with '/': '${prefix}'`)
     return [prefix.length > 1 && prefix.endsWith('/') ? prefix.slice(0, -1) : prefix, mount] as const
   })
+  const onRequest = toArray(options?.onRequest)
+  const onResponse = toArray(options?.onResponse)
+  const maxBodyBytes = options?.maxBodyBytes
 
   // One ResponseInit per status code, reused across requests — building JSON
   // responses via `new Response(string, cachedInit)` instead of
@@ -66,7 +112,15 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     return init
   }
 
-  return async (request: Request, env?: unknown, executionContext?: unknown): Promise<Response> => {
+  const finish = async (response: Response, request: Request): Promise<Response> => {
+    let current = response
+    for (const hook of onResponse) {
+      current = (await hook(current, request)) ?? current
+    }
+    return current
+  }
+
+  const handler = async (request: Request, env?: unknown, executionContext?: unknown): Promise<Response> => {
     // The pathname is sliced out by hand instead of via `new URL(...)`: a URL
     // object parses and normalizes the entire URL (origin, auth, escaping),
     // which benchmarked at roughly a fifth of this adapter's per-request cost.
@@ -83,17 +137,33 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
       if (path === prefix || path.startsWith(prefix + '/')) return mount(request)
     }
 
-    const response = await api.handle(
-      {
-        method: request.method,
-        path,
-        searchParams: () => new URLSearchParams(queryIndex === -1 ? '' : url.slice(queryIndex + 1)),
-        header: (name) => request.headers.get(name) ?? undefined,
-        readBody: () => request.json(),
-      },
-      env,
-      executionContext,
-    )
+    const apiRequest: ApiRequest = {
+      method: request.method,
+      path,
+      searchParams: () => new URLSearchParams(queryIndex === -1 ? '' : url.slice(queryIndex + 1)),
+      queryString: () => (queryIndex === -1 ? '' : url.slice(queryIndex + 1)),
+      header: (name) => request.headers.get(name) ?? undefined,
+      readBody:
+        maxBodyBytes === undefined
+          ? () => request.json()
+          : () => readTextCapped(request, maxBodyBytes).then((text) => JSON.parse(text) as unknown),
+      readText: maxBodyBytes === undefined ? () => request.text() : () => readTextCapped(request, maxBodyBytes),
+      readBytes:
+        maxBodyBytes === undefined
+          ? () => request.arrayBuffer().then((buffer) => new Uint8Array(buffer))
+          : () => readBytesCapped(request.body, request.headers.get('content-length'), maxBodyBytes),
+      signal: request.signal,
+    }
+    const response = await api.handle(apiRequest, env, executionContext)
+
+    // Raw statuses (contract-declared contentType) pass the body straight to
+    // the Response constructor: a string, bytes, or a live ReadableStream.
+    if (response.contentType !== undefined) {
+      return new Response((response.body ?? null) as StreamingBody | null, {
+        status: response.status,
+        headers: { 'content-type': response.contentType, ...response.headers },
+      })
+    }
     if (response.headers === undefined) {
       if (response.body === undefined) return new Response(null, { status: response.status })
       return new Response(JSON.stringify(response.body), initFor(response.status))
@@ -107,7 +177,25 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
       headers: { ...JSON_HEADERS, ...response.headers },
     })
   }
+
+  if (onRequest.length === 0 && onResponse.length === 0) return handler
+
+  return async (request: Request, env?: unknown, executionContext?: unknown): Promise<Response> => {
+    for (const gate of onRequest) {
+      const early = await gate(request, env, executionContext)
+      if (early !== undefined) return finish(early, request)
+    }
+    return finish(await handler(request, env, executionContext), request)
+  }
 }
 
 /** Shared across every response with a JSON body and no custom headers. */
 const JSON_HEADERS: Readonly<Record<string, string>> = Object.freeze({ 'content-type': 'application/json' })
+
+const toArray = <T>(value: T | ReadonlyArray<T> | undefined): ReadonlyArray<T> =>
+  value === undefined ? [] : Array.isArray(value) ? value : [value as T]
+
+const readTextCapped = (request: Request, limit: number): Promise<string> =>
+  readBytesCapped(request.body, request.headers.get('content-length'), limit).then((bytes) => DECODER.decode(bytes))
+
+const DECODER = new TextDecoder()

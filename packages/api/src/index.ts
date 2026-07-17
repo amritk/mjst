@@ -1,16 +1,25 @@
 export { buildCoercionPlan } from './build-coercion-plan'
-export { buildQueryObject } from './build-query-object'
+export { buildCookiesObject } from './build-cookies-object'
+export { buildHeadersObject } from './build-headers-object'
+export { assignQueryPair, buildQueryObject } from './build-query-object'
+export { buildQueryObjectFromString } from './build-query-object-from-string'
 export { coercePrimitive } from './coerce-primitive'
 export type { CompileModuleOptions } from './compile/compile-to-module'
 export { compileToModule } from './compile/compile-to-module'
 export { createApi } from './create-api'
+export type { Cors, CorsOptions } from './create-cors'
+export { createCors } from './create-cors'
+export type { ErrorCaptureInfo, SentryOptions } from './create-sentry'
+export { createSentry } from './create-sentry'
 export { decodeSegment } from './decode-segment'
 export { defineRoute } from './define-route'
 export type { RouteMatch } from './match-route'
 export { matchRoute } from './match-route'
 export { parsePathPattern } from './parse-path-pattern'
+export { isPayloadTooLargeError, payloadTooLargeError } from './payload-too-large'
+export { readBytesCapped } from './read-bytes-capped'
 export { routeFactory } from './route-factory'
-export type { FetchHandler, FetchHandlerOptions } from './to-fetch-handler'
+export type { FetchHandler, FetchHandlerOptions, FetchOnRequest, FetchOnResponse } from './to-fetch-handler'
 export { toFetchHandler } from './to-fetch-handler'
 export type { NodeHandler, NodeHandlerOptions } from './to-node-handler'
 export { toNodeHandler } from './to-node-handler'
@@ -22,12 +31,16 @@ export type {
   ApiRequest,
   ApiResponse,
   Coercion,
+  CompiledCookies,
+  CompiledHeaders,
   CompiledInput,
   CompiledRoute,
   CompiledValidation,
   ContextFactory,
   ContextFactoryInput,
+  ErrorFormatters,
   HttpMethod,
+  OnErrorDetails,
   OpenApiDocument,
   OpenApiInfo,
   PathSegment,
@@ -40,6 +53,8 @@ export type {
   RouteReplyValue,
   RouteTable,
   SchemaValue,
+  StreamingBody,
+  ValidationFailure,
   ValidationFailureBody,
   ValidatorCompiler,
 } from './types'

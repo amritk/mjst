@@ -1,6 +1,7 @@
 import { defineRoute } from '../define-route'
 import { routeFactory } from '../route-factory'
-import type { ContextFactoryInput } from '../types'
+import type { FetchOnRequest, FetchOnResponse } from '../to-fetch-handler'
+import type { ApiRequest, ApiResponse, ContextFactoryInput, ErrorFormatters, OnErrorDetails } from '../types'
 
 /**
  * The differential corpus: routes chosen so every emitter path is exercised —
@@ -174,3 +175,111 @@ export const echoHeader = defineRoute({
     headers: { 'x-served-by': 'corpus' },
   }),
 })
+
+/** A validated headers slot: required string plus a coerced integer. */
+export const tenantInfo = defineRoute({
+  method: 'get',
+  path: '/tenant',
+  request: {
+    headers: {
+      type: 'object',
+      properties: { 'x-api-key': { type: 'string', minLength: 4 }, 'x-retry-count': { type: 'integer' } },
+      required: ['x-api-key'],
+    },
+  },
+  responses: { 200: { body: { type: 'object' } } },
+  handler: ({ headers }) => ({
+    status: 200,
+    body: { key: headers['x-api-key'], retries: headers['x-retry-count'] ?? 0 },
+  }),
+})
+
+/** A validated cookies slot: required session, coerced counter, tracking noise ignored. */
+export const dashboard = defineRoute({
+  method: 'get',
+  path: '/dashboard',
+  request: {
+    cookies: {
+      type: 'object',
+      properties: { session: { type: 'string', minLength: 4 }, visits: { type: 'integer' } },
+      required: ['session'],
+    },
+  },
+  responses: { 200: { body: { type: 'object' } } },
+  handler: ({ cookies }) => ({ status: 200, body: { session: cookies.session, visits: cookies.visits ?? 0 } }),
+})
+
+/** A raw streaming status — the agent-chat shape. */
+export const streamChat = defineRoute({
+  method: 'post',
+  path: '/chat',
+  responses: { 200: { contentType: 'text/plain; charset=utf-8' } },
+  handler: () => {
+    const encoder = new TextEncoder()
+    const body = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        controller.enqueue(encoder.encode('token-1 '))
+        controller.enqueue(encoder.encode('token-2'))
+        controller.close()
+      },
+    })
+    return { status: 200, headers: { 'x-frame-protocol': '1' }, body }
+  },
+})
+
+/** A raw string status — no JSON quoting allowed. */
+export const csvExport = defineRoute({
+  method: 'get',
+  path: '/export',
+  responses: { 200: { contentType: 'text/csv' } },
+  handler: () => ({ status: 200, body: 'a,b\n1,2' }),
+})
+
+/** Reads the raw body text itself — the webhook-signature shape. */
+export const rawEcho = defineRoute({
+  method: 'post',
+  path: '/raw-echo',
+  responses: { 200: { body: { type: 'object' } } },
+  handler: async ({ request }) => ({ status: 200, body: { raw: await request.readText() } }),
+})
+
+/** An onRequest gate: blocks flagged requests before mounts and routing. */
+export const gateTeapot: FetchOnRequest = (request) =>
+  request.headers.get('x-block') === '1'
+    ? new Response(JSON.stringify({ error: 'blocked' }), {
+        status: 418,
+        headers: { 'content-type': 'application/json' },
+      })
+    : undefined
+
+/** An onResponse decorator: stamps every outgoing response. */
+export const stampHeader: FetchOnResponse = (response) => {
+  response.headers.set('x-stamped', 'yes')
+  return undefined
+}
+
+/**
+ * A createSentry-style onError: proves both engines hand thrown errors the
+ * same route contract and platform values, since everything it reads shows
+ * up in the response the differential test compares.
+ */
+export const corpusOnError = (error: unknown, _request: ApiRequest, details: OnErrorDetails): ApiResponse => ({
+  status: 500,
+  body: {
+    error: 'handled',
+    message: error instanceof Error ? error.message : 'unknown',
+    route: details.route.path,
+    method: details.route.method,
+    tenant: (details.env as { tenant?: string } | undefined)?.tenant ?? null,
+  },
+})
+
+/** Custom error envelopes — both engines must shape cold paths identically. */
+export const corpusErrors: ErrorFormatters = {
+  notFound: (request) => ({ status: 404, body: { error: 'nothing at ' + request.path } }),
+  validationFailed: (failure) => ({
+    status: 422,
+    body: { problem: failure.source, count: failure.errors.length },
+  }),
+  payloadTooLarge: () => ({ status: 413, body: { error: 'over the corpus limit' } }),
+}

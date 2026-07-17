@@ -91,4 +91,68 @@ describe('to-open-api', () => {
     expect(operation?.['tags']).toEqual(['users'])
     expect(operation?.['operationId']).toBe('getUser')
   })
+
+  it('unrolls header schemas into in:header parameters', () => {
+    const authed = defineRoute({
+      method: 'get',
+      path: '/tenant',
+      request: {
+        headers: {
+          type: 'object',
+          properties: { 'x-api-key': { type: 'string' }, 'x-trace-id': { type: 'string' } },
+          required: ['x-api-key'],
+        },
+      },
+      responses: { 200: {} },
+      handler: () => ({ status: 200 }),
+    })
+    const document = toOpenApi([authed], info)
+    const operation = (document.paths['/tenant'] as Record<string, Record<string, unknown>>)['get']
+    expect(operation?.['parameters']).toEqual([
+      { name: 'x-api-key', in: 'header', required: true, schema: { type: 'string' } },
+      { name: 'x-trace-id', in: 'header', required: false, schema: { type: 'string' } },
+    ])
+  })
+
+  it('unrolls cookie schemas into in:cookie parameters', () => {
+    const dashboard = defineRoute({
+      method: 'get',
+      path: '/dashboard',
+      request: {
+        cookies: {
+          type: 'object',
+          properties: { session: { type: 'string' } },
+          required: ['session'],
+        },
+      },
+      responses: { 200: {} },
+      handler: () => ({ status: 200 }),
+    })
+    const document = toOpenApi([dashboard], info)
+    const operation = (document.paths['/dashboard'] as Record<string, Record<string, unknown>>)['get']
+    expect(operation?.['parameters']).toEqual([
+      { name: 'session', in: 'cookie', required: true, schema: { type: 'string' } },
+    ])
+  })
+
+  it('documents raw statuses under their content type, without media parameters', () => {
+    const chat = defineRoute({
+      method: 'post',
+      path: '/chat',
+      responses: {
+        200: { contentType: 'text/plain; charset=utf-8', description: 'Token stream' },
+        204: { contentType: 'text/csv', body: { type: 'string' } },
+      },
+      handler: () => ({ status: 200, body: 'x' }),
+    })
+    const document = toOpenApi([chat], info)
+    const operation = (document.paths['/chat'] as Record<string, Record<string, unknown>>)['post']
+    const responses = operation?.['responses'] as Record<string, Record<string, unknown>>
+    expect(responses['200']).toEqual({ description: 'Token stream', content: { 'text/plain': {} } })
+    // A body schema on a raw status is documentation-only, but it does appear.
+    expect(responses['204']).toEqual({
+      description: 'Status 204',
+      content: { 'text/csv': { schema: { type: 'string' } } },
+    })
+  })
 })

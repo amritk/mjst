@@ -1,13 +1,19 @@
 import type { Validator } from '@amritk/runtime-validators'
 
+import { buildCookiesObject } from './build-cookies-object'
+import { buildHeadersObject } from './build-headers-object'
 import { buildParamsObject } from './build-params-object'
 import { buildQueryObject } from './build-query-object'
+import { buildQueryObjectFromString } from './build-query-object-from-string'
 import { matchRoute } from './match-route'
+import { isPayloadTooLargeError } from './payload-too-large'
 import type {
   ApiRequest,
   ApiResponse,
   ContextFactory,
   ErasedRequestContext,
+  ErrorFormatters,
+  OnErrorDetails,
   OpenApiDocument,
   RouteReplyValue,
   RouteTable,
@@ -24,7 +30,8 @@ export type ApiInternals = {
   readonly openApiPath: string | undefined
   readonly openApi: () => OpenApiDocument
   readonly createContext: ContextFactory | undefined
-  readonly onError: ((error: unknown, request: ApiRequest) => ApiResponse) | undefined
+  readonly onError: ((error: unknown, request: ApiRequest, details: OnErrorDetails) => ApiResponse) | undefined
+  readonly errors: ErrorFormatters | undefined
 }
 
 /**
@@ -33,6 +40,10 @@ export type ApiInternals = {
 const NOT_FOUND: ApiResponse = Object.freeze({ status: 404, body: Object.freeze({ error: 'not_found' }) })
 const INTERNAL_ERROR: ApiResponse = Object.freeze({ status: 500, body: Object.freeze({ error: 'internal_error' }) })
 const INVALID_JSON: ApiResponse = Object.freeze({ status: 400, body: Object.freeze({ error: 'invalid_json' }) })
+const PAYLOAD_TOO_LARGE: ApiResponse = Object.freeze({
+  status: 413,
+  body: Object.freeze({ error: 'payload_too_large' }),
+})
 
 /**
  * The core request pipeline: match → coerce + validate declared inputs → run
@@ -51,30 +62,74 @@ export const handleRequest = async (
     return { status: 200, body: internals.openApi() }
   }
 
+  const errors = internals.errors
   const match = matchRoute(internals.table, request.method, request.path)
-  if (match === undefined) return NOT_FOUND
+  if (match === undefined) {
+    // The path may be served under other methods — that is a 405 with an
+    // `allow` header, not a 404. Cold path, so scanning the method list is
+    // cheaper than maintaining a per-path index for every request.
+    const allow: string[] = []
+    for (const method of internals.table.methods) {
+      if (method !== request.method && matchRoute(internals.table, method, request.path) !== undefined) {
+        allow.push(method)
+      }
+    }
+    if (allow.length > 0) {
+      allow.sort()
+      return (
+        errors?.methodNotAllowed?.(allow, request) ?? {
+          status: 405,
+          headers: { allow: allow.join(', ') },
+          body: { error: 'method_not_allowed' },
+        }
+      )
+    }
+    return errors?.notFound?.(request) ?? NOT_FOUND
+  }
   const route = match.route
 
   let params: unknown
   if (route.params !== undefined) {
     params = buildParamsObject(match.params, route.params.coercions)
-    if (!route.params.guard(params)) return validationFailure('params', route.params.collect, params)
+    if (!route.params.guard(params)) return validationFailure('params', route.params.collect, params, errors, request)
   }
 
   let query: unknown
   if (route.query !== undefined) {
-    query = buildQueryObject(request.searchParams(), route.query.coercions)
-    if (!route.query.guard(query)) return validationFailure('query', route.query.collect, query)
+    // The raw query string (when the adapter has it) skips URLSearchParams
+    // construction for plain queries — the encoded ones fall back inside.
+    query =
+      request.queryString !== undefined
+        ? buildQueryObjectFromString(request.queryString(), route.query.coercions)
+        : buildQueryObject(request.searchParams(), route.query.coercions)
+    if (!route.query.guard(query)) return validationFailure('query', route.query.collect, query, errors, request)
+  }
+
+  let headers: unknown
+  if (route.headers !== undefined) {
+    headers = buildHeadersObject(request.header, route.headers)
+    if (!route.headers.guard(headers)) {
+      return validationFailure('headers', route.headers.collect, headers, errors, request)
+    }
+  }
+
+  let cookies: unknown
+  if (route.cookies !== undefined) {
+    cookies = buildCookiesObject(request.header('cookie'), route.cookies.names, route.cookies.coercions)
+    if (!route.cookies.guard(cookies)) {
+      return validationFailure('cookies', route.cookies.collect, cookies, errors, request)
+    }
   }
 
   let body: unknown
   if (route.body !== undefined) {
     try {
       body = await request.readBody()
-    } catch {
-      return INVALID_JSON
+    } catch (error) {
+      if (isPayloadTooLargeError(error)) return errors?.payloadTooLarge?.(request) ?? PAYLOAD_TOO_LARGE
+      return errors?.invalidJson?.(request) ?? INVALID_JSON
     }
-    if (!route.body.guard(body)) return validationFailure('body', route.body.collect, body)
+    if (!route.body.guard(body)) return validationFailure('body', route.body.collect, body, errors, request)
   }
 
   let reply: RouteReplyValue
@@ -89,10 +144,16 @@ export const handleRequest = async (
     // The erased handler type exists for contract assignability (see
     // AnyRouteContract); the values really do match the contract's schemas at
     // this point, which is what the cast asserts.
-    const context = { params, query, body, context: appContext, request } as ErasedRequestContext
+    const context = { params, query, body, headers, cookies, context: appContext, request } as ErasedRequestContext
     reply = await route.contract.handler(context)
   } catch (error) {
-    return internals.onError !== undefined ? internals.onError(error, request) : INTERNAL_ERROR
+    // A handler that read the body itself (webhook verification, uploads)
+    // hits the size limit as a thrown error — that is the transport's 413,
+    // not a handler crash.
+    if (isPayloadTooLargeError(error)) return errors?.payloadTooLarge?.(request) ?? PAYLOAD_TOO_LARGE
+    return internals.onError !== undefined
+      ? internals.onError(error, request, { route: route.contract, env, executionContext })
+      : INTERNAL_ERROR
   }
 
   if (route.responses !== undefined) {
@@ -116,6 +177,14 @@ export const handleRequest = async (
     }
   }
 
+  // A raw status carries its contract-declared content type out to the
+  // adapter, which sends the body untouched instead of JSON-serializing it.
+  const rawContentType = route.rawContentTypes?.get(reply.status)
+  if (rawContentType !== undefined) {
+    return reply.headers === undefined
+      ? { status: reply.status, body: reply.body, contentType: rawContentType }
+      : { status: reply.status, headers: reply.headers, body: reply.body, contentType: rawContentType }
+  }
   return reply
 }
 
@@ -128,12 +197,18 @@ const validationFailure = (
   source: ValidationFailureBody['source'],
   collect: Validator,
   value: unknown,
+  errors: ErrorFormatters | undefined,
+  request: ApiRequest,
 ): ApiResponse => {
   const result = collect(value)
+  const collected = result === true ? [] : result.errors
+  if (errors?.validationFailed !== undefined) {
+    return errors.validationFailed({ source, errors: collected }, request)
+  }
   const body: ValidationFailureBody = {
     error: 'validation_failed',
     source,
-    errors: result === true ? [] : result.errors,
+    errors: collected,
   }
   return { status: 400, body }
 }

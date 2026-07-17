@@ -25,6 +25,14 @@ Express, Fastify, or raw `node:http` (Node).
   `new Function`, so it runs under strict CSP, Cloudflare Workers, and
   React Native. Swappable for generated validators when you want maximum
   steady-state throughput (see below).
+- **The whole HTTP surface.** Streaming/raw replies with client-disconnect
+  signals, raw body access for webhook signatures, body size limits,
+  request-header schemas, hook chains for CORS/rate limits/security headers,
+  and pluggable error envelopes — each shipped in both the runtime and
+  compiled engines.
+- **One dependency, many integrations.** Drizzle, Better Auth, Sentry, and a
+  generated typed client (Hey API) connect through seams — `context`,
+  `mounts`, `onError`, OpenAPI — not bundled SDKs. Recipes below.
 
 ## Usage
 
@@ -93,8 +101,10 @@ Writing an adapter for anything else is ~15 lines: construct one
 | `info` | placeholder | OpenAPI `info` block (`title`, `version`, `description`). |
 | `openApiPath` | `/openapi.json` | Where the document is served. `false` disables serving. |
 | `compile` | runtime-validators | Swap the validation engine — see below. |
+| `context` | — | Per-request app context factory (database handles, sessions). See [App context](#app-context-drizzle-sessions-anything-per-request). |
 | `validateResponses` | `false` | Validate reply bodies against the declared response schemas; mismatches become a 500. A development/test net. |
-| `onError` | bare 500 | Map a thrown handler error to a response. The default never leaks the error message. |
+| `onError` | bare 500 | Map a thrown handler error to a response. Receives `(error, request, { route, env, executionContext })` — everything error reporting needs. The default never leaks the error message. |
+| `errors` | built-in bodies | Reshape the pipeline's own cold-path responses (`notFound`, `invalidJson`, `payloadTooLarge`, `validationFailed`, `methodNotAllowed`) to match an existing wire format. |
 
 ### Validation semantics
 
@@ -107,9 +117,103 @@ Writing an adapter for anything else is ~15 lines: construct one
   `additionalProperties` rules still apply.
 - Declaring `request.body` makes a JSON body required; a body that fails to
   parse is a `400 { error: 'invalid_json' }`.
+- `request.headers` takes an object schema whose property names are header
+  names (lookup is case-insensitive; write them lowercase). Only declared
+  headers are read, values coerce like query parameters, and each property
+  becomes an `in: 'header'` OpenAPI parameter — so `x-api-key`-style auth
+  requirements document themselves.
+- `request.cookies` works the same way for the `cookie` header: only declared
+  names are read (tracking cookies never reach validation), values are
+  unquoted and percent-decoded per the usual middleware conventions, and
+  each property becomes an `in: 'cookie'` OpenAPI parameter.
+- A known path requested with the wrong method answers
+  `405 { error: 'method_not_allowed' }` with a sorted `allow` header;
+  unknown paths stay 404.
 - Validation failures answer `400` with `{ error: 'validation_failed', source,
   errors }` where `errors` carries the same `{ message, path }` shape as
-  `@amritk/runtime-validators`.
+  `@amritk/runtime-validators` and `source` is `params`, `query`, `headers`,
+  or `body`. The `errors` option reshapes this (and the other built-in
+  bodies) when deployed clients already parse a different envelope.
+
+### Streaming and raw responses
+
+Declare a status with `contentType` and its body becomes a raw payload — a
+`ReadableStream<Uint8Array>`, `Uint8Array`, or string that every adapter
+sends untouched. This is the AI-token-stream / SSE / CSV-download shape; the
+request side stays validated and documented, only the reply is raw:
+
+```ts
+const chat = defineRoute({
+  method: 'post',
+  path: '/chat',
+  request: { body: chatBodySchema },
+  responses: { 200: { contentType: 'text/plain; charset=utf-8' } },
+  handler: ({ body, request }) => ({
+    status: 200,
+    // request.signal aborts when the client disconnects — stop generating.
+    body: streamTokens(body.messages, request.signal),
+  }),
+})
+```
+
+### Raw request bodies and size limits
+
+The pipeline only consumes the body stream when a `body` schema is declared.
+A route that needs the exact bytes — webhook signature verification, uploads
+— declares no body schema and reads itself via `request.readText()` /
+`readBytes()`:
+
+```ts
+const stripeWebhook = defineRoute({
+  method: 'post',
+  path: '/billing/webhook',
+  request: {
+    headers: { type: 'object', properties: { 'stripe-signature': { type: 'string' } }, required: ['stripe-signature'] },
+  },
+  responses: { 200: {}, 400: {} },
+  handler: async ({ headers, request }) => {
+    const payload = await request.readText() // exact signed bytes, never re-serialized
+    const event = await stripe.webhooks.constructEventAsync(payload, headers['stripe-signature'], secret)
+    // ...
+    return { status: 200 }
+  },
+})
+```
+
+`toFetchHandler(api, { maxBodyBytes: 1_000_000 })` (also on `toNodeHandler`
+and `compileToModule`) rejects larger bodies with a 413 — checked against
+`content-length` up front, enforced on the running byte count as the body
+streams in, for pipeline and handler-initiated reads alike.
+
+### Hooks: CORS, rate limits, security headers
+
+`toFetchHandler` takes two hook chains over the raw `Request`/`Response` —
+deliberately not a middleware onion. `onRequest` gates run in order before
+mounts and routing, and the first returned `Response` short-circuits;
+`onResponse` decorators run on **every** outgoing response, including 404s,
+gate replies, and mounted routers, which is what security headers and CORS
+actually require:
+
+```ts
+import { createCors, toFetchHandler } from '@amritk/api'
+
+const cors = createCors({ origin: (o) => o, credentials: true, exposeHeaders: ['x-demo-used'] })
+
+const handler = toFetchHandler(api, {
+  onRequest: [
+    cors.onRequest, // answers preflights
+    async (request, env) =>
+      (await allowed(request, env)) ? undefined : new Response('{"error":"rate_limited"}', { status: 429 }),
+  ],
+  onResponse: [
+    cors.onResponse,
+    (response) => {
+      response.headers.set('x-frame-options', 'DENY')
+    },
+  ],
+})
+// Compiled: compileToModule({ ..., onRequestExports: ['gate'], onResponseExports: ['stamp'] })
+```
 
 ### Plugging in generated validators
 
@@ -145,6 +249,11 @@ The intended split: **runtime engine in development** (instant, no build step,
 `validateResponses` available), **compiled module in production**. The two
 engines are held observationally identical by a differential test that runs
 the same request corpus through both, so switching is just an import swap.
+
+Everything `createApi`/`toFetchHandler` accept has a compiled equivalent that
+references *exports of your routes module*, so both engines execute the same
+values: `contextExport`, `mounts`, `onRequestExports`, `onResponseExports`,
+`errorsExport`, `onErrorExport`, and `maxBodyBytes`.
 
 ```ts
 // scripts/compile-api.ts — the build step
@@ -258,15 +367,81 @@ export const getProfile = defineAppRoute({
 If only some routes need the session, make the context lazy (`session: () =>
 memoizedLookup()`) so public routes never pay for the cookie check.
 
+### Error reporting: Sentry
+
+`onError` receives the matched route contract and the platform values, which
+is everything error reporting needs — the route *pattern* (`/users/{id}`,
+not `/users/8231`) is what groups issues cleanly, and Workers-side Sentry
+clients read their DSN from `env` and flush via `executionContext`.
+`createSentry` packages this: it takes a capture **function**, not an SDK
+client, so nothing gets bundled and any client fits (`@sentry/node`,
+`@sentry/cloudflare`, Toucan):
+
+```ts
+import { createApi, createSentry } from '@amritk/api'
+import { Toucan } from 'toucan-js'
+
+const sentry = createSentry({
+  capture: (error, { route, method, env, executionContext }) => {
+    const client = new Toucan({ dsn: (env as Env).SENTRY_DSN, context: executionContext as ExecutionContext })
+    client.setTag('route', `${method} ${route}`)
+    client.captureException(error)
+  },
+})
+
+const api = createApi({ routes, onError: sentry.onError })
+// Compiled: compileToModule({ ..., onErrorExport: 'onError' })
+```
+
+A throwing capture is swallowed (the client still gets its 500), and
+validation failures are not captured — those are the caller's bug.
+
+### Typed client: Hey API
+
+The generated OpenAPI document is verified [Hey API](https://heyapi.dev)
+input, which turns it into a typed fetch SDK — a framework-agnostic
+replacement for RPC clients like Hono's `hc`:
+
+```bash
+bunx @hey-api/openapi-ts -i http://localhost:3000/openapi.json -o src/client
+```
+
+```ts
+import { getUser } from './client/sdk.gen'
+const { data } = await getUser({ path: { id: 7 } }) // data: { id: number; name: string }
+```
+
+Client and server both derive from the same schemas, so they cannot drift —
+this package's integration test generates a client from `toOpenApi` output
+and asserts the contract types (typed path params, required headers, error
+variants) come through.
+
 ### Schemas from Zod, TypeBox, Valibot, Effect
 
 Contracts take plain JSON Schema. Schemas authored in other libraries convert
 via [`@amritk/adapters`](../adapters) before being placed in a contract.
 
+## Integration philosophy
+
+Deliberately **recipes over plugins, seams over SDKs** — the core's one
+dependency is `@amritk/runtime-validators`, and third-party SDK versions stay
+yours:
+
+| Concern | Seam |
+|:--|:--|
+| Drizzle / any ORM | `context` factory builds the handle per request from `env` |
+| Better Auth / any self-contained router | `mounts` passthrough + session lookup in `context` |
+| Sentry / error reporting | `onError` (`createSentry` packages it) |
+| Rate limits, feature flags, CSRF, origin checks | `onRequest` gates |
+| Security headers, CORS | `onResponse` decorators / `createCors` |
+| Typed clients | generated from the OpenAPI document (Hey API) |
+
 ## Scope notes
 
-- JSON bodies only (`application/json`) for now — multipart, streaming, and
-  content negotiation are out of scope for this first cut.
+- Request bodies are JSON (`application/json`) as far as *validation* goes;
+  raw bytes are always available via `readText`/`readBytes` (webhooks,
+  uploads), and raw/streaming **responses** are first-class via `contentType`.
+  Multipart parsing is not built in.
 - Route paths use OpenAPI syntax (`/users/{id}`); a parameter owns its whole
   segment.
 - Static paths always win over parameterized ones; parameterized routes match

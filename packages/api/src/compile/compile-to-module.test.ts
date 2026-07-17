@@ -19,11 +19,19 @@ const routes: Record<string, AnyRouteContract> = {
   echoHeader: corpus.echoHeader,
   whoami: corpus.whoami,
   submitMetric: corpus.submitMetric,
+  tenantInfo: corpus.tenantInfo,
+  streamChat: corpus.streamChat,
+  csvExport: corpus.csvExport,
+  rawEcho: corpus.rawEcho,
+  dashboard: corpus.dashboard,
 }
 const info = { title: 'Differential', version: '1.0.0' }
 
 /** Workers-style bindings passed to both engines on every request. */
 const ENV = { tenant: 'acme' }
+
+/** Small enough to trip on purpose, large enough for every valid corpus body. */
+const MAX_BODY_BYTES = 256
 
 const emit = (): string =>
   compileToModule({
@@ -34,6 +42,11 @@ const emit = (): string =>
     info,
     contextExport: 'createAppContext',
     mounts: { '/mounted': 'mountEcho' },
+    onRequestExports: ['gateTeapot'],
+    onResponseExports: ['stampHeader'],
+    errorsExport: 'corpusErrors',
+    onErrorExport: 'corpusOnError',
+    maxBodyBytes: MAX_BODY_BYTES,
   })
 
 /**
@@ -74,8 +87,19 @@ describe('compile-to-module', () => {
         fetch: (request: Request, env?: unknown) => Response | Promise<Response>
       }
       const runtime = toFetchHandler(
-        createApi({ routes: Object.values(routes), info, context: corpus.createAppContext }),
-        { mounts: { '/mounted': corpus.mountEcho } },
+        createApi({
+          routes: Object.values(routes),
+          info,
+          context: corpus.createAppContext,
+          errors: corpus.corpusErrors,
+          onError: corpus.corpusOnError,
+        }),
+        {
+          mounts: { '/mounted': corpus.mountEcho },
+          onRequest: [corpus.gateTeapot],
+          onResponse: [corpus.stampHeader],
+          maxBodyBytes: MAX_BODY_BYTES,
+        },
       )
 
       const cases: ReadonlyArray<() => Request> = [
@@ -91,6 +115,10 @@ describe('compile-to-module', () => {
         () => new Request('http://localhost/users?limit=5&tags=a&tags=b'),
         () => new Request('http://localhost/users?limit=0'),
         () => new Request('http://localhost/users'),
+        // Encoded queries exercise the URLSearchParams fallback of the fast
+        // string parser in both engines.
+        () => new Request('http://localhost/users?tags=a%20b&tags=c+d&limit=7'),
+        () => new Request('http://localhost/users?tags=%E2%9C%93'),
         () => post({ name: 'Ada', age: 30 }),
         () => post({ name: 'Ada' }),
         () => post({ name: '' }),
@@ -130,6 +158,35 @@ describe('compile-to-module', () => {
         () => metric({ kind: 'error', value: 1, meta: {} }), // missing nested required
         () => metric({ kind: 'error', value: 1, rogue: true }), // closed root object
         () => metric({ kind: 'error', value: 1, note: 7 }), // nullable does not admit non-null junk
+        // Headers slot: valid, coerced integer, missing required, too short.
+        () => new Request('http://localhost/tenant', { headers: { 'x-api-key': 'secret', 'x-retry-count': '2' } }),
+        () => new Request('http://localhost/tenant', { headers: { 'x-api-key': 'secret' } }),
+        () => new Request('http://localhost/tenant'),
+        () => new Request('http://localhost/tenant', { headers: { 'x-api-key': 'abc' } }),
+        // Raw statuses: a streamed body and a CSV string, byte for byte.
+        () => new Request('http://localhost/chat', { method: 'POST' }),
+        () => new Request('http://localhost/export'),
+        // Raw body access: whitespace must survive exactly (HMAC shape).
+        () => new Request('http://localhost/raw-echo', { method: 'POST', body: '{ "spacing":   "matters" }' }),
+        // Body size cap: the declared body path and the handler-read path.
+        () => post({ name: 'x'.repeat(MAX_BODY_BYTES) }),
+        () => new Request('http://localhost/raw-echo', { method: 'POST', body: 'y'.repeat(MAX_BODY_BYTES + 1) }),
+        // The onRequest gate short-circuits before mounts and routing.
+        () => new Request('http://localhost/health', { headers: { 'x-block': '1' } }),
+        () => new Request('http://localhost/mounted/deep', { headers: { 'x-block': '1' } }),
+        // Cookies: valid with tracking noise, coercion failure, missing required,
+        // quoted + percent-encoded values.
+        () => new Request('http://localhost/dashboard', { headers: { cookie: '_ga=x; session=abc123; visits=2' } }),
+        () => new Request('http://localhost/dashboard', { headers: { cookie: 'session=abc123; visits=lots' } }),
+        () => new Request('http://localhost/dashboard', { headers: { cookie: 'visits=2' } }),
+        () => new Request('http://localhost/dashboard'),
+        () => new Request('http://localhost/dashboard', { headers: { cookie: 'session="abc%20123"' } }),
+        // 405: wrong method on static and dynamic paths (multi-method allow
+        // lists come from /users, which serves GET and POST).
+        () => new Request('http://localhost/users', { method: 'PUT' }),
+        () => new Request('http://localhost/users/7', { method: 'PUT' }),
+        () => new Request('http://localhost/health', { method: 'DELETE' }),
+        () => new Request('http://localhost/chat'),
       ]
 
       for (const makeRequest of cases) {
@@ -139,11 +196,12 @@ describe('compile-to-module', () => {
 
         expect(fromCompiled.status, label).toBe(fromRuntime.status)
         expect(contentType(fromCompiled), label).toBe(contentType(fromRuntime))
-        for (const header of ['x-deleted', 'x-served-by']) {
+        for (const header of ['x-deleted', 'x-served-by', 'x-stamped', 'x-frame-protocol', 'allow']) {
           expect(fromCompiled.headers.get(header), label).toBe(fromRuntime.headers.get(header))
         }
         const [runtimeText, compiledText] = [await fromRuntime.text(), await fromCompiled.text()]
-        if (runtimeText === '' || compiledText === '') {
+        if (runtimeText === '' || compiledText === '' || contentType(fromRuntime) !== 'application/json') {
+          // Raw statuses (streams, CSV) must match byte for byte.
           expect(compiledText, label).toBe(runtimeText)
         } else {
           // Key order may differ (serializers emit required keys first); JSON
