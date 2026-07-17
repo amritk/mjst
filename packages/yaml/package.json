@@ -1,6 +1,6 @@
 {
   "name": "@amritk/yaml",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "A fast, featherweight, zero-dependency YAML parser for OpenAPI tooling — with exact source positions (line:column) on every node.",
   "module": "./dist/index.js",
   "type": "module",
