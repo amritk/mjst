@@ -374,11 +374,51 @@ describe('create-api', () => {
 
     const response = await api.handle(request('PATCH', '/users/7'))
     expect(response.status).toBe(405)
-    expect(response.headers).toEqual({ allow: 'DELETE, GET' })
+    // HEAD is advertised because the GET route serves it implicitly.
+    expect(response.headers).toEqual({ allow: 'DELETE, GET, HEAD' })
     expect(response.body).toEqual({ error: 'method_not_allowed' })
 
     // A path no method serves stays a 404.
     expect((await api.handle(request('PATCH', '/nowhere'))).status).toBe(404)
+  })
+
+  it('runs the GET pipeline for HEAD requests (adapters discard the body)', async () => {
+    const api = createApi({ routes: [getUser] })
+
+    // The pipeline answers HEAD with GET's full reply — status, headers, and
+    // body; discarding the body is the adapter's job.
+    const found = await api.handle(request('HEAD', '/users/1'))
+    expect(found.status).toBe(200)
+    expect(found.body).toEqual({ id: 1, name: 'Ada' })
+
+    const invalid = await api.handle(request('HEAD', '/users/abc'))
+    expect(invalid.status).toBe(400)
+
+    const openapi = await api.handle(request('HEAD', '/openapi.json'))
+    expect(openapi.status).toBe(200)
+
+    const missing = await api.handle(request('HEAD', '/missing'))
+    expect(missing.status).toBe(404)
+  })
+
+  it('prefers an explicitly declared HEAD route over the GET fallback', async () => {
+    const explicitHead = defineRoute({
+      method: 'head',
+      path: '/users/{id}',
+      responses: { 204: {} },
+      handler: () => ({ status: 204, headers: { 'x-explicit': 'head' } }),
+    })
+    const api = createApi({ routes: [getUser, explicitHead] })
+    const response = await api.handle(request('HEAD', '/users/1'))
+    expect(response.status).toBe(204)
+    expect(response.headers).toEqual({ 'x-explicit': 'head' })
+  })
+
+  it('claims HEAD in matches() wherever GET matches', () => {
+    const api = createApi({ routes: [getUser] })
+    expect(api.matches('HEAD', '/users/1')).toBe(true)
+    expect(api.matches('head', '/openapi.json')).toBe(true)
+    expect(api.matches('HEAD', '/missing')).toBe(false)
   })
 
   it('lets the methodNotAllowed formatter reshape the 405', async () => {
@@ -390,7 +430,7 @@ describe('create-api', () => {
     })
     const response = await api.handle(request('POST', '/users/7'))
     expect(response.status).toBe(405)
-    expect(response.body).toEqual({ error: 'try one of: GET' })
+    expect(response.body).toEqual({ error: 'try one of: GET/HEAD' })
   })
 
   it('validates declared cookies and hands them to the handler', async () => {

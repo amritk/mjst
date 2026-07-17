@@ -81,8 +81,10 @@ export const createApi = (options: ApiOptions): Api => {
     handle: (request, env, executionContext) => handleRequest(internals, request, env, executionContext),
     matches: (method, path) => {
       const upper = method.toUpperCase()
-      if (openApiPath !== undefined && upper === 'GET' && path === openApiPath) return true
-      return matchRoute(internals.table, upper, path) !== undefined
+      if (openApiPath !== undefined && (upper === 'GET' || upper === 'HEAD') && path === openApiPath) return true
+      if (matchRoute(internals.table, upper, path) !== undefined) return true
+      // HEAD falls back to GET routes, mirroring the pipeline (RFC 9110).
+      return upper === 'HEAD' && matchRoute(internals.table, 'GET', path) !== undefined
     },
     openApi,
     routes: options.routes,

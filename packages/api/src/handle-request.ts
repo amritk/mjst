@@ -58,12 +58,22 @@ export const handleRequest = async (
   env?: unknown,
   executionContext?: unknown,
 ): Promise<ApiResponse> => {
-  if (internals.openApiPath !== undefined && request.method === 'GET' && request.path === internals.openApiPath) {
+  if (
+    internals.openApiPath !== undefined &&
+    (request.method === 'GET' || request.method === 'HEAD') &&
+    request.path === internals.openApiPath
+  ) {
     return { status: 200, body: internals.openApi() }
   }
 
   const errors = internals.errors
-  const match = matchRoute(internals.table, request.method, request.path)
+  // Per RFC 9110 HEAD is GET without the body, so a HEAD request with no
+  // explicitly declared HEAD route runs the GET pipeline — handler included —
+  // and the adapters discard the body from whatever comes back.
+  let match = matchRoute(internals.table, request.method, request.path)
+  if (match === undefined && request.method === 'HEAD') {
+    match = matchRoute(internals.table, 'GET', request.path)
+  }
   if (match === undefined) {
     // The path may be served under other methods — that is a 405 with an
     // `allow` header, not a 404. Cold path, so scanning the method list is
@@ -75,6 +85,9 @@ export const handleRequest = async (
       }
     }
     if (allow.length > 0) {
+      // GET routes implicitly serve HEAD (see the fallback above), so the
+      // allow list advertises it whenever GET appears.
+      if (allow.includes('GET') && !allow.includes('HEAD')) allow.push('HEAD')
       allow.sort()
       return (
         errors?.methodNotAllowed?.(allow, request) ?? {

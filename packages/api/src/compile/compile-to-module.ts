@@ -199,29 +199,30 @@ export const compileToModule = (options: CompileModuleOptions): string => {
 
   // The framework-neutral request the app context factory, handlers, and
   // error formatters see. Body readers are built once here so the byte-limit
-  // behavior matches toFetchHandler exactly.
-  if (maxBodyBytes !== undefined) {
-    lines.push(
-      'const DECODER = new TextDecoder()',
-      `const readTextCapped = (request) => readBytesCapped(request.body, request.headers.get('content-length'), ${maxBodyBytes}).then((bytes) => DECODER.decode(bytes))`,
-    )
-  }
-  const readBodyExpression =
-    maxBodyBytes === undefined ? 'request.json()' : 'readTextCapped(request).then((text) => JSON.parse(text))'
-  lines.push(
-    'const makeApiRequest = (request, url, rawPath, queryIndex) => ({',
-    '  method: request.method,',
-    '  path: rawPath,',
-    "  searchParams: () => new URLSearchParams(queryIndex === -1 ? '' : url.slice(queryIndex + 1)),",
-    "  queryString: () => (queryIndex === -1 ? '' : url.slice(queryIndex + 1)),",
-    '  header: (name) => request.headers.get(name) ?? undefined,',
-    `  readBody: () => ${readBodyExpression},`,
-    maxBodyBytes === undefined ? '  readText: () => request.text(),' : '  readText: () => readTextCapped(request),',
+  // and read-caching behavior match toFetchHandler exactly: all three readers
+  // share one buffered read, so the body can be read repeatedly and after the
+  // pipeline consumed a declared body schema.
+  const readAllBytesExpression =
     maxBodyBytes === undefined
-      ? '  readBytes: () => request.arrayBuffer().then((buffer) => new Uint8Array(buffer)),'
-      : `  readBytes: () => readBytesCapped(request.body, request.headers.get('content-length'), ${maxBodyBytes}),`,
-    '  signal: request.signal,',
-    '})',
+      ? 'request.arrayBuffer().then((buffer) => new Uint8Array(buffer))'
+      : `readBytesCapped(request.body, request.headers.get('content-length'), ${maxBodyBytes})`
+  lines.push(
+    'const DECODER = new TextDecoder()',
+    'const makeApiRequest = (request, url, rawPath, queryIndex) => {',
+    '  let bytes',
+    `  const readAllBytes = () => (bytes ??= ${readAllBytesExpression})`,
+    '  return {',
+    '    method: request.method,',
+    '    path: rawPath,',
+    "    searchParams: () => new URLSearchParams(queryIndex === -1 ? '' : url.slice(queryIndex + 1)),",
+    "    queryString: () => (queryIndex === -1 ? '' : url.slice(queryIndex + 1)),",
+    '    header: (name) => request.headers.get(name) ?? undefined,',
+    '    readBody: () => readAllBytes().then((buffer) => JSON.parse(DECODER.decode(buffer))),',
+    '    readText: () => readAllBytes().then((buffer) => DECODER.decode(buffer)),',
+    '    readBytes: readAllBytes,',
+    '    signal: request.signal,',
+    '  }',
+    '}',
   )
 
   if (used.codePoints) {
@@ -269,17 +270,23 @@ const emitErrorHelpers = (
     lines.push(
       // Mirrors the fetch adapter's ApiResponse → Response translation so a
       // formatter's reply (headers, raw contentType and all) serializes the
-      // same way in both engines.
+      // same way in both engines — including the boundary that turns a
+      // throwing translation (circular body, invalid header name) into the
+      // pipeline's own 500.
       'const toResponse = (r) => {',
-      '  if (r.contentType !== undefined) {',
-      "    return new Response(r.body ?? null, { status: r.status, headers: { 'content-type': r.contentType, ...r.headers } })",
+      '  try {',
+      '    if (r.contentType !== undefined) {',
+      "      return new Response(r.body ?? null, { status: r.status, headers: { 'content-type': r.contentType, ...r.headers } })",
+      '    }',
+      '    if (r.headers === undefined) {',
+      '      return r.body === undefined ? new Response(null, { status: r.status }) : new Response(JSON.stringify(r.body), initFor(r.status))',
+      '    }',
+      '    return r.body === undefined',
+      '      ? new Response(null, { status: r.status, headers: { ...r.headers } })',
+      '      : new Response(JSON.stringify(r.body), { status: r.status, headers: { ...JSON_HEADERS, ...r.headers } })',
+      '  } catch {',
+      '    return internalError()',
       '  }',
-      '  if (r.headers === undefined) {',
-      '    return r.body === undefined ? new Response(null, { status: r.status }) : new Response(JSON.stringify(r.body), initFor(r.status))',
-      '  }',
-      '  return r.body === undefined',
-      '    ? new Response(null, { status: r.status, headers: { ...r.headers } })',
-      '    : new Response(JSON.stringify(r.body), { status: r.status, headers: { ...JSON_HEADERS, ...r.headers } })',
       '}',
     )
   }
@@ -449,20 +456,26 @@ const emitRouteDeclarations = (
   const bodyExpression = serialized
     .map((status) => `reply.status === ${status} ? serialize_${route.name}_${status}(reply.body) : `)
     .join('')
-  lines.push(`const respond_${route.name} = (reply) => {`)
+  // The try/catch mirrors the fetch adapter's translation boundary: a reply
+  // that cannot serialize (circular body, invalid header name) becomes the
+  // pipeline's 500 instead of an escaped rejection.
+  lines.push(`const respond_${route.name} = (reply) => {`, '  try {')
   for (const [status, contentType] of rawStatuses) {
     lines.push(
-      `  if (reply.status === ${status}) return new Response(reply.body ?? null, { status: ${status}, headers: { 'content-type': ${JSON.stringify(contentType)}, ...reply.headers } })`,
+      `    if (reply.status === ${status}) return new Response(reply.body ?? null, { status: ${status}, headers: { 'content-type': ${JSON.stringify(contentType)}, ...reply.headers } })`,
     )
   }
   lines.push(
-    `  const body = ${bodyExpression}reply.body === undefined ? null : JSON.stringify(reply.body)`,
-    '  if (reply.headers === undefined) {',
-    '    return body === null ? new Response(null, { status: reply.status }) : new Response(body, initFor(reply.status))',
+    `    const body = ${bodyExpression}reply.body === undefined ? null : JSON.stringify(reply.body)`,
+    '    if (reply.headers === undefined) {',
+    '      return body === null ? new Response(null, { status: reply.status }) : new Response(body, initFor(reply.status))',
+    '    }',
+    '    return body === null',
+    '      ? new Response(null, { status: reply.status, headers: { ...reply.headers } })',
+    '      : new Response(body, { status: reply.status, headers: { ...JSON_HEADERS, ...reply.headers } })',
+    '  } catch {',
+    '    return internalError()',
     '  }',
-    '  return body === null',
-    '    ? new Response(null, { status: reply.status, headers: { ...reply.headers } })',
-    '    : new Response(body, { status: reply.status, headers: { ...JSON_HEADERS, ...reply.headers } })',
     '}',
   )
 
@@ -666,7 +679,7 @@ const emitDispatch = (
   }
   if (openApiPath !== undefined) {
     lines.push(
-      `  if (method === 'GET' && rawPath === ${JSON.stringify(openApiPath)}) return new Response(OPENAPI_JSON, initFor(200))`,
+      `  if ((method === 'GET' || method === 'HEAD') && rawPath === ${JSON.stringify(openApiPath)}) return method === 'HEAD' ? new Response(null, initFor(200)) : new Response(OPENAPI_JSON, initFor(200))`,
     )
   }
   lines.push("  const path = rawPath.length > 1 && rawPath.endsWith('/') ? rawPath.slice(0, -1) : rawPath")
@@ -704,6 +717,47 @@ const emitDispatch = (
     lines.push('  }')
   }
 
+  // HEAD falls back to the GET routes with the reply body stripped (RFC
+  // 9110), exactly like the runtime pipeline. Explicitly declared HEAD routes
+  // won above: their method block already returned on a match.
+  lines.unshift(
+    'const stripHeadBody = (response) => {',
+    '  if (response.body !== null) void response.body.cancel().catch(() => undefined)',
+    '  return new Response(null, { status: response.status, headers: response.headers })',
+    '}',
+  )
+  const gets = routes.filter((route) => route.method === 'GET')
+  if (gets.length > 0) {
+    lines.unshift(
+      "const headOf = (reply) => (typeof reply?.then === 'function' ? reply.then(stripHeadBody) : stripHeadBody(reply))",
+    )
+    lines.push("  if (method === 'HEAD') {")
+    for (const route of gets.filter((entry) => entry.isStatic)) {
+      lines.push(
+        `    if (path === ${JSON.stringify(route.staticPath)}) return headOf(route_${route.name}(request, url, rawPath, queryIndex${extraArguments}))`,
+      )
+    }
+    const dynamicGets = gets.filter((entry) => !entry.isStatic)
+    if (dynamicGets.length > 0) {
+      lines.push("    const segments = path === '/' ? [] : path.slice(1).split('/')")
+      for (const route of dynamicGets) {
+        const conditions = [`segments.length === ${route.segments.length}`]
+        const captures: string[] = []
+        route.segments.forEach((segment, index) => {
+          if (typeof segment === 'string') {
+            conditions.push(`segments[${index}] === ${JSON.stringify(segment)}`)
+          } else {
+            captures.push(`decodeSegment(segments[${index}])`)
+          }
+        })
+        lines.push(
+          `    if (${conditions.join(' && ')}) return headOf(route_${route.name}(request, url, rawPath, queryIndex${extraArguments}, ${captures.join(', ')}))`,
+        )
+      }
+    }
+    lines.push('  }')
+  }
+
   // The 405/404 tail. A request only gets here when its own method has no
   // matching route, so any method collected below is a genuine alternative.
   const staticAllow = new Map<string, string[]>()
@@ -733,8 +787,14 @@ const emitDispatch = (
     }
   }
   lines.push(
-    `  if (allow.length > 0) return methodNotAllowed(allow.sort(), ${ERROR_ARGS})`,
-    `  return notFound(${ERROR_ARGS})`,
+    // GET routes implicitly serve HEAD (see the fallback block), so the allow
+    // list advertises it whenever GET appears — same as the runtime pipeline.
+    // HEAD 405s/404s are stripped like every HEAD reply the fetch adapter
+    // sends: same status and headers, no body.
+    "  if (allow.includes('GET') && !allow.includes('HEAD')) allow.push('HEAD')",
+    `  if (allow.length > 0) { const denied = methodNotAllowed(allow.sort(), ${ERROR_ARGS}); return method === 'HEAD' ? stripHeadBody(denied) : denied }`,
+    `  const missing = notFound(${ERROR_ARGS})`,
+    "  return method === 'HEAD' ? stripHeadBody(missing) : missing",
     '}',
   )
 

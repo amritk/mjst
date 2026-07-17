@@ -147,4 +147,102 @@ describe('to-node-handler', () => {
       expect(await response.json()).toEqual({ error: 'payload_too_large' })
     })
   })
+
+  it('sets content-length on JSON replies instead of chunking', async () => {
+    const handler = toNodeHandler(createApi({ routes: [getUser] }))
+    await withServer(createServer(handler), async (origin) => {
+      const response = await fetch(origin + '/users/5')
+      const payload = await response.text()
+      expect(response.headers.get('content-length')).toBe(String(Buffer.byteLength(payload)))
+      expect(response.headers.get('transfer-encoding')).toBeNull()
+    })
+  })
+
+  it('answers HEAD via the GET route with headers only', async () => {
+    const handler = toNodeHandler(createApi({ routes: [getUser] }))
+    await withServer(createServer(handler), async (origin) => {
+      const response = await fetch(origin + '/users/5', { method: 'HEAD' })
+      expect(response.status).toBe(200)
+      expect(response.headers.get('content-type')).toBe('application/json')
+      expect(await response.text()).toBe('')
+
+      const invalid = await fetch(origin + '/users/not-a-number', { method: 'HEAD' })
+      expect(invalid.status).toBe(400)
+      expect(await invalid.text()).toBe('')
+    })
+  })
+
+  it('falls through to next() for HEAD only when GET has no route either', async () => {
+    const handler = toNodeHandler(createApi({ routes: [getUser] }))
+    const server = createServer((request, response) => {
+      void handler(request, response, () => {
+        response.writeHead(418)
+        response.end()
+      })
+    })
+    await withServer(server, async (origin) => {
+      // matches() must claim HEAD wherever GET matches, or Express-style
+      // middleware would skip the adapter for HEAD health checks.
+      expect((await fetch(origin + '/users/1', { method: 'HEAD' })).status).toBe(200)
+      expect((await fetch(origin + '/missing', { method: 'HEAD' })).status).toBe(418)
+    })
+  })
+
+  it('lets a handler read the body after the pipeline validated it (regression: used to hang)', async () => {
+    const signed = defineRoute({
+      method: 'post',
+      path: '/signed',
+      request: { body: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
+      responses: { 200: { body: { type: 'object', properties: { parsed: {}, raw: {}, again: {} } } } },
+      // Three reads of an already-consumed Node stream: without the shared
+      // buffered read, the first handler read would wait on 'end' forever.
+      handler: async ({ body, request }) => ({
+        status: 200,
+        body: { parsed: body.name, raw: await request.readText(), again: (await request.readBytes()).byteLength },
+      }),
+    })
+    const handler = toNodeHandler(createApi({ routes: [signed] }))
+    await withServer(createServer(handler), async (origin) => {
+      const payload = '{"name":  "Ada"}'
+      const response = await fetch(origin + '/signed', { method: 'POST', body: payload })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ parsed: 'Ada', raw: payload, again: payload.length })
+    })
+  }, 10_000)
+
+  it('answers 500 when the reply body cannot be serialized', async () => {
+    const cyclic = defineRoute({
+      method: 'get',
+      path: '/cyclic',
+      responses: { 200: { body: { type: 'object' } } },
+      handler: () => {
+        const body: Record<string, unknown> = {}
+        body['self'] = body
+        return { status: 200, body }
+      },
+    })
+    const handler = toNodeHandler(createApi({ routes: [cyclic] }))
+    await withServer(createServer(handler), async (origin) => {
+      const response = await fetch(origin + '/cyclic')
+      expect(response.status).toBe(500)
+      expect(await response.json()).toEqual({ error: 'internal_error' })
+    })
+  })
+
+  it('answers 500 when a reply header is invalid instead of crashing the server', async () => {
+    const badHeader = defineRoute({
+      method: 'get',
+      path: '/bad-header',
+      responses: { 204: {} },
+      handler: () => ({ status: 204, headers: { 'bad header\n': 'x' } }),
+    })
+    const handler = toNodeHandler(createApi({ routes: [badHeader] }))
+    await withServer(createServer(handler), async (origin) => {
+      const response = await fetch(origin + '/bad-header')
+      expect(response.status).toBe(500)
+      expect(await response.json()).toEqual({ error: 'internal_error' })
+      // The server survived to answer another request.
+      expect((await fetch(origin + '/bad-header')).status).toBe(500)
+    })
+  })
 })

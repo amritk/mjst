@@ -4,6 +4,10 @@
   "description": "Framework-agnostic, contract-first API layer built on mjst JSON Schema tooling. Typed routes, fast request/response validation, and OpenAPI 3.1 generation with no extra code — adapters for fetch (Hono, Next.js, Bun, Workers) and Node (Express, Fastify).",
   "module": "./dist/index.js",
   "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
   "license": "MIT",
   "author": "amritk",
   "keywords": [
@@ -42,8 +46,8 @@
   "exports": {
     ".": {
       "development": "./src/index.ts",
-      "default": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     }
   },
   "dependencies": {

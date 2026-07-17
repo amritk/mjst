@@ -126,9 +126,13 @@ Writing an adapter for anything else is ~15 lines: construct one
   names are read (tracking cookies never reach validation), values are
   unquoted and percent-decoded per the usual middleware conventions, and
   each property becomes an `in: 'cookie'` OpenAPI parameter.
+- `HEAD` is served automatically wherever `GET` is (RFC 9110): the GET
+  pipeline runs — validation, handler, response headers and all — and the
+  adapter discards the body (cancelling streams rather than leaking them).
+  Declaring an explicit `head` route overrides the fallback for its path.
 - A known path requested with the wrong method answers
-  `405 { error: 'method_not_allowed' }` with a sorted `allow` header;
-  unknown paths stay 404.
+  `405 { error: 'method_not_allowed' }` with a sorted `allow` header
+  (advertising `HEAD` whenever `GET` is served); unknown paths stay 404.
 - Validation failures answer `400` with `{ error: 'validation_failed', source,
   errors }` where `errors` carries the same `{ message, path }` shape as
   `@amritk/runtime-validators` and `source` is `params`, `query`, `headers`,
@@ -158,10 +162,12 @@ const chat = defineRoute({
 
 ### Raw request bodies and size limits
 
-The pipeline only consumes the body stream when a `body` schema is declared.
-A route that needs the exact bytes — webhook signature verification, uploads
-— declares no body schema and reads itself via `request.readText()` /
-`readBytes()`:
+The pipeline only consumes the body stream when a `body` schema is declared,
+and all reads share one buffered copy — so `request.readText()` /
+`readBytes()` can be called repeatedly, in any combination, and even
+alongside a declared body schema (parsed access *and* the exact signed bytes
+in the same handler). A route that only needs the raw bytes — webhook
+signature verification, uploads — simply declares no body schema:
 
 ```ts
 const stripeWebhook = defineRoute({
@@ -186,6 +192,12 @@ and `compileToModule`) rejects larger bodies with a 413 — checked against
 streams in, for pipeline and handler-initiated reads alike.
 
 ### Hooks: CORS, rate limits, security headers
+
+Hooks, `mounts`, and `createCors` are features of the **fetch adapter** —
+`toNodeHandler` deliberately omits them, because every Node framework it
+plugs into already has a middleware chain for CORS, rate limits, and
+security headers (Express/Connect middleware runs before the handler; plain
+`node:http` users can wrap the returned listener).
 
 `toFetchHandler` takes two hook chains over the raw `Request`/`Response` —
 deliberately not a middleware onion. `onRequest` gates run in order before
@@ -435,6 +447,21 @@ yours:
 | Rate limits, feature flags, CSRF, origin checks | `onRequest` gates |
 | Security headers, CORS | `onResponse` decorators / `createCors` |
 | Typed clients | generated from the OpenAPI document (Hey API) |
+
+## Requirements and stability
+
+- **ESM-only.** There is no CommonJS entry point; `require('@amritk/api')`
+  works only on Node versions that support `require(esm)` (22.12+).
+- **Runtimes.** Any fetch-standard runtime (Cloudflare Workers, Bun, Deno,
+  edge platforms) for `toFetchHandler`/`compileToModule`; Node **≥ 20** for
+  `toNodeHandler` (declared in `engines`).
+- **Versioning.** The package is pre-1.0: breaking changes land in **minor**
+  versions (with changelog entries), patches stay compatible. The contract
+  shape (`defineRoute` fields), the `ApiRequest`/`ApiResponse` seam, and the
+  wire format of built-in error bodies are treated as stable; anything
+  exported purely for `compileToModule` output (`buildQueryObjectFromString`,
+  `decodeSegment`, …) is internal plumbing and may change as the compiler
+  does — regenerate compiled modules when upgrading.
 
 ## Scope notes
 

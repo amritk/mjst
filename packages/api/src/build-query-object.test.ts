@@ -40,4 +40,26 @@ describe('build-query-object', () => {
   it('returns an empty object for an empty query string', () => {
     expect(buildQueryObject(new URLSearchParams(), plan({}))).toEqual({})
   })
+
+  it('keeps __proto__ and constructor as own properties instead of touching the prototype', () => {
+    const query = buildQueryObject(new URLSearchParams('__proto__=evil&constructor=x'), plan({}))
+    // On a plain object the __proto__ assignment would hit the prototype
+    // setter — silently dropped — and a schema with additionalProperties:
+    // false could never reject the key. The null prototype makes both keys
+    // ordinary data for the validator to judge.
+    expect(Object.getPrototypeOf(query)).toBe(null)
+    expect(query['__proto__']).toBe('evil')
+    expect(query['constructor']).toBe('x')
+    expect(Object.keys(query).sort()).toEqual(['__proto__', 'constructor'])
+    expect(({} as Record<string, unknown>)['evil']).toBeUndefined()
+  })
+
+  it('accumulates a declared __proto__ array key without rewiring the object', () => {
+    // Built directly: `{ __proto__: ... }` in a literal would set the
+    // prototype rather than a plan entry — the very trap under test.
+    const coercions = new Map<string, Coercion>([['__proto__', 'string-array']])
+    const query = buildQueryObject(new URLSearchParams('__proto__=a&__proto__=b'), coercions)
+    expect(Array.isArray(query)).toBe(false)
+    expect(query['__proto__']).toEqual(['a', 'b'])
+  })
 })
