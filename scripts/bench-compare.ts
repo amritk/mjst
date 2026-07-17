@@ -10,7 +10,7 @@ import { fmtOps, NOISY_SPREAD } from '../packages/generate-parsers/bench/measure
  * and emits a markdown delta table, for the PR-description bench report in CI
  * (`.github/workflows/bench.yml`) and for manual before/after checks.
  *
- *   bun run scripts/bench-compare.ts --baseline <dir> [--head <dir>] [--output <file>]
+ *   bun run scripts/bench-compare.ts --baseline <dir> [--head <dir>] [--output <file>] [--suites a,b]
  *
  * Only mjst is timed — the zod/typebox/ajv/typia columns of the full benches
  * can't change from a PR, so they'd only add minutes and noise. Each
@@ -24,6 +24,8 @@ import { fmtOps, NOISY_SPREAD } from '../packages/generate-parsers/bench/measure
  * Compared surfaces:
  *   - generate-parsers  — parse throughput (ops/s) per PARSE_CASE
  *   - generate-validators — validate throughput (ops/s, valid + invalid input)
+ *   - api — request throughput (req/s) through the runtime and compiled
+ *     engines, per API_BENCH_CASES
  *   - codegen — buildSchema time per parser (ms), timed in-process per tree
  *
  * A case present only in the head tree reports `n/a (new case)` for main
@@ -76,6 +78,17 @@ const head = resolve(argValue('--head') ?? join(import.meta.dirname, '..'))
 const outputPath = argValue('--output')
 const baselineLabel = argValue('--baseline-label') ?? 'main'
 
+/** Suite filter for quick local runs: `--suites api` or `--suites parsers,codegen`. CI runs all. */
+const ALL_SUITES = ['parsers', 'validators', 'api', 'codegen'] as const
+const suitesArg = argValue('--suites')
+const suites = new Set<string>(suitesArg === undefined ? ALL_SUITES : suitesArg.split(','))
+for (const name of suites) {
+  if (!(ALL_SUITES as readonly string[]).includes(name)) {
+    console.error(`unknown suite '${name}' — valid: ${ALL_SUITES.join(', ')}`)
+    process.exit(1)
+  }
+}
+
 const gitSha = (tree: string): string => {
   try {
     return execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: tree, encoding: 'utf8' }).trim()
@@ -88,13 +101,21 @@ const gitSha = (tree: string): string => {
  * Spawns one isolated mjst measurement using the given tree's own bench
  * worker, exactly as that tree's `bench/run.ts` would. Returns null when the
  * worker fails — most commonly a case name that doesn't exist in that tree.
+ *
+ * `developConditions: false` drops `--conditions development`, so workspace
+ * dependencies resolve to their built `dist` instead of TypeScript sources.
+ * The api workers need this: `@amritk/runtime-validators` sources use `@/`
+ * path aliases that Bun cannot resolve across package boundaries, and timing
+ * the compiled artifact is what consumers experience anyway. The workflow
+ * builds that package in both trees before benching.
  */
-const runWorker = (tree: string, pkg: string, caseName: string): WorkerRun => {
+const runWorker = (tree: string, pkg: string, caseName: string, developConditions = true): WorkerRun => {
   const benchDir = join(tree, 'packages', pkg, 'bench')
   const worker = join(benchDir, 'worker.ts')
   if (!existsSync(worker)) return null
   try {
-    const stdout = execFileSync(process.execPath, ['--conditions', 'development', worker, caseName, 'mjst'], {
+    const conditions = developConditions ? ['--conditions', 'development'] : []
+    const stdout = execFileSync(process.execPath, [...conditions, worker, caseName, 'mjst'], {
       encoding: 'utf8',
       maxBuffer: 8 * 1024 * 1024,
       cwd: benchDir,
@@ -216,8 +237,8 @@ const run = async (): Promise<void> => {
     pathToFileURL(join(head, 'packages/generate-parsers/bench/schemas.ts')).href
   )) as { PARSE_CASES: readonly { name: string; mode: string; schema: unknown }[] }
 
-  console.error('generate-parsers (parse ops/s)…')
-  for (const parseCase of parsersSchemas.PARSE_CASES) {
+  if (suites.has('parsers')) console.error('generate-parsers (parse ops/s)…')
+  for (const parseCase of suites.has('parsers') ? parsersSchemas.PARSE_CASES : []) {
     const { base: baseResult, head: headResult } = runPair('generate-parsers', parseCase.name)
     progress({
       suite: 'parsers',
@@ -234,8 +255,8 @@ const run = async (): Promise<void> => {
     pathToFileURL(join(head, 'packages/generate-validators/bench/schemas.ts')).href
   )) as { BENCH_CASES: readonly { name: string }[] }
 
-  console.error('generate-validators (validate ops/s)…')
-  for (const benchCase of validatorsSchemas.BENCH_CASES) {
+  if (suites.has('validators')) console.error('generate-validators (validate ops/s)…')
+  for (const benchCase of suites.has('validators') ? validatorsSchemas.BENCH_CASES : []) {
     const { base: baseResult, head: headResult } = runPair('generate-validators', benchCase.name)
     for (const metric of ['valid', 'invalid'] as const) {
       progress({
@@ -250,8 +271,31 @@ const run = async (): Promise<void> => {
     }
   }
 
-  console.error('parser codegen (ms per buildSchema)…')
-  for (const parseCase of parsersSchemas.PARSE_CASES) {
+  // The api case table is import-cheap by design (setups load lazily), so
+  // pulling the names from the head tree needs no built packages.
+  const apiCases = (await import(pathToFileURL(join(head, 'packages/api/bench/cases.ts')).href)) as {
+    API_BENCH_CASES: readonly { name: string }[]
+  }
+
+  if (suites.has('api')) console.error('api (request req/s)…')
+  for (const benchCase of suites.has('api') ? apiCases.API_BENCH_CASES : []) {
+    const { base: baseResult, head: headResult } = abbaPair(
+      (tree) => runWorker(tree, 'api', benchCase.name, false),
+      betterOps,
+    )
+    progress({
+      suite: 'api',
+      caseName: benchCase.name,
+      metric: 'req/s',
+      higherIsBetter: true,
+      base: statOf(baseResult, 'valid'),
+      head: statOf(headResult, 'valid'),
+      parityOk: pairParityOk(baseResult, headResult),
+    })
+  }
+
+  if (suites.has('codegen')) console.error('parser codegen (ms per buildSchema)…')
+  for (const parseCase of suites.has('codegen') ? parsersSchemas.PARSE_CASES : []) {
     const pair = abbaPair((tree) => codegenStats(tree, parseCase.schema, parseCase.mode), betterMs)
     progress({
       suite: 'codegen',
