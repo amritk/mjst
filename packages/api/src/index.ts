@@ -15,7 +15,17 @@ export type {
   ClientOptions,
   ClientReply,
   ClientReplyOf,
+  ErrorBodyOf,
+  ErrorStatusOf,
+  RequestBodyOf,
+  RequestCookiesOf,
+  RequestHeadersOf,
+  RequestParamsOf,
+  RequestQueryOf,
   ResponseBodyOf,
+  ResponseStatusOf,
+  SuccessBodyOf,
+  SuccessStatusOf,
 } from './create-client'
 export { createClient } from './create-client'
 export type { Cors, CorsOptions } from './create-cors'
@@ -81,6 +91,7 @@ export type {
   RouteContract,
   RouteHandler,
   RouteReply,
+  RouteReplyOf,
   RouteReplyValue,
   RouteTable,
   SchemaValue,

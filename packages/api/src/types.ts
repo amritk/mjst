@@ -204,6 +204,14 @@ export type RouteReply<Responses extends ResponseContracts> = {
 }[keyof Responses]
 
 /**
+ * {@link RouteReply} keyed by the contract itself — the server-side twin of
+ * the client's `ClientReplyOf`, so a helper that builds replies for one route
+ * (`const paymentRequired = (): RouteReplyOf<typeof demoChat> => ...`) can
+ * name its return type without reaching for `C['responses']`.
+ */
+export type RouteReplyOf<C extends AnyContract> = RouteReply<C['responses']>
+
+/**
  * A route's implementation. It only runs after every declared request schema
  * has validated, so the context values are safe to use without further checks.
  */
