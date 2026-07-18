@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { createApi } from './create-api'
+import type { ClientReplyOf, ResponseBodyOf } from './create-client'
 import { createClient } from './create-client'
 import { defineContract } from './define-contract'
 import { defineRoute } from './define-route'
@@ -302,6 +303,61 @@ describe('create-client', () => {
     })
     const reply = await client.ping()
     if (reply.status === 200) expect(reply.body.pong).toBe(true)
+  })
+
+  it('names response body types straight from the contracts', async () => {
+    // The motivating shape: an error status whose body the frontend must read
+    // exactly — previously an inline `as { ... }` cast at every use site.
+    const demoChat = defineContract({
+      method: 'post',
+      path: '/demo/chat',
+      request: { body: { type: 'object', properties: { message: { type: 'string' } }, required: ['message'] } },
+      responses: {
+        200: {
+          contentType: 'text/plain; charset=utf-8',
+          // Documented for consumers that parse the trailing frame themselves.
+          body: { type: 'object', properties: { used: { type: 'integer' } }, required: ['used'] },
+        },
+        402: {
+          body: {
+            type: 'object',
+            properties: {
+              error: { type: 'string' },
+              requiresVerification: { type: 'boolean' },
+              used: { type: 'integer' },
+              remaining: { type: 'integer' },
+            },
+            required: ['error', 'requiresVerification', 'used', 'remaining'],
+          },
+        },
+      },
+    })
+
+    // The 402 body, named once from the contract instead of cast at use sites.
+    type LimitBody = ResponseBodyOf<typeof demoChat, 402>
+    const limit: LimitBody = { error: 'demo_limit', requiresVerification: true, used: 5, remaining: 0 }
+    expect(limit.remaining).toBe(0)
+    // @ts-expect-error — remaining is a number, not a string
+    const wrongLimit: LimitBody = { error: 'demo_limit', requiresVerification: true, used: 5, remaining: 'none' }
+    void wrongLimit
+
+    // A raw (contentType) status that documents a body schema still names the
+    // payload type, for code that parses the stream itself.
+    type FrameBody = ResponseBodyOf<typeof demoChat, 200>
+    const frame: FrameBody = { used: 3 }
+    void frame
+
+    // Statuses declared without a body come out undefined; omitting the
+    // status yields the union across every declared one.
+    const empty: ResponseBodyOf<typeof getUser, 404> = undefined
+    void empty
+    const anyBody: ResponseBodyOf<typeof demoChat> = limit
+    void anyBody
+
+    // ClientReplyOf names the union a method resolves with.
+    const client = makeClient()
+    const reply: ClientReplyOf<typeof getUser> = await client.getUser({ params: { id: 7 }, query: {} })
+    expect(reply.status).toBe(200)
   })
 
   it('rejects wrongly-typed inputs at compile time', () => {

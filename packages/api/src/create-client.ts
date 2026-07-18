@@ -83,6 +83,39 @@ export type ClientReply<Responses extends ResponseContracts> = {
       : { readonly status: Status; readonly body?: undefined; readonly response: Response }
 }[keyof Responses]
 
+/**
+ * {@link ClientReply} keyed by the contract itself, matching how
+ * {@link ClientInput} is written — so naming the union a method resolves with
+ * does not require reaching for `C['responses']`.
+ */
+export type ClientReplyOf<C extends AnyContract> = ClientReply<C['responses']>
+
+/**
+ * The schema-typed body for one declared status (or a union of statuses;
+ * defaults to every declared one). This is what lets an app name its wire
+ * types straight from the contracts — no codegen, no hand-written mirror that
+ * can drift:
+ *
+ * ```typescript
+ * // The 402 body, exactly as the contract declares it.
+ * export type DemoLimitBody = ResponseBodyOf<typeof demoLimit, 402>
+ * ```
+ *
+ * Derived from the declared schema, not from the client's parsing: a raw
+ * (`contentType`) status that documents a `body` schema still yields that
+ * schema's type here, so code that parses the stream itself can type what it
+ * expects to find — even though {@link ClientReply} leaves such a status's
+ * `Response` unread. Statuses declared without a body come out `undefined`.
+ */
+export type ResponseBodyOf<
+  C extends AnyContract,
+  Status extends keyof C['responses'] = keyof C['responses'],
+> = Status extends keyof C['responses']
+  ? C['responses'][Status] extends { body: infer B }
+    ? FromSchema<B>
+    : undefined
+  : never
+
 /** Keys of T that an empty object cannot satisfy — i.e. the required ones. */
 type RequiredKeys<T> = { [K in keyof T]-?: object extends Pick<T, K> ? never : K }[keyof T]
 

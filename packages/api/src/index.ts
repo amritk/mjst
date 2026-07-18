@@ -8,7 +8,15 @@ export { coercePrimitive } from './coerce-primitive'
 export type { CompileModuleOptions } from './compile/compile-to-module'
 export { compileToModule } from './compile/compile-to-module'
 export { createApi } from './create-api'
-export type { ApiClient, ClientInput, ClientMethod, ClientOptions, ClientReply } from './create-client'
+export type {
+  ApiClient,
+  ClientInput,
+  ClientMethod,
+  ClientOptions,
+  ClientReply,
+  ClientReplyOf,
+  ResponseBodyOf,
+} from './create-client'
 export { createClient } from './create-client'
 export type { Cors, CorsOptions } from './create-cors'
 export { createCors } from './create-cors'
