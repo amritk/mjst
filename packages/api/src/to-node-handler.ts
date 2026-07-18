@@ -1,8 +1,8 @@
-import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from 'node:http'
 import { validateHeaderName, validateHeaderValue } from 'node:http'
 
 import { payloadTooLargeError } from './payload-too-large'
-import type { Api, ApiRequest } from './types'
+import type { Api, ApiRequest, RequestLocals } from './types'
 
 /**
  * A Node request listener that also works as Express/Connect middleware: when
@@ -84,6 +84,8 @@ export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandl
       // consumed a declared body schema, or that simply reads twice.
       let bytes: Promise<Buffer> | undefined
       const readAll = (): Promise<Buffer> => (bytes ??= readBytes(incoming, maxBodyBytes))
+      // Created lazily so requests that never touch `locals` do not allocate.
+      let locals: RequestLocals | undefined
       const request: ApiRequest = {
         method,
         path,
@@ -105,20 +107,31 @@ export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandl
           }
           return controller.signal
         },
+        raw: incoming,
+        get locals(): RequestLocals {
+          locals ??= {}
+          return locals
+        },
       }
 
       const response = await api.handle(request, options?.env)
 
-      const headers: Record<string, string> = { ...response.headers }
+      const headers: Record<string, string | readonly string[]> = { ...response.headers }
       // Handler-supplied headers are validated up front: a writeHead that
       // throws mid-serialization leaves the ServerResponse unrecoverable
       // (statusMessage and body suppression latch), so the 500 boundary below
       // could never answer. Validated here, the throw happens while recovery
-      // is still possible.
+      // is still possible. Node's writeHead sends an array value as that many
+      // separate header lines — exactly what repeated `set-cookie` needs — so
+      // each element validates individually.
       if (response.headers !== undefined) {
         for (const [name, value] of Object.entries(headers)) {
           validateHeaderName(name)
-          validateHeaderValue(name, value)
+          if (Array.isArray(value)) {
+            for (const item of value) validateHeaderValue(name, item)
+          } else {
+            validateHeaderValue(name, value as string)
+          }
         }
       }
       // HEAD answers carry the status and headers the (GET) pipeline produced
@@ -131,7 +144,7 @@ export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandl
           if (response.contentType !== undefined) headers['content-type'] = response.contentType
           else if (body !== undefined) headers['content-type'] = 'application/json'
         }
-        outgoing.writeHead(response.status, headers)
+        outgoing.writeHead(response.status, headers as OutgoingHttpHeaders)
         outgoing.end()
         return
       }
@@ -140,7 +153,7 @@ export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandl
       // chunk by chunk so the client sees data as the handler produces it.
       if (response.contentType !== undefined) {
         if (headers['content-type'] === undefined) headers['content-type'] = response.contentType
-        outgoing.writeHead(response.status, headers)
+        outgoing.writeHead(response.status, headers as OutgoingHttpHeaders)
         const body = response.body
         if (body === undefined || body === null) {
           outgoing.end()
@@ -161,7 +174,7 @@ export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandl
         return
       }
       if (response.body === undefined) {
-        outgoing.writeHead(response.status, headers)
+        outgoing.writeHead(response.status, headers as OutgoingHttpHeaders)
         outgoing.end()
         return
       }
@@ -170,7 +183,7 @@ export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandl
       // A known length keeps Node off chunked transfer encoding for what is
       // always a fully-buffered JSON payload.
       headers['content-length'] = String(Buffer.byteLength(payload))
-      outgoing.writeHead(response.status, headers)
+      outgoing.writeHead(response.status, headers as OutgoingHttpHeaders)
       outgoing.end(payload)
     } catch {
       // A failure past the pipeline — writeHead on an invalid header name,

@@ -72,6 +72,13 @@ export type CompileModuleOptions = OpenApiExtras & {
    */
   readonly observeExport?: string
   /**
+   * Export name (in the routes module) of the unmatched-request observer —
+   * the same function passed to `createApi({ observeUnmatched })` in
+   * development. Called once per 404/405 with `route: undefined`; no code is
+   * emitted when unset.
+   */
+  readonly observeUnmatchedExport?: string
+  /**
    * Rejects request bodies larger than this many bytes with a 413 — the
    * compiled equivalent of `toFetchHandler`'s `maxBodyBytes` option, enforced
    * with the same shared capped reader.
@@ -113,6 +120,8 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   assertIdentifier(onErrorExport, 'onErrorExport')
   const observeExport = options.observeExport
   assertIdentifier(observeExport, 'observeExport')
+  const observeUnmatchedExport = options.observeUnmatchedExport
+  assertIdentifier(observeUnmatchedExport, 'observeUnmatchedExport')
   const onRequestExports = options.onRequestExports ?? []
   const onResponseExports = options.onResponseExports ?? []
   for (const name of [...onRequestExports, ...onResponseExports]) assertIdentifier(name, 'hook export')
@@ -121,7 +130,11 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   // functions must thread the platform arguments even without a context factory.
   const emitContext: EmitContext = {
     contextExport,
-    needsPlatform: contextExport !== undefined || onErrorExport !== undefined || observeExport !== undefined,
+    needsPlatform:
+      contextExport !== undefined ||
+      onErrorExport !== undefined ||
+      observeExport !== undefined ||
+      observeUnmatchedExport !== undefined,
   }
 
   const mounts = Object.entries(options.mounts ?? {}).map(([prefix, exportName]) => {
@@ -144,6 +157,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     parseMultipartBody: false,
     invalidBody: false,
     unsupportedMediaType: false,
+    refine: false,
   }
 
   const declarations: string[] = []
@@ -176,10 +190,15 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     used.matchesBodyType ? 'matchesBodyType' : undefined,
     used.parseFormBody ? 'parseFormBody' : undefined,
     used.parseMultipartBody ? 'parseMultipartBody' : undefined,
+    used.refine ? 'refinementFailure' : undefined,
     routes.some((route) => !route.isStatic) ? 'decodeSegment' : undefined,
     // The thrown-error path always distinguishes 413s, matching the runtime
     // pipeline for handlers that read (or reject on) an oversized body.
     'isPayloadTooLargeError',
+    // Every respond function's custom-headers branch goes through the shared
+    // header builder, so repeated set-cookie values serialize identically to
+    // the runtime adapter.
+    'buildResponseHeaders',
     maxBodyBytes === undefined ? undefined : 'readBytesCapped',
   ].filter((name) => name !== undefined)
   const validatorImports = [
@@ -193,6 +212,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     ...(errorsExport === undefined ? [] : [errorsExport]),
     ...(onErrorExport === undefined ? [] : [onErrorExport]),
     ...(observeExport === undefined ? [] : [observeExport]),
+    ...(observeUnmatchedExport === undefined ? [] : [observeUnmatchedExport]),
     ...onRequestExports,
     ...onResponseExports,
     ...mounts.map(([, exportName]) => exportName),
@@ -229,7 +249,11 @@ export const compileToModule = (options: CompileModuleOptions): string => {
       : `readBytesCapped(request.body, request.headers.get('content-length'), ${maxBodyBytes})`
   lines.push(
     'const DECODER = new TextDecoder()',
-    'const makeApiRequest = (request, url, rawPath, queryIndex) => {',
+    // `locals` is the per-request bag created in the dispatch, so every
+    // consumer of this request — gates, context factory, handler, error
+    // formatters, observers — reads and writes the same object, exactly like
+    // the runtime adapter's single ApiRequest.
+    'const makeApiRequest = (request, url, rawPath, queryIndex, locals) => {',
     '  let bytes',
     `  const readAllBytes = () => (bytes ??= ${readAllBytesExpression})`,
     '  return {',
@@ -242,6 +266,8 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     '    readText: () => readAllBytes().then((buffer) => DECODER.decode(buffer)),',
     '    readBytes: readAllBytes,',
     '    signal: request.signal,',
+    '    raw: request,',
+    '    locals,',
     '  }',
     '}',
   )
@@ -264,7 +290,16 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   }
   lines.push('', ...declarations)
   lines.push(
-    ...emitDispatch(routes, openApiPath, emitContext, mounts, onRequestExports, onResponseExports, observeExport),
+    ...emitDispatch(
+      routes,
+      openApiPath,
+      emitContext,
+      mounts,
+      onRequestExports,
+      onResponseExports,
+      observeExport,
+      observeUnmatchedExport,
+    ),
   )
   lines.push('', 'export default { fetch }', '')
   return lines.join('\n')
@@ -299,14 +334,14 @@ const emitErrorHelpers = (
       'const toResponse = (r) => {',
       '  try {',
       '    if (r.contentType !== undefined) {',
-      "      return new Response(r.body ?? null, { status: r.status, headers: { 'content-type': r.contentType, ...r.headers } })",
+      "      return new Response(r.body ?? null, { status: r.status, headers: r.headers === undefined ? { 'content-type': r.contentType } : buildResponseHeaders(r.headers, r.contentType) })",
       '    }',
       '    if (r.headers === undefined) {',
       '      return r.body === undefined ? new Response(null, { status: r.status }) : new Response(JSON.stringify(r.body), initFor(r.status))',
       '    }',
       '    return r.body === undefined',
-      '      ? new Response(null, { status: r.status, headers: { ...r.headers } })',
-      '      : new Response(JSON.stringify(r.body), { status: r.status, headers: { ...JSON_HEADERS, ...r.headers } })',
+      '      ? new Response(null, { status: r.status, headers: buildResponseHeaders(r.headers) })',
+      "      : new Response(JSON.stringify(r.body), { status: r.status, headers: buildResponseHeaders(r.headers, 'application/json') })",
       '  } catch {',
       '    return internalError()',
       '  }',
@@ -335,19 +370,19 @@ const emitErrorHelpers = (
     }
   } else {
     lines.push(
-      `const notFound = (request, url, rawPath, queryIndex) => ${errorsExport}.notFound !== undefined ? toResponse(${errorsExport}.notFound(makeApiRequest(request, url, rawPath, queryIndex))) : new Response('{"error":"not_found"}', initFor(404))`,
-      `const invalidJson = (request, url, rawPath, queryIndex) => ${errorsExport}.invalidJson !== undefined ? toResponse(${errorsExport}.invalidJson(makeApiRequest(request, url, rawPath, queryIndex))) : new Response('{"error":"invalid_json"}', initFor(400))`,
-      `const payloadTooLarge = (request, url, rawPath, queryIndex) => ${errorsExport}.payloadTooLarge !== undefined ? toResponse(${errorsExport}.payloadTooLarge(makeApiRequest(request, url, rawPath, queryIndex))) : new Response('{"error":"payload_too_large"}', initFor(413))`,
-      `const methodNotAllowed = (allow, request, url, rawPath, queryIndex) => ${errorsExport}.methodNotAllowed !== undefined ? toResponse(${errorsExport}.methodNotAllowed(allow, makeApiRequest(request, url, rawPath, queryIndex))) : ${defaultMethodNotAllowed}`,
+      `const notFound = (request, url, rawPath, queryIndex, locals) => ${errorsExport}.notFound !== undefined ? toResponse(${errorsExport}.notFound(makeApiRequest(request, url, rawPath, queryIndex, locals))) : new Response('{"error":"not_found"}', initFor(404))`,
+      `const invalidJson = (request, url, rawPath, queryIndex, locals) => ${errorsExport}.invalidJson !== undefined ? toResponse(${errorsExport}.invalidJson(makeApiRequest(request, url, rawPath, queryIndex, locals))) : new Response('{"error":"invalid_json"}', initFor(400))`,
+      `const payloadTooLarge = (request, url, rawPath, queryIndex, locals) => ${errorsExport}.payloadTooLarge !== undefined ? toResponse(${errorsExport}.payloadTooLarge(makeApiRequest(request, url, rawPath, queryIndex, locals))) : new Response('{"error":"payload_too_large"}', initFor(413))`,
+      `const methodNotAllowed = (allow, request, url, rawPath, queryIndex, locals) => ${errorsExport}.methodNotAllowed !== undefined ? toResponse(${errorsExport}.methodNotAllowed(allow, makeApiRequest(request, url, rawPath, queryIndex, locals))) : ${defaultMethodNotAllowed}`,
     )
     if (used['invalidBody']) {
       lines.push(
-        `const invalidBody = (request, url, rawPath, queryIndex) => ${errorsExport}.invalidBody !== undefined ? toResponse(${errorsExport}.invalidBody(makeApiRequest(request, url, rawPath, queryIndex))) : new Response('{"error":"invalid_body"}', initFor(400))`,
+        `const invalidBody = (request, url, rawPath, queryIndex, locals) => ${errorsExport}.invalidBody !== undefined ? toResponse(${errorsExport}.invalidBody(makeApiRequest(request, url, rawPath, queryIndex, locals))) : new Response('{"error":"invalid_body"}', initFor(400))`,
       )
     }
     if (used['unsupportedMediaType']) {
       lines.push(
-        `const unsupportedMediaType = (contentType, request, url, rawPath, queryIndex) => ${errorsExport}.unsupportedMediaType !== undefined ? toResponse(${errorsExport}.unsupportedMediaType(contentType, makeApiRequest(request, url, rawPath, queryIndex))) : new Response('{"error":"unsupported_media_type"}', initFor(415))`,
+        `const unsupportedMediaType = (contentType, request, url, rawPath, queryIndex, locals) => ${errorsExport}.unsupportedMediaType !== undefined ? toResponse(${errorsExport}.unsupportedMediaType(contentType, makeApiRequest(request, url, rawPath, queryIndex, locals))) : new Response('{"error":"unsupported_media_type"}', initFor(415))`,
       )
     }
   }
@@ -355,13 +390,13 @@ const emitErrorHelpers = (
   // transport's outcome, not an application error to report.
   if (onErrorExport === undefined) {
     lines.push(
-      'const thrown = (error, route, request, url, rawPath, queryIndex) => isPayloadTooLargeError(error) ? payloadTooLarge(request, url, rawPath, queryIndex) : internalError()',
+      'const thrown = (error, route, request, url, rawPath, queryIndex, locals) => isPayloadTooLargeError(error) ? payloadTooLarge(request, url, rawPath, queryIndex, locals) : internalError()',
     )
   } else {
     lines.push(
-      'const thrown = (error, route, request, url, rawPath, queryIndex, env, executionContext) => isPayloadTooLargeError(error)',
-      '  ? payloadTooLarge(request, url, rawPath, queryIndex)',
-      `  : toResponse(${onErrorExport}(error, makeApiRequest(request, url, rawPath, queryIndex), { route, env, executionContext }))`,
+      'const thrown = (error, route, request, url, rawPath, queryIndex, locals, env, executionContext) => isPayloadTooLargeError(error)',
+      '  ? payloadTooLarge(request, url, rawPath, queryIndex, locals)',
+      `  : toResponse(${onErrorExport}(error, makeApiRequest(request, url, rawPath, queryIndex, locals), { route, env, executionContext }))`,
     )
   }
   if (used['validate']) {
@@ -374,13 +409,35 @@ const emitErrorHelpers = (
       )
     } else {
       lines.push(
-        'const failValidation = (source, collect, value, request, url, rawPath, queryIndex) => {',
+        'const failValidation = (source, collect, value, request, url, rawPath, queryIndex, locals) => {',
         '  const result = collect()(value)',
         '  const errors = result === true ? [] : result.errors',
         `  if (${errorsExport}.validationFailed !== undefined) {`,
-        `    return toResponse(${errorsExport}.validationFailed({ source, errors }, makeApiRequest(request, url, rawPath, queryIndex)))`,
+        `    return toResponse(${errorsExport}.validationFailed({ source, errors }, makeApiRequest(request, url, rawPath, queryIndex, locals)))`,
         '  }',
         "  return new Response(JSON.stringify({ error: 'validation_failed', source, errors }), initFor(400))",
+        '}',
+      )
+    }
+  }
+  // Refinement failures normalize through the shared helper so the envelope
+  // is byte-identical to the runtime engine's, custom formatter included.
+  if (used['refine']) {
+    if (errorsExport === undefined) {
+      lines.push(
+        'const failRefine = (issues) => {',
+        '  const failure = refinementFailure(issues)',
+        "  return new Response(JSON.stringify({ error: 'validation_failed', source: failure.source, errors: failure.errors }), initFor(400))",
+        '}',
+      )
+    } else {
+      lines.push(
+        'const failRefine = (issues, request, url, rawPath, queryIndex, locals) => {',
+        '  const failure = refinementFailure(issues)',
+        `  if (${errorsExport}.validationFailed !== undefined) {`,
+        `    return toResponse(${errorsExport}.validationFailed(failure, makeApiRequest(request, url, rawPath, queryIndex, locals)))`,
+        '  }',
+        "  return new Response(JSON.stringify({ error: 'validation_failed', source: failure.source, errors: failure.errors }), initFor(400))",
         '}',
       )
     }
@@ -543,7 +600,7 @@ const emitRouteDeclarations = (
   lines.push(`const respond_${route.name} = (reply) => {`, '  try {')
   for (const [status, contentType] of rawStatuses) {
     lines.push(
-      `    if (reply.status === ${status}) return new Response(reply.body ?? null, { status: ${status}, headers: { 'content-type': ${JSON.stringify(contentType)}, ...reply.headers } })`,
+      `    if (reply.status === ${status}) return new Response(reply.body ?? null, { status: ${status}, headers: reply.headers === undefined ? { 'content-type': ${JSON.stringify(contentType)} } : buildResponseHeaders(reply.headers, ${JSON.stringify(contentType)}) })`,
     )
   }
   lines.push(
@@ -552,8 +609,8 @@ const emitRouteDeclarations = (
     '      return body === null ? new Response(null, { status: reply.status }) : new Response(body, initFor(reply.status))',
     '    }',
     '    return body === null',
-    '      ? new Response(null, { status: reply.status, headers: { ...reply.headers } })',
-    '      : new Response(body, { status: reply.status, headers: { ...JSON_HEADERS, ...reply.headers } })',
+    '      ? new Response(null, { status: reply.status, headers: buildResponseHeaders(reply.headers) })',
+    "      : new Response(body, { status: reply.status, headers: buildResponseHeaders(reply.headers, 'application/json') })",
     '  } catch {',
     '    return internalError()',
     '  }',
@@ -568,7 +625,7 @@ const slotSuffix = (slot: 'params' | 'query' | 'headers' | 'cookies' | 'body', n
   slot.charAt(0).toUpperCase() + slot.slice(1) + '_' + name
 
 /** The request-context arguments every cold-path helper receives. */
-const ERROR_ARGS = 'request, url, rawPath, queryIndex'
+const ERROR_ARGS = 'request, url, rawPath, queryIndex, locals'
 
 /**
  * What the emitters need to know about the module-wide wiring: the context
@@ -598,6 +655,7 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
     'url',
     'rawPath',
     'queryIndex',
+    'locals',
     ...(needsPlatform ? ['env', 'executionContext'] : []),
     ...route.paramNames.map((_, i) => 'p' + i),
   ]
@@ -696,13 +754,30 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
       `${indent}}`,
       `${indent}let appContext`,
       `${indent}try {`,
-      `${indent}  appContext = ${contextExport}({ request: apiRequest, env, executionContext })`,
+      `${indent}  appContext = ${contextExport}({ request: apiRequest, env, executionContext, locals })`,
       `${indent}} catch (error) {`,
       `${indent}  return thrown(error, ${thrownArguments})`,
       `${indent}}`,
       `${indent}return typeof appContext?.then === 'function' ? appContext.then(proceed, (error) => thrown(error, ${thrownArguments})) : proceed(appContext)`,
     )
     return lines
+  }
+
+  // Refinement mirrors the runtime pipeline: after every declared slot has
+  // validated, before the context factory and handler, with a throwing
+  // refine taking the handler-error path.
+  const refineLines = (bodyValue: string, indent: string): string[] => {
+    if (route.contract.refine === undefined) return []
+    used['refine'] = true
+    return [
+      `${indent}let refineIssues`,
+      `${indent}try {`,
+      `${indent}  refineIssues = ${route.name}.refine({ params: ${paramsValue}, query: ${queryValue}, body: ${bodyValue}, headers: ${headersValue}, cookies: ${cookiesValue} })`,
+      `${indent}} catch (error) {`,
+      `${indent}  return thrown(error, ${thrownArguments})`,
+      `${indent}}`,
+      `${indent}if (refineIssues !== undefined && refineIssues.length > 0) return failRefine(refineIssues, ${ERROR_ARGS})`,
+    ]
   }
 
   // The apiRequest is built after the zero-cost guards (params, query,
@@ -722,6 +797,7 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
     )
     const guardAndRun = [
       `    if (!guard${suffix}(body)) return failValidation('body', collect${suffix}, body, ${ERROR_ARGS})`,
+      ...refineLines('body', '    '),
       ...runLines('body', '    '),
     ]
     if (bodyType === 'json') {
@@ -752,7 +828,7 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
       )
     }
   } else {
-    lines.push(...runLines('undefined', '  '))
+    lines.push(...refineLines('undefined', '  '), ...runLines('undefined', '  '))
   }
   lines.push('}')
   return lines
@@ -775,6 +851,7 @@ const emitDispatch = (
   onRequestExports: readonly string[],
   onResponseExports: readonly string[],
   observeExport: string | undefined,
+  observeUnmatchedExport: string | undefined,
 ): string[] => {
   const hooked = onRequestExports.length > 0 || onResponseExports.length > 0
   const extraArguments = emitContext.needsPlatform ? ', env, executionContext' : ''
@@ -787,15 +864,15 @@ const emitDispatch = (
     observeExport === undefined
       ? (_route: CompiledEntry, call: string): string => call
       : (route: CompiledEntry, call: string): string =>
-          `observed(${route.name}, () => ${call}, request, url, rawPath, queryIndex${extraArguments})`
+          `observed(${route.name}, () => ${call}, request, url, rawPath, queryIndex, locals${extraArguments})`
   const lines: string[] = []
   if (observeExport !== undefined) {
     lines.push(
-      'const observed = (contract, run, request, url, rawPath, queryIndex, env, executionContext) => {',
+      'const observed = (contract, run, request, url, rawPath, queryIndex, locals, env, executionContext) => {',
       '  const start = performance.now()',
       '  const finish = (response) => {',
       '    try {',
-      `      ${observeExport}({ route: contract, request: makeApiRequest(request, url, rawPath, queryIndex), status: response.status, durationMs: performance.now() - start, env, executionContext })`,
+      `      ${observeExport}({ route: contract, request: makeApiRequest(request, url, rawPath, queryIndex, locals), status: response.status, durationMs: performance.now() - start, env, executionContext })`,
       '    } catch {',
       '      // A throwing observer must never fail the request it watched.',
       '    }',
@@ -806,14 +883,32 @@ const emitDispatch = (
       '}',
     )
   }
+  if (observeUnmatchedExport !== undefined) {
+    lines.push(
+      'const observedMiss = (response, request, url, rawPath, queryIndex, locals, env, executionContext, start) => {',
+      '  try {',
+      `    ${observeUnmatchedExport}({ route: undefined, request: makeApiRequest(request, url, rawPath, queryIndex, locals), status: response.status, durationMs: performance.now() - start, env, executionContext })`,
+      '  } catch {',
+      '    // A throwing observer must never fail the request it watched.',
+      '  }',
+      '  return response',
+      '}',
+    )
+  }
   lines.push(
-    `${hooked ? 'const' : 'export const'} ${dispatchName} = (request${extraArguments}) => {`,
+    `${hooked ? 'const' : 'export const'} ${dispatchName} = (request${hooked ? ', locals' : ''}${extraArguments}) => {`,
+    // One locals bag per request — hooked builds it in the wrapper (gates run
+    // first), unhooked here — so every consumer (context factory, handler,
+    // error formatters, observers) shares one object, like the runtime's
+    // single ApiRequest.
+    ...(hooked ? [] : ['  const locals = {}']),
     '  const url = request.url',
     "  const schemeEnd = url.indexOf('://')",
     "  const pathStart = url.indexOf('/', schemeEnd === -1 ? 0 : schemeEnd + 3)",
     "  const queryIndex = pathStart === -1 ? -1 : url.indexOf('?', pathStart)",
     "  const rawPath = pathStart === -1 ? '/' : queryIndex === -1 ? url.slice(pathStart) : url.slice(pathStart, queryIndex)",
     '  const method = request.method',
+    ...(observeUnmatchedExport === undefined ? [] : ['  const missStart = performance.now()']),
   )
   for (const [prefix, exportName] of mounts) {
     lines.push(
@@ -837,7 +932,7 @@ const emitDispatch = (
     lines.push(`  if (method === '${method}') {`)
     for (const route of statics) {
       lines.push(
-        `    if (path === ${JSON.stringify(route.staticPath)}) return ${invoke(route, `route_${route.name}(request, url, rawPath, queryIndex${extraArguments})`)}`,
+        `    if (path === ${JSON.stringify(route.staticPath)}) return ${invoke(route, `route_${route.name}(request, url, rawPath, queryIndex, locals${extraArguments})`)}`,
       )
     }
     if (dynamics.length > 0) {
@@ -845,7 +940,7 @@ const emitDispatch = (
       for (const route of dynamics) {
         const { conditions, captures } = dynamicMatch(route, 'segments')
         lines.push(
-          `    if (${conditions.join(' && ')}) return ${invoke(route, `route_${route.name}(request, url, rawPath, queryIndex${extraArguments}, ${captures.join(', ')})`)}`,
+          `    if (${conditions.join(' && ')}) return ${invoke(route, `route_${route.name}(request, url, rawPath, queryIndex, locals${extraArguments}, ${captures.join(', ')})`)}`,
         )
       }
     }
@@ -869,7 +964,7 @@ const emitDispatch = (
     lines.push("  if (method === 'HEAD') {")
     for (const route of gets.filter((entry) => entry.isStatic)) {
       lines.push(
-        `    if (path === ${JSON.stringify(route.staticPath)}) return headOf(${invoke(route, `route_${route.name}(request, url, rawPath, queryIndex${extraArguments})`)})`,
+        `    if (path === ${JSON.stringify(route.staticPath)}) return headOf(${invoke(route, `route_${route.name}(request, url, rawPath, queryIndex, locals${extraArguments})`)})`,
       )
     }
     const dynamicGets = gets.filter((entry) => !entry.isStatic)
@@ -878,7 +973,7 @@ const emitDispatch = (
       for (const route of dynamicGets) {
         const { conditions, captures } = dynamicMatch(route, 'segments')
         lines.push(
-          `    if (${conditions.join(' && ')}) return headOf(${invoke(route, `route_${route.name}(request, url, rawPath, queryIndex${extraArguments}, ${captures.join(', ')})`)})`,
+          `    if (${conditions.join(' && ')}) return headOf(${invoke(route, `route_${route.name}(request, url, rawPath, queryIndex, locals${extraArguments}, ${captures.join(', ')})`)})`,
         )
       }
     }
@@ -914,8 +1009,16 @@ const emitDispatch = (
     // HEAD 405s/404s are stripped like every HEAD reply the fetch adapter
     // sends: same status and headers, no body.
     "  if (allow.includes('GET') && !allow.includes('HEAD')) allow.push('HEAD')",
-    `  if (allow.length > 0) { const denied = methodNotAllowed(allow.sort(), ${ERROR_ARGS}); return method === 'HEAD' ? stripHeadBody(denied) : denied }`,
-    `  const missing = notFound(${ERROR_ARGS})`,
+  )
+  // The unmatched observer fires on the shaped miss (the status the client
+  // will see), before HEAD body stripping — same order as the runtime.
+  const miss = (expression: string): string =>
+    observeUnmatchedExport === undefined
+      ? expression
+      : `observedMiss(${expression}, ${ERROR_ARGS}, env, executionContext, missStart)`
+  lines.push(
+    `  if (allow.length > 0) { const denied = ${miss(`methodNotAllowed(allow.sort(), ${ERROR_ARGS})`)}; return method === 'HEAD' ? stripHeadBody(denied) : denied }`,
+    `  const missing = ${miss(`notFound(${ERROR_ARGS})`)}`,
     "  return method === 'HEAD' ? stripHeadBody(missing) : missing",
     '}',
   )
@@ -926,26 +1029,35 @@ const emitDispatch = (
   // and every outcome — short-circuit, mount, routed reply, 404 — through the
   // decorators. Identical semantics to toFetchHandler's chains.
   if (onResponseExports.length > 0) {
-    lines.push('const finishResponse = async (response, request) => {', '  let current = response', '  let next')
+    lines.push(
+      'const finishResponse = async (response, request, locals) => {',
+      '  let current = response',
+      '  let next',
+    )
     for (const name of onResponseExports) {
-      lines.push(`  next = await ${name}(current, request)`, '  if (next !== undefined) current = next')
+      lines.push(`  next = await ${name}(current, request, locals)`, '  if (next !== undefined) current = next')
     }
     lines.push('  return current', '}')
   }
   const finish = (expression: string): string =>
-    onResponseExports.length > 0 ? `finishResponse(${expression}, request)` : expression
-  lines.push('export const fetch = async (request, env, executionContext) => {')
+    onResponseExports.length > 0 ? `finishResponse(${expression}, request, locals)` : expression
+  lines.push(
+    'export const fetch = async (request, env, executionContext) => {',
+    // The shared per-request bag, created before the first gate so gates,
+    // pipeline, and decorators all see the same object.
+    '  const locals = {}',
+  )
   if (onRequestExports.length > 0) {
     lines.push('  let early')
     for (const name of onRequestExports) {
       lines.push(
-        `  early = await ${name}(request, env, executionContext)`,
+        `  early = await ${name}(request, env, executionContext, locals)`,
         `  if (early !== undefined) return ${finish('early')}`,
       )
     }
   }
   lines.push(
-    `  return ${finish(`await handleFetch(request${emitContext.needsPlatform ? ', env, executionContext' : ''})`)}`,
+    `  return ${finish(`await handleFetch(request, locals${emitContext.needsPlatform ? ', env, executionContext' : ''})`)}`,
     '}',
   )
   return lines

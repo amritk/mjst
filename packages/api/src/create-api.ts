@@ -83,6 +83,7 @@ export const createApi = (options: ApiOptions): Api => {
     onError: options.onError,
     errors: options.errors,
     observe: options.observe,
+    observeUnmatched: options.observeUnmatched,
   }
 
   return {

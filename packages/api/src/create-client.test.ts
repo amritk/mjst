@@ -1,0 +1,317 @@
+import { describe, expect, it } from 'vitest'
+
+import { createApi } from './create-api'
+import { createClient } from './create-client'
+import { defineContract } from './define-contract'
+import { defineRoute } from './define-route'
+import { implementRoute } from './implement-route'
+import { toFetchHandler } from './to-fetch-handler'
+import { isUnexpectedStatusError } from './unexpected-status-error'
+
+/**
+ * The contracts are pure data (defineContract) and the server binds handlers
+ * separately — exactly the split a frontend/server pair would use. The client
+ * talks to the real pipeline through its injectable fetch, so these tests
+ * cover the whole loop with no network.
+ */
+const getUser = defineContract({
+  method: 'get',
+  path: '/users/{id}',
+  request: {
+    params: { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] },
+    query: {
+      type: 'object',
+      properties: { verbose: { type: 'boolean' }, tags: { type: 'array', items: { type: 'string' } } },
+    },
+  },
+  responses: {
+    200: {
+      body: {
+        type: 'object',
+        properties: { id: { type: 'integer' }, name: { type: 'string' } },
+        required: ['id', 'name'],
+      },
+    },
+    404: {},
+  },
+})
+
+const chat = defineContract({
+  method: 'post',
+  path: '/chat',
+  request: {
+    body: { type: 'object', properties: { message: { type: 'string' } }, required: ['message'] },
+    headers: { type: 'object', properties: { 'x-api-key': { type: 'string' } }, required: ['x-api-key'] },
+  },
+  responses: { 200: { contentType: 'text/plain; charset=utf-8' }, 401: {} },
+})
+
+const readFile = defineContract({
+  method: 'get',
+  path: '/files/{path+}',
+  request: { params: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
+  responses: { 200: { body: { type: 'object', properties: { path: {} } } } },
+})
+
+const health = defineContract({
+  method: 'get',
+  path: '/health',
+  responses: { 200: { body: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] } } },
+})
+
+const contracts = { getUser, chat, readFile, health }
+
+const routes = [
+  implementRoute(getUser, ({ params }) =>
+    params.id === 7 ? { status: 200, body: { id: 7, name: 'Ada' } } : { status: 404 },
+  ),
+  implementRoute(chat, ({ headers, body }) =>
+    headers['x-api-key'] === 'secret' ? { status: 200, body: `echo: ${body.message}` } : { status: 401 },
+  ),
+  implementRoute(readFile, ({ params }) => ({ status: 200, body: { path: params.path } })),
+  implementRoute(health, () => ({ status: 200, body: { ok: true } })),
+]
+
+/** Routes the client's requests straight into the fetch adapter — no sockets. */
+const makeClient = (captured?: Request[]) => {
+  const handler = toFetchHandler(createApi({ routes }))
+  return createClient(contracts, 'https://api.test', {
+    fetch: (url, init) => {
+      const request = new Request(url, init)
+      // Cloned so assertions can read the body after the server consumed it.
+      captured?.push(request.clone())
+      return handler(request)
+    },
+  })
+}
+
+describe('create-client', () => {
+  it('calls a route with typed params and returns the discriminated reply', async () => {
+    const client = makeClient()
+    const reply = await client.getUser({ params: { id: 7 }, query: {} })
+    expect(reply.status).toBe(200)
+    if (reply.status === 200) {
+      // Narrowed by status: body is the schema-typed object.
+      expect(reply.body.name).toBe('Ada')
+      expect(reply.response.headers.get('content-type')).toContain('application/json')
+    }
+  })
+
+  it('returns declared empty-body statuses without reading a body', async () => {
+    const client = makeClient()
+    const reply = await client.getUser({ params: { id: 1 }, query: {} })
+    expect(reply.status).toBe(404)
+    expect(reply.body).toBeUndefined()
+  })
+
+  it('serializes query values with array repeats and skips undefined', async () => {
+    const captured: Request[] = []
+    const client = makeClient(captured)
+    await client.getUser({ params: { id: 7 }, query: { verbose: true, tags: ['a', 'b'] } })
+    expect(new URL(captured[0]?.url ?? '').search).toBe('?verbose=true&tags=a&tags=b')
+  })
+
+  it('percent-encodes plain path parameters but keeps greedy slashes', async () => {
+    const captured: Request[] = []
+    const client = makeClient(captured)
+    const reply = await client.readFile({ params: { path: 'docs/2026/q1 report.pdf' } })
+    expect(new URL(captured[0]?.url ?? '').pathname).toBe('/files/docs/2026/q1%20report.pdf')
+    if (reply.status === 200) expect(reply.body).toEqual({ path: 'docs/2026/q1 report.pdf' })
+  })
+
+  it('exposes the raw Response for contentType statuses instead of parsing', async () => {
+    const client = makeClient()
+    const reply = await client.chat({ body: { message: 'hi' }, headers: { 'x-api-key': 'secret' } })
+    expect(reply.status).toBe(200)
+    if (reply.status === 200) {
+      // The stream is untouched — the caller reads it.
+      expect(await reply.response.text()).toBe('echo: hi')
+      expect(reply.response.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+    }
+  })
+
+  it('sends declared headers plus ad-hoc extras and JSON bodies', async () => {
+    const captured: Request[] = []
+    const client = makeClient(captured)
+    await client.chat({ body: { message: 'x' }, headers: { 'x-api-key': 'secret', 'x-trace': 'abc' } })
+    const sent = captured[0]
+    expect(sent?.headers.get('x-api-key')).toBe('secret')
+    expect(sent?.headers.get('x-trace')).toBe('abc')
+    expect(sent?.headers.get('content-type')).toBe('application/json')
+    expect(await sent?.json()).toEqual({ message: 'x' })
+  })
+
+  it('merges client-level headers from a per-call (async) provider', async () => {
+    const captured: Request[] = []
+    const handler = toFetchHandler(createApi({ routes }))
+    let token = 'first'
+    const client = createClient(contracts, 'https://api.test/', {
+      fetch: (url, init) => {
+        const request = new Request(url, init)
+        captured.push(request)
+        return handler(request)
+      },
+      headers: () => Promise.resolve({ authorization: `Bearer ${token}` }),
+    })
+    await client.health()
+    token = 'second'
+    await client.health()
+    expect(captured.map((request) => request.headers.get('authorization'))).toEqual(['Bearer first', 'Bearer second'])
+  })
+
+  it('takes no argument at all for contracts without request slots', async () => {
+    const client = makeClient()
+    const reply = await client.health()
+    if (reply.status === 200) expect(reply.body.ok).toBe(true)
+  })
+
+  it('throws a recognizable error for statuses the contract never declared', async () => {
+    const client = makeClient()
+    // id 'abc' fails validation server-side: a 400 the contract does not declare.
+    const failed = client.getUser({ params: { id: 'abc' as unknown as number }, query: {} })
+    await expect(failed).rejects.toThrow(/Undeclared 400 response for 'getUser'/)
+    const error = await failed.catch((thrown: unknown) => thrown)
+    expect(isUnexpectedStatusError(error)).toBe(true)
+    if (isUnexpectedStatusError(error)) {
+      // The response rides along unread, so error handling can inspect it.
+      expect(error.response.status).toBe(400)
+      expect(((await error.response.json()) as { error: string }).error).toBe('validation_failed')
+    }
+  })
+
+  it('aborts through the per-call signal', async () => {
+    const client = createClient(contracts, 'https://api.test', {
+      fetch: (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+        }),
+    })
+    const controller = new AbortController()
+    const call = client.health({ signal: controller.signal })
+    controller.abort()
+    await expect(call).rejects.toThrow('aborted')
+  })
+
+  it('sends form bodies as urlencoded pairs with array repeats', async () => {
+    const signup = defineContract({
+      method: 'post',
+      path: '/signup',
+      request: {
+        body: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            age: { type: 'integer' },
+            tags: { type: 'array', items: { type: 'string' } },
+          },
+          required: ['name', 'age'],
+        },
+        bodyType: 'form',
+      },
+      responses: { 201: { body: { type: 'object' } } },
+    })
+    const server = toFetchHandler(
+      createApi({ routes: [implementRoute(signup, ({ body }) => ({ status: 201, body }))] }),
+    )
+    const client = createClient({ signup }, 'https://api.test', {
+      fetch: (url, init) => server(new Request(url, init)),
+    })
+    const reply = await client.signup({ body: { name: 'Ada', age: 30, tags: ['a', 'b'] } })
+    expect(reply.status).toBe(201)
+    // The server coerced the urlencoded strings back per the schema.
+    if (reply.status === 201) expect(reply.body).toEqual({ name: 'Ada', age: 30, tags: ['a', 'b'] })
+  })
+
+  it('sends multipart bodies with File parts intact', async () => {
+    const upload = defineContract({
+      method: 'post',
+      path: '/upload',
+      request: {
+        body: {
+          type: 'object',
+          properties: { title: { type: 'string' }, attachment: {} },
+          required: ['title', 'attachment'],
+        },
+        bodyType: 'multipart',
+      },
+      responses: { 200: { body: { type: 'object' } } },
+    })
+    const server = toFetchHandler(
+      createApi({
+        routes: [
+          implementRoute(upload, async ({ body }) => {
+            const { title, attachment } = body as { title: string; attachment: File }
+            return {
+              status: 200,
+              body: { title, name: attachment.name, byteLength: (await attachment.arrayBuffer()).byteLength },
+            }
+          }),
+        ],
+      }),
+    )
+    const client = createClient({ upload }, 'https://api.test', {
+      fetch: (url, init) => server(new Request(url, init)),
+    })
+    const reply = await client.upload({
+      body: { title: 'report', attachment: new File([new Uint8Array(5)], 'r.bin') },
+    })
+    if (reply.status === 200) expect(reply.body).toEqual({ title: 'report', name: 'r.bin', byteLength: 5 })
+  })
+
+  it('serializes declared cookies onto the cookie header', async () => {
+    const dashboard = defineContract({
+      method: 'get',
+      path: '/dashboard',
+      request: {
+        cookies: {
+          type: 'object',
+          properties: { session: { type: 'string' }, visits: { type: 'integer' } },
+          required: ['session'],
+        },
+      },
+      responses: { 200: { body: { type: 'object' } } },
+    })
+    const server = toFetchHandler(
+      createApi({
+        routes: [
+          implementRoute(dashboard, ({ cookies }) => ({
+            status: 200,
+            body: { session: cookies.session, visits: cookies.visits ?? 0 },
+          })),
+        ],
+      }),
+    )
+    const client = createClient({ dashboard }, 'https://api.test', {
+      fetch: (url, init) => server(new Request(url, init)),
+    })
+    const reply = await client.dashboard({ cookies: { session: 'abc 123', visits: 2 } })
+    // The value round-trips percent-encoded — the server unquotes and decodes.
+    if (reply.status === 200) expect(reply.body).toEqual({ session: 'abc 123', visits: 2 })
+  })
+
+  it('works with one-shot defineRoute values too — routes are contracts', async () => {
+    const ping = defineRoute({
+      method: 'get',
+      path: '/ping',
+      responses: { 200: { body: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'] } } },
+      handler: () => ({ status: 200, body: { pong: true } }),
+    })
+    const server = toFetchHandler(createApi({ routes: [ping] }))
+    const client = createClient({ ping }, 'https://api.test', {
+      fetch: (url, init) => server(new Request(url, init)),
+    })
+    const reply = await client.ping()
+    if (reply.status === 200) expect(reply.body.pong).toBe(true)
+  })
+
+  it('rejects wrongly-typed inputs at compile time', () => {
+    const client = makeClient()
+    // @ts-expect-error — id must be a number
+    void client.getUser({ params: { id: 'seven' }, query: {} }).catch(() => undefined)
+    // @ts-expect-error — params are required when declared
+    void client.getUser({ query: {} }).catch(() => undefined)
+    // @ts-expect-error — declared headers are required
+    void client.chat({ body: { message: 'x' } }).catch(() => undefined)
+    expect(true).toBe(true)
+  })
+})

@@ -30,6 +30,10 @@ const routes: Record<string, AnyRouteContract> = {
   buildInfo: corpus.buildInfo,
   releaseInfo: corpus.releaseInfo,
   dashboard: corpus.dashboard,
+  platformInfo: corpus.platformInfo,
+  login: corpus.login,
+  bookSlot: corpus.bookSlot,
+  localsEcho: corpus.localsEcho,
 }
 const info = { title: 'Differential', version: '1.0.0' }
 
@@ -56,11 +60,12 @@ const emit = (): string =>
     ...OPENAPI_EXTRAS,
     contextExport: 'createAppContext',
     mounts: { '/mounted': 'mountEcho' },
-    onRequestExports: ['gateTeapot'],
-    onResponseExports: ['stampHeader'],
+    onRequestExports: ['gateResolveTenant', 'gateTeapot'],
+    onResponseExports: ['stampHeader', 'stampLocals'],
     errorsExport: 'corpusErrors',
     onErrorExport: 'corpusOnError',
     observeExport: 'recordObservation',
+    observeUnmatchedExport: 'recordUnmatched',
     maxBodyBytes: MAX_BODY_BYTES,
   })
 
@@ -110,11 +115,12 @@ describe('compile-to-module', () => {
           errors: corpus.corpusErrors,
           onError: corpus.corpusOnError,
           observe: corpus.recordObservation,
+          observeUnmatched: corpus.recordUnmatched,
         }),
         {
           mounts: { '/mounted': corpus.mountEcho },
-          onRequest: [corpus.gateTeapot],
-          onResponse: [corpus.stampHeader],
+          onRequest: [corpus.gateResolveTenant, corpus.gateTeapot],
+          onResponse: [corpus.stampHeader, corpus.stampLocals],
           maxBodyBytes: MAX_BODY_BYTES,
         },
       )
@@ -265,6 +271,30 @@ describe('compile-to-module', () => {
         // exercise the routes themselves.
         () => new Request('http://localhost/build-info'),
         () => new Request('http://localhost/release-info'),
+        // The platform-request escape hatch: both engines run on fetch, so
+        // both must expose the same Request through `request.raw`.
+        () => new Request('http://localhost/platform?x=1'),
+        // Repeated set-cookie headers from a string[] value (compared via
+        // getSetCookie below), next to an ordinary single-valued header.
+        () => new Request('http://localhost/login', { method: 'POST' }),
+        // Refinement: pass, cross-field failure (through the custom
+        // validationFailed formatter, custom path intact), and a throwing
+        // refine that must take the onError path.
+        () => slot({ start: 1, end: 5 }),
+        () => slot({ start: 5, end: 2 }),
+        () => slot({ start: 13, end: 20 }),
+        // Refinement runs only after schema validation — this fails the slot
+        // check, never reaching refine.
+        () => slot({ start: 'soon', end: 2 }),
+        // The locals bag: gate → handler → decorator flow, with and without
+        // the tenant header the gate resolves.
+        () => new Request('http://localhost/locals-echo', { headers: { 'x-tenant': 'acme-inc' } }),
+        () => new Request('http://localhost/locals-echo'),
+        // The context factory sees the same bag the gate wrote.
+        () => new Request('http://localhost/whoami', { headers: { 'x-tenant': 'acme-inc' } }),
+        // Unmatched requests with the tenant gate: the 404 formatter and the
+        // unmatched observer both see the shared locals.
+        () => new Request('http://localhost/nowhere', { headers: { 'x-tenant': 'acme-inc' } }),
       ]
 
       for (const makeRequest of cases) {
@@ -282,9 +312,21 @@ describe('compile-to-module', () => {
 
         expect(fromCompiled.status, label).toBe(fromRuntime.status)
         expect(contentType(fromCompiled), label).toBe(contentType(fromRuntime))
-        for (const header of ['x-deleted', 'x-served-by', 'x-stamped', 'x-frame-protocol', 'x-cache', 'allow']) {
+        for (const header of [
+          'x-deleted',
+          'x-served-by',
+          'x-stamped',
+          'x-frame-protocol',
+          'x-cache',
+          'x-single',
+          'x-locals',
+          'allow',
+        ]) {
           expect(fromCompiled.headers.get(header), label).toBe(fromRuntime.headers.get(header))
         }
+        // Repeated set-cookie values must survive as separate header lines in
+        // both engines — getSetCookie is the only un-folded view.
+        expect(fromCompiled.headers.getSetCookie(), label).toEqual(fromRuntime.headers.getSetCookie())
         const [runtimeText, compiledText] = [await fromRuntime.text(), await fromCompiled.text()]
         if (runtimeText === '' || compiledText === '' || contentType(fromRuntime) !== 'application/json') {
           // Raw statuses (streams, CSV) must match byte for byte.
@@ -324,6 +366,13 @@ const post = (body: unknown): Request =>
 
 const metric = (body: unknown): Request =>
   new Request('http://localhost/metrics', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+const slot = (body: unknown): Request =>
+  new Request('http://localhost/slots', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),

@@ -30,9 +30,14 @@ Express, Fastify, or raw `node:http` (Node).
   request-header schemas, hook chains for CORS/rate limits/security headers,
   and pluggable error envelopes — each shipped in both the runtime and
   compiled engines.
-- **One dependency, many integrations.** Drizzle, Better Auth, Sentry, and a
-  generated typed client (Hey API) connect through seams — `context`,
-  `mounts`, `onError`, OpenAPI — not bundled SDKs. Recipes below.
+- **Contract/handler split with a derived typed client.** Declare contracts as
+  pure data (`defineContract`), bind server handlers separately
+  (`implementRoute`), and derive a typed fetch client (`createClient`) from
+  the same literals — no codegen, browser-safe imports, the `hc` replacement
+  for teams leaving Hono RPC.
+- **One dependency, many integrations.** Drizzle, Better Auth, Sentry, and
+  typed clients connect through seams — `context`, `mounts`, `onError`,
+  `locals`, OpenAPI — not bundled SDKs. Recipes below.
 
 ## Usage
 
@@ -68,6 +73,92 @@ const api = createApi({
 document (configurable via `openApiPath`). Note: for the types to flow, write
 schemas inline (as above) or declare shared ones `as const` — a plain `const`
 widens the literal before `defineRoute` sees it.
+
+### Contracts without handlers (browser-safe)
+
+`defineRoute` couples the contract to its handler, which is perfect for a
+server-only codebase — but a frontend that wants the contract types must not
+bundle server code. `defineContract` declares the same contract as **pure
+data**, `implementRoute` binds the handler server-side, and the one-shot
+`defineRoute` keeps working unchanged (every route *is* a contract):
+
+```ts
+// contracts.ts — imported by server AND browser
+import { defineContract } from '@amritk/api'
+
+export const getUser = defineContract({
+  method: 'get',
+  path: '/users/{id}',
+  request: { params: { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] } },
+  responses: {
+    200: { body: { type: 'object', properties: { id: { type: 'integer' }, name: { type: 'string' } }, required: ['id', 'name'] } },
+    404: {},
+  },
+})
+```
+
+```ts
+// routes.ts — server only
+import { implementRoute, routeImplementer } from '@amritk/api'
+import * as contracts from './contracts'
+
+export const getUser = implementRoute(contracts.getUser, ({ params }) =>
+  params.id === 1 ? { status: 200, body: { id: 1, name: 'Ada' } } : { status: 404 },
+)
+
+// With an app context, bind the implementer once (the routeFactory counterpart):
+const implementAppRoute = routeImplementer<AppContext>()
+export const getProfile = implementAppRoute(contracts.getProfile, ({ context }) => /* ... */)
+```
+
+### Typed client: `createClient`
+
+`createClient` derives a typed fetch client from a record of contracts — no
+codegen, no OpenAPI round-trip, works in any browser/worker/Node bundle. The
+same literals that type the handlers type each call, so client and server
+cannot drift. This is the framework-agnostic replacement for Hono's `hc`:
+
+```ts
+// client.ts — browser bundle; pulls in zero server code
+import { createClient, isUnexpectedStatusError } from '@amritk/api'
+import * as contracts from './contracts'
+
+const client = createClient(contracts, 'https://api.example.com', {
+  headers: () => ({ authorization: `Bearer ${readToken()}` }), // static record or (async) function
+  fetch: myFetch, // injectable for tests; defaults to global fetch
+})
+
+const reply = await client.getUser({ params: { id: 7 }, signal: AbortSignal.timeout(5000) })
+if (reply.status === 200) reply.body.name // typed from the schema — narrowing on status
+if (reply.status === 404) /* declared, typed, no body */;
+```
+
+- **Replies are a discriminated union on `status`,** derived from the
+  `responses` map. JSON statuses carry a typed `body` (parsed eagerly);
+  statuses declared with a raw `contentType` carry only the untouched
+  `Response` — read the stream and headers yourself (the AI-chat shape):
+
+  ```ts
+  const chat = await client.chat({ body: { message: 'hi' }, headers: { 'x-api-key': key } })
+  if (chat.status === 200) for await (const chunk of chat.response.body) render(chunk)
+  ```
+
+- **Inputs are typed per slot:** declared `params`/`query`/`body`/`cookies`
+  are required and schema-typed, `headers` accepts the declared shape plus
+  ad-hoc extras, and a per-call `signal` cancels. Contracts with no request
+  slots call with no argument at all (`client.health()`).
+- **Wire format follows the contract:** path params are segment-encoded
+  (greedy `{path+}` keeps its slashes), array query values repeat the key,
+  and `bodyType: 'form'` / `'multipart'` serialize as urlencoded pairs /
+  `FormData` with `File` values intact.
+- **Undeclared statuses throw** (instead of poisoning the union): catch and
+  inspect with `isUnexpectedStatusError(error)` — the unread `Response` rides
+  on the error. Declare the statuses you want to handle in the contract.
+
+The OpenAPI → [Hey API](https://heyapi.dev) route still works for external
+consumers who want a standalone generated SDK (`bunx @hey-api/openapi-ts -i
+http://localhost:3000/openapi.json -o src/client`); `createClient` is the
+lighter path for monorepo-internal frontends.
 
 ### Serving it
 
@@ -106,6 +197,7 @@ Writing an adapter for anything else is ~15 lines: construct one
 | `onError` | bare 500 | Map a thrown handler error to a response. Receives `(error, request, { route, env, executionContext })` — everything error reporting needs. The default never leaks the error message. |
 | `errors` | built-in bodies | Reshape the pipeline's own cold-path responses (`notFound`, `invalidJson`, `invalidBody`, `unsupportedMediaType`, `payloadTooLarge`, `validationFailed`, `methodNotAllowed`) to match an existing wire format. |
 | `observe` | — | Called once per matched request with `{ route, request, status, durationMs, env, executionContext }` — the seam for per-route latency metrics and structured request logs. See [Observability](#observability-metrics-and-request-logs). |
+| `observeUnmatched` | — | The unmatched-request counterpart: called once per 404/405 with `route: undefined`, for request-logging parity with framework middleware. |
 | `servers` / `securitySchemes` / `security` | — | Document-level OpenAPI settings: base URLs, named auth schemes (`components.securitySchemes`), and the default security requirement. Routes add `security` / `deprecated` per operation. |
 
 ### Validation semantics
@@ -147,6 +239,32 @@ Writing an adapter for anything else is ~15 lines: construct one
   `@amritk/runtime-validators` and `source` is `params`, `query`, `headers`,
   or `body`. The `errors` option reshapes this (and the other built-in
   bodies) when deployed clients already parse a different envelope.
+
+### Cross-field refinement
+
+Per-slot JSON Schema cannot see across fields. A route (or contract) may
+declare `refine`, which runs synchronously **after** every declared slot has
+validated — so its inputs are already typed and coerced — and **before** the
+context factory and handler. Returned issues reject the request through the
+standard `validation_failed` envelope (and the `validationFailed` formatter),
+with your own `path`/`message`; `undefined` or `[]` accepts it. A thrown
+refine takes the `onError` path like any handler error:
+
+```ts
+const chat = defineRoute({
+  method: 'post',
+  path: '/chat',
+  request: { body: chatBodySchema },
+  refine: ({ body }) => {
+    const total = body.messages.reduce((n, m) => n + m.content.length, 0)
+    return total <= 64_000
+      ? undefined
+      : [{ path: '/messages', message: `total message length ${total} exceeds 64k` }]
+  },
+  responses: { 200: { contentType: 'text/event-stream' } },
+  handler: /* ... */,
+})
+```
 
 ### Form and multipart bodies
 
@@ -253,6 +371,64 @@ and `compileToModule`) rejects larger bodies with a 413 — checked against
 `content-length` up front, enforced on the running byte count as the body
 streams in, for pipeline and handler-initiated reads alike.
 
+### The platform request: `request.raw`
+
+`ApiRequest` is framework-neutral on purpose, but platforms attach real data
+to their native request objects — Cloudflare's `request.cf` carries geo
+coordinates, ASN, TLS metadata. Each adapter exposes its native request as
+`request.raw`: the Web `Request` on the fetch adapter and compiled engine,
+the `IncomingMessage` on the Node adapter. It is typed `unknown` because
+reading it is platform-specific **by design** — the cast at the use site is
+the honest record of that coupling:
+
+```ts
+const nearby = defineRoute({
+  method: 'get',
+  path: '/nearby',
+  responses: { 200: { body: resultsSchema } },
+  handler: ({ request }) => {
+    const cf = (request.raw as Request & { cf?: IncomingRequestCfProperties }).cf
+    return { status: 200, body: search(cf?.latitude, cf?.longitude) }
+  },
+})
+```
+
+The context factory sees the same request, so platform data can flow into the
+app context once instead of per handler. Portable code should keep `raw`
+reads behind a seam (a context field) so only one module knows the platform.
+
+### Multiple `set-cookie` headers
+
+Reply headers accept `string | string[]` per name. An array is sent as that
+many separate header lines — the only correct encoding for repeated
+`set-cookie`, which must never be comma-folded (RFC 6265). This is what
+session + CSRF (Better Auth) or session + Stripe-state flows need:
+
+```ts
+const login = defineRoute({
+  method: 'post',
+  path: '/login',
+  request: { body: credentialsSchema },
+  responses: { 200: { body: profileSchema } },
+  handler: async ({ body }) => ({
+    status: 200,
+    headers: {
+      'set-cookie': [
+        `session=${await createSession(body)}; Path=/; HttpOnly; Secure`,
+        `csrf=${issueCsrf()}; Path=/; Secure`,
+      ],
+    },
+    body: profile,
+  }),
+})
+```
+
+Both engines serialize arrays identically (the differential corpus covers
+it), and the Node adapter validates each element before `writeHead`. With
+`validateResponses` on, a declared response-header schema sees the value as
+given — a string or the array — so declare `anyOf` if you validate a header
+that can repeat.
+
 ### Hooks: CORS, rate limits, security headers
 
 Hooks, `mounts`, and `createCors` are features of the **fetch adapter** —
@@ -288,6 +464,42 @@ const handler = toFetchHandler(api, {
 })
 // Compiled: compileToModule({ ..., onRequestExports: ['gate'], onResponseExports: ['stamp'] })
 ```
+
+### Per-request state: `locals`
+
+Every request carries one shared scratch bag. Gates receive it as their
+fourth argument, decorators as their third, the context factory as
+`input.locals`, and handlers as `request.locals` — so an auth gate resolves
+the tenant **once** and everyone downstream reads it, and a rate-limit gate's
+counters get stamped onto the response without recomputing:
+
+```ts
+const handler = toFetchHandler(api, {
+  onRequest: [
+    async (request, env, _executionContext, locals) => {
+      const tenant = await resolveTenant(request, env)
+      if (tenant === undefined) return new Response('{"error":"unauthorized"}', { status: 401 })
+      locals.tenant = tenant // handlers see request.locals.tenant
+      const usage = await checkDemoLimit(tenant, env) // KV-backed rate limit
+      if (usage.blocked) return new Response('{"error":"rate_limited"}', { status: 429 })
+      locals.usage = usage
+      return undefined
+    },
+  ],
+  onResponse: [
+    (response, _request, locals) => {
+      const usage = locals.usage as Usage | undefined
+      if (usage !== undefined) response.headers.set('x-demo-remaining', String(usage.remaining))
+    },
+  ],
+})
+// Compiled: identical wiring via onRequestExports/onResponseExports.
+```
+
+The bag is plain `Record<string, unknown>` — no reserved keys. Without hooks
+it is created lazily on first `request.locals` access, so untouched requests
+never allocate. `onError` handlers and error formatters see the same bag
+through their `request`, so a 404 logger can still label the tenant.
 
 ### Plugging in generated validators
 
@@ -327,8 +539,10 @@ the same request corpus through both, so switching is just an import swap.
 Everything `createApi`/`toFetchHandler` accept has a compiled equivalent that
 references *exports of your routes module*, so both engines execute the same
 values: `contextExport`, `mounts`, `onRequestExports`, `onResponseExports`,
-`errorsExport`, `onErrorExport`, `observeExport`, `maxBodyBytes`, and the
-OpenAPI extras (`servers`, `securitySchemes`, `security`).
+`errorsExport`, `onErrorExport`, `observeExport`, `observeUnmatchedExport`,
+`maxBodyBytes`, and the OpenAPI extras (`servers`, `securitySchemes`,
+`security`). Contract features (`refine`, `string[]` headers, `request.raw`,
+`locals`) work identically in both — the differential corpus pins each one.
 
 ```ts
 // scripts/compile-api.ts — the build step
@@ -460,6 +674,22 @@ const api = createApi({
 // Compiled: compileToModule({ ..., observeExport: 'observe' })
 ```
 
+For full request-log parity with framework middleware — every request logged,
+not just matched ones — add `observeUnmatched`, called once per 404/405 with
+`route: undefined` (a separate hook so `observe`'s `route` stays
+non-optional). One logger can serve both:
+
+```ts
+const logRequest = ({ route, request, status, durationMs }: RequestObservation | UnmatchedObservation) => {
+  log.info(`${request.method} ${route?.path ?? request.path} → ${status} in ${durationMs.toFixed(1)}ms`)
+}
+const api = createApi({ routes, observe: logRequest, observeUnmatched: logRequest })
+// Compiled: compileToModule({ ..., observeExport: 'logRequest', observeUnmatchedExport: 'logRequest' })
+```
+
+The OpenAPI document path and gate short-circuits remain unobserved by both
+hooks.
+
 Keep the observer synchronous-fast — fire-and-forget any I/O (or hand it to
 `executionContext.waitUntil` on Workers, which the observation carries).
 
@@ -517,11 +747,11 @@ const api = createApi({ routes, onError: sentry.onError })
 A throwing capture is swallowed (the client still gets its 500), and
 validation failures are not captured — those are the caller's bug.
 
-### Typed client: Hey API
+### Typed client for external consumers: Hey API
 
-The generated OpenAPI document is verified [Hey API](https://heyapi.dev)
-input, which turns it into a typed fetch SDK — a framework-agnostic
-replacement for RPC clients like Hono's `hc`:
+For consumers outside the monorepo (who cannot import your contracts), the
+generated OpenAPI document is verified [Hey API](https://heyapi.dev) input,
+which turns it into a standalone typed fetch SDK:
 
 ```bash
 bunx @hey-api/openapi-ts -i http://localhost:3000/openapi.json -o src/client
@@ -535,7 +765,8 @@ const { data } = await getUser({ path: { id: 7 } }) // data: { id: number; name:
 Client and server both derive from the same schemas, so they cannot drift —
 this package's integration test generates a client from `toOpenApi` output
 and asserts the contract types (typed path params, required headers, error
-variants) come through.
+variants) come through. Monorepo-internal frontends should prefer
+[`createClient`](#typed-client-createclient), which needs no codegen at all.
 
 ### Schemas from Zod, TypeBox, Valibot, Effect
 
@@ -553,10 +784,12 @@ yours:
 | Drizzle / any ORM | `context` factory builds the handle per request from `env` |
 | Better Auth / any self-contained router | `mounts` passthrough + session lookup in `context` |
 | Sentry / error reporting | `onError` (`createSentry` packages it) |
-| Metrics, request logging | `observe` (route pattern, status, duration per matched request) |
+| Metrics, request logging | `observe` + `observeUnmatched` (route pattern, status, duration) |
 | Rate limits, feature flags, CSRF, origin checks | `onRequest` gates |
 | Security headers, CORS | `onResponse` decorators / `createCors` |
-| Typed clients | generated from the OpenAPI document (Hey API) |
+| Auth ↔ handler state (resolved tenants, counters) | per-request `locals` bag |
+| Platform data (Workers `request.cf` geo/ASN) | `request.raw` escape hatch |
+| Typed clients | `createClient` from shared contracts; Hey API from OpenAPI for external consumers |
 
 ## Requirements and stability
 

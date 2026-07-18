@@ -9,10 +9,12 @@ import type { RouteMatch } from './match-route'
 import { matchRoute } from './match-route'
 import { matchesBodyType, parseFormBody, parseMultipartBody } from './parse-body'
 import { isPayloadTooLargeError } from './payload-too-large'
+import { refinementFailure } from './refinement-failure'
 import type {
   ApiRequest,
   ApiResponse,
   ContextFactory,
+  ErasedRefineInput,
   ErasedRequestContext,
   ErrorFormatters,
   OnErrorDetails,
@@ -20,6 +22,7 @@ import type {
   RequestObservation,
   RouteReplyValue,
   RouteTable,
+  UnmatchedObservation,
   ValidationFailureBody,
 } from './types'
 
@@ -36,6 +39,7 @@ export type ApiInternals = {
   readonly onError: ((error: unknown, request: ApiRequest, details: OnErrorDetails) => ApiResponse) | undefined
   readonly errors: ErrorFormatters | undefined
   readonly observe: ((observation: RequestObservation) => void) | undefined
+  readonly observeUnmatched: ((observation: UnmatchedObservation) => void) | undefined
 }
 
 /**
@@ -79,6 +83,9 @@ export const handleRequest = (
   }
 
   const errors = internals.errors
+  // Sampled before matching only when unmatched requests are observed, so
+  // their durations cover the same span observe would have seen.
+  const unmatchedStart = internals.observeUnmatched === undefined ? 0 : performance.now()
   // Per RFC 9110 HEAD is GET without the body, so a HEAD request with no
   // explicitly declared HEAD route runs the GET pipeline — handler included —
   // and the adapters discard the body from whatever comes back.
@@ -96,20 +103,35 @@ export const handleRequest = (
         allow.push(method)
       }
     }
+    let miss: ApiResponse
     if (allow.length > 0) {
       // GET routes implicitly serve HEAD (see the fallback above), so the
       // allow list advertises it whenever GET appears.
       if (allow.includes('GET') && !allow.includes('HEAD')) allow.push('HEAD')
       allow.sort()
-      return Promise.resolve(
-        errors?.methodNotAllowed?.(allow, request) ?? {
-          status: 405,
-          headers: { allow: allow.join(', ') },
-          body: { error: 'method_not_allowed' },
-        },
-      )
+      miss = errors?.methodNotAllowed?.(allow, request) ?? {
+        status: 405,
+        headers: { allow: allow.join(', ') },
+        body: { error: 'method_not_allowed' },
+      }
+    } else {
+      miss = errors?.notFound?.(request) ?? NOT_FOUND
     }
-    return Promise.resolve(errors?.notFound?.(request) ?? NOT_FOUND)
+    if (internals.observeUnmatched !== undefined) {
+      try {
+        internals.observeUnmatched({
+          route: undefined,
+          request,
+          status: miss.status,
+          durationMs: performance.now() - unmatchedStart,
+          env,
+          executionContext,
+        })
+      } catch {
+        // A throwing observer must never fail the request it watched.
+      }
+    }
+    return Promise.resolve(miss)
   }
 
   const observe = internals.observe
@@ -210,13 +232,26 @@ const runRoute = async (
 
   let reply: RouteReplyValue
   try {
+    // Refinement runs after every slot validated (its whole point is seeing
+    // them together) and inside this try so a throwing refine takes the
+    // handler-error path — a cross-field check is app code, not transport.
+    const refine = route.contract.refine
+    if (refine !== undefined) {
+      const issues = refine({ params, query, body, headers, cookies } as ErasedRefineInput)
+      if (issues !== undefined && issues.length > 0) {
+        const failure = refinementFailure(issues)
+        if (errors?.validationFailed !== undefined) return errors.validationFailed(failure, request)
+        const failureBody: ValidationFailureBody = { error: 'validation_failed', ...failure }
+        return { status: 400, body: failureBody }
+      }
+    }
     // The app context is built after validation so the factory (a session
     // lookup, a database handle) never runs for requests that will be 400ed
     // anyway. A factory error takes the same path as a handler error.
     const appContext =
       internals.createContext === undefined
         ? undefined
-        : await internals.createContext({ request, env, executionContext })
+        : await internals.createContext({ request, env, executionContext, locals: request.locals })
     // The erased handler type exists for contract assignability (see
     // AnyRouteContract); the values really do match the contract's schemas at
     // this point, which is what the cast asserts.
