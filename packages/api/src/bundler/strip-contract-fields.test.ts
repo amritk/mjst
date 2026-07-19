@@ -240,6 +240,24 @@ describe('strip-contract-fields', () => {
     expect(sent?.body).toEqual({ text: 'hi' })
   })
 
+  it('preserves the total line count of a multi-line call site', () => {
+    // The bundler plugins return `map: null`, so downstream sourcemaps only
+    // stay aligned if the strip never changes which line anything sits on.
+    const stripped = stripContractFields(widget)
+    expect(stripped).not.toBe(widget)
+    expect(stripped.split('\n').length).toBe(widget.split('\n').length)
+  })
+
+  it('keeps code after a stripped call site on its original line numbers', () => {
+    const source = `${widget}\nconst sentinelAfterContracts = 1\n`
+    const stripped = stripContractFields(source)
+    const lineOf = (text: string, needle: string): number => text.split('\n').findIndex((line) => line.includes(needle))
+    // The second contract starts after the first stripped one — it must not
+    // have drifted, and neither may the plain statement after both.
+    expect(lineOf(stripped, 'sendMessage')).toBe(lineOf(source, 'sendMessage'))
+    expect(lineOf(stripped, 'sentinelAfterContracts')).toBe(lineOf(source, 'sentinelAfterContracts'))
+  })
+
   it('handles quoted keys, trailing commas, and comments between properties', () => {
     const source = `const c = defineContract({
       // the verb

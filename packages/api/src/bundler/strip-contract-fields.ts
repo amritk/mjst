@@ -10,7 +10,8 @@
  * runtime only checks `body !== undefined`). Types are compile-time, so the
  * consumer's TypeScript never notices; dropping a schema property also drops
  * the bundler's reference to any imported schema value, letting tree-shaking
- * remove it. The Vite and Bun plugins in this directory apply it per module.
+ * remove it. The Vite, Rollup, esbuild, and Bun plugins in this directory
+ * apply it per module.
  *
  * The scanner is deliberately conservative: any call site it cannot parse
  * with certainty (spreads, computed keys, explicit type arguments, syntax it
@@ -337,10 +338,27 @@ const rewriteContract = (source: string, contract: ParsedObject): string => {
   return emitObject(parts)
 }
 
+const countNewlines = (text: string): number => {
+  let count = 0
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '\n') count += 1
+  }
+  return count
+}
+
 /**
  * Rewrites every parseable `defineContract({ ... })` call site in a module's
  * source down to the fields the client runtime reads. Pure text in, text out
- * — the Vite and Bun plugins wire it into their load pipelines.
+ * — the Vite, Rollup, esbuild, and Bun plugins wire it into their load
+ * pipelines.
+ *
+ * The rewrite is line-preserving: every newline the original call site
+ * spanned is re-emitted as padding right after the rewritten literal, so code
+ * following the call site keeps its original line numbers. The plugins return
+ * `map: null` (or no map at all), and without this padding any downstream
+ * sourcemap would drift by the number of collapsed lines. Columns within an
+ * edited line may still shift; minifiers collapse the padding again, so
+ * bundle size is unaffected.
  */
 export const stripContractFields = (source: string): string => {
   let output = ''
@@ -373,7 +391,11 @@ export const stripContractFields = (source: string): string => {
       searchFrom = afterName
       continue
     }
-    output += source.slice(copiedTo, braceIndex) + rewriteContract(source, parsed)
+    const rewritten = rewriteContract(source, parsed)
+    // The rewritten literal keeps only fragments of the original span, so it
+    // can never gain newlines — pad the difference to keep later lines put.
+    const removedNewlines = countNewlines(source.slice(braceIndex, parsed.end)) - countNewlines(rewritten)
+    output += source.slice(copiedTo, braceIndex) + rewritten + '\n'.repeat(Math.max(0, removedNewlines))
     copiedTo = parsed.end
     searchFrom = parsed.end
   }

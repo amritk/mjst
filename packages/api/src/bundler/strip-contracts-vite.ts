@@ -1,3 +1,4 @@
+import { isScannableId } from './is-scannable-id'
 import { stripContractFields } from './strip-contract-fields'
 
 /**
@@ -27,9 +28,6 @@ export type StripContractsViteOptions = {
   readonly exclude?: RegExp
 }
 
-/** Module ids worth scanning — TS/JS sources, with any query suffix Vite adds. */
-const SCANNABLE_ID = /\.(?:[cm]?[jt]s|[jt]sx)(?:\?|$)/
-
 /**
  * Vite plugin that strips server/OpenAPI freight from `defineContract` call
  * sites in browser builds (see `stripContractFields` for exactly what goes).
@@ -51,7 +49,7 @@ export const stripContractsVite = (options?: StripContractsViteOptions): StripCo
   apply: 'build',
   transform: (code, id, transformOptions) => {
     if (transformOptions?.ssr === true) return null
-    if (!SCANNABLE_ID.test(id) || !code.includes('defineContract')) return null
+    if (!isScannableId(id) || !code.includes('defineContract')) return null
     if (options?.exclude?.test(id) === true) return null
     const stripped = stripContractFields(code)
     return stripped === code ? null : { code: stripped, map: null }
