@@ -23,6 +23,16 @@ export type StripContractsBunPlugin = {
   }) => void
 }
 
+/** Options for {@link stripContractsBun}. */
+export type StripContractsBunOptions = {
+  /**
+   * File paths to leave untouched. The escape hatch for modules whose
+   * contracts the app itself reads at runtime (client-side validation
+   * against `contract.request` schemas) — those must keep their freight.
+   */
+  readonly exclude?: RegExp
+}
+
 const SCANNABLE_PATH = /\.(?:[cm]?[jt]s|[jt]sx)$/
 
 const loaderFor = (path: string): OnLoadResult['loader'] => {
@@ -49,10 +59,11 @@ const loaderFor = (path: string): OnLoadResult['loader'] => {
  * })
  * ```
  */
-export const stripContractsBun = (): StripContractsBunPlugin => ({
+export const stripContractsBun = (options?: StripContractsBunOptions): StripContractsBunPlugin => ({
   name: 'amritk-api-strip-contracts',
   setup: (build) => {
     build.onLoad({ filter: SCANNABLE_PATH }, async (args) => {
+      if (options?.exclude?.test(args.path) === true) return undefined
       const source = await readFile(args.path, 'utf-8')
       if (!source.includes('defineContract')) return undefined
       const stripped = stripContractFields(source)

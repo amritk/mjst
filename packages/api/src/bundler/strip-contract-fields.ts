@@ -287,12 +287,21 @@ const parseValueObject = (source: string, property: ObjectProperty): ParsedObjec
 
 const emitObject = (parts: readonly string[]): string => (parts.length === 0 ? '{}' : `{ ${parts.join(', ')} }`)
 
+/**
+ * The replacement for a `body` schema. The runtime only checks
+ * `body !== undefined`, so a schema collapses to `body: true` — except a
+ * literal `body: undefined`, which must stay `undefined` to keep meaning "no
+ * body" after the strip.
+ */
+const bodyMarker = (source: string, field: ObjectProperty): string =>
+  source.slice(field.value.start, field.value.end).trim() === 'undefined' ? field.raw : 'body: true'
+
 const rewriteRequest = (source: string, property: ObjectProperty): string => {
   const parsed = parseValueObject(source, property)
   if (parsed === null) return property.raw
   const parts: string[] = []
   for (const field of parsed.properties) {
-    if (field.name === 'body') parts.push('body: true')
+    if (field.name === 'body') parts.push(bodyMarker(source, field))
     else if (!STRIP_REQUEST.has(field.name)) parts.push(field.raw)
   }
   return `request: ${emitObject(parts)}`
@@ -310,7 +319,7 @@ const rewriteResponses = (source: string, property: ObjectProperty): string => {
     }
     const fields: string[] = []
     for (const field of statusObject.properties) {
-      if (field.name === 'body') fields.push('body: true')
+      if (field.name === 'body') fields.push(bodyMarker(source, field))
       else if (!STRIP_RESPONSE.has(field.name)) fields.push(field.raw)
     }
     parts.push(`${status.name}: ${emitObject(fields)}`)

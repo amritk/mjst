@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
+import { createApi } from '../create-api'
+import { createClient } from '../create-client'
 import { defineContract } from '../define-contract'
+import { formBodySerializer } from '../form-body-serializer'
+import { implementRoute } from '../implement-route'
+import { toFetchHandler } from '../to-fetch-handler'
 import { stripContractFields } from './strip-contract-fields'
 
 /**
@@ -158,10 +163,81 @@ describe('strip-contract-fields', () => {
     expect(stripped).toContain('futureMarker: true')
   })
 
+  it('keeps a literal body: undefined meaning "no body"', () => {
+    // The marker replacement must not flip an explicit undefined into true —
+    // the client would start JSON-parsing (or sending) a body that is not there.
+    const source = `const c = defineContract({
+      method: 'get',
+      path: '/x',
+      request: { body: undefined },
+      responses: { 200: { body: undefined }, 201: { body: { type: 'object' } } },
+    })`
+    const contracts = evaluateContracts(`exports.c = ${stripContractFields(source).slice('const c = '.length)}`)
+    expect(contracts['c']).toEqual({
+      method: 'get',
+      path: '/x',
+      request: { body: undefined },
+      responses: { 200: { body: undefined }, 201: { body: true } },
+    })
+  })
+
   it('bails on trailing casts instead of dropping them', () => {
     const source = `const c = defineContract({ method: 'get', path: '/x', request: { query: qs } as const, responses: { 200: {} } })`
     const stripped = stripContractFields(source)
     expect(stripped).toContain('as const')
+  })
+
+  it('drives createClient against the real server identically after the strip', async () => {
+    // The no-functional-regression proof: the server keeps FULL contracts
+    // (it validates), the client gets the STRIPPED ones — exactly the split a
+    // browser build with the plugin produces — and every reply behavior
+    // (JSON parse, empty-body status, form serialization) must be unchanged.
+    // The server contracts are declared inline (evaluated ones lose the
+    // literal types handlers need); any drift from the widget source shows up
+    // as a route mismatch at runtime.
+    const stripped = evaluateContracts(stripContractFields(widget))
+    const routes = [
+      implementRoute(
+        defineContract({
+          method: 'get',
+          path: '/status',
+          responses: { 200: { body: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] } } },
+        }),
+        () => ({ status: 200, body: { ok: true } }),
+      ),
+      implementRoute(
+        defineContract({
+          method: 'post',
+          path: '/messages',
+          request: {
+            body: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+            bodyType: 'form',
+          },
+          responses: { 201: { body: { type: 'object' } } },
+        }),
+        ({ body }) => ({ status: 201, body }),
+      ),
+    ]
+    const server = toFetchHandler(createApi({ routes }))
+    // Evaluated contracts lose their literal types, so the per-slot input
+    // typing degrades to "everything required" — loosen the call surface;
+    // this test is about runtime behavior, the typing is covered elsewhere.
+    type LooseClient = Record<string, (input?: Record<string, unknown>) => Promise<{ status: number; body?: unknown }>>
+    const client = createClient(stripped, 'https://api.test', {
+      fetch: (url, init) => server(new Request(url, init)),
+      serializers: [formBodySerializer],
+    }) as unknown as LooseClient
+
+    const status = await client['getStatus']?.({ headers: { 'x-api-key': 'k' } })
+    expect(status?.status).toBe(200)
+    // The 200 body schema became a marker, so the client still JSON-parses.
+    expect(status?.body).toEqual({ ok: true })
+
+    // bodyType survived the strip: the form body round-trips through the
+    // server's urlencoded parser and coercion.
+    const sent = await client['sendMessage']?.({ body: { text: 'hi' } })
+    expect(sent?.status).toBe(201)
+    expect(sent?.body).toEqual({ text: 'hi' })
   })
 
   it('handles quoted keys, trailing commas, and comments between properties', () => {

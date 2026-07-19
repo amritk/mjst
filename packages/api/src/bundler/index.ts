@@ -1,5 +1,5 @@
 export { stripContractFields } from './strip-contract-fields'
-export type { StripContractsBunPlugin } from './strip-contracts-bun'
+export type { StripContractsBunOptions, StripContractsBunPlugin } from './strip-contracts-bun'
 export { stripContractsBun } from './strip-contracts-bun'
-export type { StripContractsVitePlugin } from './strip-contracts-vite'
+export type { StripContractsViteOptions, StripContractsVitePlugin } from './strip-contracts-vite'
 export { stripContractsVite } from './strip-contracts-vite'

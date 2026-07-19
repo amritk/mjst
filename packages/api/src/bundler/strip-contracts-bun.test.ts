@@ -4,6 +4,20 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
+import { stripContractsBun } from './strip-contracts-bun'
+
+/** Captures the plugin's onLoad callback so tests can drive it directly. */
+const loadCallbackOf = (plugin: ReturnType<typeof stripContractsBun>) => {
+  let callback: ((args: { path: string }) => Promise<{ contents: string; loader: string } | undefined>) | undefined
+  plugin.setup({
+    onLoad: (_constraints, registered) => {
+      callback = registered
+    },
+  })
+  if (callback === undefined) throw new Error('plugin registered no onLoad callback')
+  return callback
+}
+
 /**
  * End-to-end size test for the whole story: a realistic JSON-only,
  * static-path widget (the agent-ummo shape — three contracts, fat schemas,
@@ -124,6 +138,34 @@ type SizeReport = {
 }
 
 describe('strip-contracts-bun', () => {
+  it('strips loaded modules, defers untouched ones, and honors exclude', async () => {
+    const fixtureDir = join(here, '.fixtures-onload')
+    mkdirSync(fixtureDir, { recursive: true })
+    try {
+      const contractPath = join(fixtureDir, 'contracts.ts')
+      writeFileSync(
+        contractPath,
+        `export const c = defineContract({ method: 'get', path: '/x', summary: 's', responses: { 200: {} } })`,
+      )
+      const plainPath = join(fixtureDir, 'plain.ts')
+      writeFileSync(plainPath, 'export const x = 1')
+
+      const load = loadCallbackOf(stripContractsBun())
+      const stripped = await load({ path: contractPath })
+      expect(stripped?.loader).toBe('ts')
+      expect(stripped?.contents).not.toContain('summary')
+      // Modules without a call site defer to Bun's default loader.
+      expect(await load({ path: plainPath })).toBeUndefined()
+
+      // Excluded modules keep their freight — the escape hatch for apps that
+      // read contract schemas at runtime.
+      const excluding = loadCallbackOf(stripContractsBun({ exclude: /contracts\.ts$/ }))
+      expect(await excluding({ path: contractPath })).toBeUndefined()
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  })
+
   it('shrinks a real browser bundle and strips every freight string', () => {
     const fixtureDir = join(here, '.fixtures')
     mkdirSync(fixtureDir, { recursive: true })

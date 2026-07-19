@@ -16,6 +16,17 @@ export type StripContractsVitePlugin = {
   ) => { readonly code: string; readonly map: null } | null
 }
 
+/** Options for {@link stripContractsVite}. */
+export type StripContractsViteOptions = {
+  /**
+   * Module ids to leave untouched, matched against the full resolved id. The
+   * escape hatch for modules whose contracts the app itself reads at runtime
+   * (client-side validation against `contract.request` schemas, in-browser
+   * OpenAPI rendering) — those must keep their freight.
+   */
+  readonly exclude?: RegExp
+}
+
 /** Module ids worth scanning — TS/JS sources, with any query suffix Vite adds. */
 const SCANNABLE_ID = /\.(?:[cm]?[jt]s|[jt]sx)(?:\?|$)/
 
@@ -34,13 +45,14 @@ const SCANNABLE_ID = /\.(?:[cm]?[jt]s|[jt]sx)(?:\?|$)/
  * export default defineConfig({ plugins: [stripContractsVite()] })
  * ```
  */
-export const stripContractsVite = (): StripContractsVitePlugin => ({
+export const stripContractsVite = (options?: StripContractsViteOptions): StripContractsVitePlugin => ({
   name: 'amritk-api-strip-contracts',
   enforce: 'pre',
   apply: 'build',
-  transform: (code, id, options) => {
-    if (options?.ssr === true) return null
+  transform: (code, id, transformOptions) => {
+    if (transformOptions?.ssr === true) return null
     if (!SCANNABLE_ID.test(id) || !code.includes('defineContract')) return null
+    if (options?.exclude?.test(id) === true) return null
     const stripped = stripContractFields(code)
     return stripped === code ? null : { code: stripped, map: null }
   },

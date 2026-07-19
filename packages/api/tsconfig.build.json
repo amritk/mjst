@@ -10,6 +10,6 @@
     "**/*.test.ts",
     "**/*.test-utils.ts",
     "src/compile/.fixtures",
-    "src/bundler/.fixtures"
+    "src/bundler/.fixtures*"
   ]
 }

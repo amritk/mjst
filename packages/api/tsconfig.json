@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.json",
   "include": ["src/**/*.ts"],
-  "exclude": ["src/compile/.fixtures", "src/.hey-api-fixtures", "src/bundler/.fixtures"]
+  "exclude": ["src/compile/.fixtures", "src/.hey-api-fixtures", "src/bundler/.fixtures*"]
 }

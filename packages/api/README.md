@@ -231,6 +231,19 @@ fields are kept, SSR modules and the Vite dev server are never touched — the
 failure mode is a bigger bundle, never a broken one. The Vite plugin runs
 `enforce: 'pre'`, `apply: 'build'`.
 
+Two caveats. First, the strip assumes the browser only calls contracts
+through `createClient`. If your app itself reads contract schemas at runtime
+— client-side form validation against `contract.request.body`, in-browser
+OpenAPI rendering — those modules must keep their freight: pass
+`{ exclude: /pattern/ }` (matched against the module id / file path) to
+either plugin, or leave the plugin off. Second, only direct
+`defineContract({ ... })` identifier calls are rewritten; a renamed import
+or a wrapper function keeps its call sites intact (and its bytes).
+
+For other bundlers, the underlying source-to-source transform is exported as
+`stripContractFields(source)` — wire it into any pipeline that can run a
+per-module text transform (esbuild `onLoad`, a Rollup `transform` hook).
+
 Measured on a realistic widget consumer — three JSON-only contracts with
 static paths, bundled with `Bun.build` (`target: 'browser'`, minified;
 enforced by `src/bundler/strip-contracts-bun.test.ts`):
@@ -406,6 +419,10 @@ on Node, native on Workers/Bun/Deno) over the same shared buffered read as
 everything else — `maxBodyBytes` still caps uploads. Repeated file keys keep
 the last file; repeated string keys accumulate when the schema declares an
 array.
+
+Sending these formats from the derived client is opt-in: register
+`formBodySerializer` / `multipartBodySerializer` in `createClient` (see the
+typed-client section above) so JSON-only apps never bundle them.
 
 ### Streaming and raw responses
 

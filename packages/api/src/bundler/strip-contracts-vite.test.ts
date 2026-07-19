@@ -39,4 +39,10 @@ describe('strip-contracts-vite', () => {
     const result = plugin.transform(contractModule, '/app/src/contracts.ts?v=abc123')
     expect(result?.code).toContain('body: true')
   })
+
+  it('leaves excluded modules untouched — for apps that read schemas at runtime', () => {
+    const plugin = stripContractsVite({ exclude: /form-contracts/ })
+    expect(plugin.transform(contractModule, '/app/src/form-contracts.ts')).toBeNull()
+    expect(plugin.transform(contractModule, '/app/src/contracts.ts')?.code).toContain('body: true')
+  })
 })
