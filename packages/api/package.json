@@ -48,6 +48,11 @@
       "development": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./bundler": {
+      "development": "./src/bundler/index.ts",
+      "types": "./dist/bundler/index.d.ts",
+      "default": "./dist/bundler/index.js"
     }
   },
   "dependencies": {

@@ -1,3 +1,4 @@
 src/compile/.fixtures/
 src/.hey-api-fixtures/
+src/bundler/.fixtures*/
 bench/.fixtures/
