@@ -122,7 +122,11 @@ export const API_BENCH_CASES: readonly ApiBenchCase[] = [
         const response = await handler(
           new Request('http://localhost/users', {
             method: 'POST',
-            headers: { 'content-type': 'application/json' },
+            // The constructor leaves content-length unset, but every server
+            // runtime (Bun.serve, workerd, undici) delivers it on incoming
+            // fixed-size bodies — and the capped reader's native fast path
+            // keys on it, so the header is part of a realistic request.
+            headers: { 'content-type': 'application/json', 'content-length': String(POST_BODY.length) },
             body: POST_BODY,
           }),
         )

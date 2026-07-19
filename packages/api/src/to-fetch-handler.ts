@@ -1,6 +1,6 @@
 import { buildResponseHeaders } from './build-response-headers'
 import { DEFAULT_MAX_BODY_BYTES } from './payload-too-large'
-import { readBytesCapped } from './read-bytes-capped'
+import { readBodyCapped } from './read-body-capped'
 import type { Api, ApiRequest, ApiResponse, RequestLocals, StreamingBody } from './types'
 
 /**
@@ -168,7 +168,7 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     const readAllBytes =
       maxBodyBytes === Number.POSITIVE_INFINITY
         ? () => (bytes ??= request.arrayBuffer().then((buffer) => new Uint8Array(buffer)))
-        : () => (bytes ??= readBytesCapped(request.body, request.headers.get('content-length'), maxBodyBytes))
+        : () => (bytes ??= readBodyCapped(request, maxBodyBytes))
 
     // The hook wrapper's shared bag when hooks are configured; otherwise
     // created lazily on first `locals` access, so the zero-hook fast path

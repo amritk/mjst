@@ -241,7 +241,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     // header builder, so repeated set-cookie values serialize identically to
     // the runtime adapter.
     'buildResponseHeaders',
-    unboundedBody ? undefined : 'readBytesCapped',
+    unboundedBody ? undefined : 'readBodyCapped',
   ].filter((name) => name !== undefined)
   const validatorImports = [
     used.validate ? 'validate' : undefined,
@@ -300,7 +300,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   // pipeline consumed a declared body schema.
   const readAllBytesExpression = unboundedBody
     ? 'request.arrayBuffer().then((buffer) => new Uint8Array(buffer))'
-    : `readBytesCapped(request.body, request.headers.get('content-length'), ${maxBodyBytes})`
+    : `readBodyCapped(request, ${maxBodyBytes})`
   lines.push(
     'const DECODER = new TextDecoder()',
     // `locals` is the per-request bag created in the dispatch, so every

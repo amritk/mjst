@@ -457,9 +457,9 @@ describe('compile-to-module', () => {
     const source = emit()
     // The differential emit pins maxBodyBytes to 256; a bare emit carries the
     // shared 1 MiB default instead.
-    expect(source).toContain("readBytesCapped(request.body, request.headers.get('content-length'), 256)")
+    expect(source).toContain('readBodyCapped(request, 256)')
     const bare = compileToModule({ routesImport: './x', routes: { health: corpus.health } })
-    expect(bare).toContain("readBytesCapped(request.body, request.headers.get('content-length'), 1048576)")
+    expect(bare).toContain('readBodyCapped(request, 1048576)')
     // Infinity removes the capped reader entirely — the plain arrayBuffer
     // read has no limit to enforce.
     const unbounded = compileToModule({
@@ -467,7 +467,7 @@ describe('compile-to-module', () => {
       routes: { health: corpus.health },
       maxBodyBytes: Number.POSITIVE_INFINITY,
     })
-    expect(unbounded).not.toContain('readBytesCapped')
+    expect(unbounded).not.toContain('readBodyCapped')
     expect(unbounded).toContain('request.arrayBuffer()')
     // Document-level tags flow into the embedded document, and the etag is a
     // quoted 8-hex-digit strong validator baked next to it.

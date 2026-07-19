@@ -17,3 +17,5 @@ Deep-review hardening pass across the client, OpenAPI projection, request pipeli
 **CORS.** `createCors` throws at setup on the browser-rejected `origin: '*'` + `credentials: true` combination.
 
 **Bundler.** New `stripContractsEsbuild` and `stripContractsRollup` join the Vite and Bun plugins, and the strip transform is now line-preserving so `map: null` no longer misaligns downstream sourcemaps.
+
+The cap keeps the native read path: a body whose declared `content-length` fits the limit reads via `arrayBuffer()` (with a post-read length check), and only chunked or unparseable-length requests take the streaming capped reader — so on realistic traffic the default cap costs ~4%, not the 82% an always-streaming read would.
