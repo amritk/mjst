@@ -1,5 +1,20 @@
 # @amritk/generate-parsers
 
+## 0.17.0
+
+### Minor Changes
+
+- 57d617a: Smaller generated parsers — the fast-path guard now calls the `validate{Type}Shape` predicate that already ships in the same file instead of inlining a byte-identical copy of the whole check chain. On the OpenAI OpenAPI spec (888 generated files) the bundled + minified output drops ~8% (703 kB → 645 kB); the duplicated guard chains were the single largest source of repeated bytes in generated code.
+
+  The substitution is proven safe per parser: the generator renders the shape predicate its guard would need and delegates only when it matches the emitted one byte-for-byte — composition keywords, conditional flattening, alias/union predicates, and stub validators all keep the inline guard exactly as before. Exported `additionalProperties: false` / `stripUnknown` parsers also keep it, because their literal-return fast path would otherwise pay double property reads (a measured 6–13% hot-path cost on the strict benches). With the guard delegated, the cached property reads move below the fast-path return, so clean input skips them entirely; benchmarks are within noise of the previous output across all parse cases.
+
+### Patch Changes
+
+- 6e7c65e: Slim published packages — comments are now stripped from the compiled JS in `dist` (they were duplicating the JSDoc that already ships in the `.d.ts` files, which is what editors read), and `@amritk/lint` now minifies its bundled OpenAPI meta-schema JSON documents. Unpacked size drops ~30% across the board (for example `@amritk/lint` 448 kB → 307 kB, `@amritk/generate-parsers` 293 kB → 191 kB) with no behavior change: declaration files keep their docs, `/* @__PURE__ */` annotations and the CLI shebang survive, and `@amritk/helpers` still ships its TypeScript sources for embedded mode.
+- Updated dependencies [6e7c65e]
+  - @amritk/generate-markdown@0.4.3
+  - @amritk/helpers@0.13.3
+
 ## 0.16.3
 
 ### Patch Changes
