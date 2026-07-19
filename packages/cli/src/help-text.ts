@@ -11,6 +11,10 @@ Usage:
   mjst --schema-dir <dir> --out-dir <dir> [options]
   mjst --schema <path> --out-file <file> --types-only [options]
 
+Subcommands (each with its own flags and --help):
+  mjst lint <files>                       Lint JSON/YAML documents against a ruleset
+  mjst compile-api <module> --out <file>  Compile @amritk/api route contracts into a fetch-handler module
+
 Input:
   --schema <path>       Schema to process: a JSON Schema file, or a module when --input is set
   --schema-dir <dir>    Directory of JSON Schemas, processed recursively (instead of --schema)

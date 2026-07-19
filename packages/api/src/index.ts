@@ -19,6 +19,7 @@ export type {
   ClientReplyOf,
   ErrorBodyOf,
   ErrorStatusOf,
+  FetchOptions,
   PathParamsBuilder,
   RequestBodyOf,
   RequestCookiesOf,
@@ -38,14 +39,19 @@ export { createSentry } from './create-sentry'
 export { decodeSegment } from './decode-segment'
 export { defineContract } from './define-contract'
 export { defineRoute } from './define-route'
+export type { FetchLikeHandler, FetchNodeListener, FetchToNodeHandlerOptions } from './fetch-to-node-handler'
+export { fetchToNodeHandler } from './fetch-to-node-handler'
 export { formBodySerializer } from './form-body-serializer'
+export { hashContracts } from './hash-contracts'
 export { implementRoute } from './implement-route'
+export { isMalformedBodyError, malformedBodyError } from './malformed-body-error'
 export type { RouteMatch } from './match-route'
 export { matchRoute } from './match-route'
 export { multipartBodySerializer } from './multipart-body-serializer'
 export { matchesBodyType, parseFormBody, parseMultipartBody } from './parse-body'
 export { parsePathPattern } from './parse-path-pattern'
 export { isPayloadTooLargeError, payloadTooLargeError } from './payload-too-large'
+export { readBodyCapped } from './read-body-capped'
 export { readBytesCapped } from './read-bytes-capped'
 export { refinementFailure } from './refinement-failure'
 export { routeFactory } from './route-factory'

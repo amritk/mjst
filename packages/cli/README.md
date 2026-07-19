@@ -21,7 +21,7 @@
 
 Options can be supplied via CLI flags or a JSON config file. **CLI flags always take precedence over config file values.**
 
-It also carries a `lint` subcommand — `mjst lint <files>` — a format-agnostic JSON/YAML style-guide linter powered by [`@amritk/lint`](../lint). See [Linting](#linting).
+It also carries a `lint` subcommand — `mjst lint <files>` — a format-agnostic JSON/YAML style-guide linter powered by [`@amritk/lint`](../lint) (see [Linting](#linting)), and a `compile-api` subcommand — `mjst compile-api <routes-module> --out <file>` — that compiles [`@amritk/api`](../api) route contracts into a production fetch-handler module (see [Compiling an API](#compiling-an-api)).
 
 ---
 
@@ -216,6 +216,33 @@ With no `-r`, mjst discovers a `.lint.{yaml,yml,json,js,mjs}` ruleset by walking
 By default `mjst lint` dereferences `$ref`, `$dynamicRef`/`$dynamicAnchor`, and `$recursiveRef`/`$recursiveAnchor` before running rules, so rules with `resolved: true` (the ruleset default) see through references. Internal and local cross-file refs resolve from disk — a finding on a cross-file node reports that file's own `line:column` — while remote refs are only fetched when you opt in with `--resolve-remote` or `--allowed-hosts`.
 
 The exit code is `0` when no finding reaches `--fail-severity`, `1` when one does, and `2` on a usage error. Run `mjst lint --help` for the full list.
+
+---
+
+## Compiling an API
+
+`mjst compile-api` compiles [`@amritk/api`](../api) route contracts into a fused fetch-handler module — the production counterpart to `createApi`, with inlined guards, schema-derived serializers, and a precomputed OpenAPI document. It wraps the library's `compileToModule` so you do not have to hand-write a build script. Like `lint`, it has its own flags (and its own `--help`), independent of the generation flags above.
+
+```bash
+# Compile every route contract exported by the routes module
+npx mjst compile-api src/routes.ts --out dist/handler.js
+
+# Wire in the exports-by-name options (context factory, mounts, OpenAPI info, ...)
+npx mjst compile-api src/routes.ts --out dist/handler.js --options compile-options.json
+```
+
+Every export of the routes module that looks like a route contract (`method`, `path`, `responses`) is compiled; the generated module imports those contracts back through `--routes-import` (default: the relative path from the out file to the routes module). The routes module is imported at build time, so it must be loadable by the runtime running mjst — run via `bunx` for TypeScript sources, or under Node install a loader such as `tsx` (`node --import tsx`).
+
+| Flag | Description |
+| --- | --- |
+| `<routes-module>` | Module exporting the route contracts (positional). |
+| `--out` | Output file for the generated module (required; parent directories are created). |
+| `--routes-import` | Import specifier the generated module uses for the routes module. Defaults to the relative path from the out file. |
+| `--options` | JSON file spread into the `compileToModule` options — `contextExport`, `mounts`, `info`, `servers`, `security`, `securitySchemes`, and friends. Flags take precedence. |
+| `--open-api-path` | Serve the precomputed OpenAPI JSON at this path (default `/openapi.json`). |
+| `--max-body-bytes` | Reject request bodies larger than this many bytes with a 413 (default `1048576`; `Infinity` disables the cap). |
+
+The exit code is `0` on success, `1` when compilation fails (unloadable module, no contracts found, invalid options JSON), and `2` on a usage error. Run `mjst compile-api --help` for details.
 
 ---
 

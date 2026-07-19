@@ -10,6 +10,7 @@
 mjst/
 ├── packages/
 │   ├── cli/                   # @amritk/mjst — command-line interface (generate + lint)
+│   ├── api/                   # @amritk/api — contract-first HTTP API layer (routes, validation, OpenAPI, typed client)
 │   ├── lint/                  # @amritk/lint — format-agnostic JSON/YAML style-guide linter
 │   ├── generate-parsers/      # @amritk/generate-parsers — parser + type generator
 │   ├── generate-validators/   # @amritk/generate-validators — predicate validator generator
@@ -35,6 +36,13 @@ Command-line entry point. Reads CLI flags and/or a JSON config file, loads a sch
 - **Depends on:** `@amritk/generate-parsers`, `@amritk/generate-markdown`, `@amritk/lint`
 - **Bin:** `mjst` → `dist/cli.js` (built for the Node target)
 - **Config schema:** `config.schema.json` — also drives the CLI README table via `@amritk/generate-markdown`. The `lint` subcommand has its own independent flags (see the CLI README).
+
+### `@amritk/api` (`packages/api`)
+
+Contract-first, framework-agnostic HTTP API layer. Each route declares its method, path, request schemas, and response schemas once; from that one contract the package derives typed handlers (`FromSchema`), runtime request/response validation, an OpenAPI 3.1 document (contract schemas embed verbatim — 3.1's dialect *is* Draft 2020-12), and a typed fetch client (`createClient`, no codegen). Two engines execute the same contracts: the **runtime engine** (`createApi` — eval-free, powered by `@amritk/runtime-validators`, for development and CSP-restricted platforms) and the **compiled engine** (`compileToModule` — emits a fused fetch-handler module with inlined guards, schema-derived serializers, and a precomputed OpenAPI string, for production/Cloudflare Workers). A differential test corpus holds the two engines observationally identical. Adapters: `toFetchHandler` (Bun, Workers, Deno, Hono, Next.js) and `toNodeHandler` (node:http, Express/Connect). `@amritk/api/bundler` ships contract-slimming build plugins for browser bundles.
+
+- **Depends on:** `@amritk/runtime-validators` (its single runtime dependency, by design — integrations connect through seams: `context`, `mounts`, hooks, `onError`).
+- **Design docs:** `docs/api-framework-plan.md` (architecture + roadmap), `docs/ummo-readiness.md` (adoption audit).
 
 ### `@amritk/lint` (`packages/lint`)
 

@@ -10,8 +10,9 @@ export type CorsOptions = {
    * Which origins may call the API: `'*'` for anyone, an exact origin, a
    * list, or a function deciding per request (return the origin value to
    * allow — usually the input itself — or `undefined` to deny). Note the
-   * spec forbids `'*'` together with `credentials`; use a function that
-   * reflects the origin instead.
+   * spec forbids `'*'` together with `credentials` — {@link createCors}
+   * throws on that combination; use a function that reflects the origin
+   * instead.
    */
   readonly origin: '*' | string | readonly string[] | ((origin: string, request: Request) => string | undefined)
   /** Methods advertised on preflight. Defaults to the common full set. */
@@ -49,6 +50,12 @@ const DEFAULT_METHODS = 'GET,HEAD,PUT,POST,DELETE,PATCH'
  * 404s and gate short-circuits — because a browser drops any reply lacking
  * the allow-origin header, error or not.
  *
+ * Throws when the static origin config is the `'*'` wildcard combined with
+ * `credentials: true` — the Fetch spec forbids that pair and every browser
+ * rejects it, so failing at setup beats shipping CORS headers no browser
+ * will honor. A function-typed `origin` cannot be checked statically and is
+ * trusted as written.
+ *
  * @example
  * ```typescript
  * const cors = createCors({ origin: (o) => o, credentials: true, exposeHeaders: ['x-demo-used'] })
@@ -56,6 +63,13 @@ const DEFAULT_METHODS = 'GET,HEAD,PUT,POST,DELETE,PATCH'
  * ```
  */
 export const createCors = (options: CorsOptions): Cors => {
+  if (options.credentials === true && originAllowsWildcard(options.origin)) {
+    throw new Error(
+      "CORS: `origin: '*'` cannot be combined with `credentials: true` — browsers reject a wildcard " +
+        'allow-origin on credentialed requests. Reflect the request origin with a function instead, ' +
+        'e.g. `origin: (origin) => origin`.',
+    )
+  }
   const resolve = toResolver(options.origin)
   // With a single fixed allowed origin the response headers never vary, so
   // they are computed once. `vary: origin` still matters for caches whenever
@@ -102,6 +116,18 @@ export const createCors = (options: CorsOptions): Cors => {
   }
 
   return { onRequest, onResponse }
+}
+
+/**
+ * Whether a static origin config resolves to the `'*'` wildcard — the literal
+ * string, or a list containing it (a `'*'` entry in a list is a
+ * misconfiguration too: it would only ever match a literal `origin: *` header,
+ * which no browser sends, and it signals wildcard intent).
+ */
+const originAllowsWildcard = (origin: CorsOptions['origin']): boolean => {
+  if (typeof origin === 'function') return false
+  if (typeof origin === 'string') return origin === '*'
+  return origin.includes('*')
 }
 
 const toResolver = (origin: CorsOptions['origin']): ((origin: string, request: Request) => string | undefined) => {

@@ -134,11 +134,51 @@ describe('create-api', () => {
     expect((await api.handle(request('DELETE', '/users/1'))).status).toBe(405)
   })
 
-  it('serves the OpenAPI document at the default path', async () => {
+  it('serves the OpenAPI document at the default path as a cached raw JSON string', async () => {
     const api = createApi({ routes: [getUser], info: { title: 'Users', version: '1.0.0' } })
     const response = await api.handle(request('GET', '/openapi.json'))
     expect(response.status).toBe(200)
-    expect(response.body).toMatchObject({ openapi: '3.1.0', info: { title: 'Users', version: '1.0.0' } })
+    // The document rides the raw contentType path so adapters reuse the
+    // cached string instead of re-stringifying per request.
+    expect(response.contentType).toBe('application/json')
+    expect(JSON.parse(response.body as string)).toMatchObject({
+      openapi: '3.1.0',
+      info: { title: 'Users', version: '1.0.0' },
+    })
+    // Same cached string instance on the next request — no re-serialization.
+    const again = await api.handle(request('GET', '/openapi.json'))
+    expect(again.body).toBe(response.body)
+  })
+
+  it('serves the OpenAPI document with a strong etag and no-cache revalidation headers', async () => {
+    const api = createApi({ routes: [getUser] })
+    const response = await api.handle(request('GET', '/openapi.json'))
+    const etag = (response.headers as Record<string, string>)['etag']
+    expect(etag).toMatch(/^"[0-9a-f]{8}"$/)
+    expect((response.headers as Record<string, string>)['cache-control']).toBe('no-cache')
+  })
+
+  it('answers 304 with no body when if-none-match carries the document etag', async () => {
+    const api = createApi({ routes: [getUser] })
+    const first = await api.handle(request('GET', '/openapi.json'))
+    const etag = (first.headers as Record<string, string>)['etag'] ?? ''
+
+    const revalidated = await api.handle(request('GET', '/openapi.json', { headers: { 'if-none-match': etag } }))
+    expect(revalidated.status).toBe(304)
+    expect(revalidated.body).toBeUndefined()
+    expect((revalidated.headers as Record<string, string>)['etag']).toBe(etag)
+
+    // Weak-compare tokens, lists, and the wildcard all revalidate too.
+    const weak = await api.handle(
+      request('GET', '/openapi.json', { headers: { 'if-none-match': `"stale", W/${etag}` } }),
+    )
+    expect(weak.status).toBe(304)
+    const wildcard = await api.handle(request('GET', '/openapi.json', { headers: { 'if-none-match': '*' } }))
+    expect(wildcard.status).toBe(304)
+
+    // A stale validator still gets the full document.
+    const stale = await api.handle(request('GET', '/openapi.json', { headers: { 'if-none-match': '"deadbeef"' } }))
+    expect(stale.status).toBe(200)
   })
 
   it('serves the OpenAPI document at a custom path and not at the default', async () => {
@@ -462,8 +502,9 @@ describe('create-api', () => {
 
     const response = await api.handle(request('PATCH', '/users/7'))
     expect(response.status).toBe(405)
-    // HEAD is advertised because the GET route serves it implicitly.
-    expect(response.headers).toEqual({ allow: 'DELETE, GET, HEAD' })
+    // HEAD is advertised because the GET route serves it implicitly, and
+    // OPTIONS because the pipeline answers it automatically for known paths.
+    expect(response.headers).toEqual({ allow: 'DELETE, GET, HEAD, OPTIONS' })
     expect(response.body).toEqual({ error: 'method_not_allowed' })
 
     // A path no method serves stays a 404.
@@ -645,7 +686,49 @@ describe('create-api', () => {
     })
     const response = await api.handle(request('POST', '/users/7'))
     expect(response.status).toBe(405)
-    expect(response.body).toEqual({ error: 'try one of: GET/HEAD' })
+    expect(response.body).toEqual({ error: 'try one of: GET/HEAD/OPTIONS' })
+  })
+
+  it('answers OPTIONS automatically with 204 and the allow list for known paths', async () => {
+    const remove = defineRoute({
+      method: 'delete',
+      path: '/users/{id}',
+      responses: { 204: {} },
+      handler: () => ({ status: 204 }),
+    })
+    const api = createApi({ routes: [getUser, remove] })
+
+    const response = await api.handle(request('OPTIONS', '/users/7'))
+    expect(response.status).toBe(204)
+    expect(response.headers).toEqual({ allow: 'DELETE, GET, HEAD, OPTIONS' })
+    expect(response.body).toBeUndefined()
+
+    // A path no method serves stays a 404 — OPTIONS reveals nothing extra.
+    expect((await api.handle(request('OPTIONS', '/nowhere'))).status).toBe(404)
+  })
+
+  it('lets an explicitly declared options route win over the automatic answer', async () => {
+    const explicitOptions = defineRoute({
+      method: 'options',
+      path: '/users/{id}',
+      responses: { 200: { body: { type: 'object' } } },
+      handler: () => ({ status: 200, body: { custom: true } }),
+    })
+    const api = createApi({ routes: [getUser, explicitOptions] })
+    const response = await api.handle(request('OPTIONS', '/users/7'))
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({ custom: true })
+  })
+
+  it('keeps the automatic OPTIONS out of the methodNotAllowed formatter', async () => {
+    const api = createApi({
+      routes: [getUser],
+      errors: { methodNotAllowed: () => ({ status: 405, body: { error: 'formatted' } }) },
+    })
+    // The 204 is not a 405, so the formatter must not reshape it.
+    const response = await api.handle(request('OPTIONS', '/users/7'))
+    expect(response.status).toBe(204)
+    expect(response.body).toBeUndefined()
   })
 
   it('validates declared cookies and hands them to the handler', async () => {
@@ -757,6 +840,58 @@ describe('create-api', () => {
     expect(refined).toBe(1)
   })
 
+  it('awaits an async refine before running the handler', async () => {
+    const bookSlot = defineRoute({
+      method: 'post',
+      path: '/slots',
+      request: {
+        body: {
+          type: 'object',
+          properties: { start: { type: 'integer' }, end: { type: 'integer' } },
+          required: ['start', 'end'],
+        },
+      },
+      // The uniqueness-lookup shape: refinement resolves asynchronously.
+      refine: async ({ body }) => {
+        await Promise.resolve()
+        return body.start < body.end ? undefined : [{ path: '/end', message: 'end must be after start' }]
+      },
+      responses: { 201: {} },
+      handler: () => ({ status: 201 }),
+    })
+    const api = createApi({ routes: [bookSlot] })
+
+    expect((await api.handle(request('POST', '/slots', { body: { start: 1, end: 5 } }))).status).toBe(201)
+
+    const rejected = await api.handle(request('POST', '/slots', { body: { start: 5, end: 2 } }))
+    expect(rejected.status).toBe(400)
+    expect(rejected.body).toEqual({
+      error: 'validation_failed',
+      source: 'body',
+      errors: [{ message: 'end must be after start', path: '/end' }],
+    })
+  })
+
+  it('sends a rejecting async refine down the onError path', async () => {
+    const bookSlot = defineRoute({
+      method: 'post',
+      path: '/slots',
+      request: { body: { type: 'object', properties: { start: { type: 'integer' } }, required: ['start'] } },
+      refine: async () => {
+        await Promise.resolve()
+        throw new Error('async refine crashed')
+      },
+      responses: { 201: {} },
+      handler: () => ({ status: 201 }),
+    })
+    const api = createApi({
+      routes: [bookSlot],
+      onError: (error) => ({ status: 500, body: { handled: error instanceof Error ? error.message : '?' } }),
+    })
+    const response = await api.handle(request('POST', '/slots', { body: { start: 1 } }))
+    expect(response).toEqual({ status: 500, body: { handled: 'async refine crashed' } })
+  })
+
   it('sends a throwing refine down the onError path', async () => {
     const bookSlot = defineRoute({
       method: 'post',
@@ -813,6 +948,15 @@ describe('create-api', () => {
       },
     })
     expect((await throwing.handle(request('GET', '/missing'))).status).toBe(404)
+  })
+
+  it('forwards document-level tags into the OpenAPI document', async () => {
+    const tags = [{ name: 'users', description: 'User management' }]
+    const api = createApi({ routes: [getUser], tags })
+    expect(api.openApi().tags).toEqual(tags)
+    // The served document carries them too.
+    const response = await api.handle(request('GET', '/openapi.json'))
+    expect((JSON.parse(response.body as string) as { tags: unknown }).tags).toEqual(tags)
   })
 
   it('hands the request locals bag to the context factory', async () => {

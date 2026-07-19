@@ -85,6 +85,28 @@ describe('create-cors', () => {
     expect(await cors.onResponse(response, request, {})).toBeUndefined()
   })
 
+  it('throws when origin * is combined with credentials', () => {
+    // Browsers reject the wildcard on credentialed requests, so shipping the
+    // pair silently would mean CORS that never works.
+    expect(() => createCors({ origin: '*', credentials: true })).toThrow(/origin: '\*'.*credentials: true/)
+  })
+
+  it('throws when an origin list contains * with credentials', () => {
+    expect(() => createCors({ origin: ['https://app.example', '*'], credentials: true })).toThrow(/credentials/)
+  })
+
+  it('allows credentials with specific origins and with a function origin', () => {
+    expect(() => createCors({ origin: 'https://app.example', credentials: true })).not.toThrow()
+    expect(() => createCors({ origin: ['https://app.example'], credentials: true })).not.toThrow()
+    // A function cannot be checked statically — it is trusted as written.
+    expect(() => createCors({ origin: (origin) => origin, credentials: true })).not.toThrow()
+  })
+
+  it('still accepts the wildcard origin without credentials', () => {
+    expect(() => createCors({ origin: '*' })).not.toThrow()
+    expect(() => createCors({ origin: '*', credentials: false })).not.toThrow()
+  })
+
   it('sends the literal wildcard for origin *', async () => {
     const cors = createCors({ origin: '*' })
     const request = new Request('http://localhost/x', { headers: { origin: 'https://anyone.example' } })

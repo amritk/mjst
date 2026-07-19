@@ -1,8 +1,9 @@
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from 'node:http'
 import { validateHeaderName, validateHeaderValue } from 'node:http'
 
-import { payloadTooLargeError } from './payload-too-large'
+import { DEFAULT_MAX_BODY_BYTES, payloadTooLargeError } from './payload-too-large'
 import type { Api, ApiRequest, RequestLocals } from './types'
+import { waitForDrain } from './wait-for-drain'
 
 /**
  * A Node request listener that also works as Express/Connect middleware: when
@@ -29,8 +30,9 @@ export type NodeHandlerOptions = {
    * Rejects request bodies larger than this many bytes with a 413, checked
    * against the declared `content-length` up front and enforced while the
    * body streams in. Applies to the pipeline's own body parsing and to
-   * handler-initiated `readText`/`readBytes` calls alike. Unset means no
-   * limit.
+   * handler-initiated `readText`/`readBytes` calls alike. Defaults to 1 MiB
+   * (1,048,576 bytes) — an unbounded read is a memory-DoS by default. Pass
+   * `Infinity` to disable the cap entirely.
    */
   readonly maxBodyBytes?: number
 }
@@ -61,7 +63,7 @@ export type NodeHandlerOptions = {
  * ```
  */
 export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandler => {
-  const maxBodyBytes = options?.maxBodyBytes
+  const maxBodyBytes = options?.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES
   return async (incoming, outgoing, next) => {
     const target = incoming.url ?? '/'
     const queryIndex = target.indexOf('?')
@@ -162,7 +164,13 @@ export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandl
         } else {
           try {
             for await (const chunk of body as ReadableStream<Uint8Array>) {
-              outgoing.write(chunk)
+              if (outgoing.write(chunk)) continue
+              // The kernel buffer is full — honor backpressure instead of
+              // piling chunks into memory as fast as the handler produces
+              // them. waitForDrain resolves false (never hangs) when the
+              // response errors or closes mid-wait; throwing here exits the
+              // for-await, which cancels the source stream.
+              if (!(await waitForDrain(outgoing))) throw new Error('Response closed while awaiting drain')
             }
             outgoing.end()
           } catch {
@@ -205,20 +213,20 @@ export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandl
   }
 }
 
-const readBytes = (incoming: IncomingMessage, limit: number | undefined): Promise<Buffer> =>
+// An Infinity limit disables the cap arithmetically: no finite declared
+// length or running total ever exceeds it, so no special-casing is needed.
+const readBytes = (incoming: IncomingMessage, limit: number): Promise<Buffer> =>
   new Promise((resolve, reject) => {
-    if (limit !== undefined) {
-      const declared = Number(incoming.headers['content-length'])
-      if (Number.isFinite(declared) && declared > limit) {
-        reject(payloadTooLargeError(limit))
-        return
-      }
+    const declared = Number(incoming.headers['content-length'])
+    if (Number.isFinite(declared) && declared > limit) {
+      reject(payloadTooLargeError(limit))
+      return
     }
     const chunks: Buffer[] = []
     let total = 0
     incoming.on('data', (chunk: Buffer) => {
       total += chunk.byteLength
-      if (limit !== undefined && total > limit) {
+      if (total > limit) {
         // Stop consuming and tear the socket down — the client is mid-upload
         // and nothing will ever read the rest.
         incoming.destroy()

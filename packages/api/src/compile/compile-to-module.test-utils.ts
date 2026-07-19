@@ -1,7 +1,10 @@
+import { validate, validateGuard } from '@amritk/runtime-validators'
+
 import { defineRoute } from '../define-route'
 import { routeFactory } from '../route-factory'
 import type { FetchOnRequest, FetchOnResponse } from '../to-fetch-handler'
 import type {
+  AnyRouteContract,
   ApiRequest,
   ApiResponse,
   ContextFactoryInput,
@@ -9,6 +12,7 @@ import type {
   OnErrorDetails,
   RequestObservation,
   UnmatchedObservation,
+  ValidatorCompiler,
 } from '../types'
 
 /**
@@ -228,6 +232,42 @@ export const bookSlot = defineRoute({
   },
   responses: { 201: {} },
   handler: () => ({ status: 201 }),
+})
+
+/**
+ * An async refine over the same cross-field constraint as `bookSlot`: both
+ * engines must await the promise, route resolved issues through the standard
+ * envelope, and send a rejected refine (start = 13) down the onError path.
+ */
+export const bookSlotAsync = defineRoute({
+  method: 'post',
+  path: '/slots-async',
+  request: {
+    body: {
+      type: 'object',
+      properties: { start: { type: 'integer' }, end: { type: 'integer' } },
+      required: ['start', 'end'],
+    },
+  },
+  refine: async ({ body }) => {
+    // A microtask hop makes the promise genuinely asynchronous.
+    await Promise.resolve()
+    if (body.start === 13) throw new Error('async refine crashed')
+    return body.start < body.end ? undefined : [{ path: '/end', message: 'end must be after start' }]
+  },
+  responses: { 201: {} },
+  handler: () => ({ status: 201 }),
+})
+
+/**
+ * An explicitly declared options route: it must win over the automatic
+ * OPTIONS answer in both engines.
+ */
+export const optionsProbe = defineRoute({
+  method: 'options',
+  path: '/users',
+  responses: { 200: { body: { type: 'object' } } },
+  handler: () => ({ status: 200, headers: { 'x-options': 'explicit' }, body: { custom: true } }),
 })
 
 /** Reads the shared locals bag the gate populated; writes its own note for the decorator. */
@@ -486,6 +526,85 @@ export const corpusOnError = (error: unknown, request: ApiRequest, details: OnEr
     // The locals the gate resolved must be visible here too — the error path
     // shares the same per-request bag as the pipeline.
     gateTenant: (request.locals?.['tenant'] as string | undefined) ?? null,
+  },
+})
+
+/**
+ * A custom ValidatorCompiler both engines can share: the interpreter's
+ * verdicts, tightened so any object carrying a `compilerProbe` key is
+ * rejected. The probe is observable through ordinary requests, which is how
+ * the differential test proves every guard really came from this compiler
+ * (the interpreter and the inline guards would both accept the probe).
+ */
+export const corpusCompile: ValidatorCompiler = (schema) => {
+  const guard = validateGuard(schema)
+  return {
+    guard: (value): value is unknown =>
+      guard(value) && !(typeof value === 'object' && value !== null && 'compilerProbe' in value),
+    collect: validate(schema),
+  }
+}
+
+/**
+ * Reply body violates the declared 200 schema (`ok` must be a boolean).
+ * Typed as AnyRouteContract on purpose: defineRoute would reject this reply
+ * at compile time, and response validation exists exactly for what the type
+ * checker cannot see in erased/dynamic code.
+ */
+export const badReply: AnyRouteContract = {
+  method: 'get',
+  path: '/bad-reply',
+  responses: {
+    200: {
+      body: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },
+    },
+  },
+  handler: () => ({ status: 200, body: { ok: 'yes' } }),
+}
+
+/** Replies with a status the contract never declared — a 500 under validateResponses. */
+export const undeclaredStatus: AnyRouteContract = {
+  method: 'get',
+  path: '/undeclared',
+  responses: { 200: {} },
+  handler: () => ({ status: 201, body: { oops: true } }),
+}
+
+/** Declared response headers: `?bad=true` sets one that violates its schema. */
+export const strictHeaders = defineRoute({
+  method: 'get',
+  path: '/strict-headers',
+  request: { query: { type: 'object', properties: { bad: { type: 'boolean' } } } },
+  responses: {
+    200: {
+      body: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },
+      headers: { 'x-count': { type: 'string', minLength: 3 } },
+    },
+  },
+  handler: ({ query }) => ({
+    status: 200,
+    headers: { 'x-count': query.bad === true ? 'x' : 'abc' },
+    body: { ok: true },
+  }),
+})
+
+/** Set when the endless stream's consumer hangs up — the abort-detection probe. */
+export const endlessState = { cancelled: false }
+
+/** Streams forever; only a client disconnect (stream cancel) can end it. */
+export const endlessStream = defineRoute({
+  method: 'get',
+  path: '/endless',
+  responses: { 200: { contentType: 'application/octet-stream' } },
+  handler: () => {
+    const bytes = new Uint8Array(64 * 1024)
+    const body = new ReadableStream<Uint8Array>({
+      pull: (controller) => controller.enqueue(bytes),
+      cancel: () => {
+        endlessState.cancelled = true
+      },
+    })
+    return { status: 200, body }
   },
 })
 

@@ -42,6 +42,7 @@
   },
   "dependencies": {
     "@amritk/adapters": "workspace:*",
+    "@amritk/api": "workspace:*",
     "@amritk/generate-examples": "workspace:*",
     "@amritk/generate-parsers": "workspace:*",
     "@amritk/generate-validators": "workspace:*",

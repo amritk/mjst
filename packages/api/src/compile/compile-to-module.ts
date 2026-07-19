@@ -1,5 +1,8 @@
 import { buildCoercionPlan } from '../build-coercion-plan'
+import { fnv1aHex } from '../fnv1a-hex'
+import { hashContracts } from '../hash-contracts'
 import { parsePathPattern } from '../parse-path-pattern'
+import { DEFAULT_MAX_BODY_BYTES } from '../payload-too-large'
 import { toOpenApi } from '../to-open-api'
 import type { AnyRouteContract, OpenApiExtras, OpenApiInfo, PathSegment } from '../types'
 import { generateGuardSource } from './generate-guard-source'
@@ -27,6 +30,27 @@ export type CompileModuleOptions = OpenApiExtras & {
    * factory after validation, exactly like the runtime engine.
    */
   readonly contextExport?: string
+  /**
+   * Export name (in the routes module) of a `ValidatorCompiler` — the same
+   * function passed to `createApi({ compile })` in development. When set, no
+   * guards are inlined from the schemas: every request slot's guard and error
+   * collector (and, with `validateResponses`, every reply validator) comes
+   * from calling this compiler at module init, exactly like the runtime
+   * engine builds its validators at startup. When unset, the emitter keeps
+   * its default strategy — inline guards for the safe subset, the interpreter
+   * elsewhere.
+   */
+  readonly compileExport?: string
+  /**
+   * Validate reply bodies and declared reply headers against the response
+   * contracts, exactly like `createApi({ validateResponses: true })`:
+   * contract-breaking replies (and undeclared statuses) answer the same
+   * `invalid_response` 500 the runtime engine produces. Validators are built
+   * at module init — from `compileExport` when set, the interpreter
+   * otherwise — and schema-derived fast serializers are skipped so bodies
+   * serialize via JSON.stringify, matching the runtime's ordering and output.
+   */
+  readonly validateResponses?: boolean
   /**
    * Prefix-mounted sub-handlers, as `{ '/api/auth': 'authHandler' }` where the
    * value is an export name (in the routes module) of a
@@ -81,7 +105,8 @@ export type CompileModuleOptions = OpenApiExtras & {
   /**
    * Rejects request bodies larger than this many bytes with a 413 — the
    * compiled equivalent of `toFetchHandler`'s `maxBodyBytes` option, enforced
-   * with the same shared capped reader.
+   * with the same shared capped reader. Defaults to 1 MiB (1,048,576 bytes);
+   * pass `Infinity` to disable the cap entirely.
    */
   readonly maxBodyBytes?: number
   /** Import specifier for the @amritk/api helpers (override for tests/vendoring). */
@@ -114,6 +139,9 @@ export const compileToModule = (options: CompileModuleOptions): string => {
 
   const contextExport = options.contextExport
   assertIdentifier(contextExport, 'contextExport')
+  const compileExport = options.compileExport
+  assertIdentifier(compileExport, 'compileExport')
+  const validateResponses = options.validateResponses ?? false
   const errorsExport = options.errorsExport
   assertIdentifier(errorsExport, 'errorsExport')
   const onErrorExport = options.onErrorExport
@@ -125,7 +153,10 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   const onRequestExports = options.onRequestExports ?? []
   const onResponseExports = options.onResponseExports ?? []
   for (const name of [...onRequestExports, ...onResponseExports]) assertIdentifier(name, 'hook export')
-  const maxBodyBytes = options.maxBodyBytes
+  // Infinity (the explicit opt-out) reads as "no cap" below; the default cap
+  // matches the runtime adapters so both engines cut off at the same byte.
+  const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES
+  const unboundedBody = maxBodyBytes === Number.POSITIVE_INFINITY
   // The onError and observe contracts include env/executionContext, so route
   // functions must thread the platform arguments even without a context factory.
   const emitContext: EmitContext = {
@@ -135,6 +166,8 @@ export const compileToModule = (options: CompileModuleOptions): string => {
       onErrorExport !== undefined ||
       observeExport !== undefined ||
       observeUnmatchedExport !== undefined,
+    compileExport,
+    validateResponses,
   }
 
   const mounts = Object.entries(options.mounts ?? {}).map(([prefix, exportName]) => {
@@ -150,6 +183,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     decodeSegment: false,
     validate: false,
     validateGuard: false,
+    failValidation: false,
     codePoints: false,
     compileRx: false,
     matchesBodyType: false,
@@ -179,7 +213,12 @@ export const compileToModule = (options: CompileModuleOptions): string => {
           toOpenApi(
             routes.map((route) => route.contract),
             info,
-            { servers: options.servers, securitySchemes: options.securitySchemes, security: options.security },
+            {
+              servers: options.servers,
+              securitySchemes: options.securitySchemes,
+              security: options.security,
+              tags: options.tags,
+            },
           ),
         )
 
@@ -195,11 +234,14 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     // The thrown-error path always distinguishes 413s, matching the runtime
     // pipeline for handlers that read (or reject on) an oversized body.
     'isPayloadTooLargeError',
+    // The staleness check below recomputes the contracts hash at init, so
+    // every emitted module imports the hash function.
+    'hashContracts',
     // Every respond function's custom-headers branch goes through the shared
     // header builder, so repeated set-cookie values serialize identically to
     // the runtime adapter.
     'buildResponseHeaders',
-    maxBodyBytes === undefined ? undefined : 'readBytesCapped',
+    unboundedBody ? undefined : 'readBodyCapped',
   ].filter((name) => name !== undefined)
   const validatorImports = [
     used.validate ? 'validate' : undefined,
@@ -209,6 +251,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   const routeModuleImports = [
     ...routes.map((route) => route.name),
     ...(contextExport === undefined ? [] : [contextExport]),
+    ...(compileExport === undefined ? [] : [compileExport]),
     ...(errorsExport === undefined ? [] : [errorsExport]),
     ...(onErrorExport === undefined ? [] : [onErrorExport]),
     ...(observeExport === undefined ? [] : [observeExport]),
@@ -228,7 +271,19 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   if (validatorImports.length > 0) {
     lines.push(`import { ${validatorImports.join(', ')} } from ${JSON.stringify(validatorsImport)}`)
   }
+  // The schemas are baked into this module but the handlers are imported
+  // live, so a schema edit without regeneration silently drifts. The baked
+  // hash against a recompute over the live contracts catches exactly that at
+  // init — as a warning, never a throw: a stale module still serves traffic,
+  // taking production down over it would be worse than the drift.
+  const contractsHash = hashContracts(routes.map((route) => route.contract))
+  const staleWarning = `[@amritk/api] Stale compiled module: the route contracts in ${options.routesImport} no longer match the schemas baked into this module — re-run compileToModule to regenerate it.`
   lines.push(
+    '',
+    `export const contractsHash = '${contractsHash}'`,
+    `if (hashContracts([${routes.map((route) => route.name).join(', ')}]) !== contractsHash) {`,
+    `  console.error(${JSON.stringify(staleWarning)})`,
+    '}',
     '',
     "const JSON_HEADERS = { 'content-type': 'application/json' }",
     `const INITS = new Map([${[...statuses]
@@ -243,10 +298,9 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   // and read-caching behavior match toFetchHandler exactly: all three readers
   // share one buffered read, so the body can be read repeatedly and after the
   // pipeline consumed a declared body schema.
-  const readAllBytesExpression =
-    maxBodyBytes === undefined
-      ? 'request.arrayBuffer().then((buffer) => new Uint8Array(buffer))'
-      : `readBytesCapped(request.body, request.headers.get('content-length'), ${maxBodyBytes})`
+  const readAllBytesExpression = unboundedBody
+    ? 'request.arrayBuffer().then((buffer) => new Uint8Array(buffer))'
+    : `readBodyCapped(request, ${maxBodyBytes})`
   lines.push(
     'const DECODER = new TextDecoder()',
     // `locals` is the per-request bag created in the dispatch, so every
@@ -285,8 +339,36 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     lines.push("const compileRx = (src) => { try { return new RegExp(src, 'u') } catch { return new RegExp(src) } }")
   }
   lines.push(...emitErrorHelpers(errorsExport, onErrorExport, used))
+  if (validateResponses) {
+    // The runtime's invalid_response 500 in emitted form: `result` is the
+    // collector's verdict (true = no details, exactly like the pipeline's
+    // `result === true ? [] : result.errors`), `source` is set only for the
+    // reply-headers variant.
+    lines.push(
+      'const invalidResponse = (status, source, result) => {',
+      '  const errors = result === true ? [] : result.errors',
+      '  const body = source === undefined',
+      "    ? { error: 'invalid_response', status, errors }",
+      "    : { error: 'invalid_response', status, source, errors }",
+      '  return new Response(JSON.stringify(body), initFor(500))',
+      '}',
+    )
+  }
   if (openApiJson !== undefined) {
-    lines.push(`const OPENAPI_JSON = ${JSON.stringify(openApiJson)}`)
+    // The etag is baked at build time from the same hash the runtime engine
+    // applies at startup, so identical documents answer with identical etags
+    // in both engines.
+    const openApiEtag = '"' + fnv1aHex(openApiJson) + '"'
+    lines.push(
+      `const OPENAPI_JSON = ${JSON.stringify(openApiJson)}`,
+      `const OPENAPI_ETAG = ${JSON.stringify(openApiEtag)}`,
+      `const OPENAPI_HEADERS = { 'content-type': 'application/json', etag: OPENAPI_ETAG, 'cache-control': 'no-cache' }`,
+      `const OPENAPI_304_HEADERS = { etag: OPENAPI_ETAG, 'cache-control': 'no-cache' }`,
+      // Inline copy of the runtime's matchesIfNoneMatch (RFC 9110 weak
+      // comparison as an exact-token scan) — the emitted module's runtime
+      // imports are limited to the package's public surface.
+      "const openApiEtagMatches = (value) => { if (value.trim() === '*') return true; for (const part of value.split(',')) { let candidate = part.trim(); if (candidate.startsWith('W/')) candidate = candidate.slice(2); if (candidate === OPENAPI_ETAG) return true } return false }",
+    )
   }
   lines.push('', ...declarations)
   lines.push(
@@ -399,7 +481,7 @@ const emitErrorHelpers = (
       `  : toResponse(${onErrorExport}(error, makeApiRequest(request, url, rawPath, queryIndex, locals), { route, env, executionContext }))`,
     )
   }
-  if (used['validate']) {
+  if (used['failValidation']) {
     if (errorsExport === undefined) {
       lines.push(
         'const failValidation = (source, collect, value) => {',
@@ -534,21 +616,33 @@ const emitRouteDeclarations = (
     if (schema === undefined) continue
     const suffix = slotSuffix(slot, route.name)
     lines.push(`const schema${suffix} = ${JSON.stringify(schema)}`)
-    const generated = generateGuardSource(schema, 'g' + suffix)
-    if (generated === undefined) {
-      used['validateGuard'] = true
-      lines.push(`const guard${suffix} = validateGuard(schema${suffix})`)
+    if (emitContext.compileExport !== undefined) {
+      // With a custom compiler nothing is inlined — the exported compiler
+      // builds guard and collector at init, mirroring how the runtime engine
+      // routes every schema through `options.compile`.
+      lines.push(
+        `const compiled${suffix} = ${emitContext.compileExport}(schema${suffix})`,
+        `const guard${suffix} = compiled${suffix}.guard`,
+        `const collect${suffix} = () => compiled${suffix}.collect`,
+      )
     } else {
-      used['codePoints'] = used['codePoints'] || generated.usesCodePoints
-      used['compileRx'] = used['compileRx'] || generated.usesCompileRx
-      lines.push(...generated.declarations)
-      lines.push(`const guard${suffix} = ${generated.expression}`)
+      const generated = generateGuardSource(schema, 'g' + suffix)
+      if (generated === undefined) {
+        used['validateGuard'] = true
+        lines.push(`const guard${suffix} = validateGuard(schema${suffix})`)
+      } else {
+        used['codePoints'] = used['codePoints'] || generated.usesCodePoints
+        used['compileRx'] = used['compileRx'] || generated.usesCompileRx
+        lines.push(...generated.declarations)
+        lines.push(`const guard${suffix} = ${generated.expression}`)
+      }
+      used['validate'] = true
+      lines.push(
+        `let _collect${suffix}`,
+        `const collect${suffix} = () => (_collect${suffix} ??= validate(schema${suffix}))`,
+      )
     }
-    used['validate'] = true
-    lines.push(
-      `let _collect${suffix}`,
-      `const collect${suffix} = () => (_collect${suffix} ??= validate(schema${suffix}))`,
-    )
+    used['failValidation'] = true
     if (slot === 'query') {
       used['buildQueryObject'] = true
       const plan = [...buildCoercionPlan(schema)]
@@ -584,10 +678,55 @@ const emitRouteDeclarations = (
       continue
     }
     if (response.body === undefined) continue
+    // With response validation on, bodies serialize via JSON.stringify like
+    // the runtime engine — a schema-derived serializer could only disagree
+    // with a validator over the exact schemas validation just checked.
+    if (emitContext.validateResponses) continue
     const source = generateSerializerSource(response.body)
     if (source !== undefined) {
       serialized.push(Number(status))
       lines.push(`const serialize_${route.name}_${status} = ${source}`)
+    }
+  }
+
+  const replyChecks: string[] = []
+  if (emitContext.validateResponses) {
+    // The reply validators mirror compileRoute: body validators only for
+    // JSON statuses (raw contentType bodies have no JSON value to check),
+    // header validators as an open object over the declared header schemas,
+    // and the declared-status set for the undeclared-reply 500.
+    const statuses = Object.keys(route.contract.responses).map((status) => Number(status))
+    lines.push(`const declared_${route.name} = new Set(${JSON.stringify(statuses)})`)
+    replyChecks.push(
+      `    if (!declared_${route.name}.has(reply.status)) return invalidResponse(reply.status, undefined, true)`,
+    )
+    for (const [status, response] of Object.entries(route.contract.responses)) {
+      const bodySchema = response.contentType === undefined ? response.body : undefined
+      const headerSchemas = response.headers
+      if (bodySchema === undefined && headerSchemas === undefined) continue
+      const checks: string[] = []
+      if (bodySchema !== undefined) {
+        const name = `replyBody_${route.name}_${status}`
+        lines.push(
+          `const ${name}Schema = ${JSON.stringify(bodySchema)}`,
+          `const ${name} = ${compiledValidationExpression(`${name}Schema`, emitContext.compileExport, used)}`,
+        )
+        checks.push(
+          `      if (!${name}.guard(reply.body)) return invalidResponse(${status}, undefined, ${name}.collect(reply.body))`,
+        )
+      }
+      if (headerSchemas !== undefined) {
+        const name = `replyHeaders_${route.name}_${status}`
+        lines.push(
+          `const ${name}Schema = ${JSON.stringify({ type: 'object', properties: headerSchemas })}`,
+          `const ${name} = ${compiledValidationExpression(`${name}Schema`, emitContext.compileExport, used)}`,
+        )
+        checks.push(
+          '      const replyHeaders = reply.headers ?? {}',
+          `      if (!${name}.guard(replyHeaders)) return invalidResponse(${status}, 'headers', ${name}.collect(replyHeaders))`,
+        )
+      }
+      replyChecks.push(`    if (reply.status === ${status}) {`, ...checks, '    }')
     }
   }
 
@@ -598,6 +737,10 @@ const emitRouteDeclarations = (
   // that cannot serialize (circular body, invalid header name) becomes the
   // pipeline's 500 instead of an escaped rejection.
   lines.push(`const respond_${route.name} = (reply) => {`, '  try {')
+  // Reply validation runs first — before the raw-status returns and the
+  // serializers — matching the runtime pipeline, where runRoute validates
+  // the reply before the adapter ever sees it.
+  lines.push(...replyChecks)
   for (const [status, contentType] of rawStatuses) {
     lines.push(
       `    if (reply.status === ${status}) return new Response(reply.body ?? null, { status: ${status}, headers: reply.headers === undefined ? { 'content-type': ${JSON.stringify(contentType)} } : buildResponseHeaders(reply.headers, ${JSON.stringify(contentType)}) })`,
@@ -636,6 +779,28 @@ const ERROR_ARGS = 'request, url, rawPath, queryIndex, locals'
 type EmitContext = {
   readonly contextExport: string | undefined
   readonly needsPlatform: boolean
+  /** ValidatorCompiler export name; guards come from it instead of inlining when set. */
+  readonly compileExport: string | undefined
+  /** Whether replies are validated against the response contracts (see the option). */
+  readonly validateResponses: boolean
+}
+
+/**
+ * The init-time expression producing a `{ guard, collect }` pair for one
+ * schema constant: the exported custom compiler when configured, the
+ * interpreter (built eagerly, exactly like `createApi`'s `defaultCompile`)
+ * otherwise. Mutates `used` so the interpreter imports only appear when
+ * something references them.
+ */
+const compiledValidationExpression = (
+  schemaVar: string,
+  compileExport: string | undefined,
+  used: Record<string, boolean>,
+): string => {
+  if (compileExport !== undefined) return `${compileExport}(${schemaVar})`
+  used['validate'] = true
+  used['validateGuard'] = true
+  return `{ guard: validateGuard(${schemaVar}), collect: validate(${schemaVar}) }`
 }
 
 /**
@@ -764,19 +929,24 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
   }
 
   // Refinement mirrors the runtime pipeline: after every declared slot has
-  // validated, before the context factory and handler, with a throwing
-  // refine taking the handler-error path.
-  const refineLines = (bodyValue: string, indent: string): string[] => {
-    if (route.contract.refine === undefined) return []
+  // validated, before the context factory and handler, with a throwing or
+  // rejecting refine taking the handler-error path. Sync and async refines
+  // share one continuation so both verdicts run identical code.
+  const refineAndRunLines = (bodyValue: string, indent: string): string[] => {
+    if (route.contract.refine === undefined) return runLines(bodyValue, indent)
     used['refine'] = true
     return [
-      `${indent}let refineIssues`,
+      `${indent}const afterRefine = (refineIssues) => {`,
+      `${indent}  if (refineIssues !== undefined && refineIssues.length > 0) return failRefine(refineIssues, ${ERROR_ARGS})`,
+      ...runLines(bodyValue, indent + '  '),
+      `${indent}}`,
+      `${indent}let refineResult`,
       `${indent}try {`,
-      `${indent}  refineIssues = ${route.name}.refine({ params: ${paramsValue}, query: ${queryValue}, body: ${bodyValue}, headers: ${headersValue}, cookies: ${cookiesValue} })`,
+      `${indent}  refineResult = ${route.name}.refine({ params: ${paramsValue}, query: ${queryValue}, body: ${bodyValue}, headers: ${headersValue}, cookies: ${cookiesValue} })`,
       `${indent}} catch (error) {`,
       `${indent}  return thrown(error, ${thrownArguments})`,
       `${indent}}`,
-      `${indent}if (refineIssues !== undefined && refineIssues.length > 0) return failRefine(refineIssues, ${ERROR_ARGS})`,
+      `${indent}return typeof refineResult?.then === 'function' ? refineResult.then(afterRefine, (error) => thrown(error, ${thrownArguments})) : afterRefine(refineResult)`,
     ]
   }
 
@@ -797,8 +967,7 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
     )
     const guardAndRun = [
       `    if (!guard${suffix}(body)) return failValidation('body', collect${suffix}, body, ${ERROR_ARGS})`,
-      ...refineLines('body', '    '),
-      ...runLines('body', '    '),
+      ...refineAndRunLines('body', '    '),
     ]
     if (bodyType === 'json') {
       lines.push(
@@ -828,7 +997,7 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
       )
     }
   } else {
-    lines.push(...refineLines('undefined', '  '), ...runLines('undefined', '  '))
+    lines.push(...refineAndRunLines('undefined', '  '))
   }
   lines.push('}')
   return lines
@@ -917,7 +1086,13 @@ const emitDispatch = (
   }
   if (openApiPath !== undefined) {
     lines.push(
-      `  if ((method === 'GET' || method === 'HEAD') && rawPath === ${JSON.stringify(openApiPath)}) return method === 'HEAD' ? new Response(null, initFor(200)) : new Response(OPENAPI_JSON, initFor(200))`,
+      `  if ((method === 'GET' || method === 'HEAD') && rawPath === ${JSON.stringify(openApiPath)}) {`,
+      // A matching validator answers 304 with no body — the document string
+      // is embedded and immutable, so revalidation is a header compare.
+      "    const ifNoneMatch = request.headers.get('if-none-match')",
+      '    if (ifNoneMatch !== null && openApiEtagMatches(ifNoneMatch)) return new Response(null, { status: 304, headers: OPENAPI_304_HEADERS })',
+      "    return method === 'HEAD' ? new Response(null, { status: 200, headers: OPENAPI_HEADERS }) : new Response(OPENAPI_JSON, { status: 200, headers: OPENAPI_HEADERS })",
+      '  }',
     )
   }
   lines.push("  const path = rawPath.length > 1 && rawPath.endsWith('/') ? rawPath.slice(0, -1) : rawPath")
@@ -1017,7 +1192,19 @@ const emitDispatch = (
       ? expression
       : `observedMiss(${expression}, ${ERROR_ARGS}, env, executionContext, missStart)`
   lines.push(
-    `  if (allow.length > 0) { const denied = ${miss(`methodNotAllowed(allow.sort(), ${ERROR_ARGS})`)}; return method === 'HEAD' ? stripHeadBody(denied) : denied }`,
+    '  if (allow.length > 0) {',
+    // The server genuinely serves OPTIONS for known paths (the 204 below),
+    // so it joins every allow list; the guard covers paths with an explicit
+    // options route already collected by the scan.
+    "    if (!allow.includes('OPTIONS')) allow.push('OPTIONS')",
+    '    allow.sort()',
+    // A plain OPTIONS on a path served under other methods answers 204 with
+    // the allow list — same rule as the runtime pipeline; an explicitly
+    // declared options route matched in its method block above.
+    `    if (method === 'OPTIONS') return ${miss("new Response(null, { status: 204, headers: { allow: allow.join(', ') } })")}`,
+    `    const denied = ${miss(`methodNotAllowed(allow, ${ERROR_ARGS})`)}`,
+    "    return method === 'HEAD' ? stripHeadBody(denied) : denied",
+    '  }',
     `  const missing = ${miss(`notFound(${ERROR_ARGS})`)}`,
     "  return method === 'HEAD' ? stripHeadBody(missing) : missing",
     '}',

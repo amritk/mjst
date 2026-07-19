@@ -8,6 +8,10 @@ export default defineConfig({
     alias: [
       { find: /^@\//, replacement: `${resolve(process.cwd(), 'src')}/` },
       { find: /^@amritk\/adapters\/(.*)$/, replacement: resolve(root, 'packages/adapters/src/$1.ts') },
+      // api can be consumed from src: its only runtime dependency,
+      // @amritk/runtime-validators, is aliased to dist below.
+      { find: /^@amritk\/api$/, replacement: resolve(root, 'packages/api/src/index.ts') },
+      { find: /^@amritk\/api\/bundler$/, replacement: resolve(root, 'packages/api/src/bundler/index.ts') },
       { find: /^@amritk\/helpers\/(.*)$/, replacement: resolve(root, 'packages/helpers/src/$1.ts') },
       { find: /^@amritk\/generate-examples$/, replacement: resolve(root, 'packages/generate-examples/src/index.ts') },
       { find: /^@amritk\/generate-markdown$/, replacement: resolve(root, 'packages/generate-markdown/src/index.ts') },

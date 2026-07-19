@@ -1,5 +1,6 @@
 import type { FromSchema } from '@amritk/runtime-validators'
 
+import { malformedBodyError } from './malformed-body-error'
 import { toSearchParams } from './to-search-params'
 import type { AnyContract, BodyType, ResponseContracts } from './types'
 import { unexpectedStatusError } from './unexpected-status-error'
@@ -37,6 +38,14 @@ export type BodySerializer = {
 export type PathParamsBuilder = (pattern: string, params: Readonly<Record<string, unknown>> | undefined) => string
 
 /**
+ * Extra `RequestInit` fields passed through to fetch untouched —
+ * `credentials`, `cache`, `redirect`, `keepalive`, `mode`, and friends. The
+ * fields the client computes itself (`method`, `headers`, `body`, `signal`)
+ * are carved out so a passthrough can never clobber them.
+ */
+export type FetchOptions = Omit<RequestInit, 'method' | 'headers' | 'body' | 'signal'>
+
+/**
  * Options for {@link createClient}.
  */
 export type ClientOptions = {
@@ -45,6 +54,15 @@ export type ClientOptions = {
    * wrapper that adds retries. Defaults to the global `fetch`.
    */
   readonly fetch?: (url: string, init: RequestInit) => Promise<Response>
+  /**
+   * `RequestInit` fields merged into every request, e.g.
+   * `{ credentials: 'include' }` for browser cookie auth. Per-call
+   * `fetchOptions` win over these on conflict (shallow merge). Note that
+   * browsers forbid setting the `cookie` request header, so the typed
+   * `cookies` slot only works from Node/undici/workers — browser cookie auth
+   * should rely on server-set cookies plus `credentials: 'include'` here.
+   */
+  readonly fetchOptions?: FetchOptions
   /**
    * Headers sent with every call: a static record, or a (possibly async)
    * function evaluated per call — the shape auth tokens need. Per-call
@@ -66,6 +84,14 @@ export type ClientOptions = {
    * static-path apps omit it and skip the code entirely.
    */
   readonly pathParams?: PathParamsBuilder
+  /**
+   * Default timeout applied to every call, in milliseconds. Implemented with
+   * `AbortSignal.timeout`, composed via `AbortSignal.any` when a call also
+   * passes its own `signal` — either one aborts the request. Per-call
+   * `timeoutMs` overrides this, including an explicit `undefined` to disable
+   * the timeout for one call.
+   */
+  readonly timeoutMs?: number
 }
 
 /**
@@ -118,6 +144,19 @@ export type ClientInput<C extends AnyContract> = SlotField<'params', SlotSchema<
   HeadersField<SlotSchema<C, 'headers'>> & {
     /** Per-call cancellation, e.g. from `AbortSignal.timeout(5000)`. */
     readonly signal?: AbortSignal
+    /**
+     * Per-call `RequestInit` passthrough, shallow-merged over the
+     * client-level `fetchOptions` — the winning source for `credentials`,
+     * `cache`, `redirect`, and friends on this one request.
+     */
+    readonly fetchOptions?: FetchOptions
+    /**
+     * Per-call timeout override in milliseconds. The explicit `| undefined`
+     * matters under `exactOptionalPropertyTypes`: present-but-`undefined`
+     * disables the client-level default for this call, while absent falls
+     * back to it.
+     */
+    readonly timeoutMs?: number | undefined
   }
 
 /**
@@ -257,6 +296,8 @@ type RawInput = {
   readonly headers?: ExtraHeaders
   readonly cookies?: Readonly<Record<string, unknown>>
   readonly signal?: AbortSignal
+  readonly fetchOptions?: FetchOptions
+  readonly timeoutMs?: number | undefined
 }
 
 /**
@@ -273,10 +314,21 @@ type RawInput = {
  * through the registered `pathParams` builder (`buildParamPath`
  * segment-encodes; greedy `{x+}` parameters keep their slashes), declared
  * `headers`/`cookies` are typed, and extra headers and an `AbortSignal` ride
- * along. Replies come back as the {@link ClientReply} union; an undeclared
- * status throws (check it with `isUnexpectedStatusError`). The non-JSON wire
- * formats and the path-template builder are opt-in imports so apps only
- * bundle what their calls actually use.
+ * along. Every request carries `accept: application/json` unless some header
+ * source overrides it. Extra `RequestInit` fields (`credentials`, `cache`,
+ * `redirect`, ...) pass through via `fetchOptions` — client-level defaults
+ * with per-call overrides — and `timeoutMs` aborts slow calls, composing with
+ * a caller `signal` through `AbortSignal.any`. Replies come back as the
+ * {@link ClientReply} union; an undeclared status throws (check it with
+ * `isUnexpectedStatusError`) and a declared JSON status whose body fails to
+ * parse throws too (check it with `isMalformedBodyError` — the `Response` and
+ * the parse error ride along). The non-JSON wire formats and the
+ * path-template builder are opt-in imports so apps only bundle what their
+ * calls actually use.
+ *
+ * Browsers forbid setting the `cookie` request header, so the typed `cookies`
+ * slot works from Node/undici/workers only. Browser cookie auth should use
+ * server-set cookies plus `fetchOptions: { credentials: 'include' }`.
  *
  * @example
  * ```typescript
@@ -310,6 +362,8 @@ export const createClient = <Contracts extends Readonly<Record<string, AnyContra
     baseHeaders: options?.headers,
     serializers,
     pathParams: options?.pathParams,
+    fetchOptions: options?.fetchOptions,
+    timeoutMs: options?.timeoutMs,
   }
   const client: Record<string, unknown> = {}
   for (const [name, contract] of Object.entries(contracts)) {
@@ -325,6 +379,8 @@ type SharedClientState = {
   readonly baseHeaders: ClientOptions['headers']
   readonly serializers: Partial<Record<BodyType, BodySerializer>>
   readonly pathParams: PathParamsBuilder | undefined
+  readonly fetchOptions: FetchOptions | undefined
+  readonly timeoutMs: number | undefined
 }
 
 const buildMethod = (
@@ -337,9 +393,13 @@ const buildMethod = (
   const hasBody = contract.request?.body !== undefined
   const hasPathParams = contract.path.includes('{')
   return async (input: RawInput = {}) => {
-    const headers = new Headers(
-      typeof shared.baseHeaders === 'function' ? await shared.baseHeaders() : shared.baseHeaders,
-    )
+    // The accept default goes in first so every later source — client-level
+    // headers, declared headers, per-call extras — can override it.
+    const headers = new Headers({ accept: 'application/json' })
+    const baseHeaders = typeof shared.baseHeaders === 'function' ? await shared.baseHeaders() : shared.baseHeaders
+    if (baseHeaders !== undefined) {
+      for (const [headerName, value] of Object.entries(baseHeaders)) headers.set(headerName, value)
+    }
     if (input.headers !== undefined) {
       for (const [headerName, value] of Object.entries(input.headers)) headers.set(headerName, String(value))
     }
@@ -375,9 +435,15 @@ const buildMethod = (
     }
 
     const url = shared.base + path + queryStringOf(input.query)
-    const init: RequestInit = { method, headers }
+    // Passthrough options spread first so the fields the client computes
+    // (method, headers, body, signal) always win over them.
+    const init: RequestInit = { ...shared.fetchOptions, ...input.fetchOptions, method, headers }
     if (body !== undefined) init.body = body
-    if (input.signal !== undefined) init.signal = input.signal
+    // A per-call timeoutMs property wins even when set to undefined — that is
+    // how one call opts out of the client-level default.
+    const timeoutMs = 'timeoutMs' in input ? input.timeoutMs : shared.timeoutMs
+    const signal = composeSignal(input.signal, timeoutMs)
+    if (signal !== undefined) init.signal = signal
     const response = await shared.fetchImpl(url, init)
 
     const declared = contract.responses[response.status]
@@ -388,8 +454,27 @@ const buildMethod = (
     if (declared.contentType !== undefined || declared.body === undefined) {
       return { status: response.status, response }
     }
-    return { status: response.status, body: (await response.json()) as unknown, response }
+    // A bare SyntaxError from response.json() would lose the route name, the
+    // status, and the Response — wrap it so error handling keeps all three.
+    const parsed: unknown = await response.json().catch((cause: unknown) => {
+      throw malformedBodyError(name, response, cause)
+    })
+    return { status: response.status, body: parsed, response }
   }
+}
+
+/**
+ * Builds the effective abort signal for one request: the caller's signal, a
+ * timeout signal, both composed with `AbortSignal.any` (Node >= 20, our
+ * engines floor — no polyfill needed), or nothing at all.
+ */
+const composeSignal = (
+  callerSignal: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+): AbortSignal | undefined => {
+  if (timeoutMs === undefined) return callerSignal
+  const timeoutSignal = AbortSignal.timeout(timeoutMs)
+  return callerSignal === undefined ? timeoutSignal : AbortSignal.any([callerSignal, timeoutSignal])
 }
 
 const queryStringOf = (query: Readonly<Record<string, unknown>> | undefined): string => {

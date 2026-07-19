@@ -1,7 +1,8 @@
 import { validate, validateGuard } from '@amritk/runtime-validators'
 
 import { compileRoute } from './compile-route'
-import type { ApiInternals } from './handle-request'
+import { fnv1aHex } from './fnv1a-hex'
+import type { ApiInternals, OpenApiSerialized } from './handle-request'
 import { handleRequest } from './handle-request'
 import { matchRoute } from './match-route'
 import { toOpenApi } from './to-open-api'
@@ -69,8 +70,23 @@ export const createApi = (options: ApiOptions): Api => {
       servers: options.servers,
       securitySchemes: options.securitySchemes,
       security: options.security,
+      tags: options.tags,
     })
     return document
+  }
+
+  // The document is immutable per process, so it is stringified (and hashed
+  // into its etag) exactly once — the pipeline serves this cached string
+  // instead of re-serializing the document on every request. The compiled
+  // engine derives its etag from the same hash at build time, so identical
+  // documents carry identical etags in both engines.
+  let serialized: OpenApiSerialized | undefined
+  const openApiSerialized = (): OpenApiSerialized => {
+    if (serialized === undefined) {
+      const json = JSON.stringify(openApi())
+      serialized = { json, etag: '"' + fnv1aHex(json) + '"' }
+    }
+    return serialized
   }
 
   const methods = [...new Set(options.routes.map((contract) => contract.method.toUpperCase()))]
@@ -78,7 +94,7 @@ export const createApi = (options: ApiOptions): Api => {
   const internals: ApiInternals = {
     table: { staticRoutes, dynamicRoutes, methods },
     openApiPath,
-    openApi,
+    openApiSerialized,
     createContext: options.context,
     onError: options.onError,
     errors: options.errors,

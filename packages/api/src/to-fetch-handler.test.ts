@@ -82,8 +82,29 @@ describe('to-fetch-handler', () => {
   it('serves the OpenAPI document', async () => {
     const response = await handler(new Request('http://localhost/openapi.json'))
     expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('application/json')
     const document = (await response.json()) as { openapi: string }
     expect(document.openapi).toBe('3.1.0')
+  })
+
+  it('serves the OpenAPI document with an etag and honors if-none-match with a 304', async () => {
+    const first = await handler(new Request('http://localhost/openapi.json'))
+    const etag = first.headers.get('etag') ?? ''
+    expect(etag).toMatch(/^"[0-9a-f]{8}"$/)
+    expect(first.headers.get('cache-control')).toBe('no-cache')
+
+    const revalidated = await handler(
+      new Request('http://localhost/openapi.json', { headers: { 'if-none-match': etag } }),
+    )
+    expect(revalidated.status).toBe(304)
+    expect(revalidated.headers.get('etag')).toBe(etag)
+    expect(await revalidated.text()).toBe('')
+
+    // A stale validator gets the full document again.
+    const stale = await handler(
+      new Request('http://localhost/openapi.json', { headers: { 'if-none-match': '"deadbeef"' } }),
+    )
+    expect(stale.status).toBe(200)
   })
 
   it('routes mount prefixes to the sub-handler with the raw Request', async () => {
@@ -188,6 +209,35 @@ describe('to-fetch-handler', () => {
     )
     expect(response.status).toBe(413)
     expect(await response.json()).toEqual({ error: 'payload_too_large' })
+  })
+
+  it('caps bodies at 1 MiB by default and lets Infinity restore unbounded reads', async () => {
+    const webhook = defineRoute({
+      method: 'post',
+      path: '/webhook',
+      responses: { 200: { body: { type: 'object', properties: { bytes: {} } } } },
+      handler: async ({ request }) => ({ status: 200, body: { bytes: (await request.readBytes()).byteLength } }),
+    })
+    const oversized = (): Request =>
+      new Request('http://localhost/webhook', { method: 'POST', body: 'x'.repeat(1_048_577) })
+
+    // No options at all: the shared 1 MiB default applies.
+    const defaulted = toFetchHandler(createApi({ routes: [webhook] }))
+    const rejected = await defaulted(oversized())
+    expect(rejected.status).toBe(413)
+    expect(await rejected.json()).toEqual({ error: 'payload_too_large' })
+
+    // A body at exactly the limit still passes.
+    const atLimit = await defaulted(
+      new Request('http://localhost/webhook', { method: 'POST', body: 'x'.repeat(1_048_576) }),
+    )
+    expect(atLimit.status).toBe(200)
+
+    // Infinity is the documented opt-out back to unbounded reads.
+    const unbounded = toFetchHandler(createApi({ routes: [webhook] }), { maxBodyBytes: Number.POSITIVE_INFINITY })
+    const accepted = await unbounded(oversized())
+    expect(accepted.status).toBe(200)
+    expect(await accepted.json()).toEqual({ bytes: 1_048_577 })
   })
 
   it('answers 413 when a handler-initiated raw read exceeds maxBodyBytes', async () => {
@@ -325,11 +375,11 @@ describe('to-fetch-handler', () => {
     // /echo/{id} only serves POST — HEAD gets the 405, not the GET fallback.
     const wrongMethod = await handler(new Request('http://localhost/echo/7', { method: 'HEAD' }))
     expect(wrongMethod.status).toBe(405)
-    expect(wrongMethod.headers.get('allow')).toBe('POST')
+    expect(wrongMethod.headers.get('allow')).toBe('OPTIONS, POST')
     expect(await wrongMethod.text()).toBe('')
   })
 
-  it('advertises HEAD in allow lists whenever GET is allowed', async () => {
+  it('advertises HEAD and OPTIONS in allow lists whenever GET is allowed', async () => {
     const users = defineRoute({
       method: 'get',
       path: '/users',
@@ -339,7 +389,18 @@ describe('to-fetch-handler', () => {
     const heady = toFetchHandler(createApi({ routes: [users] }))
     const response = await heady(new Request('http://localhost/users', { method: 'PUT' }))
     expect(response.status).toBe(405)
-    expect(response.headers.get('allow')).toBe('GET, HEAD')
+    expect(response.headers.get('allow')).toBe('GET, HEAD, OPTIONS')
+  })
+
+  it('answers plain OPTIONS on a known path with 204 and the allow list', async () => {
+    const response = await handler(new Request('http://localhost/echo/7', { method: 'OPTIONS' }))
+    expect(response.status).toBe(204)
+    expect(response.headers.get('allow')).toBe('OPTIONS, POST')
+    expect(await response.text()).toBe('')
+
+    // Unknown paths keep answering 404.
+    const missing = await handler(new Request('http://localhost/missing', { method: 'OPTIONS' }))
+    expect(missing.status).toBe(404)
   })
 
   it('lets a handler read the body after the pipeline validated it', async () => {

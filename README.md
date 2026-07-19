@@ -47,6 +47,7 @@ The CLI (`mjst`) is the primary entry point; everything above is also published 
 | Package | Description |
 |:---|:---|
 | [`@amritk/mjst`](./packages/cli) | CLI — generates parsers, validators, and types from a schema, and lints JSON/YAML (`mjst lint`) |
+| [`@amritk/api`](./packages/api) | Contract-first, framework-agnostic API layer — typed routes, request/response validation, OpenAPI 3.1, typed client |
 | [`@amritk/lint`](./packages/lint) | Format-agnostic JSON/YAML style-guide linter — JSON Schema + custom rules, with exact `line:column` findings |
 | [`@amritk/generate-parsers`](./packages/generate-parsers) | Programmatic API for parser + type generation |
 | [`@amritk/generate-validators`](./packages/generate-validators) | Programmatic API for validator generation |
