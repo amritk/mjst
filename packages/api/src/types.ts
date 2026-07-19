@@ -609,12 +609,53 @@ export type RouteTable = {
 }
 
 /**
- * The `info` block of the generated OpenAPI document.
+ * The `contact` object of the OpenAPI `info` block. Passed through verbatim —
+ * documentation UIs render it as the "who to reach" block.
+ */
+export type OpenApiContact = {
+  readonly name?: string
+  readonly url?: string
+  readonly email?: string
+}
+
+/**
+ * The `license` object of the OpenAPI `info` block. `identifier` is the
+ * OpenAPI 3.1 SPDX expression field (e.g. `'MIT'`); it and `url` are mutually
+ * exclusive per the spec, but that is left to the author — everything passes
+ * through verbatim.
+ */
+export type OpenApiLicense = {
+  readonly name: string
+  readonly identifier?: string
+  readonly url?: string
+}
+
+/**
+ * The `info` block of the generated OpenAPI document. Everything here passes
+ * through to the document verbatim.
  */
 export type OpenApiInfo = {
   readonly title: string
   readonly version: string
   readonly description?: string
+  /** URL of the terms of service for the API. */
+  readonly termsOfService?: string
+  readonly contact?: OpenApiContact
+  readonly license?: OpenApiLicense
+}
+
+/**
+ * One entry of the document-level `tags` array: a description (and optional
+ * external docs link) for a tag name that operations reference via their own
+ * `tags`. Documentation UIs use these to title and order their sections.
+ */
+export type OpenApiTag = {
+  readonly name: string
+  readonly description?: string
+  readonly externalDocs?: {
+    readonly url: string
+    readonly description?: string
+  }
 }
 
 /** One entry of the OpenAPI `servers` array. */
@@ -649,6 +690,12 @@ export type OpenApiExtras = {
    * `security: []`.
    */
   readonly security?: SecurityRequirements | undefined
+  /**
+   * Document-level tag metadata, emitted as the top-level `tags` array.
+   * Operations still tag themselves via {@link Contract.tags}; this is where
+   * those tag names get descriptions and external docs links.
+   */
+  readonly tags?: readonly OpenApiTag[] | undefined
 }
 
 /**
@@ -663,6 +710,7 @@ export type OpenApiDocument = {
   readonly info: OpenApiInfo
   readonly servers?: readonly OpenApiServer[]
   readonly security?: SecurityRequirements
+  readonly tags?: readonly OpenApiTag[]
   readonly paths: Readonly<Record<string, unknown>>
   readonly components?: Readonly<Record<string, unknown>>
 }
