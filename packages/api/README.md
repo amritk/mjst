@@ -70,9 +70,11 @@ const api = createApi({
 ```
 
 `api.handle` is the whole runtime; `GET /openapi.json` serves the generated
-document (configurable via `openApiPath`). Note: for the types to flow, write
-schemas inline (as above) or declare shared ones `as const` — a plain `const`
-widens the literal before `defineRoute` sees it.
+document (configurable via `openApiPath`) — serialized once per process and
+sent with a strong `etag` + `cache-control: no-cache`, answering `304` to a
+matching `if-none-match`. Note: for the types to flow, write schemas inline
+(as above) or declare shared ones `as const` — a plain `const` widens the
+literal before `defineRoute` sees it.
 
 ### Contracts without handlers (browser-safe)
 
@@ -127,6 +129,8 @@ const client = createClient(contracts, 'https://api.example.com', {
   headers: () => ({ authorization: `Bearer ${readToken()}` }), // static record or (async) function
   fetch: myFetch, // injectable for tests; defaults to global fetch
   pathParams: buildParamPath, // opt-in: only needed for {param} paths
+  fetchOptions: { credentials: 'include' }, // RequestInit extras (credentials, cache, redirect, …)
+  timeoutMs: 10_000, // default per-call timeout; composes with a per-call signal
 })
 
 const reply = await client.getUser({ params: { id: 7 }, signal: AbortSignal.timeout(5000) })
@@ -147,7 +151,19 @@ if (reply.status === 404) /* declared, typed, no body */;
 - **Inputs are typed per slot:** declared `params`/`query`/`body`/`cookies`
   are required and schema-typed, `headers` accepts the declared shape plus
   ad-hoc extras, and a per-call `signal` cancels. Contracts with no request
-  slots call with no argument at all (`client.health()`).
+  slots call with no argument at all (`client.health()`). Every call also
+  accepts `fetchOptions` (per-call `RequestInit` extras, merged over the
+  client-level ones) and `timeoutMs` (overriding the client default; a
+  timeout and a caller `signal` compose via `AbortSignal.any`). Requests
+  send `accept: application/json` unless a header overrides it.
+- **Cookies and browsers:** the `cookies` slot serializes into the `cookie`
+  request header, which browsers forbid scripts from setting — it works from
+  Node/undici/workers only. Browser cookie auth uses server-set cookies plus
+  `fetchOptions: { credentials: 'include' }`.
+- **A declared status whose body fails to parse** (a proxy truncation, a
+  gateway HTML page under a JSON status) throws a recognizable error —
+  `isMalformedBodyError(error)` — carrying the consumed `Response` and the
+  parse error as `cause`, instead of a bare `SyntaxError`.
 - **Wire formats beyond JSON are opt-in imports:** JSON bodies and query
   serialization (array values repeat the key) are built in; contracts with
   `bodyType: 'form'` / `'multipart'` (urlencoded pairs / `FormData` with
@@ -216,6 +232,11 @@ import { stripContractsVite } from '@amritk/api/bundler'
 
 export default defineConfig({ plugins: [stripContractsVite()] })
 ```
+
+esbuild and Rollup builds use `stripContractsEsbuild()` / `stripContractsRollup()`
+from the same subpath, with identical `exclude` semantics. The strip is
+line-preserving — removed spans keep their newlines — so downstream
+sourcemaps stay line-accurate.
 
 ```ts
 // build.ts — Bun.build; add it to the browser build only
@@ -299,7 +320,7 @@ Writing an adapter for anything else is ~15 lines: construct one
 | `errors` | built-in bodies | Reshape the pipeline's own cold-path responses (`notFound`, `invalidJson`, `invalidBody`, `unsupportedMediaType`, `payloadTooLarge`, `validationFailed`, `methodNotAllowed`) to match an existing wire format. |
 | `observe` | — | Called once per matched request with `{ route, request, status, durationMs, env, executionContext }` — the seam for per-route latency metrics and structured request logs. See [Observability](#observability-metrics-and-request-logs). |
 | `observeUnmatched` | — | The unmatched-request counterpart: called once per 404/405 with `route: undefined`, for request-logging parity with framework middleware. |
-| `servers` / `securitySchemes` / `security` | — | Document-level OpenAPI settings: base URLs, named auth schemes (`components.securitySchemes`), and the default security requirement. Routes add `security` / `deprecated` per operation. |
+| `servers` / `securitySchemes` / `security` / `tags` | — | Document-level OpenAPI settings: base URLs, named auth schemes (`components.securitySchemes`), the default security requirement, and tag objects (`name`/`description`/`externalDocs`). Routes add `security` / `deprecated` per operation. |
 
 ### Validation semantics
 
@@ -334,7 +355,11 @@ Writing an adapter for anything else is ~15 lines: construct one
   Declaring an explicit `head` route overrides the fallback for its path.
 - A known path requested with the wrong method answers
   `405 { error: 'method_not_allowed' }` with a sorted `allow` header
-  (advertising `HEAD` whenever `GET` is served); unknown paths stay 404.
+  (advertising `HEAD` whenever `GET` is served, and `OPTIONS` always);
+  unknown paths stay 404.
+- `OPTIONS` on a known path answers `204` with the same `allow` header
+  automatically; declaring an explicit `options` route overrides it. CORS
+  preflights are answered earlier by the `createCors` gate when configured.
 - Validation failures answer `400` with `{ error: 'validation_failed', source,
   errors }` where `errors` carries the same `{ message, path }` shape as
   `@amritk/runtime-validators` and `source` is `params`, `query`, `headers`,
@@ -344,9 +369,9 @@ Writing an adapter for anything else is ~15 lines: construct one
 ### Cross-field refinement
 
 Per-slot JSON Schema cannot see across fields. A route (or contract) may
-declare `refine`, which runs synchronously **after** every declared slot has
-validated — so its inputs are already typed and coerced — and **before** the
-context factory and handler. Returned issues reject the request through the
+declare `refine`, which runs (sync or async — a returned promise is awaited)
+**after** every declared slot has validated — so its inputs are already typed
+and coerced — and **before** the context factory and handler. Returned issues reject the request through the
 standard `validation_failed` envelope (and the `validationFailed` formatter),
 with your own `path`/`message`; `undefined` or `[]` accepts it. A thrown
 refine takes the `onError` path like any handler error:
@@ -445,6 +470,11 @@ const chat = defineRoute({
 })
 ```
 
+Both adapters apply backpressure: the fetch adapter hands the stream to the
+platform `Response`, and the Node adapter awaits `drain` whenever a write
+overruns the socket buffer, so a fast producer never buffers unbounded
+memory against a slow client.
+
 ### Raw request bodies and size limits
 
 The pipeline only consumes the body stream when a `body` schema is declared,
@@ -474,7 +504,9 @@ const stripeWebhook = defineRoute({
 `toFetchHandler(api, { maxBodyBytes: 1_000_000 })` (also on `toNodeHandler`
 and `compileToModule`) rejects larger bodies with a 413 — checked against
 `content-length` up front, enforced on the running byte count as the body
-streams in, for pipeline and handler-initiated reads alike.
+streams in, for pipeline and handler-initiated reads alike. **The default is
+1 MiB** — unbounded reads are opt-in via `maxBodyBytes: Infinity`, so an
+unconfigured deployment is not a memory-exhaustion vector.
 
 ### The platform request: `request.raw`
 
@@ -553,6 +585,8 @@ actually require:
 import { createCors, toFetchHandler } from '@amritk/api'
 
 const cors = createCors({ origin: (o) => o, credentials: true, exposeHeaders: ['x-demo-used'] })
+// createCors throws at setup on origin: '*' + credentials: true — a
+// combination every browser rejects.
 
 const handler = toFetchHandler(api, {
   onRequest: [
@@ -819,7 +853,14 @@ Give a shared schema a `title` and reuse the same object across contracts —
 it is hoisted into `components.schemas` and referenced with `$ref`, so
 generated clients get one `User` type instead of N structurally identical
 copies. Titles that collide with *different* contents stay inline (never a
-wrong `$ref`). Response contracts may also declare notable headers —
+wrong `$ref`). Schemas carrying internal `$ref`s (recursive shapes with
+`$defs`) are always hoisted, with their refs re-rooted under the component,
+so they stay resolvable in the document. Every operation gets an
+`operationId` — explicit `operationId` on the route wins, otherwise one is
+synthesized from method + path (`get /users/{id}` → `getUsersById`);
+duplicates throw at startup. `info` accepts `contact`, `license`, and
+`termsOfService`, and multipart file parts are documented with `encoding`
+entries (`contentMediaType` or `application/octet-stream`). Response contracts may also declare notable headers —
 `responses: { 200: { headers: { 'x-ratelimit-remaining': { type: 'integer' } } } }`
 — documented as OpenAPI header objects and checked under `validateResponses`.
 
