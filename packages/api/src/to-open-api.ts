@@ -220,7 +220,8 @@ const collectComponentSchemas = (routes: ReadonlyArray<AnyRouteContract>): Compo
   for (const route of routes) {
     const operationName = synthesizeOperationId(route.method, route.path)
     const push = (schema: unknown, slot: string): void => {
-      if (typeof schema === 'object' && schema !== null) occurrences.push({ schema, syntheticKey: operationName + slot })
+      if (typeof schema === 'object' && schema !== null)
+        occurrences.push({ schema, syntheticKey: operationName + slot })
     }
     push(route.request?.body, 'Body')
     for (const [status, response] of Object.entries(route.responses)) push(response.body, 'Response' + status)
@@ -344,7 +345,10 @@ const toMultipartEncoding = (body: unknown): Record<string, unknown> | undefined
   return Object.fromEntries(
     fileParts.map(([name, schema]) => {
       const { contentMediaType } = schema as { contentMediaType?: unknown }
-      return [name, { contentType: typeof contentMediaType === 'string' ? contentMediaType : 'application/octet-stream' }]
+      return [
+        name,
+        { contentType: typeof contentMediaType === 'string' ? contentMediaType : 'application/octet-stream' },
+      ]
     }),
   )
 }

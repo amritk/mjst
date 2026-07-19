@@ -373,7 +373,10 @@ describe('to-open-api', () => {
     expect(Object.keys(schemas)).toEqual(['Tree'])
     const ref = { $ref: '#/components/schemas/Tree' }
     const createOperation = (document.paths['/trees'] as Record<string, Record<string, unknown>>)['post']
-    expect(createOperation?.['requestBody']).toEqual({ required: true, content: { 'application/json': { schema: ref } } })
+    expect(createOperation?.['requestBody']).toEqual({
+      required: true,
+      content: { 'application/json': { schema: ref } },
+    })
     const getOperation = (document.paths['/trees/{id}'] as Record<string, Record<string, unknown>>)['get']
     expect(getOperation?.['responses']).toEqual({
       '200': { description: 'Status 200', content: { 'application/json': { schema: ref } } },

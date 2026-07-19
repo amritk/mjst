@@ -299,12 +299,44 @@ The gaps identified in `docs/ummo-readiness.md` are closed, in both engines
   failures, `in: 'cookie'` OpenAPI parameters — via a shared
   `buildCookiesObject` both engines import.
 
+## Shipped: deep-review hardening pass (2026-07, third pass)
+
+A full-surface review (four parallel audits: pipeline, client, compiled
+engine, OpenAPI/adapters) closed these in one pass — every behavioral change
+in both engines, pinned by the differential corpus:
+
+- **Safety defaults**: 1 MiB default `maxBodyBytes` (`Infinity` opts out);
+  Node adapter streaming backpressure (`drain`-aware pump).
+- **HTTP semantics**: automatic `OPTIONS` → 204 + `allow` (405s advertise
+  `OPTIONS` too); async `refine`.
+- **OpenAPI validity/completeness**: greedy `{name+}` template rewrite;
+  internal-`$ref` schemas hoisted with refs re-rooted; deterministic
+  `operationId` synthesis + duplicate detection; `info`
+  contact/license/termsOfService; document-level `tags`; multipart
+  `encoding` objects; etag + 304 serving of the document.
+- **Client**: `fetchOptions` + `timeoutMs` (signal composition), Accept
+  default, `malformedBodyError`, browser-cookie caveat documented.
+- **Compiled engine**: `contractsHash` staleness warning, `compileExport`
+  (custom-validator parity), `validateResponses` parity,
+  `fetchToNodeHandler` bridge, and the `mjst compile-api` CLI subcommand.
+- **Bundler**: esbuild + Rollup strip plugins; line-preserving transform.
+- **CORS**: setup-time throw on `'*'` + credentials.
+
 ## Roadmap / open questions
 
-- **Generated-validator integration sugar.** A `mjst` CLI mode that reads
-  route files and emits a ready-made `compile` function (schema-identity →
-  generated validator), closing the loop with `@amritk/generate-validators`
-  automatically.
+- **Generated-validator integration sugar.** `mjst compile-api` now wraps
+  `compileToModule`; the remaining sugar is a mode that also emits a
+  ready-made `compile` function (schema-identity → generated validator),
+  closing the loop with `@amritk/generate-validators` automatically
+  (`compileExport` provides the seam).
+- **Deferred from the review pass** (design-heavy, not fixes): client
+  retry/interceptor chain and opt-in client-side validation; per-route body
+  limits; base-path mounting of the API itself; `deepObject` query style;
+  request charset decoding; a server-side handler timeout (a blanket
+  timeout would kill legitimate long-lived SSE/token streams — needs a
+  per-route design); webpack/Turbopack strip plugin (the exported
+  `stripContractFields` covers it via a ~5-line loader); compiled-module
+  source maps; watch mode for `compile-api`.
 - **Content negotiation, inbound.** Raw *outbound* statuses shipped
   (`contentType` above); multipart/form-data request bodies remain manual
   via `readBytes`.

@@ -468,7 +468,10 @@ const buildMethod = (
  * timeout signal, both composed with `AbortSignal.any` (Node >= 20, our
  * engines floor — no polyfill needed), or nothing at all.
  */
-const composeSignal = (callerSignal: AbortSignal | undefined, timeoutMs: number | undefined): AbortSignal | undefined => {
+const composeSignal = (
+  callerSignal: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+): AbortSignal | undefined => {
   if (timeoutMs === undefined) return callerSignal
   const timeoutSignal = AbortSignal.timeout(timeoutMs)
   return callerSignal === undefined ? timeoutSignal : AbortSignal.any([callerSignal, timeoutSignal])

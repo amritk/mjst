@@ -294,9 +294,7 @@ describe('create-client', () => {
     // keeping the status — the client must not surface a bare SyntaxError.
     const client = createClient(contracts, 'https://api.test', {
       fetch: () =>
-        Promise.resolve(
-          new Response('<html>oops</html>', { status: 200, headers: { 'content-type': 'text/html' } }),
-        ),
+        Promise.resolve(new Response('<html>oops</html>', { status: 200, headers: { 'content-type': 'text/html' } })),
     })
     const failed = client.health()
     await expect(failed).rejects.toThrow(/Malformed body for 200 response of 'health'/)

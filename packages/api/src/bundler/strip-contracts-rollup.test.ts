@@ -43,6 +43,8 @@ describe('strip-contracts-rollup', () => {
     const result = plugin.transform(source, '/app/src/contracts.ts')
     const lines = result?.code.split('\n') ?? []
     expect(lines.length).toBe(source.split('\n').length)
-    expect(lines.indexOf('export const sentinelAfter = 1')).toBe(source.split('\n').indexOf('export const sentinelAfter = 1'))
+    expect(lines.indexOf('export const sentinelAfter = 1')).toBe(
+      source.split('\n').indexOf('export const sentinelAfter = 1'),
+    )
   })
 })

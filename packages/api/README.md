@@ -679,9 +679,22 @@ Everything `createApi`/`toFetchHandler` accept has a compiled equivalent that
 references *exports of your routes module*, so both engines execute the same
 values: `contextExport`, `mounts`, `onRequestExports`, `onResponseExports`,
 `errorsExport`, `onErrorExport`, `observeExport`, `observeUnmatchedExport`,
-`maxBodyBytes`, and the OpenAPI extras (`servers`, `securitySchemes`,
-`security`). Contract features (`refine`, `string[]` headers, `request.raw`,
-`locals`) work identically in both — the differential corpus pins each one.
+`compileExport` (a custom `ValidatorCompiler` — the compiled counterpart of
+`compile`, so generated validators behave identically in production),
+`validateResponses` (the same reply-contract net as the runtime engine, for
+staging builds), `maxBodyBytes`, and the OpenAPI extras (`servers`,
+`securitySchemes`, `security`, `tags`). Contract features (`refine`,
+`string[]` headers, `request.raw`, `locals`) work identically in both — the
+differential corpus pins each one.
+
+Staleness is detected, not silent: the emitted module bakes a
+`contractsHash` and recomputes it over the imported routes at init — a
+schema or path edited after compilation logs a one-line
+"stale compiled module" warning (never a throw) until you regenerate. The
+`mjst compile-api` CLI subcommand wraps the build step
+(`mjst compile-api ./src/routes.ts --out src/api.compiled.ts`), and
+`fetchToNodeHandler` bridges the compiled `fetch` export onto
+`node:http`/Express so Node deployments get the compiled fast path too.
 
 ```ts
 // scripts/compile-api.ts — the build step
