@@ -1,6 +1,9 @@
 import { validateArray } from '@amritk/helpers/validate-array'
 import { validateRecord } from '@amritk/helpers/validate-record'
 import { transformSync } from 'esbuild'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
+import { generateParserFunction, generateShapeValidator } from './generate-parser-function'
 
 /**
  * Shared harness for the differential fuzz suites (and any test that executes
@@ -36,6 +39,27 @@ export const evalGenerated = <T>(code: string, exportName: string): T => {
     validateRecord,
   )
   return mod.exports[exportName] as T
+}
+
+/**
+ * Generates the parser exactly the way generate-files lays out a file: the
+ * exported shape validator first, then the parser handed that validator's
+ * source so its fast-path guard can delegate to it instead of inlining a
+ * duplicate check chain. The fuzz suites compile through this so they
+ * exercise the shipped pairing, not just the standalone parser.
+ */
+export const generateFileParser = (
+  schema: JSONSchema,
+  typeName: string,
+  options?: { readonly strict?: boolean; readonly stripUnknown?: boolean },
+): string => {
+  const stripUnknown = options?.stripUnknown ?? false
+  const shapeValidator = generateShapeValidator(schema, typeName, false, '', true, stripUnknown)
+  const parser = generateParserFunction(schema, typeName, {
+    ...options,
+    shapeValidatorSource: shapeValidator,
+  })
+  return `${shapeValidator}\n\n${parser}`
 }
 
 /** Deterministic mulberry32-style RNG so fuzz failures reproduce across runs. */

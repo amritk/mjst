@@ -118,6 +118,18 @@ type GenerateParserOptions = {
    * exact `===` fast path and the hot path is unaffected.
    */
   readonly caseInsensitive?: boolean
+  /**
+   * The exact source of the `validate{TypeName}Shape` predicate emitted into
+   * the same file as this parser (generate-files produces it for the root
+   * type). When the parser can prove — by rendering the predicate it would
+   * need and comparing byte-for-byte — that this emitted predicate tests
+   * exactly its own fast-path guard, it emits `validate{TypeName}Shape(input)`
+   * instead of a second inline copy of the whole check chain, which roughly
+   * halves the emitted checks per object type. Any mismatch (composition
+   * keywords, conditional flattening, alias/union predicates, stubs) keeps
+   * the inline guard, so a wrong substitution is impossible by construction.
+   */
+  readonly shapeValidatorSource?: string
 }
 
 /**
@@ -733,9 +745,18 @@ const generateNonObjectParser = (
       const useRefImports = unionCtx?.useRefImports ?? false
       const suffix = unionCtx?.suffix ?? ''
       const stripUnknown = unionCtx?.stripUnknown ?? false
+      const itemShapeValidator = generateShapeValidator(
+        items,
+        itemName,
+        useRefImports,
+        suffix,
+        false,
+        stripUnknown,
+        reserved,
+      )
       const preamble = [
         `type ${itemName} = ${typeName}[number];`,
-        generateShapeValidator(items, itemName, useRefImports, suffix, false, stripUnknown, reserved),
+        itemShapeValidator,
         generateObjectParser(
           items,
           itemName,
@@ -748,6 +769,7 @@ const generateNonObjectParser = (
           unionCtx?.rootSchema,
           reserved,
           unionCtx?.caseInsensitive ?? false,
+          itemShapeValidator,
         ),
       ].join('\n\n')
       return `${preamble}\n\n${delegated(generateParserName(itemName))}`
@@ -1018,6 +1040,7 @@ const generateObjectParser = (
   rootSchema?: Record<string, unknown>,
   reservedNames: ReadonlySet<string> = NO_RESERVED_NAMES,
   caseInsensitive = false,
+  shapeValidatorSource?: string,
 ): string => {
   const functionName = generateParserName(typeName)
   const exportPrefix = exported ? 'export ' : ''
@@ -1047,9 +1070,16 @@ const generateObjectParser = (
   for (const [key, subName] of subTypeNames) {
     const propSchema = schemaProps[key] as JSONSchema
     preamble.push(`type ${subName} = ${typeName}[${JSON.stringify(key)}];`)
-    preamble.push(
-      generateShapeValidator(propSchema, subName, useRefImports, suffix, false, stripUnknown, reservedNames),
+    const subShapeValidator = generateShapeValidator(
+      propSchema,
+      subName,
+      useRefImports,
+      suffix,
+      false,
+      stripUnknown,
+      reservedNames,
     )
+    preamble.push(subShapeValidator)
     preamble.push(
       generateObjectParser(
         propSchema,
@@ -1063,6 +1093,7 @@ const generateObjectParser = (
         rootSchema,
         reservedNames,
         caseInsensitive,
+        subShapeValidator,
       ),
     )
   }
@@ -1072,9 +1103,16 @@ const generateObjectParser = (
     const itemSchema = (propSchema as { items: JSONSchema }).items
     // NonNullable strips the `| undefined` an optional array property carries.
     preamble.push(`type ${subName} = NonNullable<${typeName}[${JSON.stringify(key)}]>[number];`)
-    preamble.push(
-      generateShapeValidator(itemSchema, subName, useRefImports, suffix, false, stripUnknown, reservedNames),
+    const itemShapeValidator = generateShapeValidator(
+      itemSchema,
+      subName,
+      useRefImports,
+      suffix,
+      false,
+      stripUnknown,
+      reservedNames,
     )
+    preamble.push(itemShapeValidator)
     // Hand-rolled loop instead of Array.prototype.every on the guard path — the
     // callback protocol costs a few percent on element-heavy hot paths.
     preamble.push(
@@ -1093,6 +1131,7 @@ const generateObjectParser = (
         rootSchema,
         reservedNames,
         caseInsensitive,
+        itemShapeValidator,
       ),
     )
   }
@@ -1157,6 +1196,12 @@ const generateObjectParser = (
   // per-property by generatePropertyTypeCheck returning null.)
   let canFastPath = !hasAllOfRefParsers && !hasFastPathBlockingKeyword(schema)
   const fastPathChecks: string[] = []
+  // The same checks rebuilt against `input.x` accessors instead of the cached
+  // vars — the exact form generateShapeValidator emits. Rendering a predicate
+  // from these and byte-comparing it to `shapeValidatorSource` proves the
+  // file's shape validator tests precisely this guard, so the parser can call
+  // it instead of inlining a second copy of the chain.
+  const fastPathAccessorChecks: string[] = []
 
   // `toVarName` collapses distinct keys that differ only in non-identifier chars
   // (e.g. `a-b` and `a.b` both → `_a_b`), which would emit two `const _a_b`
@@ -1193,10 +1238,21 @@ const generateObjectParser = (
     }
     if (check === null) {
       canFastPath = false
-    } else if (isRequired) {
+      continue
+    }
+    const accessor = safeAccessor('input', key)
+    let accessorCheck = subName
+      ? `${shapeValidatorName(subName)}(${accessor})`
+      : (generatePropertyTypeCheck(accessor, propSchema, useRefImports, suffix) as string)
+    if (itemSubName) {
+      accessorCheck = `${accessorCheck} && _every${itemSubName}(${accessor})`
+    }
+    if (isRequired) {
       fastPathChecks.push(check)
+      fastPathAccessorChecks.push(accessorCheck)
     } else {
       fastPathChecks.push(`(${varName} === undefined || ${check})`)
+      fastPathAccessorChecks.push(`(${accessor} === undefined || ${accessorCheck})`)
     }
   }
 
@@ -1221,6 +1277,46 @@ const generateObjectParser = (
   // The deep guard proves the whole shape (so `{ ...input }` can be returned),
   // using the nested shape predicates and the known-keys term above.
   const deepGuard = canFastPath && fastPathChecks.length > 0 ? fastPathChecks.join(' && ') : null
+
+  // An exported stripKeys parser returns a literal built from the cached
+  // property reads on its fast path. Delegating that guard to the shape
+  // validator would re-read every property inside the call on top of the
+  // cached reads the literal still needs — a measured 6-13% hot-path loss on
+  // the strict benches — so those parsers keep the inline guard. Every other
+  // fast path returns `{ ...input }` (or the input itself), whose spread
+  // re-reads the properties regardless, so delegation only adds one call.
+  const literalReturnUsesVars = stripKeys && !(isSchemaObject(schema) && hasAllOf(schema)) && exported
+
+  // When the shape validator emitted alongside this parser tests exactly the
+  // deep guard, the guard becomes a call to it instead of an inline duplicate
+  // of the whole chain — the single largest source of repeated bytes in
+  // generated output. Equivalence is proven by rendering the predicate this
+  // guard would need (generateShapeValidator's exact output format, built from
+  // the accessor-based checks) and comparing byte-for-byte with the source the
+  // caller actually emitted; any difference — a stub, an alias or union
+  // predicate, a schema transformed on the way here — keeps the inline guard.
+  let deepGuardExpr = deepGuard
+  if (deepGuard !== null && shapeValidatorSource !== undefined && !literalReturnUsesVars) {
+    const shapeFnName = shapeValidatorName(typeName)
+    const shapeStrictKeysGuard =
+      stripKeys && exactKeyCount === null ? `\n  if (!_hasOnlyKnownKeys${typeName}(input)) return false;` : ''
+    const shapeChecks = [...fastPathAccessorChecks]
+    if (stripKeys && exactKeyCount !== null) {
+      shapeChecks.push(
+        `Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === ${exactKeyCount}`,
+      )
+    }
+    const expectedShapeValidator =
+      shapeChecks.length === 0
+        ? shapeStrictKeysGuard
+          ? `${exportPrefix}const ${shapeFnName} = (input: unknown): boolean => {\n  if (!isObject(input)) return false;${shapeStrictKeysGuard}\n  return true;\n};`
+          : `${exportPrefix}const ${shapeFnName} = (input: unknown): boolean => isObject(input);`
+        : `${exportPrefix}const ${shapeFnName} = (input: unknown): boolean => {\n  if (!isObject(input)) return false;${shapeStrictKeysGuard}\n  return ${shapeChecks.join('\n    && ')};\n};`
+    if (shapeValidatorSource === expectedShapeValidator) {
+      deepGuardExpr = `${shapeFnName}(input)`
+    }
+  }
+  const deepGuardCallsShape = deepGuardExpr !== deepGuard
 
   // The shallow guard powers the strict strip-build fast path (stripUnknown
   // without additionalProperties: false): it proves every scalar is well-typed
@@ -1455,7 +1551,7 @@ const generateObjectParser = (
   const emitDeepGuardReturn = (lines: string[]): void => {
     const canLiteral = stripKeys && !(isSchemaObject(schema) && hasAllOf(schema))
     if (!canLiteral) {
-      lines.push(`  if (${deepGuard}) return { ...input } as ${typeName};`)
+      lines.push(`  if (${deepGuardExpr}) return { ...input } as ${typeName};`)
       return
     }
     // A *private* (nested-object / array-item) parser whose deep guard proved
@@ -1467,7 +1563,7 @@ const generateObjectParser = (
     // Exported root parsers keep returning a fresh object so callers never
     // alias the value they passed in.
     if (!exported) {
-      lines.push(`  if (${deepGuard}) return input as ${typeName};`)
+      lines.push(`  if (${deepGuardExpr}) return input as ${typeName};`)
       return
     }
     const fields: string[] = []
@@ -1485,13 +1581,19 @@ const generateObjectParser = (
           : `    ...(${accessor} !== undefined && { ${safeLiteralKey(key)}: ${accessor} }),`,
       )
     }
-    lines.push(`  if (${deepGuard}) return {`)
+    lines.push(`  if (${deepGuardExpr}) return {`)
     lines.push(fields.join('\n'))
     lines.push(`  } as ${typeName};`)
   }
 
   const lines: string[] = []
   lines.push(`${exportPrefix}const ${functionName} = (input: unknown): ${typeName} => {`)
+
+  // With the guard delegated to the shape validator, the cached property reads
+  // feed only the slow path — declaring them after the fast-path return spares
+  // every clean input the dead loads. The strict shallow-guard branch reads
+  // the vars in its own guard, so it always keeps them first.
+  const varsAfterGuard = deepGuardCallsShape && shallowGuard === null
 
   if (strict) {
     // Guard first: a non-object throws straight away; a clean, well-typed input
@@ -1500,7 +1602,7 @@ const generateObjectParser = (
     lines.push(
       `  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);`,
     )
-    lines.push(...varDeclLines)
+    if (!varsAfterGuard) lines.push(...varDeclLines)
     lines.push(...warnLines)
 
     // The first assertion line is the `isObject` check, already done above.
@@ -1558,6 +1660,7 @@ const generateObjectParser = (
       if (deepGuard) {
         emitDeepGuardReturn(lines)
       }
+      if (varsAfterGuard) lines.push(...varDeclLines)
       for (const assertionLine of assertionLines) {
         lines.push(assertionLine)
       }
@@ -1579,11 +1682,12 @@ const generateObjectParser = (
     }
   } else {
     lines.push(`  if (!isObject(input)) return ${fallbackObject};`)
-    lines.push(...varDeclLines)
+    if (!varsAfterGuard) lines.push(...varDeclLines)
     lines.push(...warnLines)
     if (deepGuard) {
       emitDeepGuardReturn(lines)
     }
+    if (varsAfterGuard) lines.push(...varDeclLines)
     emitReturn(lines, buildObjectLines(false))
   }
 
@@ -2274,6 +2378,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
       options?.rootSchema,
       options?.reservedNames,
       caseInsensitive,
+      options?.shapeValidatorSource,
     )
   }
 
