@@ -1,8 +1,7 @@
 import Ajv from 'ajv/dist/2020'
 import { describe, expect, it } from 'vitest'
 
-import { evalGenerated, KEYS, makeRng, pick } from './differential.test-utils'
-import { generateParserFunction } from './generate-parser-function'
+import { evalGenerated, generateFileParser, KEYS, makeRng, pick } from './differential.test-utils'
 
 /**
  * The coercing parser's contract is that its output is a valid instance of the
@@ -121,10 +120,7 @@ describe('parser coercion conformance vs ajv', () => {
       } catch {
         continue
       }
-      const parse = evalGenerated<(input: unknown) => unknown>(
-        generateParserFunction(schema as never, 'Root'),
-        'parseRoot',
-      )
+      const parse = evalGenerated<(input: unknown) => unknown>(generateFileParser(schema as never, 'Root'), 'parseRoot')
       for (let t = 0; t < 8 && failures.length < 8; t++) {
         const input = randVal(rng, 3)
         let output: unknown

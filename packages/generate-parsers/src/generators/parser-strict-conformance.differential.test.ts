@@ -2,8 +2,7 @@ import { isDeepStrictEqual } from 'node:util'
 import Ajv from 'ajv/dist/2020'
 import { describe, expect, it } from 'vitest'
 
-import { evalGenerated, KEYS, makeRng, pick } from './differential.test-utils'
-import { generateParserFunction } from './generate-parser-function'
+import { evalGenerated, generateFileParser, KEYS, makeRng, pick } from './differential.test-utils'
 
 /**
  * Differential fuzz for the *strict* parser modes, with Ajv as the oracle.
@@ -196,7 +195,7 @@ describe('strict parser conformance vs ajv', () => {
         continue
       }
       const parse = evalGenerated<(input: unknown) => unknown>(
-        generateParserFunction(schema as never, 'Root', { strict: true }),
+        generateFileParser(schema as never, 'Root', { strict: true }),
         'parseRoot',
       )
 
@@ -241,7 +240,7 @@ describe('strict parser conformance vs ajv', () => {
         continue
       }
       const parse = evalGenerated<(input: unknown) => unknown>(
-        generateParserFunction(schema as never, 'Root', { strict: true, stripUnknown: true }),
+        generateFileParser(schema as never, 'Root', { strict: true, stripUnknown: true }),
         'parseRoot',
       )
 

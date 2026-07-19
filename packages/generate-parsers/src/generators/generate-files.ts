@@ -166,10 +166,15 @@ export const generateFile = (
   // parser and the shape validator must receive the SAME set — their derived
   // sub-names have to agree.
   const reservedNames = collectImportTypeNames(schema, { selfRef, rootSchema, typeSuffix })
+  // The shape validator is generated first so the parser can compare it
+  // against its own fast-path guard and call it instead of inlining a
+  // duplicate of the check chain (see GenerateParserOptions.shapeValidatorSource).
+  const shapeValidator = generateShapeValidator(schema, typeName, true, typeSuffix, true, stripUnknown, reservedNames)
   const parserFunction = generateParserFunction(schema, typeName, {
     useRefImports: true,
     typeSuffix,
     reservedNames,
+    shapeValidatorSource: shapeValidator,
     ...(options?.isRoot !== undefined ? { isRoot: options.isRoot } : {}),
     ...(rootSchema !== undefined ? { rootSchema } : {}),
     ...(options?.logWarnings !== undefined ? { logWarnings: options.logWarnings } : {}),
@@ -177,7 +182,6 @@ export const generateFile = (
     ...(options?.stripUnknown !== undefined ? { stripUnknown: options.stripUnknown } : {}),
     ...(options?.caseInsensitive !== undefined ? { caseInsensitive: options.caseInsensitive } : {}),
   })
-  const shapeValidator = generateShapeValidator(schema, typeName, true, typeSuffix, true, stripUnknown, reservedNames)
   const combinedFunctions = `${shapeValidator}\n\n${parserFunction}`
   const helpers: CollectedHelpers = collectHelpers(
     combinedFunctions,
