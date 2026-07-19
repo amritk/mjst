@@ -38,6 +38,14 @@ type SlotSchema<
 type SlotField<Key extends string, S> = [S] extends [never] ? unknown : { readonly [K in Key]: FromSchema<S> }
 
 /**
+ * What a declared slot's schema means as a value — and `undefined` for a
+ * contract that never declared the slot, mirroring what the server handler
+ * sees (`SchemaValue` in types.ts), so code shared by both sides types
+ * identically.
+ */
+type SlotValue<S> = [S] extends [never] ? undefined : FromSchema<S>
+
+/**
  * Ad-hoc header values. Numbers and booleans are allowed (serialized with
  * `String`) so coerced header schemas (`x-retry-count: { type: 'integer' }`)
  * type-check without manual stringification.
@@ -82,6 +90,98 @@ export type ClientReply<Responses extends ResponseContracts> = {
       ? { readonly status: Status; readonly body: FromSchema<B>; readonly response: Response }
       : { readonly status: Status; readonly body?: undefined; readonly response: Response }
 }[keyof Responses]
+
+/**
+ * {@link ClientReply} keyed by the contract itself, matching how
+ * {@link ClientInput} is written — so naming the union a method resolves with
+ * does not require reaching for `C['responses']`.
+ */
+export type ClientReplyOf<C extends AnyContract> = ClientReply<C['responses']>
+
+/**
+ * The schema-typed body for one declared status (or a union of statuses;
+ * defaults to every declared one). This is what lets an app name its wire
+ * types straight from the contracts — no codegen, no hand-written mirror that
+ * can drift:
+ *
+ * ```typescript
+ * // The 402 body, exactly as the contract declares it.
+ * export type DemoLimitBody = ResponseBodyOf<typeof demoLimit, 402>
+ * ```
+ *
+ * Derived from the declared schema, not from the client's parsing: a raw
+ * (`contentType`) status that documents a `body` schema still yields that
+ * schema's type here, so code that parses the stream itself can type what it
+ * expects to find — even though {@link ClientReply} leaves such a status's
+ * `Response` unread. Statuses declared without a body come out `undefined`.
+ */
+export type ResponseBodyOf<
+  C extends AnyContract,
+  Status extends keyof C['responses'] = keyof C['responses'],
+> = Status extends keyof C['responses']
+  ? C['responses'][Status] extends { body: infer B }
+    ? FromSchema<B>
+    : undefined
+  : never
+
+/**
+ * The path-parameter shape a contract declares, or `undefined` when it
+ * declares none. Like {@link ResponseBodyOf}, these request-slot helpers
+ * exist so an app names its wire types once from the contract — a form model,
+ * a composable's argument — instead of re-declaring shapes that can drift.
+ */
+export type RequestParamsOf<C extends AnyContract> = SlotValue<SlotSchema<C, 'params'>>
+
+/** The query shape a contract declares, or `undefined` when it declares none. */
+export type RequestQueryOf<C extends AnyContract> = SlotValue<SlotSchema<C, 'query'>>
+
+/** The request-body shape a contract declares, or `undefined` when it declares none. */
+export type RequestBodyOf<C extends AnyContract> = SlotValue<SlotSchema<C, 'body'>>
+
+/** The declared request-header shape, or `undefined` when the contract declares none. */
+export type RequestHeadersOf<C extends AnyContract> = SlotValue<SlotSchema<C, 'headers'>>
+
+/** The declared cookie shape, or `undefined` when the contract declares none. */
+export type RequestCookiesOf<C extends AnyContract> = SlotValue<SlotSchema<C, 'cookies'>>
+
+/**
+ * The statuses a contract declares, as number literals (`200 | 402`) — the
+ * domain for an exhaustive switch over a reply's `status`.
+ */
+export type ResponseStatusOf<C extends AnyContract> = keyof C['responses'] & number
+
+/**
+ * Filters a status union down to a class by its leading digit. Template
+ * literal matching is how the type system reads a number's first digit —
+ * there is no numeric range type to lean on.
+ */
+type StatusInClass<Status extends number, FirstDigit extends string> = Status extends number
+  ? `${Status}` extends `${FirstDigit}${string}`
+    ? Status
+    : never
+  : never
+
+/** The declared success (2xx) statuses. */
+export type SuccessStatusOf<C extends AnyContract> = StatusInClass<ResponseStatusOf<C>, '2'>
+
+/** The declared error (4xx/5xx) statuses. */
+export type ErrorStatusOf<C extends AnyContract> = StatusInClass<ResponseStatusOf<C>, '4' | '5'>
+
+/**
+ * The success payload union — the bodies of every declared 2xx status. This
+ * is the "data" type an SDK generator would emit per operation, named from
+ * the contract instead. A raw (`contentType`) success without a documented
+ * body schema contributes `undefined` (its payload is the stream itself).
+ */
+export type SuccessBodyOf<C extends AnyContract> = ResponseBodyOf<C, SuccessStatusOf<C> & keyof C['responses']>
+
+/**
+ * The error payload union — the bodies of every declared 4xx/5xx status, the
+ * per-operation error type an SDK generator would emit. A contract that
+ * declares no error statuses comes out `never`; error statuses declared
+ * without a body contribute `undefined`.
+ */
+export type ErrorBodyOf<C extends AnyContract> = ResponseBodyOf<C, ErrorStatusOf<C> & keyof C['responses']>
 
 /** Keys of T that an empty object cannot satisfy — i.e. the required ones. */
 type RequiredKeys<T> = { [K in keyof T]-?: object extends Pick<T, K> ? never : K }[keyof T]

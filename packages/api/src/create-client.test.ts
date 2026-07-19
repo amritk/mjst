@@ -1,11 +1,26 @@
 import { describe, expect, it } from 'vitest'
 
 import { createApi } from './create-api'
+import type {
+  ClientReplyOf,
+  ErrorBodyOf,
+  ErrorStatusOf,
+  RequestBodyOf,
+  RequestCookiesOf,
+  RequestHeadersOf,
+  RequestParamsOf,
+  RequestQueryOf,
+  ResponseBodyOf,
+  ResponseStatusOf,
+  SuccessBodyOf,
+  SuccessStatusOf,
+} from './create-client'
 import { createClient } from './create-client'
 import { defineContract } from './define-contract'
 import { defineRoute } from './define-route'
 import { implementRoute } from './implement-route'
 import { toFetchHandler } from './to-fetch-handler'
+import type { RouteReplyOf } from './types'
 import { isUnexpectedStatusError } from './unexpected-status-error'
 
 /**
@@ -302,6 +317,162 @@ describe('create-client', () => {
     })
     const reply = await client.ping()
     if (reply.status === 200) expect(reply.body.pong).toBe(true)
+  })
+
+  it('names response body types straight from the contracts', async () => {
+    // The motivating shape: an error status whose body the frontend must read
+    // exactly — previously an inline `as { ... }` cast at every use site.
+    const demoChat = defineContract({
+      method: 'post',
+      path: '/demo/chat',
+      request: { body: { type: 'object', properties: { message: { type: 'string' } }, required: ['message'] } },
+      responses: {
+        200: {
+          contentType: 'text/plain; charset=utf-8',
+          // Documented for consumers that parse the trailing frame themselves.
+          body: { type: 'object', properties: { used: { type: 'integer' } }, required: ['used'] },
+        },
+        402: {
+          body: {
+            type: 'object',
+            properties: {
+              error: { type: 'string' },
+              requiresVerification: { type: 'boolean' },
+              used: { type: 'integer' },
+              remaining: { type: 'integer' },
+            },
+            required: ['error', 'requiresVerification', 'used', 'remaining'],
+          },
+        },
+      },
+    })
+
+    // The 402 body, named once from the contract instead of cast at use sites.
+    type LimitBody = ResponseBodyOf<typeof demoChat, 402>
+    const limit: LimitBody = { error: 'demo_limit', requiresVerification: true, used: 5, remaining: 0 }
+    expect(limit.remaining).toBe(0)
+    // @ts-expect-error — remaining is a number, not a string
+    const wrongLimit: LimitBody = { error: 'demo_limit', requiresVerification: true, used: 5, remaining: 'none' }
+    void wrongLimit
+
+    // A raw (contentType) status that documents a body schema still names the
+    // payload type, for code that parses the stream itself.
+    type FrameBody = ResponseBodyOf<typeof demoChat, 200>
+    const frame: FrameBody = { used: 3 }
+    void frame
+
+    // Statuses declared without a body come out undefined; omitting the
+    // status yields the union across every declared one.
+    const empty: ResponseBodyOf<typeof getUser, 404> = undefined
+    void empty
+    const anyBody: ResponseBodyOf<typeof demoChat> = limit
+    void anyBody
+
+    // ClientReplyOf names the union a method resolves with.
+    const client = makeClient()
+    const reply: ClientReplyOf<typeof getUser> = await client.getUser({ params: { id: 7 }, query: {} })
+    expect(reply.status).toBe(200)
+  })
+
+  it('names request slot types from the contracts', () => {
+    // Declared slots come out schema-typed — the shapes a form model or
+    // composable holds before calling the client.
+    const params: RequestParamsOf<typeof getUser> = { id: 7 }
+    expect(params.id).toBe(7)
+    // @ts-expect-error — id is declared as an integer
+    const badParams: RequestParamsOf<typeof getUser> = { id: 'seven' }
+    void badParams
+    const query: RequestQueryOf<typeof getUser> = { verbose: true, tags: ['a'] }
+    void query
+    const body: RequestBodyOf<typeof chat> = { message: 'hi' }
+    void body
+    // @ts-expect-error — message is required
+    const badBody: RequestBodyOf<typeof chat> = {}
+    void badBody
+    const headers: RequestHeadersOf<typeof chat> = { 'x-api-key': 'secret' }
+    void headers
+    // Undeclared slots come out undefined, mirroring what handlers see.
+    const noBody: RequestBodyOf<typeof getUser> = undefined
+    void noBody
+    const noCookies: RequestCookiesOf<typeof chat> = undefined
+    void noCookies
+  })
+
+  it('names status classes and success/error body unions from the contracts', () => {
+    const metered = defineContract({
+      method: 'post',
+      path: '/metered',
+      responses: {
+        200: { body: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] } },
+        402: {
+          body: {
+            type: 'object',
+            properties: { error: { type: 'string' }, remaining: { type: 'integer' } },
+            required: ['error', 'remaining'],
+          },
+        },
+        503: {},
+      },
+    })
+
+    // The declared statuses are the domain for exhaustive switches.
+    const declared: ResponseStatusOf<typeof metered> = 402
+    expect(declared).toBe(402)
+    // @ts-expect-error — 500 is not declared
+    const undeclared: ResponseStatusOf<typeof metered> = 500
+    void undeclared
+
+    // Status classes split by leading digit: 2xx success, 4xx/5xx error.
+    const success: SuccessStatusOf<typeof metered> = 200
+    void success
+    // @ts-expect-error — 402 is not a success status
+    const notSuccess: SuccessStatusOf<typeof metered> = 402
+    void notSuccess
+    const failureStatus: ErrorStatusOf<typeof metered> = 402
+    void failureStatus
+    const alsoFailure: ErrorStatusOf<typeof metered> = 503
+    void alsoFailure
+
+    // The generated-SDK-style "data" and "error" unions, named from the
+    // contract: 2xx bodies on one side, 4xx/5xx bodies on the other.
+    const data: SuccessBodyOf<typeof metered> = { ok: true }
+    void data
+    // @ts-expect-error — the 402 body is not a success body
+    const wrongData: SuccessBodyOf<typeof metered> = { error: 'limit', remaining: 0 }
+    void wrongData
+    const failure: ErrorBodyOf<typeof metered> = { error: 'demo_limit', remaining: 0 }
+    void failure
+    // 503 declares no body, so undefined is part of the error union.
+    const emptyFailure: ErrorBodyOf<typeof metered> = undefined
+    void emptyFailure
+
+    // A contract with no declared error statuses has an empty error union.
+    const noErrors: [ErrorBodyOf<typeof health>] extends [never] ? true : false = true
+    expect(noErrors).toBe(true)
+  })
+
+  it('names the handler reply union from a contract — the server-side twin', () => {
+    // A reply builder shared across handlers can type its return once.
+    const missing = (): RouteReplyOf<typeof getUser> => ({ status: 404 })
+    expect(missing().status).toBe(404)
+    const found: RouteReplyOf<typeof getUser> = { status: 200, body: { id: 1, name: 'Ada' } }
+    void found
+    // @ts-expect-error — 500 is not declared by the contract
+    const undeclared: RouteReplyOf<typeof getUser> = { status: 500 }
+    void undeclared
+    // @ts-expect-error — the 200 body must match its schema
+    const wrongBody: RouteReplyOf<typeof getUser> = { status: 200, body: { id: 1 } }
+    void wrongBody
+
+    // Routes from defineRoute are contracts too — helpers accept them as-is.
+    const ping = defineRoute({
+      method: 'get',
+      path: '/ping',
+      responses: { 200: { body: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'] } } },
+      handler: () => ({ status: 200, body: { pong: true } }),
+    })
+    const pong: ResponseBodyOf<typeof ping, 200> = { pong: true }
+    void pong
   })
 
   it('rejects wrongly-typed inputs at compile time', () => {

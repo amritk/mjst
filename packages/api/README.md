@@ -154,6 +154,27 @@ if (reply.status === 404) /* declared, typed, no body */;
 - **Undeclared statuses throw** (instead of poisoning the union): catch and
   inspect with `isUnexpectedStatusError(error)` — the unread `Response` rides
   on the error. Declare the statuses you want to handle in the contract.
+- **Name wire types from the contracts** — the `…Of` helpers extract every
+  schema-typed shape an app would otherwise re-declare by hand or generate:
+  `ResponseBodyOf` (one status's body), `SuccessBodyOf` / `ErrorBodyOf` (the
+  generated-SDK-style data and error unions, split 2xx vs 4xx/5xx),
+  `ResponseStatusOf` (the declared statuses, for exhaustive switches),
+  `RequestParamsOf` / `RequestQueryOf` / `RequestBodyOf` /
+  `RequestHeadersOf` / `RequestCookiesOf` (the request slots, `undefined`
+  when undeclared), and `ClientReplyOf` / `RouteReplyOf` (the client and
+  handler reply unions). Error payloads become named exports instead of
+  inline `as { ... }` casts at every use site:
+
+  ```ts
+  import type { ErrorBodyOf, RequestBodyOf, ResponseBodyOf } from '@amritk/api'
+
+  // The 402 body, exactly as the contract declares it — no codegen.
+  export type DemoLimitBody = ResponseBodyOf<typeof contracts.demoChat, 402>
+  // Every declared error payload of the operation, as one union.
+  export type DemoChatError = ErrorBodyOf<typeof contracts.demoChat>
+  // What a form model holds before calling the client.
+  export type DemoChatInput = RequestBodyOf<typeof contracts.demoChat>
+  ```
 
 The OpenAPI → [Hey API](https://heyapi.dev) route still works for external
 consumers who want a standalone generated SDK (`bunx @hey-api/openapi-ts -i
