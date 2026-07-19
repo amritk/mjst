@@ -1,5 +1,14 @@
 # @amritk/generate-examples
 
+## 0.5.3
+
+### Patch Changes
+
+- 6e7c65e: Slim published packages — comments are now stripped from the compiled JS in `dist` (they were duplicating the JSDoc that already ships in the `.d.ts` files, which is what editors read), and `@amritk/lint` now minifies its bundled OpenAPI meta-schema JSON documents. Unpacked size drops ~30% across the board (for example `@amritk/lint` 448 kB → 307 kB, `@amritk/generate-parsers` 293 kB → 191 kB) with no behavior change: declaration files keep their docs, `/* @__PURE__ */` annotations and the CLI shebang survive, and `@amritk/helpers` still ships its TypeScript sources for embedded mode.
+- Updated dependencies [6e7c65e]
+  - @amritk/helpers@0.13.3
+  - @amritk/runtime-validators@0.7.3
+
 ## 0.5.2
 
 ### Patch Changes
