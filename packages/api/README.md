@@ -120,12 +120,13 @@ cannot drift. This is the framework-agnostic replacement for Hono's `hc`:
 
 ```ts
 // client.ts — browser bundle; pulls in zero server code
-import { createClient, isUnexpectedStatusError } from '@amritk/api'
+import { buildParamPath, createClient, isUnexpectedStatusError } from '@amritk/api'
 import * as contracts from './contracts'
 
 const client = createClient(contracts, 'https://api.example.com', {
   headers: () => ({ authorization: `Bearer ${readToken()}` }), // static record or (async) function
   fetch: myFetch, // injectable for tests; defaults to global fetch
+  pathParams: buildParamPath, // opt-in: only needed for {param} paths
 })
 
 const reply = await client.getUser({ params: { id: 7 }, signal: AbortSignal.timeout(5000) })
@@ -147,10 +148,27 @@ if (reply.status === 404) /* declared, typed, no body */;
   are required and schema-typed, `headers` accepts the declared shape plus
   ad-hoc extras, and a per-call `signal` cancels. Contracts with no request
   slots call with no argument at all (`client.health()`).
-- **Wire format follows the contract:** path params are segment-encoded
-  (greedy `{path+}` keeps its slashes), array query values repeat the key,
-  and `bodyType: 'form'` / `'multipart'` serialize as urlencoded pairs /
-  `FormData` with `File` values intact.
+- **Wire formats beyond JSON are opt-in imports:** JSON bodies and query
+  serialization (array values repeat the key) are built in; contracts with
+  `bodyType: 'form'` / `'multipart'` (urlencoded pairs / `FormData` with
+  `File` values intact) need their serializer registered, and `{param}` path
+  templates need `buildParamPath` (segment-encoded; greedy `{path+}` keeps
+  its slashes):
+
+  ```ts
+  import { buildParamPath, createClient, formBodySerializer, multipartBodySerializer } from '@amritk/api'
+
+  const client = createClient(contracts, url, {
+    serializers: [formBodySerializer, multipartBodySerializer], // only what you send
+    pathParams: buildParamPath, // only if any path has {params}
+  })
+  ```
+
+  A call that needs an unregistered piece throws with the fix in the
+  message; JSON-only apps with static paths pass nothing and bundle none of
+  it. A custom `BodySerializer` (any `bodyType`, including `'json'` to
+  override the built-in encoder) is a `{ bodyType, serialize, contentType? }`
+  object.
 - **Undeclared statuses throw** (instead of poisoning the union): catch and
   inspect with `isUnexpectedStatusError(error)` — the unread `Response` rides
   on the error. Declare the statuses you want to handle in the contract.
@@ -180,6 +198,55 @@ The OpenAPI → [Hey API](https://heyapi.dev) route still works for external
 consumers who want a standalone generated SDK (`bunx @hey-api/openapi-ts -i
 http://localhost:3000/openapi.json -o src/client`); `createClient` is the
 lighter path for monorepo-internal frontends.
+
+#### Browser bundle size: the contract-slimming plugin
+
+At runtime the client reads only a sliver of each contract — `method`,
+`path`, `request.bodyType`, whether a `body` schema exists, and each response
+status's `contentType` marker. The request/response schemas, `refine`,
+`summary`/`description`, tags, and security requirements are server and
+OpenAPI freight, and they scale with route count. The `@amritk/api/bundler`
+plugin (Vite and `Bun.build`) strips them from `defineContract` call sites in
+browser builds; types are compile-time, so nothing changes for the consumer,
+and dropped schema references become tree-shakeable:
+
+```ts
+// vite.config.ts
+import { stripContractsVite } from '@amritk/api/bundler'
+
+export default defineConfig({ plugins: [stripContractsVite()] })
+```
+
+```ts
+// build.ts — Bun.build; add it to the browser build only
+import { stripContractsBun } from '@amritk/api/bundler'
+
+await Bun.build({ entrypoints: ['./src/client.ts'], target: 'browser', plugins: [stripContractsBun()] })
+```
+
+The transform is deliberately conservative: call sites it cannot parse with
+certainty (spreads, computed keys, explicit type arguments, aliased imports
+of `defineContract`) are left byte-for-byte untouched, unknown contract
+fields are kept, SSR modules and the Vite dev server are never touched — the
+failure mode is a bigger bundle, never a broken one. The Vite plugin runs
+`enforce: 'pre'`, `apply: 'build'`.
+
+Measured on a realistic widget consumer — three JSON-only contracts with
+static paths, bundled with `Bun.build` (`target: 'browser'`, minified;
+enforced by `src/bundler/strip-contracts-bun.test.ts`):
+
+| Bundle                                | minified | gzip    |
+| ------------------------------------- | -------- | ------- |
+| 0.3.0 client (everything built in)    | 3.6 kB   | 1.7 kB  |
+| 0.4.0 client, no plugin               | 3.7 kB   | 1.7 kB  |
+| 0.4.0 client + strip plugin           | 2.7 kB   | 1.4 kB  |
+| contract data alone, before → after   | 1.3 kB → 0.31 kB | 0.57 kB → 0.19 kB |
+
+The contract-data row is the one that scales: the plugin removes ~75% of
+every contract's bytes (~0.3 kB minified per route in this fixture), so the
+gap widens with route count. The client core itself is a fixed cost, and the
+opt-in serializer/path split keeps it flat: form, multipart, and `{param}`
+handling are no longer bundled unless the app registers them.
 
 ### Serving it
 

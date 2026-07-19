@@ -1,7 +1,40 @@
 import type { FromSchema } from '@amritk/runtime-validators'
 
-import type { AnyContract, ResponseContracts } from './types'
+import { toSearchParams } from './to-search-params'
+import type { AnyContract, BodyType, ResponseContracts } from './types'
 import { unexpectedStatusError } from './unexpected-status-error'
+
+/**
+ * One opt-in wire format: how a declared `bodyType` turns a call's `body`
+ * into fetchable bytes. JSON is built into the client; everything else
+ * (`formBodySerializer`, `multipartBodySerializer`, or your own) is imported
+ * and registered explicitly so apps only bundle the formats they send.
+ * Registering a `bodyType: 'json'` serializer overrides the built-in one.
+ */
+export type BodySerializer = {
+  /** The contract `bodyType` this serializer handles. */
+  readonly bodyType: BodyType
+  /**
+   * `content-type` header to stamp when the serialized body does not carry
+   * its own. Omit it for `URLSearchParams`/`FormData` results — fetch derives
+   * the header (including the multipart boundary) from the body itself.
+   */
+  readonly contentType?: string
+  /**
+   * Turns the call's (schema-typed) body value into a fetch body. Typed via
+   * `RequestInit` because the standalone `BodyInit` name is not in every lib
+   * set this package compiles against.
+   */
+  readonly serialize: (body: unknown) => NonNullable<RequestInit['body']>
+}
+
+/**
+ * Fills a contract's `{param}` path template with a call's `params`. Opt-in
+ * for the same reason as {@link BodySerializer}: apps whose contracts use
+ * only static paths never bundle the template machinery. The package ships
+ * `buildParamPath` as the standard implementation.
+ */
+export type PathParamsBuilder = (pattern: string, params: Readonly<Record<string, unknown>> | undefined) => string
 
 /**
  * Options for {@link createClient}.
@@ -20,6 +53,19 @@ export type ClientOptions = {
   readonly headers?:
     | Readonly<Record<string, string>>
     | (() => Readonly<Record<string, string>> | Promise<Readonly<Record<string, string>>>)
+  /**
+   * Wire formats beyond JSON, matched to contracts by `bodyType`. Import and
+   * register `formBodySerializer` / `multipartBodySerializer` only when your
+   * contracts declare those types; calling a contract whose `bodyType` has no
+   * registered serializer throws with the fix in the message.
+   */
+  readonly serializers?: readonly BodySerializer[]
+  /**
+   * Path-template builder for contracts with `{param}` segments — pass
+   * `buildParamPath`. Calling a parameterized contract without one throws;
+   * static-path apps omit it and skip the code entirely.
+   */
+  readonly pathParams?: PathParamsBuilder
 }
 
 /**
@@ -221,13 +267,16 @@ type RawInput = {
  * this function — without bundling any server code. This is the
  * framework-agnostic replacement for RPC clients like Hono's `hc`.
  *
- * Per call: `params` fill the path template (segment-encoded; greedy `{x+}`
- * parameters keep their slashes), `query` serializes repeats for arrays,
- * `body` follows the contract's `bodyType` (JSON, form, or multipart with
- * `File` values), declared `headers`/`cookies` are typed, and extra headers
- * and an `AbortSignal` ride along. Replies come back as the
- * {@link ClientReply} union; an undeclared status throws (check it with
- * `isUnexpectedStatusError`).
+ * Per call: `query` serializes repeats for arrays, `body` follows the
+ * contract's `bodyType` (JSON built in; register `formBodySerializer` /
+ * `multipartBodySerializer` for the rest), `params` fill the path template
+ * through the registered `pathParams` builder (`buildParamPath`
+ * segment-encodes; greedy `{x+}` parameters keep their slashes), declared
+ * `headers`/`cookies` are typed, and extra headers and an `AbortSignal` ride
+ * along. Replies come back as the {@link ClientReply} union; an undeclared
+ * status throws (check it with `isUnexpectedStatusError`). The non-JSON wire
+ * formats and the path-template builder are opt-in imports so apps only
+ * bundle what their calls actually use.
  *
  * @example
  * ```typescript
@@ -235,6 +284,7 @@ type RawInput = {
  *
  * const client = createClient(contracts, 'https://api.example.com', {
  *   headers: () => ({ authorization: `Bearer ${token}` }),
+ *   pathParams: buildParamPath, // only needed for {param} paths
  * })
  *
  * const reply = await client.getUser({ params: { id: 7 } })
@@ -252,51 +302,83 @@ export const createClient = <Contracts extends Readonly<Record<string, AnyContra
   // Global fetch must not be called unbound (browsers throw Illegal
   // invocation), so the default goes through a wrapper.
   const fetchImpl = options?.fetch ?? ((url: string, init: RequestInit) => globalThis.fetch(url, init))
-  const baseHeaders = options?.headers
-  const base = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl
+  const serializers: Partial<Record<BodyType, BodySerializer>> = {}
+  for (const serializer of options?.serializers ?? []) serializers[serializer.bodyType] = serializer
+  const shared: SharedClientState = {
+    base: baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl,
+    fetchImpl,
+    baseHeaders: options?.headers,
+    serializers,
+    pathParams: options?.pathParams,
+  }
   const client: Record<string, unknown> = {}
   for (const [name, contract] of Object.entries(contracts)) {
-    client[name] = buildMethod(name, contract, base, fetchImpl, baseHeaders)
+    client[name] = buildMethod(name, contract, shared)
   }
   return client as ApiClient<Contracts>
+}
+
+/** What every built method shares — resolved once in {@link createClient}. */
+type SharedClientState = {
+  readonly base: string
+  readonly fetchImpl: NonNullable<ClientOptions['fetch']>
+  readonly baseHeaders: ClientOptions['headers']
+  readonly serializers: Partial<Record<BodyType, BodySerializer>>
+  readonly pathParams: PathParamsBuilder | undefined
 }
 
 const buildMethod = (
   name: string,
   contract: AnyContract,
-  base: string,
-  fetchImpl: NonNullable<ClientOptions['fetch']>,
-  baseHeaders: ClientOptions['headers'],
+  shared: SharedClientState,
 ): ((input?: RawInput) => Promise<unknown>) => {
   const method = contract.method.toUpperCase()
   const bodyType = contract.request?.bodyType ?? 'json'
   const hasBody = contract.request?.body !== undefined
+  const hasPathParams = contract.path.includes('{')
   return async (input: RawInput = {}) => {
-    const headers = new Headers(typeof baseHeaders === 'function' ? await baseHeaders() : baseHeaders)
+    const headers = new Headers(
+      typeof shared.baseHeaders === 'function' ? await shared.baseHeaders() : shared.baseHeaders,
+    )
     if (input.headers !== undefined) {
       for (const [headerName, value] of Object.entries(input.headers)) headers.set(headerName, String(value))
     }
     if (input.cookies !== undefined) appendCookies(headers, input.cookies)
 
-    let body: string | URLSearchParams | FormData | undefined
+    let body: RequestInit['body'] | undefined
     if (hasBody) {
-      if (bodyType === 'json') {
+      const serializer = shared.serializers[bodyType]
+      if (serializer !== undefined) {
+        body = serializer.serialize(input.body)
+        if (serializer.contentType !== undefined && !headers.has('content-type')) {
+          headers.set('content-type', serializer.contentType)
+        }
+      } else if (bodyType === 'json') {
         body = JSON.stringify(input.body)
         if (!headers.has('content-type')) headers.set('content-type', 'application/json')
-      } else if (bodyType === 'form') {
-        // URLSearchParams and FormData bodies carry their own content type
-        // (FormData's includes the boundary), so fetch stamps the header.
-        body = toSearchParams(input.body as Readonly<Record<string, unknown>>)
       } else {
-        body = toFormData(input.body as Readonly<Record<string, unknown>>)
+        // Thrown per call rather than in createClient so a shared contracts
+        // record can carry formats this particular app never sends. Kept
+        // terse on purpose — these strings ship in every browser bundle.
+        throw new Error(
+          `Contract '${name}': no serializer for bodyType '${bodyType}' — add it to createClient serializers`,
+        )
       }
     }
 
-    const url = base + buildPath(contract.path, input.params) + queryStringOf(input.query)
+    let path = contract.path
+    if (hasPathParams) {
+      if (shared.pathParams === undefined) {
+        throw new Error(`Contract '${name}': path '${contract.path}' needs createClient pathParams (buildParamPath)`)
+      }
+      path = shared.pathParams(contract.path, input.params)
+    }
+
+    const url = shared.base + path + queryStringOf(input.query)
     const init: RequestInit = { method, headers }
     if (body !== undefined) init.body = body
     if (input.signal !== undefined) init.signal = input.signal
-    const response = await fetchImpl(url, init)
+    const response = await shared.fetchImpl(url, init)
 
     const declared = contract.responses[response.status]
     if (declared === undefined) throw unexpectedStatusError(name, response)
@@ -310,54 +392,10 @@ const buildMethod = (
   }
 }
 
-/**
- * Fills the contract's path template. Plain parameters are fully encoded; a
- * greedy `{name+}` value is encoded per segment so its slashes survive as
- * path structure — the inverse of the server's per-segment decode.
- */
-const buildPath = (pattern: string, params: Readonly<Record<string, unknown>> | undefined): string =>
-  pattern.replace(/\{([^}]+)\}/g, (_match, rawName: string) => {
-    const greedy = rawName.endsWith('+')
-    const key = greedy ? rawName.slice(0, -1) : rawName
-    const value = params?.[key]
-    if (value === undefined) throw new Error(`Missing path parameter '${key}' for '${pattern}'`)
-    const text = String(value)
-    return greedy ? text.split('/').map(encodeURIComponent).join('/') : encodeURIComponent(text)
-  })
-
 const queryStringOf = (query: Readonly<Record<string, unknown>> | undefined): string => {
   if (query === undefined) return ''
   const text = toSearchParams(query).toString()
   return text === '' ? '' : '?' + text
-}
-
-/** Serializes an object the way the server parses it: repeats for arrays, `String` for scalars, skips `undefined`. */
-const toSearchParams = (values: Readonly<Record<string, unknown>>): URLSearchParams => {
-  const search = new URLSearchParams()
-  for (const [key, value] of Object.entries(values)) {
-    if (value === undefined) continue
-    if (Array.isArray(value)) {
-      for (const item of value) search.append(key, String(item))
-    } else {
-      search.append(key, String(value))
-    }
-  }
-  return search
-}
-
-const toFormData = (values: Readonly<Record<string, unknown>>): FormData => {
-  const data = new FormData()
-  for (const [key, value] of Object.entries(values)) {
-    if (value === undefined) continue
-    if (value instanceof Blob) {
-      data.append(key, value)
-    } else if (Array.isArray(value)) {
-      for (const item of value) data.append(key, String(item))
-    } else {
-      data.append(key, String(value))
-    }
-  }
-  return data
 }
 
 /** Serializes declared cookies onto the `cookie` header (percent-encoded, like the server's decode). */

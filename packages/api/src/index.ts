@@ -1,6 +1,7 @@
 export { buildCoercionPlan } from './build-coercion-plan'
 export { buildCookiesObject } from './build-cookies-object'
 export { buildHeadersObject } from './build-headers-object'
+export { buildParamPath } from './build-param-path'
 export { assignQueryPair, buildQueryObject } from './build-query-object'
 export { buildQueryObjectFromString } from './build-query-object-from-string'
 export { buildResponseHeaders } from './build-response-headers'
@@ -10,6 +11,7 @@ export { compileToModule } from './compile/compile-to-module'
 export { createApi } from './create-api'
 export type {
   ApiClient,
+  BodySerializer,
   ClientInput,
   ClientMethod,
   ClientOptions,
@@ -17,6 +19,7 @@ export type {
   ClientReplyOf,
   ErrorBodyOf,
   ErrorStatusOf,
+  PathParamsBuilder,
   RequestBodyOf,
   RequestCookiesOf,
   RequestHeadersOf,
@@ -35,9 +38,11 @@ export { createSentry } from './create-sentry'
 export { decodeSegment } from './decode-segment'
 export { defineContract } from './define-contract'
 export { defineRoute } from './define-route'
+export { formBodySerializer } from './form-body-serializer'
 export { implementRoute } from './implement-route'
 export type { RouteMatch } from './match-route'
 export { matchRoute } from './match-route'
+export { multipartBodySerializer } from './multipart-body-serializer'
 export { matchesBodyType, parseFormBody, parseMultipartBody } from './parse-body'
 export { parsePathPattern } from './parse-path-pattern'
 export { isPayloadTooLargeError, payloadTooLargeError } from './payload-too-large'
@@ -50,6 +55,7 @@ export { toFetchHandler } from './to-fetch-handler'
 export type { NodeHandler, NodeHandlerOptions } from './to-node-handler'
 export { toNodeHandler } from './to-node-handler'
 export { toOpenApi } from './to-open-api'
+export { toSearchParams } from './to-search-params'
 export type {
   AnyContract,
   AnyRouteContract,

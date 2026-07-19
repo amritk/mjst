@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { buildParamPath } from './build-param-path'
 import { createApi } from './create-api'
 import type {
   ClientReplyOf,
@@ -18,7 +19,9 @@ import type {
 import { createClient } from './create-client'
 import { defineContract } from './define-contract'
 import { defineRoute } from './define-route'
+import { formBodySerializer } from './form-body-serializer'
 import { implementRoute } from './implement-route'
+import { multipartBodySerializer } from './multipart-body-serializer'
 import { toFetchHandler } from './to-fetch-handler'
 import type { RouteReplyOf } from './types'
 import { isUnexpectedStatusError } from './unexpected-status-error'
@@ -97,6 +100,7 @@ const makeClient = (captured?: Request[]) => {
       captured?.push(request.clone())
       return handler(request)
     },
+    pathParams: buildParamPath,
   })
 }
 
@@ -230,6 +234,7 @@ describe('create-client', () => {
     )
     const client = createClient({ signup }, 'https://api.test', {
       fetch: (url, init) => server(new Request(url, init)),
+      serializers: [formBodySerializer],
     })
     const reply = await client.signup({ body: { name: 'Ada', age: 30, tags: ['a', 'b'] } })
     expect(reply.status).toBe(201)
@@ -266,11 +271,54 @@ describe('create-client', () => {
     )
     const client = createClient({ upload }, 'https://api.test', {
       fetch: (url, init) => server(new Request(url, init)),
+      serializers: [multipartBodySerializer],
     })
     const reply = await client.upload({
       body: { title: 'report', attachment: new File([new Uint8Array(5)], 'r.bin') },
     })
     if (reply.status === 200) expect(reply.body).toEqual({ title: 'report', name: 'r.bin', byteLength: 5 })
+  })
+
+  it('throws a pointed error when a bodyType has no registered serializer', async () => {
+    const signup = defineContract({
+      method: 'post',
+      path: '/signup',
+      request: { body: { type: 'object' }, bodyType: 'form' },
+      responses: { 201: {} },
+    })
+    // No serializers registered — a JSON-only client that accidentally calls
+    // a form contract should learn the fix from the message.
+    const client = createClient({ signup }, 'https://api.test', {
+      fetch: () => Promise.resolve(new Response(null, { status: 201 })),
+    })
+    await expect(client.signup({ body: {} })).rejects.toThrow(/Contract 'signup': no serializer for bodyType 'form'/)
+  })
+
+  it('throws a pointed error for {param} paths without a registered builder', async () => {
+    const client = createClient({ getUser }, 'https://api.test', {
+      fetch: () => Promise.resolve(new Response(null, { status: 404 })),
+    })
+    await expect(client.getUser({ params: { id: 7 }, query: {} })).rejects.toThrow(
+      /Contract 'getUser': path '\/users\/\{id\}' needs createClient pathParams/,
+    )
+  })
+
+  it('lets a registered json serializer override the built-in one', async () => {
+    const captured: Request[] = []
+    const client = createClient({ chat }, 'https://api.test', {
+      fetch: (url, init) => {
+        captured.push(new Request(url, init))
+        return Promise.resolve(new Response(null, { status: 401 }))
+      },
+      serializers: [
+        // A json override is how apps swap in a custom encoder (stable
+        // stringify, bigint handling) without forking the client.
+        { bodyType: 'json', contentType: 'application/json', serialize: () => '"custom"' },
+      ],
+    })
+    await client.chat({ body: { message: 'x' }, headers: { 'x-api-key': 'k' } })
+    expect(await captured[0]?.text()).toBe('"custom"')
+    expect(captured[0]?.headers.get('content-type')).toBe('application/json')
   })
 
   it('serializes declared cookies onto the cookie header', async () => {
