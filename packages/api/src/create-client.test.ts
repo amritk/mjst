@@ -21,6 +21,7 @@ import { defineContract } from './define-contract'
 import { defineRoute } from './define-route'
 import { formBodySerializer } from './form-body-serializer'
 import { implementRoute } from './implement-route'
+import { isMalformedBodyError } from './malformed-body-error'
 import { multipartBodySerializer } from './multipart-body-serializer'
 import { toFetchHandler } from './to-fetch-handler'
 import type { RouteReplyOf } from './types'
@@ -209,6 +210,124 @@ describe('create-client', () => {
     const call = client.health({ signal: controller.signal })
     controller.abort()
     await expect(call).rejects.toThrow('aborted')
+  })
+
+  it('merges fetchOptions shallowly with per-call values winning over client-level ones', async () => {
+    const inits: RequestInit[] = []
+    const client = createClient(contracts, 'https://api.test', {
+      fetch: (_url, init) => {
+        inits.push(init)
+        return Promise.resolve(new Response('{"ok":true}', { status: 200 }))
+      },
+      fetchOptions: { cache: 'no-store', redirect: 'error' },
+    })
+    await client.health()
+    await client.health({ fetchOptions: { cache: 'force-cache' } })
+    expect(inits[0]?.cache).toBe('no-store')
+    expect(inits[0]?.redirect).toBe('error')
+    // Shallow merge: the per-call value wins per key, client-level fills the rest.
+    expect(inits[1]?.cache).toBe('force-cache')
+    expect(inits[1]?.redirect).toBe('error')
+    // The computed fields stay in charge — passthrough cannot clobber the method.
+    expect(inits[1]?.method).toBe('GET')
+  })
+
+  it('passes credentials through to fetch for browser cookie auth', async () => {
+    const inits: RequestInit[] = []
+    const client = createClient(contracts, 'https://api.test', {
+      fetch: (_url, init) => {
+        inits.push(init)
+        return Promise.resolve(new Response('{"ok":true}', { status: 200 }))
+      },
+      fetchOptions: { credentials: 'include' },
+    })
+    await client.health()
+    expect(inits[0]?.credentials).toBe('include')
+  })
+
+  it('aborts a slow fetch when timeoutMs elapses', async () => {
+    const client = createClient(contracts, 'https://api.test', {
+      // The stub never resolves on its own — only the timeout signal can end it.
+      fetch: (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+        }),
+      timeoutMs: 5,
+    })
+    const error = await client.health().catch((thrown: unknown) => thrown)
+    expect((error as Error).name).toBe('TimeoutError')
+  })
+
+  it('composes timeoutMs with a caller signal so either one aborts', async () => {
+    const client = createClient(contracts, 'https://api.test', {
+      fetch: (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+        }),
+      // Long enough that only the caller abort can be what fires below.
+      timeoutMs: 5000,
+    })
+    const controller = new AbortController()
+    const call = client.health({ signal: controller.signal })
+    controller.abort()
+    await expect(call).rejects.toThrow('aborted')
+  })
+
+  it('lets a per-call timeoutMs of undefined disable the client-level default', async () => {
+    const inits: RequestInit[] = []
+    const client = createClient(contracts, 'https://api.test', {
+      fetch: (_url, init) => {
+        inits.push(init)
+        return Promise.resolve(new Response('{"ok":true}', { status: 200 }))
+      },
+      timeoutMs: 5,
+    })
+    await client.health({ timeoutMs: undefined })
+    await client.health()
+    // Present-but-undefined opts out entirely; absent falls back to the default.
+    expect(inits[0]?.signal).toBeUndefined()
+    expect(inits[1]?.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('throws a recognizable error when a declared JSON body fails to parse', async () => {
+    // A proxy or CDN can replace a JSON reply with an HTML error page while
+    // keeping the status — the client must not surface a bare SyntaxError.
+    const client = createClient(contracts, 'https://api.test', {
+      fetch: () =>
+        Promise.resolve(
+          new Response('<html>oops</html>', { status: 200, headers: { 'content-type': 'text/html' } }),
+        ),
+    })
+    const failed = client.health()
+    await expect(failed).rejects.toThrow(/Malformed body for 200 response of 'health'/)
+    const error = await failed.catch((thrown: unknown) => thrown)
+    expect(isMalformedBodyError(error)).toBe(true)
+    if (isMalformedBodyError(error)) {
+      // The response and the original parse error ride along for handlers.
+      expect(error.response.status).toBe(200)
+      expect(error.cause).toBeInstanceOf(SyntaxError)
+    }
+  })
+
+  it('sends accept application/json by default and lets every header source override it', async () => {
+    const captured: Request[] = []
+    const client = makeClient(captured)
+    await client.health()
+    expect(captured[0]?.headers.get('accept')).toBe('application/json')
+    // Per-call extras win, case-insensitively.
+    await client.health({ headers: { Accept: 'application/xml' } })
+    expect(captured[1]?.headers.get('accept')).toBe('application/xml')
+    // Client-level headers win over the default too.
+    const inits: RequestInit[] = []
+    const overridden = createClient(contracts, 'https://api.test', {
+      fetch: (_url, init) => {
+        inits.push(init)
+        return Promise.resolve(new Response('{"ok":true}', { status: 200 }))
+      },
+      headers: { accept: 'text/event-stream' },
+    })
+    await overridden.health()
+    expect(new Headers(inits[0]?.headers).get('accept')).toBe('text/event-stream')
   })
 
   it('sends form bodies as urlencoded pairs with array repeats', async () => {

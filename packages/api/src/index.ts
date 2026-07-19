@@ -19,6 +19,7 @@ export type {
   ClientReplyOf,
   ErrorBodyOf,
   ErrorStatusOf,
+  FetchOptions,
   PathParamsBuilder,
   RequestBodyOf,
   RequestCookiesOf,
@@ -40,6 +41,7 @@ export { defineContract } from './define-contract'
 export { defineRoute } from './define-route'
 export { formBodySerializer } from './form-body-serializer'
 export { implementRoute } from './implement-route'
+export { isMalformedBodyError, malformedBodyError } from './malformed-body-error'
 export type { RouteMatch } from './match-route'
 export { matchRoute } from './match-route'
 export { multipartBodySerializer } from './multipart-body-serializer'
