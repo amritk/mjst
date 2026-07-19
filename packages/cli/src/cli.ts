@@ -432,6 +432,17 @@ const run = async (): Promise<void> => {
     process.exit(result.code)
   }
 
+  // `mjst compile-api <routes-module>` compiles @amritk/api route contracts
+  // into a fused fetch-handler module. Like lint, it owns its own flags and
+  // `--help`, so it must dispatch before the shared version/help checks.
+  if (args[0] === 'compile-api') {
+    const { run: compileApiRun } = await import('./compile-api/run')
+    const result = await compileApiRun(args.slice(1))
+    if (result.stdout) process.stdout.write(result.stdout)
+    if (result.stderr) process.stderr.write(result.stderr)
+    process.exit(result.code)
+  }
+
   if (isVersionRequest(args)) {
     console.log(await readVersion())
     return

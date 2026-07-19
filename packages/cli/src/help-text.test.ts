@@ -39,6 +39,11 @@ describe('help-text', () => {
     }
   })
 
+  it('lists the subcommands', () => {
+    expect(HELP_TEXT).toContain('mjst lint')
+    expect(HELP_TEXT).toContain('mjst compile-api')
+  })
+
   it('starts with a usage synopsis', () => {
     expect(HELP_TEXT).toContain('Usage:')
     expect(HELP_TEXT.startsWith('mjst')).toBe(true)
