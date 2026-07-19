@@ -7,6 +7,7 @@ import { buildQueryObject } from './build-query-object'
 import { buildQueryObjectFromString } from './build-query-object-from-string'
 import type { RouteMatch } from './match-route'
 import { matchRoute } from './match-route'
+import { matchesIfNoneMatch } from './matches-if-none-match'
 import { matchesBodyType, parseFormBody, parseMultipartBody } from './parse-body'
 import { isPayloadTooLargeError } from './payload-too-large'
 import { refinementFailure } from './refinement-failure'
@@ -18,13 +19,22 @@ import type {
   ErasedRequestContext,
   ErrorFormatters,
   OnErrorDetails,
-  OpenApiDocument,
   RequestObservation,
   RouteReplyValue,
   RouteTable,
   UnmatchedObservation,
   ValidationFailureBody,
 } from './types'
+
+/**
+ * The OpenAPI document ready to serve: its JSON string (stringified once —
+ * the document is immutable per process) and the strong etag derived from
+ * that string, quoted and ready for the `etag` header.
+ */
+export type OpenApiSerialized = {
+  readonly json: string
+  readonly etag: string
+}
 
 /**
  * Everything `handle` needs, pre-computed by `createApi`. Kept as a separate
@@ -34,7 +44,7 @@ import type {
 export type ApiInternals = {
   readonly table: RouteTable
   readonly openApiPath: string | undefined
-  readonly openApi: () => OpenApiDocument
+  readonly openApiSerialized: () => OpenApiSerialized
   readonly createContext: ContextFactory | undefined
   readonly onError: ((error: unknown, request: ApiRequest, details: OnErrorDetails) => ApiResponse) | undefined
   readonly errors: ErrorFormatters | undefined
@@ -79,7 +89,21 @@ export const handleRequest = (
     (request.method === 'GET' || request.method === 'HEAD') &&
     request.path === internals.openApiPath
   ) {
-    return Promise.resolve({ status: 200, body: internals.openApi() })
+    const { json, etag } = internals.openApiSerialized()
+    // The document is immutable per process, so a matching validator makes
+    // the revalidation `cache-control: no-cache` forces essentially free.
+    const ifNoneMatch = request.header('if-none-match')
+    if (ifNoneMatch !== undefined && matchesIfNoneMatch(ifNoneMatch, etag)) {
+      return Promise.resolve({ status: 304, headers: { etag, 'cache-control': 'no-cache' } })
+    }
+    // The cached string rides the raw contentType path so adapters send it
+    // as-is instead of re-stringifying the document on every request.
+    return Promise.resolve({
+      status: 200,
+      headers: { etag, 'cache-control': 'no-cache' },
+      body: json,
+      contentType: 'application/json',
+    })
   }
 
   const errors = internals.errors
@@ -108,12 +132,23 @@ export const handleRequest = (
       // GET routes implicitly serve HEAD (see the fallback above), so the
       // allow list advertises it whenever GET appears.
       if (allow.includes('GET') && !allow.includes('HEAD')) allow.push('HEAD')
+      // The server genuinely serves OPTIONS for known paths (see the 204
+      // below), so it belongs in every allow list. The guard matters when an
+      // explicit options route already put it there via the scan.
+      if (!allow.includes('OPTIONS')) allow.push('OPTIONS')
       allow.sort()
-      miss = errors?.methodNotAllowed?.(allow, request) ?? {
-        status: 405,
-        headers: { allow: allow.join(', ') },
-        body: { error: 'method_not_allowed' },
-      }
+      // A plain OPTIONS on a path served under other methods is a capability
+      // question, not a wrong-method mistake — answer it with the allow list
+      // instead of a 405. An explicitly declared options route matched above
+      // and never reaches this branch.
+      miss =
+        request.method === 'OPTIONS'
+          ? { status: 204, headers: { allow: allow.join(', ') } }
+          : (errors?.methodNotAllowed?.(allow, request) ?? {
+              status: 405,
+              headers: { allow: allow.join(', ') },
+              body: { error: 'method_not_allowed' },
+            })
     } else {
       miss = errors?.notFound?.(request) ?? NOT_FOUND
     }
@@ -233,11 +268,12 @@ const runRoute = async (
   let reply: RouteReplyValue
   try {
     // Refinement runs after every slot validated (its whole point is seeing
-    // them together) and inside this try so a throwing refine takes the
-    // handler-error path — a cross-field check is app code, not transport.
+    // them together) and inside this try so a throwing or rejecting refine
+    // takes the handler-error path — a cross-field check is app code, not
+    // transport. The await also admits async refines (uniqueness lookups).
     const refine = route.contract.refine
     if (refine !== undefined) {
-      const issues = refine({ params, query, body, headers, cookies } as ErasedRefineInput)
+      const issues = await refine({ params, query, body, headers, cookies } as ErasedRefineInput)
       if (issues !== undefined && issues.length > 0) {
         const failure = refinementFailure(issues)
         if (errors?.validationFailed !== undefined) return errors.validationFailed(failure, request)

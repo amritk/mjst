@@ -335,13 +335,17 @@ export type Contract<
   /**
    * Post-validation refinement for cross-field constraints JSON Schema cannot
    * express ("sum of all message lengths ≤ 64k", "start before end"). Runs
-   * synchronously after every declared slot has validated, before the context
-   * factory and handler. Return issues to reject the request — they answer
-   * through the standard `validation_failed` envelope (and the
-   * `validationFailed` error formatter) — or `undefined` / an empty array to
-   * accept it. A thrown refine takes the handler-error path (`onError`).
+   * after every declared slot has validated, before the context factory and
+   * handler, and may be sync or async — a returned promise is awaited. Return
+   * (or resolve) issues to reject the request — they answer through the
+   * standard `validation_failed` envelope (and the `validationFailed` error
+   * formatter) — or `undefined` / an empty array to accept it. A thrown or
+   * rejected refine takes the handler-error path (`onError`), exactly like a
+   * throwing handler.
    */
-  readonly refine?: (input: RefineInput<Params, Query, Body, Headers, Cookies>) => readonly RefineIssue[] | undefined
+  readonly refine?: (
+    input: RefineInput<Params, Query, Body, Headers, Cookies>,
+  ) => readonly RefineIssue[] | undefined | Promise<readonly RefineIssue[] | undefined>
   readonly responses: Responses
 }
 
@@ -388,8 +392,10 @@ export type RouteContract<
     readonly headers?: Headers
     readonly cookies?: Cookies
   }
-  /** Post-validation cross-field refinement. See {@link Contract.refine}. */
-  readonly refine?: (input: RefineInput<Params, Query, Body, Headers, Cookies>) => readonly RefineIssue[] | undefined
+  /** Post-validation cross-field refinement, sync or async. See {@link Contract.refine}. */
+  readonly refine?: (
+    input: RefineInput<Params, Query, Body, Headers, Cookies>,
+  ) => readonly RefineIssue[] | undefined | Promise<readonly RefineIssue[] | undefined>
   readonly responses: Responses
   readonly handler: RouteHandler<Params, Query, Body, Headers, Cookies, Responses, Context>
 }
@@ -470,7 +476,9 @@ export type AnyContract = {
     readonly headers?: unknown
     readonly cookies?: unknown
   }
-  readonly refine?: (input: ErasedRefineInput) => readonly RefineIssue[] | undefined
+  readonly refine?: (
+    input: ErasedRefineInput,
+  ) => readonly RefineIssue[] | undefined | Promise<readonly RefineIssue[] | undefined>
   readonly responses: ResponseContracts
 }
 
@@ -796,7 +804,9 @@ export type ApiOptions = OpenApiExtras & {
   readonly observe?: (observation: RequestObservation) => void
   /**
    * The unmatched-request counterpart to `observe`, called once per request
-   * that matched no route (404) or only routes under other methods (405) —
+   * that matched no route (404), only routes under other methods (405), or
+   * was an OPTIONS answered automatically for a path served under other
+   * methods (204) —
    * request-logging parity with framework middleware, without wrapping the
    * adapter. Kept separate from `observe` so its observation can honestly
    * carry `route: undefined` (one logger can serve both via
@@ -815,7 +825,11 @@ export type UnmatchedObservation = {
   readonly route: undefined
   /** The request as the pipeline saw it. */
   readonly request: ApiRequest
-  /** 404, or 405 when the path is served under other methods. */
+  /**
+   * 404; 405 when the path is served under other methods; or 204 for an
+   * OPTIONS request answered automatically because the path exists under
+   * other methods (no explicit `options` route matched).
+   */
   readonly status: number
   /** Milliseconds spent matching and shaping the miss response. */
   readonly durationMs: number

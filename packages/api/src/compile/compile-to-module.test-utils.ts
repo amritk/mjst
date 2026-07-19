@@ -230,6 +230,42 @@ export const bookSlot = defineRoute({
   handler: () => ({ status: 201 }),
 })
 
+/**
+ * An async refine over the same cross-field constraint as `bookSlot`: both
+ * engines must await the promise, route resolved issues through the standard
+ * envelope, and send a rejected refine (start = 13) down the onError path.
+ */
+export const bookSlotAsync = defineRoute({
+  method: 'post',
+  path: '/slots-async',
+  request: {
+    body: {
+      type: 'object',
+      properties: { start: { type: 'integer' }, end: { type: 'integer' } },
+      required: ['start', 'end'],
+    },
+  },
+  refine: async ({ body }) => {
+    // A microtask hop makes the promise genuinely asynchronous.
+    await Promise.resolve()
+    if (body.start === 13) throw new Error('async refine crashed')
+    return body.start < body.end ? undefined : [{ path: '/end', message: 'end must be after start' }]
+  },
+  responses: { 201: {} },
+  handler: () => ({ status: 201 }),
+})
+
+/**
+ * An explicitly declared options route: it must win over the automatic
+ * OPTIONS answer in both engines.
+ */
+export const optionsProbe = defineRoute({
+  method: 'options',
+  path: '/users',
+  responses: { 200: { body: { type: 'object' } } },
+  handler: () => ({ status: 200, headers: { 'x-options': 'explicit' }, body: { custom: true } }),
+})
+
 /** Reads the shared locals bag the gate populated; writes its own note for the decorator. */
 export const localsEcho = defineRoute({
   method: 'get',

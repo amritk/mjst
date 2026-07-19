@@ -1,5 +1,7 @@
 import { buildCoercionPlan } from '../build-coercion-plan'
+import { fnv1aHex } from '../fnv1a-hex'
 import { parsePathPattern } from '../parse-path-pattern'
+import { DEFAULT_MAX_BODY_BYTES } from '../payload-too-large'
 import { toOpenApi } from '../to-open-api'
 import type { AnyRouteContract, OpenApiExtras, OpenApiInfo, PathSegment } from '../types'
 import { generateGuardSource } from './generate-guard-source'
@@ -81,7 +83,8 @@ export type CompileModuleOptions = OpenApiExtras & {
   /**
    * Rejects request bodies larger than this many bytes with a 413 — the
    * compiled equivalent of `toFetchHandler`'s `maxBodyBytes` option, enforced
-   * with the same shared capped reader.
+   * with the same shared capped reader. Defaults to 1 MiB (1,048,576 bytes);
+   * pass `Infinity` to disable the cap entirely.
    */
   readonly maxBodyBytes?: number
   /** Import specifier for the @amritk/api helpers (override for tests/vendoring). */
@@ -125,7 +128,10 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   const onRequestExports = options.onRequestExports ?? []
   const onResponseExports = options.onResponseExports ?? []
   for (const name of [...onRequestExports, ...onResponseExports]) assertIdentifier(name, 'hook export')
-  const maxBodyBytes = options.maxBodyBytes
+  // Infinity (the explicit opt-out) reads as "no cap" below; the default cap
+  // matches the runtime adapters so both engines cut off at the same byte.
+  const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES
+  const unboundedBody = maxBodyBytes === Number.POSITIVE_INFINITY
   // The onError and observe contracts include env/executionContext, so route
   // functions must thread the platform arguments even without a context factory.
   const emitContext: EmitContext = {
@@ -179,7 +185,12 @@ export const compileToModule = (options: CompileModuleOptions): string => {
           toOpenApi(
             routes.map((route) => route.contract),
             info,
-            { servers: options.servers, securitySchemes: options.securitySchemes, security: options.security },
+            {
+              servers: options.servers,
+              securitySchemes: options.securitySchemes,
+              security: options.security,
+              tags: options.tags,
+            },
           ),
         )
 
@@ -199,7 +210,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     // header builder, so repeated set-cookie values serialize identically to
     // the runtime adapter.
     'buildResponseHeaders',
-    maxBodyBytes === undefined ? undefined : 'readBytesCapped',
+    unboundedBody ? undefined : 'readBytesCapped',
   ].filter((name) => name !== undefined)
   const validatorImports = [
     used.validate ? 'validate' : undefined,
@@ -243,10 +254,9 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   // and read-caching behavior match toFetchHandler exactly: all three readers
   // share one buffered read, so the body can be read repeatedly and after the
   // pipeline consumed a declared body schema.
-  const readAllBytesExpression =
-    maxBodyBytes === undefined
-      ? 'request.arrayBuffer().then((buffer) => new Uint8Array(buffer))'
-      : `readBytesCapped(request.body, request.headers.get('content-length'), ${maxBodyBytes})`
+  const readAllBytesExpression = unboundedBody
+    ? 'request.arrayBuffer().then((buffer) => new Uint8Array(buffer))'
+    : `readBytesCapped(request.body, request.headers.get('content-length'), ${maxBodyBytes})`
   lines.push(
     'const DECODER = new TextDecoder()',
     // `locals` is the per-request bag created in the dispatch, so every
@@ -286,7 +296,20 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   }
   lines.push(...emitErrorHelpers(errorsExport, onErrorExport, used))
   if (openApiJson !== undefined) {
-    lines.push(`const OPENAPI_JSON = ${JSON.stringify(openApiJson)}`)
+    // The etag is baked at build time from the same hash the runtime engine
+    // applies at startup, so identical documents answer with identical etags
+    // in both engines.
+    const openApiEtag = '"' + fnv1aHex(openApiJson) + '"'
+    lines.push(
+      `const OPENAPI_JSON = ${JSON.stringify(openApiJson)}`,
+      `const OPENAPI_ETAG = ${JSON.stringify(openApiEtag)}`,
+      `const OPENAPI_HEADERS = { 'content-type': 'application/json', etag: OPENAPI_ETAG, 'cache-control': 'no-cache' }`,
+      `const OPENAPI_304_HEADERS = { etag: OPENAPI_ETAG, 'cache-control': 'no-cache' }`,
+      // Inline copy of the runtime's matchesIfNoneMatch (RFC 9110 weak
+      // comparison as an exact-token scan) — the emitted module's runtime
+      // imports are limited to the package's public surface.
+      "const openApiEtagMatches = (value) => { if (value.trim() === '*') return true; for (const part of value.split(',')) { let candidate = part.trim(); if (candidate.startsWith('W/')) candidate = candidate.slice(2); if (candidate === OPENAPI_ETAG) return true } return false }",
+    )
   }
   lines.push('', ...declarations)
   lines.push(
@@ -764,19 +787,24 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
   }
 
   // Refinement mirrors the runtime pipeline: after every declared slot has
-  // validated, before the context factory and handler, with a throwing
-  // refine taking the handler-error path.
-  const refineLines = (bodyValue: string, indent: string): string[] => {
-    if (route.contract.refine === undefined) return []
+  // validated, before the context factory and handler, with a throwing or
+  // rejecting refine taking the handler-error path. Sync and async refines
+  // share one continuation so both verdicts run identical code.
+  const refineAndRunLines = (bodyValue: string, indent: string): string[] => {
+    if (route.contract.refine === undefined) return runLines(bodyValue, indent)
     used['refine'] = true
     return [
-      `${indent}let refineIssues`,
+      `${indent}const afterRefine = (refineIssues) => {`,
+      `${indent}  if (refineIssues !== undefined && refineIssues.length > 0) return failRefine(refineIssues, ${ERROR_ARGS})`,
+      ...runLines(bodyValue, indent + '  '),
+      `${indent}}`,
+      `${indent}let refineResult`,
       `${indent}try {`,
-      `${indent}  refineIssues = ${route.name}.refine({ params: ${paramsValue}, query: ${queryValue}, body: ${bodyValue}, headers: ${headersValue}, cookies: ${cookiesValue} })`,
+      `${indent}  refineResult = ${route.name}.refine({ params: ${paramsValue}, query: ${queryValue}, body: ${bodyValue}, headers: ${headersValue}, cookies: ${cookiesValue} })`,
       `${indent}} catch (error) {`,
       `${indent}  return thrown(error, ${thrownArguments})`,
       `${indent}}`,
-      `${indent}if (refineIssues !== undefined && refineIssues.length > 0) return failRefine(refineIssues, ${ERROR_ARGS})`,
+      `${indent}return typeof refineResult?.then === 'function' ? refineResult.then(afterRefine, (error) => thrown(error, ${thrownArguments})) : afterRefine(refineResult)`,
     ]
   }
 
@@ -797,8 +825,7 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
     )
     const guardAndRun = [
       `    if (!guard${suffix}(body)) return failValidation('body', collect${suffix}, body, ${ERROR_ARGS})`,
-      ...refineLines('body', '    '),
-      ...runLines('body', '    '),
+      ...refineAndRunLines('body', '    '),
     ]
     if (bodyType === 'json') {
       lines.push(
@@ -828,7 +855,7 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
       )
     }
   } else {
-    lines.push(...refineLines('undefined', '  '), ...runLines('undefined', '  '))
+    lines.push(...refineAndRunLines('undefined', '  '))
   }
   lines.push('}')
   return lines
@@ -917,7 +944,13 @@ const emitDispatch = (
   }
   if (openApiPath !== undefined) {
     lines.push(
-      `  if ((method === 'GET' || method === 'HEAD') && rawPath === ${JSON.stringify(openApiPath)}) return method === 'HEAD' ? new Response(null, initFor(200)) : new Response(OPENAPI_JSON, initFor(200))`,
+      `  if ((method === 'GET' || method === 'HEAD') && rawPath === ${JSON.stringify(openApiPath)}) {`,
+      // A matching validator answers 304 with no body — the document string
+      // is embedded and immutable, so revalidation is a header compare.
+      "    const ifNoneMatch = request.headers.get('if-none-match')",
+      '    if (ifNoneMatch !== null && openApiEtagMatches(ifNoneMatch)) return new Response(null, { status: 304, headers: OPENAPI_304_HEADERS })',
+      "    return method === 'HEAD' ? new Response(null, { status: 200, headers: OPENAPI_HEADERS }) : new Response(OPENAPI_JSON, { status: 200, headers: OPENAPI_HEADERS })",
+      '  }',
     )
   }
   lines.push("  const path = rawPath.length > 1 && rawPath.endsWith('/') ? rawPath.slice(0, -1) : rawPath")
@@ -1017,7 +1050,19 @@ const emitDispatch = (
       ? expression
       : `observedMiss(${expression}, ${ERROR_ARGS}, env, executionContext, missStart)`
   lines.push(
-    `  if (allow.length > 0) { const denied = ${miss(`methodNotAllowed(allow.sort(), ${ERROR_ARGS})`)}; return method === 'HEAD' ? stripHeadBody(denied) : denied }`,
+    '  if (allow.length > 0) {',
+    // The server genuinely serves OPTIONS for known paths (the 204 below),
+    // so it joins every allow list; the guard covers paths with an explicit
+    // options route already collected by the scan.
+    "    if (!allow.includes('OPTIONS')) allow.push('OPTIONS')",
+    '    allow.sort()',
+    // A plain OPTIONS on a path served under other methods answers 204 with
+    // the allow list — same rule as the runtime pipeline; an explicitly
+    // declared options route matched in its method block above.
+    `    if (method === 'OPTIONS') return ${miss("new Response(null, { status: 204, headers: { allow: allow.join(', ') } })")}`,
+    `    const denied = ${miss(`methodNotAllowed(allow, ${ERROR_ARGS})`)}`,
+    "    return method === 'HEAD' ? stripHeadBody(denied) : denied",
+    '  }',
     `  const missing = ${miss(`notFound(${ERROR_ARGS})`)}`,
     "  return method === 'HEAD' ? stripHeadBody(missing) : missing",
     '}',

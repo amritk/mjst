@@ -1,4 +1,5 @@
 import { buildResponseHeaders } from './build-response-headers'
+import { DEFAULT_MAX_BODY_BYTES } from './payload-too-large'
 import { readBytesCapped } from './read-bytes-capped'
 import type { Api, ApiRequest, ApiResponse, RequestLocals, StreamingBody } from './types'
 
@@ -76,7 +77,9 @@ export type FetchHandlerOptions = {
    * against the declared `content-length` up front and enforced while the
    * body streams in (so a lying or chunked client is still cut off). Applies
    * to the pipeline's own body parsing and to handler-initiated
-   * `readText`/`readBytes` calls alike. Unset means no limit.
+   * `readText`/`readBytes` calls alike. Defaults to 1 MiB (1,048,576 bytes)
+   * — an unbounded read is a memory-DoS by default. Pass `Infinity` to
+   * disable the cap entirely.
    */
   readonly maxBodyBytes?: number
 }
@@ -107,7 +110,7 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
   })
   const onRequest = toArray(options?.onRequest)
   const onResponse = toArray(options?.onResponse)
-  const maxBodyBytes = options?.maxBodyBytes
+  const maxBodyBytes = options?.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES
 
   // One ResponseInit per status code, reused across requests — building JSON
   // responses via `new Response(string, cachedInit)` instead of
@@ -159,8 +162,11 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     // the pipeline consumed a declared body schema would otherwise hit the
     // stream's single-use limit.
     let bytes: Promise<Uint8Array> | undefined
+    // An Infinity cap means genuinely unbounded, so it takes the plain
+    // arrayBuffer path — no reason to stream-count bytes against a limit
+    // nothing can exceed.
     const readAllBytes =
-      maxBodyBytes === undefined
+      maxBodyBytes === Number.POSITIVE_INFINITY
         ? () => (bytes ??= request.arrayBuffer().then((buffer) => new Uint8Array(buffer)))
         : () => (bytes ??= readBytesCapped(request.body, request.headers.get('content-length'), maxBodyBytes))
 

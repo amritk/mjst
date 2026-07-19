@@ -7,6 +7,15 @@
 const MARKER = 'amritk.api.payloadTooLarge'
 
 /**
+ * The body-size limit (1 MiB) applied when `maxBodyBytes` is not set on an
+ * adapter or on `compileToModule`. Unbounded body reads are a memory-DoS
+ * waiting to happen, so the cap is opt-out (`maxBodyBytes: Infinity`) rather
+ * than opt-in. Shared here so the fetch adapter, the Node adapter, and the
+ * compiled engine all agree on the exact byte.
+ */
+export const DEFAULT_MAX_BODY_BYTES = 1_048_576
+
+/**
  * Creates the error a body reader throws when the payload exceeds the
  * configured limit. The pipeline recognizes it (via
  * {@link isPayloadTooLargeError}) and answers 413 instead of treating it as a

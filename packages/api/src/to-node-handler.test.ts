@@ -130,6 +130,75 @@ describe('to-node-handler', () => {
     })
   })
 
+  it('honors write backpressure while pumping a fast producer to completion', async () => {
+    // Each 64 KiB chunk overshoots the response's default 16 KiB buffer, so
+    // outgoing.write returns false on every enqueue and the pump must await
+    // 'drain' repeatedly — the old fire-and-forget write loop never did.
+    const chunkCount = 8
+    const chunk = 'x'.repeat(64 * 1024)
+    const firehose = defineRoute({
+      method: 'get',
+      path: '/firehose',
+      responses: { 200: { contentType: 'application/octet-stream' } },
+      handler: () => {
+        const encoder = new TextEncoder()
+        let sent = 0
+        const body = new ReadableStream<Uint8Array>({
+          pull: (controller) => {
+            if (sent === chunkCount) {
+              controller.close()
+              return
+            }
+            sent += 1
+            controller.enqueue(encoder.encode(chunk))
+          },
+        })
+        return { status: 200, body }
+      },
+    })
+    const handler = toNodeHandler(createApi({ routes: [firehose] }))
+    await withServer(createServer(handler), async (origin) => {
+      const response = await fetch(origin + '/firehose')
+      expect(response.status).toBe(200)
+      const text = await response.text()
+      expect(text.length).toBe(chunkCount * chunk.length)
+      expect(text).toBe(chunk.repeat(chunkCount))
+    })
+  }, 15_000)
+
+  it('cancels the source stream instead of hanging when the client disconnects mid-stream', async () => {
+    let cancelled = false
+    const endless = defineRoute({
+      method: 'get',
+      path: '/endless',
+      responses: { 200: { contentType: 'application/octet-stream' } },
+      handler: () => {
+        const bytes = new Uint8Array(64 * 1024)
+        const body = new ReadableStream<Uint8Array>({
+          // Never closes — only client disconnect can end this response.
+          pull: (controller) => controller.enqueue(bytes),
+          cancel: () => {
+            cancelled = true
+          },
+        })
+        return { status: 200, body }
+      },
+    })
+    const handler = toNodeHandler(createApi({ routes: [endless] }))
+    await withServer(createServer(handler), async (origin) => {
+      const controller = new AbortController()
+      const response = await fetch(origin + '/endless', { signal: controller.signal })
+      expect(response.status).toBe(200)
+      // Read one chunk so the stream is genuinely flowing, then hang up.
+      const reader = (response.body as ReadableStream<Uint8Array>).getReader()
+      await reader.read()
+      controller.abort()
+      // The drain wait must bail on the closed response and cancel the
+      // producer instead of pumping into the void forever.
+      await expect.poll(() => cancelled, { timeout: 5_000 }).toBe(true)
+    })
+  }, 15_000)
+
   it('gives handlers the raw body text', async () => {
     const webhook = defineRoute({
       method: 'post',
@@ -155,6 +224,44 @@ describe('to-node-handler', () => {
       })
       expect(response.status).toBe(413)
       expect(await response.json()).toEqual({ error: 'payload_too_large' })
+    })
+  })
+
+  it('caps bodies at 1 MiB by default and lets Infinity restore unbounded reads', async () => {
+    const webhook = defineRoute({
+      method: 'post',
+      path: '/webhook',
+      responses: { 200: { body: { type: 'object', properties: { bytes: {} } } } },
+      handler: async ({ request }) => ({ status: 200, body: { bytes: (await request.readBytes()).byteLength } }),
+    })
+
+    // No options at all: the shared 1 MiB default applies.
+    const defaulted = toNodeHandler(createApi({ routes: [webhook] }))
+    await withServer(createServer(defaulted), async (origin) => {
+      const rejected = await fetch(origin + '/webhook', { method: 'POST', body: 'x'.repeat(1_048_577) })
+      expect(rejected.status).toBe(413)
+      expect(await rejected.json()).toEqual({ error: 'payload_too_large' })
+
+      const atLimit = await fetch(origin + '/webhook', { method: 'POST', body: 'x'.repeat(1_048_576) })
+      expect(atLimit.status).toBe(200)
+    })
+
+    // Infinity is the documented opt-out back to unbounded reads.
+    const unbounded = toNodeHandler(createApi({ routes: [webhook] }), { maxBodyBytes: Number.POSITIVE_INFINITY })
+    await withServer(createServer(unbounded), async (origin) => {
+      const accepted = await fetch(origin + '/webhook', { method: 'POST', body: 'x'.repeat(1_048_577) })
+      expect(accepted.status).toBe(200)
+      expect(await accepted.json()).toEqual({ bytes: 1_048_577 })
+    })
+  }, 15_000)
+
+  it('answers plain OPTIONS on a known path with 204 and the allow list', async () => {
+    const handler = toNodeHandler(createApi({ routes: [getUser, createUser] }))
+    await withServer(createServer(handler), async (origin) => {
+      const response = await fetch(origin + '/users', { method: 'OPTIONS' })
+      expect(response.status).toBe(204)
+      expect(response.headers.get('allow')).toBe('OPTIONS, POST')
+      expect(await response.text()).toBe('')
     })
   })
 
