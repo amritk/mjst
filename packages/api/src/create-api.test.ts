@@ -781,6 +781,30 @@ describe('create-api', () => {
     expect(response.body).toEqual({ error: 'too big, sorry' })
   })
 
+  it("maps the host framework's body-limit error thrown inside a handler to 413", async () => {
+    // When mounted on Fastify, a body over its `bodyLimit` surfaces to the
+    // handler as FST_ERR_CTP_BODY_TOO_LARGE — a foreign error the pipeline
+    // must still answer 413 for, not a generic 500.
+    const webhook = defineRoute({
+      method: 'post',
+      path: '/webhook',
+      responses: { 200: {} },
+      handler: async ({ request: incoming }) => {
+        await incoming.readText()
+        return { status: 200 }
+      },
+    })
+    const api = createApi({ routes: [webhook] })
+    const fastifyRejected: ApiRequest = {
+      ...request('POST', '/webhook'),
+      readText: () =>
+        Promise.reject(Object.assign(new Error('Request body is too large'), { code: 'FST_ERR_CTP_BODY_TOO_LARGE' })),
+    }
+    const response = await api.handle(fastifyRejected)
+    expect(response.status).toBe(413)
+    expect(response.body).toEqual({ error: 'payload_too_large' })
+  })
+
   it('rejects requests through refine with the standard validation envelope', async () => {
     const bookSlot = defineRoute({
       method: 'post',

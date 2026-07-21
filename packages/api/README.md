@@ -508,6 +508,13 @@ streams in, for pipeline and handler-initiated reads alike. **The default is
 1 MiB** — unbounded reads are opt-in via `maxBodyBytes: Infinity`, so an
 unconfigured deployment is not a memory-exhaustion vector.
 
+When the API is mounted on another server that reads the body first, that
+server's own limit can trip before this one. Those foreign body-limit errors
+are recognized too, so they answer 413 rather than a generic 500: Fastify's
+`FST_ERR_CTP_BODY_TOO_LARGE` (its `bodyLimit`), Express's
+`body-parser`/`raw-body` `entity.too.large`, and any thrown HTTP error whose
+`statusCode`/`status` is 413.
+
 ### The platform request: `request.raw`
 
 `ApiRequest` is framework-neutral on purpose, but platforms attach real data
