@@ -39,7 +39,25 @@ export const Dynamic = (props: DynamicProps): HTMLElement => {
     // Resolving inside the tracking scope is what makes a signal/getter
     // reactive; a plain string simply renders once.
     const resolved = typeof component === 'string' ? component : component()
+    // The types already reject a bare component (see `DynamicProps.component`),
+    // but an `as`/`any` escape hatch — or a getter that returns a built node by
+    // mistake (`() => <div/>` instead of `() => Div`) — can still slip a wrong
+    // value through. The check is one `typeof` per resolve and only ever throws
+    // on programmer error, so it stays on rather than hiding behind a dev flag.
+    if (typeof resolved !== 'string' && typeof resolved !== 'function') {
+      throw new TypeError(
+        `<Dynamic> expected component to resolve to a tag string or a component function, but got ${describeResolved(resolved)}. ` +
+          'Pass a component through a getter — component={() => MyComponent} — not the element it builds.',
+      )
+    }
     return () => jsx(resolved, rest as MiniElementProps)
   })
   return host
+}
+
+/** A readable description of a bad resolved value, for the {@link Dynamic} guard's error. */
+const describeResolved = (value: unknown): string => {
+  if (value instanceof Node) return 'a built DOM node (did a getter return JSX instead of the component itself?)'
+  if (value === null) return 'null'
+  return `a ${typeof value}`
 }

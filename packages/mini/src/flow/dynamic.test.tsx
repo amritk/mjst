@@ -38,4 +38,17 @@ describe('dynamic', () => {
     const host = Dynamic({ component: () => Chip, label: 'tag' })
     expect(host.querySelector('.chip')?.textContent).toBe('tag')
   })
+
+  it('throws a clear error when a getter returns a built node instead of a component', () => {
+    // The common honest mistake: `() => <div/>` (returns an element) rather than
+    // `() => Div` (returns the component). The types catch it; this guards the
+    // `as any` escape hatch at runtime with a readable message.
+    const bad = { component: () => document.createElement('div') } as unknown as Parameters<typeof Dynamic>[0]
+    expect(() => Dynamic(bad)).toThrow(/tag string or a component function/)
+  })
+
+  it('throws when the resolved component is neither a string nor a function', () => {
+    const bad = { component: () => 42 } as unknown as Parameters<typeof Dynamic>[0]
+    expect(() => Dynamic(bad)).toThrow(/a number/)
+  })
 })
