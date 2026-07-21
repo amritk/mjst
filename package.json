@@ -22,6 +22,7 @@
   "license": "MIT",
   "scripts": {
     "generate-readmes": "(cd packages/cli && bun run generate-readme) && (cd packages/generate-parsers && bun run generate-readme)",
+    "prebuild": "bun run --filter='@amritk/runtime-validators' build",
     "build": "bun run --workspaces build",
     "dev": "bun --conditions development packages/cli/src/cli.ts",
     "types:check": "bun run --workspaces types:check",
