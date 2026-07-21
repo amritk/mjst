@@ -139,7 +139,7 @@ The ergonomic control-flow components the core deliberately omits — each reuse
 | Export | Purpose |
 |:---|:---|
 | `Show` | `<Show when={cond} fallback={…}>` — mounts one branch, tears down the other (bindings included). Truthiness drives it, so `when={user}` works. |
-| `For` | `<For each={items} key={…}>{(item, i) => …}</For>` — keyed list backed by the core `list`. `key` defaults to an object `id` / primitive value / index; supply it for reordering lists. |
+| `For` | `<For each={items} key={…}>{(item, i) => …}</For>` — keyed list backed by the core `list`. `key` defaults to an object `id` / primitive value / index; supply it for reordering lists. Pass `as` (with `class`/`style`/`ref`) to render into a real element instead of the default `display: contents` host — needed when the container itself is styled, e.g. a `divide-y` list whose separators only match direct children: `<For each={rows} as="ul" class="divide-y">`. |
 | `Switch` / `Match` | `<Switch fallback>…<Match when={…}>…</Match></Switch>` — renders the first truthy branch; only the winner is built. |
 | `Dynamic` | `<Dynamic component={tag} {...props}/>` — renders a tag or component chosen at runtime (`component` is a tag string or a getter/signal returning the tag/component). |
 | `ShowProps`, `ForProps`, `SwitchProps`, `MatchProps`, `DynamicProps`, `DynamicComponent`, `ChildFactory` | Exported types. |
