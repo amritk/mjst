@@ -1,5 +1,77 @@
 # @amritk/api
 
+## 0.5.0
+
+### Minor Changes
+
+- da1be72: Compiled-engine parity and deployment features: `hashContracts` plus a baked `contractsHash` with an init-time staleness warning in every module `compileToModule` emits (schema edits without regeneration now surface as a `console.error` instead of silent drift); `compileExport` on `CompileModuleOptions` so a custom `ValidatorCompiler` (the runtime `compile` option) drives every guard and collector in the compiled engine too; `validateResponses` on `CompileModuleOptions` for runtime-identical reply body/header validation (`invalid_response` 500s) in the compiled engine; and `fetchToNodeHandler`, a general Node bridge that runs any fetch handler — a compiled module's `fetch` export included — under `node:http`/Express with streaming, repeated `set-cookie`, backpressure, and disconnect handling.
+- 5395bed: Add more framework-parity helpers, all composing through existing seams
+  (`mounts`, `onRequest`/`onResponse`, the raw response, the context factory) —
+  no request-pipeline changes:
+
+  - `createCsrf` — stateless double-submit CSRF protection.
+  - `createHealth` — a health/readiness endpoint (`200`/`503`) running probes
+    concurrently, for load balancers and Kubernetes gates.
+  - `signCookie`/`unsignCookie`/`createSignedCookies` — HMAC-SHA256 signed
+    cookies over Web Crypto (no dependency).
+  - `sseStream`/`formatSse` — Server-Sent Events as a streaming body for
+    raw-`contentType` routes.
+  - `negotiateMediaType`/`parseAccept` — server-driven content negotiation with
+    RFC 9110 media-range specificity and `q=0` handling.
+  - `versionRoutes` — URI-prefix API versioning (`/v1`, `/v2`).
+  - `withTimeout` — a per-handler wall-clock deadline.
+  - `runAfterResponse`/`createBackground` — after-response ("background") work
+    via `waitUntil` where the platform provides it.
+
+- 09ff86c: Add framework-parity middleware helpers, each composing through the existing
+  `onRequest`/`onResponse`/`mounts` seams (no core pipeline changes):
+
+  - `createRateLimit` — request rate limiting with `RateLimit-*`/`Retry-After`
+    headers, a 429 short-circuit, and a pluggable store (in-memory default).
+  - `createRequestId` — correlation-id propagation into `locals` and the
+    response, with `getRequestId`.
+  - `createSecurityHeaders` — the `helmet`/`secure-headers` baseline as an
+    `onResponse` decorator.
+  - `createCompression` — gzip/deflate response compression over the platform
+    `CompressionStream`.
+  - `createETag` — automatic entity tags and conditional-GET (`304`) handling.
+  - `createDocs` — an interactive API reference page (Scalar/Swagger UI/ReDoc)
+    served next to `openapi.json`, with `docsHtml`.
+
+- da1be72: Deep-review hardening pass across the client, OpenAPI projection, request pipeline, and bundler plugins.
+
+  **Breaking (pre-1.0 minor): request bodies are now capped at 1 MiB by default.** `maxBodyBytes` keeps its meaning on both adapters and `compileToModule`; unset now means 1 MiB instead of unbounded (a memory-exhaustion vector), and `maxBodyBytes: Infinity` restores unbounded reads.
+
+  **Typed client.** `fetchOptions` (client-level and per-call `RequestInit` extras — `credentials`, `cache`, `redirect`, …) and `timeoutMs` (composes with a per-call `signal` via `AbortSignal.any`). Requests send `accept: application/json` by default. A declared JSON status whose body fails to parse throws `malformedBodyError` — recognizable via `isMalformedBodyError`, carrying the `Response` and the parse error as `cause` — instead of a bare `SyntaxError`. Documented: the `cookies` slot cannot work from browsers (forbidden header); use server-set cookies plus `fetchOptions: { credentials: 'include' }`.
+
+  **OpenAPI.** Greedy `{name+}` routes now emit valid documents (`{name}` templates with a matching, described parameter). Schemas carrying internal `$ref`s hoist into `components.schemas` with refs re-rooted, so recursive shapes resolve. Every operation gets a deterministic `operationId` (explicit wins; duplicates throw at startup). `info` accepts `contact`/`license`/`termsOfService`, documents accept top-level `tags` objects (plumbed through `createApi` and `compileToModule`), and multipart file parts get `encoding` entries. The served document carries a strong `etag` + `cache-control: no-cache`, answers `304` to `if-none-match`, and is serialized once per process.
+
+  **HTTP semantics (both engines, differential-pinned).** `OPTIONS` on a known path answers `204` with a sorted `allow` header (explicit `options` routes still win), and 405 `allow` lists advertise `OPTIONS`. `refine` may be async — a returned promise is awaited, rejections take the `onError` path.
+
+  **Node adapter.** Streaming replies honor `write()` backpressure with a hang-proof `drain` wait, so fast producers no longer buffer unbounded memory against slow clients.
+
+  **CORS.** `createCors` throws at setup on the browser-rejected `origin: '*'` + `credentials: true` combination.
+
+  **Bundler.** New `stripContractsEsbuild` and `stripContractsRollup` join the Vite and Bun plugins, and the strip transform is now line-preserving so `map: null` no longer misaligns downstream sourcemaps.
+
+  The cap keeps the native read path: a body whose declared `content-length` fits the limit reads via `arrayBuffer()` (with a post-read length check), and only chunked or unparseable-length requests take the streaming capped reader — so on realistic traffic the default cap costs ~4%, not the 82% an always-streaming read would.
+
+- ca672c3: Add `streamMultipart` (and `multipartBoundary`) — a streaming
+  `multipart/form-data` parser for large file uploads. Where the pipeline's
+  built-in multipart handling buffers the whole body via `Response.formData`,
+  this yields each part with its bytes streamed, so a multi-gigabyte upload flows
+  through at constant memory. Reach it from a handler through `request.raw`.
+  Purely additive — the existing buffered path is unchanged.
+
+### Patch Changes
+
+- 824b869: Map the host framework's body-limit error to a 413. When the API is mounted on
+  another server (Fastify's content-type parser at its `bodyLimit`, Express's
+  `body-parser`/`raw-body`, or any HTTP error carrying a 413 status), an
+  oversized body now takes the `payloadTooLarge` path instead of the generic
+  `onError`/500 — fixing e.g. a 20 MiB body returning `500` rather than `413`.
+  Recognition is shared by the interpreted and compiled engines.
+
 ## 0.4.0
 
 ### Minor Changes
