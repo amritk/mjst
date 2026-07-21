@@ -129,6 +129,16 @@ Categories:
 - **Codegen utilities:** `generate-type-definition`, `generate-index-barrel`, `parse-documentation`, `safe-accessor`
 - **Runtime helpers (referenced from generated output):** `is-object`, `validate-array`, `validate-record`, `has-ref`. In `--helpers=embedded` mode (default when `@amritk/helpers` is not resolvable from `outDir`), these sources are snapshotted at `@amritk/generate-parsers` build time and emitted into `outDir/_helpers/` so the generated output is self-contained.
 
+### `@amritk/mini` (`packages/mini`)
+
+A deliberately tiny, compilerless signals UI layer for the bundle-size-sensitive embed widget: `alien-signals` for reactivity, a capped set of DOM bindings that keep data off the `innerHTML` XSS surface (`bindText`/`bindAttr`/`bindClass`/`bindShow`/`bindValue`, plus the single sanctioned `bindHtml` sink), keyed collections (`list`), static-template cloning (`template`), and a compilerless JSX runtime (`@amritk/mini/jsx-runtime`) whose reactivity is decided by value shape — a function-valued attribute or child is a live binding, everything else is applied once. **The cap is the design:** no VDOM, no diffing, no re-render.
+
+- **The `.` entry is byte-budgeted.** Its only runtime dependency is `alien-signals`, and it imports **no** subpath module — that constraint is the whole design, because the widget bundles it. Two tests enforce it: `src/import-boundary.test.ts` walks the `.` source graph (must be `alien-signals` only, and each feature must stay free of the others), and `src/core-size-budget.test.ts` bundles the `.` entry with an esbuild metafile and asserts the gzipped size stays under budget. `"sideEffects": false` keeps everything tree-shakeable.
+- **Layered subpath exports** grow it into a framework for the dashboards (not bundle-constrained), each its own module graph so importing one pulls in none of the others: `@amritk/mini/router` (history/hash client router — `createRouter`, `matchRoute`, `<Link>`), `@amritk/mini/flow` (`Show`, `For`, `Switch`/`Match`, `Dynamic`), `@amritk/mini/forms` (field state as signals + validation via a `(values) => errors` function **or** a JSON Schema through `@amritk/runtime-validators`), and `@amritk/mini/query` (a thin `@tanstack/query-core` → signals adapter).
+- **Composition is explicit** — no runtime plugin registry / `mini.use()` (it would defeat tree-shaking) and no context/provide-inject; dependencies are prop-drilled (e.g. `<Link navigate={router.navigate}>`). `ref` is the element-extension seam.
+- **Depends on:** `alien-signals` (core). `@amritk/runtime-validators` (forms schema validation) and `@tanstack/query-core` (query) are **optional peer dependencies** — install them only for the subpath that needs them.
+- **Build:** browser-only (`lib: DOM`, `types: []`), `tsgo -p tsconfig.build.json && tsc-alias && strip-comments`. Tests use Vitest + happy-dom.
+
 ## Import Conventions
 
 - **Within a package:** use `#` subpath imports declared in that package's `package.json` (e.g. `import { foo } from '#helpers/foo'`).

@@ -94,9 +94,14 @@ describe('differential', () => {
   }
 
   // Large, real-world public specs we don't control — the documents this
-  // parser actually has to survive in the wild.
+  // parser actually has to survive in the wild. Parsing a multi-thousand-line
+  // spec twice (ours + the reference) and deep-equalling the trees is well
+  // within the default 5s locally, but the CI runner executes the workspace
+  // suites in parallel, and under that contention the biggest fixture
+  // (openai.yaml) can tip past it — so give these cases the same generous
+  // budget the other real-world differential suites use.
   for (const { name, source } of VENDORED) {
-    it(`matches yaml for vendored spec: ${name}`, () => {
+    it(`matches yaml for vendored spec: ${name}`, { timeout: 30_000 }, () => {
       expect(ours(source)).toEqual(eemeli(source, { merge: true }))
     })
   }

@@ -5,6 +5,7 @@
   "type": "module",
   "license": "MIT",
   "author": "amritk",
+  "sideEffects": false,
   "keywords": [
     "signals",
     "reactive",
@@ -60,6 +61,46 @@
       "types": "./dist/jsx-dev-runtime.d.ts",
       "import": "./dist/jsx-dev-runtime.js",
       "default": "./dist/jsx-dev-runtime.js"
+    },
+    "./router": {
+      "development": "./src/router/index.ts",
+      "types": "./dist/router/index.d.ts",
+      "import": "./dist/router/index.js",
+      "default": "./dist/router/index.js"
+    },
+    "./flow": {
+      "development": "./src/flow/index.ts",
+      "types": "./dist/flow/index.d.ts",
+      "import": "./dist/flow/index.js",
+      "default": "./dist/flow/index.js"
+    },
+    "./forms": {
+      "development": "./src/forms/index.ts",
+      "types": "./dist/forms/index.d.ts",
+      "import": "./dist/forms/index.js",
+      "default": "./dist/forms/index.js"
+    },
+    "./query": {
+      "development": "./src/query/index.ts",
+      "types": "./dist/query/index.d.ts",
+      "import": "./dist/query/index.js",
+      "default": "./dist/query/index.js"
     }
+  },
+  "peerDependencies": {
+    "@amritk/runtime-validators": "workspace:*",
+    "@tanstack/query-core": "^5"
+  },
+  "peerDependenciesMeta": {
+    "@amritk/runtime-validators": {
+      "optional": true
+    },
+    "@tanstack/query-core": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@amritk/runtime-validators": "workspace:*",
+    "@tanstack/query-core": "^5.101.2"
   }
 }
