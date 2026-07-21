@@ -1,10 +1,4 @@
 /**
- * Which documentation renderer to serve. All three read the same OpenAPI
- * document the API already serves at `openApiPath`; they differ only in look.
- */
-export type DocsUi = 'scalar' | 'swagger' | 'redoc'
-
-/**
  * Options for {@link createDocs}.
  */
 export type DocsOptions = {
@@ -14,13 +8,11 @@ export type DocsOptions = {
    * default. Point it elsewhere if you moved or proxied the document.
    */
   readonly specUrl?: string
-  /** Renderer. Defaults to `'scalar'`. */
-  readonly ui?: DocsUi
   /** Page `<title>`. Defaults to `'API Reference'`. */
   readonly title?: string
   /**
-   * Origin the renderer's script/styles load from. Defaults to the jsDelivr
-   * CDN. Override to pin a version or to serve assets from your own origin
+   * Origin the Scalar bundle loads from. Defaults to the jsDelivr CDN.
+   * Override to pin a version or to serve the script from your own origin
    * when a strict CSP forbids third-party scripts.
    */
   readonly cdn?: string
@@ -32,35 +24,25 @@ const escapeHtml = (value: string): string =>
   )
 
 /**
- * Builds the self-contained HTML for a docs page. Exported so an app that
- * serves its own routes (a Next.js page, a custom mount) can render the same
- * markup without going through {@link createDocs}.
+ * Builds the self-contained HTML for a Scalar API reference page. Exported so
+ * an app that serves its own routes (a Next.js page, a custom mount) can render
+ * the same markup without going through {@link createDocs}.
  */
 export const docsHtml = (options?: DocsOptions): string => {
   const specUrl = escapeHtml(options?.specUrl ?? '/openapi.json')
   const title = escapeHtml(options?.title ?? 'API Reference')
   const cdn = options?.cdn ?? 'https://cdn.jsdelivr.net/npm'
-  const ui = options?.ui ?? 'scalar'
 
-  const head = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title>`
-
-  if (ui === 'swagger') {
-    return `${head}<link rel="stylesheet" href="${cdn}/swagger-ui-dist/swagger-ui.css"></head><body><div id="swagger-ui"></div><script src="${cdn}/swagger-ui-dist/swagger-ui-bundle.js"></script><script>window.ui=SwaggerUIBundle({url:${JSON.stringify(specUrl)},dom_id:'#swagger-ui'})</script></body></html>`
-  }
-  if (ui === 'redoc') {
-    return `${head}</head><body><redoc spec-url="${specUrl}"></redoc><script src="${cdn}/redoc/bundles/redoc.standalone.js"></script></body></html>`
-  }
-  // Scalar: the default. One data-url script plus the standalone bundle.
-  return `${head}</head><body><script id="api-reference" data-url="${specUrl}"></script><script src="${cdn}/@scalar/api-reference"></script></body></html>`
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title></head><body><script id="api-reference" data-url="${specUrl}"></script><script src="${cdn}/@scalar/api-reference"></script></body></html>`
 }
 
 /**
- * Serves an interactive API reference page — the Swagger UI / ReDoc surface
- * FastAPI and NestJS give you out of the box, which this framework left implicit
- * behind the raw `openapi.json`. Returns a `(Request) => Response` shaped for
- * the `mounts` option, so a single line puts human-readable docs next to the
- * machine-readable document. The renderer's assets load from a CDN at view
- * time (no server dependency added); pin or self-host them via `cdn` under a
+ * Serves an interactive Scalar API reference page — the Swagger UI / ReDoc
+ * surface FastAPI and NestJS give you out of the box, which this framework left
+ * implicit behind the raw `openapi.json`. Returns a `(Request) => Response`
+ * shaped for the `mounts` option, so a single line puts human-readable docs
+ * next to the machine-readable document. Scalar's bundle loads from a CDN at
+ * view time (no server dependency added); pin or self-host it via `cdn` under a
  * strict CSP.
  *
  * @example

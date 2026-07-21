@@ -27,10 +27,8 @@ describe('create-docs', () => {
     expect(response.headers.get('allow')).toBe('GET, HEAD')
   })
 
-  it('renders swagger and redoc variants from the same spec url', () => {
-    expect(docsHtml({ ui: 'swagger', specUrl: '/v1/openapi.json' })).toContain('swagger-ui')
-    expect(docsHtml({ ui: 'swagger' })).toContain('/openapi.json')
-    expect(docsHtml({ ui: 'redoc', specUrl: '/v1/openapi.json' })).toContain('spec-url="/v1/openapi.json"')
+  it('points the reference at a custom spec url', () => {
+    expect(docsHtml({ specUrl: '/v1/openapi.json' })).toContain('data-url="/v1/openapi.json"')
   })
 
   it('escapes the title and spec url', () => {
