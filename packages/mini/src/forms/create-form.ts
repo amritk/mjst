@@ -1,14 +1,19 @@
-import { bindValue } from '../bind'
+import { bindChecked, bindValue } from '../bind'
+import { onCleanup } from '../on-cleanup'
 import type { ReadonlySignal, Signal } from '../signals'
-import { batch, computed, signal } from '../signals'
+import { batch, computed, effect, signal } from '../signals'
 import { type FormErrors, schemaToValidator } from './schema-to-validator'
 
+/** A single field's value. Text inputs give strings; checkboxes give booleans; number inputs give numbers. */
+export type FieldValue = string | number | boolean
+
 /**
- * A form's values. Fields are strings because they bind to text inputs and
- * textareas through the core `bindValue` — validation is where a string becomes
- * a typed, checked value.
+ * A form's values, keyed by field. A field's type is whatever its
+ * `initialValues` entry is — `''` for a text field, `false` for a checkbox, `0`
+ * for a number input — and `bind` wires the matching DOM binding by inspecting
+ * the element.
  */
-export type FieldValues = Record<string, string>
+export type FieldValues = Record<string, FieldValue>
 
 /**
  * How a form validates. Either a plain function from values to errors, or a
@@ -29,9 +34,9 @@ export type FormConfig<V extends FieldValues> = {
 }
 
 /** The reactive state and helpers for one field. */
-export type Field = {
+export type Field<T extends FieldValue = FieldValue> = {
   /** The field's value signal — the same one `bind` wires to the input. */
-  value: Signal<string>
+  value: Signal<T>
   /**
    * The message to display, or `undefined`. Gated on interaction: an error is
    * withheld until the field has been blurred or the form submitted, so a
@@ -61,11 +66,16 @@ export type Form<V extends FieldValues> = {
   /** Whether a submit has been attempted (drives error visibility). */
   submitted: ReadonlySignal<boolean>
   /** The reactive state and helpers for one field. Stable across calls. */
-  field: (name: keyof V & string) => Field
-  /** A `ref` callback that two-way-binds an input to a field and tracks blur — `ref={form.bind('email')}`. */
+  field: <K extends keyof V & string>(name: K) => Field<V[K]>
+  /**
+   * A `ref` callback that two-way-binds an input to a field and tracks blur —
+   * `ref={form.bind('email')}`. The binding matches the control: `checkbox`/
+   * `radio` bind `.checked`, `number`/`range` bind a coerced number, everything
+   * else binds `.value`. Cleaned up with the enclosing scope.
+   */
   bind: (name: keyof V & string) => (element: HTMLInputElement | HTMLTextAreaElement) => void
   /** Sets a field's value imperatively. */
-  setValue: (name: keyof V & string, value: string) => void
+  setValue: <K extends keyof V & string>(name: K, value: V[K]) => void
   /** Restores initial values and clears touched/submitted state. */
   reset: () => void
   /** Marks everything touched, validates, and runs `onSubmit` when valid. Use as a `<form>`'s `onSubmit`. */
@@ -88,14 +98,17 @@ export const createForm = <V extends FieldValues>(config: FormConfig<V>): Form<V
   const runValidate = toValidator(config.validate)
 
   // Every key came from `initialValues`, so its value is always present; the
-  // `?? ''` only satisfies `noUncheckedIndexedAccess`, which widens the lookup
-  // to `string | undefined` for the generic index signature.
-  const initialOf = (key: keyof V & string): string => config.initialValues[key] ?? ''
+  // cast only satisfies `noUncheckedIndexedAccess`, which widens the lookup to
+  // include `undefined` for the generic index signature.
+  const initialOf = <K extends keyof V & string>(key: K): V[K] => config.initialValues[key] as V[K]
 
-  const valueSignals = {} as Record<keyof V & string, Signal<string>>
+  // Signals are stored uniformly as `Signal<FieldValue>` so the reset/snapshot
+  // loops can write any key without hitting the "union of setters" problem;
+  // `field`/`setValue` re-narrow to the concrete field type at the boundary.
+  const valueSignals = {} as Record<keyof V & string, Signal<FieldValue>>
   const touchedSignals = {} as Record<keyof V & string, Signal<boolean>>
   for (const key of keys) {
-    valueSignals[key] = signal(initialOf(key))
+    valueSignals[key] = signal<FieldValue>(initialOf(key))
     touchedSignals[key] = signal(false)
   }
 
@@ -113,12 +126,12 @@ export const createForm = <V extends FieldValues>(config: FormConfig<V>): Form<V
 
   // Field objects are memoised so repeated `field(name)` calls (a view may read
   // one in several places) share the same signals rather than re-deriving them.
-  const fields = new Map<string, Field>()
-  const field = (name: keyof V & string): Field => {
+  const fields = new Map<string, unknown>()
+  const field = <K extends keyof V & string>(name: K): Field<V[K]> => {
     const existing = fields.get(name)
-    if (existing) return existing
-    const built: Field = {
-      value: valueSignals[name],
+    if (existing) return existing as Field<V[K]>
+    const built: Field<V[K]> = {
+      value: valueSignals[name] as unknown as Signal<V[K]>,
       error: computed(() => (touchedSignals[name]() || submitted() ? errors()[name] : undefined)),
       touched: () => touchedSignals[name](),
       dirty: computed(() => valueSignals[name]() !== initialOf(name)),
@@ -131,11 +144,26 @@ export const createForm = <V extends FieldValues>(config: FormConfig<V>): Form<V
   const bind =
     (name: keyof V & string) =>
     (element: HTMLInputElement | HTMLTextAreaElement): void => {
-      bindValue(element, valueSignals[name])
-      element.addEventListener('blur', () => touchedSignals[name](true))
+      const model = valueSignals[name]
+      // The control decides the binding: a checkbox/radio is a boolean, a
+      // number/range input is a coerced number, everything else is a string.
+      const dispose =
+        element instanceof HTMLInputElement && (element.type === 'checkbox' || element.type === 'radio')
+          ? bindChecked(element, model as unknown as Signal<boolean>)
+          : element instanceof HTMLInputElement && (element.type === 'number' || element.type === 'range')
+            ? bindNumber(element, model as unknown as Signal<number>)
+            : bindValue(element, model as unknown as Signal<string>)
+      const onBlur = (): void => touchedSignals[name](true)
+      element.addEventListener('blur', onBlur)
+      // Tear both down with the enclosing scope so a re-bound / re-mounted input
+      // does not leave the value effect and blur listener behind.
+      onCleanup(() => {
+        dispose()
+        element.removeEventListener('blur', onBlur)
+      })
     }
 
-  const setValue = (name: keyof V & string, value: string): void => valueSignals[name](value)
+  const setValue = <K extends keyof V & string>(name: K, value: V[K]): void => valueSignals[name](value)
 
   const reset = (): void =>
     batch(() => {
@@ -176,4 +204,26 @@ const toValidator = <V extends FieldValues>(validate?: FormValidate<V>): ((value
   // records what the `typeof` check has already proven.
   if (typeof validate === 'function') return validate as (values: V) => FormErrors
   return schemaToValidator(validate)
+}
+
+/**
+ * Two-way binds a number/range input to a numeric signal — the numeric sibling
+ * of the core `bindValue`. The element shows the number as text and writes back
+ * a parsed `number` on input (`NaN`, from an empty or partial entry, becomes
+ * `0`). Kept here rather than in core because only forms coerce input types.
+ */
+const bindNumber = (element: HTMLInputElement, model: Signal<number>): (() => void) => {
+  const stop = effect(() => {
+    const next = String(model())
+    if (element.value !== next) element.value = next
+  })
+  const onInput = (): void => {
+    const value = element.valueAsNumber
+    model(Number.isNaN(value) ? 0 : value)
+  }
+  element.addEventListener('input', onInput)
+  return () => {
+    stop()
+    element.removeEventListener('input', onInput)
+  }
 }

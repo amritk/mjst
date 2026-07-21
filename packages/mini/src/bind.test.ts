@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest'
 
-import { bindAttr, bindClass, bindHtml, bindShow, bindText, bindValue } from './bind'
+import { bindAttr, bindChecked, bindClass, bindHtml, bindShow, bindText, bindValue } from './bind'
 import { signal } from './signals'
 
 describe('bind', () => {
@@ -109,5 +109,51 @@ describe('bind', () => {
     stop()
     label('b')
     expect(node.textContent).toBe('a')
+  })
+
+  it('bindValue holds the signal back during IME composition, committing on end', () => {
+    const model = signal('')
+    const node = document.createElement('input')
+    bindValue(node, model)
+    node.dispatchEvent(new Event('compositionstart'))
+    // Mid-composition input must NOT reach the signal — it would tear the
+    // candidate string apart on CJK/accented entry.
+    node.value = 'partial'
+    node.dispatchEvent(new Event('input'))
+    expect(model()).toBe('')
+    // The finished text commits once on compositionend.
+    node.value = 'final'
+    node.dispatchEvent(new Event('compositionend'))
+    expect(model()).toBe('final')
+  })
+
+  it('bindChecked drives the checkbox from the signal and back', () => {
+    const on = signal(false)
+    const node = document.createElement('input')
+    node.type = 'checkbox'
+    bindChecked(node, on)
+    expect(node.checked).toBe(false)
+    on(true)
+    expect(node.checked).toBe(true)
+    // Toggling the box writes the signal on change.
+    node.checked = false
+    node.dispatchEvent(new Event('change'))
+    expect(on()).toBe(false)
+  })
+
+  it('bindChecked dispose stops both directions', () => {
+    const on = signal(true)
+    const node = document.createElement('input')
+    node.type = 'checkbox'
+    const dispose = bindChecked(node, on)
+    expect(node.checked).toBe(true)
+    dispose()
+    // Signal → element stops.
+    on(false)
+    expect(node.checked).toBe(true)
+    // Element → signal stops: toggling the box no longer writes the signal.
+    node.checked = true
+    node.dispatchEvent(new Event('change'))
+    expect(on()).toBe(false)
   })
 })

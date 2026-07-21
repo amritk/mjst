@@ -64,8 +64,9 @@ Signals are zero-argument functions, so passing one **without calling it** is al
 | `effect(fn)` | Run `fn` and re-run it whenever the signals it reads change. Returns a stop function. |
 | `effectScope(fn)` | Group effects so a single dispose tears them all down. |
 | `batch(fn)` | Coalesce several writes into one propagation pass. |
-| `watch(get, cb)` | Fire `cb(value, previous)` on change, **skipping** the initial run — mini's `watch`. |
+| `watch(get, cb, opts?)` | Fire `cb(value, previous)` on change, **skipping** the initial run — mini's `watch`. Pass `{ immediate: true }` to also run once on setup (with `previous` as `undefined`). |
 | `onCleanup(fn)` | Register teardown to run when the enclosing `effectScope` is disposed. |
+| `mount(container, component)` | Run `component` in an owning `effectScope`, append its node, and return a `dispose` that removes the node and tears the scope down. The application root — use it so top-level bindings and `onCleanup` have an owner. |
 | `Signal<T>`, `ReadonlySignal<T>` | Types for the two halves of a signal. |
 
 ### DOM bindings (`@amritk/mini`)
@@ -78,7 +79,8 @@ Each binding ties one node property to a signal-reading getter and returns the e
 | `bindAttr(node, name, get)` | Keep an attribute in sync (`false`/`null` removes it, `true` sets it bare). |
 | `bindClass(node, name, get)` | Toggle a single class. |
 | `bindShow(node, get)` | Show/hide via inline `display`. |
-| `bindValue(node, model)` | Two-way bind a text input/textarea to a string signal — mini's `v-model`. |
+| `bindValue(node, model)` | Two-way bind a text input/textarea to a string signal — mini's `v-model`. Holds writes during IME composition and commits on `compositionend`. |
+| `bindChecked(node, model)` | Two-way bind a checkbox/radio to a boolean signal — the `.checked` analogue of `bindValue`. |
 | `bindHtml(node, sanitize, get)` | The **one** sanctioned `innerHTML` sink; the sanitizer is a required argument at every call site. |
 
 ### Structure (`@amritk/mini`)
@@ -90,7 +92,9 @@ Each binding ties one node property to a signal-reading getter and returns the e
 
 ### JSX runtime (`@amritk/mini/jsx-runtime`, `@amritk/mini/jsx-dev-runtime`)
 
-The automatic runtime TypeScript targets when a package sets `"jsx": "react-jsx"` and `"jsxImportSource": "@amritk/mini"`. Exposes `jsx`, `jsxs`, `jsxDEV`, and the `JSX` namespace, plus the `Component`, `MaybeReactive`, `MiniChild`, `MiniChildren`, and `TargetedEvent` types.
+The automatic runtime TypeScript targets when a package sets `"jsx": "react-jsx"` and `"jsxImportSource": "@amritk/mini"`. Exposes `jsx`, `jsxs`, `jsxDEV`, and the `JSX` namespace, plus the `Component`, `MaybeReactive`, `MiniChild`, `MiniChildren`, `ClassValue`, `StyleValue`, and `TargetedEvent` types.
+
+SVG tags are created in the SVG namespace, so `<svg>`/`<path>`/… render as real SVG. `class` accepts a string, an array (falsy entries dropped), or a `{ name: boolean }` toggle map; `style` accepts a cssText string or a property object (camelCase keys are kebab-cased) — each still static-or-reactive by the value-shape rule.
 
 ---
 
@@ -106,13 +110,14 @@ A small client-side router for the dashboards, in history or hash mode.
 
 | Export | Purpose |
 |:---|:---|
-| `createRouter({ routes, mode?, base? })` | Matches the URL against a route table into a reactive `route` signal; returns `{ route, navigate, stop }`. Attaches its location listener immediately. |
+| `createRouter({ routes, mode?, base? })` | Matches the URL against a route table into a reactive `route` signal; returns `{ route, navigate, stop }`. Attaches its location listener immediately. The `route` state includes a parsed `query` record alongside the raw `search`. |
 | `matchRoute(pattern, path)` | Matches a `/users/:id` pattern (with an optional trailing `*` catch-all) against a pathname, returning captured params or `null`. |
 | `Link` | An `<a href>` that intercepts a plain left-click and calls `navigate` — modified clicks, non-primary buttons, and `preventDefault`ed events are left to the browser. Takes `navigate` as a prop (`navigate={router.navigate}`). |
-| `Route`, `RouterMode`, `RouterOptions`, `RouteState`, `Router`, `NavigateOptions`, `RouteParams`, `LinkProps` | Exported types. |
+| `RouterView` | Renders the matched route's view (the `view` key by default) and swaps it on navigation — the outlet that replaces a hand-written `route().route?.['view']` cast. Takes `router={router}`. |
+| `Route`, `RouterMode`, `RouterOptions`, `RouteState`, `Router`, `NavigateOptions`, `RouteParams`, `LinkProps`, `RouterViewProps` | Exported types. |
 
 ```tsx
-import { createRouter, Link } from '@amritk/mini/router'
+import { createRouter, RouterView } from '@amritk/mini/router'
 
 const router = createRouter({
   routes: [
@@ -122,10 +127,8 @@ const router = createRouter({
   ],
 })
 
-const view = () => {
-  const matched = router.route()
-  return (matched.route?.['view'] as () => HTMLElement | undefined)?.() ?? NotFound()
-}
+// RouterView reads the matched route's `view` and swaps it on navigation.
+const app = <RouterView router={router} fallback={NotFound} />
 ```
 
 ### Control flow (`@amritk/mini/flow`)
@@ -158,9 +161,9 @@ Field state (value / dirty / touched / errors as signals), submit handling, and 
 
 | Export | Purpose |
 |:---|:---|
-| `createForm({ initialValues, validate?, onSubmit? })` | Returns `{ values, errors, isValid, isDirty, isSubmitting, submitted, field, bind, setValue, reset, handleSubmit }`. Errors recompute reactively; each field withholds its message until blurred or the form is submitted. |
+| `createForm({ initialValues, validate?, onSubmit? })` | Returns `{ values, errors, isValid, isDirty, isSubmitting, submitted, field, bind, setValue, reset, handleSubmit }`. Errors recompute reactively; each field withholds its message until blurred or the form is submitted. A field's type follows its initial value (`string`, `number`, or `boolean`), and `bind` wires the matching control — `.checked` for checkbox/radio, a coerced number for number/range, `.value` otherwise. |
 | `schemaToValidator(schema)` | Compiles a JSON Schema into a `(values) => errors` function via `@amritk/runtime-validators`. |
-| `Field`, `FieldValues`, `FormConfig`, `Form`, `FormValidate`, `FormErrors` | Exported types. |
+| `Field`, `FieldValue`, `FieldValues`, `FormConfig`, `Form`, `FormValidate`, `FormErrors` | Exported types. |
 
 Validation accepts **either** a plain `(values) => errors` function **or** a JSON Schema, which is validated through `@amritk/runtime-validators` (eval-free, CSP-safe) — so a form dogfoods the mjst validation stack:
 
@@ -190,7 +193,7 @@ A thin adapter that bridges [`@tanstack/query-core`](https://tanstack.com/query)
 
 | Export | Purpose |
 |:---|:---|
-| `createQuery(client, options)` | Subscribes a `QueryObserver` and exposes `{ result, data, error, status, isPending, isLoading, isFetching, isSuccess, isError, refetch }` as signals. Call it inside a component/`effectScope` — the subscription is cleaned up with the scope. |
+| `createQuery(client, options)` | Subscribes a `QueryObserver` and exposes `{ result, data, error, status, isPending, isLoading, isFetching, isSuccess, isError, refetch }` as signals. Call it inside a component/`effectScope` — the subscription is cleaned up with the scope. `options` may be a getter, so the query key can depend on signals (`() => ({ queryKey: ['user', id()] })`) and refetch when they change. |
 | `QueryResult` | Exported type. |
 
 `@tanstack/query-core` is an **optional peer dependency** — install it only if you use `/query`.

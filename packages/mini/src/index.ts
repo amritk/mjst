@@ -10,10 +10,11 @@
  * real framework (Preact or Solid), not a new helper.
  */
 
-export { bindAttr, bindClass, bindHtml, bindShow, bindText, bindValue } from './bind'
+export { bindAttr, bindChecked, bindClass, bindHtml, bindShow, bindText, bindValue } from './bind'
 export type { Component, MaybeReactive, MiniChild, MiniChildren, TargetedEvent } from './jsx-runtime'
 export { list } from './list'
+export { mount } from './mount'
 export { onCleanup } from './on-cleanup'
 export { batch, computed, effect, effectScope, type ReadonlySignal, type Signal, signal } from './signals'
 export { type TemplateInstance, template } from './template'
-export { watch } from './watch'
+export { type WatchOptions, watch } from './watch'

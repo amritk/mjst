@@ -147,6 +147,42 @@ describe('jsx-runtime', () => {
     expect(el.style.display).toBe('none')
   })
 
+  it('creates SVG elements in the SVG namespace so they render', () => {
+    const icon = (
+      <svg viewBox="0 0 16 16" width={16} role="img" aria-label="box">
+        <title>box</title>
+        <path d="M0 0h16v16H0z" fill="currentColor" />
+      </svg>
+    )
+    // A plain createElement would put these in the HTML namespace and draw
+    // nothing; createElementNS is what makes them real SVG.
+    expect(icon.namespaceURI).toBe('http://www.w3.org/2000/svg')
+    expect(icon.getAttribute('viewBox')).toBe('0 0 16 16')
+    const path = icon.querySelector('path')
+    expect(path?.namespaceURI).toBe('http://www.w3.org/2000/svg')
+    expect(path?.getAttribute('d')).toBe('M0 0h16v16H0z')
+  })
+
+  it('resolves an array class dropping falsy entries', () => {
+    const active = false
+    const el = <div class={['card', active && 'active', 'lg']} />
+    expect(el.className).toBe('card lg')
+  })
+
+  it('resolves an object class by truthy keys, reactively', () => {
+    const open = signal(false)
+    const el = <div class={() => ({ panel: true, open: open() })} />
+    expect(el.className).toBe('panel')
+    open(true)
+    expect(el.className).toBe('panel open')
+  })
+
+  it('applies an object style, camelCase keys kebab-cased', () => {
+    const el = <div style={{ color: 'red', fontSize: '12px' }} />
+    expect(el.style.color).toBe('red')
+    expect(el.style.getPropertyValue('font-size')).toBe('12px')
+  })
+
   it('narrows currentTarget to the bound element in event handlers', () => {
     let width = -1
     const el = (

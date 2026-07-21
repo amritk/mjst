@@ -2,6 +2,7 @@ import { QueryClient } from '@tanstack/query-core'
 import { effectScope } from 'alien-signals'
 import { describe, expect, it, vi } from 'vitest'
 
+import { signal } from '../signals'
 import { createQuery } from './create-query'
 
 /** Reads how many live observers a query has, to prove teardown detaches them. */
@@ -45,6 +46,22 @@ describe('create-query', () => {
     })
     await vi.waitFor(() => expect(query.isError()).toBe(true))
     expect((query.error() as Error).message).toBe('boom')
+  })
+
+  it('refetches under a new key when the options getter changes', async () => {
+    const client = new QueryClient()
+    await client.prefetchQuery({ queryKey: ['user', 1], queryFn: async () => 'one' })
+    await client.prefetchQuery({ queryKey: ['user', 2], queryFn: async () => 'two' })
+    const id = signal(1)
+    let query!: ReturnType<typeof createQuery<string>>
+    effectScope(() => {
+      // Options as a getter: the query key depends on a signal.
+      query = createQuery<string>(client, () => ({ queryKey: ['user', id()], queryFn: async () => 'x' }))
+    })
+    await vi.waitFor(() => expect(query.data()).toBe('one'))
+    // Flipping the signal pushes new options into the observer, which refetches.
+    id(2)
+    await vi.waitFor(() => expect(query.data()).toBe('two'))
   })
 
   it('detaches the observer when its scope is disposed', async () => {

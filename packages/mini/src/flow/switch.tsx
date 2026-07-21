@@ -1,8 +1,8 @@
+import { createHost } from '../internal/create-host'
+import { renderChild } from '../internal/render-child'
 import { toFactory } from '../internal/to-factory'
 import type { MiniChildren } from '../jsx-runtime'
-import { createHost } from './create-host'
 import { MATCH, type MatchData, type MatchElement } from './match-marker'
-import { renderChild } from './render-child'
 
 /** Props for {@link Switch}. `children` are the `<Match>` branches. */
 export type SwitchProps = {

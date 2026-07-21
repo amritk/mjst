@@ -1,8 +1,8 @@
+import { createHost } from '../internal/create-host'
+import { renderChild } from '../internal/render-child'
 import { toFactory } from '../internal/to-factory'
 import { toGetter } from '../internal/to-getter'
 import type { MaybeReactive } from '../jsx-runtime'
-import { createHost } from './create-host'
-import { renderChild } from './render-child'
 
 /**
  * Props for {@link Show}. `children` and `fallback` accept either a built node

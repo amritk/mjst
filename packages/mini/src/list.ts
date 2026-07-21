@@ -21,8 +21,8 @@ import { effect, effectScope } from 'alien-signals'
 export const list = <T>(
   container: Element,
   items: () => readonly T[],
-  key: (item: T) => string,
-  create: (item: T) => HTMLElement,
+  key: (item: T, index: number) => string,
+  create: (item: T, index: number) => HTMLElement,
 ): (() => void) => {
   const live = new Map<string, { node: HTMLElement; dispose: () => void }>()
 
@@ -30,22 +30,28 @@ export const list = <T>(
     const next = items()
     const seen = new Set<string>()
     let cursor: ChildNode | null = container.firstChild
+    // The position is tracked here so `key`/`create` receive it directly —
+    // deriving it with `items().indexOf(item)` at each call site would be O(n²)
+    // and mis-handle duplicate primitives (indexOf finds the first match).
+    let index = 0
     for (const item of next) {
-      const k = key(item)
+      const k = key(item, index)
       seen.add(k)
       let entry = live.get(k)
       if (!entry) {
         // effectScope runs its body synchronously; the assignment inside is
         // definite, just invisible to the compiler — hence the non-null `!`.
         let node!: HTMLElement
+        const created = index
         const dispose = effectScope(() => {
-          node = create(item)
+          node = create(item, created)
         })
         entry = { node, dispose }
         live.set(k, entry)
       }
       if (entry.node === cursor) cursor = cursor.nextSibling
       else container.insertBefore(entry.node, cursor)
+      index++
     }
     for (const [k, entry] of live) {
       if (seen.has(k)) continue

@@ -1,6 +1,6 @@
+import { createHost } from '../internal/create-host'
+import { renderChild } from '../internal/render-child'
 import { type Component, jsx, type MiniElementProps } from '../jsx-runtime'
-import { createHost } from './create-host'
-import { renderChild } from './render-child'
 
 /** A thing `<Dynamic>` can render: an intrinsic tag name or a component function. */
 export type DynamicComponent = string | Component<never>

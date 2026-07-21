@@ -92,6 +92,32 @@ describe('list', () => {
     expect(childIds(container)).toEqual(['3', '1', '2'])
   })
 
+  it('passes the running position to key and create', () => {
+    const items = signal<readonly Item[]>([
+      { id: 'a', label: 'a' },
+      { id: 'b', label: 'b' },
+      { id: 'c', label: 'c' },
+    ])
+    const seenKey: number[] = []
+    const seenCreate: number[] = []
+    const container = document.createElement('div')
+    list(
+      container,
+      items,
+      (item, index) => {
+        seenKey.push(index)
+        return item.id
+      },
+      (item, index) => {
+        seenCreate.push(index)
+        return makeItem(item)
+      },
+    )
+    // Every item's real position reaches both callbacks — no O(n) indexOf.
+    expect(seenKey).toEqual([0, 1, 2])
+    expect(seenCreate).toEqual([0, 1, 2])
+  })
+
   it('stops reconciling and disposes all scopes on dispose', () => {
     const items = signal<readonly Item[]>([{ id: '1', label: 'a' }])
     const container = document.createElement('div')

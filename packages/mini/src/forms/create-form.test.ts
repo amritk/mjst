@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest'
 
+import { effectScope } from '../signals'
 import { createForm } from './create-form'
 
 describe('create-form', () => {
@@ -119,5 +120,46 @@ describe('create-form', () => {
   it('returns the same field object on repeated calls', () => {
     const form = createForm({ initialValues: { name: 'Ada' } })
     expect(form.field('name')).toBe(form.field('name'))
+  })
+
+  it('binds a checkbox field as a boolean', () => {
+    const form = createForm({ initialValues: { agree: false } })
+    const input = document.createElement('input')
+    input.type = 'checkbox'
+    form.bind('agree')(input)
+    // Signal → box on creation.
+    expect(input.checked).toBe(false)
+    // Box → signal on change.
+    input.checked = true
+    input.dispatchEvent(new Event('change'))
+    expect(form.values().agree).toBe(true)
+  })
+
+  it('binds a number field as a coerced number', () => {
+    const form = createForm({ initialValues: { qty: 1 } })
+    const input = document.createElement('input')
+    input.type = 'number'
+    form.bind('qty')(input)
+    expect(input.value).toBe('1')
+    input.value = '42'
+    input.dispatchEvent(new Event('input'))
+    expect(form.values().qty).toBe(42)
+    // A field validator sees the real number type.
+    expect(typeof form.values().qty).toBe('number')
+  })
+
+  it('tears down a bound input when its scope is disposed', () => {
+    const form = createForm({ initialValues: { name: 'Ada' } })
+    const input = document.createElement('input')
+    const dispose = effectScope(() => {
+      form.bind('name')(input)
+    })
+    dispose()
+    // After disposal the value binding is gone: signal writes no longer reach
+    // the element, and blur no longer marks the field touched.
+    form.setValue('name', 'Grace')
+    expect(input.value).toBe('Ada')
+    input.dispatchEvent(new Event('blur'))
+    expect(form.field('name').touched()).toBe(false)
   })
 })

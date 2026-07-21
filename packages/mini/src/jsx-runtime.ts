@@ -68,6 +68,21 @@ export type MiniChild = StaticChild | (() => string | number | boolean | null | 
 
 export type MiniChildren = MiniChild | readonly MiniChild[]
 
+/**
+ * The value forms `class` accepts. A plain string is applied verbatim; an array
+ * drops falsy entries and joins with spaces (`['btn', active && 'on']`); an
+ * object keeps the keys whose value is truthy (`{ btn: true, on: active() }`).
+ * The whole thing is still `MaybeReactive`, so wrap it in a getter to track.
+ */
+export type ClassValue = string | readonly (string | false | null | undefined)[] | Record<string, boolean>
+
+/**
+ * The value forms `style` accepts: a `cssText` string, or an object of
+ * properties (camelCase or kebab-case keys, `--custom` props included). Numbers
+ * are stringified as-is — add units yourself where CSS needs them.
+ */
+export type StyleValue = string | Record<string, string | number | null | undefined | false>
+
 // ---------------------------------------------------------------------------
 // Typed props: events, globals, per-element attributes
 // ---------------------------------------------------------------------------
@@ -78,7 +93,7 @@ export type MiniChildren = MiniChild | readonly MiniChild[]
  * may land on a descendant); only `currentTarget` — the listening element —
  * is known precisely.
  */
-export type TargetedEvent<E extends HTMLElement, Ev extends Event> = Ev & { readonly currentTarget: E }
+export type TargetedEvent<E extends Element, Ev extends Event> = Ev & { readonly currentTarget: E }
 
 /**
  * The `on*` handlers mini wires, each carrying the precise DOM event type and
@@ -88,7 +103,7 @@ export type TargetedEvent<E extends HTMLElement, Ev extends Event> = Ev & { read
  * single line here plus nothing at runtime (the generic `on*` path handles
  * any listener).
  */
-type EventHandlers<E extends HTMLElement> = {
+type EventHandlers<E extends Element> = {
   onClick?: (event: TargetedEvent<E, MouseEvent>) => void
   onInput?: (event: TargetedEvent<E, InputEvent>) => void
   onChange?: (event: TargetedEvent<E, Event>) => void
@@ -107,7 +122,7 @@ type EventHandlers<E extends HTMLElement> = {
  * type so `ref` lands on the concrete node (`<button ref>` gives an
  * `HTMLButtonElement`).
  */
-type SpecialProps<E extends HTMLElement> = {
+type SpecialProps<E extends Element> = {
   children?: MiniChildren
   /**
    * Called with the created element after its children are appended — the
@@ -128,11 +143,11 @@ type SpecialProps<E extends HTMLElement> = {
 
 /** Global attributes valid on any element. Each is static-or-reactive. */
 type GlobalAttributes = {
-  class?: MaybeReactive<string>
+  class?: MaybeReactive<ClassValue>
   id?: MaybeReactive<string>
   title?: MaybeReactive<string | null>
   role?: MaybeReactive<string>
-  style?: MaybeReactive<string>
+  style?: MaybeReactive<StyleValue>
   tabindex?: MaybeReactive<number | string>
   hidden?: MaybeReactive<boolean>
   draggable?: MaybeReactive<boolean>
@@ -173,7 +188,79 @@ type ElementAttributes = {
     rows?: MaybeReactive<number | string>
   }
   label: { for?: MaybeReactive<string> }
+  form: {
+    action?: MaybeReactive<string>
+    method?: MaybeReactive<'get' | 'post'>
+    novalidate?: MaybeReactive<boolean>
+    autocomplete?: MaybeReactive<string>
+  }
+  select: {
+    value?: MaybeReactive<string>
+    name?: MaybeReactive<string>
+    disabled?: MaybeReactive<boolean>
+    required?: MaybeReactive<boolean>
+    multiple?: MaybeReactive<boolean>
+  }
+  option: {
+    value?: MaybeReactive<string>
+    selected?: MaybeReactive<boolean>
+    disabled?: MaybeReactive<boolean>
+  }
 }
+
+/**
+ * The presentational and geometry attributes SVG elements reach for most.
+ * Kebab-case names (`stroke-width`, `stop-color`) are written as string keys, as
+ * they appear in markup. Anything not listed still comes through `aria-*` /
+ * `data-*` or a `ref`, matching how the HTML table stays scoped to what's used.
+ */
+type SvgAttributes = {
+  viewBox?: MaybeReactive<string>
+  xmlns?: MaybeReactive<string>
+  width?: MaybeReactive<string | number>
+  height?: MaybeReactive<string | number>
+  x?: MaybeReactive<string | number>
+  y?: MaybeReactive<string | number>
+  x1?: MaybeReactive<string | number>
+  y1?: MaybeReactive<string | number>
+  x2?: MaybeReactive<string | number>
+  y2?: MaybeReactive<string | number>
+  cx?: MaybeReactive<string | number>
+  cy?: MaybeReactive<string | number>
+  r?: MaybeReactive<string | number>
+  rx?: MaybeReactive<string | number>
+  ry?: MaybeReactive<string | number>
+  d?: MaybeReactive<string>
+  points?: MaybeReactive<string>
+  transform?: MaybeReactive<string>
+  fill?: MaybeReactive<string>
+  stroke?: MaybeReactive<string>
+  opacity?: MaybeReactive<string | number>
+  offset?: MaybeReactive<string | number>
+  href?: MaybeReactive<string>
+  preserveAspectRatio?: MaybeReactive<string>
+  gradientUnits?: MaybeReactive<string>
+  gradientTransform?: MaybeReactive<string>
+  'stroke-width'?: MaybeReactive<string | number>
+  'stroke-linecap'?: MaybeReactive<'butt' | 'round' | 'square'>
+  'stroke-linejoin'?: MaybeReactive<'miter' | 'round' | 'bevel'>
+  'stroke-dasharray'?: MaybeReactive<string | number>
+  'stroke-dashoffset'?: MaybeReactive<string | number>
+  'fill-opacity'?: MaybeReactive<string | number>
+  'fill-rule'?: MaybeReactive<'nonzero' | 'evenodd'>
+  'stroke-opacity'?: MaybeReactive<string | number>
+  'stop-color'?: MaybeReactive<string>
+  'stop-opacity'?: MaybeReactive<string | number>
+  'clip-path'?: MaybeReactive<string>
+  'text-anchor'?: MaybeReactive<'start' | 'middle' | 'end'>
+}
+
+/** The full prop type for one SVG (namespaced) element. */
+export type SvgProps<Tag extends keyof SVGElementTagNameMap> = GlobalAttributes &
+  AriaDataAttributes &
+  SpecialProps<SVGElementTagNameMap[Tag]> &
+  EventHandlers<SVGElementTagNameMap[Tag]> &
+  SvgAttributes
 
 /** The full prop type for one intrinsic (tag-named) element. */
 export type IntrinsicProps<Tag extends keyof HTMLElementTagNameMap> = GlobalAttributes &
@@ -198,14 +285,86 @@ export type MiniElementProps = { readonly [prop: string]: unknown }
 // Runtime
 // ---------------------------------------------------------------------------
 
+/** Tag names that must be created in the SVG namespace, not as HTML elements. */
+const SVG_TAGS = new Set([
+  'svg',
+  'g',
+  'path',
+  'circle',
+  'ellipse',
+  'line',
+  'rect',
+  'polyline',
+  'polygon',
+  'text',
+  'tspan',
+  'defs',
+  'use',
+  'symbol',
+  'image',
+  'marker',
+  'pattern',
+  'mask',
+  'clipPath',
+  'linearGradient',
+  'radialGradient',
+  'stop',
+  'filter',
+  'foreignObject',
+])
+
+const SVG_NS = 'http://www.w3.org/2000/svg'
+
+/**
+ * Creates the backing element, choosing the SVG namespace for SVG tags so
+ * `<svg>`/`<path>`/… are real `SVGElement`s that actually render (a plain
+ * `createElement('svg')` makes an inert HTML element in the wrong namespace).
+ */
+const createElement = (tag: string): HTMLElement | SVGElement =>
+  SVG_TAGS.has(tag) ? document.createElementNS(SVG_NS, tag) : document.createElement(tag)
+
 /**
  * Applies one attribute with `bindAttr` semantics: `false`/`null`/`undefined`
  * remove it, `true` sets it bare, everything else is stringified. Shared by
  * the static and reactive paths so both behave identically.
  */
-const setAttribute = (element: HTMLElement, name: string, value: unknown): void => {
+const setAttribute = (element: Element, name: string, value: unknown): void => {
   if (value === false || value === null || value === undefined) element.removeAttribute(name)
   else element.setAttribute(name, value === true ? '' : String(value))
+}
+
+/** Collapses a {@link ClassValue} (string, array, or toggle-map) into a className string. */
+const resolveClass = (value: unknown): string => {
+  if (Array.isArray(value)) return value.filter(Boolean).join(' ')
+  if (value !== null && typeof value === 'object') {
+    return Object.entries(value)
+      .filter(([, on]) => on)
+      .map(([name]) => name)
+      .join(' ')
+  }
+  return value === null || value === undefined || value === false ? '' : String(value)
+}
+
+/** Converts a camelCase style key to its kebab-case CSS name (leaving `--custom` props alone). */
+const cssName = (key: string): string =>
+  key.startsWith('--') ? key : key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)
+
+/** Applies a {@link StyleValue}: a string sets `style` wholesale, an object sets each property. */
+const applyStyle = (element: Element, value: unknown): void => {
+  const style = (element as HTMLElement | SVGElement).style
+  if (value === null || value === undefined || value === false) {
+    element.removeAttribute('style')
+    return
+  }
+  if (typeof value === 'object') {
+    style.cssText = ''
+    for (const [key, entry] of Object.entries(value)) {
+      if (entry === null || entry === undefined || entry === false) continue
+      style.setProperty(cssName(key), String(entry))
+    }
+    return
+  }
+  setAttribute(element, 'style', value)
 }
 
 /**
@@ -214,7 +373,7 @@ const setAttribute = (element: HTMLElement, name: string, value: unknown): void 
  * makes `{cond && <span>…</span>}` work for build-time conditionals. A
  * function child becomes a reactive text node bound to the values it reads.
  */
-const appendChildren = (element: HTMLElement, children: MiniChildren): void => {
+const appendChildren = (element: Element, children: MiniChildren): void => {
   if (children === null || children === undefined || typeof children === 'boolean') return
   if (Array.isArray(children)) {
     for (const child of children) appendChildren(element, child as MiniChildren)
@@ -250,7 +409,7 @@ export const jsx = (tag: string | Component<never>, props: MiniElementProps, _ke
   // bindings) is the only thing that ever updates afterwards.
   if (typeof tag === 'function') return (tag as (props: MiniElementProps) => HTMLElement)(props)
 
-  const element = document.createElement(tag)
+  const element = createElement(tag)
   let ref: ((el: HTMLElement) => void) | undefined
 
   for (const [name, value] of Object.entries(props)) {
@@ -265,7 +424,16 @@ export const jsx = (tag: string | Component<never>, props: MiniElementProps, _ke
       // Reactive visibility. A getter tracks; a static boolean is wrapped so
       // one code path (bindShow) handles both.
       const get = typeof value === 'function' ? (value as () => boolean) : () => value as boolean
-      bindShow(element, get)
+      bindShow(element as HTMLElement, get)
+    } else if (name === 'class') {
+      // `class` accepts a string, an array, or a toggle-map; a function tracks.
+      // Everything funnels through `resolveClass` so both forms behave alike.
+      if (typeof value === 'function') effect(() => setAttribute(element, 'class', resolveClass(value())))
+      else setAttribute(element, 'class', resolveClass(value))
+    } else if (name === 'style') {
+      // `style` accepts a cssText string or a property object; a function tracks.
+      if (typeof value === 'function') effect(() => applyStyle(element, (value as () => unknown)()))
+      else applyStyle(element, value)
     } else if (name.startsWith('on') && typeof value === 'function') {
       // onClick → click, onPointerDown → pointerdown. Plain listener, bubble
       // phase — options and delegation are out of scope by charter.
@@ -280,8 +448,8 @@ export const jsx = (tag: string | Component<never>, props: MiniElementProps, _ke
     }
   }
 
-  ref?.(element)
-  return element
+  ref?.(element as HTMLElement)
+  return element as HTMLElement
 }
 
 /**
@@ -313,10 +481,19 @@ export const jsxDEV = (
  * expression IS the `HTMLElement` it creates, which is why a JSX expression
  * can be passed anywhere mini expects a node and components need no wrapper.
  */
+/**
+ * SVG tag names that do not also name an HTML element. The overlapping few
+ * (`a`, `title`, `script`, `style`) stay on their HTML typing — `href` and the
+ * globals cover their SVG use — so the two maps merge without colliding.
+ */
+type SvgOnlyTag = Exclude<keyof SVGElementTagNameMap, keyof HTMLElementTagNameMap>
+
 export namespace JSX {
   export type Element = HTMLElement
   export type IntrinsicElements = {
     [Tag in keyof HTMLElementTagNameMap]: IntrinsicProps<Tag>
+  } & {
+    [Tag in SvgOnlyTag]: SvgProps<Tag>
   }
   export type ElementChildrenAttribute = {
     children: MiniChildren
