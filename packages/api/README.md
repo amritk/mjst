@@ -164,12 +164,12 @@ if (reply.status === 404) /* declared, typed, no body */;
   gateway HTML page under a JSON status) throws a recognizable error —
   `isMalformedBodyError(error)` — carrying the consumed `Response` and the
   parse error as `cause`, instead of a bare `SyntaxError`.
-- **Wire formats beyond JSON are opt-in imports:** JSON bodies and query
-  serialization (array values repeat the key) are built in; contracts with
-  `bodyType: 'form'` / `'multipart'` (urlencoded pairs / `FormData` with
-  `File` values intact) need their serializer registered, and `{param}` path
-  templates need `buildParamPath` (segment-encoded; greedy `{path+}` keeps
-  its slashes):
+- **Wire formats beyond JSON are opt-in imports:** JSON bodies, the raw
+  `text`/`bytes` bodies (sent verbatim), and query serialization (array values
+  repeat the key) are all built in; contracts with `bodyType: 'form'` /
+  `'multipart'` (urlencoded pairs / `FormData` with `File` values intact) need
+  their serializer registered, and `{param}` path templates need
+  `buildParamPath` (segment-encoded; greedy `{path+}` keeps its slashes):
 
   ```ts
   import { buildParamPath, createClient, formBodySerializer, multipartBodySerializer } from '@amritk/api'
@@ -332,9 +332,10 @@ Writing an adapter for anything else is ~15 lines: construct one
   declares an array; undeclared keys pass through as strings so
   `additionalProperties` rules still apply.
 - Declaring `request.body` makes a body required. The default encoding is
-  JSON; `bodyType: 'form'` and `bodyType: 'multipart'` switch it (see below).
-  A JSON body that fails to parse is a `400 { error: 'invalid_json' }`; a
-  form/multipart body that fails to parse is a `400 { error: 'invalid_body' }`.
+  JSON; `bodyType: 'form'`, `'multipart'`, `'text'`, and `'bytes'` switch it
+  (see below). A JSON body that fails to parse is a `400 { error:
+  'invalid_json' }`; a form/multipart body that fails to parse is a `400 {
+  error: 'invalid_body' }`.
 - A request whose `content-type` contradicts the declared body type answers
   `415 { error: 'unsupported_media_type' }` before any read. A request with
   *no* content-type gets the benefit of the doubt and fails on the parse
@@ -444,6 +445,33 @@ on Node, native on Workers/Bun/Deno) over the same shared buffered read as
 everything else — `maxBodyBytes` still caps uploads. Repeated file keys keep
 the last file; repeated string keys accumulate when the schema declares an
 array.
+
+### Raw text and binary bodies
+
+`bodyType: 'text'` and `'bytes'` skip parsing entirely: the body is validated
+verbatim against the schema and handed to the handler as a `string` (decoded)
+or a `Uint8Array` — a `text/csv` upload or a binary blob that still rides the
+typed contract and the typed client, no hand-rolled `fetch` required. The 415
+check is lenient (any `text/*` for text, any media type for bytes), so the
+schema is the real gate.
+
+```ts
+const importCsv = defineContract({
+  method: 'post',
+  path: '/import',
+  // { type: 'string' } for text; {} accepts any bytes.
+  request: { body: { type: 'string', minLength: 1 }, bodyType: 'text' },
+  responses: { 200: { body: { type: 'object', properties: { rows: { type: 'integer' } }, required: ['rows'] } } },
+})
+
+// server: the handler receives the raw string
+implementRoute(importCsv, ({ body }) => ({ status: 200, body: { rows: body.split('\n').length } }))
+
+// client: the body goes on the wire unchanged. text/bytes are built in — no
+// serializer to register. A default content type is stamped only when nothing
+// else set one, so override it per call for a specific media type.
+await client.importCsv({ body: csvText, headers: { 'content-type': 'text/csv' } })
+```
 
 Sending these formats from the derived client is opt-in: register
 `formBodySerializer` / `multipartBodySerializer` in `createClient` (see the
@@ -775,13 +803,22 @@ const api = createApi({ routes: [listUsers], context: createContext })
 
 Two touch points, both first-class. Better Auth's own endpoints are a
 self-contained fetch handler that owns `/api/auth/*` — mount it by prefix and
-the raw `Request`/`Response` pass straight through (streaming intact):
+the raw `Request`/`Response` pass straight through (streaming intact). The
+mount handler also receives the platform `env` and `executionContext`, so a
+per-request, env-dependent instance (secrets and the DB URL live on `env`,
+which only exists inside `fetch` on Cloudflare Workers) can be built right
+there:
 
 ```ts
 export const auth = betterAuth({ /* ... */ })
 
 const handler = toFetchHandler(api, {
   mounts: { '/api/auth': (request) => auth.handler(request) },
+})
+
+// Workers: build the instance from env inside the mount.
+const workerHandler = toFetchHandler(api, {
+  mounts: { '/api/auth': (request, env) => makeAuth(env as Env).handler(request) },
 })
 // Express instead: app.all('/api/auth/*', toNodeHandler(auth)); app.use(toNodeHandler(api))
 // Compiled: compileToModule({ ..., mounts: { '/api/auth': 'authMountHandler' } })
@@ -974,9 +1011,9 @@ yours:
 
 ## Scope notes
 
-- Request bodies validate as JSON, form-encoded, or multipart per the
-  contract's `bodyType`; raw bytes are always available via
-  `readText`/`readBytes` (webhook signatures), and raw/streaming
+- Request bodies validate as JSON, form-encoded, multipart, or raw
+  `text`/`bytes` per the contract's `bodyType`; the raw bytes are always also
+  available via `readText`/`readBytes` (webhook signatures), and raw/streaming
   **responses** are first-class via `contentType`.
 - Route paths use OpenAPI syntax (`/users/{id}`); a parameter owns its whole
   segment. A greedy tail parameter — `/files/{path+}`, the AWS API Gateway

@@ -81,6 +81,7 @@ Each binding ties one node property to a signal-reading getter and returns the e
 | `bindShow(node, get)` | Show/hide via inline `display`. |
 | `bindValue(node, model)` | Two-way bind a text input/textarea to a string signal — mini's `v-model`. Holds writes during IME composition and commits on `compositionend`. |
 | `bindChecked(node, model)` | Two-way bind a checkbox/radio to a boolean signal — the `.checked` analogue of `bindValue`. |
+| `bindSelect(node, model)` | Two-way bind a `<select>` to a string signal — sets `.value` (the property, so the option selects) and writes back on `change`. |
 | `bindHtml(node, sanitize, get)` | The **one** sanctioned `innerHTML` sink; the sanitizer is a required argument at every call site. |
 
 ### Structure (`@amritk/mini`)

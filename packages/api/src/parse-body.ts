@@ -22,6 +22,14 @@ export const matchesBodyType = (contentType: string, bodyType: BodyType): boolea
       return mediaType === 'application/x-www-form-urlencoded'
     case 'multipart':
       return mediaType === 'multipart/form-data'
+    case 'text':
+      // Any textual media type (text/csv, text/plain, …). The parse is a plain
+      // decode, so the schema — not the media type — is the real gate.
+      return mediaType.startsWith('text/')
+    case 'bytes':
+      // Raw bytes carry no structure to contradict; accept whatever the client
+      // labelled them (application/octet-stream, application/pdf, image/*, …).
+      return true
   }
 }
 

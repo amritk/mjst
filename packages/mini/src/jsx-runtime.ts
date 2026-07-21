@@ -180,12 +180,24 @@ type ElementAttributes = {
     disabled?: MaybeReactive<boolean>
     required?: MaybeReactive<boolean>
     autocomplete?: MaybeReactive<string>
+    name?: MaybeReactive<string>
+    checked?: MaybeReactive<boolean>
+    /** File-input filter, e.g. `'image/*'` or `'.csv,text/csv'`. */
+    accept?: MaybeReactive<string>
+    min?: MaybeReactive<number | string>
+    max?: MaybeReactive<number | string>
+    step?: MaybeReactive<number | string>
+    multiple?: MaybeReactive<boolean>
+    readonly?: MaybeReactive<boolean>
   }
   textarea: {
     value?: MaybeReactive<string>
     placeholder?: MaybeReactive<string>
     disabled?: MaybeReactive<boolean>
     rows?: MaybeReactive<number | string>
+    name?: MaybeReactive<string>
+    required?: MaybeReactive<boolean>
+    readonly?: MaybeReactive<boolean>
   }
   label: { for?: MaybeReactive<string> }
   form: {

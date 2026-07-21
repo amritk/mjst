@@ -122,6 +122,27 @@ describe('to-fetch-handler', () => {
     expect(sibling.status).toBe(404)
   })
 
+  it('passes env and executionContext through to mount handlers', async () => {
+    // The env-dependent sub-router shape: Better Auth on Workers reads secrets
+    // and the DB URL from env, which only exists inside fetch.
+    const seen: Array<{ env: unknown; ctx: unknown }> = []
+    const mounted = toFetchHandler(createApi({ routes: [empty] }), {
+      mounts: {
+        '/api/auth': (_request, env, executionContext) => {
+          seen.push({ env, ctx: executionContext })
+          const tenant = (env as { tenant?: string } | undefined)?.tenant ?? null
+          return Response.json({ tenant }, { status: 418 })
+        },
+      },
+    })
+    const ctx = { waitUntil: () => undefined }
+    const reply = await mounted(new Request('http://localhost/api/auth/session'), { tenant: 'acme' }, ctx)
+    expect(reply.status).toBe(418)
+    expect(await reply.json()).toEqual({ tenant: 'acme' })
+    expect(seen[0]?.env).toEqual({ tenant: 'acme' })
+    expect(seen[0]?.ctx).toBe(ctx)
+  })
+
   it('rejects mount prefixes without a leading slash at construction', () => {
     expect(() =>
       toFetchHandler(createApi({ routes: [empty] }), { mounts: { 'api/auth': () => new Response(null) } }),

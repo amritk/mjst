@@ -141,6 +141,11 @@ const BODY_MEDIA_TYPES = {
   json: 'application/json',
   form: 'application/x-www-form-urlencoded',
   multipart: 'multipart/form-data',
+  // Raw encodings document a representative default media type; the actual
+  // request may carry any textual (text/*) or binary type — the 415 check is
+  // deliberately lenient there (see matchesBodyType).
+  text: 'text/plain',
+  bytes: 'application/octet-stream',
 } as const
 
 /** Matches a greedy `{name+}` path segment (parse-path-pattern's syntax). */

@@ -54,9 +54,11 @@ export type CompileModuleOptions = OpenApiExtras & {
   /**
    * Prefix-mounted sub-handlers, as `{ '/api/auth': 'authHandler' }` where the
    * value is an export name (in the routes module) of a
-   * `(request: Request) => Response | Promise<Response>` function. Checked
-   * before routing with the raw Request passed straight through — the
-   * compiled equivalent of `toFetchHandler`'s `mounts` option.
+   * `(request: Request, env: unknown, executionContext: unknown) => Response |
+   * Promise<Response>` function. Checked before routing with the raw Request —
+   * and the platform `env`/`executionContext` — passed straight through, so an
+   * env-dependent sub-router (Better Auth on Workers) works. The compiled
+   * equivalent of `toFetchHandler`'s `mounts` option.
    */
   readonly mounts?: Readonly<Record<string, string>>
   /**
@@ -157,24 +159,28 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   // matches the runtime adapters so both engines cut off at the same byte.
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES
   const unboundedBody = maxBodyBytes === Number.POSITIVE_INFINITY
-  // The onError and observe contracts include env/executionContext, so route
-  // functions must thread the platform arguments even without a context factory.
-  const emitContext: EmitContext = {
-    contextExport,
-    needsPlatform:
-      contextExport !== undefined ||
-      onErrorExport !== undefined ||
-      observeExport !== undefined ||
-      observeUnmatchedExport !== undefined,
-    compileExport,
-    validateResponses,
-  }
 
   const mounts = Object.entries(options.mounts ?? {}).map(([prefix, exportName]) => {
     if (!prefix.startsWith('/')) throw new Error(`Mount prefix must start with '/': '${prefix}'`)
     assertIdentifier(exportName, 'Mount export')
     return [prefix.length > 1 && prefix.endsWith('/') ? prefix.slice(0, -1) : prefix, exportName] as const
   })
+
+  // The onError and observe contracts include env/executionContext, and mounts
+  // receive them too (an env-dependent sub-router like Better Auth on Workers),
+  // so route functions must thread the platform arguments even without a
+  // context factory.
+  const emitContext: EmitContext = {
+    contextExport,
+    needsPlatform:
+      contextExport !== undefined ||
+      onErrorExport !== undefined ||
+      observeExport !== undefined ||
+      observeUnmatchedExport !== undefined ||
+      mounts.length > 0,
+    compileExport,
+    validateResponses,
+  }
 
   const used = {
     coercePrimitive: false,
@@ -975,6 +981,17 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
         ...guardAndRun,
         `  }, (error) => isPayloadTooLargeError(error) ? payloadTooLarge(${ERROR_ARGS}) : invalidJson(${ERROR_ARGS}))`,
       )
+    } else if (bodyType === 'text' || bodyType === 'bytes') {
+      used['invalidBody'] = true
+      // Raw encodings: the decoded string (readText) or the bytes (readBytes)
+      // are validated against the schema as-is, no parse step to fail — so the
+      // rejection handler only distinguishes an over-cap read from a read error.
+      const reader = bodyType === 'text' ? 'readText' : 'readBytes'
+      lines.push(
+        `  return apiRequest.${reader}().then((body) => {`,
+        ...guardAndRun,
+        `  }, (error) => isPayloadTooLargeError(error) ? payloadTooLarge(${ERROR_ARGS}) : invalidBody(${ERROR_ARGS}))`,
+      )
     } else if (bodyType === 'form') {
       used['parseFormBody'] = true
       used['invalidBody'] = true
@@ -1080,8 +1097,11 @@ const emitDispatch = (
     ...(observeUnmatchedExport === undefined ? [] : ['  const missStart = performance.now()']),
   )
   for (const [prefix, exportName] of mounts) {
+    // Mounts get the platform arguments (Better Auth on Workers reads secrets
+    // from env); their presence forced needsPlatform, so env/executionContext
+    // are in scope here.
     lines.push(
-      `  if (rawPath === ${JSON.stringify(prefix)} || rawPath.startsWith(${JSON.stringify(prefix + '/')})) return ${exportName}(request)`,
+      `  if (rawPath === ${JSON.stringify(prefix)} || rawPath.startsWith(${JSON.stringify(prefix + '/')})) return ${exportName}(request, env, executionContext)`,
     )
   }
   if (openApiPath !== undefined) {

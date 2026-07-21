@@ -85,9 +85,11 @@ const compileBody = (
 ): CompiledBody | undefined => {
   if (schema === undefined) return undefined
   const type = bodyType ?? 'json'
-  // Form and multipart fields arrive as strings, so they coerce exactly like
-  // query parameters; JSON values are already typed and skip the plan.
-  return { ...compile(schema), bodyType: type, coercions: type === 'json' ? NO_COERCIONS : buildCoercionPlan(schema) }
+  // Only form and multipart fields arrive as strings needing coercion (exactly
+  // like query parameters). JSON values are already typed, and raw text/bytes
+  // are handed over unparsed — all three skip the plan.
+  const coercions = type === 'form' || type === 'multipart' ? buildCoercionPlan(schema) : NO_COERCIONS
+  return { ...compile(schema), bodyType: type, coercions }
 }
 
 /**

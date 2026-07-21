@@ -10,7 +10,7 @@
  * real framework (Preact or Solid), not a new helper.
  */
 
-export { bindAttr, bindChecked, bindClass, bindHtml, bindShow, bindText, bindValue } from './bind'
+export { bindAttr, bindChecked, bindClass, bindHtml, bindSelect, bindShow, bindText, bindValue } from './bind'
 export type { Component, MaybeReactive, MiniChild, MiniChildren, TargetedEvent } from './jsx-runtime'
 export { list } from './list'
 export { mount } from './mount'

@@ -254,9 +254,15 @@ const runRoute = async (
       body =
         bodyType === 'json'
           ? await request.readBody()
-          : bodyType === 'form'
-            ? parseFormBody(await request.readText(), route.body.coercions)
-            : await parseMultipartBody(await request.readBytes(), contentType, route.body.coercions)
+          : bodyType === 'text'
+            ? // Raw text: the decoded body, validated against the schema as-is.
+              await request.readText()
+            : bodyType === 'bytes'
+              ? // Raw bytes: handed to the handler untouched (uploads, binary).
+                await request.readBytes()
+              : bodyType === 'form'
+                ? parseFormBody(await request.readText(), route.body.coercions)
+                : await parseMultipartBody(await request.readBytes(), contentType, route.body.coercions)
     } catch (error) {
       if (isPayloadTooLargeError(error)) return errors?.payloadTooLarge?.(request) ?? PAYLOAD_TOO_LARGE
       if (bodyType === 'json') return errors?.invalidJson?.(request) ?? INVALID_JSON
