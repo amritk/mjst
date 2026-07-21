@@ -30,9 +30,14 @@ export default defineConfig({
       { find: /^@amritk\/resolve-refs$/, replacement: resolve(root, 'packages/resolve-refs/src/index.ts') },
       { find: /^@amritk\/yaml$/, replacement: resolve(root, 'packages/yaml/src/index.ts') },
       { find: /^@amritk\/lint$/, replacement: resolve(root, 'packages/lint/src/index.ts') },
+      // mini's JSX transform emits `import { jsx } from '@amritk/mini/jsx-runtime'`,
+      // so the runtime subpaths must resolve to source (more specific first).
+      { find: /^@amritk\/mini\/jsx-runtime$/, replacement: resolve(root, 'packages/mini/src/jsx-runtime.ts') },
+      { find: /^@amritk\/mini\/jsx-dev-runtime$/, replacement: resolve(root, 'packages/mini/src/jsx-dev-runtime.ts') },
+      { find: /^@amritk\/mini$/, replacement: resolve(root, 'packages/mini/src/index.ts') },
     ],
   },
   test: {
-    include: ['packages/**/*.test.ts'],
+    include: ['packages/**/*.test.ts', 'packages/**/*.test.tsx'],
   },
 })

@@ -20,7 +20,8 @@ mjst/
 │   ├── adapters/              # @amritk/adapters — convert external schemas (TypeBox, …) to JSON Schema
 │   ├── resolve-refs/          # @amritk/resolve-refs — inline internal/cross-file/remote $refs
 │   ├── yaml/                  # @amritk/yaml — tiny YAML parser with exact source positions
-│   └── helpers/               # @amritk/helpers — shared schema utilities + runtime
+│   ├── helpers/               # @amritk/helpers — shared schema utilities + runtime
+│   └── mini/                  # @amritk/mini — tiny signals UI layer (DOM bindings + compilerless JSX)
 ├── .claude/                   # Developer guidelines
 ├── .changeset/                # Changesets config (release automation)
 ├── .github/                   # CI, release, issue & PR templates
