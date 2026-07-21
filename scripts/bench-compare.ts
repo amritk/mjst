@@ -2,6 +2,8 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { gzipSync } from 'node:zlib'
+import { build } from 'esbuild'
 
 import { fmtOps, NOISY_SPREAD } from '../packages/generate-parsers/bench/measure.ts'
 
@@ -52,12 +54,14 @@ type Row = {
   readonly suite: string
   readonly caseName: string
   readonly metric: string
-  /** true → ops/s (bigger is better); false → ms (smaller is better) */
+  /** true → ops/s (bigger is better); false → ms/bytes (smaller is better) */
   readonly higherIsBetter: boolean
   readonly base: Stats | null | 'failed'
   readonly head: Stats | null | 'failed'
   /** false when either tree's worker reported a parity failure for this case. */
   readonly parityOk?: boolean
+  /** Display unit. Defaults to ops/ms from `higherIsBetter`; `'bytes'` renders a gzipped size with no spread. */
+  readonly unit?: 'bytes'
 }
 
 const args = process.argv.slice(2)
@@ -79,7 +83,7 @@ const outputPath = argValue('--output')
 const baselineLabel = argValue('--baseline-label') ?? 'main'
 
 /** Suite filter for quick local runs: `--suites api` or `--suites parsers,codegen`. CI runs all. */
-const ALL_SUITES = ['parsers', 'validators', 'api', 'codegen'] as const
+const ALL_SUITES = ['parsers', 'validators', 'api', 'codegen', 'bundle'] as const
 const suitesArg = argValue('--suites')
 const suites = new Set<string>(suitesArg === undefined ? ALL_SUITES : suitesArg.split(','))
 for (const name of suites) {
@@ -189,11 +193,68 @@ const codegenStats = (tree: string, schema: unknown, mode: string): Stats | 'fai
   }
 }
 
-const cell = (stats: Stats | null | 'failed', higherIsBetter: boolean): string => {
+const cell = (stats: Stats | null | 'failed', higherIsBetter: boolean, unit?: 'bytes'): string => {
   if (stats === 'failed') return '⚠ worker failed'
   if (!stats) return 'n/a (new case)'
+  // Bundle sizes are deterministic, so there is no spread to report.
+  if (unit === 'bytes') return fmtBytes(stats.median)
   const value = higherIsBetter ? fmtOps(stats.median) : `${stats.median.toFixed(2)}ms`
   return `${value} ±${(stats.spread * 100).toFixed(0)}%`
+}
+
+/** Formats a gzipped byte count as e.g. `2,421 B`. */
+const fmtBytes = (bytes: number): string => `${Math.round(bytes).toLocaleString('en-US')} B`
+
+/**
+ * The mini entries whose bundled, gzipped size the `bundle` suite tracks. The
+ * charter for `@amritk/mini` is that its `.` entry costs the size-sensitive
+ * widget zero extra bytes when subpath features are added, so surfacing the
+ * `core (.)` delta right in the PR description makes a regression impossible to
+ * miss. Optional peer deps are marked external — an app that opts into `/forms`
+ * or `/query` already ships them — so each number reflects mini's own code.
+ */
+const MINI_BUNDLE_CASES: readonly { name: string; entry: string; external: readonly string[] }[] = [
+  { name: 'core (.)', entry: 'packages/mini/src/index.ts', external: [] },
+  { name: 'flow', entry: 'packages/mini/src/flow/index.ts', external: [] },
+  { name: 'router', entry: 'packages/mini/src/router/index.ts', external: [] },
+  { name: 'forms', entry: 'packages/mini/src/forms/index.ts', external: ['@amritk/runtime-validators'] },
+  { name: 'query', entry: 'packages/mini/src/query/index.ts', external: ['@tanstack/query-core'] },
+]
+
+/**
+ * Gzipped size of a bundled mini entry in one tree, or `null` when the entry
+ * does not exist there — a subpath the baseline predates renders "n/a (new
+ * case)" rather than failing, exactly like a new bench case. The size is
+ * deterministic, so it is measured once (spread 0) instead of through the ABBA
+ * protocol the timed suites need.
+ */
+const measureBundle = async (
+  tree: string,
+  entry: string,
+  external: readonly string[],
+): Promise<Stats | null | 'failed'> => {
+  const absEntry = join(tree, entry)
+  if (!existsSync(absEntry)) return null
+  try {
+    const result = await build({
+      entryPoints: [absEntry],
+      absWorkingDir: tree,
+      bundle: true,
+      format: 'esm',
+      minify: true,
+      write: false,
+      platform: 'browser',
+      target: 'es2022',
+      external: [...external],
+    })
+    const bytes = gzipSync(result.outputFiles[0]?.contents ?? new Uint8Array()).length
+    return { median: bytes, spread: 0 }
+  } catch (error) {
+    sawWorkerFailure = true
+    const detail = error instanceof Error ? error.message : ''
+    console.error(`bundle measure failed: ${entry} · ${tree}\n${detail}`)
+    return 'failed'
+  }
 }
 
 /** Within this fraction the delta is called noise (⚪); beyond it, 🟢/🔴. */
@@ -227,7 +288,7 @@ const run = async (): Promise<void> => {
   const progress = (row: Row): void => {
     rows.push(row)
     console.error(
-      `  ${row.suite} · ${row.caseName} · ${row.metric}: main ${cell(row.base, row.higherIsBetter)} → PR ${cell(row.head, row.higherIsBetter)}  ${delta(row)}`,
+      `  ${row.suite} · ${row.caseName} · ${row.metric}: main ${cell(row.base, row.higherIsBetter, row.unit)} → PR ${cell(row.head, row.higherIsBetter, row.unit)}  ${delta(row)}`,
     )
   }
 
@@ -307,6 +368,21 @@ const run = async (): Promise<void> => {
     })
   }
 
+  if (suites.has('bundle')) console.error('mini bundle (gzip bytes)…')
+  for (const bundleCase of suites.has('bundle') ? MINI_BUNDLE_CASES : []) {
+    const baseBytes = await measureBundle(base, bundleCase.entry, bundleCase.external)
+    const headBytes = await measureBundle(head, bundleCase.entry, bundleCase.external)
+    progress({
+      suite: 'bundle',
+      caseName: bundleCase.name,
+      metric: 'gzip bytes',
+      higherIsBetter: false,
+      unit: 'bytes',
+      base: baseBytes,
+      head: headBytes,
+    })
+  }
+
   const lines: string[] = []
   lines.push('<!-- mjst-bench-delta:start -->')
   lines.push(`### ⚡ Benchmark delta vs ${baselineLabel} (\`${gitSha(base)}\` → \`${gitSha(head)}\`)`)
@@ -315,14 +391,15 @@ const run = async (): Promise<void> => {
   lines.push('|---|---|---|---:|---:|---:|')
   for (const row of rows) {
     lines.push(
-      `| ${row.suite} | ${row.caseName} | ${row.metric} | ${cell(row.base, row.higherIsBetter)} | ${cell(row.head, row.higherIsBetter)} | ${delta(row)} |`,
+      `| ${row.suite} | ${row.caseName} | ${row.metric} | ${cell(row.base, row.higherIsBetter, row.unit)} | ${cell(row.head, row.higherIsBetter, row.unit)} | ${delta(row)} |`,
     )
   }
   lines.push('')
   lines.push(
-    '<sub>mjst only; each number is the better of two order-balanced (ABBA) runs, each the median of 21 isolated-process trials (±n% = coefficient of variation). ' +
+    '<sub>mjst only; each timed number is the better of two order-balanced (ABBA) runs, each the median of 21 isolated-process trials (±n% = coefficient of variation). ' +
       '⚪ within ±5% · 🟢 improvement · 🔴 regression · ~ marks an unstable sample (CV > 10%) · ⚠parity marks a correctness disagreement. ' +
-      'On shared CI runners, deltas within ±10% are usually noise — trust direction only when it persists across pushes.</sub>',
+      'On shared CI runners, deltas within ±10% are usually noise — trust direction only when it persists across pushes. ' +
+      'The `bundle` suite is different: gzipped bytes of each bundled `@amritk/mini` entry (optional peer deps external), deterministic and measured once, so its Δ is exact — `core (.)` must stay flat as subpath features land.</sub>',
   )
   lines.push('<!-- mjst-bench-delta:end -->')
 
