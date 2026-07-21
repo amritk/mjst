@@ -1,5 +1,21 @@
 # @amritk/mjst
 
+## 0.13.0
+
+### Minor Changes
+
+- e40dc3e: Add a `compile-api` subcommand — `mjst compile-api <routes-module> --out <file>` — that loads a module of `@amritk/api` route contracts and compiles them with `compileToModule` into a fused fetch-handler module, so producing the compiled engine no longer requires a hand-written build script. Supports `--routes-import`, `--options <json-file>` (spread into the compile options), `--open-api-path`, and `--max-body-bytes`.
+
+### Patch Changes
+
+- Updated dependencies [da1be72]
+- Updated dependencies [824b869]
+- Updated dependencies [5395bed]
+- Updated dependencies [09ff86c]
+- Updated dependencies [da1be72]
+- Updated dependencies [ca672c3]
+  - @amritk/api@0.5.0
+
 ## 0.12.3
 
 ### Patch Changes
