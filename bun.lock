@@ -51,7 +51,7 @@
     },
     "packages/api": {
       "name": "@amritk/api",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "dependencies": {
         "@amritk/runtime-validators": "workspace:*",
       },
@@ -62,7 +62,7 @@
     },
     "packages/cli": {
       "name": "@amritk/mjst",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "bin": {
         "mjst": "./dist/cli.js",
       },
@@ -163,7 +163,7 @@
     },
     "packages/mini": {
       "name": "@amritk/mini",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "alien-signals": "catalog:",
       },
