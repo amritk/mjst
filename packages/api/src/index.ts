@@ -32,8 +32,25 @@ export type {
   SuccessStatusOf,
 } from './create-client'
 export { createClient } from './create-client'
+export type { CompressionOptions } from './create-compression'
+export { createCompression } from './create-compression'
 export type { Cors, CorsOptions } from './create-cors'
 export { createCors } from './create-cors'
+export type { DocsOptions, DocsUi } from './create-docs'
+export { createDocs, docsHtml } from './create-docs'
+export type { ETagOptions } from './create-etag'
+export { createETag } from './create-etag'
+export type {
+  RateLimit,
+  RateLimitOptions,
+  RateLimitState,
+  RateLimitStore,
+} from './create-rate-limit'
+export { createRateLimit, memoryRateLimitStore } from './create-rate-limit'
+export type { RequestId, RequestIdOptions } from './create-request-id'
+export { createRequestId, getRequestId } from './create-request-id'
+export type { SecurityHeadersOptions } from './create-security-headers'
+export { createSecurityHeaders } from './create-security-headers'
 export type { ErrorCaptureInfo, SentryOptions } from './create-sentry'
 export { createSentry } from './create-sentry'
 export { decodeSegment } from './decode-segment'
