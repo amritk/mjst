@@ -7,6 +7,8 @@ Developer guidelines live in the `.claude/` directory:
 - **comments.md** — Comment guidelines and JSDoc
 - **testing.md** — Test setup, style, and examples
 - **architecture.md** — Monorepo structure and design
+- **cli-ergonomics.md** — Agent-friendly CLI and API output design
+- **documentation.md** — Doc authoring and maintaining these guidelines
 
 ## Changesets
 
