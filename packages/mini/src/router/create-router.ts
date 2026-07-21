@@ -37,6 +37,8 @@ export type RouteState<R extends Route> = {
   path: string
   /** The query string including its leading `?`, or `''` when there is none. */
   search: string
+  /** The query string parsed into a record (last value wins on repeats) — read `query.page` directly. */
+  query: RouteParams
   /** Params captured from the matched route's pattern. */
   params: RouteParams
   /** The matched route definition, or `null` when nothing matched (render a 404). */
@@ -125,9 +127,19 @@ const stripBase = (pathname: string, base: string): string => {
 
 /** Matches a location against the route table, returning the assembled state. */
 const resolve = <R extends Route>(routes: readonly R[], location: { path: string; search: string }): RouteState<R> => {
+  const query = parseQuery(location.search)
   for (const route of routes) {
     const params = matchRoute(route.path, location.path)
-    if (params) return { path: location.path, search: location.search, params, route }
+    if (params) return { path: location.path, search: location.search, query, params, route }
   }
-  return { path: location.path, search: location.search, params: {}, route: null }
+  return { path: location.path, search: location.search, query, params: {}, route: null }
+}
+
+/** Parses a `?a=1&b=2` search string into a flat record; repeated keys keep the last value. */
+const parseQuery = (search: string): RouteParams => {
+  const params: RouteParams = {}
+  const raw = search.startsWith('?') ? search.slice(1) : search
+  if (!raw) return params
+  for (const [key, value] of new URLSearchParams(raw)) params[key] = value
+  return params
 }

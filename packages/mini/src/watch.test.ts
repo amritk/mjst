@@ -56,6 +56,19 @@ describe('watch', () => {
     expect(calls).toEqual([30])
   })
 
+  it('runs immediately with undefined previous when immediate is set', () => {
+    const count = signal(3)
+    const calls: [number, number | undefined][] = []
+    watch(count, (value, previous) => calls.push([value, previous]), { immediate: true })
+    // Fires once up front; the first call has no previous value.
+    expect(calls).toEqual([[3, undefined]])
+    count(4)
+    expect(calls).toEqual([
+      [3, undefined],
+      [4, 3],
+    ])
+  })
+
   it('stops firing after the returned stop function is called', () => {
     const count = signal(0)
     const calls: number[] = []

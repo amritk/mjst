@@ -1,7 +1,7 @@
+import { createHost } from '../internal/create-host'
 import { toGetter } from '../internal/to-getter'
 import type { MaybeReactive } from '../jsx-runtime'
 import { list } from '../list'
-import { createHost } from './create-host'
 import { defaultKey } from './default-key'
 
 /** Props for {@link For}, parameterised by the item type `T`. */
@@ -35,11 +35,8 @@ export const For = <T,>(props: ForProps<T>): HTMLElement => {
   const host = createHost()
   const each = toGetter(props.each)
   const keyOf = props.key ?? defaultKey
-  list(
-    host,
-    each,
-    (item) => keyOf(item, each().indexOf(item)),
-    (item) => props.children(item, each().indexOf(item)),
-  )
+  // `list` supplies the real position, so neither `key` nor `children` has to
+  // recover it with an O(n) `indexOf` (which also mis-keys duplicate items).
+  list(host, each, keyOf, props.children)
   return host
 }

@@ -84,6 +84,16 @@ describe('create-router', () => {
     router.stop()
   })
 
+  it('parses the query string into a reactive record', () => {
+    window.history.replaceState(null, '', '/users/42?tab=posts&page=2')
+    const router = createRouter({ routes })
+    expect(router.route().query).toEqual({ tab: 'posts', page: '2' })
+    expect(router.route().search).toBe('?tab=posts&page=2')
+    router.navigate('/users/42?tab=likes')
+    expect(router.route().query).toEqual({ tab: 'likes' })
+    router.stop()
+  })
+
   it('stops updating after stop is called', () => {
     const router = createRouter({ routes })
     router.stop()

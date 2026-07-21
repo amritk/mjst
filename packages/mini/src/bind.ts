@@ -58,18 +58,55 @@ export const bindHtml = (node: Element, sanitize: (raw: string) => string, get: 
  * writes the signal back on every `input` event.
  *
  * Writing `value` back is guarded on inequality so echoing the freshly-typed
- * character never repositions the caret. Returns a combined dispose that
- * stops the effect and detaches the listener.
+ * character never repositions the caret. IME composition (CJK, accents) is held
+ * off: while a composition is in flight the signal is not written and the
+ * element is not overwritten, and the final text is committed once on
+ * `compositionend` — otherwise the mid-composition `input` events would tear the
+ * candidate string apart. Returns a combined dispose that stops the effect and
+ * detaches every listener.
  */
 export const bindValue = (node: HTMLInputElement | HTMLTextAreaElement, model: Signal<string>): (() => void) => {
+  let composing = false
   const stop = effect(() => {
     const next = model()
-    if (node.value !== next) node.value = next
+    if (!composing && node.value !== next) node.value = next
   })
-  const onInput = (): void => model(node.value)
+  const onInput = (): void => {
+    if (!composing) model(node.value)
+  }
+  const onCompositionStart = (): void => {
+    composing = true
+  }
+  const onCompositionEnd = (): void => {
+    composing = false
+    model(node.value)
+  }
   node.addEventListener('input', onInput)
+  node.addEventListener('compositionstart', onCompositionStart)
+  node.addEventListener('compositionend', onCompositionEnd)
   return () => {
     stop()
     node.removeEventListener('input', onInput)
+    node.removeEventListener('compositionstart', onCompositionStart)
+    node.removeEventListener('compositionend', onCompositionEnd)
+  }
+}
+
+/**
+ * Two-way binding between a checkbox (or radio) input and a boolean signal —
+ * the `bindValue` analogue for `.checked`. The box follows the signal, and
+ * toggling it writes the signal back on `change`. Returns a combined dispose
+ * that stops the effect and detaches the listener.
+ */
+export const bindChecked = (node: HTMLInputElement, model: Signal<boolean>): (() => void) => {
+  const stop = effect(() => {
+    const next = model()
+    if (node.checked !== next) node.checked = next
+  })
+  const onChange = (): void => model(node.checked)
+  node.addEventListener('change', onChange)
+  return () => {
+    stop()
+    node.removeEventListener('change', onChange)
   }
 }

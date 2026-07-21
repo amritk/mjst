@@ -1,4 +1,4 @@
-import type { ChildFactory } from './render-child'
+import type { ChildFactory } from '../internal/render-child'
 
 /** The data a `<Match>` carries for its enclosing `<Switch>`. */
 export type MatchData = {

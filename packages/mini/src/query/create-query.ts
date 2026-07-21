@@ -9,7 +9,7 @@ import {
 
 import { onCleanup } from '../on-cleanup'
 import type { ReadonlySignal } from '../signals'
-import { computed, signal } from '../signals'
+import { computed, effect, signal } from '../signals'
 
 /**
  * A query exposed as mini signals. `result` is the full TanStack Query result;
@@ -36,8 +36,8 @@ export type QueryResult<TData, TError> = {
   isSuccess: ReadonlySignal<boolean>
   /** The query errored. */
   isError: ReadonlySignal<boolean>
-  /** Imperatively refetch. */
-  refetch: () => void
+  /** Imperatively refetch; resolves with the settled result. */
+  refetch: () => Promise<QueryObserverResult<TData, TError>>
 }
 
 /**
@@ -60,12 +60,36 @@ export const createQuery = <
   TQueryKey extends QueryKey = QueryKey,
 >(
   client: QueryClient,
-  options: QueryObserverOptions<TQueryFnData, TError, TData, TQueryFnData, TQueryKey>,
+  options:
+    | QueryObserverOptions<TQueryFnData, TError, TData, TQueryFnData, TQueryKey>
+    | (() => QueryObserverOptions<TQueryFnData, TError, TData, TQueryFnData, TQueryKey>),
 ): QueryResult<TData, TError> => {
-  const defaulted = client.defaultQueryOptions(options)
+  // Options may be a getter so the query key (and everything else) can depend on
+  // signals — `() => ({ queryKey: ['user', id()], ... })`. A plain object is
+  // wrapped in a constant getter, so one code path serves both.
+  const getOptions = typeof options === 'function' ? options : () => options
+
+  const defaulted = client.defaultQueryOptions(getOptions())
   const observer = new QueryObserver<TQueryFnData, TError, TData, TQueryFnData, TQueryKey>(client, defaulted)
 
   const result = signal(observer.getOptimisticResult(defaulted))
+
+  // Track the options getter and push every change into the observer, so a
+  // reactive query key refetches under the new key. The first effect run only
+  // records dependencies — the observer already holds these options — while
+  // later runs (a tracked signal changed) call `setOptions`.
+  let first = true
+  onCleanup(
+    effect(() => {
+      const next = client.defaultQueryOptions(getOptions())
+      if (first) {
+        first = false
+        return
+      }
+      observer.setOptions(next)
+    }),
+  )
+
   // query-core pushes a fresh result object on every state change; each one
   // replaces the signal, and the derived views below narrow it to a field.
   onCleanup(observer.subscribe((next) => result(next)))
@@ -80,8 +104,6 @@ export const createQuery = <
     isFetching: computed(() => result().isFetching),
     isSuccess: computed(() => result().isSuccess),
     isError: computed(() => result().isError),
-    refetch: () => {
-      observer.refetch()
-    },
+    refetch: () => observer.refetch(),
   }
 }

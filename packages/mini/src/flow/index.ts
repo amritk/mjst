@@ -11,13 +11,13 @@
  * DOM — there is no diffing, only mount and dispose.
  */
 
+export type { ChildFactory } from '../internal/render-child'
 export type { DynamicComponent, DynamicProps } from './dynamic'
 export { Dynamic } from './dynamic'
 export type { ForProps } from './for'
 export { For } from './for'
 export type { MatchProps } from './match'
 export { Match } from './match'
-export type { ChildFactory } from './render-child'
 export type { ShowProps } from './show'
 export { Show } from './show'
 export type { SwitchProps } from './switch'
