@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    // mini is browser-only: it builds real DOM, so it needs the DOM libs and
+    // none of the Node ambient types the root config pulls in.
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": [],
+    "jsx": "react-jsx",
+    "jsxImportSource": "@amritk/mini",
+    // Resolve mini's own JSX runtime to source during type checking. The JSX
+    // transform emits `import { jsx } from '@amritk/mini/jsx-runtime'`, which
+    // would otherwise resolve to `dist` (via the package exports) and fail
+    // before the package has been built.
+    "paths": {
+      "@amritk/mini/jsx-runtime": ["./src/jsx-runtime.ts"],
+      "@amritk/mini/jsx-dev-runtime": ["./src/jsx-dev-runtime.ts"],
+      "@amritk/mini": ["./src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

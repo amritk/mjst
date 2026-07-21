@@ -1,0 +1,15 @@
+{
+  "extends": ["./tsconfig.json", "../../tsconfig.build.json"],
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    // Re-asserted here because the shared `../../tsconfig.build.json` (applied
+    // last in `extends`) resets `lib`/`types` back to the Node-only defaults,
+    // which would drop the DOM types mini is built against.
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": [],
+    "jsx": "react-jsx",
+    "jsxImportSource": "@amritk/mini"
+  },
+  "exclude": ["dist", "node_modules", "**/*.test.ts", "**/*.test.tsx"]
+}
