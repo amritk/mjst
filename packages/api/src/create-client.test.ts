@@ -640,6 +640,72 @@ describe('create-client', () => {
     void pong
   })
 
+  it('makes an all-optional query slot optional at the call site', async () => {
+    const listThings = defineContract({
+      method: 'get',
+      path: '/things',
+      // Every query property is optional (no `required`), so the whole slot —
+      // and, since it is the only declared slot, the whole input arg — is
+      // optional. `client.listThings()` must type-check and send no query.
+      request: {
+        query: { type: 'object', properties: { limit: { type: 'string' }, offset: { type: 'string' } } },
+      },
+      responses: { 200: { body: { type: 'object', properties: { items: { type: 'array' } }, required: ['items'] } } },
+    })
+    const route = implementRoute(listThings, ({ query }) => ({
+      status: 200,
+      body: { items: [query.limit ?? null] as unknown[] },
+    }))
+    const handler = toFetchHandler(createApi({ routes: [route] }))
+    const captured: Request[] = []
+    const client = createClient({ listThings }, 'https://api.test', {
+      fetch: (url, init) => {
+        const request = new Request(url, init)
+        captured.push(request.clone())
+        return handler(request)
+      },
+    })
+    // No argument at all.
+    const bare = await client.listThings()
+    expect(bare.status).toBe(200)
+    expect(new URL(captured[0]?.url ?? '').search).toBe('')
+    // An empty object is fine too.
+    await client.listThings({})
+    // And passing some params still works and serializes.
+    await client.listThings({ query: { limit: '5' } })
+    expect(new URL(captured[2]?.url ?? '').search).toBe('?limit=5')
+  })
+
+  it('sends a raw text body verbatim under the raw content type', async () => {
+    const uploadCsv = defineContract({
+      method: 'post',
+      path: '/csv',
+      request: { body: { type: 'string', minLength: 1 }, bodyType: 'text' },
+      responses: { 200: { body: { type: 'object', properties: { rows: { type: 'integer' } }, required: ['rows'] } } },
+    })
+    const route = implementRoute(uploadCsv, ({ body }) => ({ status: 200, body: { rows: body.split('\n').length } }))
+    const handler = toFetchHandler(createApi({ routes: [route] }))
+    const captured: Request[] = []
+    const client = createClient({ uploadCsv }, 'https://api.test', {
+      fetch: (url, init) => {
+        const request = new Request(url, init)
+        captured.push(request.clone())
+        return handler(request)
+      },
+    })
+    const reply = await client.uploadCsv({ body: 'a,b\n1,2' })
+    expect(reply.status).toBe(200)
+    if (reply.status === 200) expect(reply.body.rows).toBe(2)
+    // The body is on the wire unchanged, under the default raw content type.
+    const sent = captured[0]
+    expect(await sent?.text()).toBe('a,b\n1,2')
+    expect(sent?.headers.get('content-type')).toBe('text/plain;charset=utf-8')
+
+    // A per-call content-type header overrides the default (text/csv upload).
+    await client.uploadCsv({ body: 'x,y', headers: { 'content-type': 'text/csv' } })
+    expect(captured[1]?.headers.get('content-type')).toBe('text/csv')
+  })
+
   it('rejects wrongly-typed inputs at compile time', () => {
     const client = makeClient()
     // @ts-expect-error — id must be a number

@@ -163,6 +163,43 @@ describe('jsx-runtime', () => {
     expect(path?.getAttribute('d')).toBe('M0 0h16v16H0z')
   })
 
+  it('types and applies the extended form-control attributes', () => {
+    const el = (
+      <input
+        type="number"
+        name="quantity"
+        min={0}
+        max={10}
+        step={1}
+        required
+        readonly
+        multiple
+        accept=".csv,text/csv"
+      />
+    )
+    expect(el.getAttribute('name')).toBe('quantity')
+    expect(el.getAttribute('min')).toBe('0')
+    expect(el.getAttribute('max')).toBe('10')
+    expect(el.getAttribute('step')).toBe('1')
+    expect(el.hasAttribute('required')).toBe(true)
+    expect(el.hasAttribute('readonly')).toBe(true)
+    expect(el.getAttribute('accept')).toBe('.csv,text/csv')
+  })
+
+  it('types select and option value attributes', () => {
+    const el = (
+      <select name="pick" disabled={false}>
+        <option value="a" selected>
+          A
+        </option>
+        <option value="b">B</option>
+      </select>
+    )
+    const options = el.querySelectorAll('option')
+    expect(options[0]?.getAttribute('value')).toBe('a')
+    expect(options[1]?.getAttribute('value')).toBe('b')
+  })
+
   it('resolves an array class dropping falsy entries', () => {
     const active = false
     const el = <div class={['card', active && 'active', 'lg']} />

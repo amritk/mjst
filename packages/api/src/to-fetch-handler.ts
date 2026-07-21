@@ -62,12 +62,25 @@ export type FetchHandlerOptions = {
    * toFetchHandler(api, { mounts: { '/api/auth': (request) => auth.handler(request) } })
    * ```
    *
+   * The platform `env` and `executionContext` the handler was invoked with are
+   * passed through too — the shape a per-request env-dependent sub-router needs
+   * (Better Auth on Cloudflare Workers reads secrets and the DB URL from
+   * `env`, which only exists inside `fetch`):
+   *
+   * ```typescript
+   * toFetchHandler(api, {
+   *   mounts: { '/api/auth': (request, env) => makeAuth(env as Env).handler(request) },
+   * })
+   * ```
+   *
    * Mounts still sit inside the hook chains: gates run before them and
    * response decorators after, so a mounted router is not a hole in the
    * app's headers or rate limits. A gate that must not apply to a mount
    * (a CSRF check exempting the auth routes, say) checks the path itself.
    */
-  readonly mounts?: Readonly<Record<string, (request: Request) => Response | Promise<Response>>>
+  readonly mounts?: Readonly<
+    Record<string, (request: Request, env: unknown, executionContext: unknown) => Response | Promise<Response>>
+  >
   /** Gate(s) run before mounts and routing, in order. See {@link FetchOnRequest}. */
   readonly onRequest?: FetchOnRequest | ReadonlyArray<FetchOnRequest>
   /** Decorator(s) run on every outgoing response, in order. See {@link FetchOnResponse}. */
@@ -154,7 +167,7 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     const path = pathStart === -1 ? '/' : queryIndex === -1 ? url.slice(pathStart) : url.slice(pathStart, queryIndex)
 
     for (const [prefix, mount] of mounts) {
-      if (path === prefix || path.startsWith(prefix + '/')) return mount(request)
+      if (path === prefix || path.startsWith(prefix + '/')) return mount(request, env, executionContext)
     }
 
     // All three readers share one buffered read, so the body can be read

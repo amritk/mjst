@@ -110,6 +110,23 @@ type SlotSchema<
 type SlotField<Key extends string, S> = [S] extends [never] ? unknown : { readonly [K in Key]: FromSchema<S> }
 
 /**
+ * Like {@link SlotField}, but the field itself is OPTIONAL when the slot's
+ * schema has no required properties — the "all-optional schema" case, folded
+ * into {@link RequiredKeys} exactly the way a fully-absent slot already is. A
+ * GET whose query params are every one optional (`{ limit?, offset? }`) then
+ * needs no argument at the call site: `client.listThings()` type-checks, and
+ * when it is the only declared slot the whole input arg drops to optional too
+ * (see {@link ClientMethod}). Used for `query` and `cookies` — the slots a
+ * caller legitimately sends nothing for; `params` (the path needs them) and
+ * `body` (declaring it makes a body required) stay strictly required.
+ */
+type RelaxedSlotField<Key extends string, S> = [S] extends [never]
+  ? unknown
+  : [RequiredKeys<FromSchema<S>>] extends [never]
+    ? { readonly [K in Key]?: FromSchema<S> }
+    : { readonly [K in Key]: FromSchema<S> }
+
+/**
  * What a declared slot's schema means as a value — and `undefined` for a
  * contract that never declared the slot, mirroring what the server handler
  * sees (`SchemaValue` in types.ts), so code shared by both sides types
@@ -138,9 +155,9 @@ type HeadersField<S> = [S] extends [never]
  * slots become required, typed fields; undeclared ones do not exist.
  */
 export type ClientInput<C extends AnyContract> = SlotField<'params', SlotSchema<C, 'params'>> &
-  SlotField<'query', SlotSchema<C, 'query'>> &
+  RelaxedSlotField<'query', SlotSchema<C, 'query'>> &
   SlotField<'body', SlotSchema<C, 'body'>> &
-  SlotField<'cookies', SlotSchema<C, 'cookies'>> &
+  RelaxedSlotField<'cookies', SlotSchema<C, 'cookies'>> &
   HeadersField<SlotSchema<C, 'headers'>> & {
     /** Per-call cancellation, e.g. from `AbortSignal.timeout(5000)`. */
     readonly signal?: AbortSignal
@@ -309,8 +326,10 @@ type RawInput = {
  * framework-agnostic replacement for RPC clients like Hono's `hc`.
  *
  * Per call: `query` serializes repeats for arrays, `body` follows the
- * contract's `bodyType` (JSON built in; register `formBodySerializer` /
- * `multipartBodySerializer` for the rest), `params` fill the path template
+ * contract's `bodyType` (JSON and the raw `text`/`bytes` encodings are built
+ * in — the latter sent verbatim under a raw content type you can override per
+ * call via `headers`; register `formBodySerializer` / `multipartBodySerializer`
+ * for those two), `params` fill the path template
  * through the registered `pathParams` builder (`buildParamPath`
  * segment-encodes; greedy `{x+}` parameters keep their slashes), declared
  * `headers`/`cookies` are typed, and extra headers and an `AbortSignal` ride
@@ -416,6 +435,15 @@ const buildMethod = (
       } else if (bodyType === 'json') {
         body = JSON.stringify(input.body)
         if (!headers.has('content-type')) headers.set('content-type', 'application/json')
+      } else if (bodyType === 'text' || bodyType === 'bytes') {
+        // Raw bodies go on the wire verbatim — a string, Blob, ArrayBuffer, or
+        // typed array is already a valid fetch body. A default content type is
+        // stamped only when no header source set one, so a `text/csv` upload
+        // just passes `headers: { 'content-type': 'text/csv' }` per call.
+        body = input.body as NonNullable<RequestInit['body']>
+        if (!headers.has('content-type')) {
+          headers.set('content-type', bodyType === 'text' ? 'text/plain;charset=utf-8' : 'application/octet-stream')
+        }
       } else {
         // Thrown per call rather than in createClient so a shared contracts
         // record can carry formats this particular app never sends. Kept

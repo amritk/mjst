@@ -283,8 +283,13 @@ export const localsEcho = defineRoute({
 })
 
 /** A Better-Auth-style self-contained sub-handler for prefix mounting. */
-export const mountEcho = (request: Request): Response =>
-  Response.json({ mounted: true, url: request.url }, { status: 418 })
+export const mountEcho = (request: Request, env: unknown): Response =>
+  // Echoes the platform env so both engines prove mounts receive it (the
+  // env-dependent sub-router shape — Better Auth on Workers).
+  Response.json(
+    { mounted: true, url: request.url, tenant: (env as { tenant?: string } | undefined)?.tenant ?? null },
+    { status: 418 },
+  )
 
 /** Reads the raw request (header lookup) and replies with custom headers. */
 export const echoHeader = defineRoute({
@@ -431,6 +436,24 @@ export const uploadFile = defineRoute({
       body: { title, filename: attachment.name, byteLength: (await attachment.arrayBuffer()).byteLength },
     }
   },
+})
+
+/** A raw text body: `bodyType: 'text'` hands the decoded string to the handler unparsed. */
+export const csvUpload = defineRoute({
+  method: 'post',
+  path: '/csv-upload',
+  request: { body: { type: 'string', minLength: 1 }, bodyType: 'text' },
+  responses: { 200: { body: { type: 'object' } } },
+  handler: ({ body }) => ({ status: 200, body: { rows: body.split('\n').length, echo: body } }),
+})
+
+/** A raw bytes body: `bodyType: 'bytes'` hands the Uint8Array to the handler. */
+export const bytesUpload = defineRoute({
+  method: 'post',
+  path: '/bytes-upload',
+  request: { body: {}, bodyType: 'bytes' },
+  responses: { 200: { body: { type: 'object' } } },
+  handler: ({ body }) => ({ status: 200, body: { byteLength: (body as Uint8Array).byteLength } }),
 })
 
 /** A greedy tail capture: the rest of the path, decoded and rejoined. */

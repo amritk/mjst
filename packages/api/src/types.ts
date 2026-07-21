@@ -309,9 +309,12 @@ export type Contract<
      * coercion (typed keys coerce, array keys accumulate); `'multipart'`
      * parses `multipart/form-data` — string parts coerce like form fields,
      * file parts reach the handler as `File` objects (declare them in the
-     * schema without a `type` keyword). A request whose `content-type`
-     * contradicts the declared type answers 415. Selects the OpenAPI
-     * requestBody content key.
+     * schema without a `type` keyword). `'text'` and `'bytes'` skip parsing
+     * entirely: the handler receives the raw `string` / `Uint8Array` and the
+     * schema validates it verbatim (`{ type: 'string' }` for text, `{}` for
+     * bytes) — a `text/csv` or binary upload that the typed client can send.
+     * A request whose `content-type` contradicts the declared type answers
+     * 415. Selects the OpenAPI requestBody content key.
      */
     readonly bodyType?: BodyType
     /**
@@ -512,8 +515,16 @@ export type ValidatorCompiler = (schema: unknown) => CompiledValidation
 /**
  * The transport encodings a request body schema can validate. Selects the
  * parser, the 415 media-type check, and the OpenAPI requestBody content key.
+ *
+ * `'text'` and `'bytes'` are the raw encodings: the body is not parsed into an
+ * object but handed to the handler as-is — a `string` (`readText`) or a
+ * `Uint8Array` (`readBytes`) — so a `text/csv` upload or a binary payload rides
+ * the typed contract and client instead of a hand-rolled `fetch`. The body
+ * schema is validated verbatim against that value (`{ type: 'string' }` for
+ * text; `{}` accepts any bytes), and the typed client sends the call's `body`
+ * unchanged under the raw content type (override it per call via `headers`).
  */
-export type BodyType = 'json' | 'form' | 'multipart'
+export type BodyType = 'json' | 'form' | 'multipart' | 'text' | 'bytes'
 
 /**
  * How a string path/query value is converted before validation. HTTP delivers

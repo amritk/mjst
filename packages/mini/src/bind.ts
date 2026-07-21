@@ -93,6 +93,32 @@ export const bindValue = (node: HTMLInputElement | HTMLTextAreaElement, model: S
 }
 
 /**
+ * Two-way binding between a `<select>` and a string signal — the `bindValue`
+ * analogue for a dropdown. The element's `value` follows the signal (setting
+ * `.value`, the property, so the matching `<option>` is selected — a bare
+ * `value` attribute would not), and choosing an option writes the signal back
+ * on `change`.
+ *
+ * `<select>` has no IME composition to hold off (there is no free text to
+ * compose), so this stays simpler than the input/textarea path: one effect,
+ * one `change` listener. Writing `value` back is still guarded on inequality so
+ * an echo never reorders the option list. Returns a combined dispose that stops
+ * the effect and detaches the listener.
+ */
+export const bindSelect = (node: HTMLSelectElement, model: Signal<string>): (() => void) => {
+  const stop = effect(() => {
+    const next = model()
+    if (node.value !== next) node.value = next
+  })
+  const onChange = (): void => model(node.value)
+  node.addEventListener('change', onChange)
+  return () => {
+    stop()
+    node.removeEventListener('change', onChange)
+  }
+}
+
+/**
  * Two-way binding between a checkbox (or radio) input and a boolean signal —
  * the `bindValue` analogue for `.checked`. The box follows the signal, and
  * toggling it writes the signal back on `change`. Returns a combined dispose

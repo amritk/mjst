@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest'
 
-import { bindAttr, bindChecked, bindClass, bindHtml, bindShow, bindText, bindValue } from './bind'
+import { bindAttr, bindChecked, bindClass, bindHtml, bindSelect, bindShow, bindText, bindValue } from './bind'
 import { signal } from './signals'
 
 describe('bind', () => {
@@ -155,5 +155,45 @@ describe('bind', () => {
     node.checked = true
     node.dispatchEvent(new Event('change'))
     expect(on()).toBe(false)
+  })
+
+  const buildSelect = (values: readonly string[]): HTMLSelectElement => {
+    const select = document.createElement('select')
+    for (const value of values) {
+      const option = document.createElement('option')
+      option.value = value
+      option.textContent = value
+      select.appendChild(option)
+    }
+    return select
+  }
+
+  it('bindSelect drives the dropdown from the signal and back', () => {
+    const model = signal('b')
+    const node = buildSelect(['a', 'b', 'c'])
+    bindSelect(node, model)
+    // The property (not a bare attribute) is set, so the option is selected.
+    expect(node.value).toBe('b')
+    model('c')
+    expect(node.value).toBe('c')
+    // Choosing an option writes the signal on change.
+    node.value = 'a'
+    node.dispatchEvent(new Event('change'))
+    expect(model()).toBe('a')
+  })
+
+  it('bindSelect dispose stops both directions', () => {
+    const model = signal('a')
+    const node = buildSelect(['a', 'b'])
+    const dispose = bindSelect(node, model)
+    expect(node.value).toBe('a')
+    dispose()
+    // Signal → element stops.
+    model('b')
+    expect(node.value).toBe('a')
+    // Element → signal stops: choosing an option no longer writes the signal.
+    node.value = 'a'
+    node.dispatchEvent(new Event('change'))
+    expect(model()).toBe('b')
   })
 })

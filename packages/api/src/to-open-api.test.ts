@@ -540,6 +540,34 @@ describe('to-open-api', () => {
     })
   })
 
+  it('keys raw text and bytes request bodies under their media types', () => {
+    const csv = defineRoute({
+      method: 'post',
+      path: '/csv',
+      request: { bodyType: 'text', body: { type: 'string' } },
+      responses: { 200: {} },
+      handler: () => ({ status: 200 }),
+    })
+    const blob = defineRoute({
+      method: 'post',
+      path: '/blob',
+      request: { bodyType: 'bytes', body: {} },
+      responses: { 200: {} },
+      handler: () => ({ status: 200 }),
+    })
+    const document = toOpenApi([csv, blob], info)
+    const csvBody = ((document.paths['/csv'] as Record<string, Record<string, unknown>>)['post']?.['requestBody'] as {
+      required: boolean
+      content: Record<string, unknown>
+    }) ?? { required: false, content: {} }
+    expect(csvBody.required).toBe(true)
+    expect(csvBody.content).toEqual({ 'text/plain': { schema: { type: 'string' } } })
+    const blobBody = (document.paths['/blob'] as Record<string, Record<string, unknown>>)['post']?.['requestBody'] as {
+      content: Record<string, unknown>
+    }
+    expect(blobBody.content).toEqual({ 'application/octet-stream': { schema: {} } })
+  })
+
   it('omits encoding for multipart bodies without file parts', () => {
     const form = defineRoute({
       method: 'post',

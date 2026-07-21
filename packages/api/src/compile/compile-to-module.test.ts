@@ -28,6 +28,8 @@ const routes: Record<string, AnyRouteContract> = {
   fileProxy: corpus.fileProxy,
   submitForm: corpus.submitForm,
   uploadFile: corpus.uploadFile,
+  csvUpload: corpus.csvUpload,
+  bytesUpload: corpus.bytesUpload,
   buildInfo: corpus.buildInfo,
   releaseInfo: corpus.releaseInfo,
   dashboard: corpus.dashboard,
@@ -195,6 +197,31 @@ describe('compile-to-module', () => {
         () => new Request('http://localhost/export'),
         // Raw body access: whitespace must survive exactly (HMAC shape).
         () => new Request('http://localhost/raw-echo', { method: 'POST', body: '{ "spacing":   "matters" }' }),
+        // Raw text bodyType: the decoded string is validated and handed over
+        // unparsed; a text/* content-type passes, a JSON one is a 415, and an
+        // empty body fails the schema's minLength.
+        () => new Request('http://localhost/csv-upload', { method: 'POST', body: 'a,b\n1,2\n3,4' }),
+        () =>
+          new Request('http://localhost/csv-upload', {
+            method: 'POST',
+            headers: { 'content-type': 'text/csv' },
+            body: 'x,y',
+          }),
+        () =>
+          new Request('http://localhost/csv-upload', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: '"nope"',
+          }),
+        () => new Request('http://localhost/csv-upload', { method: 'POST', body: '' }),
+        // Raw bytes bodyType: any content-type is accepted, the Uint8Array
+        // reaches the handler, and the size cap still applies.
+        () =>
+          new Request('http://localhost/bytes-upload', {
+            method: 'POST',
+            headers: { 'content-type': 'application/octet-stream' },
+            body: new Uint8Array([1, 2, 3, 4, 5]),
+          }),
         // Body size cap: the declared body path and the handler-read path.
         () => post({ name: 'x'.repeat(MAX_BODY_BYTES) }),
         () => new Request('http://localhost/raw-echo', { method: 'POST', body: 'y'.repeat(MAX_BODY_BYTES + 1) }),
