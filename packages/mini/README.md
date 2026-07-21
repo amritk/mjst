@@ -16,7 +16,7 @@
 
 ## Overview
 
-`@amritk/mini` is a minimal UI layer built on [alien-signals](https://github.com/stackblitz/alien-signals): fine-grained reactivity plus a small, capped set of DOM helpers and a compilerless JSX runtime.
+`@amritk/mini` is a minimal UI layer built on [alien-signals](https://github.com/stackblitz/alien-signals): fine-grained reactivity plus a small, capped set of DOM helpers and a compilerless JSX runtime. It ships from the [mjst](../../README.md) monorepo.
 
 **The cap is the design.** There is no virtual DOM, no diffing, and no re-render. JSX (or `template`) builds real DOM **once**; dynamic values flow through the bind helpers or function-valued props; and repetition goes through `list`. A component function runs a single time and returns the `HTMLElement` it built. If a feature seems to be missing here, the correct next step is usually a real framework (Preact or Solid), not a new helper.
 

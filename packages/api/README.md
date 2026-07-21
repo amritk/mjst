@@ -1,7 +1,7 @@
 # @amritk/api
 
-Contract-first, framework-agnostic API layer built on mjst's JSON Schema
-tooling. Declare each route once — method, path, request schemas, response
+Contract-first, framework-agnostic API layer built on [mjst](../../README.md)'s
+JSON Schema tooling. Declare each route once — method, path, request schemas, response
 schemas, handler — and get typed handlers, fast request/response validation,
 and an OpenAPI 3.1 document with **no extra code**. Thin adapters connect the
 same API to Hono, Next.js, Bun, Cloudflare Workers, Deno (fetch), and
