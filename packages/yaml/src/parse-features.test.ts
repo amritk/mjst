@@ -247,6 +247,29 @@ describe('resource-exhaustion guards', () => {
     expect(out.d.x).toBe(1)
   })
 
+  it('rejects a deep alias chain in projection instead of overflowing the stack', () => {
+    // Each link nests ~800 deep (under the parser's 1000 cap) and aliases the
+    // previous one, so the *expanded* traversal is ~800×5 deep while the node
+    // count stays far under the expansion budget — the shape that used to reach
+    // the native stack limit and throw an uncatchable RangeError.
+    const open = '['.repeat(800)
+    const close = ']'.repeat(800)
+    let src = `b0: &b0 ${open}0${close}\n`
+    for (let i = 1; i <= 4; i++) src += `b${i}: &b${i} ${open}*b${i - 1}${close}\n`
+    src += 'root: *b4\n'
+    const doc = parseDocument(src)
+    expect(() => doc.toJS()).toThrow(/nesting depth/i)
+  })
+
+  it('still projects a bounded alias that reuses a moderately deep subtree', () => {
+    const open = '['.repeat(300)
+    const close = ']'.repeat(300)
+    const out = parseDocument(`base: &b ${open}1${close}\ncopy: *b\n`).toJS() as { copy: unknown[] }
+    let node: unknown = out.copy
+    for (let i = 0; i < 300; i++) node = (node as unknown[])[0]
+    expect(node).toBe(1)
+  })
+
   it('reports a depth-limit error on pathologically nested flow input instead of overflowing', () => {
     const { errors } = parseDocument('['.repeat(100_000))
     expect(errors.some((e) => e.code === 'DEPTH_LIMIT')).toBe(true)

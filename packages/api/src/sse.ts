@@ -16,18 +16,39 @@ export type SseEvent = {
   readonly comment?: string
 }
 
+// The SSE line grammar ends a line on CR, LF, or CRLF, so splitting a
+// multi-line field value on this catches every terminator a browser's
+// `EventSource` parser would. Splitting on `\n` alone (missing `\r`) is an
+// injection hole: a lone CR in `data` is emitted verbatim, and the client
+// reads it as a line break, letting attacker-controlled text forge extra
+// `data:` fields — or, via `\r\r`, terminate the event and forge a whole new
+// one. Applied to `data` and `comment`, which legitimately span lines.
+const SSE_NEWLINE = /\r\n|[\r\n]/
+
+// `event` and `id` are single-value control fields — one line by construction.
+// A CR or LF in them cannot be a legitimate line break, so it can only be an
+// attempt to inject additional fields/events; strip both rather than emit them.
+const stripNewlines = (value: string): string => value.replace(/[\r\n]/g, '')
+
 /**
  * Serializes one {@link SseEvent} into an SSE frame (fields followed by the
  * blank-line terminator). Exported for hand-rolled streams and tests.
+ *
+ * Newlines in field values are handled per the SSE line grammar so a handler
+ * that streams user-controlled strings cannot forge fields or events: `data`
+ * and `comment` split on CR/LF/CRLF into repeated fields, while the
+ * single-line `event`/`id` fields have any CR/LF stripped.
  */
 export const formatSse = (event: SseEvent): string => {
   let frame = ''
-  if (event.comment !== undefined) frame += `: ${event.comment}\n`
-  if (event.event !== undefined) frame += `event: ${event.event}\n`
-  if (event.id !== undefined) frame += `id: ${event.id}\n`
+  if (event.comment !== undefined) {
+    for (const line of event.comment.split(SSE_NEWLINE)) frame += `: ${line}\n`
+  }
+  if (event.event !== undefined) frame += `event: ${stripNewlines(event.event)}\n`
+  if (event.id !== undefined) frame += `id: ${stripNewlines(event.id)}\n`
   if (event.retry !== undefined) frame += `retry: ${event.retry}\n`
   if (event.data !== undefined) {
-    for (const line of event.data.split('\n')) frame += `data: ${line}\n`
+    for (const line of event.data.split(SSE_NEWLINE)) frame += `data: ${line}\n`
   }
   return `${frame}\n`
 }

@@ -67,13 +67,46 @@ const LOCALS_KEY = '__amritk.rateLimit'
 
 type StampedHeaders = { readonly limit: number; readonly remaining: number; readonly reset: number }
 
+// Hard ceiling on how many keys the in-memory store retains. A flood of
+// distinct keys — trivial when the key derives from a spoofable header like
+// `x-forwarded-for` — would otherwise grow the map without bound (memory
+// exhaustion) and, since a sweep can only drop *expired* entries, turn every
+// subsequent insert into a full O(n) scan that frees nothing (CPU exhaustion).
+// When the map crosses `MAX_KEYS` it is trimmed back down to `TARGET_KEYS`, so
+// the maintenance cost amortizes to O(1) per insert instead of running each
+// time. Evicting a still-live counter under such a flood only grants that key a
+// fresh window — strictly better than the unbounded growth it replaces, and the
+// default store is already documented as single-instance (use a shared `store`
+// for anything larger).
+const MAX_KEYS = 100_000
+const TARGET_KEYS = 90_000
+
 /**
  * A process-memory {@link RateLimitStore} using fixed windows. Exported so a
  * test or a single-instance deployment can hold a reference (to clear it, say);
  * most callers just let {@link createRateLimit} default to a fresh one.
+ *
+ * Memory is bounded: the map is trimmed to {@link TARGET_KEYS} once it exceeds
+ * {@link MAX_KEYS}, so a flood of distinct keys can neither exhaust memory nor
+ * degrade the hot path to a per-request O(n) scan.
  */
 export const memoryRateLimitStore = (): RateLimitStore => {
   const windows = new Map<string, RateLimitState>()
+  const trim = (now: number): void => {
+    // First drop entries whose window has already elapsed — cheap and lossless.
+    for (const [candidate, value] of windows) {
+      if (value.resetAt <= now) windows.delete(candidate)
+    }
+    // If still over budget the surplus is live keys (a distinct-key flood).
+    // Evict oldest-inserted first, down to the target, so the trim amortizes.
+    if (windows.size > TARGET_KEYS) {
+      let excess = windows.size - TARGET_KEYS
+      for (const candidate of windows.keys()) {
+        windows.delete(candidate)
+        if (--excess <= 0) break
+      }
+    }
+  }
   return {
     hit: (key, windowMs) => {
       const now = Date.now()
@@ -81,13 +114,7 @@ export const memoryRateLimitStore = (): RateLimitStore => {
       if (existing === undefined || existing.resetAt <= now) {
         const state = { count: 1, resetAt: now + windowMs }
         windows.set(key, state)
-        // Opportunistic purge so an idle-but-churning keyspace does not grow
-        // without bound; bounded to a small scan so a hot path stays cheap.
-        if (windows.size > 10_000) {
-          for (const [candidate, value] of windows) {
-            if (value.resetAt <= now) windows.delete(candidate)
-          }
-        }
+        if (windows.size > MAX_KEYS) trim(now)
         return state
       }
       const state = { count: existing.count + 1, resetAt: existing.resetAt }
