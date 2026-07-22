@@ -1,6 +1,6 @@
 {
   "name": "@amritk/generate-parsers",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "description": "Generate TypeScript parsers and type definitions from JSON Schemas.",
   "module": "./dist/index.js",
   "type": "module",
