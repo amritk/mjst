@@ -16,9 +16,23 @@ jobs:
       pull-requests: write
       id-token: write
     steps:
+      # Mint a short-lived token from a GitHub App installation so the Release
+      # PR is authored by the App instead of github-actions[bot]. Bot-authored
+      # PRs get gated behind the "requires approval from a maintainer" screen
+      # and often don't trigger CI at all; an App is a trusted actor, so its
+      # PR runs CI automatically with no approval. Requires the two secrets
+      # below (App installed on this repo with contents:write + pull-requests:write).
+      - name: Generate a token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
 
       - uses: oven-sh/setup-bun@v2
 
@@ -63,6 +77,8 @@ jobs:
         with:
           version: bun run release:version
           publish: bun run release:publish
+          title: Release
+          commit: "chore: release"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           NPM_CONFIG_PROVENANCE: "true"
