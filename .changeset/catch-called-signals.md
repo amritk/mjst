@@ -8,9 +8,10 @@ creation, where `attr={signal}` binds it reactively. The mistake cannot be
 caught at runtime (props are evaluated before `jsx()` runs) or by the type
 checker (a called signal returns a valid static value), so it is caught in the
 source. `catchCalledSignals()` walks the TypeScript AST in Vite's `transform`
-hook, so it reports live in the dev server (a warning per finding, with a
-clickable `file:line:column`) and fails `vite build` — one plugin covering both
-the editor feedback loop and the CI gate. It flags only the unambiguous shape
+hook, so it reports live in the dev server — a terminal warning per finding
+(clickable `file:line:column`) plus a non-blocking error overlay — and fails
+`vite build`, one plugin covering both the editor feedback loop and the CI gate.
+Pass `{ overlay: false }` to keep dev feedback in the terminal only. It flags only the unambiguous shape
 (a binding whose whole value is a single zero-argument call) — both attributes
 (`disabled={streaming()}`, `show`/`class`/`style`, and component props such as
 `<For each={items()}>`) and children (`<span>{count()}</span>`) — leaving bare

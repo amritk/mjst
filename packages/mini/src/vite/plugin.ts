@@ -1,6 +1,6 @@
-import type { Plugin } from 'vite'
+import type { ErrorPayload, Plugin, ViteDevServer } from 'vite'
 
-import { findCalledSignalBindings } from './find-called-signal-bindings'
+import { type CalledSignalBinding, findCalledSignalBindings } from './find-called-signal-bindings'
 
 /**
  * Options for {@link catchCalledSignals}. The default severity tracks the Vite
@@ -15,6 +15,13 @@ export type CatchCalledSignalsOptions = {
    * to ship a frozen signal. Set it explicitly to force one behaviour.
    */
   readonly failOnError?: boolean
+  /**
+   * Surface findings in Vite's error overlay during dev, on top of the terminal
+   * warnings. The overlay is non-blocking — the module still loads — and clears
+   * itself on the next clean edit. Defaults to `true`; set `false` to keep the
+   * feedback in the terminal only.
+   */
+  readonly overlay?: boolean
 }
 
 /** A `.tsx` module we should scan — not a virtual module, not a dependency. */
@@ -24,7 +31,7 @@ const isScannable = (id: string): boolean => {
 }
 
 /** The human-facing message for one finding — the fix is in the text, not just the rule name. */
-const describe = ({ attribute, callee }: { attribute?: string; callee: string }): string => {
+const describe = ({ attribute, callee }: CalledSignalBinding): string => {
   const [was, fix] =
     attribute === undefined
       ? [`{${callee}()}`, `{${callee}}`]
@@ -33,17 +40,49 @@ const describe = ({ attribute, callee }: { attribute?: string; callee: string })
 }
 
 /**
+ * A one-line source frame with a caret under the finding, for the overlay. The
+ * `>` gutter marks the offending line the way Vite's own frames do.
+ */
+const frameFor = (code: string, binding: CalledSignalBinding): string => {
+  const line = code.split('\n')[binding.line - 1] ?? ''
+  const gutter = `> ${binding.line} | `
+  const caret = `${' '.repeat(gutter.length + binding.column - 1)}^`
+  return `${gutter}${line}\n${caret}`
+}
+
+/**
+ * Builds the overlay payload for a file's findings. The overlay shows one error
+ * at a time, so every binding goes into the message and the first anchors the
+ * `loc`/frame — the terminal warnings remain the full, clickable list.
+ */
+const overlayError = (code: string, id: string, bindings: readonly CalledSignalBinding[]): ErrorPayload['err'] => {
+  const first = bindings[0] as CalledSignalBinding
+  const lines = bindings.map((binding) => `  ${id}:${binding.line}:${binding.column}  ${describe(binding)}`)
+  return {
+    plugin: '@amritk/mini:catch-called-signals',
+    message: `${bindings.length} frozen signal binding${bindings.length === 1 ? '' : 's'}:\n${lines.join('\n')}`,
+    stack: '',
+    id,
+    frame: frameFor(code, first),
+    loc: { file: id, line: first.line, column: first.column },
+  }
+}
+
+/**
  * A Vite plugin that catches mini's called-signal footgun as you type. It scans
  * each `.tsx` module in `transform` (so it re-runs on every edit) using the same
  * {@link findCalledSignalBindings} core as the CLI, warns with a clickable
- * `file:line:column`, and — during `vite build` — fails the build so the
- * mistake cannot reach production. It never rewrites your code; `transform`
- * always returns `null`.
+ * `file:line:column`, shows the findings in the dev overlay, and — during
+ * `vite build` — fails the build so the mistake cannot reach production. It
+ * never rewrites your code; `transform` always returns `null`.
  */
 export const catchCalledSignals = (options: CatchCalledSignalsOptions = {}): Plugin => {
   // Captured from `configResolved` so the default severity can follow the
   // command (`serve` warns, `build` fails) unless `failOnError` overrides it.
   let failByDefault = false
+  // The dev server, captured in `serve` only, so `transform` can push the
+  // overlay over its WebSocket. `undefined` during `build`.
+  let server: ViteDevServer | undefined
 
   return {
     name: '@amritk/mini:catch-called-signals',
@@ -52,6 +91,9 @@ export const catchCalledSignals = (options: CatchCalledSignalsOptions = {}): Plu
     enforce: 'pre',
     configResolved(config) {
       failByDefault = config.command === 'build'
+    },
+    configureServer(devServer) {
+      server = devServer
     },
     transform(code, id) {
       if (id.startsWith('\0') || !isScannable(id)) return null
@@ -70,6 +112,12 @@ export const catchCalledSignals = (options: CatchCalledSignalsOptions = {}): Plu
         this.error(
           `${count} frozen signal binding${count === 1 ? '' : 's'} in this file — pass the getter without () to keep bindings reactive`,
         )
+      }
+
+      // Non-blocking dev overlay: the module still loads, and the next clean
+      // edit sends an HMR update that dismisses it.
+      if (server !== undefined && options.overlay !== false) {
+        server.ws.send({ type: 'error', err: overlayError(code, id, bindings) })
       }
 
       return null

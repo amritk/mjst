@@ -40,6 +40,17 @@ const resolveConfig = (plugin: Plugin, command: 'build' | 'serve'): void => {
   run({ command })
 }
 
+/** Every payload the overlay path pushed over the dev server's WebSocket. */
+type Overlay = { type: string; err: { message: string; frame?: string; loc?: { line: number } } }
+
+/** Attaches a mock dev server so the plugin's overlay branch has a `ws.send` to call. */
+const attachServer = (plugin: Plugin, sent: Overlay[]): void => {
+  const hook = plugin.configureServer
+  const handler = typeof hook === 'function' ? hook : hook?.handler
+  const run = handler as (server: { ws: { send: (payload: Overlay) => void } }) => unknown
+  run({ ws: { send: (payload) => sent.push(payload) } })
+}
+
 const FOOTGUN = 'const a = <button disabled={streaming()}>x</button>'
 
 describe('catch-called-signals plugin', () => {
@@ -72,6 +83,35 @@ describe('catch-called-signals plugin', () => {
     resolveConfig(plugin, 'serve')
 
     expect(() => runTransform(plugin, reports, FOOTGUN, '/app/widget.tsx')).toThrow()
+  })
+
+  it('pushes a dev overlay for a frozen binding', () => {
+    const reports: Reports = { warnings: [], errors: [] }
+    const sent: Overlay[] = []
+    const plugin = catchCalledSignals()
+    resolveConfig(plugin, 'serve')
+    attachServer(plugin, sent)
+
+    runTransform(plugin, reports, FOOTGUN, '/app/widget.tsx')
+
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.type).toBe('error')
+    expect(sent[0]?.err.message).toContain('disabled={streaming}')
+    expect(sent[0]?.err.frame).toContain('^')
+    expect(sent[0]?.err.loc?.line).toBe(1)
+  })
+
+  it('does not push an overlay when overlay is disabled', () => {
+    const reports: Reports = { warnings: [], errors: [] }
+    const sent: Overlay[] = []
+    const plugin = catchCalledSignals({ overlay: false })
+    resolveConfig(plugin, 'serve')
+    attachServer(plugin, sent)
+
+    runTransform(plugin, reports, FOOTGUN, '/app/widget.tsx')
+
+    expect(reports.warnings).toHaveLength(1)
+    expect(sent).toEqual([])
   })
 
   it('warns on a called signal used as a child', () => {
