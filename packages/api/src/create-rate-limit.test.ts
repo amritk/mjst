@@ -57,6 +57,20 @@ describe('create-rate-limit', () => {
     expect(await limit.onRequest(req(), undefined, undefined, {})).toBeUndefined()
   })
 
+  it('bounds memory under a flood of distinct keys by evicting the oldest', async () => {
+    // Simulates a distinct-key flood (e.g. spoofed x-forwarded-for values): the
+    // map must not grow without bound, so oldest-inserted keys are evicted once
+    // it crosses the ceiling. An evicted key's counter resets to a fresh window.
+    const store = memoryRateLimitStore()
+    store.hit('victim', 60_000)
+    expect((await store.hit('victim', 60_000)).count).toBe(2) // still tracked at count 2
+    for (let i = 0; i < 100_001; i++) store.hit(`flood-${i}`, 60_000)
+    // The oldest key ('victim') has been evicted, so it starts a new window.
+    expect((await store.hit('victim', 60_000)).count).toBe(1)
+    // A recently-seen key is retained and keeps counting.
+    expect((await store.hit('flood-100000', 60_000)).count).toBe(2)
+  })
+
   it('supports a custom 429 body', async () => {
     const limit = createRateLimit({
       limit: 0,

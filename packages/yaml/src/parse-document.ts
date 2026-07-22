@@ -1278,23 +1278,41 @@ const newExpansionBudget = (sourceLength: number): ExpansionBudget => ({
   left: Math.max(MIN_ALIAS_NODE_BUDGET, sourceLength * ALIAS_NODES_PER_BYTE),
 })
 
-const toJsValue = (node: YamlNode | null, merge: boolean, budget: ExpansionBudget): unknown => {
+/**
+ * Cap on recursion depth while *projecting* the tree to JS, distinct from the
+ * parser's {@link MAX_PARSE_DEPTH}. The parser bounds structural nesting, but
+ * aliases are re-expanded here: an alias defined at shallow parse depth can
+ * point at a deeply-nested node, and a chain of such aliases makes the expanded
+ * traversal far deeper than the parse tree while keeping the node count under
+ * {@link ExpansionBudget} (each node is visited once per expansion). Without a
+ * separate limit that chain recurses straight into the native stack ceiling,
+ * turning a small untrusted document into an uncatchable `RangeError` crash.
+ * Set to twice the parse cap so ordinary alias reuse (embedding a shared,
+ * deeply-nested subtree) still projects, while a runaway chain throws the same
+ * catchable resource-exhaustion error the budget does.
+ */
+const MAX_PROJECT_DEPTH = MAX_PARSE_DEPTH * 2
+
+const toJsValue = (node: YamlNode | null, merge: boolean, budget: ExpansionBudget, depth: number): unknown => {
   if (budget.left-- <= 0) {
     throw new Error('Excessive alias expansion — the document may be a resource-exhaustion attack')
+  }
+  if (depth > MAX_PROJECT_DEPTH) {
+    throw new Error('Excessive nesting depth — the document may be a resource-exhaustion attack')
   }
   if (node === null) return null
   if (node.kind === 'scalar') return node.tag !== undefined ? applyScalarTag(node) : node.value
   if (node.kind === 'alias') {
     // `target` was captured at parse time as the anchor in scope where the alias
     // appeared, so a later redefinition of the same name doesn't affect it.
-    return node.target ? toJsValue(node.target, merge, budget) : undefined
+    return node.target ? toJsValue(node.target, merge, budget, depth + 1) : undefined
   }
   if (node.kind === 'seq') {
     // Index loop into a pre-sized array: no per-seq closure (as `.map` allocates)
     // and the result array never reallocates as it grows.
     const items = node.items
     const out = new Array(items.length)
-    for (let i = 0; i < items.length; i++) out[i] = toJsValue(items[i] ?? null, merge, budget)
+    for (let i = 0; i < items.length; i++) out[i] = toJsValue(items[i] ?? null, merge, budget, depth + 1)
     // `!!omap` is an ordered map written as a sequence of single-pair maps;
     // collapse it to a `Map` to match `yaml` (eemeli). One `=== 'omap'` check
     // per sequence keeps the untagged path effectively free.
@@ -1309,17 +1327,17 @@ const toJsValue = (node: YamlNode | null, merge: boolean, budget: ExpansionBudge
     if (pair === undefined) continue
     const key = pair.key
     if (merge && key.kind === 'scalar' && key.source === '<<') {
-      applyMerge(obj, toJsValue(pair.value, merge, budget))
+      applyMerge(obj, toJsValue(pair.value, merge, budget, depth + 1))
       continue
     }
-    setMapKey(obj, keyText(key), pair.value ? toJsValue(pair.value, merge, budget) : null)
+    setMapKey(obj, keyText(key), pair.value ? toJsValue(pair.value, merge, budget, depth + 1) : null)
   }
   // `!!set` is a mapping whose keys are the members; project to a `Set`.
   if (node.tag === 'set') {
     const set = new Set<unknown>()
     for (let i = 0; i < items.length; i++) {
       const pair = items[i]
-      if (pair) set.add(toJsValue(pair.key, merge, budget))
+      if (pair) set.add(toJsValue(pair.key, merge, budget, depth + 1))
     }
     return set
   }
@@ -1369,7 +1387,7 @@ const finishDocument = (state: State, contents: YamlNode | null): YamlDocument =
   const { errors, warnings, merge, len } = state
   // Aliases carry their resolved target (captured at parse time), so projection
   // no longer needs the anchors map — anchor scope is settled by the time we get here.
-  return { contents, errors, warnings, toJS: () => toJsValue(contents, merge, newExpansionBudget(len)) }
+  return { contents, errors, warnings, toJS: () => toJsValue(contents, merge, newExpansionBudget(len), 0) }
 }
 
 /**

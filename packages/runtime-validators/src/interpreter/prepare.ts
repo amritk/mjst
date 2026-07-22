@@ -1,4 +1,5 @@
 import { type InterpreterContext, interpret, newValidatorCaches } from '@/interpreter/interpret'
+import { limitsCacheKey, type ResolvedLimits, resolveLimits, screenPatterns } from '@/interpreter/limits'
 import type { ValidateOptions, ValidationResult } from '@/types'
 
 /**
@@ -15,9 +16,9 @@ const normalizeFormats = (formats: ValidateOptions['formats']): 'all' | Readonly
   return new Set(formats)
 }
 
-const cacheKey = (emitErrors: boolean, formats: 'all' | ReadonlySet<string>): string => {
+const cacheKey = (emitErrors: boolean, formats: 'all' | ReadonlySet<string>, limits: ResolvedLimits): string => {
   const formatsKey = formats === 'all' ? '*' : [...formats].sort().join(',')
-  return `${emitErrors ? 'e' : 'g'}|${formatsKey}`
+  return `${emitErrors ? 'e' : 'g'}|${formatsKey}|${limitsCacheKey(limits)}`
 }
 
 /**
@@ -30,7 +31,13 @@ const makeValidator = (
   schema: unknown,
   formats: 'all' | ReadonlySet<string>,
   emitErrors: boolean,
+  limits: ResolvedLimits,
 ): ((input: unknown) => unknown) => {
+  // Screen every `pattern`/`patternProperties` source once, up front, so a
+  // schema carrying a ReDoS-prone regex fails loudly here (at build time) rather
+  // than mid-request. Skipped when `allowUnsafePatterns` is set.
+  screenPatterns(schema, limits.allowUnsafePatterns)
+
   // One caches holder, captured here and shared across every call of this
   // validator. Its maps stay null until the schema actually hits a `pattern` or
   // `$ref`, so a first validation of the common map-free schema allocates
@@ -46,6 +53,9 @@ const makeValidator = (
       errors: null,
       failed: false,
       refStack: [],
+      maxDepth: limits.maxDepth,
+      // A fresh budget per call: the ceiling is per-validation, not per-validator.
+      budget: { steps: limits.maxSteps },
     }
     interpret(ctx, schema, input, '')
     if (emitErrors) {
@@ -65,11 +75,12 @@ export const prepareValidator = (
   emitErrors: boolean,
 ): ((input: unknown) => unknown) => {
   const formats = normalizeFormats(options?.formats)
+  const limits = resolveLimits(options?.limits)
 
   // Only object/array schemas can be WeakMap keys. Boolean schemas are trivial,
   // so skipping the cache for them costs nothing.
   if (typeof schema !== 'object' || schema === null) {
-    return makeValidator(schema, formats, emitErrors)
+    return makeValidator(schema, formats, emitErrors, limits)
   }
 
   let byKey = cache.get(schema)
@@ -78,11 +89,11 @@ export const prepareValidator = (
     cache.set(schema, byKey)
   }
 
-  const key = cacheKey(emitErrors, formats)
+  const key = cacheKey(emitErrors, formats, limits)
   const existing = byKey.get(key)
   if (existing) return existing
 
-  const validator = makeValidator(schema, formats, emitErrors)
+  const validator = makeValidator(schema, formats, emitErrors, limits)
   byKey.set(key, validator)
   return validator
 }

@@ -1,4 +1,5 @@
 import { FORMAT_CHECKS, isValidRegex } from '@/interpreter/format-checks'
+import { validationLimitError } from '@/interpreter/limits'
 import { resolveDynamicRef, resolveRecursiveRef } from '@/interpreter/resolve-dynamic-ref'
 import { resolveLocalRef } from '@/interpreter/resolve-local-ref'
 import type { ValidationError } from '@/types'
@@ -49,6 +50,25 @@ export type InterpreterContext = {
    * edge, so it only ever holds current ancestors — see {@link interpretRef}.
    */
   readonly refStack: unknown[]
+  /** Recursion-depth ceiling (see {@link ValidateLimits.maxDepth}). */
+  readonly maxDepth: number
+  /**
+   * Remaining work budget, shared by reference with nested branch contexts so an
+   * exponential `anyOf`/`oneOf` fan-out draws down one shared pool rather than a
+   * fresh budget per branch (see {@link ValidateLimits.maxSteps}). A holder
+   * object rather than a bare number precisely so the reference is shared.
+   */
+  readonly budget: { steps: number }
+}
+
+/** Charges one unit of the shared work budget, throwing once it is exhausted. */
+const spend = (ctx: InterpreterContext): void => {
+  if (--ctx.budget.steps < 0) {
+    throw validationLimitError(
+      'Validation exceeded its step budget (possible exponential/quadratic schema or input). ' +
+        'Raise it with `limits: { maxSteps }` if the schema and data are trusted.',
+    )
+  }
 }
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
@@ -128,8 +148,52 @@ const deepEqual = (a: unknown, b: unknown, depth = 0): boolean => {
   return true
 }
 
+/**
+ * A cheap, order-independent structural hash consistent with {@link deepEqual}:
+ * `deepEqual(a, b)` implies `structuralHash(a) === structuralHash(b)`. It buckets
+ * candidate-equal elements in {@link allUnique} so the exact `deepEqual` compare
+ * runs only within a bucket — turning the realistic "array of distinct objects"
+ * case from O(n²) into ~O(n). Object keys are folded commutatively (XOR) so key
+ * order does not change the hash; `NaN`/`-0` collapse to match SameValueZero.
+ * Depth-capped like `deepEqual`, so over-deep values simply share a bucket and
+ * are settled by the (also depth-capped) `deepEqual` — never a wrong verdict.
+ */
+const structuralHash = (value: unknown, depth = 0): number => {
+  if (value === null) return 0x1a2b3c
+  const t = typeof value
+  if (t === 'number') {
+    const n = value as number
+    return Number.isNaN(n) ? 0x7ff8 : n === 0 ? 0 : Math.trunc(n * 2654435761) | 0
+  }
+  if (t === 'string') {
+    const s = value as string
+    let h = 0x811c9dc5
+    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193)
+    return h | 0
+  }
+  if (t === 'boolean') return value ? 1 : 2
+  if (t !== 'object') return 0x5eed // symbol/function/undefined — rare in JSON data
+  if (depth >= MAX_EQUAL_DEPTH) return 0xdee9 // over-deep: share a bucket, deepEqual settles it
+  if (Array.isArray(value)) {
+    let h = 0x12345 ^ value.length
+    for (let i = 0; i < value.length; i++) h = (Math.imul(h, 31) + structuralHash(value[i], depth + 1)) | 0
+    return h | 0
+  }
+  const obj = value as Record<string, unknown>
+  const keys = Object.keys(obj)
+  let h = 0xabcde ^ keys.length
+  // Commutative fold: XOR each key/value contribution so ordering is irrelevant,
+  // matching deepEqual's key-order-independent comparison.
+  for (const k of keys) {
+    let kh = 0x811c9dc5
+    for (let i = 0; i < k.length; i++) kh = Math.imul(kh ^ k.charCodeAt(i), 0x01000193)
+    h = (h ^ (Math.imul(kh, 0x9e3779b1) + structuralHash(obj[k], depth + 1))) | 0
+  }
+  return h | 0
+}
+
 /** True when every element of `arr` is distinct by {@link deepEqual}. */
-const allUnique = (arr: readonly unknown[]): boolean => {
+const allUnique = (ctx: InterpreterContext, arr: readonly unknown[]): boolean => {
   const len = arr.length
   if (len < 2) return true
 
@@ -137,7 +201,7 @@ const allUnique = (arr: readonly unknown[]): boolean => {
   // a native Set. Set membership is SameValueZero, which is already type-sensitive
   // (1, "1", and true are three distinct entries), so it matches JSON Schema's
   // equality for primitives without allocating a stringified key per element.
-  // Objects/arrays fall back to the exact structural comparison below.
+  // Objects/arrays fall back to the structural comparison below.
   let allPrimitive = true
   for (let i = 0; i < len; i++) {
     const v = arr[i]
@@ -148,7 +212,26 @@ const allUnique = (arr: readonly unknown[]): boolean => {
   }
   if (allPrimitive) return new Set(arr).size === len
 
-  for (let i = 0; i < len; i++) for (let j = i + 1; j < len; j++) if (deepEqual(arr[i], arr[j])) return false
+  // Structural path: bucket by hash, then run the exact `deepEqual` only within a
+  // bucket. Distinct objects land in distinct buckets (~O(n)); the O(n²) pairwise
+  // fallback survives only inside a bucket (equal or hash-colliding elements), and
+  // every comparison there charges the step budget so a crafted all-collide input
+  // fails loudly instead of hanging.
+  const buckets = new Map<number, unknown[]>()
+  for (let i = 0; i < len; i++) {
+    const item = arr[i]
+    const h = structuralHash(item)
+    const bucket = buckets.get(h)
+    if (bucket === undefined) {
+      buckets.set(h, [item])
+      continue
+    }
+    for (const seen of bucket) {
+      spend(ctx)
+      if (deepEqual(seen, item)) return false
+    }
+    bucket.push(item)
+  }
   return true
 }
 
@@ -340,6 +423,7 @@ const matchesSchema = (
   ctx: InterpreterContext,
   schema: unknown,
   value: unknown,
+  depth: number,
   collect?: Evaluation | null,
 ): boolean => {
   const sub: InterpreterContext = {
@@ -350,12 +434,16 @@ const matchesSchema = (
     errors: null,
     failed: false,
     refStack: ctx.refStack,
+    maxDepth: ctx.maxDepth,
+    // Share the same budget holder by reference so branch evaluation draws down
+    // the caller's pool — an exponential fan-out cannot escape it with a fresh one.
+    budget: ctx.budget,
   }
   // When the caller is tracking annotations, evaluate the branch into a private
   // tracker and fold it in only if the branch matched — annotations from a
   // failing branch never count toward `unevaluated*`.
   const branchEval = collect ? newEvaluation() : null
-  interpret(sub, schema, value, '', branchEval)
+  interpret(sub, schema, value, '', branchEval, depth + 1)
   const ok = !sub.failed
   if (ok && collect && branchEval) mergeEvaluation(collect, branchEval)
   return ok
@@ -483,6 +571,7 @@ const interpretObject = (
   value: unknown,
   path: string,
   evalScope: Evaluation | null,
+  depth: number,
 ): void => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return
   const obj = value as Record<string, unknown>
@@ -512,7 +601,7 @@ const interpretObject = (
         else {
           // Build the child path from the pre-escaped key (a bare concat, no
           // per-call scan), only in error mode where it is actually read.
-          interpret(ctx, properties[key], pv, emitErrors ? `${path}/${escapedKeys[i]}` : path)
+          interpret(ctx, properties[key], pv, emitErrors ? `${path}/${escapedKeys[i]}` : path, null, depth + 1)
           evalScope?.props.add(key)
         }
       } else if (present) {
@@ -550,7 +639,7 @@ const interpretObject = (
   if (dependentSchemas) {
     for (const [trigger, subSchema] of Object.entries(dependentSchemas)) {
       if (!hasProperty(obj, trigger)) continue
-      interpretInPlace(ctx, subSchema, obj, path, evalScope)
+      interpretInPlace(ctx, subSchema, obj, path, evalScope, depth)
       if (ctx.failed) return
     }
   }
@@ -570,7 +659,7 @@ const interpretObject = (
           }
         }
       } else {
-        interpretInPlace(ctx, dep, obj, path, evalScope)
+        interpretInPlace(ctx, dep, obj, path, evalScope, depth)
         if (ctx.failed) return
       }
     }
@@ -596,7 +685,7 @@ const interpretObject = (
         if (regex.test(k)) {
           matched = true
           evalScope?.props.add(k)
-          interpret(ctx, patternSchema, obj[k], childPath(ctx, path, k))
+          interpret(ctx, patternSchema, obj[k], childPath(ctx, path, k), null, depth + 1)
           if (ctx.failed) return
         }
       }
@@ -608,7 +697,7 @@ const interpretObject = (
         if (ctx.failed) return
       } else if (isPlainObject(additional)) {
         evalScope?.props.add(k)
-        interpret(ctx, additional, obj[k], childPath(ctx, path, k))
+        interpret(ctx, additional, obj[k], childPath(ctx, path, k), null, depth + 1)
         if (ctx.failed) return
       }
     }
@@ -631,7 +720,7 @@ const interpretObject = (
   if ('propertyNames' in s) {
     const nameSchema = s['propertyNames']
     for (const k in obj) {
-      if (!matchesSchema(ctx, nameSchema, k)) {
+      if (!matchesSchema(ctx, nameSchema, k, depth)) {
         fail(ctx, `property name "${k}" is invalid`, childPath(ctx, path, k))
         if (ctx.failed) return
       }
@@ -646,6 +735,7 @@ const interpretArray = (
   value: unknown,
   path: string,
   evalScope: Evaluation | null,
+  depth: number,
 ): void => {
   if (!Array.isArray(value)) return
   const arr = value as unknown[]
@@ -679,7 +769,7 @@ const interpretArray = (
   if (tuple) {
     for (let index = 0; index < tuple.length; index++) {
       if (arr.length > index) {
-        interpret(ctx, tuple[index], arr[index], childPath(ctx, path, index))
+        interpret(ctx, tuple[index], arr[index], childPath(ctx, path, index), null, depth + 1)
         evalScope?.items.add(index)
         if (ctx.failed) return
       }
@@ -693,7 +783,7 @@ const interpretArray = (
     }
   } else if (rest !== undefined && rest !== true) {
     for (let i = start; i < arr.length; i++) {
-      interpret(ctx, rest, arr[i], childPath(ctx, path, i))
+      interpret(ctx, rest, arr[i], childPath(ctx, path, i), null, depth + 1)
       if (ctx.failed) return
     }
     // A tail `items`/`additionalItems` schema sweeps every index from `start` on.
@@ -703,7 +793,7 @@ const interpretArray = (
     evalScope.allItems = true
   }
 
-  if (uniqueRequired && !allUnique(arr)) {
+  if (uniqueRequired && !allUnique(ctx, arr)) {
     fail(ctx, 'must have unique items', path)
     if (ctx.failed) return
   }
@@ -717,7 +807,7 @@ const interpretArray = (
     const min = typeof s['minContains'] === 'number' ? s['minContains'] : 1
     const max = typeof s['maxContains'] === 'number' ? s['maxContains'] : undefined
     let count = 0
-    for (const item of arr) if (matchesSchema(ctx, containsSchema, item)) count++
+    for (const item of arr) if (matchesSchema(ctx, containsSchema, item, depth)) count++
     // Ajv parity for `unevaluatedItems`: a satisfied `contains` marks the *whole*
     // array as evaluated, not just the matching items — but a bare `minContains: 0`
     // (with no `maxContains`) opts out of contributing any evaluated-item annotation
@@ -864,13 +954,14 @@ const interpretRef = (
   value: unknown,
   path: string,
   evalScope: Evaluation | null,
+  depth: number,
 ): void => {
   const stack = ctx.refStack
   for (let i = 0; i < stack.length; i += 2) {
     if (stack[i] === target && stack[i + 1] === value) return
   }
   stack.push(target, value)
-  interpretInPlace(ctx, target, value, path, evalScope)
+  interpretInPlace(ctx, target, value, path, evalScope, depth)
   stack.length -= 2
 }
 
@@ -892,13 +983,14 @@ const interpretInPlace = (
   value: unknown,
   path: string,
   parentScope: Evaluation | null,
+  depth: number,
 ): void => {
   if (parentScope === null) {
-    interpret(ctx, schema, value, path, null)
+    interpret(ctx, schema, value, path, null, depth + 1)
     return
   }
   const childScope = newEvaluation()
-  interpret(ctx, schema, value, path, childScope)
+  interpret(ctx, schema, value, path, childScope, depth + 1)
   mergeEvaluation(parentScope, childScope)
 }
 
@@ -914,10 +1006,22 @@ export const interpret = (
   value: unknown,
   path: string,
   evaluation: Evaluation | null = null,
+  depth = 0,
 ): void => {
   // In guard mode the first failure unwinds the whole walk; in error mode this
   // is never set, so every branch runs and collects.
   if (ctx.failed) return
+
+  // Resource ceilings, checked before any work at this node. Depth guards a
+  // recursive schema over deep data from overflowing the native stack; the step
+  // budget guards exponential/quadratic blow-up. Both throw a ValidationLimitError.
+  if (depth > ctx.maxDepth) {
+    throw validationLimitError(
+      `Validation exceeded its maximum depth of ${ctx.maxDepth} (deeply nested data against a recursive ` +
+        'schema). Raise it with `limits: { maxDepth }` if the schema and data are trusted.',
+    )
+  }
+  spend(ctx)
 
   // Boolean schemas: `true`/`{}` accept everything, `false` rejects everything.
   if (schema === true) return
@@ -946,7 +1050,7 @@ export const interpret = (
   // forever. Sibling keywords still apply per 2020-12, so we do not stop here.
   const ref = s['$ref']
   if (typeof ref === 'string') {
-    interpretRef(ctx, resolveRef(ctx, ref), value, path, evalScope)
+    interpretRef(ctx, resolveRef(ctx, ref), value, path, evalScope, depth)
     if (ctx.failed) return
   }
 
@@ -954,7 +1058,7 @@ export const interpret = (
   // `$ref`, sibling keywords still apply, so we do not stop here.
   const dynRef = s['$dynamicRef']
   if (typeof dynRef === 'string') {
-    interpretRef(ctx, resolveDyn(ctx, dynRef), value, path, evalScope)
+    interpretRef(ctx, resolveDyn(ctx, dynRef), value, path, evalScope, depth)
     if (ctx.failed) return
   }
 
@@ -962,7 +1066,7 @@ export const interpret = (
   // value is `"#"`: late-binds to the `$recursiveAnchor: true` subschema,
   // falling back to the document root.
   if (typeof s['$recursiveRef'] === 'string') {
-    interpretRef(ctx, resolveRec(ctx), value, path, evalScope)
+    interpretRef(ctx, resolveRec(ctx), value, path, evalScope, depth)
     if (ctx.failed) return
   }
 
@@ -1031,8 +1135,8 @@ export const interpret = (
   // schema analysis, no allocation), so it costs the cold one-shot path nothing.
   if (typeof value === 'object') {
     if (value !== null) {
-      if (Array.isArray(value)) interpretArray(ctx, s, value, path, evalScope)
-      else interpretObject(ctx, s, value, path, evalScope)
+      if (Array.isArray(value)) interpretArray(ctx, s, value, path, evalScope, depth)
+      else interpretObject(ctx, s, value, path, evalScope, depth)
       if (ctx.failed) return
     }
   } else if (typeof value === 'string') {
@@ -1045,7 +1149,7 @@ export const interpret = (
 
   if (Array.isArray(s['allOf'])) {
     for (const sub of s['allOf']) {
-      interpretInPlace(ctx, sub, value, path, evalScope)
+      interpretInPlace(ctx, sub, value, path, evalScope, depth)
       if (ctx.failed) return
     }
   }
@@ -1055,7 +1159,7 @@ export const interpret = (
     for (const sub of s['anyOf']) {
       // When tracking annotations, evaluate every branch (each match contributes
       // its evaluated keys); otherwise short-circuit on the first match.
-      if (matchesSchema(ctx, sub, value, evalScope)) {
+      if (matchesSchema(ctx, sub, value, depth, evalScope)) {
         ok = true
         if (!evalScope) break
       }
@@ -1069,7 +1173,7 @@ export const interpret = (
   if (Array.isArray(s['oneOf']) && s['oneOf'].length > 0) {
     let count = 0
     for (const sub of s['oneOf']) {
-      if (matchesSchema(ctx, sub, value, evalScope)) count++
+      if (matchesSchema(ctx, sub, value, depth, evalScope)) count++
     }
     if (count !== 1) {
       fail(ctx, 'must match exactly one schema in oneOf', path)
@@ -1079,24 +1183,24 @@ export const interpret = (
 
   if ('not' in s) {
     // `not` produces no annotations — a passing inner schema means failure.
-    if (matchesSchema(ctx, s['not'], value)) {
+    if (matchesSchema(ctx, s['not'], value, depth)) {
       fail(ctx, 'must not match schema', path)
       if (ctx.failed) return
     }
   }
 
   if ('if' in s) {
-    if (matchesSchema(ctx, s['if'], value, evalScope)) {
-      if ('then' in s) interpretInPlace(ctx, s['then'], value, path, evalScope)
+    if (matchesSchema(ctx, s['if'], value, depth, evalScope)) {
+      if ('then' in s) interpretInPlace(ctx, s['then'], value, path, evalScope, depth)
     } else if ('else' in s) {
-      interpretInPlace(ctx, s['else'], value, path, evalScope)
+      interpretInPlace(ctx, s['else'], value, path, evalScope, depth)
     }
   }
 
   // `unevaluatedProperties` / `unevaluatedItems` (2020-12) run last: every other
   // keyword above has recorded what it evaluated into `evalScope`, so these act
   // on exactly what is left over.
-  if (nodeUnevaluated && evalScope) interpretUnevaluated(ctx, s, value, path, evalScope)
+  if (nodeUnevaluated && evalScope) interpretUnevaluated(ctx, s, value, path, evalScope, depth)
 }
 
 /**
@@ -1111,6 +1215,7 @@ const interpretUnevaluated = (
   value: unknown,
   path: string,
   evalScope: Evaluation,
+  depth: number,
 ): void => {
   if ('unevaluatedProperties' in s && typeof value === 'object' && value !== null && !Array.isArray(value)) {
     const up = s['unevaluatedProperties']
@@ -1121,7 +1226,7 @@ const interpretUnevaluated = (
         if (up === false) {
           fail(ctx, 'must NOT have unevaluated properties', childPath(ctx, path, k))
         } else if (up !== true && isPlainObject(up)) {
-          interpret(ctx, up, obj[k], childPath(ctx, path, k))
+          interpret(ctx, up, obj[k], childPath(ctx, path, k), null, depth + 1)
         }
         evalScope.props.add(k)
         if (ctx.failed) return
@@ -1139,7 +1244,7 @@ const interpretUnevaluated = (
         if (ui === false) {
           fail(ctx, 'must NOT have unevaluated items', childPath(ctx, path, i))
         } else if (ui !== true && isPlainObject(ui)) {
-          interpret(ctx, ui, arr[i], childPath(ctx, path, i))
+          interpret(ctx, ui, arr[i], childPath(ctx, path, i), null, depth + 1)
         }
         evalScope.items.add(i)
         if (ctx.failed) return

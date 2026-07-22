@@ -18,6 +18,25 @@ describe('sse', () => {
     expect(formatSse({ data: 'a\nb' })).toBe('data: a\ndata: b\n\n')
   })
 
+  it('splits data on CR and CRLF, not just LF, so a lone CR cannot forge a field', () => {
+    // Without CR handling, `data: ok\rdata: {"role":"admin"}` reaches the
+    // client as two data fields — the second one attacker-forged.
+    expect(formatSse({ data: 'ok\rinjected' })).toBe('data: ok\ndata: injected\n\n')
+    expect(formatSse({ data: 'a\r\nb' })).toBe('data: a\ndata: b\n\n')
+  })
+
+  it('strips newlines from single-line event and id fields', () => {
+    // A `\n` in `event` would otherwise inject a `data:` field of its own.
+    expect(formatSse({ event: 'msg\ndata: forged', data: 'x' })).toBe('event: msgdata: forged\ndata: x\n\n')
+    expect(formatSse({ id: '1\revent: privileged', data: 'x' })).toBe('id: 1event: privileged\ndata: x\n\n')
+  })
+
+  it('splits a multi-line comment into repeated comment lines instead of injecting', () => {
+    // Each line stays a `:` comment (ignored by clients); no `\r\r` can slip a
+    // blank line through to terminate the event early.
+    expect(formatSse({ comment: 'a\r\rb' })).toBe(': a\n: \n: b\n\n')
+  })
+
   it('streams an async generator of events', async () => {
     const stream = sseStream(
       (async function* () {
