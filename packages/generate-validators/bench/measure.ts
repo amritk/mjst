@@ -6,8 +6,8 @@
  */
 export {
   fmtOps,
-  measure,
   type MeasureOptions,
+  measure,
   NOISY_SPREAD,
   opsCell,
   type Stats,
