@@ -5,7 +5,7 @@
 **A deliberately tiny signals-based UI layer: reactive DOM bindings plus a compilerless JSX runtime.**
 
 ![status](https://img.shields.io/badge/status-pre--alpha-ef4444?style=flat-square)&nbsp;
-![version](https://img.shields.io/badge/version-v0.1.0-6366f1?style=flat-square&logo=npm&logoColor=white)&nbsp;
+![version](https://img.shields.io/npm/v/@amritk/mini?style=flat-square&logo=npm&logoColor=white&label=version&color=6366f1)&nbsp;
 ![license](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)&nbsp;
 ![size](https://img.shields.io/badge/deps-1%20(alien--signals)-f97316?style=flat-square)&nbsp;
 ![vibe coded](https://img.shields.io/badge/vibe-coded-a855f7?style=flat-square)
