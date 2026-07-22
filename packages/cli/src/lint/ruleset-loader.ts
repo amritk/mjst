@@ -2,7 +2,8 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { parseWithPointers, type RulesetDefinition } from '@amritk/lint'
+import { parseWithPointers } from '@amritk/lint'
+import type { RulesetDefinition } from '@amritk/lint/types'
 
 const RULESET_FILENAMES = ['.lint.yaml', '.lint.yml', '.lint.json', '.lint.js', '.lint.mjs']
 

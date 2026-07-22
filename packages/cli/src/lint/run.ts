@@ -1,13 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { dirname, isAbsolute, resolve } from 'node:path'
-import {
-  DiagnosticSeverity,
-  type IDiagnostic,
-  type LintResolver,
-  lintDocument,
-  type RulesetDefinition,
-  validateRuleset,
-} from '@amritk/lint'
+import { type LintResolver, lintDocument, validateRuleset } from '@amritk/lint'
+import { DiagnosticSeverity, type IDiagnostic, type RulesetDefinition } from '@amritk/lint/types'
 import fg from 'fast-glob'
 import yargs from 'yargs'
 

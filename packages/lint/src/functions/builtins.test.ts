@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { IFunctionContext } from '../core'
+import type { IFunctionContext } from '../core/types'
 import {
   alphabetical,
   casing,

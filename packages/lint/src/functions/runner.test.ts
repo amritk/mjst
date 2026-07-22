@@ -1,15 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import {
-  createDocument,
-  createLinter,
-  createRuleset,
-  type ISourceDocument,
-  type ISourceOrigin,
-  type ISourceSet,
-  type JsonPath,
-  type RulesetDefinition,
-} from '../core'
+import { createDocument, createLinter, createRuleset } from '../core'
+import type { ISourceDocument, ISourceOrigin, ISourceSet, JsonPath, RulesetDefinition } from '../core/types'
 import { builtinFunctions } from './index'
 
 const lint = (source: string, definition: RulesetDefinition) =>

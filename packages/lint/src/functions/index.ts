@@ -1,4 +1,4 @@
-import type { FunctionRegistry } from '../core'
+import type { FunctionRegistry } from '../core/types'
 import { alphabetical } from './alphabetical'
 import { casing } from './casing'
 import { defined } from './defined'

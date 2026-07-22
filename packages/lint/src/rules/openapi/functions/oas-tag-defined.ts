@@ -1,4 +1,4 @@
-import type { IFunctionResult, RulesetFunction } from '../../../core'
+import type { IFunctionResult, RulesetFunction } from '../../../core/types'
 import { isObject } from './helpers'
 
 /** Ensures each operation tag is declared in the global `tags` list. */

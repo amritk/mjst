@@ -1,4 +1,4 @@
-import type { RulesetFunction } from '../core'
+import type { RulesetFunction } from '../core/types'
 
 /** Options for {@link enumeration}. */
 export type IEnumerationOptions = {

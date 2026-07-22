@@ -102,15 +102,15 @@ export const getUser = defineContract({
 ```ts
 // routes.ts — server only
 import { implementRoute, routeImplementer } from '@amritk/api'
-import { getProfile as getProfileContract, getUser as getUserContract } from './contracts'
+import * as contracts from './contracts'
 
-export const getUser = implementRoute(getUserContract, ({ params }) =>
+export const getUser = implementRoute(contracts.getUser, ({ params }) =>
   params.id === 1 ? { status: 200, body: { id: 1, name: 'Ada' } } : { status: 404 },
 )
 
 // With an app context, bind the implementer once (the routeFactory counterpart):
 const implementAppRoute = routeImplementer<AppContext>()
-export const getProfile = implementAppRoute(getProfileContract, ({ context }) => /* ... */)
+export const getProfile = implementAppRoute(contracts.getProfile, ({ context }) => /* ... */)
 ```
 
 ### Typed client: `createClient`
@@ -123,9 +123,9 @@ cannot drift. This is the framework-agnostic replacement for Hono's `hc`:
 ```ts
 // client.ts — browser bundle; pulls in zero server code
 import { buildParamPath, createClient, isUnexpectedStatusError } from '@amritk/api'
-import { chat, getUser } from './contracts'
+import * as contracts from './contracts'
 
-const client = createClient({ chat, getUser }, 'https://api.example.com', {
+const client = createClient(contracts, 'https://api.example.com', {
   headers: () => ({ authorization: `Bearer ${readToken()}` }), // static record or (async) function
   fetch: myFetch, // injectable for tests; defaults to global fetch
   pathParams: buildParamPath, // opt-in: only needed for {param} paths
@@ -735,9 +735,8 @@ schema or path edited after compilation logs a one-line
 // scripts/compile-api.ts — the build step
 import { writeFileSync } from 'node:fs'
 import { compileToModule } from '@amritk/api'
-import { getProfile, getUser } from '../src/routes'
+import * as routes from '../src/routes'
 
-const routes = { getProfile, getUser }
 writeFileSync('src/api.compiled.ts', compileToModule({ routesImport: './routes', routes }))
 ```
 

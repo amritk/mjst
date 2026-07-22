@@ -1,15 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
+import { createDocument, createLinter, createRuleset } from '../core'
 import {
   type AsyncRulesetFunction,
-  createDocument,
-  createLinter,
-  createRuleset,
   DiagnosticSeverity,
   type RuleEntry,
   type RulesetDefinition,
   type RulesetFunction,
-} from '../core'
+} from '../core/types'
 import { builtinFunctions } from './index'
 
 // The runner is async (rule functions may return a Promise), so `lint` resolves

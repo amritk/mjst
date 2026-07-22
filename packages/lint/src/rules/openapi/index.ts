@@ -2,14 +2,8 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, resolve as resolvePath } from 'node:path'
 
-import {
-  createRuleset as createCoreRuleset,
-  type FunctionRegistry,
-  type ResolvedExtend,
-  type Ruleset,
-  type RulesetDefinition,
-  type RulesetFunction,
-} from '../../core'
+import { createRuleset as createCoreRuleset, type ResolvedExtend, type Ruleset } from '../../core'
+import type { FunctionRegistry, RulesetDefinition, RulesetFunction } from '../../core/types'
 import { builtinFunctions } from '../../functions'
 import { parseWithPointers } from '../../parsers'
 import { oasFormats } from './formats'

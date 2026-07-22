@@ -33,30 +33,7 @@ export {
   type RulesetOptions,
 } from './ruleset'
 export { createLinter, type IRunOptions, type Linter } from './runner'
-export {
-  type AsyncRulesetFunction,
-  DiagnosticSeverity,
-  type FunctionRegistry,
-  type HumanReadableSeverity,
-  type IDiagnostic,
-  type IDocumentRegistry,
-  type IFunctionContext,
-  type IFunctionResult,
-  type ILocation,
-  type IOriginMap,
-  type IPosition,
-  type IRange,
-  type IRuleDefinition,
-  type IRulesetOverride,
-  type ISourceDocument,
-  type ISourceOrigin,
-  type ISourceSet,
-  type IThen,
-  type JsonPath,
-  type ResolvedRule,
-  type RuleEntry,
-  type RulesetDefinition,
-  type RulesetExtends,
-  type RulesetFunction,
-} from './types'
+// The core type surface lives in `./types` and is published on its own
+// `@amritk/lint/types` subpath — it is deliberately not re-exported through this
+// barrel. Modules that need those types import them from `./types` directly.
 export { type IRulesetProblem, validateRuleset } from './validate-ruleset'

@@ -46,6 +46,11 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./types": {
+      "development": "./src/core/types.ts",
+      "types": "./dist/core/types.d.ts",
+      "default": "./dist/core/types.js"
+    },
     "./rules/openapi": {
       "development": "./src/rules/openapi/index.ts",
       "types": "./dist/rules/openapi/index.d.ts",

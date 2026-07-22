@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { createRuleset, lint, type RulesetDefinition } from '../core'
+import { createRuleset, lint } from '../core'
+import type { RulesetDefinition } from '../core/types'
 import { builtinFunctions } from './index'
 
 // A non-OpenAPI document (a "bane"-style service config) linted through the

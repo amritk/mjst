@@ -1,4 +1,4 @@
-import type { RulesetFunction } from '../../../core'
+import type { RulesetFunction } from '../../../core/types'
 import { schema as schemaFunction } from '../../../functions'
 import { loadOasSchema, type OasVersion } from '../schemas'
 

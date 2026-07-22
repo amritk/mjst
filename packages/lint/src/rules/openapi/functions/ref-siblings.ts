@@ -1,4 +1,4 @@
-import type { IFunctionResult, RulesetFunction } from '../../../core'
+import type { IFunctionResult, RulesetFunction } from '../../../core/types'
 import { isObject } from './helpers'
 
 /** Flags objects that mix `$ref` with sibling keys (which are ignored per spec). */

@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { lint, type RulesetDefinition } from '../../core'
+import { lint } from '../../core'
+import type { RulesetDefinition } from '../../core/types'
 import { createOpenApiRuleset } from './index'
 
 // Real-world compatibility guard, modelled on the DigitalOcean API ruleset

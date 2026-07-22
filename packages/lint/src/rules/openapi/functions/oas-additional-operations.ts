@@ -1,4 +1,4 @@
-import type { IFunctionResult, RulesetFunction } from '../../../core'
+import type { IFunctionResult, RulesetFunction } from '../../../core/types'
 import { isObject, OPERATION_METHODS } from './helpers'
 
 // Methods that have a dedicated fixed field on the Path Item Object (the eight
