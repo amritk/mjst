@@ -20,14 +20,115 @@ import { builtinFunctions } from './functions'
 import { parseWithPointers } from './parsers'
 
 // Re-export the engine, built-in functions, and fix subsystem as the package's
-// public API. `export *` from `./core` also provides a low-level `createRuleset`,
-// but the higher-level wrapper defined below (which layers in the built-in
-// functions and file/package `extends` resolution) is the local export and wins.
-// Rendering findings is a consumer concern: `lintDocument` returns structured
-// `IDiagnostic[]`, and the caller decides how to display or serialize them.
-export * from './core'
-export * from './fix'
-export * from './functions'
+// public API. `./core` also provides a low-level `createRuleset`, deliberately
+// omitted here: the higher-level wrapper defined below (which layers in the
+// built-in functions and file/package `extends` resolution) is the local export
+// and takes its place. Rendering findings is a consumer concern: `lintDocument`
+// returns structured `IDiagnostic[]`, and the caller decides how to display or
+// serialize them.
+export {
+  type AliasDefinition,
+  type AsyncRulesetFunction,
+  type CompiledPath,
+  compileQuery,
+  createDocument,
+  createLinter,
+  detectFormats,
+  DiagnosticSeverity,
+  type Document,
+  type ExtendModifier,
+  type ExtendResolver,
+  type Format,
+  type FunctionRegistry,
+  globToRegExp,
+  type HumanReadableSeverity,
+  type IDiagnostic,
+  type IDocumentOptions,
+  type IDocumentRegistry,
+  type IFunctionContext,
+  type IFunctionResult,
+  type ILocation,
+  type IOriginMap,
+  type IPosition,
+  type IQueryMatch,
+  type IRange,
+  type IRuleDefinition,
+  type IRulesetOverride,
+  type IRulesetProblem,
+  type IRunOptions,
+  type ISourceDocument,
+  type ISourceOrigin,
+  type ISourceSet,
+  type IThen,
+  type JsonPath,
+  lint,
+  type LintOptions,
+  type LintPlugin,
+  type LintPluginContext,
+  type LintPluginResult,
+  type LintResolver,
+  type LintResolverResult,
+  type LintResult,
+  type Linter,
+  lintWithResult,
+  matchesGlob,
+  type PluginRunResult,
+  pointerToPath,
+  query,
+  queryCompiled,
+  queryMany,
+  type ResolvedExtend,
+  type ResolvedRule,
+  resolveSourceOrigin,
+  resolveSourceOriginFromMap,
+  resolveSourcePath,
+  type RuleEntry,
+  type Ruleset,
+  type RulesetDefinition,
+  type RulesetExtends,
+  type RulesetFunction,
+  type RulesetOptions,
+  runPlugins,
+  validateRuleset,
+} from './core'
+export {
+  type AppliedFix,
+  applyFixes,
+  type ApplyFixesOptions,
+  createFixPlugin,
+  type EditOp,
+  FIX_PLUGIN_NAME,
+  type FixContext,
+  type Fixer,
+  type FixerRegistry,
+  type FixPluginData,
+  type FixResult,
+  type ParserFormat,
+} from './fix'
+export {
+  alphabetical,
+  builtinFunctions,
+  casing,
+  type CasingType,
+  defined,
+  enumeration,
+  falsy,
+  type IAlphabeticalOptions,
+  type ICasingOptions,
+  type IOrOptions,
+  type ISchemaOptions,
+  type IUnreferencedReusableObjectOptions,
+  type IXorOptions,
+  length,
+  or,
+  pattern,
+  schema,
+  truthy,
+  typedEnum,
+  undefinedFn,
+  unreferencedReusableObject,
+  xor,
+} from './functions'
 export { detectFormat, parseWithPointers } from './parsers'
 
 const require = createRequire(import.meta.url)

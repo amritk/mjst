@@ -33,5 +33,30 @@ export {
   type RulesetOptions,
 } from './ruleset'
 export { createLinter, type IRunOptions, type Linter } from './runner'
-export * from './types'
+export {
+  type AsyncRulesetFunction,
+  DiagnosticSeverity,
+  type FunctionRegistry,
+  type HumanReadableSeverity,
+  type IDiagnostic,
+  type IDocumentRegistry,
+  type IFunctionContext,
+  type IFunctionResult,
+  type ILocation,
+  type IOriginMap,
+  type IPosition,
+  type IRange,
+  type IRuleDefinition,
+  type IRulesetOverride,
+  type ISourceDocument,
+  type ISourceOrigin,
+  type ISourceSet,
+  type IThen,
+  type JsonPath,
+  type ResolvedRule,
+  type RuleEntry,
+  type RulesetDefinition,
+  type RulesetExtends,
+  type RulesetFunction,
+} from './types'
 export { type IRulesetProblem, validateRuleset } from './validate-ruleset'

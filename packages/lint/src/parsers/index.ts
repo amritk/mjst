@@ -1,7 +1,16 @@
 export { type ApplyEditOpsResult, applyEditOps, applyEditOpsWithChanges, type EditOp } from './edit-model'
 export { parseJson } from './json'
 export { createLineMap, type LineMap } from './lines'
-export * from './types'
+export {
+  DiagnosticSeverity,
+  type IDiagnostic,
+  type ILocation,
+  type IParseResult,
+  type IParserOptions,
+  type IPosition,
+  type IRange,
+  type JsonPath,
+} from './types'
 export { parseYaml } from './yaml'
 
 import { parseJson } from './json'

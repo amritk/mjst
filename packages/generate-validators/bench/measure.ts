@@ -4,4 +4,12 @@
  * copies that had to be kept in sync by hand); bench code is unpublished
  * dev-tooling, so the cross-package relative import is deliberate.
  */
-export * from '../../generate-parsers/bench/measure.ts'
+export {
+  fmtOps,
+  measure,
+  type MeasureOptions,
+  NOISY_SPREAD,
+  opsCell,
+  type Stats,
+  statsOf,
+} from '../../generate-parsers/bench/measure.ts'

@@ -351,9 +351,9 @@ type RawInput = {
  *
  * @example
  * ```typescript
- * import * as contracts from './contracts'
+ * import { chat, getUser } from './contracts'
  *
- * const client = createClient(contracts, 'https://api.example.com', {
+ * const client = createClient({ chat, getUser }, 'https://api.example.com', {
  *   headers: () => ({ authorization: `Bearer ${token}` }),
  *   pathParams: buildParamPath, // only needed for {param} paths
  * })
@@ -361,8 +361,8 @@ type RawInput = {
  * const reply = await client.getUser({ params: { id: 7 } })
  * if (reply.status === 200) console.log(reply.body.name) // typed from the schema
  *
- * const chat = await client.chat({ body: { message: 'hi' }, signal })
- * if (chat.status === 200) await readStream(chat.response.body) // raw statuses expose the Response
+ * const chatReply = await client.chat({ body: { message: 'hi' }, signal })
+ * if (chatReply.status === 200) await readStream(chatReply.response.body) // raw statuses expose the Response
  * ```
  */
 export const createClient = <Contracts extends Readonly<Record<string, AnyContract>>>(
