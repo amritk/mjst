@@ -64,6 +64,13 @@ export const bindHtml = (node: Element, sanitize: (raw: string) => string, get: 
  * `compositionend` — otherwise the mid-composition `input` events would tear the
  * candidate string apart. Returns a combined dispose that stops the effect and
  * detaches every listener.
+ *
+ * @example
+ * ```tsx
+ * const name = signal('')
+ * const input = (<input placeholder="name" />) as HTMLInputElement
+ * bindValue(input, name) // two-way: typing writes name(), name('x') sets the field
+ * ```
  */
 export const bindValue = (node: HTMLInputElement | HTMLTextAreaElement, model: Signal<string>): (() => void) => {
   let composing = false

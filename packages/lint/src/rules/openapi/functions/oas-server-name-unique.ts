@@ -1,4 +1,4 @@
-import type { IFunctionResult, RulesetFunction } from '../../../core'
+import type { IFunctionResult, RulesetFunction } from '../../../core/types'
 import { isObject } from './helpers'
 
 /** Flags duplicate OpenAPI 3.2 Server Object `name` values across the servers array. */

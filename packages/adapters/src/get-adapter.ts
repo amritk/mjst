@@ -32,6 +32,15 @@ const effectAdapter: Adapter = {
  * reaches here — the CLI reads JSON Schema files directly without an adapter —
  * and formats that are named but not yet built throw a clear, actionable error
  * so the CLI can fail fast with guidance instead of a cryptic crash.
+ *
+ * @example
+ * ```ts
+ * import { z } from 'zod' // Zod 4+
+ * const User = z.object({ id: z.number().int(), name: z.string().min(1) })
+ * const adapter = getAdapter('zod')
+ * const jsonSchema = await adapter.toJSONSchema(User) // always await, even for TypeBox
+ * // getAdapter('json') THROWS — JSON Schema is read directly, it has no adapter.
+ * ```
  */
 export const getAdapter = (format: SourceFormat): Adapter => {
   switch (format) {

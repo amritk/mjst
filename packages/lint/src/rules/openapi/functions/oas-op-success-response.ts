@@ -1,4 +1,4 @@
-import type { RulesetFunction } from '../../../core'
+import type { RulesetFunction } from '../../../core/types'
 import { isObject } from './helpers'
 
 // A success response is any 2xx/3xx status code, or a `2XX`/`3XX` wildcard (3.x).

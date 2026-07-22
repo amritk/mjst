@@ -3,11 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
+import { DiagnosticSeverity, type RulesetDefinition } from './core/types'
 import {
   builtinFunctions,
   createFixPlugin,
   createRuleset,
-  DiagnosticSeverity,
   type FixerRegistry,
   fixDocument,
   lint,
@@ -15,7 +15,6 @@ import {
   lintDocumentWithResult,
   parseWithPointers,
   query,
-  type RulesetDefinition,
   resolveNamedRuleset,
   validateRuleset,
 } from './index'

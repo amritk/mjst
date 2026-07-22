@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import type { IDiagnostic } from '../core'
-import { createDocument, DiagnosticSeverity } from '../core'
+import { createDocument } from '../core'
+import { DiagnosticSeverity, type IDiagnostic } from '../core/types'
 import { applyFixes } from './apply'
 import { createFixPlugin } from './plugin'
 import type { FixerRegistry } from './types'

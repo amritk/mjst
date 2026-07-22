@@ -1,4 +1,4 @@
-import type { IDiagnostic, JsonPath } from '../core'
+import type { IDiagnostic, JsonPath } from '../core/types'
 import type { EditOp, ParserFormat } from '../parsers'
 
 export type { EditOp, ParserFormat }

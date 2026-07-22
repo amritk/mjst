@@ -336,6 +336,13 @@ const END_MARKER = '<!-- config-table-end -->'
  * replaced. If it exists but is missing one or both markers we refuse to write
  * rather than destroy hand-written content. When no README exists yet the table
  * is written on its own.
+ *
+ * @example
+ * ```ts
+ * // Takes NO arguments and does its own file I/O: it reads ./config.schema.json
+ * // from process.cwd() and writes ./README.md. Run it from the package directory.
+ * await generateMarkdown()
+ * ```
  */
 export const generateMarkdown = async (): Promise<void> => {
   const root = process.cwd()

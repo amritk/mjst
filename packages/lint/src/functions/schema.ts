@@ -1,6 +1,6 @@
 import { validate as buildValidator } from '@amritk/runtime-validators'
 
-import type { IFunctionResult, JsonPath, RulesetFunction } from '../core'
+import type { IFunctionResult, JsonPath, RulesetFunction } from '../core/types'
 
 type RuntimeValidator = (input: unknown) => true | { valid: false; errors: { message: string; path: string }[] }
 

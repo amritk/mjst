@@ -1,4 +1,4 @@
-import type { IDiagnostic, JsonPath } from '../core'
+import type { IDiagnostic, JsonPath } from '../core/types'
 import { applyEditOpsWithChanges, type EditOp, type ParserFormat } from '../parsers'
 import type { AppliedFix, FixerRegistry, FixResult } from './types'
 

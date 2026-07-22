@@ -17,6 +17,15 @@ import { effect, effectScope } from 'alien-signals'
  *
  * Returns a dispose function that stops tracking and tears down every item
  * scope (without removing the container itself).
+ *
+ * @example
+ * ```tsx
+ * const todos = signal<{ id: string; text: string }[]>([])
+ * const ul = (<ul />) as HTMLUListElement
+ * // items is a getter (pass the signal); key must be stable per item.
+ * list(ul, todos, (todo) => todo.id, (todo) => <li>{todo.text}</li>)
+ * todos([...todos(), { id: '1', text: 'ship docs' }]) // appends one <li>
+ * ```
  */
 export const list = <T>(
   container: Element,

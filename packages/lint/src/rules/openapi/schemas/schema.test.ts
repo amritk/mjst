@@ -1,7 +1,8 @@
 import { validate } from '@amritk/runtime-validators'
 import { describe, expect, it } from 'vitest'
 
-import { type IRuleDefinition, lint } from '../../../core'
+import { lint } from '../../../core'
+import type { IRuleDefinition } from '../../../core/types'
 import { createOpenApiRuleset, oas } from '../index'
 import { loadOasSchema } from './index'
 

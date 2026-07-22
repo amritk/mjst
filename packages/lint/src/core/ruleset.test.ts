@@ -1,12 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import {
-  createRuleset,
-  DiagnosticSeverity,
-  type ExtendResolver,
-  type FunctionRegistry,
-  type RulesetDefinition,
-} from './index'
+import { createRuleset, type ExtendResolver } from './index'
+import { DiagnosticSeverity, type FunctionRegistry, type RulesetDefinition } from './types'
 
 // A minimal function registry — these tests exercise ruleset merging/resolution,
 // not the functions themselves.

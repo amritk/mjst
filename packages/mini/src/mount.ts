@@ -17,6 +17,20 @@ import { effectScope } from 'alien-signals'
  * Use it once at the entry point — `const dispose = mount(document.body, App)` —
  * and call `dispose()` when the whole tree should go away (a test, an unmounted
  * micro-frontend, a hot-reload boundary).
+ *
+ * @example
+ * ```tsx
+ * const Counter = () => {
+ *   const count = signal(0)
+ *   return (
+ *     <button onClick={() => count(count() + 1)}>
+ *       {() => `clicked ${count()} times`}
+ *     </button>
+ *   )
+ * }
+ * const dispose = mount(document.body, Counter)
+ * // later: dispose() removes the node and stops every effect it created.
+ * ```
  */
 export const mount = (container: Element, component: () => Node): (() => void) => {
   // effectScope runs its body synchronously; the assignment is definite, just

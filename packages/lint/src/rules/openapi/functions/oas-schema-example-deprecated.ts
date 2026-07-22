@@ -1,4 +1,4 @@
-import type { RulesetFunction } from '../../../core'
+import type { RulesetFunction } from '../../../core/types'
 import { isObject } from './helpers'
 
 // JSON Schema keywords that mark an object as a Schema Object (vs. a Media Type

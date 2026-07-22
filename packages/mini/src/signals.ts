@@ -43,6 +43,17 @@ export type ReadonlySignal<T> = () => T
  *
  * With no initial value the signal starts `undefined` and its type widens to
  * include it, matching alien-signals' own two overloads.
+ *
+ * @example
+ * ```ts
+ * const count = signal(0)
+ * count()        // read  → 0
+ * count(count() + 1)  // write → count() is now 1
+ *
+ * // In JSX, pass the signal itself (a getter) to bind live — never call it:
+ * // <span>{() => count()}</span>   reactive
+ * // <span>{count()}</span>         STATIC — frozen at 1 forever
+ * ```
  */
 export const signal = createSignal as {
   <T>(): Signal<T | undefined>
@@ -52,6 +63,18 @@ export const signal = createSignal as {
 /**
  * Groups several signal writes into one propagation pass, so effects that
  * depend on more than one of them run once instead of once per write.
+ *
+ * @example
+ * ```ts
+ * const first = signal('Ada')
+ * const last = signal('Lovelace')
+ * effect(() => console.log(first(), last()))
+ * // Without batch, this logs twice; with it, once after both writes land.
+ * batch(() => {
+ *   first('Grace')
+ *   last('Hopper')
+ * })
+ * ```
  */
 export const batch = (fn: () => void): void => {
   startBatch()

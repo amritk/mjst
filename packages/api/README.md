@@ -88,21 +88,31 @@ data**, `implementRoute` binds the handler server-side, and the one-shot
 // contracts.ts — imported by server AND browser
 import { defineContract } from '@amritk/api'
 
-export const getUser = defineContract({
-  method: 'get',
-  path: '/users/{id}',
-  request: { params: { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] } },
-  responses: {
-    200: { body: { type: 'object', properties: { id: { type: 'integer' }, name: { type: 'string' } }, required: ['id', 'name'] } },
-    404: {},
-  },
-})
+// One object is the single source of truth: the client covers exactly these
+// keys, and adding an endpoint here wires it into client and server at once.
+export const contracts = {
+  getUser: defineContract({
+    method: 'get',
+    path: '/users/{id}',
+    request: { params: { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] } },
+    responses: {
+      200: { body: { type: 'object', properties: { id: { type: 'integer' }, name: { type: 'string' } }, required: ['id', 'name'] } },
+      404: {},
+    },
+  }),
+  getProfile: defineContract({
+    method: 'get',
+    path: '/users/{id}/profile',
+    request: { params: { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] } },
+    responses: { 200: {} },
+  }),
+}
 ```
 
 ```ts
 // routes.ts — server only
 import { implementRoute, routeImplementer } from '@amritk/api'
-import * as contracts from './contracts'
+import { contracts } from './contracts'
 
 export const getUser = implementRoute(contracts.getUser, ({ params }) =>
   params.id === 1 ? { status: 200, body: { id: 1, name: 'Ada' } } : { status: 404 },
@@ -123,7 +133,7 @@ cannot drift. This is the framework-agnostic replacement for Hono's `hc`:
 ```ts
 // client.ts — browser bundle; pulls in zero server code
 import { buildParamPath, createClient, isUnexpectedStatusError } from '@amritk/api'
-import * as contracts from './contracts'
+import { contracts } from './contracts'
 
 const client = createClient(contracts, 'https://api.example.com', {
   headers: () => ({ authorization: `Bearer ${readToken()}` }), // static record or (async) function
@@ -735,8 +745,11 @@ schema or path edited after compilation logs a one-line
 // scripts/compile-api.ts — the build step
 import { writeFileSync } from 'node:fs'
 import { compileToModule } from '@amritk/api'
-import * as routes from '../src/routes'
+import { getProfile, getUser } from '../src/routes'
 
+// routes.ts keeps individual named exports — the compiled module imports each by
+// name — so the build step collects them into the record compileToModule wants.
+const routes = { getProfile, getUser }
 writeFileSync('src/api.compiled.ts', compileToModule({ routesImport: './routes', routes }))
 ```
 

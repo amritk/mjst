@@ -33,12 +33,8 @@ describe('jsx-runtime', () => {
 
   it('freezes a called signal — the documented footgun', () => {
     const disabled = signal(true)
-    const el = (
-      // catch-called-signals-ignore: this test demonstrates the footgun on purpose
-      <button type="button" disabled={disabled()}>
-        go
-      </button>
-    )
+    // biome-ignore format: keep the binding and its static-read markers on one line
+    const el = <button type="button" disabled={disabled()}>go</button> // mini-static-ok catch-called-signals-ignore: asserts the footgun on purpose
     disabled(false)
     // Static forever: the call handed the runtime a plain boolean.
     expect(el.hasAttribute('disabled')).toBe(true)

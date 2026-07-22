@@ -206,6 +206,14 @@ const resolveInternal = (
  * can't load other documents — use `resolveRefsFromFile` for those). Cycles are
  * broken by keeping the original reference node, so recursive schemas keep
  * their recursive branch.
+ *
+ * @example
+ * ```ts
+ * const { resolved, errors } = resolveRefs(document)
+ * // Errors are COLLECTED, never thrown — always check `errors`.
+ * // External ($ref to another file/URL) refs stay in place; use
+ * // resolveRefsFromFile('./schema.json', { allowedHosts: [...] }) for those.
+ * ```
  */
 export const resolveRefs = (data: unknown, options: ResolveRefsOptions = {}): ResolveResult => {
   const origins: OriginMap | undefined = options.trackOrigins ? new Map() : undefined
