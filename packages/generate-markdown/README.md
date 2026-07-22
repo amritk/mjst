@@ -5,7 +5,7 @@
 **Generate markdown documentation from JSON Schemas.**
 
 ![status](https://img.shields.io/badge/status-pre--alpha-ef4444?style=flat-square)&nbsp;
-![version](https://img.shields.io/badge/version-v0.1.0-6366f1?style=flat-square&logo=npm&logoColor=white)&nbsp;
+![version](https://img.shields.io/npm/v/@amritk/generate-markdown?style=flat-square&logo=npm&logoColor=white&label=version&color=6366f1)&nbsp;
 ![license](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)&nbsp;
 ![JSON Schema](https://img.shields.io/badge/JSON%20Schema-2020--12-f97316?style=flat-square)&nbsp;
 ![node](https://img.shields.io/badge/node-%E2%89%A520-339933?style=flat-square&logo=node.js&logoColor=white)&nbsp;
