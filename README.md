@@ -161,6 +161,27 @@ See the [CLI README](./packages/cli/README.md) for the full flag reference and c
 
 ---
 
+## For AI agents & LLMs
+
+Using mjst from a coding agent (Cursor, Claude Code, Copilot, …)? mjst is
+pre-alpha, so it isn't in any model's training data — these docs are written to
+close that gap:
+
+- **[`llms.txt`](./llms.txt)** — a curated, link-rich index of every package
+  ([llmstxt.org](https://llmstxt.org) convention), for agents and docs crawlers.
+- **[`llms-full.txt`](./llms-full.txt)** — every package's `AI.md` in one file, to
+  paste straight into a model's context.
+- **`packages/*/AI.md`** — per package: the mental model, a minimal runnable
+  example, and the gotchas most likely to trip up an LLM. Each also ships inside
+  the published npm tarball, so an agent can read it from `node_modules`.
+- **[`AGENTS.md`](./AGENTS.md)** — for agents *editing this repo* (build/test
+  workflow, per-package invariants).
+
+Both `llms.txt` files are generated from the packages by `bun run generate-llms`,
+so they stay in sync with the source.
+
+---
+
 ## Requirements
 
 - **Node.js ≥ 20** (or **Bun ≥ 1.1**) to run the CLI

@@ -1,0 +1,691 @@
+# mjst — full AI documentation bundle
+
+Generated from each package's AI.md by `scripts/generate-llms.ts`. This is the paste-into-context bundle; the curated index is `llms.txt`.
+
+---
+
+# @amritk/mjst (the `mjst` CLI) — notes for AI coding agents
+
+The command-line entry point to mjst: generate TypeScript parsers, validators,
+and types from JSON Schema, plus `lint` and `compile-api` subcommands. Full
+reference is [README.md](./README.md); config options are in
+[config.schema.json](./config.schema.json).
+
+> Pre-alpha: generated output and flags change without notice pre-1.0. This
+> package ships **only a `mjst` binary** — there are no JS exports. For the
+> programmatic API import `@amritk/generate-parsers` etc. instead.
+
+## The three commands
+
+```bash
+# 1. Codegen (default command)
+mjst --schema ./schema.json --out-dir ./generated
+
+# 2. Lint JSON/YAML against JSON Schema + style rules
+mjst lint "**/*.{yaml,json}" -r .lint.yaml
+
+# 3. Compile an @amritk/api routes module to a fused, eval-free handler
+mjst compile-api ./routes.ts --out ./dist/handler.ts
+```
+
+## Codegen gotchas
+
+1. **You must pass an output.** `--out-dir <dir>` **or** `--out-file <file>` —
+   omitting both errors. `--out-file` only works with `--types-only`.
+2. **`--import-ext` defaults to `ts`, not `js`.** Generated imports carry literal
+   `.ts` extensions, so plain `tsc` needs `allowImportingTsExtensions`. Use
+   `--import-ext js` or `--build` for directly-compilable output.
+   `--import-ext ts` + `--build` is a hard error.
+3. **Flags accept kebab or camel** (`--out-dir` ≡ `--outDir`). **Config-file
+   keys are camelCase** (`outDir`, `schemaDir`, `typesOnly`, …), validated
+   against `config.schema.json`. CLI flags always override the config file.
+4. **The root type name comes from the schema `title`/filename**, not
+   `Document`. Override with `--root-type <name>` (single-schema only; rejected
+   with `--schema-dir`).
+5. **Non-JSON input** (`--input typebox|zod|valibot|effect`) works for a single
+   `--schema`; `--schema-dir` only accepts `json`.
+
+## Common flags
+
+`--schema` / `--schema-dir`, `--out-dir` / `--out-file`, `--input`,
+`--validators`, `--examples`, `--types-only`, `--build`, `--strict`,
+`--strip-unknown`, `--readonly`, `--import-ext ts|js`, `--config <path>`,
+`--resolve-remote` / `--allowed-hosts` (SSRF-guarded remote `$ref`s).
+
+## Lint gotchas
+
+- `-F`/`--fail-severity` (default `error`) sets the exit-code threshold
+  (`0` clean, `1` findings at/above threshold, `2` usage error).
+- With no `-r`, a `.lint.{yaml,yml,json,js,mjs}` ruleset is auto-discovered by
+  walking up from each file.
+
+Install: `bun add -d @amritk/mjst` (or `npx mjst …`).
+
+---
+
+# @amritk/api — notes for AI coding agents
+
+Contract-first, framework-agnostic HTTP API layer: declare each route once as
+JSON Schema and get a typed handler, runtime request/response validation,
+OpenAPI 3.1, and a derived typed client. Fast path for an LLM; full reference is
+[README.md](./README.md).
+
+> Pre-alpha: breaking changes land in **minor** versions. ESM-only (no CJS
+> entry). `require('@amritk/api')` needs Node 22.12+.
+
+## Mental model
+
+- A **route** = a JSON Schema contract + a handler. `params`/`query`/`body`
+  arrive **already validated and coerced** (path `id: {type:'integer'}` is a
+  `number` in the handler), and a handler may only return `{ status, body }`
+  pairs its `responses` map declares.
+- `createApi({ routes, info })` compiles contracts into a runtime; an **adapter**
+  (`toFetchHandler` / `toNodeHandler`) turns it into a real server handler.
+- Contracts are **data** — `defineContract` (no handler) is browser-safe and
+  drives the typed `createClient`; `defineRoute` bundles the handler in.
+
+## Minimal example
+
+```ts
+import { createApi, defineRoute, toFetchHandler } from '@amritk/api'
+
+const getUser = defineRoute({
+  method: 'get',
+  path: '/users/{id}',
+  request: {
+    params: { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] },
+  },
+  responses: {
+    200: { body: { type: 'object', properties: { id: { type: 'integer' }, name: { type: 'string' } }, required: ['id', 'name'] } },
+    404: {},
+  },
+  handler: ({ params }) =>
+    params.id === 1 ? { status: 200, body: { id: 1, name: 'Ada' } } : { status: 404 },
+})
+
+const api = createApi({ routes: [getUser], info: { title: 'Users API', version: '1.0.0' } })
+const handler = toFetchHandler(api)
+Bun.serve({ fetch: handler })      // or: export default { fetch: handler } on Workers
+// GET /openapi.json is served automatically.
+```
+
+## Gotchas — where agents fail
+
+1. **Keep schemas literal.** Write request/response schemas inline in
+   `defineRoute`/`defineContract`, or declare shared ones `as const`. A plain
+   `const schema = {…}` widens the literal before the `const` generics capture
+   it and `params`/`query`/`body` collapse to loose types. This is the #1
+   failure.
+2. **A declared `request.body` is required, and JSON is the default.** For
+   other bodies set `request.bodyType: 'form' | 'multipart' | 'text' | 'bytes'`
+   alongside the schema. Multipart **file** parts must be declared with **no**
+   `type` keyword (`{}`), never `type: 'string'`.
+3. **Hooks / `mounts` / CORS are fetch-adapter only.** `toNodeHandler` has no
+   `onRequest`/`onResponse`/`mounts`/`createCors` by design — use the Node
+   framework's own middleware. `createApi` does not accept them either.
+4. **`maxBodyBytes` defaults to 1 MiB** (413 above it). Set it on the *adapter*,
+   not `createApi`; uncap with `maxBodyBytes: Infinity`.
+5. **Typed client needs opt-in pieces.** `createClient(contracts, baseUrl, options)`:
+   pass `serializers: [formBodySerializer, multipartBodySerializer]` for
+   form/multipart, and `pathParams: buildParamPath` for any `{param}` path.
+   Undeclared response statuses **throw** (`isUnexpectedStatusError`) instead of
+   entering the union — declare every status you handle. Browser auth uses
+   `fetchOptions: { credentials: 'include' }` (the `cookies` slot is Node-only).
+
+## Subpath entry points
+
+| Import | Purpose |
+|---|---|
+| `@amritk/api` | runtime, client, adapters, OpenAPI, hook factories |
+| `@amritk/api/bundler` | build-time plugins (`stripContractsVite`/`Esbuild`/`Rollup`/`Bun`) that strip server/OpenAPI freight from `defineContract` sites in browser builds — build tooling only, never in runtime code |
+
+Schemas authored in Zod / TypeBox / Valibot / Effect: convert with
+`@amritk/adapters` first. Install: `bun add @amritk/api`.
+
+---
+
+# @amritk/mini — notes for AI coding agents
+
+A deliberately tiny signals-based UI layer: reactive DOM bindings plus a
+compilerless JSX runtime. This file is the fast path for an LLM; the full
+reference is [README.md](./README.md).
+
+> Pre-alpha: APIs change in **minor** versions. It builds **real DOM once** —
+> there is no virtual DOM, no diffing, no re-render, no `useState`, no hooks.
+> If you reach for those, you want Preact or Solid, not mini.
+
+## The one rule that trips up every agent
+
+Reactivity is decided by **value shape at runtime**, because there is no
+compiler analysing your code:
+
+- A **function-valued** attribute / child / `show` is **reactive** — re-applied
+  whenever the signals it reads change.
+- Any **other value** is **static** — applied once at creation, never again.
+
+A signal is a zero-arg function, so pass it **without calling it** to bind live:
+
+```tsx
+<button disabled={streaming}>        {/* ✅ reactive — tracks forever        */}
+<button disabled={streaming()}>      {/* ❌ STATIC — frozen at creation!      */}
+<span>{() => count() * 2}</span>     {/* ✅ reactive derived text             */}
+<span>{count()}</span>               {/* ❌ static text, frozen               */}
+<button onClick={() => count(count() + 1)}>+</button>  {/* ✅ calls are fine inside handlers */}
+```
+
+Calling the signal reads it once and hands the runtime a plain value. When an
+attribute should track state, pass the signal itself or a thunk. The repo ships
+a linter for exactly this mistake — see `packages/mini/scripts/check-reactivity.ts`.
+
+## Signals
+
+```ts
+import { signal, computed, effect, batch } from '@amritk/mini'
+
+const count = signal(0)
+count()            // read  → 0
+count(count() + 1) // write → 1  (setter takes the value; there is no `.set`)
+const doubled = computed(() => count() * 2)
+effect(() => console.log(doubled())) // re-runs on every change; runs sync
+batch(() => { count(1); count(2) })  // one propagation pass, not two
+```
+
+## Building UI
+
+```tsx
+import { signal, mount, list } from '@amritk/mini'
+
+const Counter = () => {
+  const n = signal(0)
+  return (
+    <button onClick={() => n(n() + 1)}>
+      {() => `clicked ${n()} times`}
+    </button>
+  )
+}
+
+const dispose = mount(document.body, Counter) // owns the tree; dispose() tears it down
+```
+
+- **`mount(container, Component)`** — the only correct entry point. It opens the
+  `effectScope` that owns every effect/`onCleanup` a component creates. Appending
+  `container.appendChild(App())` yourself leaks effects.
+- **`list(container, items, key, create)`** — keyed collections. `items` is a
+  getter (pass the signal). `container` must be owned solely by the list.
+- **`onCleanup(fn)`** — teardown; must be called synchronously inside a
+  component (i.e. inside a `mount`/`list` scope).
+- **`bindText`/`bindValue`/`bindAttr`/`bindClass`/`bindShow`/`bindChecked`/`bindSelect`** —
+  imperative bindings for `template()` or `ref` code. `bindHtml` is the *only*
+  `innerHTML` sink and takes a required `sanitize` argument.
+
+## JSX setup
+
+Set in the consuming package's `tsconfig.json` — mini does **not** use the React
+runtime:
+
+```jsonc
+{ "compilerOptions": { "jsx": "react-jsx", "jsxImportSource": "@amritk/mini" } }
+```
+
+No fragments (`<>…</>`), no `dangerouslySetInnerHTML`, no event options. A JSX
+expression **is** the `HTMLElement` — components return the element directly.
+
+## Subpath entry points (tree-shakeable; core stays tiny)
+
+| Import | Purpose | Extra peer dep |
+|---|---|---|
+| `@amritk/mini` | signals, `mount`, `list`, binds, JSX | — |
+| `@amritk/mini/router` | client-side router (`createRouter`, `Link`, `RouterView`) | — |
+| `@amritk/mini/flow` | `Show` / `Switch` / `Match` / `For` / `Dynamic` control-flow | — |
+| `@amritk/mini/forms` | `createForm` field state + validation | `@amritk/runtime-validators` (schema arm only) |
+| `@amritk/mini/query` | `createQuery` cache/dedupe/retry adapter | `@tanstack/query-core` |
+
+Install: `bun add @amritk/mini` (or npm/pnpm/yarn).
+
+---
+
+# @amritk/lint — notes for AI coding agents
+
+A fast, format-agnostic JSON/YAML style-guide linter: JSON Schema validation
+plus custom rules, emitting findings with exact `line:column` ranges. Full
+reference is [README.md](./README.md).
+
+> Pre-alpha: APIs change in **minor** versions.
+
+## Minimal example
+
+```ts
+import { lintDocument } from '@amritk/lint'
+
+const ruleset = {
+  rules: {
+    'require-name': { given: '$', severity: 'error', then: { field: 'name', function: 'truthy' } },
+  },
+}
+
+const findings = await lintDocument('version: 1\n', { ruleset, source: 'service.yaml' })
+```
+
+## Gotchas — where agents fail
+
+1. **Two `severity` vocabularies.** In a **ruleset** you author strings
+   (`'error' | 'warn' | 'info' | 'hint' | 'off'`). In a **finding** `severity`
+   is **numeric** (`0` error, `1` warn, `2` info, `3` hint). Don't cross them.
+2. **Ranges are zero-based** (`{ line, character }` from 0). Add 1 to both to
+   print `file:line:col`.
+3. **The engine ships no resolver, no built-in ruleset, no fixers.** `$ref`s are
+   only dereferenced if you pass a `resolve` hook (e.g. wrapping
+   `@amritk/resolve-refs`); `fixDocument` is a no-op until you supply a
+   `FixerRegistry`; `createRuleset()` with no argument runs zero rules.
+4. **`extends` targets are file paths or npm packages only** — there are no
+   named built-in rulesets in core. String `extends` resolve relative to
+   `rulesetBasePath` (or the ruleset file's own directory).
+5. **OpenAPI support is a separate subpath**, `@amritk/lint/rules/openapi`
+   (`createOpenApiRuleset`, `oas`, `oasFixers`, …) — not the package root.
+
+## Exports
+
+- `lintDocument(input, options?)` → findings only.
+- `lintDocumentWithResult(input, options?)` → `{ diagnostics, output?, pluginData }`.
+- `fixDocument(input, options?)` → `{ output, fixed, applied, remaining }` (needs `fixers`).
+- `createRuleset(def?, basePath?)`, `resolveNamedRuleset(name, basePath?)`,
+  `builtinFunctions` (`alphabetical`, `casing`, `truthy`, `pattern`, `schema`, …).
+
+## Subpaths
+
+| Import | Purpose |
+|---|---|
+| `@amritk/lint` | core engine, `lintDocument`/`fixDocument`, built-in functions |
+| `@amritk/lint/rules/openapi` | ready-made OpenAPI preset (`createOpenApiRuleset`, `oas`) |
+
+Install: `bun add @amritk/lint`.
+
+---
+
+# @amritk/generate-parsers — notes for AI coding agents
+
+Programmatic API: turn a JSON Schema (Draft 2020-12) into TypeScript type
+definitions plus optional runtime parser functions. Full reference is
+[README.md](./README.md). (Most users want the [`mjst` CLI](../cli) instead.)
+
+> Pre-alpha: APIs and generated output change pre-1.0.
+
+## Minimal example
+
+```ts
+import { buildSchema } from '@amritk/generate-parsers'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
+const schema: JSONSchema = { type: 'object', properties: { title: { type: 'string' } } }
+
+const files = await buildSchema(schema, 'Document')
+// files → [{ filename: 'document.ts', content: '…' }, { filename: 'index.ts', content: '…' }, …]
+```
+
+## Gotchas — where agents fail
+
+1. **`buildSchema` is `async` and takes POSITIONAL args, no options object.** The
+   full signature is
+   `buildSchema(rootSchema, rootTypeName, extensions?, typesOnly?, logWarnings?, strict?, helpersMode?, helpersImportPrefix?, readonly?, stripUnknown?, typeSuffix?, importExt?, caseInsensitive?)`.
+   To set a later flag you must pass every intervening positional. (The README's
+   short form omits the trailing seven.)
+2. **It returns files in memory — it does NOT write to disk.** You write the
+   `GeneratedFile[]` (`{ filename, content }`) yourself.
+3. **Output is more than one file per `$def`:** always an `index.ts` barrel, and
+   (unless `typesOnly`) runtime helper files.
+4. **Default parsers COERCE invalid input to defaults** rather than throwing;
+   pass `strict: true` (the 6th positional) to make them throw.
+
+Only the `.` entry (`buildSchema`, `GeneratedFile`, `ImportExtension`).
+Install: `bun add @amritk/generate-parsers`.
+
+---
+
+# @amritk/generate-validators — notes for AI coding agents
+
+Programmatic API: generate lightweight predicate validators (`validateFoo(input)`)
+plus types from a JSON Schema. Full reference is [README.md](./README.md).
+
+> Pre-alpha: APIs and generated output change pre-1.0.
+
+## Minimal example
+
+```ts
+import { buildValidatorSchema } from '@amritk/generate-validators'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
+const schema: JSONSchema = {
+  type: 'object',
+  properties: { title: { type: 'string' } },
+  required: ['title'],
+}
+
+const files = await buildValidatorSchema(schema, 'Document')
+// → document.ts, validation-result.ts, index.ts
+```
+
+## Gotchas — where agents fail
+
+1. **Success is the literal `true`, not `{ valid: true }`.** A generated
+   `validateFoo` returns `true | { valid: false; errors: ValidationError[] }`.
+   Check `if (result !== true)` for the failure path — `if (result.valid)` is
+   wrong.
+2. **Small signature:** `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?)`
+   — async, no `strict`/`typesOnly`/options. Returns `GeneratedFile[]` in memory
+   (you write them).
+3. **Output includes a shared `validation-result.ts`** (`ValidationError`,
+   `ValidationResult`, helpers) plus the `index.ts` barrel.
+4. **`NaN` satisfies numeric bounds** (`minimum`/`maximum`/`multipleOf`) — differs
+   from Ajv. Draft-07 schemas are auto-upgraded to 2020-12.
+
+Only the `.` entry. Install: `bun add @amritk/generate-validators`.
+
+---
+
+# @amritk/generate-examples — notes for AI coding agents
+
+Programmatic API: turn a JSON Schema into test data — a fast-check arbitrary
+(`FooArbitrary`) and a concrete example value (`fooExample`) per node, plus
+types. Full reference is [README.md](./README.md).
+
+> Pre-alpha: APIs and generated output change pre-1.0.
+
+## Minimal example
+
+```ts
+import { buildExampleSchema } from '@amritk/generate-examples'
+
+const schema = {
+  type: 'object',
+  properties: { id: { type: 'string', format: 'uuid' }, age: { type: 'integer', minimum: 0 } },
+  required: ['id'],
+} as const
+
+const files = await buildExampleSchema(schema, 'User') // → user.ts, index.ts
+```
+
+## Gotchas — where agents fail
+
+1. **Generated arbitrary files `import * as fc from 'fast-check'`** — `fast-check`
+   (`>=3`) is an **optional peer dependency** consumers must install. The static
+   `fooExample` values have no runtime deps.
+2. **`generateArbitrary` / `generateExampleConst` return source-code STRINGS**;
+   **`deriveExample` returns an actual runtime VALUE.** Easy to confuse.
+3. **A static example constrained only by `pattern` may not match the pattern** —
+   use the arbitrary when pattern fidelity matters.
+4. **Unsupported keywords degrade silently:** `fc.anything()` in arbitraries,
+   `null` in static examples — no error thrown.
+
+Exports: `buildExampleSchema`, `generateArbitrary`, `generateExampleConst`,
+`deriveExample`, `serializeValue`, `GeneratedFile`. Only the `.` entry.
+Install: `bun add @amritk/generate-examples`.
+
+---
+
+# @amritk/generate-markdown — notes for AI coding agents
+
+Programmatic API: render an HTML config-reference table from a
+`config.schema.json` into a `README.md`, keeping flag docs in sync with the
+schema. Full reference is [README.md](./README.md).
+
+> Pre-alpha: APIs change pre-1.0. This is an internal tooling package — most
+> users never call it directly.
+
+## The whole API
+
+```ts
+import { generateMarkdown } from '@amritk/generate-markdown'
+
+// Takes NO arguments. Reads ./config.schema.json from process.cwd() and
+// writes ./README.md. Run it from the target package's directory.
+await generateMarkdown()
+```
+
+## Gotchas — where agents fail
+
+1. **It does its own filesystem I/O and takes no arguments.** Unlike the other
+   generators it does **not** accept a schema object or return `GeneratedFile[]`
+   — it reads a fixed `./config.schema.json` and writes `./README.md`, both
+   relative to `process.cwd()`, and returns `void`.
+2. **It splices between markers.** If `README.md` exists but lacks BOTH
+   `<!-- config-table-start -->` and `<!-- config-table-end -->`, it **throws**
+   rather than overwrite hand-written content. Only the content between the
+   markers is replaced.
+3. **Output is an HTML `<table>`**, not a GitHub-flavored pipe table (so it can
+   carry `x-icon` / `x-cli-flag` extension columns).
+
+Only the `.` entry (`generateMarkdown`). Install: `bun add @amritk/generate-markdown`.
+
+---
+
+# @amritk/runtime-validators — notes for AI coding agents
+
+Eval-free runtime JSON Schema validation: interpret a schema discovered at
+runtime — no `new Function`, no build step, runs under strict CSP. Full
+reference is [README.md](./README.md).
+
+> Pre-alpha: APIs change in **minor** versions.
+
+## Minimal example
+
+```ts
+import { validate, validateGuard, assert } from '@amritk/runtime-validators'
+
+const schema = {
+  type: 'object',
+  properties: { id: { type: 'integer' }, name: { type: 'string', minLength: 1 } },
+  required: ['id', 'name'],
+  additionalProperties: false,
+} as const
+
+const validator = validate(schema)          // (input) => true | { valid: false; errors }
+const result = validator({ id: 1, name: 'Ada' })
+if (result !== true) console.error(result.errors)
+
+const isUser = validateGuard(schema)        // (input) => input is User  (boolean guard)
+const user = assert(schema, { id: 1, name: 'Ada' }) // returns typed value OR throws
+```
+
+## Gotchas — where agents fail
+
+1. **Success is the literal `true`, not `{ valid: true }`.** For `validate`,
+   check `if (result !== true)`; the failure case is `{ valid: false, errors }`.
+2. **`assert(schema, value)` — the value is the 2nd positional arg.** `validate`
+   and `validateGuard` take only the schema and return a function.
+3. **Only local `$ref`s resolve** (`#/$defs/x`, `#anchor`, incl. recursion).
+   Remote / cross-file refs are NOT fetched — bundle first with
+   `@amritk/resolve-refs`, then validate the dereferenced document.
+4. **`format` is opt-in.** Unlisted formats are treated as annotations (like
+   Ajv); pass `{ formats: 'all' }` or a list to enforce.
+5. **Write the schema `as const`** for type inference. Wrong regime: this is a
+   cold/few-values interpreter; for one schema × millions of values, use Ajv (or
+   `@amritk/generate-validators` for generated straight-line code).
+
+Exports: `validate`, `validateGuard`, `assert`, and the types `Validator`,
+`Guard`, `ValidationError`, `ValidationResult`, `FromSchema`, `Infer`,
+`ValidateOptions`. Only the `.` entry. Install: `bun add @amritk/runtime-validators`.
+
+---
+
+# @amritk/adapters — notes for AI coding agents
+
+Convert schemas authored in TypeBox, Zod, Valibot, or Effect into Draft 2020-12
+JSON Schema — the single input shape the mjst generators consume. Full
+reference is [README.md](./README.md).
+
+> Pre-alpha: APIs change in **minor** versions.
+
+## Minimal example
+
+```ts
+import { getAdapter } from '@amritk/adapters/get-adapter'
+import { z } from 'zod' // Zod 4+
+
+const User = z.object({ id: z.number().int(), name: z.string().min(1) })
+
+const adapter = getAdapter('zod')
+const jsonSchema = await adapter.toJSONSchema(User) // always await
+```
+
+## Gotchas — where agents fail
+
+1. **No barrel export.** You CANNOT `import { zodToJsonSchema } from '@amritk/adapters'`.
+   Import from the specific subpath (`@amritk/adapters/zod-to-json-schema`) or
+   use `@amritk/adapters/get-adapter`.
+2. **Adapters take the loaded schema VALUE, not a file path.** Loading the module
+   is the caller's job.
+3. **`getAdapter('json')` throws** — `'json'` is a valid `SourceFormat` but has no
+   adapter (JSON Schema is read directly). Only `typebox` / `zod` / `valibot` /
+   `effect` resolve.
+4. **Source libraries are optional peer deps**, imported dynamically. **Zod must
+   be v4+** (`toJSONSchema` doesn't exist earlier). Always `await` — even
+   TypeBox's synchronous path is typed to allow a Promise.
+5. **Unrepresentable constructs widen to `{}`** with a stderr `[mjst]` warning
+   (Effect throws on nested ones). `date` / `bigint` become `x-mjst` hints. Pass
+   `{ strict: true }` to throw instead of widening.
+
+## Subpaths
+
+`@amritk/adapters/get-adapter`, `.../typebox-to-json-schema`,
+`.../zod-to-json-schema`, `.../valibot-to-json-schema`,
+`.../effect-to-json-schema`, `.../adapter` (types), `.../source-format` (types).
+Install: `bun add @amritk/adapters` (+ your source library).
+
+---
+
+# @amritk/resolve-refs — notes for AI coding agents
+
+Resolve and inline JSON Schema / OpenAPI `$ref`s (internal, cross-file, remote)
+into a single dereferenced document, with session caching and a default-deny
+SSRF guard. Full reference is [README.md](./README.md).
+
+> Pre-alpha: APIs change in **minor** versions.
+
+## Minimal example
+
+```ts
+import { resolveRefs, resolveRefsFromFile } from '@amritk/resolve-refs'
+
+// In-memory, INTERNAL refs only:
+const { resolved, errors } = resolveRefs(myDocument)
+
+// From disk (cross-file + remote):
+const result = await resolveRefsFromFile('./schema.json')
+
+// Remote requires host allow-listing:
+const remote = await resolveRefsFromFile('https://api.example.com/schema.json', {
+  allowedHosts: ['api.example.com'],
+})
+```
+
+## Gotchas — where agents fail
+
+1. **`resolveRefs` is in-memory only.** It does NOT load other files/URLs —
+   external refs stay in place and are pushed to `errors` (the ref becomes `{}`).
+   Use `resolveRefsFromFile` for cross-file/remote.
+2. **Errors are collected, never thrown.** A missing file, refused host, or bad
+   URL lands on `result.errors` while the rest still resolves. Always check it.
+3. **Default-deny SSRF guard.** Remote refs to loopback / private / link-local /
+   `169.254.169.254` are refused unless `allowPrivateHosts: true` or an explicit
+   `allowedHosts` entry.
+4. **JSON-only by default** (`JSON.parse`). For YAML pass a custom
+   `parse: (content, location) => …` (e.g. wrapping `@amritk/yaml`).
+5. **`origins` exists only with `trackOrigins: true`.** Cycles are preserved (the
+   cycle point stays a `$ref`), so output is not always fully flat. The remote
+   cache is process-wide — `clearRemoteCache()` or `cache: false` when a schema
+   may have changed.
+
+Exports: `resolveRefs`, `resolveRefsFromFile`, `clearRemoteCache`,
+`getByPointer`, `pointerToPath`, `isPrivateHost` + types. Only the `.` entry.
+Install: `bun add @amritk/resolve-refs`.
+
+---
+
+# @amritk/yaml — notes for AI coding agents
+
+A fast, zero-dependency YAML parser for OpenAPI tooling that records exact
+`[start, end)` source offsets on every node. Full reference is
+[README.md](./README.md).
+
+> Pre-alpha: APIs change in **minor** versions. This is a YAML **subset** for
+> tooling, not full YAML 1.2 conformance.
+
+## Minimal example
+
+```ts
+import { parseDocument, nodeAtPath, lineCounter } from '@amritk/yaml'
+
+const source = 'info:\n  title: My API\n  version: 1.0.0\n'
+const doc = parseDocument(source)
+
+const node = nodeAtPath(doc.contents, ['info', 'version'])
+const lc = lineCounter(source)
+lc.linePos(node!.start) // → { line: 3, col: 12 } (1-based)
+
+for (const error of doc.errors) {
+  const { line, col } = lc.linePos(error.start)
+  console.error(`${line}:${col} ${error.message}`)
+}
+```
+
+## Gotchas — where agents fail
+
+1. **`version: 1.0.0` stays the STRING `"1.0.0"`** (YAML 1.2 core schema), not a
+   number — intentional for OpenAPI round-trip safety.
+2. **Nodes carry `start` / `end` inline** (not a `range` tuple). `end` is
+   **exclusive**, and offsets are char offsets — convert with `lineCounter`
+   (1-based line/col).
+3. **`parseDocument` reads only the FIRST document** of a `---` stream. Use
+   `parseAllDocuments` for multi-doc; each doc has its own anchor scope.
+4. **Values materialize lazily via `toJS()`** (resolves aliases + merge keys);
+   `parse()` === `parseDocument().toJS()`. `pair.value` can be `null` (e.g.
+   `paths:` with no value).
+5. **Errors are collected on `doc.errors` / `doc.warnings`, not thrown.** Tab
+   indentation is a `TAB_INDENT` error.
+
+Exports: `parse`, `parseDocument`, `parseAllDocuments`, `nodeAtPath`,
+`lineCounter`, the guards `isScalar`/`isMap`/`isSeq`/`isPair`/`isAlias`, + node
+types. Only the `.` entry. Install: `bun add @amritk/yaml`.
+
+---
+
+# @amritk/helpers — notes for AI coding agents
+
+Shared schema-traversal, codegen, and runtime utilities for the mjst ecosystem,
+each published as its own subpath so consumers import only what they need. Full
+reference is [README.md](./README.md).
+
+> Pre-alpha: internal ecosystem package — most users never import it directly.
+> APIs change in **minor** versions.
+
+## Minimal example
+
+```ts
+import { resolveRef } from '@amritk/helpers/resolve-ref'
+import { isObjectSchema, hasProperties } from '@amritk/helpers/schema-guards'
+
+const node = resolveRef('#/$defs/info', rootSchema) // (ref, root); undefined on miss
+
+if (node && isObjectSchema(node) && hasProperties(node)) {
+  for (const [name, property] of Object.entries(node.properties)) {
+    // …
+  }
+}
+```
+
+## Gotchas — where agents fail
+
+1. **No barrel — import per subpath.** `@amritk/helpers/resolve-ref`, NOT
+   `@amritk/helpers`. The subpath is the exact kebab-case filename with no `.ts`.
+2. **`resolveRef(ref, rootSchema)`** takes the ref first, root second, handles
+   JSON-pointer `$ref`s only, and returns `undefined` on a miss (no throw) —
+   guard the result.
+3. **Two similar guards:** `isSchemaObject` narrows to a non-boolean schema;
+   `isObjectSchema` narrows to a `type: object` schema. Don't confuse them.
+4. **Some modules are copied verbatim into generated output** (`is-object`,
+   `safe-accessor`, `validate-array`, `validate-record`) — intentionally
+   dependency-free and minimal, not general-purpose validators.
+
+Notable subpaths: `/resolve-ref`, `/extract-refs`, `/schema-guards`,
+`/ref-to-name`, `/ref-to-filename`, `/upgrade-draft07-schema`,
+`/generate-type-definition`, `/is-object`. Install: `bun add @amritk/helpers`.

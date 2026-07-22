@@ -174,6 +174,18 @@ export type ILintResult = {
  * Lints a JSON/YAML `input` end to end: parses with source maps and applies the
  * ruleset. Returns just the findings; use {@link lintDocumentWithResult} for the
  * full result.
+ *
+ * @example
+ * ```ts
+ * const ruleset = {
+ *   rules: {
+ *     'require-name': { given: '$', severity: 'error', then: { field: 'name', function: 'truthy' } },
+ *   },
+ * }
+ * const findings = await lintDocument('version: 1\n', { ruleset, source: 'service.yaml' })
+ * // findings[].range is ZERO-based; add 1 to line/character to print file:line:col.
+ * // findings[].severity is numeric (0 error, 1 warn, 2 info, 3 hint).
+ * ```
  */
 export const lintDocument = async (input: string, options: ILintOptions = {}): Promise<IDiagnostic[]> =>
   (await lintDocumentWithResult(input, options)).diagnostics

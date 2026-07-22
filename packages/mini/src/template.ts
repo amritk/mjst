@@ -13,6 +13,15 @@ export type TemplateInstance = {
  * Safety: the argument must be a static string literal with no interpolated
  * data — dynamic content flows through the bind helpers, which use
  * `textContent`. This keeps `template` off the XSS surface entirely.
+ *
+ * @example
+ * ```ts
+ * const row = template('<li><span data-ref="label"></span></li>')
+ * const { root, ref } = row()
+ * const count = signal(0)
+ * bindText(ref.label, () => `${count()} items`) // dynamic data via bind, not interpolation
+ * document.body.append(root)
+ * ```
  */
 export const template = (html: string): (() => TemplateInstance) => {
   const parsed = document.createElement('template')

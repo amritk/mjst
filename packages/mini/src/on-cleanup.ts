@@ -14,6 +14,16 @@ import { effect } from 'alien-signals'
  * Must be called synchronously inside an `effectScope` (which `mount` and
  * every `list` item open); outside one there is nothing to attach to and the
  * cleanup would never run.
+ *
+ * @example
+ * ```tsx
+ * const Clock = () => {
+ *   const now = signal(Date.now())
+ *   const id = setInterval(() => now(Date.now()), 1000)
+ *   onCleanup(() => clearInterval(id)) // fires when the mount/list scope disposes
+ *   return <time>{() => new Date(now()).toLocaleTimeString()}</time>
+ * }
+ * ```
  */
 export const onCleanup = (fn: () => void): void => {
   effect(() => fn)
