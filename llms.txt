@@ -1,0 +1,26 @@
+# mjst
+
+> Fast, type-safe TypeScript parsers, validators, types, docs, and test data generated from JSON Schema (Draft 2020-12), plus a JSON/YAML linter, a contract-first API layer, and a tiny signals UI layer.
+
+mjst is a pre-alpha monorepo of independently published `@amritk/*` packages. Each package ships an `AI.md` — a mental model, a minimal runnable example, and the gotchas most likely to trip up an LLM. `llms-full.txt` inlines all of them into one file.
+
+## Packages
+
+- [@amritk/mjst](https://github.com/amritk/mjst/blob/main/packages/cli/README.md): Generate TypeScript parsers and type definitions from JSON Schemas — [AI.md](https://github.com/amritk/mjst/blob/main/packages/cli/AI.md)
+- [@amritk/api](https://github.com/amritk/mjst/blob/main/packages/api/README.md): Framework-agnostic, contract-first API layer built on mjst JSON Schema tooling — [AI.md](https://github.com/amritk/mjst/blob/main/packages/api/AI.md)
+- [@amritk/mini](https://github.com/amritk/mjst/blob/main/packages/mini/README.md): A deliberately tiny signals-based UI layer: reactive DOM bindings plus a compilerless JSX runtime — [AI.md](https://github.com/amritk/mjst/blob/main/packages/mini/AI.md)
+- [@amritk/lint](https://github.com/amritk/mjst/blob/main/packages/lint/README.md): A fast, format-agnostic JSON/YAML style-guide linter with JSON Schema and custom rules — [AI.md](https://github.com/amritk/mjst/blob/main/packages/lint/AI.md)
+- [@amritk/generate-parsers](https://github.com/amritk/mjst/blob/main/packages/generate-parsers/README.md): Generate TypeScript parsers and type definitions from JSON Schemas — [AI.md](https://github.com/amritk/mjst/blob/main/packages/generate-parsers/AI.md)
+- [@amritk/generate-validators](https://github.com/amritk/mjst/blob/main/packages/generate-validators/README.md): Generate TypeScript validation functions from JSON Schemas — [AI.md](https://github.com/amritk/mjst/blob/main/packages/generate-validators/AI.md)
+- [@amritk/generate-examples](https://github.com/amritk/mjst/blob/main/packages/generate-examples/README.md): Generate fast-check arbitraries and example values from JSON Schemas — [AI.md](https://github.com/amritk/mjst/blob/main/packages/generate-examples/AI.md)
+- [@amritk/generate-markdown](https://github.com/amritk/mjst/blob/main/packages/generate-markdown/README.md): Generate markdown documentation from JSON Schemas — [AI.md](https://github.com/amritk/mjst/blob/main/packages/generate-markdown/AI.md)
+- [@amritk/runtime-validators](https://github.com/amritk/mjst/blob/main/packages/runtime-validators/README.md): Extremely fast, eval-free runtime JSON Schema validation — [AI.md](https://github.com/amritk/mjst/blob/main/packages/runtime-validators/AI.md)
+- [@amritk/adapters](https://github.com/amritk/mjst/blob/main/packages/adapters/README.md): Convert schemas from external libraries (TypeBox, Zod, ...) into JSON Schema for mjst — [AI.md](https://github.com/amritk/mjst/blob/main/packages/adapters/AI.md)
+- [@amritk/resolve-refs](https://github.com/amritk/mjst/blob/main/packages/resolve-refs/README.md): Resolve and inline JSON Schema / OpenAPI $refs — internal, cross-file, and remote — with session caching and a default-deny SSRF guard — [AI.md](https://github.com/amritk/mjst/blob/main/packages/resolve-refs/AI.md)
+- [@amritk/yaml](https://github.com/amritk/mjst/blob/main/packages/yaml/README.md): A fast, featherweight, zero-dependency YAML parser for OpenAPI tooling — with exact source positions (line:column) on every node — [AI.md](https://github.com/amritk/mjst/blob/main/packages/yaml/AI.md)
+- [@amritk/helpers](https://github.com/amritk/mjst/blob/main/packages/helpers/README.md): Shared utilities for the mjst code generation ecosystem — [AI.md](https://github.com/amritk/mjst/blob/main/packages/helpers/AI.md)
+
+## Optional
+
+- [Full AI docs bundle](https://github.com/amritk/mjst/blob/main/llms-full.txt): every package's AI.md in one file
+- [Repository](https://github.com/amritk/mjst): source, issues, and human-facing READMEs

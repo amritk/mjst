@@ -33,11 +33,8 @@ describe('jsx-runtime', () => {
 
   it('freezes a called signal — the documented footgun', () => {
     const disabled = signal(true)
-    const el = (
-      <button type="button" disabled={disabled()}>
-        go
-      </button>
-    )
+    // biome-ignore format: keep disabled={disabled()} and the mini-static-ok marker on one line
+    const el = <button type="button" disabled={disabled()}>go</button> // mini-static-ok: asserts the footgun
     disabled(false)
     // Static forever: the call handed the runtime a plain boolean.
     expect(el.hasAttribute('disabled')).toBe(true)

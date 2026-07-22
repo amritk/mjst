@@ -27,7 +27,8 @@
     "mjst": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "AI.md"
   ],
   "publishConfig": {
     "access": "public"

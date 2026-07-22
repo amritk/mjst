@@ -22,6 +22,17 @@ export type WatchOptions = {
  *
  * Returns a stop function. Values are compared with `Object.is`, so getters
  * should return primitives or stable references.
+ *
+ * @example
+ * ```ts
+ * const query = signal('')
+ * // Fires only on change, not on setup — pass the signal (a getter), don't call it:
+ * const stop = watch(query, (next, previous) => {
+ *   console.log(`search changed: ${previous} → ${next}`)
+ * })
+ * // Run for the current value too:
+ * watch(query, (next) => fetchResults(next), { immediate: true })
+ * ```
  */
 export const watch = <T>(
   get: () => T,

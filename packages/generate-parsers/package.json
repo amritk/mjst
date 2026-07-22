@@ -23,7 +23,8 @@
     "url": "https://github.com/amritk/mjst/issues"
   },
   "files": [
-    "dist"
+    "dist",
+    "AI.md"
   ],
   "publishConfig": {
     "access": "public"
