@@ -34,6 +34,7 @@ describe('jsx-runtime', () => {
   it('freezes a called signal — the documented footgun', () => {
     const disabled = signal(true)
     const el = (
+      // catch-called-signals-ignore: this test demonstrates the footgun on purpose
       <button type="button" disabled={disabled()}>
         go
       </button>

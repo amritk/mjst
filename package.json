@@ -30,6 +30,7 @@
     "check": "biome check .",
     "format": "biome check --write --formatter-enabled=true --linter-enabled=false .",
     "lint": "biome lint .",
+    "lint:called-signals": "bun run scripts/catch-called-signals.ts",
     "pretest": "bun run --filter='@amritk/runtime-validators' build",
     "test": "bun run --workspaces test",
     "test:seq": "bun run --workspaces --sequential test",
