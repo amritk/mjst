@@ -29,7 +29,9 @@ A signal is a zero-arg function, so pass it **without calling it** to bind live:
 
 Calling the signal reads it once and hands the runtime a plain value. When an
 attribute should track state, pass the signal itself or a thunk. The repo ships
-a linter for exactly this mistake — see `packages/mini/scripts/check-reactivity.ts`.
+a guard for exactly this mistake: the `@amritk/mini/vite` plugin
+(`catchCalledSignals`) flags it live in the dev server and fails `vite build`,
+and `bun run check:reactivity` runs the same check in CI.
 
 ## Signals
 

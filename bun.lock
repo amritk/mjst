@@ -170,14 +170,20 @@
       "devDependencies": {
         "@amritk/runtime-validators": "workspace:*",
         "@tanstack/query-core": "^5.101.2",
+        "typescript": "^5",
+        "vite": "^8",
       },
       "peerDependencies": {
         "@amritk/runtime-validators": "workspace:*",
         "@tanstack/query-core": "^5",
+        "typescript": "^5",
+        "vite": "^5 || ^6 || ^7 || ^8",
       },
       "optionalPeers": [
         "@amritk/runtime-validators",
         "@tanstack/query-core",
+        "typescript",
+        "vite",
       ],
     },
     "packages/resolve-refs": {

@@ -29,7 +29,7 @@
     "types:check": "bun run --workspaces types:check",
     "lint:check": "bun run check",
     "check": "biome check .",
-    "check:reactivity": "bun run --filter='@amritk/mini' check:reactivity",
+    "check:reactivity": "bun run scripts/catch-called-signals.ts",
     "format": "biome check --write --formatter-enabled=true --linter-enabled=false .",
     "lint": "biome lint .",
     "pretest": "bun run --filter='@amritk/runtime-validators' build",

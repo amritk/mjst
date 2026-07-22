@@ -199,6 +199,28 @@ A thin adapter that bridges [`@tanstack/query-core`](https://tanstack.com/query)
 
 `@tanstack/query-core` is an **optional peer dependency** — install it only if you use `/query`.
 
+### Build guard (`@amritk/mini/vite`)
+
+A Vite plugin that catches the one footgun of the [reactivity rule](#the-reactivity-rule): calling a signal in a binding (`disabled={streaming()}`) freezes its value at creation instead of tracking it. Because the call happens before `jsx()` runs, neither the runtime nor the type checker can see the mistake — so it is caught in the source, by parsing it.
+
+| Export | Purpose |
+|:---|:---|
+| `catchCalledSignals(options?)` | A Vite plugin. Walks the TypeScript AST of each `.tsx` module on every edit and flags a **signal called directly in a binding** — `disabled={streaming()}` (and so `show`/`class`/`style`, and component props like `<For each={items()}>` when `items` is a signal) or a child `<span>{count()}</span>`. It only flags names it can see are signals (`signal()`/`computed()`, or a `Signal<…>`/`ReadonlySignal<…>` type), so one-shot helpers like `id={makeId()}` are left alone. In dev it **warns** in the terminal and shows the findings in Vite's **error overlay** (non-blocking — the module still loads, and the overlay clears on the next clean edit); during `vite build` it **fails** the build — one plugin for both the editor loop and the CI gate. Bare getters and thunks never match; a `// mini-static-ok` comment (same line or the line above) opts out a deliberate case. Pass `{ failOnError }` to force the severity, or `{ overlay: false }` to keep dev feedback in the terminal only. |
+| `findCalledSignalBindings(source)` | The underlying scanner (returns `CalledSignalBinding[]`), for a bespoke lint command or editor integration. |
+| `CatchCalledSignalsOptions`, `CalledSignalBinding` | Exported types. |
+
+```ts
+import { defineConfig } from 'vite'
+
+import { catchCalledSignals } from '@amritk/mini/vite'
+
+export default defineConfig({
+  plugins: [catchCalledSignals()],
+})
+```
+
+`vite` and `typescript` are **optional peer dependencies** — needed only by this subpath, so the `.` core stays dependency-free.
+
 ---
 
 ## Usage

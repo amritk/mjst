@@ -1,0 +1,144 @@
+import ts from 'typescript'
+
+/**
+ * One place a compilerless JSX runtime cannot help you: `@amritk/mini` decides
+ * reactivity by value shape at runtime, so `disabled={streaming}` binds live
+ * (the getter is passed through) while `disabled={streaming()}` calls the
+ * signal first and freezes a plain boolean at creation. The runtime never sees
+ * the signal in the second form — the call already happened at the JSX call
+ * site — so neither the runtime nor the type checker can catch the mistake
+ * (a called signal returns a perfectly valid static value). The only place
+ * left to catch it is the source, which is what this scanner does.
+ *
+ * It walks the TypeScript AST and flags the unambiguous shape: an attribute
+ * (or child) whose entire value is a single zero-argument call to a *signal* —
+ * `disabled={streaming()}` or `<span>{count()}</span>`. To keep false positives
+ * near zero it only flags calls to names it can see are signals: a local
+ * `const x = signal(...)` / `computed(...)`, or a binding typed `Signal<…>` /
+ * `ReadonlySignal<…>` (variable, parameter, or property). A one-shot helper like
+ * `id={makeId()}` is therefore left alone. The correct forms are a different
+ * node and never match — a bare getter `attr={signal}` has no call, and a thunk
+ * or handler `attr={() => signal()}` wraps the call in an arrow. Because the
+ * parser does the work, comments and strings cannot trip the scanner and
+ * multi-line attributes are found.
+ *
+ * This is the shared core behind both adapters — the Vite plugin
+ * ({@link catchCalledSignals}) that reports live in the dev server, and the
+ * repo's CLI gate. When a read is deliberately static, mark the line (or the
+ * line above) with a `// mini-static-ok` comment and it is skipped.
+ */
+
+/** A single suspicious `{signal()}` binding, with a 1-based source position. */
+export type CalledSignalBinding = {
+  /**
+   * The JSX attribute name (`disabled`) for an attribute binding, or `undefined`
+   * when the call is a JSX child — `<span>{count()}</span>` — which has no
+   * attribute name. A child freezes just like an attribute: a bare `{count}`
+   * child is already reactive (mini wraps function children in an effect), so
+   * `{count()}` is the frozen mistake.
+   */
+  readonly attribute?: string
+  /** The signal that was called, e.g. `streaming`. */
+  readonly callee: string
+  /** 1-based line of the binding, for a `file:line:col` report. */
+  readonly line: number
+  /** 1-based column of the binding. */
+  readonly column: number
+}
+
+/** The opt-out marker, checked on the finding's own line or the line above. */
+const IGNORE = 'mini-static-ok'
+
+/** Whether a type annotation is `Signal<…>` or `ReadonlySignal<…>`. */
+const isSignalType = (type: ts.TypeNode | undefined): boolean =>
+  type !== undefined &&
+  ts.isTypeReferenceNode(type) &&
+  ts.isIdentifier(type.typeName) &&
+  (type.typeName.text === 'Signal' || type.typeName.text === 'ReadonlySignal')
+
+/** Whether an initializer is a `signal(...)` or `computed(...)` call. */
+const isSignalFactory = (init: ts.Expression | undefined): boolean =>
+  init !== undefined &&
+  ts.isCallExpression(init) &&
+  ts.isIdentifier(init.expression) &&
+  (init.expression.text === 'signal' || init.expression.text === 'computed')
+
+/**
+ * The names that behave as signals in one file: locals bound to
+ * `signal(...)` / `computed(...)`, and identifiers annotated `Signal<…>` /
+ * `ReadonlySignal<…>` (variables, parameters, properties). This is a file-wide
+ * heuristic rather than scope-accurate resolution — which is why the
+ * `mini-static-ok` escape hatch exists for the rare name collision.
+ */
+const collectSignalNames = (sourceFile: ts.SourceFile): Set<string> => {
+  const names = new Set<string>()
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      (isSignalFactory(node.initializer) || isSignalType(node.type))
+    ) {
+      names.add(node.name.text)
+    } else if (ts.isParameter(node) && ts.isIdentifier(node.name) && isSignalType(node.type)) {
+      names.add(node.name.text)
+    } else if (
+      (ts.isPropertySignature(node) || ts.isPropertyDeclaration(node)) &&
+      ts.isIdentifier(node.name) &&
+      isSignalType(node.type)
+    ) {
+      names.add(node.name.text)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return names
+}
+
+/** Finds every `attr={signal()}` and `{signal()}`-child binding in a `.tsx` source string. */
+export const findCalledSignalBindings = (source: string): readonly CalledSignalBinding[] => {
+  const sourceFile = ts.createSourceFile('scan.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const signals = collectSignalNames(sourceFile)
+  if (signals.size === 0) return []
+
+  const lines = source.split('\n')
+  const bindings: CalledSignalBinding[] = []
+
+  // Records a finding unless its line (or the line above) carries the opt-out
+  // marker. `anchor` decides where we point — the attribute for a prop, the
+  // whole `{…}` for a child — so the report lands on the offending token.
+  const record = (anchor: ts.Node, callee: string, attribute?: string): void => {
+    const { line, character } = sourceFile.getLineAndCharacterOfPosition(anchor.getStart(sourceFile))
+    // `line` is 0-based, so `lines[line]` is the binding's own line.
+    if (lines[line]?.includes(IGNORE) || lines[line - 1]?.includes(IGNORE)) return
+    const position = { line: line + 1, column: character + 1 }
+    bindings.push(attribute === undefined ? { callee, ...position } : { attribute, callee, ...position })
+  }
+
+  const visit = (node: ts.Node): void => {
+    // A `{…}` in JSX is a `JsxExpression`; its parent tells us whether it is an
+    // attribute value or a child. Both freeze a called signal identically.
+    if (ts.isJsxExpression(node) && node.expression !== undefined) {
+      const value = node.expression
+      if (
+        ts.isCallExpression(value) &&
+        value.arguments.length === 0 &&
+        ts.isIdentifier(value.expression) &&
+        signals.has(value.expression.text)
+      ) {
+        const callee = value.expression.text
+        const parent = node.parent
+        if (ts.isJsxAttribute(parent) && ts.isIdentifier(parent.name)) {
+          // `on*` is an event handler, not a reactive binding — a bare call
+          // there is a different mistake, so leave it to the runtime.
+          if (!parent.name.text.startsWith('on')) record(parent, callee, parent.name.text)
+        } else if (ts.isJsxElement(parent) || ts.isJsxFragment(parent)) {
+          record(node, callee)
+        }
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+
+  visit(sourceFile)
+  return bindings
+}

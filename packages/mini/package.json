@@ -38,7 +38,6 @@
   "scripts": {
     "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f && node ../../scripts/strip-comments.mjs",
     "types:check": "tsgo -p . --noEmit",
-    "check:reactivity": "bun run scripts/check-reactivity.ts src",
     "test": "NODE_ENV=production vitest run --root ../.. mini"
   },
   "dependencies": {
@@ -87,11 +86,19 @@
       "types": "./dist/query/index.d.ts",
       "import": "./dist/query/index.js",
       "default": "./dist/query/index.js"
+    },
+    "./vite": {
+      "development": "./src/vite/index.ts",
+      "types": "./dist/vite/index.d.ts",
+      "import": "./dist/vite/index.js",
+      "default": "./dist/vite/index.js"
     }
   },
   "peerDependencies": {
     "@amritk/runtime-validators": "workspace:*",
-    "@tanstack/query-core": "^5"
+    "@tanstack/query-core": "^5",
+    "typescript": "^5",
+    "vite": "^5 || ^6 || ^7 || ^8"
   },
   "peerDependenciesMeta": {
     "@amritk/runtime-validators": {
@@ -99,10 +106,18 @@
     },
     "@tanstack/query-core": {
       "optional": true
+    },
+    "typescript": {
+      "optional": true
+    },
+    "vite": {
+      "optional": true
     }
   },
   "devDependencies": {
     "@amritk/runtime-validators": "workspace:*",
-    "@tanstack/query-core": "^5.101.2"
+    "@tanstack/query-core": "^5.101.2",
+    "typescript": "^5",
+    "vite": "^8"
   }
 }

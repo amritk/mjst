@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest'
 const SRC = fileURLToPath(new URL('.', import.meta.url))
 
 /** The subpath feature directories — none of these may be reachable from `.`. */
-const SUBPATH_DIRS = ['flow', 'router', 'forms', 'query', 'internal']
+const SUBPATH_DIRS = ['flow', 'router', 'forms', 'query', 'vite', 'internal']
 
 /** Extracts every import/export module specifier from a source file. */
 const specifiersOf = (file: string): string[] => {
