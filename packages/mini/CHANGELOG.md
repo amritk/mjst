@@ -1,5 +1,11 @@
 # @amritk/mini
 
+## 0.4.1
+
+### Patch Changes
+
+- d35a9ab: chore: package bump
+
 ## 0.4.0
 
 ### Minor Changes
