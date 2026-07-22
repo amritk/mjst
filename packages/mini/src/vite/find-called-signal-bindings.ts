@@ -28,15 +28,21 @@ import ts from 'typescript'
  * above and the binding is skipped.
  */
 
-/** A single suspicious `attr={callee()}` binding, with a 1-based source position. */
+/** A single suspicious `{callee()}` binding, with a 1-based source position. */
 export type CalledSignalBinding = {
-  /** The JSX attribute name, e.g. `disabled`. */
-  readonly attribute: string
+  /**
+   * The JSX attribute name (`disabled`) for an attribute binding, or `undefined`
+   * when the call is a JSX child — `<span>{count()}</span>` — which has no
+   * attribute name. A child freezes just like an attribute: a bare `{count}`
+   * child is already reactive (mini wraps function children in an effect), so
+   * `{count()}` is the frozen mistake.
+   */
+  readonly attribute?: string
   /** The reference that was called, e.g. `streaming` or `form.isSubmitting`. */
   readonly callee: string
-  /** 1-based line of the attribute, for a `file:line:col` report. */
+  /** 1-based line of the binding, for a `file:line:col` report. */
   readonly line: number
-  /** 1-based column of the attribute. */
+  /** 1-based column of the binding. */
   readonly column: number
 }
 
@@ -55,24 +61,34 @@ const readCallee = (expression: ts.Expression, source: ts.SourceFile): string | 
   return undefined
 }
 
-/** Finds every `attr={callee()}` binding in a `.tsx` source string. */
+/** Finds every `attr={callee()}` and `{callee()}`-child binding in a `.tsx` source string. */
 export const findCalledSignalBindings = (source: string): readonly CalledSignalBinding[] => {
   const sourceFile = ts.createSourceFile('scan.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
   const lines = source.split('\n')
   const bindings: CalledSignalBinding[] = []
 
+  // Records a finding unless its line (or the line above) carries the opt-out
+  // marker. `anchor` decides where we point — the attribute for a prop, the
+  // whole `{…}` for a child — so the report lands on the offending token.
+  const record = (anchor: ts.Node, callee: string, attribute?: string): void => {
+    const { line, character } = sourceFile.getLineAndCharacterOfPosition(anchor.getStart(sourceFile))
+    // `line` is 0-based, so `lines[line]` is the binding's own line.
+    if (lines[line]?.includes(IGNORE) || lines[line - 1]?.includes(IGNORE)) return
+    const position = { line: line + 1, column: character + 1 }
+    bindings.push(attribute === undefined ? { callee, ...position } : { attribute, callee, ...position })
+  }
+
   const visit = (node: ts.Node): void => {
-    if (ts.isJsxAttribute(node) && node.initializer !== undefined && ts.isJsxExpression(node.initializer)) {
-      const value = node.initializer.expression
-      if (value !== undefined && ts.isCallExpression(value) && value.arguments.length === 0) {
+    // A `{…}` in JSX is a `JsxExpression`; its parent tells us whether it is an
+    // attribute value or a child. Both freeze a called signal identically.
+    if (ts.isJsxExpression(node) && node.expression !== undefined) {
+      const value = node.expression
+      if (ts.isCallExpression(value) && value.arguments.length === 0) {
         const callee = readCallee(value.expression, sourceFile)
         if (callee !== undefined) {
-          const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile))
-          // `line` is 0-based, so `lines[line]` is the attribute's own line.
-          const suppressed = lines[line]?.includes(IGNORE) || lines[line - 1]?.includes(IGNORE)
-          if (suppressed !== true) {
-            bindings.push({ attribute: node.name.getText(sourceFile), callee, line: line + 1, column: character + 1 })
-          }
+          const parent = node.parent
+          if (ts.isJsxAttribute(parent)) record(parent, callee, parent.name.getText(sourceFile))
+          else if (ts.isJsxElement(parent) || ts.isJsxFragment(parent)) record(node, callee)
         }
       }
     }

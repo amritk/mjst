@@ -74,6 +74,18 @@ describe('catch-called-signals plugin', () => {
     expect(() => runTransform(plugin, reports, FOOTGUN, '/app/widget.tsx')).toThrow()
   })
 
+  it('warns on a called signal used as a child', () => {
+    const reports: Reports = { warnings: [], errors: [] }
+    const plugin = catchCalledSignals()
+    resolveConfig(plugin, 'serve')
+
+    runTransform(plugin, reports, 'const a = <span>{count()}</span>', '/app/widget.tsx')
+
+    expect(reports.warnings).toHaveLength(1)
+    expect(reports.warnings[0]).toContain('{count()}')
+    expect(reports.warnings[0]).toContain('pass {count}')
+  })
+
   it('ignores non-tsx modules', () => {
     const reports: Reports = { warnings: [], errors: [] }
     const plugin = catchCalledSignals()

@@ -205,7 +205,7 @@ A Vite plugin that catches the one footgun of the [reactivity rule](#the-reactiv
 
 | Export | Purpose |
 |:---|:---|
-| `catchCalledSignals(options?)` | A Vite plugin. Scans each `.tsx` module on every edit and flags an attribute whose whole value is a single zero-argument call (`attr={signal()}`). **Warns** in the dev server and **fails** `vite build` — one plugin for both the editor loop and the CI gate. Bare getters, thunks, and handlers are a different shape and never match; a `catch-called-signals-ignore` comment opts out a deliberate case. Pass `{ failOnError }` to force the severity. |
+| `catchCalledSignals(options?)` | A Vite plugin. Scans each `.tsx` module on every edit and flags a binding whose whole value is a single zero-argument call — both attributes (`disabled={streaming()}`, and so `show`/`class`/`style`/component props like `<For each={items()}>`) and children (`<span>{count()}</span>`). **Warns** in the dev server and **fails** `vite build` — one plugin for both the editor loop and the CI gate. Bare getters, thunks, and handlers are a different shape and never match; a `catch-called-signals-ignore` comment opts out a deliberate case. Pass `{ failOnError }` to force the severity. |
 | `findCalledSignalBindings(source)` | The underlying scanner (returns `CalledSignalBinding[]`), for a bespoke lint command or editor integration. |
 | `CatchCalledSignalsOptions`, `CalledSignalBinding` | Exported types. |
 

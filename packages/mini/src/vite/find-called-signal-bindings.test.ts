@@ -33,6 +33,41 @@ describe('find-called-signal-bindings', () => {
     expect(findCalledSignalBindings(source)).toMatchObject([{ attribute: 'disabled', callee: 'streaming', line: 3 }])
   })
 
+  it('flags a called signal used as a JSX child', () => {
+    // A bare `{count}` child is already reactive, so `{count()}` is the frozen
+    // mistake — the same footgun, one position over. Child findings carry no
+    // attribute name.
+    const found = findCalledSignalBindings('const a = <span>{count()}</span>')
+    expect(found).toHaveLength(1)
+    expect(found[0]).toMatchObject({ callee: 'count', line: 1, column: 17 })
+    expect(found[0]?.attribute).toBeUndefined()
+  })
+
+  it('flags a called signal child reached through a member access', () => {
+    const found = findCalledSignalBindings('const a = <span>{store.count()}</span>')
+    expect(found).toMatchObject([{ callee: 'store.count' }])
+  })
+
+  it('leaves a bare signal child alone', () => {
+    // `{count}` is a function child — mini wraps it in an effect, so it tracks.
+    expect(findCalledSignalBindings('const a = <span>{count}</span>')).toEqual([])
+  })
+
+  it('leaves a thunk child alone', () => {
+    expect(findCalledSignalBindings('const a = <span>{() => count() * 2}</span>')).toEqual([])
+  })
+
+  it('leaves a build-time conditional child alone', () => {
+    // `{cond && <span/>}` is a logical expression, not a call — the documented
+    // build-time conditional stays untouched.
+    expect(findCalledSignalBindings('const a = <div>{show && <span>hi</span>}</div>')).toEqual([])
+  })
+
+  it('leaves a child call with arguments alone', () => {
+    // `{formatDate(now)}` is a one-shot render value, not a forgotten getter.
+    expect(findCalledSignalBindings('const a = <span>{formatDate(now)}</span>')).toEqual([])
+  })
+
   it('leaves the bare getter alone', () => {
     expect(findCalledSignalBindings('const b = <button disabled={streaming}>y</button>')).toEqual([])
   })

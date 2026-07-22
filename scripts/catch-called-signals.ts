@@ -42,9 +42,11 @@ const main = async (paths: readonly string[]): Promise<number> => {
       const bindings = findCalledSignalBindings(await readFile(file, 'utf-8'))
       for (const { attribute, callee, line, column } of bindings) {
         total += 1
-        console.log(
-          `${file}:${line}:${column}  ${attribute}={${callee}()} freezes the signal — pass ${attribute}={${callee}} to keep it reactive`,
-        )
+        const [was, fix] =
+          attribute === undefined
+            ? [`{${callee}()}`, `{${callee}}`]
+            : [`${attribute}={${callee}()}`, `${attribute}={${callee}}`]
+        console.log(`${file}:${line}:${column}  ${was} freezes the signal — pass ${fix} to keep it reactive`)
       }
     }
   }

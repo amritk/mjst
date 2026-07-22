@@ -11,7 +11,9 @@ source. `catchCalledSignals()` walks the TypeScript AST in Vite's `transform`
 hook, so it reports live in the dev server (a warning per finding, with a
 clickable `file:line:column`) and fails `vite build` — one plugin covering both
 the editor feedback loop and the CI gate. It flags only the unambiguous shape
-(an attribute whose whole value is a single zero-argument call), leaving bare
+(a binding whose whole value is a single zero-argument call) — both attributes
+(`disabled={streaming()}`, `show`/`class`/`style`, and component props such as
+`<For each={items()}>`) and children (`<span>{count()}</span>`) — leaving bare
 getters, thunks, and handlers alone, and honours a `catch-called-signals-ignore`
 comment for deliberate cases. The exported `findCalledSignalBindings` core backs
 a bespoke lint command or editor integration. `vite` and `typescript` are

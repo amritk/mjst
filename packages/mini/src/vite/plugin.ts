@@ -24,8 +24,13 @@ const isScannable = (id: string): boolean => {
 }
 
 /** The human-facing message for one finding — the fix is in the text, not just the rule name. */
-const describe = ({ attribute, callee }: { attribute: string; callee: string }): string =>
-  `${attribute}={${callee}()} calls the signal and freezes it at creation — pass ${attribute}={${callee}} (no parentheses) to keep it reactive`
+const describe = ({ attribute, callee }: { attribute?: string; callee: string }): string => {
+  const [was, fix] =
+    attribute === undefined
+      ? [`{${callee}()}`, `{${callee}}`]
+      : [`${attribute}={${callee}()}`, `${attribute}={${callee}}`]
+  return `${was} calls the signal and freezes it at creation — pass ${fix} (no parentheses) to keep it reactive`
+}
 
 /**
  * A Vite plugin that catches mini's called-signal footgun as you type. It scans
