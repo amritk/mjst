@@ -153,12 +153,18 @@ export type ResponseHeaders = Readonly<Record<string, ResponseHeaderValue>>
  * `contentType` is set (the reply's status was declared with a raw
  * `contentType` in its contract), `body` is a {@link StreamingBody} and
  * adapters send it untouched under that content type instead of serializing.
+ *
+ * When `raw` is set, a handler returned a web {@link Response} directly (the
+ * escape hatch — see {@link RouteHandler}); the adapters send it verbatim,
+ * ignoring `status`/`headers`/`body`, and only strip its body for HEAD. The
+ * mirrored `status` is the raw response's own, so observers still see it.
  */
 export type ApiResponse = {
   readonly status: number
   readonly headers?: ResponseHeaders
   readonly body?: unknown
   readonly contentType?: string
+  readonly raw?: Response
 }
 
 /**
@@ -214,6 +220,14 @@ export type RouteReplyOf<C extends AnyContract> = RouteReply<C['responses']>
 /**
  * A route's implementation. It only runs after every declared request schema
  * has validated, so the context values are safe to use without further checks.
+ *
+ * A handler normally returns a {@link RouteReply} — a `{ status, body }` pair
+ * the contract's response schemas type and validate. As an escape hatch it may
+ * instead return a raw web `Response`, which the adapters send verbatim: this
+ * bypasses response validation and serialization entirely (there is no
+ * framework-level body to check), so reach for it only when a route needs full
+ * control of the wire output or is porting code that already builds `Response`
+ * objects.
  */
 export type RouteHandler<
   Params,
@@ -225,7 +239,7 @@ export type RouteHandler<
   Context = undefined,
 > = (
   context: RequestContext<Params, Query, Body, Headers, Cookies, Context>,
-) => RouteReply<Responses> | Promise<RouteReply<Responses>>
+) => RouteReply<Responses> | Response | Promise<RouteReply<Responses> | Response>
 
 /**
  * One problem a {@link Contract.refine} hook reports. Shaped after the
@@ -490,7 +504,7 @@ export type AnyContract = {
  * an {@link AnyContract} plus the erased handler.
  */
 export type AnyRouteContract = AnyContract & {
-  readonly handler: (context: ErasedRequestContext) => RouteReplyValue | Promise<RouteReplyValue>
+  readonly handler: (context: ErasedRequestContext) => RouteReplyValue | Response | Promise<RouteReplyValue | Response>
 }
 
 /**

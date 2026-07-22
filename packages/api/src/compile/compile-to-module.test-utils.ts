@@ -370,6 +370,30 @@ export const rawEcho = defineRoute({
   handler: async ({ request }) => ({ status: 200, body: { raw: await request.readText() } }),
 })
 
+/**
+ * The Response escape hatch: the handler returns a raw web `Response` directly
+ * instead of a `{ status, body }` reply. Its status, headers (including a
+ * repeated set-cookie), content type, and body ride out verbatim — response
+ * validation is skipped, so the 202 it sends stands even though the contract
+ * only declares 200. Both engines must produce byte-identical output, decorate
+ * it with the onResponse hooks, and strip its body for HEAD like any GET reply.
+ */
+export const rawResponse = defineRoute({
+  method: 'get',
+  path: '/raw-response',
+  responses: { 200: { body: { type: 'object' } } },
+  handler: () =>
+    new Response(JSON.stringify({ escaped: true }), {
+      status: 202,
+      headers: [
+        ['content-type', 'application/json'],
+        ['x-served-by', 'raw'],
+        ['set-cookie', 'a=1'],
+        ['set-cookie', 'b=2'],
+      ],
+    }),
+})
+
 /** Shared titled schema: both engines must hoist it into components.schemas. */
 const buildInfoSchema = {
   title: 'BuildInfo',

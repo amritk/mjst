@@ -130,6 +130,53 @@ describe('to-node-handler', () => {
     })
   })
 
+  it('sends a raw web Response returned by a handler verbatim, set-cookie unfolded', async () => {
+    const raw = defineRoute({
+      method: 'get',
+      path: '/raw',
+      responses: { 200: { body: { type: 'object' } } },
+      // The escape hatch: full control of status, headers, and body, bypassing
+      // response validation — the 202 stands though only 200 is declared.
+      handler: () =>
+        new Response(JSON.stringify({ escaped: true }), {
+          status: 202,
+          headers: [
+            ['content-type', 'application/json'],
+            ['set-cookie', 'a=1; Path=/'],
+            ['set-cookie', 'b=2; HttpOnly'],
+          ],
+        }),
+    })
+    const handler = toNodeHandler(createApi({ routes: [raw] }))
+    await withServer(createServer(handler), async (origin) => {
+      const response = await fetch(origin + '/raw')
+      expect(response.status).toBe(202)
+      expect(response.headers.get('content-type')).toBe('application/json')
+      expect(response.headers.getSetCookie()).toEqual(['a=1; Path=/', 'b=2; HttpOnly'])
+      expect(await response.json()).toEqual({ escaped: true })
+    })
+  })
+
+  it('strips the body from a raw web Response for HEAD, keeping status and headers', async () => {
+    const raw = defineRoute({
+      method: 'get',
+      path: '/raw',
+      responses: { 200: { body: { type: 'object' } } },
+      handler: () =>
+        new Response(JSON.stringify({ escaped: true }), {
+          status: 202,
+          headers: { 'content-type': 'application/json', 'x-served-by': 'raw' },
+        }),
+    })
+    const handler = toNodeHandler(createApi({ routes: [raw] }))
+    await withServer(createServer(handler), async (origin) => {
+      const response = await fetch(origin + '/raw', { method: 'HEAD' })
+      expect(response.status).toBe(202)
+      expect(response.headers.get('x-served-by')).toBe('raw')
+      expect(await response.text()).toBe('')
+    })
+  })
+
   it('honors write backpressure while pumping a fast producer to completion', async () => {
     // Each 64 KiB chunk overshoots the response's default 16 KiB buffer, so
     // outgoing.write returns false on every enqueue and the pump must await

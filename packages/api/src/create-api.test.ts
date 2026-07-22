@@ -262,6 +262,24 @@ describe('create-api', () => {
     expect(response.body).toMatchObject({ error: 'invalid_response', status: 200 })
   })
 
+  it('surfaces a raw web Response from a handler on the ApiResponse, bypassing response validation', async () => {
+    const escapeRoute = defineRoute({
+      method: 'get',
+      path: '/escape',
+      responses: { 200: { body: { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] } } },
+      // A raw Response is the escape hatch: even with validateResponses on and a
+      // status the contract never declares, it rides out untouched — there is no
+      // framework-level body to check.
+      handler: () => new Response('raw bytes', { status: 202, headers: { 'content-type': 'text/plain' } }),
+    })
+    const api = createApi({ routes: [escapeRoute], validateResponses: true })
+    const response = await api.handle(request('GET', '/escape'))
+    expect(response.status).toBe(202)
+    expect(response.raw).toBeInstanceOf(Response)
+    expect(response.body).toBeUndefined()
+    expect(await response.raw?.text()).toBe('raw bytes')
+  })
+
   it('flags undeclared reply statuses when validateResponses is on', async () => {
     const offContract = defineRoute({
       method: 'get',

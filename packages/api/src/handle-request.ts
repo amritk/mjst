@@ -271,7 +271,7 @@ const runRoute = async (
     if (!route.body.guard(body)) return validationFailure('body', route.body.collect, body, errors, request)
   }
 
-  let reply: RouteReplyValue
+  let reply: RouteReplyValue | Response
   try {
     // Refinement runs after every slot validated (its whole point is seeing
     // them together) and inside this try so a throwing or rejecting refine
@@ -308,6 +308,12 @@ const runRoute = async (
       ? internals.onError(error, request, { route: route.contract, env, executionContext })
       : INTERNAL_ERROR
   }
+
+  // The escape hatch: a handler that returns a raw web Response takes full
+  // control of the wire output. It rides out to the adapter untouched via
+  // `raw`, skipping response validation and serialization — there is no
+  // framework-level body to check. The mirrored status keeps observers honest.
+  if (reply instanceof Response) return { status: reply.status, raw: reply }
 
   if (route.responses !== undefined) {
     const compiled = route.responses.get(reply.status)
