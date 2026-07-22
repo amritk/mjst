@@ -351,7 +351,7 @@ type RawInput = {
  *
  * @example
  * ```typescript
- * import * as contracts from './contracts'
+ * import { contracts } from './contracts' // a single record of `defineContract` calls
  *
  * const client = createClient(contracts, 'https://api.example.com', {
  *   headers: () => ({ authorization: `Bearer ${token}` }),

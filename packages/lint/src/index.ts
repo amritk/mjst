@@ -4,30 +4,104 @@ import { dirname, isAbsolute, resolve as resolvePath } from 'node:path'
 
 import {
   createRuleset as createCoreRuleset,
-  type FunctionRegistry,
-  type IDiagnostic,
   type IDocumentOptions,
   type LintPlugin,
   type LintResolver,
   lintWithResult,
   type ResolvedExtend,
   type Ruleset,
-  type RulesetDefinition,
-  type RulesetFunction,
 } from './core'
+import type { FunctionRegistry, IDiagnostic, RulesetDefinition, RulesetFunction } from './core/types'
 import { type AppliedFix, createFixPlugin, FIX_PLUGIN_NAME, type FixerRegistry, type FixPluginData } from './fix'
 import { builtinFunctions } from './functions'
 import { parseWithPointers } from './parsers'
 
 // Re-export the engine, built-in functions, and fix subsystem as the package's
-// public API. `export *` from `./core` also provides a low-level `createRuleset`,
-// but the higher-level wrapper defined below (which layers in the built-in
-// functions and file/package `extends` resolution) is the local export and wins.
-// Rendering findings is a consumer concern: `lintDocument` returns structured
-// `IDiagnostic[]`, and the caller decides how to display or serialize them.
-export * from './core'
-export * from './fix'
-export * from './functions'
+// public API. `./core` also provides a low-level `createRuleset`, deliberately
+// omitted here: the higher-level wrapper defined below (which layers in the
+// built-in functions and file/package `extends` resolution) is the local export
+// and takes its place. Rendering findings is a consumer concern: `lintDocument`
+// returns structured `IDiagnostic[]`, and the caller decides how to display or
+// serialize them.
+export {
+  type AliasDefinition,
+  type CompiledPath,
+  compileQuery,
+  createDocument,
+  createLinter,
+  type Document,
+  detectFormats,
+  type ExtendModifier,
+  type ExtendResolver,
+  type Format,
+  globToRegExp,
+  type IDocumentOptions,
+  type IQueryMatch,
+  type IRulesetProblem,
+  type IRunOptions,
+  type Linter,
+  type LintOptions,
+  type LintPlugin,
+  type LintPluginContext,
+  type LintPluginResult,
+  type LintResolver,
+  type LintResolverResult,
+  type LintResult,
+  lint,
+  lintWithResult,
+  matchesGlob,
+  type PluginRunResult,
+  pointerToPath,
+  query,
+  queryCompiled,
+  queryMany,
+  type ResolvedExtend,
+  type Ruleset,
+  type RulesetOptions,
+  resolveSourceOrigin,
+  resolveSourceOriginFromMap,
+  resolveSourcePath,
+  runPlugins,
+  validateRuleset,
+} from './core'
+export {
+  type AppliedFix,
+  type ApplyFixesOptions,
+  applyFixes,
+  createFixPlugin,
+  type EditOp,
+  FIX_PLUGIN_NAME,
+  type FixContext,
+  type Fixer,
+  type FixerRegistry,
+  type FixPluginData,
+  type FixResult,
+  type ParserFormat,
+} from './fix'
+export {
+  alphabetical,
+  builtinFunctions,
+  type CasingType,
+  casing,
+  defined,
+  enumeration,
+  falsy,
+  type IAlphabeticalOptions,
+  type ICasingOptions,
+  type IOrOptions,
+  type ISchemaOptions,
+  type IUnreferencedReusableObjectOptions,
+  type IXorOptions,
+  length,
+  or,
+  pattern,
+  schema,
+  truthy,
+  typedEnum,
+  undefinedFn,
+  unreferencedReusableObject,
+  xor,
+} from './functions'
 export { detectFormat, parseWithPointers } from './parsers'
 
 const require = createRequire(import.meta.url)

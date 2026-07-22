@@ -1,4 +1,4 @@
-import type { JsonPath } from '../../core'
+import type { JsonPath } from '../../core/types'
 import type { EditOp, Fixer, FixerRegistry } from '../../fix'
 
 /** Reads the value at `path` in the parsed document, or `undefined` if absent. */

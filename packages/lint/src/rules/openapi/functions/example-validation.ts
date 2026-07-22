@@ -1,6 +1,6 @@
 import { validate } from '@amritk/runtime-validators'
 
-import type { IFunctionResult, JsonPath, RulesetFunction } from '../../../core'
+import type { IFunctionResult, JsonPath, RulesetFunction } from '../../../core/types'
 import { isObject } from './helpers'
 
 // The two example rules below are kept in one module because they share private

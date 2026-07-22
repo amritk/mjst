@@ -1,4 +1,4 @@
-import type { IFunctionResult, RulesetFunction } from '../core'
+import type { IFunctionResult, RulesetFunction } from '../core/types'
 
 /** Options for {@link unreferencedReusableObject}. */
 export type IUnreferencedReusableObjectOptions = {

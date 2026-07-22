@@ -1,17 +1,14 @@
 import { readFileSync } from 'node:fs'
 import { resolve as resolvePath } from 'node:path'
+import { createDocument, type Document, type LintResolver, resolveSourceOriginFromMap } from '@amritk/lint'
 import {
-  createDocument,
   DiagnosticSeverity,
-  type Document,
   type IDiagnostic,
   type IOriginMap,
   type ISourceDocument,
   type ISourceSet,
   type JsonPath,
-  type LintResolver,
-  resolveSourceOriginFromMap,
-} from '@amritk/lint'
+} from '@amritk/lint/types'
 import { type OriginMap, type ResolveError, resolveRefs, resolveRefsFromFile } from '@amritk/resolve-refs'
 import { parse as parseYaml } from '@amritk/yaml'
 

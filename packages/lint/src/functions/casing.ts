@@ -1,4 +1,4 @@
-import type { IFunctionResult, RulesetFunction } from '../core'
+import type { IFunctionResult, RulesetFunction } from '../core/types'
 
 /** The supported casing styles a value can be checked against. */
 export type CasingType = 'flat' | 'camel' | 'pascal' | 'kebab' | 'cobol' | 'snake' | 'macro'

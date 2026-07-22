@@ -1,4 +1,4 @@
-import type { IFunctionResult, RulesetFunction } from '../../../core'
+import type { IFunctionResult, RulesetFunction } from '../../../core/types'
 import { isObject } from './helpers'
 
 // OpenAPI 3.2 Example Object exclusivity (MUST-level, per the spec's field

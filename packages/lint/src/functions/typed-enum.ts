@@ -1,4 +1,4 @@
-import type { IFunctionResult, RulesetFunction } from '../core'
+import type { IFunctionResult, RulesetFunction } from '../core/types'
 
 const JS_TYPES: Record<string, (value: unknown) => boolean> = {
   string: (v) => typeof v === 'string',

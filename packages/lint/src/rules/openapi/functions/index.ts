@@ -1,4 +1,4 @@
-import type { FunctionRegistry, RulesetFunction } from '../../../core'
+import type { FunctionRegistry, RulesetFunction } from '../../../core/types'
 import { oasMediaExample, oasSchemaExample } from './example-validation'
 import { oasAdditionalOperations } from './oas-additional-operations'
 import { oasDiscriminator } from './oas-discriminator'

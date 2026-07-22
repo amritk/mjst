@@ -1,4 +1,4 @@
-import type { RulesetFunction } from '../core'
+import type { RulesetFunction } from '../core/types'
 
 /**
  * Flags a value that is defined. Exported as `undefinedFn` because `undefined`

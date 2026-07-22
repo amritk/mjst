@@ -1,4 +1,4 @@
-import type { RulesetFunction } from '../../../core'
+import type { RulesetFunction } from '../../../core/types'
 import { isObject } from './helpers'
 
 /**

@@ -1,4 +1,4 @@
-import type { IFunctionResult, JsonPath, RulesetFunction } from '../../../core'
+import type { IFunctionResult, JsonPath, RulesetFunction } from '../../../core/types'
 import { isObject, OPERATION_METHODS } from './helpers'
 
 // Path template parameters, e.g. `{id}`. Matches Spectral's grammar so matrix

@@ -1,4 +1,4 @@
-import type { RuleEntry, RulesetDefinition } from '../../core'
+import type { RuleEntry, RulesetDefinition } from '../../core/types'
 
 // `query` is a fixed operation field from OpenAPI 3.2 onward. Including it in the
 // operation selectors is harmless on older versions (which never carry a `query`

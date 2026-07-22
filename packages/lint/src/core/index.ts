@@ -33,5 +33,7 @@ export {
   type RulesetOptions,
 } from './ruleset'
 export { createLinter, type IRunOptions, type Linter } from './runner'
-export * from './types'
+// The core type surface lives in `./types` and is published on its own
+// `@amritk/lint/types` subpath — it is deliberately not re-exported through this
+// barrel. Modules that need those types import them from `./types` directly.
 export { type IRulesetProblem, validateRuleset } from './validate-ruleset'
