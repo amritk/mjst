@@ -1,14 +1,19 @@
 ---
+"@amritk/mini": minor
 ---
 
-Add `scripts/catch-called-signals.ts`, a source scanner that catches mini's
-compilerless-JSX footgun: `attr={signal()}` calls the getter and freezes a
-plain value at creation, where `attr={signal}` binds it reactively. The mistake
-cannot be caught at runtime (props are evaluated before `jsx()` runs) or by the
-type checker (a called signal returns a valid static value), so it has to be
-caught in the source. The scanner walks the TypeScript AST (an existing
-dev dependency) and flags the unambiguous shape — an attribute whose whole value
-is a single zero-argument call — leaving bare getters, thunks, and handlers
-alone, and honours a `catch-called-signals-ignore` comment for deliberate cases.
-Because the parser does the work, comments and strings never trip it and
-multi-line attributes are found. Exposed as `bun run lint:called-signals`.
+Add `@amritk/mini/vite`, a build-time guard for mini's one compilerless-JSX
+footgun: `attr={signal()}` calls the getter and freezes a plain value at
+creation, where `attr={signal}` binds it reactively. The mistake cannot be
+caught at runtime (props are evaluated before `jsx()` runs) or by the type
+checker (a called signal returns a valid static value), so it is caught in the
+source. `catchCalledSignals()` walks the TypeScript AST in Vite's `transform`
+hook, so it reports live in the dev server (a warning per finding, with a
+clickable `file:line:column`) and fails `vite build` — one plugin covering both
+the editor feedback loop and the CI gate. It flags only the unambiguous shape
+(an attribute whose whole value is a single zero-argument call), leaving bare
+getters, thunks, and handlers alone, and honours a `catch-called-signals-ignore`
+comment for deliberate cases. The exported `findCalledSignalBindings` core backs
+a bespoke lint command or editor integration. `vite` and `typescript` are
+optional peer dependencies of this subpath only — the `.` core stays
+dependency-free.

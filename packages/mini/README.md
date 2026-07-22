@@ -199,6 +199,28 @@ A thin adapter that bridges [`@tanstack/query-core`](https://tanstack.com/query)
 
 `@tanstack/query-core` is an **optional peer dependency** — install it only if you use `/query`.
 
+### Build guard (`@amritk/mini/vite`)
+
+A Vite plugin that catches the one footgun of the [reactivity rule](#the-reactivity-rule): calling a signal in a binding (`disabled={streaming()}`) freezes its value at creation instead of tracking it. Because the call happens before `jsx()` runs, neither the runtime nor the type checker can see the mistake — so it is caught in the source, by parsing it.
+
+| Export | Purpose |
+|:---|:---|
+| `catchCalledSignals(options?)` | A Vite plugin. Scans each `.tsx` module on every edit and flags an attribute whose whole value is a single zero-argument call (`attr={signal()}`). **Warns** in the dev server and **fails** `vite build` — one plugin for both the editor loop and the CI gate. Bare getters, thunks, and handlers are a different shape and never match; a `catch-called-signals-ignore` comment opts out a deliberate case. Pass `{ failOnError }` to force the severity. |
+| `findCalledSignalBindings(source)` | The underlying scanner (returns `CalledSignalBinding[]`), for a bespoke lint command or editor integration. |
+| `CatchCalledSignalsOptions`, `CalledSignalBinding` | Exported types. |
+
+```ts
+import { defineConfig } from 'vite'
+
+import { catchCalledSignals } from '@amritk/mini/vite'
+
+export default defineConfig({
+  plugins: [catchCalledSignals()],
+})
+```
+
+`vite` and `typescript` are **optional peer dependencies** — needed only by this subpath, so the `.` core stays dependency-free.
+
 ---
 
 ## Usage
