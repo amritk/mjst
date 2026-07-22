@@ -1,8 +1,10 @@
 export { assert } from './assert'
 export type { FromSchema } from './from-schema'
 export type { Infer } from './infer'
+export { isValidationLimitError } from './interpreter/limits'
 export type {
   Guard,
+  ValidateLimits,
   ValidateOptions,
   ValidationError,
   ValidationFailedError,

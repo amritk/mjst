@@ -1,3 +1,5 @@
+import type { ValidateLimits } from './interpreter/limits'
+
 /**
  * A single validation error with a human-readable message and a JSON Pointer
  * path indicating where in the document the error occurred.
@@ -74,4 +76,15 @@ export type ValidateOptions = {
    * built-in format.
    */
   readonly formats?: 'all' | readonly string[]
+  /**
+   * Resource ceilings that keep a validation from being turned into a
+   * denial-of-service by an adversarial schema or input — recursion depth, total
+   * work, and unsafe regex patterns. The defaults are generous enough that
+   * ordinary schemas and documents never trip them; see {@link ValidateLimits}.
+   * Exceeding a runtime ceiling throws a `ValidationLimitError`
+   * ({@link isValidationLimitError}).
+   */
+  readonly limits?: ValidateLimits
 }
+
+export type { ValidateLimits }
