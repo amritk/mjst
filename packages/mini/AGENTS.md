@@ -11,7 +11,7 @@ runtime built on alien-signals.
 
 ```bash
 bun run --filter='@amritk/mini' test
-bun run --filter='@amritk/mini' check:reactivity   # the footgun guard
+bun run check:reactivity   # the footgun guard (also ships as the @amritk/mini/vite plugin)
 bun run --filter='@amritk/mini' types:check
 ```
 
@@ -24,9 +24,10 @@ bun run --filter='@amritk/mini' types:check
   a strong justification.
 - **Reactivity is decided by value shape at runtime:** a function-valued
   attribute/child/`show` is reactive; anything else is static. The classic bug is
-  calling a signal in JSX (`disabled={streaming()}`) — `scripts/check-reactivity.ts`
-  guards it and runs in CI. If you add a `.tsx` test that intentionally freezes a
-  signal, mark the line `// mini-static-ok`.
+  calling a signal in JSX (`disabled={streaming()}`) — the `@amritk/mini/vite`
+  plugin guards it live in the dev server, and `check:reactivity` runs the same
+  check in CI. If you add a `.tsx` test that intentionally freezes a signal, mark
+  the line `// mini-static-ok`.
 - **`bindHtml` is the only `innerHTML` sink**, and its `sanitize` argument is
   required at every call site — never add a default. Everything else writes
   through `textContent` / attributes / `classList`.

@@ -3,98 +3,95 @@ import { describe, expect, it } from 'vitest'
 import { findCalledSignalBindings } from './find-called-signal-bindings'
 
 describe('find-called-signal-bindings', () => {
-  it('flags an attribute whose value is a called signal', () => {
-    const found = findCalledSignalBindings('const a = <button disabled={streaming()}>x</button>')
+  it('flags a signal called directly in an attribute', () => {
+    const found = findCalledSignalBindings(
+      'const streaming = signal(false)\nconst a = <button disabled={streaming()}>x</button>',
+    )
     expect(found).toHaveLength(1)
-    expect(found[0]).toMatchObject({ attribute: 'disabled', callee: 'streaming' })
+    expect(found[0]).toMatchObject({ attribute: 'disabled', callee: 'streaming', line: 2 })
   })
 
-  it('flags a called signal reached through a member access', () => {
-    const found = findCalledSignalBindings('const f = <input checked={form.isSubmitting()} />')
-    expect(found).toMatchObject([{ attribute: 'checked', callee: 'form.isSubmitting' }])
-  })
-
-  it('flags a called signal reached through an optional chain', () => {
-    const found = findCalledSignalBindings('const f = <input checked={form?.dirty()} />')
-    expect(found).toMatchObject([{ attribute: 'checked', callee: 'form?.dirty' }])
-  })
-
-  it('flags an on* handler that is invoked instead of passed', () => {
-    // `onClick={handleClick()}` runs the handler once at creation — the same
-    // class of bug as a frozen signal, so it belongs in the report too.
-    const found = findCalledSignalBindings('const i = <button onClick={handleClick()}>go</button>')
-    expect(found).toMatchObject([{ attribute: 'onClick', callee: 'handleClick' }])
-  })
-
-  it('flags an attribute that spans multiple lines', () => {
-    // The parser does not care about formatting, so a wrapped attribute is
-    // caught where a line-oriented scan would miss it.
-    const source = ['const k = (', '  <button', '    disabled={streaming()}', '  >go</button>', ')'].join('\n')
-    expect(findCalledSignalBindings(source)).toMatchObject([{ attribute: 'disabled', callee: 'streaming', line: 3 }])
-  })
-
-  it('flags a called signal used as a JSX child', () => {
+  it('flags a signal called directly as a JSX child', () => {
     // A bare `{count}` child is already reactive, so `{count()}` is the frozen
     // mistake — the same footgun, one position over. Child findings carry no
     // attribute name.
-    const found = findCalledSignalBindings('const a = <span>{count()}</span>')
+    const found = findCalledSignalBindings('const count = signal(0)\nconst a = <span>{count()}</span>')
     expect(found).toHaveLength(1)
-    expect(found[0]).toMatchObject({ callee: 'count', line: 1, column: 17 })
+    expect(found[0]).toMatchObject({ callee: 'count', line: 2 })
     expect(found[0]?.attribute).toBeUndefined()
   })
 
-  it('flags a called signal child reached through a member access', () => {
-    const found = findCalledSignalBindings('const a = <span>{store.count()}</span>')
-    expect(found).toMatchObject([{ callee: 'store.count' }])
+  it('recognises computed and Signal-typed parameters', () => {
+    const source =
+      'const doubled = computed(() => 1)\nconst Row = (p: { active: Signal<boolean> }) => <li class={doubled()} />'
+    expect(findCalledSignalBindings(source)).toMatchObject([{ attribute: 'class', callee: 'doubled' }])
   })
 
-  it('leaves a bare signal child alone', () => {
-    // `{count}` is a function child — mini wraps it in an effect, so it tracks.
-    expect(findCalledSignalBindings('const a = <span>{count}</span>')).toEqual([])
+  it('does not flag a call to a name it cannot see is a signal', () => {
+    // `makeId` is not a signal, so `id={makeId()}` is a one-shot value, not the
+    // reactivity footgun — the false positive a shape-only scan would raise.
+    expect(findCalledSignalBindings('const a = <button id={makeId()}>x</button>')).toEqual([])
   })
 
-  it('leaves a thunk child alone', () => {
-    expect(findCalledSignalBindings('const a = <span>{() => count() * 2}</span>')).toEqual([])
+  it('ignores files with no signals entirely', () => {
+    expect(findCalledSignalBindings('const a = <button disabled={foo()}>x</button>')).toEqual([])
   })
 
-  it('leaves a build-time conditional child alone', () => {
-    // `{cond && <span/>}` is a logical expression, not a call — the documented
-    // build-time conditional stays untouched.
-    expect(findCalledSignalBindings('const a = <div>{show && <span>hi</span>}</div>')).toEqual([])
-  })
-
-  it('leaves a child call with arguments alone', () => {
-    // `{formatDate(now)}` is a one-shot render value, not a forgotten getter.
-    expect(findCalledSignalBindings('const a = <span>{formatDate(now)}</span>')).toEqual([])
+  it('flags a signal attribute that spans multiple lines', () => {
+    // The parser does not care about formatting, so a wrapped attribute is
+    // caught where a line-oriented scan would miss it.
+    const source = [
+      'const streaming = signal(false)',
+      'const k = (',
+      '  <button',
+      '    disabled={streaming()}',
+      '  >go</button>',
+      ')',
+    ].join('\n')
+    expect(findCalledSignalBindings(source)).toMatchObject([{ attribute: 'disabled', callee: 'streaming', line: 4 }])
   })
 
   it('leaves the bare getter alone', () => {
-    expect(findCalledSignalBindings('const b = <button disabled={streaming}>y</button>')).toEqual([])
+    expect(
+      findCalledSignalBindings('const streaming = signal(false)\nconst b = <button disabled={streaming}>y</button>'),
+    ).toEqual([])
   })
 
   it('leaves a thunk-wrapped call alone', () => {
     // A derived binding is correct — the call lives inside the getter mini runs.
-    expect(findCalledSignalBindings('const e = <button disabled={() => streaming()}>ok</button>')).toEqual([])
+    expect(
+      findCalledSignalBindings('const s = signal(false)\nconst e = <button disabled={() => s()}>ok</button>'),
+    ).toEqual([])
   })
 
-  it('leaves an event handler arrow alone', () => {
-    expect(findCalledSignalBindings('const d = <button onClick={() => count(count() + 1)}>h</button>')).toEqual([])
+  it('leaves an event handler alone', () => {
+    const source = 'const count = signal(0)\nconst d = <button onClick={() => count(count() + 1)}>h</button>'
+    expect(findCalledSignalBindings(source)).toEqual([])
+  })
+
+  it('does not flag a signal called in an on* handler value', () => {
+    // `onClick` is an event slot, not a reactive binding — out of scope.
+    expect(findCalledSignalBindings('const go = signal(false)\nconst a = <button onClick={go()}>x</button>')).toEqual(
+      [],
+    )
   })
 
   it('leaves a partial expression alone', () => {
     // We only match when the whole value is one call, so `{count() + 1}` is a
     // deliberate miss rather than a risk of warning on legitimate code.
-    expect(findCalledSignalBindings('const g = <button value={count() + 1}>x</button>')).toEqual([])
+    expect(
+      findCalledSignalBindings('const count = signal(0)\nconst g = <button value={count() + 1}>x</button>'),
+    ).toEqual([])
+  })
+
+  it('leaves a bare signal child alone', () => {
+    expect(findCalledSignalBindings('const count = signal(0)\nconst a = <span>{count}</span>')).toEqual([])
   })
 
   it('ignores the footgun when it appears inside a comment', () => {
-    // mini's jsx-runtime documents `disabled={streaming()}` in JSDoc; because
-    // the scanner walks the AST, a comment is never parsed as JSX, so the
-    // teaching example cannot trip it.
+    // The scanner walks the AST, so a comment is never parsed as JSX.
     const source = [
-      '/**',
-      ' *     <button disabled={streaming()}>',
-      ' */',
+      'const streaming = signal(false)',
       '// bad: <button disabled={streaming()}>',
       'const ok = <button disabled={streaming}>y</button>',
     ].join('\n')
@@ -102,32 +99,34 @@ describe('find-called-signal-bindings', () => {
   })
 
   it('ignores the footgun when it appears inside a string', () => {
-    // A parser sees a string literal, not markup — only real JSX is scanned.
-    expect(findCalledSignalBindings('const doc = "use disabled={streaming()} carefully"')).toEqual([])
+    const source = 'const streaming = signal(false)\nconst doc = "use disabled={streaming()} carefully"'
+    expect(findCalledSignalBindings(source)).toEqual([])
   })
 
   it('reports a 1-based line and column', () => {
-    const source = '\n  const c = <button id={makeId()}>z</button>'
+    const source = 'const makeId = signal("")\n  const c = <button id={makeId()}>z</button>'
     expect(findCalledSignalBindings(source)[0]).toMatchObject({ line: 2, column: 21 })
   })
 
   it('skips a binding suppressed on the same line', () => {
-    const source = 'const a = <button disabled={streaming()}>x</button> // catch-called-signals-ignore'
+    const source = 'const s = signal(false)\nconst a = <button disabled={s()}>x</button> // mini-static-ok'
     expect(findCalledSignalBindings(source)).toEqual([])
   })
 
   it('skips a binding suppressed on the line above', () => {
     const source =
-      '// catch-called-signals-ignore: intentional frozen value\nconst a = <button disabled={streaming()}>x</button>'
+      'const s = signal(false)\n// mini-static-ok: intentional frozen value\nconst a = <button disabled={s()}>x</button>'
     expect(findCalledSignalBindings(source)).toEqual([])
   })
 
   it('finds every binding in a file', () => {
     const source = [
-      '<button disabled={streaming()}>a</button>',
-      '<button disabled={paused}>b</button>',
-      '<input checked={form.dirty()} />',
+      'const streaming = signal(false)',
+      'const dirty = signal(false)',
+      'const a = <button disabled={streaming()}>a</button>',
+      'const b = <button disabled={paused}>b</button>',
+      'const c = <input checked={dirty()} />',
     ].join('\n')
-    expect(findCalledSignalBindings(source).map((binding) => binding.callee)).toEqual(['streaming', 'form.dirty'])
+    expect(findCalledSignalBindings(source).map((binding) => binding.callee)).toEqual(['streaming', 'dirty'])
   })
 })

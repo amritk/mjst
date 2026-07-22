@@ -51,7 +51,8 @@ const attachServer = (plugin: Plugin, sent: Overlay[]): void => {
   run({ ws: { send: (payload) => sent.push(payload) } })
 }
 
-const FOOTGUN = 'const a = <button disabled={streaming()}>x</button>'
+// A signal must be declared for the signal-aware scanner to flag its call.
+const FOOTGUN = 'const streaming = signal(false); export const a = <button disabled={streaming()}>x</button>'
 
 describe('catch-called-signals plugin', () => {
   it('warns on a frozen binding during dev without failing', () => {
@@ -119,7 +120,7 @@ describe('catch-called-signals plugin', () => {
     const plugin = catchCalledSignals()
     resolveConfig(plugin, 'serve')
 
-    runTransform(plugin, reports, 'const a = <span>{count()}</span>', '/app/widget.tsx')
+    runTransform(plugin, reports, 'const count = signal(0); const a = <span>{count()}</span>', '/app/widget.tsx')
 
     expect(reports.warnings).toHaveLength(1)
     expect(reports.warnings[0]).toContain('{count()}')
@@ -161,7 +162,12 @@ describe('catch-called-signals plugin', () => {
     const plugin = catchCalledSignals()
     resolveConfig(plugin, 'build')
 
-    runTransform(plugin, reports, 'const a = <button disabled={streaming}>x</button>', '/app/widget.tsx')
+    runTransform(
+      plugin,
+      reports,
+      'const streaming = signal(false); const a = <button disabled={streaming}>x</button>',
+      '/app/widget.tsx',
+    )
 
     expect(reports.warnings).toEqual([])
     expect(reports.errors).toEqual([])

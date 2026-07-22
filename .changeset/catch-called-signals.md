@@ -11,12 +11,13 @@ source. `catchCalledSignals()` walks the TypeScript AST in Vite's `transform`
 hook, so it reports live in the dev server — a terminal warning per finding
 (clickable `file:line:column`) plus a non-blocking error overlay — and fails
 `vite build`, one plugin covering both the editor feedback loop and the CI gate.
-Pass `{ overlay: false }` to keep dev feedback in the terminal only. It flags only the unambiguous shape
-(a binding whose whole value is a single zero-argument call) — both attributes
-(`disabled={streaming()}`, `show`/`class`/`style`, and component props such as
-`<For each={items()}>`) and children (`<span>{count()}</span>`) — leaving bare
-getters, thunks, and handlers alone, and honours a `catch-called-signals-ignore`
-comment for deliberate cases. The exported `findCalledSignalBindings` core backs
-a bespoke lint command or editor integration. `vite` and `typescript` are
-optional peer dependencies of this subpath only — the `.` core stays
-dependency-free.
+Pass `{ overlay: false }` to keep dev feedback in the terminal only. To keep
+false positives near zero it only flags a call to a name it can see is a signal
+(`signal()`/`computed()`, or a `Signal<…>`/`ReadonlySignal<…>` type) — so
+`id={makeId()}` is left alone — across both attributes (`disabled={streaming()}`,
+`show`/`class`/`style`, and component props such as `<For each={items()}>`) and
+children (`<span>{count()}</span>`). Bare getters, thunks, and handlers never
+match, and a `// mini-static-ok` comment opts out a deliberate static read. The
+same `findCalledSignalBindings` core backs the repo's `check:reactivity` CLI
+gate. `vite` and `typescript` are optional peer dependencies of this subpath
+only — the `.` core stays dependency-free.
