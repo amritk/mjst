@@ -72,6 +72,7 @@ export { defineRoute } from './define-route'
 export type { FetchLikeHandler, FetchNodeListener, FetchToNodeHandlerOptions } from './fetch-to-node-handler'
 export { fetchToNodeHandler } from './fetch-to-node-handler'
 export { formBodySerializer } from './form-body-serializer'
+export { defineGuard, guardFactory, guardResponses } from './guard-bundle'
 export { hashContracts } from './hash-contracts'
 export type { RouteImplementation } from './implement-route'
 export { implementRoute } from './implement-route'
@@ -84,6 +85,7 @@ export { negotiateMediaType, parseAccept } from './negotiate'
 export { matchesBodyType, parseFormBody, parseMultipartBody } from './parse-body'
 export { parsePathPattern } from './parse-path-pattern'
 export { isPayloadTooLargeError, payloadTooLargeError } from './payload-too-large'
+export { protectedRoute } from './protected-route'
 export { readBodyCapped } from './read-body-capped'
 export { readBytesCapped } from './read-bytes-capped'
 export { refinementFailure } from './refinement-failure'
@@ -103,6 +105,7 @@ export { toOpenApi } from './to-open-api'
 export { toSearchParams } from './to-search-params'
 export type {
   AnyContract,
+  AnyGuardBundle,
   AnyRouteContract,
   Api,
   ApiOptions,
@@ -124,7 +127,11 @@ export type {
   ErasedRefineInput,
   ErasedRequestContext,
   ErrorFormatters,
+  GuardBundle,
+  GuardContextOf,
+  GuardResponsesOf,
   HttpMethod,
+  MergedGuardResponses,
   OnErrorDetails,
   OpenApiDocument,
   OpenApiExtras,
