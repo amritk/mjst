@@ -213,6 +213,11 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     try {
       if (request.method === 'HEAD') return headResponse(response)
 
+      // A handler that returned a raw web Response (the escape hatch) sends it
+      // verbatim — still through the onResponse decorators, since `finish`
+      // wraps whatever this handler returns.
+      if (response.raw !== undefined) return response.raw
+
       // Raw statuses (contract-declared contentType) pass the body straight to
       // the Response constructor: a string, bytes, or a live ReadableStream.
       if (response.contentType !== undefined) {
@@ -268,6 +273,13 @@ const toArray = <T>(value: T | ReadonlyArray<T> | undefined): ReadonlyArray<T> =
  * nothing will ever pump it.
  */
 const headResponse = (response: ApiResponse): Response => {
+  // A raw Response from the escape hatch: keep its status and headers, drop the
+  // body (RFC 9110), and cancel the source stream since nothing will pump it.
+  if (response.raw !== undefined) {
+    const rawBody = response.raw.body
+    if (rawBody !== null) void rawBody.cancel().catch(() => undefined)
+    return new Response(null, { status: response.raw.status, headers: response.raw.headers })
+  }
   const body: unknown = response.body
   if (body instanceof ReadableStream) void body.cancel().catch(() => undefined)
   if (response.contentType !== undefined) {

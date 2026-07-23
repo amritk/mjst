@@ -24,6 +24,7 @@ const routes: Record<string, AnyRouteContract> = {
   streamChat: corpus.streamChat,
   csvExport: corpus.csvExport,
   rawEcho: corpus.rawEcho,
+  rawResponse: corpus.rawResponse,
   doubleRead: corpus.doubleRead,
   fileProxy: corpus.fileProxy,
   submitForm: corpus.submitForm,
@@ -195,6 +196,11 @@ describe('compile-to-module', () => {
         // Raw statuses: a streamed body and a CSV string, byte for byte.
         () => new Request('http://localhost/chat', { method: 'POST' }),
         () => new Request('http://localhost/export'),
+        // The Response escape hatch: a handler returning a raw web Response.
+        // Its 202, repeated set-cookie, and JSON body must match, and HEAD over
+        // it strips the body while keeping status and headers.
+        () => new Request('http://localhost/raw-response'),
+        () => new Request('http://localhost/raw-response', { method: 'HEAD' }),
         // Raw body access: whitespace must survive exactly (HMAC shape).
         () => new Request('http://localhost/raw-echo', { method: 'POST', body: '{ "spacing":   "matters" }' }),
         // Raw text bodyType: the decoded string is validated and handed over

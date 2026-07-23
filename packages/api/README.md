@@ -513,6 +513,32 @@ platform `Response`, and the Node adapter awaits `drain` whenever a write
 overruns the socket buffer, so a fast producer never buffers unbounded
 memory against a slow client.
 
+### Returning a raw `Response` (escape hatch)
+
+A `contentType` status keeps the reply typed and documented while letting the
+body be raw. When you instead need full control of the *entire* response —
+status, headers, and body all outside the contract — a handler may return a web
+`Response` directly. The adapters send it verbatim (the fetch adapter returns
+it as-is, the Node adapter streams it out), still running the `onResponse`
+decorators, and strip its body for HEAD like any other reply:
+
+```ts
+const proxy = defineRoute({
+  method: 'get',
+  path: '/legacy',
+  responses: { 200: { body: legacySchema } },
+  // Reuse an existing Response-building helper (or an upstream fetch) unchanged.
+  handler: ({ request }) => fetch(new URL(request.raw as Request), { redirect: 'manual' }),
+})
+```
+
+This is a deliberate escape hatch: a returned `Response` skips response
+validation entirely (there is no framework-level body to check), so the status
+it carries need not appear in `responses`. Reach for it when porting handlers
+that already build `Response` objects, or when proxying an upstream response;
+prefer a typed `{ status, body }` reply — or a `contentType` status for raw
+bodies — everywhere else, so the contract stays the source of truth.
+
 ### Raw request bodies and size limits
 
 The pipeline only consumes the body stream when a `body` schema is declared,

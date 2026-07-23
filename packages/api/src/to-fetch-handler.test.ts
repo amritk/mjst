@@ -188,6 +188,52 @@ describe('to-fetch-handler', () => {
     expect(response.headers.get('content-type')).toBe('text/csv')
   })
 
+  it('returns a raw web Response from a handler verbatim, through onResponse decorators', async () => {
+    const raw = defineRoute({
+      method: 'get',
+      path: '/raw',
+      responses: { 200: { body: { type: 'object' } } },
+      // The escape hatch: full control of the wire output, bypassing response
+      // validation — the 202 stands even though only 200 is declared.
+      handler: () =>
+        new Response(JSON.stringify({ escaped: true }), {
+          status: 202,
+          headers: { 'content-type': 'application/json', 'set-cookie': 'sid=abc' },
+        }),
+    })
+    const decorated = toFetchHandler(createApi({ routes: [raw] }), {
+      onResponse: (response) => {
+        response.headers.set('x-stamped', 'yes')
+        return undefined
+      },
+    })
+    const response = await decorated(new Request('http://localhost/raw'))
+    expect(response.status).toBe(202)
+    expect(response.headers.get('content-type')).toBe('application/json')
+    expect(response.headers.get('set-cookie')).toBe('sid=abc')
+    // The decorator still ran on the escape-hatch Response.
+    expect(response.headers.get('x-stamped')).toBe('yes')
+    expect(await response.json()).toEqual({ escaped: true })
+  })
+
+  it('strips the body from a raw web Response on HEAD, keeping status and headers', async () => {
+    const raw = defineRoute({
+      method: 'get',
+      path: '/raw',
+      responses: { 200: { body: { type: 'object' } } },
+      handler: () =>
+        new Response(JSON.stringify({ escaped: true }), {
+          status: 202,
+          headers: { 'content-type': 'application/json', 'x-served-by': 'raw' },
+        }),
+    })
+    const handler = toFetchHandler(createApi({ routes: [raw] }))
+    const response = await handler(new Request('http://localhost/raw', { method: 'HEAD' }))
+    expect(response.status).toBe(202)
+    expect(response.headers.get('x-served-by')).toBe('raw')
+    expect(await response.text()).toBe('')
+  })
+
   it('gives handlers the raw body text for signature verification', async () => {
     const webhook = defineRoute({
       method: 'post',

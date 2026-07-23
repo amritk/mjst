@@ -118,6 +118,43 @@ export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandl
 
       const response = await api.handle(request, options?.env)
 
+      // A handler that returned a raw web Response (the escape hatch): its
+      // status, headers, and streaming body go out verbatim. Headers rode
+      // through the Response constructor already, so they need no revalidation;
+      // set-cookie is pulled out on its own so repeated cookies stay unfolded.
+      if (response.raw !== undefined) {
+        const raw = response.raw
+        const rawHeaders: OutgoingHttpHeaders = {}
+        raw.headers.forEach((value, name) => {
+          rawHeaders[name] = value
+        })
+        const setCookie = raw.headers.getSetCookie()
+        if (setCookie.length > 0) rawHeaders['set-cookie'] = setCookie
+        if (method === 'HEAD') {
+          if (raw.body !== null) void raw.body.cancel().catch(() => undefined)
+          outgoing.writeHead(raw.status, rawHeaders)
+          outgoing.end()
+          return
+        }
+        outgoing.writeHead(raw.status, rawHeaders)
+        if (raw.body === null) {
+          outgoing.end()
+          return
+        }
+        try {
+          for await (const chunk of raw.body as ReadableStream<Uint8Array>) {
+            if (outgoing.write(chunk)) continue
+            if (!(await waitForDrain(outgoing))) throw new Error('Response closed while awaiting drain')
+          }
+          outgoing.end()
+        } catch {
+          // The stream failed mid-flight; the status line is already sent, so
+          // dropping the connection is the only honest option.
+          outgoing.destroy()
+        }
+        return
+      }
+
       const headers: Record<string, string | readonly string[]> = { ...response.headers }
       // Handler-supplied headers are validated up front: a writeHead that
       // throws mid-serialization leaves the ServerResponse unrecoverable

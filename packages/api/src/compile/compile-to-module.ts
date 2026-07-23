@@ -743,6 +743,10 @@ const emitRouteDeclarations = (
   // that cannot serialize (circular body, invalid header name) becomes the
   // pipeline's 500 instead of an escaped rejection.
   lines.push(`const respond_${route.name} = (reply) => {`, '  try {')
+  // The escape hatch: a handler that returns a raw web Response sends it
+  // verbatim, bypassing reply validation and serialization — HEAD strips its
+  // body downstream via stripHeadBody, like any other Response.
+  lines.push('    if (reply instanceof Response) return reply')
   // Reply validation runs first — before the raw-status returns and the
   // serializers — matching the runtime pipeline, where runRoute validates
   // the reply before the adapter ever sees it.
