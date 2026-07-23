@@ -379,18 +379,12 @@ in both engines, pinned by the differential corpus:
   `runGuards` in the same order); the differential corpus pins the parity,
   including an async guard and a throwing guard down `onError`. Guards are
   excluded from the contracts hash — like `handler` and `refine`, they are
-  imported and called live.
-- **Guards that derive their response.** For the ergonomic path a guard is a
-  *bundle* pairing its check with the `responses` it can answer (`defineGuard`
-  / a context-bound `guardFactory<Context>()`), and `protectedRoute(contract,
-  guards, handler)` merges those responses into the route — so the 401/403 is
-  never re-declared, yet still rides into the handler's reply union, the OpenAPI
-  document, and response validation. It needs no engine changes: `protectedRoute`
-  returns an ordinary `RouteContract` with a merged `responses` map and the
-  bundles' functions in `guards`, so both engines run it unchanged. The app
-  `Context` is inferred from the guards (build them with `guardFactory<Ctx>()`
-  and the handler's context types itself); a guard can only deny with a status
-  it declared, so the merge can never document a reply it cannot produce. The
-  one boundary is the browser: a `defineContract` a frontend imports for
-  `createClient` carries no guards, so `guardResponses(...)` returns the merged
-  fragment to spread into that contract when the native client needs the status.
+  imported and called live. Guards attach in one place — the `guards` field —
+  and the denial status stays *declared on the contract* rather than derived
+  from the guard: the contract remains the single source of truth for the wire,
+  so OpenAPI, response validation, and the typed `createClient` all agree with
+  nothing to reconcile. (An earlier `protectedRoute` that merged a guard's
+  declared responses onto the route was dropped: it added a second calling
+  convention and could not keep the browser `createClient` in sync without a
+  manual fragment spread, so it fought the contract-first grain for a marginal
+  DRY win. Declaring a shared `authResponses` fragment covers the boilerplate.)

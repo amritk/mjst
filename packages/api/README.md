@@ -853,83 +853,59 @@ declares. That single rule is what keeps enforcement honest: the `401`/`403` a
 guard produces is already in the OpenAPI document, and forgetting to list the
 status is a compile error, not a silently-open endpoint.
 
-#### Let the guard carry its own response — `protectedRoute`
-
-The ergonomic path: a guard *bundles* its denial response with its check, and
-`protectedRoute` **derives** that status onto the route, so you never
-re-declare the 401/403. Bind the app context once with `guardFactory<Ctx>()`
-(the guard sibling of `routeFactory`), and the guards need no annotations:
-
-```ts
-import { guardFactory, protectedRoute } from '@amritk/api'
-
-// app-context.ts — one binding, next to routeFactory<AppContext>()
-export const defineAppGuard = guardFactory<AppContext>()
-
-// guards.ts — each guard declares the status it can answer
-export const requireSession = defineAppGuard({
-  responses: { 401: { body: errorSchema } },
-  guard: (ctx) => (ctx.context.session ? undefined : { status: 401, body: { error: 'unauthorized' } }),
-})
-export const requireAdmin = defineAppGuard({
-  responses: { 403: { body: errorSchema } },
-  guard: (ctx) => (ctx.context.session?.user.role === 'admin' ? undefined : { status: 403, body: { error: 'forbidden' } }),
-})
-
-// routes.ts — no 401/403 here; the guards contribute them
-export const deleteUser = protectedRoute(
-  { method: 'delete', path: '/users/{id}', request: { params: idParams }, responses: { 204: {} } },
-  [requireSession, requireAdmin],
-  ({ params, context }) => context.db.delete(users).where(eq(users.id, params.id)).then(() => ({ status: 204 })),
-)
-// deleteUser.responses is { 204, 401, 403 } — the guard statuses merged in, so the
-// OpenAPI document and response validation cover them, and the app context is
-// inferred from the guards (the handler's `context` is typed, no annotation).
-```
-
-A guard can only deny with a status it declared in its own `responses`, so the
-merge can never document a reply the guard cannot produce. Stack more guards and
-their statuses accumulate; the route's own declaration wins on any shared status.
-
-One boundary: the merged responses live on the *route*. A `defineContract` a
-browser imports for `createClient` has no guards, so spread `guardResponses(...)`
-into it when the native client needs to be typed for the derived status too:
-
-```ts
-export const getProfileContract = defineContract({
-  method: 'get',
-  path: '/profile',
-  responses: { 200: { body: profileSchema }, ...guardResponses(requireSession) }, // adds 401
-})
-```
-
-#### Or declare the status yourself — the `guards` field
-
-If you'd rather keep the status on the route (or need a denial reply that varies
-per request), attach plain guard functions with the `guards` field and declare
-the status as usual. `requireContext(predicate, deniedReply)` builds the common
-session/role check:
+Guards attach in exactly one place — the `guards` field, wherever you declare
+the route (`defineRoute` / `implementRoute` / `routeFactory` / `routeImplementer`).
+`requireContext(predicate, deniedReply)` builds the common session/role check
+once, and it reuses across every route:
 
 ```ts
 import { requireContext, type ContextGuardInput } from '@amritk/api'
 
+// guards.ts — reusable across routes; the predicate reads the app context.
 export const requireSession = requireContext(
   (ctx: ContextGuardInput<AppContext>) => ctx.context.session !== null,
   { status: 401, body: { error: 'unauthorized' } },
 )
+export const requireAdmin = requireContext(
+  (ctx: ContextGuardInput<AppContext>) => ctx.context.session?.user.role === 'admin',
+  { status: 403, body: { error: 'forbidden' } },
+)
 
-export const getProfile = defineAppRoute({
-  method: 'get',
-  path: '/profile',
-  responses: { 200: { body: profileSchema }, 401: { body: errorSchema } }, // 401 declared here
-  guards: [requireSession],
-  handler: ({ context }) => ({ status: 200, body: toProfile(context.session.user) }),
+// routes.ts — guards run before the handler, in order.
+export const deleteUser = defineAppRoute({
+  method: 'delete',
+  path: '/users/{id}',
+  request: { params: idParams },
+  responses: { 204: {}, ...authResponses }, // 401 + 403, declared once (see below)
+  guards: [requireSession, requireAdmin],
+  handler: async ({ params, context }) => {
+    await context.db.delete(users).where(eq(users.id, params.id))
+    return { status: 204 }
+  },
 })
 ```
 
-Both engines run guards identically (the compiled module threads the live guards
-through the same order), whichever way you attach them — the differential corpus
-pins that parity.
+The status a guard denies with stays **declared on the contract**, not derived
+from the guard — the contract remains the single source of truth for the wire,
+so the OpenAPI document, response validation, and the typed `createClient` are
+all correct with nothing to reconcile. A guard can only deny with a status the
+route declares (`RouteReply` types the guard's return), so forgetting to list it
+is a compile error, not a silently-open endpoint.
+
+Keep the boilerplate DRY by declaring the shared shape once and spreading it —
+the reply value and its schema live next to each other so they cannot drift:
+
+```ts
+// auth-responses.ts
+const errorSchema = { type: 'object', properties: { error: { type: 'string' } }, required: ['error'] } as const
+export const authResponses = { 401: { body: errorSchema }, 403: { body: errorSchema } } as const
+```
+
+For a denial reply that varies per request (naming the missing scope, say),
+skip `requireContext` and write the guard inline — it is just
+`(ctx) => reply | undefined`. Both engines run guards identically (the compiled
+module threads the live `contract.guards` through the same order), pinned by the
+differential corpus.
 
 ### Auth: Better Auth
 
@@ -1127,7 +1103,7 @@ yours:
 |:--|:--|
 | Drizzle / any ORM | `context` factory builds the handle per request from `env` |
 | Better Auth / any self-contained router | `mounts` passthrough + session lookup in `context` |
-| Per-route authorization (sessions, roles, scopes) | `protectedRoute` + guard bundles (derives the 401/403), or the `guards` field + `requireContext` |
+| Per-route authorization (sessions, roles, scopes) | route `guards` field + `requireContext` (the denial status stays declared on the contract) |
 | Sentry / error reporting | `onError` (`createSentry` packages it) |
 | Metrics, request logging | `observe` + `observeUnmatched` (route pattern, status, duration) |
 | Rate limits, feature flags, CSRF, origin checks | `onRequest` gates |

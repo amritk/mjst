@@ -68,17 +68,16 @@ Bun.serve({ fetch: handler })      // or: export default { fetch: handler } on W
    Undeclared response statuses **throw** (`isUnexpectedStatusError`) instead of
    entering the union — declare every status you handle. Browser auth uses
    `fetchOptions: { credentials: 'include' }` (the `cookies` slot is Node-only).
-6. **Guards authorize; they live on the route, not the contract.** A guard
+6. **Guards authorize; attach them in the `guards` field.** Add `guards: [...]`
+   to the route (`defineRoute`/`implementRoute`/`routeFactory`/`routeImplementer`
+   — never `defineContract`, which stays browser-safe data). A guard
    `(ctx) => reply | undefined` runs after the context factory, before the
-   handler, and can only deny with a declared status. Two ways to attach:
-   `protectedRoute(contract, [guards], handler)` where each guard is a bundle
-   (`defineGuard` / `guardFactory<Ctx>()`) that carries its own response — the
-   status is **derived** onto the route, so you never declare the 401/403; or
-   the `guards: [...]` field on `defineRoute`/`implementRoute`/`routeImplementer`
-   with the status declared yourself (`requireContext` builds the check). Never
-   put guards on `defineContract` — it stays browser-safe data; for a native
-   `createClient` to see a derived status, spread `guardResponses(...)` into the
-   shared contract.
+   handler, sees the same `context`, and can only deny with a status the route's
+   `responses` declares (so declare the 401/403 — a compile error otherwise, and
+   the status stays visible to OpenAPI + `createClient`). `requireContext(
+   predicate, deniedReply)` builds the common session/role check; declare the
+   shared denial shape once (`const authResponses = { 401: {...} } as const`) and
+   spread it into each protected route's `responses`.
 
 ## Subpath entry points
 
