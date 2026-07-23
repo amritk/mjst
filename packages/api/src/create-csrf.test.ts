@@ -29,6 +29,17 @@ describe('create-csrf', () => {
     expect(blocked?.status).toBe(403)
   })
 
+  it('rejects an unsafe request whose cookie and header tokens are both empty', async () => {
+    const csrf = createCsrf()
+    const blocked = await csrf.onRequest(
+      request('POST', { cookie: 'csrf_token=', 'x-csrf-token': '' }),
+      undefined,
+      undefined,
+      {},
+    )
+    expect(blocked?.status).toBe(403)
+  })
+
   it('allows an unsafe request when the tokens match', async () => {
     const csrf = createCsrf()
     const result = await csrf.onRequest(
@@ -46,6 +57,7 @@ describe('create-csrf', () => {
     csrf.onResponse(response, request('GET'), {})
     expect(response.headers.get('set-cookie')).toContain('csrf_token=seeded')
     expect(response.headers.get('set-cookie')).toContain('SameSite=Lax')
+    expect(response.headers.get('set-cookie')).toContain('Secure')
   })
 
   it('does not reseed when a token cookie is already present', () => {

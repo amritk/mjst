@@ -151,6 +151,11 @@ export const createTokenRefresh = (options: TokenRefreshOptions): TokenRefresh =
   // Single-flight guard: non-null while a refresh is in flight, so concurrent
   // callers share it rather than each starting their own.
   let inFlight: Promise<AuthToken> | null = null
+  // Bumped by `invalidate` (and `dispose`). A refresh captures the value when it
+  // starts and only commits its result if the value is unchanged — so an
+  // invalidation that lands mid-flight (a logout, or a 401 handler dropping the
+  // token) is not clobbered by the in-flight refresh resurrecting a token.
+  let generation = 0
   let timer: ReturnType<typeof setTimeout> | undefined
   let disposed = false
 
@@ -190,11 +195,17 @@ export const createTokenRefresh = (options: TokenRefreshOptions): TokenRefresh =
 
   const refresh = (): Promise<AuthToken> => {
     if (inFlight !== null) return inFlight
+    const startedAt = generation
     inFlight = Promise.resolve(options.refresh(current))
       .then((result) => {
-        current = normalize(result)
+        const token = normalize(result)
+        // An `invalidate`/`dispose` landed while this refresh was in flight —
+        // honor it and discard this now-stale token rather than resurrecting
+        // one the caller deliberately dropped.
+        if (generation !== startedAt) return token
+        current = token
         schedule()
-        return current
+        return token
       })
       .finally(() => {
         // Cleared on success and failure alike: a rejected refresh is not
@@ -227,10 +238,13 @@ export const createTokenRefresh = (options: TokenRefreshOptions): TokenRefresh =
     token: () => current,
     invalidate: () => {
       current = undefined
+      // Bump so an in-flight refresh cannot commit its result over this.
+      generation++
       clearTimer()
     },
     dispose: () => {
       disposed = true
+      generation++
       clearTimer()
     },
   }

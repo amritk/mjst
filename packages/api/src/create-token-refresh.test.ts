@@ -164,6 +164,41 @@ describe('create-token-refresh', () => {
     expect(calls).toBe(1)
   })
 
+  it('does not resurrect a token when invalidate lands during an in-flight refresh', async () => {
+    let resolveRefresh: ((token: { token: string; expiresAt: number }) => void) | undefined
+    let calls = 0
+    const auth = createTokenRefresh({
+      initial: { token: 'old', expiresAt: 10_000 },
+      refresh: () =>
+        new Promise((resolve) => {
+          calls += 1
+          resolveRefresh = resolve
+        }),
+      refreshBefore: 2_000,
+      now: () => 8_500, // inside the window, so headers() kicks off a background refresh
+      proactive: false,
+    })
+
+    // In-window call rides the current token and starts a background refresh.
+    expect(await auth.headers()).toEqual({ authorization: 'Bearer old' })
+    expect(calls).toBe(1)
+
+    // The caller invalidates (logout / post-401) while that refresh is still in flight.
+    auth.invalidate()
+    expect(auth.token()).toBeUndefined()
+
+    // The in-flight refresh now resolves — it must NOT repopulate the token.
+    resolveRefresh?.({ token: 'renewed', expiresAt: 20_000 })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(auth.token()).toBeUndefined()
+
+    // And the next call refreshes from scratch rather than reusing the resurrected token.
+    const next = auth.headers()
+    resolveRefresh?.({ token: 'brand-new', expiresAt: 20_000 })
+    expect(await next).toEqual({ authorization: 'Bearer brand-new' })
+    expect(calls).toBe(2)
+  })
+
   it('proactively renews on an idle timer and stops after dispose', async () => {
     vi.useFakeTimers({ now: 0 })
     try {

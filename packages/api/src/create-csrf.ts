@@ -19,8 +19,10 @@ export type CsrfOptions = {
   readonly safeMethods?: readonly string[]
   /**
    * Attributes appended to the `Set-Cookie` line. Defaults to
-   * `Path=/; SameSite=Lax`. The cookie is intentionally **not** `HttpOnly` —
-   * the double-submit pattern needs page scripts to read it and echo it back.
+   * `Path=/; SameSite=Lax; Secure`. The cookie is intentionally **not**
+   * `HttpOnly` — the double-submit pattern needs page scripts to read it and
+   * echo it back — but it is `Secure` so the token never rides a plaintext
+   * request; drop `Secure` explicitly for a plain-HTTP dev origin.
    */
   readonly cookieAttributes?: string
   /** Mints a token. Defaults to `crypto.randomUUID()`. */
@@ -71,16 +73,18 @@ export const createCsrf = (options?: CsrfOptions): Csrf => {
   const cookieName = options?.cookieName ?? 'csrf_token'
   const headerName = options?.headerName ?? 'x-csrf-token'
   const safe = new Set(options?.safeMethods ?? ['GET', 'HEAD', 'OPTIONS'])
-  const attributes = options?.cookieAttributes ?? 'Path=/; SameSite=Lax'
+  const attributes = options?.cookieAttributes ?? 'Path=/; SameSite=Lax; Secure'
   const generate = options?.generate ?? (() => crypto.randomUUID())
 
   const onRequest: FetchOnRequest = (request) => {
     if (safe.has(request.method) || options?.exempt?.(request) === true) return undefined
     const cookieToken = parseCookie(request.headers.get('cookie'), cookieName)
     const headerToken = request.headers.get(headerName)
-    // Both must be present and equal. A missing cookie means the client never
-    // received a token (or stripped it) — treat it as a failure, not a bypass.
-    if (cookieToken === undefined || headerToken === null || cookieToken !== headerToken) {
+    // Both must be present, non-empty, and equal. A missing cookie means the
+    // client never received a token (or stripped it) — treat it as a failure,
+    // not a bypass. An empty string on both sides is rejected explicitly so a
+    // blank pair can never satisfy the equality check.
+    if (!cookieToken || !headerToken || cookieToken !== headerToken) {
       return new Response(JSON.stringify({ error: 'csrf_failed' }), {
         status: 403,
         headers: { 'content-type': 'application/json; charset=utf-8' },

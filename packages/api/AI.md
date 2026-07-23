@@ -79,6 +79,32 @@ Bun.serve({ fetch: handler })      // or: export default { fetch: handler } on W
    shared denial shape once (`const authResponses = { 401: {...} } as const`) and
    spread it into each protected route's `responses`.
 
+## Security helpers (fetch adapter + client)
+
+Hook factories ship the standard middleware over `onRequest`/`onResponse`/`locals`:
+
+- **`createSecurityHeaders(opts?)`** (`onResponse`) — helmet-style headers, set
+  only when absent. **HSTS and CSP default off** (both lock out the wrong
+  deployment); opt in with `strictTransportSecurity: true` /
+  `contentSecurityPolicy: '…'`.
+- **`createCors(opts)`** — throws at setup on `origin: '*'` + `credentials: true`.
+  A reflect-all origin function with credentials trusts every site — validate
+  inside the function.
+- **`createRateLimit(opts)`** — 429 + `Retry-After`/`RateLimit-*`. **Default key
+  is a spoofable client IP header** (`x-forwarded-for[0]` etc.); for auth
+  throttling pass a `key` reading a proxy-verified IP or a `locals` user id.
+  Default store is in-process/single-instance — pass a shared `store` for a fleet.
+- **`createCsrf(opts?)`** — double-submit cookie; rejects empty/missing tokens;
+  cookie defaults `Path=/; SameSite=Lax; Secure`, not `HttpOnly` by design.
+  Client half: **`createCsrfHeader()`** echoes the cookie into `x-csrf-token`.
+- **`signCookie`/`unsignCookie`/`createSignedCookies`** — HMAC-SHA256, constant-time
+  verify. **Integrity, not secrecy** — sign a session id, keep session server-side.
+- **`createTokenRefresh(opts)`** (bearer) — single-flighted, renews on the token
+  clock (JWT `exp` via `decodeJwtExpiry`, unverified — server still verifies).
+  Doesn't react to 401s; call `invalidate()` on logout (safe against an in-flight
+  refresh). **`createRefreshFetch(opts)`** (HttpOnly cookie) — refresh + replay
+  once on 401, single-flighted.
+
 ## Subpath entry points
 
 | Import | Purpose |
