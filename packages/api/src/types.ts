@@ -242,6 +242,60 @@ export type RouteHandler<
 ) => RouteReply<Responses> | Response | Promise<RouteReply<Responses> | Response>
 
 /**
+ * A route guard: an authorization check that runs after validation and the
+ * context factory, just before the handler. It sees the same
+ * {@link RequestContext} the handler will — the validated slots and, crucially,
+ * the app `context` (the session, tenant, or database handle the factory
+ * resolved) — and returns one of two things:
+ *
+ * - a {@link RouteReply} (or raw `Response`) to **deny** the request, which
+ *   short-circuits the handler and rides the same response-validation and
+ *   serialization path a handler reply would; or
+ * - `undefined` to **pass**, letting the next guard — or the handler — run.
+ *
+ * Guards run in the order the route lists them, first denial wins, and each may
+ * be sync or async (a returned promise is awaited). A thrown or rejected guard
+ * takes the handler-error path (`onError`), exactly like a throwing handler.
+ *
+ * The return type is tied to the contract's response map, so a guard can only
+ * deny with a status the contract declares — which keeps the OpenAPI document
+ * honest: the 401/403 a guard produces is already documented as a response.
+ * Reusable guards (one `requireSession` applied across many routes) are plain
+ * functions over {@link ContextGuardInput}; see {@link requireContext}.
+ */
+export type RouteGuard<
+  Params,
+  Query,
+  Body,
+  Headers,
+  Cookies,
+  Responses extends ResponseContracts,
+  Context = undefined,
+> = (
+  context: RequestContext<Params, Query, Body, Headers, Cookies, Context>,
+) => RouteReply<Responses> | Response | undefined | Promise<RouteReply<Responses> | Response | undefined>
+
+/**
+ * The context a **reusable** guard sees — the shape a `requireSession` or
+ * `requireRole` written once and applied to many routes accepts. The request
+ * slots are `unknown` (a guard that gates on the session has no business
+ * reading typed params, and widening them is what lets one guard attach to
+ * every route regardless of its schemas), while `context` stays typed as the
+ * app context so the guard can read `context.context.session`. Any concrete
+ * {@link RequestContext} is assignable to this, which is why a guard typed over
+ * it satisfies a route's {@link RouteGuard} slot.
+ */
+export type ContextGuardInput<Context = unknown> = {
+  readonly params: unknown
+  readonly query: unknown
+  readonly body: unknown
+  readonly headers: unknown
+  readonly cookies: unknown
+  readonly context: Context
+  readonly request: ApiRequest
+}
+
+/**
  * One problem a {@link Contract.refine} hook reports. Shaped after the
  * validators' `ValidationError` so refinement failures ride the standard
  * `validation_failed` envelope deployed clients already parse.
@@ -413,20 +467,28 @@ export type RouteContract<
   readonly refine?: (
     input: RefineInput<Params, Query, Body, Headers, Cookies>,
   ) => readonly RefineIssue[] | undefined | Promise<readonly RefineIssue[] | undefined>
+  /**
+   * Authorization guards run in order after validation and the context factory,
+   * before the handler — the first to return a reply denies the request. Server
+   * concern, so it lives here on the route rather than on the browser-safe
+   * {@link Contract}: guards need the app `context` a handler sees, and their
+   * denial statuses are already declared in `responses`. See {@link RouteGuard}.
+   */
+  readonly guards?: readonly RouteGuard<Params, Query, Body, Headers, Cookies, Responses, Context>[]
   readonly responses: Responses
   readonly handler: RouteHandler<Params, Query, Body, Headers, Cookies, Responses, Context>
 }
 
 /**
  * Compile-time guard that {@link RouteContract} carries exactly
- * {@link Contract}'s fields plus `handler` — the price of the deliberate
- * duplication documented on RouteContract. Drift makes the `Expect`
- * constraints below fail to compile.
+ * {@link Contract}'s fields plus the server-only `handler` and `guards` — the
+ * price of the deliberate duplication documented on RouteContract. Drift makes
+ * the `Expect` constraints below fail to compile.
  */
 type Expect<T extends true> = T
 export type ContractFieldsStayInSync = [
-  Expect<Omit<RouteContract, 'handler'> extends Contract ? true : false>,
-  Expect<Contract extends Omit<RouteContract, 'handler'> ? true : false>,
+  Expect<Omit<RouteContract, 'handler' | 'guards'> extends Contract ? true : false>,
+  Expect<Contract extends Omit<RouteContract, 'handler' | 'guards'> ? true : false>,
 ]
 
 /**
@@ -501,9 +563,14 @@ export type AnyContract = {
 
 /**
  * The type-erased form of {@link RouteContract} that {@link createApi} accepts:
- * an {@link AnyContract} plus the erased handler.
+ * an {@link AnyContract} plus the erased handler and guards. The guard slots are
+ * `never` for the same assignability reason as {@link ErasedRequestContext} —
+ * any concretely-typed guard array is assignable here.
  */
 export type AnyRouteContract = AnyContract & {
+  readonly guards?: readonly ((
+    context: ErasedRequestContext,
+  ) => RouteReplyValue | Response | undefined | Promise<RouteReplyValue | Response | undefined>)[]
   readonly handler: (context: ErasedRequestContext) => RouteReplyValue | Response | Promise<RouteReplyValue | Response>
 }
 

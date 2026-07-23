@@ -68,6 +68,16 @@ Bun.serve({ fetch: handler })      // or: export default { fetch: handler } on W
    Undeclared response statuses **throw** (`isUnexpectedStatusError`) instead of
    entering the union — declare every status you handle. Browser auth uses
    `fetchOptions: { credentials: 'include' }` (the `cookies` slot is Node-only).
+6. **Guards authorize; attach them in the `guards` field.** Add `guards: [...]`
+   to the route (`defineRoute`/`implementRoute`/`routeFactory`/`routeImplementer`
+   — never `defineContract`, which stays browser-safe data). A guard
+   `(ctx) => reply | undefined` runs after the context factory, before the
+   handler, sees the same `context`, and can only deny with a status the route's
+   `responses` declares (so declare the 401/403 — a compile error otherwise, and
+   the status stays visible to OpenAPI + `createClient`). `requireContext(
+   predicate, deniedReply)` builds the common session/role check; declare the
+   shared denial shape once (`const authResponses = { 401: {...} } as const`) and
+   spread it into each protected route's `responses`.
 
 ## Subpath entry points
 

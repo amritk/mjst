@@ -270,6 +270,54 @@ export const optionsProbe = defineRoute({
   handler: () => ({ status: 200, headers: { 'x-options': 'explicit' }, body: { custom: true } }),
 })
 
+/**
+ * Route guards: two run in order, the first (sync) denying when `x-key` is
+ * missing, the second (async) denying non-admins. On a full pass the handler
+ * runs. Both engines must agree on which guard denied — and that a guard's
+ * reply rides the same response path a handler reply does.
+ */
+export const guardedResource = defineRoute({
+  method: 'get',
+  path: '/guarded',
+  request: {
+    headers: {
+      type: 'object',
+      properties: { 'x-key': { type: 'string' }, 'x-role': { type: 'string' } },
+    },
+  },
+  responses: {
+    200: { body: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] } },
+    401: { body: { type: 'object', properties: { error: { type: 'string' } }, required: ['error'] } },
+    403: { body: { type: 'object', properties: { error: { type: 'string' } }, required: ['error'] } },
+  },
+  guards: [
+    ({ headers }) => (headers['x-key'] === 'secret' ? undefined : { status: 401, body: { error: 'unauthorized' } }),
+    async ({ headers }) => {
+      // A microtask hop makes the guard genuinely asynchronous, so both engines
+      // must await it before deciding.
+      await Promise.resolve()
+      return headers['x-role'] === 'admin' ? undefined : { status: 403, body: { error: 'forbidden' } }
+    },
+  ],
+  handler: () => ({ status: 200, body: { ok: true } }),
+})
+
+/**
+ * A guard that throws: both engines must route it down the onError path, just
+ * like a throwing handler, rather than leaking the rejection.
+ */
+export const guardBoom = defineRoute({
+  method: 'get',
+  path: '/guard-boom',
+  responses: { 200: { body: { type: 'object' } } },
+  guards: [
+    () => {
+      throw new Error('guard exploded')
+    },
+  ],
+  handler: () => ({ status: 200, body: { ok: true } }),
+})
+
 /** Reads the shared locals bag the gate populated; writes its own note for the decorator. */
 export const localsEcho = defineRoute({
   method: 'get',

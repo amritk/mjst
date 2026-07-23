@@ -40,6 +40,8 @@ const routes: Record<string, AnyRouteContract> = {
   bookSlotAsync: corpus.bookSlotAsync,
   optionsProbe: corpus.optionsProbe,
   localsEcho: corpus.localsEcho,
+  guardedResource: corpus.guardedResource,
+  guardBoom: corpus.guardBoom,
 }
 const info = { title: 'Differential', version: '1.0.0' }
 
@@ -98,6 +100,12 @@ describe('compile-to-module', () => {
     // health 200 serializes positionally; listUsers 200 (open schema) has no serializer.
     expect(source).toContain('serialize_health_200')
     expect(source).not.toContain('serialize_listUsers_200')
+    // Guarded routes emit the shared runGuards helper and thread the live
+    // contract's guards through it before the handler; unguarded routes never
+    // reference it.
+    expect(source).toContain('const runGuards =')
+    expect(source).toContain('runGuards(guardedResource.guards, context, 0)')
+    expect(source).not.toContain('runGuards(health.guards')
     // No eval anywhere in the output.
     expect(source).not.toMatch(/\beval\(|new Function\(/)
   })
@@ -255,6 +263,15 @@ describe('compile-to-module', () => {
         () => new Request('http://localhost/health', { method: 'OPTIONS' }),
         () => new Request('http://localhost/users/7', { method: 'OPTIONS' }),
         () => new Request('http://localhost/nowhere-at-all', { method: 'OPTIONS' }),
+        // Route guards: the sync guard denies (401) without the key, the async
+        // guard denies (403) for non-admins, both pass for an admin with the
+        // key, and a throwing guard takes the onError path — identically in
+        // both engines.
+        () => new Request('http://localhost/guarded'),
+        () => new Request('http://localhost/guarded', { headers: { 'x-key': 'secret' } }),
+        () => new Request('http://localhost/guarded', { headers: { 'x-key': 'secret', 'x-role': 'admin' } }),
+        () => new Request('http://localhost/guarded', { headers: { 'x-key': 'wrong', 'x-role': 'admin' } }),
+        () => new Request('http://localhost/guard-boom'),
         // Async refine: accepted, resolved issues (through the custom
         // validationFailed formatter), and a rejected refine down onError.
         () => slotAsync({ start: 1, end: 5 }),
