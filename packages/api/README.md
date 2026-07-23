@@ -932,6 +932,24 @@ const workerHandler = toFetchHandler(api, {
 // Compiled: compileToModule({ ..., mounts: { '/api/auth': 'authMountHandler' } })
 ```
 
+**The auth endpoints already exist — you write none of them.** The mount hands
+`/api/auth/*` to Better Auth's own handler, so every endpoint it serves —
+`sign-up/email`, `sign-in/email`, `sign-out`, `get-session`, and whatever your
+enabled plugins add (magic link, passkey, 2FA, organization…) — works without a
+single route contract on your side. Call them from the browser with Better
+Auth's own typed client (`createAuthClient`), generated from *your* config and
+plugins, so it always matches what the server actually serves. To surface them
+in one unified OpenAPI page, enable Better Auth's OpenAPI plugin (it generates a
+schema from your live config) and serve it alongside `@amritk/api`'s
+`/openapi.json`.
+
+The framework deliberately ships **no** built-in Better Auth contracts. Baking a
+vendor's endpoint shapes into the core would drift across versions, go blind to
+which plugins you enabled, and pull one SDK's surface into a vendor-neutral
+layer — the opposite of the mount seam. Better Auth stays the source of truth
+for its own API; the mount is how it plugs in, and the endpoints it serves are
+the login calls you were going to write.
+
 The session flows through the app context, and a [guard](#guards-authorize-once-declare-the-outcome)
 enforces it — the protected route *declares* its 401, so the auth behavior
 shows up in the OpenAPI document like everything else:
