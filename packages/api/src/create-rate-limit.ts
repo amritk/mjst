@@ -37,6 +37,17 @@ export type RateLimitOptions = {
    * so an unconfigured deployment behind no proxy shares one bucket rather
    * than silently not limiting. Override to key by API token, user id from
    * `locals`, or a route group.
+   *
+   * **Security note.** These headers are client-supplied: `x-forwarded-for`'s
+   * first hop is fully attacker-controlled, and `cf-connecting-ip`/`x-real-ip`
+   * can be spoofed by anything reaching the origin directly rather than through
+   * the proxy that sets them. So the default trusts client input, and an
+   * attacker rotating the header gets a fresh bucket per request. Only rely on
+   * the default when a trusted proxy *overwrites* these headers and the origin
+   * is not reachable around it. For a security throttle (login/brute-force),
+   * key off a source you control — a proxy-verified client IP (rightmost
+   * untrusted `x-forwarded-for` hop for your topology) or an authenticated user
+   * id from `locals`.
    */
   readonly key?: (request: Request, locals: RequestLocals) => string
   /** Counter backend. Defaults to an in-process {@link RateLimitStore}. */

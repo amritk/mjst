@@ -675,6 +675,156 @@ const handler = toFetchHandler(api, {
 // Compiled: compileToModule({ ..., onRequestExports: ['gate'], onResponseExports: ['stamp'] })
 ```
 
+### Built-in security hooks
+
+Rather than hand-roll the gates above, the package ships the common security
+middleware as hook factories — the `helmet` / `secure-headers`, `cors`,
+`rate-limit`, and CSRF features every framework in the ecosystem provides,
+expressed over the same `onRequest`/`onResponse`/`locals` seams so they work
+identically under the runtime and the compiled engine.
+
+```ts
+import {
+  createCors,
+  createCsrf,
+  createRateLimit,
+  createSecurityHeaders,
+  toFetchHandler,
+} from '@amritk/api'
+
+const cors = createCors({ origin: (o) => o, credentials: true })
+const csrf = createCsrf()
+const limit = createRateLimit({ limit: 100, windowMs: 60_000 })
+
+const handler = toFetchHandler(api, {
+  onRequest: [cors.onRequest, limit.onRequest, csrf.onRequest],
+  onResponse: [cors.onResponse, limit.onResponse, csrf.onResponse, createSecurityHeaders()],
+})
+```
+
+**`createSecurityHeaders(options?)`** — an `onResponse` decorator that stamps
+the browser-hardening headers (`x-content-type-options: nosniff`,
+`x-frame-options: SAMEORIGIN`, `referrer-policy: no-referrer`, the
+cross-origin isolation trio, …) only when the handler didn't already set them.
+**HSTS and CSP default off** on purpose: `strict-transport-security` on a bare
+IP or a plain-HTTP dev origin locks browsers out, and no single CSP fits every
+app — opt into both explicitly (`strictTransportSecurity: true`,
+`contentSecurityPolicy: "…"`) for a production HTTPS deployment. Any field
+takes `false` to omit or a string to override.
+
+**`createCors(options)`** — preflight answerer (`onRequest`) plus allow/expose
+stamper (`onResponse`), applied to *every* response including 404s and gate
+short-circuits, since a browser drops any reply without the allow-origin
+header. It **throws at setup** on the spec-forbidden `origin: '*'` +
+`credentials: true` pair. A function origin (`(o) => o`) is trusted as
+written — reflecting *every* origin with `credentials: true` turns any site
+into a trusted caller, so validate the origin inside the function rather than
+echoing it blindly.
+
+**`createRateLimit(options)`** — counts each request against a key and
+short-circuits over-limit ones with a `429` carrying `Retry-After` and the
+`RateLimit-*` headers; under the limit it stamps those headers via `locals`.
+The default in-process `memoryRateLimitStore()` is single-instance and
+memory-bounded; pass a shared `store` (Redis, a Durable Object) for a fleet.
+
+> **Keying is a security decision.** The default key is the client IP read
+> from `cf-connecting-ip` / `x-real-ip` / the first `x-forwarded-for` hop —
+> **all client-supplied and spoofable**. An attacker rotating the header gets
+> a fresh bucket per request, defeating the limit. Rely on the default only
+> when a trusted proxy *overwrites* these headers and the origin isn't
+> reachable around it. For a security throttle (login / brute-force), pass a
+> `key` that reads a proxy-verified IP (the rightmost untrusted
+> `x-forwarded-for` hop for your topology) or an authenticated user id from
+> `locals`.
+
+**`createCsrf(options?)`** — stateless double-submit-cookie CSRF (the defense
+Rails, Laravel, and Hono ship). The gate rejects an unsafe-method request
+whose `x-csrf-token` header doesn't match its `csrf_token` cookie with a `403`
+(empty/missing tokens are always rejected — a blank pair never satisfies the
+check); the decorator seeds the cookie on any response that lacks one. The
+cookie defaults to `Path=/; SameSite=Lax; Secure` and is intentionally **not**
+`HttpOnly` — the pattern needs page scripts to read and echo it. Drop `Secure`
+via `cookieAttributes` only for a plain-HTTP dev origin. Use `exempt` to skip
+bearer-token API paths, where CSRF doesn't apply. On the client, pair it with
+**`createCsrfHeader()`** — a `headers` provider for `createClient` that reads
+the `csrf_token` cookie and echoes it in `x-csrf-token`:
+
+```ts
+import { createClient, createCsrfHeader } from '@amritk/api'
+
+const client = createClient(contracts, 'https://api.example.com', {
+  fetchOptions: { credentials: 'include' },
+  headers: createCsrfHeader(),
+})
+```
+
+### Signed cookies
+
+**`signCookie` / `unsignCookie` / `createSignedCookies`** sign a value with
+HMAC-SHA256 over the Web Crypto API (so the same code runs on Workers, Bun,
+Deno, and Node ≥ 20). A signed value is `<value>.<base64url-hmac>`; tampering
+with either half fails verification, which runs through the constant-time
+`crypto.subtle.verify`. This is **integrity, not secrecy** — the value stays
+readable, so sign a session id and keep the session server-side; never put a
+secret in it.
+
+```ts
+import { createSignedCookies } from '@amritk/api'
+
+const cookies = createSignedCookies(env.COOKIE_SECRET)
+const setCookie = `sid=${await cookies.sign(sessionId)}; HttpOnly; Secure; SameSite=Lax`
+const sessionId = await cookies.unsign(parsedCookie) // undefined if tampered
+// Rotate by unsigning against the current secret first, then older ones.
+```
+
+### Client-side auth refresh
+
+Two helpers cover the two token models, both plugging into
+`createClient({ headers, fetch })`:
+
+**`createTokenRefresh(options)`** — the **bearer-token** model. It holds a
+single-flighted token and renews it on the token's own clock: a call that
+finds the token expired blocks on one shared `refresh` (no thundering herd),
+and a token inside its `refreshBefore` window renews in the background while
+the current call rides the still-valid token. JWTs are zero-config — return
+the string from `refresh` and its `exp` is decoded by
+**`decodeJwtExpiry`** (signature deliberately unverified; it's read only to
+schedule refresh, and the server still verifies every token). It does **not**
+react to 401s — call `invalidate()` from your 401 handling or on logout to
+force the next call to refresh. `invalidate()` also wins a race against an
+in-flight background refresh, so a logout can't be silently undone by a
+renewal already on the wire.
+
+```ts
+import { createClient, createTokenRefresh } from '@amritk/api'
+
+const auth = createTokenRefresh({
+  refresh: async () => (await fetch('/auth/refresh').then((r) => r.json())).accessToken, // a JWT
+})
+const client = createClient(contracts, 'https://api.example.com', { headers: auth.headers })
+// on logout: auth.invalidate(); on teardown: auth.dispose()
+```
+
+**`createRefreshFetch(options)`** — the **HttpOnly-cookie** model, where the
+browser holds no token and only triggers a server-side renewal. It wraps a
+fetch so a `401` (override `shouldRefresh`) runs a single-flighted `refresh`
+and replays the original request exactly once — no retry loop, no refresh
+stampede. Because it renews on a real server 401, it also covers
+early-revocation that a pure expiry clock can't see.
+
+```ts
+import { createClient, createCsrfHeader, createRefreshFetch } from '@amritk/api'
+
+const authFetch = createRefreshFetch({
+  refresh: () => fetch('/auth/refresh', { method: 'POST', credentials: 'include' }),
+})
+const client = createClient(contracts, 'https://api.example.com', {
+  fetch: authFetch,
+  fetchOptions: { credentials: 'include' },
+  headers: createCsrfHeader(),
+})
+```
+
 ### Per-request state: `locals`
 
 Every request carries one shared scratch bag. Gates receive it as their
