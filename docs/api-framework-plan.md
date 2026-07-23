@@ -356,11 +356,27 @@ in both engines, pinned by the differential corpus:
   an owner-scoped query from the same context — with the 401 appearing in
   the generated OpenAPI document like any other response.
 
-- ~~Route-level middleware/auth.~~ Superseded by two shipped primitives that
-  cover the real-world cases without a middleware chain: a **typed app
-  context** (`createApi({ context })` + `routeFactory<Context>()`, receiving
-  platform `env`/`executionContext` — Drizzle handles, Better Auth sessions)
-  and **prefix mounts** (`toFetchHandler(api, { mounts })` /
-  `compileToModule({ mounts })` — Better Auth's own endpoints pass through as
-  raw Request/Response). Auth *outcomes* stay contract-declared: a protected
-  route declares its 401, so it documents itself.
+- ~~Route-level middleware/auth.~~ Superseded by shipped primitives that cover
+  the real-world cases without a middleware chain: a **typed app context**
+  (`createApi({ context })` + `routeFactory<Context>()`, receiving platform
+  `env`/`executionContext` — Drizzle handles, Better Auth sessions), **prefix
+  mounts** (`toFetchHandler(api, { mounts })` / `compileToModule({ mounts })` —
+  Better Auth's own endpoints pass through as raw Request/Response), and
+  **route guards** (see below). Auth *outcomes* stay contract-declared: a
+  protected route declares its 401, so it documents itself.
+- **Route guards.** `guards: [...]` on `defineRoute`/`implementRoute`/
+  `routeImplementer` (server side — the browser-safe `defineContract` stays
+  pure data) run in order after the context factory and before the handler,
+  first denial winning; sync or async, a thrown guard takes the `onError`
+  path. A guard is `(ctx) => reply | undefined`: it sees the same
+  `RequestContext` the handler will (resolved session included) and denies with
+  a reply or passes with `undefined`. The return type is tied to the contract's
+  response map, so a guard can only deny with a *declared* status — enforcement
+  that cannot silently open an endpoint, and the 401/403 is already in the
+  OpenAPI document. `requireContext(predicate, deniedReply)` packages the
+  reusable session/role check. Both engines run guards identically (the
+  compiled module threads the live `contract.guards` through a shared
+  `runGuards` in the same order); the differential corpus pins the parity,
+  including an async guard and a throwing guard down `onError`. Guards are
+  excluded from the contracts hash — like `handler` and `refine`, they are
+  imported and called live.

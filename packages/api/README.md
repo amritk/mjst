@@ -838,6 +838,60 @@ const api = createApi({ routes: [listUsers], context: createContext })
 // Compiled: compileToModule({ routesImport: './routes', routes, contextExport: 'createContext' })
 ```
 
+### Guards: authorize once, declare the outcome
+
+A guard is an authorization check that runs **after validation and the context
+factory, before the handler** — it sees the same `context` the handler will
+(the resolved session included) and either returns a reply to **deny** the
+request or `undefined` to **pass**. Guards run in the order the route lists
+them, first denial wins, and each may be sync or async; a thrown guard takes
+the `onError` path like a throwing handler. Guards live next to the handler
+(`defineRoute`, `implementRoute`, `routeImplementer`), never on the
+browser-safe `defineContract` — but their *outcome* stays contract-declared,
+because a guard can only deny with a status the route's `responses` map
+declares. That single rule is what keeps enforcement honest: the `401`/`403` a
+guard produces is already in the OpenAPI document, and forgetting to list the
+status is a compile error, not a silently-open endpoint.
+
+Because a guard denies with a declared status, one guard written once attaches
+to every route that declares it. `requireContext(predicate, deniedReply)` is
+the one-liner most auth guards reduce to:
+
+```ts
+import { requireContext, type ContextGuardInput } from '@amritk/api'
+
+// guards.ts — reusable across routes; the predicate reads the app context.
+export const requireSession = requireContext(
+  (ctx: ContextGuardInput<AppContext>) => ctx.context.session !== null,
+  { status: 401, body: { error: 'unauthorized' } },
+)
+export const requireAdmin = requireContext(
+  (ctx: ContextGuardInput<AppContext>) => ctx.context.session?.user.role === 'admin',
+  { status: 403, body: { error: 'forbidden' } },
+)
+
+// routes.ts — guards run before the handler, in order. `defineAppRoute` is the
+// one-shot form; `routeImplementer<AppContext>()` binds guards to a handler-free
+// contract the same way.
+export const deleteUser = defineAppRoute({
+  method: 'delete',
+  path: '/users/{id}',
+  request: { params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  responses: { 204: {}, 401: { body: errorSchema }, 403: { body: errorSchema } },
+  guards: [requireSession, requireAdmin],
+  handler: async ({ params, context }) => {
+    await context.db.delete(users).where(eq(users.id, params.id))
+    return { status: 204 }
+  },
+})
+```
+
+For a denial reply that varies per request (naming the missing scope, say),
+write a plain guard function `(ctx) => reply | undefined` — `requireContext`
+keeps its reply constant so the declared-status guarantee stays exact. Both
+engines run guards identically (the compiled module threads the live guards
+through the same order), and the differential corpus pins that parity.
+
 ### Auth: Better Auth
 
 Two touch points, both first-class. Better Auth's own endpoints are a
@@ -863,9 +917,9 @@ const workerHandler = toFetchHandler(api, {
 // Compiled: compileToModule({ ..., mounts: { '/api/auth': 'authMountHandler' } })
 ```
 
-Sessions flow through the app context, and guarding is part of the contract —
-a protected route *declares* its 401, so the auth behavior shows up in the
-OpenAPI document like everything else:
+The session flows through the app context, and a [guard](#guards-authorize-once-declare-the-outcome)
+enforces it — the protected route *declares* its 401, so the auth behavior
+shows up in the OpenAPI document like everything else:
 
 ```ts
 export const createContext = async ({ request }: ContextFactoryInput) => ({
@@ -874,17 +928,26 @@ export const createContext = async ({ request }: ContextFactoryInput) => ({
   }),
 })
 
-export const getProfile = defineAppRoute({
+// implementAppRoute = routeImplementer<AppContext>() — binds a handler (and
+// guards) to a handler-free contract, so contracts.ts stays browser-safe.
+export const getProfile = implementAppRoute(getProfileContract, {
+  // requireSession denies with the declared 401 before the handler runs, so the
+  // handler only ever sees an authenticated session.
+  guards: [requireSession],
+  handler: ({ context }) => ({ status: 200, body: toProfile(context.session.user) }),
+})
+```
+
+where `getProfileContract` (pure data, browser-safe) declares both responses:
+
+```ts
+export const getProfileContract = defineContract({
   method: 'get',
   path: '/profile',
   responses: {
     200: { body: profileSchema },
     401: { body: { type: 'object', properties: { error: { type: 'string' } }, required: ['error'] } },
   },
-  handler: ({ context }) =>
-    context.session === null
-      ? { status: 401, body: { error: 'unauthorized' } }
-      : { status: 200, body: toProfile(context.session.user) },
 })
 ```
 
@@ -1025,6 +1088,7 @@ yours:
 |:--|:--|
 | Drizzle / any ORM | `context` factory builds the handle per request from `env` |
 | Better Auth / any self-contained router | `mounts` passthrough + session lookup in `context` |
+| Per-route authorization (sessions, roles, scopes) | route `guards` (`requireContext` packages the common case) |
 | Sentry / error reporting | `onError` (`createSentry` packages it) |
 | Metrics, request logging | `observe` + `observeUnmatched` (route pattern, status, duration) |
 | Rate limits, feature flags, CSRF, origin checks | `onRequest` gates |

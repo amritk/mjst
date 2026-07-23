@@ -11,7 +11,7 @@ import type { AnyContract } from './types'
  *
  * The compiled module embeds this hash at emit time and recomputes it over
  * the live contracts at init, which is how schema edits that silently drifted
- * from a stale build get surfaced. Handlers and `refine` hooks are
+ * from a stale build get surfaced. Handlers, `refine` hooks, and `guards` are
  * deliberately excluded — the emitted module imports and calls them live, so
  * changing them never makes a build stale.
  *
@@ -26,8 +26,8 @@ export const hashContracts = (routes: ReadonlyArray<AnyContract>): string =>
 
 /**
  * Picks exactly the contract-relevant fields. An explicit pick (rather than
- * hashing the whole contract) keeps functions like `handler` and `refine` out
- * of the fingerprint by construction.
+ * hashing the whole contract) keeps functions like `handler`, `refine`, and
+ * `guards` out of the fingerprint by construction.
  */
 const contractFields = (contract: AnyContract): Record<string, unknown> => {
   const request = contract.request

@@ -298,7 +298,20 @@ const runRoute = async (
     // AnyRouteContract); the values really do match the contract's schemas at
     // this point, which is what the cast asserts.
     const context = { params, query, body, headers, cookies, context: appContext, request } as ErasedRequestContext
-    reply = await route.contract.handler(context)
+    // Guards run after the context factory (they gate on the session it
+    // resolved) and before the handler, in order, first denial winning. A
+    // guard's reply is a normal reply — it falls through to the same response
+    // validation and serialization below — and a throwing guard takes this
+    // try's onError path, exactly like the handler.
+    let denied: RouteReplyValue | Response | undefined
+    const guards = route.contract.guards
+    if (guards !== undefined) {
+      for (const guard of guards) {
+        denied = await guard(context)
+        if (denied !== undefined) break
+      }
+    }
+    reply = denied ?? (await route.contract.handler(context))
   } catch (error) {
     // A handler that read the body itself (webhook verification, uploads)
     // hits the size limit as a thrown error — that is the transport's 413,

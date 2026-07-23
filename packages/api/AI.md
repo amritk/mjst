@@ -68,6 +68,13 @@ Bun.serve({ fetch: handler })      // or: export default { fetch: handler } on W
    Undeclared response statuses **throw** (`isUnexpectedStatusError`) instead of
    entering the union — declare every status you handle. Browser auth uses
    `fetchOptions: { credentials: 'include' }` (the `cookies` slot is Node-only).
+6. **Guards authorize; they live on the route, not the contract.** Add
+   `guards: [...]` to `defineRoute`/`implementRoute`/`routeImplementer` (never
+   `defineContract` — it stays browser-safe data). A guard `(ctx) => reply |
+   undefined` runs after the context factory, before the handler, and can only
+   deny with a status the route's `responses` declares — so declare the 401/403
+   or it is a compile error. `requireContext(predicate, deniedReply)` packages
+   the common session/role check into a reusable guard.
 
 ## Subpath entry points
 

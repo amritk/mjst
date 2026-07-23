@@ -198,6 +198,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     invalidBody: false,
     unsupportedMediaType: false,
     refine: false,
+    guards: false,
   }
 
   const declarations: string[] = []
@@ -343,6 +344,24 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     // Mirrors the interpreter's pattern compilation: Unicode mode first, with
     // a non-Unicode fallback for legacy patterns the u flag rejects.
     lines.push("const compileRx = (src) => { try { return new RegExp(src, 'u') } catch { return new RegExp(src) } }")
+  }
+  if (used.guards) {
+    // Runs a route's guards in order, first denial winning — the emitted twin
+    // of the runtime pipeline's guard loop. Stays synchronous (no promise
+    // allocated) until a guard actually returns one; when a guard is async it
+    // resolves and recurses from the next index. `undefined` means "all passed".
+    lines.push(
+      'const runGuards = (guards, context, i) => {',
+      '  while (i < guards.length) {',
+      '    const result = guards[i++](context)',
+      "    if (result != null && typeof result.then === 'function') {",
+      '      return result.then((value) => (value !== undefined ? value : runGuards(guards, context, i)))',
+      '    }',
+      '    if (result !== undefined) return result',
+      '  }',
+      '  return undefined',
+      '}',
+    )
   }
   lines.push(...emitErrorHelpers(errorsExport, onErrorExport, used))
   if (validateResponses) {
@@ -904,15 +923,49 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
     cookiesValue = 'cookies'
   }
 
-  const invokeLines = (bodyValue: string, appContextValue: string, indent: string): string[] => [
-    `${indent}const context = { params: ${paramsValue}, query: ${queryValue}, body: ${bodyValue}, headers: ${headersValue}, cookies: ${cookiesValue}, context: ${appContextValue}, request: apiRequest }`,
-    `${indent}try {`,
-    `${indent}  const reply = ${route.name}.handler(context)`,
-    `${indent}  return typeof reply?.then === 'function' ? reply.then(respond_${route.name}, (error) => thrown(error, ${thrownArguments})) : respond_${route.name}(reply)`,
-    `${indent}} catch (error) {`,
-    `${indent}  return thrown(error, ${thrownArguments})`,
-    `${indent}}`,
-  ]
+  const guards = route.contract.guards
+  const hasGuards = guards !== undefined && guards.length > 0
+  if (hasGuards) used['guards'] = true
+  const invokeLines = (bodyValue: string, appContextValue: string, indent: string): string[] => {
+    const context = `${indent}const context = { params: ${paramsValue}, query: ${queryValue}, body: ${bodyValue}, headers: ${headersValue}, cookies: ${cookiesValue}, context: ${appContextValue}, request: apiRequest }`
+    if (!hasGuards) {
+      return [
+        context,
+        `${indent}try {`,
+        `${indent}  const reply = ${route.name}.handler(context)`,
+        `${indent}  return typeof reply?.then === 'function' ? reply.then(respond_${route.name}, (error) => thrown(error, ${thrownArguments})) : respond_${route.name}(reply)`,
+        `${indent}} catch (error) {`,
+        `${indent}  return thrown(error, ${thrownArguments})`,
+        `${indent}}`,
+      ]
+    }
+    // Guarded: run the guards first (mirroring the runtime pipeline's loop),
+    // and only reach the handler if none denied. A guard's reply short-circuits
+    // through respond_* — the same response-validation and serialization path a
+    // handler reply takes — and a thrown/rejected guard or handler routes to
+    // thrown. runHandler catches its own sync throw so it is safe to call from
+    // inside the async continuation too, matching the runtime's single try.
+    return [
+      context,
+      `${indent}const runHandler = () => {`,
+      `${indent}  try {`,
+      `${indent}    const reply = ${route.name}.handler(context)`,
+      `${indent}    return typeof reply?.then === 'function' ? reply.then(respond_${route.name}, (error) => thrown(error, ${thrownArguments})) : respond_${route.name}(reply)`,
+      `${indent}  } catch (error) {`,
+      `${indent}    return thrown(error, ${thrownArguments})`,
+      `${indent}  }`,
+      `${indent}}`,
+      `${indent}try {`,
+      `${indent}  const guarded = runGuards(${route.name}.guards, context, 0)`,
+      `${indent}  if (guarded != null && typeof guarded.then === 'function') {`,
+      `${indent}    return guarded.then((early) => (early !== undefined ? respond_${route.name}(early) : runHandler()), (error) => thrown(error, ${thrownArguments}))`,
+      `${indent}  }`,
+      `${indent}  return guarded !== undefined ? respond_${route.name}(guarded) : runHandler()`,
+      `${indent}} catch (error) {`,
+      `${indent}  return thrown(error, ${thrownArguments})`,
+      `${indent}}`,
+    ]
+  }
 
   const runLines = (bodyValue: string, indent: string): string[] => {
     const lines: string[] = []

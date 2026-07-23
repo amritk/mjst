@@ -73,6 +73,7 @@ export type { FetchLikeHandler, FetchNodeListener, FetchToNodeHandlerOptions } f
 export { fetchToNodeHandler } from './fetch-to-node-handler'
 export { formBodySerializer } from './form-body-serializer'
 export { hashContracts } from './hash-contracts'
+export type { RouteImplementation } from './implement-route'
 export { implementRoute } from './implement-route'
 export { isMalformedBodyError, malformedBodyError } from './malformed-body-error'
 export type { RouteMatch } from './match-route'
@@ -86,6 +87,7 @@ export { isPayloadTooLargeError, payloadTooLargeError } from './payload-too-larg
 export { readBodyCapped } from './read-body-capped'
 export { readBytesCapped } from './read-bytes-capped'
 export { refinementFailure } from './refinement-failure'
+export { requireContext } from './require-context'
 export { routeFactory } from './route-factory'
 export { routeImplementer } from './route-implementer'
 export { createSignedCookies, signCookie, unsignCookie } from './sign-cookie'
@@ -117,6 +119,7 @@ export type {
   CompiledValidation,
   ContextFactory,
   ContextFactoryInput,
+  ContextGuardInput,
   Contract,
   ErasedRefineInput,
   ErasedRequestContext,
@@ -138,6 +141,7 @@ export type {
   ResponseHeaders,
   ResponseHeaderValue,
   RouteContract,
+  RouteGuard,
   RouteHandler,
   RouteReply,
   RouteReplyOf,
