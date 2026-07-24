@@ -148,6 +148,57 @@ describe('create-form', () => {
     expect(typeof form.values().qty).toBe('number')
   })
 
+  it('lets a number field be cleared instead of snapping to zero', () => {
+    const form = createForm({ initialValues: { qty: 5 } })
+    const input = document.createElement('input')
+    input.type = 'number'
+    form.bind('qty')(input)
+    // Clearing the field must leave it empty and report NaN, not force a "0" —
+    // so a required/minimum check can tell "left blank" apart from "typed zero".
+    input.value = ''
+    input.dispatchEvent(new Event('input'))
+    expect(input.value).toBe('')
+    expect(Number.isNaN(form.values().qty)).toBe(true)
+  })
+
+  it('layers a manual error over validation and clears it on edit', () => {
+    const form = createForm({ initialValues: { email: 'taken@x.com' } })
+    const input = document.createElement('input')
+    form.bind('email')(input)
+    form.field('email').setTouched()
+    form.setError('email', 'Already taken')
+    expect(form.field('email').error()).toBe('Already taken')
+    expect(form.isValid()).toBe(false)
+    // Editing the field clears the server-side message.
+    input.value = 'new@x.com'
+    input.dispatchEvent(new Event('input'))
+    expect(form.field('email').error()).toBeUndefined()
+  })
+
+  it('captures a rejected submit in submitError without rejecting', async () => {
+    const form = createForm({
+      initialValues: { name: 'Ada' },
+      onSubmit: async () => {
+        throw new Error('server down')
+      },
+    })
+    // handleSubmit must resolve (not reject) so a form onSubmit never leaks an
+    // unhandled rejection; the message surfaces through submitError.
+    await form.handleSubmit()
+    expect(form.submitError()).toBe('server down')
+    expect(form.isSubmitting()).toBe(false)
+  })
+
+  it('reset clears submitting, submit error, and manual errors', () => {
+    const form = createForm({ initialValues: { name: 'Ada' } })
+    form.setError('name', 'nope')
+    expect(form.field('name').error() !== undefined || form.errors()['name'] === 'nope').toBe(true)
+    form.reset()
+    expect(form.errors()['name']).toBeUndefined()
+    expect(form.submitError()).toBeUndefined()
+    expect(form.isSubmitting()).toBe(false)
+  })
+
   it('tears down a bound input when its scope is disposed', () => {
     const form = createForm({ initialValues: { name: 'Ada' } })
     const input = document.createElement('input')

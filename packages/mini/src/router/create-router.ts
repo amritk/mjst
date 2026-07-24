@@ -88,12 +88,14 @@ export const createRouter = <R extends Route>(options: RouterOptions<R>): Router
   const navigate = (to: string, navigateOptions?: NavigateOptions): void => {
     const replace = navigateOptions?.replace ?? false
     if (mode === 'hash') {
-      // Setting the hash triggers `hashchange`, which refreshes the signal.
-      // `replace` needs the History API because assigning `location.hash`
-      // always pushes.
+      // Setting the hash triggers `hashchange`, which refreshes the signal —
+      // except when `to` equals the current hash, where the browser fires no
+      // event (re-clicking the active link). `replace` needs the History API
+      // because assigning `location.hash` always pushes. Either way, refresh the
+      // signal directly so navigation is never silently dropped.
       if (replace) window.history.replaceState(null, '', `#${to}`)
       else window.location.hash = to
-      if (replace) route(read())
+      route(read())
     } else {
       const url = base + to
       if (replace) window.history.replaceState(null, '', url)

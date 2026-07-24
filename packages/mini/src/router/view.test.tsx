@@ -39,6 +39,15 @@ describe('RouterView', () => {
     router.stop()
   })
 
+  it('throws a clear error when the matched route stores a non-function view', () => {
+    // A common misconfiguration: `view` holds a built element or a string rather
+    // than a factory. Guard it with a readable message instead of crashing when
+    // renderChild tries to call it.
+    const router = createRouter({ routes: [{ path: '/', view: 'not-a-factory' }] })
+    expect(() => RouterView({ router })).toThrow(/view factory/)
+    router.stop()
+  })
+
   it('keeps the same view across a same-route param change', () => {
     // `/users/1` → `/users/2` matches one route definition, so its view factory
     // is a stable reference and the mounted node must be preserved (params update

@@ -84,6 +84,22 @@ describe('create-router', () => {
     router.stop()
   })
 
+  it('refreshes the signal when navigating to the current hash', () => {
+    window.history.replaceState(null, '', '/')
+    window.location.hash = '#/users/3'
+    const router = createRouter({ routes, mode: 'hash' })
+    router.navigate('/users/9')
+    window.dispatchEvent(new Event('hashchange'))
+    expect(router.route().params).toEqual({ id: '9' })
+    // Re-navigating to the same hash fires no `hashchange`, yet the signal must
+    // still refresh — a fresh RouteState so subscribers re-run.
+    const before = router.route()
+    router.navigate('/users/9')
+    expect(router.route()).not.toBe(before)
+    expect(router.route().params).toEqual({ id: '9' })
+    router.stop()
+  })
+
   it('parses the query string into a reactive record', () => {
     window.history.replaceState(null, '', '/users/42?tab=posts&page=2')
     const router = createRouter({ routes })

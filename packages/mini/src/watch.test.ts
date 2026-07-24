@@ -78,4 +78,35 @@ describe('watch', () => {
     count(2)
     expect(calls).toEqual([1])
   })
+
+  it('does not track signals the callback reads', () => {
+    // The callback reads `other`, but only `count` should drive the watcher —
+    // otherwise writing `other` would re-fire the callback on an unrelated change.
+    const count = signal(0)
+    const other = signal('a')
+    const calls: string[] = []
+    watch(count, () => calls.push(other()))
+    count(1)
+    expect(calls).toEqual(['a'])
+    // Writing the signal only read inside the callback must not re-fire it.
+    other('b')
+    expect(calls).toEqual(['a'])
+  })
+
+  it('does not track callback reads on the immediate run either', () => {
+    const count = signal(0)
+    const other = signal('a')
+    let runs = 0
+    watch(
+      count,
+      () => {
+        runs += 1
+        other()
+      },
+      { immediate: true },
+    )
+    expect(runs).toBe(1)
+    other('b')
+    expect(runs).toBe(1)
+  })
 })
