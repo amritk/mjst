@@ -349,10 +349,14 @@ const setAttribute = (element: Element, name: string, value: unknown): void => {
 const resolveClass = (value: unknown): string => {
   if (Array.isArray(value)) return value.filter(Boolean).join(' ')
   if (value !== null && typeof value === 'object') {
-    return Object.entries(value)
-      .filter(([, on]) => on)
-      .map(([name]) => name)
-      .join(' ')
+    // Accumulate the truthy keys directly instead of chaining
+    // `entries().filter().map().join()`, which allocates three throwaway arrays
+    // on every reactive class update.
+    let result = ''
+    for (const name in value as Record<string, unknown>) {
+      if ((value as Record<string, unknown>)[name]) result += result ? ` ${name}` : name
+    }
+    return result
   }
   return value === null || value === undefined || value === false ? '' : String(value)
 }
@@ -370,7 +374,10 @@ const applyStyle = (element: Element, value: unknown): void => {
   }
   if (typeof value === 'object') {
     style.cssText = ''
-    for (const [key, entry] of Object.entries(value)) {
+    // `for…in` rather than `Object.entries`: no per-update tuple array, and
+    // style objects are plain literals with no inherited enumerables.
+    for (const key in value as Record<string, unknown>) {
+      const entry = (value as Record<string, unknown>)[key]
       if (entry === null || entry === undefined || entry === false) continue
       style.setProperty(cssName(key), String(entry))
     }
@@ -424,7 +431,13 @@ export const jsx = (tag: string | Component<never>, props: MiniElementProps, _ke
   const element = createElement(tag)
   let ref: ((el: HTMLElement) => void) | undefined
 
-  for (const [name, value] of Object.entries(props)) {
+  // `for…in` over the props object rather than `Object.entries(props)`: the
+  // latter allocates an array of `[key, value]` tuples on every element built,
+  // and element creation is the framework's hottest path. Props always arrive
+  // as a plain object literal from the JSX transform, so there are no inherited
+  // enumerables to filter out.
+  for (const name in props) {
+    const value = props[name]
     if (name === 'children') {
       appendChildren(element, value as MiniChildren)
     } else if (name === 'key') {
