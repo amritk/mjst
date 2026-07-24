@@ -1,5 +1,92 @@
 # @amritk/api
 
+## 0.8.0
+
+### Minor Changes
+
+- 2e757e3: Add route guards for per-endpoint authorization. Declare `guards: [...]` on
+  `defineRoute`, `implementRoute`, or `routeImplementer` (server side — the
+  browser-safe `defineContract` stays pure data); each guard runs after the
+  context factory and before the handler, sees the same `RequestContext` the
+  handler will, and either returns a reply to deny the request or `undefined` to
+  pass. Guards run in order (first denial wins), may be sync or async, and a
+  thrown guard takes the `onError` path. A guard can only deny with a status the
+  route's `responses` map declares, so enforcement can never silently open an
+  endpoint and the 401/403 is already in the OpenAPI document. Guards attach in
+  one place — the `guards` field — and the denial status stays declared on the
+  contract, so OpenAPI, response validation, and the typed `createClient` all
+  agree. `requireContext` packages the common reusable session/role check; declare
+  a shared `authResponses` fragment once to keep the boilerplate DRY. Both the
+  runtime and compiled engines run guards identically, pinned by the differential
+  corpus.
+
+### Patch Changes
+
+- d0a6e99: Security hardening for the auth helpers, plus reference docs for the built-in
+  security hooks.
+
+  - **`createTokenRefresh`** — `invalidate()` (and `dispose()`) now win a race
+    against an in-flight background refresh. Previously, a refresh already on the
+    wire when the caller invalidated would repopulate the token on resolve,
+    silently undoing a logout or a post-401 drop. A generation guard makes the
+    in-flight refresh discard its result instead of resurrecting the token.
+  - **`createCsrf`** — the seeded `csrf_token` cookie now defaults to
+    `Path=/; SameSite=Lax; Secure` (was missing `Secure`), so the double-submit
+    token never rides a plaintext request; drop `Secure` via `cookieAttributes`
+    for a plain-HTTP dev origin. The gate now rejects empty tokens explicitly, so
+    a blank cookie/header pair can never satisfy the equality check.
+  - **`createRateLimit`** — documented that the default key derives from
+    client-supplied, spoofable IP headers and must not be relied on for a
+    security throttle without a trusted proxy; use a proxy-verified IP or an
+    authenticated `locals` user id for login/brute-force limits.
+  - **Docs** — README now has a "Built-in security hooks", "Signed cookies", and
+    "Client-side auth refresh" reference covering `createSecurityHeaders`,
+    `createCors`, `createRateLimit`, `createCsrf`/`createCsrfHeader`,
+    `signCookie`/`createSignedCookies`, `createTokenRefresh`, and
+    `createRefreshFetch`; AI.md gains a compact security-helper summary.
+
+- a09134f: Fix four HTTP-layer correctness bugs surfaced by a review of `@amritk/api`.
+
+  - **`multipartBodySerializer`** — a repeated field carrying files (the
+    multi-file upload case, `{ files: [file1, file2] }`) was `String`-coerced to
+    `"[object File]"` per item, silently dropping the uploads. `Blob`/`File`
+    items inside arrays are now kept intact; only non-blob items are stringified.
+  - **`createETag`** — the default hash ran over `TextDecoder.decode(body)`,
+    which maps every invalid UTF-8 byte to U+FFFD, so distinct binary bodies
+    could collapse to the same string and share one _strong_ ETag — yielding a
+    spurious `304` that serves stale bytes. The default now hashes the raw bytes
+    (`fnv1aHexBytes`); ASCII bodies are unaffected.
+  - **`createCompression`** — `Accept-Encoding` negotiation was a substring test,
+    so it treated `gzip;q=0` (an explicit refusal) as acceptance and ignored a
+    bare `*`. It now parses RFC 9110 `q`-weights and honors the `*` wildcard.
+  - **`coercePrimitive`** — a numeric path/query/header value of `Infinity` or
+    `-Infinity` was coerced to a non-finite `number` that passed the type guard
+    and then serialized back out as JSON `null`. Non-finite values now stay
+    strings so the validator rejects them; finite forms (including exponential
+    notation) still coerce.
+
+- 217cb66: `FromSchema` now honours the `x-mjst` `brand` hint, so branded ids reach the API
+  boundary.
+
+  - **`@amritk/runtime-validators`** — a schema carrying
+    `'x-mjst': { brand: 'UserId' }` now infers `Base & { readonly __brand: 'UserId' }`
+    (e.g. `string & …`), matching the `.d.ts` shape the code generators already
+    emit. Branding stays type-level only — runtime validation still checks the
+    plain base type — and `null` remains assignable when a `nullable` schema is
+    branded.
+  - **`@amritk/api`** — because route `params` / `query` / `body` are typed through
+    `FromSchema`, a branded param schema now flows a nominal id into the handler and
+    the derived typed client, so a `UserId` can't be passed where an `OrderId` is
+    expected. The same protection Drizzle's `.$type<UserId>()` gives a column, at
+    the API boundary.
+  - **Docs** — the `x-mjst` reference now documents the `brand` hint (a new
+    "Nominal brands" section in `@amritk/adapters`), with recipes in the
+    `@amritk/api` README/AI.md and the `@amritk/runtime-validators` type-inference
+    docs, plus the `mjst-extension` subpath in `@amritk/helpers`.
+
+- Updated dependencies [217cb66]
+  - @amritk/runtime-validators@0.9.0
+
 ## 0.7.0
 
 ### Minor Changes

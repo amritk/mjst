@@ -1,5 +1,110 @@
 # @amritk/mini
 
+## 0.5.0
+
+### Minor Changes
+
+- 71145da: `list` (and `For`, which wraps it) now reconciles with a move-minimal two-ended
+  keyed diff instead of the append-order walk.
+
+  - **Reordering is now O(moves), not O(n).** The previous reconciler was tuned
+    for append and replace-the-tail and fell back to an `insertBefore` sweep that
+    moved every node after the first mismatch — so a two-row swap or an early-row
+    removal touched the whole tail. The new pass closes in from both ends, so
+    swapping two rows is two DOM moves, removing an interior row is zero, and a
+    reversal is one move per row. Append and replace-the-tail stay a no-move fast
+    path, and node identity (focus, scroll, input state) is preserved throughout.
+  - **Bulk insertions now batch through a `DocumentFragment`.** A first render,
+    a "create many", or an append of many rows touches the live tree once instead
+    of once per row; a single-row append (the streaming-transcript hot path) still
+    inserts directly, so it does not regress.
+  - **A full clear is one DOM operation.** Emptying the list disposes every row
+    scope and wipes the container with a single `replaceChildren` instead of
+    removing nodes one at a time.
+  - **Core `.` size budget raised 2800 → 3050 B gzipped** to fit the reconciler
+    work (the bundled core is ~3.0 KB). Subpaths still add zero bytes to `.`, and
+    the widget that imports only `.` pays for it once.
+  - No API change: same `list(container, items, key, create)` signature, same
+    duplicate-key warning, same scope disposal on removal.
+
+- 9a47efa: Flow/router state preservation, correctness fixes across the binding layer, and
+  form ergonomics.
+
+  **Fixes**
+
+  - Flow and router components no longer rebuild their subtree when a derived
+    condition changes without flipping which branch wins. `renderChild` now gates
+    the swap on factory identity, so `<Show when={() => count() > 5}>`,
+    `<Switch>`, `<Dynamic>`, and `<RouterView>` keep the mounted node (and its
+    focus/scroll/input state) across unrelated signal changes; a same-route param
+    change like `/users/1 → /users/2` preserves the view.
+  - `watch` runs its callback untracked, so a signal read inside the callback no
+    longer becomes a dependency that re-fires the watcher (matches Vue's `watch`).
+  - The two-way binds (`bindValue`/`bindSelect`/`bindChecked`) attach their DOM
+    listeners inside an effect, so disposing the enclosing `effectScope` detaches
+    them too — previously that path stopped only the signal→element effect and
+    leaked the element→signal listeners.
+  - Number form fields report `NaN` and render blank when cleared instead of
+    snapping to `0`, so a `required`/`minimum` check can tell empty from zero.
+  - `createQuery` re-seeds the optimistic result when a reactive query key
+    changes, so `data`/`isPending` reflect the new key immediately, and `refetch`
+    forwards its options to query-core.
+  - Hash-mode `navigate` refreshes the route signal even when the target equals
+    the current hash (which fires no `hashchange`), and `RouterView` throws a
+    clear error when a matched route's view is not a function.
+  - `list` warns instead of silently dropping rows when two items share a key.
+
+  **Features**
+
+  - `@amritk/mini/forms` adds a `<Field>` component that renders a label, control,
+    and live validation error wired to a `createForm` field in one element;
+    `createForm` gains `setError`/`submitError` (with auto-clear on edit and a
+    captured `onSubmit` rejection), `reset` now clears submitting/error state, and
+    `form.bind` handles `<select>`. The exported field-state type is renamed
+    `Field` → `FieldState` to free the name for the component.
+  - `<For>` accepts a `fallback` for the empty-list state.
+  - `<Link>` gains a reactive `to`, `active`/`activeClass`/`aria-current` for the
+    current link, and `target`/`rel`/`title`/`id`/`style` passthrough.
+  - The `@amritk/mini/vite` reactivity guard now catches a called signal anywhere
+    inside a non-getter attribute or child value — ternaries, logical
+    expressions, `style`/`class` object literals, template literals — not only the
+    whole-value-is-one-call shape, while still never flagging a call inside a
+    getter.
+
+- edaabaa: `<Show>` can pass the narrowed value to a function child. `<Show when={user}>`
+  now accepts `{(user) => …}`, where `user` is a getter with `null`/`undefined`
+  removed from its type — so the branch reads the value that satisfied `when`
+  without repeating the signal or a non-null assertion. The value arrives as a
+  getter, so a truthy→truthy change updates it reactively without rebuilding the
+  branch (a focused input inside it survives), and the getter returns the last
+  truthy value so a read that races the branch's teardown can never throw. The
+  existing node and zero-argument factory child forms are unchanged.
+
+### Patch Changes
+
+- c6cd268: Trim allocations on the hottest render paths, with no change in behaviour.
+
+  - **`jsx`** — iterate props with `for…in` instead of `Object.entries(props)`.
+    Element creation is the framework's most-executed path, and `Object.entries`
+    allocated an array plus a `[key, value]` tuple for every prop on every element
+    built; the `for…in` walk allocates nothing. Props always arrive as a plain
+    object literal from the JSX transform, so there are no inherited enumerables to
+    guard against.
+  - **`resolveClass`** — the object (toggle-map) form now accumulates truthy keys
+    in a single loop rather than chaining `entries().filter().map().join()`, which
+    allocated three throwaway arrays on every reactive `class` update.
+  - **`applyStyle`** — the object form iterates with `for…in` for the same reason,
+    dropping the per-update tuple array on every reactive `style` update.
+
+  - **`list`** — the keyed reconciler tracked which keys survived a pass with a
+    freshly-allocated `Set` (plus an insert per row) on every update. A monotonic
+    pass counter stamped onto each cached entry does the same job — survivor
+    detection and the duplicate-key warning — without allocating anything per
+    update.
+
+  Both the `./jsx-runtime` entry and the size-budgeted core move by a handful of
+  gzipped bytes and stay comfortably within budget.
+
 ## 0.4.1
 
 ### Patch Changes

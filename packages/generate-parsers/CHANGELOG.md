@@ -1,5 +1,12 @@
 # @amritk/generate-parsers
 
+## 0.17.2
+
+### Patch Changes
+
+- Updated dependencies [217cb66]
+  - @amritk/helpers@0.13.5
+
 ## 0.17.1
 
 ### Patch Changes
