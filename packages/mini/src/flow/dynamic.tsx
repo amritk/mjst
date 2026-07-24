@@ -35,6 +35,12 @@ export type DynamicProps = {
 export const Dynamic = (props: DynamicProps): HTMLElement => {
   const host = createHost()
   const { component, ...rest } = props
+  // Memoise the factory on the resolved tag/component so `renderChild` sees a
+  // stable reference while the choice is unchanged. Without this the getter
+  // would return a fresh closure every run, defeating renderChild's identity
+  // skip and rebuilding the element on any unrelated signal the getter reads.
+  let lastResolved: DynamicComponent | undefined
+  let lastFactory: (() => HTMLElement) | null = null
   renderChild(host, () => {
     // Resolving inside the tracking scope is what makes a signal/getter
     // reactive; a plain string simply renders once.
@@ -50,7 +56,10 @@ export const Dynamic = (props: DynamicProps): HTMLElement => {
           'Pass a component through a getter — component={() => MyComponent} — not the element it builds.',
       )
     }
-    return () => jsx(resolved, rest as MiniElementProps)
+    if (lastFactory && resolved === lastResolved) return lastFactory
+    lastResolved = resolved
+    lastFactory = () => jsx(resolved, rest as MiniElementProps)
+    return lastFactory
   })
   return host
 }

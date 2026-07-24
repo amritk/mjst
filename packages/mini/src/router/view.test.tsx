@@ -38,4 +38,25 @@ describe('RouterView', () => {
     expect(host.textContent).toBe('fallback')
     router.stop()
   })
+
+  it('keeps the same view across a same-route param change', () => {
+    // `/users/1` → `/users/2` matches one route definition, so its view factory
+    // is a stable reference and the mounted node must be preserved (params update
+    // reactively inside it) rather than torn down and rebuilt.
+    let builds = 0
+    const user = (): HTMLElement => {
+      builds += 1
+      return document.createElement('div')
+    }
+    const router = createRouter({ routes: [{ path: '/users/:id', view: user }] })
+    router.navigate('/users/1')
+    const host = RouterView({ router })
+    const node = host.firstChild
+    expect(builds).toBe(1)
+    router.navigate('/users/2')
+    // Same route definition → same view factory → same node kept in place.
+    expect(builds).toBe(1)
+    expect(host.firstChild).toBe(node)
+    router.stop()
+  })
 })

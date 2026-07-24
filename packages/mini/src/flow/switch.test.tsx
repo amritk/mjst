@@ -46,4 +46,32 @@ describe('switch', () => {
     })
     expect(host.childNodes).toHaveLength(0)
   })
+
+  it('does not rebuild the winning branch when another branch condition changes', () => {
+    // Switch reads every `when()`, so any of them re-runs the effect. The winner
+    // must stay put unless it actually loses — rebuilding it on an unrelated
+    // condition change would drop the branch's DOM state.
+    const ready = signal(true)
+    const other = signal(false)
+    let builds = 0
+    const host = Switch({
+      children: [
+        Match({
+          when: ready,
+          children: () => {
+            builds += 1
+            return document.createElement('span')
+          },
+        }),
+        Match({ when: other, children: () => document.createTextNode('other') }),
+      ],
+    })
+    const first = host.firstChild
+    expect(builds).toBe(1)
+    // A losing branch's condition toggling must not rebuild the winner.
+    other(true)
+    other(false)
+    expect(builds).toBe(1)
+    expect(host.firstChild).toBe(first)
+  })
 })
