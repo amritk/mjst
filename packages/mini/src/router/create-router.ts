@@ -1,6 +1,8 @@
 import type { ReadonlySignal } from '../signals'
 import { signal } from '../signals'
 import { matchRoute, type RouteParams } from './match-route'
+import { parseQuery } from './parse-query'
+import { stripBase } from './strip-base'
 
 /**
  * One route definition. `path` is a {@link matchRoute} pattern; every other key
@@ -118,15 +120,6 @@ const currentLocation = (mode: RouterMode, base: string): { path: string; search
   return { path, search: window.location.search }
 }
 
-/** Removes the configured base prefix from a pathname before matching. */
-const stripBase = (pathname: string, base: string): string => {
-  if (base && pathname.startsWith(base)) {
-    const rest = pathname.slice(base.length)
-    return rest.startsWith('/') || rest === '' ? rest || '/' : pathname
-  }
-  return pathname
-}
-
 /** Matches a location against the route table, returning the assembled state. */
 const resolve = <R extends Route>(routes: readonly R[], location: { path: string; search: string }): RouteState<R> => {
   const query = parseQuery(location.search)
@@ -135,13 +128,4 @@ const resolve = <R extends Route>(routes: readonly R[], location: { path: string
     if (params) return { path: location.path, search: location.search, query, params, route }
   }
   return { path: location.path, search: location.search, query, params: {}, route: null }
-}
-
-/** Parses a `?a=1&b=2` search string into a flat record; repeated keys keep the last value. */
-const parseQuery = (search: string): RouteParams => {
-  const params: RouteParams = {}
-  const raw = search.startsWith('?') ? search.slice(1) : search
-  if (!raw) return params
-  for (const [key, value] of new URLSearchParams(raw)) params[key] = value
-  return params
 }

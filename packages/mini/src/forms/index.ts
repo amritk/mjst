@@ -12,7 +12,7 @@
  */
 export type { Field as FieldState, FieldValues, Form, FormConfig, FormValidate } from './create-form'
 export { createForm } from './create-form'
-export { Field } from './field'
 export type { FieldControl, FieldProps } from './field'
+export { Field } from './field'
 export type { FormErrors } from './schema-to-validator'
 export { schemaToValidator } from './schema-to-validator'

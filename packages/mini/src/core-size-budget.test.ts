@@ -44,11 +44,18 @@ const built = await build({
   target: 'es2022',
 })
 
-const output = built.outputFiles[0]?.contents ?? new Uint8Array()
 const inputs = Object.keys(built.metafile.inputs)
 
 describe('core-size-budget', () => {
+  it('produces exactly one non-empty output file', () => {
+    // Guards the measurement itself: an empty output would gzip to a handful of
+    // bytes and pass the budget green, silently disarming the whole safety net.
+    expect(built.outputFiles).toHaveLength(1)
+    expect(built.outputFiles[0]?.contents.length ?? 0).toBeGreaterThan(0)
+  })
+
   it('stays under the gzipped byte budget', () => {
+    const output = built.outputFiles[0]?.contents ?? new Uint8Array()
     const gzipped = gzipSync(output).length
     expect(gzipped).toBeLessThanOrEqual(GZIP_BUDGET)
   })
@@ -63,7 +70,10 @@ describe('core-size-budget', () => {
   })
 
   it('pulls in no other node_modules package', () => {
-    const packages = inputs.filter((input) => input.includes('node_modules'))
-    for (const input of packages) expect(input).toContain('alien-signals')
+    // A real assertion in both directions: every node_modules input must be
+    // alien-signals, so a non-alien dependency shows up as a non-empty offenders
+    // list rather than an empty loop that can only fail, never meaningfully pass.
+    const foreign = inputs.filter((input) => input.includes('node_modules') && !input.includes('alien-signals'))
+    expect(foreign).toEqual([])
   })
 })

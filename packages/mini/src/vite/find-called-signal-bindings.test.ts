@@ -110,6 +110,7 @@ describe('find-called-signal-bindings', () => {
   })
 
   it('flags a signal called inside a template literal child', () => {
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the ${...} is JSX source under test, not a placeholder to interpolate.
     const found = findCalledSignalBindings('const n = signal(0)\nconst g = <span>{`count: ${n()}`}</span>')
     expect(found).toHaveLength(1)
     expect(found[0]?.callee).toBe('n')
@@ -120,9 +121,7 @@ describe('find-called-signal-bindings', () => {
     // The call lives in a `.map` callback — a getter boundary — so it is the
     // reactive form, not a freeze.
     expect(
-      findCalledSignalBindings(
-        'const items = signal<number[]>([])\nconst g = <ul>{() => items().map((i) => i)}</ul>',
-      ),
+      findCalledSignalBindings('const items = signal<number[]>([])\nconst g = <ul>{() => items().map((i) => i)}</ul>'),
     ).toEqual([])
   })
 

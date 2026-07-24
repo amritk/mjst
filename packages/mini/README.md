@@ -113,7 +113,7 @@ A small client-side router for the dashboards, in history or hash mode.
 |:---|:---|
 | `createRouter({ routes, mode?, base? })` | Matches the URL against a route table into a reactive `route` signal; returns `{ route, navigate, stop }`. Attaches its location listener immediately. The `route` state includes a parsed `query` record alongside the raw `search`. |
 | `matchRoute(pattern, path)` | Matches a `/users/:id` pattern (with an optional trailing `*` catch-all) against a pathname, returning captured params or `null`. |
-| `Link` | An `<a href>` that intercepts a plain left-click and calls `navigate` — modified clicks, non-primary buttons, and `preventDefault`ed events are left to the browser. Takes `navigate` as a prop (`navigate={router.navigate}`). |
+| `Link` | An `<a href>` that intercepts a plain left-click and calls `navigate` — modified clicks, non-primary buttons, and `preventDefault`ed events are left to the browser. Takes `navigate` as a prop (`navigate={router.navigate}`); `to` may be reactive. Pass `active` (plus `activeClass`) to mark the current link — it toggles the class and sets `aria-current="page"` — and `target`/`rel`/`title`/`id`/`style` pass through to the anchor. |
 | `RouterView` | Renders the matched route's view (the `view` key by default) and swaps it on navigation — the outlet that replaces a hand-written `route().route?.['view']` cast. Takes `router={router}`. |
 | `Route`, `RouterMode`, `RouterOptions`, `RouteState`, `Router`, `NavigateOptions`, `RouteParams`, `LinkProps`, `RouterViewProps` | Exported types. |
 
@@ -139,7 +139,7 @@ The ergonomic control-flow components the core deliberately omits — each reuse
 | Export | Purpose |
 |:---|:---|
 | `Show` | `<Show when={cond} fallback={…}>` — mounts one branch, tears down the other (bindings included). Truthiness drives it, so `when={user}` works. |
-| `For` | `<For each={items} key={…}>{(item, i) => …}</For>` — keyed list backed by the core `list`. `key` defaults to an object `id` / primitive value / index; supply it for reordering lists. Pass `as` (with `class`/`style`/`ref`) to render into a real element instead of the default `display: contents` host — needed when the container itself is styled, e.g. a `divide-y` list whose separators only match direct children: `<For each={rows} as="ul" class="divide-y">`. |
+| `For` | `<For each={items} key={…}>{(item, i) => …}</For>` — keyed list backed by the core `list`. `key` defaults to an object `id` / primitive value / index; supply it for reordering lists. Pass `fallback` to render an empty state while the list has no items, and `as` (with `class`/`style`/`ref`) to render into a real element instead of the default `display: contents` host — needed when the container itself is styled, e.g. a `divide-y` list whose separators only match direct children: `<For each={rows} as="ul" class="divide-y">`. |
 | `Switch` / `Match` | `<Switch fallback>…<Match when={…}>…</Match></Switch>` — renders the first truthy branch; only the winner is built. |
 | `Dynamic` | `<Dynamic component={tag} {...props}/>` — renders a tag or component chosen at runtime (`component` is a tag string or a getter/signal returning the tag/component). |
 | `ShowProps`, `ForProps`, `SwitchProps`, `MatchProps`, `DynamicProps`, `DynamicComponent`, `ChildFactory` | Exported types. |
@@ -162,14 +162,15 @@ Field state (value / dirty / touched / errors as signals), submit handling, and 
 
 | Export | Purpose |
 |:---|:---|
-| `createForm({ initialValues, validate?, onSubmit? })` | Returns `{ values, errors, isValid, isDirty, isSubmitting, submitted, field, bind, setValue, reset, handleSubmit }`. Errors recompute reactively; each field withholds its message until blurred or the form is submitted. A field's type follows its initial value (`string`, `number`, or `boolean`), and `bind` wires the matching control — `.checked` for checkbox/radio, a coerced number for number/range, `.value` otherwise. |
+| `createForm({ initialValues, validate?, onSubmit? })` | Returns `{ values, errors, isValid, isDirty, isSubmitting, submitted, submitError, field, bind, setValue, setError, reset, handleSubmit }`. Errors recompute reactively; each field withholds its message until blurred or the form is submitted. A field's type follows its initial value (`string`, `number`, or `boolean`), and `bind` wires the matching control — `.checked` for checkbox/radio, a coerced number for number/range, `<select>` on change, `.value` otherwise. `setError(name, msg)` layers a server-side error (auto-cleared on edit); a rejected `onSubmit` is captured in `submitError` instead of rejecting. |
+| `Field` | `<Field form={form} name="email" label="Email" type="email" />` — a component that renders a label, control, and live error message wired to a field in one element (`as="textarea"`/`"select"`, plus `class`/`labelClass`/`inputClass`/`errorClass`). |
 | `schemaToValidator(schema)` | Compiles a JSON Schema into a `(values) => errors` function via `@amritk/runtime-validators`. |
-| `Field`, `FieldValue`, `FieldValues`, `FormConfig`, `Form`, `FormValidate`, `FormErrors` | Exported types. |
+| `FieldState`, `FieldProps`, `FieldControl`, `FieldValue`, `FieldValues`, `FormConfig`, `Form`, `FormValidate`, `FormErrors` | Exported types. |
 
 Validation accepts **either** a plain `(values) => errors` function **or** a JSON Schema, which is validated through `@amritk/runtime-validators` (eval-free, CSP-safe) — so a form dogfoods the mjst validation stack:
 
 ```tsx
-import { createForm } from '@amritk/mini/forms'
+import { createForm, Field } from '@amritk/mini/forms'
 
 const form = createForm({
   initialValues: { email: '' },
@@ -177,13 +178,17 @@ const form = createForm({
   onSubmit: (values) => save(values),
 })
 
+// <Field> renders the label, control, and live error message in one element.
 const view = () => (
   <form onSubmit={form.handleSubmit}>
-    <input ref={form.bind('email')} placeholder="email" />
-    <span show={() => Boolean(form.field('email').error())}>{() => form.field('email').error()}</span>
+    <Field form={form} name="email" label="Email" type="email" />
     <button type="submit" disabled={form.isSubmitting}>Save</button>
   </form>
 )
+
+// …or wire the pieces by hand with `form.bind` when you need full control:
+//   <input ref={form.bind('email')} />
+//   <span show={() => Boolean(form.field('email').error())}>{() => form.field('email').error()}</span>
 ```
 
 `@amritk/runtime-validators` is an **optional peer dependency** — install it only if you validate with schemas.
@@ -205,7 +210,7 @@ A Vite plugin that catches the one footgun of the [reactivity rule](#the-reactiv
 
 | Export | Purpose |
 |:---|:---|
-| `catchCalledSignals(options?)` | A Vite plugin. Walks the TypeScript AST of each `.tsx` module on every edit and flags a **signal called directly in a binding** — `disabled={streaming()}` (and so `show`/`class`/`style`, and component props like `<For each={items()}>` when `items` is a signal) or a child `<span>{count()}</span>`. It only flags names it can see are signals (`signal()`/`computed()`, or a `Signal<…>`/`ReadonlySignal<…>` type), so one-shot helpers like `id={makeId()}` are left alone. In dev it **warns** in the terminal and shows the findings in Vite's **error overlay** (non-blocking — the module still loads, and the overlay clears on the next clean edit); during `vite build` it **fails** the build — one plugin for both the editor loop and the CI gate. Bare getters and thunks never match; a `// mini-static-ok` comment (same line or the line above) opts out a deliberate case. Pass `{ failOnError }` to force the severity, or `{ overlay: false }` to keep dev feedback in the terminal only. |
+| `catchCalledSignals(options?)` | A Vite plugin. Walks the TypeScript AST of each `.tsx` module on every edit and flags a **signal called inside a binding** — `disabled={streaming()}`, a child `<span>{count()}</span>`, and also sub-expression freezes like `class={active() ? 'on' : 'off'}`, `disabled={busy() || locked}`, `style={{ width: w() }}`, and `` title={`${count()} left`} `` (anywhere in a value that is not itself a getter). It only flags names it can see are signals (`signal()`/`computed()`, or a `Signal<…>`/`ReadonlySignal<…>` type), so one-shot helpers like `id={makeId()}` are left alone, and a call inside an arrow/`.map` callback is the correct reactive form and never flagged. In dev it **warns** in the terminal and shows the findings in Vite's **error overlay** (non-blocking — the module still loads, and the overlay clears on the next clean edit); during `vite build` it **fails** the build — one plugin for both the editor loop and the CI gate. Bare getters and thunks never match; a `// mini-static-ok` comment (same line or the line above) opts out a deliberate case. Pass `{ failOnError }` to force the severity, or `{ overlay: false }` to keep dev feedback in the terminal only. |
 | `findCalledSignalBindings(source)` | The underlying scanner (returns `CalledSignalBinding[]`), for a bespoke lint command or editor integration. |
 | `CatchCalledSignalsOptions`, `CalledSignalBinding` | Exported types. |
 

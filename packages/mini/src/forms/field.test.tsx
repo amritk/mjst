@@ -49,10 +49,7 @@ describe('field', () => {
         form,
         name: 'role',
         as: 'select',
-        children: [
-          jsxOption('user', 'User'),
-          jsxOption('admin', 'Admin'),
-        ],
+        children: [jsxOption('user', 'User'), jsxOption('admin', 'Admin')],
       }),
     )
     const select = host.querySelector('select') as HTMLSelectElement
