@@ -80,4 +80,41 @@ describe('show', () => {
     expect(host.firstChild).toBe(node)
     expect((host.firstChild as HTMLInputElement).value).toBe('typed')
   })
+
+  it('does not rebuild the branch when a derived condition changes without flipping', () => {
+    // The regression this guards: `when` reads `count`, so the effect re-runs on
+    // every `count` write, but the branch stays truthy from 6 upward. Rebuilding
+    // then would drop focus/scroll and re-run bindings in an unchanged subtree.
+    const count = signal(6)
+    let builds = 0
+    const host = Show({
+      when: () => count() > 5,
+      children: () => {
+        builds += 1
+        return document.createElement('span')
+      },
+    })
+    const first = host.firstChild
+    expect(builds).toBe(1)
+    count(7)
+    count(8)
+    // Same node, built once — the derived condition never flipped.
+    expect(builds).toBe(1)
+    expect(host.firstChild).toBe(first)
+    // A real flip still rebuilds.
+    count(0)
+    expect(host.childNodes).toHaveLength(0)
+    count(9)
+    expect(builds).toBe(2)
+  })
+
+  it('keeps a truthy-to-truthy value change from rebuilding a reused node', () => {
+    const user = signal<{ name: string }>({ name: 'Ada' })
+    const node = document.createElement('input')
+    node.value = 'draft'
+    Show({ when: user, children: node })
+    // A different truthy user must not tear down and re-insert the node.
+    user({ name: 'Grace' })
+    expect(node.value).toBe('draft')
+  })
 })

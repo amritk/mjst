@@ -64,6 +64,34 @@ describe('create-query', () => {
     await vi.waitFor(() => expect(query.data()).toBe('two'))
   })
 
+  it('reports the new key optimistically the moment the getter changes', async () => {
+    const client = new QueryClient()
+    await client.prefetchQuery({ queryKey: ['user', 1], queryFn: async () => 'one' })
+    const id = signal(1)
+    let query!: ReturnType<typeof createQuery<string>>
+    effectScope(() => {
+      query = createQuery<string>(client, () => ({ queryKey: ['user', id()], queryFn: async () => 'fresh' }))
+    })
+    await vi.waitFor(() => expect(query.data()).toBe('one'))
+    // Flipping to an uncached key must flip the derived signals synchronously —
+    // without the optimistic re-seed they would still report the old key's data.
+    id(2)
+    expect(query.isPending()).toBe(true)
+    expect(query.data()).toBeUndefined()
+  })
+
+  it('forwards options to a manual refetch', async () => {
+    const client = new QueryClient()
+    let query!: ReturnType<typeof createQuery<string>>
+    effectScope(() => {
+      query = createQuery<string>(client, { queryKey: ['refetch'], queryFn: async () => 'v' })
+    })
+    await vi.waitFor(() => expect(query.isSuccess()).toBe(true))
+    // The options argument is accepted and reaches query-core (no throw, resolves).
+    const result = await query.refetch({ cancelRefetch: false })
+    expect(result.data).toBe('v')
+  })
+
   it('detaches the observer when its scope is disposed', async () => {
     const client = new QueryClient()
     const dispose = effectScope(() => {

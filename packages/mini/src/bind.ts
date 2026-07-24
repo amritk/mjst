@@ -13,6 +13,23 @@ import type { Signal } from './signals'
  * HTML sink is `bindHtml` below.
  */
 
+/**
+ * Attaches DOM listeners inside a no-dependency effect and returns its stop.
+ * Because the listeners live in an effect, disposing the surrounding
+ * `effectScope` detaches them too — so a two-way bind whose combined dispose is
+ * never called by hand (the documented `effectScope`-disposal path) still tears
+ * down its element→signal listeners, not just its signal→element effect. Calling
+ * the returned stop by hand detaches them the same way, and doing both is safe:
+ * the effect's cleanup runs at most once.
+ */
+const listen = (node: EventTarget, handlers: readonly [type: string, handler: EventListener][]): (() => void) =>
+  effect(() => {
+    for (const [type, handler] of handlers) node.addEventListener(type, handler)
+    return () => {
+      for (const [type, handler] of handlers) node.removeEventListener(type, handler)
+    }
+  })
+
 /** Keeps `node.textContent` equal to the getter's value. */
 export const bindText = (node: Node, get: () => string): (() => void) =>
   effect(() => {
@@ -78,24 +95,30 @@ export const bindValue = (node: HTMLInputElement | HTMLTextAreaElement, model: S
     const next = model()
     if (!composing && node.value !== next) node.value = next
   })
-  const onInput = (): void => {
-    if (!composing) model(node.value)
-  }
-  const onCompositionStart = (): void => {
-    composing = true
-  }
-  const onCompositionEnd = (): void => {
-    composing = false
-    model(node.value)
-  }
-  node.addEventListener('input', onInput)
-  node.addEventListener('compositionstart', onCompositionStart)
-  node.addEventListener('compositionend', onCompositionEnd)
+  const stopListeners = listen(node, [
+    [
+      'input',
+      () => {
+        if (!composing) model(node.value)
+      },
+    ],
+    [
+      'compositionstart',
+      () => {
+        composing = true
+      },
+    ],
+    [
+      'compositionend',
+      () => {
+        composing = false
+        model(node.value)
+      },
+    ],
+  ])
   return () => {
     stop()
-    node.removeEventListener('input', onInput)
-    node.removeEventListener('compositionstart', onCompositionStart)
-    node.removeEventListener('compositionend', onCompositionEnd)
+    stopListeners()
   }
 }
 
@@ -117,11 +140,10 @@ export const bindSelect = (node: HTMLSelectElement, model: Signal<string>): (() 
     const next = model()
     if (node.value !== next) node.value = next
   })
-  const onChange = (): void => model(node.value)
-  node.addEventListener('change', onChange)
+  const stopListeners = listen(node, [['change', () => model(node.value)]])
   return () => {
     stop()
-    node.removeEventListener('change', onChange)
+    stopListeners()
   }
 }
 
@@ -136,10 +158,9 @@ export const bindChecked = (node: HTMLInputElement, model: Signal<boolean>): (()
     const next = model()
     if (node.checked !== next) node.checked = next
   })
-  const onChange = (): void => model(node.checked)
-  node.addEventListener('change', onChange)
+  const stopListeners = listen(node, [['change', () => model(node.checked)]])
   return () => {
     stop()
-    node.removeEventListener('change', onChange)
+    stopListeners()
   }
 }

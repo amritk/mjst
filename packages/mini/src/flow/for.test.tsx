@@ -77,6 +77,45 @@ describe('for', () => {
     expect(labels(host)).toEqual(['0:a', '1:b'])
   })
 
+  describe('fallback', () => {
+    it('renders the fallback while the list is empty and swaps to rows when filled', () => {
+      const items = signal<readonly Item[]>([])
+      const host = For({
+        each: items,
+        key: (item) => item.id,
+        children: row,
+        fallback: () => {
+          const node = document.createElement('p')
+          node.textContent = 'No results'
+          return node
+        },
+      })
+      expect(host.textContent).toBe('No results')
+      items([{ id: '1', label: 'a' }])
+      expect(labels(host.firstElementChild as HTMLElement)).toEqual(['a'])
+      // Emptying the list brings the fallback back.
+      items([])
+      expect(host.textContent).toBe('No results')
+    })
+
+    it('does not disturb rows when a non-empty list changes', () => {
+      const items = signal<readonly Item[]>([{ id: '1', label: 'a' }])
+      const host = For({
+        each: items,
+        key: (item) => item.id,
+        children: row,
+        fallback: () => document.createElement('p'),
+      })
+      const listHost = host.firstElementChild
+      items([
+        { id: '1', label: 'a' },
+        { id: '2', label: 'b' },
+      ])
+      // The list host is not rebuilt on a non-empty→non-empty change.
+      expect(host.firstElementChild).toBe(listHost)
+    })
+  })
+
   describe('as', () => {
     it('renders a display:contents host by default', () => {
       const items = signal<readonly Item[]>([{ id: '1', label: 'a' }])

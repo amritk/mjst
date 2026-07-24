@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { bindAttr, bindChecked, bindClass, bindHtml, bindSelect, bindShow, bindText, bindValue } from './bind'
-import { signal } from './signals'
+import { effectScope, signal } from './signals'
 
 describe('bind', () => {
   it('bindText tracks the signal', () => {
@@ -97,6 +97,25 @@ describe('bind', () => {
     model('b')
     expect(node.value).toBe('a')
     // Element → signal stops.
+    node.value = 'c'
+    node.dispatchEvent(new Event('input'))
+    expect(model()).toBe('b')
+  })
+
+  it('bindValue detaches its listeners when the enclosing scope disposes', () => {
+    // The documented norm is to rely on effectScope disposal rather than the
+    // returned dispose. That must tear down BOTH directions — a leaked `input`
+    // listener would keep writing an orphaned signal after teardown.
+    const model = signal('a')
+    const node = document.createElement('input')
+    const disposeScope = effectScope(() => {
+      bindValue(node, model)
+    })
+    disposeScope()
+    // Signal → element stops.
+    model('b')
+    expect(node.value).toBe('a')
+    // Element → signal stops: the input listener is gone, so typing is inert.
     node.value = 'c'
     node.dispatchEvent(new Event('input'))
     expect(model()).toBe('b')

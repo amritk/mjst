@@ -45,6 +45,10 @@ export const list = <T>(
     let index = 0
     for (const item of next) {
       const k = key(item, index)
+      // Two items with the same key collapse into one node — the second shares
+      // the first's element and its own row silently vanishes. Surface it rather
+      // than letting a bad `key` drop rows without a trace.
+      if (seen.has(k)) console.warn('[mini] list: duplicate key drops rows:', k)
       seen.add(k)
       let entry = live.get(k)
       if (!entry) {

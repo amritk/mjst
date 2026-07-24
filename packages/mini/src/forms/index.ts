@@ -10,7 +10,9 @@
  * existence. The schema arm imports `@amritk/runtime-validators`, an optional
  * peer: install it only if you validate with schemas.
  */
-export type { Field, FieldValues, Form, FormConfig, FormValidate } from './create-form'
+export type { Field as FieldState, FieldValues, Form, FormConfig, FormValidate } from './create-form'
 export { createForm } from './create-form'
+export type { FieldControl, FieldProps } from './field'
+export { Field } from './field'
 export type { FormErrors } from './schema-to-validator'
 export { schemaToValidator } from './schema-to-validator'

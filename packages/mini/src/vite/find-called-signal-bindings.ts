@@ -10,17 +10,24 @@ import ts from 'typescript'
  * (a called signal returns a perfectly valid static value). The only place
  * left to catch it is the source, which is what this scanner does.
  *
- * It walks the TypeScript AST and flags the unambiguous shape: an attribute
- * (or child) whose entire value is a single zero-argument call to a *signal* —
- * `disabled={streaming()}` or `<span>{count()}</span>`. To keep false positives
- * near zero it only flags calls to names it can see are signals: a local
- * `const x = signal(...)` / `computed(...)`, or a binding typed `Signal<…>` /
- * `ReadonlySignal<…>` (variable, parameter, or property). A one-shot helper like
- * `id={makeId()}` is therefore left alone. The correct forms are a different
- * node and never match — a bare getter `attr={signal}` has no call, and a thunk
- * or handler `attr={() => signal()}` wraps the call in an arrow. Because the
- * parser does the work, comments and strings cannot trip the scanner and
- * multi-line attributes are found.
+ * It walks the TypeScript AST and flags a zero-argument call to a *signal*
+ * anywhere inside an attribute or child value that is not itself a function —
+ * the whole-value case `disabled={streaming()}` / `<span>{count()}</span>`, and
+ * also the sub-expression freezes that trip people up just as often:
+ * `class={active() ? 'on' : 'off'}`, `disabled={busy() || locked}`,
+ * `style={{ width: w() }}`, `` title={`${count()} left`} ``. Every one of those
+ * calls the signal at the JSX call site and hands the runtime a frozen value.
+ *
+ * To keep false positives near zero it only flags calls to names it can see are
+ * signals: a local `const x = signal(...)` / `computed(...)`, or a binding typed
+ * `Signal<…>` / `ReadonlySignal<…>` (variable, parameter, or property). A
+ * one-shot helper like `id={makeId()}` is therefore left alone. The correct
+ * forms never match: a bare getter `attr={signal}` has no call, and a thunk,
+ * handler, or `.map` callback wraps the call in an arrow — the scanner stops at
+ * every `=>`/`function` boundary, so a signal read inside a getter is exactly
+ * the reactive form and is not flagged. Because the parser does the work,
+ * comments and strings cannot trip the scanner and multi-line attributes are
+ * found.
  *
  * This is the shared core behind both adapters — the Vite plugin
  * ({@link catchCalledSignals}) that reports live in the dev server, and the
@@ -114,25 +121,57 @@ export const findCalledSignalBindings = (source: string): readonly CalledSignalB
     bindings.push(attribute === undefined ? { callee, ...position } : { attribute, callee, ...position })
   }
 
+  // Collects zero-arg calls to known signals within an expression, stopping at
+  // any function boundary — a call inside an arrow/`function` is the reactive
+  // getter form and must not be flagged.
+  const collectCalls = (expr: ts.Node): ts.CallExpression[] => {
+    const found: ts.CallExpression[] = []
+    const walk = (node: ts.Node): void => {
+      if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return
+      if (
+        ts.isCallExpression(node) &&
+        node.arguments.length === 0 &&
+        ts.isIdentifier(node.expression) &&
+        signals.has(node.expression.text)
+      ) {
+        found.push(node)
+      }
+      ts.forEachChild(node, walk)
+    }
+    walk(expr)
+    return found
+  }
+
   const visit = (node: ts.Node): void => {
     // A `{…}` in JSX is a `JsxExpression`; its parent tells us whether it is an
     // attribute value or a child. Both freeze a called signal identically.
     if (ts.isJsxExpression(node) && node.expression !== undefined) {
       const value = node.expression
-      if (
-        ts.isCallExpression(value) &&
-        value.arguments.length === 0 &&
-        ts.isIdentifier(value.expression) &&
-        signals.has(value.expression.text)
-      ) {
-        const callee = value.expression.text
-        const parent = node.parent
-        if (ts.isJsxAttribute(parent) && ts.isIdentifier(parent.name)) {
-          // `on*` is an event handler, not a reactive binding — a bare call
-          // there is a different mistake, so leave it to the runtime.
-          if (!parent.name.text.startsWith('on')) record(parent, callee, parent.name.text)
-        } else if (ts.isJsxElement(parent) || ts.isJsxFragment(parent)) {
-          record(node, callee)
+      const parent = node.parent
+      const isAttribute = ts.isJsxAttribute(parent) && ts.isIdentifier(parent.name)
+      const attribute = isAttribute ? (parent.name as ts.Identifier).text : undefined
+      const isChild = ts.isJsxElement(parent) || ts.isJsxFragment(parent)
+      // `onClick`/`onInput`… are event slots, not reactive bindings — a bare
+      // call there is a different mistake, left to the runtime. Match the real
+      // handler shape (`on` + capital) so props like `once`/`online` are spared.
+      const isEventHandler = attribute !== undefined && /^on[A-Z]/.test(attribute)
+      // A function-valued attribute/child is the correct reactive form — the
+      // call lives inside the getter mini runs — so it is never flagged.
+      const isGetter = ts.isArrowFunction(value) || ts.isFunctionExpression(value)
+      if ((isAttribute || isChild) && !isEventHandler && !isGetter) {
+        // The whole value being one bare call anchors on the attribute/child for
+        // a stable report; a sub-expression freeze anchors on the offending call.
+        const wholeValueCall =
+          ts.isCallExpression(value) &&
+          value.arguments.length === 0 &&
+          ts.isIdentifier(value.expression) &&
+          signals.has(value.expression.text)
+        if (wholeValueCall) {
+          const callee = (value.expression as ts.Identifier).text
+          if (isAttribute) record(parent, callee, attribute)
+          else record(node, callee)
+        } else {
+          for (const call of collectCalls(value)) record(call, (call.expression as ts.Identifier).text, attribute)
         }
       }
     }

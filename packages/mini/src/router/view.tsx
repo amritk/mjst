@@ -23,15 +23,24 @@ export type RouterViewProps<R extends Route> = {
  * changes, exactly like `<Show>` swaps a branch.
  *
  * Route metadata is opaque to the router, so the view factory is read as
- * `unknown` and called; point `view` at a different key if the route table
- * stores its component elsewhere.
+ * `unknown` and guarded before it is called; point `view` at a different key if
+ * the route table stores its component elsewhere. A matched route whose `view`
+ * is present but not a function throws a readable error rather than letting
+ * `renderChild` crash on a non-callable — the router equivalent of `<Dynamic>`'s
+ * guard.
  */
 export const RouterView = <R extends Route>(props: RouterViewProps<R>): HTMLElement => {
   const host = createHost()
   const key = props.view ?? 'view'
   renderChild(host, () => {
-    const factory = props.router.route().route?.[key] as (() => Node) | undefined
-    return factory ?? props.fallback ?? null
+    const factory = props.router.route().route?.[key]
+    if (factory !== undefined && typeof factory !== 'function') {
+      throw new TypeError(
+        `<RouterView> expected route.${key} to be a view factory (() => HTMLElement), but got a ${typeof factory}. ` +
+          `Store a function under "${key}", or point view= at the key that holds it.`,
+      )
+    }
+    return (factory as (() => Node) | undefined) ?? props.fallback ?? null
   })
   return host
 }

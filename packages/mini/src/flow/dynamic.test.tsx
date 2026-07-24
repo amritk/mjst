@@ -51,4 +51,26 @@ describe('dynamic', () => {
     const bad = { component: () => 42 } as unknown as Parameters<typeof Dynamic>[0]
     expect(() => Dynamic(bad)).toThrow(/a number/)
   })
+
+  it('does not rebuild when an unrelated signal in the getter changes', () => {
+    // The getter reads `theme` but always resolves to the same tag; the element
+    // must be built once, not rebuilt on every `theme` write.
+    const theme = signal('light')
+    let builds = 0
+    const Widget = (): HTMLElement => {
+      builds += 1
+      return document.createElement('div')
+    }
+    const host = Dynamic({
+      component: () => {
+        theme()
+        return Widget
+      },
+    })
+    const first = host.firstElementChild
+    expect(builds).toBe(1)
+    theme('dark')
+    expect(builds).toBe(1)
+    expect(host.firstElementChild).toBe(first)
+  })
 })

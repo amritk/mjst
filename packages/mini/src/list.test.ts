@@ -92,6 +92,45 @@ describe('list', () => {
     expect(childIds(container)).toEqual(['3', '1', '2'])
   })
 
+  it('preserves node identity across a reorder', () => {
+    // Keying exists to keep each item's real DOM node (its focus/scroll/input
+    // state) as rows move — assert the same elements survive, not just the order.
+    const items = signal<readonly Item[]>([
+      { id: '1', label: 'a' },
+      { id: '2', label: 'b' },
+    ])
+    const container = document.createElement('div')
+    list(container, items, (item) => item.id, makeItem)
+    const [first, second] = [...container.children] as HTMLElement[]
+    items([
+      { id: '2', label: 'b' },
+      { id: '1', label: 'a' },
+    ])
+    const byId = (id: string) => container.querySelector(`[data-id="${id}"]`)
+    // The moved nodes are the very same elements, not rebuilt clones.
+    expect(byId('1')).toBe(first)
+    expect(byId('2')).toBe(second)
+  })
+
+  it('warns when two items share a key', () => {
+    const warnings: unknown[] = []
+    const original = console.warn
+    console.warn = (...args: unknown[]) => warnings.push(args)
+    try {
+      const items = signal<readonly Item[]>([
+        { id: 'dup', label: 'a' },
+        { id: 'dup', label: 'b' },
+      ])
+      const container = document.createElement('div')
+      list(container, items, (item) => item.id, makeItem)
+      // The colliding row collapses into one node; the warning makes that visible.
+      expect(container.children).toHaveLength(1)
+      expect(warnings).toHaveLength(1)
+    } finally {
+      console.warn = original
+    }
+  })
+
   it('passes the running position to key and create', () => {
     const items = signal<readonly Item[]>([
       { id: 'a', label: 'a' },

@@ -1,4 +1,4 @@
-import { bindChecked, bindValue } from '../bind'
+import { bindChecked, bindSelect, bindValue } from '../bind'
 import { onCleanup } from '../on-cleanup'
 import type { ReadonlySignal, Signal } from '../signals'
 import { batch, computed, effect, signal } from '../signals'
@@ -55,7 +55,11 @@ export type Field<T extends FieldValue = FieldValue> = {
 export type Form<V extends FieldValues> = {
   /** All current values as one reactive record. */
   values: ReadonlySignal<V>
-  /** Every current error, keyed by field, regardless of touched state. */
+  /**
+   * Every current error, keyed by field, regardless of touched state — the
+   * validator's output with any {@link Form.setError} messages layered on top
+   * (a manual error wins over the computed one for that field).
+   */
   errors: ReadonlySignal<FormErrors>
   /** Whether there are no errors. */
   isValid: ReadonlySignal<boolean>
@@ -65,18 +69,35 @@ export type Form<V extends FieldValues> = {
   isSubmitting: ReadonlySignal<boolean>
   /** Whether a submit has been attempted (drives error visibility). */
   submitted: ReadonlySignal<boolean>
+  /**
+   * A form-level error message, or `undefined`. Set when an async `onSubmit`
+   * rejects (the rejection's message), so a failed save surfaces without the
+   * caller wiring their own `try/catch`; cleared on the next submit and on
+   * `reset`.
+   */
+  submitError: ReadonlySignal<string | undefined>
   /** The reactive state and helpers for one field. Stable across calls. */
   field: <K extends keyof V & string>(name: K) => Field<V[K]>
   /**
-   * A `ref` callback that two-way-binds an input to a field and tracks blur —
+   * A `ref` callback that two-way-binds a control to a field and tracks blur —
    * `ref={form.bind('email')}`. The binding matches the control: `checkbox`/
-   * `radio` bind `.checked`, `number`/`range` bind a coerced number, everything
-   * else binds `.value`. Cleaned up with the enclosing scope.
+   * `radio` bind `.checked`, `number`/`range` bind a coerced number, `<select>`
+   * binds on `change`, everything else binds `.value`. Cleaned up with the
+   * enclosing scope.
    */
-  bind: (name: keyof V & string) => (element: HTMLInputElement | HTMLTextAreaElement) => void
+  bind: (name: keyof V & string) => (element: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement) => void
   /** Sets a field's value imperatively. */
   setValue: <K extends keyof V & string>(name: K, value: V[K]) => void
-  /** Restores initial values and clears touched/submitted state. */
+  /**
+   * Sets or clears a manual error for a field — the hook for server-side
+   * validation (`setError('email', 'Already taken')`). It layers over the
+   * validator's output and shows as soon as the field is touched or the form
+   * submitted, exactly like a computed error. Pass `undefined` to clear it; the
+   * error also clears when the field's value next changes, so a corrected field
+   * stops showing a stale server message.
+   */
+  setError: (name: keyof V & string, message: string | undefined) => void
+  /** Restores initial values and clears touched/submitted/error/submitting state. */
   reset: () => void
   /** Marks everything touched, validates, and runs `onSubmit` when valid. Use as a `<form>`'s `onSubmit`. */
   handleSubmit: (event?: { preventDefault: () => void }) => Promise<void>
@@ -114,13 +135,19 @@ export const createForm = <V extends FieldValues>(config: FormConfig<V>): Form<V
 
   const submitted = signal(false)
   const isSubmitting = signal(false)
+  const submitError = signal<string | undefined>(undefined)
+
+  // Manual (e.g. server-side) errors, layered over the validator's output. A
+  // field's entry is cleared when its value next changes so a corrected field
+  // does not keep showing a stale message.
+  const manualErrors = signal<FormErrors>({})
 
   const values = computed(() => {
     const snapshot = {} as V
     for (const key of keys) snapshot[key] = valueSignals[key]() as V[typeof key]
     return snapshot
   })
-  const errors = computed(() => runValidate(values()))
+  const errors = computed(() => ({ ...runValidate(values()), ...manualErrors() }))
   const isValid = computed(() => Object.keys(errors()).length === 0)
   const isDirty = computed(() => keys.some((key) => valueSignals[key]() !== initialOf(key)))
 
@@ -143,27 +170,54 @@ export const createForm = <V extends FieldValues>(config: FormConfig<V>): Form<V
 
   const bind =
     (name: keyof V & string) =>
-    (element: HTMLInputElement | HTMLTextAreaElement): void => {
+    (element: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement): void => {
       const model = valueSignals[name]
       // The control decides the binding: a checkbox/radio is a boolean, a
-      // number/range input is a coerced number, everything else is a string.
+      // number/range input is a coerced number, a <select> binds on `change`,
+      // and everything else is a string on `input`.
       const dispose =
         element instanceof HTMLInputElement && (element.type === 'checkbox' || element.type === 'radio')
           ? bindChecked(element, model as unknown as Signal<boolean>)
           : element instanceof HTMLInputElement && (element.type === 'number' || element.type === 'range')
             ? bindNumber(element, model as unknown as Signal<number>)
-            : bindValue(element, model as unknown as Signal<string>)
+            : element instanceof HTMLSelectElement
+              ? bindSelect(element, model as unknown as Signal<string>)
+              : bindValue(element, model as unknown as Signal<string>)
       const onBlur = (): void => touchedSignals[name](true)
+      // Editing a field clears any manual (server-side) error on it, so a
+      // corrected value stops showing a stale message.
+      const onEdit = (): void => clearManualError(name)
       element.addEventListener('blur', onBlur)
+      element.addEventListener('input', onEdit)
+      element.addEventListener('change', onEdit)
       // Tear both down with the enclosing scope so a re-bound / re-mounted input
       // does not leave the value effect and blur listener behind.
       onCleanup(() => {
         dispose()
         element.removeEventListener('blur', onBlur)
+        element.removeEventListener('input', onEdit)
+        element.removeEventListener('change', onEdit)
       })
     }
 
-  const setValue = <K extends keyof V & string>(name: K, value: V[K]): void => valueSignals[name](value)
+  const setValue = <K extends keyof V & string>(name: K, value: V[K]): void => {
+    valueSignals[name](value)
+    clearManualError(name)
+  }
+
+  const clearManualError = (name: keyof V & string): void => {
+    if (manualErrors()[name] === undefined) return
+    const { [name]: _cleared, ...rest } = manualErrors()
+    manualErrors(rest)
+  }
+
+  const setError = (name: keyof V & string, message: string | undefined): void => {
+    if (message === undefined) {
+      clearManualError(name)
+      return
+    }
+    manualErrors({ ...manualErrors(), [name]: message })
+  }
 
   const reset = (): void =>
     batch(() => {
@@ -172,24 +226,47 @@ export const createForm = <V extends FieldValues>(config: FormConfig<V>): Form<V
         touchedSignals[key](false)
       }
       submitted(false)
+      isSubmitting(false)
+      submitError(undefined)
+      manualErrors({})
     })
 
   const handleSubmit = async (event?: { preventDefault: () => void }): Promise<void> => {
     event?.preventDefault()
     batch(() => {
       submitted(true)
+      submitError(undefined)
       for (const key of keys) touchedSignals[key](true)
     })
     if (!isValid() || !config.onSubmit) return
     isSubmitting(true)
     try {
       await config.onSubmit(values())
+    } catch (error) {
+      // Surface the failure through `submitError` rather than rejecting — wired
+      // as `<form onSubmit={form.handleSubmit}>` a rejection would become an
+      // unhandled rejection with nowhere to go.
+      submitError(error instanceof Error ? error.message : String(error))
     } finally {
       isSubmitting(false)
     }
   }
 
-  return { values, errors, isValid, isDirty, isSubmitting, submitted, field, bind, setValue, reset, handleSubmit }
+  return {
+    values,
+    errors,
+    isValid,
+    isDirty,
+    isSubmitting,
+    submitted,
+    submitError,
+    field,
+    bind,
+    setValue,
+    setError,
+    reset,
+    handleSubmit,
+  }
 }
 
 /**
@@ -209,18 +286,21 @@ const toValidator = <V extends FieldValues>(validate?: FormValidate<V>): ((value
 /**
  * Two-way binds a number/range input to a numeric signal — the numeric sibling
  * of the core `bindValue`. The element shows the number as text and writes back
- * a parsed `number` on input (`NaN`, from an empty or partial entry, becomes
- * `0`). Kept here rather than in core because only forms coerce input types.
+ * `element.valueAsNumber` on input. An empty or unparseable entry is `NaN`, and
+ * `NaN` renders as an empty field rather than `0`, so a user can actually clear
+ * the input and a `required`/`minimum` check can tell empty apart from zero
+ * (`Number.isNaN(values.age)` is the "left blank" test). Kept here rather than
+ * in core because only forms coerce input types.
  */
 const bindNumber = (element: HTMLInputElement, model: Signal<number>): (() => void) => {
   const stop = effect(() => {
-    const next = String(model())
+    const value = model()
+    // An empty field is `NaN`, not `'NaN'` — never write the model back into an
+    // already-empty input, which would otherwise snap a cleared field to `0`.
+    const next = Number.isNaN(value) ? '' : String(value)
     if (element.value !== next) element.value = next
   })
-  const onInput = (): void => {
-    const value = element.valueAsNumber
-    model(Number.isNaN(value) ? 0 : value)
-  }
+  const onInput = (): void => model(element.valueAsNumber)
   element.addEventListener('input', onInput)
   return () => {
     stop()

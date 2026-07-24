@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest'
 
+import { signal } from '../signals'
 import { Link } from './link'
 
 describe('link', () => {
@@ -55,5 +56,33 @@ describe('link', () => {
   it('forwards a class when provided', () => {
     const anchor = Link({ to: '/x', navigate: () => {}, class: 'nav-link' })
     expect(anchor.getAttribute('class')).toBe('nav-link')
+  })
+
+  it('tracks a reactive destination for both href and navigation', () => {
+    const calls: string[] = []
+    const to = signal('/a')
+    const anchor = Link({ to, navigate: (dest) => calls.push(dest) })
+    expect(anchor.getAttribute('href')).toBe('/a')
+    to('/b')
+    expect(anchor.getAttribute('href')).toBe('/b')
+    anchor.dispatchEvent(new MouseEvent('click', { button: 0, cancelable: true }))
+    expect(calls).toEqual(['/b'])
+  })
+
+  it('toggles activeClass and aria-current from the active getter', () => {
+    const here = signal(true)
+    const anchor = Link({ to: '/x', navigate: () => {}, class: 'link', active: here, activeClass: 'is-active' })
+    expect(anchor.getAttribute('class')).toBe('link is-active')
+    expect(anchor.getAttribute('aria-current')).toBe('page')
+    here(false)
+    expect(anchor.getAttribute('class')).toBe('link')
+    expect(anchor.getAttribute('aria-current')).toBe(null)
+  })
+
+  it('forwards common anchor attributes', () => {
+    const anchor = Link({ to: '/x', navigate: () => {}, target: '_blank', rel: 'noopener', title: 'Go' })
+    expect(anchor.getAttribute('target')).toBe('_blank')
+    expect(anchor.getAttribute('rel')).toBe('noopener')
+    expect(anchor.getAttribute('title')).toBe('Go')
   })
 })

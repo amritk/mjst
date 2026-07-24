@@ -5,6 +5,7 @@ import {
   QueryObserver,
   type QueryObserverOptions,
   type QueryObserverResult,
+  type RefetchOptions,
 } from '@tanstack/query-core'
 
 import { onCleanup } from '../on-cleanup'
@@ -36,8 +37,8 @@ export type QueryResult<TData, TError> = {
   isSuccess: ReadonlySignal<boolean>
   /** The query errored. */
   isError: ReadonlySignal<boolean>
-  /** Imperatively refetch; resolves with the settled result. */
-  refetch: () => Promise<QueryObserverResult<TData, TError>>
+  /** Imperatively refetch; resolves with the settled result. Options are forwarded to query-core. */
+  refetch: (options?: RefetchOptions) => Promise<QueryObserverResult<TData, TError>>
 }
 
 /**
@@ -77,7 +78,9 @@ export const createQuery = <
   // Track the options getter and push every change into the observer, so a
   // reactive query key refetches under the new key. The first effect run only
   // records dependencies — the observer already holds these options — while
-  // later runs (a tracked signal changed) call `setOptions`.
+  // later runs (a tracked signal changed) call `setOptions` and re-seed the
+  // optimistic result. Without that re-seed, `data`/`isPending` would keep
+  // reporting the previous key until query-core's async subscription fires.
   let first = true
   onCleanup(
     effect(() => {
@@ -87,6 +90,7 @@ export const createQuery = <
         return
       }
       observer.setOptions(next)
+      result(observer.getOptimisticResult(next))
     }),
   )
 
@@ -104,6 +108,6 @@ export const createQuery = <
     isFetching: computed(() => result().isFetching),
     isSuccess: computed(() => result().isSuccess),
     isError: computed(() => result().isError),
-    refetch: () => observer.refetch(),
+    refetch: (refetchOptions?: RefetchOptions) => observer.refetch(refetchOptions),
   }
 }

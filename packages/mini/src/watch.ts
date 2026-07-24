@@ -1,4 +1,4 @@
-import { effect } from 'alien-signals'
+import { effect, setActiveSub } from 'alien-signals'
 
 /** Options for {@link watch}. */
 export type WatchOptions = {
@@ -19,6 +19,12 @@ export type WatchOptions = {
  * overlay opens must not fire during setup. Pass `{ immediate: true }` when the
  * effect *should* also run for the current value; that first call receives
  * `previous` as `undefined`.
+ *
+ * Only `get` is tracked: the callback runs outside the tracking scope (like
+ * Vue's `watch`), so a signal read *inside* the callback does not become a
+ * dependency and cannot re-fire the watcher. This is what lets a callback read
+ * or write other state — `watch(query, () => fetch(query(), { signal: abort() }))` —
+ * without the watcher re-running when that unrelated state changes.
  *
  * Returns a stop function. Values are compared with `Object.is`, so getters
  * should return primitives or stable references.
@@ -49,12 +55,26 @@ export const watch = <T>(
       previous = value
       // `previous` is genuinely absent on the immediate run; the parameter is
       // typed `T` for the common change-only case, so it arrives as `undefined`.
-      if (immediate) callback(value, undefined as T)
+      if (immediate) runUntracked(() => callback(value, undefined as T))
       return
     }
     if (Object.is(value, previous)) return
     const old = previous
     previous = value
-    callback(value, old)
+    runUntracked(() => callback(value, old))
   })
+}
+
+/**
+ * Runs `fn` with dependency tracking suspended, so signals it reads are not
+ * linked to the surrounding effect. `setActiveSub(undefined)` detaches the
+ * active subscriber for the call and the previous one is restored in `finally`.
+ */
+const runUntracked = (fn: () => void): void => {
+  const previous = setActiveSub(undefined)
+  try {
+    fn()
+  } finally {
+    setActiveSub(previous)
+  }
 }
