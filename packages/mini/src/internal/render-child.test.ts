@@ -75,6 +75,29 @@ describe('render-child', () => {
     expect(host.firstChild).toBe(node)
   })
 
+  it('keeps a branch binding alive across an unchanged selection', () => {
+    // The subtle one: the branch stays the same factory, but a binding inside it
+    // reads the very signal the selection depends on. The mounted binding must
+    // keep updating — a naive identity gate that returns early inside the effect
+    // would leave the branch scope disposed (by the engine) but not rebuilt, and
+    // the binding would silently die.
+    const count = signal(1)
+    const factory: ChildFactory = () => {
+      const node = document.createElement('span')
+      bindText(node, () => String(count()))
+      return node
+    }
+    const host = document.createElement('div')
+    renderChild(host, () => (count() > 0 ? factory : null))
+    const node = host.firstChild
+    expect(host.textContent).toBe('1')
+    count(2)
+    // Same branch (same node, never rebuilt), but the binding inside it must
+    // reflect the new value.
+    expect(host.textContent).toBe('2')
+    expect(host.firstChild).toBe(node)
+  })
+
   it('stops reacting and tears down the branch on dispose', () => {
     const tick = signal(0)
     let builds = 0
