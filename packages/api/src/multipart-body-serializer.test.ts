@@ -24,4 +24,16 @@ describe('multipart-body-serializer', () => {
     expect(form.getAll('tags')).toEqual(['a', 'b'])
     expect(form.has('missing')).toBe(false)
   })
+
+  it('keeps File parts intact inside a repeated (multi-file) field', () => {
+    const first = new File([new Uint8Array(3)], 'a.bin')
+    const second = new File([new Uint8Array(4)], 'b.bin')
+    const data = multipartBodySerializer.serialize({ files: [first, second] }) as FormData
+    const parts = data.getAll('files')
+    expect(parts).toHaveLength(2)
+    expect(parts[0]).toBeInstanceOf(File)
+    expect(parts[1]).toBeInstanceOf(File)
+    expect((parts[0] as File).name).toBe('a.bin')
+    expect((parts[1] as File).name).toBe('b.bin')
+  })
 })

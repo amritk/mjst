@@ -46,6 +46,40 @@ describe('create-etag', () => {
     expect(await etag(sse, get(), {})).toBeUndefined()
   })
 
+  it('gives distinct binary bodies distinct etags (no U+FFFD collision)', async () => {
+    const etag = createETag()
+    // Two different single-byte bodies that both decode to U+FFFD as text —
+    // hashing the decoded string would collide them onto one strong etag.
+    const first = (await etag(
+      new Response(new Uint8Array([0xff]), { headers: { 'content-type': 'application/octet-stream' } }),
+      get(),
+      {},
+    )) as Response
+    const second = (await etag(
+      new Response(new Uint8Array([0xfe]), { headers: { 'content-type': 'application/octet-stream' } }),
+      get(),
+      {},
+    )) as Response
+    expect(first.headers.get('etag')).not.toBe(second.headers.get('etag'))
+  })
+
+  it('does not serve a 304 for a changed binary body under the old etag', async () => {
+    const etag = createETag()
+    const original = (await etag(
+      new Response(new Uint8Array([0xff]), { headers: { 'content-type': 'application/octet-stream' } }),
+      get(),
+      {},
+    )) as Response
+    const tag = original.headers.get('etag') ?? ''
+    // The resource changed to a different byte; the stale etag must not match.
+    const changed = (await etag(
+      new Response(new Uint8Array([0xfe]), { headers: { 'content-type': 'application/octet-stream' } }),
+      get({ 'if-none-match': tag }),
+      {},
+    )) as Response
+    expect(changed.status).toBe(200)
+  })
+
   it('passes through bodies larger than maxBytes without a 304', async () => {
     const etag = createETag({ maxBytes: 4 })
     const big = new Response('a much longer body than four bytes', {

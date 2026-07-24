@@ -10,6 +10,9 @@ export const coercePrimitive = (raw: string, kind: 'number' | 'boolean'): unknow
     return raw === 'true' ? true : raw === 'false' ? false : raw
   }
   // Number('') and Number('   ') are 0, so blank strings must stay strings.
+  // `Number.isFinite` also rejects 'Infinity'/'-Infinity' (which `Number`
+  // happily parses): a non-finite value would pass the `typeof === 'number'`
+  // guard and then serialize back out as JSON `null` — silent corruption.
   const value = Number(raw)
-  return raw.trim() !== '' && !Number.isNaN(value) ? value : raw
+  return raw.trim() !== '' && Number.isFinite(value) ? value : raw
 }
