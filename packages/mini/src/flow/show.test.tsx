@@ -117,4 +117,58 @@ describe('show', () => {
     user({ name: 'Grace' })
     expect(node.value).toBe('draft')
   })
+
+  it('passes the narrowed value to a function child', () => {
+    const user = signal<{ name: string } | null>({ name: 'Ada' })
+    const host = Show({
+      when: user,
+      children: (value) => {
+        const node = document.createElement('span')
+        // `value` is a getter narrowed to NonNullable — no `!` needed.
+        bindText(node, () => value().name)
+        return node
+      },
+    })
+    expect(host.textContent).toBe('Ada')
+  })
+
+  it('updates the value getter reactively without rebuilding the branch', () => {
+    const user = signal<{ name: string } | null>({ name: 'Ada' })
+    let builds = 0
+    const host = Show({
+      when: user,
+      children: (value) => {
+        builds += 1
+        const node = document.createElement('span')
+        bindText(node, () => value().name)
+        return node
+      },
+    })
+    const first = host.firstChild
+    expect(host.textContent).toBe('Ada')
+    // A truthy→truthy change flows through the getter — no rebuild, same node.
+    user({ name: 'Grace' })
+    expect(host.textContent).toBe('Grace')
+    expect(builds).toBe(1)
+    expect(host.firstChild).toBe(first)
+  })
+
+  it('does not throw when the value getter races the branch teardown', () => {
+    // Both the branch child and the swap depend on `when`; flipping it to null
+    // must not let the child read a null value mid-teardown. The getter holds
+    // the last truthy value, so `value().name` stays safe.
+    const user = signal<{ name: string } | null>({ name: 'Ada' })
+    const host = Show({
+      when: user,
+      children: (value) => {
+        const node = document.createElement('span')
+        bindText(node, () => value().name)
+        return node
+      },
+      fallback: () => document.createTextNode('signed out'),
+    })
+    expect(host.textContent).toBe('Ada')
+    expect(() => user(null)).not.toThrow()
+    expect(host.textContent).toBe('signed out')
+  })
 })
