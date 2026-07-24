@@ -43,6 +43,32 @@ describe('from-schema', () => {
     expectTypeOf<FromSchema<{ enum: [1, 2, 3] }>>().toEqualTypeOf<1 | 2 | 3>()
   })
 
+  it('intersects an x-mjst brand onto the base type, matching the codegen shape', () => {
+    expectTypeOf<FromSchema<{ type: 'string'; 'x-mjst': { brand: 'UserId' } }>>().toEqualTypeOf<
+      string & { readonly __brand: 'UserId' }
+    >()
+    // Runtime constraints still contribute no extra type; only the brand is added.
+    expectTypeOf<FromSchema<{ type: 'integer'; minimum: 1; 'x-mjst': { brand: 'OrderId' } }>>().toEqualTypeOf<
+      number & { readonly __brand: 'OrderId' }
+    >()
+  })
+
+  it('brands a property so it is not interchangeable with the unbranded base', () => {
+    type Result = FromSchema<{
+      type: 'object'
+      properties: { id: { type: 'string'; 'x-mjst': { brand: 'UserId' } } }
+      required: ['id']
+    }>
+    expectTypeOf<Result['id']>().toEqualTypeOf<string & { readonly __brand: 'UserId' }>()
+    expectTypeOf<Result['id']>().not.toEqualTypeOf<string>()
+  })
+
+  it('keeps null assignable when a nullable schema is branded', () => {
+    expectTypeOf<FromSchema<{ type: 'string'; nullable: true; 'x-mjst': { brand: 'UserId' } }>>().toEqualTypeOf<
+      (string & { readonly __brand: 'UserId' }) | null
+    >()
+  })
+
   it('builds an object from properties, honouring required vs optional', () => {
     type Result = FromSchema<{
       type: 'object'

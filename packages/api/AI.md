@@ -78,6 +78,14 @@ Bun.serve({ fetch: handler })      // or: export default { fetch: handler } on W
    predicate, deniedReply)` builds the common session/role check; declare the
    shared denial shape once (`const authResponses = { 401: {...} } as const`) and
    spread it into each protected route's `responses`.
+7. **Brand ids with `x-mjst` for nominal params.** A param/query/body property
+   `{ type: 'string', 'x-mjst': { brand: 'UserId' } }` makes the handler (and the
+   typed client) see `string & { readonly __brand: 'UserId' }` instead of a plain
+   `string`, so a `UserId` can't be passed where an `OrderId` is expected — the
+   `.$type<UserId>()` protection Drizzle gives a column, at the API boundary. It's
+   type-level only (no extra runtime check beyond the base type). Keep the schema
+   literal so the brand survives inference, and define your app-side id to the
+   same `{ readonly __brand: 'UserId' }` shape.
 
 ## Security helpers (fetch adapter + client)
 

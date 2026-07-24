@@ -151,12 +151,15 @@ Requires `effect@>=3`. A top-level `Schema.BigIntFromSelf` / `Schema.DateFromSel
 
 ## The `x-mjst` extension
 
-JSON Schema's core vocabulary has no keyword for a runtime `Date` or a `bigint`. mjst carries those as a vendor extension, `x-mjst`, that the generators read to emit the right TypeScript type and runtime check. Every adapter maps to the **same** two hints, so a `Date` authored in any of the four libraries generates identically:
+JSON Schema's core vocabulary has no keyword for a runtime `Date`, a `bigint`, or a nominal brand. mjst carries those as a vendor extension, `x-mjst`, that the generators read to emit the right TypeScript type and runtime check:
 
-| Source construct | `x-mjst` hint | Generated handling |
-|:---|:---|:---|
-| a runtime `Date` | `{ instanceOf: 'Date' }` | typed as `Date`, checked with `instanceof` |
-| a `bigint` | `{ primitive: 'bigint' }` | typed as `bigint`, checked with `typeof` |
+| `x-mjst` hint | Generated handling |
+|:---|:---|
+| `{ instanceOf: 'Date' }` | typed as `Date`, checked with `instanceof` |
+| `{ primitive: 'bigint' }` | typed as `bigint`, checked with `typeof` |
+| `{ brand: 'UserId' }` | typed as `Base & { readonly __brand: 'UserId' }`; validates as `Base` at runtime |
+
+`instanceOf` / `primitive` are emitted by the adapters (an adapter maps to the **same** hint whichever library authored it, so a `Date` generates identically everywhere). `brand` is **hand-authored** — no adapter emits it today — and is purely type-level: the runtime value still validates as its underlying JSON Schema type, but the generated TypeScript type is intersected with a unique brand so a `UserId` is not interchangeable with a plain `string`. See [Nominal brands](#nominal-brands) below.
 
 Per library, the `Date` / `bigint` sources are:
 
@@ -166,6 +169,40 @@ Per library, the `Date` / `bigint` sources are:
 | **Zod** | `z.date()` | `z.bigint()` |
 | **Valibot** | `v.date()` | `v.bigint()` |
 | **Effect** | `Schema.DateFromSelf` | `Schema.BigIntFromSelf` |
+
+### Nominal brands
+
+`{ brand: 'Name' }` gives a schema a **nominal** (branded) type without changing
+what it accepts at runtime. Attach it to any schema and the generated TypeScript
+intersects the base type with a unique marker:
+
+```jsonc
+{ "type": "string", "format": "uuid", "x-mjst": { "brand": "UserId" } }
+// generated type: (string & { readonly __brand: 'UserId' })
+// runtime check:  still just "a string" (plus the uuid format check)
+```
+
+Because the brand lives only in the type, two ids with different brands are not
+assignable to each other, so you can't pass an `OrderId` where a `UserId` is
+expected — the same protection Drizzle's `.$type<UserId>()` gives a column, now
+carried by the schema. The name must match `^[\w$ -]+$` (it is embedded in a
+string literal in generated output); an unsafe name is ignored.
+
+Both schema→type paths honour the brand identically:
+
+- the **code generators** (`@amritk/generate-parsers` etc.) emit it into `.d.ts`;
+- the type-level [`FromSchema`](../runtime-validators) reads it too, so anything
+  typed from a live schema literal — most notably `@amritk/api` route
+  `params` / `query` / `body` — carries the brand into your handler. Declaring a
+  route param `{ type: 'string', 'x-mjst': { brand: 'UserId' } }` makes
+  `params.id` a `UserId`, not a plain `string`, end-to-end (handler **and** the
+  derived typed client). Write the schema inline or `as const` so the literal
+  survives inference.
+
+> The brand shape is `{ readonly __brand: 'UserId' }`. If you want it to be the
+> *same* type as a Drizzle-branded id, define that id to this shape (or brand the
+> Drizzle column to match); mjst aligns a convention, it doesn't reuse Drizzle's
+> own brand symbol.
 
 ---
 

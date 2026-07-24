@@ -39,10 +39,21 @@ export type FromSchema<S> = S extends true
   : S extends false
     ? never
     : // OpenAPI `nullable: true` widens the inferred type with `null`, matching
-      // how the interpreter accepts `null` regardless of the declared `type`.
+      // how the interpreter accepts `null` regardless of the declared `type`. The
+      // brand (if any) wraps only the non-null base, so `null` stays assignable.
       S extends { nullable: true }
-      ? FromSchemaCore<S> | null
-      : FromSchemaCore<S>
+      ? ApplyBrand<S, FromSchemaCore<S>> | null
+      : ApplyBrand<S, FromSchemaCore<S>>
+
+/**
+ * Applies an `x-mjst` nominal brand to an inferred type. Branding is purely
+ * type-level — the runtime value still validates as its plain underlying type —
+ * so we intersect the base with the same unique `{ readonly __brand: '…' }`
+ * marker the code generators emit (see `generateTypeDefinition`), keeping the two
+ * schema-to-type paths in agreement. An absent or non-string brand leaves the
+ * type untouched.
+ */
+type ApplyBrand<S, T> = S extends { 'x-mjst': { brand: infer B extends string } } ? T & { readonly __brand: B } : T
 
 /**
  * The body of {@link FromSchema}, split out so the `nullable` and boolean-schema
