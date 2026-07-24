@@ -55,6 +55,7 @@ bun add @amritk/helpers
 | Subpath | Exports | Purpose |
 |:---|:---|:---|
 | `@amritk/helpers/generate-type-definition` | `generateTypeDefinition` | Render a TypeScript type from a schema node. |
+| `@amritk/helpers/mjst-extension` | `MJST_EXTENSION_KEY`, `getMjstInstanceOf`, `getMjstPrimitive`, `getMjstBrand` | Read the `x-mjst` vendor hints (`instanceOf`, `primitive`, `brand`) a schema carries. |
 | `@amritk/helpers/parse-documentation` | `parseDocumentation`, `ObjectDocumentation` | Parse a markdown doc file into per-property descriptions. |
 
 ### Runtime helpers (also copied into generated output)

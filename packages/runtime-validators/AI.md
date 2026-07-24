@@ -40,6 +40,11 @@ const user = assert(schema, { id: 1, name: 'Ada' }) // returns typed value OR th
 5. **Write the schema `as const`** for type inference. Wrong regime: this is a
    cold/few-values interpreter; for one schema × millions of values, use Ajv (or
    `@amritk/generate-validators` for generated straight-line code).
+6. **`FromSchema` honours the `x-mjst` brand.** A schema with
+   `'x-mjst': { brand: 'UserId' }` infers `Base & { readonly __brand: 'UserId' }`
+   (e.g. `string & …`), matching the code generators' `.d.ts` output. The brand
+   is type-level only — runtime validation still checks the plain base type — so
+   it's the way to give `@amritk/api` route `params`/`query`/`body` nominal ids.
 
 Exports: `validate`, `validateGuard`, `assert`, and the types `Validator`,
 `Guard`, `ValidationError`, `ValidationResult`, `FromSchema`, `Infer`,

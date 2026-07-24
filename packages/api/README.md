@@ -377,6 +377,43 @@ Writing an adapter for anything else is ~15 lines: construct one
   or `body`. The `errors` option reshapes this (and the other built-in
   bodies) when deployed clients already parse a different envelope.
 
+### Branded IDs (nominal types for params)
+
+Path/query params arrive as plain `string` / `number`, so nothing stops you from
+passing a `userId` where an `orderId` is expected. Add an `x-mjst` **brand** to
+the param schema and mjst intersects a unique nominal marker onto the inferred
+type — the runtime still validates the plain base type, but the handler (and the
+derived typed client) see a distinct branded id, the same protection Drizzle's
+`.$type<UserId>()` gives a column:
+
+```ts
+const getUser = defineRoute({
+  method: 'get',
+  path: '/users/{id}',
+  request: {
+    params: {
+      type: 'object',
+      properties: { id: { type: 'string', format: 'uuid', 'x-mjst': { brand: 'UserId' } } },
+      required: ['id'],
+    },
+  },
+  responses: { 200: { body: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } } },
+  handler: ({ params }) => {
+    params.id // (string & { readonly __brand: 'UserId' }) — not a plain string
+    return { status: 200, body: { id: params.id } }
+  },
+})
+```
+
+`params.id` is now a `UserId`, so `getOrder(params.id)` is a compile error unless
+`getOrder` takes a `UserId`. The brand is **type-level only** — it adds no runtime
+check beyond the base type (`format: 'uuid'` above still applies). Keep the schema
+literal (inline or `as const`) so the brand survives inference, and use the same
+brand shape (`{ readonly __brand: 'UserId' }`) for your app-side id type — define
+it to match, rather than expecting mjst to reuse Drizzle's own brand symbol. See
+[the `x-mjst` extension](../adapters/README.md#nominal-brands) for the full
+reference.
+
 ### Cross-field refinement
 
 Per-slot JSON Schema cannot see across fields. A route (or contract) may

@@ -103,7 +103,12 @@ Runtime-only constraints (`minLength`, `pattern`, numeric bounds, …) leave the
 base type untouched, so `name` stays `string`. Inference covers every keyword that
 shapes a type — `type` (incl. unions, `integer`, `nullable`), `const`, `enum`,
 `properties`/`required`/`additionalProperties`/`patternProperties`,
-`items`/`prefixItems` (lists and tuples), and `allOf`/`anyOf`/`oneOf`. Keywords
+`items`/`prefixItems` (lists and tuples), and `allOf`/`anyOf`/`oneOf`. It also
+honours the [`x-mjst` brand](../adapters/README.md#nominal-brands): a schema with
+`'x-mjst': { brand: 'UserId' }` infers `Base & { readonly __brand: 'UserId' }`
+(e.g. `string & …`), matching the code generators' `.d.ts` output. Branding is
+type-level only — runtime validation still checks the plain base type — so it's
+how `@amritk/api` gives route params/query/body nominal ids. Keywords
 that cannot be expressed structurally (`$ref`, `not`, `if`/`then`/`else`,
 `unevaluated*`) are skipped so the inferred type stays useful rather than
 collapsing to `never`. You can still pass an explicit type argument
