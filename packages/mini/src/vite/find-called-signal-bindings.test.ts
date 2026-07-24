@@ -76,12 +76,62 @@ describe('find-called-signal-bindings', () => {
     )
   })
 
-  it('leaves a partial expression alone', () => {
-    // We only match when the whole value is one call, so `{count() + 1}` is a
-    // deliberate miss rather than a risk of warning on legitimate code.
+  it('flags a signal call inside a larger expression', () => {
+    // `{count() + 1}` still calls the signal at the JSX site and freezes — the
+    // scanner catches a signal call anywhere in a non-getter value.
+    const found = findCalledSignalBindings('const count = signal(0)\nconst g = <button value={count() + 1}>x</button>')
+    expect(found).toHaveLength(1)
+    expect(found[0]?.callee).toBe('count')
+    expect(found[0]?.attribute).toBe('value')
+  })
+
+  it('flags a signal called inside a ternary', () => {
+    const found = findCalledSignalBindings(
+      "const active = signal(false)\nconst g = <div class={active() ? 'on' : 'off'}>x</div>",
+    )
+    expect(found).toHaveLength(1)
+    expect(found[0]?.callee).toBe('active')
+    expect(found[0]?.attribute).toBe('class')
+  })
+
+  it('flags a signal called inside a logical expression', () => {
+    const found = findCalledSignalBindings(
+      'const busy = signal(false)\nconst g = <button disabled={busy() || false}>x</button>',
+    )
+    expect(found).toHaveLength(1)
+    expect(found[0]?.callee).toBe('busy')
+  })
+
+  it('flags a signal called inside a style object literal', () => {
+    const found = findCalledSignalBindings('const w = signal(1)\nconst g = <div style={{ width: w() }}>x</div>')
+    expect(found).toHaveLength(1)
+    expect(found[0]?.callee).toBe('w')
+    expect(found[0]?.attribute).toBe('style')
+  })
+
+  it('flags a signal called inside a template literal child', () => {
+    const found = findCalledSignalBindings('const n = signal(0)\nconst g = <span>{`count: ${n()}`}</span>')
+    expect(found).toHaveLength(1)
+    expect(found[0]?.callee).toBe('n')
+    expect(found[0]?.attribute).toBeUndefined()
+  })
+
+  it('leaves a signal called inside a nested arrow alone', () => {
+    // The call lives in a `.map` callback — a getter boundary — so it is the
+    // reactive form, not a freeze.
     expect(
-      findCalledSignalBindings('const count = signal(0)\nconst g = <button value={count() + 1}>x</button>'),
+      findCalledSignalBindings(
+        'const items = signal<number[]>([])\nconst g = <ul>{() => items().map((i) => i)}</ul>',
+      ),
     ).toEqual([])
+  })
+
+  it('does not flag an attribute named like an event but not a handler', () => {
+    // `online` starts with "on" but is not an `on<Capital>` handler, so a called
+    // signal there is still a real freeze worth flagging.
+    const found = findCalledSignalBindings('const up = signal(true)\nconst g = <div online={up()}>x</div>')
+    expect(found).toHaveLength(1)
+    expect(found[0]?.attribute).toBe('online')
   })
 
   it('leaves a bare signal child alone', () => {

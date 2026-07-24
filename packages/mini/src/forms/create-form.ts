@@ -1,4 +1,4 @@
-import { bindChecked, bindValue } from '../bind'
+import { bindChecked, bindSelect, bindValue } from '../bind'
 import { onCleanup } from '../on-cleanup'
 import type { ReadonlySignal, Signal } from '../signals'
 import { batch, computed, effect, signal } from '../signals'
@@ -79,12 +79,13 @@ export type Form<V extends FieldValues> = {
   /** The reactive state and helpers for one field. Stable across calls. */
   field: <K extends keyof V & string>(name: K) => Field<V[K]>
   /**
-   * A `ref` callback that two-way-binds an input to a field and tracks blur —
+   * A `ref` callback that two-way-binds a control to a field and tracks blur —
    * `ref={form.bind('email')}`. The binding matches the control: `checkbox`/
-   * `radio` bind `.checked`, `number`/`range` bind a coerced number, everything
-   * else binds `.value`. Cleaned up with the enclosing scope.
+   * `radio` bind `.checked`, `number`/`range` bind a coerced number, `<select>`
+   * binds on `change`, everything else binds `.value`. Cleaned up with the
+   * enclosing scope.
    */
-  bind: (name: keyof V & string) => (element: HTMLInputElement | HTMLTextAreaElement) => void
+  bind: (name: keyof V & string) => (element: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement) => void
   /** Sets a field's value imperatively. */
   setValue: <K extends keyof V & string>(name: K, value: V[K]) => void
   /**
@@ -169,16 +170,19 @@ export const createForm = <V extends FieldValues>(config: FormConfig<V>): Form<V
 
   const bind =
     (name: keyof V & string) =>
-    (element: HTMLInputElement | HTMLTextAreaElement): void => {
+    (element: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement): void => {
       const model = valueSignals[name]
       // The control decides the binding: a checkbox/radio is a boolean, a
-      // number/range input is a coerced number, everything else is a string.
+      // number/range input is a coerced number, a <select> binds on `change`,
+      // and everything else is a string on `input`.
       const dispose =
         element instanceof HTMLInputElement && (element.type === 'checkbox' || element.type === 'radio')
           ? bindChecked(element, model as unknown as Signal<boolean>)
           : element instanceof HTMLInputElement && (element.type === 'number' || element.type === 'range')
             ? bindNumber(element, model as unknown as Signal<number>)
-            : bindValue(element, model as unknown as Signal<string>)
+            : element instanceof HTMLSelectElement
+              ? bindSelect(element, model as unknown as Signal<string>)
+              : bindValue(element, model as unknown as Signal<string>)
       const onBlur = (): void => touchedSignals[name](true)
       // Editing a field clears any manual (server-side) error on it, so a
       // corrected value stops showing a stale message.

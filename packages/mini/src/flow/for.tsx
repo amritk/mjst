@@ -1,4 +1,6 @@
 import { createHost } from '../internal/create-host'
+import { renderChild } from '../internal/render-child'
+import { toFactory } from '../internal/to-factory'
 import { toGetter } from '../internal/to-getter'
 import { type ClassValue, jsx, type MaybeReactive, type MiniElementProps, type StyleValue } from '../jsx-runtime'
 import { list } from '../list'
@@ -52,6 +54,12 @@ export type ForProps<T> = {
   style?: MaybeReactive<StyleValue>
   /** Called with the host element once built — the escape hatch for wiring the container directly. */
   ref?: (element: HTMLElement) => void
+  /**
+   * Rendered in place of the list while `each` is empty — the empty state
+   * (`No results`). A built node or a factory, like a flow branch. Omit it to
+   * render nothing when the list is empty.
+   */
+  fallback?: Node | (() => Node)
 }
 
 /**
@@ -86,5 +94,16 @@ export const For = <T,>(props: ForProps<T>): HTMLElement => {
   // `list` supplies the real position, so neither `key` nor `children` has to
   // recover it with an O(n) `indexOf` (which also mis-keys duplicate items).
   list(host, each, keyOf, props.children)
-  return host
+  if (props.fallback === undefined) return host
+
+  // With a fallback, swap the whole list host out for the fallback while the
+  // list is empty. `host` keeps reconciling in the background (cheap when empty),
+  // so returning to a non-empty list restores it with the current rows. The
+  // list factory is a stable reference, so a non-empty→non-empty change is a
+  // no-op swap and never rebuilds the fallback or disturbs the rows.
+  const outer = createHost()
+  const fallback = toFactory(props.fallback)
+  const listFactory = (): HTMLElement => host
+  renderChild(outer, () => (each().length > 0 ? listFactory : fallback))
+  return outer
 }
