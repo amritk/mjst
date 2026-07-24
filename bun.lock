@@ -27,7 +27,7 @@
     },
     "packages/adapters": {
       "name": "@amritk/adapters",
-      "version": "0.3.4",
+      "version": "0.3.5",
       "dependencies": {
         "@amritk/helpers": "workspace:*",
         "json-schema-typed": "catalog:",
@@ -51,7 +51,7 @@
     },
     "packages/api": {
       "name": "@amritk/api",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "dependencies": {
         "@amritk/runtime-validators": "workspace:*",
       },
@@ -62,7 +62,7 @@
     },
     "packages/cli": {
       "name": "@amritk/mjst",
-      "version": "0.13.3",
+      "version": "0.13.4",
       "bin": {
         "mjst": "./dist/cli.js",
       },
@@ -87,7 +87,7 @@
     },
     "packages/generate-examples": {
       "name": "@amritk/generate-examples",
-      "version": "0.5.4",
+      "version": "0.5.5",
       "dependencies": {
         "@amritk/helpers": "workspace:*",
         "@amritk/runtime-validators": "workspace:*",
@@ -109,7 +109,7 @@
     },
     "packages/generate-parsers": {
       "name": "@amritk/generate-parsers",
-      "version": "0.17.1",
+      "version": "0.17.2",
       "dependencies": {
         "@amritk/generate-markdown": "workspace:*",
         "@amritk/helpers": "workspace:*",
@@ -123,7 +123,7 @@
     },
     "packages/generate-validators": {
       "name": "@amritk/generate-validators",
-      "version": "0.11.10",
+      "version": "0.11.11",
       "dependencies": {
         "@amritk/helpers": "workspace:*",
         "json-schema-typed": "catalog:",
@@ -141,14 +141,14 @@
     },
     "packages/helpers": {
       "name": "@amritk/helpers",
-      "version": "0.13.4",
+      "version": "0.13.5",
       "dependencies": {
         "json-schema-typed": "catalog:",
       },
     },
     "packages/lint": {
       "name": "@amritk/lint",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "dependencies": {
         "@amritk/runtime-validators": "workspace:*",
         "@amritk/yaml": "workspace:*",
@@ -163,7 +163,7 @@
     },
     "packages/mini": {
       "name": "@amritk/mini",
-      "version": "0.4.1",
+      "version": "0.5.0",
       "dependencies": {
         "alien-signals": "catalog:",
       },
@@ -192,7 +192,7 @@
     },
     "packages/runtime-validators": {
       "name": "@amritk/runtime-validators",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "dependencies": {
         "json-schema-typed": "catalog:",
       },

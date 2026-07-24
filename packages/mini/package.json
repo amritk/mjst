@@ -1,6 +1,6 @@
 {
   "name": "@amritk/mini",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "A deliberately tiny signals-based UI layer: reactive DOM bindings plus a compilerless JSX runtime.",
   "type": "module",
   "license": "MIT",
