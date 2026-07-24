@@ -133,6 +133,33 @@ describe('list', () => {
     expect(byId('2')).toBe(second)
   })
 
+  it('batches a bulk insert before existing rows in one DOM operation', () => {
+    // Prepending several new rows ahead of an existing one goes through the
+    // fragment path: many nodes, one insertBefore into the live container.
+    const items = signal<readonly Item[]>([{ id: '3', label: 'c' }])
+    const container = document.createElement('div')
+    list(container, items, (item) => item.id, makeItem)
+    const kept = container.firstElementChild
+
+    const spy = container.insertBefore.bind(container)
+    let inserts = 0
+    container.insertBefore = ((node: Node, ref: Node | null) => {
+      inserts++
+      return spy(node, ref)
+    }) as typeof container.insertBefore
+
+    items([
+      { id: '1', label: 'a' },
+      { id: '2', label: 'b' },
+      { id: '3', label: 'c' },
+    ])
+
+    // One insertBefore for the whole fragment, and the existing row is untouched.
+    expect(inserts).toBe(1)
+    expect(childIds(container)).toEqual(['1', '2', '3'])
+    expect(container.querySelector('[data-id="3"]')).toBe(kept)
+  })
+
   it('swaps two rows with two moves and no rebuilds', () => {
     // The js-framework-benchmark "swap rows" case: exchange two non-adjacent
     // rows in a long list. A move-minimal keyed diff does exactly two

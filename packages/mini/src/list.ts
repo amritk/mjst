@@ -174,8 +174,20 @@ const reconcile = (container: Element, a: (string | null)[], b: readonly string[
   if (aStart > aEnd) {
     // Old exhausted — the leftover new keys are insertions before the first
     // already-placed node past the range (null anchor = append).
-    const anchor = bEnd + 1 < b.length ? nodeOf(live, b[bEnd + 1] as string) : null
-    for (; bStart <= bEnd; bStart++) container.insertBefore(nodeOf(live, b[bStart] as string), anchor)
+    if (bStart <= bEnd) {
+      const anchor = bEnd + 1 < b.length ? nodeOf(live, b[bEnd + 1] as string) : null
+      if (bStart === bEnd) {
+        // A single insertion (the streaming-transcript hot path) goes in
+        // directly — a fragment would just move the node twice.
+        container.insertBefore(nodeOf(live, b[bStart] as string), anchor)
+      } else {
+        // Many insertions (first render, "create many", append-to-large-table)
+        // batch through a fragment so the live tree is touched once, not N times.
+        const fragment = document.createDocumentFragment()
+        for (; bStart <= bEnd; bStart++) fragment.appendChild(nodeOf(live, b[bStart] as string))
+        container.insertBefore(fragment, anchor)
+      }
+    }
   } else if (bStart > bEnd) {
     // New exhausted — the leftover old keys are removals.
     for (; aStart <= aEnd; aStart++) {

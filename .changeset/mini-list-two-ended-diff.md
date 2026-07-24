@@ -12,8 +12,12 @@ keyed diff instead of the append-order walk.
   swapping two rows is two DOM moves, removing an interior row is zero, and a
   reversal is one move per row. Append and replace-the-tail stay a no-move fast
   path, and node identity (focus, scroll, input state) is preserved throughout.
+- **Bulk insertions now batch through a `DocumentFragment`.** A first render,
+  a "create many", or an append of many rows touches the live tree once instead
+  of once per row; a single-row append (the streaming-transcript hot path) still
+  inserts directly, so it does not regress.
 - **Core `.` size budget raised 2800 → 3000 B gzipped** to fit the diff (the
-  bundled core is ~2.9 KB). Subpaths still add zero bytes to `.`, and the widget
+  bundled core is ~3.0 KB). Subpaths still add zero bytes to `.`, and the widget
   that imports only `.` pays for the diff once.
 - No API change: same `list(container, items, key, create)` signature, same
   duplicate-key warning, same scope disposal on removal.
