@@ -33,11 +33,17 @@ export const list = <T>(
   key: (item: T, index: number) => string,
   create: (item: T, index: number) => HTMLElement,
 ): (() => void) => {
-  const live = new Map<string, { node: HTMLElement; dispose: () => void }>()
+  const live = new Map<string, { node: HTMLElement; dispose: () => void; seen: number }>()
+  // A monotonic pass counter stamped onto each entry marks which keys the
+  // current reconcile touched — the survivor set, without allocating a fresh
+  // `Set` (and N inserts) on every update. Entries left on an older pass number
+  // are the removals; an entry already stamped with the current pass is a
+  // duplicate key.
+  let pass = 0
 
   const stop = effect(() => {
     const next = items()
-    const seen = new Set<string>()
+    const now = ++pass
     let cursor: ChildNode | null = container.firstChild
     // The position is tracked here so `key`/`create` receive it directly —
     // deriving it with `items().indexOf(item)` at each call site would be O(n²)
@@ -45,11 +51,6 @@ export const list = <T>(
     let index = 0
     for (const item of next) {
       const k = key(item, index)
-      // Two items with the same key collapse into one node — the second shares
-      // the first's element and its own row silently vanishes. Surface it rather
-      // than letting a bad `key` drop rows without a trace.
-      if (seen.has(k)) console.warn('[mini] list: duplicate key drops rows:', k)
-      seen.add(k)
       let entry = live.get(k)
       if (!entry) {
         // effectScope runs its body synchronously; the assignment inside is
@@ -59,15 +60,22 @@ export const list = <T>(
         const dispose = effectScope(() => {
           node = create(item, created)
         })
-        entry = { node, dispose }
+        entry = { node, dispose, seen: now }
         live.set(k, entry)
+      } else {
+        // Two items with the same key collapse into one node — the second shares
+        // the first's element and its own row silently vanishes. An entry already
+        // stamped with this pass means we visited its key earlier in the same
+        // reconcile, so surface it rather than dropping rows without a trace.
+        if (entry.seen === now) console.warn('[mini] list: duplicate key drops rows:', k)
+        entry.seen = now
       }
       if (entry.node === cursor) cursor = cursor.nextSibling
       else container.insertBefore(entry.node, cursor)
       index++
     }
     for (const [k, entry] of live) {
-      if (seen.has(k)) continue
+      if (entry.seen === now) continue
       entry.dispose()
       entry.node.remove()
       live.delete(k)
