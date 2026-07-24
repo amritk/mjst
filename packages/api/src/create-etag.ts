@@ -1,4 +1,4 @@
-import { fnv1aHex } from './fnv1a-hex'
+import { fnv1aHexBytes } from './fnv1a-hex'
 import { matchesIfNoneMatch } from './matches-if-none-match'
 import type { FetchOnResponse } from './to-fetch-handler'
 
@@ -21,7 +21,6 @@ export type ETagOptions = {
 }
 
 const SAFE = new Set(['GET', 'HEAD'])
-const DECODER = new TextDecoder()
 
 /**
  * Automatic entity tags and conditional-GET handling — the ETag/`If-None-Match`
@@ -43,7 +42,7 @@ const DECODER = new TextDecoder()
  */
 export const createETag = (options?: ETagOptions): FetchOnResponse => {
   const maxBytes = options?.maxBytes ?? 1_048_576
-  const hash = options?.hash ?? ((body) => fnv1aHex(DECODER.decode(body)))
+  const hash = options?.hash ?? fnv1aHexBytes
 
   return async (response, request) => {
     if (response.status !== 200 || !SAFE.has(request.method)) return undefined

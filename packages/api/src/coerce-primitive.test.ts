@@ -18,6 +18,17 @@ describe('coerce-primitive', () => {
     expect(coercePrimitive('   ', 'number')).toBe('   ')
   })
 
+  // `Number('Infinity')` is a finite-looking `number` that JSON-serializes to
+  // `null`, so it must be rejected as a string for the validator to catch.
+  it('keeps non-finite strings so the validator reports a type error', () => {
+    expect(coercePrimitive('Infinity', 'number')).toBe('Infinity')
+    expect(coercePrimitive('-Infinity', 'number')).toBe('-Infinity')
+  })
+
+  it('still coerces exponential notation', () => {
+    expect(coercePrimitive('1e3', 'number')).toBe(1000)
+  })
+
   it('converts boolean strings', () => {
     expect(coercePrimitive('true', 'boolean')).toBe(true)
     expect(coercePrimitive('false', 'boolean')).toBe(false)

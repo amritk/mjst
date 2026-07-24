@@ -29,14 +29,35 @@ const DEFAULT_ENCODINGS: ReadonlyArray<'gzip' | 'deflate'> = ['gzip', 'deflate']
 const defaultFilter = (contentType: string): boolean =>
   /(?:json|text\/|javascript|xml|svg|wasm|application\/(?:x-ndjson|manifest))/i.test(contentType)
 
-/** Picks the first offered encoding the client accepts, honoring `identity`/`*`. */
+/**
+ * Picks the first offered encoding the client accepts, honoring RFC 9110
+ * `q`-weights and the `*` wildcard. A substring test is not enough: it treats
+ * `gzip;q=0` (an explicit refusal) as acceptance and misses a bare `*`.
+ */
 const negotiate = (
   acceptEncoding: string,
   offered: ReadonlyArray<'gzip' | 'deflate'>,
 ): 'gzip' | 'deflate' | undefined => {
-  const accepted = acceptEncoding.toLowerCase()
+  const weights = new Map<string, number>()
+  let wildcard: number | undefined
+  for (const part of acceptEncoding.toLowerCase().split(',')) {
+    const [token, ...params] = part.split(';').map((segment) => segment.trim())
+    if (token === undefined || token === '') continue
+    let quality = 1
+    for (const param of params) {
+      const match = /^q=(.*)$/.exec(param)
+      if (match !== null) {
+        const parsed = Number(match[1])
+        quality = Number.isNaN(parsed) ? 1 : parsed
+      }
+    }
+    if (token === '*') wildcard = quality
+    else weights.set(token, quality)
+  }
   for (const encoding of offered) {
-    if (accepted.includes(encoding)) return encoding
+    const explicit = weights.get(encoding)
+    const quality = explicit ?? wildcard
+    if (quality !== undefined && quality > 0) return encoding
   }
   return undefined
 }

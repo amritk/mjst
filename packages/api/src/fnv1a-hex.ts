@@ -22,3 +22,20 @@ export const fnv1aHex = (input: string): string => {
   }
   return (hash >>> 0).toString(16).padStart(8, '0')
 }
+
+/**
+ * FNV-1a 32-bit hash of raw bytes, formatted as 8 lowercase hex digits.
+ *
+ * Use this when hashing a binary payload (e.g. an ETag over a response body):
+ * decoding bytes to a string first is lossy — `TextDecoder` maps every invalid
+ * UTF-8 byte to U+FFFD, so distinct byte sequences would collide. Hashing the
+ * bytes directly avoids that. For ASCII input this matches {@link fnv1aHex}.
+ */
+export const fnv1aHexBytes = (bytes: Uint8Array): string => {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < bytes.length; index++) {
+    hash ^= bytes[index] as number
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}

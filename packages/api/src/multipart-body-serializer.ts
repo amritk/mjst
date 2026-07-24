@@ -8,7 +8,9 @@ const toFormData = (values: Readonly<Record<string, unknown>>): FormData => {
     if (value instanceof Blob) {
       data.append(key, value)
     } else if (Array.isArray(value)) {
-      for (const item of value) data.append(key, String(item))
+      // A repeated field can carry files too (multi-file upload), so keep Blob
+      // items intact rather than String-coercing them to "[object File]".
+      for (const item of value) data.append(key, item instanceof Blob ? item : String(item))
     } else {
       data.append(key, String(value))
     }

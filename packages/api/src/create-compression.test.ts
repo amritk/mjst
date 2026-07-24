@@ -59,4 +59,22 @@ describe('create-compression', () => {
     const result = (await compress(jsonBody(50), get('deflate'), {})) as Response
     expect(result.headers.get('content-encoding')).toBe('deflate')
   })
+
+  it('does not use an encoding the client refused with q=0', async () => {
+    const compress = createCompression({ threshold: 0, encodings: ['gzip'] })
+    // gzip is explicitly unacceptable; nothing else is offered → skip.
+    expect(await compress(jsonBody(100), get('gzip;q=0'), {})).toBeUndefined()
+  })
+
+  it('honors the encoding the client prefers when it refuses another', async () => {
+    const compress = createCompression({ threshold: 0 })
+    const result = (await compress(jsonBody(100), get('gzip;q=0, deflate'), {})) as Response
+    expect(result.headers.get('content-encoding')).toBe('deflate')
+  })
+
+  it('honors a bare * wildcard as accepting any offered encoding', async () => {
+    const compress = createCompression({ threshold: 0 })
+    const result = (await compress(jsonBody(100), get('*'), {})) as Response
+    expect(result.headers.get('content-encoding')).toBe('gzip')
+  })
 })
