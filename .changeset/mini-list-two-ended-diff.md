@@ -16,8 +16,11 @@ keyed diff instead of the append-order walk.
   a "create many", or an append of many rows touches the live tree once instead
   of once per row; a single-row append (the streaming-transcript hot path) still
   inserts directly, so it does not regress.
-- **Core `.` size budget raised 2800 → 3000 B gzipped** to fit the diff (the
-  bundled core is ~3.0 KB). Subpaths still add zero bytes to `.`, and the widget
-  that imports only `.` pays for the diff once.
+- **A full clear is one DOM operation.** Emptying the list disposes every row
+  scope and wipes the container with a single `replaceChildren` instead of
+  removing nodes one at a time.
+- **Core `.` size budget raised 2800 → 3050 B gzipped** to fit the reconciler
+  work (the bundled core is ~3.0 KB). Subpaths still add zero bytes to `.`, and
+  the widget that imports only `.` pays for it once.
 - No API change: same `list(container, items, key, create)` signature, same
   duplicate-key warning, same scope disposal on removal.

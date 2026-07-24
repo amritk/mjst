@@ -116,6 +116,15 @@ const drop = (live: Map<string, Entry>, k: string): void => {
  * touched.
  */
 const reconcile = (container: Element, a: (string | null)[], b: readonly string[], live: Map<string, Entry>): void => {
+  if (b.length === 0) {
+    // Full clear: the container holds only list nodes, so tear down every scope
+    // and wipe the children in one `replaceChildren` instead of removing them
+    // node by node.
+    for (const entry of live.values()) entry.dispose()
+    live.clear()
+    container.replaceChildren()
+    return
+  }
   let aStart = 0
   let aEnd = a.length - 1
   let bStart = 0

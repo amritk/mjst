@@ -133,6 +133,43 @@ describe('list', () => {
     expect(byId('2')).toBe(second)
   })
 
+  it('clears the whole list in one DOM operation and disposes every scope', () => {
+    const items = signal<readonly Item[]>([
+      { id: '1', label: 'a' },
+      { id: '2', label: 'b' },
+      { id: '3', label: 'c' },
+    ])
+    const label = signal('live')
+    const container = document.createElement('div')
+    list(
+      container,
+      items,
+      (item) => item.id,
+      (item) => {
+        const node = makeItem(item)
+        bindText(node, label)
+        return node
+      },
+    )
+    const node = container.firstElementChild as HTMLElement
+
+    let clears = 0
+    const original = container.replaceChildren.bind(container)
+    container.replaceChildren = ((...nodes: (Node | string)[]) => {
+      clears++
+      return original(...nodes)
+    }) as typeof container.replaceChildren
+
+    items([])
+
+    // One replaceChildren wipes all three rows at once…
+    expect(clears).toBe(1)
+    expect(container.children).toHaveLength(0)
+    // …and every row scope is torn down, so its bindings stop reacting.
+    label('after-clear')
+    expect(node.textContent).toBe('live')
+  })
+
   it('batches a bulk insert before existing rows in one DOM operation', () => {
     // Prepending several new rows ahead of an existing one goes through the
     // fragment path: many nodes, one insertBefore into the live container.
