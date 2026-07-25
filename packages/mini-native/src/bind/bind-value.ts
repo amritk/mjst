@@ -18,6 +18,16 @@ import type { Dispose, HostElement } from '../types'
  * would tear the candidate string apart. Native targets generally do not emit
  * these events at all, in which case the guard simply never engages — the
  * host is free to ignore event names it has no equivalent for.
+ *
+ * The listeners are attached from INSIDE an effect, which is what ties them to
+ * the enclosing `effectScope` rather than to the returned dispose alone. That
+ * matters because the documented way to reach this is from a `ref`, where the
+ * combined dispose is never called by hand and teardown is left to the scope:
+ * without the effect the signal→element binding would be torn down and the
+ * three element→signal listeners would not, leaving a half-disposed binding
+ * behind — on a native target, a dispatcher the engine keeps calling for an
+ * element nobody can see. Calling the returned dispose by hand detaches them
+ * the same way, and doing both is safe: an effect's cleanup runs at most once.
  */
 export const bindValue = (element: HostElement, model: Signal<string>): Dispose => {
   const host = requireHost()
@@ -35,19 +45,26 @@ export const bindValue = (element: HostElement, model: Signal<string>): Dispose 
     if (!composing) model(String(host.getProperty(element, 'value') ?? ''))
   }
 
-  const detachInput = host.addEventListener(element, 'input', readBack)
-  const detachStart = host.addEventListener(element, 'compositionstart', () => {
-    composing = true
-  })
-  const detachEnd = host.addEventListener(element, 'compositionend', () => {
-    composing = false
-    readBack()
+  // No signal is read in here, so this effect never re-runs; it exists purely
+  // so that disposing the scope detaches the listeners.
+  const detach = effect(() => {
+    const disposes = [
+      host.addEventListener(element, 'input', readBack),
+      host.addEventListener(element, 'compositionstart', () => {
+        composing = true
+      }),
+      host.addEventListener(element, 'compositionend', () => {
+        composing = false
+        readBack()
+      }),
+    ]
+    return () => {
+      for (const dispose of disposes) dispose()
+    }
   })
 
   return () => {
     stop()
-    detachInput()
-    detachStart()
-    detachEnd()
+    detach()
   }
 }

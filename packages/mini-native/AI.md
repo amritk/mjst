@@ -8,7 +8,7 @@ an LLM; the full reference is [README.md](./README.md).
 > diffing, no re-render, no hooks**. A component function runs once and returns
 > the host node it built.
 
-## The two rules that trip up every agent
+## The three rules that trip up every agent
 
 **1. Reactivity is decided by value shape at runtime**, because there is no
 compiler analysing your code:
@@ -25,6 +25,10 @@ compiler analysing your code:
 `view | text | image | scroll-view | input`. There is no `<div>`, and there never
 will be — the DOM is a *preview target* here, not the real one. Writing
 `<div>`/`<span>`/`<p>` is the single most common mistake; it will not compile.
+
+**3. Only `<text>` may hold a text run.** `<view>hello</view>` does not compile
+either. A native view tree has no loose text inside a container — on Lynx that
+screen comes up blank — so containers take element children only.
 
 ## Setup — a host must be installed first
 
@@ -57,12 +61,17 @@ JSX config in the consuming package (this is **not** the React runtime):
 
 ## Element props
 
-Common to every tag: `children`, `ref`, `show`, `class`, `style`, `id`, `testId`,
-`key`, plus `onTap` / `onLongPress` / `onFocus` / `onBlur`. Gestures are the
-native idiom — there is no `onClick`. Per tag: `text` takes `lines`; `image`
-takes `src`/`alt`/`fit`/`onLoad`/`onError`; `scroll-view` takes
+Common to every tag: `ref`, `show`, `class`, `style`, `id`, `testId`, `key`, plus
+`onTap` / `onLongPress` / `onFocus` / `onBlur`. Gestures are the native idiom —
+there is no `onClick`. Per tag: `text` takes `lines`; `image` takes
+`src`/`alt`/`fit`/`onLoad`/`onError`; `scroll-view` takes
 `direction`/`onScroll`; `input` takes
 `value`/`placeholder`/`disabled`/`readonly`/`multiline`/`keyboard`/`onInput`/`onChange`.
+`children` is per tag, not common — see rule 3 above. `multiline` is structural
+and therefore static: it decides which control the host builds.
+
+Style numbers are density-independent pixels, as in React Native — `{ width: 100 }`
+is 100px, and the host adds the unit.
 
 `show` hides in place (the host's `setVisible`). To add and remove nodes
 structurally, use the control-flow components.
@@ -72,9 +81,16 @@ structurally, use the control-flow components.
 - **`mount(container, Component)`** — the only correct entry point. It opens the
   scope that owns every effect and `onCleanup` in the tree.
 - **`list(container, items, key, create)`** — keyed collections; `items` is a
-  getter, and `container` must be owned solely by the list.
-- **`<Show>` / `<For>` / `<Dynamic>`** from `@amritk/mini-native/flow` — each
-  renders into a wrapper the host supplies, so it stays platform-neutral.
+  getter, and `container` must be owned solely by the list. Move-minimal: a row
+  is only touched when its position genuinely changes.
+- **`<Show>` / `<Switch>`+`<Match>` / `<Dynamic>` / `<For>` / `<Index>`** from
+  `@amritk/mini-native/flow` — each renders into a wrapper the host supplies, so
+  it stays platform-neutral. Use `For` by default and `Index` when values can
+  repeat; `Index` hands each row a *getter* for whatever occupies its slot.
+- **`batch` / `watch` / `untrack`** — group writes, react to changes only, and
+  read without subscribing. `watch` skips the initial run unless you pass
+  `{ immediate: true }`, which is what makes "navigate when the route changes"
+  expressible without firing during setup.
 - **`bindText` / `bindProp` / `bindShow` / `bindValue`** — imperative bindings
   for `ref` code. There is no `innerHTML` sink on any target, by design.
 
@@ -83,7 +99,7 @@ structurally, use the control-flow components.
 | Import | Purpose |
 |---|---|
 | `@amritk/mini-native` | signals, `mount`, `list`, binds, `setHost`, JSX types |
-| `@amritk/mini-native/flow` | `Show` / `For` / `Dynamic` / `defaultKey` |
+| `@amritk/mini-native/flow` | `Show` / `Switch` / `Match` / `Dynamic` / `For` / `Index` / `defaultKey` |
 | `@amritk/mini-native/host` | the `Host` contract, for writing a renderer |
 | `@amritk/mini-native/hosts/dom` | `createDomHost`, `domRoot` — web preview |
 | `@amritk/mini-native/hosts/lynx` | `createLynxHost`, `lynxRoot` — Lynx Element PAPI |
@@ -97,6 +113,9 @@ Implement `Host` (about 15 functions) and pass it to `setHost` — that is the
 whole job, there is no reconciler to port. Start from
 `hosts/create-memory-host.ts`. The target's node tree must be **mutable**;
 `flush` is optional and only for targets that batch (the runtime coalesces a
-whole tick into one commit). Hosts must tolerate unknown event names.
+whole tick into one commit). Hosts must tolerate unknown event names. Two rules
+that are easy to miss: a `setStyle` must not disturb the visibility `setVisible`
+set, and a bare number in a style bag means density-independent pixels, so the
+host adds the unit.
 
 Install: `bun add @amritk/mini-native` (or npm/pnpm/yarn).

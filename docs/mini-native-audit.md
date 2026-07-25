@@ -5,18 +5,28 @@ missing relative to `@amritk/mini`, and what a native-shaped framework needs
 that neither package has yet.
 
 Every defect below was reproduced against the package's own hosts (memory, DOM
-via happy-dom, Lynx via the fake PAPI engine) before being written down. The
-existing suite — 43 tests across 6 files — passes; none of these are covered by
-it.
+via happy-dom, Lynx via the fake PAPI engine) before being written down.
 
-Measured core size at the time of writing: `.` entry 6.5 KB raw / **2.5 KB
-gzipped**, `/flow` 2.4 KB gzipped, DOM host 731 B, Lynx host 768 B.
+> **Status: sections 1 and 2 are done.** Every defect in section 1 is fixed and
+> carries a regression test, and the section 2 parity gaps are closed apart from
+> the three feature subpaths. Section 3 — the native story — is untouched and is
+> the roadmap. Each item below is marked with what actually shipped, because the
+> reasoning is worth keeping even once the code has moved on.
+
+Core size at the time of the audit: `.` entry 6.5 KB raw / 2.5 KB gzipped,
+`/flow` 2.4 KB gzipped, DOM host 731 B, Lynx host 768 B. There is now a
+size-budget test holding that line.
 
 ---
 
 ## 1. Defects
 
 ### 1.1 `style` and `show` fight over the same slot — on every host
+
+> **Fixed.** Both real hosts now keep their own visibility bookkeeping and
+> re-assert it after a style write, and the rule is written into the `Host`
+> contract so the next host cannot rediscover it. The memory host was already
+> correct, which is exactly why the existing tests could not see the bug.
 
 `setVisible` writes visibility into the style bag (`display` on both the DOM and
 Lynx hosts) and `setStyle` replaces that bag wholesale. So any element carrying
@@ -49,6 +59,11 @@ future host will hit it.
 
 ### 1.2 `Show` / `Dynamic` rebuild the branch on every condition tick
 
+> **Fixed.** `renderChild` memoises the selection in a `computed`, and `Show`
+> builds its branch factory once so the reference is stable. `Show`'s function
+> child now also receives a getter for the narrowed value, so a truthy→truthy
+> change updates through the getter instead of rebuilding.
+
 `renderChild` runs `select` directly inside the tracking effect. The effect
 therefore re-runs on any signal `select` reads, and each re-run disposes the
 branch scope and rebuilds the subtree — even when the *selected factory did not
@@ -73,6 +88,9 @@ is essentially one line plus the comment explaining why.
 
 ### 1.3 Duplicate keys silently drop rows
 
+> **Fixed.** `list` warns and drops explicitly. `Index` is the supported way to
+> render a collection whose values legitimately repeat — see the note in section 4.
+
 `list` calls `live.get(k)`; a repeated key returns the entry already placed, so
 the same node is re-inserted (moved) instead of a second row being created.
 
@@ -87,6 +105,9 @@ explicitly. Here it is silent data loss, and it is easy to hit because
 is affected.
 
 ### 1.4 `bindValue` leaks its event listeners
+
+> **Fixed.** The listeners are attached from inside an effect, so disposing the
+> enclosing scope detaches them.
 
 `bindValue` registers three listeners (`input`, `compositionstart`,
 `compositionend`) through `host.addEventListener` and returns their disposes in
@@ -105,6 +126,10 @@ detaches them; that pattern ports directly.
 
 ### 1.5 Swapping the host loses a commit
 
+> **Fixed.** The queued flush reads the installed host when it runs rather than
+> closing over it, and `clearHost` no longer clears the queued flag out from under
+> a pending commit.
+
 `scheduleFlush` captures `current` at schedule time and `setHost` never resets
 `flushQueued`. Install host A, render (queues a flush against A), install host
 B in the same tick: A gets the flush, B never does, and B's tree is left
@@ -119,6 +144,10 @@ Niche today, but it is exactly the hot-reload and test-isolation path, and
 should read the host at flush time rather than closing over it.
 
 ### 1.6 The reconciler moves O(n) nodes for a middle removal
+
+> **Fixed.** `mini`'s two-ended keyed diff is ported onto the host operations.
+> Measured after: a middle removal costs zero moves and move-to-end costs one, both
+> pinned by tests that count host calls rather than asserting on order alone.
 
 The cursor-walk reconciler is correct on every ordering tried, and optimal for
 appends, prepends, adjacent swaps, reverses, and move-to-front. Two common cases
@@ -151,6 +180,12 @@ and should be corrected either way.
 
 ### 1.7 The DOM preview does not preview four documented props
 
+> **Fixed.** `fit`, `lines`, and `direction` map to real styles, and `multiline`
+> builds a `<textarea>` — the `Host` contract now passes the prop bag to
+> `createElement`, which is what makes a structural prop expressible at all. The
+> host keeps these in a style layer of its own so the user's `style` prop cannot
+> wipe them.
+
 The DOM host maps only `testId` and `keyboard`. Everything else is set as a
 literal attribute, so:
 
@@ -173,6 +208,10 @@ that does not clamp mean the preview is not one.
 
 ### 1.8 Numeric style values vanish on the DOM
 
+> **Fixed.** A bare number now means density-independent pixels on every target,
+> matching React Native, with the host adding the unit and the short unitless list
+> CSS itself uses.
+
 `style={{ width: 100 }}` produces empty `cssText` — `setProperty('width','100')`
 is invalid CSS and is discarded. The type permits numbers and the doc comment
 says "add units yourself", but React Native's convention (bare numbers are
@@ -184,6 +223,13 @@ Pick one and enforce it: either the DOM host appends `px` for length properties
 its union so the compiler catches it.
 
 ### 1.9 Smaller confirmed issues
+
+> **Mostly fixed.** `keyboard="phone"` maps to `tel`; `class` flattens nested
+> arrays; Lynx emits `data-testid` like the DOM host does. The loose-text case is
+> now a compile error rather than a Lynx-only silent blank, because container tags
+> accept element children only. The blind object child is unchanged in the runtime
+> — it is unreachable without casting past the types — but the memory host, which
+> is also the test host, now throws instead of corrupting its tree.
 
 - **`keyboard="phone"` emits `type="phone"`** — not a valid HTML input type; it
   silently degrades to `text`. Should map to `tel`.
@@ -204,46 +250,71 @@ its union so the compiler catches it.
 
 ## 2. Missing relative to `@amritk/mini`
 
-| | `mini` | `mini-native` |
-|:---|:---:|:---:|
-| `batch` | ✅ | ❌ |
-| `watch` (change-only, untracked callback) | ✅ | ❌ |
-| `Switch` / `Match` | ✅ | ❌ |
-| `Show` narrowed-value getter | ✅ | ❌ |
-| move-minimal keyed diff | ✅ | ❌ |
-| duplicate-key warning | ✅ | ❌ |
-| router | ✅ | ❌ |
-| forms (`createForm`, schema validation) | ✅ | ❌ |
-| query (`@tanstack/query-core`) | ✅ | ❌ |
-| called-signal lint shipped to consumers | ✅ (`/vite`) | ❌ |
-| core size-budget test | ✅ | ❌ |
-| import-boundary test | ✅ | ❌ |
-| typed events | ✅ (`TargetedEvent`) | ❌ (`unknown`) |
-| `bindClass` / `bindAttr` / `bindChecked` | ✅ | ❌ (partly by design) |
+| | `mini` | `mini-native` (before) | now |
+|:---|:---:|:---:|:---:|
+| `batch` | ✅ | ❌ | ✅ |
+| `watch` (change-only, untracked callback) | ✅ | ❌ | ✅ |
+| `untrack` | ❌ | ❌ | ✅ |
+| `Switch` / `Match` | ✅ | ❌ | ✅ |
+| `Show` narrowed-value getter | ✅ | ❌ | ✅ |
+| position-keyed collection | ❌ | ❌ | ✅ (`Index`) |
+| move-minimal keyed diff | ✅ | ❌ | ✅ |
+| duplicate-key warning | ✅ | ❌ | ✅ |
+| typed events | ✅ (`TargetedEvent`) | ❌ (`unknown`) | ✅ (augmentable) |
+| core size-budget test | ✅ | ❌ | ✅ |
+| import-boundary test | ✅ | ❌ | ✅ |
+| router | ✅ | ❌ | ❌ |
+| forms (`createForm`, schema validation) | ✅ | ❌ | ❌ |
+| query (`@tanstack/query-core`) | ✅ | ❌ | ❌ |
+| called-signal lint shipped to consumers | ✅ (`/vite`) | ❌ | ❌ — see below |
+| `bindClass` / `bindAttr` / `bindChecked` | ✅ | ❌ | ❌ — by design |
 
-`batch` is the notable core omission: without it a burst of writes runs every
+`batch` was the notable core omission: without it a burst of writes runs every
 dependent effect synchronously, and only the *flush* is coalesced — so 50 writes
-produce 1 commit but 50 property writes. `watch` is the notable app-level one;
-"run a side effect when this changes, but not on setup, and don't track what the
-callback reads" is unavoidable in real apps and cannot be expressed with `effect`
-alone.
+produced 1 commit but 50 property writes. `watch` was the notable app-level one;
+"run a side effect when this changes, but not on setup, and do not track what
+the callback reads" is unavoidable in real apps and cannot be expressed with
+`effect` alone.
 
-Of the three feature subpaths, `forms` and `query` are almost entirely
-platform-free and could be ported nearly as-is. The router's matching half
-(`match-route`, `parse-query`, `strip-base`) is pure; only the history half needs
-a native nav-stack shim — as the README already notes.
+Of the three feature subpaths still missing, `forms` and `query` are almost
+entirely platform-free and could be ported nearly as-is. The router's matching
+half (`match-route`, `parse-query`, `strip-base`) is pure; only the history half
+needs a native nav-stack shim.
+
+The called-signal lint needs no port: `mini`'s `findCalledSignalBindings` is
+purely syntactic over `.tsx`, so `@amritk/mini/vite` already catches the identical
+footgun in a `mini-native` codebase. What is missing is saying so — either a note
+in the README or a re-export, rather than a second copy of the plugin.
+
+### Two things this round turned up that the audit had missed
+
+**`key` never reached a component.** `key` is reserved by JSX: the transform
+hoists it out of the props object into the runtime's third parameter before the
+component is called, and `jsx` dropped it there. So `<For each={rows} key={byId}>`
+silently fell back to `defaultKey` — a bug that surfaces as rows mysteriously not
+updating rather than as an error. `jsx` now forwards it for component tags.
+`mini` has the same hole; its `for.test.tsx` only ever calls `For({…})` directly,
+which is probably why it went unnoticed.
+
+**Position keying cannot be a key function.** The first attempt at the
+duplicate-key escape hatch was an `indexKey` helper. It renders the wrong data:
+a row is built once and never rebuilt, so inserting at the front leaves every
+later slot holding the node built for whatever used to sit there. That is worse
+than the warning it was working around. `Index` exists instead — it hands each
+row a *getter* for whatever currently occupies its slot, so the node stays and
+the bindings inside it update in place.
 
 ### Test coverage
 
-6 test files, 43 tests. Nothing covers `For`, `Dynamic`, `renderChild`, any of
-`bind/*`, `defaultKey`, `resolveClass`, `toFactory`, `toGetter`, `runDetached`,
-`scheduleFlush`, or the memory host itself. Several of the defects above sit
-squarely in that gap — 1.2 lives in `renderChild`, 1.4 in `bind/bind-value`,
-1.3 and 1.6 in the untested branches of `list`.
-
-There is also no equivalent of mini's `core-size-budget.test.ts` or
-`import-boundary.test.ts`. Both matter more here, not less: the whole premise is
-that the core contains no platform, and only the tsconfig currently enforces it.
+Was 6 files / 43 tests, with nothing covering `For`, `Dynamic`, `renderChild`,
+any of `bind/*`, `defaultKey`, `resolveClass`, `toFactory`, `toGetter`,
+`runDetached`, `scheduleFlush`, or the memory host itself — which is where four
+of the section 1 defects lived. Every module now has tests, every defect above
+has a regression test, and there are two structural tests: an import-boundary
+test asserting no host or flow module is reachable from `.`, and a size-budget
+test on the bundled, gzipped core entry. Both matter more here than in `mini`,
+because the whole premise is that the core contains no platform and only the
+tsconfig was enforcing it.
 
 ---
 
@@ -292,59 +363,41 @@ built tree and no recovery path.
 component costs a real container view on device, which is exactly the flattening
 that native performance work targets.
 
-**Typed events.** Every handler is `(event: unknown) => void`. Because the host
-is pluggable, this wants an augmentable interface each host can fill in, not a
-fixed map.
+**Typed events.** *Done.* Handlers were `(event: unknown) => void` with no way
+to narrow them. Because the host is pluggable, a fixed map would be wrong on
+some target, so `NativeEventMap` is an augmentable interface an app fills in once
+against the host it ships.
 
 ---
 
-## 4. Recommendations
+## 4. What is left
 
-### P0 — correctness, small diffs
+Sections 1 and 2 are done. What remains is section 3 — the native story — plus a
+few loose ends.
 
-1. Separate visibility from the style channel in the `Host` contract (§1.1).
-2. Memoise `select` in a `computed` inside `renderChild` (§1.2).
-3. Register `bindValue`'s listeners with `onCleanup` (§1.4).
-4. Warn and drop on duplicate keys in `list` (§1.3).
-5. `setHost` resets `flushQueued`; the queued microtask reads the host at flush
-   time (§1.5).
-6. Port mini's two-ended keyed diff into `list` (§1.6).
-7. Fix or withdraw `fit` / `lines` / `direction` / `multiline` /
-   `keyboard=phone` on the DOM host, and correct the comments that claim they
-   already work (§1.7, §1.9).
-8. Decide the numeric-style policy and enforce it in types or in the host
-   (§1.8).
+### Loose ends
 
-Items 2–6 are ports of code that already exists and is already tested in
-`mini`. Item 1 is the only one needing a design decision.
+- Port `forms` and `query` from `mini`; both are close to platform-free.
+- A router, with a native nav-stack shim standing in for `window.history`.
+- Point consumers at `@amritk/mini/vite` for the called-signal check, or
+  re-export it, rather than shipping a second copy.
+- A benchmark, mirroring the js-framework-benchmark example `mini` grew. The
+  reconciler now has a move-minimal guarantee measured in host calls; a wall
+  clock number would be better.
 
-### P1 — parity and confidence
+### The native story, in priority order
 
-9. Export `batch`, `watch`, and an `untrack` built on the existing
-   `runDetached`.
-10. Add `Switch` / `Match`, an `Index` (non-keyed) companion to `For`, and the
-    `Show` narrowed-value getter.
-11. Fill the test gaps above; add a core size-budget test (lock in ~2.5 KB
-    gzipped) and an import-boundary test asserting no host is reachable from
-    `.`.
-12. Ship the called-signal check to consumers — the footgun is identical here
-    and the existing `findCalledSignalBindings` is host-agnostic.
-13. Make handler types augmentable per host.
+1. **Accessibility props** across the vocabulary and in the `Host` contract.
+   Still the largest single omission, and still far cheaper to design in while
+   the vocabulary is five tags than to retrofit later.
+2. **A virtualised list** bound to Lynx's recycler. `For` over ten thousand rows
+   creates ten thousand host elements.
+3. **Gestures beyond tap and long-press**, and a `Host.animate` seam so the
+   engine owns the timeline instead of taking a bridge write per frame.
+4. **Context, `Portal`, and error boundaries.**
+5. **Safe-area, dimensions, and colour-scheme signals** — all cheap for a host
+   to expose, all needed by every real app.
 
-### P2 — the native story
-
-14. Accessibility props across the vocabulary, and in the `Host` contract.
-15. A virtualised list bound to Lynx's recycler.
-16. Full gesture set; a `Host.animate` seam.
-17. Context/provide, `Portal`, error boundaries.
-18. Safe-area, dimensions, and colour-scheme signals.
-19. Port `forms` and `query` (near-free); router with a nav-stack shim.
-20. A benchmark, mirroring the js-framework-benchmark example `mini` grew — the
-    reconciler changes in P0 want a number attached.
-
-### On the README
-
-The "Known gaps" section is good practice and should stay, but it currently
-under-reports: `fit`, `lines`, and `direction` are no-ops it does not mention,
-and the reconciliation note describes better behaviour than the code delivers.
-Both are worth correcting alongside the fixes.
+Fragments stay deliberately absent, at the known cost of one container view per
+component. That is the flattening native performance work usually targets, so it
+is worth revisiting if a real screen shows the cost.
