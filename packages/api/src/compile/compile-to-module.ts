@@ -3,6 +3,7 @@ import { fnv1aHex } from '../fnv1a-hex'
 import { hashContracts } from '../hash-contracts'
 import { parsePathPattern } from '../parse-path-pattern'
 import { DEFAULT_MAX_BODY_BYTES } from '../payload-too-large'
+import { assertRoutesSecured } from '../secure-routes'
 import { toOpenApi } from '../to-open-api'
 import type { AnyRouteContract, OpenApiExtras, OpenApiInfo, PathSegment } from '../types'
 import { generateGuardSource } from './generate-guard-source'
@@ -23,6 +24,17 @@ export type CompileModuleOptions = OpenApiExtras & {
   readonly info?: OpenApiInfo
   /** Where the precomputed OpenAPI JSON is served. `false` disables. */
   readonly openApiPath?: string | false
+  /**
+   * Export names (in the routes module) of the guards gating the served
+   * OpenAPI document — the same functions passed to
+   * `createApi({ openApiGuards })` in development. The document endpoint is
+   * answered before routing, so `secureRoutes` never reaches it and a
+   * deny-by-default API would otherwise publish its schema to anyone. They run
+   * exactly like a route's security guards (the context factory first, request
+   * slots `undefined`, first denial winning) and a denial is sent as-is,
+   * without response validation.
+   */
+  readonly openApiGuardExports?: readonly string[]
   /**
    * Export name (in the routes module) of the app-context factory — the same
    * function passed to `createApi({ context })` in development. When set, the
@@ -139,6 +151,16 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   const routes = Object.entries(options.routes).map(([name, contract]) => compileEntry(name, contract))
   assertNoDuplicates(routes)
 
+  // Documented-but-unenforced authentication is the failure mode `secureRoutes`
+  // exists to prevent, so a route the document says needs auth but that carries
+  // no resolved guards fails the build rather than shipping an open endpoint —
+  // the same check `createApi` runs at startup.
+  assertRoutesSecured(
+    routes.map((route) => route.contract),
+    options.security,
+    'compileToModule',
+  )
+
   const contextExport = options.contextExport
   assertIdentifier(contextExport, 'contextExport')
   const compileExport = options.compileExport
@@ -155,6 +177,8 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   const onRequestExports = options.onRequestExports ?? []
   const onResponseExports = options.onResponseExports ?? []
   for (const name of [...onRequestExports, ...onResponseExports]) assertIdentifier(name, 'hook export')
+  const openApiGuardExports = options.openApiGuardExports ?? []
+  for (const name of openApiGuardExports) assertIdentifier(name, 'OpenAPI guard export')
   // Infinity (the explicit opt-out) reads as "no cap" below; the default cap
   // matches the runtime adapters so both engines cut off at the same byte.
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES
@@ -166,10 +190,10 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     return [prefix.length > 1 && prefix.endsWith('/') ? prefix.slice(0, -1) : prefix, exportName] as const
   })
 
-  // The onError and observe contracts include env/executionContext, and mounts
+  // The onError and observe contracts include env/executionContext, mounts
   // receive them too (an env-dependent sub-router like Better Auth on Workers),
-  // so route functions must thread the platform arguments even without a
-  // context factory.
+  // and the document gate hands them to the context factory it builds, so route
+  // functions must thread the platform arguments even without a context factory.
   const emitContext: EmitContext = {
     contextExport,
     needsPlatform:
@@ -177,7 +201,8 @@ export const compileToModule = (options: CompileModuleOptions): string => {
       onErrorExport !== undefined ||
       observeExport !== undefined ||
       observeUnmatchedExport !== undefined ||
-      mounts.length > 0,
+      mounts.length > 0 ||
+      openApiGuardExports.length > 0,
     compileExport,
     validateResponses,
   }
@@ -200,6 +225,9 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     refine: false,
     guards: false,
   }
+  // The document gate runs its guards through the same shared loop a route's
+  // do, so it has to exist even when no route declares a guard of its own.
+  if (openApiGuardExports.length > 0) used.guards = true
 
   const declarations: string[] = []
   for (const route of routes) {
@@ -265,6 +293,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     ...(observeUnmatchedExport === undefined ? [] : [observeUnmatchedExport]),
     ...onRequestExports,
     ...onResponseExports,
+    ...openApiGuardExports,
     ...mounts.map(([, exportName]) => exportName),
   ]
   const lines: string[] = [
@@ -363,7 +392,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
       '}',
     )
   }
-  lines.push(...emitErrorHelpers(errorsExport, onErrorExport, used))
+  lines.push(...emitErrorHelpers(errorsExport, onErrorExport, used, openApiGuardExports.length > 0))
   if (validateResponses) {
     // The runtime's invalid_response 500 in emitted form: `result` is the
     // collector's verdict (true = no details, exactly like the pipeline's
@@ -394,6 +423,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
       // imports are limited to the package's public surface.
       "const openApiEtagMatches = (value) => { if (value.trim() === '*') return true; for (const part of value.split(',')) { let candidate = part.trim(); if (candidate.startsWith('W/')) candidate = candidate.slice(2); if (candidate === OPENAPI_ETAG) return true } return false }",
     )
+    if (openApiGuardExports.length > 0) lines.push(...emitOpenApiGate(openApiGuardExports, contextExport))
   }
   lines.push('', ...declarations)
   lines.push(
@@ -406,6 +436,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
       onResponseExports,
       observeExport,
       observeUnmatchedExport,
+      openApiGuardExports.length > 0,
     ),
   )
   lines.push('', 'export default { fetch }', '')
@@ -424,14 +455,19 @@ const assertIdentifier = (name: string | undefined, label: string): void => {
  * runtime pipeline would hand it); without one they collapse to the shared
  * frozen defaults. Call sites always pass the request context — the default
  * builders simply ignore it, which keeps every call site identical.
+ *
+ * `needsToResponse` forces the reply → `Response` translator even with no app
+ * formatters, for the document gate: its denials are ordinary replies that
+ * still have to reach the wire.
  */
 const emitErrorHelpers = (
   errorsExport: string | undefined,
   onErrorExport: string | undefined,
   used: Record<string, boolean>,
+  needsToResponse: boolean,
 ): string[] => {
   const lines: string[] = []
-  if (errorsExport !== undefined || onErrorExport !== undefined) {
+  if (errorsExport !== undefined || onErrorExport !== undefined || needsToResponse) {
     lines.push(
       // Mirrors the fetch adapter's ApiResponse → Response translation so a
       // formatter's reply (headers, raw contentType and all) serializes the
@@ -549,6 +585,64 @@ const emitErrorHelpers = (
       )
     }
   }
+  return lines
+}
+
+/**
+ * Emits the guarded OpenAPI document endpoint. The document is answered before
+ * routing, so `secureRoutes` never sees it — under a deny-by-default API these
+ * guards are the only thing keeping the schema off the open internet. They run
+ * exactly like a route's security guards: the context factory first (they gate
+ * on the session it resolves), then the guards in order with the request slots
+ * `undefined`, first denial winning. No contract sits behind this endpoint, so
+ * a denial is sent as-is — there is no response schema to check it against.
+ */
+const emitOpenApiGate = (guardExports: readonly string[], contextExport: string | undefined): string[] => {
+  // `route: undefined` is what the runtime engine reports for the document
+  // endpoint, since no contract produced the error.
+  const thrown = 'thrown(error, undefined, request, url, rawPath, queryIndex, locals, env, executionContext)'
+  const lines = [
+    `const OPENAPI_GUARDS = [${guardExports.join(', ')}]`,
+    'const guardedOpenApi = (method, request, url, rawPath, queryIndex, locals, env, executionContext) => {',
+    '  const apiRequest = makeApiRequest(request, url, rawPath, queryIndex, locals)',
+    // Serving the document is the same answer the unguarded dispatch inlines;
+    // it lives in a closure here so the gate can reach it once every guard has
+    // passed.
+    '  const serve = () => {',
+    "    const ifNoneMatch = request.headers.get('if-none-match')",
+    '    if (ifNoneMatch !== null && openApiEtagMatches(ifNoneMatch)) return new Response(null, { status: 304, headers: OPENAPI_304_HEADERS })',
+    "    return method === 'HEAD' ? new Response(null, { status: 200, headers: OPENAPI_HEADERS }) : new Response(OPENAPI_JSON, { status: 200, headers: OPENAPI_HEADERS })",
+    '  }',
+    // A denial is an ordinary reply (or the raw-Response escape hatch), and a
+    // HEAD request gets it without a body like every other HEAD reply.
+    "  const deny = (reply) => { const response = reply instanceof Response ? reply : toResponse(reply); return method === 'HEAD' ? stripHeadBody(response) : response }",
+    '  const guardRequest = (appContext) => {',
+    '    const gate = { params: undefined, query: undefined, body: undefined, headers: undefined, cookies: undefined, context: appContext, request: apiRequest }',
+    '    try {',
+    '      const denied = runGuards(OPENAPI_GUARDS, gate, 0)',
+    "      if (denied != null && typeof denied.then === 'function') {",
+    `        return denied.then((early) => (early !== undefined ? deny(early) : serve()), (error) => ${thrown})`,
+    '      }',
+    '      return denied !== undefined ? deny(denied) : serve()',
+    '    } catch (error) {',
+    `      return ${thrown}`,
+    '    }',
+    '  }',
+  ]
+  if (contextExport === undefined) {
+    lines.push('  return guardRequest(undefined)')
+  } else {
+    lines.push(
+      '  let appContext',
+      '  try {',
+      `    appContext = ${contextExport}({ request: apiRequest, env, executionContext, locals })`,
+      '  } catch (error) {',
+      `    return ${thrown}`,
+      '  }',
+      `  return typeof appContext?.then === 'function' ? appContext.then(guardRequest, (error) => ${thrown}) : guardRequest(appContext)`,
+    )
+  }
+  lines.push('}')
   return lines
 }
 
@@ -836,6 +930,10 @@ const compiledValidationExpression = (
  * Emits the route function itself: coerce + guard the declared slots in the
  * same order as the runtime pipeline (params, query, headers, then body),
  * build the context, call the untouched user handler, and map the reply.
+ *
+ * A route whose OpenAPI `security` resolved into guards gets that pipeline as
+ * `run_<name>`, wrapped by the gate {@link emitSecurityGate} emits — nothing
+ * below runs until the guards have passed.
  */
 const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, emitContext: EmitContext): string[] => {
   const { contextExport, needsPlatform } = emitContext
@@ -853,7 +951,17 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
     ...(needsPlatform ? ['env', 'executionContext'] : []),
     ...route.paramNames.map((_, i) => 'p' + i),
   ]
-  lines.push(`const route_${route.name} = (${parameters.join(', ')}) => {`)
+  const securityGuards = route.contract.securityGuards
+  const secured = securityGuards !== undefined && securityGuards.length > 0
+  if (secured) used['guards'] = true
+  // Gated routes take the request and the app context the gate already built:
+  // the factory must run exactly once per request, and the gate needed it
+  // before this pipeline exists.
+  lines.push(
+    secured
+      ? `const run_${route.name} = (apiRequest, appContext, ${parameters.join(', ')}) => {`
+      : `const route_${route.name} = (${parameters.join(', ')}) => {`,
+  )
 
   let paramsValue = 'undefined'
   if (request?.params !== undefined) {
@@ -973,6 +1081,13 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
       lines.push(...invokeLines(bodyValue, 'undefined', indent))
       return lines
     }
+    // A gated route's context arrived as an argument: its security guards gate
+    // on the session, so the factory already ran before validation and its one
+    // value is reused here — the factory runs once per request either way.
+    if (secured) {
+      lines.push(...invokeLines(bodyValue, 'appContext', indent))
+      return lines
+    }
     // The factory runs after validation (mirroring the runtime pipeline) and
     // may be sync or async; a thrown or rejected factory becomes a 500, the
     // same path a throwing handler takes.
@@ -1015,8 +1130,10 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
 
   // The apiRequest is built after the zero-cost guards (params, query,
   // headers) so guard-rejected requests allocate nothing, and before the body
-  // read so exactly one object owns the single-use body stream.
-  lines.push(`  const apiRequest = makeApiRequest(${ERROR_ARGS})`)
+  // read so exactly one object owns the single-use body stream. A gated route
+  // already has it: its security guards see the raw request, so the gate built
+  // it up front and passed it down.
+  if (!secured) lines.push(`  const apiRequest = makeApiRequest(${ERROR_ARGS})`)
   if (request?.body !== undefined) {
     const bodyType = request.bodyType ?? 'json'
     const suffix = slotSuffix('body', route.name)
@@ -1074,6 +1191,66 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
     lines.push(...refineAndRunLines('undefined', '  '))
   }
   lines.push('}')
+  if (secured) lines.push(...emitSecurityGate(route, emitContext, thrownArguments, parameters))
+  return lines
+}
+
+/**
+ * Emits the security gate wrapping a route whose OpenAPI `security` resolved
+ * into guards: build the request, build the app context (the guards gate on the
+ * session it resolves), run the guards in order, and only then hand off to the
+ * validation pipeline with that same context. An unauthenticated caller
+ * therefore never reaches the body reader, the schema error detail, or `refine`
+ * — the deny-by-default promise the runtime engine makes, in emitted form.
+ *
+ * A denial rides `respond_*`, the same response path a handler reply takes, and
+ * a throwing guard or factory takes the ordinary error path.
+ */
+const emitSecurityGate = (
+  route: CompiledEntry,
+  emitContext: EmitContext,
+  thrownArguments: string,
+  parameters: readonly string[],
+): string[] => {
+  const { contextExport } = emitContext
+  const proceed = `run_${route.name}(apiRequest, appContext, ${parameters.join(', ')})`
+  const lines = [
+    `const route_${route.name} = (${parameters.join(', ')}) => {`,
+    `  const apiRequest = makeApiRequest(${ERROR_ARGS})`,
+    '  const guardRequest = (appContext) => {',
+    // No slot has been validated yet, which is exactly what a security guard is
+    // documented to see: the session on the context, and the raw request.
+    '    const gate = { params: undefined, query: undefined, body: undefined, headers: undefined, cookies: undefined, context: appContext, request: apiRequest }',
+    '    try {',
+    // The live contract's array, not a build-time copy — the guards resolved by
+    // `secureRoutes` are threaded exactly like the route's own `guards`.
+    `      const denied = runGuards(${route.name}.securityGuards, gate, 0)`,
+    "      if (denied != null && typeof denied.then === 'function') {",
+    `        return denied.then((early) => (early !== undefined ? respond_${route.name}(early) : ${proceed}), (error) => thrown(error, ${thrownArguments}))`,
+    '      }',
+    `      return denied !== undefined ? respond_${route.name}(denied) : ${proceed}`,
+    '    } catch (error) {',
+    `      return thrown(error, ${thrownArguments})`,
+    '    }',
+    '  }',
+  ]
+  if (contextExport === undefined) {
+    lines.push('  return guardRequest(undefined)')
+  } else {
+    // The factory runs before validation here — the usual "build it late" saving
+    // does not apply to a route whose whole point is rejecting early — and its
+    // value is handed to the pipeline below, so it still runs once per request.
+    lines.push(
+      '  let appContext',
+      '  try {',
+      `    appContext = ${contextExport}({ request: apiRequest, env, executionContext, locals })`,
+      '  } catch (error) {',
+      `    return thrown(error, ${thrownArguments})`,
+      '  }',
+      `  return typeof appContext?.then === 'function' ? appContext.then(guardRequest, (error) => thrown(error, ${thrownArguments})) : guardRequest(appContext)`,
+    )
+  }
+  lines.push('}')
   return lines
 }
 
@@ -1095,6 +1272,7 @@ const emitDispatch = (
   onResponseExports: readonly string[],
   observeExport: string | undefined,
   observeUnmatchedExport: string | undefined,
+  openApiGuarded: boolean,
 ): string[] => {
   const hooked = onRequestExports.length > 0 || onResponseExports.length > 0
   const extraArguments = emitContext.needsPlatform ? ', env, executionContext' : ''
@@ -1162,15 +1340,22 @@ const emitDispatch = (
     )
   }
   if (openApiPath !== undefined) {
-    lines.push(
-      `  if ((method === 'GET' || method === 'HEAD') && rawPath === ${JSON.stringify(openApiPath)}) {`,
-      // A matching validator answers 304 with no body — the document string
-      // is embedded and immutable, so revalidation is a header compare.
-      "    const ifNoneMatch = request.headers.get('if-none-match')",
-      '    if (ifNoneMatch !== null && openApiEtagMatches(ifNoneMatch)) return new Response(null, { status: 304, headers: OPENAPI_304_HEADERS })',
-      "    return method === 'HEAD' ? new Response(null, { status: 200, headers: OPENAPI_HEADERS }) : new Response(OPENAPI_JSON, { status: 200, headers: OPENAPI_HEADERS })",
-      '  }',
-    )
+    lines.push(`  if ((method === 'GET' || method === 'HEAD') && rawPath === ${JSON.stringify(openApiPath)}) {`)
+    if (openApiGuarded) {
+      // Gated: the document endpoint answers only once every document guard
+      // has passed. Its presence forced needsPlatform, so the platform
+      // arguments the gate hands the context factory are in scope here.
+      lines.push(`    return guardedOpenApi(method, ${ERROR_ARGS}, env, executionContext)`)
+    } else {
+      lines.push(
+        // A matching validator answers 304 with no body — the document string
+        // is embedded and immutable, so revalidation is a header compare.
+        "    const ifNoneMatch = request.headers.get('if-none-match')",
+        '    if (ifNoneMatch !== null && openApiEtagMatches(ifNoneMatch)) return new Response(null, { status: 304, headers: OPENAPI_304_HEADERS })',
+        "    return method === 'HEAD' ? new Response(null, { status: 200, headers: OPENAPI_HEADERS }) : new Response(OPENAPI_JSON, { status: 200, headers: OPENAPI_HEADERS })",
+      )
+    }
+    lines.push('  }')
   }
   lines.push("  const path = rawPath.length > 1 && rawPath.endsWith('/') ? rawPath.slice(0, -1) : rawPath")
 

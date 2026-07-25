@@ -1,13 +1,16 @@
 import { validate, validateGuard } from '@amritk/runtime-validators'
 
 import { defineRoute } from '../define-route'
+import { requireContext } from '../require-context'
 import { routeFactory } from '../route-factory'
+import { secureRoutes, securityGuard } from '../secure-routes'
 import type { FetchOnRequest, FetchOnResponse } from '../to-fetch-handler'
 import type {
   AnyRouteContract,
   ApiRequest,
   ApiResponse,
   ContextFactoryInput,
+  ContextGuardInput,
   ErrorFormatters,
   OnErrorDetails,
   RequestObservation,
@@ -20,12 +23,20 @@ import type {
  * inlined guards and interpreter fallbacks, generated serializers and
  * JSON.stringify fallbacks, static and parameterized paths, empty replies,
  * custom headers, thrown errors, and a handler that reads the raw request.
+ *
+ * The corpus runs deny-by-default: both engines get the document-level
+ * `security` below, so every route that is meant to be reachable without
+ * credentials opts out with `security: []`. The handful that genuinely require
+ * a key go through {@link secure} at the bottom of this file, which resolves
+ * their requirement into the guards both engines then run before parsing
+ * anything.
  */
 
 /** Static path, serializer-eligible response. */
 export const health = defineRoute({
   method: 'get',
   path: '/health',
+  security: [],
   responses: {
     200: {
       body: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },
@@ -38,6 +49,7 @@ export const health = defineRoute({
 export const getUser = defineRoute({
   method: 'get',
   path: '/users/{id}',
+  security: [],
   request: {
     params: { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] },
   },
@@ -60,6 +72,7 @@ export const getUser = defineRoute({
 export const listUsers = defineRoute({
   method: 'get',
   path: '/users',
+  security: [],
   request: {
     query: {
       type: 'object',
@@ -81,6 +94,7 @@ export const listUsers = defineRoute({
 export const createUser = defineRoute({
   method: 'post',
   path: '/users',
+  security: [],
   request: {
     body: {
       type: 'object',
@@ -109,6 +123,7 @@ export const createUser = defineRoute({
 export const removeThing = defineRoute({
   method: 'delete',
   path: '/things/{id}',
+  security: [],
   responses: { 204: {} },
   handler: () => ({ status: 204, headers: { 'x-deleted': 'yes' } }),
 })
@@ -117,6 +132,7 @@ export const removeThing = defineRoute({
 export const boom = defineRoute({
   method: 'get',
   path: '/boom',
+  security: [],
   responses: { 200: {} },
   handler: () => {
     throw new Error('nope')
@@ -132,6 +148,7 @@ export const boom = defineRoute({
 export const submitMetric = defineRoute({
   method: 'post',
   path: '/metrics',
+  security: [],
   request: {
     body: {
       type: 'object',
@@ -161,20 +178,130 @@ export type CorpusContext = {
   readonly tenant: string
   readonly viaHeader: string | null
   readonly gateTenant: string | null
+  /** The credential the security guards below gate on. */
+  readonly apiKey: string | null
+  /** How many times the factory has run for this request. Always 1. */
+  readonly runs: number
 }
 
-export const createAppContext = async ({ request, env, locals }: ContextFactoryInput): Promise<CorpusContext> => ({
-  tenant: (env as { tenant?: string } | undefined)?.tenant ?? 'none',
-  viaHeader: request.header('x-ctx') ?? null,
-  // What the onRequest gate resolved into the shared locals bag — proves the
-  // factory sees the same object the gates wrote.
-  gateTenant: (locals?.['tenant'] as string | undefined) ?? null,
+export const createAppContext = async ({ request, env, locals }: ContextFactoryInput): Promise<CorpusContext> => {
+  // Counted in the shared per-request bag so a handler can prove the factory
+  // ran exactly once: a secured route builds its context up front, for the
+  // security guards, and must reuse that value rather than build a second one.
+  const runs = ((locals?.['contextRuns'] as number | undefined) ?? 0) + 1
+  if (locals !== undefined) locals['contextRuns'] = runs
+  return {
+    tenant: (env as { tenant?: string } | undefined)?.tenant ?? 'none',
+    viaHeader: request.header('x-ctx') ?? null,
+    // What the onRequest gate resolved into the shared locals bag — proves the
+    // factory sees the same object the gates wrote.
+    gateTenant: (locals?.['tenant'] as string | undefined) ?? null,
+    apiKey: request.header('x-api-key') ?? null,
+    runs,
+  }
+}
+
+/**
+ * The credential guard behind the document-level default: it gates on what the
+ * context factory resolved, so a route reaching its handler proves the factory
+ * ran before the guards did. Exported as well, because the OpenAPI document
+ * endpoint is answered before routing and so has to be handed the same gate.
+ */
+export const requireApiKey = requireContext((ctx: ContextGuardInput<CorpusContext>) => ctx.context.apiKey !== null, {
+  status: 401,
+  body: { error: 'unauthorized' },
 })
+
+/** Deliberately async, so both engines have to await a security guard. */
+const requireAdminKey = requireContext(
+  async (ctx: ContextGuardInput<CorpusContext>) => {
+    // A microtask hop makes the guard genuinely asynchronous.
+    await Promise.resolve()
+    return ctx.context.apiKey === 'admin-key'
+  },
+  { status: 403, body: { error: 'forbidden' } },
+)
+
+/** The schemes carry both their OpenAPI shape and the guard enforcing them. */
+export const corpusSecuritySchemes = {
+  apiKey: { type: 'apiKey', name: 'x-api-key', in: 'header', [securityGuard]: requireApiKey },
+  adminKey: { type: 'apiKey', name: 'x-api-key', in: 'header', [securityGuard]: requireAdminKey },
+} as const
+
+/** The document-level default: every route needs a key unless it opts out. */
+export const corpusSecurity = [{ apiKey: [] }]
+
+/**
+ * Resolves one route's effective `security` into the guards that enforce it.
+ * Routes marked public with `security: []` need no resolution, which is why
+ * only the guarded handful below go through here.
+ */
+const secure = (route: AnyRouteContract): AnyRouteContract => {
+  const [resolved] = secureRoutes([route], { securitySchemes: corpusSecuritySchemes, security: corpusSecurity })
+  if (resolved === undefined) throw new Error('secureRoutes returned no route')
+  return resolved
+}
+
+const unauthorizedSchema = {
+  type: 'object',
+  properties: { error: { type: 'string' } },
+  required: ['error'],
+} as const
+
+/**
+ * The document default in force over a route that also declares a body and a
+ * refine. Both engines must deny before either runs, so an unauthenticated
+ * caller never sees a parse error, a schema error detail, or the refinement's
+ * verdict — and the reply proves the context factory still ran exactly once.
+ */
+export const secureNote = secure(
+  routeFactory<CorpusContext>()({
+    method: 'post',
+    path: '/notes',
+    request: {
+      body: {
+        type: 'object',
+        properties: { title: { type: 'string', minLength: 1 }, copies: { type: 'integer' } },
+        required: ['title'],
+      },
+    },
+    refine: ({ body }) => (body.title === 'clash' ? [{ path: '/title', message: 'title already taken' }] : undefined),
+    responses: {
+      200: { body: { type: 'object' } },
+      401: { body: unauthorizedSchema },
+    },
+    handler: ({ body, context }) => ({
+      status: 200,
+      body: { title: body.title, copies: body.copies ?? 1, key: context.apiKey, contextRuns: context.runs },
+    }),
+  }),
+)
+
+/**
+ * A per-operation override with two schemes in one requirement — an AND, first
+ * denial winning — over a route with validated params. The guards run before
+ * the params are coerced, so an unparseable id still answers the denial.
+ */
+export const secureReport = secure(
+  routeFactory<CorpusContext>()({
+    method: 'get',
+    path: '/reports/{id}',
+    security: [{ apiKey: [], adminKey: [] }],
+    request: { params: { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] } },
+    responses: {
+      200: { body: { type: 'object' } },
+      401: { body: unauthorizedSchema },
+      403: { body: unauthorizedSchema },
+    },
+    handler: ({ params, context }) => ({ status: 200, body: { id: params.id, contextRuns: context.runs } }),
+  }),
+)
 
 /** Exercises the app context: env binding + request access through the factory. */
 export const whoami = routeFactory<CorpusContext>()({
   method: 'get',
   path: '/whoami',
+  security: [],
   responses: { 200: { body: { type: 'object' } } },
   handler: ({ context }) => ({
     status: 200,
@@ -186,6 +313,7 @@ export const whoami = routeFactory<CorpusContext>()({
 export const platformInfo = defineRoute({
   method: 'get',
   path: '/platform',
+  security: [],
   responses: { 200: { body: { type: 'object' } } },
   handler: ({ request }) => ({
     status: 200,
@@ -200,6 +328,7 @@ export const platformInfo = defineRoute({
 export const login = defineRoute({
   method: 'post',
   path: '/login',
+  security: [],
   responses: { 200: { body: { type: 'object' } } },
   handler: () => ({
     status: 200,
@@ -219,6 +348,7 @@ export const login = defineRoute({
 export const bookSlot = defineRoute({
   method: 'post',
   path: '/slots',
+  security: [],
   request: {
     body: {
       type: 'object',
@@ -242,6 +372,7 @@ export const bookSlot = defineRoute({
 export const bookSlotAsync = defineRoute({
   method: 'post',
   path: '/slots-async',
+  security: [],
   request: {
     body: {
       type: 'object',
@@ -266,6 +397,7 @@ export const bookSlotAsync = defineRoute({
 export const optionsProbe = defineRoute({
   method: 'options',
   path: '/users',
+  security: [],
   responses: { 200: { body: { type: 'object' } } },
   handler: () => ({ status: 200, headers: { 'x-options': 'explicit' }, body: { custom: true } }),
 })
@@ -279,6 +411,7 @@ export const optionsProbe = defineRoute({
 export const guardedResource = defineRoute({
   method: 'get',
   path: '/guarded',
+  security: [],
   request: {
     headers: {
       type: 'object',
@@ -309,6 +442,7 @@ export const guardedResource = defineRoute({
 export const guardBoom = defineRoute({
   method: 'get',
   path: '/guard-boom',
+  security: [],
   responses: { 200: { body: { type: 'object' } } },
   guards: [
     () => {
@@ -322,6 +456,7 @@ export const guardBoom = defineRoute({
 export const localsEcho = defineRoute({
   method: 'get',
   path: '/locals-echo',
+  security: [],
   responses: { 200: { body: { type: 'object' } } },
   handler: ({ request }) => {
     const locals = request.locals ?? {}
@@ -343,6 +478,7 @@ export const mountEcho = (request: Request, env: unknown): Response =>
 export const echoHeader = defineRoute({
   method: 'get',
   path: '/header-echo',
+  security: [],
   responses: { 200: { body: { type: 'object' } } },
   handler: ({ request }) => ({
     status: 200,
@@ -355,6 +491,7 @@ export const echoHeader = defineRoute({
 export const tenantInfo = defineRoute({
   method: 'get',
   path: '/tenant',
+  security: [],
   request: {
     headers: {
       type: 'object',
@@ -373,6 +510,7 @@ export const tenantInfo = defineRoute({
 export const dashboard = defineRoute({
   method: 'get',
   path: '/dashboard',
+  security: [],
   request: {
     cookies: {
       type: 'object',
@@ -388,6 +526,7 @@ export const dashboard = defineRoute({
 export const streamChat = defineRoute({
   method: 'post',
   path: '/chat',
+  security: [],
   responses: { 200: { contentType: 'text/plain; charset=utf-8' } },
   handler: () => {
     const encoder = new TextEncoder()
@@ -406,6 +545,7 @@ export const streamChat = defineRoute({
 export const csvExport = defineRoute({
   method: 'get',
   path: '/export',
+  security: [],
   responses: { 200: { contentType: 'text/csv' } },
   handler: () => ({ status: 200, body: 'a,b\n1,2' }),
 })
@@ -414,6 +554,7 @@ export const csvExport = defineRoute({
 export const rawEcho = defineRoute({
   method: 'post',
   path: '/raw-echo',
+  security: [],
   responses: { 200: { body: { type: 'object' } } },
   handler: async ({ request }) => ({ status: 200, body: { raw: await request.readText() } }),
 })
@@ -429,6 +570,7 @@ export const rawEcho = defineRoute({
 export const rawResponse = defineRoute({
   method: 'get',
   path: '/raw-response',
+  security: [],
   responses: { 200: { body: { type: 'object' } } },
   handler: () =>
     new Response(JSON.stringify({ escaped: true }), {
@@ -450,20 +592,27 @@ const buildInfoSchema = {
   required: ['sha'],
 } as const
 
-/** Deprecated + per-operation security: OpenAPI annotations must match. */
-export const buildInfo = defineRoute({
-  method: 'get',
-  path: '/build-info',
-  deprecated: true,
-  security: [{ apiKey: [] }],
-  responses: { 200: { body: buildInfoSchema } },
-  handler: () => ({ status: 200, body: { sha: 'abc123' } }),
-})
+/**
+ * Deprecated + per-operation security: OpenAPI annotations must match, and the
+ * requirement it spells out is the same one the document default applies
+ * elsewhere — so it resolves to the same guard.
+ */
+export const buildInfo = secure(
+  defineRoute({
+    method: 'get',
+    path: '/build-info',
+    deprecated: true,
+    security: [{ apiKey: [] }],
+    responses: { 200: { body: buildInfoSchema }, 401: { body: unauthorizedSchema } },
+    handler: () => ({ status: 200, body: { sha: 'abc123' } }),
+  }),
+)
 
 /** Documented response headers on a reply that actually sets them. */
 export const releaseInfo = defineRoute({
   method: 'get',
   path: '/release-info',
+  security: [],
   responses: { 200: { body: buildInfoSchema, headers: { 'x-cache': { type: 'string' } } } },
   handler: () => ({ status: 200, headers: { 'x-cache': 'hit' }, body: { sha: 'abc123' } }),
 })
@@ -472,6 +621,7 @@ export const releaseInfo = defineRoute({
 export const submitForm = defineRoute({
   method: 'post',
   path: '/form',
+  security: [],
   request: {
     body: {
       type: 'object',
@@ -492,6 +642,7 @@ export const submitForm = defineRoute({
 export const uploadFile = defineRoute({
   method: 'post',
   path: '/upload',
+  security: [],
   request: {
     body: {
       type: 'object',
@@ -514,6 +665,7 @@ export const uploadFile = defineRoute({
 export const csvUpload = defineRoute({
   method: 'post',
   path: '/csv-upload',
+  security: [],
   request: { body: { type: 'string', minLength: 1 }, bodyType: 'text' },
   responses: { 200: { body: { type: 'object' } } },
   handler: ({ body }) => ({ status: 200, body: { rows: body.split('\n').length, echo: body } }),
@@ -523,6 +675,7 @@ export const csvUpload = defineRoute({
 export const bytesUpload = defineRoute({
   method: 'post',
   path: '/bytes-upload',
+  security: [],
   request: { body: {}, bodyType: 'bytes' },
   responses: { 200: { body: { type: 'object' } } },
   handler: ({ body }) => ({ status: 200, body: { byteLength: (body as Uint8Array).byteLength } }),
@@ -532,6 +685,7 @@ export const bytesUpload = defineRoute({
 export const fileProxy = defineRoute({
   method: 'get',
   path: '/files/{path+}',
+  security: [],
   request: {
     params: { type: 'object', properties: { path: { type: 'string', minLength: 3 } }, required: ['path'] },
   },
@@ -547,6 +701,7 @@ export const fileProxy = defineRoute({
 export const doubleRead = defineRoute({
   method: 'post',
   path: '/double-read',
+  security: [],
   request: { body: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
   responses: { 200: { body: { type: 'object' } } },
   handler: async ({ body, request }) => ({
@@ -615,8 +770,8 @@ export const corpusOnError = (error: unknown, request: ApiRequest, details: OnEr
   body: {
     error: 'handled',
     message: error instanceof Error ? error.message : 'unknown',
-    route: details.route.path,
-    method: details.route.method,
+    route: details.route?.path ?? request.path,
+    method: details.route?.method ?? request.method,
     tenant: (details.env as { tenant?: string } | undefined)?.tenant ?? null,
     // The locals the gate resolved must be visible here too — the error path
     // shares the same per-request bag as the pipeline.

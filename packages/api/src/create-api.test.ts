@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest'
 import { createApi } from './create-api'
 import { defineRoute } from './define-route'
 import { payloadTooLargeError } from './payload-too-large'
+import { requireContext } from './require-context'
 import { routeFactory } from './route-factory'
+import { secureRoutes, securityGuard } from './secure-routes'
 import type { ApiRequest, ValidationFailureBody } from './types'
 
 /**
@@ -1019,5 +1021,71 @@ describe('create-api', () => {
 
     // Hand-written adapters without locals still work — the factory sees undefined.
     expect(await api.handle(request('GET', '/whoami'))).toEqual({ status: 200, body: { tenant: 'none' } })
+  })
+
+  describe('secureRoutes enforcement checks', () => {
+    const unauthorized = { status: 401, body: { error: 'unauthorized' } } as const
+    const requireSession = requireContext(() => false, unauthorized)
+    const schemes = { bearerAuth: { type: 'http', scheme: 'bearer', [securityGuard]: requireSession } }
+
+    /** A route documenting the denial status, so only the wiring is under test. */
+    const guarded = (path: string, security?: readonly Record<string, readonly string[]>[]) =>
+      defineRoute({
+        method: 'get',
+        path,
+        ...(security !== undefined ? { security } : {}),
+        responses: { 200: { body: { type: 'object' } }, 401: { body: { type: 'object' } } },
+        handler: () => ({ status: 200, body: {} }),
+      })
+
+    it('throws when a document-level default covers an unsecured route', () => {
+      expect(() => createApi({ routes: [guarded('/secret')], security: [{ bearerAuth: [] }] })).toThrow(
+        /GET \/secret is documented as requiring authentication by the document-level `security` default/,
+      )
+    })
+
+    it("throws when a route's own security is set and it was never secured", () => {
+      expect(() => createApi({ routes: [guarded('/secret', [{ bearerAuth: [] }])] })).toThrow(
+        /GET \/secret is documented as requiring authentication by its own `security`/,
+      )
+    })
+
+    it('accepts routes that went through secureRoutes', () => {
+      const security = [{ bearerAuth: [] }]
+      const routes = secureRoutes([guarded('/secret')], { securitySchemes: schemes, security })
+      expect(() => createApi({ routes, securitySchemes: schemes, security })).not.toThrow()
+    })
+
+    it('accepts a public opt-out under a document-level default', () => {
+      expect(() => createApi({ routes: [guarded('/health', [])], security: [{ bearerAuth: [] }] })).not.toThrow()
+    })
+
+    it('accepts an unsecured route when nothing documents it as protected', () => {
+      // No own `security` and no document default: nothing was promised, so
+      // there is nothing to enforce.
+      expect(() => createApi({ routes: [guarded('/open')] })).not.toThrow()
+    })
+
+    it('throws when secureRoutes resolved against a different default than the document declares', () => {
+      // The routes really are guarded — but by `bearerAuth`, while the document
+      // tells clients the API is public. Enforcement and documentation drifted.
+      const routes = secureRoutes([guarded('/secret')], {
+        securitySchemes: schemes,
+        security: [{ bearerAuth: [] }],
+      })
+      expect(() => createApi({ routes, securitySchemes: schemes, security: [{ other: ['read'] }] })).toThrow(
+        /relies on the document-level `security` default, but `secureRoutes` resolved it against/,
+      )
+    })
+
+    it('ignores the default mismatch for a route carrying its own security', () => {
+      // Its own requirement is what was resolved, so the document default is
+      // irrelevant to how this route is enforced.
+      const routes = secureRoutes([guarded('/secret', [{ bearerAuth: [] }])], {
+        securitySchemes: schemes,
+        security: [{ bearerAuth: [] }],
+      })
+      expect(() => createApi({ routes, securitySchemes: schemes, security: [{ bearerAuth: ['other'] }] })).not.toThrow()
+    })
   })
 })

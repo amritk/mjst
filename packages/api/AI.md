@@ -82,13 +82,24 @@ Bun.serve({ fetch: handler })      // or: export default { fetch: handler } on W
    with `secureRoutes(routes, { securitySchemes, security })`: put the guard on
    each scheme under the `securityGuard` (`x-guard`) key, set a document-level
    `security` default, and opt public routes out with `security: []`. It resolves
-   each route's effective `security` into guards on `contract.guards` (AND within
-   a requirement object, OR across them), so both engines enforce it; a
-   requirement naming an undefined or guard-less scheme throws at startup, and the
-   guard is stripped from the OpenAPI document. Pass the *same* `securitySchemes`/
-   `security` to `createApi`/`compileToModule` for the document. Blanket document
-   guards are not type-checked against each route's `responses` (they span
-   heterogeneous routes) — use the bare `guards` field when you want that.
+   each route's effective `security` into `contract.securityGuards` (AND within a
+   requirement object, OR across them — the first alternative's denial is what
+   the client sees), so both engines enforce it. A requirement's **scopes** reach
+   the guard as its second argument, so `[{ oauth2: ['admin'] }]` enforces
+   differently from `[{ oauth2: [] }]`. Unlike the route's own `guards`, security
+   guards run **before** slot validation, body reads and `refine` (the context
+   factory runs first, so they can gate on the session) — an unauthenticated
+   caller never reaches the parser or app code, and their context's request slots
+   are `undefined`. Four things throw at startup, all fail-closed: a requirement
+   naming an undefined or guard-less scheme; an empty requirement object `{}`
+   (`allowOptionalSecurity` opts in); a guard whose denial status the route's
+   `responses` omits (`allowUndeclaredDenials` opts out); and — from
+   `createApi`/`compileToModule` — a route documented as requiring auth whose
+   requirement was never resolved, i.e. `secureRoutes` was not called. Pass the
+   *same* `securitySchemes`/`security` to `createApi`/`compileToModule` for the
+   document; the guard is stripped from it. The document endpoint itself is
+   served before matching, so gate it with `openApiGuards` if the schema is not
+   public.
 7. **Brand ids with `x-mjst` for nominal params.** A param/query/body property
    `{ type: 'string', 'x-mjst': { brand: 'UserId' } }` makes the handler (and the
    typed client) see `string & { readonly __brand: 'UserId' }` instead of a plain

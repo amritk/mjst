@@ -15,6 +15,7 @@ import type {
   ApiRequest,
   ApiResponse,
   ContextFactory,
+  ErasedGuard,
   ErasedRefineInput,
   ErasedRequestContext,
   ErrorFormatters,
@@ -45,6 +46,7 @@ export type ApiInternals = {
   readonly table: RouteTable
   readonly openApiPath: string | undefined
   readonly openApiSerialized: () => OpenApiSerialized
+  readonly openApiGuards: readonly ErasedGuard[] | undefined
   readonly createContext: ContextFactory | undefined
   readonly onError: ((error: unknown, request: ApiRequest, details: OnErrorDetails) => ApiResponse) | undefined
   readonly errors: ErrorFormatters | undefined
@@ -89,21 +91,13 @@ export const handleRequest = (
     (request.method === 'GET' || request.method === 'HEAD') &&
     request.path === internals.openApiPath
   ) {
-    const { json, etag } = internals.openApiSerialized()
-    // The document is immutable per process, so a matching validator makes
-    // the revalidation `cache-control: no-cache` forces essentially free.
-    const ifNoneMatch = request.header('if-none-match')
-    if (ifNoneMatch !== undefined && matchesIfNoneMatch(ifNoneMatch, etag)) {
-      return Promise.resolve({ status: 304, headers: { etag, 'cache-control': 'no-cache' } })
+    // The document endpoint is answered before matching, so `secureRoutes`
+    // never sees it — under a deny-by-default API the schema would stay public
+    // unless it is gated here.
+    if (internals.openApiGuards !== undefined) {
+      return guardOpenApi(internals, internals.openApiGuards, request, env, executionContext)
     }
-    // The cached string rides the raw contentType path so adapters send it
-    // as-is instead of re-stringifying the document on every request.
-    return Promise.resolve({
-      status: 200,
-      headers: { etag, 'cache-control': 'no-cache' },
-      body: json,
-      contentType: 'application/json',
-    })
+    return Promise.resolve(serveOpenApi(internals, request))
   }
 
   const errors = internals.errors
@@ -192,6 +186,68 @@ export const handleRequest = (
 }
 
 /**
+ * Serves the cached OpenAPI document, honouring `if-none-match`.
+ */
+const serveOpenApi = (internals: ApiInternals, request: ApiRequest): ApiResponse => {
+  const { json, etag } = internals.openApiSerialized()
+  // The document is immutable per process, so a matching validator makes
+  // the revalidation `cache-control: no-cache` forces essentially free.
+  const ifNoneMatch = request.header('if-none-match')
+  if (ifNoneMatch !== undefined && matchesIfNoneMatch(ifNoneMatch, etag)) {
+    return { status: 304, headers: { etag, 'cache-control': 'no-cache' } }
+  }
+  // The cached string rides the raw contentType path so adapters send it
+  // as-is instead of re-stringifying the document on every request.
+  return {
+    status: 200,
+    headers: { etag, 'cache-control': 'no-cache' },
+    body: json,
+    contentType: 'application/json',
+  }
+}
+
+/**
+ * The guarded document path: build the app context, run the document guards in
+ * order (first denial winning), and serve the document only if none denied.
+ * There is no route contract behind this endpoint, so a denial is sent as-is —
+ * response validation has no schema to check it against.
+ */
+const guardOpenApi = async (
+  internals: ApiInternals,
+  guards: readonly ErasedGuard[],
+  request: ApiRequest,
+  env: unknown,
+  executionContext: unknown,
+): Promise<ApiResponse> => {
+  let denied: RouteReplyValue | Response | undefined
+  try {
+    const appContext =
+      internals.createContext === undefined
+        ? undefined
+        : await internals.createContext({ request, env, executionContext, locals: request.locals })
+    const gate = {
+      params: undefined,
+      query: undefined,
+      body: undefined,
+      headers: undefined,
+      cookies: undefined,
+      context: appContext,
+      request,
+    } as unknown as ErasedRequestContext
+    for (const guard of guards) {
+      denied = await guard(gate)
+      if (denied !== undefined) break
+    }
+  } catch (error) {
+    return internals.onError !== undefined
+      ? internals.onError(error, request, { route: undefined, env, executionContext })
+      : INTERNAL_ERROR
+  }
+  if (denied === undefined) return serveOpenApi(internals, request)
+  return denied instanceof Response ? { status: denied.status, raw: denied } : denied
+}
+
+/**
  * The matched-route section of the pipeline: coerce + validate declared
  * inputs, run the handler, (optionally) validate the reply. Split out so the
  * observe wrapper above times exactly this — the part whose duration belongs
@@ -206,6 +262,50 @@ const runRoute = async (
 ): Promise<ApiResponse> => {
   const errors = internals.errors
   const route = match.route
+
+  // Security guards (resolved from the route's OpenAPI `security` by
+  // `secureRoutes`) gate the request before anything is parsed or validated:
+  // an unauthenticated caller must not reach the body reader, the multipart
+  // parser, the schema error detail, or `refine` — all of which are app-visible
+  // work that a deny-by-default API owes nobody. They gate on the session, so
+  // the context factory runs first here; the usual "build the context after
+  // validation" saving does not apply to a route whose whole point is to
+  // reject before validation. The context is reused below, so the factory
+  // still runs exactly once per request.
+  const securityGuards = route.contract.securityGuards
+  let appContext: unknown
+  let contextBuilt = false
+  if (securityGuards !== undefined) {
+    let denied: RouteReplyValue | Response | undefined
+    try {
+      if (internals.createContext !== undefined) {
+        appContext = await internals.createContext({ request, env, executionContext, locals: request.locals })
+      }
+      contextBuilt = true
+      // The validated slots do not exist yet — a security guard reads the
+      // session and the raw `request`, which is what `SecurityGuard` documents.
+      const gate = {
+        params: undefined,
+        query: undefined,
+        body: undefined,
+        headers: undefined,
+        cookies: undefined,
+        context: appContext,
+        request,
+      } as unknown as ErasedRequestContext
+      for (const guard of securityGuards) {
+        denied = await guard(gate)
+        if (denied !== undefined) break
+      }
+    } catch (error) {
+      return internals.onError !== undefined
+        ? internals.onError(error, request, { route: route.contract, env, executionContext })
+        : INTERNAL_ERROR
+    }
+    // A denial is an ordinary reply: it takes the same response-validation and
+    // serialization path a handler reply would.
+    if (denied !== undefined) return finishReply(denied, route)
+  }
 
   let params: unknown
   if (route.params !== undefined) {
@@ -289,11 +389,12 @@ const runRoute = async (
     }
     // The app context is built after validation so the factory (a session
     // lookup, a database handle) never runs for requests that will be 400ed
-    // anyway. A factory error takes the same path as a handler error.
-    const appContext =
-      internals.createContext === undefined
-        ? undefined
-        : await internals.createContext({ request, env, executionContext, locals: request.locals })
+    // anyway. A factory error takes the same path as a handler error. A route
+    // with security guards already built it above, before validation, and that
+    // one value is reused — the factory runs once per request either way.
+    if (!contextBuilt && internals.createContext !== undefined) {
+      appContext = await internals.createContext({ request, env, executionContext, locals: request.locals })
+    }
     // The erased handler type exists for contract assignability (see
     // AnyRouteContract); the values really do match the contract's schemas at
     // this point, which is what the cast asserts.
@@ -322,6 +423,16 @@ const runRoute = async (
       : INTERNAL_ERROR
   }
 
+  return finishReply(reply, route)
+}
+
+/**
+ * The shared reply tail: the raw-`Response` escape hatch, response validation
+ * when it is on, and the raw-content-type passthrough. A security guard's
+ * denial goes through it too, so a denial is serialized and checked exactly
+ * like the handler reply it replaced.
+ */
+const finishReply = (reply: RouteReplyValue | Response, route: RouteMatch['route']): ApiResponse => {
   // The escape hatch: a handler that returns a raw web Response takes full
   // control of the wire output. It rides out to the adapter untouched via
   // `raw`, skipping response validation and serialization — there is no
