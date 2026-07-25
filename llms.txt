@@ -1,6 +1,6 @@
 # mjst
 
-> Fast, type-safe TypeScript parsers, validators, types, docs, and test data generated from JSON Schema (Draft 2020-12), plus a JSON/YAML linter, a contract-first API layer, and a tiny signals UI layer.
+> Fast, type-safe TypeScript parsers, validators, types, docs, and test data generated from JSON Schema (Draft 2020-12), plus a JSON/YAML linter, and a contract-first API layer.
 
 mjst is a pre-alpha monorepo of independently published `@amritk/*` packages. Each package ships an `AI.md` — a mental model, a minimal runnable example, and the gotchas most likely to trip up an LLM. `llms-full.txt` inlines all of them into one file.
 
@@ -8,8 +8,6 @@ mjst is a pre-alpha monorepo of independently published `@amritk/*` packages. Ea
 
 - [@amritk/mjst](https://github.com/amritk/mjst/blob/main/packages/cli/README.md): Generate TypeScript parsers and type definitions from JSON Schemas — [AI.md](https://github.com/amritk/mjst/blob/main/packages/cli/AI.md)
 - [@amritk/api](https://github.com/amritk/mjst/blob/main/packages/api/README.md): Framework-agnostic, contract-first API layer built on mjst JSON Schema tooling — [AI.md](https://github.com/amritk/mjst/blob/main/packages/api/AI.md)
-- [@amritk/mini](https://github.com/amritk/mjst/blob/main/packages/mini/README.md): A deliberately tiny signals-based UI layer: reactive DOM bindings plus a compilerless JSX runtime — [AI.md](https://github.com/amritk/mjst/blob/main/packages/mini/AI.md)
-- [@amritk/mini-native](https://github.com/amritk/mjst/blob/main/packages/mini-native/README.md): A React-Native-shaped signals UI runtime on mini's model: real host nodes created once, mutated forever by signals, rendered through a pluggable host — [AI.md](https://github.com/amritk/mjst/blob/main/packages/mini-native/AI.md)
 - [@amritk/lint](https://github.com/amritk/mjst/blob/main/packages/lint/README.md): A fast, format-agnostic JSON/YAML style-guide linter with JSON Schema and custom rules — [AI.md](https://github.com/amritk/mjst/blob/main/packages/lint/AI.md)
 - [@amritk/generate-parsers](https://github.com/amritk/mjst/blob/main/packages/generate-parsers/README.md): Generate TypeScript parsers and type definitions from JSON Schemas — [AI.md](https://github.com/amritk/mjst/blob/main/packages/generate-parsers/AI.md)
 - [@amritk/generate-validators](https://github.com/amritk/mjst/blob/main/packages/generate-validators/README.md): Generate TypeScript validation functions from JSON Schemas — [AI.md](https://github.com/amritk/mjst/blob/main/packages/generate-validators/AI.md)

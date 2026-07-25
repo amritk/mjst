@@ -30,26 +30,9 @@ export default defineConfig({
       },
       { find: /^@amritk\/resolve-refs$/, replacement: resolve(root, 'packages/resolve-refs/src/index.ts') },
       { find: /^@amritk\/yaml$/, replacement: resolve(root, 'packages/yaml/src/index.ts') },
-      // The types subpath must resolve to source too (more specific first, like mini below).
+      // The types subpath must resolve to source too (more specific first).
       { find: /^@amritk\/lint\/types$/, replacement: resolve(root, 'packages/lint/src/core/types.ts') },
       { find: /^@amritk\/lint$/, replacement: resolve(root, 'packages/lint/src/index.ts') },
-      // mini's JSX transform emits `import { jsx } from '@amritk/mini/jsx-runtime'`,
-      // so the runtime subpaths must resolve to source (more specific first).
-      { find: /^@amritk\/mini\/jsx-runtime$/, replacement: resolve(root, 'packages/mini/src/jsx-runtime.ts') },
-      { find: /^@amritk\/mini\/jsx-dev-runtime$/, replacement: resolve(root, 'packages/mini/src/jsx-dev-runtime.ts') },
-      // mini-native's transform emits the same imports against its own runtime;
-      // both packages' entries must be matched before the shorter `@amritk/mini`
-      // pattern would swallow them.
-      {
-        find: /^@amritk\/mini-native\/jsx-runtime$/,
-        replacement: resolve(root, 'packages/mini-native/src/jsx-runtime.ts'),
-      },
-      {
-        find: /^@amritk\/mini-native\/jsx-dev-runtime$/,
-        replacement: resolve(root, 'packages/mini-native/src/jsx-dev-runtime.ts'),
-      },
-      { find: /^@amritk\/mini-native$/, replacement: resolve(root, 'packages/mini-native/src/index.ts') },
-      { find: /^@amritk\/mini$/, replacement: resolve(root, 'packages/mini/src/index.ts') },
     ],
   },
   test: {

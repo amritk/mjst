@@ -23,8 +23,6 @@ const BRANCH = 'main'
 const ORDER = [
   'cli',
   'api',
-  'mini',
-  'mini-native',
   'lint',
   'generate-parsers',
   'generate-validators',
@@ -72,7 +70,7 @@ const buildIndex = (packages: Pkg[]): string => {
   lines.push('# mjst')
   lines.push('')
   lines.push(
-    '> Fast, type-safe TypeScript parsers, validators, types, docs, and test data generated from JSON Schema (Draft 2020-12), plus a JSON/YAML linter, a contract-first API layer, and a tiny signals UI layer.',
+    '> Fast, type-safe TypeScript parsers, validators, types, docs, and test data generated from JSON Schema (Draft 2020-12), plus a JSON/YAML linter, and a contract-first API layer.',
   )
   lines.push('')
   lines.push(

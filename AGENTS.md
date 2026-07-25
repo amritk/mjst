@@ -19,7 +19,7 @@ this repository**. For Claude Code the same rules live in
 
 `mjst` is a **Bun monorepo** of JSON Schema (Draft 2020-12) tooling for
 TypeScript: code generators (parsers, validators, types, examples, markdown), a
-JSON/YAML linter, a contract-first API layer, and a tiny signals UI layer. Each
+JSON/YAML linter, and a contract-first API layer. Each
 `packages/*` directory is an independently published `@amritk/*` package with
 its own `AGENTS.md`.
 
@@ -30,7 +30,6 @@ bun install                 # install workspace deps
 bun run build               # build all packages (some tests need runtime-validators built)
 bun run test                # run every package's tests
 bun run check               # biome lint + format check
-bun run check:reactivity    # guard @amritk/mini's compilerless-JSX footgun
 bun run types:check         # type-check all packages
 ```
 
