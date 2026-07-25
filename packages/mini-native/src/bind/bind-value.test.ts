@@ -141,6 +141,26 @@ describe('bind-value', () => {
     expect(asElement(input).props['value']).toBe('partial')
   })
 
+  it('applies a write that arrived mid-composition once the composition ends', () => {
+    // The element is deliberately left alone during a composition, but the write
+    // must not be lost with it. Reading the element back instead would make the
+    // model agree with the element again, leaving the tracking effect nothing to
+    // re-apply — and the app's write would vanish without trace.
+    const memory = createMemoryHost()
+    setHost(memory.host)
+    const model = signal('')
+    const input = memory.host.createElement('input')
+    bindValue(input, model)
+
+    dispatchMemoryEvent(asElement(input), 'compositionstart')
+    asElement(input).props['value'] = 'partial'
+    model('cleared by the app')
+    dispatchMemoryEvent(asElement(input), 'compositionend')
+
+    expect(asElement(input).props['value']).toBe('cleared by the app')
+    expect(model()).toBe('cleared by the app')
+  })
+
   it('resumes composing after the composition ends', () => {
     const memory = createMemoryHost()
     setHost(memory.host)

@@ -22,5 +22,9 @@ export const resolveClass = (value: unknown): string => {
       .map(([name]) => name)
       .join(' ')
   }
-  return value === null || value === undefined || value === false ? '' : String(value)
+  // Every falsy value drops out, not just the three the type permits. `0` and
+  // `NaN` are reachable from untyped input — `count && 'badge'` hands one
+  // straight through — and stringifying first would turn them into the perfectly
+  // truthy class names "0" and "NaN".
+  return value ? String(value) : ''
 }

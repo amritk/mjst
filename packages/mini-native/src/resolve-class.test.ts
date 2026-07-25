@@ -54,4 +54,13 @@ describe('resolve-class', () => {
     expect(resolveClass(7)).toBe('7')
     expect(resolveClass(true)).toBe('true')
   })
+
+  it('drops a falsy number rather than turning it into a class name', () => {
+    // `count && 'badge'` hands `0` straight through, and stringifying before
+    // filtering would turn it into the perfectly truthy class name "0". Only
+    // reachable from untyped input, which is exactly where it would go unnoticed.
+    expect(resolveClass(['card', 0, 'wide'])).toBe('card wide')
+    expect(resolveClass(['card', Number.NaN])).toBe('card')
+    expect(resolveClass(0)).toBe('')
+  })
 })

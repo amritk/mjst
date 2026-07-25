@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { createMemoryHost } from './hosts/create-memory-host'
 import { serializeMemoryTree } from './hosts/serialize-memory-tree'
-import { clearHost, mount, onCleanup, setHost, signal } from './index'
+import { clearHost, list, mount, onCleanup, setHost, signal } from './index'
 
 afterEach(() => {
   clearHost()
@@ -67,5 +67,36 @@ describe('mount', () => {
     label('after')
 
     expect(renders).toBe(afterMount)
+  })
+
+  it('disposes the rows a mounted component built', () => {
+    // `list` ties its row scopes to the scope it was called in rather than to
+    // the reconciliation effect, so unmounting the component has to take the
+    // rows with it. If it did not, every removed row's bindings would keep
+    // running against nodes nobody can see — the failure mode that looks like
+    // nothing at all until something reads a signal it should not.
+    const memory = createMemoryHost()
+    setHost(memory.host)
+    const removed: string[] = []
+    const rows = signal([{ id: 'a' }, { id: 'b' }])
+
+    const dispose = mount(memory.rootElement, () => {
+      const container = memory.host.createElement('view')
+      list(
+        container,
+        rows,
+        (row) => row.id,
+        (row) => {
+          onCleanup(() => removed.push(row.id))
+          return <text>{row.id}</text>
+        },
+      )
+      return container
+    })
+
+    expect(removed).toEqual([])
+    dispose()
+
+    expect(removed).toEqual(['a', 'b'])
   })
 })

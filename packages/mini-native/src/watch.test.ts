@@ -104,22 +104,32 @@ describe('watch', () => {
 
   it('runs the callback untracked so a signal it reads cannot re-fire it', () => {
     // This is the guarantee that lets a callback consult or write other state
-    // freely. Without it, reading `pageSize` inside the callback would quietly
-    // subscribe the watcher to it and every unrelated change would fire the
-    // side effect again.
+    // freely. Without it, reading `pageSize` inside the callback subscribes the
+    // WATCHER to it, and the watcher then wakes up on every unrelated page-size
+    // change. The wasted wake-up is what this counts: only `get` is tracked, so
+    // it must not be re-evaluated for a signal only the callback touched.
     const query = signal('a')
     const pageSize = signal(10)
+    let reads = 0
     let runs = 0
 
-    watch(query, () => {
-      runs++
-      pageSize()
-    })
+    watch(
+      () => {
+        reads++
+        return query()
+      },
+      () => {
+        runs++
+        pageSize()
+      },
+    )
 
     query('b')
     expect(runs).toBe(1)
+    const settled = reads
 
     pageSize(20)
+    expect(reads).toBe(settled)
     expect(runs).toBe(1)
   })
 
@@ -139,12 +149,18 @@ describe('watch', () => {
   })
 
   it('runs the immediate callback untracked too', () => {
+    // The immediate run happens inside the very first evaluation, where a
+    // tracked read would be picked up most easily of all.
     const route = signal('/home')
     const locale = signal('en')
+    let reads = 0
     let runs = 0
 
     watch(
-      route,
+      () => {
+        reads++
+        return route()
+      },
       () => {
         runs++
         locale()
@@ -153,7 +169,10 @@ describe('watch', () => {
     )
 
     expect(runs).toBe(1)
+    const settled = reads
+
     locale('fr')
+    expect(reads).toBe(settled)
     expect(runs).toBe(1)
   })
 
