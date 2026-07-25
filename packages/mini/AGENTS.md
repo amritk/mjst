@@ -31,9 +31,11 @@ bun run --filter='@amritk/mini' types:check
 - **`bindHtml` is the only `innerHTML` sink**, and its `sanitize` argument is
   required at every call site — never add a default. Everything else writes
   through `textContent` / attributes / `classList`.
-- **Subpaths (`router`/`flow`/`forms`/`query`) must add zero bytes to the `.`
-  entry.** `forms`' schema arm and `query` depend on **optional** peers
+- **Subpaths (`router`/`flow`/`forms`/`query`/`hot`) must add zero bytes to the
+  `.` entry.** `forms`' schema arm and `query` depend on **optional** peers
   (`@amritk/runtime-validators`, `@tanstack/query-core`) — keep them optional.
+  `hot` is why `mount` itself has no hot-reload branch: the widget ships one
+  static bundle and must not pay for a dev-server feature.
 - **`show` and `style` share one inline `display` slot.** Applying a style bag
   replaces the inline style wholesale, so a style write would otherwise un-hide
   what `bindShow` hid — and which won came down to the order the attributes were

@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest'
 /**
  * The charter's hardest constraint, enforced: the `.` entry's transitive import
  * graph must contain ONLY mini's own core sources and `alien-signals`. No
- * subpath module (`/router`, `/flow`, `/forms`, `/query`) and no other package
+ * subpath module (`/router`, `/flow`, `/forms`, `/query`, `/hot`) and no other package
  * may leak into core, because the bundle-size-sensitive widget imports `.` — a
  * single stray import here is bytes added to that bundle. This walks the source
  * graph from `src/index.ts` and fails CI the moment anything else appears.
@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest'
 const SRC = fileURLToPath(new URL('.', import.meta.url))
 
 /** The subpath feature directories — none of these may be reachable from `.`. */
-const SUBPATH_DIRS = ['flow', 'router', 'forms', 'query', 'vite', 'internal']
+const SUBPATH_DIRS = ['flow', 'router', 'forms', 'query', 'hot', 'vite', 'internal']
 
 /** Extracts every import/export module specifier from a source file. */
 const specifiersOf = (file: string): string[] => {
@@ -92,7 +92,7 @@ describe('import-boundary', () => {
   // in `/router` or `/forms`, and so on. Sharing a leaf helper under `internal/`
   // is fine (it carries no other feature's weight); reaching a sibling FEATURE
   // directory is the leak this guards against.
-  const FEATURES = ['flow', 'router', 'forms', 'query'] as const
+  const FEATURES = ['flow', 'router', 'forms', 'query', 'hot'] as const
   for (const feature of FEATURES) {
     it(`keeps /${feature} free of the other feature modules`, () => {
       const { files } = walk(resolve(SRC, feature, 'index.ts'))
