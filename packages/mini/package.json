@@ -87,6 +87,12 @@
       "import": "./dist/query/index.js",
       "default": "./dist/query/index.js"
     },
+    "./hot": {
+      "development": "./src/hot/index.ts",
+      "types": "./dist/hot/index.d.ts",
+      "import": "./dist/hot/index.js",
+      "default": "./dist/hot/index.js"
+    },
     "./vite": {
       "development": "./src/vite/index.ts",
       "types": "./dist/vite/index.d.ts",

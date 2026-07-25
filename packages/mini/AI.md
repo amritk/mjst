@@ -95,5 +95,42 @@ expression **is** the `HTMLElement` — components return the element directly.
 | `@amritk/mini/flow` | `Show` / `Switch` / `Match` / `For` / `Dynamic` control-flow | — |
 | `@amritk/mini/forms` | `createForm` field state + validation | `@amritk/runtime-validators` (schema arm only) |
 | `@amritk/mini/query` | `createQuery` cache/dedupe/retry adapter | `@tanstack/query-core` |
+| `@amritk/mini/hot` | `hotMount` — hot reloading at the app entry point | — |
 
 Install: `bun add @amritk/mini` (or npm/pnpm/yarn).
+
+## Hot reload
+
+Both halves are required — the plugin marks the boundary, the helper owns the
+teardown:
+
+```ts
+// vite.config.ts
+import { acceptHotUpdates } from '@amritk/mini/vite'
+plugins: [acceptHotUpdates()]
+```
+
+```tsx
+// main.tsx — the entry module, and the only place this belongs.
+import { hotMount } from '@amritk/mini/hot'
+
+hotMount(document.body, App, import.meta.hot)
+```
+
+- Swap `mount` for `hotMount` **at the entry only**. Without a hot boundary, Vite
+  cannot find a module that accepts the update and reloads the whole page on
+  every edit.
+- **The plugin is not optional.** Vite scans module *source* for
+  `import.meta.hot.accept(`; a runtime `accept` reached through a helper does not
+  register, so `hotMount` alone still full-reloads. The plugin appends that call
+  to whichever module calls `hotMount`.
+- Pass `import.meta.hot` straight through — do **not** write
+  `if (import.meta.hot)` yourself. It is `undefined` in a production build, where
+  `hotMount` is exactly `mount`.
+- Signal state **resets** on each reload: no compiler and no component identity
+  means there is nothing to map old signals onto. State that must survive edits
+  belongs in a separate store module (unchanged modules keep their instance).
+- Never register your own `hot.dispose()` — the runtime keeps one disposer per
+  module, so it would replace mini's and leak the old tree. Extra teardown goes
+  in an `onCleanup` inside the root component.
+- Keep the entry thin: it re-runs on every edit below it.

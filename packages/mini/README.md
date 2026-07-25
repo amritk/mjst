@@ -204,12 +204,48 @@ A thin adapter that bridges [`@tanstack/query-core`](https://tanstack.com/query)
 
 `@tanstack/query-core` is an **optional peer dependency** — install it only if you use `/query`.
 
-### Build guard (`@amritk/mini/vite`)
+### Hot reload (`@amritk/mini/hot`)
 
-A Vite plugin that catches the one footgun of the [reactivity rule](#the-reactivity-rule): calling a signal in a binding (`disabled={streaming()}`) freezes its value at creation instead of tracking it. Because the call happens before `jsx()` runs, neither the runtime nor the type checker can see the mistake — so it is caught in the source, by parsing it.
+One line at the entry point that turns the dev server's full page reload into a tree swap. Vite hot-updates a module only if something **accepts** the update; a mini app accepts nothing, so an edit walks up the import graph to the entry, finds no boundary, and reloads the page. This subpath makes the entry that boundary.
 
 | Export | Purpose |
 |:---|:---|
+| `hotMount(container, component, hot)` | `mount` plus the hot-module wiring: it hands the runtime the mount's `dispose` as the module's teardown, so an edit anywhere below the entry tears the old tree down — every effect and `onCleanup` fires — before the updated entry mounts the new one. Pass `import.meta.hot` straight through: in a production build it is `undefined` and the call is exactly `mount`, so one call site covers both modes. It also accepts at runtime **before** mounting, so a component that throws mid-render leaves an accept callback behind and its fix still arrives as a hot update. |
+| `HotContext` | Exported type — the structural `accept`/`dispose` pair the helper needs. Vite's `import.meta.hot` satisfies it, and this subpath imports no `vite` types of its own. |
+
+It takes both halves: [`acceptHotUpdates()`](#build-plugins-amritkminivite) marks the module as the boundary — only a source transform can, since Vite looks for the literal `import.meta.hot.accept(` in the module text and never sees a runtime call made through a helper.
+
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite'
+
+import { acceptHotUpdates } from '@amritk/mini/vite'
+
+export default defineConfig({ plugins: [acceptHotUpdates()] })
+```
+
+```tsx
+// main.tsx — the entry module. Keep it thin: it re-runs on every edit below it.
+import { hotMount } from '@amritk/mini/hot'
+
+import { App } from './app'
+
+hotMount(document.body, App, import.meta.hot)
+```
+
+Two things to know. **Signal state resets on every reload** — mini has no compiler and no component identity, so there is nothing to map an old component's signals onto in the new one, and a clean remount is the honest behaviour; state that should survive edits belongs in a separate store module, which keeps its instance across an update because it is not the module that changed. And **do not register your own `hot.dispose()`** — the runtime keeps one disposer per module, so a second registration silently replaces mini's and leaks the old tree; extra teardown goes in an `onCleanup` inside the root component, where the mount scope already owns it.
+
+This lives in a subpath rather than in `mount` because the `.` entry is byte-budgeted for the embed widget, which ships one static bundle and has no dev server to hot-update.
+
+### Build plugins (`@amritk/mini/vite`)
+
+Two Vite plugins, both here for the same reason: in a compilerless runtime some things can only be settled by reading the source, because neither the type checker nor the runtime can see them.
+
+`catchCalledSignals` catches the one footgun of the [reactivity rule](#the-reactivity-rule): calling a signal in a binding (`disabled={streaming()}`) freezes its value at creation instead of tracking it, and the call happens before `jsx()` ever runs. `acceptHotUpdates` is the build-time half of [hot reloading](#hot-reload-amritkminihot) — Vite reads a module's text for `import.meta.hot.accept(` to decide whether it can stop an update there, so the call has to be *in* the source.
+
+| Export | Purpose |
+|:---|:---|
+| `acceptHotUpdates()` | A Vite plugin. Appends `import.meta.hot?.accept()` to any first-party module that calls `hotMount`, making it the app's hot-update boundary — without it the dev server finds nothing to accept the update and reloads the whole page. Only modules that mount are touched, the line is appended (so no existing line moves and positions stay honest), and a module that already writes its own `import.meta.hot.accept` is left alone. `apply: 'serve'`, so nothing is injected into a production build. |
 | `catchCalledSignals(options?)` | A Vite plugin. Walks the TypeScript AST of each `.tsx` module on every edit and flags a **signal called inside a binding** — `disabled={streaming()}`, a child `<span>{count()}</span>`, and also sub-expression freezes like `class={active() ? 'on' : 'off'}`, `disabled={busy() || locked}`, `style={{ width: w() }}`, and `` title={`${count()} left`} `` (anywhere in a value that is not itself a getter). It only flags names it can see are signals (`signal()`/`computed()`, or a `Signal<…>`/`ReadonlySignal<…>` type), so one-shot helpers like `id={makeId()}` are left alone, and a call inside an arrow/`.map` callback is the correct reactive form and never flagged. In dev it **warns** in the terminal and shows the findings in Vite's **error overlay** (non-blocking — the module still loads, and the overlay clears on the next clean edit); during `vite build` it **fails** the build — one plugin for both the editor loop and the CI gate. Bare getters and thunks never match; a `// mini-static-ok` comment (same line or the line above) opts out a deliberate case. Pass `{ failOnError }` to force the severity, or `{ overlay: false }` to keep dev feedback in the terminal only. |
 | `findCalledSignalBindings(source)` | The underlying scanner (returns `CalledSignalBinding[]`), for a bespoke lint command or editor integration. |
 | `CatchCalledSignalsOptions`, `CalledSignalBinding` | Exported types. |
@@ -217,10 +253,10 @@ A Vite plugin that catches the one footgun of the [reactivity rule](#the-reactiv
 ```ts
 import { defineConfig } from 'vite'
 
-import { catchCalledSignals } from '@amritk/mini/vite'
+import { acceptHotUpdates, catchCalledSignals } from '@amritk/mini/vite'
 
 export default defineConfig({
-  plugins: [catchCalledSignals()],
+  plugins: [catchCalledSignals(), acceptHotUpdates()],
 })
 ```
 

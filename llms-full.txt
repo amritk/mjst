@@ -147,13 +147,24 @@ Bun.serve({ fetch: handler })      // or: export default { fetch: handler } on W
    with `secureRoutes(routes, { securitySchemes, security })`: put the guard on
    each scheme under the `securityGuard` (`x-guard`) key, set a document-level
    `security` default, and opt public routes out with `security: []`. It resolves
-   each route's effective `security` into guards on `contract.guards` (AND within
-   a requirement object, OR across them), so both engines enforce it; a
-   requirement naming an undefined or guard-less scheme throws at startup, and the
-   guard is stripped from the OpenAPI document. Pass the *same* `securitySchemes`/
-   `security` to `createApi`/`compileToModule` for the document. Blanket document
-   guards are not type-checked against each route's `responses` (they span
-   heterogeneous routes) — use the bare `guards` field when you want that.
+   each route's effective `security` into `contract.securityGuards` (AND within a
+   requirement object, OR across them — the first alternative's denial is what
+   the client sees), so both engines enforce it. A requirement's **scopes** reach
+   the guard as its second argument, so `[{ oauth2: ['admin'] }]` enforces
+   differently from `[{ oauth2: [] }]`. Unlike the route's own `guards`, security
+   guards run **before** slot validation, body reads and `refine` (the context
+   factory runs first, so they can gate on the session) — an unauthenticated
+   caller never reaches the parser or app code, and their context's request slots
+   are `undefined`. Four things throw at startup, all fail-closed: a requirement
+   naming an undefined or guard-less scheme; an empty requirement object `{}`
+   (`allowOptionalSecurity` opts in); a guard whose denial status the route's
+   `responses` omits (`allowUndeclaredDenials` opts out); and — from
+   `createApi`/`compileToModule` — a route documented as requiring auth whose
+   requirement was never resolved, i.e. `secureRoutes` was not called. Pass the
+   *same* `securitySchemes`/`security` to `createApi`/`compileToModule` for the
+   document; the guard is stripped from it. The document endpoint itself is
+   served before matching, so gate it with `openApiGuards` if the schema is not
+   public.
 7. **Brand ids with `x-mjst` for nominal params.** A param/query/body property
    `{ type: 'string', 'x-mjst': { brand: 'UserId' } }` makes the handler (and the
    typed client) see `string & { readonly __brand: 'UserId' }` instead of a plain
@@ -298,8 +309,45 @@ expression **is** the `HTMLElement` — components return the element directly.
 | `@amritk/mini/flow` | `Show` / `Switch` / `Match` / `For` / `Dynamic` control-flow | — |
 | `@amritk/mini/forms` | `createForm` field state + validation | `@amritk/runtime-validators` (schema arm only) |
 | `@amritk/mini/query` | `createQuery` cache/dedupe/retry adapter | `@tanstack/query-core` |
+| `@amritk/mini/hot` | `hotMount` — hot reloading at the app entry point | — |
 
 Install: `bun add @amritk/mini` (or npm/pnpm/yarn).
+
+## Hot reload
+
+Both halves are required — the plugin marks the boundary, the helper owns the
+teardown:
+
+```ts
+// vite.config.ts
+import { acceptHotUpdates } from '@amritk/mini/vite'
+plugins: [acceptHotUpdates()]
+```
+
+```tsx
+// main.tsx — the entry module, and the only place this belongs.
+import { hotMount } from '@amritk/mini/hot'
+
+hotMount(document.body, App, import.meta.hot)
+```
+
+- Swap `mount` for `hotMount` **at the entry only**. Without a hot boundary, Vite
+  cannot find a module that accepts the update and reloads the whole page on
+  every edit.
+- **The plugin is not optional.** Vite scans module *source* for
+  `import.meta.hot.accept(`; a runtime `accept` reached through a helper does not
+  register, so `hotMount` alone still full-reloads. The plugin appends that call
+  to whichever module calls `hotMount`.
+- Pass `import.meta.hot` straight through — do **not** write
+  `if (import.meta.hot)` yourself. It is `undefined` in a production build, where
+  `hotMount` is exactly `mount`.
+- Signal state **resets** on each reload: no compiler and no component identity
+  means there is nothing to map old signals onto. State that must survive edits
+  belongs in a separate store module (unchanged modules keep their instance).
+- Never register your own `hot.dispose()` — the runtime keeps one disposer per
+  module, so it would replace mini's and leak the old tree. Extra teardown goes
+  in an `onCleanup` inside the root component.
+- Keep the entry thin: it re-runs on every edit below it.
 
 ---
 
