@@ -24,6 +24,7 @@ const ORDER = [
   'cli',
   'api',
   'mini',
+  'mini-native',
   'lint',
   'generate-parsers',
   'generate-validators',

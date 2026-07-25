@@ -21,7 +21,8 @@ mjst/
 │   ├── resolve-refs/          # @amritk/resolve-refs — inline internal/cross-file/remote $refs
 │   ├── yaml/                  # @amritk/yaml — tiny YAML parser with exact source positions
 │   ├── helpers/               # @amritk/helpers — shared schema utilities + runtime
-│   └── mini/                  # @amritk/mini — tiny signals UI layer (DOM bindings + compilerless JSX)
+│   ├── mini/                  # @amritk/mini — tiny signals UI layer (DOM bindings + compilerless JSX)
+│   └── mini-native/           # @amritk/mini-native — the same runtime through a pluggable host (native/DOM)
 ├── .claude/                   # Developer guidelines
 ├── .changeset/                # Changesets config (release automation)
 ├── .github/                   # CI, release, issue & PR templates
@@ -138,6 +139,15 @@ A deliberately tiny, compilerless signals UI layer for the bundle-size-sensitive
 - **Composition is explicit** — no runtime plugin registry / `mini.use()` (it would defeat tree-shaking) and no context/provide-inject; dependencies are prop-drilled (e.g. `<Link navigate={router.navigate}>`). `ref` is the element-extension seam.
 - **Depends on:** `alien-signals` (core). `@amritk/runtime-validators` (forms schema validation) and `@tanstack/query-core` (query) are **optional peer dependencies** — install them only for the subpath that needs them.
 - **Build:** browser-only (`lib: DOM`, `types: []`), `tsgo -p tsconfig.build.json && tsc-alias && strip-comments`. Tests use Vitest + happy-dom.
+
+### `@amritk/mini-native` (`packages/mini-native`)
+
+The same runtime with the browser taken out of the core: signals, compilerless JSX, and build-once-mutate-forever nodes, but every platform call goes through a **`Host`** the caller installs with `setHost`. `JSX.IntrinsicElements` is a native vocabulary (`view`/`text`/`image`/`scroll-view`/`input`), not `HTMLElementTagNameMap` — which inverts the usual relationship: the DOM host is a **preview target for a native app** (`view` → `<div>`, `text` → `<span>`), not the real target that native approximates.
+
+- **Porting is one file.** The absence of a reconciler is what makes that true — there is no virtual tree to diff, so a new target means implementing `Host` (about 15 functions) and nothing else. Its one hard requirement: the target's node tree must be **mutable**. Three hosts ship: `hosts/memory` (plain objects, the reference implementation and what the suite runs against), `hosts/dom` (web preview), and `hosts/lynx` (Lynx's Element PAPI, taken as an argument so it is testable against a fake engine).
+- **The core is platform-free, enforced by the compiler.** `tsconfig.json` omits `lib.dom` and Node's ambient types, so a stray `document` anywhere outside `hosts/create-dom-host.ts` fails `types:check`; that one file is excluded there and checked by `tsconfig.dom.json` instead (the `types:check` script runs both passes). Every suite but the DOM host's runs in the node environment, where `document` genuinely does not exist.
+- **Depends on:** `alien-signals` only, re-exported from `src/signals.ts` so nothing else imports it.
+- **Build:** `tsgo -p tsconfig.build.json && tsc-alias && strip-comments`, the same pipeline as every other package.
 
 ## Import Conventions
 

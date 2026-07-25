@@ -1,0 +1,29 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    // The DOM library is deliberately absent. The runtime is supposed to be free
+    // of any platform dependency, and leaving `lib.dom` out turns that from a
+    // convention into something the compiler enforces: a stray `document` or
+    // `HTMLElement` anywhere in the core fails the check rather than quietly
+    // working in a browser and breaking on a device. Node's ambient types go for
+    // the same reason.
+    //
+    // The DOM host is the one place that genuinely needs those types, so it is
+    // excluded here and checked by `tsconfig.dom.json` instead.
+    "lib": ["ESNext"],
+    "types": [],
+    "jsx": "react-jsx",
+    "jsxImportSource": "@amritk/mini-native",
+    // Resolve the package's own JSX runtime to source during type checking. The
+    // JSX transform emits `import { jsx } from '@amritk/mini-native/jsx-runtime'`,
+    // which would otherwise resolve to `dist` (via the package exports) and fail
+    // before the package has been built.
+    "paths": {
+      "@amritk/mini-native/jsx-runtime": ["./src/jsx-runtime.ts"],
+      "@amritk/mini-native/jsx-dev-runtime": ["./src/jsx-dev-runtime.ts"],
+      "@amritk/mini-native": ["./src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["dist", "node_modules", "src/hosts/create-dom-host.ts", "src/hosts/create-dom-host.test.tsx"]
+}

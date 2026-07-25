@@ -186,6 +186,22 @@
         "vite",
       ],
     },
+    "packages/mini-native": {
+      "name": "@amritk/mini-native",
+      "version": "0.0.0",
+      "dependencies": {
+        "alien-signals": "catalog:",
+      },
+      "devDependencies": {
+        "typescript": "^5",
+      },
+      "peerDependencies": {
+        "typescript": "^5",
+      },
+      "optionalPeers": [
+        "typescript",
+      ],
+    },
     "packages/resolve-refs": {
       "name": "@amritk/resolve-refs",
       "version": "0.4.4",
@@ -233,6 +249,8 @@
     "@amritk/lint": ["@amritk/lint@workspace:packages/lint"],
 
     "@amritk/mini": ["@amritk/mini@workspace:packages/mini"],
+
+    "@amritk/mini-native": ["@amritk/mini-native@workspace:packages/mini-native"],
 
     "@amritk/mjst": ["@amritk/mjst@workspace:packages/cli"],
 
