@@ -609,8 +609,7 @@ describe('compile-to-module', () => {
           new Request('http://localhost/openapi.json', {
             headers: { 'x-api-key': 'corpus-key', 'if-none-match': '*' },
           }),
-        () =>
-          new Request('http://localhost/openapi.json', { method: 'HEAD', headers: { 'x-api-key': 'corpus-key' } }),
+        () => new Request('http://localhost/openapi.json', { method: 'HEAD', headers: { 'x-api-key': 'corpus-key' } }),
         // Routes are unaffected by the document gate.
         () => new Request('http://localhost/health'),
       ]

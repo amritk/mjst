@@ -7,7 +7,8 @@ OpenAPI document. The document endpoint is answered before route matching, so
 `secureRoutes` never covers it — without this the full schema stayed public under
 an otherwise deny-by-default API. The guards run exactly like a route's security
 guards: the context factory first, then each guard in order with the first denial
-winning, and the denial is sent as-is.
+winning, and the denial is sent as-is. The compiled engine names them by export —
+`openApiGuardExports: ['requireSession']` — like its other hook options.
 
 `OnErrorDetails.route` is now `AnyRouteContract | undefined`. It is `undefined`
 only for an error raised on the guarded document path, which has no route behind

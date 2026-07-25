@@ -1191,6 +1191,12 @@ otherwise. Gate it with `openApiGuards`, which run exactly like a route's:
 createApi({ routes, securitySchemes, security, openApiGuards: [requireSession] })
 ```
 
+The compiled engine names them by export, like its other hooks:
+
+```ts
+compileToModule({ routesImport, routes, openApiGuardExports: ['requireSession'] })
+```
+
 Reach for `secureRoutes` when the safe default is *closed*; reach for the bare
 `guards` field for per-route, fine-grained checks that need the validated
 request — those still run after validation, just before the handler.

@@ -13,6 +13,7 @@ import type {
   ApiOptions,
   ApiRequest,
   ContextGuardInput,
+  ErasedGuard,
   OnErrorDetails,
   SecurityRequirements,
   ValidationFailureBody,
@@ -494,5 +495,47 @@ describe('security-guard-ordering', () => {
     const accepted = await api.handle(request('POST', '/open/1', { body: note }))
     expect(accepted).toEqual({ status: 200, body: { ok: true } })
     expect(built).toBe(1)
+  })
+
+  it('reports a security guard that outgrew the body cap as a 413', async () => {
+    // A guard that reads the body itself (signature verification) hits the cap
+    // as a thrown error. That is the transport's 413, not a guard crash — the
+    // same rule the handler and the body reader already follow, and what the
+    // compiled engine reports, so the engines agree.
+    const contract = defineContract({
+      method: 'get',
+      path: '/verify',
+      responses: { 200: { body: { type: 'object' } }, 401: { body: { type: 'object' } } },
+    })
+    const throwing: SecurityGuard = () => {
+      throw payloadTooLargeError(8)
+    }
+    const routes = secureRoutes([routeImplementer()(contract, () => ({ status: 200, body: {} }))], {
+      securitySchemes: { sig: { type: 'http', scheme: 'bearer', [securityGuard]: throwing } },
+      security: [{ sig: [] }],
+    })
+    const api = createApi({ routes, onError: () => ({ status: 500, body: { error: 'went-to-onError' } }) })
+    expect(await api.handle(request('GET', '/verify'))).toEqual({
+      status: 413,
+      body: { error: 'payload_too_large' },
+    })
+  })
+
+  it('reports an OpenAPI document guard that outgrew the body cap as a 413', async () => {
+    // Typed as a plain route guard rather than a `SecurityGuard`: nothing
+    // declares a security requirement for the document, so a document guard is
+    // never handed scopes.
+    const gate: ErasedGuard = () => {
+      throw payloadTooLargeError(8)
+    }
+    const api = createApi({
+      routes: [],
+      openApiGuards: [gate],
+      onError: () => ({ status: 500, body: { error: 'went-to-onError' } }),
+    })
+    expect(await api.handle(request('GET', '/openapi.json'))).toEqual({
+      status: 413,
+      body: { error: 'payload_too_large' },
+    })
   })
 })

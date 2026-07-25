@@ -239,6 +239,9 @@ const guardOpenApi = async (
       if (denied !== undefined) break
     }
   } catch (error) {
+    // Same transport-level 413 the route pipeline reports, for a guard that
+    // read the body itself.
+    if (isPayloadTooLargeError(error)) return internals.errors?.payloadTooLarge?.(request) ?? PAYLOAD_TOO_LARGE
     return internals.onError !== undefined
       ? internals.onError(error, request, { route: undefined, env, executionContext })
       : INTERNAL_ERROR
@@ -298,6 +301,10 @@ const runRoute = async (
         if (denied !== undefined) break
       }
     } catch (error) {
+      // A guard that read the body itself (a signature check) hits the size
+      // limit as a thrown error — the transport's 413, exactly as it is for the
+      // handler below.
+      if (isPayloadTooLargeError(error)) return errors?.payloadTooLarge?.(request) ?? PAYLOAD_TOO_LARGE
       return internals.onError !== undefined
         ? internals.onError(error, request, { route: route.contract, env, executionContext })
         : INTERNAL_ERROR
