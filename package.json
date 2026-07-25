@@ -5,7 +5,6 @@
     "packages/*"
   ],
   "catalog": {
-    "alien-signals": "3.2.1",
     "json-schema-typed": "^8.0.1"
   },
   "type": "module",
@@ -29,7 +28,6 @@
     "types:check": "bun run --workspaces types:check",
     "lint:check": "bun run check",
     "check": "biome check .",
-    "check:reactivity": "bun run scripts/catch-called-signals.ts",
     "format": "biome check --write --formatter-enabled=true --linter-enabled=false .",
     "lint": "biome lint .",
     "pretest": "bun run --filter='@amritk/runtime-validators' build",
@@ -49,7 +47,6 @@
     "@valibot/to-json-schema": "^1.7.0",
     "effect": "^3.21.2",
     "esbuild": "^0.28.1",
-    "happy-dom": "^20.0.0",
     "ts-go": "^1.0.4",
     "tsc-alias": "^1.8.17",
     "typescript": "^5",
