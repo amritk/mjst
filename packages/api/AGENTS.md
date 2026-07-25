@@ -17,9 +17,12 @@ bun run --filter='@amritk/api' types:check
 ## Invariants — do not break these
 
 - **ESM-only.** No CJS entry point. Keep it that way.
-- **Two entries only:** `.` (runtime/client/adapters/OpenAPI) and `./bundler`
-  (build-time strip plugins). Bundler code must never be imported by runtime/
-  server code.
+- **Three entries, each one-way:** `.` (runtime/client/adapters/OpenAPI),
+  `./bundler` (build-time strip plugins), and `./dev` (hot reloading). The
+  dependency only ever points *into* `.`: bundler and dev code may import the
+  runtime, never the reverse. That is what keeps `node:fs` watching and module
+  re-importing out of the graph that ships to Workers and browsers — do not add
+  a fourth entry without the same justification.
 - **The adapter split is intentional:** hooks / `mounts` / CORS belong to
   `toFetchHandler`, not `toNodeHandler`. Don't add them to the Node adapter.
 - **Lots of exports are compiler plumbing** (`buildQueryObjectFromString`,

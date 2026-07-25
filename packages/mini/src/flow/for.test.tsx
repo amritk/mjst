@@ -60,6 +60,33 @@ describe('for', () => {
     expect(labels(host)).toEqual(['x', 'y'])
   })
 
+  it('honours a `key` written as a JSX attribute', () => {
+    // JSX reserves `key`: the transform hoists it out of the props object and
+    // into the runtime's third parameter before the component is ever called,
+    // so a runtime that drops it there leaves `For` silently falling back to
+    // `defaultKey`. That surfaces later as rows mysteriously not updating
+    // rather than as any kind of error, which is why this reads the way it looks.
+    const items = signal<readonly Item[]>([
+      { id: '1', label: 'a' },
+      { id: '2', label: 'b' },
+    ])
+    const host = (
+      <For each={items} key={(item: Item) => item.label}>
+        {row}
+      </For>
+    )
+    const first = host.firstElementChild
+    items([
+      { id: '1', label: 'renamed' },
+      { id: '2', label: 'b' },
+    ])
+    // Keying on the label rather than the id makes a relabel a NEW identity, so
+    // the node is rebuilt with the new text. With the key dropped, `defaultKey`
+    // would have keyed on `id`, reused the node, and left it reading 'a'.
+    expect(host.firstElementChild).not.toBe(first)
+    expect(labels(host)).toEqual(['renamed', 'b'])
+  })
+
   it('passes the creation-time index to the child factory', () => {
     const items = signal<readonly Item[]>([
       { id: '1', label: 'a' },

@@ -25,9 +25,22 @@ export type ChildFactory = () => Node | null
  * at all is what avoids that: the branch scope is only ever torn down on a real
  * flip, right before the next one is built.
  *
- * The previous scope is disposed explicitly at the top of each run rather than
- * through an effect-cleanup return: scopes created inside an effect persist
- * across its re-runs, so they must be torn down by hand.
+ * That same engine behaviour is what gives the branch its lifetime, so it is
+ * worth stating plainly: alien-signals disposes a scope created inside an effect
+ * when that effect re-runs (before the new run's body starts) and when the
+ * effect itself is disposed. So the branch scope is already tied to the swap
+ * effect, and the swap effect is already tied to whatever scope `renderChild`
+ * was called in — the component's. Both handovers therefore happen on their own:
+ * a real flip disposes the outgoing branch, and unmounting the component
+ * disposes the last one. That is why `Show` and friends can ignore the returned
+ * teardown without leaking a branch.
+ *
+ * The explicit `dispose?.()` calls are kept anyway. They are idempotent — a
+ * second dispose of an already-disposed scope does nothing, and its `onCleanup`s
+ * still fire exactly once — and they make the branch's lifetime legible right
+ * where it changes, instead of resting silently on an engine detail. Contrast
+ * `list`, which cannot lean on that detail at all: its rows must outlive the
+ * effect that builds them, so it detaches them and owns their teardown outright.
  */
 export const renderChild = (host: Element, select: () => ChildFactory | null): (() => void) => {
   let dispose: (() => void) | null = null

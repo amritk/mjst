@@ -50,16 +50,37 @@ import type { Component, HostElement, MiniChildren } from './types'
  * - No conditional or list rendering inside expressions. A function child is a
  *   reactive TEXT binding only; structural changes go through `Show`, `Dynamic`,
  *   and `For`.
- * - `key` is accepted (JSX reserves it) and ignored — keying lives in `list`,
- *   the one place collections are reconciled.
+ * - `key` on an ELEMENT is accepted (JSX reserves it) and ignored — keying lives
+ *   in `list`, the one place collections are reconciled. On a COMPONENT it is
+ *   forwarded as an ordinary prop; see the note in `jsx` for why that is not the
+ *   same decision.
  */
-export const jsx = (tag: ElementTag | Component<never>, props: ElementPropBag, _key?: unknown): HostElement => {
+export const jsx = (tag: ElementTag | Component<never>, props: ElementPropBag, key?: unknown): HostElement => {
   // A component runs exactly once. There is no instance and no lifecycle;
   // whatever reactivity it sets up internally is all that ever updates after.
-  if (typeof tag === 'function') return (tag as (props: ElementPropBag) => HostElement)(props)
+  //
+  // `key` is handed back to a component rather than dropped. The JSX transform
+  // hoists any `key` attribute out of the props object and into this third
+  // parameter before the component is ever called — a React convention this
+  // runtime inherits from the transform whether it wants to or not — so a
+  // component with a legitimate prop of that name would silently never receive
+  // it. `For` is exactly that component: `<For each={rows} key={byId}>` would
+  // quietly fall back to the default key, which is the kind of bug that shows
+  // up as rows mysteriously not updating rather than as an error. There is no
+  // competing meaning to protect here, because this framework does no
+  // keying at the JSX level at all.
+  if (typeof tag === 'function') {
+    const withKey = key === undefined ? props : { ...props, key }
+    return (tag as (props: ElementPropBag) => HostElement)(withKey)
+  }
 
   const host = requireHost()
-  const element = host.createElement(tag)
+  // The props go in as well as being applied below, because a few of them
+  // decide what the host BUILDS rather than how the built element behaves —
+  // `input multiline` becomes a different control entirely, and no target can
+  // swap one for the other after the fact. Hosts with nothing to read here
+  // ignore the argument.
+  const element = host.createElement(tag, props)
   let ref: ((element: HostElement) => void) | undefined
 
   for (const [name, value] of Object.entries(props)) {

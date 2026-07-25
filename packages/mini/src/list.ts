@@ -1,5 +1,8 @@
 import { effect, effectScope } from 'alien-signals'
 
+import { onCleanup } from './on-cleanup'
+import { runDetached } from './run-detached'
+
 /** A live row: its DOM node and the dispose for the scope its bindings live in. */
 type Entry = { node: HTMLElement; dispose: () => void }
 
@@ -23,7 +26,9 @@ type Entry = { node: HTMLElement; dispose: () => void }
  * focus, scroll, and input state.
  *
  * Returns a dispose function that stops tracking and tears down every item scope
- * (without removing the container itself).
+ * (without removing the container itself). The same teardown is registered with
+ * `onCleanup`, so disposing the scope `list` was called in — the component's —
+ * cleans the rows up too, without the caller having to hold on to the return.
  *
  * @example
  * ```tsx
@@ -68,9 +73,16 @@ export const list = <T>(
         // definite, just invisible to the compiler — hence the non-null `!`.
         let node!: HTMLElement
         const created = index
-        const dispose = effectScope(() => {
-          node = create(item, created)
-        })
+        // Detached on purpose: alien-signals disposes a scope created inside a
+        // running effect the moment that effect re-runs, so a row scope owned by
+        // this effect would die the next time the collection changed. Appending
+        // one row would leave every earlier row in the document with dead
+        // bindings and an already-fired `onCleanup`. See `runDetached`.
+        const dispose = runDetached(() =>
+          effectScope(() => {
+            node = create(item, created)
+          }),
+        )
         live.set(k, { node, dispose })
       }
       order.push(k)
@@ -82,11 +94,23 @@ export const list = <T>(
     prev = order
   })
 
-  return () => {
+  // Clearing `live` as it goes makes this safe to call twice, which matters now
+  // that both an explicit call and scope teardown can reach it.
+  const dispose = (): void => {
     stop()
     for (const entry of live.values()) entry.dispose()
     live.clear()
   }
+
+  // Row scopes are detached from the reconciliation effect, so nothing upstream
+  // tears them down on its own any more — before the detach, disposing the
+  // component's scope disposed `stop`, and that took every row scope with it.
+  // Registering here restores exactly that: unmounting the component still
+  // disposes every row. Outside a scope (a bare `list` in a test) `onCleanup`
+  // simply never fires, which is the same lifetime the list had before.
+  onCleanup(dispose)
+
+  return dispose
 }
 
 /** The DOM node currently bound to `k` (guaranteed present after pass 1). */

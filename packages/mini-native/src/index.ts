@@ -39,13 +39,20 @@ export { bindShow } from './bind/bind-show'
 export { bindText } from './bind/bind-text'
 export { bindValue } from './bind/bind-value'
 export { clearHost, requireHost, setHost } from './current-host'
-export { ELEMENT_TAGS, type ElementProps, type ElementTag } from './elements'
+export {
+  ELEMENT_TAGS,
+  type ElementProps,
+  type ElementTag,
+  type NativeEventHandler,
+  type NativeEventMap,
+} from './elements'
 export type { Host, HostEventHandler } from './host'
 export { list } from './list'
 export { mount } from './mount'
 export { onCleanup } from './on-cleanup'
 export { type ChildFactory, renderChild } from './render-child'
 export {
+  batch,
   computed,
   effect,
   effectScope,
@@ -56,6 +63,8 @@ export {
 export type {
   ClassValue,
   Component,
+  ContainerChild,
+  ContainerChildren,
   Dispose,
   HostElement,
   HostNode,
@@ -65,3 +74,5 @@ export type {
   MiniChildren,
   StyleValue,
 } from './types'
+export { untrack } from './untrack'
+export { type WatchOptions, watch } from './watch'

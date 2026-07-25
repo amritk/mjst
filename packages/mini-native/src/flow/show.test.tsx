@@ -89,4 +89,64 @@ describe('show', () => {
     open(false)
     expect(cleaned).toBe(true)
   })
+
+  it('hands the function child a getter for the narrowed value', () => {
+    const memory = createMemoryHost()
+    setHost(memory.host)
+    const user = signal<{ name: string } | null>({ name: 'sam' })
+
+    mount(memory.rootElement, () => <Show when={user}>{(value) => <text>{() => value().name}</text>}</Show>)
+
+    expect(serializeMemoryTree(memory.root)).toContain('"sam"')
+  })
+
+  it('updates the child through the getter without rebuilding the branch', () => {
+    // The whole reason the child receives a getter rather than a raw value: a
+    // truthy→truthy change has to flow into the existing branch, because
+    // rebuilding it would drop whatever state it held — a focused input, say.
+    const memory = createMemoryHost()
+    setHost(memory.host)
+    const user = signal<{ name: string } | null>({ name: 'sam' })
+    let builds = 0
+    let cleaned = false
+
+    mount(memory.rootElement, () => (
+      <Show when={user}>
+        {(value) => {
+          builds += 1
+          onCleanup(() => {
+            cleaned = true
+          })
+          return <text>{() => value().name}</text>
+        }}
+      </Show>
+    ))
+
+    expect(builds).toBe(1)
+    user({ name: 'alex' })
+
+    expect(serializeMemoryTree(memory.root)).toContain('"alex"')
+    // Built once and never torn down: the branch survived the change.
+    expect(builds).toBe(1)
+    expect(cleaned).toBe(false)
+  })
+
+  it('keeps the last truthy value readable while the branch is torn down', () => {
+    // Both the swap and the child's text binding depend on `when`, so on the way
+    // to falsy the child can be read one last time. The getter answers with the
+    // previous value instead of the falsy one, so `value().name` cannot throw
+    // regardless of which effect runs first.
+    const memory = createMemoryHost()
+    setHost(memory.host)
+    const user = signal<{ name: string } | null>({ name: 'sam' })
+
+    mount(memory.rootElement, () => (
+      <Show when={user} fallback={() => <text>anonymous</text>}>
+        {(value) => <text>{() => value().name}</text>}
+      </Show>
+    ))
+
+    expect(() => user(null)).not.toThrow()
+    expect(serializeMemoryTree(memory.root)).toContain('"anonymous"')
+  })
 })

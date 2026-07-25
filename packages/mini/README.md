@@ -95,7 +95,11 @@ Each binding ties one node property to a signal-reading getter and returns the e
 
 The automatic runtime TypeScript targets when a package sets `"jsx": "react-jsx"` and `"jsxImportSource": "@amritk/mini"`. Exposes `jsx`, `jsxs`, `jsxDEV`, and the `JSX` namespace, plus the `Component`, `MaybeReactive`, `MiniChild`, `MiniChildren`, `ClassValue`, `StyleValue`, and `TargetedEvent` types.
 
-SVG tags are created in the SVG namespace, so `<svg>`/`<path>`/… render as real SVG. `class` accepts a string, an array (falsy entries dropped), or a `{ name: boolean }` toggle map; `style` accepts a cssText string or a property object (camelCase keys are kebab-cased) — each still static-or-reactive by the value-shape rule.
+SVG tags are created in the SVG namespace, so `<svg>`/`<path>`/… render as real SVG. `class` accepts a string, a (nestable) array with falsy entries dropped, or a `{ name: boolean }` toggle map; `style` accepts a cssText string or a property object (camelCase keys are kebab-cased) — each still static-or-reactive by the value-shape rule.
+
+In a style object a **bare number means pixels**, as it does in React, Preact, and Solid: `style={{ width: 100 }}` is `100px`. The properties CSS treats as unitless (`opacity`, `zIndex`, `flex`, `lineHeight`, …) and custom `--*` properties are passed through untouched, and a string is always taken verbatim, so reach for one whenever you want a different unit.
+
+`show` and `style` can be used on the same element without fighting over `display`: hiding wins while it is in effect, and showing the element again restores whatever its own style asked for.
 
 ---
 

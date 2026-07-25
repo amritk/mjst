@@ -917,6 +917,70 @@ const api = createApi({
 })
 ```
 
+### Development: hot reloading
+
+`@amritk/api/dev` turns the runtime engine into a hot-reloading dev server:
+the process keeps its socket, its connections, and everything living outside
+your route modules, while the route table, validators, and OpenAPI document
+are rebuilt from the code on disk whenever it changes. No restart, no
+`node --watch` losing your in-memory state between saves.
+
+```ts
+// dev.ts — bun dev.ts, node dev.js, deno run dev.ts
+import { toFetchHandler } from '@amritk/api'
+import { createHotApi, importFresh, watchPaths } from '@amritk/api/dev'
+
+const api = await createHotApi({
+  load: async () => {
+    const routes = await importFresh<typeof import('./src/routes')>('./src/routes.ts')
+    return { routes: Object.values(routes), validateResponses: true }
+  },
+  watch: watchPaths('src'),
+})
+
+Bun.serve({ port: 3000, fetch: toFetchHandler(api) })
+// or: http.createServer(toNodeHandler(api)).listen(3000)
+```
+
+`api` is a normal `Api` — the same object `toFetchHandler` / `toNodeHandler` /
+`createDocs` take — so it is wired in once and never mentioned again. Three
+pieces make it up:
+
+| Export | What it does |
+|:---|:---|
+| `createHotApi({ load, watch?, onReload?, onReloadError?, log? })` | The stable `Api` whose build is swapped underneath it. Adds `reload(changed?)`, `close()`, `generation()`, and `error()`. |
+| `watchPaths(paths, { extensions?, ignore?, debounceMs? })` | Recursive filesystem watching, debounced into one batch per save. It is just the default `watch` seam — anything of the shape `(onChange) => dispose` fits, so a bundler's watcher or a test's manual trigger drops straight in. |
+| `importFresh(specifier, { base?, graph?, root? })` | Re-imports a module the runtime has already cached, which is what lets `load` see new code. Resolves relative specifiers against `process.cwd()` by default. |
+
+What it guarantees while you edit:
+
+- **The swap is atomic.** A reload only takes over once the new build
+  succeeded, and in-flight requests finish against the build they started on.
+- **A broken edit does not take the server down.** The previous build keeps
+  serving, the error is logged and kept on `api.error()`. Fix the file, save,
+  and the next reload takes over.
+- **A broken *first* build still binds the port** and answers `503
+  {error:'not_loaded'}` with the reason, instead of exiting before you can
+  curl it.
+- **Reloads coalesce.** Edits landing mid-build share one follow-up pass, so
+  a `git checkout` costs one extra build rather than one per file.
+
+How far a reload reaches depends on the runtime. On Node (22.15+) it covers
+the **whole local graph** — editing a handler three imports deep rebuilds the
+API — via a `node:module` resolve hook, scoped to files under `root` so your
+dependencies are never re-evaluated. Elsewhere (Bun, Deno, older Node) the
+module named in `load` reloads but the modules *it* imports keep their
+instances; `bun --hot` covers that case natively, so on Bun either run under
+`--hot` **or** use `watchPaths`, not both — otherwise every save reloads
+twice.
+
+Modules that reload get **fresh instances**, so anything that must survive a
+reload — a connection pool, an in-memory store — belongs outside them (on
+`globalThis`, or in a module outside `root`). And keep this entry out of
+production: every generation stays in memory, and `createApi`'s startup checks
+(duplicate routes, unsecured routes) are worth failing a deploy over rather
+than logging. Production is the compiled engine, next.
+
 ### Production: the compiled engine
 
 `compileToModule` is the production counterpart to `createApi` — it emits a

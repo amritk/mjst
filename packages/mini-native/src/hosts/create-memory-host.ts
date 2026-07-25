@@ -89,7 +89,7 @@ export const createMemoryHost = (): MemoryHost => {
 
     insert: (parent, node, anchor) => {
       const parentEl = fromHostElement(parent)
-      const child = fromHostNode(node)
+      const child = requireMemoryNode(node)
       // Detach first so an insert doubles as a move, which is exactly what the
       // list reconciler relies on when rows change position.
       detach(child)
@@ -135,6 +135,30 @@ const element = (tag: string): MemoryElement => ({
   visible: true,
   parent: null,
 })
+
+/**
+ * Checks that something really is a node this host made, before it is linked
+ * into the tree.
+ *
+ * Every host crosses the opaque-handle boundary with a cast, and a cast believes
+ * whatever it is told — so anything that slips past the types (a `Date`, a plain
+ * object, a promise) lands in the tree as a child that nothing can render or
+ * serialise, and the failure surfaces somewhere far away. This host is also the
+ * test host, which makes a loud error here worth far more than the microscopic
+ * cost of the check: a test that hands over the wrong thing says so immediately.
+ */
+const requireMemoryNode = (node: HostNode): MemoryNode => {
+  const candidate = node as unknown
+  if (typeof candidate === 'object' && candidate !== null) {
+    const kind = (candidate as { kind?: unknown }).kind
+    if (kind === 'element' || kind === 'text') return candidate as MemoryNode
+  }
+  throw new TypeError(
+    `The memory host can only insert nodes it created, and received ${String(candidate)} instead. ` +
+      'A value like this usually reaches the tree as a child that is neither a host node, a string, ' +
+      'nor a function — convert it to a string first.',
+  )
+}
 
 /** Unlinks a node from whatever parent currently holds it. */
 const detach = (node: MemoryNode): void => {
