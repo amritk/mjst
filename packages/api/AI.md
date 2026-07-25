@@ -77,7 +77,18 @@ Bun.serve({ fetch: handler })      // or: export default { fetch: handler } on W
    the status stays visible to OpenAPI + `createClient`). `requireContext(
    predicate, deniedReply)` builds the common session/role check; declare the
    shared denial shape once (`const authResponses = { 401: {...} } as const`) and
-   spread it into each protected route's `responses`.
+   spread it into each protected route's `responses`. For **deny-by-default**
+   (every route requires auth; you name the public ones), wrap the route array
+   with `secureRoutes(routes, { securitySchemes, security })`: put the guard on
+   each scheme under the `securityGuard` (`x-guard`) key, set a document-level
+   `security` default, and opt public routes out with `security: []`. It resolves
+   each route's effective `security` into guards on `contract.guards` (AND within
+   a requirement object, OR across them), so both engines enforce it; a
+   requirement naming an undefined or guard-less scheme throws at startup, and the
+   guard is stripped from the OpenAPI document. Pass the *same* `securitySchemes`/
+   `security` to `createApi`/`compileToModule` for the document. Blanket document
+   guards are not type-checked against each route's `responses` (they span
+   heterogeneous routes) — use the bare `guards` field when you want that.
 7. **Brand ids with `x-mjst` for nominal params.** A param/query/body property
    `{ type: 'string', 'x-mjst': { brand: 'UserId' } }` makes the handler (and the
    typed client) see `string & { readonly __brand: 'UserId' }` instead of a plain

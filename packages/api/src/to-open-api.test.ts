@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { defineRoute } from './define-route'
+import { securityGuard } from './secure-routes'
 import { toOpenApi } from './to-open-api'
 
 const info = { title: 'Test API', version: '1.2.3' }
@@ -165,6 +166,30 @@ describe('to-open-api', () => {
     expect(document.servers).toEqual([{ url: 'https://api.example.com', description: 'production' }])
     expect(document.security).toEqual([{ bearerAuth: [] }])
     expect(document.components).toEqual({ securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer' } } })
+  })
+
+  it('strips the secureRoutes guard from a security scheme, keeping its other keys', () => {
+    const guard = () => undefined
+    const document = toOpenApi([getUser], info, {
+      securitySchemes: {
+        bearerAuth: { type: 'http', scheme: 'bearer', [securityGuard]: guard },
+        apiKey: { type: 'apiKey', name: 'x-api-key', in: 'header', [securityGuard]: guard },
+      },
+    })
+    // The runtime guard is gone; every documented key survives.
+    expect(document.components).toEqual({
+      securitySchemes: {
+        bearerAuth: { type: 'http', scheme: 'bearer' },
+        apiKey: { type: 'apiKey', name: 'x-api-key', in: 'header' },
+      },
+    })
+  })
+
+  it('passes plain security schemes through unchanged when none carry a guard', () => {
+    const securitySchemes = { bearerAuth: { type: 'http', scheme: 'bearer' } }
+    const document = toOpenApi([getUser], info, { securitySchemes })
+    // No copy is made when there is nothing to strip.
+    expect((document.components as { securitySchemes: unknown }).securitySchemes).toBe(securitySchemes)
   })
 
   it('emits per-operation security and deprecated flags', () => {

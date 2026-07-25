@@ -131,6 +131,56 @@ describe('secure-routes', () => {
     expect((await api.handle(request('/either', { 'x-api-key': 'let-me-in' }))).status).toBe(200)
   })
 
+  it('applies an OR requirement declared as the document default', async () => {
+    const api = build([roleRoute('/dashboard')], [{ adminAuth: [] }, { apiKey: [] }])
+    expect((await api.handle(request('/dashboard', { 'x-role': 'user' }))).status).toBe(401)
+    expect((await api.handle(request('/dashboard', { 'x-role': 'admin' }))).status).toBe(200)
+    expect((await api.handle(request('/dashboard', { 'x-api-key': 'let-me-in' }))).status).toBe(200)
+  })
+
+  it('stops at the first satisfied alternative in an OR', async () => {
+    let laterCalls = 0
+    const pass = requireContext(() => true, unauthorized)
+    const counting = requireContext(() => {
+      laterCalls += 1
+      return true
+    }, unauthorized)
+    const pair = {
+      first: { type: 'http', scheme: 'bearer', [securityGuard]: pass },
+      second: { type: 'http', scheme: 'bearer', [securityGuard]: counting },
+    }
+    const api = createApi({
+      routes: secureRoutes([roleRoute('/or', [{ first: [] }, { second: [] }])], { securitySchemes: pair }),
+      context,
+    })
+    expect((await api.handle(request('/or'))).status).toBe(200)
+    // The first alternative passed, so the second alternative's guard never ran.
+    expect(laterCalls).toBe(0)
+  })
+
+  it('awaits an async scheme guard', async () => {
+    const asyncSession = requireContext(async (ctx: ContextGuardInput<AppContext>) => {
+      await Promise.resolve()
+      return ctx.context.session !== null
+    }, unauthorized)
+    const api = createApi({
+      routes: secureRoutes([roleRoute('/async')], {
+        securitySchemes: { s: { type: 'http', scheme: 'bearer', [securityGuard]: asyncSession } },
+        security: [{ s: [] }],
+      }),
+      context,
+    })
+    expect((await api.handle(request('/async'))).status).toBe(401)
+    expect((await api.handle(request('/async', { 'x-role': 'user' }))).status).toBe(200)
+  })
+
+  it('adds no guard for an empty requirement object', () => {
+    const route = roleRoute('/anon', [{}])
+    const [result] = secureRoutes([route], { securitySchemes: schemes })
+    // An empty requirement enforces nothing, so the route is left untouched.
+    expect(result).toBe(route)
+  })
+
   it("runs security guards before the route's own guards", async () => {
     const paymentRequired = { status: 402, body: { error: 'payment_required' } } as const
     const guarded = implement(
