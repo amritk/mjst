@@ -1,5 +1,76 @@
 # @amritk/api
 
+## 0.9.0
+
+### Minor Changes
+
+- 6191ec9: Add hot reloading for the development server through a new `@amritk/api/dev`
+  entry: `createHotApi`, `watchPaths`, and `importFresh`. The dev server keeps its
+  socket, its connections, and everything living outside your route modules while
+  the route table, validators, and OpenAPI document are rebuilt from disk on every
+  save — no restart, no in-memory state lost between edits.
+
+  `createHotApi({ load, watch })` returns a normal `Api`, so it is handed to
+  `toFetchHandler` / `toNodeHandler` once and never mentioned again; the build
+  underneath it is swapped atomically, and in-flight requests finish against the
+  build they started on. A broken edit does not take the server down — the previous
+  build keeps serving, with the reason logged and kept on `api.error()` — and a
+  failure before the _first_ build still binds the port, answering
+  `503 {error:'not_loaded'}` with the error instead of exiting. Reloads that arrive
+  mid-build coalesce into one follow-up pass, so a branch switch costs one extra
+  build rather than one per file. `reload(changed?)`, `close()`, and `generation()`
+  round out the surface.
+
+  `watchPaths(paths, options?)` is the debounced filesystem watcher (recursive,
+  `node_modules`/`dist`/dotfile-aware, extension-filtered), and it is only the
+  default implementation of the `watch` seam — anything shaped
+  `(onChange) => dispose` fits, including a bundler's watcher or a test's manual
+  trigger. `importFresh(specifier, options?)` is the module re-import that lets
+  `load` see new code: on Node 22.15+ it re-evaluates the **whole local graph**
+  (a `node:module` resolve hook scoped to `root`, so dependencies are never
+  re-evaluated), and elsewhere the named module.
+
+  The entry is development-only and one-way — it imports the runtime, never the
+  reverse — so `node:fs` watching and module re-importing stay out of the graph
+  that ships to Workers and browsers.
+
+- e072b47: Add `openApiGuards` to `createApi` and `compileToModule`, gating the served
+  OpenAPI document. The document endpoint is answered before route matching, so
+  `secureRoutes` never covers it — without this the full schema stayed public under
+  an otherwise deny-by-default API. The guards run exactly like a route's security
+  guards: the context factory first, then each guard in order with the first denial
+  winning, and the denial is sent as-is. The compiled engine names them by export —
+  `openApiGuardExports: ['requireSession']` — like its other hook options.
+
+  `OnErrorDetails.route` is now `AnyRouteContract | undefined`. It is `undefined`
+  only for an error raised on the guarded document path, which has no route behind
+  it; an `onError` that reads `details.route.path` needs a `?.` to keep
+  type-checking.
+
+- 2b74018: Add `secureRoutes` for deny-by-default authorization. It resolves each route's
+  OpenAPI `security` requirement — its own, or a document-level default — into the
+  guards that enforce it and attaches them as the route's `securityGuards`. Schemes
+  carry their guard under an `x-guard` extension (the exported `securityGuard`
+  key), so one declaration drives both the OpenAPI document and runtime
+  enforcement; the guard is stripped from the generated document.
+
+  AND/OR requirement semantics follow OpenAPI (the first alternative's denial is
+  what the client sees), a requirement's scopes reach the scheme's guard as its
+  second argument, and a public route opts out with `security: []`. Security guards
+  run before slot validation, body reads and `refine` — after the context factory,
+  so they can gate on the session — which keeps an unauthenticated caller away from
+  the parser, the schema error detail and app code.
+
+  Four fail-closed startup errors keep the document and the runtime in agreement: a
+  requirement naming an undefined or guard-less scheme; an empty requirement object
+  (`{}`, OpenAPI's "auth optional" — opt in with `allowOptionalSecurity`); a guard
+  whose denial status the route's `responses` omits (opt out with
+  `allowUndeclaredDenials`); and calling `createApi`/`compileToModule` with a
+  `security` default covering a route that never went through `secureRoutes`.
+
+  Because the guards land on `contract.securityGuards`, both the runtime and
+  compiled engines honor them unchanged.
+
 ## 0.8.0
 
 ### Minor Changes
