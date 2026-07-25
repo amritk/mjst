@@ -1,3 +1,4 @@
+import { securityGuard } from './secure-routes'
 import type { AnyRouteContract, OpenApiDocument, OpenApiExtras, OpenApiInfo } from './types'
 
 /**
@@ -130,10 +131,31 @@ export const toOpenApi = (
   if (components.schemas.size > 0 || extras.securitySchemes !== undefined) {
     const block: Record<string, unknown> = {}
     if (components.schemas.size > 0) block['schemas'] = Object.fromEntries(components.schemas)
-    if (extras.securitySchemes !== undefined) block['securitySchemes'] = extras.securitySchemes
+    if (extras.securitySchemes !== undefined) block['securitySchemes'] = stripSchemeGuards(extras.securitySchemes)
     document['components'] = block
   }
   return document as unknown as OpenApiDocument
+}
+
+/**
+ * Removes the runtime guard `secureRoutes` reads (see {@link securityGuard})
+ * from each Security Scheme Object, so the document stays a pure OpenAPI
+ * artifact — the guard is a function that would `JSON.stringify` away on the
+ * wire anyway, but dropping it here keeps the in-memory document honest too.
+ * Returns the input untouched when no scheme carries a guard (the common case),
+ * so plain `securitySchemes` pass through by reference exactly as before.
+ */
+const stripSchemeGuards = (schemes: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> => {
+  const carriesGuard = (scheme: unknown): boolean =>
+    typeof scheme === 'object' && scheme !== null && securityGuard in scheme
+  if (!Object.values(schemes).some(carriesGuard)) return schemes
+  return Object.fromEntries(
+    Object.entries(schemes).map(([name, scheme]) => {
+      if (!carriesGuard(scheme)) return [name, scheme]
+      const { [securityGuard]: _guard, ...rest } = scheme as Record<string, unknown>
+      return [name, rest]
+    }),
+  )
 }
 
 /** The OpenAPI requestBody content key for each declared body type. */

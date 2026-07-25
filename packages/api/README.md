@@ -1094,6 +1094,61 @@ skip `requireContext` and write the guard inline — it is just
 module threads the live `contract.guards` through the same order), pinned by the
 differential corpus.
 
+### Deny-by-default: `secureRoutes`
+
+Per-route `guards` are opt-**in**: an un-guarded route is public, so a
+forgotten guard is a silently-open endpoint. When you want the opposite — every
+route requires auth and you name the *public* ones — reach for `secureRoutes`.
+It reads OpenAPI's own security model: a **document-level** `security` default
+applies to every route, and a route opts out with `security: []`.
+
+The link between a scheme and the guard that enforces it is an `x-guard`
+extension on the Security Scheme Object — the `securityGuard` key. `secureRoutes`
+resolves each route's effective `security` (its own, or the document default)
+into those guards and prepends them to the route's `guards`:
+
+```ts
+import { requireContext, secureRoutes, securityGuard, type ContextGuardInput } from '@amritk/api'
+
+const requireSession = requireContext(
+  (ctx: ContextGuardInput<AppContext>) => ctx.context.session !== null,
+  { status: 401, body: { error: 'unauthorized' } },
+)
+const requireAdmin = requireContext(
+  (ctx: ContextGuardInput<AppContext>) => ctx.context.session?.user.role === 'admin',
+  { status: 403, body: { error: 'forbidden' } },
+)
+
+// One declaration carries the scheme's OpenAPI shape *and* its guard.
+const securitySchemes = {
+  bearerAuth: { type: 'http', scheme: 'bearer', [securityGuard]: requireSession },
+  adminAuth: { type: 'http', scheme: 'bearer', [securityGuard]: requireAdmin },
+} as const
+const security = [{ bearerAuth: [] }] // the deny-by-default: every route needs a session
+
+// getAdminPanel declares `security: [{ adminAuth: [] }]`; health declares `security: []`.
+export const routes = secureRoutes([getProfile, getAdminPanel, health], { securitySchemes, security })
+
+// Pass the same schemes/security on for the document — the guard is stripped from it.
+export const api = createApi({ routes, securitySchemes, security })
+```
+
+Resolution follows OpenAPI exactly: schemes within one requirement object are an
+**AND** (all must pass); several requirement objects are an **OR** (any passing
+alternative allows the request). The fail-closed guarantee is a startup error —
+a `security` requirement naming a scheme that is undefined, or defined without an
+`x-guard`, throws rather than serving an endpoint you documented as protected;
+mark it `security: []` if public is what you meant.
+
+Because the guards land on `contract.guards`, both engines honor them with no
+further wiring — `createApi` runs them per request and `compileToModule` threads
+the same live array through its guard loop, so no `securitySchemes` need reach
+the compiled module for enforcement. Reach for `secureRoutes` when the safe
+default is *closed*; reach for the bare `guards` field when only a few routes
+need protection and the denial status should stay type-checked against each
+route's `responses` (a blanket document guard cannot be, since it spans
+heterogeneous routes).
+
 ### Auth: Better Auth
 
 Two touch points, both first-class. Better Auth's own endpoints are a
@@ -1227,6 +1282,11 @@ const api = createApi({
 const login = defineRoute({ method: 'post', path: '/login', security: [], /* public */ ... })
 const legacy = defineRoute({ method: 'get', path: '/v1/users', deprecated: true, ... })
 ```
+
+Here `security` only *documents* the requirement. To also **enforce** it —
+turning the same document default into deny-by-default auth — attach an
+`x-guard` to each scheme and wrap the routes with
+[`secureRoutes`](#deny-by-default-secureroutes).
 
 Give a shared schema a `title` and reuse the same object across contracts —
 it is hoisted into `components.schemas` and referenced with `$ref`, so
