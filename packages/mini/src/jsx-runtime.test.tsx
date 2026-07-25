@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest'
 
+import type { ClassValue } from './jsx-runtime'
 import { signal } from './signals'
 
 describe('jsx-runtime', () => {
@@ -203,6 +204,20 @@ describe('jsx-runtime', () => {
     expect(el.className).toBe('card lg')
   })
 
+  it('flattens a nested class array and drops every falsy entry', () => {
+    const shared = ['b', { c: true, d: false }]
+    const el = <div class={['a', shared, false, null]} />
+    // Without recursion the nested array is stringified where it stands, and
+    // `String(['b', …])` produces the single comma-joined class name 'b,c'.
+    expect(el.className).toBe('a b c')
+
+    // `0` sits outside the declared type but well inside what untyped call sites
+    // hand over (`count && 'badge'` produces one), and resolving entries by
+    // stringifying before testing them would turn it into the class name "0".
+    const loose = ['a', 0, 'b'] as unknown as ClassValue
+    expect((<div class={loose} />).className).toBe('a b')
+  })
+
   it('resolves an object class by truthy keys, reactively', () => {
     const open = signal(false)
     const el = <div class={() => ({ panel: true, open: open() })} />
@@ -215,6 +230,51 @@ describe('jsx-runtime', () => {
     const el = <div style={{ color: 'red', fontSize: '12px' }} />
     expect(el.style.color).toBe('red')
     expect(el.style.getPropertyValue('font-size')).toBe('12px')
+  })
+
+  it('gives a bare style number pixels, except where CSS is unitless', () => {
+    const el = <div style={{ width: 100, marginTop: 8, opacity: 0.5, zIndex: 3, lineHeight: 1.5, '--gap': 4 }} />
+    // `setProperty('width', '100')` is not valid CSS, so an unconverted number
+    // used to be dropped on the floor without a word.
+    expect(el.style.getPropertyValue('width')).toBe('100px')
+    expect(el.style.getPropertyValue('margin-top')).toBe('8px')
+    // Ratios, counts, and multipliers break if a unit is appended.
+    expect(el.style.getPropertyValue('opacity')).toBe('0.5')
+    expect(el.style.getPropertyValue('z-index')).toBe('3')
+    expect(el.style.getPropertyValue('line-height')).toBe('1.5')
+    // A custom property means whatever its author says, so no unit is guessed.
+    expect(el.style.getPropertyValue('--gap')).toBe('4')
+  })
+
+  it('keeps a style write from un-hiding what show hid, and restores the bag display', () => {
+    const visible = signal(true)
+    const width = signal(10)
+    // `show` and `style` write the same inline `display` slot: hiding sets
+    // `display: none`, and applying the bag replaces the inline style wholesale.
+    const el = <div show={visible} style={() => ({ width: `${width()}px`, display: 'flex' })} />
+    expect(el.style.display).toBe('flex')
+    visible(false)
+    expect(el.style.display).toBe('none')
+    // The style update must not bring the element back into view.
+    width(20)
+    expect(el.style.getPropertyValue('width')).toBe('20px')
+    expect(el.style.display).toBe('none')
+    // Showing it again restores what the bag asked for, not a hardcoded ''.
+    visible(true)
+    expect(el.style.display).toBe('flex')
+  })
+
+  it('settles show against a static style whichever order the props were written in', () => {
+    // Props are iterated in object order, so without arbitration the behaviour
+    // depends on which attribute happened to be typed first — here `style`
+    // lands before `show` ever runs.
+    const visible = signal(true)
+    const el = <div style={{ display: 'inline-block' }} show={visible} />
+    expect(el.style.display).toBe('inline-block')
+    visible(false)
+    expect(el.style.display).toBe('none')
+    visible(true)
+    expect(el.style.display).toBe('inline-block')
   })
 
   it('narrows currentTarget to the bound element in event handlers', () => {

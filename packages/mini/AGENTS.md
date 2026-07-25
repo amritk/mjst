@@ -34,7 +34,42 @@ bun run --filter='@amritk/mini' types:check
 - **Subpaths (`router`/`flow`/`forms`/`query`) must add zero bytes to the `.`
   entry.** `forms`' schema arm and `query` depend on **optional** peers
   (`@amritk/runtime-validators`, `@tanstack/query-core`) — keep them optional.
+- **`show` and `style` share one inline `display` slot.** Applying a style bag
+  replaces the inline style wholesale, so a style write would otherwise un-hide
+  what `bindShow` hid — and which won came down to the order the attributes were
+  typed in. `applyDisplay` in `bind.ts` arbitrates; anything new that writes
+  `display` has to go through it.
 - This package **ships its `src/`** too (see `files`), so source comments are
   shipped — keep them accurate.
+
+## The alien-signals scope-ownership gotcha
+
+A scope created inside a running `effect` is **disposed when that effect
+re-runs**, before the next run's body starts. That is usually what you want, and
+it is fatal anywhere a long-lived subtree is built from inside a tracking effect.
+
+`list` is exactly that case. Rows are built inside the reconciliation effect,
+which re-runs on every change to the collection, so appending one row used to
+dispose the scope of every row already on screen — the nodes stayed in the
+document looking perfectly correct while all of their bindings quietly stopped
+updating, and each surviving row's `onCleanup` fired as though the row had been
+removed. `run-detached.ts` is the fix, and because detaching also removes the
+chain that used to dispose rows when the component unmounted, `list` registers
+its teardown with `onCleanup` to restore it. `list.test.ts` carries a regression
+test for each half.
+
+`internal/render-child.ts` is the opposite case and deliberately relies on the
+engine behaviour: its branch scope is meant to be tied to the swap effect, and
+the swap effect to the component's scope, which is why `Show` can ignore the
+returned teardown without leaking a branch. Do not "fix" it to match `list`.
+
+## The reserved-`key` gotcha
+
+`key` is reserved by JSX. The transform hoists any `key` attribute out of the
+props object into the runtime's third parameter *before the component is
+called*, so a component with a legitimate prop of that name — `For`, whose `key`
+is the row identity function — would never receive it. `jsx` forwards it back
+into props for component tags; `flow/for.test.tsx` pins that. It stays ignored
+for element tags, where there is no keying at the JSX level at all.
 
 Add a changeset for every change (`bunx changeset`).

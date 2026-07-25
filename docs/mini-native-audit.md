@@ -293,8 +293,8 @@ hoists it out of the props object into the runtime's third parameter before the
 component is called, and `jsx` dropped it there. So `<For each={rows} key={byId}>`
 silently fell back to `defaultKey` — a bug that surfaces as rows mysteriously not
 updating rather than as an error. `jsx` now forwards it for component tags.
-`mini` has the same hole; its `for.test.tsx` only ever calls `For({…})` directly,
-which is probably why it went unnoticed.
+`mini` had the same hole; its `for.test.tsx` only ever called `For({…})`
+directly, which is probably why it went unnoticed.
 
 **Position keying cannot be a key function.** The first attempt at the
 duplicate-key escape hatch was an `indexKey` helper. It renders the wrong data:
@@ -374,6 +374,27 @@ against the host it ships.
 
 Sections 1 and 2 are done. What remains is section 3 — the native story — plus a
 few loose ends.
+
+### Applied to `@amritk/mini` as well
+
+Seven of these defects turned out to exist in the DOM sibling too, and were
+reproduced there against happy-dom before being fixed:
+
+- `list` disposing every rendered row's scope on any change to the collection —
+  the same alien-signals ownership trap, and the most serious of the set, since
+  it silently kills the bindings inside any `<For>` row. `mini` now has its own
+  `run-detached.ts`, plus an `onCleanup` to replace the ownership chain that
+  detaching removes.
+- The comment in `mini`'s `internal/render-child.ts` asserting the opposite
+  engine behaviour. No defect there — its branch scope is meant to be tied to
+  the swap effect — but the paragraph was wrong and is corrected.
+- `key` never reaching a component.
+- A style write un-hiding what `show` hid.
+- Bare numeric style values being silently dropped.
+- `class` not flattening nested arrays.
+- `bindValue` losing a write that lands mid-IME-composition.
+
+`mini`'s gzipped core budget moved 3050 → 3200 to cover them (measured 3137).
 
 ### Loose ends
 

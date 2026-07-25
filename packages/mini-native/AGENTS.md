@@ -94,8 +94,9 @@ should die.
 `list.test.tsx` has a regression test named *"keeps existing rows reactive after
 another row is appended"* that fails without it.
 
-> Worth noting: `@amritk/mini` has the same latent bug upstream, and a comment in
-> its `render-child.ts` asserts the opposite behaviour.
+> `@amritk/mini` had the same latent bug, and a comment in its `render-child.ts`
+> asserted the opposite behaviour. Both are fixed there now — it has its own
+> `run-detached.ts` — so the two packages agree about how the engine behaves.
 
 ## The reserved-`key` gotcha
 
@@ -106,8 +107,8 @@ is the row identity function — would never receive it. `jsx` forwards it back
 into props for component tags, and `flow/for.test.tsx` pins that. It stays
 ignored for element tags, where there is no keying at the JSX level at all.
 
-> `@amritk/mini` has this hole too; its `for.test.tsx` only ever calls `For({…})`
-> directly, which is likely why nobody noticed.
+> `@amritk/mini` had this hole too — its `for.test.tsx` only ever called
+> `For({…})` directly, which is likely why nobody noticed. Fixed there as well.
 
 ## Testing
 

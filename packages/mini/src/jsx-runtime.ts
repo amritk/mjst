@@ -1,6 +1,6 @@
 import { effect } from 'alien-signals'
 
-import { bindShow } from './bind'
+import { applyDisplay, bindShow } from './bind'
 
 /**
  * mini's JSX runtime — the automatic runtime TypeScript targets when a
@@ -45,8 +45,10 @@ import { bindShow } from './bind'
  *   explicit sanitizer argument, stays the single sanctioned HTML sink.
  * - No event options (capture/passive/once) and no delegation: `on*` props
  *   map to plain `addEventListener`. Anything fancier takes a `ref`.
- * - `key` is accepted (JSX syntax reserves it) and ignored — keying lives in
- *   `list`, the only place mini reconciles collections.
+ * - `key` on an ELEMENT is accepted (JSX syntax reserves it) and ignored —
+ *   keying lives in `list`, the only place mini reconciles collections. On a
+ *   COMPONENT it is forwarded as an ordinary prop; see the note in `jsx` for
+ *   why that is not the same decision.
  */
 
 // ---------------------------------------------------------------------------
@@ -69,17 +71,27 @@ export type MiniChild = StaticChild | (() => string | number | boolean | null | 
 export type MiniChildren = MiniChild | readonly MiniChild[]
 
 /**
- * The value forms `class` accepts. A plain string is applied verbatim; an array
- * drops falsy entries and joins with spaces (`['btn', active && 'on']`); an
- * object keeps the keys whose value is truthy (`{ btn: true, on: active() }`).
- * The whole thing is still `MaybeReactive`, so wrap it in a getter to track.
+ * One entry in a `class` list. Entries nest, so a shared fragment — itself an
+ * array or a toggle map — composes into a bigger list instead of being
+ * stringified into it.
  */
-export type ClassValue = string | readonly (string | false | null | undefined)[] | Record<string, boolean>
+type ClassEntry = string | false | null | undefined | readonly ClassEntry[] | Record<string, boolean>
+
+/**
+ * The value forms `class` accepts. A plain string is applied verbatim; an array
+ * drops falsy entries and joins with spaces (`['btn', active && 'on']`), and its
+ * entries may themselves be arrays or toggle maps, which flatten; an object keeps
+ * the keys whose value is truthy (`{ btn: true, on: active() }`). The whole thing
+ * is still `MaybeReactive`, so wrap it in a getter to track.
+ */
+export type ClassValue = string | readonly ClassEntry[] | Record<string, boolean>
 
 /**
  * The value forms `style` accepts: a `cssText` string, or an object of
- * properties (camelCase or kebab-case keys, `--custom` props included). Numbers
- * are stringified as-is — add units yourself where CSS needs them.
+ * properties (camelCase or kebab-case keys, `--custom` props included). A bare
+ * number means pixels (`{ width: 100 }` → `width: 100px`), the convention React,
+ * Preact, and Solid share, except on the properties CSS treats as unitless and
+ * on custom properties — see {@link UNITLESS}.
  */
 export type StyleValue = string | Record<string, string | number | null | undefined | false>
 
@@ -137,7 +149,11 @@ type SpecialProps<E extends Element> = {
    * common show/hide case — structural add/remove still belongs to `list`.
    */
   show?: MaybeReactive<boolean>
-  /** Accepted because JSX reserves it, ignored at runtime — keying lives in `list`. */
+  /**
+   * Accepted on an element because JSX reserves it, and ignored at runtime —
+   * keying lives in `list`. A COMPONENT that declares its own `key` prop does
+   * receive it; `jsx` puts it back into the props the transform hoisted it out of.
+   */
   key?: string | number
 }
 
@@ -347,43 +363,100 @@ const setAttribute = (element: Element, name: string, value: unknown): void => {
 
 /** Collapses a {@link ClassValue} (string, array, or toggle-map) into a className string. */
 const resolveClass = (value: unknown): string => {
-  if (Array.isArray(value)) return value.filter(Boolean).join(' ')
+  if (Array.isArray(value)) {
+    // Entries resolve recursively so nesting composes: `['card', shared]` where
+    // `shared` is itself an array or a toggle map produces the flattened list,
+    // not the comma-joined mess `String()` would make of it. Building class
+    // lists out of shared fragments is the ordinary way people use this.
+    let result = ''
+    for (const entry of value) {
+      const resolved = resolveClass(entry)
+      if (resolved) result += result ? ` ${resolved}` : resolved
+    }
+    return result
+  }
   if (value !== null && typeof value === 'object') {
     // Accumulate the truthy keys directly instead of chaining
     // `entries().filter().map().join()`, which allocates three throwaway arrays
-    // on every reactive class update.
+    // on every reactive class update — and likewise above, rather than the
+    // `map().filter().join()` a recursive walk invites.
     let result = ''
     for (const name in value as Record<string, unknown>) {
       if ((value as Record<string, unknown>)[name]) result += result ? ` ${name}` : name
     }
     return result
   }
-  return value === null || value === undefined || value === false ? '' : String(value)
+  // Every falsy value drops out, not just the three the type permits. `0` and
+  // `NaN` reach here from untyped input — `count && 'badge'` hands one straight
+  // through — and stringifying before the test would turn them into the
+  // perfectly truthy class names "0" and "NaN".
+  return value ? String(value) : ''
 }
 
 /** Converts a camelCase style key to its kebab-case CSS name (leaving `--custom` props alone). */
 const cssName = (key: string): string =>
   key.startsWith('--') ? key : key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)
 
+/**
+ * The properties whose numbers are ratios, counts, or multipliers rather than
+ * lengths, so a unit would break them. Stored with the separators stripped and
+ * lowercased, so `zIndex` and `z-index` land on the same entry.
+ *
+ * Kept short on purpose: this covers what a layout actually reaches for, and an
+ * unlisted property that turns out to need it is a one-line addition. The same
+ * list lives in `mini-native`'s `to-style-text`, copied rather than shared —
+ * mini's core graph is asserted to hold nothing but its own sources and
+ * alien-signals.
+ */
+const UNITLESS = new Set([
+  'opacity',
+  'zindex',
+  'flex',
+  'flexgrow',
+  'flexshrink',
+  'order',
+  'lineheight',
+  'fontweight',
+  'zoom',
+  'aspectratio',
+  'scale',
+])
+
+/**
+ * Spells one style-bag entry the way `setProperty` needs to read it.
+ *
+ * A bare number means pixels — the convention React, Preact, and Solid all
+ * share, so it is what every JSX author already expects — because
+ * `setProperty('width', '100')` is not valid CSS and is dropped on the floor
+ * without a word. Custom properties are exempt: a `--gap` is whatever its author
+ * says it is, so guessing a unit for one would be presumptuous.
+ */
+const styleText = (key: string, value: unknown): string =>
+  typeof value !== 'number' || key.startsWith('--') || UNITLESS.has(key.replace(/-/g, '').toLowerCase())
+    ? String(value)
+    : `${value}px`
+
 /** Applies a {@link StyleValue}: a string sets `style` wholesale, an object sets each property. */
 const applyStyle = (element: Element, value: unknown): void => {
-  const style = (element as HTMLElement | SVGElement).style
+  const target = element as HTMLElement | SVGElement
   if (value === null || value === undefined || value === false) {
     element.removeAttribute('style')
-    return
-  }
-  if (typeof value === 'object') {
-    style.cssText = ''
+  } else if (typeof value === 'object') {
+    target.style.cssText = ''
     // `for…in` rather than `Object.entries`: no per-update tuple array, and
     // style objects are plain literals with no inherited enumerables.
     for (const key in value as Record<string, unknown>) {
       const entry = (value as Record<string, unknown>)[key]
       if (entry === null || entry === undefined || entry === false) continue
-      style.setProperty(cssName(key), String(entry))
+      target.style.setProperty(cssName(key), styleText(key, entry))
     }
-    return
+  } else {
+    setAttribute(element, 'style', value)
   }
-  setAttribute(element, 'style', value)
+  // Every arm above rewrites the inline style wholesale, which on an element
+  // that `show` has hidden would un-hide it. Hand the result to `applyDisplay`
+  // so the two settle it between them.
+  applyDisplay(target)
 }
 
 /**
@@ -422,11 +495,24 @@ const appendChildren = (element: Element, children: MiniChildren): void => {
  * `<div class="x">{y}</div>` into `jsx('div', { class: 'x', children: y })`;
  * a capitalised tag arrives as its component function instead of a string.
  */
-export const jsx = (tag: string | Component<never>, props: MiniElementProps, _key?: unknown): HTMLElement => {
+export const jsx = (tag: string | Component<never>, props: MiniElementProps, key?: unknown): HTMLElement => {
   // Components run exactly once — there is no instance, no lifecycle, no
   // re-render. Whatever reactivity the component sets up internally (its
   // bindings) is the only thing that ever updates afterwards.
-  if (typeof tag === 'function') return (tag as (props: MiniElementProps) => HTMLElement)(props)
+  //
+  // `key` is handed back to a component rather than dropped. The JSX transform
+  // hoists any `key` attribute out of the props object and into this third
+  // parameter before the component is ever called — a React convention this
+  // runtime inherits from the transform whether it wants to or not — so a
+  // component with a legitimate prop of that name would silently never receive
+  // it. `For` is exactly that component: `<For each={rows} key={byId}>` would
+  // quietly fall back to `defaultKey`, which surfaces as rows mysteriously not
+  // updating rather than as an error. There is no competing meaning to protect,
+  // because mini does no keying at the JSX level at all — that lives in `list`.
+  if (typeof tag === 'function') {
+    const withKey = key === undefined ? props : { ...props, key }
+    return (tag as (props: MiniElementProps) => HTMLElement)(withKey)
+  }
 
   const element = createElement(tag)
   let ref: ((el: HTMLElement) => void) | undefined
