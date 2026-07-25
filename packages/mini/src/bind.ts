@@ -53,10 +53,65 @@ export const bindClass = (node: Element, name: string, get: () => boolean): (() 
     node.classList.toggle(name, get())
   })
 
-/** Shows or hides the node via inline `display`. */
+/**
+ * What an element's single inline `display` slot is being asked for, by the two
+ * features that both want to write it.
+ */
+type DisplayState = {
+  /** Whether `bindShow` currently has this element hidden. */
+  hidden: boolean
+  /** The `display` the element's own style asked for — `''` means its natural one. */
+  styleDisplay: string
+}
+
+/**
+ * Only elements something has actually hidden get an entry, so an element with
+ * a plain `style` prop and no `show` pays one lookup miss and nothing else.
+ */
+const displays = new WeakMap<HTMLElement | SVGElement, DisplayState>()
+
+/**
+ * Resolves the one inline `display` that `show` and a `style` write are
+ * competing for, so neither silently undoes the other.
+ *
+ * `bindShow` hides by writing `display: none`, while applying a style bag
+ * replaces the inline style wholesale — so on an element carrying both props the
+ * style write un-hides it, and which one wins comes down to the order the
+ * attributes happened to be typed in. Remembering the two intents apart is what
+ * makes that order stop mattering. Hiding wins while it is in effect; otherwise
+ * the element gets back exactly the `display` its style asked for, which is why
+ * showing it again does not just restore a hardcoded `''`.
+ *
+ * The bookkeeping lives here rather than in the JSX runtime because `bindShow`
+ * is public API that people call straight from a `ref` — the JSX path is only
+ * one of its callers. `mini-native` solves the same collision inside its DOM
+ * host; the two packages share no code by design.
+ *
+ * @param node The element whose `display` is being resolved.
+ * @param hidden Visibility, when `bindShow` is the caller. Omit it after a style
+ *   write to re-read whatever `display` that style just asked for.
+ */
+export const applyDisplay = (node: HTMLElement | SVGElement, hidden?: boolean): void => {
+  const known = displays.get(node)
+  // Nothing has hidden this element, so its own style owns `display` outright
+  // and there is nothing to arbitrate.
+  if (known === undefined && hidden === undefined) return
+  // A first registration reads the current inline `display` as the style's,
+  // which is what makes `<div style={…} show={…}>` work in either prop order.
+  const state = known ?? { hidden: false, styleDisplay: node.style.display }
+  if (hidden === undefined) state.styleDisplay = node.style.display
+  else state.hidden = hidden
+  if (known === undefined) displays.set(node, state)
+  node.style.display = state.hidden ? 'none' : state.styleDisplay
+}
+
+/**
+ * Shows or hides the node via inline `display`, remembering the intent so a
+ * later `style` write cannot quietly un-hide it — see {@link applyDisplay}.
+ */
 export const bindShow = (node: HTMLElement, get: () => boolean): (() => void) =>
   effect(() => {
-    node.style.display = get() ? '' : 'none'
+    applyDisplay(node, !get())
   })
 
 /**
@@ -79,8 +134,11 @@ export const bindHtml = (node: Element, sanitize: (raw: string) => string, get: 
  * off: while a composition is in flight the signal is not written and the
  * element is not overwritten, and the final text is committed once on
  * `compositionend` — otherwise the mid-composition `input` events would tear the
- * candidate string apart. Returns a combined dispose that stops the effect and
- * detaches every listener.
+ * candidate string apart. A write to the signal that lands mid-composition is
+ * not dropped: it is deferred and applied at `compositionend`, where it wins
+ * over the candidate text, on the grounds that an app clearing a field is being
+ * deliberate. Returns a combined dispose that stops the effect and detaches
+ * every listener.
  *
  * @example
  * ```tsx
@@ -91,9 +149,21 @@ export const bindHtml = (node: Element, sanitize: (raw: string) => string, get: 
  */
 export const bindValue = (node: HTMLInputElement | HTMLTextAreaElement, model: Signal<string>): (() => void) => {
   let composing = false
-  const stop = effect(() => {
+  // A write to the signal that arrived mid-composition and still has to land.
+  let deferred = false
+  /** Pushes the signal onto the element, skipping a write that would not change it. */
+  const push = (): void => {
     const next = model()
-    if (!composing && node.value !== next) node.value = next
+    if (node.value !== next) node.value = next
+  }
+  const stop = effect(() => {
+    // Read unconditionally, so the effect keeps tracking the signal even on the
+    // runs it declines to apply.
+    const next = model()
+    // Writing now would tear the IME's candidate string apart, so the write is
+    // remembered and settled once the composition ends.
+    if (composing) deferred = true
+    else if (node.value !== next) node.value = next
   })
   const stopListeners = listen(node, [
     [
@@ -112,6 +182,17 @@ export const bindValue = (node: HTMLInputElement | HTMLTextAreaElement, model: S
       'compositionend',
       () => {
         composing = false
+        if (deferred) {
+          // The app wrote to the signal while the user was mid-composition —
+          // clearing the field on submit, say. That is a deliberate override, so
+          // it wins over the candidate text instead of being read back and
+          // silently discarded. Reading back here would set the signal FROM the
+          // element, the two would agree again, and the tracking effect would
+          // have nothing left to re-apply: the write would simply vanish.
+          deferred = false
+          push()
+          return
+        }
         model(node.value)
       },
     ],

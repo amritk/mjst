@@ -1,4 +1,4 @@
-import { signal as createSignal } from 'alien-signals'
+import { signal as createSignal, endBatch, startBatch } from 'alien-signals'
 
 /**
  * The reactivity primitives, re-exported so the rest of the codebase depends on
@@ -33,3 +33,36 @@ export type ReadonlySignal<T> = () => T
 
 /** Creates a writable signal holding `initial`. */
 export const signal = <T>(initial: T): Signal<T> => createSignal(initial) as Signal<T>
+
+/**
+ * Groups several signal writes into one propagation pass, so effects depending
+ * on more than one of them run once rather than once per write.
+ *
+ * Effects run synchronously on write, which is usually what you want and is
+ * occasionally very much not: updating five fields of a form model re-runs
+ * every binding that reads any of them five times. The flush scheduler already
+ * coalesces the resulting COMMIT into one — a burst of writes costs a single
+ * `flush` — but it cannot coalesce the property writes that lead up to it, and
+ * on a native target each of those is a call across the bridge. This is the
+ * tool for that: batch the writes and the bridge sees one pass.
+ *
+ * @example
+ * ```ts
+ * const first = signal('Ada')
+ * const last = signal('Lovelace')
+ * effect(() => render(`${first()} ${last()}`))
+ * // Without batch this renders twice; with it, once, after both writes land.
+ * batch(() => {
+ *   first('Grace')
+ *   last('Hopper')
+ * })
+ * ```
+ */
+export const batch = (fn: () => void): void => {
+  startBatch()
+  try {
+    fn()
+  } finally {
+    endBatch()
+  }
+}

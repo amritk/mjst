@@ -31,15 +31,36 @@ export type MiniChild = StaticChild | (() => string | number | boolean | null | 
 export type MiniChildren = MiniChild | readonly MiniChild[]
 
 /**
+ * What may appear inside a CONTAINER element — anything already built into a
+ * host node, plus the nullish and boolean values that vanish, which is what
+ * keeps `{condition && <text>…</text>}` working as a build-time conditional.
+ *
+ * Bare strings and numbers are deliberately absent, and that is the whole point
+ * of the type existing. A native view tree has no notion of loose text inside a
+ * container: on Lynx a text run has to live inside a `<text>` element, so
+ * `<view>hello</view>` builds a node the engine will not render and the screen
+ * comes up silently blank. The DOM host would happily show it, which is exactly
+ * how that mistake survives a browser preview and reaches a device. Making it a
+ * compile error is the only place to catch it honestly.
+ */
+export type ContainerChild = HostChild | boolean | null | undefined
+
+export type ContainerChildren = ContainerChild | readonly ContainerChild[]
+
+/**
  * The value forms `class` accepts. A plain string is applied verbatim, an array
  * drops falsy entries and joins with spaces (`['card', active && 'on']`), and
  * an object keeps the keys whose value is truthy (`{ card: true, on: active() }`).
  * The whole thing is still `MaybeReactive`, so wrap it in a getter to track it.
  *
+ * The array arm is recursive, so a shared fragment can be dropped into a list
+ * without being flattened by hand first — `['card', theme]` composes whether
+ * `theme` is a string, another array, or a toggle map.
+ *
  * Hosts that have no class concept at all are free to ignore the resolved
  * string; the runtime always hands them a plain space-joined value.
  */
-export type ClassValue = string | readonly (string | false | null | undefined)[] | Record<string, boolean>
+export type ClassValue = string | false | null | undefined | readonly ClassValue[] | Record<string, boolean>
 
 /**
  * A style declaration as a property bag. Unlike the web there is no `cssText`
@@ -47,8 +68,14 @@ export type ClassValue = string | readonly (string | false | null | undefined)[]
  * to — a structured object is the only shape every target can consume.
  *
  * Keys may be camelCase or kebab-case; the DOM host normalises them and native
- * hosts generally want the camelCase form as-is. Numbers are passed through
- * untouched, so add units yourself wherever the target needs them.
+ * hosts generally want the camelCase form as-is.
+ *
+ * A bare NUMBER means density-independent pixels, the convention React Native
+ * and every native toolkit share, and the host adds the unit — so
+ * `{ width: 100 }` is a hundred pixels on every target rather than an invalid
+ * declaration the browser silently discards. Pass a string when you want a
+ * different unit (`'50%'`, `'2rem'`), and note that the properties CSS treats
+ * as unitless stay unitless.
  */
 export type StyleValue = Record<string, string | number | null | undefined | false>
 

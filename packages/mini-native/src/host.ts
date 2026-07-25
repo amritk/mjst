@@ -20,8 +20,16 @@ export type Host = {
    * Creates an element for one of the tags in the element vocabulary. Hosts map
    * the vocabulary onto whatever they actually render — the DOM host turns
    * `view` into a `<div>`, a native host turns it into a real container view.
+   *
+   * The element's props are passed along because some targets have to decide
+   * what to build from them rather than configure it afterwards: the DOM has no
+   * way to turn an `<input>` into a `<textarea>` once it exists, so `multiline`
+   * has to be read here. Props consumed at creation are STATIC — a getter is
+   * not tracked, because a node cannot change what it is. Everything else still
+   * arrives through `setProperty` in the usual way, so a host is free to ignore
+   * this parameter entirely.
    */
-  createElement: (tag: string) => HostElement
+  createElement: (tag: string, props?: Readonly<Record<string, unknown>>) => HostElement
 
   /**
    * Creates the wrapper element the control-flow components swap their children
@@ -51,13 +59,33 @@ export type Host = {
    */
   getProperty: (element: HostElement, name: string) => unknown
 
-  /** Applies a style bag. A `null` clears any style previously applied. */
+  /**
+   * Applies a style bag, replacing whatever was applied before. A `null` clears
+   * it.
+   *
+   * Numeric values mean density-independent pixels, the same convention every
+   * native toolkit uses, and adding the unit is the HOST's job — the runtime
+   * hands the number through untouched so each target can spell it the way it
+   * needs to. A host is still free to treat a handful of properties as
+   * unitless, exactly as CSS does for `opacity` or `flexGrow`.
+   *
+   * A style write MUST NOT disturb the visibility set by {@link setVisible}.
+   * That is easy to get wrong, because the obvious implementation of both is
+   * the same channel — inline `display` on the web, inline styles on Lynx — and
+   * a wholesale style replacement then quietly un-hides a hidden element. Any
+   * host expressing the two through one channel has to remember the visibility
+   * and re-apply it after the style. See either shipped host for the shape.
+   */
   setStyle: (element: HostElement, value: StyleValue | null) => void
 
   /**
    * Shows or hides an element without removing it from the tree. Kept separate
    * from `setStyle` because targets disagree on how visibility works — inline
    * `display` on the web, a dedicated flag or style key natively.
+   *
+   * This owns visibility outright: showing an element again must restore
+   * whatever the element's own style asked for, not a hardcoded default. See
+   * the invariant on {@link setStyle}.
    */
   setVisible: (element: HostElement, visible: boolean) => void
 

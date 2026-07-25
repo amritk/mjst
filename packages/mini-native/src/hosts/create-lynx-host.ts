@@ -1,6 +1,7 @@
 import type { Host, HostEventHandler } from '../host'
 import type { HostElement, HostNode, HostText, StyleValue } from '../types'
 import { globalLynxApi, type LynxElement, type LynxElementApi } from './lynx-element-api'
+import { toStyleText } from './to-style-text'
 
 /**
  * A host that renders onto Lynx, driving its Element PAPI directly.
@@ -34,6 +35,25 @@ export const createLynxHost = (api: LynxElementApi = globalLynxApi()): Host => {
    */
   const handlers = new WeakMap<LynxElement, Map<string, Set<HostEventHandler>>>()
 
+  /**
+   * What the host remembers about an element's visibility.
+   *
+   * Lynx expresses both a style bag and visibility through inline styles, and
+   * `__SetInlineStyles` overwrites wholesale, so a style write would otherwise
+   * un-hide an element the runtime had hidden. Remembering the two separately
+   * lets a style write re-assert the hidden state, and lets showing an element
+   * again restore the display its own style asked for.
+   */
+  const visibility = new WeakMap<LynxElement, LynxVisibility>()
+
+  const visibilityOf = (element: LynxElement): LynxVisibility => {
+    const existing = visibility.get(element)
+    if (existing) return existing
+    const created: LynxVisibility = { styleDisplay: null, hidden: false }
+    visibility.set(element, created)
+    return created
+  }
+
   return {
     // A framework-owned tree does not participate in Lynx's own component
     // system, so every element is created under component ID 0.
@@ -62,21 +82,33 @@ export const createLynxHost = (api: LynxElementApi = globalLynxApi()): Host => {
         api.__SetClasses(element, typeof value === 'string' ? value : '')
         return
       }
-      api.__SetAttribute(element, name, value === false || value === undefined ? null : value)
+      api.__SetAttribute(element, ATTRIBUTES[name] ?? name, value === false || value === undefined ? null : value)
     },
 
-    getProperty: (target, name) => api.__GetAttributes(fromHostElement(target))[name],
+    getProperty: (target, name) => api.__GetAttributes(fromHostElement(target))[ATTRIBUTES[name] ?? name],
 
     setStyle: (target, value) => {
+      const element = fromHostElement(target)
+      const state = visibilityOf(element)
       // Passing an empty bag is how a style is cleared: it replaces whatever
       // was set before, since `__SetInlineStyles` overwrites wholesale.
-      api.__SetInlineStyles(fromHostElement(target), value === null ? {} : toStyleStrings(value))
+      const styles = value === null ? {} : toStyleStrings(value)
+      state.styleDisplay = styles['display'] ?? null
+      api.__SetInlineStyles(element, styles)
+      // That wholesale replacement is exactly what would un-hide a hidden
+      // element, so the runtime's visibility is put back on top of it.
+      if (state.hidden) api.__AddInlineStyle(element, 'display', 'none')
     },
 
-    // Lynx lays elements out with flex by default, so restoring visibility
-    // means restoring `flex` rather than clearing the property.
-    setVisible: (target, visible) =>
-      api.__AddInlineStyle(fromHostElement(target), 'display', visible ? 'flex' : 'none'),
+    setVisible: (target, visible) => {
+      const element = fromHostElement(target)
+      const state = visibilityOf(element)
+      state.hidden = !visible
+      // Showing an element restores what its own style bag asked for. Lynx lays
+      // elements out with flex by default, so a bag that said nothing about
+      // display gets `flex` back rather than the property being cleared.
+      api.__AddInlineStyle(element, 'display', visible ? (state.styleDisplay ?? DEFAULT_DISPLAY) : 'none')
+    },
 
     addEventListener: (target, name, handler) => {
       const element = fromHostElement(target)
@@ -151,18 +183,41 @@ export const createLynxHost = (api: LynxElementApi = globalLynxApi()): Host => {
  */
 export const lynxRoot = (element: LynxElement): HostElement => toHostElement(element)
 
+/** What the host remembers per element so a style write cannot disturb visibility. */
+type LynxVisibility = {
+  /** The `display` the element's own style bag asked for, or `null` when it asked for none. */
+  styleDisplay: string | null
+  /** Whether the runtime has hidden this element through `setVisible`. */
+  hidden: boolean
+}
+
+/** What an element lays out as when nothing has said otherwise. Lynx is flex everywhere. */
+const DEFAULT_DISPLAY = 'flex'
+
+/**
+ * Vocabulary prop names Lynx spells differently.
+ *
+ * `testId` is the interesting one: passed through raw it is an attribute the
+ * engine does not recognise, so a UI test would have nothing to select on. The
+ * DOM host already emits `data-testid`, and matching it here means one selector
+ * finds the element in the browser preview and on the device alike.
+ */
+const ATTRIBUTES: Record<string, string> = {
+  testId: 'data-testid',
+}
+
 /**
  * Stringifies a style bag and drops the entries that mean "unset".
  *
- * Numbers are passed through as strings rather than given a unit, matching
- * every other host: the caller decides units, because guessing `px` would be
- * wrong for the many unitless properties.
+ * Numbers become density-independent pixels here rather than being handed over
+ * bare, which is the host's job per the contract — see {@link toStyleText} for
+ * the properties that stay unitless.
  */
 const toStyleStrings = (value: StyleValue): Record<string, string> => {
   const styles: Record<string, string> = {}
   for (const [key, entry] of Object.entries(value)) {
     if (entry === null || entry === undefined || entry === false) continue
-    styles[key] = String(entry)
+    styles[key] = toStyleText(key, entry)
   }
   return styles
 }

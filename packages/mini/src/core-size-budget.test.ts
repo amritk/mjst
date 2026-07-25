@@ -19,18 +19,24 @@ import { describe, expect, it } from 'vitest'
  * `alien-signals`. Import a subpath into core and this test fails on both
  * counts, before the widget ever grows.
  *
- * The budget is deliberately snug against the measured size (~3.0 KB gzipped):
+ * The budget is deliberately snug against the measured size (~3.1 KB gzipped):
  * a leaked subpath adds far more than the headroom, so a real regression cannot
- * hide under it. Bump it only for an intentional, reviewed change to the core —
- * as when `list` traded a few hundred bytes (~2.7 → ~3.0 KB) for a move-minimal
- * two-ended keyed diff (O(1) row swaps and middle removals), fragment-batched
- * bulk inserts, and a one-call full-clear path.
+ * hide under it. Bump it only for an intentional, reviewed change to the core.
+ * It has moved twice, both times to buy correctness or a real win:
+ *
+ * - ~2.7 → ~3.0 KB, when `list` took a move-minimal two-ended keyed diff (O(1)
+ *   row swaps and middle removals), fragment-batched bulk inserts, and a
+ *   one-call full-clear path.
+ * - ~3.0 → ~3.1 KB, for a round of correctness fixes: `runDetached`, so a keyed
+ *   list stops disposing every rendered row whenever the collection changes;
+ *   the arbitration that keeps a style write from un-hiding what `show` hid;
+ *   and pixel units for bare numeric style values, which were silently dropped.
  */
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 
 /** Gzipped-byte ceiling for the bundled `.` entry. */
-const GZIP_BUDGET = 3050
+const GZIP_BUDGET = 3200
 
 /** Feature directories whose sources must never enter the core graph. */
 const SUBPATH_DIRS = ['flow/', 'router/', 'forms/', 'query/', 'internal/']

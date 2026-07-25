@@ -1,13 +1,11 @@
-import { applyProp } from '../apply-prop'
-import { requireHost } from '../current-host'
-import type { ElementTag } from '../elements'
 import { list } from '../list'
 import { toGetter } from '../to-getter'
-import type { ClassValue, HostElement, MaybeReactive, StyleValue } from '../types'
+import type { HostElement, MaybeReactive } from '../types'
+import { buildContainer, type ContainerProps } from './build-container'
 import { defaultKey } from './default-key'
 
 /** Props for {@link For}, parameterised by the item type. */
-export type ForProps<T> = {
+export type ForProps<T> = ContainerProps & {
   /** The collection. A getter or signal tracks; a plain array renders once. */
   each: MaybeReactive<readonly T[]>
   /**
@@ -22,27 +20,22 @@ export type ForProps<T> = {
    * their data instead of their slot.
    */
   key?: (item: T, index: number) => string
-  /**
-   * Render rows into a real element of this tag instead of the default flow
-   * wrapper. Reach for it when the container itself needs to be styled or to
-   * lay its rows out directly — a `scroll-view` of rows being the common case.
-   */
-  as?: ElementTag
-  /** Class for the `as` container. Ignored when `as` is not set. */
-  class?: MaybeReactive<ClassValue>
-  /** Style for the `as` container. Ignored when `as` is not set. */
-  style?: MaybeReactive<StyleValue | null>
-  /** Called with the container once built — the escape hatch for wiring it directly. */
-  ref?: (element: HostElement) => void
 }
 
 /**
  * Keyed list rendering — the ergonomic wrapper over the `list` primitive.
  *
  * One node exists per key. Appending adds rows without touching existing ones,
- * a removed key disposes its row and everything the row set up, and reorders
- * converge. This adds nothing to the core beyond a default key and a container,
- * so anything it cannot express can drop down to `list` directly.
+ * a removed key disposes its row and everything the row set up, and a row that
+ * moves is repositioned rather than rebuilt. This adds nothing to the core
+ * beyond a default key and a container, so anything it cannot express can drop
+ * down to `list` directly.
+ *
+ * Every item needs a stable identity for this to work, because a row is built
+ * once from the item it was given and is never rebuilt for a new one. When the
+ * collection holds primitives that can repeat, or when position genuinely IS
+ * the identity, reach for `Index` instead — keying such a list by value hands
+ * two rows the same key, which `list` reports and drops.
  */
 export const For = <T>(props: ForProps<T>): HostElement => {
   const container = buildContainer(props)
@@ -51,21 +44,5 @@ export const For = <T>(props: ForProps<T>): HostElement => {
   // `list` supplies the real position, so neither `key` nor `children` has to
   // recover it with a linear scan that would also mis-key duplicate items.
   list(container, each, keyOf, props.children)
-  return container
-}
-
-/**
- * Builds the element rows are reconciled into: the shared flow wrapper by
- * default, or a real element of the requested tag with `class`, `style`, and
- * `ref` applied exactly as they would be on any other element.
- */
-const buildContainer = <T>(props: ForProps<T>): HostElement => {
-  const host = requireHost()
-  if (props.as === undefined) return host.createFlowHost()
-
-  const container = host.createElement(props.as)
-  if (props.class !== undefined) applyProp(container, 'class', props.class)
-  if (props.style !== undefined) applyProp(container, 'style', props.style)
-  props.ref?.(container)
   return container
 }

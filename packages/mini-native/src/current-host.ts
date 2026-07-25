@@ -53,7 +53,6 @@ export const requireHost = (): Host => {
  */
 export const clearHost = (): void => {
   current = null
-  flushQueued = false
 }
 
 /**
@@ -70,13 +69,23 @@ export const clearHost = (): void => {
  * JavaScript engine is required to, and this file is compiled without any
  * platform library. `Promise.resolve().then` is the same microtask, spelled in
  * ECMAScript.
+ *
+ * The installed host is read when the flush RUNS, not when it is scheduled.
+ * Closing over the host instead would strand a swap: install one host, render
+ * (which queues a commit against it), install another in the same tick, and the
+ * outgoing host would receive the commit while the incoming one — the only host
+ * with anything on screen — never got flushed at all. Reading `current` late
+ * means whoever is installed at the end of the tick is the one that commits,
+ * which is the only answer that holds for a hot reload or a test swapping hosts
+ * between cases. For the same reason `clearHost` leaves the queued flag alone:
+ * the pending microtask is what clears it, so a host installed in between still
+ * rides the commit that is already scheduled rather than quietly suppressing it.
  */
 export const scheduleFlush = (): void => {
-  const host = current
-  if (!host?.flush || flushQueued) return
+  if (flushQueued || !current?.flush) return
   flushQueued = true
   void Promise.resolve().then(() => {
     flushQueued = false
-    host.flush?.()
+    current?.flush?.()
   })
 }

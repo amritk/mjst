@@ -33,14 +33,18 @@ src/
   render-child.ts         Reactive single-slot swap, the base of control flow
   mount.ts                Application root — opens the owning scope
   run-detached.ts         Escape hatch for scope ownership (see the gotcha below)
-  signals.ts              alien-signals re-exported, so nothing else imports it
+  untrack.ts              The same suspension, named for the reader's side of it
+  watch.ts                Change-only effect with an untracked callback
+  signals.ts              alien-signals re-exported (plus batch), so nothing else imports it
+  warn.ts                 Recoverable-mistake reporting, without assuming a console
   bind/                   bind-text, bind-prop, bind-show, bind-value
-  flow/                   Show, Dynamic, For, defaultKey
+  flow/                   Show, Switch/Match, Dynamic, For, Index, defaultKey
   hosts/
     create-memory-host.ts The reference host — plain objects, no platform
     create-dom-host.ts    Web preview target (the ONLY file that knows about HTML)
     create-lynx-host.ts   Native target, driving Lynx's Element PAPI
     lynx-element-api.ts   The PAPI subset, as an injectable type
+    to-style-text.ts      Numbers → the target's unit, shared by the real hosts
 ```
 
 ## Invariants — do not break these
@@ -61,6 +65,13 @@ src/
 - **`Host` stays small** (about 15 functions) — it is the entire porting cost of
   a new platform. `createFlowHost` is separate from `createElement` because the
   right wrapper differs per target; `flush` is optional, for targets that batch.
+- **Visibility survives a style write.** `setVisible` and `setStyle` are easiest
+  to implement through one channel, and then a wholesale style replacement
+  quietly un-hides a hidden element — which is order-dependent on how the props
+  happened to be written, so it fails intermittently. Any host sharing a channel
+  between the two must remember the visibility and re-assert it. Both real hosts
+  do; the memory host keeps them as separate fields, which is why its tests
+  could not catch the bug.
 - **No raw-markup sink, ever.** There is deliberately no `bindHtml` equivalent
   anywhere in the host contract, so bound data cannot inject elements on any
   target.
@@ -83,8 +94,21 @@ should die.
 `list.test.tsx` has a regression test named *"keeps existing rows reactive after
 another row is appended"* that fails without it.
 
-> Worth noting: `@amritk/mini` has the same latent bug upstream, and a comment in
-> its `render-child.ts` asserts the opposite behaviour.
+> `@amritk/mini` had the same latent bug, and a comment in its `render-child.ts`
+> asserted the opposite behaviour. Both are fixed there now — it has its own
+> `run-detached.ts` — so the two packages agree about how the engine behaves.
+
+## The reserved-`key` gotcha
+
+`key` is reserved by JSX. The transform hoists any `key` attribute out of the
+props object into the runtime's third parameter *before the component is ever
+called*, so a component with a legitimate prop of that name — `For`, whose `key`
+is the row identity function — would never receive it. `jsx` forwards it back
+into props for component tags, and `flow/for.test.tsx` pins that. It stays
+ignored for element tags, where there is no keying at the JSX level at all.
+
+> `@amritk/mini` had this hole too — its `for.test.tsx` only ever called
+> `For({…})` directly, which is likely why nobody noticed. Fixed there as well.
 
 ## Testing
 
@@ -101,18 +125,10 @@ no device, no emulator.
 
 ## Known gaps
 
-Deliberate omissions rather than oversights, listed so nobody has to rediscover
-them:
-
-- **No router.** Route *matching* is pure and portable; the navigation half needs
-  a native nav-stack shim rather than `window.history`.
-- **No `Switch`/`Match`.** `Show` and `Dynamic` cover the cases in use; these are
-  a thin layer over `renderChild` when wanted.
-- **No `bindClass`.** The reactive `class` prop covers it and keeps the contract
-  smaller.
-- **`input multiline` does nothing in the DOM preview.** The element is created
-  before props are read, so the host cannot switch to a `<textarea>`.
-- **Reconciliation is append-ordered.** Rows already in position are never moved,
-  so appends are free and arbitrary reorders converge with more insert calls.
+See the README's *Known gaps* for the full list. The short version: `bindClass`
+and fragments are deliberate omissions; accessibility props, a virtualised list,
+gestures beyond tap, an animation seam, context/portal/error boundaries, and the
+router / forms / query subpaths are simply not built yet. `docs/mini-native-audit.md`
+at the repo root carries the reasoning and the priority order.
 
 Add a changeset for every change (`bunx changeset`).

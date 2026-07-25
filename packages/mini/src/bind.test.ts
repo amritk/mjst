@@ -146,6 +146,25 @@ describe('bind', () => {
     expect(model()).toBe('final')
   })
 
+  it('bindValue applies a signal write that landed mid-composition once it ends', () => {
+    // The element is deliberately left alone during a composition, but the
+    // write must not be lost with it. Reading the element back instead sets the
+    // signal FROM the element, the two agree again, and the tracking effect has
+    // nothing left to re-apply — so the app's write vanishes without a trace.
+    const model = signal('')
+    const node = document.createElement('input')
+    bindValue(node, model)
+    node.dispatchEvent(new Event('compositionstart'))
+    node.value = 'partial'
+    model('cleared by the app')
+    // Still untouched while the candidate string is in flight.
+    expect(node.value).toBe('partial')
+    node.dispatchEvent(new Event('compositionend'))
+    // The deliberate write wins over the candidate text.
+    expect(node.value).toBe('cleared by the app')
+    expect(model()).toBe('cleared by the app')
+  })
+
   it('bindChecked drives the checkbox from the signal and back', () => {
     const on = signal(false)
     const node = document.createElement('input')
