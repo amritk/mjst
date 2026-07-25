@@ -42,14 +42,21 @@ const routes: Record<string, AnyRouteContract> = {
   localsEcho: corpus.localsEcho,
   guardedResource: corpus.guardedResource,
   guardBoom: corpus.guardBoom,
+  secureNote: corpus.secureNote,
+  secureReport: corpus.secureReport,
 }
 const info = { title: 'Differential', version: '1.0.0' }
 
-/** Document-level OpenAPI extras, passed identically to both engines. */
+/**
+ * Document-level OpenAPI extras, passed identically to both engines. The
+ * schemes and the default requirement are the corpus's own, so the document
+ * both engines publish and the guards `secureRoutes` resolved come from one
+ * declaration — the runtime guard itself never reaches the document.
+ */
 const OPENAPI_EXTRAS = {
   servers: [{ url: 'https://api.example.com' }],
-  securitySchemes: { apiKey: { type: 'apiKey', name: 'x-api-key', in: 'header' } },
-  security: [{ apiKey: [] }],
+  securitySchemes: corpus.corpusSecuritySchemes,
+  security: corpus.corpusSecurity,
   tags: [{ name: 'users', description: 'User management' }],
 } as const
 
@@ -272,6 +279,28 @@ describe('compile-to-module', () => {
         () => new Request('http://localhost/guarded', { headers: { 'x-key': 'secret', 'x-role': 'admin' } }),
         () => new Request('http://localhost/guarded', { headers: { 'x-key': 'wrong', 'x-role': 'admin' } }),
         () => new Request('http://localhost/guard-boom'),
+        // Security guards resolved from the document-level default: they run
+        // before the body is read, so an unauthenticated caller gets the
+        // denial even when the payload could never have parsed, validated, or
+        // survived the size cap. With a key the pipeline runs as usual, and the
+        // reply's contextRuns proves the factory the guards gated on ran once.
+        () => note('{"title":"note"}'),
+        () => note('{"title":"note"}', 'corpus-key'),
+        () => note('not json at all'),
+        () => note('{"title":""}'),
+        () => note('{"title":""}', 'corpus-key'),
+        () => note('{"title":"clash"}', 'corpus-key'),
+        () => note(JSON.stringify({ title: 'x'.repeat(MAX_BODY_BYTES) })),
+        () => note(JSON.stringify({ title: 'x'.repeat(MAX_BODY_BYTES) }), 'corpus-key'),
+        // A per-operation override naming two schemes: the sync guard denies
+        // without a key, the async one denies a non-admin, and both decide
+        // before the path parameter is coerced — so an unparseable id still
+        // answers the denial rather than a 400.
+        () => new Request('http://localhost/reports/abc'),
+        () => new Request('http://localhost/reports/abc', { headers: { 'x-api-key': 'corpus-key' } }),
+        () => new Request('http://localhost/reports/abc', { headers: { 'x-api-key': 'admin-key' } }),
+        () => new Request('http://localhost/reports/7', { headers: { 'x-api-key': 'admin-key' } }),
+        () => new Request('http://localhost/reports/7', { method: 'HEAD', headers: { 'x-api-key': 'admin-key' } }),
         // Async refine: accepted, resolved issues (through the custom
         // validationFailed formatter), and a rejected refine down onError.
         () => slotAsync({ start: 1, end: 5 }),
@@ -340,6 +369,7 @@ describe('compile-to-module', () => {
         // response headers) flow through the /openapi.json case above; these
         // exercise the routes themselves.
         () => new Request('http://localhost/build-info'),
+        () => new Request('http://localhost/build-info', { headers: { 'x-api-key': 'corpus-key' } }),
         () => new Request('http://localhost/release-info'),
         // The platform-request escape hatch: both engines run on fetch, so
         // both must expose the same Request through `request.raw`.
@@ -430,6 +460,16 @@ describe('compile-to-module', () => {
       expect(await compiledRevalidated.text()).toBe('')
       expect(runtimeRevalidated.headers.get('etag')).toBe(etag)
       expect(compiledRevalidated.headers.get('etag')).toBe(etag)
+
+      // The loop above proves the engines agree; these pin down what they
+      // agreed on, so a security guard running too late in *both* engines
+      // cannot pass as parity. An unparseable body must still answer the
+      // denial, and the served reply must show the context factory ran once.
+      const unauthenticated = await compiledModule.fetch(note('not json at all'), ENV)
+      expect(unauthenticated.status).toBe(401)
+      const authenticated = await compiledModule.fetch(note('{"title":"note"}', 'corpus-key'), ENV)
+      expect(authenticated.status).toBe(200)
+      expect(await authenticated.json()).toMatchObject({ key: 'corpus-key', contextRuns: 1 })
     } finally {
       rmSync(fixtureDir, { recursive: true, force: true })
     }
@@ -524,6 +564,77 @@ describe('compile-to-module', () => {
     expect(source).toContain('User management')
     expect(source).toMatch(/const OPENAPI_ETAG = "\\"[0-9a-f]{8}\\""/)
   })
+
+  it('gates the OpenAPI document identically to the runtime engine', async () => {
+    const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), '.fixtures-openapi-guards')
+    mkdirSync(fixtureDir, { recursive: true })
+    try {
+      const documentRoutes = { health: corpus.health }
+      const source = compileToModule({
+        routesImport: '../compile-to-module.test-utils',
+        runtimeImport: '../../index',
+        validatorsImport: '@amritk/runtime-validators',
+        routes: documentRoutes,
+        info,
+        contextExport: 'createAppContext',
+        openApiGuardExports: ['requireApiKey'],
+      })
+      // The document gate runs the exported guards through the shared loop,
+      // even though no route in this module declares a guard of its own.
+      expect(source).toContain('const OPENAPI_GUARDS = [requireApiKey]')
+      expect(source).toContain('runGuards(OPENAPI_GUARDS, gate, 0)')
+
+      const fixturePath = join(fixtureDir, 'generated-openapi-guards.ts')
+      writeFileSync(fixturePath, source)
+      const compiledModule = (await import(fixturePath)) as {
+        fetch: (request: Request, env?: unknown) => Response | Promise<Response>
+      }
+      const runtime = toFetchHandler(
+        createApi({
+          routes: Object.values(documentRoutes),
+          info,
+          context: corpus.createAppContext,
+          openApiGuards: [corpus.requireApiKey],
+        }),
+      )
+
+      const cases: ReadonlyArray<() => Request> = [
+        // No credential: the schema stays private, and the denial is sent as
+        // the guard wrote it — there is no contract behind this endpoint.
+        () => new Request('http://localhost/openapi.json'),
+        () => new Request('http://localhost/openapi.json', { method: 'HEAD' }),
+        // With one: the document, its etag, and the 304 revalidation.
+        () => new Request('http://localhost/openapi.json', { headers: { 'x-api-key': 'corpus-key' } }),
+        () =>
+          new Request('http://localhost/openapi.json', {
+            headers: { 'x-api-key': 'corpus-key', 'if-none-match': '*' },
+          }),
+        () => new Request('http://localhost/openapi.json', { method: 'HEAD', headers: { 'x-api-key': 'corpus-key' } }),
+        // Routes are unaffected by the document gate.
+        () => new Request('http://localhost/health'),
+      ]
+      for (const makeRequest of cases) {
+        const fromRuntime = await runtime(makeRequest(), ENV)
+        const fromCompiled = await compiledModule.fetch(makeRequest(), ENV)
+        const label = makeRequest().method + ' ' + new URL(makeRequest().url).pathname
+        expect(fromCompiled.status, label).toBe(fromRuntime.status)
+        expect(fromCompiled.headers.get('etag'), label).toBe(fromRuntime.headers.get('etag'))
+        expect(fromCompiled.headers.get('content-type'), label).toBe(fromRuntime.headers.get('content-type'))
+        expect(await fromCompiled.text(), label).toBe(await fromRuntime.text())
+      }
+
+      // The agreed answers: private without a key, served with one.
+      expect((await compiledModule.fetch(new Request('http://localhost/openapi.json'), ENV)).status).toBe(401)
+      const served = await compiledModule.fetch(
+        new Request('http://localhost/openapi.json', { headers: { 'x-api-key': 'corpus-key' } }),
+        ENV,
+      )
+      expect(served.status).toBe(200)
+      expect(await served.text()).toContain('"openapi"')
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  }, 20_000)
 
   it('rejects duplicate routes and invalid export names at emit time', () => {
     expect(() => compileToModule({ routesImport: './x', routes: { a: corpus.health, b: corpus.health } })).toThrow(
@@ -772,6 +883,17 @@ const slot = (body: unknown): Request =>
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
+  })
+
+/** The secured note route: the api key rides a header, so it can be left off. */
+const note = (body: string, key?: string): Request =>
+  new Request('http://localhost/notes', {
+    method: 'POST',
+    headers:
+      key === undefined
+        ? { 'content-type': 'application/json' }
+        : { 'content-type': 'application/json', 'x-api-key': key },
+    body,
   })
 
 const slotAsync = (body: unknown): Request =>

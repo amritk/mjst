@@ -5,6 +5,7 @@ import { fnv1aHex } from './fnv1a-hex'
 import type { ApiInternals, OpenApiSerialized } from './handle-request'
 import { handleRequest } from './handle-request'
 import { matchRoute } from './match-route'
+import { assertRoutesSecured } from './secure-routes'
 import { toOpenApi } from './to-open-api'
 import type { Api, ApiOptions, CompiledRoute, OpenApiDocument, ValidatorCompiler } from './types'
 
@@ -33,6 +34,11 @@ const defaultCompile: ValidatorCompiler = (schema) => ({
 export const createApi = (options: ApiOptions): Api => {
   const compile = options.compile ?? defaultCompile
   const validateResponses = options.validateResponses ?? false
+
+  // Documented-but-unenforced authentication is the failure mode `secureRoutes`
+  // exists to prevent, so a route the document says needs auth but that carries
+  // no resolved guards is a startup error rather than a silently-open endpoint.
+  assertRoutesSecured(options.routes, options.security, 'createApi')
 
   const staticRoutes = new Map<string, CompiledRoute>()
   const dynamicRoutes = new Map<string, CompiledRoute[]>()
@@ -95,6 +101,7 @@ export const createApi = (options: ApiOptions): Api => {
     table: { staticRoutes, dynamicRoutes, methods },
     openApiPath,
     openApiSerialized,
+    openApiGuards: options.openApiGuards,
     createContext: options.context,
     onError: options.onError,
     errors: options.errors,

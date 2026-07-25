@@ -69,8 +69,10 @@ export const createSentry = (
       try {
         options.capture(error, {
           request,
-          route: details.route.path,
-          method: details.route.method.toUpperCase(),
+          // Undefined for an error raised outside any route (the guarded
+          // OpenAPI document endpoint, served before matching).
+          route: details.route?.path ?? request.path,
+          method: (details.route?.method ?? request.method).toUpperCase(),
           env: details.env,
           executionContext: details.executionContext,
         })

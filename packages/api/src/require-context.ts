@@ -13,12 +13,25 @@ import type { ContextGuardInput, RouteReplyValue } from './types'
  *   { status: 401, body: { error: 'unauthorized' } },
  * )
  *
- * // Roles, scopes, feature flags — same shape, a different predicate.
+ * // Roles, feature flags — same shape, a different predicate.
  * export const requireAdmin = requireContext(
  *   (ctx: ContextGuardInput<AppContext>) => ctx.context.session?.user.role === 'admin',
  *   { status: 403, body: { error: 'forbidden' } },
  * )
+ *
+ * // Attached to a security scheme, the predicate also receives the scopes the
+ * // requirement asked for — so one guard covers every scope combination the
+ * // OpenAPI document advertises.
+ * export const requireScopes = requireContext(
+ *   (ctx: ContextGuardInput<AppContext>, scopes) =>
+ *     scopes.every((scope) => ctx.context.session?.scopes.includes(scope)),
+ *   { status: 403, body: { error: 'insufficient_scope' } },
+ * )
  * ```
+ *
+ * The `scopes` argument is the requirement's value list — `['billing:write']`
+ * for `security: [{ oauth2: ['billing:write'] }]` — and an empty array for a
+ * guard used as a plain route guard, so a predicate may simply ignore it.
  *
  * The predicate may be sync or async (a returned promise is awaited); returning
  * `true` passes the request to the next guard or the handler, `false` denies it
@@ -29,14 +42,40 @@ import type { ContextGuardInput, RouteReplyValue } from './types'
  * helper deliberately keeps the reply a constant so its type stays exact.
  */
 export const requireContext = <const Denied extends RouteReplyValue, Context = unknown>(
-  allow: (context: ContextGuardInput<Context>) => boolean | Promise<boolean>,
+  allow: (context: ContextGuardInput<Context>, scopes: readonly string[]) => boolean | Promise<boolean>,
   denied: Denied,
-): ((context: ContextGuardInput<Context>) => Denied | undefined | Promise<Denied | undefined>) => {
-  return (context) => {
-    const verdict = allow(context)
+): ((
+  context: ContextGuardInput<Context>,
+  scopes?: readonly string[],
+) => Denied | undefined | Promise<Denied | undefined>) => {
+  const guard = (context: ContextGuardInput<Context>, scopes: readonly string[] = NO_SCOPES) => {
+    const verdict = allow(context, scopes)
     // A plain boolean stays fully synchronous — no promise is allocated on the
     // common in-process check (a session already on the context).
     if (typeof verdict === 'boolean') return verdict ? undefined : denied
     return verdict.then((ok) => (ok ? undefined : denied))
   }
+  denialStatuses.set(guard, denied.status)
+  return guard
 }
+
+/** Shared empty scope list, so the no-scopes call path allocates nothing. */
+const NO_SCOPES: readonly string[] = Object.freeze([])
+
+/**
+ * The status each {@link requireContext} guard denies with. `secureRoutes`
+ * reads it to check the route documents that status — the guarantee the type
+ * system provides for a guard attached directly to `guards`, but cannot for
+ * one arriving through a security scheme, where the context type is erased.
+ *
+ * A `WeakMap` keyed on the guard keeps the function itself an ordinary,
+ * property-free closure.
+ */
+const denialStatuses = new WeakMap<object, number>()
+
+/**
+ * The status a guard denies with, when it is known — i.e. when the guard came
+ * from {@link requireContext}. `undefined` for a hand-written guard, whose
+ * denial can vary per request and so cannot be checked up front.
+ */
+export const denialStatusOf = (guard: object): number | undefined => denialStatuses.get(guard)

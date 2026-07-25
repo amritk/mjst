@@ -1135,19 +1135,71 @@ export const api = createApi({ routes, securitySchemes, security })
 
 Resolution follows OpenAPI exactly: schemes within one requirement object are an
 **AND** (all must pass); several requirement objects are an **OR** (any passing
-alternative allows the request). The fail-closed guarantee is a startup error —
-a `security` requirement naming a scheme that is undefined, or defined without an
-`x-guard`, throws rather than serving an endpoint you documented as protected;
-mark it `security: []` if public is what you meant.
+alternative allows the request, and when none does the client sees the *first*
+alternative's denial — the primary way in, rather than whichever happens to be
+last in the array). A guard shared by two alternatives runs once per request.
 
-Because the guards land on `contract.guards`, both engines honor them with no
-further wiring — `createApi` runs them per request and `compileToModule` threads
-the same live array through its guard loop, so no `securitySchemes` need reach
-the compiled module for enforcement. Reach for `secureRoutes` when the safe
-default is *closed*; reach for the bare `guards` field when only a few routes
-need protection and the denial status should stay type-checked against each
-route's `responses` (a blanket document guard cannot be, since it spans
-heterogeneous routes).
+A requirement's **scopes** are enforced, not just documented: they reach the
+scheme's guard as its second argument, so one `oauth2` scheme covers every scope
+combination the document advertises.
+
+```ts
+const requireScopes = requireContext(
+  (ctx: ContextGuardInput<AppContext>, scopes) => scopes.every((s) => ctx.context.session?.scopes.includes(s)),
+  { status: 403, body: { error: 'insufficient_scope' } },
+)
+// `security: [{ oauth2: ['billing:write'] }]` calls it with ['billing:write'].
+```
+
+**Security guards run before validation.** Unlike the route's own `guards`, they
+are the first thing a matched request meets: the context factory resolves the
+session, the guards gate on it, and only then does the pipeline coerce and
+validate slots, read the body, or run `refine`. An unauthenticated caller
+therefore never reaches the body parser, the schema error detail, or app code.
+Their context carries the app `context` and the raw `request`; the validated
+slots are `undefined`, which is why a security guard gates on the session rather
+than on typed input.
+
+Four things are startup errors, all of them fail-closed:
+
+1. A requirement naming a scheme that is undefined, or defined without an
+   `x-guard` — you cannot document a route as protected and have it silently
+   serve unprotected.
+2. An empty requirement object (`{}`). OpenAPI reads it as "authentication
+   optional", so a stray one makes a route public and every sibling alternative
+   moot — indistinguishable from a typo. Use `security: []` to mark a route
+   public, or `allowOptionalSecurity: true` if you really mean optional.
+3. A guard whose denial status the route's `responses` does not declare. This is
+   the guarantee type erasure takes away — a `requireContext` guard on `guards`
+   is compile-checked against `responses`, one arriving through a scheme cannot
+   be — so it is checked at startup instead, which also stops `validateResponses`
+   from turning a denial into a 500. Opt out with `allowUndeclaredDenials: true`.
+4. Calling `createApi`/`compileToModule` with a `security` default while a route
+   it covers never went through `secureRoutes`. Without this, the document
+   asserts every operation needs auth while the routes serve anonymously.
+
+Because the guards land on `contract.securityGuards`, both engines honor them
+with no further wiring — `createApi` runs them per request and `compileToModule`
+threads the same live array through its emitted pipeline, so no `securitySchemes`
+need reach the compiled module for enforcement.
+
+The generated document is served *before* route matching, so `secureRoutes` does
+not cover it — under a deny-by-default API the schema stays public unless you say
+otherwise. Gate it with `openApiGuards`, which run exactly like a route's:
+
+```ts
+createApi({ routes, securitySchemes, security, openApiGuards: [requireSession] })
+```
+
+The compiled engine names them by export, like its other hooks:
+
+```ts
+compileToModule({ routesImport, routes, openApiGuardExports: ['requireSession'] })
+```
+
+Reach for `secureRoutes` when the safe default is *closed*; reach for the bare
+`guards` field for per-route, fine-grained checks that need the validated
+request — those still run after validation, just before the handler.
 
 ### Auth: Better Auth
 

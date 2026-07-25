@@ -568,11 +568,31 @@ export type AnyContract = {
  * any concretely-typed guard array is assignable here.
  */
 export type AnyRouteContract = AnyContract & {
-  readonly guards?: readonly ((
-    context: ErasedRequestContext,
-  ) => RouteReplyValue | Response | undefined | Promise<RouteReplyValue | Response | undefined>)[]
+  readonly guards?: readonly ErasedGuard[]
+  /**
+   * The guards enforcing this route's OpenAPI `security` requirement, resolved
+   * by `secureRoutes`. They are kept apart from {@link AnyRouteContract.guards}
+   * because they run at a different point in the pipeline: **before** slot
+   * validation, body reads and `refine`, so an unauthenticated request never
+   * reaches the parser, the schema error detail, or app code. Their context
+   * therefore carries `undefined` request slots — a security guard gates on the
+   * session and the raw `request`, not on validated input.
+   *
+   * Written only by `secureRoutes`; hand-authored routes use `guards`.
+   */
+  readonly securityGuards?: readonly ErasedGuard[]
   readonly handler: (context: ErasedRequestContext) => RouteReplyValue | Response | Promise<RouteReplyValue | Response>
 }
+
+/**
+ * A guard with its context type erased — the element type both
+ * {@link AnyRouteContract.guards} and {@link AnyRouteContract.securityGuards}
+ * hold. Any concretely-typed {@link RouteGuard} is assignable to it, for the
+ * same reason {@link ErasedRequestContext}'s `never` slots are.
+ */
+export type ErasedGuard = (
+  context: ErasedRequestContext,
+) => RouteReplyValue | Response | undefined | Promise<RouteReplyValue | Response | undefined>
 
 /**
  * The pair of validators the pipeline keeps per schema: a boolean guard for the
@@ -855,6 +875,15 @@ export type ApiOptions = OpenApiExtras & {
    * `false` to disable serving it. Defaults to `/openapi.json`.
    */
   readonly openApiPath?: string | false
+  /**
+   * Guards gating the served OpenAPI document. The document endpoint is
+   * answered before route matching, so it is outside `secureRoutes`' reach —
+   * under a deny-by-default API the schema would otherwise stay public. These
+   * run exactly like a route's security guards (the context factory first,
+   * request slots `undefined`, first denial winning) and a denial is sent
+   * as-is, without response validation.
+   */
+  readonly openApiGuards?: readonly ErasedGuard[]
   /** Swap the validation engine. See {@link ValidatorCompiler}. */
   readonly compile?: ValidatorCompiler
   /**
@@ -957,8 +986,12 @@ export type RequestObservation = {
  * for grouping, and the platform values for client construction and flushing.
  */
 export type OnErrorDetails = {
-  /** The matched route's contract. Its `path` pattern groups errors cleanly. */
-  readonly route: AnyRouteContract
+  /**
+   * The matched route's contract. Its `path` pattern groups errors cleanly.
+   * `undefined` when the error came from outside any route — currently only
+   * the guarded OpenAPI document endpoint, which is served before matching.
+   */
+  readonly route: AnyRouteContract | undefined
   /** The platform bindings the adapter was invoked with (Workers `env`). */
   readonly env: unknown
   /** The platform execution context (Workers `ctx`, for `waitUntil` flushes). */
