@@ -1,0 +1,121 @@
+{
+  "name": "@amritk/mini-native",
+  "version": "0.0.0",
+  "description": "A React-Native-shaped signals UI runtime on mini's model: real host nodes created once, mutated forever by signals, rendered through a pluggable host.",
+  "type": "module",
+  "license": "MIT",
+  "author": "amritk",
+  "sideEffects": false,
+  "keywords": [
+    "signals",
+    "reactive",
+    "jsx",
+    "native",
+    "lynx",
+    "ui",
+    "typescript",
+    "mjst"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amritk/mjst.git",
+    "directory": "packages/mini-native"
+  },
+  "homepage": "https://github.com/amritk/mjst/tree/main/packages/mini-native#readme",
+  "bugs": {
+    "url": "https://github.com/amritk/mjst/issues"
+  },
+  "files": [
+    "dist",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "!src/**/*.test.ts",
+    "!src/**/*.test.tsx",
+    "AI.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f && node ../../scripts/strip-comments.mjs",
+    "types:check": "tsgo -p . --noEmit && tsgo -p tsconfig.dom.json --noEmit",
+    "test": "NODE_ENV=production vitest run --root ../.. packages/mini-native/"
+  },
+  "dependencies": {
+    "alien-signals": "catalog:"
+  },
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./jsx-runtime": {
+      "development": "./src/jsx-runtime.ts",
+      "types": "./dist/jsx-runtime.d.ts",
+      "import": "./dist/jsx-runtime.js",
+      "default": "./dist/jsx-runtime.js"
+    },
+    "./jsx-dev-runtime": {
+      "development": "./src/jsx-dev-runtime.ts",
+      "types": "./dist/jsx-dev-runtime.d.ts",
+      "import": "./dist/jsx-dev-runtime.js",
+      "default": "./dist/jsx-dev-runtime.js"
+    },
+    "./host": {
+      "development": "./src/host.ts",
+      "types": "./dist/host.d.ts",
+      "import": "./dist/host.js",
+      "default": "./dist/host.js"
+    },
+    "./flow": {
+      "development": "./src/flow/index.ts",
+      "types": "./dist/flow/index.d.ts",
+      "import": "./dist/flow/index.js",
+      "default": "./dist/flow/index.js"
+    },
+    "./hosts/dom": {
+      "development": "./src/hosts/create-dom-host.ts",
+      "types": "./dist/hosts/create-dom-host.d.ts",
+      "import": "./dist/hosts/create-dom-host.js",
+      "default": "./dist/hosts/create-dom-host.js"
+    },
+    "./hosts/lynx": {
+      "development": "./src/hosts/create-lynx-host.ts",
+      "types": "./dist/hosts/create-lynx-host.d.ts",
+      "import": "./dist/hosts/create-lynx-host.js",
+      "default": "./dist/hosts/create-lynx-host.js"
+    },
+    "./hosts/memory": {
+      "development": "./src/hosts/create-memory-host.ts",
+      "types": "./dist/hosts/create-memory-host.d.ts",
+      "import": "./dist/hosts/create-memory-host.js",
+      "default": "./dist/hosts/create-memory-host.js"
+    },
+    "./hosts/memory/serialize": {
+      "development": "./src/hosts/serialize-memory-tree.ts",
+      "types": "./dist/hosts/serialize-memory-tree.d.ts",
+      "import": "./dist/hosts/serialize-memory-tree.js",
+      "default": "./dist/hosts/serialize-memory-tree.js"
+    },
+    "./hosts/memory/dispatch": {
+      "development": "./src/hosts/dispatch-memory-event.ts",
+      "types": "./dist/hosts/dispatch-memory-event.d.ts",
+      "import": "./dist/hosts/dispatch-memory-event.js",
+      "default": "./dist/hosts/dispatch-memory-event.js"
+    }
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "typescript": "^5"
+  }
+}
