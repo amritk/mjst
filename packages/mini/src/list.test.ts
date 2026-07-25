@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest'
 
 import { bindText } from './bind'
 import { list } from './list'
-import { signal } from './signals'
+import { onCleanup } from './on-cleanup'
+import { effectScope, signal } from './signals'
 
 type Item = { id: string; label: string }
 
@@ -297,6 +298,81 @@ describe('list', () => {
     // Every item's real position reaches both callbacks — no O(n) indexOf.
     expect(seenKey).toEqual([0, 1, 2])
     expect(seenCreate).toEqual([0, 1, 2])
+  })
+
+  it('keeps an existing row reacting after a sibling is appended', () => {
+    // Row scopes are built inside the reconciliation effect, and that effect
+    // re-runs on every write to `items`. alien-signals disposes a scope created
+    // inside an effect when the effect re-runs, so without `runDetached` this
+    // append silently kills the first row's bindings: the node stays in the DOM
+    // showing 'before' forever while looking perfectly correct.
+    const items = signal<readonly Item[]>([{ id: '1', label: 'a' }])
+    const text = signal('before')
+    const container = document.createElement('div')
+    list(
+      container,
+      items,
+      (item) => item.id,
+      (item) => {
+        const node = makeItem(item)
+        bindText(node, text)
+        return node
+      },
+    )
+    const first = container.firstElementChild as HTMLElement
+    items([...items(), { id: '2', label: 'b' }])
+    text('after')
+    expect(first.textContent).toBe('after')
+  })
+
+  it('does not fire a row onCleanup when a sibling is appended', () => {
+    // The same bug seen from the teardown side: appending 'b' must not look like
+    // 'a' was removed. An `onCleanup` inside a row is how components release
+    // intervals, sockets, and listeners, so firing it on a live row leaves the
+    // row on screen with its resources already torn down.
+    const items = signal<readonly Item[]>([{ id: 'a', label: 'a' }])
+    const cleaned: string[] = []
+    const container = document.createElement('div')
+    list(
+      container,
+      items,
+      (item) => item.id,
+      (item) => {
+        onCleanup(() => cleaned.push(item.id))
+        return makeItem(item)
+      },
+    )
+    items([...items(), { id: 'b', label: 'b' }])
+    expect(cleaned).toEqual([])
+    // …and a genuine removal still cleans up, so the guard above is not just
+    // cleanup being broken outright.
+    items([{ id: 'b', label: 'b' }])
+    expect(cleaned).toEqual(['a'])
+  })
+
+  it('disposes every row when the scope list was called in is disposed', () => {
+    // Detaching row scopes takes them out of the reconciliation effect's
+    // ownership, so `list` has to hand them to its caller's scope by hand.
+    // Without that, unmounting a component would leave its rows reacting.
+    const items = signal<readonly Item[]>([{ id: '1', label: 'a' }])
+    const text = signal('live')
+    const container = document.createElement('div')
+    const disposeScope = effectScope(() => {
+      list(
+        container,
+        items,
+        (item) => item.id,
+        (item) => {
+          const node = makeItem(item)
+          bindText(node, text)
+          return node
+        },
+      )
+    })
+    const node = container.firstElementChild as HTMLElement
+    disposeScope()
+    text('after-unmount')
+    expect(node.textContent).toBe('live')
   })
 
   it('stops reconciling and disposes all scopes on dispose', () => {
