@@ -12,6 +12,7 @@ export default defineConfig({
       // @amritk/runtime-validators, is aliased to dist below.
       { find: /^@amritk\/api$/, replacement: resolve(root, 'packages/api/src/index.ts') },
       { find: /^@amritk\/api\/bundler$/, replacement: resolve(root, 'packages/api/src/bundler/index.ts') },
+      { find: /^@amritk\/api\/dev$/, replacement: resolve(root, 'packages/api/src/dev/index.ts') },
       { find: /^@amritk\/helpers\/(.*)$/, replacement: resolve(root, 'packages/helpers/src/$1.ts') },
       { find: /^@amritk\/generate-examples$/, replacement: resolve(root, 'packages/generate-examples/src/index.ts') },
       { find: /^@amritk\/generate-markdown$/, replacement: resolve(root, 'packages/generate-markdown/src/index.ts') },

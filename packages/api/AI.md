@@ -141,6 +141,17 @@ Hook factories ship the standard middleware over `onRequest`/`onResponse`/`local
 |---|---|
 | `@amritk/api` | runtime, client, adapters, OpenAPI, hook factories |
 | `@amritk/api/bundler` | build-time plugins (`stripContractsVite`/`Esbuild`/`Rollup`/`Bun`) that strip server/OpenAPI freight from `defineContract` sites in browser builds — build tooling only, never in runtime code |
+| `@amritk/api/dev` | hot reloading for the dev server (`createHotApi`, `watchPaths`, `importFresh`) — development only, never in deployed code |
+
+**Hot reload (dev server).** `createHotApi({ load, watch })` returns a normal
+`Api` you hand to an adapter once; it rebuilds itself from disk on every save
+without restarting the process, so sockets and in-memory state survive. `load`
+must *re-read* the routes (`importFresh('./src/routes.ts')`) rather than close
+over an import — a plain `import` is cached and would rebuild the same code
+forever. Swaps are atomic and a failed reload keeps the previous build serving
+(`api.error()` has the reason; a failure before the first build answers 503).
+Reload depth: whole local graph on Node 22.15+, the named module elsewhere —
+on Bun use `bun --hot` **or** `watchPaths`, never both.
 
 Schemas authored in Zod / TypeBox / Valibot / Effect: convert with
 `@amritk/adapters` first. Install: `bun add @amritk/api`.
