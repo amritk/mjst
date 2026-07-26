@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - main
+  # Manual fallback. When GitHub drops the push event for a merge — it dropped
+  # the one for 4b4b383, which produced no Release *or* CI run — main is left
+  # carrying an unreleased changeset with no run to re-run, since none was ever
+  # created. Without this the only recovery is to wait for the next merge to
+  # carry the release along. Firing it by hand does the same work: changesets
+  # opens the version PR (or publishes, on a version PR's own merge) from
+  # whatever is on main.
+  workflow_dispatch:
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
@@ -26,8 +34,20 @@ jobs:
         with:
           node-version: 24
 
-      - name: Upgrade npm for trusted publishing
-        run: npm install -g npm
+      # Trusted publishing (OIDC) needs npm >= 11.5.1, but the ceiling matters
+      # as much as the floor. npm 12 wraps `npm info --json` output in an array
+      # where every earlier npm returned a bare object, and changesets reads
+      # `pkgInfo.versions || []` straight off that object — so under npm 12 the
+      # `[]` fallback hits for every package and the "is this already on npm?"
+      # pre-check concludes nothing has ever been published. `changeset publish`
+      # then tries to republish the whole workspace, and each package whose
+      # version did not change fails with "You cannot publish over the
+      # previously published versions", turning an otherwise good release red
+      # (0.9.0 shipped exactly that way). The array also has no `.error`, so
+      # changesets logs no 404 or unknown-error warning to give the game away.
+      # Unpin once changesets handles npm 12's output shape.
+      - name: Pin npm to 11 for trusted publishing
+        run: npm install -g npm@11
 
       # Don't use setup-node's `registry-url`: it writes an .npmrc carrying a
       # deprecated `always-auth` line (hence the "Unknown user config
