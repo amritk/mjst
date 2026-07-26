@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createApi } from './create-api'
 import { defineRoute } from './define-route'
 import { payloadTooLargeError } from './payload-too-large'
+import { raw } from './raw'
 import { requireContext } from './require-context'
 import { routeFactory } from './route-factory'
 import { secureRoutes, securityGuard } from './secure-routes'
@@ -272,7 +273,7 @@ describe('create-api', () => {
       // A raw Response is the escape hatch: even with validateResponses on and a
       // status the contract never declares, it rides out untouched — there is no
       // framework-level body to check.
-      handler: () => new Response('raw bytes', { status: 202, headers: { 'content-type': 'text/plain' } }),
+      handler: () => raw(new Response('raw bytes', { status: 202, headers: { 'content-type': 'text/plain' } })),
     })
     const api = createApi({ routes: [escapeRoute], validateResponses: true })
     const response = await api.handle(request('GET', '/escape'))

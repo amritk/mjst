@@ -554,27 +554,43 @@ memory against a slow client.
 
 A `contentType` status keeps the reply typed and documented while letting the
 body be raw. When you instead need full control of the *entire* response —
-status, headers, and body all outside the contract — a handler may return a web
-`Response` directly. The adapters send it verbatim (the fetch adapter returns
-it as-is, the Node adapter streams it out), still running the `onResponse`
-decorators, and strip its body for HEAD like any other reply:
+status, headers, and body all outside the contract — a handler may return
+`raw(response)`. The adapters send the wrapped response verbatim (the fetch
+adapter returns it as-is, the Node adapter streams it out), still running the
+`onResponse` decorators, and strip its body for HEAD like any other reply:
 
 ```ts
+import { raw } from '@amritk/api'
+
 const proxy = defineRoute({
   method: 'get',
   path: '/legacy',
   responses: { 200: { body: legacySchema } },
   // Reuse an existing Response-building helper (or an upstream fetch) unchanged.
-  handler: ({ request }) => fetch(new URL(request.raw as Request), { redirect: 'manual' }),
+  handler: async ({ request }) => raw(await fetch(new URL(request.raw as Request), { redirect: 'manual' })),
 })
 ```
 
-This is a deliberate escape hatch: a returned `Response` skips response
-validation entirely (there is no framework-level body to check), so the status
-it carries need not appear in `responses`. Reach for it when porting handlers
-that already build `Response` objects, or when proxying an upstream response;
-prefer a typed `{ status, body }` reply — or a `contentType` status for raw
-bodies — everywhere else, so the contract stays the source of truth.
+This is a deliberate escape hatch: a `raw` reply skips response validation
+entirely (there is no framework-level body to check), so the status it carries
+need not appear in `responses`. Reach for it when porting handlers that already
+build `Response` objects, or when proxying an upstream response; prefer a typed
+`{ status, body }` reply — or a `contentType` status for raw bodies —
+everywhere else, so the contract stays the source of truth.
+
+The `raw()` wrapper (`{ raw: Response }`) is not just ergonomics. A bare
+`Response` in the handler's return union carries `status: number`, which matches
+every declared status and so forces TypeScript to check the reply against
+`Response` too — making an ordinary reply whose own status is a union of
+declared statuses fail to compile, with a misleading complaint about the status:
+
+```ts
+// `embed.status` is `502 | 503`, and the contract declares both.
+if (!embed.ok) return { status: embed.status, body: { error: embed.error } }
+```
+
+`raw` carries no `status`, so replies like that infer normally. Returning a bare
+`Response` is no longer accepted as of 0.10.0 — wrap it in `raw()`.
 
 ### Raw request bodies and size limits
 

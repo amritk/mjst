@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createApi } from './create-api'
 import { defineContract } from './define-contract'
 import { payloadTooLargeError } from './payload-too-large'
+import { raw } from './raw'
 import { requireContext } from './require-context'
 import { routeImplementer } from './route-implementer'
 import type { SecurityGuard } from './secure-routes'
@@ -453,13 +454,13 @@ describe('security-guard-ordering', () => {
   })
 
   it('lets a security guard deny with a raw Response', async () => {
-    const raw = new Response('go away', { status: 418, headers: { 'content-type': 'text/plain' } })
+    const denial = new Response('go away', { status: 418, headers: { 'content-type': 'text/plain' } })
     // Response validation is on to prove the raw escape hatch skips it, exactly
     // as it does for a handler's raw reply.
-    const api = secure(thing, () => raw, { validateResponses: true })
+    const api = secure(thing, () => raw(denial), { validateResponses: true })
     const response = await api.handle(request('GET', '/thing'))
     expect(response.status).toBe(418)
-    expect(response.raw).toBe(raw)
+    expect(response.raw).toBe(denial)
     expect(response.body).toBeUndefined()
   })
 

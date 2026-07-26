@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createApi } from './create-api'
 import { defineRoute } from './define-route'
+import { raw } from './raw'
 import type { Api, ApiRequest, ContextGuardInput, ErasedGuard, OnErrorDetails } from './types'
 
 type AppContext = { readonly session: { readonly role: string } | null }
@@ -127,10 +128,10 @@ describe('open-api-guards', () => {
   })
 
   it('honors a raw Response denial', async () => {
-    const raw = new Response('nope', { status: 403 })
-    const response = await build([() => raw]).handle(request('GET', '/openapi.json'))
+    const denial = new Response('nope', { status: 403 })
+    const response = await build([() => raw(denial)]).handle(request('GET', '/openapi.json'))
     expect(response.status).toBe(403)
-    expect(response.raw).toBe(raw)
+    expect(response.raw).toBe(denial)
     expect(response.body).toBeUndefined()
   })
 

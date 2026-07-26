@@ -1,6 +1,7 @@
 import { validate, validateGuard } from '@amritk/runtime-validators'
 
 import { defineRoute } from '../define-route'
+import { raw } from '../raw'
 import { requireContext } from '../require-context'
 import { routeFactory } from '../route-factory'
 import { secureRoutes, securityGuard } from '../secure-routes'
@@ -573,15 +574,17 @@ export const rawResponse = defineRoute({
   security: [],
   responses: { 200: { body: { type: 'object' } } },
   handler: () =>
-    new Response(JSON.stringify({ escaped: true }), {
-      status: 202,
-      headers: [
-        ['content-type', 'application/json'],
-        ['x-served-by', 'raw'],
-        ['set-cookie', 'a=1'],
-        ['set-cookie', 'b=2'],
-      ],
-    }),
+    raw(
+      new Response(JSON.stringify({ escaped: true }), {
+        status: 202,
+        headers: [
+          ['content-type', 'application/json'],
+          ['x-served-by', 'raw'],
+          ['set-cookie', 'a=1'],
+          ['set-cookie', 'b=2'],
+        ],
+      }),
+    ),
 })
 
 /** Shared titled schema: both engines must hoist it into components.schemas. */

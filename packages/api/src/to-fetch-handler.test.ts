@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createApi } from './create-api'
 import { createCors } from './create-cors'
 import { defineRoute } from './define-route'
+import { raw } from './raw'
 import { toFetchHandler } from './to-fetch-handler'
 
 const echo = defineRoute({
@@ -189,19 +190,21 @@ describe('to-fetch-handler', () => {
   })
 
   it('returns a raw web Response from a handler verbatim, through onResponse decorators', async () => {
-    const raw = defineRoute({
+    const rawRoute = defineRoute({
       method: 'get',
       path: '/raw',
       responses: { 200: { body: { type: 'object' } } },
       // The escape hatch: full control of the wire output, bypassing response
       // validation — the 202 stands even though only 200 is declared.
       handler: () =>
-        new Response(JSON.stringify({ escaped: true }), {
-          status: 202,
-          headers: { 'content-type': 'application/json', 'set-cookie': 'sid=abc' },
-        }),
+        raw(
+          new Response(JSON.stringify({ escaped: true }), {
+            status: 202,
+            headers: { 'content-type': 'application/json', 'set-cookie': 'sid=abc' },
+          }),
+        ),
     })
-    const decorated = toFetchHandler(createApi({ routes: [raw] }), {
+    const decorated = toFetchHandler(createApi({ routes: [rawRoute] }), {
       onResponse: (response) => {
         response.headers.set('x-stamped', 'yes')
         return undefined
@@ -217,17 +220,19 @@ describe('to-fetch-handler', () => {
   })
 
   it('strips the body from a raw web Response on HEAD, keeping status and headers', async () => {
-    const raw = defineRoute({
+    const rawRoute = defineRoute({
       method: 'get',
       path: '/raw',
       responses: { 200: { body: { type: 'object' } } },
       handler: () =>
-        new Response(JSON.stringify({ escaped: true }), {
-          status: 202,
-          headers: { 'content-type': 'application/json', 'x-served-by': 'raw' },
-        }),
+        raw(
+          new Response(JSON.stringify({ escaped: true }), {
+            status: 202,
+            headers: { 'content-type': 'application/json', 'x-served-by': 'raw' },
+          }),
+        ),
     })
-    const handler = toFetchHandler(createApi({ routes: [raw] }))
+    const handler = toFetchHandler(createApi({ routes: [rawRoute] }))
     const response = await handler(new Request('http://localhost/raw', { method: 'HEAD' }))
     expect(response.status).toBe(202)
     expect(response.headers.get('x-served-by')).toBe('raw')

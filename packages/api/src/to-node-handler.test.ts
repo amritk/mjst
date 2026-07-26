@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createApi } from './create-api'
 import { defineRoute } from './define-route'
+import { raw } from './raw'
 import { toNodeHandler } from './to-node-handler'
 
 const getUser = defineRoute({
@@ -131,23 +132,25 @@ describe('to-node-handler', () => {
   })
 
   it('sends a raw web Response returned by a handler verbatim, set-cookie unfolded', async () => {
-    const raw = defineRoute({
+    const rawRoute = defineRoute({
       method: 'get',
       path: '/raw',
       responses: { 200: { body: { type: 'object' } } },
       // The escape hatch: full control of status, headers, and body, bypassing
       // response validation — the 202 stands though only 200 is declared.
       handler: () =>
-        new Response(JSON.stringify({ escaped: true }), {
-          status: 202,
-          headers: [
-            ['content-type', 'application/json'],
-            ['set-cookie', 'a=1; Path=/'],
-            ['set-cookie', 'b=2; HttpOnly'],
-          ],
-        }),
+        raw(
+          new Response(JSON.stringify({ escaped: true }), {
+            status: 202,
+            headers: [
+              ['content-type', 'application/json'],
+              ['set-cookie', 'a=1; Path=/'],
+              ['set-cookie', 'b=2; HttpOnly'],
+            ],
+          }),
+        ),
     })
-    const handler = toNodeHandler(createApi({ routes: [raw] }))
+    const handler = toNodeHandler(createApi({ routes: [rawRoute] }))
     await withServer(createServer(handler), async (origin) => {
       const response = await fetch(origin + '/raw')
       expect(response.status).toBe(202)
@@ -158,17 +161,19 @@ describe('to-node-handler', () => {
   })
 
   it('strips the body from a raw web Response for HEAD, keeping status and headers', async () => {
-    const raw = defineRoute({
+    const rawRoute = defineRoute({
       method: 'get',
       path: '/raw',
       responses: { 200: { body: { type: 'object' } } },
       handler: () =>
-        new Response(JSON.stringify({ escaped: true }), {
-          status: 202,
-          headers: { 'content-type': 'application/json', 'x-served-by': 'raw' },
-        }),
+        raw(
+          new Response(JSON.stringify({ escaped: true }), {
+            status: 202,
+            headers: { 'content-type': 'application/json', 'x-served-by': 'raw' },
+          }),
+        ),
     })
-    const handler = toNodeHandler(createApi({ routes: [raw] }))
+    const handler = toNodeHandler(createApi({ routes: [rawRoute] }))
     await withServer(createServer(handler), async (origin) => {
       const response = await fetch(origin + '/raw', { method: 'HEAD' })
       expect(response.status).toBe(202)
