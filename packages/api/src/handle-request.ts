@@ -72,20 +72,6 @@ const PAYLOAD_TOO_LARGE: ApiResponse = Object.freeze({
 })
 
 /**
- * The raw `Response` behind a reply, or `undefined` for an ordinary
- * `{ status, body }` one. A {@link RawReply} carries no `status` of its own —
- * that is precisely what keeps `status` a usable discriminant on the reply
- * union — so the wrapped response's status is what callers mirror out.
- *
- * A bare `Response` is still honoured even though the types no longer offer
- * it: handlers written against 0.7–0.9 and untyped JavaScript ones would
- * otherwise be read as a reply whose `headers` is a `Headers` and whose `body`
- * is a stream, i.e. silently mangled rather than sent.
- */
-const rawResponseOf = (reply: RouteReplyValue | RawReply): Response | undefined =>
-  (reply as Partial<RawReply>).raw ?? (reply instanceof Response ? reply : undefined)
-
-/**
  * The core request pipeline: match → coerce + validate declared inputs → run
  * the handler → (optionally) validate the reply. Every step that can be
  * skipped is: undeclared slots are never parsed, guards run alone on the happy
@@ -262,7 +248,7 @@ const guardOpenApi = async (
       : INTERNAL_ERROR
   }
   if (denied === undefined) return serveOpenApi(internals, request)
-  const escaped = rawResponseOf(denied)
+  const escaped = (denied as Partial<RawReply>).raw
   return escaped !== undefined ? { status: escaped.status, raw: escaped } : (denied as RouteReplyValue)
 }
 
@@ -460,7 +446,9 @@ const finishReply = (reply: RouteReplyValue | RawReply, route: RouteMatch['route
   // of the wire output. The response rides out to the adapter untouched via
   // `raw`, skipping response validation and serialization — there is no
   // framework-level body to check. The mirrored status keeps observers honest.
-  const escaped = rawResponseOf(reply)
+  // `RawReply` carries no `status` of its own — that is what keeps `status` a
+  // usable discriminant on the reply union — so the test is the `raw` slot.
+  const escaped = (reply as Partial<RawReply>).raw
   if (escaped !== undefined) return { status: escaped.status, raw: escaped }
 
   // Past the escape hatch every reply is an ordinary `{ status, body }` value.

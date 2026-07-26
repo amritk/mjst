@@ -543,48 +543,6 @@ describe('compile-to-module', () => {
     }
   }, 20_000)
 
-  it('honors a bare Response from a pre-0.10 handler, identically to the runtime engine', async () => {
-    const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), '.fixtures-legacy-raw')
-    mkdirSync(fixtureDir, { recursive: true })
-    const fixturePath = join(fixtureDir, 'generated-legacy-raw.ts')
-    try {
-      const legacyRoutes = { legacyRawResponse: corpus.legacyRawResponse }
-      writeFileSync(
-        fixturePath,
-        compileToModule({
-          routesImport: '../compile-to-module.test-utils',
-          runtimeImport: '../../index',
-          validatorsImport: '@amritk/runtime-validators',
-          routes: legacyRoutes,
-          info,
-        }),
-      )
-      const compiledModule = (await import(fixturePath)) as {
-        default: { fetch: (request: Request) => Response | Promise<Response> }
-      }
-      const runtime = toFetchHandler(createApi({ routes: Object.values(legacyRoutes), info }))
-
-      // The escape hatch's own status stands (only 200 is declared), and the
-      // response's headers and body ride out untouched in both engines.
-      for (const handler of [runtime, (request: Request) => compiledModule.default.fetch(request)]) {
-        const response = await handler(new Request('http://localhost/legacy-raw-response'))
-        expect(response.status).toBe(202)
-        expect(response.headers.get('x-served-by')).toBe('legacy')
-        expect(await response.json()).toEqual({ legacy: true })
-      }
-
-      // HEAD still drops the body while keeping status and headers.
-      for (const handler of [runtime, (request: Request) => compiledModule.default.fetch(request)]) {
-        const response = await handler(new Request('http://localhost/legacy-raw-response', { method: 'HEAD' }))
-        expect(response.status).toBe(202)
-        expect(response.headers.get('x-served-by')).toBe('legacy')
-        expect(await response.text()).toBe('')
-      }
-    } finally {
-      rmSync(fixtureDir, { recursive: true, force: true })
-    }
-  })
-
   it('bakes the default cap, the Infinity opt-out, tags, and the document etag into the emitted source', () => {
     const source = emit()
     // The differential emit pins maxBodyBytes to 256; a bare emit carries the

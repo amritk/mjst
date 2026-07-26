@@ -615,7 +615,7 @@ const emitOpenApiGate = (guardExports: readonly string[], contextExport: string 
     '  }',
     // A denial is an ordinary reply (or the raw-Response escape hatch), and a
     // HEAD request gets it without a body like every other HEAD reply.
-    "  const deny = (reply) => { const response = reply.raw !== undefined ? reply.raw : reply instanceof Response ? reply : toResponse(reply); return method === 'HEAD' ? stripHeadBody(response) : response }",
+    "  const deny = (reply) => { const response = reply.raw !== undefined ? reply.raw : toResponse(reply); return method === 'HEAD' ? stripHeadBody(response) : response }",
     '  const guardRequest = (appContext) => {',
     '    const gate = { params: undefined, query: undefined, body: undefined, headers: undefined, cookies: undefined, context: appContext, request: apiRequest }',
     '    try {',
@@ -858,11 +858,8 @@ const emitRouteDeclarations = (
   lines.push(`const respond_${route.name} = (reply) => {`, '  try {')
   // The escape hatch: a handler that returns `raw(response)` sends it verbatim,
   // bypassing reply validation and serialization — HEAD strips its body
-  // downstream via stripHeadBody, like any other Response. A bare Response is
-  // still honoured for handlers written against 0.7–0.9, matching the runtime
-  // engine's `rawResponseOf`.
+  // downstream via stripHeadBody, like any other Response.
   lines.push('    if (reply.raw !== undefined) return reply.raw')
-  lines.push('    if (reply instanceof Response) return reply')
   // Reply validation runs first — before the raw-status returns and the
   // serializers — matching the runtime pipeline, where runRoute validates
   // the reply before the adapter ever sees it.

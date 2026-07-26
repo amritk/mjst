@@ -590,8 +590,7 @@ if (!embed.ok) return { status: embed.status, body: { error: embed.error } }
 ```
 
 `raw` carries no `status`, so replies like that infer normally. Returning a bare
-`Response` is a type error as of 0.10.0 (both engines still send one at runtime,
-so handlers compiled against 0.7–0.9 keep working).
+`Response` is no longer accepted as of 0.10.0 — wrap it in `raw()`.
 
 ### Raw request bodies and size limits
 

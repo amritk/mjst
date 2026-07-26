@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createApi } from './create-api'
 import { defineRoute } from './define-route'
 import { raw } from './raw'
-import type { ApiRequest, RawReply } from './types'
+import type { ApiRequest } from './types'
 
 const request = (method: string, path: string): ApiRequest => ({
   method,
@@ -45,24 +45,6 @@ describe('raw', () => {
     expect(response.raw).toBeInstanceOf(Response)
     expect(response.body).toBeUndefined()
     expect(await response.raw?.text()).toBe('raw bytes')
-  })
-
-  it('still honors a bare Response from a pre-0.10 handler', async () => {
-    const legacy = defineRoute({
-      method: 'get',
-      path: '/legacy',
-      responses: { 200: { body: okBody } },
-      // The types no longer offer a bare `Response` — hence the cast — but the
-      // pipeline keeps sending one, so handlers written against 0.7–0.9 (and
-      // untyped JavaScript ones) do not silently degrade into a reply whose
-      // `headers` is a `Headers` and whose `body` is a stream.
-      handler: (() => new Response('legacy', { status: 202 })) as unknown as () => RawReply,
-    })
-    const api = createApi({ routes: [legacy], validateResponses: true })
-    const response = await api.handle(request('GET', '/legacy'))
-    expect(response.status).toBe(202)
-    expect(response.raw).toBeInstanceOf(Response)
-    expect(await response.raw?.text()).toBe('legacy')
   })
 
   it('carries a guard denial out untouched', async () => {

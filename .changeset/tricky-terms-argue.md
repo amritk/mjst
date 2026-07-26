@@ -6,9 +6,8 @@
 instead of a bare `Response`. Returning a `Response` directly from a handler or
 guard is a type error; wrap it — `return raw(response)` — or, if you build the
 reply object yourself, `return { raw: response }`. The new `raw` helper and the
-`RawReply` type are exported from `@amritk/api`. Both engines still send a bare
-`Response` at runtime, so handlers compiled against 0.7–0.9 keep working until
-they are updated.
+`RawReply` type are exported from `@amritk/api`. Neither engine sends a bare
+`Response` any more, so this must be updated at the call site.
 
 This fixes a silent type-inference regression introduced in 0.7.0 with the
 escape hatch itself: from 0.7.0 through 0.9.0, an ordinary reply whose `status`
