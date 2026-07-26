@@ -84,6 +84,7 @@ export { negotiateMediaType, parseAccept } from './negotiate'
 export { matchesBodyType, parseFormBody, parseMultipartBody } from './parse-body'
 export { parsePathPattern } from './parse-path-pattern'
 export { isPayloadTooLargeError, payloadTooLargeError } from './payload-too-large'
+export { raw } from './raw'
 export { readBodyCapped } from './read-body-capped'
 export { readBytesCapped } from './read-bytes-capped'
 export { refinementFailure } from './refinement-failure'
@@ -133,6 +134,7 @@ export type {
   OpenApiInfo,
   OpenApiServer,
   PathSegment,
+  RawReply,
   RefineInput,
   RefineIssue,
   RequestContext,

@@ -20,6 +20,7 @@ import type {
   ErasedRequestContext,
   ErrorFormatters,
   OnErrorDetails,
+  RawReply,
   RequestObservation,
   RouteReplyValue,
   RouteTable,
@@ -69,6 +70,20 @@ const PAYLOAD_TOO_LARGE: ApiResponse = Object.freeze({
   status: 413,
   body: Object.freeze({ error: 'payload_too_large' }),
 })
+
+/**
+ * The raw `Response` behind a reply, or `undefined` for an ordinary
+ * `{ status, body }` one. A {@link RawReply} carries no `status` of its own —
+ * that is precisely what keeps `status` a usable discriminant on the reply
+ * union — so the wrapped response's status is what callers mirror out.
+ *
+ * A bare `Response` is still honoured even though the types no longer offer
+ * it: handlers written against 0.7–0.9 and untyped JavaScript ones would
+ * otherwise be read as a reply whose `headers` is a `Headers` and whose `body`
+ * is a stream, i.e. silently mangled rather than sent.
+ */
+const rawResponseOf = (reply: RouteReplyValue | RawReply): Response | undefined =>
+  (reply as Partial<RawReply>).raw ?? (reply instanceof Response ? reply : undefined)
 
 /**
  * The core request pipeline: match → coerce + validate declared inputs → run
@@ -219,7 +234,7 @@ const guardOpenApi = async (
   env: unknown,
   executionContext: unknown,
 ): Promise<ApiResponse> => {
-  let denied: RouteReplyValue | Response | undefined
+  let denied: RouteReplyValue | RawReply | undefined
   try {
     const appContext =
       internals.createContext === undefined
@@ -247,7 +262,8 @@ const guardOpenApi = async (
       : INTERNAL_ERROR
   }
   if (denied === undefined) return serveOpenApi(internals, request)
-  return denied instanceof Response ? { status: denied.status, raw: denied } : denied
+  const escaped = rawResponseOf(denied)
+  return escaped !== undefined ? { status: escaped.status, raw: escaped } : (denied as RouteReplyValue)
 }
 
 /**
@@ -279,7 +295,7 @@ const runRoute = async (
   let appContext: unknown
   let contextBuilt = false
   if (securityGuards !== undefined) {
-    let denied: RouteReplyValue | Response | undefined
+    let denied: RouteReplyValue | RawReply | undefined
     try {
       if (internals.createContext !== undefined) {
         appContext = await internals.createContext({ request, env, executionContext, locals: request.locals })
@@ -378,7 +394,7 @@ const runRoute = async (
     if (!route.body.guard(body)) return validationFailure('body', route.body.collect, body, errors, request)
   }
 
-  let reply: RouteReplyValue | Response
+  let reply: RouteReplyValue | RawReply
   try {
     // Refinement runs after every slot validated (its whole point is seeing
     // them together) and inside this try so a throwing or rejecting refine
@@ -411,7 +427,7 @@ const runRoute = async (
     // guard's reply is a normal reply — it falls through to the same response
     // validation and serialization below — and a throwing guard takes this
     // try's onError path, exactly like the handler.
-    let denied: RouteReplyValue | Response | undefined
+    let denied: RouteReplyValue | RawReply | undefined
     const guards = route.contract.guards
     if (guards !== undefined) {
       for (const guard of guards) {
@@ -439,58 +455,62 @@ const runRoute = async (
  * denial goes through it too, so a denial is serialized and checked exactly
  * like the handler reply it replaced.
  */
-const finishReply = (reply: RouteReplyValue | Response, route: RouteMatch['route']): ApiResponse => {
-  // The escape hatch: a handler that returns a raw web Response takes full
-  // control of the wire output. It rides out to the adapter untouched via
+const finishReply = (reply: RouteReplyValue | RawReply, route: RouteMatch['route']): ApiResponse => {
+  // The escape hatch: a handler that returns `raw(response)` takes full control
+  // of the wire output. The response rides out to the adapter untouched via
   // `raw`, skipping response validation and serialization — there is no
   // framework-level body to check. The mirrored status keeps observers honest.
-  if (reply instanceof Response) return { status: reply.status, raw: reply }
+  const escaped = rawResponseOf(reply)
+  if (escaped !== undefined) return { status: escaped.status, raw: escaped }
+
+  // Past the escape hatch every reply is an ordinary `{ status, body }` value.
+  const value = reply as RouteReplyValue
 
   if (route.responses !== undefined) {
-    const compiled = route.responses.get(reply.status)
-    if (compiled?.body !== undefined && !compiled.body.guard(reply.body)) {
-      const result = compiled.body.collect(reply.body)
+    const compiled = route.responses.get(value.status)
+    if (compiled?.body !== undefined && !compiled.body.guard(value.body)) {
+      const result = compiled.body.collect(value.body)
       return {
         status: 500,
         body: {
           error: 'invalid_response',
-          status: reply.status,
+          status: value.status,
           errors: result === true ? [] : result.errors,
         },
       }
     }
     if (compiled?.headers !== undefined) {
-      const replyHeaders = reply.headers ?? {}
+      const replyHeaders = value.headers ?? {}
       if (!compiled.headers.guard(replyHeaders)) {
         const result = compiled.headers.collect(replyHeaders)
         return {
           status: 500,
           body: {
             error: 'invalid_response',
-            status: reply.status,
+            status: value.status,
             source: 'headers',
             errors: result === true ? [] : result.errors,
           },
         }
       }
     }
-    if (compiled === undefined && route.contract.responses[reply.status] === undefined) {
+    if (compiled === undefined && route.contract.responses[value.status] === undefined) {
       return {
         status: 500,
-        body: { error: 'invalid_response', status: reply.status, errors: [] },
+        body: { error: 'invalid_response', status: value.status, errors: [] },
       }
     }
   }
 
   // A raw status carries its contract-declared content type out to the
   // adapter, which sends the body untouched instead of JSON-serializing it.
-  const rawContentType = route.rawContentTypes?.get(reply.status)
+  const rawContentType = route.rawContentTypes?.get(value.status)
   if (rawContentType !== undefined) {
-    return reply.headers === undefined
-      ? { status: reply.status, body: reply.body, contentType: rawContentType }
-      : { status: reply.status, headers: reply.headers, body: reply.body, contentType: rawContentType }
+    return value.headers === undefined
+      ? { status: value.status, body: value.body, contentType: rawContentType }
+      : { status: value.status, headers: value.headers, body: value.body, contentType: rawContentType }
   }
-  return reply
+  return value
 }
 
 /**

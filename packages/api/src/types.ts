@@ -154,10 +154,10 @@ export type ResponseHeaders = Readonly<Record<string, ResponseHeaderValue>>
  * `contentType` in its contract), `body` is a {@link StreamingBody} and
  * adapters send it untouched under that content type instead of serializing.
  *
- * When `raw` is set, a handler returned a web {@link Response} directly (the
- * escape hatch — see {@link RouteHandler}); the adapters send it verbatim,
- * ignoring `status`/`headers`/`body`, and only strip its body for HEAD. The
- * mirrored `status` is the raw response's own, so observers still see it.
+ * When `raw` is set, a handler returned a {@link RawReply} (the escape hatch —
+ * see {@link RouteHandler}); the adapters send it verbatim, ignoring
+ * `status`/`headers`/`body`, and only strip its body for HEAD. The mirrored
+ * `status` is the raw response's own, so observers still see it.
  */
 export type ApiResponse = {
   readonly status: number
@@ -218,16 +218,30 @@ export type RouteReply<Responses extends ResponseContracts> = {
 export type RouteReplyOf<C extends AnyContract> = RouteReply<C['responses']>
 
 /**
+ * The escape hatch: a wrapper around a raw web `Response` that a handler (or a
+ * guard) may return instead of a {@link RouteReply}. The adapters send the
+ * wrapped response verbatim, bypassing response validation and serialization
+ * entirely — there is no framework-level body to check — so reach for it only
+ * when a route needs full control of the wire output or is proxying a response
+ * it already has. Build one with `raw(response)`.
+ *
+ * It deliberately wraps rather than being a bare `Response`. A union member
+ * carrying `status: number` — which `Response` does — disqualifies `status` as
+ * a discriminant for the *whole* reply union, and TypeScript then refuses any
+ * reply whose `status` is itself a union (`{ status: upstream.status }` where
+ * `upstream.status` is `502 | 503`) even though every one of those statuses is
+ * declared. Having no `status` of its own keeps the discriminant intact.
+ */
+export type RawReply = { readonly raw: Response }
+
+/**
  * A route's implementation. It only runs after every declared request schema
  * has validated, so the context values are safe to use without further checks.
  *
  * A handler normally returns a {@link RouteReply} — a `{ status, body }` pair
  * the contract's response schemas type and validate. As an escape hatch it may
- * instead return a raw web `Response`, which the adapters send verbatim: this
- * bypasses response validation and serialization entirely (there is no
- * framework-level body to check), so reach for it only when a route needs full
- * control of the wire output or is porting code that already builds `Response`
- * objects.
+ * instead return a {@link RawReply} (`raw(response)`), which the adapters send
+ * verbatim; see {@link RawReply} for what that costs and why it is wrapped.
  */
 export type RouteHandler<
   Params,
@@ -239,7 +253,7 @@ export type RouteHandler<
   Context = undefined,
 > = (
   context: RequestContext<Params, Query, Body, Headers, Cookies, Context>,
-) => RouteReply<Responses> | Response | Promise<RouteReply<Responses> | Response>
+) => RouteReply<Responses> | RawReply | Promise<RouteReply<Responses> | RawReply>
 
 /**
  * A route guard: an authorization check that runs after validation and the
@@ -248,7 +262,7 @@ export type RouteHandler<
  * the app `context` (the session, tenant, or database handle the factory
  * resolved) — and returns one of two things:
  *
- * - a {@link RouteReply} (or raw `Response`) to **deny** the request, which
+ * - a {@link RouteReply} (or a {@link RawReply}) to **deny** the request, which
  *   short-circuits the handler and rides the same response-validation and
  *   serialization path a handler reply would; or
  * - `undefined` to **pass**, letting the next guard — or the handler — run.
@@ -273,7 +287,7 @@ export type RouteGuard<
   Context = undefined,
 > = (
   context: RequestContext<Params, Query, Body, Headers, Cookies, Context>,
-) => RouteReply<Responses> | Response | undefined | Promise<RouteReply<Responses> | Response | undefined>
+) => RouteReply<Responses> | RawReply | undefined | Promise<RouteReply<Responses> | RawReply | undefined>
 
 /**
  * The context a **reusable** guard sees — the shape a `requireSession` or
@@ -581,7 +595,7 @@ export type AnyRouteContract = AnyContract & {
    * Written only by `secureRoutes`; hand-authored routes use `guards`.
    */
   readonly securityGuards?: readonly ErasedGuard[]
-  readonly handler: (context: ErasedRequestContext) => RouteReplyValue | Response | Promise<RouteReplyValue | Response>
+  readonly handler: (context: ErasedRequestContext) => RouteReplyValue | RawReply | Promise<RouteReplyValue | RawReply>
 }
 
 /**
@@ -592,7 +606,7 @@ export type AnyRouteContract = AnyContract & {
  */
 export type ErasedGuard = (
   context: ErasedRequestContext,
-) => RouteReplyValue | Response | undefined | Promise<RouteReplyValue | Response | undefined>
+) => RouteReplyValue | RawReply | undefined | Promise<RouteReplyValue | RawReply | undefined>
 
 /**
  * The pair of validators the pipeline keeps per schema: a boolean guard for the

@@ -13,9 +13,12 @@ OpenAPI 3.1, and a derived typed client. Fast path for an LLM; full reference is
 - A **route** = a JSON Schema contract + a handler. `params`/`query`/`body`
   arrive **already validated and coerced** (path `id: {type:'integer'}` is a
   `number` in the handler), and a handler returns `{ status, body }` pairs its
-  `responses` map declares — or, as an escape hatch, a raw web `Response` that
-  the adapters send verbatim (skipping response validation) for full control of
-  the wire output.
+  `responses` map declares — or, as an escape hatch, `raw(response)` wrapping a
+  web `Response` that the adapters send verbatim (skipping response validation)
+  for full control of the wire output. Return `raw(response)`, never a bare
+  `Response`: a bare one in the return union makes TypeScript reject any reply
+  whose `status` is itself a union of declared statuses (`{ status: upstream.status }`
+  where that is `502 | 503`).
 - `createApi({ routes, info })` compiles contracts into a runtime; an **adapter**
   (`toFetchHandler` / `toNodeHandler`) turns it into a real server handler.
 - Contracts are **data** — `defineContract` (no handler) is browser-safe and

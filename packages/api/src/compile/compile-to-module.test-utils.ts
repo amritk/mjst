@@ -1,6 +1,7 @@
 import { validate, validateGuard } from '@amritk/runtime-validators'
 
 import { defineRoute } from '../define-route'
+import { raw } from '../raw'
 import { requireContext } from '../require-context'
 import { routeFactory } from '../route-factory'
 import { secureRoutes, securityGuard } from '../secure-routes'
@@ -13,6 +14,7 @@ import type {
   ContextGuardInput,
   ErrorFormatters,
   OnErrorDetails,
+  RawReply,
   RequestObservation,
   UnmatchedObservation,
   ValidatorCompiler,
@@ -573,15 +575,36 @@ export const rawResponse = defineRoute({
   security: [],
   responses: { 200: { body: { type: 'object' } } },
   handler: () =>
-    new Response(JSON.stringify({ escaped: true }), {
+    raw(
+      new Response(JSON.stringify({ escaped: true }), {
+        status: 202,
+        headers: [
+          ['content-type', 'application/json'],
+          ['x-served-by', 'raw'],
+          ['set-cookie', 'a=1'],
+          ['set-cookie', 'b=2'],
+        ],
+      }),
+    ),
+})
+
+/**
+ * The pre-0.10 spelling of the escape hatch: a handler returning a bare
+ * `Response` instead of `raw(response)`. The types no longer offer it — hence
+ * the cast — but both engines still send it verbatim, so handlers compiled
+ * against 0.7–0.9 keep working rather than degrading into a reply whose
+ * `headers` is a `Headers` and whose `body` is a stream.
+ */
+export const legacyRawResponse = defineRoute({
+  method: 'get',
+  path: '/legacy-raw-response',
+  security: [],
+  responses: { 200: { body: { type: 'object' } } },
+  handler: (() =>
+    new Response(JSON.stringify({ legacy: true }), {
       status: 202,
-      headers: [
-        ['content-type', 'application/json'],
-        ['x-served-by', 'raw'],
-        ['set-cookie', 'a=1'],
-        ['set-cookie', 'b=2'],
-      ],
-    }),
+      headers: { 'content-type': 'application/json', 'x-served-by': 'legacy' },
+    })) as unknown as () => RawReply,
 })
 
 /** Shared titled schema: both engines must hoist it into components.schemas. */

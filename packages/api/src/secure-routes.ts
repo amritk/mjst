@@ -4,6 +4,7 @@ import type {
   ContextGuardInput,
   ErasedGuard,
   ErasedRequestContext,
+  RawReply,
   RouteReplyValue,
   SecurityRequirements,
 } from './types'
@@ -35,7 +36,7 @@ export const securityGuard = 'x-guard'
 export type SecurityGuard<Context = unknown> = (
   context: ContextGuardInput<Context>,
   scopes: readonly string[],
-) => RouteReplyValue | Response | undefined | Promise<RouteReplyValue | Response | undefined>
+) => RouteReplyValue | RawReply | undefined | Promise<RouteReplyValue | RawReply | undefined>
 
 /**
  * A named OpenAPI Security Scheme Object that additionally carries the guard
@@ -310,7 +311,7 @@ const guardFor = (
   const typed = guard as unknown as (
     context: ErasedRequestContext,
     scopes: readonly string[],
-  ) => RouteReplyValue | Response | undefined | Promise<RouteReplyValue | Response | undefined>
+  ) => RouteReplyValue | RawReply | undefined | Promise<RouteReplyValue | RawReply | undefined>
   // The scopes are bound here, once at startup, rather than threaded through
   // the per-request guard signature — that keeps `securityGuards` the same
   // one-argument shape the pipeline's guard loops already run, and means a
@@ -360,12 +361,12 @@ const orGuard = (alternatives: readonly ErasedGuard[][]): ErasedGuard => {
   return (context) => {
     // Per request, so a scheme required by several alternatives is not
     // re-checked (and any I/O it does is not repeated).
-    const seen = new Map<ErasedGuard, RouteReplyValue | Response | undefined>()
+    const seen = new Map<ErasedGuard, RouteReplyValue | RawReply | undefined>()
 
     const runAlternative = (
       guards: readonly ErasedGuard[],
       index: number,
-    ): RouteReplyValue | Response | undefined | Promise<RouteReplyValue | Response | undefined> => {
+    ): RouteReplyValue | RawReply | undefined | Promise<RouteReplyValue | RawReply | undefined> => {
       let i = index
       while (i < guards.length) {
         const guard = guards[i++] as ErasedGuard
@@ -377,12 +378,12 @@ const orGuard = (alternatives: readonly ErasedGuard[][]): ErasedGuard => {
         const result = guard(context)
         if (typeof (result as PromiseLike<unknown>)?.then === 'function') {
           const next = i
-          return (result as Promise<RouteReplyValue | Response | undefined>).then((value) => {
+          return (result as Promise<RouteReplyValue | RawReply | undefined>).then((value) => {
             seen.set(guard, value)
             return value !== undefined ? value : runAlternative(guards, next)
           })
         }
-        const value = result as RouteReplyValue | Response | undefined
+        const value = result as RouteReplyValue | RawReply | undefined
         seen.set(guard, value)
         if (value !== undefined) return value
       }
@@ -391,20 +392,20 @@ const orGuard = (alternatives: readonly ErasedGuard[][]): ErasedGuard => {
 
     const runFrom = (
       index: number,
-      firstDenial: RouteReplyValue | Response | undefined,
-    ): RouteReplyValue | Response | undefined | Promise<RouteReplyValue | Response | undefined> => {
+      firstDenial: RouteReplyValue | RawReply | undefined,
+    ): RouteReplyValue | RawReply | undefined | Promise<RouteReplyValue | RawReply | undefined> => {
       let denial = firstDenial
       for (let i = index; i < alternatives.length; i++) {
         const outcome = runAlternative(alternatives[i] as ErasedGuard[], 0)
         if (typeof (outcome as PromiseLike<unknown>)?.then === 'function') {
           const next = i + 1
           const carried = denial
-          return (outcome as Promise<RouteReplyValue | Response | undefined>).then((value) =>
+          return (outcome as Promise<RouteReplyValue | RawReply | undefined>).then((value) =>
             // An alternative whose every scheme passed satisfies the request.
             value === undefined ? undefined : runFrom(next, carried ?? value),
           )
         }
-        const value = outcome as RouteReplyValue | Response | undefined
+        const value = outcome as RouteReplyValue | RawReply | undefined
         if (value === undefined) return undefined
         denial ??= value
       }
