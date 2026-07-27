@@ -21,14 +21,31 @@ export type GeneratedGuard = {
  * `description`, `format`, …) are ignored, exactly as the interpreter ignores
  * them.
  *
+ * `enforcesFormat` mirrors the api's `formats` option. With it on, `format`
+ * stops being an annotation for the interpreter, so it stops being one here
+ * too: a schema carrying the keyword leaves the subset and falls back to
+ * `validateGuard`, which owns the format regexes. Inlining them instead would
+ * mean maintaining a second copy of every format in this file.
+ *
  * Returns `undefined` the moment anything falls outside that subset — the
  * emitter then falls back to the runtime interpreter, which implements all of
  * JSON Schema. Bailing instead of approximating is what keeps the compiled
  * and runtime engines semantically identical; the differential test enforces
  * it.
  */
-export const generateGuardSource = (schema: unknown, prefix: string): GeneratedGuard | undefined => {
-  const state: GuardState = { counter: 0, declarations: [], usesCodePoints: false, usesCompileRx: false, prefix }
+export const generateGuardSource = (
+  schema: unknown,
+  prefix: string,
+  enforcesFormat = false,
+): GeneratedGuard | undefined => {
+  const state: GuardState = {
+    counter: 0,
+    declarations: [],
+    usesCodePoints: false,
+    usesCompileRx: false,
+    prefix,
+    enforcesFormat,
+  }
   const checks = emitChecks(schema, 'input', '  ', state)
   if (checks === undefined) return undefined
   return {
@@ -45,13 +62,12 @@ type GuardState = {
   usesCodePoints: boolean
   usesCompileRx: boolean
   readonly prefix: string
+  readonly enforcesFormat: boolean
 }
 
 /**
  * Keywords that never affect validation — the interpreter reads specific
  * keys and these are not among them, so ignoring them preserves the verdict.
- * (`format` is annotation-only here because the pipeline never opts into
- * format enforcement.)
  */
 const ANNOTATIONS = new Set([
   'title',
@@ -62,8 +78,13 @@ const ANNOTATIONS = new Set([
   'readOnly',
   'writeOnly',
   '$comment',
-  'format',
 ])
+
+/**
+ * The same list plus `format`, used when the pipeline does not opt into format
+ * enforcement — then the interpreter ignores the keyword and so can we.
+ */
+const ANNOTATIONS_WITH_FORMAT = new Set([...ANNOTATIONS, 'format'])
 
 /**
  * Property names the interpreter tests with `Object.hasOwn` instead of the
@@ -122,7 +143,8 @@ const emitChecks = (schema: unknown, value: string, indent: string, state: Guard
   if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) return undefined
   const node = schema as Record<string, unknown>
 
-  const keys = new Set(Object.keys(node).filter((key) => !ANNOTATIONS.has(key)))
+  const annotations = state.enforcesFormat ? ANNOTATIONS : ANNOTATIONS_WITH_FORMAT
+  const keys = new Set(Object.keys(node).filter((key) => !annotations.has(key)))
 
   // OpenAPI nullable: a null value passes the whole subschema, before any
   // other keyword is considered — so every other check nests under V !== null.

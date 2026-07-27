@@ -3,6 +3,9 @@
   "version": "0.13.6",
   "description": "Generate TypeScript parsers and type definitions from JSON Schemas.",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "license": "MIT",
   "author": "amritk",
   "keywords": [

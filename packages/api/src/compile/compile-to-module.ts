@@ -1,3 +1,5 @@
+import type { ValidateOptions } from '@amritk/runtime-validators'
+
 import { buildCoercionPlan } from '../build-coercion-plan'
 import { fnv1aHex } from '../fnv1a-hex'
 import { hashContracts } from '../hash-contracts'
@@ -53,6 +55,17 @@ export type CompileModuleOptions = OpenApiExtras & {
    * elsewhere.
    */
   readonly compileExport?: string
+  /**
+   * String `format`s to enforce, exactly like `createApi({ formats })` — pass
+   * the same value to both engines so the compiled module and the development
+   * server agree. Off by default (JSON Schema treats `format` as an
+   * annotation), so a `format: 'uuid'` param accepts any string until set.
+   *
+   * A schema carrying `format` then leaves the inlinable subset and is checked
+   * by the interpreter, which owns the format regexes. Ignored when
+   * `compileExport` is set, since that replaces the engine this configures.
+   */
+  readonly formats?: ValidateOptions['formats']
   /**
    * Validate reply bodies and declared reply headers against the response
    * contracts, exactly like `createApi({ validateResponses: true })`:
@@ -130,6 +143,12 @@ export type CompileModuleOptions = OpenApiExtras & {
 }
 
 /**
+ * Name of the hoisted `ValidateOptions` constant in the emitted module. Only
+ * declared when {@link CompileModuleOptions.formats} is set.
+ */
+const VALIDATE_OPTIONS_VAR = 'VALIDATE_OPTIONS'
+
+/**
  * Emits a fused fetch-handler module — the production counterpart to
  * `createApi`. Everything the runtime engine decides per request is decided
  * here, once, at build time: the router becomes a chain of string compares,
@@ -194,8 +213,15 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   // receive them too (an env-dependent sub-router like Better Auth on Workers),
   // and the document gate hands them to the context factory it builds, so route
   // functions must thread the platform arguments even without a context factory.
+  // One hoisted constant rather than an object literal per call site: the
+  // interpreter memoizes prepared validators per (schema, options) pair, so a
+  // fresh literal each time would defeat that cache.
+  const validateOptions =
+    options.formats === undefined ? undefined : JSON.stringify({ formats: options.formats } satisfies ValidateOptions)
+
   const emitContext: EmitContext = {
     contextExport,
+    validateOptions,
     needsPlatform:
       contextExport !== undefined ||
       onErrorExport !== undefined ||
@@ -322,6 +348,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     '}',
     '',
     "const JSON_HEADERS = { 'content-type': 'application/json' }",
+    ...(validateOptions === undefined ? [] : [`const ${VALIDATE_OPTIONS_VAR} = ${validateOptions}`]),
     `const INITS = new Map([${[...statuses]
       .sort((a, b) => a - b)
       .map((status) => `[${status}, { status: ${status}, headers: JSON_HEADERS }]`)
@@ -745,10 +772,11 @@ const emitRouteDeclarations = (
         `const collect${suffix} = () => compiled${suffix}.collect`,
       )
     } else {
-      const generated = generateGuardSource(schema, 'g' + suffix)
+      const generated = generateGuardSource(schema, 'g' + suffix, emitContext.validateOptions !== undefined)
+      const opts = emitContext.validateOptions === undefined ? '' : `, ${VALIDATE_OPTIONS_VAR}`
       if (generated === undefined) {
         used['validateGuard'] = true
-        lines.push(`const guard${suffix} = validateGuard(schema${suffix})`)
+        lines.push(`const guard${suffix} = validateGuard(schema${suffix}${opts})`)
       } else {
         used['codePoints'] = used['codePoints'] || generated.usesCodePoints
         used['compileRx'] = used['compileRx'] || generated.usesCompileRx
@@ -758,7 +786,7 @@ const emitRouteDeclarations = (
       used['validate'] = true
       lines.push(
         `let _collect${suffix}`,
-        `const collect${suffix} = () => (_collect${suffix} ??= validate(schema${suffix}))`,
+        `const collect${suffix} = () => (_collect${suffix} ??= validate(schema${suffix}${opts}))`,
       )
     }
     used['failValidation'] = true
@@ -828,7 +856,7 @@ const emitRouteDeclarations = (
         const name = `replyBody_${route.name}_${status}`
         lines.push(
           `const ${name}Schema = ${JSON.stringify(bodySchema)}`,
-          `const ${name} = ${compiledValidationExpression(`${name}Schema`, emitContext.compileExport, used)}`,
+          `const ${name} = ${compiledValidationExpression(`${name}Schema`, emitContext, used)}`,
         )
         checks.push(
           `      if (!${name}.guard(reply.body)) return invalidResponse(${status}, undefined, ${name}.collect(reply.body))`,
@@ -838,7 +866,7 @@ const emitRouteDeclarations = (
         const name = `replyHeaders_${route.name}_${status}`
         lines.push(
           `const ${name}Schema = ${JSON.stringify({ type: 'object', properties: headerSchemas })}`,
-          `const ${name} = ${compiledValidationExpression(`${name}Schema`, emitContext.compileExport, used)}`,
+          `const ${name} = ${compiledValidationExpression(`${name}Schema`, emitContext, used)}`,
         )
         checks.push(
           '      const replyHeaders = reply.headers ?? {}',
@@ -904,6 +932,13 @@ type EmitContext = {
   readonly needsPlatform: boolean
   /** ValidatorCompiler export name; guards come from it instead of inlining when set. */
   readonly compileExport: string | undefined
+  /**
+   * Serialized `ValidateOptions` for the interpreter, or `undefined` when the
+   * defaults apply. Set means every `validate`/`validateGuard` call in the
+   * output takes {@link VALIDATE_OPTIONS_VAR} as its second argument, and
+   * format-bearing schemas stop being inlined.
+   */
+  readonly validateOptions: string | undefined
   /** Whether replies are validated against the response contracts (see the option). */
   readonly validateResponses: boolean
 }
@@ -917,13 +952,14 @@ type EmitContext = {
  */
 const compiledValidationExpression = (
   schemaVar: string,
-  compileExport: string | undefined,
+  emitContext: EmitContext,
   used: Record<string, boolean>,
 ): string => {
-  if (compileExport !== undefined) return `${compileExport}(${schemaVar})`
+  if (emitContext.compileExport !== undefined) return `${emitContext.compileExport}(${schemaVar})`
   used['validate'] = true
   used['validateGuard'] = true
-  return `{ guard: validateGuard(${schemaVar}), collect: validate(${schemaVar}) }`
+  const opts = emitContext.validateOptions === undefined ? '' : `, ${VALIDATE_OPTIONS_VAR}`
+  return `{ guard: validateGuard(${schemaVar}${opts}), collect: validate(${schemaVar}${opts}) }`
 }
 
 /**

@@ -324,6 +324,7 @@ Writing an adapter for anything else is ~15 lines: construct one
 | `info` | placeholder | OpenAPI `info` block (`title`, `version`, `description`). |
 | `openApiPath` | `/openapi.json` | Where the document is served. `false` disables serving. |
 | `compile` | runtime-validators | Swap the validation engine — see below. |
+| `formats` | — | String `format`s to assert: `'all'`, or a list like `['uuid', 'email']`. Off by default — see [String formats](#string-formats). |
 | `context` | — | Per-request app context factory (database handles, sessions). See [App context](#app-context-drizzle-sessions-anything-per-request). |
 | `validateResponses` | `false` | Validate reply bodies (and declared reply headers) against the response contracts; mismatches become a 500. A development/test net. |
 | `onError` | bare 500 | Map a thrown handler error to a response. Receives `(error, request, { route, env, executionContext })` — everything error reporting needs. The default never leaks the error message. |
@@ -377,6 +378,36 @@ Writing an adapter for anything else is ~15 lines: construct one
   or `body`. The `errors` option reshapes this (and the other built-in
   bodies) when deployed clients already parse a different envelope.
 
+### String formats
+
+`format` is an **annotation** in JSON Schema, and both Ajv and
+`@amritk/runtime-validators` make asserting it opt-in. The api follows suit: by
+default a param declared `{ type: 'string', format: 'uuid' }` documents itself as
+a UUID in the OpenAPI output and accepts any string at runtime.
+
+Pass `formats` to assert them:
+
+```ts
+// Every built-in format: uuid, email, date-time, date, time, duration, uri,
+// uri-reference, uri-template, hostname, idn-hostname, ipv4, ipv6,
+// json-pointer, relative-json-pointer, regex, and the idn-/iri- variants.
+const api = createApi({ routes, formats: 'all' })
+
+// Or only the ones you rely on, leaving the rest as documentation.
+const api = createApi({ routes, formats: ['uuid', 'email'] })
+```
+
+A violation is an ordinary `400 { error: 'validation_failed' }` alongside every
+other constraint. Format checks are pragmatic regexes rather than RFC-perfect
+parsers — they reject obviously-bad input; treat them as a first gate, not as
+proof a value is routable or deliverable.
+
+Pass the same value to `compileToModule({ formats })` so the compiled module and
+the development server agree — a schema carrying `format` then leaves the
+inlinable subset and is checked by the interpreter, which owns the regexes.
+`formats` is ignored when you supply your own `compile`, since that replaces the
+engine it configures.
+
 ### Branded IDs (nominal types for params)
 
 Path/query params arrive as plain `string` / `number`, so nothing stops you from
@@ -407,7 +438,8 @@ const getUser = defineRoute({
 
 `params.id` is now a `UserId`, so `getOrder(params.id)` is a compile error unless
 `getOrder` takes a `UserId`. The brand is **type-level only** — it adds no runtime
-check beyond the base type (`format: 'uuid'` above still applies). Keep the schema
+check beyond the base type, and the `format: 'uuid'` next to it is an annotation
+until you opt in with [`formats`](#string-formats). Keep the schema
 literal (inline or `as const`) so the brand survives inference, and use the same
 brand shape (`{ readonly __brand: 'UserId' }`) for your app-side id type — define
 it to match, rather than expecting mjst to reuse Drizzle's own brand symbol. See

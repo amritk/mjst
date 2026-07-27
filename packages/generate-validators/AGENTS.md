@@ -24,5 +24,10 @@ bun run --filter='@amritk/generate-validators' types:check
 - Draft-07 input is auto-upgraded to 2020-12 — keep that path working.
 - Known deliberate quirk: `NaN` satisfies numeric bounds. If you "fix" it, that
   is a behavior change needing a changeset and test updates.
+- `format` deliberately emits no check (annotation, like the interpreter's
+  default). `unevaluatedProperties`/`unevaluatedItems` deliberately **throw** —
+  the rule is never to emit a validator that accepts what the interpreter
+  rejects, so an unimplemented *narrowing* keyword fails generation rather than
+  passing silently. Any new keyword lands on one side of that line or the other.
 
 Add a changeset for every change (`bunx changeset`).

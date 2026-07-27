@@ -4,6 +4,10 @@
   "description": "A fast, featherweight, zero-dependency YAML parser for OpenAPI tooling — with exact source positions (line:column) on every node.",
   "module": "./dist/index.js",
   "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
   "license": "MIT",
   "author": "amritk",
   "keywords": [

@@ -4,6 +4,10 @@
   "description": "A fast, format-agnostic JSON/YAML style-guide linter with JSON Schema and custom rules.",
   "module": "./dist/index.js",
   "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
   "license": "MIT",
   "author": "amritk",
   "keywords": [

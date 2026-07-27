@@ -30,8 +30,13 @@ bun install                 # install workspace deps
 bun run build               # build all packages (some tests need runtime-validators built)
 bun run test                # run every package's tests
 bun run check               # biome lint + format check
-bun run types:check         # type-check all packages
+bun run types:check         # type-check all packages (needs a prior build)
 ```
+
+`types:check` runs after `build` for a reason: a package resolves its workspace
+imports through the sibling's `exports`, whose `types` condition points at
+`dist/*.d.ts`. On a tree that has never been built, every cross-package import
+reports TS2307 and drags an implicit-any cascade behind it.
 
 Per package: `bun run --filter='@amritk/<name>' test` (and `build`, `types:check`).
 

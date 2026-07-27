@@ -3,6 +3,10 @@
   "version": "0.13.5",
   "description": "Shared utilities for the mjst code generation ecosystem.",
   "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
   "license": "MIT",
   "author": "amritk",
   "keywords": [

@@ -30,6 +30,18 @@ jobs:
       - name: Build
         run: bun run build
 
+      # The build only type-checks what it emits (tsconfig.build.json drops the
+      # tests); this checks every package against the stricter root tsconfig.
+      # Left out of CI originally, which let `types:check` sit broken in three
+      # packages for weeks with nothing to catch it.
+      #
+      # Runs *after* the build, not before: a package resolves its workspace
+      # imports through the sibling's `exports`, whose `types` condition points
+      # at `dist/*.d.ts`. Without those emitted, every cross-package import is
+      # TS2307 and the implicit-any cascade behind it.
+      - name: Type check
+        run: bun run types:check
+
       # Loads every compiled module under plain Node, runs the CLI from dist/
       # end-to-end (generate → tsc → parse), and installs packed tarballs like
       # an npm consumer — catches build/pack-step corruption the src-aliased

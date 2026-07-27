@@ -37,5 +37,12 @@ export default defineConfig({
   },
   test: {
     include: ['packages/**/*.test.ts', 'packages/**/*.test.tsx'],
+    // `bun run test` fans out one vitest instance per workspace package, so a
+    // heavy test (the api differential corpus, the codegen-then-compile suites)
+    // competes with eleven siblings for the same cores. Under that load the 5s
+    // default measures machine contention rather than correctness — the api
+    // corpus test took 6.0s and went red while passing in 1.8s on its own. A
+    // wider budget still catches a genuine hang.
+    testTimeout: 30_000,
   },
 })

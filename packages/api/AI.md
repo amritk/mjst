@@ -111,6 +111,12 @@ Bun.serve({ fetch: handler })      // or: export default { fetch: handler } on W
    type-level only (no extra runtime check beyond the base type). Keep the schema
    literal so the brand survives inference, and define your app-side id to the
    same `{ readonly __brand: 'UserId' }` shape.
+8. **`format` is not asserted unless you ask.** Like JSON Schema itself and Ajv,
+   `format: 'uuid'` is documentation — the route accepts any string. Pass
+   `formats: 'all'` (or a list, `['uuid', 'email']`) to `createApi` *and* to
+   `compileToModule`, or the compiled module and the dev server disagree. A
+   violation is an ordinary 400 `validation_failed`. Ignored when you supply your
+   own `compile`, which replaces the engine the option configures.
 
 ## Security helpers (fetch adapter + client)
 
