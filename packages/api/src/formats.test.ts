@@ -76,7 +76,7 @@ describe('formats', () => {
     const api = createApi({
       routes: [findUser],
       formats: 'all',
-      compile: () => ({ guard: (_input): _input is unknown => true, collect: () => true }),
+      compile: () => ({ guard: (_input: unknown): _input is unknown => true, collect: () => true }),
     })
 
     const response = await api.handle(request('/users/not-a-uuid'))
