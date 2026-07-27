@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, resolve as resolvePath } from 'node:path'
+import { foldNullable } from '@amritk/helpers/fold-nullable'
 import { generateIndexBarrel } from '@amritk/helpers/generate-index-barrel'
 import { walkRefGraph } from '@amritk/helpers/walk-ref-graph'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
@@ -162,7 +163,12 @@ export const buildSchema = async (
   const files: GeneratedFile[] = []
   const usedHelpers = new Set<RuntimeHelperName>()
 
-  walkRefGraph(rootSchema, rootTypeName, { typeSuffix }, (node) => {
+  // OpenAPI 3.0 documents say "or null" with a sibling `nullable: true`, which
+  // no `type`-reading code path here understands. Fold it into `type: [..., 'null']`
+  // once, for the whole document, so parsers accept null where the schema allows it.
+  const foldedSchema = foldNullable(rootSchema)
+
+  walkRefGraph(foldedSchema, rootTypeName, { typeSuffix }, (node) => {
     // `index` is reserved for the barrel below, so never let a definition of
     // that name overwrite it.
     if (node.filename === 'index') return
@@ -171,6 +177,7 @@ export const buildSchema = async (
     // both the root (the lowercased root type name) and every `$ref` target.
     const extended = extensions ? applySchemaExtensions(node.schema, node.filename, extensions) : node.schema
     const result = generateFile(extended, node.typeName, {
+      selfFilename: node.filename,
       typesOnly: typesOnly ?? false,
       rootSchema: node.rootSchema,
       helpersMode,

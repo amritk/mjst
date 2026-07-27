@@ -93,15 +93,21 @@ export const isCoercibleItemSchema = (itemSchema: JSONSchema): boolean => {
 }
 
 /**
- * The tuple `prefixItems` array when the schema declares one, else `null`.
- * `prefixItems` (JSON Schema 2020-12) positions each element against its own
- * subschema; the draft array-form `items` is handled by the existing item
- * paths, not here.
+ * The tuple positions a schema declares, else `null`. `prefixItems` (JSON
+ * Schema 2020-12) positions each element against its own subschema; draft-07
+ * spelled the same construct as an array-valued `items`, which every other item
+ * path skips (they all read `items` as a single schema), so it is normalized
+ * here rather than left unchecked.
  */
 export const getPrefixItems = (schema: JSONSchema): readonly JSONSchema[] | null => {
   if (!isSchemaObject(schema)) return null
   const prefix = (schema as Record<string, unknown>)['prefixItems']
-  return Array.isArray(prefix) ? (prefix as JSONSchema[]) : null
+  if (Array.isArray(prefix)) return prefix as JSONSchema[]
+  // Draft-07 spelled the same thing as an array-valued `items` (with
+  // `additionalItems` for the tail). Without this the positions went entirely
+  // unchecked — `items` is only read as a single schema everywhere else, so an
+  // array landed on no code path at all.
+  return Array.isArray(schema.items) ? (schema.items as JSONSchema[]) : null
 }
 
 /**
@@ -122,7 +128,7 @@ export const prefixItemsCapsLength = (schema: JSONSchema): boolean => {
  * `Number.isInteger` — a bare `typeof === "number"` accepts `1.5`. Used to build
  * the disjunction for an array-form `type` (e.g. `["string","null"]`).
  */
-const singleTypeCheck = (accessor: string, type: string): string | null => {
+export const singleTypeCheck = (accessor: string, type: string): string | null => {
   switch (type) {
     case 'string':
       return `typeof ${accessor} === "string"`

@@ -17,6 +17,33 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { generateDefaultFromPattern } from '#generators/generate-default-from-pattern'
 
 /**
+ * True when a schema's `default` is an instance of the type it declares. A
+ * schema with no (or a multi-) `type` places no constraint we can check here, so
+ * the default is taken at face value.
+ */
+const defaultMatchesType = (value: unknown, schema: JSONSchema): boolean => {
+  if (!hasType(schema)) return true
+  switch (schema.type) {
+    case 'string':
+      return typeof value === 'string'
+    case 'number':
+      return typeof value === 'number'
+    case 'integer':
+      return typeof value === 'number' && Number.isInteger(value)
+    case 'boolean':
+      return typeof value === 'boolean'
+    case 'null':
+      return value === null
+    case 'array':
+      return Array.isArray(value)
+    case 'object':
+      return typeof value === 'object' && value !== null && !Array.isArray(value)
+    default:
+      return true
+  }
+}
+
+/**
  * Returns the default value for a JSON Schema property.
  * Priority order: explicit default > first enum value > first example > union first schema > pattern-based > type-based.
  * These defaults ensure that parsing never fails, even with missing data.
@@ -26,8 +53,13 @@ export const getDefaultValue = (schema: JSONSchema): string => {
     return 'undefined'
   }
 
-  // Explicit default takes highest priority
-  if (hasDefault(schema)) {
+  // Explicit default takes highest priority — but only when it actually is an
+  // instance of the declared type. Real-world documents carry defaults left over
+  // from an earlier shape (OpenAI's `testing_criteria` declares `type: array`
+  // with `default: eval`), and honouring one means a coercing parser "repairs" a
+  // missing array into a string: invalid against the schema, and not even
+  // assignable to the type this generator emits for the property.
+  if (hasDefault(schema) && defaultMatchesType(schema.default, schema)) {
     return JSON.stringify(schema.default)
   }
 

@@ -63,7 +63,13 @@ export const generateExampleFile = (
     typeSuffix,
   })
 
-  const typeDefinition = generateTypeDefinition(schema, typeName, { typeSuffix })
+  // `rootSchema` lets the type generator name a URI `$ref` that resolves inside
+  // the document — the same rule the import collector above uses — instead of
+  // typing it `unknown` while this file imports the generated type.
+  const typeDefinition = generateTypeDefinition(schema, typeName, {
+    typeSuffix,
+    ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
+  })
   const arbitrary = generateArbitrary(schema, typeName, typeSuffix, options?.lazyRefFilenames, options?.rootSchema)
   const example = generateExampleConst(schema, typeName, options?.rootSchema)
 

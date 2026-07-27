@@ -31,7 +31,12 @@ import {
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { generateEnumCheck } from './generate-enum-check'
-import { getPrefixItems, prefixItemsCapsLength, scalarItemTypeCheck } from './generate-validation-expression'
+import {
+  getPrefixItems,
+  prefixItemsCapsLength,
+  scalarItemTypeCheck,
+  singleTypeCheck,
+} from './generate-validation-expression'
 
 /**
  * Boolean type-check expression builders shared by the shape validators, the
@@ -65,6 +70,10 @@ export const shapeValidatorName = (typeName: string): string => `validate${typeN
 export const isInlineObjectProperty = (propSchema: JSONSchema): propSchema is JSONSchema.Object => {
   if (!isSchemaObject(propSchema)) return false
   if (hasRef(propSchema) || hasEnum(propSchema) || hasConst(propSchema)) return false
+  // An array-form `type` (`["object","null"]`) admits values the sub-parser
+  // would reject: it opens with an `isObject` check and throws on null, so a
+  // nullable object property must stay on the general path, which preserves it.
+  if (Array.isArray(propSchema.type)) return false
   if (hasOneOf(propSchema) || hasAnyOf(propSchema) || hasAllOf(propSchema)) return false
   // `then`/`else` must be excluded even without `if`: generateShapeValidator
   // stubs any schema carrying them, so admitting one here would wire an
@@ -122,6 +131,68 @@ export const hasFastPathBlockingKeyword = (schema: JSONSchema): boolean => {
   return (
     'contains' in record || 'dependentSchemas' in record || 'propertyNames' in record || 'dependentRequired' in record
   )
+}
+
+/**
+ * Keywords that narrow a value beyond its `type`. An array-form `type` gets a
+ * plain disjunction of per-type checks, which would silently wave these through
+ * — a fast path must be *true-sound* — so their presence disables it.
+ */
+const CONSTRAINT_KEYWORDS = [
+  'pattern',
+  'minLength',
+  'maxLength',
+  'minimum',
+  'maximum',
+  'exclusiveMinimum',
+  'exclusiveMaximum',
+  'multipleOf',
+  'minItems',
+  'maxItems',
+  'uniqueItems',
+  'items',
+  'prefixItems',
+  'properties',
+  'required',
+  'additionalProperties',
+  'patternProperties',
+  'minProperties',
+  'maxProperties',
+] as const
+
+/**
+ * The membership check for an array-form `type` (the multi-type / nullable
+ * idiom, e.g. `["string","null"]`): the disjunction of the per-type checks.
+ * Returns `undefined` when the schema has no array `type`, and `null` when it
+ * has one that cannot be checked soundly — a type name we do not model, or a
+ * constraint keyword a bare `typeof` would skip.
+ *
+ * Without this every nullable property fell through to `hasType`, which is false
+ * for an array `type`, and produced no check at all: no fast path (so the shape
+ * validator degraded to the `=> false` stub) and, in strict mode, nothing to
+ * throw on.
+ */
+export const multiTypeCheck = (
+  varName: string,
+  schema: JSONSchema,
+  options: { readonly ignoreConstraints?: boolean } = {},
+): string | null | undefined => {
+  if (!isSchemaObject(schema) || !Array.isArray(schema.type)) return undefined
+  const record = schema as Record<string, unknown>
+  // Constraints only matter to a *true-sound* caller (the fast path), which must
+  // not wave a value through on a bare `typeof`. A caller that only throws when
+  // the check fails needs false-soundness, and "matches none of the declared
+  // types" is conclusive however many constraints ride along.
+  if (!options.ignoreConstraints && CONSTRAINT_KEYWORDS.some((keyword) => keyword in record)) return null
+
+  const checks: string[] = []
+  for (const type of schema.type) {
+    const check = singleTypeCheck(varName, type as string)
+    if (check === null) return null
+    checks.push(`(${check})`)
+  }
+  if (checks.length === 0) return null
+  return checks.length === 1 ? (checks[0] as string) : `(${checks.join(' || ')})`
 }
 
 /**
@@ -191,6 +262,9 @@ export const generatePropertyTypeCheck = (
     const c = schema.const
     return c === null || typeof c !== 'object' ? `${varName} === ${JSON.stringify(c)}` : null
   }
+
+  const multiType = multiTypeCheck(varName, schema)
+  if (multiType !== undefined) return multiType
 
   if (!hasType(schema)) return null
 
@@ -416,6 +490,11 @@ const canTrustPropertyCheck = (
   if (hasOneOf(schema) || hasAnyOf(schema) || hasAllOf(schema) || 'not' in schema) return false
 
   if (hasConst(schema)) return schema.const === null || typeof schema.const !== 'object'
+
+  // Mirrors the array-`type` branch of generatePropertyTypeCheck: a disjunction
+  // of per-type checks is false-sound exactly when it was emitted at all.
+  const multiType = multiTypeCheck('_x', schema)
+  if (multiType !== undefined) return multiType !== null
 
   if (!hasType(schema)) return false
 

@@ -2006,7 +2006,7 @@ describe('generate-parser-function', () => {
     it('emits a private sub-parser and shape predicate for an inline nested object', () => {
       const result = generateParserFunction(nestedSchema, 'Demo')
 
-      expect(result).toContain('type Demo_Nested = Demo["nested"];')
+      expect(result).toContain('type Demo_Nested = NonNullable<Demo>["nested"];')
       expect(result).toContain('const parseDemo_Nested = (input: unknown): Demo_Nested =>')
       expect(result).toContain('const validateDemo_NestedShape = (input: unknown): boolean =>')
       // Private helpers stay private — only the root parser is exported.
@@ -2096,7 +2096,7 @@ describe('generate-parser-function', () => {
     it('emits a private item sub-parser and shape predicate for inline object items', () => {
       const result = generateParserFunction(stepsSchema, 'Plan')
 
-      expect(result).toContain('type Plan_StepsItem = NonNullable<Plan["steps"]>[number];')
+      expect(result).toContain('type Plan_StepsItem = NonNullable<NonNullable<Plan>["steps"]>[number];')
       expect(result).toContain('const parsePlan_StepsItem = (input: unknown): Plan_StepsItem =>')
       expect(result).toContain('const validatePlan_StepsItemShape = (input: unknown): boolean =>')
       // Private helpers stay private — only the root parser is exported.

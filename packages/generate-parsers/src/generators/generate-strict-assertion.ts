@@ -30,7 +30,13 @@ import {
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { generateEnumCheck } from './generate-enum-check'
-import { canEnforceUnion, generateUnionCheck, getUnionBranches, isInlineObjectProperty } from './generate-type-checks'
+import {
+  canEnforceUnion,
+  generateUnionCheck,
+  getUnionBranches,
+  isInlineObjectProperty,
+  multiTypeCheck,
+} from './generate-type-checks'
 import { getPrefixItems, prefixItemsCapsLength, scalarItemTypeCheck } from './generate-validation-expression'
 import { subschemaMatchExpr } from './subschema-match'
 
@@ -479,6 +485,30 @@ const generatePropertyAssertion = (
     return lines
   }
 
+  // Array-form `type` (multi-type / nullable, e.g. `["string","null"]`). `hasType`
+  // is false for it, so without this branch a strict parser emitted no check at
+  // all and handed back whatever it was given under a `string | null` signature.
+  const multiType = multiTypeCheck(acc, propSchema, { ignoreConstraints: true })
+  if (multiType !== undefined) {
+    const types = propSchema.type as string[]
+    if (multiType !== null) {
+      const expected = throwError(`${field} expected ${types.map(typeLabel).join(' | ')}, got `, `typeof ${acc}`)
+      lines.push(
+        isRequired ? `  if (!${multiType}) ${expected};` : `  if (${acc} !== undefined && !${multiType}) ${expected};`,
+      )
+    }
+    // "Nullable T" — the overwhelmingly common array-`type` shape — still carries
+    // T's constraints, so run them against a single-typed view of the schema.
+    // Every constraint check is already guarded on the value's runtime shape
+    // (`typeof x === "string" && …`, `Array.isArray(x) && …`), so a null value
+    // passes them all untouched and needs no extra guard.
+    const nonNull = types.filter((type) => type !== 'null')
+    if (nonNull.length === 1) {
+      lines.push(...generateConstraintChecks(acc, { ...propSchema, type: nonNull[0] } as JSONSchema, field, context))
+    }
+    return lines
+  }
+
   if (hasType(propSchema)) {
     const t = propSchema.type as string
     const wrongType = wrongTypeCondition(acc, t)
@@ -526,6 +556,23 @@ const generatePropertyAssertion = (
  * Properties with a `$ref` are validated by the nested parser's own strict
  * check when that parser is invoked downstream.
  */
+/**
+ * The `allOf` members this assertion must enforce itself: plain object schemas
+ * written inline. A `$ref` member is enforced by the parser generated for its
+ * target, and a member that composes further (nested `allOf`/`oneOf`/`if`) is
+ * left alone rather than half-checked.
+ */
+export const inlineAllOfMembers = (schema: JSONSchema): JSONSchema[] => {
+  if (!isSchemaObject(schema) || !Array.isArray(schema.allOf)) return []
+  return schema.allOf.filter((member): member is JSONSchema => {
+    if (!isSchemaObject(member) || hasRef(member)) return false
+    const record = member as Record<string, unknown>
+    if ('allOf' in record || 'oneOf' in record || 'anyOf' in record || 'not' in record) return false
+    if ('if' in record || 'then' in record || 'else' in record) return false
+    return hasProperties(member) || hasRequired(member)
+  })
+}
+
 export const generateObjectStrictAssertion = (
   schema: JSONSchema,
   typeName: string,
@@ -538,12 +585,32 @@ export const generateObjectStrictAssertion = (
 
   if (!isSchemaObject(schema)) return lines
 
+  const required = new Set<string>(hasRequired(schema) ? schema.required : [])
+
   if (hasProperties(schema)) {
-    const required = new Set<string>(hasRequired(schema) ? schema.required : [])
     const props = schema.properties as Record<string, JSONSchema>
     for (const key in props) {
       lines.push(...generatePropertyAssertion(key, props[key] as JSONSchema, required.has(key), typeName, context))
     }
+    for (const key in props) required.delete(key)
+  }
+
+  // A `required` entry with no declared property still demands the key. Only the
+  // per-property loop above emitted presence checks, so these went unenforced —
+  // the inline-object union check has always covered the same case.
+  for (const key of required) {
+    lines.push(
+      `  if (!(${JSON.stringify(key)} in input)) ${throwError(`[${typeName}] missing required property '${key}'`)};`,
+    )
+  }
+
+  // `allOf` members written inline (rather than as a `$ref`, which the referenced
+  // parser validates on its own) contribute properties and `required` keys just
+  // like the schema's own. They were skipped entirely, so a strict parser
+  // accepted documents the schema rejects — and the emitted type intersects them
+  // in, so it promised fields nothing checked.
+  for (const member of inlineAllOfMembers(schema)) {
+    lines.push(...generateObjectStrictAssertion(member, typeName, context).slice(1))
   }
 
   // Object-level keywords for the object itself. `input` is already proven an
@@ -602,6 +669,29 @@ export const generateScalarStrictAssertion = (
     )
   }
 
+  // Array-form `type` at the root — same gap as the property path below.
+  const rootMultiType = multiTypeCheck('input', schema, { ignoreConstraints: true })
+  if (rootMultiType !== undefined) {
+    const types = schema.type as string[]
+    if (rootMultiType !== null) {
+      lines.push(
+        `  if (!${rootMultiType}) ${throwError(`${label} expected ${types.map(typeLabel).join(' | ')}, got `, got)};`,
+      )
+    }
+    const nonNull = types.filter((type) => type !== 'null')
+    if (nonNull.length === 1) {
+      lines.push(
+        ...generateConstraintChecks(
+          'input',
+          { ...schema, type: nonNull[0] } as JSONSchema,
+          label,
+          rootSchema ? { rootSchema } : {},
+        ),
+      )
+    }
+    return lines.length > 0 ? lines.join('\n') : null
+  }
+
   if (hasType(schema)) {
     const t = schema.type as string
     const wrongType = wrongTypeCondition('input', t)
@@ -611,16 +701,12 @@ export const generateScalarStrictAssertion = (
 
     // Root-level arrays enforce scalar/enum item types too — the same gap the
     // property path closes in generateConstraintChecks — plus `contains`.
+    // Item types and tuple positions are emitted by generateConstraintChecks
+    // below (shared with the property path) — emitting them here as well put
+    // every check in the file twice. `contains` has no property-path equivalent
+    // at the root, so it stays.
     if (t === 'array') {
-      const itemCheck = generateItemCheck(schema)
-      if (itemCheck) {
-        lines.push(
-          `  if (!(input as readonly unknown[]).every((_it) => ${itemCheck.check})) ${throwError(`${label} ${itemCheck.message}`)};`,
-        )
-      }
       lines.push(...generateContainsCheck('input', schema, label))
-      // Tuple `prefixItems`: assert each position and cap length under items:false.
-      lines.push(...generatePrefixItemsAssertion('input', label, schema, rootSchema))
     }
 
     // String (pattern, min/maxLength), number/integer (bounds, multipleOf) and

@@ -1,4 +1,3 @@
-import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { getDiscriminatorValue } from '#helpers/get-discriminator-value'
 
@@ -24,10 +23,13 @@ export const generateDiscriminatedUnionValidation = (
   defaultValue: string,
   isRequired: boolean,
 ): string => {
-  // A non-identifier discriminator key (e.g. `x-type`) must use bracket access;
-  // `${accessor}?.${key}` would emit broken TS. `safeAccessor` picks dot vs
-  // bracket notation and JSON.stringifies the literal so quotes-in-keys are safe.
-  const discAccessor = safeAccessor(`${accessor}?`, discriminatorKey)
+  // The discriminant is read *before* anything narrows the value, so a bare
+  // `input?.type` does not type-check against `unknown` (TS2339) and every
+  // generated discriminated union failed to compile under `strict`. Reading it
+  // through a record cast keeps the runtime identical (types are erased) and
+  // the branch checks below still do the real narrowing. Bracket access with a
+  // JSON-quoted key also covers non-identifier discriminators like `x-type`.
+  const discAccessor = `(${accessor} as Record<string, unknown> | null | undefined)?.[${JSON.stringify(discriminatorKey)}]`
 
   // Each branch contributes its guard condition and the value to yield on a
   // match; the value is `accessor` because `generateSchemaChecks` has already
