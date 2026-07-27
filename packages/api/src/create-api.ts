@@ -1,3 +1,4 @@
+import type { ValidateOptions } from '@amritk/runtime-validators'
 import { validate, validateGuard } from '@amritk/runtime-validators'
 
 import { compileRoute } from './compile-route'
@@ -14,11 +15,21 @@ import type { Api, ApiOptions, CompiledRoute, OpenApiDocument, ValidatorCompiler
  * `@amritk/runtime-validators`. Guard and collector share one prepared
  * schema walk (prepare is memoized per schema object), so building both up
  * front costs a single preparation.
+ *
+ * `formats` rides along from {@link ApiOptions.formats}: the interpreter treats
+ * `format` as an annotation unless told otherwise, so a contract declaring
+ * `format: 'uuid'` only rejects a non-UUID once a caller opts in.
  */
-const defaultCompile: ValidatorCompiler = (schema) => ({
-  guard: validateGuard(schema),
-  collect: validate(schema),
-})
+const createDefaultCompile = (formats: ValidateOptions['formats']): ValidatorCompiler => {
+  if (formats === undefined) {
+    return (schema) => ({ guard: validateGuard(schema), collect: validate(schema) })
+  }
+  const validateOptions: ValidateOptions = { formats }
+  return (schema) => ({
+    guard: validateGuard(schema, validateOptions),
+    collect: validate(schema, validateOptions),
+  })
+}
 
 /**
  * Compiles route contracts into a runnable API. All schema work — path
@@ -32,7 +43,7 @@ const defaultCompile: ValidatorCompiler = (schema) => ({
  * (configurable via `openApiPath`), built lazily on first access and cached.
  */
 export const createApi = (options: ApiOptions): Api => {
-  const compile = options.compile ?? defaultCompile
+  const compile = options.compile ?? createDefaultCompile(options.formats)
   const validateResponses = options.validateResponses ?? false
 
   // Documented-but-unenforced authentication is the failure mode `secureRoutes`

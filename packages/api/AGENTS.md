@@ -33,5 +33,10 @@ bun run --filter='@amritk/api' types:check
   literals — mirror that in new tests.
 - Validation defaults to the eval-free `@amritk/runtime-validators` engine (CSP-
   safe). Keep the default path free of `new Function`.
+- `format` is an annotation unless the caller passes `formats` (`'all'` or a
+  list) to **both** `createApi` and `compileToModule` — the engines have to be
+  configured alike. With it on, format-bearing schemas leave the inlinable subset
+  and fall back to the interpreter rather than growing a second copy of every
+  format regex in `generate-guard-source.ts`.
 
 Add a changeset for every change (`bunx changeset`).

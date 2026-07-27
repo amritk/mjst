@@ -34,5 +34,10 @@ const files = await buildValidatorSchema(schema, 'Document')
    `ValidationResult`, helpers) plus the `index.ts` barrel.
 4. **`NaN` satisfies numeric bounds** (`minimum`/`maximum`/`multipleOf`) — differs
    from Ajv. Draft-07 schemas are auto-upgraded to 2020-12.
+5. **`format` emits no check.** It stays an annotation, like the interpreter's
+   default — but *not* like the interpreter run with `{ formats: 'all' }`
+   (`@amritk/lint`, `createApi({ formats })`), which rejects strings a generated
+   validator accepts. `unevaluatedProperties`/`unevaluatedItems` go the other
+   way: unimplemented, so generation **throws** instead of widening the verdict.
 
 Only the `.` entry. Install: `bun add @amritk/generate-validators`.

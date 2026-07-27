@@ -1,4 +1,4 @@
-import type { FromSchema, Guard, ValidationError, Validator } from '@amritk/runtime-validators'
+import type { FromSchema, Guard, ValidateOptions, ValidationError, Validator } from '@amritk/runtime-validators'
 
 /**
  * The HTTP methods a route contract can declare. Lowercase on purpose — these
@@ -900,6 +900,17 @@ export type ApiOptions = OpenApiExtras & {
   readonly openApiGuards?: readonly ErasedGuard[]
   /** Swap the validation engine. See {@link ValidatorCompiler}. */
   readonly compile?: ValidatorCompiler
+  /**
+   * String `format`s to enforce across every request and response schema
+   * (`'all'`, or a list like `['uuid', 'email']`).
+   *
+   * Off by default, matching JSON Schema — where `format` is an annotation —
+   * and Ajv, where assertion is opt-in. Until you pass this, a param declared
+   * `{ type: 'string', format: 'uuid' }` accepts any string; the brand it
+   * carries is still type-level only. Ignored when `compile` is supplied, since
+   * that replaces the engine this configures.
+   */
+  readonly formats?: ValidateOptions['formats']
   /**
    * Per-request app context factory. Runs after validation, only for matched
    * requests, and its return value reaches handlers as `context`. Declare the

@@ -103,7 +103,17 @@ per-item work (a bare `string[]` is free; a closed object with several fields is
 meaningfully slower), which is why array-heavy schemas validate more slowly than
 scalar/object ones.
 
-One divergence is worth calling out: **`NaN` satisfies a constrained number.**
+**`format` emits no check.** JSON Schema treats `format` as an annotation, and so
+does this generator: `{ type: 'string', format: 'uuid' }` produces the `typeof`
+check and nothing more. That matches the interpreter's default, but *not* the
+interpreter run with `{ formats: 'all' }` — as `@amritk/lint` and
+`createApi({ formats })` do — so a generated validator accepts strings those
+reject. Two keywords are handled the other way: `unevaluatedProperties` and
+`unevaluatedItems` are not implemented and **throw at generation time** rather
+than silently widening the verdict, because unlike `format` there is no reading of
+the spec under which ignoring them is correct.
+
+One further divergence is worth calling out: **`NaN` satisfies a constrained number.**
 Because the numeric bound checks are the exact negation of the error condition
 (e.g. `!(x < minimum)`), and every comparison against `NaN` is `false`, a `NaN`
 passes `minimum`/`maximum`/`exclusive*`/`multipleOf`. This matches the interpreter
@@ -144,8 +154,15 @@ the first error rather than collecting a full error list.)
 
 Preparing a validator costs ~0.3–0.6 ms for mjst codegen and ~0.05–0.2 ms for a
 TypeBox `TypeCompiler` compile, versus ~9–12 ms for an Ajv compile. Every library
-agrees on every verdict; parity is asserted before timing (TypeBox is given
-uuid/email format checkers so every library does the same work). Each library is
+agrees on every verdict; parity is asserted before timing.
+
+One caveat on the first two rows: their schemas declare `format` (`uuid`,
+`email`), and Ajv, typia, zod, and TypeBox all check it, while mjst's generated
+validators treat it as an annotation (see [Semantics](#semantics)). So on `small`
+and `order`, mjst is doing slightly less work than the columns beside it — the
+parity samples fail other constraints too, which is why the verdicts still agree.
+The `assert-loose` / `assert-strict` rows carry no `format` and are the
+constraint-for-constraint comparison. Each library is
 timed in an isolated process over a pool of distinct inputs, reporting the median
 of many trials — so the optimiser can't hoist or eliminate the work and the
 numbers stay reproducible. Micro-benchmark figures vary by machine and runtime —
