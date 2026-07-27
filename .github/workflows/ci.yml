@@ -24,6 +24,13 @@ jobs:
       - name: Lint
         run: bun run check
 
+      # The build only type-checks what it emits (tsconfig.build.json drops the
+      # tests); this checks every package against the stricter root tsconfig.
+      # Left out of CI originally, which let `types:check` sit broken in three
+      # packages for weeks with nothing to catch it.
+      - name: Type check
+        run: bun run types:check
+
       - name: Test
         run: bun run test
 

@@ -3,6 +3,10 @@
   "version": "0.3.5",
   "description": "Convert schemas from external libraries (TypeBox, Zod, ...) into JSON Schema for mjst.",
   "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
   "license": "MIT",
   "author": "amritk",
   "keywords": [

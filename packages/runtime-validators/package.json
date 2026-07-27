@@ -4,6 +4,10 @@
   "description": "Extremely fast, eval-free runtime JSON Schema validation. Interprets a schema you do not know ahead of time — no new Function, no build step, runs anywhere.",
   "module": "./dist/index.js",
   "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
   "license": "MIT",
   "author": "amritk",
   "keywords": [
@@ -45,9 +49,6 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
-  },
-  "dependencies": {
-    "json-schema-typed": "catalog:"
   },
   "devDependencies": {
     "@amritk/helpers": "workspace:*",

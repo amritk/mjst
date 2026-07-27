@@ -4,6 +4,10 @@
   "description": "Generate markdown documentation from JSON Schemas.",
   "module": "./dist/index.js",
   "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
   "license": "MIT",
   "author": "amritk",
   "keywords": [
