@@ -60,7 +60,13 @@ export const generateValidatorFile = (
     typeSuffix,
   })
 
-  const typeDefinition = generateTypeDefinition(schema, typeName, { typeSuffix })
+  // `rootSchema` lets the type generator name a URI `$ref` that resolves inside
+  // the document — the same rule the import collector above uses — instead of
+  // typing it `unknown` while this file imports the generated type.
+  const typeDefinition = generateTypeDefinition(schema, typeName, {
+    typeSuffix,
+    ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
+  })
   const validatorFunction = generateValidatorFunction(schema, typeName, typeSuffix)
   const booleanGuard = generateBooleanGuard(schema, typeName, typeSuffix)
 

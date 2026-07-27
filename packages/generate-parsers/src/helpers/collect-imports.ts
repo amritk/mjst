@@ -30,6 +30,14 @@ type CollectImportsOptions = {
    */
   readonly selfRef?: string | undefined
   /**
+   * The filename this file is being written as, without extension. Takes
+   * precedence over `selfRef` for self-import detection, and covers the case
+   * `selfRef` cannot: the root document has no ref of its own, so a definition
+   * whose name collides with the root type name (root `Contact` + `$defs.contact`)
+   * used to make the root file import its own type from itself.
+   */
+  readonly selfFilename?: string | undefined
+  /**
    * The root schema document. When provided, URI refs that cannot be resolved
    * within the root schema's $defs are excluded from the import list, preventing
    * imports for external schemas that were never generated as files.
@@ -119,7 +127,7 @@ export const collectImportTypeNames = (schema: JSONSchema, options?: CollectImpo
 
 /** Shared `$ref` walk: filename → derived type name for every import target. */
 const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOptions): Map<string, string> => {
-  const selfFilename = options?.selfRef ? refToFilename(options.selfRef) : undefined
+  const selfFilename = options?.selfFilename ?? (options?.selfRef ? refToFilename(options.selfRef) : undefined)
   const rootSchema = options?.rootSchema
   const typeSuffix = options?.typeSuffix
   const refs = new Set<string>()

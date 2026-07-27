@@ -180,4 +180,49 @@ describe('walk-ref-graph', () => {
     expect(nodes[0]?.ref).toBeUndefined()
     expect(nodes[0]?.schema).toHaveProperty('properties')
   })
+  describe('filename collisions', () => {
+    it('warns when two definitions reduce to the same filename', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const schema = {
+        type: 'object',
+        properties: { a: { $ref: '#/$defs/Pet' }, b: { $ref: '#/$defs/pet' } },
+        $defs: { Pet: { type: 'object' }, pet: { type: 'object' } },
+      }
+
+      const nodes = collect(schema, 'Doc')
+
+      // Only one of the two is generated — that is the behaviour being warned about.
+      expect(nodes.filter((n) => n.filename === 'pet')).toHaveLength(1)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('both map to "pet.ts"'))
+      warn.mockRestore()
+    })
+
+    it('warns when a definition collides with the root type name', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const schema = {
+        type: 'object',
+        properties: { c: { $ref: '#/$defs/contact' } },
+        $defs: { contact: { type: 'object' } },
+      }
+
+      collect(schema, 'Contact')
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('the root type Contact'))
+      warn.mockRestore()
+    })
+
+    it('stays quiet when every definition has its own filename', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const schema = {
+        type: 'object',
+        properties: { a: { $ref: '#/$defs/cat' }, b: { $ref: '#/$defs/dog' } },
+        $defs: { cat: { type: 'object' }, dog: { type: 'object' } },
+      }
+
+      collect(schema, 'Doc')
+
+      expect(warn).not.toHaveBeenCalled()
+      warn.mockRestore()
+    })
+  })
 })

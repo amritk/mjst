@@ -15,8 +15,8 @@ describe('generate-discriminated-union-validation', () => {
       },
     ]
     const result = generateDiscriminatedUnionValidation('value', schemas, 'kind', '{}', true)
-    expect(result).toContain('value?.kind === "a"')
-    expect(result).toContain('value?.kind === "b"')
+    expect(result).toContain('(value as Record<string, unknown> | null | undefined)?.["kind"] === "a"')
+    expect(result).toContain('(value as Record<string, unknown> | null | undefined)?.["kind"] === "b"')
   })
 
   it('returns fallback expression when no schemas have discriminator values', () => {
@@ -39,7 +39,7 @@ describe('generate-discriminated-union-validation', () => {
       },
     ]
     const result = generateDiscriminatedUnionValidation('input', schemas, 'kind', '{}', true)
-    expect(result).toContain('input?.kind === "user"')
+    expect(result).toContain('(input as Record<string, unknown> | null | undefined)?.["kind"] === "user"')
     // Should include object type checks
     expect(result).toContain('typeof input === "object"')
   })
@@ -56,8 +56,8 @@ describe('generate-discriminated-union-validation', () => {
       },
     ]
     const result = generateDiscriminatedUnionValidation('value', schemas, 'type', '{}', true)
-    expect(result).toContain('value?.type === "cat"')
-    expect(result).toContain('value?.type === "dog"')
+    expect(result).toContain('(value as Record<string, unknown> | null | undefined)?.["type"] === "cat"')
+    expect(result).toContain('(value as Record<string, unknown> | null | undefined)?.["type"] === "dog"')
   })
 
   it('handles empty schemas array', () => {
@@ -77,7 +77,7 @@ describe('generate-discriminated-union-validation', () => {
       },
     ]
     const result = generateDiscriminatedUnionValidation('value', schemas, 'kind', '{}', true)
-    expect(result).toContain('value?.kind === "a"')
+    expect(result).toContain('(value as Record<string, unknown> | null | undefined)?.["kind"] === "a"')
     // The second schema has no discriminator, so it does not appear in the ternary chain
     expect(result).not.toContain('value?.kind === undefined')
   })

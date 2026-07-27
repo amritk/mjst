@@ -167,11 +167,14 @@ export const walkRefGraph = (
 
   const processedRefs = new Set<string>()
   const processedFilenames = new Set<string>()
+  /** Which ref claimed each filename, so a later collision can name both sides. */
+  const filenameOwners = new Map<string, string>()
 
   // Root node first — its filename reserves a slot so a later ref that maps to
   // the same name does not emit a duplicate file.
   const rootFilename = rootTypeName.toLowerCase()
   processedFilenames.add(rootFilename)
+  filenameOwners.set(rootFilename, `the root type ${rootTypeName}`)
 
   // An alias root (a document that is just `$ref: '#/$defs/x'`) whose derived
   // filename equals its target's would reserve the filename for a wrapper that
@@ -218,8 +221,22 @@ export const walkRefGraph = (
     }
 
     const filename = refToFilename(ref)
-    if (!processedFilenames.has(filename)) {
+    if (processedFilenames.has(filename)) {
+      // Two definitions that reduce to one filename (`Pet`/`pet`, `foo-bar`/`foo.bar`)
+      // silently collapse: the first one generated wins and the second is dropped,
+      // so every reference to it gets the wrong type with no other signal. Warn
+      // loudly — renaming the definition is the only fix, and it has to be the
+      // caller's, since the name is what the emitted imports are keyed on.
+      const owner = filenameOwners.get(filename)
+      if (owner !== undefined && owner !== ref) {
+        console.warn(
+          `Warning: ${ref} and ${owner} both map to "${filename}.ts" — only ${owner} was generated, so ` +
+            `every reference to the other resolves to the wrong type. Rename one so each gets its own file.`,
+        )
+      }
+    } else {
       processedFilenames.add(filename)
+      filenameOwners.set(filename, ref)
       visit({
         ref,
         typeName: refToName(ref, typeSuffix),

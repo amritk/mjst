@@ -1,0 +1,54 @@
+import { describe, expect, it } from 'vitest'
+
+import { foldNullable } from './fold-nullable'
+
+describe('foldNullable', () => {
+  it('adds null to a string type', () => {
+    expect(foldNullable({ type: 'string', nullable: true })).toEqual({ type: ['string', 'null'], nullable: true })
+  })
+
+  it('adds null to an array-form type', () => {
+    expect(foldNullable({ type: ['string', 'number'], nullable: true })).toEqual({
+      type: ['string', 'number', 'null'],
+      nullable: true,
+    })
+  })
+
+  it('leaves an already-nullable type alone', () => {
+    const schema = { type: ['string', 'null'], nullable: true }
+    expect(foldNullable(schema)).toBe(schema)
+  })
+
+  it('folds nested properties and array items', () => {
+    expect(
+      foldNullable({
+        type: 'object',
+        properties: {
+          a: { type: 'string', nullable: true },
+          b: { type: 'array', items: { type: 'number', nullable: true } },
+        },
+      }),
+    ).toEqual({
+      type: 'object',
+      properties: {
+        a: { type: ['string', 'null'], nullable: true },
+        b: { type: 'array', items: { type: ['number', 'null'], nullable: true } },
+      },
+    })
+  })
+
+  it('leaves a nullable node with no type alone — there is no type list to extend', () => {
+    const schema = { $ref: '#/$defs/thing', nullable: true }
+    expect(foldNullable(schema)).toBe(schema)
+  })
+
+  it('returns the same reference when nothing needs folding', () => {
+    const schema = { type: 'object', properties: { a: { type: 'string' } } }
+    expect(foldNullable(schema)).toBe(schema)
+  })
+
+  it('ignores a falsy nullable', () => {
+    const schema = { type: 'string', nullable: false }
+    expect(foldNullable(schema)).toBe(schema)
+  })
+})

@@ -222,7 +222,7 @@ describe('generateTypeDefinition', () => {
 
     const result = generateTypeDefinition(schema, 'Empty')
 
-    expect(result).toStrictEqual('export type Empty = {\n' + '\n' + '};')
+    expect(result).toStrictEqual('export type Empty = {};')
   })
 
   it('generates type for object with no type specified', () => {
@@ -1457,6 +1457,240 @@ describe('generateTypeDefinition', () => {
       const result = generateTypeDefinition(schema, 'Document')
       expect(result).toContain('contact: Contact;')
       expect(result).not.toContain('ContactObject')
+    })
+  })
+  describe('nullable (OpenAPI 3.0)', () => {
+    it('widens a nullable scalar property with null', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { name: { type: 'string', nullable: true } },
+        required: ['name'],
+      } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Doc')).toContain('name: string | null;')
+    })
+
+    it('widens a nullable object schema without losing its properties', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        nullable: true,
+        properties: { a: { type: 'string' } },
+        required: ['a'],
+      } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = {\n  a: string;\n} | null;')
+    })
+
+    it('does not double up when null is already declared', () => {
+      const schema: JSONSchema = { type: ['string', 'null'], nullable: true } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = string | null;')
+    })
+  })
+
+  describe('array-form type', () => {
+    it('keeps the properties of a nullable object', () => {
+      const schema: JSONSchema = {
+        type: ['object', 'null'],
+        properties: { a: { type: 'string' } },
+        required: ['a'],
+      } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = { a: string } | null;')
+    })
+
+    it('keeps the item type of a nullable array', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { a: { type: ['array', 'null'], items: { type: 'string' } } },
+      } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Doc')).toContain('a?: string[] | null;')
+    })
+
+    it('deduplicates repeated members', () => {
+      const schema: JSONSchema = { type: ['string', 'number', 'string'] } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = string | number;')
+    })
+
+    it('applies readonly to the array member', () => {
+      const schema: JSONSchema = { type: ['array', 'null'], items: { type: 'string' } } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Doc', { readonly: true })).toBe(
+        'export type Doc = readonly string[] | null;',
+      )
+    })
+  })
+
+  describe('tuples', () => {
+    it('emits a fixed tuple for prefixItems with items: false', () => {
+      const schema: JSONSchema = {
+        type: 'array',
+        prefixItems: [{ type: 'string' }, { type: 'number' }],
+        items: false,
+      } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = [string?, number?];')
+    })
+
+    it('requires the positions minItems reaches and types the rest from items', () => {
+      const schema: JSONSchema = {
+        type: 'array',
+        prefixItems: [{ type: 'string' }, { type: 'number' }],
+        minItems: 1,
+        items: { type: 'boolean' },
+      } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = [string, number?, ...boolean[]];')
+    })
+
+    it('reads the draft-07 array form of items as a tuple', () => {
+      const schema: JSONSchema = {
+        type: 'array',
+        items: [{ type: 'string' }, { type: 'number' }],
+        additionalItems: false,
+      } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = [string?, number?];')
+    })
+
+    it('marks a readonly tuple readonly', () => {
+      const schema: JSONSchema = { type: 'array', prefixItems: [{ type: 'string' }], items: false } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Doc', { readonly: true })).toBe('export type Doc = readonly [string?];')
+    })
+  })
+
+  describe('open-ended keys alongside declared properties', () => {
+    it('emits an index signature widened to cover the declared properties', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { a: { type: 'string' } },
+        additionalProperties: { type: 'number' },
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe(
+        'export type Doc = {\n  a?: string;\n  [key: string]: number | string | undefined;\n};',
+      )
+    })
+
+    it('keeps a template-literal key for the sole x- pattern, which needs no widening', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { a: { type: 'string' } },
+        patternProperties: { '^x-': { type: 'number' } },
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toContain('[key: `x-${string}`]: number;')
+    })
+
+    it('does not emit an index signature for additionalProperties: true', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { a: { type: 'string' } },
+        additionalProperties: true,
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).not.toContain('[key: string]')
+    })
+  })
+
+  describe('composition alongside a declared shape', () => {
+    it('intersects an inline allOf member instead of dropping it', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { a: { type: 'string' } },
+        allOf: [{ type: 'object', properties: { b: { type: 'number' } }, required: ['b'] }],
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = {\n  a?: string;\n} & { b: number };')
+    })
+
+    it('keeps the properties of a nested schema that also declares oneOf', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          outer: {
+            type: 'object',
+            properties: { a: { type: 'string' } },
+            oneOf: [{ required: ['a'] }],
+          },
+        },
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toContain('outer?: { a?: string };')
+    })
+
+    it('intersects a sibling union onto the declared properties', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { a: { type: 'string' } },
+        anyOf: [{ type: 'object', properties: { b: { type: 'number' } }, required: ['b'] }],
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toContain('} & { b: number };')
+    })
+
+    it('drops unknown members rather than emitting `& unknown`', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { a: { type: 'string' } },
+        oneOf: [{ required: ['a'] }, { required: ['b'] }],
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = {\n  a?: string;\n};')
+    })
+  })
+
+  describe('JSDoc escaping', () => {
+    it('escapes a comment terminator in a property description', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { include: { type: 'string', description: 'Glob such as **/*.ts to match' } },
+      }
+
+      const result = generateTypeDefinition(schema, 'Doc')
+      expect(result).toContain('/** Glob such as **\\/*.ts to match */')
+      expect(result).not.toContain('*/*.ts')
+    })
+
+    it('escapes a comment terminator in a top-level description', () => {
+      const schema: JSONSchema = { type: 'string', description: 'Matches **/*.ts' }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toContain('Matches **\\/*.ts')
+    })
+
+    it('escapes a comment terminator in a multi-line description', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { a: { type: 'string', description: 'one\n*/ two' } },
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).not.toMatch(/\*\/ two/)
+    })
+  })
+
+  describe('URI $ref', () => {
+    it('names a URI ref that resolves inside the root document', () => {
+      const rootSchema = {
+        $defs: { 'http://asyncapi.com/definitions/3.1.0/channel.json': { type: 'object' } },
+      }
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { channel: { $ref: 'http://asyncapi.com/definitions/3.1.0/channel.json' } },
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc', { rootSchema })).toContain('channel?: Channel;')
+    })
+
+    it('leaves an unresolvable URI ref as unknown', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { channel: { $ref: 'http://asyncapi.com/definitions/3.1.0/channel.json' } },
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc', { rootSchema: {} })).toContain('channel?: unknown;')
     })
   })
 })

@@ -26,6 +26,13 @@ type GenerateFileOptions = {
    */
   readonly selfRef?: string
   /**
+   * The filename this file is written as, without extension. Used for
+   * self-import detection when the schema has no `$ref` of its own — the root
+   * document — so a `$defs` entry that collides with the root type name cannot
+   * make the root file import itself.
+   */
+  readonly selfFilename?: string
+  /**
    * The root schema document. When provided, URI refs that cannot be resolved
    * within the root schema's $defs are excluded from the import list.
    */
@@ -142,11 +149,25 @@ export const generateFile = (
   const helpersMode: HelpersMode = options?.helpersMode ?? 'package'
   const typeSuffix = options?.typeSuffix ?? ''
   const importExt: ImportExtension = options?.importExt ?? 'js'
-  const typeDefinition = generateTypeDefinition(schema, typeName, { readonly: options?.readonly ?? false, typeSuffix })
+  // `rootSchema` lets the type generator name a URI `$ref` that resolves inside
+  // the document — the same rule `collectImports` uses — instead of falling back
+  // to `unknown` while this file imports (and its parser calls) the generated type.
+  const typeDefinition = generateTypeDefinition(schema, typeName, {
+    readonly: options?.readonly ?? false,
+    typeSuffix,
+    ...(rootSchema !== undefined ? { rootSchema } : {}),
+  })
 
   if (typesOnly) {
     // In types-only mode, skip the parser function and use type-only imports
-    const imports = collectImports(schema, { typesOnly: true, selfRef, rootSchema, typeSuffix, importExt })
+    const imports = collectImports(schema, {
+      typesOnly: true,
+      selfRef,
+      selfFilename: options?.selfFilename,
+      rootSchema,
+      typeSuffix,
+      importExt,
+    })
     let result = ''
 
     if (imports.length > 0) {
@@ -165,7 +186,12 @@ export const generateFile = (
   // dedup against them so they can never shadow an imported identifier. The
   // parser and the shape validator must receive the SAME set — their derived
   // sub-names have to agree.
-  const reservedNames = collectImportTypeNames(schema, { selfRef, rootSchema, typeSuffix })
+  const reservedNames = collectImportTypeNames(schema, {
+    selfRef,
+    selfFilename: options?.selfFilename,
+    rootSchema,
+    typeSuffix,
+  })
   // The shape validator is generated first so the parser can compare it
   // against its own fast-path guard and call it instead of inlining a
   // duplicate of the check chain (see GenerateParserOptions.shapeValidatorSource).
@@ -189,7 +215,10 @@ export const generateFile = (
     options?.helpersImportPrefix,
     importExt,
   )
-  const imports = [...collectImports(schema, { selfRef, rootSchema, typeSuffix, importExt }), ...helpers.imports]
+  const imports = [
+    ...collectImports(schema, { selfRef, selfFilename: options?.selfFilename, rootSchema, typeSuffix, importExt }),
+    ...helpers.imports,
+  ]
 
   // Build file output using string concatenation instead of array join for performance
   let result = ''

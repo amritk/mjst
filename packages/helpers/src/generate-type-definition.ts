@@ -2,8 +2,15 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { getMjstBrand, getMjstInstanceOf, getMjstPrimitive } from './mjst-extension'
 import { refToName } from './ref-to-name'
+import { resolveRef } from './resolve-ref'
 import { safeKey } from './safe-accessor'
 import { isObjectSchema, isSchemaObject } from './schema-guards'
+
+/**
+ * Any schema that is not a boolean shorthand. Broader than `JSONSchema.Object`,
+ * which narrows `type` to `'object'` and so hides array keywords like `items`.
+ */
+type SchemaNode = Exclude<JSONSchema, boolean>
 
 type ConditionalObjectResult = {
   schema: JSONSchema.Object
@@ -19,6 +26,30 @@ export type TypeOptions = {
    * Defaults to `''` (no suffix). Set to e.g. `'Object'` to emit `ContactObject`.
    */
   readonly typeSuffix?: string
+  /**
+   * The root document, used to decide whether a URI `$ref` names a type the
+   * generator also emits a file for. Without it such refs stay `unknown` — the
+   * conservative reading, since an unresolvable ref has no generated file to
+   * name. Pass it whenever the caller also emits imports for those refs, so the
+   * type and the import agree.
+   */
+  readonly rootSchema?: Record<string, unknown>
+}
+
+/**
+ * The type name for a `$ref`, or `unknown` when no file is generated for it.
+ *
+ * Internal refs always name a generated type. A URI ref does too — but only
+ * when it resolves inside the root document, which is precisely the rule
+ * `collectImports` uses to decide whether to import it. Keeping the two in step
+ * is what stops a file from importing `Channel` while typing the property that
+ * uses it as `unknown`.
+ */
+const refTypeName = (ref: string, options: TypeOptions): string => {
+  if (ref.startsWith('#')) return refToName(ref, options.typeSuffix)
+  if (ref.includes('#/properties/')) return 'unknown'
+  if (options.rootSchema && resolveRef(ref, options.rootSchema)) return refToName(ref, options.typeSuffix)
+  return 'unknown'
 }
 
 const getConditionalObjectSchema = (schema: JSONSchema): ConditionalObjectResult | null => {
@@ -37,8 +68,10 @@ const getConditionalObjectSchema = (schema: JSONSchema): ConditionalObjectResult
     return null
   }
 
+  const ownProperties = schema.properties
   const ifProperties = ifSchema.properties
   const thenProperties = thenSchema.properties
+  const hasOwnProperties = ownProperties && typeof ownProperties === 'object'
   const hasIfProperties = ifProperties && typeof ifProperties === 'object'
   const hasThenProperties = thenProperties && typeof thenProperties === 'object'
 
@@ -46,12 +79,23 @@ const getConditionalObjectSchema = (schema: JSONSchema): ConditionalObjectResult
     return null
   }
 
+  // The conditional fragments are merged *onto* the schema's own properties —
+  // a schema is allowed to declare `properties` alongside `if`/`then`, and
+  // reading only the conditional halves silently dropped everything it declared
+  // unconditionally.
   const properties = {
+    ...(hasOwnProperties ? ownProperties : {}),
     ...(hasIfProperties ? ifProperties : {}),
     ...(hasThenProperties ? thenProperties : {}),
   }
 
   const required = new Set<string>()
+
+  if (Array.isArray(schema.required)) {
+    for (const key of schema.required) {
+      required.add(key)
+    }
+  }
 
   if (Array.isArray(ifSchema.required)) {
     for (const key of ifSchema.required) {
@@ -106,13 +150,22 @@ const getBooleanSubSchemaType = (schema: boolean): string => {
 }
 
 /**
+ * Neutralizes comment terminators inside schema-authored prose. A description
+ * holding a star-slash pair — a glob like `**\/*.ts`, a C-style code sample —
+ * would close the JSDoc block early and leave the rest of the generated file
+ * unparseable. Escaping the slash is the conventional fix: editors and TypeDoc
+ * still render the original text, but the comment can no longer end there.
+ */
+const escapeCommentText = (text: string): string => text.replace(/\*\//g, '*\\/')
+
+/**
  * Renders a possibly multi-line description as JSDoc body lines, prefixing each
  * line with `${indent}* `. Blank lines become a bare `${indent}*` so we never
  * emit trailing whitespace. Without this, embedded newlines would leave
  * continuation lines unprefixed and break the comment block.
  */
 const renderJsDocBody = (description: string, indent: string): string =>
-  description
+  escapeCommentText(description)
     .split('\n')
     .map((line) => (line.length > 0 ? `${indent}* ${line}\n` : `${indent}*\n`))
     .join('')
@@ -139,7 +192,7 @@ const buildJsDocBlock = (title: string, description: string, commentUrl?: string
  */
 const buildInlinePropertyComment = (description: string): string => {
   if (!description.includes('\n')) {
-    return `  /** ${description} */\n`
+    return `  /** ${escapeCommentText(description)} */\n`
   }
   return `  /**\n${renderJsDocBody(description, '   ')}   */\n`
 }
@@ -153,7 +206,42 @@ const buildInlinePropertyComment = (description: string): string => {
 const getTypeScriptType = (schema: JSONSchema, options: TypeOptions = {}): string => {
   const base = getUnbrandedType(schema, options)
   const brand = getMjstBrand(schema)
-  return brand ? `(${base} & { readonly __brand: '${brand}' })` : base
+  const branded = brand ? `(${base} & { readonly __brand: '${brand}' })` : base
+  // OpenAPI 3.0 spells nullability as a sibling flag instead of a `null` member
+  // of `type`. Without this widening the emitted type claims the value can never
+  // be null while the document says it can — and `generate-validators` builds an
+  // `input is T` predicate on top of a validator that *does* accept null, so the
+  // narrowing would be unsound.
+  return isNullableSchema(schema) ? withNull(branded) : branded
+}
+
+/** True for the OpenAPI 3.0 `nullable: true` widening (JSON Schema has no such keyword). */
+const isNullableSchema = (schema: JSONSchema): boolean =>
+  isSchemaObject(schema) && (schema as Record<string, unknown>)['nullable'] === true
+
+/** Parenthesizes a union so it composes safely inside `[]`, `&`, or an optional marker. */
+const wrapUnion = (type: string): string => (type.includes(' | ') ? `(${type})` : type)
+
+/** Appends `| null` unless the rendered type already admits null. */
+const withNull = (type: string): string => (type.split(' | ').includes('null') ? type : `${type} | null`)
+
+/** Joins members with ` | `, dropping duplicates while preserving order. */
+const unionOf = (members: readonly string[]): string => [...new Set(members)].join(' | ')
+
+/**
+ * Joins members with ` & `, dropping duplicates and any `unknown` member —
+ * `X & unknown` is just `X`, and composition keywords routinely contribute one
+ * (a `oneOf` branch that only lists `required`, say). Returns `unknown` when
+ * every member was dropped.
+ */
+const intersectionOf = (members: readonly string[]): string => {
+  const kept = [...new Set(members)].filter((member) => member !== 'unknown')
+  if (kept.length === 0) return 'unknown'
+  // `X & object` is `X` for any object type, and a schema that declares
+  // `type: 'object'` next to a `oneOf` contributes exactly that bare member.
+  const meaningful = kept.length > 1 ? kept.filter((member) => member !== 'object') : kept
+  if (meaningful.length === 0) return 'object'
+  return meaningful.join(' & ')
 }
 
 /** Wraps a `Record<...>` in `Readonly<...>` when readonly output is requested. */
@@ -194,6 +282,253 @@ const patternPropertiesRecordType = (
 }
 
 /**
+ * The tuple positions a schema declares: 2020-12 `prefixItems`, or the draft-07
+ * array form of `items`. Returns undefined for a plain (homogeneous) array.
+ */
+const getTuplePositions = (schema: SchemaNode): readonly JSONSchema[] | undefined => {
+  const record = schema as Record<string, unknown>
+  const prefixItems = record['prefixItems']
+  if (Array.isArray(prefixItems) && prefixItems.length > 0) return prefixItems as JSONSchema[]
+  if (Array.isArray(schema.items) && schema.items.length > 0) return schema.items as JSONSchema[]
+  return undefined
+}
+
+/**
+ * Renders a tuple type for a schema carrying `prefixItems` (or the draft-07
+ * array `items`). A position is only required when `minItems` reaches it — JSON
+ * Schema lets a tuple stop short unless told otherwise — so the rest are
+ * emitted optional. Extra elements past the declared positions are typed from
+ * the sibling `items` (`additionalItems` in the draft-07 spelling) and dropped
+ * entirely when that sibling is `false`.
+ */
+const tupleTypeToTs = (schema: SchemaNode, positions: readonly JSONSchema[], options: TypeOptions): string => {
+  const record = schema as Record<string, unknown>
+  // With the draft-07 spelling `items` *is* the tuple, so the rest schema is
+  // `additionalItems`; with `prefixItems` it is the sibling `items`.
+  const rest = Array.isArray(schema.items) ? record['additionalItems'] : record['items']
+  const minItems = typeof schema.minItems === 'number' ? schema.minItems : 0
+
+  const parts: string[] = []
+  for (let i = 0; i < positions.length; i++) {
+    const positionType = wrapUnion(getTypeScriptType(positions[i] as JSONSchema, options))
+    parts.push(i < minItems ? positionType : `${positionType}?`)
+  }
+
+  if (rest !== false) {
+    const restType =
+      rest === undefined || rest === true ? 'unknown' : wrapUnion(getTypeScriptType(rest as JSONSchema, options))
+    parts.push(`...${restType}[]`)
+  }
+
+  const tuple = `[${parts.join(', ')}]`
+  return options.readonly ? `readonly ${tuple}` : tuple
+}
+
+/** Renders the TypeScript type for an `array` schema — tuple, typed list, or bare list. */
+const arrayTypeToTs = (schema: SchemaNode, options: TypeOptions): string => {
+  const positions = getTuplePositions(schema)
+  if (positions) return tupleTypeToTs(schema, positions, options)
+
+  if (schema.items !== undefined && !Array.isArray(schema.items)) {
+    const itemType = getTypeScriptType(schema.items, options)
+    // Wrap union types in parentheses so `(A | B)[]` is not misread as `A | B[]`
+    const wrappedItemType = wrapUnion(itemType)
+    return options.readonly ? `readonly ${wrappedItemType}[]` : `${wrappedItemType}[]`
+  }
+  return options.readonly ? 'readonly unknown[]' : 'unknown[]'
+}
+
+/**
+ * The open-ended key signature a schema declares, or undefined when it declares
+ * none. Only a *schema-valued* `additionalProperties` counts: `true` is the JSON
+ * Schema default, so emitting `[key: string]: unknown` for it would widen nearly
+ * every generated type into uselessness, and `false` is a closed object.
+ */
+const getIndexSignature = (schema: SchemaNode, options: TypeOptions): { key: string; value: string } | undefined => {
+  const additionalProperties = schema.additionalProperties
+  if (additionalProperties !== undefined && typeof additionalProperties !== 'boolean') {
+    return { key: 'string', value: getTypeScriptType(additionalProperties, options) }
+  }
+
+  const patternProperties = schema.patternProperties
+  if (patternProperties && typeof patternProperties === 'object') {
+    const entries = Object.entries(patternProperties)
+    if (entries.length === 0) return undefined
+    const valueTypes = entries.map(([, value]) =>
+      typeof value === 'boolean' ? getBooleanSubSchemaType(value) : getTypeScriptType(value, options),
+    )
+    // The `^x-` vendor-extension convention maps to a template-literal key, but
+    // only when it is the single pattern (a union of key patterns can't be expressed).
+    const key = entries.length === 1 && entries[0]?.[0] === '^x-' ? '`x-${string}`' : 'string'
+    return { key, value: unionOf(valueTypes) }
+  }
+
+  return undefined
+}
+
+/**
+ * Renders the index-signature line to sit alongside declared properties.
+ *
+ * A `string` index must accept every declared property's type or TypeScript
+ * rejects the whole type (TS2411), so the signature is widened with them — and
+ * with `undefined` when any declared property is optional. A template-literal
+ * key (`` `x-${string}` ``) constrains a disjoint set of keys, so it needs no
+ * widening.
+ */
+const buildIndexSignatureLine = (
+  index: { key: string; value: string },
+  declaredTypes: readonly string[],
+  hasOptionalProperty: boolean,
+  options: TypeOptions,
+): string => {
+  const readonlyPrefix = options.readonly ? 'readonly ' : ''
+  if (index.key !== 'string') return `${readonlyPrefix}[key: ${index.key}]: ${index.value}`
+  const widened = unionOf([
+    ...index.value.split(' | '),
+    ...declaredTypes,
+    ...(hasOptionalProperty ? ['undefined'] : []),
+  ])
+  return `${readonlyPrefix}[key: string]: ${widened}`
+}
+
+/** The description (or `$comment` fallback) to emit as JSDoc above a property. */
+const propertyDescription = (propSchema: JSONSchema): string | undefined => {
+  if (!isSchemaObject(propSchema)) return undefined
+  if (typeof propSchema.description === 'string') return propSchema.description
+  if (typeof propSchema.$comment === 'string') return propSchema.$comment
+  return undefined
+}
+
+/**
+ * Renders an `object` schema: a property literal when it declares properties, a
+ * `Record`/index type when it only declares open-ended keys, else the bare
+ * `object`. Open-ended keys declared *alongside* properties become an index
+ * signature inside the literal rather than being dropped.
+ */
+const objectTypeToTs = (schema: SchemaNode, options: TypeOptions): string => {
+  const index = getIndexSignature(schema, options)
+
+  if (schema.properties && Object.keys(schema.properties).length > 0) {
+    const readonlyPrefix = options.readonly ? 'readonly ' : ''
+    // Build the required-key set once instead of an O(required) `includes`
+    // per property (O(properties × required) for a wide object).
+    const requiredSet = new Set<string>(Array.isArray(schema.required) ? schema.required : [])
+    const hasDescriptions = Object.values(schema.properties).some((p) => propertyDescription(p) !== undefined)
+
+    const declaredTypes: string[] = []
+    let hasOptionalProperty = false
+    // Entries are emitted ready to place: multi-line layout wants each
+    // declaration indented and `;`-terminated (with its JSDoc block already
+    // carrying its own indent), the compact one wants bare declarations.
+    const entries: string[] = []
+    for (const key in schema.properties) {
+      // schema.properties[key] is safe: key comes from iterating schema.properties
+      const propSchema = schema.properties[key] as JSONSchema
+      const isRequired = requiredSet.has(key)
+      const optional = isRequired ? '' : '?'
+      if (!isRequired) hasOptionalProperty = true
+      const propType = getTypeScriptType(propSchema, options)
+      declaredTypes.push(propType)
+      const declaration = readonlyPrefix + safeKey(key) + optional + ': ' + propType
+      if (!hasDescriptions) {
+        entries.push(declaration)
+        continue
+      }
+      const inlineDescription = propertyDescription(propSchema)
+      entries.push((inlineDescription ? buildInlinePropertyComment(inlineDescription) : '') + '  ' + declaration + ';')
+    }
+
+    if (index) {
+      const line = buildIndexSignatureLine(index, declaredTypes, hasOptionalProperty, options)
+      entries.push(hasDescriptions ? '  ' + line + ';' : line)
+    }
+
+    // Descriptions force the multi-line layout — an inline `/** … */` per
+    // property would otherwise run the whole literal together on one line.
+    if (hasDescriptions) return '{\n' + entries.join('\n') + '\n}'
+    return '{ ' + entries.join('; ') + ' }'
+  }
+
+  if (index) {
+    return index.key === 'string' && !options.readonly
+      ? recordType('string', index.value, options)
+      : recordType(index.key, index.value, options)
+  }
+
+  return 'object'
+}
+
+/**
+ * Renders the shape a schema declares *itself* — its `type`, or the record
+ * keywords it carries without one. Returns undefined when the schema declares
+ * no shape of its own (so composition keywords alone decide the type).
+ */
+const getLocalShapeType = (schema: SchemaNode, options: TypeOptions): string | undefined => {
+  // Object-like conditional schemas (`if`/`then`) describe one merged shape.
+  const conditionalResult = getConditionalObjectSchema(schema)
+  if (conditionalResult) {
+    const baseType = objectTypeToTs(conditionalResult.schema, options)
+    return conditionalResult.thenRef
+      ? `(${baseType}) & ${refToName(conditionalResult.thenRef, options.typeSuffix)}`
+      : baseType
+  }
+
+  if (!schema.type) {
+    const index = getIndexSignature(schema, options)
+    if (index) return objectTypeToTs(schema, options)
+
+    if (schema.additionalProperties !== undefined && typeof schema.additionalProperties === 'boolean') {
+      return recordType('string', getBooleanSubSchemaType(schema.additionalProperties), options)
+    }
+
+    if (schema.properties && Object.keys(schema.properties).length > 0) return objectTypeToTs(schema, options)
+
+    if (schema.default !== undefined) {
+      if (typeof schema.default === 'string') return 'string'
+      if (typeof schema.default === 'number') return 'number'
+      if (typeof schema.default === 'boolean') return 'boolean'
+    }
+
+    return undefined
+  }
+
+  // Array-form `type` (the multi-type / nullable idiom, e.g. `["object","null"]`)
+  // is a union of the per-type renderings. Each member is rendered from the SAME
+  // schema, so a nullable object keeps its properties and a nullable array keeps
+  // its item type instead of collapsing to `Record<string, unknown>` / `unknown[]`.
+  if (Array.isArray(schema.type)) {
+    return unionOf(schema.type.map((type) => singleTypeToTs(schema, type, options)))
+  }
+
+  return singleTypeToTs(schema, schema.type, options)
+}
+
+/** Renders one JSON Schema `type` value against the schema that declared it. */
+const singleTypeToTs = (schema: SchemaNode, type: JSONSchema.TypeValue, options: TypeOptions): string => {
+  switch (type) {
+    case 'string':
+      return 'string'
+    case 'number':
+    case 'integer':
+      return 'number'
+    case 'boolean':
+      return 'boolean'
+    case 'null':
+      return 'null'
+    case 'array':
+      return arrayTypeToTs(schema, options)
+    case 'object': {
+      const rendered = objectTypeToTs(schema, options)
+      // A shapeless object inside a union reads better as an indexable record
+      // than as the bare `object`, which cannot be indexed at all.
+      return rendered === 'object' && Array.isArray(schema.type) ? recordType('string', 'unknown', options) : rendered
+    }
+    default:
+      return 'unknown'
+  }
+}
+
+/**
  * Converts a JSON Schema type to its TypeScript equivalent, ignoring any brand.
  * Recursively handles nested objects and arrays.
  */
@@ -224,11 +559,7 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string
 
   // Handle $ref
   if (schema.$ref) {
-    // External refs (e.g. http://json-schema.org/...) cannot be resolved locally — treat as unknown
-    if (!schema.$ref.startsWith('#')) {
-      return 'unknown'
-    }
-    return refToName(schema.$ref, options.typeSuffix)
+    return refTypeName(schema.$ref, options)
   }
 
   // Handle $dynamicRef (used for recursive schemas)
@@ -247,210 +578,68 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string
 
   // Handle enum - union of literal types
   if (schema.enum && schema.enum.length > 0) {
-    if (schema.enum.length === 1) {
-      return JSON.stringify(schema.enum[0])
-    }
-    let enumUnion = JSON.stringify(schema.enum[0])
-    for (let i = 1; i < schema.enum.length; i++) {
-      enumUnion += ' | ' + JSON.stringify(schema.enum[i])
-    }
-    return enumUnion
+    return unionOf(schema.enum.map((value) => JSON.stringify(value)))
   }
 
-  // Handle union types (oneOf, anyOf) - check this before returning unknown
-  if (schema.oneOf && Array.isArray(schema.oneOf) && schema.oneOf.length > 0) {
-    // schema.oneOf[0] is safe: we guard with .length > 0 above
-    let oneOfUnion = getTypeScriptType(schema.oneOf[0]!, options)
-    for (let i = 1; i < schema.oneOf.length; i++) {
-      oneOfUnion += ' | ' + getTypeScriptType(schema.oneOf[i]!, options)
-    }
-    return oneOfUnion
-  }
-  if (schema.anyOf && Array.isArray(schema.anyOf) && schema.anyOf.length > 0) {
-    // schema.anyOf[0] is safe: we guard with .length > 0 above
-    let anyOfUnion = getTypeScriptType(schema.anyOf[0]!, options)
-    for (let i = 1; i < schema.anyOf.length; i++) {
-      anyOfUnion += ' | ' + getTypeScriptType(schema.anyOf[i]!, options)
-    }
-    return anyOfUnion
+  // A schema may declare a shape of its own *and* compose others. Returning
+  // either alone silently drops half of what the document says, so the local
+  // shape, the `oneOf`/`anyOf` union, and every `allOf` member are combined into
+  // one intersection.
+  const members: string[] = []
+  const localType = getLocalShapeType(schema, options)
+  if (localType !== undefined) members.push(localType)
+
+  if (Array.isArray(schema.allOf)) {
+    for (const entry of schema.allOf) members.push(wrapUnion(getTypeScriptType(entry, options)))
   }
 
-  // Handle allOf (intersection types)
-  if (schema.allOf && Array.isArray(schema.allOf) && schema.allOf.length > 0) {
-    // schema.allOf[0] is safe: we guard with .length > 0 above
-    let intersectionTypes = getTypeScriptType(schema.allOf[0]!, options)
-    for (let i = 1; i < schema.allOf.length; i++) {
-      intersectionTypes += ' & ' + getTypeScriptType(schema.allOf[i]!, options)
-    }
-    return intersectionTypes
+  const branches = Array.isArray(schema.oneOf) && schema.oneOf.length > 0 ? schema.oneOf : undefined
+  const anyBranches = Array.isArray(schema.anyOf) && schema.anyOf.length > 0 ? schema.anyOf : undefined
+  const unionBranches = branches ?? anyBranches
+  if (unionBranches) {
+    const union = unionOf(unionBranches.map((branch) => getTypeScriptType(branch, options)))
+    // A lone union is the whole type; alongside other members it is one factor
+    // of an intersection and needs its own parentheses.
+    if (members.length === 0 && !Array.isArray(schema.allOf)) return union
+    members.push(wrapUnion(union))
   }
 
-  // Handle object-like conditional schemas that use if/then without declaring type
-  const conditionalResult = getConditionalObjectSchema(schema)
-  if (conditionalResult) {
-    const baseType = getTypeScriptType(conditionalResult.schema, options)
-    if (conditionalResult.thenRef) {
-      return `(${baseType}) & ${refToName(conditionalResult.thenRef, options.typeSuffix)}`
-    }
-    return baseType
+  if (members.length === 0) return 'unknown'
+  return intersectionOf(members)
+}
+
+/**
+ * The types a schema composes alongside its own property block: every `allOf`
+ * member, a sibling `$ref` (2019-09+ allows one next to other keywords), and a
+ * sibling `oneOf`/`anyOf` union. Each is intersected onto the body — an `allOf`
+ * member written inline rather than as a `$ref` used to be dropped outright,
+ * taking its properties and its `required` list with it.
+ */
+const getCompositionMembers = (schema: JSONSchema, options: TypeOptions): string[] => {
+  if (!isSchemaObject(schema)) return []
+  const members: string[] = []
+
+  if (Array.isArray(schema.allOf)) {
+    for (const entry of schema.allOf) members.push(wrapUnion(getTypeScriptType(entry, options)))
   }
 
-  // No type so we return unknown
-  if (!schema.type) {
-    if (schema.additionalProperties !== undefined) {
-      if (typeof schema.additionalProperties === 'boolean') {
-        return recordType('string', getBooleanSubSchemaType(schema.additionalProperties), options)
-      }
-      return recordType('string', getTypeScriptType(schema.additionalProperties, options), options)
-    }
-
-    if (schema.patternProperties && typeof schema.patternProperties === 'object') {
-      const record = patternPropertiesRecordType(schema.patternProperties, options)
-      if (record !== undefined) return record
-    }
-
-    if (schema.default !== undefined) {
-      if (typeof schema.default === 'string') {
-        return 'string'
-      }
-      if (typeof schema.default === 'number') {
-        return 'number'
-      }
-      if (typeof schema.default === 'boolean') {
-        return 'boolean'
-      }
-    }
-
-    return 'unknown'
+  if (typeof schema.$ref === 'string') {
+    members.push(refTypeName(schema.$ref, options))
   }
 
-  // Handle type as an array (union of types)
-  if (Array.isArray(schema.type)) {
-    const mapType = (t: string): string => {
-      switch (t) {
-        case 'string':
-          return 'string'
-        case 'number':
-        case 'integer':
-          return 'number'
-        case 'boolean':
-          return 'boolean'
-        case 'null':
-          return 'null'
-        case 'array':
-          return 'unknown[]'
-        case 'object':
-          return 'Record<string, unknown>'
-        default:
-          return 'unknown'
-      }
-    }
-    let typeUnion = mapType(schema.type[0])
-    for (let i = 1; i < schema.type.length; i++) {
-      typeUnion += ' | ' + mapType(schema.type[i])
-    }
-    return typeUnion
+  const unionBranches =
+    Array.isArray(schema.oneOf) && schema.oneOf.length > 0
+      ? schema.oneOf
+      : Array.isArray(schema.anyOf) && schema.anyOf.length > 0
+        ? schema.anyOf
+        : undefined
+  if (unionBranches) {
+    members.push(wrapUnion(unionOf(unionBranches.map((branch) => getTypeScriptType(branch, options)))))
   }
 
-  switch (schema.type) {
-    // String
-    case 'string':
-      return 'string'
-
-    // Number
-    case 'number':
-    case 'integer':
-      return 'number'
-
-    // Boolean
-    case 'boolean':
-      return 'boolean'
-
-    // Array
-    case 'array':
-      if (schema.items) {
-        const itemType = getTypeScriptType(schema.items, options)
-        // Wrap union types in parentheses so `(A | B)[]` is not misread as `A | B[]`
-        const wrappedItemType = itemType.includes(' | ') ? `(${itemType})` : itemType
-        return options.readonly ? `readonly ${wrappedItemType}[]` : `${wrappedItemType}[]`
-      }
-      return options.readonly ? 'readonly unknown[]' : 'unknown[]'
-
-    // Object
-    case 'object':
-      if (schema.properties) {
-        const readonlyPrefix = options.readonly ? 'readonly ' : ''
-        // Build the required-key set once instead of an O(required) `includes`
-        // per property (O(properties × required) for a wide object).
-        const requiredSet = new Set<string>(Array.isArray(schema.required) ? schema.required : [])
-        const hasDescriptions = Object.values(schema.properties).some(
-          (p) => isSchemaObject(p) && (typeof p.description === 'string' || typeof p.$comment === 'string'),
-        )
-
-        if (hasDescriptions) {
-          let properties = ''
-          let first = true
-          for (const key in schema.properties) {
-            // schema.properties[key] is safe: key comes from iterating schema.properties
-            const propSchema = schema.properties[key]!
-            const isRequired = requiredSet.has(key)
-            const optional = isRequired ? '' : '?'
-            const propType = getTypeScriptType(propSchema, options)
-            const inlineDescription =
-              isSchemaObject(propSchema) && typeof propSchema.description === 'string'
-                ? propSchema.description
-                : isSchemaObject(propSchema) && typeof propSchema.$comment === 'string'
-                  ? propSchema.$comment
-                  : undefined
-            if (!first) properties += '\n'
-            first = false
-            if (inlineDescription) {
-              properties +=
-                buildInlinePropertyComment(inlineDescription) +
-                '  ' +
-                readonlyPrefix +
-                safeKey(key) +
-                optional +
-                ': ' +
-                propType +
-                ';'
-            } else {
-              properties += '  ' + readonlyPrefix + safeKey(key) + optional + ': ' + propType + ';'
-            }
-          }
-          return '{\n' + properties + '\n}'
-        }
-
-        let properties = ''
-        let first = true
-        for (const key in schema.properties) {
-          // schema.properties[key] is safe: key comes from iterating schema.properties
-          const propSchema = schema.properties[key]!
-          const isRequired = requiredSet.has(key)
-          const optional = isRequired ? '' : '?'
-          const propType = getTypeScriptType(propSchema, options)
-          if (!first) properties += '; '
-          properties += readonlyPrefix + safeKey(key) + optional + ': ' + propType
-          first = false
-        }
-        return '{ ' + properties + ' }'
-      }
-      // Handle additionalProperties with $ref or $dynamicRef
-      if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
-        const additionalPropType = getTypeScriptType(schema.additionalProperties, options)
-        return recordType('string', additionalPropType, options)
-      }
-      // Handle patternProperties as a Record type
-      if (schema.patternProperties && typeof schema.patternProperties === 'object') {
-        const record = patternPropertiesRecordType(schema.patternProperties, options)
-        if (record !== undefined) return record
-      }
-      return 'object'
-
-    // Default to unknown
-    default:
-      return 'unknown'
-  }
+  // `X & unknown` is `X`: a branch that only lists `required`, or a ref with no
+  // generated file, contributes nothing and would just add noise.
+  return [...new Set(members)].filter((member) => member !== 'unknown')
 }
 
 /**
@@ -461,8 +650,10 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string
 export const generateTypeDefinition = (schema: JSONSchema, typeName: string, options: TypeOptions = {}): string => {
   const readonlyPrefix = options.readonly ? 'readonly ' : ''
 
-  // Handle non-object schemas first
-  if (!isObjectLikeSchema(schema)) {
+  // Handle non-object schemas first. An array-form `type` goes here too: it is a
+  // union (`{ … } | null`), not a single object body, so it cannot be emitted as
+  // a property block even when one of its members is an object.
+  if (!isObjectLikeSchema(schema) || (isSchemaObject(schema) && Array.isArray(schema.type))) {
     const tsType = getTypeScriptType(schema, options)
     let result = ''
 
@@ -531,48 +722,40 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
 
     const schemaProps = normalizedSchema.properties ?? {}
     const requiredSet = new Set<string>(Array.isArray(normalizedSchema.required) ? normalizedSchema.required : [])
+    const declaredTypes: string[] = []
+    let hasOptionalProperty = false
     let properties = ''
     let isFirstProp = true
+    const appendLine = (line: string): void => {
+      if (!isFirstProp) properties += '\n'
+      isFirstProp = false
+      properties += line
+    }
     for (const key in schemaProps) {
       // schemaProps[key] is safe: key comes from iterating schemaProps
       const propSchema = schemaProps[key]!
       const isRequired = requiredSet.has(key)
       const optional = isRequired ? '' : '?'
+      if (!isRequired) hasOptionalProperty = true
       const propType = getTypeScriptType(propSchema, options)
+      declaredTypes.push(propType)
       const quotedKey = readonlyPrefix + safeKey(key)
 
-      if (!isFirstProp) properties += '\n'
-      isFirstProp = false
-
       // Add JSDoc comment from $comment or description if available
-      const inlineDescription =
-        isSchemaObject(propSchema) && typeof propSchema.description === 'string'
-          ? propSchema.description
-          : isSchemaObject(propSchema) && typeof propSchema.$comment === 'string'
-            ? propSchema.$comment
-            : undefined
-      if (inlineDescription) {
-        properties +=
-          buildInlinePropertyComment(inlineDescription) + '  ' + quotedKey + optional + ': ' + propType + ';'
-      } else {
-        properties += '  ' + quotedKey + optional + ': ' + propType + ';'
-      }
+      const inlineDescription = propertyDescription(propSchema)
+      appendLine(
+        inlineDescription
+          ? buildInlinePropertyComment(inlineDescription) + '  ' + quotedKey + optional + ': ' + propType + ';'
+          : '  ' + quotedKey + optional + ': ' + propType + ';',
+      )
     }
 
-    // Collect allOf $ref intersections
-    const allOfIntersections: string[] = []
-    if (isSchemaObject(schema) && Array.isArray(schema.allOf)) {
-      for (const entry of schema.allOf) {
-        if (isSchemaObject(entry) && entry.$ref) {
-          allOfIntersections.push(refToName(entry.$ref, options.typeSuffix))
-        }
-      }
-    }
-
-    // JSON Schema 2019-09+ allows $ref as a sibling to other keywords.
-    // Treat it as an additional intersection type (e.g. for specification-extensions).
-    if (isSchemaObject(schema) && typeof schema.$ref === 'string' && schema.$ref.startsWith('#')) {
-      allOfIntersections.push(refToName(schema.$ref, options.typeSuffix))
+    // Open-ended keys declared alongside fixed properties become an index
+    // signature inside the same body — dropping them used to erase everything a
+    // schema said about the keys it does not name.
+    const index = getIndexSignature(normalizedSchema, options)
+    if (index) {
+      appendLine('  ' + buildIndexSignatureLine(index, declaredTypes, hasOptionalProperty, options) + ';')
     }
 
     let result = ''
@@ -580,15 +763,17 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
       result += buildJsDocBlock(jsDocTitle, jsDocDescription)
     }
 
-    let typeBody = '{\n' + properties + '\n}'
+    let typeBody = properties === '' ? '{}' : '{\n' + properties + '\n}'
 
     if (conditionalThenRef) {
       typeBody += ' & ' + refToName(conditionalThenRef, options.typeSuffix)
     }
 
-    for (const intersectionType of allOfIntersections) {
+    for (const intersectionType of getCompositionMembers(schema, options)) {
       typeBody += ' & ' + intersectionType
     }
+
+    if (isNullableSchema(schema)) typeBody = withNull(typeBody)
 
     result += 'export type ' + typeName + ' = ' + typeBody + ';'
 

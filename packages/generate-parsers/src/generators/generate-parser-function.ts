@@ -31,6 +31,7 @@ import {
   generateObjectKeywordChecks,
   generateObjectStrictAssertion,
   generateScalarStrictAssertion,
+  inlineAllOfMembers,
 } from './generate-strict-assertion'
 import {
   canEnforceUnion,
@@ -460,7 +461,19 @@ const generateFallbackObject = (
       if (fallbackValue === 'undefined') {
         return `{} as ${typeName}`
       }
-      requiredProps.push(`        ${safeLiteralKey(key)}: ${fallbackValue},`)
+      // A default built for a *composed* property (or the bare `{}` we fall back
+      // to when there is nothing better) is only ever a partial instance: an
+      // `allOf` contributes required members this literal does not carry, and
+      // the emitted parser then fails to compile. Assert it to the property's
+      // own type — an object literal is always allowed to become one of these.
+      const partialFallback =
+        fallbackValue === '{}' ||
+        (isSchemaObject(propSchema) && (hasAllOf(propSchema) || hasOneOf(propSchema) || hasAnyOf(propSchema)))
+      requiredProps.push(
+        `        ${safeLiteralKey(key)}: ${
+          partialFallback ? `${fallbackValue} as NonNullable<${typeName}>[${JSON.stringify(key)}]` : fallbackValue
+        },`,
+      )
     }
   }
 
@@ -755,7 +768,7 @@ const generateNonObjectParser = (
         reserved,
       )
       const preamble = [
-        `type ${itemName} = ${typeName}[number];`,
+        `type ${itemName} = NonNullable<${typeName}>[number];`,
         itemShapeValidator,
         generateObjectParser(
           items,
@@ -776,7 +789,13 @@ const generateNonObjectParser = (
     }
   }
 
-  if (!isSchemaObject(schema) || !hasType(schema)) {
+  // `hasType` is false for an array-form `type` (`["string","null"]`), which used
+  // to drop a root multi-type schema straight to a bare cast — a *strict* parser
+  // that asserted nothing. Let it through so the strict assertion below runs; the
+  // coercing switch further down still falls through to the cast, matching the
+  // "nothing safe to coerce to" behaviour for a disjunction.
+  const isMultiType = isSchemaObject(schema) && Array.isArray(schema.type)
+  if (!isSchemaObject(schema) || (!hasType(schema) && !isMultiType)) {
     // Schema without type information cannot be validated beyond a cast
     return `export const ${functionName} = (input: unknown): ${typeName} => input as ${typeName};`
   }
@@ -790,8 +809,13 @@ const generateNonObjectParser = (
     if (assertion === null) {
       return `export const ${functionName} = (input: unknown): ${typeName} => input as ${typeName};`
     }
-    const returnExpr =
-      schema.type === 'array' ? `[...(input as readonly unknown[])] as ${typeName}` : `input as ${typeName}`
+    // A tuple type (`prefixItems`) is not assignable from `unknown[]` — TS
+    // rejects the direct assertion (TS2352) — so the copy is widened through
+    // `unknown` first. Plain arrays keep the direct, checkable cast.
+    const arrayCast = getPrefixItems(schema)
+      ? `[...(input as readonly unknown[])] as unknown as ${typeName}`
+      : `[...(input as readonly unknown[])] as ${typeName}`
+    const returnExpr = !isMultiType && schema.type === 'array' ? arrayCast : `input as ${typeName}`
     return `export const ${functionName} = (input: unknown): ${typeName} => {\n${assertion}\n  return ${returnExpr};\n};`
   }
 
@@ -818,7 +842,10 @@ const generateNonObjectParser = (
           undefined,
           unionCtx?.caseInsensitive,
         )
-        return `export const ${functionName} = (input: unknown): ${typeName} => Array.isArray(input) ? ${mapped} as ${typeName} : [] as ${typeName};`
+        // Both branches go through `unknown`: the mapped copy and the empty
+        // fallback are plain arrays, and a tuple type accepts neither directly
+        // (an empty literal is missing every position `minItems` made required).
+        return `export const ${functionName} = (input: unknown): ${typeName} => Array.isArray(input) ? ${mapped} as unknown as ${typeName} : [] as unknown as ${typeName};`
       }
       // Coerce each element when the item schema is a single scalar type or an enum.
       if (hasItems(schema) && !Array.isArray(schema.items) && isCoercibleItemSchema(schema.items)) {
@@ -1069,7 +1096,10 @@ const generateObjectParser = (
 
   for (const [key, subName] of subTypeNames) {
     const propSchema = schemaProps[key] as JSONSchema
-    preamble.push(`type ${subName} = ${typeName}[${JSON.stringify(key)}];`)
+    // `NonNullable` on the *parent*: this generator recurses, so `typeName` is
+    // often itself a sub-alias of an optional (or nullable) property and
+    // carries `| undefined`, which cannot be indexed (TS2339).
+    preamble.push(`type ${subName} = NonNullable<${typeName}>[${JSON.stringify(key)}];`)
     const subShapeValidator = generateShapeValidator(
       propSchema,
       subName,
@@ -1101,8 +1131,10 @@ const generateObjectParser = (
   for (const [key, subName] of subItemNames) {
     const propSchema = schemaProps[key] as JSONSchema
     const itemSchema = (propSchema as { items: JSONSchema }).items
-    // NonNullable strips the `| undefined` an optional array property carries.
-    preamble.push(`type ${subName} = NonNullable<${typeName}[${JSON.stringify(key)}]>[number];`)
+    // The inner `NonNullable` strips the `| undefined` an optional array property
+    // carries; the outer one lets the parent be indexed at all when it is itself
+    // the alias of an optional property (see the object branch above).
+    preamble.push(`type ${subName} = NonNullable<NonNullable<${typeName}>[${JSON.stringify(key)}]>[number];`)
     const itemShapeValidator = generateShapeValidator(
       itemSchema,
       subName,
@@ -1194,7 +1226,12 @@ const generateObjectParser = (
   // actually runs them; returning `{ ...input }` on a bare shape match would skip
   // the enforcement. (A property-level blocker like `contains` is already caught
   // per-property by generatePropertyTypeCheck returning null.)
-  let canFastPath = !hasAllOfRefParsers && !hasFastPathBlockingKeyword(schema)
+  // Inline (non-$ref) `allOf` members are enforced only by the strict assertion
+  // block, which the fast path jumps over — so a strict parser must not take it
+  // when any are present, or the member's own `required`/type checks never run.
+  // Coerce parsers have nothing to skip, so they keep the fast path.
+  let canFastPath =
+    !hasAllOfRefParsers && !hasFastPathBlockingKeyword(schema) && !(strict && inlineAllOfMembers(schema).length > 0)
   const fastPathChecks: string[] = []
   // The same checks rebuilt against `input.x` accessors instead of the cached
   // vars — the exact form generateShapeValidator emits. Rendering a predicate

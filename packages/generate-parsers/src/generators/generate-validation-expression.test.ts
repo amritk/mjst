@@ -294,7 +294,7 @@ describe('generate-validation-expression', () => {
     }
     const result = generateValidationExpression('shape', schema, '{}', true)
 
-    expect(result).toContain('input?.shape?.type')
+    expect(result).toContain('(input?.shape as Record<string, unknown> | null | undefined)?.["type"]')
   })
 
   it('generates anyOf validation without discriminator', () => {
@@ -328,7 +328,7 @@ describe('generate-validation-expression', () => {
     }
     const result = generateValidationExpression('data', schema, '{}', true)
 
-    expect(result).toContain('input?.data?.kind')
+    expect(result).toContain('(input?.data as Record<string, unknown> | null | undefined)?.["kind"]')
   })
 
   it('generates allOf validation', () => {

@@ -151,7 +151,9 @@ The generator handles:
 - `$ref` and `$dynamicRef` resolution, including JSON Schema 2020-12 `$dynamicAnchor`
 - Discriminated and non-discriminated unions (`oneOf` / `anyOf`)
 - Enums and `const` values
-- Nested objects, arrays, records, and tuples
+- Nested objects, arrays, records, and tuples (`prefixItems`, and the draft-07 array form of `items`)
+- Multi-type schemas (`type: ["string", "null"]`) and the OpenAPI 3.0 `nullable: true` spelling
+- Composition alongside a declared shape — `allOf` members and sibling unions are intersected into the type, not dropped
 - Pattern-based default values
 
 ---
