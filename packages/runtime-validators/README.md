@@ -152,7 +152,7 @@ What keeps the interpreter lean:
 - **No allocation on the happy path.** The error array is created only when the first error is recorded, so valid input (and the entire guard path) allocates nothing.
 - **A `WeakMap` cache** keyed by schema object, so `validate(sameSchema)` hands back the same validator (with its warm caches) per `(mode, formats)`.
 
-> Benchmarks live in [`bench/`](./bench) and run a correctness parity check against Ajv on every case. Correctness is further locked down by [`src/differential.test.ts`](./src/differential.test.ts), a differential fuzz that compares the interpreter's verdict against Ajv's across ~144k random and mutated values (zero divergences) — so "fast" never comes at the cost of "correct".
+> Benchmarks live in [`bench/`](./bench) and run a correctness parity check against Ajv on every case. Correctness is further locked down by [`src/differential.test.ts`](./src/differential.test.ts), a differential fuzz that compares the interpreter's verdict against Ajv's across ~240k random and mutated values (20 schema shapes × 12k values, zero divergences) — so "fast" never comes at the cost of "correct".
 
 ---
 
@@ -166,6 +166,7 @@ Builds an error-collecting validator that interprets the schema on the fly.
 |:---|:---|:---|
 | `schema` | `unknown` | A JSON Schema (object, or a boolean schema). Local `$ref`s into the same document are resolved, including recursion. |
 | `options.formats` | `'all' \| string[]` | String formats to enforce. Unlisted formats are treated as annotations (not validated), matching Ajv's opt-in behavior. |
+| `options.limits` | `ValidateLimits` | Per-validation resource ceilings — see [Resource limits](#resource-limits). |
 
 Returns a `Validator`: `(input: unknown) => true | { valid: false; errors: ValidationError[] }`. When the schema is written `as const`, the validator carries the inferred output type — recover it with `Infer`.
 
@@ -176,6 +177,36 @@ Builds a boolean type guard `(input: unknown) => input is T`. Same options as `v
 ### `assert(schema, value, options?)`
 
 Validates `value` against the schema in a single call and returns it typed to the schema, or throws a `ValidationFailedError` when it does not match — a plain `Error` (so `instanceof Error` and logging work) whose message lists each failure and whose `errors` property carries the same `ValidationError[]` that `validate` collects. Same `options` as `validate`. Reach for it when invalid input is exceptional and you would rather parse-or-throw than branch on a result. When the schema is written `as const` (or inferred via the `const` parameter), the return type is inferred from it.
+
+### Resource limits
+
+The interpreter walks arbitrary — and possibly untrusted — schemas over
+arbitrary data, so three unbounded costs carry a ceiling. Every default is
+generous enough that ordinary schemas and documents never approach it, and each
+is tunable per call via `options.limits`:
+
+| Limit | Default | Guards against |
+|:---|---:|:---|
+| `maxDepth` | `512` | Deeply-nested data against a recursive schema (`{ items: { $ref: '#' } }`) overflowing the native stack as an uncatchable `RangeError`. |
+| `maxSteps` | `10_000_000` | Exponential combinator blow-up (nested `anyOf`/`oneOf` re-evaluating every branch) and quadratic `uniqueItems`. |
+| `allowUnsafePatterns` | `false` | ReDoS: a `pattern` with nested unbounded quantifiers (`(a+)+$`) is screened out before a validator is built. Set `true` only when every schema is trusted. |
+
+Exceeding a runtime ceiling **throws** rather than silently returning a verdict —
+the same fail-loud contract as an unresolvable `$ref` or an unknown `type`. The
+thrown value is a plain `Error` with a recognizable `name`; use
+`isValidationLimitError(error)` to tell it apart from an ordinary throw.
+
+```ts
+import { isValidationLimitError, validate } from '@amritk/runtime-validators'
+
+const isValid = validate(untrustedSchema, { limits: { maxSteps: 100_000 } })
+try {
+  isValid(payload)
+} catch (error) {
+  if (isValidationLimitError(error)) return reject('schema too expensive')
+  throw error
+}
+```
 
 ### `FromSchema<Schema>` and `Infer<Validator>`
 

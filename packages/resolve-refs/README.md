@@ -91,9 +91,11 @@ full spec:
 
 ## Documents
 
-Every document — local file or remote — is parsed as **JSON**. mjst works with
-JSON Schema documents only, so this resolver stays JSON-only and dependency-free.
-(The Loupe linter's sibling resolver additionally accepts YAML.)
+Every document — local file or remote — is parsed as **JSON** by default, so the
+resolver stays dependency-free. Other formats plug in through the `parse` option:
+`mjst lint` passes a YAML-aware parser there, which is how a `.lint.yaml`
+document's cross-file `$ref`s resolve without this package depending on a YAML
+parser.
 
 ## Benchmarks
 

@@ -75,18 +75,32 @@ Write them to disk however you like.
 
 ## API
 
-### `buildSchema(rootSchema, rootTypeName, extensions?, typesOnly?, logWarnings?, strict?)`
+### `buildSchema(rootSchema, rootTypeName, …options)`
 
-| Parameter | Type | Description |
-|:---|:---|:---|
-| `rootSchema` | `JSONSchema` | The root schema to traverse. `$ref` and `$dynamicRef` are resolved recursively. |
-| `rootTypeName` | `string` | Name used for the root type (e.g. `"Document"`). |
-| `extensions` | `SchemaExtensions` _(optional)_ | Map of definition name → extra optional properties to merge in before generation. |
-| `typesOnly` | `boolean` _(optional)_ | When `true`, only emit `.ts` type definitions — skip parser functions and runtime helpers. |
-| `logWarnings` | `boolean` _(optional)_ | When `true`, generated parsers emit a `console.warn` for every input key not declared in the schema's properties. |
-| `strict` | `boolean` _(optional)_ | When `true`, generated parsers throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. |
+Every option after the first two is **positional** — pass them in this order:
+
+| # | Parameter | Type | Default | Description |
+|--:|:---|:---|:---|:---|
+| 1 | `rootSchema` | `JSONSchema` | — | The root schema to traverse. `$ref` and `$dynamicRef` are resolved recursively. |
+| 2 | `rootTypeName` | `string` | — | Name used for the root type (e.g. `"Document"`). |
+| 3 | `extensions` | `SchemaExtensions` | — | Map of definition name → extra optional properties to merge in before generation. |
+| 4 | `typesOnly` | `boolean` | — | Only emit `.ts` type definitions — skip parser functions and runtime helpers. |
+| 5 | `logWarnings` | `boolean` | — | Generated parsers emit a `console.warn` for every input key not declared in the schema's properties. |
+| 6 | `strict` | `boolean` | — | Generated parsers throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. |
+| 7 | `helpersMode` | `'package' \| 'embedded'` | `'package'` | `'package'` imports runtime helpers from `@amritk/helpers`; `'embedded'` emits them alongside the output so it is self-contained. |
+| 8 | `helpersImportPrefix` | `string` | `'./'` | Prefix the generated files use when importing embedded helpers. |
+| 9 | `readonly` | `boolean` | `false` | Emit every property, array, and record in the type definitions as `readonly`. |
+| 10 | `stripUnknown` | `boolean` | `false` | Build each result from the declared properties only, dropping undeclared input keys at every level (zod's `.strip()`). |
+| 11 | `typeSuffix` | `string` | `''` | Suffix appended to every `$ref`-derived type name (`'Object'` turns `Contact` into `ContactObject`). The root type name is unaffected. |
+| 12 | `importExt` | `'js' \| 'ts'` | `'js'` | Extension emitted on relative import specifiers. `'js'` is the NodeNext form for output you compile; `'ts'` emits the literal on-disk paths so the sources run unbuilt. |
+| 13 | `caseInsensitive` | `boolean` | `false` | Normalize a mis-cased string to the exact casing of an enum/const member it matches case-insensitively. Coerce mode only. |
 
 Returns: `Promise<GeneratedFile[]>`.
+
+> [!NOTE]
+> `importExt` defaults to `'js'` here, whereas the [`mjst` CLI](../cli) defaults it to
+> `'ts'`. The example above therefore emits `./info.js` specifiers; pass `'ts'` for
+> output meant to run without a build step.
 
 ---
 

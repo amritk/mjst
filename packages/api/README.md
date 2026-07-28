@@ -862,6 +862,43 @@ const sessionId = await cookies.unsign(parsedCookie) // undefined if tampered
 // Rotate by unsigning against the current secret first, then older ones.
 ```
 
+### Framework-parity helpers
+
+The gates and decorators above are the security half of what a batteries-included
+framework ships. The rest is here too, each one composing through an existing
+seam (`mounts`, `onRequest`/`onResponse`, `locals`, the raw reply) rather than
+changing the request pipeline — so nothing costs anything until you wire it in:
+
+| Export | What it does | Seam |
+|:--|:--|:--|
+| `createDocs(options?)` · `docsHtml(options?)` | Interactive Scalar API reference page next to `openapi.json`. The bundle loads from a CDN at view time — pin or self-host it via `cdn` under a strict CSP. `docsHtml` returns the markup alone for apps that serve their own page. | `mounts` |
+| `createHealth(options?)` | Health/readiness endpoint. Runs every probe concurrently and answers `200 {status:'ok'}` or `503 {status:'error'}` listing which are down — a throwing probe counts as down. Omit `checks` for a bare liveness endpoint. | `mounts` |
+| `createETag(options?)` | Strong entity tags plus conditional-GET: hashes a safe-method `200` body, sets `ETag`, and answers `304` on a matching `if-none-match`. Buffers the body to hash it, so it is opt-in and never touches a streaming reply. | `onResponse` |
+| `createCompression(options?)` | gzip/deflate over the platform `CompressionStream` — negotiates `accept-encoding` with RFC 9110 `q`-weights, sets `content-encoding`, drops the stale `content-length`, and appends to `vary`. | `onResponse` |
+| `createRequestId(options?)` · `getRequestId(locals)` | Correlation ids: adopt a trusted inbound header or generate one, write it to `locals` for handlers/`observe`, and echo it on the response. | `onRequest` + `onResponse` |
+| `versionRoutes(prefix, routes)` | URI-prefix versioning (`/v1`, `/v2`) — returns copies of the contracts with the prefix prepended to each `path`, so the prefix flows into OpenAPI and typed clients too. | route list |
+| `withTimeout(ms, handler, onTimeout)` | Wall-clock deadline on one handler; past `ms`, `onTimeout` produces the reply (a status the route declares) and the slow result is discarded. Bounds pipeline occupancy, not work already handed to the platform. | route `handler` |
+| `runAfterResponse(executionContext, task, onError?)` · `createBackground(executionContext, onError?)` | Work that outlives the response — registered through `waitUntil` where the platform has it (Workers), detached elsewhere. A rejected task goes to `onError` instead of becoming an unhandled rejection. | `executionContext` |
+| `sseStream(source, options?)` · `formatSse(event)` | Server-Sent Events as a streaming body for a raw `contentType` route. | `contentType` reply |
+| `streamMultipart(body, contentType, options?)` · `multipartBoundary(contentType)` | Async-iterate multipart parts off the raw body stream instead of buffering the whole upload. | `request.raw` |
+| `negotiateMediaType(accept, offers)` · `parseAccept(header)` | Server-driven content negotiation with RFC 9110 media-range specificity and `q=0` handling. | handler |
+
+```ts
+import { createCompression, createDocs, createETag, createHealth, createRequestId } from '@amritk/api'
+
+const requestId = createRequestId()
+
+const handler = toFetchHandler(api, {
+  mounts: {
+    '/docs': createDocs(), //            GET /docs   → interactive reference
+    '/healthz': createHealth(), //       liveness
+    '/readyz': createHealth({ checks: [{ name: 'db', check: () => db.ping() }] }),
+  },
+  onRequest: [requestId.onRequest],
+  onResponse: [requestId.onResponse, createETag(), createCompression()],
+})
+```
+
 ### Client-side auth refresh
 
 Two helpers cover the two token models, both plugging into

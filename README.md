@@ -28,10 +28,11 @@ mjst is a monorepo of JSON Schema (Draft 2020-12) tooling for TypeScript. At its
 | **Validators** | Error-collecting `validateX` functions plus flat `isX` boolean type guards |
 | **Type definitions** | `.d.ts` types matching the schema, with documentation comments |
 | **Test data** | fast-check arbitraries for property testing, plus concrete example values |
-| **Markdown** | Reference docs derived from the schema |
+| **Markdown** | A configuration-reference table rendered from a schema's properties |
 
 Around the generators sits a wider toolbox:
 
+- **API layer** — `@amritk/api` turns route contracts into typed handlers, request/response validation, an OpenAPI 3.1 document, and a typed client
 - **Linting** — `mjst lint` checks JSON/YAML documents against JSON Schema and custom style rules, with exact `line:column` findings
 - **Adapters** — consume schemas authored in TypeBox, Zod, Valibot, or Effect as input
 - **`$ref` resolution** — resolve and inline JSON Schema / OpenAPI `$ref`s, with a default-deny SSRF guard
@@ -46,14 +47,14 @@ The CLI (`mjst`) is the primary entry point; everything above is also published 
 
 | Package | Description |
 |:---|:---|
-| [`@amritk/mjst`](./packages/cli) | CLI — generates parsers, validators, and types from a schema, and lints JSON/YAML (`mjst lint`) |
+| [`@amritk/mjst`](./packages/cli) | CLI — generates parsers, validators, types, and test data from a schema; lints JSON/YAML (`mjst lint`); compiles API contracts (`mjst compile-api`) |
 | [`@amritk/api`](./packages/api) | Contract-first, framework-agnostic API layer — typed routes, request/response validation, OpenAPI 3.1, typed client |
 | [`@amritk/lint`](./packages/lint) | Format-agnostic JSON/YAML style-guide linter — JSON Schema + custom rules, with exact `line:column` findings |
 | [`@amritk/generate-parsers`](./packages/generate-parsers) | Programmatic API for parser + type generation |
 | [`@amritk/generate-validators`](./packages/generate-validators) | Programmatic API for validator generation |
 | [`@amritk/runtime-validators`](./packages/runtime-validators) | Runtime JSON Schema validation for schemas not known ahead of time |
 | [`@amritk/generate-examples`](./packages/generate-examples) | Programmatic API for fast-check arbitraries + example data generation |
-| [`@amritk/generate-markdown`](./packages/generate-markdown) | Programmatic API for markdown documentation generation |
+| [`@amritk/generate-markdown`](./packages/generate-markdown) | Renders a configuration-reference table from a `config.schema.json` into a README |
 | [`@amritk/adapters`](./packages/adapters) | Convert schemas from external libraries (TypeBox, Zod, Valibot, Effect) into JSON Schema |
 | [`@amritk/resolve-refs`](./packages/resolve-refs) | Resolve and inline JSON Schema / OpenAPI `$ref`s, with a default-deny SSRF guard |
 | [`@amritk/yaml`](./packages/yaml) | Tiny, dependency-free YAML parser with exact source positions for diagnostics |

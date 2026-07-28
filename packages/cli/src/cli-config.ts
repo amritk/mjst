@@ -134,7 +134,7 @@ export type CliConfig = {
   readonly importExt?: 'js' | 'ts'
   /**
    * Name for the root type of a single-`schema` run (e.g. `'Program'` yields
-   * `parseProgram` / `validateProgramShape`). When omitted, the name is
+   * `parseProgram` / `validateProgram`). When omitted, the name is
    * derived from the schema's `title`, falling back to the schema filename in
    * PascalCase (`spec-plan.json` → `SpecPlan`) and then to `'Document'`.
    * Not supported with `schemaDir`, where each schema names its own root.

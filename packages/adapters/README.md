@@ -145,7 +145,7 @@ const User = Schema.Struct({
 const jsonSchema = await effectToJsonSchema(User)
 ```
 
-Requires `effect@>=3`. A top-level `Schema.BigIntFromSelf` / `Schema.DateFromSelf` is rescued into an `x-mjst` hint; everything else goes through `JSONSchema.make`. **Read the [encoded-representation caveat](#effect-encodes-the-wire-representation) before choosing between `Schema.Date` and `Schema.DateFromSelf`** — it changes whether you get a `string` or a runtime `Date`.
+Requires `effect@>=3`. A `Schema.BigIntFromSelf` / `Schema.DateFromSelf` **anywhere in the tree** — top level or nested inside a struct, array, or union — is rescued into an `x-mjst` hint; every subtree `JSONSchema.make` accepts is taken from it verbatim. **Read the [encoded-representation caveat](#effect-encodes-the-wire-representation) before choosing between `Schema.Date` and `Schema.DateFromSelf`** — it changes whether you get a `string` or a runtime `Date`.
 
 ---
 
@@ -213,7 +213,7 @@ Some source types have no faithful JSON Schema representation and are **not** re
 - **Zod.** These Zod types become "accept anything": `symbol`, `nan`, `void`, `undefined`, `never`, `map`, `set`, `promise`, `function`. When any appear, the adapter logs, e.g.: *"[mjst] Zod adapter: function, symbol have no JSON Schema representation and became 'accept anything'. The generated type will be wider than the Zod schema."*
 - **Valibot.** The converter runs in `errorMode: 'warn'`: an unsupported construct degrades to an open schema and `@valibot/to-json-schema` logs which one, so the widening is reported by the converter itself.
 - **TypeBox.** An extended `type` string with no mapping (see below) is left unchanged with a warning: *"[mjst] TypeBox type '…' has no JSON Schema or x-mjst mapping; leaving it unchanged."*
-- **Effect.** Effect does not widen — it is stricter. `JSONSchema.make` **throws** on a *nested* unrepresentable type (a `BigIntFromSelf` / `DateFromSelf` below the top level with no `jsonSchema` annotation). The adapter catches that and re-throws an actionable message pointing you at the fix: use the string-encoded `Schema.Date` / `Schema.BigInt`, or add a `jsonSchema` annotation to that field.
+- **Effect.** Effect does not widen — it is stricter. `JSONSchema.make` throws on any unrepresentable type, wherever it sits. The adapter catches that and descends structurally, rebuilding the container (struct, array, union, refinement, …) and rescuing every `BigIntFromSelf` / `DateFromSelf` leaf it reaches into an `x-mjst` hint. Only a leaf it has no rescue for (a raw `symbol`, say) is fatal, and then it throws an actionable message rather than Effect's opaque one: replace the type with a JSON-representable one, or add a `jsonSchema` annotation to that field.
 
 If any of these matter to your schema, prefer a representable alternative (e.g. model a set as an array) or add the library's own JSON Schema annotation.
 
@@ -237,7 +237,7 @@ Any other extended type (`Uint8Array`, `Symbol`, `Undefined`, …) is left untou
 Effect models a value as a **decode/encode pair**, and `JSONSchema.make` describes the **encoded** (wire) representation — not the runtime type. This is the caveat most likely to surprise you:
 
 - `Schema.Date` decodes a `Date` **from a string**, so it converts to a **`string`** schema — not a runtime `Date`. The adapter passes this through unchanged, because it accurately reflects what Effect expects on the wire.
-- Only the `*FromSelf` variants — `Schema.DateFromSelf`, `Schema.BigIntFromSelf` — describe the runtime value itself, and those are the ones rescued into `x-mjst` runtime-type hints (see [`src/effect-to-json-schema.ts:63`](./src/effect-to-json-schema.ts#L63)).
+- Only the `*FromSelf` variants — `Schema.DateFromSelf`, `Schema.BigIntFromSelf` — describe the runtime value itself, and those are the ones rescued into `x-mjst` runtime-type hints (see [`src/effect-to-json-schema.ts:121-122`](./src/effect-to-json-schema.ts#L121-L122)).
 
 So: want a generated `Date`? Author `Schema.DateFromSelf`. Want a string that Effect parses into a `Date`? Author `Schema.Date` and expect a `string` in the generated output. The same distinction applies to `Schema.BigInt` (→ `string`) vs `Schema.BigIntFromSelf` (→ `bigint`).
 
