@@ -1,5 +1,44 @@
 # @amritk/mjst
 
+## 0.13.7
+
+### Patch Changes
+
+- 65771d4: Repair the workspace type check and complete the published manifests
+
+  `bun run types:check` had been failing for three packages and nothing in CI ran
+  it. `@amritk/lint`, `@amritk/runtime-validators`, and `@amritk/yaml` were the
+  only tsconfigs without the `**/*.test.ts` exclude the other nine carry, so their
+  test files pulled the shared OpenAPI fixture loader into the program, where its
+  `@amritk/resolve-refs` / `@amritk/yaml` imports do not resolve from the repo
+  root. CI now runs `types:check` alongside the lint and test steps.
+
+  Every package declares `engines: { node: '>=20' }`, matching the Node target the
+  CLI already emits for, so an install on an older runtime warns instead of
+  failing at run time. Every library also declares `sideEffects: false` so bundlers
+  can tree-shake them — relevant to `@amritk/runtime-validators`, `@amritk/lint`,
+  and `@amritk/yaml`, which are built to ship into browsers and Workers. The CLI
+  is excluded: its bin runs on import.
+
+  `@amritk/runtime-validators` no longer depends on `json-schema-typed`. It never
+  imported the package, and the dependency was installed by every consumer of the
+  one package whose design goal is staying self-contained.
+
+- Updated dependencies [65771d4]
+- Updated dependencies [dcc2ea4]
+- Updated dependencies [491bde2]
+- Updated dependencies [fe8191b]
+  - @amritk/generate-validators@0.11.12
+  - @amritk/generate-examples@0.5.6
+  - @amritk/generate-markdown@0.4.5
+  - @amritk/generate-parsers@0.18.0
+  - @amritk/resolve-refs@0.4.5
+  - @amritk/helpers@0.14.0
+  - @amritk/adapters@0.3.6
+  - @amritk/lint@0.4.2
+  - @amritk/yaml@0.3.5
+  - @amritk/api@0.11.0
+
 ## 0.13.6
 
 ### Patch Changes
