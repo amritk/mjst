@@ -762,14 +762,54 @@ const parseFlowSeq = (state: State): YamlSeq => {
   return { kind: 'seq', items, start, end: state.pos }
 }
 
+/**
+ * Map size at which duplicate-key tracking switches from scanning the pairs
+ * collected so far to a `Set`. Below it a linear scan wins outright: real
+ * documents are dominated by tiny mappings (OpenAPI averages under three keys
+ * per map), and allocating a `Set` to deduplicate two or three strings costs
+ * far more than comparing them. Above it the scan's O(n^2) growth would start
+ * to matter, so we pay for the `Set` once and hash from there on.
+ */
+const SET_THRESHOLD = 8
+
+/**
+ * Reports `key` if an earlier pair in `items` already used it, and returns the
+ * tracking `Set` to carry into the next call (`null` while the map is still
+ * small enough to scan). Shared by the block and flow mapping parsers, which
+ * track duplicates identically.
+ *
+ * Complex (map/seq) keys have no stable text form, so callers skip them rather
+ * than collapse every one to the same bucket and falsely report a duplicate.
+ */
+const trackKey = (state: State, items: YamlPair[], key: YamlNode, seen: Set<string> | null): Set<string> | null => {
+  const text = keyText(key)
+  if (seen === null && items.length >= SET_THRESHOLD) {
+    seen = new Set()
+    for (let i = 0; i < items.length; i++) {
+      const k = items[i]?.key
+      if (k !== undefined && (k.kind === 'scalar' || k.kind === 'alias')) seen.add(keyText(k))
+    }
+  }
+  if (seen !== null) {
+    if (seen.has(text)) pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.start, key.end)
+    else seen.add(text)
+    return seen
+  }
+  for (let i = 0; i < items.length; i++) {
+    const k = items[i]?.key
+    if (k !== undefined && (k.kind === 'scalar' || k.kind === 'alias') && keyText(k) === text) {
+      pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.start, key.end)
+      break
+    }
+  }
+  return null
+}
+
 const parseFlowMap = (state: State): YamlMap => {
   const start = state.pos
   state.pos++ // {
   const items: YamlPair[] = []
-  // Duplicate-key tracking mirrors `parseBlockMap`: lazy-allocate the Set only
-  // once a second key appears, and skip complex (map/seq) keys that have no
-  // stable text form. Flow maps enforce `uniqueKeys` just like block maps do.
-  let firstKey: string | null = null
+  // Flow maps enforce `uniqueKeys` just like block maps do; see `trackKey`.
   let seen: Set<string> | null = null
   for (;;) {
     skipFlowWs(state)
@@ -791,19 +831,7 @@ const parseFlowMap = (state: State): YamlMap => {
       const vc = state.src.charCodeAt(state.pos)
       if (vc !== COMMA && vc !== RBRACE) value = parseFlowNode(state)
     }
-    if (state.uniqueKeys && (key.kind === 'scalar' || key.kind === 'alias')) {
-      const text = keyText(key)
-      if (seen) {
-        if (seen.has(text)) pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.start, key.end)
-        else seen.add(text)
-      } else if (firstKey === null) {
-        firstKey = text
-      } else {
-        seen = new Set([firstKey])
-        if (firstKey === text) pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.start, key.end)
-        else seen.add(text)
-      }
-    }
+    if (state.uniqueKeys && (key.kind === 'scalar' || key.kind === 'alias')) seen = trackKey(state, items, key, seen)
     items.push({ kind: 'pair', key, value, start: key.start, end: value ? value.end : key.end })
     skipFlowWs(state)
     const sep = state.src.charCodeAt(state.pos)
@@ -890,9 +918,7 @@ const keyText = (node: YamlNode): string => {
 const parseBlockMap = (state: State, indent: number, firstColon: number): YamlMap => {
   const { src, len } = state
   const items: YamlPair[] = []
-  // Duplicate-key tracking is lazy: most maps have unique keys, and many have a
-  // single key, so we only allocate the Set once a second key actually appears.
-  let firstKey: string | null = null
+  // Duplicate-key tracking; see `trackKey` for why small maps avoid the `Set`.
   let seen: Set<string> | null = null
 
   // The cursor is already parked at the first key's content; later iterations
@@ -994,22 +1020,7 @@ const parseBlockMap = (state: State, indent: number, firstColon: number): YamlMa
       }
     }
 
-    // Duplicate-key tracking. Complex (map/seq) keys have no stable text form, so
-    // we skip them rather than collapse every one to the same bucket and falsely
-    // report a duplicate.
-    if (state.uniqueKeys && (key.kind === 'scalar' || key.kind === 'alias')) {
-      const text = keyText(key)
-      if (seen) {
-        if (seen.has(text)) pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.start, key.end)
-        else seen.add(text)
-      } else if (firstKey === null) {
-        firstKey = text
-      } else {
-        seen = new Set([firstKey])
-        if (firstKey === text) pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.start, key.end)
-        else seen.add(text)
-      }
-    }
+    if (state.uniqueKeys && (key.kind === 'scalar' || key.kind === 'alias')) seen = trackKey(state, items, key, seen)
     items.push({ kind: 'pair', key, value, start: key.start, end: value ? value.end : key.end })
   }
 

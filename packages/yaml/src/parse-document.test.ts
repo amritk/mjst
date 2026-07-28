@@ -127,6 +127,31 @@ describe('parse-document', () => {
     expect(parseDocument('a: 1\na: 2\n').toJS()).toEqual({ a: 2 })
   })
 
+  it('reports a duplicate key in a map large enough to switch tracking strategy', () => {
+    // Small maps are deduplicated by scanning the pairs collected so far; past a
+    // threshold the parser switches to a `Set`. Both sides of that switch must
+    // behave identically, including a duplicate of a key seen before the switch.
+    const keys = 'abcdefghijkl'.split('').map((k, i) => `${k}: ${i}\n`)
+    const { errors } = parseDocument(`${keys.join('')}b: 99\n`)
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.code).toBe('DUPLICATE_KEY')
+    expect(errors[0]?.message).toBe('Map key "b" is duplicated')
+  })
+
+  it('does not report duplicates for a large map of unique keys', () => {
+    const source = 'abcdefghijklmnop'
+      .split('')
+      .map((k, i) => `${k}: ${i}\n`)
+      .join('')
+    expect(parseDocument(source).errors).toHaveLength(0)
+  })
+
+  it('does not treat two complex keys as duplicates of each other', () => {
+    // Map/seq keys have no stable text form, so they are skipped rather than
+    // collapsed into one bucket — otherwise every complex key collides.
+    expect(parseDocument('? [1, 2]\n: x\n? [3, 4]\n: y\n').errors).toHaveLength(0)
+  })
+
   it('allows duplicate keys when uniqueKeys is disabled', () => {
     const { errors, toJS } = parseDocument('a: 1\na: 2\n', { uniqueKeys: false })
     expect(errors).toHaveLength(0)
