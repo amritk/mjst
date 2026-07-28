@@ -164,7 +164,7 @@ A ruleset is a plain object (authored as YAML, JSON, or a JS module):
 | `overrides` | Per-file-glob rule tweaks. |
 | `aliases` | Reusable `given` fragments referenced as `#alias`. |
 
-Built-in functions: `alphabetical`, `casing`, `defined`, `enumeration`, `falsy`, `length`, `pattern`, `schema`, `truthy`, `undefined`, `unreferencedReusableObject`, `xor`, `typedEnum`.
+Built-in functions: `alphabetical`, `casing`, `defined`, `enumeration`, `falsy`, `length`, `or`, `pattern`, `schema`, `truthy`, `undefined`, `unreferencedReusableObject`, `xor`, `typedEnum`.
 
 ---
 

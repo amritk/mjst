@@ -23,6 +23,9 @@ Each generated file exports:
 
 - A TypeScript `type` definition for the schema
 - A `validateFoo(input: unknown, _path?: string): ValidationResult` function
+- An `isFoo(input: unknown): input is Foo` boolean type guard — a single flat
+  predicate (no error array, no cold-path call) reaching the same verdict as
+  `validateFoo`, for the common "is this valid?" question
 
 A shared `validation-result.ts` template and an `index.ts` barrel are emitted alongside the generated files.
 
@@ -81,12 +84,13 @@ if (!result.valid) {
 
 ## API
 
-### `buildValidatorSchema(rootSchema, rootTypeName)`
+### `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?)`
 
-| Parameter | Type | Description |
-|:---|:---|:---|
-| `rootSchema` | `JSONSchema` | The root schema to traverse. `$ref` and `$dynamicRef` are resolved recursively. Draft-07 schemas are upgraded to 2020-12 automatically. |
-| `rootTypeName` | `string` | Name used for the root type (e.g. `"Document"`). |
+| Parameter | Type | Default | Description |
+|:---|:---|:---|:---|
+| `rootSchema` | `JSONSchema` | — | The root schema to traverse. `$ref` and `$dynamicRef` are resolved recursively. Draft-07 schemas are upgraded to 2020-12 automatically. |
+| `rootTypeName` | `string` | — | Name used for the root type (e.g. `"Document"`). |
+| `typeSuffix` | `string` | `''` | Suffix appended to every `$ref`-derived type name (`'Object'` turns `Contact` into `ContactObject`). The root type name is unaffected. |
 
 Returns: `Promise<GeneratedFile[]>` where `GeneratedFile = { filename: string; content: string }`.
 

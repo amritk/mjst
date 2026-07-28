@@ -83,7 +83,7 @@ If `README.md` already exists and contains the marker comments below, only the c
 <!-- config-table-end -->
 ```
 
-Without markers (or without an existing README) the file is overwritten with just the table.
+When there is no `README.md` yet, one is created holding just the table. When a `README.md` exists but is **missing** either marker, `generateMarkdown` throws rather than overwriting it — add both markers where the table should go and re-run.
 
 ---
 

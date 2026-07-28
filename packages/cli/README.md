@@ -128,7 +128,7 @@ since tsc cannot emit from `.ts` specifiers.
 > [!NOTE]
 > **Breaking change (0.9.0):** the root type is no longer always named `Document`. It is derived
 > from the schema `title`, falling back to the schema filename (`spec-plan.json` → `SpecPlan`,
-> giving `parseSpecPlan` / `validateSpecPlanShape`). Pass `--root-type <Name>` to override it for
+> giving `parseSpecPlan` / `validateSpecPlan`). Pass `--root-type <Name>` to override it for
 > a single `--schema` run. Update any imports that referenced `Document` / `parseDocument`.
 
 ### External and remote `$ref`s
@@ -437,7 +437,7 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
 <td align="center"></td>
 </tr>
 <tr>
-<td colspan="4">Name for the root type of a single --schema run (e.g. 'Program' yields parseProgram / validateProgramShape). When omitted, the name is derived from the schema's title, falling back to the schema filename in PascalCase (spec-plan.json → SpecPlan) and then to 'Document'. Not supported with --schema-dir, where each schema derives its own root type from its filename.<br><strong>Examples:</strong> <code>"Program"</code></td>
+<td colspan="4">Name for the root type of a single --schema run (e.g. 'Program' yields parseProgram / validateProgram). When omitted, the name is derived from the schema's title, falling back to the schema filename in PascalCase (spec-plan.json → SpecPlan) and then to 'Document'. Not supported with --schema-dir, where each schema derives its own root type from its filename.<br><strong>Examples:</strong> <code>"Program"</code></td>
 </tr>
 <tr>
 <td>🌐 <code>resolveRemote</code></td>
@@ -526,12 +526,14 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
 
 ## Scripts
 
-| Script | Command |
+| Script | What it does |
 |:---|:---|
-| `bun run dev` | `bun run --conditions=development ./src/cli.ts` |
-| `bun run start` | `bun run ./src/cli.ts` |
-| `bun run build` | `bun run build:code && bun run build:types` |
-| `bun run generate-readme` | `bun run generate-readme` |
+| `bun run dev` | Run the CLI from source, resolving workspace packages to their `development` exports. |
+| `bun run start` | Run the CLI from source against built workspace packages. |
+| `bun run build` | Compile to `dist/` (`tsgo` + `tsc-alias`, then strip comments). |
+| `bun run types:check` | Type-check the package without emitting. |
+| `bun run test` | Run this package's test suite. |
+| `bun run generate-readme` | Regenerate the [Configuration reference](#configuration-reference) table from `config.schema.json`. |
 
 ---
 
