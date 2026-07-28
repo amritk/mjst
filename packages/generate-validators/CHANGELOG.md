@@ -1,5 +1,114 @@
 # @amritk/generate-validators
 
+## 0.11.12
+
+### Patch Changes
+
+- 65771d4: Repair the workspace type check and complete the published manifests
+
+  `bun run types:check` had been failing for three packages and nothing in CI ran
+  it. `@amritk/lint`, `@amritk/runtime-validators`, and `@amritk/yaml` were the
+  only tsconfigs without the `**/*.test.ts` exclude the other nine carry, so their
+  test files pulled the shared OpenAPI fixture loader into the program, where its
+  `@amritk/resolve-refs` / `@amritk/yaml` imports do not resolve from the repo
+  root. CI now runs `types:check` alongside the lint and test steps.
+
+  Every package declares `engines: { node: '>=20' }`, matching the Node target the
+  CLI already emits for, so an install on an older runtime warns instead of
+  failing at run time. Every library also declares `sideEffects: false` so bundlers
+  can tree-shake them — relevant to `@amritk/runtime-validators`, `@amritk/lint`,
+  and `@amritk/yaml`, which are built to ship into browsers and Workers. The CLI
+  is excluded: its bin runs on import.
+
+  `@amritk/runtime-validators` no longer depends on `json-schema-typed`. It never
+  imported the package, and the dependency was installed by every consumer of the
+  one package whose design goal is staying self-contained.
+
+- dcc2ea4: Let `@amritk/api` assert string formats, and document where `format` is ignored
+
+  `format` is an annotation in JSON Schema, and both Ajv and
+  `@amritk/runtime-validators` make asserting it opt-in. `@amritk/api` never opted
+  in and offered no way to, so a route declaring
+  `{ type: 'string', format: 'uuid' }` accepted any string — while the README said
+  the format "still applies". Short of replacing the whole engine through
+  `compile`, there was no way to get the check.
+
+  Both engines now take `formats`, matching the interpreter's own option:
+
+  ```ts
+  createApi({ routes, formats: "all" });
+  createApi({ routes, formats: ["uuid", "email"] });
+  compileToModule({ routes, routesImport, formats: "all" });
+  ```
+
+  A violation is an ordinary `400 { error: 'validation_failed' }`. Pass the same
+  value to both engines so the compiled module and the development server agree;
+  the option is ignored when a custom `compile` is supplied, since that replaces
+  the engine it configures. Default behavior is unchanged — `format` stays an
+  annotation until you ask.
+
+  In the compiled engine a schema carrying `format` leaves the inlinable subset
+  and falls back to the interpreter, which owns the format regexes, rather than
+  the emitter growing a second copy of each. Engine-for-engine equivalence is
+  covered by a new differential case.
+
+  `@amritk/generate-validators` emits no `format` check either, and that was
+  nowhere in its docs — a real divergence from the interpreter as `@amritk/lint`
+  runs it (`formats: 'all'`). Now stated in the README, AI.md, and AGENTS.md, with
+  a test pinning it, and the benchmark section no longer claims every library does
+  the same work on the two rows whose schemas declare `format`.
+
+- fe8191b: Close the gaps between the emitted TypeScript types and the schemas they come from
+
+  The shared type generator read past several keywords, so the type it emitted
+  described fewer documents than the schema allowed — and the parsers built from
+  it disagreed with it. Generating the whole vendored OpenAPI corpus (982
+  component schemas, 5,872 files) and compiling the result under `strict` went
+  from 667 type errors to none.
+
+  **Types**
+
+  - `nullable: true` (OpenAPI 3.0) now widens the type with `| null` — 432
+    occurrences in the vendored corpus were previously typed as non-null, which
+    also made `generate-validators`' `input is T` predicate unsound, since its
+    validator accepts null.
+  - An array-form `type` keeps the shape it declares: `["object","null"]` with
+    properties is `{ … } | null` instead of `Record<string, unknown> | null`, and
+    `["array","null"]` keeps its item type. Members are deduplicated, and
+    `readonly` applies to them.
+  - `prefixItems` (and the draft-07 array form of `items`) emits a tuple instead
+    of `unknown[]`, with positions optional past `minItems` and the tail typed
+    from the sibling `items`/`additionalItems`.
+  - Keywords declared _alongside_ `properties` are no longer dropped: `allOf`
+    members written inline (not just `$ref`s) and sibling `oneOf`/`anyOf` unions
+    are intersected in, `additionalProperties`/`patternProperties` become an index
+    signature, and a nested schema with both `properties` and a union keeps both.
+  - A `description` or `$comment` containing a comment terminator no longer ends
+    the JSDoc block early — a glob like `**/*.ts` in a description used to make
+    the whole generated file unparseable.
+  - A URI `$ref` that resolves inside the document is named rather than typed
+    `unknown`, matching the import the same file already emits for it.
+
+  **Parsers**
+
+  - An array-form `type` is enforced: strict parsers assert the disjunction (plus
+    the constraints of the non-null member) instead of emitting no check at all,
+    and the shape validator keeps a real fast path instead of degrading to a stub.
+  - Inline `allOf` members are enforced in strict mode, and the fast path no
+    longer jumps over those assertions.
+  - A `required` key with no declared property is asserted present.
+  - Tuple positions declared with the draft-07 array `items` are checked.
+  - A `default` that contradicts its declared `type` is ignored rather than used
+    as a coercion target.
+  - Root-level tuple and item assertions are emitted once, not twice.
+  - A file no longer imports from itself when a definition's name collides with
+    the root type name, and colliding definition names are reported: two that
+    reduce to one filename mean only the first is generated.
+
+- Updated dependencies [65771d4]
+- Updated dependencies [fe8191b]
+  - @amritk/helpers@0.14.0
+
 ## 0.11.11
 
 ### Patch Changes
