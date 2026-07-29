@@ -78,13 +78,14 @@ describe('parseYaml', () => {
     expect(diagnostics).toHaveLength(0)
   })
 
-  // L1: a null map key used to render as `''` and collide with the root path;
-  // distinct paths must now resolve to distinct locations.
+  // L1: a null map key projects to the `''` key a JavaScript object can hold, so
+  // its path segment is `''` too — which must still not collide with the root
+  // path (`pathKey` tags each segment, so `['']` is `.` and the root is `''`).
   it('does not collide a null map key with the document root', () => {
     const { data, getLocationForJsonPath } = parseYaml<Record<string, unknown>>('null: 1\nother: 2\n')
-    expect(data).toEqual({ null: 1, other: 2 })
+    expect(data).toEqual({ '': 1, other: 2 })
     const rootStart = getLocationForJsonPath([])?.range.start
-    const nullKeyStart = getLocationForJsonPath(['null'])?.range.start
+    const nullKeyStart = getLocationForJsonPath([''])?.range.start
     expect(rootStart).toEqual({ line: 0, character: 0 })
     expect(nullKeyStart).toEqual({ line: 0, character: 6 })
     expect(nullKeyStart).not.toEqual(rootStart)
@@ -98,26 +99,24 @@ describe('parseYaml', () => {
 
   // Precision gap 1: complex (map/seq) keys used to collapse to `''`, so two
   // distinct complex keys shared one index slot and clobbered each other's
-  // ranges. Distinct complex keys must now resolve to distinct locations.
+  // ranges. They now render in flow style, in both the data and the index.
   it('does not collide two distinct complex mapping keys', () => {
     const source = ['? [a]', ': first', '? [b]', ': second'].join('\n') + '\n'
-    const { getLocationForJsonPath } = parseYaml(source)
-    // A sequence key `[a]` serializes to the stable segment `["a"]`.
-    const locA = getLocationForJsonPath(['["a"]'])
-    const locB = getLocationForJsonPath(['["b"]'])
+    const { data, getLocationForJsonPath } = parseYaml(source)
+    expect(data).toEqual({ '[ a ]': 'first', '[ b ]': 'second' })
+    const locA = getLocationForJsonPath(['[ a ]'])
+    const locB = getLocationForJsonPath(['[ b ]'])
     expect(locA?.range.start.line).toBe(1) // `: first`
     expect(locB?.range.start.line).toBe(3) // `: second`
     expect(locA?.range).not.toEqual(locB?.range)
   })
 
   it('gives a map key and a seq key distinct index slots', () => {
-    // Both keys still collapse to `''` in the projected data (that is `toJS`'s
-    // behavior), but the position index keeps them addressable and distinct.
     const source = ['? {a}', ': mapKey', '? [a]', ': seqKey'].join('\n') + '\n'
     const { data, getLocationForJsonPath } = parseYaml<Record<string, unknown>>(source)
-    expect(data).toEqual({ '': 'seqKey' })
-    const mapLoc = getLocationForJsonPath(['{"a":null}'])
-    const seqLoc = getLocationForJsonPath(['["a"]'])
+    expect(data).toEqual({ '{ a: null }': 'mapKey', '[ a ]': 'seqKey' })
+    const mapLoc = getLocationForJsonPath(['{ a: null }'])
+    const seqLoc = getLocationForJsonPath(['[ a ]'])
     expect(mapLoc?.range.start.line).toBe(1)
     expect(seqLoc?.range.start.line).toBe(3)
     expect(mapLoc?.range).not.toEqual(seqLoc?.range)

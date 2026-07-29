@@ -23,11 +23,88 @@ describe('core-schema tags', () => {
   it('leaves the value untouched for an unknown/custom tag but keeps the tag on the node', () => {
     const doc = parseDocument('a: !custom hello\n')
     expect(doc.toJS()).toEqual({ a: 'hello' })
-    const node = doc.contents
-    if (node?.kind === 'map') {
-      const value = node.items[0]?.value
-      if (value?.kind === 'scalar') expect(value.tag).toBe('custom')
-    }
+    expect(tagOfFirstValue(doc)).toBe('!custom')
+  })
+
+  it('keeps a local tag distinct from the core tag of the same name, so it does not coerce', () => {
+    // `!str` names an application-local type; only `!!str` is the core schema's.
+    expect(parseDocument('a: !str 123\n').toJS()).toEqual({ a: 123 })
+    expect(tagOfFirstValue(parseDocument('a: !str 123\n'))).toBe('!str')
+    expect(parseDocument('a: !!str 123\n').toJS()).toEqual({ a: '123' })
+  })
+
+  it('resolves a verbatim tag to the core tag it names', () => {
+    expect(parseDocument('a: !<tag:yaml.org,2002:str> 123\n').toJS()).toEqual({ a: '123' })
+    expect(tagOfFirstValue(parseDocument('a: !<tag:yaml.org,2002:str> 123\n'))).toBe('str')
+  })
+
+  it('keeps a verbatim tag outside the schema namespace whole', () => {
+    const doc = parseDocument('a: !<https://example.com/t> 123\n')
+    expect(tagOfFirstValue(doc)).toBe('https://example.com/t')
+    expect(doc.toJS()).toEqual({ a: 123 })
+  })
+
+  it('reports a verbatim tag with no closing bracket', () => {
+    const doc = parseDocument('a: !<tag:yaml.org,2002:str 1\n')
+    expect(doc.errors.map((e) => e.code)).toContain('BAD_TAG')
+  })
+
+  it('resolves the non-specific ! tag as a string', () => {
+    expect(parseDocument('a: ! 123\n').toJS()).toEqual({ a: '123' })
+  })
+
+  it('percent-decodes escapes in a tag suffix', () => {
+    expect(tagOfFirstValue(parseDocument('a: !%21odd 1\n'))).toBe('!!odd')
+  })
+})
+
+/** Reads the tag off the first mapping value — the shape every tag test asserts on. */
+const tagOfFirstValue = (doc: ReturnType<typeof parseDocument>): string | undefined => {
+  const node = doc.contents
+  if (node?.kind !== 'map') return undefined
+  return node.items[0]?.value?.kind === 'scalar' ? node.items[0]?.value.tag : undefined
+}
+
+describe('%TAG and %YAML directives', () => {
+  it('expands a tag written through a declared handle', () => {
+    const doc = parseDocument('%TAG !e! tag:example.com,2000:app/\n---\na: !e!foo 1\n')
+    expect(tagOfFirstValue(doc)).toBe('tag:example.com,2000:app/foo')
+  })
+
+  it('lets %TAG redirect the !! handle onto the core schema namespace', () => {
+    const doc = parseDocument('%TAG !! tag:example.com,2000:app/\n---\na: !!foo 1\n')
+    expect(tagOfFirstValue(doc)).toBe('tag:example.com,2000:app/foo')
+  })
+
+  it('reports a handle that was never declared', () => {
+    const doc = parseDocument('a: !e!foo 1\n')
+    expect(doc.errors.map((e) => e.code)).toContain('UNKNOWN_TAG_HANDLE')
+  })
+
+  it('scopes tag handles to the document that declared them', () => {
+    const [first, second] = parseAllDocuments(
+      '%TAG !e! tag:example.com,2000:app/\n---\na: !e!foo 1\n---\nb: !e!foo 2\n',
+    )
+    expect(first?.errors ?? []).toHaveLength(0)
+    expect((second?.errors ?? []).map((e) => e.code)).toContain('UNKNOWN_TAG_HANDLE')
+  })
+
+  it('warns that a 1.1 document is parsed with the 1.2 core schema', () => {
+    const doc = parseDocument('%YAML 1.1\n---\na: yes\n')
+    expect(doc.warnings.map((w) => w.code)).toEqual(['UNSUPPORTED_YAML_VERSION'])
+    // The warning is advisory: resolution stays on the 1.2 core schema.
+    expect(doc.toJS()).toEqual({ a: 'yes' })
+  })
+
+  it('does not warn about a %YAML 1.2 directive', () => {
+    expect(parseDocument('%YAML 1.2\n---\na: 1\n').warnings).toHaveLength(0)
+  })
+
+  it('warns about a repeated %YAML directive and an unknown directive', () => {
+    expect(parseDocument('%YAML 1.2\n%YAML 1.2\n---\na: 1\n').warnings.map((w) => w.code)).toEqual([
+      'DUPLICATE_DIRECTIVE',
+    ])
+    expect(parseDocument('%FOO bar\n---\na: 1\n').warnings.map((w) => w.code)).toEqual(['UNKNOWN_DIRECTIVE'])
   })
 })
 

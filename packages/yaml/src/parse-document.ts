@@ -47,6 +47,7 @@ const GT = 62 // >
 const QUESTION = 63 // ?
 const DOT = 46 // .
 const PERCENT = 37 // %
+const LT = 60 // <
 
 type LineInfo = {
   eof: boolean
@@ -77,6 +78,16 @@ type State = {
    * stack overflow — it is reported as a parse error instead.
    */
   depth: number
+  /**
+   * `%TAG` handle prefixes declared for the current document, keyed by the handle
+   * *including* its delimiting `!`s (`!`, `!!`, `!e!`). `null` until a document
+   * actually declares one, so the overwhelmingly common directive-free document
+   * never allocates the map; the two default handles are resolved by
+   * {@link handlePrefix} instead of being pre-seeded here.
+   */
+  tagHandles: Map<string, string> | null
+  /** Whether this document already carried a `%YAML` directive (at most one is legal). */
+  yamlDirective: boolean
   /**
    * Reused by `peekLine` to avoid allocating a result object per line. Callers
    * read it immediately and never hold it across another `peekLine`, so a single
@@ -222,6 +233,175 @@ const pushError = (state: State, code: string, message: string, start: number, e
   state.errors.push({ kind: 'error', code, message, start, end })
 }
 
+const pushWarning = (state: State, code: string, message: string, start: number, end: number): void => {
+  state.warnings.push({ kind: 'warning', code, message, start, end })
+}
+
+/**
+ * The prefix every schema tag shares. A written tag that resolves under it is a
+ * core or extended schema tag, and is stored on the node by its short suffix
+ * (`str`, `int`, `binary`, …) — the form {@link applyScalarTag} switches on.
+ */
+const YAML_TAG_PREFIX = 'tag:yaml.org,2002:'
+
+/**
+ * Percent-decodes the URI escapes a tag suffix may carry (`%21` → `!`), which is
+ * how a tag names a character that would otherwise end the token. Malformed
+ * escapes are left alone rather than throwing.
+ */
+const decodeTagUri = (text: string): string => {
+  if (text.indexOf('%') === -1) return text
+  try {
+    return decodeURIComponent(text)
+  } catch {
+    return text
+  }
+}
+
+/** True for the characters a named tag handle may contain, i.e. `!name!` — alphanumerics and `-`. */
+const isTagHandleChar = (c: number): boolean =>
+  (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === DASH
+
+/**
+ * Resolves a handle (`!`, `!!`, or a named `!x!`) to its prefix. The two default
+ * handles are built in — `!` names local tags and `!!` the schema namespace —
+ * and either can be overridden by a `%TAG` directive, which is why the
+ * document's own map is consulted first.
+ */
+const handlePrefix = (state: State, handle: string): string | undefined => {
+  const declared = state.tagHandles?.get(handle)
+  if (declared !== undefined) return declared
+  if (handle === '!!') return YAML_TAG_PREFIX
+  return handle === '!' ? '!' : undefined
+}
+
+/**
+ * Turns the tag exactly as written — `!!str`, `!local`, `!e!suffix`, a verbatim
+ * `!<uri>`, or the bare non-specific `!` — into the form stored on the node.
+ *
+ * Schema tags collapse to their short suffix (`!!str` and
+ * `!<tag:yaml.org,2002:str>` both become `str`), so a document can reach the
+ * core tags by any of the three spellings. Everything else keeps its fully
+ * resolved form: a local tag stays `!local`, and a handle declared by `%TAG`
+ * expands to the URI it names. That distinction is the point — before it, a
+ * local `!str` was indistinguishable from the core `!!str` and wrongly coerced
+ * its value.
+ *
+ * Only ever reached from {@link scanPropsSlow}, i.e. when a node actually
+ * carries a tag.
+ */
+const resolveTag = (state: State, written: string, start: number): string => {
+  // The bare `!` is the non-specific tag: it forces resolution as a string
+  // rather than naming a type, so it is kept verbatim for `applyScalarTag`.
+  if (written === '!') return '!'
+
+  if (written.charCodeAt(1) === LT) {
+    // Verbatim `!<uri>` — the URI is used exactly as given, no handle involved.
+    const close = written.length - 1
+    if (written.charCodeAt(close) !== GT) {
+      pushError(state, 'BAD_TAG', 'Verbatim tag is missing its closing ">"', start, start + written.length)
+      return written
+    }
+    return shortenTag(decodeTagUri(written.slice(2, close)))
+  }
+
+  // Split off the handle: `!!`, a named `!x!`, or the primary `!`.
+  let handleEnd = 1
+  if (written.charCodeAt(1) === BANG) {
+    handleEnd = 2
+  } else {
+    let i = 1
+    while (i < written.length && isTagHandleChar(written.charCodeAt(i))) i++
+    if (i > 1 && written.charCodeAt(i) === BANG) handleEnd = i + 1
+  }
+  const handle = written.slice(0, handleEnd)
+  const prefix = handlePrefix(state, handle)
+  if (prefix === undefined) {
+    pushError(
+      state,
+      'UNKNOWN_TAG_HANDLE',
+      `Tag handle "${handle}" was never declared by a %TAG directive`,
+      start,
+      start + written.length,
+    )
+    return written
+  }
+  return shortenTag(prefix + decodeTagUri(written.slice(handleEnd)))
+}
+
+/** Reduces a resolved schema tag to the short suffix the rest of the parser keys off. */
+const shortenTag = (tag: string): string => (tag.startsWith(YAML_TAG_PREFIX) ? tag.slice(YAML_TAG_PREFIX.length) : tag)
+
+/** Offset of the end of the whitespace-delimited token starting at `from`. */
+const tokenEnd = (src: string, from: number, len: number): number => {
+  let i = from
+  while (i < len) {
+    const c = src.charCodeAt(i)
+    if (isSpace(c) || c === NL || c === CR) break
+    i++
+  }
+  return i
+}
+
+/**
+ * Reads one `%`-directive line. Directives are advisory here rather than
+ * rewriting how the document parses — with one exception: `%TAG` handles are
+ * recorded, because a tag written through a handle cannot be resolved without
+ * them. A `%YAML` version is checked and reported but does not switch schemas;
+ * the parser always applies the 1.2 core schema.
+ *
+ * Runs once per directive line, on documents that have any — the directive-free
+ * path pays nothing beyond the `%` test that already gated it.
+ */
+const readDirective = (state: State, pos: number): void => {
+  const { src, len } = state
+  const nameEnd = tokenEnd(src, pos + 1, len)
+  const name = src.slice(pos + 1, nameEnd)
+  if (name === 'TAG') {
+    let i = nameEnd
+    while (i < len && isSpace(src.charCodeAt(i))) i++
+    const handleEnd = tokenEnd(src, i, len)
+    const handle = src.slice(i, handleEnd)
+    let j = handleEnd
+    while (j < len && isSpace(src.charCodeAt(j))) j++
+    const prefixEnd = tokenEnd(src, j, len)
+    const prefix = src.slice(j, prefixEnd)
+    if (handle === '' || prefix === '' || handle.charCodeAt(0) !== BANG) {
+      pushWarning(state, 'BAD_DIRECTIVE', '%TAG directive needs a handle and a prefix', pos, prefixEnd)
+      return
+    }
+    if (state.tagHandles === null) state.tagHandles = new Map()
+    const handles = state.tagHandles
+    if (handles.has(handle)) {
+      pushWarning(state, 'DUPLICATE_DIRECTIVE', `Tag handle "${handle}" is declared more than once`, pos, prefixEnd)
+    }
+    handles.set(handle, decodeTagUri(prefix))
+    return
+  }
+  if (name === 'YAML') {
+    let i = nameEnd
+    while (i < len && isSpace(src.charCodeAt(i))) i++
+    const versionEnd = tokenEnd(src, i, len)
+    const version = src.slice(i, versionEnd)
+    if (state.yamlDirective) {
+      pushWarning(state, 'DUPLICATE_DIRECTIVE', 'A document may carry only one %YAML directive', pos, versionEnd)
+    }
+    state.yamlDirective = true
+    if (version !== '1.2') {
+      // 1.1 documents parse — they are a near-superset — but their schema
+      // differences (`yes`/`no` booleans, `1_000`, sexagesimals) are not applied,
+      // so say so rather than silently resolving them by 1.2 rules.
+      const message =
+        version.startsWith('1.') && version !== ''
+          ? `Document declares YAML ${version}; it is parsed with the 1.2 core schema`
+          : `Unsupported YAML version "${version}"`
+      pushWarning(state, 'UNSUPPORTED_YAML_VERSION', message, pos, versionEnd)
+    }
+    return
+  }
+  pushWarning(state, 'UNKNOWN_DIRECTIVE', `Unknown directive "%${name}"`, pos, nameEnd)
+}
+
 /**
  * Finds the offset of the `key:` separator on the current line, or -1 if the
  * line is not a mapping entry. Honors quotes so a `:` inside a quoted key does
@@ -292,7 +472,7 @@ const scanPropsSlow = (state: State): NodeProps => {
     } else if (c === BANG) {
       let i = state.pos + 1
       while (i < len && !isSpace(src.charCodeAt(i)) && src.charCodeAt(i) !== NL && src.charCodeAt(i) !== CR) i++
-      tag = src.slice(state.pos, i).replace(/^!+/, '')
+      tag = resolveTag(state, src.slice(state.pos, i), state.pos)
       state.pos = i
     } else {
       break
@@ -379,7 +559,61 @@ const scanAlias = (state: State): YamlNode => {
   const target = state.anchors.get(name)
   const alias: YamlAlias = { kind: 'alias', source: name, start, end: i }
   if (target !== undefined) alias.target = target
+  // An anchor must be declared before the alias that uses it, so a miss here is
+  // a real error rather than a forward reference to resolve later. Without the
+  // report the alias silently projects to `undefined` and its mapping key
+  // vanishes from the output — the worst way for a document to be wrong.
+  else pushError(state, 'UNRESOLVED_ALIAS', `Alias "*${name}" has no matching anchor`, start, i)
   return alias
+}
+
+/**
+ * `@` and `` ` `` are reserved indicators in YAML 1.2: they may not begin a plain
+ * scalar. The single-operation test works because `c | 32` maps exactly the two
+ * of them (64 and 96) onto 96.
+ */
+const isReservedIndicator = (c: number): boolean => (c | 32) === 96
+
+const reportReservedIndicator = (state: State): void => {
+  const pos = state.pos
+  pushError(
+    state,
+    'BAD_SCALAR_START',
+    `Reserved indicator "${state.src[pos]}" cannot start a plain scalar`,
+    pos,
+    pos + 1,
+  )
+}
+
+/**
+ * Reports content left on the line after a node that ends at a delimiter — a
+ * flow collection, a quoted scalar, or an alias. Only those kinds need the
+ * check: a plain or block scalar absorbs whatever follows as part of its own
+ * value, so there is nothing left over to be unexpected.
+ */
+const checkTrailingContent = (state: State): void => {
+  const c = state.src.charCodeAt(state.pos)
+  // Fast path: the node ended flush against a line break, a comment, or end of
+  // input — one read and a few comparisons for the shape nearly every document
+  // has. (`charCodeAt` past the end yields NaN, which the length test catches.)
+  if (c === NL || c === CR || c === HASH || state.pos >= state.len) return
+  reportTrailingContent(state, c)
+}
+
+/** The cold half of {@link checkTrailingContent}, kept out of it so it stays inlinable. */
+const reportTrailingContent = (state: State, c: number): void => {
+  if (c === SPACE || c === TAB) {
+    skipInlineSpaces(state)
+    if (atLineEnd(state)) return
+  }
+  const start = state.pos
+  pushError(
+    state,
+    'UNEXPECTED_CONTENT',
+    'Unexpected content after the end of a node',
+    start,
+    plainLineEnd(state.src, start, state.len),
+  )
 }
 
 /** Index of the end of a plain scalar's text on one line (trailing spaces and ` #` comment trimmed). */
@@ -714,8 +948,36 @@ const parseFlowNodeInner = (state: State): YamlNode => {
   else if (c === LBRACE) node = parseFlowMap(state)
   else if (c === DQUOTE || c === SQUOTE) node = scanQuoted(state, c)
   else if (c === STAR) node = scanAlias(state)
-  else node = scanFlowPlain(state)
+  else {
+    if (isReservedIndicator(c)) reportReservedIndicator(state)
+    node = scanFlowPlain(state)
+  }
   return attachProps(node, props, state)
+}
+
+/**
+ * Consumes an explicit `? ` key introducer inside a flow collection. The entry
+ * that follows is parsed exactly like an implicit one — the `?` only marks the
+ * key, it does not change its shape — so skipping it is the whole job.
+ */
+const skipFlowExplicitKey = (state: State): void => {
+  if (state.src.charCodeAt(state.pos) === QUESTION && introducerBoundary(state.src, state.pos + 1, state.len)) {
+    state.pos++
+    skipFlowWs(state)
+  }
+}
+
+/**
+ * Reports and consumes a `,` sitting where a value belongs (`[1,,2]`). Returns
+ * whether it did, so the caller restarts its entry loop. A comma *before* the
+ * closing bracket is the legal trailing comma and never reaches here — the
+ * caller checks for the closing bracket first.
+ */
+const skipEmptyFlowEntry = (state: State): boolean => {
+  if (state.src.charCodeAt(state.pos) !== COMMA) return false
+  pushError(state, 'UNEXPECTED_COMMA', 'Missing value before ","', state.pos, state.pos + 1)
+  state.pos++
+  return true
 }
 
 const parseFlowSeq = (state: State): YamlSeq => {
@@ -733,6 +995,8 @@ const parseFlowSeq = (state: State): YamlSeq => {
       pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "]" for flow sequence', start, state.pos)
       break
     }
+    if (skipEmptyFlowEntry(state)) continue
+    skipFlowExplicitKey(state)
     const item = parseFlowNode(state)
     skipFlowWs(state)
     if (state.src.charCodeAt(state.pos) === COLON) {
@@ -822,6 +1086,8 @@ const parseFlowMap = (state: State): YamlMap => {
       pushError(state, 'UNTERMINATED_FLOW', 'Missing closing "}" for flow mapping', start, state.pos)
       break
     }
+    if (skipEmptyFlowEntry(state)) continue
+    skipFlowExplicitKey(state)
     const key = parseFlowNode(state)
     skipFlowWs(state)
     let value: YamlNode | null = null
@@ -847,31 +1113,67 @@ const parseFlowMap = (state: State): YamlMap => {
   return { kind: 'map', items, start, end: state.pos }
 }
 
+/**
+ * Resolves a value written as `&anchor` / `!tag` with nothing after it on the
+ * line: either the block node indented below, or — when there is none — an empty
+ * node the properties can attach to.
+ *
+ * Split out of {@link parseInlineValue} rather than inlined into it: this runs
+ * only for a value that carries properties and no inline content, while the
+ * function it came from runs for every mapping value in the document.
+ */
+const parsePropsOnlyValue = (state: State, props: NodeProps, parentIndent: number): YamlNode => {
+  const propsEnd = state.pos
+  finishLine(state)
+  const child = peekLine(state)
+  if (!child.eof && child.indent > parentIndent) {
+    state.pos = child.contentPos
+    return attachProps(parseNode(state, child.indent), props, state)
+  }
+  // Nothing below to describe, so the properties belong to an empty node
+  // (`a: &anchor`). It has to be materialized rather than collapsed to a plain
+  // `null`: without a node there is nothing to register the anchor against, and
+  // a later `*anchor` — which is legal, and resolves to null — would dangle.
+  return attachProps(
+    { kind: 'scalar', value: null, source: '', style: 'plain', start: propsEnd, end: propsEnd },
+    props,
+    state,
+  )
+}
+
 /** Parses the inline value that follows a `key:` separator on the same line. */
 const parseInlineValue = (state: State, parentIndent: number): YamlNode | null => {
   const props = scanProps(state)
   skipInlineSpaces(state)
   if (atLineEnd(state)) {
     // Properties with no inline value: the real value is the block node below.
-    if (props.anchor || props.tag) {
-      finishLine(state)
-      const child = peekLine(state)
-      if (!child.eof && child.indent > parentIndent) {
-        state.pos = child.contentPos
-        const node = parseNode(state, child.indent)
-        return attachProps(node, props, state)
-      }
-    }
+    if (props.anchor || props.tag) return parsePropsOnlyValue(state, props, parentIndent)
     return null
   }
   const c = state.src.charCodeAt(state.pos)
   let node: YamlNode
-  if (c === STAR) node = scanAlias(state)
-  else if (c === PIPE || c === GT) node = scanBlockScalar(state, parentIndent)
-  else if (c === LBRACKET) node = parseFlowSeq(state)
-  else if (c === LBRACE) node = parseFlowMap(state)
-  else if (c === DQUOTE || c === SQUOTE) node = scanQuoted(state, c)
-  else node = scanPlainScalar(state, parentIndent)
+  // Aliases, flow collections, and quoted scalars stop at a delimiter rather
+  // than at end of line, so anything left on the line after them is content the
+  // document did not mean to write. Plain and block scalars absorb it instead,
+  // which is why the check sits in the branches rather than after them — the
+  // common plain-scalar value must not pay for it.
+  if (c === STAR) {
+    node = scanAlias(state)
+    checkTrailingContent(state)
+  } else if (c === PIPE || c === GT) node = scanBlockScalar(state, parentIndent)
+  else if (c === LBRACKET) {
+    node = parseFlowSeq(state)
+    checkTrailingContent(state)
+  } else if (c === LBRACE) {
+    node = parseFlowMap(state)
+    checkTrailingContent(state)
+  } else if (c === DQUOTE || c === SQUOTE) {
+    node = scanQuoted(state, c)
+    checkTrailingContent(state)
+  } else {
+    if (isReservedIndicator(c)) reportReservedIndicator(state)
+    node = scanPlainScalar(state, parentIndent)
+  }
   return attachProps(node, props, state)
 }
 
@@ -904,18 +1206,95 @@ const parseValueOrChild = (state: State, indent: number): YamlNode | null => {
   return node
 }
 
+/**
+ * The string a key projects to in the plain JavaScript output, and the identity
+ * duplicate-key tracking compares on.
+ *
+ * A JavaScript object can only be keyed by a string, so every key kind has to
+ * reduce to one: an alias resolves through to whatever it points at (a key
+ * written `*ref` means the anchored value, not the literal text), and a
+ * collection key renders in flow style. Both used to collapse — to `*ref` and to
+ * the empty string respectively — which silently merged distinct keys.
+ */
 const keyText = (node: YamlNode): string => {
   if (node.kind === 'scalar') {
     const v = node.value
     // Keys are usually strings already — skip the String() round-trip.
     if (typeof v === 'string') return v
-    return v === null ? 'null' : String(v)
+    // An empty key is null in YAML and stringifies to '' — the same key `? ` and
+    // an empty quoted string produce, which is what a JS object can express.
+    return v === null ? '' : String(v)
   }
-  if (node.kind === 'alias') return '*' + node.source
-  return ''
+  return keyTextSlow(node)
 }
 
-const parseBlockMap = (state: State, indent: number, firstColon: number): YamlMap => {
+/**
+ * The non-scalar half of {@link keyText}, split out for the same reason
+ * `scanPropsSlow` is: duplicate-key tracking calls `keyText` for every mapping
+ * key, and keeping the scalar case in a small non-recursive function leaves it
+ * inlinable at that call site.
+ */
+const keyTextSlow = (node: YamlNode): string => {
+  if (node.kind === 'alias') return node.target ? keyText(node.target) : '*' + node.source
+  return stringifyFlow(node)
+}
+
+/**
+ * Renders a node as it would read inside a flow collection. Distinct from
+ * {@link keyText}, which produces the string a JavaScript object is keyed by:
+ * there an empty scalar is `''` (the only thing an object key can be), while
+ * here it reads as `null`, because `{ a: null }` is what the source said and
+ * `{ a:  }` is not a rendering of anything.
+ */
+const flowText = (node: YamlNode): string => {
+  if (node.kind === 'scalar') {
+    const v = node.value
+    return typeof v === 'string' ? v : v === null ? 'null' : String(v)
+  }
+  if (node.kind === 'alias') return node.target ? flowText(node.target) : '*' + node.source
+  return stringifyFlow(node)
+}
+
+/**
+ * Renders a collection used as a mapping key in flow style, so distinct keys get
+ * distinct strings. Recursion is bounded by the same nesting the parser accepted
+ * ({@link MAX_PARSE_DEPTH}), and only runs for the rare document that keys a
+ * mapping by a collection.
+ */
+const stringifyFlow = (node: YamlNode): string => {
+  if (node.kind === 'seq') {
+    if (node.items.length === 0) return '[]'
+    let out = '[ '
+    for (let i = 0; i < node.items.length; i++) {
+      const item = node.items[i]
+      out += (i > 0 ? ', ' : '') + (item ? flowText(item) : 'null')
+    }
+    return out + ' ]'
+  }
+  if (node.kind === 'map') {
+    if (node.items.length === 0) return '{}'
+    let out = '{ '
+    for (let i = 0; i < node.items.length; i++) {
+      const pair = node.items[i]
+      if (pair === undefined) continue
+      out += (i > 0 ? ', ' : '') + flowText(pair.key) + ': ' + (pair.value ? flowText(pair.value) : 'null')
+    }
+    return out + ' }'
+  }
+  return flowText(node)
+}
+
+/**
+ * Parses a block mapping whose entries sit at column `indent`.
+ *
+ * `firstKey` covers the one case the cursor cannot describe on its own: a
+ * collection or alias written as an implicit key (`[a, b]: value`, `*ref: value`).
+ * `parseNodeInner` has to parse that node before it can tell a key from a
+ * document-level node, so it hands the finished one over here with the cursor
+ * already past the `:`. It is consumed before the entry loop starts, which keeps
+ * the loop — the hottest code in the parser — free of any test for it.
+ */
+const parseBlockMap = (state: State, indent: number, firstColon: number, firstKey: YamlNode | null = null): YamlMap => {
   const { src, len } = state
   const items: YamlPair[] = []
   // Duplicate-key tracking; see `trackKey` for why small maps avoid the `Set`.
@@ -926,6 +1305,22 @@ const parseBlockMap = (state: State, indent: number, firstColon: number): YamlMa
   // start, an invariant the previous entry's value leaves us on).
   let contentPos = state.pos
   let firstEntry = true
+  if (firstKey !== null) {
+    // Consume the caller's already-parsed key here rather than inside the loop:
+    // the loop body is the parser's hottest code, and this case would otherwise
+    // add a test to every entry of every mapping to serve the first entry of a
+    // rare one.
+    const firstValue = parseValueOrChild(state, indent)
+    if (state.uniqueKeys && firstKey.kind === 'alias') seen = trackKey(state, items, firstKey, seen)
+    items.push({
+      kind: 'pair',
+      key: firstKey,
+      value: firstValue,
+      start: firstKey.start,
+      end: firstValue ? firstValue.end : firstKey.end,
+    })
+    firstEntry = false
+  }
   for (;;) {
     let colon: number
     let explicit: boolean
@@ -984,6 +1379,11 @@ const parseBlockMap = (state: State, indent: number, firstColon: number): YamlMa
       const kc = src.charCodeAt(state.pos)
       if (kc === DQUOTE || kc === SQUOTE) {
         key = scanQuoted(state, kc)
+      } else if (kc === STAR) {
+        // `*ref: value` keys the mapping by the anchored value, so the key has to
+        // be a real alias node — slicing it as text would key it by the literal
+        // `*ref` and lose the reference.
+        key = scanAlias(state)
       } else {
         let end = colon
         while (end > lineContentPos && isSpace(src.charCodeAt(end - 1))) end--
@@ -1055,7 +1455,11 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
     skipInlineSpaces(state)
 
     let item: YamlNode
-    if (atLineEnd(state)) {
+    // One character read serves both questions this line asks: whether the entry
+    // has a value on it at all (the `atLineEnd` test, inlined here so the read is
+    // not repeated), and whether that value opens a block scalar.
+    const ic = src.charCodeAt(state.pos)
+    if (state.pos >= len || ic === NL || ic === CR || ic === HASH) {
       finishLine(state)
       const child = peekLine(state)
       if (!child.eof && child.indent > indent) {
@@ -1065,8 +1469,12 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
         item = { kind: 'scalar', value: null, source: '', style: 'plain', start: dashPos + 1, end: dashPos + 1 }
       }
     } else {
-      const contentCol = state.pos - contentPos + indent
-      item = parseNode(state, contentCol)
+      // A block scalar opened on the `- ` line measures its content against the
+      // sequence's own indentation, not the column the `|`/`>` happens to land
+      // on: `- |` at column 0 may hold content indented by one, which the item's
+      // content column (2) would reject — dropping the scalar's body.
+      item =
+        ic === PIPE || ic === GT ? scanBlockScalar(state, indent) : parseNode(state, state.pos - contentPos + indent)
       finishLineIfMidLine(state)
     }
     items.push(item)
@@ -1122,7 +1530,12 @@ const parseNodeInner = (state: State, indent: number): YamlNode => {
     if (atLineEnd(state)) {
       finishLine(state)
       const child = peekLine(state)
-      if (!child.eof && child.indent > indent) {
+      // Properties may sit on a line of their own, with the node they describe
+      // below them. What the node has to clear is the *parent's* indentation —
+      // `indent - 1` by this function's convention, the same bound it hands to
+      // the scalar scanners — not the property line's own column, which is where
+      // the node usually starts too (`e:` / `&node` / `- x: y` all at one level).
+      if (!child.eof && child.indent >= indent) {
         state.pos = child.contentPos
         return attachProps(parseNode(state, child.indent), props, state)
       }
@@ -1135,9 +1548,25 @@ const parseNodeInner = (state: State, indent: number): YamlNode => {
   }
 
   const cc = src.charCodeAt(state.pos)
-  if (cc === STAR) return attachProps(scanAlias(state), props, state)
-  if (cc === LBRACKET) return attachProps(parseFlowSeq(state), props, state)
-  if (cc === LBRACE) return attachProps(parseFlowMap(state), props, state)
+  // An alias or a flow collection at the head of a line may be the whole node —
+  // or the *key* of a block mapping (`*ref: value`, `[a, b]: value`). Nothing
+  // before the node ends distinguishes the two, so the `:` test happens after
+  // it is parsed; until it did, the trailing `: value` and every sibling entry
+  // of that mapping were silently discarded.
+  if (cc === STAR || cc === LBRACKET || cc === LBRACE) {
+    const node = attachProps(
+      cc === STAR ? scanAlias(state) : cc === LBRACKET ? parseFlowSeq(state) : parseFlowMap(state),
+      props,
+      state,
+    )
+    skipInlineSpaces(state)
+    if (src.charCodeAt(state.pos) === COLON && introducerBoundary(src, state.pos + 1, len)) {
+      state.pos++
+      return parseBlockMap(state, indent, -1, node)
+    }
+    checkTrailingContent(state)
+    return node
+  }
   if (cc === PIPE || cc === GT) return attachProps(scanBlockScalar(state, indent - 1), props, state)
 
   // A line beginning with a quote may be a quoted *key* (e.g. `"200":`), so the
@@ -1149,11 +1578,16 @@ const parseNodeInner = (state: State, indent: number): YamlNode => {
   if (cc === QUESTION && introducerBoundary(src, state.pos + 1, len)) {
     return attachProps(parseBlockMap(state, indent, -1), props, state)
   }
-  if (cc === DQUOTE || cc === SQUOTE) return attachProps(scanQuoted(state, cc), props, state)
+  if (cc === DQUOTE || cc === SQUOTE) {
+    const quoted = attachProps(scanQuoted(state, cc), props, state)
+    checkTrailingContent(state)
+    return quoted
+  }
+  if (isReservedIndicator(cc)) reportReservedIndicator(state)
   return attachProps(scanPlainScalar(state, indent - 1), props, state)
 }
 
-/** Skips a leading BOM, `%`-directives, and a `---` document-start marker. */
+/** Reads a leading BOM, `%`-directives, and a `---` document-start marker. */
 const skipDocumentHead = (state: State): void => {
   const { src, len } = state
   if (src.charCodeAt(0) === 0xfeff) state.pos = 1
@@ -1161,7 +1595,8 @@ const skipDocumentHead = (state: State): void => {
     const line = peekLine(state)
     if (line.eof) return
     const c = src.charCodeAt(line.contentPos)
-    if (c === 37 /* % */) {
+    if (c === PERCENT) {
+      readDirective(state, line.contentPos)
       state.pos = nextLineStart(src, line.contentPos, len)
       continue
     }
@@ -1223,6 +1658,9 @@ const applyScalarTag = (node: YamlScalar): unknown => {
       const date = new Date((typeof v === 'string' ? v : node.source).trim())
       return Number.isNaN(date.getTime()) ? v : date
     }
+    // The bare `!` is the non-specific tag: it says "this node's type is not the
+    // one resolution would infer", which for a scalar means the failsafe `!!str`.
+    case '!':
     case 'str':
       // For a plain scalar the raw source *is* the string (so `!!str 1.50` keeps
       // its trailing zero); quoted/block styles already resolved to a string.
@@ -1390,8 +1828,36 @@ const newState = (source: string, options: ParseOptions): State => ({
   merge: options.merge !== false,
   tabReportedAt: -1,
   depth: 0,
+  tagHandles: null,
+  yamlDirective: false,
   line: { eof: false, indent: 0, contentPos: 0 },
 })
+
+/**
+ * Reports a second root node in what should be a single document — `a: 1` and
+ * `b: 2` followed by a bare `[1, 2]` at column 0, which the block parsers stop
+ * before and would otherwise leave silently unparsed. A `---`/`...` marker is
+ * the legitimate way to follow one node with another, so those end the check.
+ *
+ * A document whose root is a block collection ends with the cursor already at
+ * end of input — the collection loop only stops when `peekLine` reports EOF — so
+ * the usual case costs one comparison and nothing else.
+ */
+const checkDocumentEnd = (state: State): void => {
+  if (state.pos >= state.len) return
+  finishLineIfMidLine(state)
+  const line = peekLine(state)
+  if (line.eof) return
+  const c = state.src.charCodeAt(line.contentPos)
+  if ((c === DASH || c === DOT) && isDocMarker(state.src, line.contentPos, state.len)) return
+  pushError(
+    state,
+    'UNEXPECTED_CONTENT',
+    'Unexpected content after the document node — start a new document with "---"',
+    line.contentPos,
+    plainLineEnd(state.src, line.contentPos, state.len),
+  )
+}
 
 /** Builds a document from the current `state`, closing over its problems. */
 const finishDocument = (state: State, contents: YamlNode | null): YamlDocument => {
@@ -1419,37 +1885,47 @@ export const parseDocument = (source: string, options: ParseOptions = {}): YamlD
     if (!isDocEnd) {
       state.pos = head.contentPos
       contents = parseNode(state, head.indent)
+      checkDocumentEnd(state)
     }
   }
   return finishDocument(state, contents)
 }
 
+/** `skipStreamHead` result bits: which document markers it consumed. */
+const SAW_DOC_START = 1
+const SAW_DOC_END = 2
+
 /**
  * Consumes the head of one document in a stream — any `%`-directives, `...`
- * end markers of a preceding document, and a single `---` start marker. Returns
- * whether a `---` start marker was consumed, which marks an explicit (possibly
- * empty) document even when no body follows.
+ * end markers of a preceding document, and a single `---` start marker.
+ *
+ * Returns a bitmask of what it saw. `---` marks an explicit (possibly empty)
+ * document even when no body follows; `...` matters because it closes the
+ * previous document, which makes the next one legal without a `---` of its own.
  */
-const skipStreamHead = (state: State): boolean => {
+const skipStreamHead = (state: State): number => {
   const { src, len } = state
+  let seen = 0
   for (;;) {
     const line = peekLine(state)
-    if (line.eof) return false
+    if (line.eof) return seen
     const p = line.contentPos
     const c = src.charCodeAt(p)
     if (c === PERCENT) {
+      readDirective(state, p)
       state.pos = nextLineStart(src, p, len)
       continue
     }
     if (c === DOT && isDocMarker(src, p, len)) {
       state.pos = nextLineStart(src, p + 3, len)
+      seen |= SAW_DOC_END
       continue
     }
     if (c === DASH && isDocMarker(src, p, len)) {
       state.pos = nextLineStart(src, p + 3, len)
-      return true
+      return seen | SAW_DOC_START
     }
-    return false
+    return seen
   }
 }
 
@@ -1469,7 +1945,8 @@ export const parseAllDocuments = (source: string, options: ParseOptions = {}): Y
 
   const docs: YamlDocument[] = []
   for (;;) {
-    const sawStart = skipStreamHead(state)
+    const markers = skipStreamHead(state)
+    const sawStart = (markers & SAW_DOC_START) !== 0
     const line = peekLine(state)
     let contents: YamlNode | null = null
     let bodyConsumed = false
@@ -1483,6 +1960,18 @@ export const parseAllDocuments = (source: string, options: ParseOptions = {}): Y
         // A `...` end marker terminates this (empty) document; consume it.
         state.pos = nextLineStart(src, p + 3, len)
       } else {
+        // A second document may follow the first bare, but only once the one
+        // before it was closed — by its own `---` or by a `...` end marker.
+        // Otherwise this is stray content, not a new document.
+        if (!sawStart && (markers & SAW_DOC_END) === 0 && docs.length > 0) {
+          pushError(
+            state,
+            'UNEXPECTED_CONTENT',
+            'Unexpected content — start a new document with "---"',
+            p,
+            plainLineEnd(src, p, len),
+          )
+        }
         state.pos = p
         contents = parseNode(state, line.indent)
         finishLineIfMidLine(state)
@@ -1494,6 +1983,8 @@ export const parseAllDocuments = (source: string, options: ParseOptions = {}): Y
     state.errors = []
     state.warnings = []
     state.anchors = new Map()
+    state.tagHandles = null
+    state.yamlDirective = false
   }
   return docs
 }

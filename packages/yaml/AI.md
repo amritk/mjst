@@ -37,8 +37,15 @@ for (const error of doc.errors) {
 4. **Values materialize lazily via `toJS()`** (resolves aliases + merge keys);
    `parse()` === `parseDocument().toJS()`. `pair.value` can be `null` (e.g.
    `paths:` with no value).
-5. **Errors are collected on `doc.errors` / `doc.warnings`, not thrown.** Tab
-   indentation is a `TAB_INDENT` error.
+5. **Errors are collected on `doc.errors` / `doc.warnings`, not thrown.** Codes
+   include `DUPLICATE_KEY`, `UNRESOLVED_ALIAS`, `UNEXPECTED_CONTENT`,
+   `UNTERMINATED_FLOW`, `TAB_INDENT`; directive problems land in `warnings`.
+6. **`node.tag` keeps a local tag's `!`.** `!!str` → `'str'`, `!custom` →
+   `'!custom'`. Only the core/extended schema tags coerce a value; a local tag
+   passes it through. `!<verbatim>` and `%TAG` handles resolve to the same form.
+7. **A collection mapping key projects to its flow rendering.** `[a, b]: v`
+   becomes `{ '[ a, b ]': 'v' }`, and an empty key becomes `''` (not `'null'`),
+   because a JS object key can only be a string.
 
 Exports: `parse`, `parseDocument`, `parseAllDocuments`, `nodeAtPath`,
 `lineCounter`, the guards `isScalar`/`isMap`/`isSeq`/`isPair`/`isAlias`, + node
