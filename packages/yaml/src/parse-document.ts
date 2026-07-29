@@ -1113,32 +1113,41 @@ const parseFlowMap = (state: State): YamlMap => {
   return { kind: 'map', items, start, end: state.pos }
 }
 
+/**
+ * Resolves a value written as `&anchor` / `!tag` with nothing after it on the
+ * line: either the block node indented below, or — when there is none — an empty
+ * node the properties can attach to.
+ *
+ * Split out of {@link parseInlineValue} rather than inlined into it: this runs
+ * only for a value that carries properties and no inline content, while the
+ * function it came from runs for every mapping value in the document.
+ */
+const parsePropsOnlyValue = (state: State, props: NodeProps, parentIndent: number): YamlNode => {
+  const propsEnd = state.pos
+  finishLine(state)
+  const child = peekLine(state)
+  if (!child.eof && child.indent > parentIndent) {
+    state.pos = child.contentPos
+    return attachProps(parseNode(state, child.indent), props, state)
+  }
+  // Nothing below to describe, so the properties belong to an empty node
+  // (`a: &anchor`). It has to be materialized rather than collapsed to a plain
+  // `null`: without a node there is nothing to register the anchor against, and
+  // a later `*anchor` — which is legal, and resolves to null — would dangle.
+  return attachProps(
+    { kind: 'scalar', value: null, source: '', style: 'plain', start: propsEnd, end: propsEnd },
+    props,
+    state,
+  )
+}
+
 /** Parses the inline value that follows a `key:` separator on the same line. */
 const parseInlineValue = (state: State, parentIndent: number): YamlNode | null => {
   const props = scanProps(state)
   skipInlineSpaces(state)
   if (atLineEnd(state)) {
     // Properties with no inline value: the real value is the block node below.
-    if (props.anchor || props.tag) {
-      const propsEnd = state.pos
-      finishLine(state)
-      const child = peekLine(state)
-      if (!child.eof && child.indent > parentIndent) {
-        state.pos = child.contentPos
-        const node = parseNode(state, child.indent)
-        return attachProps(node, props, state)
-      }
-      // Nothing below to describe, so the properties belong to an empty node
-      // (`a: &anchor`). It has to be materialized rather than collapsed to a
-      // plain `null`: without a node there is nothing to register the anchor
-      // against, and a later `*anchor` — which is legal, and resolves to null —
-      // would dangle.
-      return attachProps(
-        { kind: 'scalar', value: null, source: '', style: 'plain', start: propsEnd, end: propsEnd },
-        props,
-        state,
-      )
-    }
+    if (props.anchor || props.tag) return parsePropsOnlyValue(state, props, parentIndent)
     return null
   }
   const c = state.src.charCodeAt(state.pos)
@@ -1279,10 +1288,11 @@ const stringifyFlow = (node: YamlNode): string => {
  * Parses a block mapping whose entries sit at column `indent`.
  *
  * `firstKey` covers the one case the cursor cannot describe on its own: a
- * collection written as an implicit key (`[a, b]: value`). `parseNodeInner` has
- * to parse the flow collection before it can tell a key from a document-level
- * node, so it hands the finished node over here with the cursor already past the
- * `:`. Everything after the first entry is found the ordinary way.
+ * collection or alias written as an implicit key (`[a, b]: value`, `*ref: value`).
+ * `parseNodeInner` has to parse that node before it can tell a key from a
+ * document-level node, so it hands the finished one over here with the cursor
+ * already past the `:`. It is consumed before the entry loop starts, which keeps
+ * the loop — the hottest code in the parser — free of any test for it.
  */
 const parseBlockMap = (state: State, indent: number, firstColon: number, firstKey: YamlNode | null = null): YamlMap => {
   const { src, len } = state
@@ -1295,7 +1305,22 @@ const parseBlockMap = (state: State, indent: number, firstColon: number, firstKe
   // start, an invariant the previous entry's value leaves us on).
   let contentPos = state.pos
   let firstEntry = true
-  let pendingKey = firstKey
+  if (firstKey !== null) {
+    // Consume the caller's already-parsed key here rather than inside the loop:
+    // the loop body is the parser's hottest code, and this case would otherwise
+    // add a test to every entry of every mapping to serve the first entry of a
+    // rare one.
+    const firstValue = parseValueOrChild(state, indent)
+    if (state.uniqueKeys && firstKey.kind === 'alias') seen = trackKey(state, items, firstKey, seen)
+    items.push({
+      kind: 'pair',
+      key: firstKey,
+      value: firstValue,
+      start: firstKey.start,
+      end: firstValue ? firstValue.end : firstKey.end,
+    })
+    firstEntry = false
+  }
   for (;;) {
     let colon: number
     let explicit: boolean
@@ -1303,7 +1328,7 @@ const parseBlockMap = (state: State, indent: number, firstColon: number, firstKe
       // `parseNode` already classified this line: a non-negative `firstColon` is
       // an inline `key:`; a negative one signals an explicit `?` introducer.
       colon = firstColon
-      explicit = firstColon < 0 && pendingKey === null
+      explicit = firstColon < 0
     } else {
       const line = peekLine(state)
       if (line.eof || line.indent !== indent) break
@@ -1324,12 +1349,7 @@ const parseBlockMap = (state: State, indent: number, firstColon: number, firstKe
 
     let key: YamlNode
     let value: YamlNode | null = null
-    if (pendingKey !== null) {
-      // A collection key already parsed by the caller; the cursor is past its `:`.
-      key = pendingKey
-      pendingKey = null
-      value = parseValueOrChild(state, indent)
-    } else if (explicit) {
+    if (explicit) {
       // `? key` (inline or a block key on the deeper lines below), optionally
       // followed by a `: value` line at the same indent. An absent `: value`
       // line leaves the value null.
@@ -1435,7 +1455,11 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
     skipInlineSpaces(state)
 
     let item: YamlNode
-    if (atLineEnd(state)) {
+    // One character read serves both questions this line asks: whether the entry
+    // has a value on it at all (the `atLineEnd` test, inlined here so the read is
+    // not repeated), and whether that value opens a block scalar.
+    const ic = src.charCodeAt(state.pos)
+    if (state.pos >= len || ic === NL || ic === CR || ic === HASH) {
       finishLine(state)
       const child = peekLine(state)
       if (!child.eof && child.indent > indent) {
@@ -1445,16 +1469,12 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
         item = { kind: 'scalar', value: null, source: '', style: 'plain', start: dashPos + 1, end: dashPos + 1 }
       }
     } else {
-      const ic = src.charCodeAt(state.pos)
-      if (ic === PIPE || ic === GT) {
-        // A block scalar opened on the `- ` line measures its content against the
-        // sequence's own indentation, not the column the `|`/`>` happens to land
-        // on: `- |` at column 0 may hold content indented by one, which the
-        // item's content column (2) would reject — dropping the scalar's body.
-        item = scanBlockScalar(state, indent)
-      } else {
-        item = parseNode(state, state.pos - contentPos + indent)
-      }
+      // A block scalar opened on the `- ` line measures its content against the
+      // sequence's own indentation, not the column the `|`/`>` happens to land
+      // on: `- |` at column 0 may hold content indented by one, which the item's
+      // content column (2) would reject — dropping the scalar's body.
+      item =
+        ic === PIPE || ic === GT ? scanBlockScalar(state, indent) : parseNode(state, state.pos - contentPos + indent)
       finishLineIfMidLine(state)
     }
     items.push(item)

@@ -47,7 +47,10 @@ is now checked rather than asserted.
 - A collection mapping key projects to its flow rendering (`'[ a, b ]'`) rather
   than `''`.
 
-Parser throughput is unchanged: measured in-process against the previous parser,
-the plain block-mapping hot path and a 100 KB document are flat to slightly
-faster, with roughly 1–2% of fixed overhead on very small (sub-microsecond-scale)
-documents.
+Parser throughput is unchanged. Measured in-process against the previous parser
+across six document shapes — a tiny config, a 2 KB OpenAPI document, a 100 KB
+document, a 400-key plain block mapping, a quoted-scalar mapping, and a 200-entry
+block sequence — every shape lands within ±1% of the old parser, and the 100 KB
+document is faster. Every check added here sits in a branch that was already
+cold, reuses a character read the parser was already making, or was moved out of
+a hot function so it does not affect what the JIT inlines.
