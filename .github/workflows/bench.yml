@@ -6,6 +6,11 @@ name: Bench
 # scripts/bench-compare.ts — one isolated worker process per measurement,
 # baseline and head interleaved so runner-load drift hits both sides equally.
 # Shared runners are still noisy: deltas within ±10% are usually noise.
+#
+# Only the suites the PR can actually move are timed: the changed-file list
+# is fetched below and scripts/bench-scope.ts narrows the run to the edited
+# packages plus their transitive dependants. A yaml-only PR gets the yaml
+# table, not four tables of unrelated noise.
 
 on:
   pull_request:
@@ -45,6 +50,28 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
+      # The PR's changed paths, one per line, for the suite scoping in
+      # bench-compare. Taken from the API rather than `git diff` because the
+      # checkouts above are shallow, and paginated because listFiles returns
+      # 100 per page. It also caps at 3000 files overall, and a truncated list
+      # could drop the very path that widens the scope — so at the cap we
+      # write nothing, which bench-compare reads as "unknown" and benches
+      # everything.
+      - name: Collect the PR's changed files
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { writeFileSync } = require('node:fs')
+            const LIST_FILES_CAP = 3000
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              ...context.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            })
+            const truncated = files.length >= LIST_FILES_CAP
+            writeFileSync('changed-files.txt', truncated ? '' : files.map((file) => file.filename).join('\n'))
+            core.info(truncated ? `${files.length} changed files — at the API cap, benching every suite` : `${files.length} changed file(s)`)
+
       - name: Install dependencies (PR)
         run: bun install --frozen-lockfile
 
@@ -69,6 +96,7 @@ jobs:
           bun run scripts/bench-compare.ts
           --baseline .bench-baseline
           --baseline-label "${{ github.event.pull_request.base.ref }}"
+          --changed changed-files.txt
           --output bench-delta.md
 
       - name: Add delta table to the job summary
