@@ -154,7 +154,7 @@ Run it yourself with `bun run bench`. Representative numbers (Bun, Linux):
 | yaml | 35.6 KB | 5.4× larger |
 | js-yaml | 13.5 KB | 2.0× larger |
 
-Correctness is pinned to `yaml` by a differential test suite (`src/differential.test.ts`) that parses a battery of documents — including full OpenAPI specs — and asserts byte-identical data output. Where `js-yaml` diverges (its `!!timestamp` type turns ISO strings into `Date`s, which is wrong for a JSON superset), we instead agree with `yaml`.
+Correctness is pinned two ways: a differential test suite (`src/differential.test.ts`) parses a battery of documents — including full OpenAPI specs — and asserts byte-identical data output against `yaml`, and `src/conformance.test.ts` measures the parser against the official YAML test suite (see [Conformance, measured](#conformance-measured)). Where `js-yaml` diverges (its `!!timestamp` type turns ISO strings into `Date`s, which is wrong for a JSON superset), we instead agree with `yaml`.
 
 ---
 
@@ -187,28 +187,69 @@ schema** for scalar typing. The exact boundaries:
 
 - Core scalar tags (the JSON-compatible set OpenAPI allows): `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`.
 - Extended tags, for general config files beyond the OpenAPI subset: `!!binary` → `Uint8Array`, `!!timestamp` → `Date`, `!!set` → `Set`, `!!omap` → `Map` (matching `yaml`). A conformant OpenAPI document won't use these.
-- Any other tag is **captured on the node** (readable via `node.tag`) and its value passed through unchanged.
+- All three spellings resolve to the same tag: the shorthand `!!str`, the verbatim `!<tag:yaml.org,2002:str>`, and a shorthand through a handle a `%TAG` directive declared.
+- The non-specific `!` resolves a scalar as a string, per the failsafe schema.
+- Any other tag is **captured on the node** (readable via `node.tag`) and its value passed through unchanged. A *local* tag keeps its `!` — `node.tag` is `!custom` for `!custom`, versus `str` for `!!str` — so an application tag that happens to share a core tag's name does not coerce.
 
 **References, documents, and trivia**
 
-- Anchors (`&name`) and aliases (`*name`); `<<` merge keys (toggle with the `merge` option).
-- Multi-document streams (`---` / `...`) via `parseAllDocuments`, each document with its own anchor scope and problem list.
+- Anchors (`&name`) and aliases (`*name`); `<<` merge keys (toggle with the `merge` option). Anchors and aliases work as mapping keys, and an alias key resolves to the anchored value.
+- Collections as mapping keys, both explicit (`? [a, b]` / `: value`) and implicit (`[a, b]: value`). A JavaScript object can only be keyed by a string, so a collection key projects to its flow rendering — `{ '[ a, b ]': 'value' }`.
+- Multi-document streams (`---` / `...`) via `parseAllDocuments`, each document with its own anchor scope, tag handles, and problem list.
+- `%TAG` directives (handles are resolved) and `%YAML` (the version is reported, not applied — resolution is always the 1.2 core schema).
 - Comments (full-line and inline), blank lines, and a leading byte-order mark.
 
 **Diagnostics**
 
-- Exact `[start, end)` source span on every node, duplicate-key detection (`DUPLICATE_KEY`), unterminated flow collections (`UNTERMINATED_FLOW`), and tab-in-indentation (`TAB_INDENT`).
+Every node carries an exact `[start, end)` source span, and problems are collected on `doc.errors` / `doc.warnings` rather than thrown.
+
+| code | |
+| --- | --- |
+| `DUPLICATE_KEY` | the same mapping key appears twice |
+| `UNRESOLVED_ALIAS` | `*name` with no matching anchor in scope |
+| `UNTERMINATED_FLOW` | a `[` or `{` that never closes |
+| `UNTERMINATED_QUOTE` | a quoted scalar that never closes |
+| `UNEXPECTED_CONTENT` | content after a node ends, or a second root node with no `---` |
+| `UNEXPECTED_COMMA` | an empty flow entry (`[1, , 2]`) |
+| `TAB_INDENT` | a tab used for indentation |
+| `BAD_SCALAR_START` | a plain scalar starting with the reserved `@` or `` ` `` |
+| `BAD_TAG` | a verbatim tag missing its closing `>` |
+| `UNKNOWN_TAG_HANDLE` | a tag handle no `%TAG` directive declared |
+| `DEPTH_LIMIT` | nesting past the parser's depth cap |
+
+Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `DUPLICATE_DIRECTIVE`, `UNKNOWN_DIRECTIVE`, `BAD_DIRECTIVE`.
 
 ### Not supported
 
-- **Tab indentation.** Forbidden by YAML 1.2; reported as a `TAB_INDENT` error rather than parsed. (Tabs *after* content — e.g. separating a key from its value — are fine.)
-- **Directive processing.** `%YAML` and `%TAG` lines are skipped, not applied. There is no resolution of named tag handles (`!handle!suffix`) or verbatim tags (`!<uri>`); every `!`/`!!` prefix is stripped and only the core/extended tag names above are interpreted, so a local `!foo` and `!!foo` are treated alike.
-- **Schema selection.** Always the 1.2 core schema — no JSON, failsafe, or YAML 1.1 schema switch.
+- **Tab indentation.** Forbidden by YAML 1.2; reported as a `TAB_INDENT` error rather than parsed. (Tabs *after* content — e.g. separating a key from its value — are fine.) The spec's finer tab rules, such as a tab inside a block scalar's indentation, are not modelled.
+- **Schema selection.** Always the 1.2 core schema — no JSON, failsafe, or YAML 1.1 schema switch. A `%YAML 1.1` document parses, with a warning that its schema differences are not applied.
 - **YAML 1.1-only scalar forms.** `yes`/`no`/`on`/`off` booleans, sexagesimal numbers (`1:30:00`), and underscore digit groups (`1_000`) stay strings, per the 1.2 core schema.
 - **Implicit timestamps.** An untagged ISO date string stays a string; only an explicit `!!timestamp` produces a `Date`.
-- **Reserved indicators.** A plain scalar beginning with the reserved `@` or `` ` `` is accepted as text rather than rejected.
+- **Stream-level directive grammar.** `%TAG` handles resolve, but the rules *around* directives are not enforced — that a document must be closed by `...` before the next document's directives, for instance.
+- **Node properties on block mapping keys.** An anchor or tag written on a mapping key (`&a key: value`) stays part of the key text instead of being applied to it.
+- **Multi-line implicit keys.** A key spanning lines, or one past the spec's 1024-character limit, is accepted rather than rejected.
+- **Carriage-return-only line breaks.** `\r\n` and `\n` are both handled; a lone `\r` as a line terminator is not.
 
 If you need full YAML 1.2 conformance, use [`yaml`](https://www.npmjs.com/package/yaml). If you need a small, fast, position-aware parser for diagnostics, use this.
+
+### Conformance, measured
+
+The boundary above is not a claim — it is checked. `src/conformance.test.ts` runs the
+official [YAML test suite](https://github.com/yaml/yaml-test-suite) (402 cases) on
+every build:
+
+**293 / 402 cases pass (72.9%).**
+
+Every case that does not is listed in `src/conformance-expected-failures.test-utils.ts`
+with the reason it does not, and the test fails if a case moves in *either*
+direction — a regression breaks the build, and so does a case that starts passing
+without its entry being removed. The suite is a dev dependency; none of it reaches
+the published bundle.
+
+The 109 remaining cases are roughly: invalid documents we accept without a
+diagnostic (~60), block-scalar and quoted-scalar folding edge cases that produce a
+different string (~20), the tab and directive rules above (~15), and shapes we
+mis-scan and now report rather than silently mis-parse (~10).
 
 ---
 

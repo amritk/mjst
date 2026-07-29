@@ -31,40 +31,52 @@ const pathKey = (path: JsonPath): string =>
   path.map((segment) => (typeof segment === 'number' ? `[${segment}]` : `.${segment}`)).join('')
 
 /**
- * Canonically serializes a complex (map/seq) mapping key into a stable, distinct
- * segment. `toJS`'s `keyText` collapses every complex key to `''`, so two
- * distinct complex keys (and their whole value subtrees) would share one index
- * slot and clobber each other. A structural serialization keeps them apart:
- * `[a,b]` for a sequence key, `{k:v}` for a mapping key, recursively. Strings are
- * quoted so a scalar member can't be confused with structure, and aliases render
- * as `*name` (never expanded, so this stays bounded regardless of the anchor).
+ * Renders a collection (map/seq) mapping key in flow style, mirroring how
+ * `@amritk/yaml`'s `toJS` projects one. This has to match that projection
+ * exactly: the position index is keyed by path, and a path segment that differs
+ * from the key the data actually carries points diagnostics at the wrong node —
+ * or at nothing.
  */
 const serializeComplexKey = (node: YamlNode): string => {
-  if (isSeq(node)) return `[${node.items.map(serializeComplexKey).join(',')}]`
-  if (isMap(node)) {
-    return `{${node.items
-      .filter(isPair)
-      .map((pair) => `${serializeComplexKey(pair.key)}:${pair.value ? serializeComplexKey(pair.value) : 'null'}`)
-      .join(',')}}`
+  if (isSeq(node)) {
+    return node.items.length === 0 ? '[]' : `[ ${node.items.map(flowText).join(', ')} ]`
   }
-  if (isAlias(node)) return `*${node.source}`
-  const v = node.value
-  return typeof v === 'string' ? JSON.stringify(v) : v === null ? 'null' : String(v)
+  if (isMap(node)) {
+    const pairs = node.items
+      .filter(isPair)
+      .map((pair) => `${flowText(pair.key)}: ${pair.value ? flowText(pair.value) : 'null'}`)
+    return pairs.length === 0 ? '{}' : `{ ${pairs.join(', ')} }`
+  }
+  return flowText(node)
 }
 
 /**
- * Stringifies a mapping key into an index segment. Scalar, null, and alias keys
- * match `toJS`'s `keyText` (`null`, the `String()` form, `*name`) so scalar-keyed
- * paths line up with the projected data. Complex (map/seq) keys — which `toJS`
- * cannot address individually — get a canonical structural serialization instead
- * of collapsing to `''`, so distinct complex keys occupy distinct index slots.
+ * Renders a node as it reads inside a flow collection, where an empty scalar is
+ * `null` rather than the `''` a JavaScript object key collapses to. Mirrors the
+ * parser's own `flowText`.
+ */
+const flowText = (node: YamlNode): string => {
+  if (isScalar(node)) {
+    const v = node.value
+    return typeof v === 'string' ? v : v === null ? 'null' : String(v)
+  }
+  if (isAlias(node)) return node.target ? flowText(node.target) : `*${node.source}`
+  return serializeComplexKey(node)
+}
+
+/**
+ * Stringifies a mapping key into an index segment, matching `toJS`'s `keyText`
+ * so a keyed path lines up with the projected data: an empty key is `''`, an
+ * alias resolves through to the value it points at, and a collection key renders
+ * in flow style. An alias with no anchor keeps its `*name` text, the same
+ * fallback the projection uses.
  */
 const keyToString = (key: YamlNode): string => {
   if (isScalar(key)) {
     const v = key.value
-    return typeof v === 'string' ? v : v === null ? 'null' : String(v)
+    return typeof v === 'string' ? v : v === null ? '' : String(v)
   }
-  if (isAlias(key)) return `*${key.source}`
+  if (isAlias(key)) return key.target ? keyToString(key.target) : `*${key.source}`
   return serializeComplexKey(key)
 }
 

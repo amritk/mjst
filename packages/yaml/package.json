@@ -53,6 +53,7 @@
   },
   "devDependencies": {
     "js-yaml": "^4.1.0",
-    "yaml": "^2.6.0"
+    "yaml": "^2.6.0",
+    "yaml-test-suite": "0.1.0"
   }
 }
