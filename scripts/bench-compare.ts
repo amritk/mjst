@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { fmtOps, NOISY_SPREAD } from '../packages/generate-parsers/bench/measure.ts'
+import { readWorkspace, SUITES, selectSuites } from './bench-scope.ts'
 
 /**
  * Benchmarks this checkout's mjst against another checkout (normally `main`)
@@ -27,6 +28,14 @@ import { fmtOps, NOISY_SPREAD } from '../packages/generate-parsers/bench/measure
  *   - api — request throughput (req/s) through the runtime and compiled
  *     engines, per API_BENCH_CASES
  *   - codegen — buildSchema time per parser (ms), timed in-process per tree
+ *   - yaml — parse throughput (ops/s) per YAML_BENCH_CASE, source-mapped tree
+ *     and plain data
+ *
+ * Only the suites the change can actually move are run: `--changed <file>`
+ * takes a newline-separated list of the PR's changed paths and narrows the
+ * table to the edited packages plus their transitive dependants (see
+ * `bench-scope.ts`). Without it every suite runs, which is what a local
+ * before/after check wants.
  *
  * A case present only in the head tree reports `n/a (new case)` for main
  * instead of failing, so adding benchmarks never breaks the comparison.
@@ -69,7 +78,7 @@ const argValue = (flag: string): string | undefined => {
 const baselineDir = argValue('--baseline')
 if (!baselineDir) {
   console.error(
-    'usage: bun run scripts/bench-compare.ts --baseline <dir> [--head <dir>] [--output <file>] [--baseline-label <name>]',
+    'usage: bun run scripts/bench-compare.ts --baseline <dir> [--head <dir>] [--output <file>] [--baseline-label <name>] [--suites a,b] [--changed <file>]',
   )
   process.exit(1)
 }
@@ -78,16 +87,46 @@ const head = resolve(argValue('--head') ?? join(import.meta.dirname, '..'))
 const outputPath = argValue('--output')
 const baselineLabel = argValue('--baseline-label') ?? 'main'
 
-/** Suite filter for quick local runs: `--suites api` or `--suites parsers,codegen`. CI runs all. */
-const ALL_SUITES = ['parsers', 'validators', 'api', 'codegen'] as const
-const suitesArg = argValue('--suites')
-const suites = new Set<string>(suitesArg === undefined ? ALL_SUITES : suitesArg.split(','))
-for (const name of suites) {
-  if (!(ALL_SUITES as readonly string[]).includes(name)) {
-    console.error(`unknown suite '${name}' — valid: ${ALL_SUITES.join(', ')}`)
-    process.exit(1)
+const ALL_SUITES = SUITES.map((suite) => suite.name)
+
+/**
+ * Which suites to time. An explicit `--suites` wins (the quick local
+ * before/after: `--suites api`); otherwise `--changed <file>` narrows the run
+ * to the packages the PR touched and everything downstream of them; with
+ * neither, everything runs.
+ */
+const resolveScope = (): { suites: Set<string>; reason: string } => {
+  const suitesArg = argValue('--suites')
+  if (suitesArg !== undefined) {
+    const names = suitesArg.split(',')
+    for (const name of names) {
+      if (!ALL_SUITES.includes(name)) {
+        console.error(`unknown suite '${name}' — valid: ${ALL_SUITES.join(', ')}`)
+        process.exit(1)
+      }
+    }
+    return { suites: new Set(names), reason: `suites explicitly selected: ${names.join(', ')}` }
   }
+
+  const changedPath = argValue('--changed')
+  if (changedPath === undefined) return { suites: new Set(ALL_SUITES), reason: 'all suites' }
+  if (!existsSync(changedPath)) {
+    // A missing list means the workflow step that writes it failed, not that
+    // nothing changed — bench everything rather than silently reporting an
+    // empty table for a PR that may well contain a regression.
+    console.error(`changed-file list '${changedPath}' not found — running every suite`)
+    return { suites: new Set(ALL_SUITES), reason: 'all suites (changed-file list unavailable)' }
+  }
+
+  const paths = readFileSync(changedPath, 'utf8')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+  const scope = selectSuites(paths, readWorkspace(head))
+  return { suites: new Set(scope.suites), reason: scope.reason }
 }
+
+const { suites, reason: scopeReason } = resolveScope()
 
 const gitSha = (tree: string): string => {
   try {
@@ -232,10 +271,14 @@ const run = async (): Promise<void> => {
   }
 
   // Case lists always come from the head tree; a baseline missing a case
-  // reports n/a rather than failing.
-  const parsersSchemas = (await import(
-    pathToFileURL(join(head, 'packages/generate-parsers/bench/schemas.ts')).href
-  )) as { PARSE_CASES: readonly { name: string; mode: string; schema: unknown }[] }
+  // reports n/a rather than failing. Each list is imported only when its suite
+  // is in scope, so a yaml-only run never loads the api or validator benches.
+  const needsParseCases = suites.has('parsers') || suites.has('codegen')
+  const parsersSchemas = needsParseCases
+    ? ((await import(pathToFileURL(join(head, 'packages/generate-parsers/bench/schemas.ts')).href)) as {
+        PARSE_CASES: readonly { name: string; mode: string; schema: unknown }[]
+      })
+    : { PARSE_CASES: [] }
 
   if (suites.has('parsers')) console.error('generate-parsers (parse ops/s)…')
   for (const parseCase of suites.has('parsers') ? parsersSchemas.PARSE_CASES : []) {
@@ -251,9 +294,11 @@ const run = async (): Promise<void> => {
     })
   }
 
-  const validatorsSchemas = (await import(
-    pathToFileURL(join(head, 'packages/generate-validators/bench/schemas.ts')).href
-  )) as { BENCH_CASES: readonly { name: string }[] }
+  const validatorsSchemas = suites.has('validators')
+    ? ((await import(pathToFileURL(join(head, 'packages/generate-validators/bench/schemas.ts')).href)) as {
+        BENCH_CASES: readonly { name: string }[]
+      })
+    : { BENCH_CASES: [] }
 
   if (suites.has('validators')) console.error('generate-validators (validate ops/s)…')
   for (const benchCase of suites.has('validators') ? validatorsSchemas.BENCH_CASES : []) {
@@ -273,9 +318,11 @@ const run = async (): Promise<void> => {
 
   // The api case table is import-cheap by design (setups load lazily), so
   // pulling the names from the head tree needs no built packages.
-  const apiCases = (await import(pathToFileURL(join(head, 'packages/api/bench/cases.ts')).href)) as {
-    API_BENCH_CASES: readonly { name: string }[]
-  }
+  const apiCases = suites.has('api')
+    ? ((await import(pathToFileURL(join(head, 'packages/api/bench/cases.ts')).href)) as {
+        API_BENCH_CASES: readonly { name: string }[]
+      })
+    : { API_BENCH_CASES: [] }
 
   if (suites.has('api')) console.error('api (request req/s)…')
   for (const benchCase of suites.has('api') ? apiCases.API_BENCH_CASES : []) {
@@ -307,23 +354,50 @@ const run = async (): Promise<void> => {
     })
   }
 
+  const yamlCases = suites.has('yaml')
+    ? ((await import(pathToFileURL(join(head, 'packages/yaml/bench/cases.ts')).href)) as {
+        YAML_BENCH_CASES: readonly { name: string }[]
+      })
+    : { YAML_BENCH_CASES: [] }
+
+  if (suites.has('yaml')) console.error('yaml (parse ops/s)…')
+  for (const benchCase of yamlCases.YAML_BENCH_CASES) {
+    const { base: baseResult, head: headResult } = runPair('yaml', benchCase.name)
+    progress({
+      suite: 'yaml',
+      caseName: benchCase.name,
+      metric: 'parse ops/s',
+      higherIsBetter: true,
+      base: statOf(baseResult, 'valid'),
+      head: statOf(headResult, 'valid'),
+      parityOk: pairParityOk(baseResult, headResult),
+    })
+  }
+
   const lines: string[] = []
   lines.push('<!-- mjst-bench-delta:start -->')
   lines.push(`### ⚡ Benchmark delta vs ${baselineLabel} (\`${gitSha(base)}\` → \`${gitSha(head)}\`)`)
   lines.push('')
-  lines.push('| Suite | Case | Metric | main | PR | Δ |')
-  lines.push('|---|---|---|---:|---:|---:|')
-  for (const row of rows) {
+
+  if (rows.length === 0) {
+    // Still write the block: the marker pair is what makes the next run
+    // replace this note in place instead of appending a second report.
+    lines.push(`No benchmark suite covers this change — ${scopeReason}.`)
+  } else {
+    lines.push('| Suite | Case | Metric | main | PR | Δ |')
+    lines.push('|---|---|---|---:|---:|---:|')
+    for (const row of rows) {
+      lines.push(
+        `| ${row.suite} | ${row.caseName} | ${row.metric} | ${cell(row.base, row.higherIsBetter)} | ${cell(row.head, row.higherIsBetter)} | ${delta(row)} |`,
+      )
+    }
+    lines.push('')
     lines.push(
-      `| ${row.suite} | ${row.caseName} | ${row.metric} | ${cell(row.base, row.higherIsBetter)} | ${cell(row.head, row.higherIsBetter)} | ${delta(row)} |`,
+      `<sub>mjst only, ${scopeReason}; each timed number is the better of two order-balanced (ABBA) runs, each the median of 21 isolated-process trials (±n% = coefficient of variation). ` +
+        '⚪ within ±5% · 🟢 improvement · 🔴 regression · ~ marks an unstable sample (CV > 10%) · ⚠parity marks a correctness disagreement. ' +
+        'On shared CI runners, deltas within ±10% are usually noise — trust direction only when it persists across pushes.</sub>',
     )
   }
-  lines.push('')
-  lines.push(
-    '<sub>mjst only; each timed number is the better of two order-balanced (ABBA) runs, each the median of 21 isolated-process trials (±n% = coefficient of variation). ' +
-      '⚪ within ±5% · 🟢 improvement · 🔴 regression · ~ marks an unstable sample (CV > 10%) · ⚠parity marks a correctness disagreement. ' +
-      'On shared CI runners, deltas within ±10% are usually noise — trust direction only when it persists across pushes.</sub>',
-  )
   lines.push('<!-- mjst-bench-delta:end -->')
 
   const markdown = lines.join('\n')
