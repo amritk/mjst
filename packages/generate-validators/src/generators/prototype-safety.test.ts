@@ -139,4 +139,23 @@ describe('prototype-safety', () => {
       {},
     ])
   })
+
+  /**
+   * The own-property guard is not free — `Object.hasOwn` is a call the engine
+   * cannot fold the way it folds `in`, and spelling every presence check that way
+   * cost roughly half the throughput on an all-present object. So it is spent only
+   * where an inherited value could actually answer. This test is the load-bearing
+   * half of that trade: it pins that a risky name still gets the guard, so a
+   * future tidy-up cannot quietly widen the cheap spelling to cover `toString`.
+   */
+  it('spends the own-property guard only on names an object can inherit', () => {
+    const schema = JSON.parse(
+      '{"type":"object","properties":{"toString":{"type":"string"},"ok":{"type":"string"}},"required":["toString","ok"]}',
+    )
+    const { code } = build(schema)
+
+    expect(code).toContain('Object.hasOwn(obj, "toString")')
+    expect(code).toContain('!("ok" in obj)')
+    expect(code).not.toContain('Object.hasOwn(obj, "ok")')
+  })
 })

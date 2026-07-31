@@ -79,16 +79,39 @@ const PROTOTYPE_MEMBERS = new Set(Object.getOwnPropertyNames(Object.prototype))
 const protoLocalName = (key: string, depth: number): string => `_own${depth}_${key}`
 
 /**
- * The generated expression that is TRUE when `key` is an *own* property of the
- * object held in `objVar`.
+ * The generated expression that is TRUE when `key` is present on the object held
+ * in `objVar` — meaning present as an *own* property, never inherited.
  *
- * `key in obj` was the obvious spelling and the wrong one: it walks the prototype
- * chain, so `'toString' in obj` is true for every object and a `required:
- * ["toString"]` could never be reported missing. `Object.hasOwn` asks the question
- * `required` / `dependentRequired` actually mean, and matches the runtime
- * interpreter's presence test.
+ * For a prototype-member name a bare `key in obj` was the obvious spelling and
+ * the wrong one: `in` walks the prototype chain, so `'toString' in obj` is true
+ * for every object and a `required: ["toString"]` could never be reported
+ * missing. Those names get `Object.hasOwn`, which asks the question `required` /
+ * `dependentRequired` actually mean and matches the runtime interpreter's
+ * presence test.
+ *
+ * Every *other* name gets `in` back, because for them the two agree and the
+ * difference is not free. `Object.hasOwn` is a call the engine cannot fold into
+ * an inline cache the way it folds `in`; measured over the assert-loose shape
+ * (ten presence checks), spelling all of them `hasOwn` cost about half the valid
+ * throughput and a fifth of the invalid. A JSON document's object never inherits
+ * `id` or `name`, so paying for that question at every site bought nothing. This
+ * is the same split {@link PROTOTYPE_MEMBERS} already drives on the read side,
+ * and the same one `@amritk/runtime-validators` makes with its `safeKeys` flag.
+ *
+ * The result binds tighter than `&&`, so it can be dropped straight into a
+ * conjunction. It is *not* safe under a bare `!` — `!"k" in obj` parses as
+ * `(!"k") in obj` — so negate it with {@link missingCheck} rather than by hand.
  */
-const hasOwnCheck = (objVar: string, key: string): string => `Object.hasOwn(${objVar}, ${JSON.stringify(key)})`
+const hasOwnCheck = (objVar: string, key: string): string => {
+  if (PROTOTYPE_MEMBERS.has(key)) return `Object.hasOwn(${objVar}, ${JSON.stringify(key)})`
+  return `${JSON.stringify(key)} in ${objVar}`
+}
+
+/**
+ * The generated expression that is TRUE when `key` is absent — the negation of
+ * {@link hasOwnCheck}, with the parentheses `in` needs under a `!`.
+ */
+const missingCheck = (objVar: string, key: string): string => `!(${hasOwnCheck(objVar, key)})`
 
 /**
  * Returns the TypeScript typeof string for a JSON Schema primitive type.
@@ -320,7 +343,7 @@ const generateMissingRequiredChecks = (schema: JSONSchema, ctx: NestingContext):
   const lines: string[] = []
   for (const key of schema.required) {
     if (Object.hasOwn(props, key)) continue
-    lines.push(`  if (!${hasOwnCheck(ctx.objVar, key)}) {`)
+    lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
     lines.push(
       `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
     )
@@ -369,7 +392,7 @@ const generatePropertyCheckLines = (
     if (isRequired && propSchema === true) {
       const parentPath = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
       return [
-        `  if (!${hasOwnCheck(ctx.objVar, key)}) {`,
+        `  if (${missingCheck(ctx.objVar, key)}) {`,
         `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
         `  }`,
       ]
@@ -403,7 +426,7 @@ const generatePropertyCheckLines = (
     ]
 
     if (isRequired) {
-      lines.push(`  if (!${hasOwnCheck(ctx.objVar, key)}) {`)
+      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
       lines.push(
         `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
       )
@@ -422,7 +445,7 @@ const generatePropertyCheckLines = (
   const instanceOf = getMjstInstanceOf(propSchema)
   if (instanceOf) {
     if (isRequired) {
-      lines.push(`  if (!${hasOwnCheck(ctx.objVar, key)}) {`)
+      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
       lines.push(
         `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
       )
@@ -441,7 +464,7 @@ const generatePropertyCheckLines = (
   const primitive = getMjstPrimitive(propSchema)
   if (primitive) {
     if (isRequired) {
-      lines.push(`  if (!${hasOwnCheck(ctx.objVar, key)}) {`)
+      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
       lines.push(
         `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
       )
@@ -461,7 +484,7 @@ const generatePropertyCheckLines = (
     const mismatch = constMismatchCondition(raw, propSchema.const)
     const msg = JSON.stringify(`must be ${JSON.stringify(propSchema.const)}`)
     if (isRequired) {
-      lines.push(`  if (!${hasOwnCheck(ctx.objVar, key)}) {`)
+      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
       lines.push(
         `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
       )
@@ -482,7 +505,7 @@ const generatePropertyCheckLines = (
     const label = (propSchema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
 
     if (isRequired) {
-      lines.push(`  if (!${hasOwnCheck(ctx.objVar, key)}) {`)
+      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
       lines.push(
         `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
       )
@@ -512,7 +535,7 @@ const generatePropertyCheckLines = (
     const label = typeArray.map((t) => typeofString(t)).join(' or ')
 
     if (isRequired) {
-      lines.push(`  if (!${hasOwnCheck(ctx.objVar, key)}) {`)
+      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
       lines.push(
         `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
       )
@@ -541,7 +564,7 @@ const generatePropertyCheckLines = (
     const typLabel = typeofString(t)
 
     if (isRequired) {
-      lines.push(`  if (!${hasOwnCheck(ctx.objVar, key)}) {`)
+      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
       lines.push(
         `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
       )
@@ -583,7 +606,7 @@ const generatePropertyCheckLines = (
     // Type-less required property. Presence must be enforced even when the schema
     // contributes no other checks (e.g. `{}` — an accept-anything schema), so a
     // missing required key is still an error. Any extra checks run in the `else`.
-    lines.push(`  if (!${hasOwnCheck(ctx.objVar, key)}) {`)
+    lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
     lines.push(
       `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
     )
@@ -1187,7 +1210,7 @@ const generateDependentRequiredChecks = (schema: JSONSchema, ctx: NestingContext
     if (!Array.isArray(deps)) continue
     for (const dep of deps) {
       const msg = JSON.stringify(`must have property '${dep}' when '${trigger}' is present`)
-      lines.push(`  if (${hasOwnCheck(obj, trigger)} && !${hasOwnCheck(obj, dep)}) {`)
+      lines.push(`  if (${hasOwnCheck(obj, trigger)} && ${missingCheck(obj, dep)}) {`)
       lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
       lines.push(`  }`)
     }
@@ -1257,7 +1280,7 @@ const generateDependenciesChecks = (schema: JSONSchema, suffix: string, ctx: Nes
       for (const key of value as unknown[]) {
         if (typeof key !== 'string') continue
         const msg = JSON.stringify(`must have property '${key}' when '${trigger}' is present`)
-        lines.push(`  if (${hasOwnCheck(obj, trigger)} && !${hasOwnCheck(obj, key)}) {`)
+        lines.push(`  if (${hasOwnCheck(obj, trigger)} && ${missingCheck(obj, key)}) {`)
         lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
         lines.push(`  }`)
       }

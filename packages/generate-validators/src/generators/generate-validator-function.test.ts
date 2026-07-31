@@ -28,7 +28,7 @@ describe('generate-validator-function', () => {
     const code = generateValidatorFunction(schema, 'Info')
 
     expect(code).toContain('export const validateInfo')
-    expect(code).toContain('Object.hasOwn(obj, "name")')
+    expect(code).toContain('!("name" in obj)')
     expect(code).toContain("must have required property 'name'")
     expect(code).toContain("typeof obj.name !== 'string'")
     expect(code).toContain('must be string')
@@ -251,7 +251,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Payment')
 
-    expect(code).toContain('Object.hasOwn(obj, "creditCard") && !Object.hasOwn(obj, "billingAddress")')
+    expect(code).toContain('"creditCard" in obj && !("billingAddress" in obj)')
     expect(code).toContain("must have property 'billingAddress' when 'creditCard' is present")
   })
 
@@ -330,7 +330,7 @@ describe('generate-validator-function', () => {
     const code = generateValidatorFunction(schema, 'Document')
 
     expect(code).toContain('validateInfo(')
-    expect(code).toContain('Object.hasOwn(obj, "info")')
+    expect(code).toContain('!("info" in obj)')
   })
 
   it('generates a scalar string validator', () => {
@@ -382,7 +382,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Event')
 
-    expect(code).toContain('Object.hasOwn(obj, "createdAt")')
+    expect(code).toContain('!("createdAt" in obj)')
     expect(code).toContain('!(obj.createdAt instanceof Date)')
     expect(code).toContain('must be Date')
   })

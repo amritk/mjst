@@ -22,7 +22,11 @@ Where they differed, `generate-validators` was usually right: it already shipped
   the object, so the *prototype's* value answered: a valid document was reported
   as `must be string` at `/hasOwnProperty`, and a required `toString` could never
   be reported missing (`'toString' in obj` is always true). Reads now go through
-  an own-property guard and presence uses `Object.hasOwn`.
+  an own-property guard, and presence uses `Object.hasOwn` — but only for the
+  names that can actually be inherited. Every other key keeps the plain `in` it
+  always had, because `Object.hasOwn` is a call the engine cannot fold the way it
+  folds `in`, and spending it on `id` or `name` bought nothing while costing
+  roughly half the throughput on an all-present object.
 - `items` alongside `prefixItems` was applied to the prefix positions too. Per
   2020-12 `items` is the tail schema, so `{prefixItems:[{type:'string'}],
   items:{type:'number'}}` rejected `["a", 1, 2]` — which Ajv accepts, and which
