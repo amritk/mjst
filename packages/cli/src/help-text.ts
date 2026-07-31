@@ -28,6 +28,7 @@ Output:
   --validators          Also emit validateX/isX validators into a validators/ subdir
   --examples            Also emit fast-check arbitraries + example values under examples/
   --build               Compile the generated files to .js/.d.ts (implies --import-ext js)
+  --force               Overwrite pre-existing files in the output destination
   --import-ext <ext>    Extension on generated relative imports: ts (default) or js
   --helpers <mode>      Runtime helpers: package or embedded (default: auto-detect from package.json)
   --root-type <name>    Root type name for a single --schema run (default: schema title or filename)

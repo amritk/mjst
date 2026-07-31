@@ -31,6 +31,8 @@ type Args = {
   resolveRemote: boolean
   allowedHosts?: string[]
   allowPrivateHosts: boolean
+  /** Set by yargs when `--help`/`-h` was passed; it has already printed the usage. */
+  help?: boolean
 }
 
 /**
@@ -87,6 +89,80 @@ const mapWithConcurrency = async <T, R>(items: T[], limit: number, worker: (item
 }
 
 /**
+ * Parses the lint flags, returning either the parsed args or a usage message.
+ *
+ * The linter is `.strict()`: a mistyped `--fail-severity` or `--allowd-hosts`
+ * used to be swallowed, so the run silently used the defaults and still reported
+ * success — exactly the kind of quiet miss a lint gate exists to prevent.
+ * `exitProcess(false)` plus an explicit `fail` handler keep yargs from tearing
+ * the process down on that usage error: `run` is driven in-process by tests (and
+ * by `mjst lint`, which owns the exit code), so the failure has to come back as a
+ * value rather than a `process.exit`.
+ */
+const parseArgs = async (argv: string[]): Promise<{ args: Args } | { error: string }> => {
+  try {
+    const parsed = (await yargs(argv)
+      .scriptName('lint')
+      .parserConfiguration({ 'greedy-arrays': false })
+      .strict()
+      .exitProcess(false)
+      .fail((message, error) => {
+        throw error ?? new Error(message)
+      })
+      .usage('$0 [documents..]', 'Lint JSON/YAML documents against a ruleset')
+      .positional('documents', { describe: 'Documents or globs to lint', type: 'string', array: true })
+      .option('ruleset', { alias: 'r', type: 'string', describe: 'Path to a ruleset file' })
+      .option('encoding', { type: 'string', default: 'utf8', describe: 'Input encoding' })
+      .option('fail-severity', { alias: 'F', type: 'string', default: 'error', choices: Object.keys(SEVERITY_BY_NAME) })
+      .option('display-only-failures', { alias: 'D', type: 'boolean', default: false })
+      .option('verbose', { type: 'boolean', default: false })
+      .option('quiet', { alias: 'q', type: 'boolean', default: false })
+      .option('stdin-filepath', {
+        type: 'string',
+        describe: 'Path to associate with stdin input (labels findings and enables ruleset discovery)',
+      })
+      .option('concurrency', {
+        type: 'number',
+        default: 8,
+        describe: 'Maximum number of documents to lint in parallel',
+      })
+      .option('resolve', {
+        type: 'boolean',
+        default: true,
+        describe: 'Dereference $ref / $dynamicRef / $recursiveRef before linting (use --no-resolve to disable)',
+      })
+      .option('resolve-remote', {
+        type: 'boolean',
+        default: false,
+        describe: 'Allow fetching http(s) $refs while resolving (off by default; a lint run stays offline)',
+      })
+      .option('allowed-hosts', {
+        type: 'string',
+        array: true,
+        describe: 'Restrict remote $ref fetches to these hosts (implies --resolve-remote)',
+      })
+      .option('allow-private-hosts', {
+        type: 'boolean',
+        default: false,
+        describe: 'Permit remote $refs to private/loopback hosts (SSRF guard, off by default)',
+      })
+      .help()
+      .alias('help', 'h')
+      .parse()) as unknown as Args
+
+    // `--concurrency abc` coerces to NaN, which used to reach `new Array(NaN)`
+    // and blow up with a bare "Invalid array length" — say what is wrong instead.
+    if (!Number.isFinite(parsed.concurrency) || parsed.concurrency < 1) {
+      return { error: 'Invalid --concurrency value. Expected a positive number.' }
+    }
+
+    return { args: parsed }
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/**
  * Runs the linter over `argv`, returning the exit code and the text it would
  * print (rather than writing to the process streams) so it can be driven
  * in-process by tests. `stdin` supplies the piped document when there are no file
@@ -96,49 +172,17 @@ export const run = async (argv: string[], options: { stdin?: string } = {}): Pro
   const out: string[] = []
   const err: string[] = []
 
-  const parsed = (await yargs(argv)
-    .scriptName('lint')
-    .parserConfiguration({ 'greedy-arrays': false })
-    .usage('$0 [documents..]', 'Lint JSON/YAML documents against a ruleset')
-    .positional('documents', { describe: 'Documents or globs to lint', type: 'string', array: true })
-    .option('ruleset', { alias: 'r', type: 'string', describe: 'Path to a ruleset file' })
-    .option('encoding', { type: 'string', default: 'utf8', describe: 'Input encoding' })
-    .option('fail-severity', { alias: 'F', type: 'string', default: 'error', choices: Object.keys(SEVERITY_BY_NAME) })
-    .option('display-only-failures', { alias: 'D', type: 'boolean', default: false })
-    .option('verbose', { type: 'boolean', default: false })
-    .option('quiet', { alias: 'q', type: 'boolean', default: false })
-    .option('stdin-filepath', {
-      type: 'string',
-      describe: 'Path to associate with stdin input (labels findings and enables ruleset discovery)',
-    })
-    .option('concurrency', {
-      type: 'number',
-      default: 8,
-      describe: 'Maximum number of documents to lint in parallel',
-    })
-    .option('resolve', {
-      type: 'boolean',
-      default: true,
-      describe: 'Dereference $ref / $dynamicRef / $recursiveRef before linting (use --no-resolve to disable)',
-    })
-    .option('resolve-remote', {
-      type: 'boolean',
-      default: false,
-      describe: 'Allow fetching http(s) $refs while resolving (off by default; a lint run stays offline)',
-    })
-    .option('allowed-hosts', {
-      type: 'string',
-      array: true,
-      describe: 'Restrict remote $ref fetches to these hosts (implies --resolve-remote)',
-    })
-    .option('allow-private-hosts', {
-      type: 'boolean',
-      default: false,
-      describe: 'Permit remote $refs to private/loopback hosts (SSRF guard, off by default)',
-    })
-    .help()
-    .alias('help', 'h')
-    .parse()) as unknown as Args
+  const outcome = await parseArgs(argv)
+  if ('error' in outcome) {
+    return { code: 2, stdout: '', stderr: `${outcome.error}\nRun \`mjst lint --help\` for the supported flags.\n` }
+  }
+
+  const parsed = outcome.args
+
+  // yargs prints the help text itself (it writes straight to stdout), so there is
+  // nothing left to lint — returning early keeps `mjst lint --help` from falling
+  // through to the stdin branch and hanging on an empty pipe.
+  if (parsed.help) return { code: 0, stdout: '', stderr: '' }
 
   const failSeverity = SEVERITY_BY_NAME[parsed.failSeverity] ?? DiagnosticSeverity.Error
 
@@ -178,8 +222,18 @@ export const run = async (argv: string[], options: { stdin?: string } = {}): Pro
     reportRulesetProblems(rulesetDefinition, parsed.ruleset)
   }
 
-  const targets = await fg(parsed.documents ?? [], { dot: true, onlyFiles: true })
+  const documents = parsed.documents ?? []
+  const targets = await fg(documents, { dot: true, onlyFiles: true })
   const allResults: IDiagnostic[] = []
+
+  // Arguments that matched nothing must not fall through to stdin. In CI there is
+  // no TTY, so stdin is an empty pipe: a typo'd path used to lint an empty
+  // document, print "No problems found", and exit 0 — turning the lint gate into
+  // a silent no-op that reports success. Only a run with no document arguments at
+  // all is a stdin run.
+  if (targets.length === 0 && documents.length > 0) {
+    return { code: 2, stdout: '', stderr: `No files matched: ${documents.join(', ')}\n` }
+  }
 
   if (targets.length === 0) {
     if (options.stdin === undefined && process.stdin.isTTY) {

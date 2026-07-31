@@ -62,6 +62,15 @@ export type CliConfig = {
    */
   readonly build?: boolean
   /**
+   * When true, generated files may overwrite files that already exist in the
+   * output destination. By default a collision with a file mjst did not generate
+   * (a hand-written `index.ts`, say) aborts the run rather than silently
+   * replacing it — and with `build`, deleting it afterwards. Regeneration does
+   * not need this: each run records what it wrote in a `.mjst-manifest.json` at
+   * the root of the output directory, and reclaims those paths freely.
+   */
+  readonly force?: boolean
+  /**
    * When true, the generated parsers emit a console.warn for every input key
    * that is not declared in the schema's properties.
    */

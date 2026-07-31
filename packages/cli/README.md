@@ -350,6 +350,15 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
 <td colspan="4">Compile the generated TypeScript files to .js and .d.ts output. A temporary tsconfig is written to the output directory, tsc is invoked, and the intermediate .ts source files are removed when compilation succeeds.</td>
 </tr>
 <tr>
+<td>💥 <code>force</code></td>
+<td><code>--force</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Allow generated files to overwrite files that already exist in the output destination. By default a collision with a file mjst did not generate (a hand-written index.ts, say) aborts the run before anything is written, because the generator would otherwise replace it — and, under build, delete it along with the other intermediate sources. Regenerating never needs this flag: each run records what it wrote in a .mjst-manifest.json at the root of the output directory, and anything listed there is replaced freely.</td>
+</tr>
+<tr>
 <td>⚠️ <code>logWarnings</code></td>
 <td><code>--log-warnings</code></td>
 <td><code>boolean</code></td>
@@ -473,7 +482,7 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
 <td align="center"></td>
 </tr>
 <tr>
-<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, validators, examples, build, logWarnings, strict, stripUnknown, caseInsensitive, readonly, helpers, typeSuffix, banner, importExt, rootType, resolveRemote, allowedHosts, allowPrivateHosts). CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
+<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, validators, examples, build, force, logWarnings, strict, stripUnknown, caseInsensitive, readonly, helpers, typeSuffix, banner, importExt, rootType, resolveRemote, allowedHosts, allowPrivateHosts) and are validated: an unknown key or a wrong value type fails the run instead of being ignored. CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
 </tr>
 </tbody>
 </table>

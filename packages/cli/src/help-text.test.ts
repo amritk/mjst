@@ -17,6 +17,7 @@ describe('help-text', () => {
       '--validators',
       '--examples',
       '--build',
+      '--force',
       '--import-ext',
       '--helpers',
       '--root-type',

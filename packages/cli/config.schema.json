@@ -4,6 +4,7 @@
   "description": "Generate TypeScript parsers and type definitions from JSON Schemas.\n\nYou can supply options via CLI flags or a JSON config file. CLI flags always take precedence over config file values.",
   "$comment": "Supply options either via CLI flags or a JSON config file — both approaches are shown below.",
   "type": "object",
+  "additionalProperties": false,
   "allOf": [
     { "oneOf": [{ "required": ["schema"] }, { "required": ["schemaDir"] }] },
     { "oneOf": [{ "required": ["outDir"] }, { "required": ["outFile"] }] }
@@ -78,6 +79,13 @@
       "x-icon": "🔨",
       "default": false,
       "description": "Compile the generated TypeScript files to .js and .d.ts output. A temporary tsconfig is written to the output directory, tsc is invoked, and the intermediate .ts source files are removed when compilation succeeds."
+    },
+    "force": {
+      "type": "boolean",
+      "x-cli-flag": "--force",
+      "x-icon": "💥",
+      "default": false,
+      "description": "Allow generated files to overwrite files that already exist in the output destination. By default a collision with a file mjst did not generate (a hand-written index.ts, say) aborts the run before anything is written, because the generator would otherwise replace it — and, under build, delete it along with the other intermediate sources. Regenerating never needs this flag: each run records what it wrote in a .mjst-manifest.json at the root of the output directory, and anything listed there is replaced freely."
     },
     "logWarnings": {
       "type": "boolean",
@@ -176,7 +184,7 @@
       "type": "string",
       "x-cli-flag": "--config <path>",
       "x-icon": "⚙️",
-      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, validators, examples, build, logWarnings, strict, stripUnknown, caseInsensitive, readonly, helpers, typeSuffix, banner, importExt, rootType, resolveRemote, allowedHosts, allowPrivateHosts). CLI flags take precedence over config file values.",
+      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, validators, examples, build, force, logWarnings, strict, stripUnknown, caseInsensitive, readonly, helpers, typeSuffix, banner, importExt, rootType, resolveRemote, allowedHosts, allowPrivateHosts) and are validated: an unknown key or a wrong value type fails the run instead of being ignored. CLI flags take precedence over config file values.",
       "examples": ["./mjst.config.json"]
     }
   },

@@ -429,4 +429,33 @@ describe('parse-cli-args', () => {
     )
     expect(() => parseCliArgs(['--allowed-hosts'])).toThrow(/expects a value/)
   })
+
+  it('parses the --force flag', () => {
+    expect(parseCliArgs(['--force'])).toEqual({ force: true })
+    expect(parseCliArgs(['--force=false'])).toEqual({ force: false })
+  })
+
+  // A typo'd subcommand used to run a perfectly ordinary generation and exit 0,
+  // which is the same silent-success failure as a lint path that matches nothing.
+  it('rejects a stray positional such as a misspelled subcommand', () => {
+    expect(() => parseCliArgs(['genrate', '--schema', 's.json', '--out-dir', 'dist'])).toThrow(
+      /Unexpected argument "genrate"/,
+    )
+  })
+
+  it('accepts the -- terminator instead of rejecting it as an unknown flag', () => {
+    expect(parseCliArgs(['--schema', 's.json', '--out-dir', 'dist', '--'])).toEqual({
+      schema: 's.json',
+      outDir: 'dist',
+    })
+  })
+
+  // `--config` is consumed before this parser runs, but a bare one still means the
+  // user asked for a config file we never loaded — generating from the defaults
+  // instead is the wrong kind of quiet.
+  it('requires a value for --config', () => {
+    expect(() => parseCliArgs(['--schema', 's.json', '--config'])).toThrow(/Flag "--config" expects a value/)
+    expect(() => parseCliArgs(['--config', '--out-dir', 'dist'])).toThrow(/Flag "--config" expects a value/)
+    expect(() => parseCliArgs(['--config='])).toThrow(/Flag "--config" expects a value/)
+  })
 })
