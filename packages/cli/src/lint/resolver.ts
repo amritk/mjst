@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { resolve as resolvePath } from 'node:path'
+import { dirname, resolve as resolvePath } from 'node:path'
 import { createDocument, type Document, type LintResolver, resolveSourceOriginFromMap } from '@amritk/lint'
 import {
   DiagnosticSeverity,
@@ -12,6 +12,7 @@ import {
 import { type OriginMap, type ResolveError, resolveRefs, resolveRefsFromFile } from '@amritk/resolve-refs'
 import { parse as parseYaml } from '@amritk/yaml'
 
+import { withAllowedRootsHint } from '../allowed-roots-hint'
 import { hasExternalRefs } from '../has-external-refs'
 
 /** How `mjst lint` dereferences `$ref` (and `$dynamicRef`/`$recursiveRef`). */
@@ -25,6 +26,13 @@ export type ResolverOptions = {
   allowedHosts?: string[]
   /** Permit remote refs to private/loopback/link-local hosts (off by default as an SSRF guard). */
   allowPrivateHosts?: boolean
+  /**
+   * Extra directories a local `$ref` may resolve into, on top of the linted
+   * document's own directory (which is always allowed). Empty by default, which
+   * keeps a `$ref` from walking out of the tree the document belongs to.
+   * Relative entries are resolved against the process working directory.
+   */
+  allowedRoots?: string[]
 }
 
 const isRemote = (location: string): boolean => /^https?:\/\//i.test(location)
@@ -100,13 +108,16 @@ const DOCUMENT_START = { start: { line: 0, character: 0 }, end: { line: 0, chara
  * remote fetch — surfaces as a diagnostic instead of being silently dropped. An
  * error carrying a JSON path is anchored to that node's position in the root
  * document (best effort, `closest`); otherwise the finding is document-level.
+ *
+ * Confinement refusals get the CLI flag name appended, since the library's own
+ * wording names an option that only a library caller can set.
  */
 const toFindings = (errors: ResolveError[], root: Document): IDiagnostic[] =>
   errors.map((error) => {
     const location = error.path.length > 0 ? root.getLocationForJsonPath(error.path, true) : undefined
     const finding: IDiagnostic = {
       code: 'unresolved-ref',
-      message: error.message,
+      message: withAllowedRootsHint(error.message),
       path: error.path,
       severity: DiagnosticSeverity.Error,
       range: location?.range ?? DOCUMENT_START,
@@ -133,13 +144,22 @@ export const createLintResolver = (options: ResolverOptions = {}): LintResolver 
     parse: parseDoc,
     trackOrigins: true as const,
   }
+  // Resolved once, but applied per document: `allowedRoots` *replaces* the
+  // resolver's default (the document's own directory), and a lint run walks many
+  // documents in different folders. Prepending each document's own directory
+  // below keeps the flag additive — naming a shared folder must not revoke the
+  // one the document itself lives in.
+  const extraRoots = (options.allowedRoots ?? []).map((root) => resolvePath(root))
 
   return async (document, { input }) => {
     const { source } = document
     if (source && hasExternalRefs(document.data)) {
       const absolute = resolvePath(source)
       if (readsBackAs(absolute, input)) {
-        const { resolved, origins, errors } = await resolveRefsFromFile(absolute, fromFileOptions)
+        const { resolved, origins, errors } = await resolveRefsFromFile(absolute, {
+          ...fromFileOptions,
+          ...(extraRoots.length > 0 ? { allowedRoots: [dirname(absolute), ...extraRoots] } : {}),
+        })
         return {
           resolved,
           sources: buildSourceSet(document, resolved, origins, absolute),

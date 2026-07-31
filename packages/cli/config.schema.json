@@ -180,11 +180,19 @@
       "default": false,
       "description": "Permit remote $refs to private, loopback, and link-local hosts. Off by default: such targets are refused as a best-effort SSRF guard (notably the 169.254.169.254 cloud-metadata endpoint). An explicit allowedHosts entry always bypasses this guard."
     },
+    "allowedRoots": {
+      "type": "array",
+      "items": { "type": "string" },
+      "x-cli-flag": "--allowed-roots <dirs>",
+      "x-icon": "📂",
+      "description": "Extra directories a local (cross-file) $ref may resolve into. By default a local $ref is confined to the schema's own directory, so '{\"$ref\": \"../../../etc/passwd\"}' (or an absolute path) reads nothing. List a root here for the ordinary split-spec layout where v1/api.json refers to a shared common/user.json one level up. The schema's own directory is always allowed, so these roots widen the default rather than replacing it, and a $ref that still lands outside every root is refused. Accepts a comma-separated list or the flag repeated; relative entries resolve against the current working directory, from a config file as well as from the flag.",
+      "examples": [["./specs"]]
+    },
     "config": {
       "type": "string",
       "x-cli-flag": "--config <path>",
       "x-icon": "⚙️",
-      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, validators, examples, build, force, logWarnings, strict, stripUnknown, caseInsensitive, readonly, helpers, typeSuffix, banner, importExt, rootType, resolveRemote, allowedHosts, allowPrivateHosts) and are validated: an unknown key or a wrong value type fails the run instead of being ignored. CLI flags take precedence over config file values.",
+      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, validators, examples, build, force, logWarnings, strict, stripUnknown, caseInsensitive, readonly, helpers, typeSuffix, banner, importExt, rootType, resolveRemote, allowedHosts, allowPrivateHosts, allowedRoots) and are validated: an unknown key or a wrong value type fails the run instead of being ignored. CLI flags take precedence over config file values.",
       "examples": ["./mjst.config.json"]
     }
   },

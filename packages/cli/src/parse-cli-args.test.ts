@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseCliArgs } from './parse-cli-args'
+import { flagTakesValue, parseCliArgs } from './parse-cli-args'
 
 describe('parse-cli-args', () => {
   it('parses --schema and --outDir with space-separated values', () => {
@@ -428,6 +428,35 @@ describe('parse-cli-args', () => {
       /Flag "--allowed-hosts" expects a value/,
     )
     expect(() => parseCliArgs(['--allowed-hosts'])).toThrow(/expects a value/)
+  })
+
+  it('parses --allowed-roots as a comma-separated list', () => {
+    expect(parseCliArgs(['--allowed-roots', './specs,../shared'])).toEqual({ allowedRoots: ['./specs', '../shared'] })
+    expect(parseCliArgs(['--allowed-roots=./specs,../shared'])).toEqual({ allowedRoots: ['./specs', '../shared'] })
+  })
+
+  it('accumulates repeated --allowed-roots flags and trims blanks', () => {
+    expect(parseCliArgs(['--allowed-roots', './a', '--allowed-roots', ' ./b , ./c '])).toEqual({
+      allowedRoots: ['./a', './b', './c'],
+    })
+  })
+
+  it('requires a value for --allowed-roots', () => {
+    expect(() => parseCliArgs(['--allowed-roots', '--out-dir', 'dist'])).toThrow(
+      /Flag "--allowed-roots" expects a value/,
+    )
+    expect(() => parseCliArgs(['--allowed-roots'])).toThrow(/expects a value/)
+  })
+
+  it('accepts the camelCase spelling of --allowed-roots', () => {
+    expect(parseCliArgs(['--allowedRoots', './specs'])).toEqual({ allowedRoots: ['./specs'] })
+  })
+
+  // `--allowed-roots` swallows its value, so a `-v` directory name must not be
+  // mistaken for a version request by the raw-argv scan in `cli.ts`.
+  it('reports that --allowed-roots takes a value', () => {
+    expect(flagTakesValue('allowed-roots')).toBe(true)
+    expect(flagTakesValue('allowedRoots')).toBe(true)
   })
 
   it('parses the --force flag', () => {

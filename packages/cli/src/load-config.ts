@@ -68,5 +68,9 @@ export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>
     ...(typeof obj['resolveRemote'] === 'boolean' && { resolveRemote: obj['resolveRemote'] }),
     ...(isStringArray(obj['allowedHosts']) && { allowedHosts: obj['allowedHosts'] }),
     ...(typeof obj['allowPrivateHosts'] === 'boolean' && { allowPrivateHosts: obj['allowPrivateHosts'] }),
+    // Kept as written: like `schema` and `outDir`, a relative entry is resolved
+    // against the process working directory rather than the config file's
+    // directory, so one rule covers both flags and config keys.
+    ...(isStringArray(obj['allowedRoots']) && { allowedRoots: obj['allowedRoots'] }),
   }
 }

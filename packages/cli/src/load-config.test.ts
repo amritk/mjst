@@ -152,6 +152,27 @@ describe('load-config', () => {
     await expect(loadConfig(configPath)).rejects.toThrow('/allowedHosts: expected string[], received array.')
   })
 
+  // Entries are handed back verbatim: they are resolved against the process cwd
+  // later, exactly like `schema` and `outDir`, rather than against this file.
+  it('loads allowedRoots from a config file without rewriting the paths', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(
+      configPath,
+      JSON.stringify({ schema: 's.json', outDir: 'o', allowedRoots: ['./specs', '../shared'] }),
+    )
+
+    const result = await loadConfig(configPath)
+
+    expect(result).toEqual({ schema: 's.json', outDir: 'o', allowedRoots: ['./specs', '../shared'] })
+  })
+
+  it('rejects an allowedRoots value that is not an array of strings', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', allowedRoots: './specs' }))
+
+    await expect(loadConfig(configPath)).rejects.toThrow('/allowedRoots: expected string[], received string.')
+  })
+
   it('loads examples boolean from config file', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
     await writeFile(configPath, JSON.stringify({ schema: 's.json', outDir: 'o', examples: true }))

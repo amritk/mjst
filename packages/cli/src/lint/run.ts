@@ -31,6 +31,7 @@ type Args = {
   resolveRemote: boolean
   allowedHosts?: string[]
   allowPrivateHosts: boolean
+  allowedRoots?: string[]
   /** Set by yargs when `--help`/`-h` was passed; it has already printed the usage. */
   help?: boolean
 }
@@ -146,6 +147,12 @@ const parseArgs = async (argv: string[]): Promise<{ args: Args } | { error: stri
         default: false,
         describe: 'Permit remote $refs to private/loopback hosts (SSRF guard, off by default)',
       })
+      .option('allowed-roots', {
+        type: 'string',
+        array: true,
+        describe:
+          "Extra directories a local $ref may resolve into, beyond the document's own (repeat the flag; relative to the current directory)",
+      })
       .help()
       .alias('help', 'h')
       .parse()) as unknown as Args
@@ -193,6 +200,7 @@ export const run = async (argv: string[], options: { stdin?: string } = {}): Pro
         remote: allowRemote,
         ...(parsed.allowedHosts ? { allowedHosts: parsed.allowedHosts } : {}),
         allowPrivateHosts: parsed.allowPrivateHosts,
+        ...(parsed.allowedRoots ? { allowedRoots: parsed.allowedRoots } : {}),
       })
     : undefined
 

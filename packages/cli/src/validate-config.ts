@@ -46,6 +46,7 @@ export const CONFIG_KEYS: Record<string, ConfigKeySpec> = {
   resolveRemote: { type: 'boolean' },
   allowedHosts: { type: 'string[]' },
   allowPrivateHosts: { type: 'boolean' },
+  allowedRoots: { type: 'string[]' },
   config: { type: 'string' },
 }
 

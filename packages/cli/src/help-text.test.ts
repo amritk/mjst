@@ -31,6 +31,7 @@ describe('help-text', () => {
       '--resolve-remote',
       '--allowed-hosts',
       '--allow-private-hosts',
+      '--allowed-roots',
       '--config',
       '--version',
       '--help',

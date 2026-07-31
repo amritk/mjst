@@ -46,6 +46,8 @@ Reference resolution:
   --resolve-remote      Fetch http(s) $refs while resolving cross-file/remote refs (off by default)
   --allowed-hosts <h>   Restrict remote $ref fetches to these hosts (comma-separated; implies --resolve-remote)
   --allow-private-hosts Permit remote $refs to private/loopback hosts (SSRF guard, off by default)
+  --allowed-roots <d>   Extra directories a local $ref may resolve into, on top of the schema's own
+                        (comma-separated; relative to the current directory)
 
 Misc:
   --config <path>       JSON config file with the same keys; CLI flags take precedence
