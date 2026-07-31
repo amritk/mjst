@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { lint } from '../../core'
+import { compileQuery, lint, query } from '../../core'
 import { createOpenApiRuleset, oas } from './index'
 
 // Rule-wiring coverage: the `given`/`field`/`formats` plumbing in `oas.ts`, as
@@ -183,5 +183,62 @@ describe('oas', () => {
     ]) {
       expect(codes.has(code)).toBe(false)
     }
+  })
+  // The preset's three filter `given`s are the only expressions in the shipped
+  // rulesets that go through the filter interpreter. These pin the exact nodes
+  // they select, so a change to the filter grammar cannot quietly widen or
+  // narrow what the OpenAPI rules look at.
+  it('filter givens select exactly the intended nodes', () => {
+    const document = {
+      openapi: '3.0.0',
+      paths: {
+        '/pets': {
+          get: {
+            responses: {
+              '200': {
+                schema: { type: 'array', items: { type: 'string' } },
+                examples: { 'application/json': [] },
+                content: { 'application/json': { schema: { type: 'string', example: 'x' } } },
+              },
+            },
+          },
+        },
+      },
+      components: {
+        schemas: {
+          Pet: { type: 'object', properties: { name: { type: 'string', default: 'rex' } } },
+          Tags: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    }
+    const givens = Object.fromEntries(
+      Object.entries(oas.rules ?? {})
+        .filter(([, rule]) => typeof rule === 'object')
+        .flatMap(([name, rule]) => {
+          const given = (rule as { given: string | string[] }).given
+          return (Array.isArray(given) ? given : [given]).map((expression) => [`${name}:${expression}`, expression])
+        }),
+    )
+    const withFilters = Object.values(givens).filter((expression) => expression.includes('[?('))
+    // Exactly three filter givens ship today; a new one needs its own assertion.
+    expect(new Set(withFilters).size).toBe(3)
+    for (const expression of withFilters) expect(compileQuery(expression).error).toBeUndefined()
+
+    const paths = (expression: string): string[] =>
+      query(document, expression)
+        .map((match) => match.path.join('.'))
+        .sort()
+
+    const schemaExample = withFilters.find((expression) => expression.includes('patternProperties')) as string
+    expect(paths(schemaExample)).toEqual([
+      'components.schemas.Pet.properties.name',
+      'paths./pets.get.responses.200.content.application/json.schema',
+    ])
+
+    const arrayType = withFilters.find((expression) => expression.includes("@.type === 'array'")) as string
+    expect(paths(arrayType)).toEqual(['components.schemas.Tags', 'paths./pets.get.responses.200.schema'])
+
+    const mediaExample = withFilters.find((expression) => expression.includes('@.examples')) as string
+    expect(paths(mediaExample)).toEqual(['paths./pets.get.responses.200'])
   })
 })

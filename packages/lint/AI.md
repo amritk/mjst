@@ -36,13 +36,27 @@ const findings = await lintDocument('version: 1\n', { ruleset, source: 'service.
    `rulesetBasePath` (or the ruleset file's own directory).
 5. **OpenAPI support is a separate subpath**, `@amritk/lint/rules/openapi`
    (`createOpenApiRuleset`, `oas`, `oasFixers`, …) — not the package root.
+6. **A ruleset is privileged; a document is not.** Linted documents cannot
+   execute anything, and `[?(...)]` filters in a `given` are parsed and
+   interpreted rather than evaluated as JavaScript. But `extends` follows any
+   path (absolute or `../`-escaping) and `require`s `.js` targets and custom
+   functions — that is code execution by design. Load rulesets from sources you
+   would trust to run a script, or pass `restrictTo: '<root>'` to confine
+   `extends`/`functions` resolution to one directory tree. See the README's
+   "Trust boundary" section.
+7. **`createRuleset` is memoized** per `(definition object, basePath,
+   restrictTo)`. Mutating a definition you already passed in will not rebuild the
+   ruleset — pass a fresh object instead.
 
 ## Exports
 
 - `lintDocument(input, options?)` → findings only.
 - `lintDocumentWithResult(input, options?)` → `{ diagnostics, output?, pluginData }`.
-- `fixDocument(input, options?)` → `{ output, fixed, applied, remaining }` (needs `fixers`).
-- `createRuleset(def?, basePath?)`, `resolveNamedRuleset(name, basePath?)`,
+- `fixDocument(input, options?)` → `{ output, fixed, applied, remaining, converged, passes }`
+  (needs `fixers`; `converged: false` means the 10-pass cap was hit with the
+  document still changing).
+- `createRuleset(def?, basePath?, { restrictTo }?)`,
+  `resolveNamedRuleset(name, basePath?, { restrictTo }?)`,
   `builtinFunctions` (`alphabetical`, `casing`, `truthy`, `pattern`, `schema`, …).
 
 ## Subpaths

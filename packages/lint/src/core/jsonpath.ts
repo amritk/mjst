@@ -1,3 +1,5 @@
+import { createBoundedCache } from './bounded-cache'
+import { compileFilter, type FilterFn } from './filter'
 import type { JsonPath } from './types'
 
 /** A single JSONPath match: the matched value and its concrete path from the root. */
@@ -20,20 +22,13 @@ export type IQueryMatch = {
 //   2. Evaluation builds the concrete `path` array directly during traversal —
 //      there is no path-string round-trip (`toPathArray`) per match.
 //
+// `[?(...)]` filter bodies are parsed and interpreted (see `./filter`), never
+// turned into JavaScript. A ruleset is data — frequently YAML someone else
+// wrote — so it must not be able to run code in the linting process.
+//
 // The compiled form is also what the runner's query planner groups on, so
 // identical `given`s and shared recursive descents can be evaluated once.
 // ---------------------------------------------------------------------------
-
-type FilterFn = (
-  value: unknown,
-  property: string | number | undefined,
-  parent: unknown,
-  root: unknown,
-  // `@path` is materialized as the jsonpath-plus string form (`$['a'][0]`),
-  // matching what ruleset filters written for Spectral expect.
-  path: string,
-  parentProperty: string | number | undefined,
-) => boolean
 
 type Selector =
   | { kind: 'child'; name: string }
@@ -102,87 +97,10 @@ const pathToJsonPathString = (path: (string | number)[]): string => {
 // Compilation
 // ---------------------------------------------------------------------------
 
-const compileCache = new Map<string, CompiledPath>()
-const filterCache = new Map<string, FilterFn>()
-
-/**
- * Rewrites jsonpath-plus' `@`-context tokens onto real identifiers, skipping any
- * `@` that sits inside a quoted string literal (so an expression like
- * `@.name.indexOf("@")` keeps the literal `@` intact). Longer tokens are matched
- * first so `@parentProperty` is not eaten by `@parent`.
- */
-const substituteContext = (source: string): string => {
-  let out = ''
-  let quote = ''
-  for (let i = 0; i < source.length; i++) {
-    const ch = source[i] as string
-    if (quote) {
-      out += ch
-      if (ch === '\\' && i + 1 < source.length) {
-        out += source[i + 1]
-        i++
-      } else if (ch === quote) {
-        quote = ''
-      }
-      continue
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch
-      out += ch
-      continue
-    }
-    if (ch === '@') {
-      const rest = source.slice(i)
-      if (rest.startsWith('@parentProperty')) {
-        out += '_pp'
-        i += '@parentProperty'.length - 1
-      } else if (rest.startsWith('@parent')) {
-        out += '_parent'
-        i += '@parent'.length - 1
-      } else if (rest.startsWith('@property')) {
-        out += '_prop'
-        i += '@property'.length - 1
-      } else if (rest.startsWith('@path')) {
-        out += '_path'
-        i += '@path'.length - 1
-      } else if (rest.startsWith('@root')) {
-        out += '_root'
-        i += '@root'.length - 1
-      } else {
-        out += '_v'
-      }
-      continue
-    }
-    out += ch
-  }
-  return out
-}
-
-const compileFilter = (source: string): FilterFn => {
-  const cached = filterCache.get(source)
-  if (cached) return cached
-  const body = substituteContext(source)
-  let fn: FilterFn
-  try {
-    // `_pp` (`@parentProperty`) is supplied directly by the caller rather than
-    // derived from a materialized path, so most filters never force a path
-    // allocation. `_path` (`@path`) is only materialized for filters that use it.
-    const compiled = new Function(
-      '_v',
-      '_prop',
-      '_parent',
-      '_root',
-      '_path',
-      '_pp',
-      `try { return !!(${body}); } catch (_e) { return false; }`,
-    ) as FilterFn
-    fn = compiled
-  } catch {
-    fn = () => false
-  }
-  filterCache.set(source, fn)
-  return fn
-}
+// Bounded so a long-lived process that compiles rulesets from untrusted input
+// (one per request, say) cannot grow this map without limit. 500 distinct
+// expressions is far more than any real ruleset uses.
+const compileCache = createBoundedCache<string, CompiledPath>(500)
 
 /** Splits bracket content on top-level commas, respecting quotes (and their escapes). */
 const splitUnion = (content: string): string[] => {
@@ -274,7 +192,16 @@ const bracketSelector = (content: string, onError: (message: string) => void): S
     const open = trimmed.indexOf('(')
     const close = trimmed.lastIndexOf(')')
     const expr = open !== -1 && close > open ? trimmed.slice(open + 1, close) : trimmed.slice(1)
-    return { kind: 'filter', test: compileFilter(expr), source: expr, usesPath: expr.includes('@path') }
+    const filter = compileFilter(expr)
+    // An expression outside the filter grammar is a ruleset bug, so it is
+    // reported like any other malformed path segment. It must never degrade into
+    // a predicate that quietly matches nothing — that is how a whole class of
+    // rules can stop firing without anyone noticing.
+    if ('error' in filter) {
+      onError(filter.error)
+      return { kind: 'none' }
+    }
+    return { kind: 'filter', test: filter.test, source: expr, usesPath: filter.usesPath }
   }
   if (trimmed.startsWith('(') && trimmed.endsWith(')')) {
     // Script subscript `[(expr)]`. We support the common `(@.length - N)` form
@@ -569,14 +496,29 @@ const applySelector = (node: Node, selector: Selector, root: unknown, out: Node[
   }
 }
 
-/** Visits `node` and every descendant (preorder), invoking `visit` on each. */
+/**
+ * Visits `node` and every descendant (preorder), invoking `visit` on each.
+ *
+ * The traversal keeps its own stack instead of recursing: document depth is
+ * attacker-controlled, and a recursive walker turns a deeply nested file into a
+ * `RangeError` that takes the whole process down. Children are pushed in reverse
+ * so they pop in document order — match order is part of the observable output.
+ */
 const walkDescendants = (node: Node, visit: (n: Node) => void): void => {
-  visit(node)
-  const value = node.value
-  if (Array.isArray(value)) {
-    for (let idx = 0; idx < value.length; idx++) walkDescendants({ value: value[idx], parent: node, key: idx }, visit)
-  } else if (isObject(value)) {
-    for (const key of Object.keys(value)) walkDescendants({ value: value[key], parent: node, key }, visit)
+  const stack: Node[] = [node]
+  while (stack.length > 0) {
+    const current = stack.pop() as Node
+    visit(current)
+    const value = current.value
+    if (Array.isArray(value)) {
+      for (let idx = value.length - 1; idx >= 0; idx--) stack.push({ value: value[idx], parent: current, key: idx })
+    } else if (isObject(value)) {
+      const keys = Object.keys(value)
+      for (let k = keys.length - 1; k >= 0; k--) {
+        const key = keys[k] as string
+        stack.push({ value: value[key], parent: current, key })
+      }
+    }
   }
 }
 

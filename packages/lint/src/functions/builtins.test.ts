@@ -178,6 +178,41 @@ describe('casing (options)', () => {
     expect(casing('/', { type: 'camel', separator: { char: '/', allowLeading: true } }, ctx())).toHaveLength(0)
     expect(casing('/', { type: 'camel', separator: { char: '/' } }, ctx())).toHaveLength(1)
   })
+
+  it('still accepts and rejects the same values around digits and trailing capitals', () => {
+    // Spectral's camel/pascal patterns let a digit start a segment and allow a
+    // single trailing capital; the rewritten (unambiguous) patterns must keep
+    // accepting exactly the same strings.
+    for (const value of ['foo', 'fooBar', 'foo2', 'foo2bar', 'foo2Bar', 'fooBar2', 'fooB', 'foo2B']) {
+      expect(casing(value, { type: 'camel' }, ctx()), value).toHaveLength(0)
+    }
+    for (const value of ['Foo', 'FooBar', 'Foo2Bar', 'FooB', 'F']) {
+      expect(casing(value, { type: 'pascal' }, ctx()), value).toHaveLength(0)
+    }
+    // Two capitals in a row are not camel/pascal case, then or now.
+    for (const value of ['fooBAr', 'fooBAR', 'Foo BAr']) {
+      expect(casing(value, { type: 'camel' }, ctx()), value).toHaveLength(1)
+    }
+    // A trailing capital is only allowed at the end of the whole value, not at
+    // the end of a separator-delimited part.
+    expect(casing('aA/a', { type: 'camel', separator: { char: '/', allowLeading: true } }, ctx())).toHaveLength(1)
+    expect(casing('a/aA', { type: 'camel', separator: { char: '/', allowLeading: true } }, ctx())).toHaveLength(0)
+  })
+
+  it('answers in linear time for a value built to trigger backtracking', () => {
+    // `'a' + '0'.repeat(44) + '!'` took over a minute on Node against the old
+    // pattern, where digits could be consumed two ways — and the value comes
+    // straight out of the linted document (an operationId, a property name).
+    const started = performance.now()
+    for (const type of ['camel', 'pascal'] as const) {
+      expect(casing(`a${'0'.repeat(60)}!`, { type }, ctx())).toHaveLength(1)
+      expect(casing(`A${'0'.repeat(60)}!`, { type }, ctx())).toHaveLength(1)
+    }
+    // The same trap through a separator whose character the style already uses.
+    const dashes = `${Array.from({ length: 40 }, () => 'a').join('-')}!`
+    expect(casing(dashes, { type: 'kebab', separator: { char: '-', allowLeading: true } }, ctx())).toHaveLength(1)
+    expect(performance.now() - started).toBeLessThan(1000)
+  })
 })
 
 describe('alphabetical (order and keyedBy)', () => {
@@ -186,6 +221,18 @@ describe('alphabetical (order and keyedBy)', () => {
     expect(alphabetical([10, 2], {}, ctx())).toHaveLength(1)
     expect(alphabetical({ a: 1, b: 2 }, {}, ctx())).toHaveLength(0)
     expect(alphabetical({ b: 1, a: 2 }, {}, ctx())).toHaveLength(1)
+  })
+
+  it('compares only plain decimal strings numerically', () => {
+    // `Number()` accepts hex, exponent, and leading-whitespace forms, which used
+    // to flag these lexicographically ordered lists as out of order.
+    expect(alphabetical(['0x10', '9'], {}, ctx())).toHaveLength(0)
+    expect(alphabetical(['1e2', '20'], {}, ctx())).toHaveLength(0)
+    expect(alphabetical([' 5', '3'], {}, ctx())).toHaveLength(0)
+    // Real numbers and plain decimal strings still compare numerically.
+    expect(alphabetical([2, '10'], {}, ctx())).toHaveLength(0)
+    expect(alphabetical(['-2', '1.5'], {}, ctx())).toHaveLength(0)
+    expect(alphabetical(['10', '2'], {}, ctx())).toHaveLength(1)
   })
 
   it('treats equal adjacent items as ordered, and short inputs as trivially ordered', () => {

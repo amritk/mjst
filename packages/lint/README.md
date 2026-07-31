@@ -105,6 +105,26 @@ await lintDocument(source, { ruleset: definition, rulesetBasePath: '/path/to/con
 
 A custom function has the signature `(value, options, context) => { message: string, path?: JsonPath }[]`.
 
+### Trust boundary — who may write a ruleset
+
+A **document** being linted is untrusted input: it is parsed, walked, and matched, and nothing in it can execute code. A **ruleset** is not input — it is configuration, and it is as privileged as the process running the linter:
+
+- `extends` accepts **any** path. `rulesetBasePath` is where resolution *starts*, not a fence: `../../../elsewhere/rules.yaml` and `/etc/rules.yaml` both resolve and load.
+- `extends` of a `.js` / `.cjs` / `.mjs` file, and every custom function named in `functions`, is `require`d — **that is code execution, by design**. This is how custom functions work.
+- YAML/JSON rulesets are *data*: their `given` filter expressions (`[?(...)]`) are parsed and interpreted, never evaluated as JavaScript, so a data-only ruleset cannot run code. A ruleset that names a `.js` file still can.
+
+So: load rulesets from sources you would trust to run a script. If you accept a ruleset from somewhere less trusted (a multi-tenant service, a PR from a fork), pass **`restrictTo`** — an optional root that every `extends` target and custom function must resolve under:
+
+```ts
+await lintDocument(source, {
+  ruleset: definition,
+  rulesetBasePath: '/srv/rulesets/tenant-42',
+  restrictTo: '/srv/rulesets/tenant-42', // refuse anything resolving outside this tree
+})
+```
+
+`restrictTo` is off by default and narrows *which* files a ruleset can name. It is not a sandbox: a `.js` file inside the permitted root still runs with full privileges.
+
 ### Auto-fix
 
 `fixDocument` runs the linter and applies a `FixerRegistry` — fixers keyed by rule `code` that map a finding to a formatting-preserving text edit — to a fixpoint, then re-lints:
@@ -126,6 +146,8 @@ const { output, applied, remaining } = await fixDocument('host: api.example.com/
 ```
 
 The engine ships no built-in fixers (rule codes are yours to define), so the default registry is empty and `fixDocument` is a no-op until you supply one.
+
+Fixing runs to a fixpoint, capped at 10 passes. The result reports how that ended: **`converged`** is `false` when the cap was hit while the document was still changing (usually two fixers undoing each other), and **`passes`** counts the passes that changed something. `applied` is de-duplicated by rule code and path, so a report can safely say "fixed N problems".
 
 ### Rendering findings
 
@@ -166,6 +188,21 @@ A ruleset is a plain object (authored as YAML, JSON, or a JS module):
 
 Built-in functions: `alphabetical`, `casing`, `defined`, `enumeration`, `falsy`, `length`, `or`, `pattern`, `schema`, `truthy`, `undefined`, `unreferencedReusableObject`, `xor`, `typedEnum`.
 
+### `given` — the JSONPath subset
+
+`$`, child and `['child']` access, `..` recursive descent, `[*]` / `.*` wildcards, `[a,b]` unions, `[n]` indices (negative counts from the end), `[start:end:step]` slices, `[(@.length-1)]`, `^` (parent) and `~` (property name), and `[?(...)]` filters.
+
+Filters are **parsed and interpreted, not evaluated as JavaScript** — a ruleset is data and cannot execute code. The supported grammar:
+
+| | |
+| --- | --- |
+| Context | `@`, `@.name`, `@['name']`, `@[0]`, `@property`, `@parentProperty`, `@parent`, `@path`, `@root`, `$` |
+| Operators | `===` `!==` `==` `!=` `<` `<=` `>` `>=` `&&` `\|\|` `!` `-` (negation), parentheses |
+| Literals | strings, numbers, `true`, `false`, `null`, `undefined`, `void 0`, `/regex/flags` |
+| Members & calls | `.length`, `.indexOf(…)`, `.lastIndexOf(…)`, `.includes(…)`, `.startsWith(…)`, `.endsWith(…)`, `.match(/re/)`, `/re/.test(…)`, `.toLowerCase()`, `.toUpperCase()`, `.trim()` |
+
+Anything outside that grammar is a ruleset error (`createRuleset` throws and names the rule) rather than a filter that quietly matches nothing. Member reads see **own properties only**, so `@.constructor` and `@['__proto__']` are plain `undefined`.
+
 ---
 
 ## API
@@ -174,9 +211,9 @@ Built-in functions: `alphabetical`, `casing`, `defined`, `enumeration`, `falsy`,
 | --- | --- |
 | `lintDocument(input, options?)` | Parse `input` and lint it against `options.ruleset`; returns `IDiagnostic[]`. |
 | `lintDocumentWithResult(input, options?)` | Like `lintDocument`, but returns `{ diagnostics, output?, pluginData }` (including any plugin's rewritten `output`). |
-| `fixDocument(input, options?)` | Lint and apply `options.fixers` to a fixpoint; returns `{ output, fixed, applied, remaining }`. |
-| `createRuleset(definition?, basePath?)` | Normalize a ruleset definition into a runnable `Ruleset`, layering the built-in functions and resolving `extends`. |
-| `resolveNamedRuleset(name, basePath?)` | Resolve an `extends` reference (file path or npm package) to its definition. |
+| `fixDocument(input, options?)` | Lint and apply `options.fixers` to a fixpoint; returns `{ output, fixed, applied, remaining, converged, passes }`. |
+| `createRuleset(definition?, basePath?, options?)` | Normalize a ruleset definition into a runnable `Ruleset`, layering the built-in functions and resolving `extends`. Memoized per `(definition object, basePath, restrictTo)` — treat a definition you have passed in as frozen. |
+| `resolveNamedRuleset(name, basePath?, options?)` | Resolve an `extends` reference (file path or npm package) to its definition. |
 | `builtinFunctions` | The registry of built-in rule functions. |
 
 The engine internals (`createDocument`, `lint`, `query`, `validateRuleset`, `parseWithPointers`, `createFixPlugin`, `DiagnosticSeverity`, and the rule/diagnostic types) are re-exported from the package root for advanced use.

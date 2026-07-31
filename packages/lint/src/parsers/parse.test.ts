@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
-import { DiagnosticSeverity, detectFormat, parseJson, parseWithPointers, parseYaml } from './index'
+import {
+  DiagnosticSeverity,
+  detectFormat,
+  findExcessiveNesting,
+  MAX_NESTING_DEPTH,
+  parseJson,
+  parseWithPointers,
+  parseYaml,
+} from './index'
 
 describe('parseYaml', () => {
   const source = ['openapi: 3.1.0', 'info:', '  title: My API', '  version: 1.0.0', 'paths: {}'].join('\n')
@@ -212,6 +220,30 @@ describe('parseJson', () => {
   it('reports syntax errors', () => {
     const { diagnostics } = parseJson('{ "a": }')
     expect(diagnostics.length).toBeGreaterThan(0)
+  })
+
+  it('reports a document nested past the depth limit instead of overflowing the stack', () => {
+    // `'['.repeat(20000)` is a 40 KB file that used to take the whole process
+    // down with a RangeError from inside the recursive-descent JSON parser.
+    const { data, diagnostics } = parseJson(`${'['.repeat(20_000)}${']'.repeat(20_000)}`)
+    expect(data).toBeUndefined()
+    expect(diagnostics).toHaveLength(1)
+    expect(diagnostics[0]?.message).toContain(`maximum nesting depth of ${MAX_NESTING_DEPTH}`)
+    expect(diagnostics[0]?.severity).toBe(DiagnosticSeverity.Error)
+  })
+
+  it('parses a document that sits just inside the depth limit', () => {
+    const depth = MAX_NESTING_DEPTH - 1
+    const { data, diagnostics } = parseJson(`${'['.repeat(depth)}1${']'.repeat(depth)}`)
+    expect(diagnostics).toHaveLength(0)
+    expect(Array.isArray(data)).toBe(true)
+  })
+
+  it('counts brackets outside string literals only', () => {
+    expect(findExcessiveNesting('{"a":"[[[[["}', 2)).toBe(-1)
+    expect(findExcessiveNesting('[[[]]]', 2)).toBe(2)
+    // An escaped quote does not end the string, so its brackets stay uncounted.
+    expect(findExcessiveNesting('{"a":"\\"[[[["}', 2)).toBe(-1)
   })
 })
 

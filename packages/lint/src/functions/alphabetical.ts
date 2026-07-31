@@ -14,6 +14,15 @@ const isStringOrNumber = (value: unknown): value is string | number =>
 /** A string made up only of digits, e.g. an integer-like object key such as "10". */
 const isIntegerLike = (value: unknown): value is string => typeof value === 'string' && /^(?:0|[1-9]\d*)$/.test(value)
 
+// Plain decimal notation only. `Number()` also happily accepts "0x10", "1e2",
+// "Infinity", and anything with leading whitespace, which made ordered lists like
+// ["0x10", "9"] and ["1e2", "20"] read as out of order — a false positive on
+// values that are really just strings that happen to look numeric to JavaScript.
+const DECIMAL_NUMBER = /^-?\d+(?:\.\d+)?$/
+
+const isNumeric = (value: unknown): boolean =>
+  typeof value === 'number' || (typeof value === 'string' && DECIMAL_NUMBER.test(value))
+
 const compare = (a: unknown, b: unknown): number => {
   // Deliberate deviation from Spectral, which relies on source order and falls
   // back to `localeCompare`: JavaScript enumerates integer-like object keys in
@@ -23,7 +32,7 @@ const compare = (a: unknown, b: unknown): number => {
   if (isIntegerLike(a) && isIntegerLike(b)) return Math.sign(Number(a) - Number(b))
   // Match Spectral: when either side is a real number or a numeric string,
   // compare numerically so mixed inputs like [2, "10"] read as ordered.
-  if ((typeof a === 'number' || !Number.isNaN(Number(a))) && (typeof b === 'number' || !Number.isNaN(Number(b)))) {
+  if (isNumeric(a) && isNumeric(b)) {
     return Math.min(1, Math.max(-1, Number(a) - Number(b)))
   }
   if (typeof a !== 'string' || typeof b !== 'string') return 0
