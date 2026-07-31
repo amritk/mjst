@@ -94,11 +94,9 @@
         "ajv": "^8.17.1",
       },
       "peerDependencies": {
-        "@amritk/runtime-validators": ">=0.9",
         "fast-check": ">=3",
       },
       "optionalPeers": [
-        "@amritk/runtime-validators",
         "fast-check",
       ],
     },

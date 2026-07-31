@@ -39,6 +39,15 @@ An `index.ts` barrel re-exports everything.
 > and the presence-gated object keywords) also imports `@amritk/runtime-validators`
 > for a post-generation validating filter; files that need no such filter don't.
 > The static `fooExample` values have no runtime dependencies.
+>
+> `@amritk/runtime-validators` is a `dependency` here rather than a peer, because
+> this generator imports it itself. That resolves it for the generator, but *not*
+> necessarily for the generated file — that file lands in **your** source tree, so
+> under pnpm's strict layout or Yarn PnP it resolves from your project, not from
+> this package's. If your schemas use any of those keywords, install it directly
+> (`npm i @amritk/runtime-validators`). It cannot also be declared a peer: Bun
+> rejects a workspace package listed as both, and `--frozen-lockfile` then fails
+> for the whole repo.
 
 ---
 

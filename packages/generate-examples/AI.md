@@ -24,7 +24,16 @@ const files = await buildExampleSchema(schema, 'User') // → user.ts, index.ts
 
 1. **Generated arbitrary files `import * as fc from 'fast-check'`** — `fast-check`
    (`>=3`) is an **optional peer dependency** consumers must install. The static
-   `fooExample` values have no runtime deps.
+   `fooExample` values have no runtime deps. A generated file whose schema uses
+   `if`/`then`/`else`, `not`, `oneOf`, `patternProperties`, `propertyNames`,
+   `dependentRequired`, `dependentSchemas`, `dependencies`, `minProperties`,
+   `maxProperties`, or `contains` **also** imports `@amritk/runtime-validators`
+   for its validating filter. That one is a `dependency` of this package, not a
+   peer — the generator imports it too — so it resolves for the generator but not
+   necessarily from the consumer's own tree, where the generated file lives.
+   Under pnpm-strict or Yarn PnP, install it directly. It cannot be declared a
+   peer as well: Bun rejects a workspace package listed as both, and
+   `--frozen-lockfile` then fails repo-wide.
 2. **`generateArbitrary` / `generateExampleConst` return source-code STRINGS**;
    **`deriveExample` returns an actual runtime VALUE.** Easy to confuse.
 3. **A static example is validated against its own schema before it is emitted.**
