@@ -67,7 +67,10 @@ export type CliConfig = {
    * (a hand-written `index.ts`, say) aborts the run rather than silently
    * replacing it — and with `build`, deleting it afterwards. Regeneration does
    * not need this: each run records what it wrote in a `.mjst-manifest.json` at
-   * the root of the output directory, and reclaims those paths freely.
+   * the root of the output directory, and reclaims those paths freely. With
+   * `outFile` the "output directory" is the directory holding that file, so the
+   * manifest lands beside it — generated examples and the `build` output already
+   * do.
    */
   readonly force?: boolean
   /**

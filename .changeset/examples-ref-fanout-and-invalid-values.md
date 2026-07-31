@@ -21,8 +21,10 @@ screens each `pattern` in whatever it is handed — so a 959-definition OpenAPI
 document paid for all 959 definitions on each of the thousand-odd checks a
 generation run makes, and embedded the whole document into every generated file
 carrying a validating filter. Only the definitions a schema's `$ref`s actually
-reach travel with it now (an `$anchor` reference, which cannot be pinned to one
-definition, still falls back to the full set). Generating the OpenAI corpus went
+reach travel with it now (a reference that cannot be pinned to one definition —
+an `$anchor` name, or a `$dynamicRef`/`$recursiveRef`, whose target is picked
+from the dynamic scope at validation time — still falls back to the full set).
+Generating the OpenAI corpus went
 from ~3.6 s to ~0.3 s, and its generated output from 119 MB to 2.7 MB.
 
 **Generated arbitraries compile under a strict tsconfig.** `fc.constantFrom("a",
@@ -57,7 +59,9 @@ config object's prototype to an `Arbitrary`). The value uses `defineProperty`
 and the source uses the computed `["__proto__"]:` form, matching what
 `generate-parsers` already does.
 
-**A schema the validator refuses no longer kills the run.** A `$ref` pointing
-outside the document (`#/components/schemas/…` in a bare fragment) threw out of
-`buildExampleSchema`. Those checks are opinions about a candidate value, so an
-undecidable schema now abstains.
+**A schema the validator refuses no longer kills the run — and no longer goes
+unmentioned.** A `$ref` pointing outside the document (`#/components/schemas/…`
+in a bare fragment) threw out of `buildExampleSchema`. Those checks are opinions
+about a candidate value, so an undecidable schema now abstains. It also warns
+once, naming the schema and the reason, because a filter that switches itself
+off silently is indistinguishable from one that ran and approved of everything.

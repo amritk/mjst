@@ -24,7 +24,13 @@ without a word, and `--build` then deleted it along with the other intermediate
 sources. Each run records what it wrote in a `.mjst-manifest.json` at the root
 of the output directory: paths listed there are reclaimed freely, so
 regenerating still needs no ceremony, while anything else aborts the run before
-a byte is written. The new `--force` flag opts out.
+a byte is written. The new `--force` flag opts out. This covers every output the
+CLI produces — the parser tree, `--validators`, `--examples`, and `--out-file`,
+which is the one most likely to be aimed at hand-written source
+(`--out-file src/types.ts` used to overwrite that file silently and, under
+`--build`, delete it afterwards). For `--out-file` the manifest lands in the
+directory holding the file, alongside the `--build` output and any generated
+examples.
 
 **Generation is atomic.** Files are staged under temporary names and renamed
 into place only once the whole set has been written, so a mid-run failure (a

@@ -97,31 +97,49 @@ const commitOrDiscard = async (writer: OutputWriter, stageAll: () => Promise<voi
   return writer.commit()
 }
 
+/** One schema's worth of example output: what to generate, and where it lands. */
+type ExampleTask = {
+  readonly schema: unknown
+  readonly rootTypeName: string
+  /** Mirrors the schema's nested location under `--schema-dir`; `''` for a single schema. */
+  readonly subDir?: string
+}
+
 /**
- * Emits fast-check arbitrary + example files for one schema (delegating to
- * {@link emitExamples}) and logs each written path. The files land in an
- * `examples/` subdirectory of `outputDir` so they never collide with the parser
- * files, which share the same `<name>.ts` / `index.ts` names. `subDir` mirrors a
- * schema's nested location under `--schema-dir`. The example sources are left out
- * of `--build`: they import the `fast-check` peer dependency and are meant to be
- * consumed by tests, not compiled alongside the runtime parsers.
+ * Emits fast-check arbitrary + example files (delegating to {@link emitExamples})
+ * and logs each written path. The files land in an `examples/` subdirectory of
+ * `outputDir` so they never collide with the parser files, which share the same
+ * `<name>.ts` / `index.ts` names. The example sources are left out of `--build`:
+ * they import the `fast-check` peer dependency and are meant to be consumed by
+ * tests, not compiled alongside the runtime parsers.
+ *
+ * Every task shares one writer, so the example tree lands as a unit — and it is a
+ * *second* writer, created after the parser tree has committed. That ordering
+ * matters: a writer reads the manifest once, at creation, so an examples writer
+ * made too early would not see the paths the parser run just claimed and would
+ * drop them from the manifest it writes. Keeping the examples out of the parser
+ * writer is what keeps them out of the `--build` file list, which is exactly the
+ * set of paths that run committed.
  */
 const runExamples = async (
   config: Partial<CliConfig>,
-  schema: unknown,
-  rootTypeName: string,
   outputDir: string,
-  subDir = '',
+  tasks: readonly ExampleTask[],
 ): Promise<void> => {
-  const written = await emitExamples({
-    schema: schema as JSONSchema,
-    rootTypeName,
-    outputDir,
-    subDir,
-    bannerPrefix: config.banner ? resolveBanner(config.banner) : '',
-    // Spread conditionally: `exactOptionalPropertyTypes` rejects an explicit
-    // `undefined` for the optional `typeSuffix`.
-    ...(config.typeSuffix !== undefined ? { typeSuffix: config.typeSuffix } : {}),
+  const writer = await createOutputWriter(outputDir, config.force)
+  const written = await commitOrDiscard(writer, async () => {
+    for (const task of tasks) {
+      await emitExamples({
+        schema: task.schema as JSONSchema,
+        rootTypeName: task.rootTypeName,
+        writer,
+        subDir: task.subDir ?? '',
+        bannerPrefix: config.banner ? resolveBanner(config.banner) : '',
+        // Spread conditionally: `exactOptionalPropertyTypes` rejects an explicit
+        // `undefined` for the optional `typeSuffix`.
+        ...(config.typeSuffix !== undefined ? { typeSuffix: config.typeSuffix } : {}),
+      })
+    }
   })
 
   for (const path of written) {
@@ -283,7 +301,7 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
   for (const filename of written) console.log(`Generated: ${filename}`)
 
   if (config.examples) {
-    await runExamples(config, schema, rootTypeName, outputDir)
+    await runExamples(config, outputDir, [{ schema, rootTypeName }])
   }
 
   if (config.build) {
@@ -297,6 +315,21 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
  * Generates a single self-contained file from one schema, concatenating every
  * generated definition (and dropping the cross-file imports that are no longer
  * needed) into `outFilePath`. Currently used for types-only output.
+ *
+ * The writer is rooted at the file's own directory, which is where its
+ * `.mjst-manifest.json` lands. That is a deliberate trade: `--out-file` usually
+ * points *into* hand-written source (`--out-file src/types.ts`), so the manifest
+ * ends up beside code mjst does not own. We take it anyway, because the
+ * alternatives are worse. Ownership has to outlive the process — without a record
+ * on disk the second run cannot tell its own output from a file somebody typed,
+ * leaving only "always clobber" (the bug this closes) or "always demand
+ * `--force`" (which breaks the regenerate-on-schema-change loop that is the whole
+ * point of `--out-file`). Anything further away — a cache under `node_modules`,
+ * say — disappears on a clean checkout, so CI would refuse to regenerate. And the
+ * directory is already one mjst writes into on this path: `--examples` puts an
+ * `examples/` tree there and `--build` drops the compiled `.d.ts` beside the
+ * source. The manifest lists only the paths this run generated, so it never
+ * claims a sibling; it is a hidden file the user can gitignore.
  */
 const runSingleFile = async (config: Partial<CliConfig>, schemaPath: string, outFilePath: string): Promise<void> => {
   const schema = await loadSchema(config, schemaPath)
@@ -323,17 +356,27 @@ const runSingleFile = async (config: Partial<CliConfig>, schemaPath: string, out
   )
 
   const combined = combineGeneratedFiles(files)
-  await writeFile(outFilePath, config.banner ? resolveBanner(config.banner) + combined : combined, 'utf-8')
+
+  // Same writer as the directory flows, and for the same reason twice over: the
+  // target is often a hand-written `src/types.ts`, which used to be overwritten
+  // silently — and then, under `--build`, deleted along with the other
+  // intermediate sources, so the user was left with neither their file nor a
+  // warning. `--build` is now handed the path this run actually committed.
+  const writer = await createOutputWriter(outputDir, config.force)
+  const written = await commitOrDiscard(writer, async () => {
+    await writer.stage(basename(outFilePath), config.banner ? resolveBanner(config.banner) + combined : combined)
+  })
+
   console.log(`Generated: ${relative(process.cwd(), outFilePath)}`)
 
   if (config.examples) {
-    await runExamples(config, schema, rootTypeName, outputDir)
+    await runExamples(config, outputDir, [{ schema, rootTypeName }])
   }
 
   if (config.build) {
-    await buildOutput(outputDir, [basename(outFilePath)], config.typesOnly)
+    await buildOutput(outputDir, written, config.typesOnly)
   } else {
-    console.log(`\nTotal files generated: 1`)
+    console.log(`\nTotal files generated: ${written.length}`)
   }
 }
 
@@ -365,7 +408,7 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
   const sharedHelpers = new Map<string, string>()
   const writer = await createOutputWriter(outputDir, config.force)
   /** Example emission is deferred until the parser tree has landed (see below). */
-  const exampleTasks: { schema: unknown; rootTypeName: string; subDir: string }[] = []
+  const exampleTasks: ExampleTask[] = []
 
   const stageAll = async (): Promise<void> => {
     for (const schemaFile of schemaFiles) {
@@ -425,8 +468,8 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
 
   for (const filename of writtenTsFiles) console.log(`Generated: ${filename}`)
 
-  for (const task of exampleTasks) {
-    await runExamples(config, task.schema, task.rootTypeName, outputDir, task.subDir)
+  if (exampleTasks.length > 0) {
+    await runExamples(config, outputDir, exampleTasks)
   }
 
   if (config.build) {

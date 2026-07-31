@@ -96,11 +96,59 @@ const defTargetFor = (ref: string): { container: DefContainer; name: string } | 
   return { container: '$defs', name: hash === -1 ? ref : ref.slice(0, hash) }
 }
 
-/** The definitions a schema can actually reach, or `'all'` when we cannot tell. */
+/**
+ * The reference keywords whose target is chosen at *validation* time, out of the
+ * dynamic scope, rather than from a lexical pointer anyone could follow ahead of
+ * time. `$dynamicRef: '#node'` binds to the outermost `$dynamicAnchor: 'node'`
+ * still in scope, and `$recursiveRef: '#'` to the outermost `$recursiveAnchor`;
+ * neither names a definition we could pick out of `$defs`.
+ */
+const DYNAMIC_REF_KEYWORDS = new Set(['$dynamicRef', '$recursiveRef'])
+
+/** Memoized per node, for the same reason {@link filterAnswers} is. */
+const dynamicRefAnswers = new WeakMap<object, boolean>()
+
+/**
+ * True when a dynamic reference appears anywhere beneath `node`.
+ *
+ * This is deliberately a *full* walk — every key, `$defs` and `enum` included —
+ * rather than one that follows only applicator keywords. The point is to decide
+ * whether the reachability analysis below can be trusted at all, so anything it
+ * skips is exactly what would make it wrong: a `$dynamicRef` hiding in an
+ * unwalked corner still resolves at validation time against an anchor that could
+ * be declared in *any* definition, so the only safe answer is to carry them all.
+ */
+const usesDynamicRef = (node: unknown): boolean => {
+  if (node === null || typeof node !== 'object') return false
+  const cached = dynamicRefAnswers.get(node)
+  if (cached !== undefined) return cached
+  const answer = Array.isArray(node)
+    ? node.some(usesDynamicRef)
+    : Object.entries(node as Record<string, unknown>).some(
+        ([key, value]) => (DYNAMIC_REF_KEYWORDS.has(key) && typeof value === 'string') || usesDynamicRef(value),
+      )
+  dynamicRefAnswers.set(node, answer)
+  return answer
+}
+
+/**
+ * The definitions a schema can actually reach, or `'all'` when we cannot tell.
+ *
+ * Reachability is walked over `$ref` alone, which is the whole story only for a
+ * schema without dynamic references. A `$dynamicRef`/`$recursiveRef` names an
+ * anchor rather than a definition, so it contributes nothing to the walk and a
+ * schema whose *only* reference is dynamic would otherwise travel with an empty
+ * `$defs` — the validator then cannot resolve the anchor, the guard fails to
+ * build, and the filter quietly degrades to accept-all. So the moment one shows
+ * up, in the schema or in any definition it drags along, we hand back `'all'`
+ * and splice the root's whole `$defs` the way this used to unconditionally.
+ */
 const reachableDefs = (
   schema: JSONSchema,
   rootSchema: Record<string, unknown>,
 ): Record<DefContainer, Record<string, unknown>> | 'all' => {
+  if (usesDynamicRef(schema)) return 'all'
+
   // Null-prototype holders so a definition literally named `__proto__` lands as
   // a real own property instead of reassigning the holder's prototype.
   const picked: Record<DefContainer, Record<string, unknown>> = {
@@ -125,6 +173,9 @@ const reachableDefs = (
     if (container === null || typeof container !== 'object') continue
     const definition = (container as Record<string, unknown>)[target.name]
     if (definition === undefined || Object.hasOwn(picked[target.container], target.name)) continue
+    // A definition can introduce a dynamic reference the schema itself never
+    // mentioned, and it resolves against the *whole* document's anchors.
+    if (usesDynamicRef(definition)) return 'all'
 
     picked[target.container][target.name] = definition
     for (const nested of extractRefs(definition as JSONSchema)) {
@@ -153,8 +204,9 @@ const resolvableCache = new WeakMap<object, WeakMap<object, Record<string, unkno
  * OpenAPI schema paid for all 959 on each of the thousand-odd checks a single
  * generation run makes — and it also embedded the whole document into every
  * generated file that carries a validating filter. A ref we cannot pin to one
- * definition (an `$anchor` name) still falls back to the full set, since
- * correctness beats size. The schema's own definitions win on collision.
+ * definition (an `$anchor` name, or any `$dynamicRef`/`$recursiveRef`) still
+ * falls back to the full set, since correctness beats size. The schema's own
+ * definitions win on collision.
  */
 export const withResolvableDefs = (
   schema: JSONSchema,
@@ -199,6 +251,61 @@ export type InstanceCheckOptions = {
   readonly checkFormats?: boolean
 }
 
+/**
+ * How much of the offending schema to quote. Enough to recognize which subschema
+ * lost its filter, without one warning filling the terminal — a real-world
+ * definition serializes to tens of kilobytes once its `$defs` travel with it.
+ */
+const WARNING_SCHEMA_LIMIT = 240
+
+/**
+ * Warn at most once per (schema, reason) pair. `makeInstanceCheck` is called at
+ * practically every node of every derivation, so warning unconditionally would
+ * print the same line hundreds of times for a single bad `pattern` and bury
+ * everything else the run has to say.
+ */
+const reportedGuardFailures = new Set<string>()
+
+/** A short, recognizable rendering of a schema for a warning message. */
+const describeSchema = (schema: Record<string, unknown>): string => {
+  const serialized = ((): string => {
+    try {
+      return JSON.stringify(schema) ?? String(schema)
+    } catch {
+      // A schema we cannot even serialize is exactly the sort we are warning
+      // about, so fall back rather than throwing from the reporting path.
+      return String(schema)
+    }
+  })()
+  return serialized.length > WARNING_SCHEMA_LIMIT ? `${serialized.slice(0, WARNING_SCHEMA_LIMIT)}…` : serialized
+}
+
+/**
+ * Reports a validity filter that could not be built, or that blew up on a value.
+ *
+ * Falling back to "everything is valid" keeps a generation run alive, and that is
+ * the right call — an undecidable schema is not grounds for discarding otherwise
+ * reasonable examples. Doing it *silently* is not: the whole point of the filter
+ * is to catch `oneOf`/`not`/`pattern` violations the deriver cannot honour
+ * structurally, so when it switches itself off, every example under that
+ * subschema stops being checked and nothing downstream can tell. Say so once,
+ * name the schema and the reason, and let the run finish.
+ */
+const warnUndecidableSchema = (schema: Record<string, unknown>, reason: unknown): void => {
+  const described = describeSchema(schema)
+  const message = reason instanceof Error ? reason.message : String(reason)
+  const key = `${message}\n${described}`
+  if (reportedGuardFailures.has(key)) return
+  reportedGuardFailures.add(key)
+  console.warn(
+    `Warning: cannot validate generated values against ${described} — ${message}. ` +
+      `Every candidate value is accepted for this subschema, so constraints only the validator ` +
+      `enforces (\`oneOf\`, \`not\`, \`pattern\`, \`if\`/\`then\`, …) go unchecked there and the ` +
+      `emitted example may not satisfy its own schema. Generation continues regardless; the usual ` +
+      `causes are a \`$ref\` pointing outside this fragment and a \`pattern\` the ReDoS screen rejects.`,
+  )
+}
+
 /** Builds the guard, or `undefined` when the interpreter refuses this schema. */
 const tryGuard = (
   schema: Record<string, unknown>,
@@ -206,7 +313,8 @@ const tryGuard = (
 ): ((input: unknown) => unknown) | undefined => {
   try {
     return checkFormats ? validateGuard(schema, { formats: 'all' }) : validateGuard(schema)
-  } catch {
+  } catch (error) {
+    warnUndecidableSchema(schema, error)
     return undefined
   }
 }
@@ -221,19 +329,23 @@ const tryGuard = (
  * ReDoS screen rejects — answers `true` for everything instead of throwing.
  * This check is an *opinion* about a candidate value; it must never be the
  * reason a whole generation run dies, and an undecidable schema is not grounds
- * for discarding an otherwise reasonable example.
+ * for discarding an otherwise reasonable example. It does warn on the way past,
+ * though — a filter that turns itself off without saying so is indistinguishable
+ * from one that ran and approved of everything.
  */
 export const makeInstanceCheck = (
   schema: JSONSchema,
   rootSchema?: Record<string, unknown>,
   options?: InstanceCheckOptions,
 ): ((value: unknown) => boolean) => {
-  const guard = tryGuard(withResolvableDefs(schema, rootSchema), options?.checkFormats === true)
+  const resolved = withResolvableDefs(schema, rootSchema)
+  const guard = tryGuard(resolved, options?.checkFormats === true)
   if (guard === undefined) return () => true
   return (value: unknown) => {
     try {
       return guard(value) === true
-    } catch {
+    } catch (error) {
+      warnUndecidableSchema(resolved, error)
       return true
     }
   }
