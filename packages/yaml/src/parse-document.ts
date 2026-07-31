@@ -315,6 +315,16 @@ const resolveTag = (state: State, written: string, start: number): string => {
     if (i > 1 && written.charCodeAt(i) === BANG) handleEnd = i + 1
   }
   const handle = written.slice(0, handleEnd)
+  const suffix = written.slice(handleEnd)
+  if (BAD_TAG_CHAR.test(suffix)) {
+    pushError(
+      state,
+      'BAD_TAG',
+      `Tag "${written}" contains a character a tag may not hold`,
+      start,
+      start + written.length,
+    )
+  }
   const prefix = handlePrefix(state, handle)
   if (prefix === undefined) {
     pushError(
@@ -326,11 +336,21 @@ const resolveTag = (state: State, written: string, start: number): string => {
     )
     return written
   }
-  return shortenTag(prefix + decodeTagUri(written.slice(handleEnd)))
+  return shortenTag(prefix + decodeTagUri(suffix))
 }
 
 /** Reduces a resolved schema tag to the short suffix the rest of the parser keys off. */
 const shortenTag = (tag: string): string => (tag.startsWith(YAML_TAG_PREFIX) ? tag.slice(YAML_TAG_PREFIX.length) : tag)
+
+/** The only shape a `%YAML` version may take. */
+const YAML_VERSION = /^\d+\.\d+$/
+
+/**
+ * Characters a tag shorthand's suffix may not contain. The spec's `ns-tag-char`
+ * excludes the flow indicators so a tag inside `[…]`/`{…}` still has an
+ * unambiguous end; a document that means them has to percent-encode them.
+ */
+const BAD_TAG_CHAR = /[,[\]{}]/
 
 /** Offset of the end of the whitespace-delimited token starting at `from`. */
 const tokenEnd = (src: string, from: number, len: number): number => {
@@ -384,9 +404,22 @@ const readDirective = (state: State, pos: number): void => {
     const versionEnd = tokenEnd(src, i, len)
     const version = src.slice(i, versionEnd)
     if (state.yamlDirective) {
-      pushWarning(state, 'DUPLICATE_DIRECTIVE', 'A document may carry only one %YAML directive', pos, versionEnd)
+      pushError(state, 'DUPLICATE_DIRECTIVE', 'A document may carry only one %YAML directive', pos, versionEnd)
     }
     state.yamlDirective = true
+    // The version has to *be* a version. Without this `%YAML 1.1#...` read as
+    // the 1.1 it starts with and was merely warned about, and anything after it
+    // on the line — `%YAML 1.2 foo` — was ignored outright.
+    if (!YAML_VERSION.test(version)) {
+      pushError(state, 'BAD_DIRECTIVE', `"${version}" is not a valid YAML version`, pos, versionEnd)
+      return
+    }
+    let after = versionEnd
+    while (after < len && isSpace(src.charCodeAt(after))) after++
+    const trailing = src.charCodeAt(after)
+    if (after < len && trailing !== NL && trailing !== CR && trailing !== HASH) {
+      pushError(state, 'BAD_DIRECTIVE', 'Unexpected content after the %YAML version', after, tokenEnd(src, after, len))
+    }
     if (version !== '1.2') {
       // 1.1 documents parse — they are a near-superset — but their schema
       // differences (`yes`/`no` booleans, `1_000`, sexagesimals) are not applied,
@@ -506,15 +539,23 @@ const scanQuoted = (state: State, quote: number): YamlScalar => {
   // the document silently, so we report it (mirroring eemeli's "Missing closing
   // quote" and the `UNTERMINATED_FLOW` handling for `[`/`{`).
   let closed = false
+  // A `---`/`...` at column 0 ends the document even with a quote still open, so
+  // an unterminated quoted scalar stops there instead of swallowing every
+  // document after it. The per-character cost is the `c === NL` test; the marker
+  // check itself only runs on the line breaks a multi-line quoted scalar has.
   if (quote === SQUOTE) {
     while (i < len) {
-      if (src.charCodeAt(i) === SQUOTE) {
+      const c = src.charCodeAt(i)
+      if (c === SQUOTE) {
         if (src.charCodeAt(i + 1) === SQUOTE) i += 2
         else {
           i++
           closed = true
           break
         }
+      } else if (c === NL && isDocMarker(src, i + 1, len)) {
+        i++
+        break
       } else i++
     }
   } else {
@@ -527,6 +568,10 @@ const scanQuoted = (state: State, quote: number): YamlScalar => {
       if (c === DQUOTE) {
         i++
         closed = true
+        break
+      }
+      if (c === NL && isDocMarker(src, i + 1, len)) {
+        i++
         break
       }
       i++
@@ -660,6 +705,9 @@ const scanPlainScalar = (state: State, parentIndent: number): YamlScalar => {
     // Only a top-level scalar (`parentIndent < 0`) can sit at column 0 alongside
     // a `---`/`...` marker; for nested scalars the indent test above already
     // stopped us, so this short-circuits to a single comparison off the hot path.
+    // A `%` line is deliberately *not* a stop: the suite's XLQ9 folds one into
+    // the scalar, so treating it as a misplaced directive would reject a valid
+    // document to catch an invalid one — the worse of the two errors.
     if (parentIndent < 0 && (c === DASH || c === DOT) && isDocMarker(src, i, len)) break
     const lineEnd = plainLineEnd(src, i, len)
     if (!segments) segments = [src.slice(start, valueEnd)]
@@ -733,7 +781,10 @@ const foldBlockFolded = (lines: string[]): string => {
       pendingBlanks++
       continue
     }
-    const curMore = line.charCodeAt(0) === SPACE
+    // "More indented" means the line begins with white space — a space *or* a
+    // tab (the spec's `s-white`). Testing only for a space folded the break
+    // around a tab-led line into a space and lost the blank line beside it.
+    const curMore = isSpace(line.charCodeAt(0))
     if (!started) {
       // Blank lines before the first content survive as leading line breaks.
       out = '\n'.repeat(pendingBlanks) + line
@@ -789,6 +840,11 @@ const scanBlockScalar = (state: State, parentIndent: number): YamlScalar => {
       contentIndent = indent
     }
     if (indent < contentIndent) break
+    // A block scalar whose content sits at column 0 — only possible at the
+    // document root — still ends at a `---`/`...` marker, which outranks it.
+    // The `indent === 0` gate means an indented block scalar (every other one)
+    // pays a single integer comparison per line and never looks further.
+    if (indent === 0 && (c === DASH || c === DOT) && isDocMarker(src, i, len)) break
     let lineEnd = lineStart + contentIndent
     while (lineEnd < len && src.charCodeAt(lineEnd) !== NL && src.charCodeAt(lineEnd) !== CR) lineEnd++
     lines.push(src.slice(lineStart + contentIndent, lineEnd))
@@ -899,6 +955,15 @@ const scanFlowPlain = (state: State): YamlScalar => {
     // A line that opens on a flow indicator ends the scalar; the collection
     // parser resumes at that indicator (or an unterminated-flow report there).
     if (j >= len || c === COMMA || c === LBRACKET || c === RBRACKET || c === LBRACE || c === RBRACE) break
+    // So does a line that opens on the `: ` that separates this key from its
+    // value, or on a comment. Both used to be swallowed as continuation text,
+    // which left the key carrying a trailing newline (`{foo\n: bar}` keyed the
+    // mapping by `"foo\n"`) or the comment glued onto the value.
+    if (c === HASH) break
+    if (c === COLON) {
+      const n = src.charCodeAt(j + 1)
+      if (j + 1 >= len || isSpace(n) || n === COMMA || n === RBRACKET || n === RBRACE || n === NL || n === CR) break
+    }
     const lineEnd = flowPlainLineEnd(src, j, j, len)
     let e = lineEnd
     while (e > j && isSpace(src.charCodeAt(e - 1))) e--
@@ -909,7 +974,7 @@ const scanFlowPlain = (state: State): YamlScalar => {
     if (lineEnd >= len || (src.charCodeAt(lineEnd) !== NL && src.charCodeAt(lineEnd) !== CR)) {
       state.pos = lineEnd
       const source = src.slice(start, valueEnd)
-      return { kind: 'scalar', value: foldSegments(segments), source, style: 'plain', start, end: valueEnd }
+      return { kind: 'scalar', value: resolveFlowPlain(segments), source, style: 'plain', start, end: valueEnd }
     }
     scan = nextLineStart(src, lineEnd, len)
   }
@@ -919,8 +984,22 @@ const scanFlowPlain = (state: State): YamlScalar => {
   while (segments.length > 1 && segments[segments.length - 1] === '') segments.pop()
   state.pos = valueEnd
   const source = src.slice(start, valueEnd)
-  return { kind: 'scalar', value: foldSegments(segments), source, style: 'plain', start, end: valueEnd }
+  return { kind: 'scalar', value: resolveFlowPlain(segments), source, style: 'plain', start, end: valueEnd }
 }
+
+/**
+ * Folds a wrapped flow plain scalar and resolves it through the core schema.
+ *
+ * The resolution is the point: `scanFlowPlain` reaches this path whenever the
+ * scalar is the last thing on its line, which is every entry of a flow
+ * collection written across lines — so `{ a: 1,\n  b: 2 }` used to yield the
+ * *string* `"2"` for `b` while the single-line `{ a: 1, b: 2 }` yielded the
+ * number. A genuinely multi-line scalar folds to spaced text that no number or
+ * boolean pattern matches, so it still resolves to a string, exactly as
+ * {@link scanPlainScalar} does for the block form.
+ */
+const resolveFlowPlain = (segments: string[]): string | number | boolean | null =>
+  resolvePlainValue(foldSegments(segments))
 
 const parseFlowNode = (state: State): YamlNode => {
   // Flow collections recurse through here rather than `parseNode`, so they need
@@ -1587,13 +1666,65 @@ const parseNodeInner = (state: State, indent: number): YamlNode => {
   return attachProps(scanPlainScalar(state, indent - 1), props, state)
 }
 
-/** Reads a leading BOM, `%`-directives, and a `---` document-start marker. */
-const skipDocumentHead = (state: State): void => {
+/**
+ * Steps past a `---` marker at `p`, stopping on the node written on the marker
+ * line when there is one. Returns that node's offset, or -1 when the line holds
+ * nothing but the marker and an optional comment (the cursor is then parked at
+ * the next line, as before).
+ *
+ * A document root may be written on the marker line — `--- foo`, `--- |`,
+ * `--- !tag`, `--- "spanning` — and skipping straight to the next line dropped
+ * it: `--- |` lost its block-scalar indicator and re-read the body as a folded
+ * plain scalar, and `--- foo` lost the scalar entirely.
+ */
+const docMarkerInlineNode = (state: State, p: number): number => {
+  const { src, len } = state
+  let i = p + 3
+  while (i < len && isSpace(src.charCodeAt(i))) i++
+  const c = src.charCodeAt(i)
+  if (i >= len || c === NL || c === CR || c === HASH) {
+    state.pos = nextLineStart(src, i, len)
+    return -1
+  }
+  state.pos = i
+  return i
+}
+
+/**
+ * Parses the node written on a `---` line. The node is the document root, so it
+ * is measured against column 0 whatever column the marker pushed it to —
+ * `--- |` holds a block scalar whose content may start at column 0.
+ */
+const parseDocMarkerNode = (state: State, contentPos: number): YamlNode => {
+  const { src, len } = state
+  // A *block* mapping is the one node kind that may not start here: its
+  // following entries would have to align under a key at column 4 or beyond,
+  // which the spec does not allow a document's root mapping to do.
+  const c = src.charCodeAt(contentPos)
+  if (c !== LBRACKET && c !== LBRACE && findKeyColon(src, contentPos, len) >= 0) {
+    pushError(
+      state,
+      'UNEXPECTED_CONTENT',
+      'A block mapping cannot start on the "---" line',
+      contentPos,
+      plainLineEnd(src, contentPos, len),
+    )
+  }
+  state.pos = contentPos
+  return parseNode(state, 0)
+}
+
+/**
+ * Reads a leading BOM, `%`-directives, and a `---` document-start marker.
+ * Returns the offset of a node written on the marker line, or -1 when there is
+ * none — see {@link docMarkerInlineNode}.
+ */
+const skipDocumentHead = (state: State): number => {
   const { src, len } = state
   if (src.charCodeAt(0) === 0xfeff) state.pos = 1
   for (;;) {
     const line = peekLine(state)
-    if (line.eof) return
+    if (line.eof) return -1
     const c = src.charCodeAt(line.contentPos)
     if (c === PERCENT) {
       readDirective(state, line.contentPos)
@@ -1612,10 +1743,11 @@ const skipDocumentHead = (state: State): void => {
         // CR, so this keeps the two marker detectors in agreement.
         src.charCodeAt(line.contentPos + 3) === CR)
     ) {
-      state.pos = nextLineStart(src, line.contentPos + 3, len)
+      const inline = docMarkerInlineNode(state, line.contentPos)
+      if (inline >= 0) return inline
       continue
     }
-    return
+    return -1
   }
 }
 
@@ -1662,9 +1794,18 @@ const applyScalarTag = (node: YamlScalar): unknown => {
     // one resolution would infer", which for a scalar means the failsafe `!!str`.
     case '!':
     case 'str':
-      // For a plain scalar the raw source *is* the string (so `!!str 1.50` keeps
-      // its trailing zero); quoted/block styles already resolved to a string.
-      return node.style === 'plain' ? node.source : typeof v === 'string' ? v : v === null ? '' : String(v)
+      // For a single-line plain scalar the raw source *is* the string (so
+      // `!!str 1.50` keeps its trailing zero). A plain scalar that wraps is the
+      // exception: its source still holds the raw line breaks, while `value`
+      // holds the folded text the document actually means, so `!!str` over two
+      // lines must read the folded value rather than un-fold it.
+      return node.style === 'plain' && node.source.indexOf('\n') === -1
+        ? node.source
+        : typeof v === 'string'
+          ? v
+          : v === null
+            ? ''
+            : String(v)
     case 'null':
       return null
     case 'bool': {
@@ -1874,9 +2015,14 @@ const finishDocument = (state: State, contents: YamlNode | null): YamlDocument =
  */
 export const parseDocument = (source: string, options: ParseOptions = {}): YamlDocument => {
   const state = newState(source, options)
-  skipDocumentHead(state)
-  const head = peekLine(state)
+  const inline = skipDocumentHead(state)
   let contents: YamlNode | null = null
+  if (inline >= 0) {
+    contents = parseDocMarkerNode(state, inline)
+    checkDocumentEnd(state)
+    return finishDocument(state, contents)
+  }
+  const head = peekLine(state)
   if (!head.eof) {
     // Stop a bare `...` document-end marker from being read as a scalar.
     const c = source.charCodeAt(head.contentPos)
@@ -1894,6 +2040,11 @@ export const parseDocument = (source: string, options: ParseOptions = {}): YamlD
 /** `skipStreamHead` result bits: which document markers it consumed. */
 const SAW_DOC_START = 1
 const SAW_DOC_END = 2
+/**
+ * The `---` it consumed carried the document's root node on the same line, and
+ * `state.pos` is parked on that node rather than at the next line start.
+ */
+const SAW_INLINE_NODE = 4
 
 /**
  * Consumes the head of one document in a stream — any `%`-directives, `...`
@@ -1903,30 +2054,68 @@ const SAW_DOC_END = 2
  * document even when no body follows; `...` matters because it closes the
  * previous document, which makes the next one legal without a `---` of its own.
  */
-const skipStreamHead = (state: State): number => {
+const skipStreamHead = (state: State, closed: boolean): number => {
   const { src, len } = state
   let seen = 0
+  let sawDirective = false
   for (;;) {
     const line = peekLine(state)
-    if (line.eof) return seen
+    if (line.eof) break
     const p = line.contentPos
     const c = src.charCodeAt(p)
     if (c === PERCENT) {
+      // A directive belongs to the document that follows it, so it may only
+      // appear at the start of the stream or once the previous document has
+      // been closed by a `...` footer.
+      if (!closed && (seen & SAW_DOC_END) === 0) {
+        pushError(
+          state,
+          'UNEXPECTED_DIRECTIVE',
+          'A directive must be preceded by a "..." document-end marker',
+          p,
+          tokenEnd(src, p, len),
+        )
+      }
       readDirective(state, p)
+      sawDirective = true
       state.pos = nextLineStart(src, p, len)
       continue
     }
     if (c === DOT && isDocMarker(src, p, len)) {
+      let after = p + 3
+      while (after < len && isSpace(src.charCodeAt(after))) after++
+      const trailing = src.charCodeAt(after)
+      if (after < len && trailing !== NL && trailing !== CR && trailing !== HASH) {
+        pushError(
+          state,
+          'UNEXPECTED_CONTENT',
+          'Unexpected content after the "..." document-end marker',
+          after,
+          plainLineEnd(src, after, len),
+        )
+      }
       state.pos = nextLineStart(src, p + 3, len)
       seen |= SAW_DOC_END
       continue
     }
     if (c === DASH && isDocMarker(src, p, len)) {
-      state.pos = nextLineStart(src, p + 3, len)
-      return seen | SAW_DOC_START
+      const inline = docMarkerInlineNode(state, p)
+      return inline >= 0 ? seen | SAW_DOC_START | SAW_INLINE_NODE : seen | SAW_DOC_START
     }
-    return seen
+    break
   }
+  // Falling out here means no `---` followed, so the directives describe a
+  // document that was never written.
+  if (sawDirective) {
+    pushError(
+      state,
+      'UNEXPECTED_DIRECTIVE',
+      'A directive must be followed by a "---" document start',
+      state.pos,
+      state.pos,
+    )
+  }
+  return seen
 }
 
 /**
@@ -1944,47 +2133,84 @@ export const parseAllDocuments = (source: string, options: ParseOptions = {}): Y
   if (src.charCodeAt(0) === 0xfeff) state.pos = 1
 
   const docs: YamlDocument[] = []
+  // Whether the stream is currently between documents — true before the first
+  // one, and again after a `...` footer. Only then may directives appear.
+  let closed = true
   for (;;) {
-    const markers = skipStreamHead(state)
+    const markers = skipStreamHead(state, closed)
     const sawStart = (markers & SAW_DOC_START) !== 0
-    const line = peekLine(state)
     let contents: YamlNode | null = null
     let bodyConsumed = false
-    if (!line.eof) {
-      const p = line.contentPos
-      const c = src.charCodeAt(p)
-      if (c === DASH && isDocMarker(src, p, len)) {
-        // The next document's start marker: the current document is empty. Leave
-        // the marker for the next iteration's `skipStreamHead` to consume.
-      } else if (c === DOT && isDocMarker(src, p, len)) {
-        // A `...` end marker terminates this (empty) document; consume it.
-        state.pos = nextLineStart(src, p + 3, len)
-      } else {
-        // A second document may follow the first bare, but only once the one
-        // before it was closed — by its own `---` or by a `...` end marker.
-        // Otherwise this is stray content, not a new document.
-        if (!sawStart && (markers & SAW_DOC_END) === 0 && docs.length > 0) {
-          pushError(
-            state,
-            'UNEXPECTED_CONTENT',
-            'Unexpected content — start a new document with "---"',
-            p,
-            plainLineEnd(src, p, len),
-          )
+    /** A `...` consumed as this (empty) document's own footer, which closes it. */
+    let footer = false
+    if ((markers & SAW_INLINE_NODE) !== 0) {
+      // The root node is written on the `---` line; the cursor already sits on it.
+      contents = parseDocMarkerNode(state, state.pos)
+      finishLineIfMidLine(state)
+      bodyConsumed = true
+    }
+    if (!bodyConsumed) {
+      const line = peekLine(state)
+      if (!line.eof) {
+        const p = line.contentPos
+        const c = src.charCodeAt(p)
+        if (c === DASH && isDocMarker(src, p, len)) {
+          // The next document's start marker: the current document is empty. Leave
+          // the marker for the next iteration's `skipStreamHead` to consume.
+        } else if (c === DOT && isDocMarker(src, p, len)) {
+          // A `...` end marker terminates this (empty) document; consume it.
+          state.pos = nextLineStart(src, p + 3, len)
+          footer = true
+        } else {
+          // A second document may follow the first bare, but only once the one
+          // before it was closed — by its own `---` or by a `...` end marker.
+          // Otherwise this is stray content, not a new document.
+          if (!sawStart && (markers & SAW_DOC_END) === 0 && docs.length > 0) {
+            pushError(
+              state,
+              'UNEXPECTED_CONTENT',
+              'Unexpected content — start a new document with "---"',
+              p,
+              plainLineEnd(src, p, len),
+            )
+          }
+          // `%` is an indicator, so it cannot open a node: a document body that
+          // starts with one is a directive written where it does not belong.
+          if (c === PERCENT) {
+            pushError(
+              state,
+              'UNEXPECTED_DIRECTIVE',
+              'A directive must be preceded by a "..." document-end marker',
+              p,
+              tokenEnd(src, p, len),
+            )
+          }
+          state.pos = p
+          contents = parseNode(state, line.indent)
+          finishLineIfMidLine(state)
+          bodyConsumed = true
         }
-        state.pos = p
-        contents = parseNode(state, line.indent)
-        finishLineIfMidLine(state)
-        bodyConsumed = true
       }
     }
     if (!sawStart && !bodyConsumed) break
     docs.push(finishDocument(state, contents))
+    closed = footer
     state.errors = []
     state.warnings = []
     state.anchors = new Map()
     state.tagHandles = null
     state.yamlDirective = false
+  }
+  // Diagnostics raised after the last document was finished — a malformed `...`
+  // footer, a directive that no `---` ever followed — belong to the stream, not
+  // to nothing. Without this they are reported into an array no caller holds.
+  if (state.errors.length > 0 || state.warnings.length > 0) {
+    const tail = docs[docs.length - 1]
+    if (tail === undefined) docs.push(finishDocument(state, null))
+    else {
+      tail.errors.push(...state.errors)
+      tail.warnings.push(...state.warnings)
+    }
   }
   return docs
 }

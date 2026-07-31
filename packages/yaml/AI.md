@@ -39,7 +39,9 @@ for (const error of doc.errors) {
    `paths:` with no value).
 5. **Errors are collected on `doc.errors` / `doc.warnings`, not thrown.** Codes
    include `DUPLICATE_KEY`, `UNRESOLVED_ALIAS`, `UNEXPECTED_CONTENT`,
-   `UNTERMINATED_FLOW`, `TAB_INDENT`; directive problems land in `warnings`.
+   `UNTERMINATED_FLOW`, `TAB_INDENT`, `UNEXPECTED_DIRECTIVE`. A misplaced or
+   malformed directive is an **error**; only an unknown directive and a
+   non-1.2 `%YAML` version are warnings.
 6. **`node.tag` keeps a local tag's `!`.** `!!str` → `'str'`, `!custom` →
    `'!custom'`. Only the core/extended schema tags coerce a value; a local tag
    passes it through. `!<verbatim>` and `%TAG` handles resolve to the same form.

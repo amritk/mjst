@@ -196,6 +196,7 @@ schema** for scalar typing. The exact boundaries:
 - Anchors (`&name`) and aliases (`*name`); `<<` merge keys (toggle with the `merge` option). Anchors and aliases work as mapping keys, and an alias key resolves to the anchored value.
 - Collections as mapping keys, both explicit (`? [a, b]` / `: value`) and implicit (`[a, b]: value`). A JavaScript object can only be keyed by a string, so a collection key projects to its flow rendering — `{ '[ a, b ]': 'value' }`.
 - Multi-document streams (`---` / `...`) via `parseAllDocuments`, each document with its own anchor scope, tag handles, and problem list.
+- A root node written on the `---` line itself — `--- foo`, `--- |`, `--- !!str`, or a quoted scalar spanning the lines below it. Its content is measured against column 0, not the column the marker pushed it to, so `--- >` may hold a block scalar starting at column 0.
 - `%TAG` directives (handles are resolved) and `%YAML` (the version is reported, not applied — resolution is always the 1.2 core schema).
 - Comments (full-line and inline), blank lines, and a leading byte-order mark.
 
@@ -213,11 +214,14 @@ Every node carries an exact `[start, end)` source span, and problems are collect
 | `UNEXPECTED_COMMA` | an empty flow entry (`[1, , 2]`) |
 | `TAB_INDENT` | a tab used for indentation |
 | `BAD_SCALAR_START` | a plain scalar starting with the reserved `@` or `` ` `` |
-| `BAD_TAG` | a verbatim tag missing its closing `>` |
+| `BAD_TAG` | a verbatim tag missing its closing `>`, or a tag holding a flow indicator |
 | `UNKNOWN_TAG_HANDLE` | a tag handle no `%TAG` directive declared |
+| `BAD_DIRECTIVE` | a malformed `%YAML` version, or content after it |
+| `DUPLICATE_DIRECTIVE` | a second `%YAML` directive on one document |
+| `UNEXPECTED_DIRECTIVE` | a directive with no `...` before it or no `---` after it |
 | `DEPTH_LIMIT` | nesting past the parser's depth cap |
 
-Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `DUPLICATE_DIRECTIVE`, `UNKNOWN_DIRECTIVE`, `BAD_DIRECTIVE`.
+Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNKNOWN_DIRECTIVE`, and a malformed `%TAG` directive (`BAD_DIRECTIVE`).
 
 ### Not supported
 
@@ -225,7 +229,7 @@ Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `DUP
 - **Schema selection.** Always the 1.2 core schema — no JSON, failsafe, or YAML 1.1 schema switch. A `%YAML 1.1` document parses, with a warning that its schema differences are not applied.
 - **YAML 1.1-only scalar forms.** `yes`/`no`/`on`/`off` booleans, sexagesimal numbers (`1:30:00`), and underscore digit groups (`1_000`) stay strings, per the 1.2 core schema.
 - **Implicit timestamps.** An untagged ISO date string stays a string; only an explicit `!!timestamp` produces a `Date`.
-- **Stream-level directive grammar.** `%TAG` handles resolve, but the rules *around* directives are not enforced — that a document must be closed by `...` before the next document's directives, for instance.
+- **Directives on a line a plain scalar could claim.** The rules around directives are enforced — a directive needs a `...` footer before it and a `---` after it, and its version must parse — with one exception: when the offending `%` line could equally be read as a continuation of the plain scalar above it, the scalar wins. Reporting it would mean rejecting a valid document (the suite's `XLQ9`) to catch an invalid one.
 - **Node properties on block mapping keys.** An anchor or tag written on a mapping key (`&a key: value`) stays part of the key text instead of being applied to it.
 - **Multi-line implicit keys.** A key spanning lines, or one past the spec's 1024-character limit, is accepted rather than rejected.
 - **Carriage-return-only line breaks.** `\r\n` and `\n` are both handled; a lone `\r` as a line terminator is not.
@@ -238,7 +242,7 @@ The boundary above is not a claim — it is checked. `src/conformance.test.ts` r
 official [YAML test suite](https://github.com/yaml/yaml-test-suite) (402 cases) on
 every build:
 
-**293 / 402 cases pass (72.9%).**
+**336 / 402 cases pass (83.6%).**
 
 Every case that does not is listed in `src/conformance-expected-failures.test-utils.ts`
 with the reason it does not, and the test fails if a case moves in *either*
@@ -246,10 +250,10 @@ direction — a regression breaks the build, and so does a case that starts pass
 without its entry being removed. The suite is a dev dependency; none of it reaches
 the published bundle.
 
-The 109 remaining cases are roughly: invalid documents we accept without a
-diagnostic (~60), block-scalar and quoted-scalar folding edge cases that produce a
-different string (~20), the tab and directive rules above (~15), and shapes we
-mis-scan and now report rather than silently mis-parse (~10).
+The 66 remaining cases are roughly: invalid documents we accept without a
+diagnostic (~36), the tab rules above (~13), shapes we mis-scan and now report
+rather than silently mis-parse (~8), documented projections to richer JavaScript
+types than JSON can express (3), and a handful of structural differences (~6).
 
 ---
 

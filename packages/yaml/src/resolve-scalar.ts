@@ -181,30 +181,55 @@ export const resolveSingleQuoted = (inner: string): string => {
   return folded.indexOf("''") === -1 ? folded : folded.replace(/''/g, "'")
 }
 
-/** Resolves a double-quoted scalar: full escape handling, line continuation, and folding. */
-export const resolveDoubleQuoted = (rawInner: string): string => {
-  const inner = normalizeBreaks(rawInner)
-  // Fast path: a plain double-quoted string with nothing to process.
-  if (inner.indexOf('\\') === -1 && inner.indexOf('\n') === -1) return inner
+/**
+ * One line of a double-quoted scalar, already unescaped, carrying what the
+ * folding rules need in order to tell padding from content.
+ *
+ * Folding drops each joined line's indentation and trailing whitespace — but a
+ * `\t` or `\ ` escape *is* content and has to survive. Recording where the
+ * escaped characters landed is what lets {@link sliceQuoted} strip only the
+ * whitespace the document wrote literally. Unescaping before folding (rather
+ * than after, as this used to) is also what makes a `\`-continuation work: the
+ * break it escapes must never become the space a plain break folds to.
+ */
+type QuotedLine = {
+  text: string
+  /** Index of the first character an escape produced, or -1 when the line has none. */
+  firstEsc: number
+  /** Index of the last character an escape produced, or -1 when the line has none. */
+  lastEsc: number
+  /** The line ended in a `\` line continuation, which swallows the break entirely. */
+  continues: boolean
+}
 
-  const source = inner.indexOf('\n') === -1 ? inner : foldLines(inner)
-  let out = ''
+const isWs = (c: number): boolean => c === 32 || c === 9
+
+/** Unescapes one line of a double-quoted scalar; see {@link QuotedLine}. */
+const unescapeLine = (line: string, allowContinuation: boolean): QuotedLine => {
+  let text = ''
+  let firstEsc = -1
+  let lastEsc = -1
   let i = 0
-  while (i < source.length) {
-    const ch = source[i]
+  while (i < line.length) {
+    const ch = line[i]
     if (ch !== '\\') {
-      out += ch
+      text += ch
       i++
       continue
     }
-    const next = source[i + 1]
+    const next = line[i + 1]
     if (next === undefined) {
-      out += '\\'
+      // A trailing `\` escapes the line break: the break and the next line's
+      // indentation both vanish. On the final line there is nothing to continue
+      // into, so it stays a literal backslash.
+      if (allowContinuation) return { text, firstEsc, lastEsc, continues: true }
+      text += '\\'
       break
     }
+    const before = text.length
     if (next === 'x' || next === 'u' || next === 'U') {
       const len = next === 'x' ? 2 : next === 'u' ? 4 : 8
-      const hex = source.slice(i + 2, i + 2 + len)
+      const hex = line.slice(i + 2, i + 2 + len)
       // The escape is only valid with exactly `len` hex digits naming a real Unicode
       // code point. A short/non-hex run (`\xZZ`) or an out-of-range value (`\UFFFFFFFF`,
       // which would make `String.fromCodePoint` throw) is treated as a literal escape
@@ -212,17 +237,111 @@ export const resolveDoubleQuoted = (rawInner: string): string => {
       const valid = hex.length === len && /^[0-9a-fA-F]+$/.test(hex)
       const code = valid ? Number.parseInt(hex, 16) : Number.NaN
       if (code <= 0x10ffff && !Number.isNaN(code)) {
-        out += String.fromCodePoint(code)
+        text += String.fromCodePoint(code)
         i += 2 + len
       } else {
-        out += next
+        text += next
         i += 2
       }
+    } else {
+      const mapped = DOUBLE_ESCAPES[next]
+      text += mapped ?? next
+      i += 2
+    }
+    if (text.length > before) {
+      if (firstEsc === -1) firstEsc = before
+      lastEsc = text.length - 1
+    }
+  }
+  return { text, firstEsc, lastEsc, continues: false }
+}
+
+/**
+ * The line's text with its folding padding removed: leading whitespace up to
+ * the first escaped character, trailing whitespace back to the last one.
+ */
+const sliceQuoted = (line: QuotedLine, dropLeading: boolean, dropTrailing: boolean): string => {
+  let start = 0
+  let end = line.text.length
+  if (dropLeading) {
+    const ceiling = line.firstEsc === -1 ? end : line.firstEsc
+    while (start < ceiling && isWs(line.text.charCodeAt(start))) start++
+  }
+  if (dropTrailing) {
+    const floor = Math.max(start, line.lastEsc + 1)
+    while (end > floor && isWs(line.text.charCodeAt(end - 1))) end--
+  }
+  return line.text.slice(start, end)
+}
+
+/** A line that folding treats as a break rather than as content. Escaped whitespace is content. */
+const isBlankQuoted = (line: QuotedLine | undefined): boolean =>
+  line !== undefined && line.firstEsc === -1 && line.text.trim() === ''
+
+/**
+ * Unescapes and folds a multi-line double-quoted scalar. The folding rules are
+ * {@link foldLines}': a single break becomes a space and a run of blank lines
+ * becomes that many newlines — applied here to lines that already know which of
+ * their whitespace came from an escape.
+ */
+const foldQuotedLines = (raw: string[]): string => {
+  const merged: QuotedLine[] = []
+  for (let i = 0; i < raw.length; i++) {
+    const line = unescapeLine(raw[i] ?? '', i < raw.length - 1)
+    const prev = merged[merged.length - 1]
+    if (prev === undefined || !prev.continues) {
+      merged.push(line)
       continue
     }
-    const mapped = DOUBLE_ESCAPES[next]
-    out += mapped ?? next
-    i += 2
+    // Splice a `\`-continued line onto the one before it: no separator, and the
+    // continuation's own indentation is dropped. The previous line keeps its
+    // trailing whitespace — the `\` protected it from the fold.
+    let cut = 0
+    const ceiling = line.firstEsc === -1 ? line.text.length : line.firstEsc
+    while (cut < ceiling && isWs(line.text.charCodeAt(cut))) cut++
+    const shift = prev.text.length - cut
+    prev.text += line.text.slice(cut)
+    if (prev.firstEsc === -1 && line.firstEsc !== -1) prev.firstEsc = line.firstEsc + shift
+    if (line.lastEsc !== -1) prev.lastEsc = line.lastEsc + shift
+    prev.continues = line.continues
+  }
+
+  const last = merged.length - 1
+  const head = merged[0]
+  let out = head === undefined ? '' : sliceQuoted(head, false, true)
+  let i = 1
+  while (i <= last) {
+    if (isBlankQuoted(merged[i])) {
+      let blanks = 0
+      while (i <= last && isBlankQuoted(merged[i])) {
+        blanks++
+        i++
+      }
+      if (i > last) {
+        // Trailing run reaching the closing quote: a lone break still folds to a
+        // space; each further blank line drops one break.
+        out += blanks === 1 ? ' ' : '\n'.repeat(blanks - 1)
+      } else {
+        out += '\n'.repeat(blanks)
+        out += sliceQuoted(merged[i] as QuotedLine, true, i !== last)
+        i++
+      }
+    } else {
+      // Trailing whitespace is content only on the final line, where no break
+      // follows it.
+      out += ' ' + sliceQuoted(merged[i] as QuotedLine, true, i !== last)
+      i++
+    }
   }
   return out
+}
+
+/** Resolves a double-quoted scalar: full escape handling, line continuation, and folding. */
+export const resolveDoubleQuoted = (rawInner: string): string => {
+  const inner = normalizeBreaks(rawInner)
+  const multiline = inner.indexOf('\n') !== -1
+  // Fast path: a plain double-quoted string with nothing to process.
+  if (!multiline && inner.indexOf('\\') === -1) return inner
+  if (!multiline) return unescapeLine(inner, false).text
+  return foldQuotedLines(inner.split('\n'))
 }

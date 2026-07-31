@@ -49,26 +49,16 @@ export const EXPECTED_FAILURES: Record<string, string> = {
   UV7Q: 'rejects: tab separating indentation from content',
 
   // ---------------------------------------------------------------------------
-  // accepts: directive and document-marker rules
+  // accepts: a directive line that is also a valid plain scalar
   //
-  // `%YAML` and `%TAG` are read — handles resolve, versions are reported — but
-  // the stream-level grammar around them is not enforced: that a directive must
-  // precede a `---`, that a document must be closed by `...` before the next
-  // document's directives, and that handles do not carry across documents.
+  // A directive must be preceded by a `...` footer, which is now reported —
+  // except where the offending line reads equally well as a continuation of the
+  // plain scalar above it. `XLQ9` (`scalar` then `%YAML 1.2`) is a *valid*
+  // document that folds the two together, so stopping a plain scalar at a `%`
+  // line would reject XLQ9 in order to catch this. Rejecting a valid document is
+  // the worse of the two errors, so the scalar wins and this goes unreported.
   // ---------------------------------------------------------------------------
-  '9HCY': 'accepts: directives after a document with no `...` footer',
-  B63P: 'accepts: a directive with no document following it',
   EB22: 'accepts: a directive with no `...` closing the previous document',
-  RHX7: 'accepts: `%YAML` with no document-end marker before it',
-  SF5V: 'accepts: a duplicate `%YAML` directive (reported as a warning, not an error)',
-  H7TQ: 'accepts: trailing words on a `%YAML` directive',
-  'MUS6/0': 'accepts: a malformed `%YAML` version',
-  'MUS6/1': 'accepts: a malformed `%YAML` version',
-  '9MMA': 'accepts: a directive with no document body',
-  QLJ7: 'accepts: a tag handle used in a later document than the one declaring it',
-  '3HFZ': 'accepts: content after a `...` document-end marker',
-  LHL4: 'accepts: a malformed tag',
-  U99R: 'accepts: a comma inside a tag',
 
   // ---------------------------------------------------------------------------
   // accepts: multi-line implicit keys
@@ -88,12 +78,11 @@ export const EXPECTED_FAILURES: Record<string, string> = {
   // ---------------------------------------------------------------------------
   // accepts: flow-collection syntax errors
   //
-  // The flow parsers recover rather than diagnose: a missing comma, a stray
-  // comment, or a document marker inside a flow collection is absorbed.
+  // The flow parsers recover rather than diagnose: a stray comment, a bare `-`,
+  // or a document marker inside a flow collection is absorbed.
   // ---------------------------------------------------------------------------
   '9C9N': 'accepts: a wrongly indented flow sequence',
   '9JBA': 'accepts: a comment directly after a flow sequence closes',
-  CML9: 'accepts: a missing comma between flow entries',
   CVW2: 'accepts: a comment directly after a comma',
   G5U8: 'accepts: bare `-` entries in a flow sequence',
   N782: 'accepts: a document marker inside a flow collection',
@@ -113,8 +102,6 @@ export const EXPECTED_FAILURES: Record<string, string> = {
   '5LLU': 'accepts: a wrongly indented block scalar line following blank lines',
   S98Z: 'accepts: a block scalar line less indented than its first content line',
   W9L4: 'accepts: a literal block scalar whose first line is more indented',
-  '5TRB': 'accepts: a `---` marker inside a double-quoted scalar',
-  RXY3: 'accepts: a `...` marker inside a single-quoted scalar',
   BF9H: 'accepts: a trailing comment inside a multi-line plain scalar',
   BS4K: 'accepts: a comment between the lines of a plain scalar',
 
@@ -130,8 +117,6 @@ export const EXPECTED_FAILURES: Record<string, string> = {
   ZCZ6: 'accepts: a mapping inside a single-line plain value',
   '5U3A': 'accepts: a sequence on the same line as its mapping key',
   EW3V: 'accepts: a wrongly indented mapping entry',
-  '9KBC': 'accepts: a mapping starting on the `---` line',
-  CXX2: 'accepts: an anchor on the `---` line of a mapping',
   SY6V: 'accepts: an anchor before a sequence entry on the same line',
   '4JVG': 'accepts: two anchors on one scalar',
   SR86: 'accepts: an anchor and an alias on the same node',
@@ -160,7 +145,6 @@ export const EXPECTED_FAILURES: Record<string, string> = {
   '57H4': 'rejects: block collection nodes whose content sits at the parent indent',
   M5C3: 'rejects: block scalar nodes whose content sits at the parent indent',
   SKE5: 'rejects: a zero-indented sequence introduced by an anchor on its own line',
-  DK3J: 'rejects: a zero-indented block scalar holding a line that looks like a comment',
   AB8U: 'rejects: a multi-line plain scalar whose continuation looks like a sequence entry',
   WZ62: 'rejects: a flow collection holding only empty content',
 
@@ -170,63 +154,32 @@ export const EXPECTED_FAILURES: Record<string, string> = {
   '2JQS': 'rejects: two entries with an empty key, which `uniqueKeys` treats as duplicates',
 
   // ---------------------------------------------------------------------------
-  // output: block scalar folding and chomping
+  // output: a compact block sequence opened on its mapping's `:` line
   //
-  // The literal/folded scanner handles the common shapes but differs on the
-  // spec's edge cases: indentation indicators combined with leading blank lines,
-  // trailing-break chomping when the block ends the document, and the
-  // 1.3-flavoured re-indentation examples.
+  // `? a` / `: - b` starts a sequence whose first entry shares the `:` line. An
+  // inline value is scanned as a scalar, so the `- b` folds into text instead.
+  // The mirror-image shape after an *implicit* key (`key: - a`) is invalid YAML
+  // and is listed above as `5U3A`, so telling the two apart is what this needs.
   // ---------------------------------------------------------------------------
-  '4Q9F': 'output: folded scalar trailing break',
-  '6FWR': 'output: `keep` chomping of trailing blank lines',
-  '6JQW': 'output: literal scalar containing a document marker',
-  '96L6': 'output: folded scalar line folding',
-  MJS9: 'output: folded scalar block folding',
-  B3HG: 'output: folded scalar with a trailing more-indented line',
-  T26H: 'output: literal content with leading blank lines',
-  T5N4: 'output: literal scalar with leading blank lines',
-  A2M4: 'output: indentation indicator combined with leading spaces',
-  FP8R: 'output: zero-indented block scalar',
-  R4YG: 'output: block indentation indicator with a more-indented first line',
-  '2G84/2': 'output: block scalar with both chomping and indentation indicators',
-  ZF4X: 'output: nested mapping whose values are block scalars',
-
-  // ---------------------------------------------------------------------------
-  // output: quoted scalar folding
-  // ---------------------------------------------------------------------------
-  NP9H: 'output: double-quoted line breaks with escaped continuations',
-  Q8AD: 'output: double-quoted line breaks, 1.3 form',
-  'DE56/2': 'output: trailing tabs in a double-quoted scalar',
-  'DE56/3': 'output: trailing tabs in a double-quoted scalar',
-
-  // ---------------------------------------------------------------------------
-  // output: document and directive handling
-  // ---------------------------------------------------------------------------
-  '27NA': 'output: `%` directive indicator inside content',
-  '6LVF': 'output: reserved directives',
-  W4TN: 'output: directives split across documents in a stream',
-  KSS4: 'output: a scalar written on the `---` line',
-  L383: 'output: two scalar documents with trailing comments',
-  '9MQT/0': 'output: a scalar document containing `...` in its content',
-  K54U: 'output: tab after the document header',
+  A2M4: 'output: a sequence opened on the `:` line of an explicit key',
 
   // ---------------------------------------------------------------------------
   // output: extended tags project to richer JavaScript types
   //
-  // `!!binary` becomes a `Uint8Array` (matching `yaml`) where the suite's JSON
-  // expectation is the base64 string. A deliberate, documented difference.
+  // `!!binary` becomes a `Uint8Array`, `!!set` a `Set`, and `!!omap` a `Map` —
+  // all three matching `yaml` (eemeli) — where the suite's JSON expectation is
+  // the plain string or object those serialize to. A deliberate, documented
+  // difference, and the reason these three read as "failures" here.
   // ---------------------------------------------------------------------------
   '565N': 'output: `!!binary` projects to `Uint8Array`, not the base64 string',
+  '2XXW': 'output: `!!set` projects to a `Set`, not a plain object',
+  J7PZ: 'output: `!!omap` projects to a `Map`, not an array of single-pair objects',
 
   // ---------------------------------------------------------------------------
   // output: remaining structural differences
   // ---------------------------------------------------------------------------
   '5WE3': 'output: an explicit block key whose value is a sequence at the key indent',
-  '4MUZ/2': 'output: a flow mapping key with its `:` on the following line',
-  '652Z': 'output: a plain flow key beginning with `?`',
   '74H7': 'output: tags in an implicit mapping',
   '9KAX': 'output: combinations of tags and anchors on the same node',
-  '7TMG': 'output: a comment in a flow sequence before the comma',
-  'VJP3/1': 'output: a flow mapping continued over several lines',
   ZWK4: 'output: a key with an anchor after a missing explicit mapping value',
 }
