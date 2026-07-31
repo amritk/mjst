@@ -51,6 +51,11 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./client": {
+      "development": "./src/client.ts",
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
     "./bundler": {
       "development": "./src/bundler/index.ts",
       "types": "./dist/bundler/index.d.ts",

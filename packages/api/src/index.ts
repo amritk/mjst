@@ -1,5 +1,6 @@
 export type { WaitUntilContext } from './after-response'
 export { createBackground, runAfterResponse } from './after-response'
+export { appendCookies } from './append-cookies'
 export { buildCoercionPlan } from './build-coercion-plan'
 export { buildCookiesObject } from './build-cookies-object'
 export { buildHeadersObject } from './build-headers-object'
@@ -7,6 +8,12 @@ export { buildParamPath } from './build-param-path'
 export { assignQueryPair, buildQueryObject } from './build-query-object'
 export { buildQueryObjectFromString } from './build-query-object-from-string'
 export { buildResponseHeaders } from './build-response-headers'
+export {
+  isMalformedBodyError,
+  isUnexpectedStatusError,
+  malformedBodyError,
+  unexpectedStatusError,
+} from './client-errors'
 export { coercePrimitive } from './coerce-primitive'
 export type { CompileModuleOptions } from './compile/compile-to-module'
 export { compileToModule } from './compile/compile-to-module'
@@ -19,10 +26,12 @@ export type {
   ClientOptions,
   ClientReply,
   ClientReplyOf,
+  CookiesSerializer,
   ErrorBodyOf,
   ErrorStatusOf,
   FetchOptions,
   PathParamsBuilder,
+  QueryParamsSerializer,
   RequestBodyOf,
   RequestCookiesOf,
   RequestHeadersOf,
@@ -75,7 +84,6 @@ export { formBodySerializer } from './form-body-serializer'
 export { hashContracts } from './hash-contracts'
 export type { RouteImplementation } from './implement-route'
 export { implementRoute } from './implement-route'
-export { isMalformedBodyError, malformedBodyError } from './malformed-body-error'
 export type { RouteMatch } from './match-route'
 export { matchRoute } from './match-route'
 export { multipartBodySerializer } from './multipart-body-serializer'
@@ -159,6 +167,5 @@ export type {
   ValidationFailureBody,
   ValidatorCompiler,
 } from './types'
-export { isUnexpectedStatusError, unexpectedStatusError } from './unexpected-status-error'
 export { versionRoutes } from './version-routes'
 export { withTimeout } from './with-timeout'

@@ -202,8 +202,9 @@ describe('strip-contracts-bun', () => {
       for (const kept of ['/conversation', '/messages', '/status']) {
         expect(report.appStrippedText).toContain(kept)
       }
-      // JSON-only and static-path: the opt-in wire formats must not be here.
-      for (const optIn of ['FormData', 'Missing path parameter']) {
+      // JSON-only and static-path: the opt-in wire formats, the query
+      // serializer, and the cookie writer must not be here.
+      for (const optIn of ['FormData', 'Missing path parameter', 'URLSearchParams', 'encodeURIComponent']) {
         expect(report.appStrippedText).not.toContain(optIn)
       }
     } finally {

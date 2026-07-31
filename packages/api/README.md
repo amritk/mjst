@@ -86,7 +86,7 @@ data**, `implementRoute` binds the handler server-side, and the one-shot
 
 ```ts
 // contracts.ts — imported by server AND browser
-import { defineContract } from '@amritk/api'
+import { defineContract } from '@amritk/api/client'
 
 // One object is the single source of truth: the client covers exactly these
 // keys, and adding an endpoint here wires it into client and server at once.
@@ -132,13 +132,14 @@ cannot drift. This is the framework-agnostic replacement for Hono's `hc`:
 
 ```ts
 // client.ts — browser bundle; pulls in zero server code
-import { buildParamPath, createClient, isUnexpectedStatusError } from '@amritk/api'
+import { buildParamPath, createClient, isUnexpectedStatusError, toSearchParams } from '@amritk/api/client'
 import { contracts } from './contracts'
 
 const client = createClient(contracts, 'https://api.example.com', {
   headers: () => ({ authorization: `Bearer ${readToken()}` }), // static record or (async) function
   fetch: myFetch, // injectable for tests; defaults to global fetch
   pathParams: buildParamPath, // opt-in: only needed for {param} paths
+  queryParams: toSearchParams, // opt-in: only needed for calls that send query
   fetchOptions: { credentials: 'include' }, // RequestInit extras (credentials, cache, redirect, …)
   timeoutMs: 10_000, // default per-call timeout; composes with a per-call signal
 })
@@ -148,6 +149,17 @@ if (reply.status === 200) reply.body.name // typed from the schema — narrowing
 if (reply.status === 404) /* declared, typed, no body */;
 ```
 
+- **`@amritk/api/client` is the browser-safe entry:** everything above —
+  `createClient`, `defineContract`, the opt-in serializers, the error
+  predicates, the `…Of` type helpers, and the client-side auth helpers
+  (`createCsrfHeader`, `createTokenRefresh`, `createRefreshFetch`) — with an
+  import graph that never
+  touches a server module or a `node:` built-in, guaranteed by a test.
+  Importing from the root `@amritk/api` works too (`sideEffects: false`
+  tree-shakes the server half out of the final bundle), but the root barrel
+  makes bundlers *resolve* the server adapters and print
+  `node:http`/`node:stream` externalization warnings along the way; the
+  subpath never triggers them.
 - **Replies are a discriminated union on `status`,** derived from the
   `responses` map. JSON statuses carry a typed `body` (parsed eagerly);
   statuses declared with a raw `contentType` carry only the untouched
@@ -168,25 +180,39 @@ if (reply.status === 404) /* declared, typed, no body */;
   send `accept: application/json` unless a header overrides it.
 - **Cookies and browsers:** the `cookies` slot serializes into the `cookie`
   request header, which browsers forbid scripts from setting — it works from
-  Node/undici/workers only. Browser cookie auth uses server-set cookies plus
+  Node/undici/workers only, and is opt-in for exactly that reason: register
+  `cookies: appendCookies` to use it; a browser bundle omits it and never
+  carries the code. Browser cookie auth uses server-set cookies plus
   `fetchOptions: { credentials: 'include' }`.
 - **A declared status whose body fails to parse** (a proxy truncation, a
   gateway HTML page under a JSON status) throws a recognizable error —
   `isMalformedBodyError(error)` — carrying the consumed `Response` and the
   parse error as `cause`, instead of a bare `SyntaxError`.
-- **Wire formats beyond JSON are opt-in imports:** JSON bodies, the raw
-  `text`/`bytes` bodies (sent verbatim), and query serialization (array values
-  repeat the key) are all built in; contracts with `bodyType: 'form'` /
-  `'multipart'` (urlencoded pairs / `FormData` with `File` values intact) need
-  their serializer registered, and `{param}` path templates need
-  `buildParamPath` (segment-encoded; greedy `{path+}` keeps its slashes):
+- **Everything beyond plain JSON calls is an opt-in import:** JSON bodies and
+  the raw `text`/`bytes` bodies (sent verbatim) are built in; the rest is
+  registered explicitly so a JSON-only, static-path app bundles none of it.
+  Contracts with `bodyType: 'form'` / `'multipart'` (urlencoded pairs /
+  `FormData` with `File` values intact) need their serializer, `{param}` path
+  templates need `pathParams: buildParamPath` (segment-encoded; greedy
+  `{path+}` keeps its slashes), query strings need `queryParams:
+  toSearchParams` (array values repeat the key, `undefined` skipped), and the
+  Node-only `cookies` slot needs `cookies: appendCookies`:
 
   ```ts
-  import { buildParamPath, createClient, formBodySerializer, multipartBodySerializer } from '@amritk/api'
+  import {
+    appendCookies,
+    buildParamPath,
+    createClient,
+    formBodySerializer,
+    multipartBodySerializer,
+    toSearchParams,
+  } from '@amritk/api/client'
 
   const client = createClient(contracts, url, {
     serializers: [formBodySerializer, multipartBodySerializer], // only what you send
     pathParams: buildParamPath, // only if any path has {params}
+    queryParams: toSearchParams, // only if any call sends query
+    cookies: appendCookies, // only from Node/undici/workers
   })
   ```
 
@@ -210,7 +236,7 @@ if (reply.status === 404) /* declared, typed, no body */;
   inline `as { ... }` casts at every use site:
 
   ```ts
-  import type { ErrorBodyOf, RequestBodyOf, ResponseBodyOf } from '@amritk/api'
+  import type { ErrorBodyOf, RequestBodyOf, ResponseBodyOf } from '@amritk/api/client'
 
   // The 402 body, exactly as the contract declares it — no codegen.
   export type DemoLimitBody = ResponseBodyOf<typeof contracts.demoChat, 402>
@@ -835,7 +861,7 @@ bearer-token API paths, where CSRF doesn't apply. On the client, pair it with
 the `csrf_token` cookie and echoes it in `x-csrf-token`:
 
 ```ts
-import { createClient, createCsrfHeader } from '@amritk/api'
+import { createClient, createCsrfHeader } from '@amritk/api/client'
 
 const client = createClient(contracts, 'https://api.example.com', {
   fetchOptions: { credentials: 'include' },
@@ -918,7 +944,7 @@ in-flight background refresh, so a logout can't be silently undone by a
 renewal already on the wire.
 
 ```ts
-import { createClient, createTokenRefresh } from '@amritk/api'
+import { createClient, createTokenRefresh } from '@amritk/api/client'
 
 const auth = createTokenRefresh({
   refresh: async () => (await fetch('/auth/refresh').then((r) => r.json())).accessToken, // a JWT
@@ -935,7 +961,7 @@ stampede. Because it renews on a real server 401, it also covers
 early-revocation that a pure expiry clock can't see.
 
 ```ts
-import { createClient, createCsrfHeader, createRefreshFetch } from '@amritk/api'
+import { createClient, createCsrfHeader, createRefreshFetch } from '@amritk/api/client'
 
 const authFetch = createRefreshFetch({
   refresh: () => fetch('/auth/refresh', { method: 'POST', credentials: 'include' }),

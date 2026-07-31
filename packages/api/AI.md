@@ -67,10 +67,15 @@ Bun.serve({ fetch: handler })      // or: export default { fetch: handler } on W
    not `createApi`; uncap with `maxBodyBytes: Infinity`.
 5. **Typed client needs opt-in pieces.** `createClient(contracts, baseUrl, options)`:
    pass `serializers: [formBodySerializer, multipartBodySerializer]` for
-   form/multipart, and `pathParams: buildParamPath` for any `{param}` path.
-   Undeclared response statuses **throw** (`isUnexpectedStatusError`) instead of
-   entering the union — declare every status you handle. Browser auth uses
-   `fetchOptions: { credentials: 'include' }` (the `cookies` slot is Node-only).
+   form/multipart, `pathParams: buildParamPath` for any `{param}` path,
+   `queryParams: toSearchParams` for any call that sends `query`, and
+   `cookies: appendCookies` to use the `cookies` slot (Node-only — browsers
+   cannot set the `cookie` header). Undeclared response statuses **throw**
+   (`isUnexpectedStatusError`) instead of entering the union — declare every
+   status you handle. Browser auth uses `fetchOptions: { credentials:
+   'include' }`. Frontends import from the **`@amritk/api/client`** subpath —
+   same client surface, guaranteed free of server modules, no bundler
+   `node:*` externalization warnings.
 6. **Guards authorize; attach them in the `guards` field.** Add `guards: [...]`
    to the route (`defineRoute`/`implementRoute`/`routeFactory`/`routeImplementer`
    — never `defineContract`, which stays browser-safe data). A guard
