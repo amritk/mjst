@@ -220,6 +220,12 @@ export const createHotApi = async (options: HotApiOptions): Promise<HotApi> => {
     get routes(): ReadonlyArray<AnyRouteContract> {
       return current?.routes ?? []
     },
+    // Read live rather than captured, like `routes` above: the adapter reaches
+    // for this when a hook throws, and after a reload the app's error sink is
+    // whatever the newest build wired up.
+    get onError(): Api['onError'] {
+      return current?.onError
+    },
     reload,
     close: () => {
       if (closed) return

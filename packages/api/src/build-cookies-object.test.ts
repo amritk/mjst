@@ -68,6 +68,28 @@ describe('build-cookies-object', () => {
     expect(result).toEqual({ toString: 'ok' })
   })
 
+  // A plain `cookies[name] = value` runs the prototype's `__proto__` setter
+  // instead of creating a property, so the value used to vanish: the contract
+  // below saw no cookie at all and `required: ['__proto__']` could never pass.
+  // Asserted through `getOwnPropertyNames`/`hasOwn` rather than `toEqual`,
+  // because an object literal spelling `__proto__` would hit the same setter.
+  it('keeps a declared cookie named __proto__ as an ordinary own property', () => {
+    const result = buildCookiesObject('__proto__=evil; session=abc', new Set(['__proto__', 'session']), NO_COERCIONS)
+    expect(Object.getOwnPropertyNames(result).sort()).toEqual(['__proto__', 'session'])
+    expect(Object.hasOwn(result, '__proto__')).toBe(true)
+    expect(result['__proto__']).toBe('evil')
+    // The record itself is untouched: a string value would never have polluted
+    // anything, which is exactly why the drop was silent.
+    expect(Object.getPrototypeOf(result)).toBe(Object.prototype)
+    expect(({} as Record<string, unknown>)['evil']).toBeUndefined()
+  })
+
+  it('coerces a declared cookie named __proto__ like any other', () => {
+    const coercions = new Map<string, Coercion>([['__proto__', 'number']])
+    const result = buildCookiesObject('__proto__=42', new Set(['__proto__']), coercions)
+    expect(result['__proto__']).toBe(42)
+  })
+
   it('is case-sensitive on names, per RFC 6265', () => {
     const result = buildCookiesObject('Session=upper; session=lower', new Set(['session']), NO_COERCIONS)
     expect(result).toEqual({ session: 'lower' })

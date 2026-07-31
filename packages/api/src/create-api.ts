@@ -131,6 +131,10 @@ export const createApi = (options: ApiOptions): Api => {
     },
     openApi,
     routes: options.routes,
+    // Re-exposed so `toFetchHandler` can report a thrown gate or response
+    // decorator through the app's own sink: those hooks run outside `handle`,
+    // so the pipeline's `onError` boundary never sees them.
+    onError: options.onError,
   }
 }
 

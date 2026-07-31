@@ -6,6 +6,7 @@ import { hashContracts } from '../hash-contracts'
 import { parsePathPattern } from '../parse-path-pattern'
 import { DEFAULT_MAX_BODY_BYTES } from '../payload-too-large'
 import { assertRoutesSecured } from '../secure-routes'
+import { HOOK_ERROR_MESSAGE } from '../to-fetch-handler'
 import { toOpenApi } from '../to-open-api'
 import type { AnyRouteContract, OpenApiExtras, OpenApiInfo, PathSegment } from '../types'
 import { generateGuardSource } from './generate-guard-source'
@@ -489,6 +490,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
       onResponseExports,
       observeExport,
       observeUnmatchedExport,
+      onErrorExport,
       openApiGuardExports.length > 0,
     ),
   )
@@ -1384,6 +1386,7 @@ const emitDispatch = (
   onResponseExports: readonly string[],
   observeExport: string | undefined,
   observeUnmatchedExport: string | undefined,
+  onErrorExport: string | undefined,
   openApiGuarded: boolean,
 ): string[] => {
   const hooked = onRequestExports.length > 0 || onResponseExports.length > 0
@@ -1586,18 +1589,44 @@ const emitDispatch = (
 
   if (!hooked) return lines
 
+  // The emitted twin of `toFetchHandler`'s `hookError`: a thrown hook is
+  // reported through the app's own `onError` (with `route: undefined` — a hook
+  // belongs to no route), and falls back to `console.error` when the app wired
+  // none. Dropping it would leave the CRLF-request-id failure the chains were
+  // wrapped for completely undiagnosable, which is worse than the platform-level
+  // crash the wrapping replaced.
+  lines.push('const hookError = (error, request, locals, env, executionContext) => {')
+  if (onErrorExport !== undefined) {
+    // The URL is re-sliced here rather than threaded down from the dispatch:
+    // the wrapper runs before it, and this is a once-per-500 cold path. Same
+    // slicing as the dispatch, so both engines report the identical `path`.
+    lines.push(
+      '  try {',
+      '    const url = request.url',
+      "    const schemeEnd = url.indexOf('://')",
+      "    const pathStart = url.indexOf('/', schemeEnd === -1 ? 0 : schemeEnd + 3)",
+      "    const queryIndex = pathStart === -1 ? -1 : url.indexOf('?', pathStart)",
+      "    const rawPath = pathStart === -1 ? '/' : queryIndex === -1 ? url.slice(pathStart) : url.slice(pathStart, queryIndex)",
+      `    return toResponse(${onErrorExport}(error, makeApiRequest(request, url, rawPath, queryIndex, locals), { route: undefined, env, executionContext }))`,
+      '  } catch {',
+      '    // Reporting failed; fall through to the log and the bare 500.',
+      '  }',
+    )
+  }
+  lines.push(`  console.error(${JSON.stringify(HOOK_ERROR_MESSAGE)}, error)`, '  return internalError()', '}')
+
   // The hook wrapper: gates in order (first Response wins), then dispatch,
   // and every outcome — short-circuit, mount, routed reply, 404 — through the
   // decorators. Identical semantics to toFetchHandler's chains.
   if (onResponseExports.length > 0) {
     // The try/catch is the emitted twin of the fetch adapter's: a decorator
     // throwing (a reflected request id with a CRLF in it, say) must become the
-    // pipeline's own 500 rather than escaping to the platform, and the chain is
-    // abandoned at the first failure so the remaining decorators never run over
-    // a half-decorated response. One try around the whole chain is
+    // pipeline's own reported 500 rather than escaping to the platform, and the
+    // chain is abandoned at the first failure so the remaining decorators never
+    // run over a half-decorated response. One try around the whole chain is
     // observationally identical to one per hook, since the catch abandons it.
     lines.push(
-      'const finishResponse = async (response, request, locals) => {',
+      'const finishResponse = async (response, request, locals, env, executionContext) => {',
       '  let current = response',
       '  let next',
       '  try {',
@@ -1605,10 +1634,16 @@ const emitDispatch = (
     for (const name of onResponseExports) {
       lines.push(`    next = await ${name}(current, request, locals)`, '    if (next !== undefined) current = next')
     }
-    lines.push('  } catch {', '    return internalError()', '  }', '  return current', '}')
+    lines.push(
+      '  } catch (error) {',
+      '    return hookError(error, request, locals, env, executionContext)',
+      '  }',
+      '  return current',
+      '}',
+    )
   }
   const finish = (expression: string): string =>
-    onResponseExports.length > 0 ? `finishResponse(${expression}, request, locals)` : expression
+    onResponseExports.length > 0 ? `finishResponse(${expression}, request, locals, env, executionContext)` : expression
   lines.push(
     'export const fetch = async (request, env, executionContext) => {',
     // The shared per-request bag, created before the first gate so gates,
@@ -1624,8 +1659,8 @@ const emitDispatch = (
       lines.push(
         '  try {',
         `    early = await ${name}(request, env, executionContext, locals)`,
-        '  } catch {',
-        `    return ${finish('internalError()')}`,
+        '  } catch (error) {',
+        `    return ${finish('hookError(error, request, locals, env, executionContext)')}`,
         '  }',
         `  if (early !== undefined) return ${finish('early')}`,
       )

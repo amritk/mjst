@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { createApi } from '../create-api'
 import { hashContracts } from '../hash-contracts'
-import { toFetchHandler } from '../to-fetch-handler'
+import { HOOK_ERROR_MESSAGE, toFetchHandler } from '../to-fetch-handler'
 import type { AnyRouteContract } from '../types'
 import { compileToModule } from './compile-to-module'
 import * as corpus from './compile-to-module.test-utils'
@@ -482,10 +482,96 @@ describe('compile-to-module', () => {
       const authenticated = await compiledModule.fetch(note('{"title":"note"}', 'corpus-key'), ENV)
       expect(authenticated.status).toBe(200)
       expect(await authenticated.json()).toMatchObject({ key: 'corpus-key', contextRuns: 1 })
+
+      // Same idea for the hook boundary: the loop proves the engines agree on
+      // the hook-boom cases, and this pins that what they agree on is the
+      // error reaching `onError` rather than both quietly swallowing it. A
+      // status-only comparison passed even when both engines dropped it.
+      const hookBoom = (kind: string) => new Request('http://localhost/health', { headers: { 'x-hook-boom': kind } })
+      for (const kind of ['request', 'response']) {
+        for (const [engine, answer] of [
+          ['runtime', await runtime(hookBoom(kind), ENV)],
+          ['compiled', await compiledModule.fetch(hookBoom(kind), ENV)],
+        ] as const) {
+          expect(answer.status, engine + ' ' + kind).toBe(500)
+          // `route: undefined` — a hook belongs to no route — so corpusOnError
+          // falls back to the request's own path and method.
+          expect(await answer.json(), engine + ' ' + kind).toMatchObject({
+            error: 'handled',
+            route: '/health',
+            method: 'GET',
+            tenant: 'acme',
+            gateTenant: 'anonymous',
+          })
+        }
+      }
     } finally {
       rmSync(fixtureDir, { recursive: true, force: true })
     }
   })
+
+  it('logs a thrown hook identically in both engines when the app wired no onError', async () => {
+    // The onError-less half of the hook boundary. Without a sink to report to
+    // there is only one place left for the error to go, and it has to be the
+    // same place in both engines — otherwise "compiled" quietly means "no
+    // telemetry", which is the whole failure this fix exists to close.
+    const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), '.fixtures-hook-log')
+    mkdirSync(fixtureDir, { recursive: true })
+    try {
+      const hookRoutes = { health: corpus.health }
+      const source = compileToModule({
+        routesImport: '../compile-to-module.test-utils',
+        runtimeImport: '../../index',
+        validatorsImport: '@amritk/runtime-validators',
+        routes: hookRoutes,
+        info,
+        onRequestExports: ['gateBoom'],
+        onResponseExports: ['stampBoom'],
+      })
+      // No onError to hand it to, so the emitted helper is the log alone.
+      expect(source).toContain('const hookError = (error, request, locals, env, executionContext) => {')
+      expect(source).toContain(`console.error(${JSON.stringify(HOOK_ERROR_MESSAGE)}, error)`)
+
+      const fixturePath = join(fixtureDir, 'generated-hook-log.ts')
+      writeFileSync(fixturePath, source)
+      const compiledModule = (await import(fixturePath)) as {
+        fetch: (request: Request, env?: unknown) => Response | Promise<Response>
+      }
+      const runtime = toFetchHandler(createApi({ routes: Object.values(hookRoutes), info }), {
+        onRequest: [corpus.gateBoom],
+        onResponse: [corpus.stampBoom],
+      })
+
+      for (const kind of ['request', 'response']) {
+        const make = (): Request => new Request('http://localhost/health', { headers: { 'x-hook-boom': kind } })
+        const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+        try {
+          const fromRuntime = await runtime(make(), ENV)
+          const runtimeLog = spy.mock.calls.splice(0)
+          const fromCompiled = await compiledModule.fetch(make(), ENV)
+          const compiledLog = spy.mock.calls.splice(0)
+
+          expect(fromCompiled.status, kind).toBe(fromRuntime.status)
+          expect(fromRuntime.status, kind).toBe(500)
+          expect(await fromCompiled.text(), kind).toBe(await fromRuntime.text())
+          // One report per engine, same prefix, same error object.
+          expect(runtimeLog.length, kind).toBe(1)
+          expect(
+            compiledLog.map((call) => String(call[0])),
+            kind,
+          ).toEqual(runtimeLog.map((call) => String(call[0])))
+          expect(String(runtimeLog[0]?.[0]), kind).toBe(HOOK_ERROR_MESSAGE)
+          expect(String((compiledLog[0]?.[1] as Error | undefined)?.message), kind).toBe(
+            String((runtimeLog[0]?.[1] as Error | undefined)?.message),
+          )
+        } finally {
+          spy.mockRestore()
+        }
+      }
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  }, 20_000)
 
   it('applies the default 1 MiB body cap, and Infinity restores unbounded reads, identically to the runtime', async () => {
     const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), '.fixtures-body-cap')

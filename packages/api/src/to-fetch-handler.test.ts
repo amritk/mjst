@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { createApi } from './create-api'
 import { createCors } from './create-cors'
 import { defineRoute } from './define-route'
 import { raw } from './raw'
-import { toFetchHandler } from './to-fetch-handler'
+import { HOOK_ERROR_MESSAGE, toFetchHandler } from './to-fetch-handler'
+import type { ApiRequest, OnErrorDetails } from './types'
 
 const echo = defineRoute({
   method: 'post',
@@ -675,6 +676,7 @@ describe('to-fetch-handler', () => {
     // did not, so a throwing gate reached the platform (a Workers 1101, a Bun
     // unhandled rejection) rather than becoming a response at all.
     const decorated: string[] = []
+    const logged = spyOnConsoleError()
     const handler = toFetchHandler(createApi({ routes: [echo] }), {
       onRequest: () => {
         throw new Error('gate exploded')
@@ -692,6 +694,10 @@ describe('to-fetch-handler', () => {
     // The 500 is still a response like any other, so the decorators see it.
     expect(decorated).toEqual(['ran'])
     expect(response.headers.get('x-stamped')).toBe('yes')
+    // With no `onError` wired there is nowhere else for the error to go, and a
+    // silent 500 is exactly what made this failure undiagnosable.
+    expect(logged.calls()).toEqual([[HOOK_ERROR_MESSAGE, 'gate exploded']])
+    logged.restore()
   })
 
   it('turns a throwing onResponse decorator into the pipeline 500', async () => {
@@ -699,6 +705,7 @@ describe('to-fetch-handler', () => {
     // an arbitrary inbound header value straight into `Headers.set`, so a
     // CRLF-bearing request id is enough to throw from inside a decorator.
     const ran: string[] = []
+    const logged = spyOnConsoleError()
     const handler = toFetchHandler(createApi({ routes: [echo] }), {
       onResponse: [
         (response) => {
@@ -725,9 +732,15 @@ describe('to-fetch-handler', () => {
     // half-decorated response would only compound the damage.
     expect(ran).toEqual(['first', 'second'])
     expect(response.headers.get('x-first')).toBeNull()
+    // The wording of the platform's own `Headers.set` rejection differs per
+    // runtime, so only the offending value is pinned.
+    expect(logged.calls().map(([prefix]) => prefix)).toEqual([HOOK_ERROR_MESSAGE])
+    expect(logged.calls()[0]?.[1]).toContain('x-injected')
+    logged.restore()
   })
 
   it('turns a rejecting async hook into the pipeline 500 too', async () => {
+    const logged = spyOnConsoleError()
     const handler = toFetchHandler(createApi({ routes: [echo] }), {
       onRequest: async () => {
         await Promise.resolve()
@@ -737,5 +750,131 @@ describe('to-fetch-handler', () => {
     const response = await handler(new Request('http://localhost/echo'))
     expect(response.status).toBe(500)
     expect(await response.json()).toEqual({ error: 'internal_error' })
+    expect(logged.calls()).toEqual([[HOOK_ERROR_MESSAGE, 'async gate exploded']])
+    logged.restore()
+  })
+
+  // The finding this covers: the chains were wrapped so a throwing hook could
+  // not escape the adapter, but the caught error was dropped on the floor —
+  // the app's own error sink never heard about it, so a decorator crash looked
+  // exactly like any other 500. A test asserting only the status would have
+  // passed before the fix.
+  it('hands a thrown hook to the app onError, with no route attached', async () => {
+    const seen: Array<{ message: string; route: string | undefined; path: string; tenant: unknown }> = []
+    const api = createApi({
+      routes: [echo],
+      onError: (error: unknown, request: ApiRequest, details: OnErrorDetails) => {
+        seen.push({
+          message: error instanceof Error ? error.message : 'unknown',
+          // A hook belongs to no route, so grouping keys fall back to the path.
+          route: details.route?.path,
+          path: request.path,
+          tenant: details.env,
+        })
+        return { status: 503, body: { error: 'reported' } }
+      },
+    })
+    const logged = spyOnConsoleError()
+    const handler = toFetchHandler(api, {
+      onRequest: () => {
+        throw new Error('gate exploded')
+      },
+    })
+
+    const response = await handler(new Request('http://localhost/echo/7?upper=true'), { tenant: 'acme' })
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({ error: 'reported' })
+    expect(seen).toEqual([{ message: 'gate exploded', route: undefined, path: '/echo/7', tenant: { tenant: 'acme' } }])
+    // Reported once, through one sink — the log is the no-onError fallback only.
+    expect(logged.calls()).toEqual([])
+    logged.restore()
+  })
+
+  it('hands a thrown onResponse decorator to onError too', async () => {
+    const seen: string[] = []
+    const handler = toFetchHandler(
+      createApi({
+        routes: [echo],
+        onError: (error: unknown) => {
+          seen.push(error instanceof Error ? error.message : 'unknown')
+          return { status: 500, body: { error: 'reported' } }
+        },
+      }),
+      {
+        onResponse: () => {
+          throw new Error('decorator exploded')
+        },
+      },
+    )
+
+    const response = await handler(new Request('http://localhost/nope'))
+    expect(seen).toEqual(['decorator exploded'])
+    expect(await response.json()).toEqual({ error: 'reported' })
+  })
+
+  it('lets onError answer a hook failure with the raw Response escape hatch', async () => {
+    // onError replies serialize through the same translation a handler reply
+    // does, so an error reporter that hand-builds its own page still reaches
+    // the wire intact from the hook path.
+    const handler = toFetchHandler(
+      createApi({
+        routes: [echo],
+        onError: () => ({
+          status: 503,
+          ...raw(new Response('DOWN', { status: 503, headers: { 'content-type': 'text/plain' } })),
+        }),
+      }),
+      {
+        onRequest: () => {
+          throw new Error('gate exploded')
+        },
+      },
+    )
+
+    const response = await handler(new Request('http://localhost/echo'))
+    expect(response.status).toBe(503)
+    expect(response.headers.get('content-type')).toBe('text/plain')
+    expect(await response.text()).toBe('DOWN')
+  })
+
+  it('falls back to the log and the bare 500 when onError itself throws', async () => {
+    const logged = spyOnConsoleError()
+    const handler = toFetchHandler(
+      createApi({
+        routes: [echo],
+        onError: () => {
+          throw new Error('reporter exploded')
+        },
+      }),
+      {
+        onRequest: () => {
+          throw new Error('gate exploded')
+        },
+      },
+    )
+
+    const response = await handler(new Request('http://localhost/echo'))
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({ error: 'internal_error' })
+    // The original hook error is what gets logged — the reporter's own crash
+    // must not bury the failure it was called to report.
+    expect(logged.calls()).toEqual([[HOOK_ERROR_MESSAGE, 'gate exploded']])
+    logged.restore()
   })
 })
+
+/**
+ * Captures `console.error` for one test, flattening `Error` arguments to their
+ * message so assertions read as the log line a developer would actually see.
+ */
+const spyOnConsoleError = (): { calls: () => string[][]; restore: () => void } => {
+  // A failed assertion skips the test's own `restore()`, which would otherwise
+  // leave the previous spy in place and make every later test inherit its
+  // recorded calls — one confusing failure turning into four.
+  vi.restoreAllMocks()
+  const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  return {
+    calls: () => spy.mock.calls.map((call) => call.map((arg) => (arg instanceof Error ? arg.message : String(arg)))),
+    restore: () => spy.mockRestore(),
+  }
+}
