@@ -88,6 +88,9 @@ OpenAPI 3.1, and a derived typed client. Fast path for an LLM; full reference is
   (`toFetchHandler` / `toNodeHandler`) turns it into a real server handler.
 - Contracts are **data** — `defineContract` (no handler) is browser-safe and
   drives the typed `createClient`; `defineRoute` bundles the handler in.
+  Frontend code (contracts files included) imports both from
+  **`@amritk/api/client`**, the entry whose import graph contains no server
+  code.
 
 ## Minimal example
 
