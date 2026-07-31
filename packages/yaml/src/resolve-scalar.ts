@@ -8,6 +8,12 @@
  */
 
 const INT_DEC = /^[-+]?[0-9]+$/
+// The 1.2 core schema writes these unsigned (`0x[0-9a-fA-F]+`, `0o[0-7]+`), so
+// strictly `-0x10` should stay the string `"-0x10"` — which is what `yaml`
+// (eemeli) does. We accept the sign, matching `js-yaml` and YAML 1.1: a config
+// author who writes `-0x10` means -16, and a released fix already pinned that
+// (`resolve-scalar.test.ts`). Narrowing it now would be a silent breaking
+// change for the one reading nobody actually intends.
 const INT_HEX = /^[-+]?0x[0-9a-fA-F]+$/
 const INT_OCT = /^[-+]?0o[0-7]+$/
 // Float requires a `.` or exponent so version strings like `1.0.0` stay strings.

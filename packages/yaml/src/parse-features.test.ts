@@ -531,3 +531,166 @@ describe('stream-level directive grammar', () => {
     expect(parseDocument('- !!str, xxx\n').errors.map((e) => e.code)).toContain('BAD_TAG')
   })
 })
+
+describe('line breaks', () => {
+  // YAML 1.2 §5.4: `b-break ::= CR LF | CR | LF`. The scanner used to look only
+  // for LF when skipping to the next line, so a CR-delimited document had every
+  // line after the first jumped over — and reported *no* error while doing it.
+  it('treats a lone CR as a line break', () => {
+    expect(parseDocument('a: 1\rb: 2\rc: 3\r').toJS()).toEqual({ a: 1, b: 2, c: 3 })
+    expect(parseDocument('root:\r  x: 1\r  y: 2\r').toJS()).toEqual({ root: { x: 1, y: 2 } })
+  })
+
+  it('does not lose a key to a lone CR inside an otherwise-LF document', () => {
+    const doc = parseDocument('a: 1\nb: 2\rc: 3\nd: 4\n')
+    expect(doc.toJS()).toEqual({ a: 1, b: 2, c: 3, d: 4 })
+    expect(doc.errors).toHaveLength(0)
+  })
+
+  it('counts CR LF as one break, not two', () => {
+    expect(parseDocument('a: 1\r\nb: 2\r\n').toJS()).toEqual({ a: 1, b: 2 })
+    // A phantom blank line between entries would show up as a null-valued key.
+    expect(Object.keys(parseDocument('a: 1\r\nb: 2\r\n').toJS() as object)).toEqual(['a', 'b'])
+  })
+
+  it('keeps block scalars, comments, and anchors working across CR breaks', () => {
+    expect(parseDocument('text: |\r  one\r  two\r').toJS()).toEqual({ text: 'one\ntwo\n' })
+    expect(parseDocument('# lead\ra: 1 # tail\rb: 2\r').toJS()).toEqual({ a: 1, b: 2 })
+    expect(parseDocument('a: &x\r  k: 1\rb: *x\r').toJS()).toEqual({ a: { k: 1 }, b: { k: 1 } })
+  })
+})
+
+describe('merge keys over inherited property names', () => {
+  // `k in target` walks the prototype chain, so every `Object.prototype` member
+  // looked like a key the target already had and was dropped from the merge —
+  // silently, with no diagnostic.
+  it('merges keys that shadow an Object.prototype member', () => {
+    const source =
+      'base: &b\n' +
+      '  name: n\n' +
+      '  toString: TS\n' +
+      '  valueOf: VO\n' +
+      '  constructor: C\n' +
+      '  hasOwnProperty: HOP\n' +
+      '  isPrototypeOf: IPO\n' +
+      'derived:\n' +
+      '  <<: *b\n'
+    const derived = (parseDocument(source).toJS() as Record<string, Record<string, unknown>>).derived
+    expect(derived).toEqual({
+      name: 'n',
+      toString: 'TS',
+      valueOf: 'VO',
+      constructor: 'C',
+      hasOwnProperty: 'HOP',
+      isPrototypeOf: 'IPO',
+    })
+  })
+
+  it('merges a `__proto__` key as plain data rather than polluting the prototype', () => {
+    const doc = parseDocument('base: &b\n  __proto__:\n    polluted: yes\nderived:\n  <<: *b\n')
+    const out = doc.toJS() as Record<string, Record<string, unknown>>
+    // The key is present as data...
+    expect(Object.hasOwn(out.derived as object, '__proto__')).toBe(true)
+    expect((out.derived as Record<string, unknown>)['__proto__']).toEqual({ polluted: 'yes' })
+    // ...and nothing leaked onto the prototype every object shares.
+    expect(Object.getPrototypeOf(out.derived)).toBe(Object.prototype)
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+  })
+
+  it('still lets an own key written on the mapping win over the merged one', () => {
+    expect(parseDocument('base: &b\n  toString: TS\nderived:\n  <<: *b\n  toString: mine\n').toJS()).toEqual({
+      base: { toString: 'TS' },
+      derived: { toString: 'mine' },
+    })
+  })
+})
+
+describe('unterminated quoted scalars', () => {
+  // The error was always reported, but the recovered text lost its last
+  // character — and that text is exactly what a linter echoes back at the author.
+  it('keeps the final character of a scalar with no closing quote', () => {
+    const doc = parseDocument('a: "abcd')
+    expect(doc.toJS()).toEqual({ a: 'abcd' })
+    expect(doc.errors.map((e) => e.code)).toEqual(['UNTERMINATED_QUOTE'])
+  })
+
+  it('keeps the final character through an escape', () => {
+    expect(parseDocument('a: "ab\\"cd').toJS()).toEqual({ a: 'ab"cd' })
+    expect(parseDocument("a: 'ab''cd").toJS()).toEqual({ a: "ab'cd" })
+  })
+
+  it('still stops at a document marker instead of swallowing every document after it', () => {
+    const doc = parseDocument('a: "abcd\n---\nb: 2\n')
+    expect(doc.toJS()).toEqual({ a: 'abcd' })
+    expect(doc.errors.map((e) => e.code)).toContain('UNTERMINATED_QUOTE')
+  })
+})
+
+describe('truncated multi-document streams', () => {
+  // `parseDocument` reading only the first document is documented, but a caller
+  // on `parse()` only sees the data — truncated input is indistinguishable from
+  // a document that genuinely held those keys alone.
+  it('warns when a second document follows the one it read', () => {
+    const doc = parseDocument('a: 1\n---\nb: 2\n')
+    expect(doc.toJS()).toEqual({ a: 1 })
+    expect(doc.errors).toHaveLength(0)
+    const warning = doc.warnings.find((w) => w.code === 'MULTIPLE_DOCUMENTS')
+    expect(warning?.message).toContain('parseAllDocuments')
+    // The span points at the marker that opened the document we skipped.
+    expect(doc.warnings[0]).toMatchObject({ start: 5, end: 8 })
+  })
+
+  it('warns for a document that follows a `...` footer', () => {
+    expect(parseDocument('a: 1\n...\n---\nb: 2\n').warnings.map((w) => w.code)).toEqual(['MULTIPLE_DOCUMENTS'])
+  })
+
+  it('stays quiet for a trailing marker with nothing under it', () => {
+    expect(parseDocument('a: 1\n...\n').warnings).toHaveLength(0)
+    expect(parseDocument('a: 1\n---\n').warnings).toHaveLength(0)
+    expect(parseDocument('a: 1\n---\n# just a comment\n').warnings).toHaveLength(0)
+  })
+})
+
+describe('block scalar indentation indicator at the document root', () => {
+  /**
+   * A deliberate, spec-led divergence from `yaml` (eemeli), pinned here because
+   * the yaml-test-suite has no case for it. `l-bare-document` is
+   * `s-l+block-node(-1, block-in)`, and `c-l+literal(n)` holds
+   * `l-literal-content(n+m,t)` — so at the root `n` is -1 and an explicit `|2`
+   * means content indent 1, leaving one space of the two on each line. `js-yaml`
+   * reads it the same way; `yaml` treats the root as n = 0 and strips both.
+   */
+  it('counts an explicit indicator from -1 at the root', () => {
+    expect(parseDocument('|2\n  x\n').toJS()).toBe(' x\n')
+    expect(parseDocument('>2\n  x\n').toJS()).toBe(' x\n')
+    expect(parseDocument('|1\n  x\n').toJS()).toBe('  x\n')
+  })
+
+  it('counts it the same way for a scalar written on the `---` line', () => {
+    expect(parseDocument('--- |2\n  x\n').toJS()).toBe(' x\n')
+  })
+
+  it('counts it from the parent indent everywhere else', () => {
+    // Nested and sequence forms measure from the parent's own column, and there
+    // every implementation agrees.
+    expect(parseDocument('k: |2\n   x\n').toJS()).toEqual({ k: ' x\n' })
+    expect(parseDocument('- |2\n   x\n').toJS()).toEqual([' x\n'])
+  })
+})
+
+describe('alias projection identity', () => {
+  /**
+   * Two aliases to one anchored collection project to two *copies*, not one
+   * shared object. The spec makes them the same node, but `toJS()` is documented
+   * as a plain tree — a path-keyed position index, a JSON round-trip, and any
+   * consumer that edits the projection all rely on that. Pinned so the choice is
+   * a decision rather than an accident.
+   */
+  it('gives each alias to a collection its own object', () => {
+    const out = parseDocument('a: &x {p: 1}\nb: *x\nc: *x\n').toJS() as Record<string, Record<string, unknown>>
+    expect(out.b).toEqual(out.c)
+    expect(out.b).not.toBe(out.c)
+    ;(out.b as Record<string, unknown>).p = 99
+    expect((out.c as Record<string, unknown>).p).toBe(1)
+  })
+})

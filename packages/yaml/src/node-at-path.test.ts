@@ -43,4 +43,41 @@ describe('node-at-path', () => {
     const node = nodeAtPath(doc.contents, ['responses', '200', 'description'])
     if (node?.kind === 'scalar') expect(node.value).toBe('ok')
   })
+
+  /**
+   * The keys a path is written in have to be the keys `toJS()` produced —
+   * otherwise a caller who walked the projected data cannot locate the node it
+   * came from. These three kinds used to be addressed by a *different* string
+   * than the projection used, so every lookup missed and a `closest: true`
+   * lookup silently reported the parent's span instead: a diagnostic pointing at
+   * the wrong line, which defeats the point of the package.
+   */
+  it('finds a null key under the empty string toJS projects it to', () => {
+    for (const source of ['null: v\n', '~: v\n']) {
+      const doc = parseDocument(source)
+      expect(Object.keys(doc.toJS() as object)).toEqual([''])
+      const node = nodeAtPath(doc.contents, [''])
+      expect(node?.kind === 'scalar' && node.value).toBe('v')
+    }
+  })
+
+  it('finds an alias key under the anchored value it resolves to', () => {
+    const doc = parseDocument('k: &a name\n*a : value\n')
+    expect(Object.keys(doc.toJS() as object)).toEqual(['k', 'name'])
+    const node = nodeAtPath(doc.contents, ['name'])
+    expect(node?.kind === 'scalar' && node.value).toBe('value')
+  })
+
+  it('finds a collection key under its flow rendering', () => {
+    const doc = parseDocument('[a, b]: v\n')
+    expect(Object.keys(doc.toJS() as object)).toEqual(['[ a, b ]'])
+    const node = nodeAtPath(doc.contents, ['[ a, b ]'])
+    expect(node?.kind === 'scalar' && node.value).toBe('v')
+  })
+
+  it('does not fall back to the parent for a key it can now address', () => {
+    const doc = parseDocument('[a, b]:\n  inner: 1\n')
+    const node = nodeAtPath(doc.contents, ['[ a, b ]', 'inner'], true)
+    expect(node?.kind === 'scalar' && node.value).toBe(1)
+  })
 })
