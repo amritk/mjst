@@ -109,8 +109,18 @@ describe('generate-arbitrary', () => {
   })
 
   it('generates fc.constantFrom for enums and fc.constant for const', () => {
-    expect(generateArbitrary({ enum: ['a', 'b'] }, 'Choice')).toContain('fc.constantFrom("a", "b")')
+    // The members are spread from a `const`-asserted tuple: passed directly,
+    // `fc.constantFrom` widens them to `Arbitrary<string>`, which does not fit
+    // the literal union the generated type declares.
+    expect(generateArbitrary({ enum: ['a', 'b'] }, 'Choice')).toContain('fc.constantFrom(...(["a", "b"] as const))')
     expect(generateArbitrary({ const: 42 }, 'Answer')).toContain('fc.constant(42)')
+  })
+
+  it('skips the const assertion for enum members that are objects or arrays', () => {
+    // `as const` would freeze an array member into a `readonly` tuple, and *that*
+    // is the assignment TypeScript refuses. Non-scalar members never widened, so
+    // they do not need it.
+    expect(generateArbitrary({ enum: [['a'], ['b']] }, 'Pairs')).toContain('fc.constantFrom(["a"], ["b"])')
   })
 
   it('references the imported arbitrary for $ref', () => {

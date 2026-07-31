@@ -27,10 +27,17 @@ const files = await buildExampleSchema(schema, 'User') // → user.ts, index.ts
    `fooExample` values have no runtime deps.
 2. **`generateArbitrary` / `generateExampleConst` return source-code STRINGS**;
    **`deriveExample` returns an actual runtime VALUE.** Easy to confuse.
-3. **A static example constrained only by `pattern` may not match the pattern** —
-   use the arbitrary when pattern fidelity matters.
+3. **A static example is validated against its own schema before it is emitted.**
+   If it fails, it is written anyway (the module must compile) and the generator
+   `console.warn`s, naming the type. That happens when the schema has no instance
+   at all, or when the constraint is beyond the deriver (a `pattern` with
+   lookarounds/backreferences, an unrecognized `format`). Use `FooArbitrary`
+   there — it carries a runtime validating filter and stays correct.
 4. **Unsupported keywords degrade silently:** `fc.anything()` in arbitraries,
    `null` in static examples — no error thrown.
+5. **`deriveExample` memoizes each `$ref` per root document**, so the returned
+   value can share sub-objects with the value derived for a sibling schema.
+   Treat it as read-only.
 
 Exports: `buildExampleSchema`, `generateArbitrary`, `generateExampleConst`,
 `deriveExample`, `serializeValue`, `GeneratedFile`. Only the `.` entry.

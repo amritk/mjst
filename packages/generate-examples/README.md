@@ -128,8 +128,7 @@ const res = await fetch('/users', { method: 'POST', body: JSON.stringify(userExa
 `type` — including multi-type unions like `['string', 'null']` —
 (string/number/integer/boolean/null/array/object), `properties`,
 `required`, `items`, `minItems`/`maxItems`, `uniqueItems`,
-`minLength`/`maxLength`, `pattern`, `format` (`email`, `uuid`, `uri`/`url`,
-`date`, `date-time`, `time`, `hostname`, `ipv4`, `ipv6`), `minimum`/`maximum`,
+`minLength`/`maxLength`, `pattern`, `format`, `minimum`/`maximum`,
 `exclusiveMinimum`/`exclusiveMaximum`, `multipleOf`, `enum` (filtered by sibling
 constraints), `const`, `minProperties`/`maxProperties`, `patternProperties`,
 `propertyNames`, `dependentRequired`, `dependentSchemas`, `contains`,
@@ -139,9 +138,37 @@ enforced by validating generated candidates against the schema and
 retrying/rejecting. Unsupported constructs degrade to `fc.anything()` in
 arbitraries and `null` in static examples.
 
+Static examples cover every `format` `@amritk/runtime-validators` knows how to
+check: `email`, `idn-email`, `date`, `date-time`, `time`, `duration`, `uuid`,
+`uri`, `iri`, `uri-reference`, `iri-reference`, `uri-template`, `json-pointer`,
+`relative-json-pointer`, `hostname`, `idn-hostname`, `ipv4`, `ipv6`, `regex`,
+plus OpenAPI's `url`. An unrecognized `format` falls back to `"string"`.
+
+---
+
+## Known limits
+
+Every `fooExample` is validated against its own schema before it is written. When
+the value does not satisfy the schema it is still emitted — so the module always
+compiles — but the generator prints a `console.warn` naming the type. Reach for
+`FooArbitrary` in those cases: the arbitrary carries a runtime validating filter
+and stays correct where the static value cannot.
+
+The value falls short for two reasons:
+
+- **The schema has no instance.** `{ pattern: '^ab$', minLength: 5 }`,
+  `uniqueItems` over booleans with `minItems: 3`, a `required` key that
+  `additionalProperties: false` forbids, or a `oneOf` whose branches every value
+  matches twice. Nothing correct exists to emit; the warning is pointing at the
+  schema, not the generator.
+- **The constraint is beyond the deriver.** `pattern` is sampled by a
+  best-effort recursive-descent walk of the regex, so lookarounds and
+  backreferences fall back to `"string"`; an unrecognized `format` does the same.
+
 > [!TIP]
-> A static example constrained only by `pattern` is not guaranteed to match the
-> pattern — reach for the arbitrary when pattern fidelity matters.
+> The example for a `$ref` is inlined by value, so a definition graph with wide
+> fan-out produces a correspondingly large literal. That cost is in the output
+> size, not in generation time — each definition is derived once per document.
 
 ---
 

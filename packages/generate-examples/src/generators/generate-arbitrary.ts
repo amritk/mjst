@@ -95,6 +95,18 @@ const lazyRef = (arbName: string): string => `fc.constant(null).chain(() => ${ar
 /** The letrec key used for a type's own (self-referential) arbitrary. */
 const SELF_KEY = 'self'
 
+/**
+ * Object-literal key form that survives the one runtime-dangerous name,
+ * `__proto__`. Even quoted, `{ "__proto__": v }` is the prototype-*setter*
+ * syntax rather than a property definition: the key never appears on the object
+ * (`Object.keys({ "__proto__": 1 })` is `[]`) and the object's prototype becomes
+ * `v` — here, an `Arbitrary` instance. So a schema with a `__proto__` property
+ * used to emit a corrupt `fc.record` config that silently dropped the key the
+ * generated type still promises. The computed form `{ ["__proto__"]: v }`
+ * defines a normal own property. `generate-parsers` solves this the same way.
+ */
+const safeLiteralKey = (key: string): string => (key === '__proto__' ? '["__proto__"]' : JSON.stringify(key))
+
 /** Builds a `fc.string({ ... })` expression honouring format and length constraints. */
 const stringExpr = (schema: JSONSchema): string => {
   if (hasFormat(schema)) {
@@ -394,7 +406,7 @@ const objectExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
     return 'fc.object()'
   }
 
-  const entries = keys.map((key) => `${JSON.stringify(key)}: ${propArbs.get(key)}`)
+  const entries = keys.map((key) => `${safeLiteralKey(key)}: ${propArbs.get(key)}`)
 
   const model = `{ ${entries.join(', ')} }`
   // fc.record treats all keys as required by default. Only emit requiredKeys
@@ -503,7 +515,20 @@ const arbitraryExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
     const fitting = members.filter((value) => enumMemberFits(schema, value))
     const chosen = fitting.length > 0 ? fitting : members
     const values = chosen.map((value) => JSON.stringify(value)).join(', ')
-    return `fc.constantFrom(${values})`
+    // Spread a `const`-asserted tuple instead of passing the members directly.
+    // `fc.constantFrom("a", "b")` infers its overload's `T` from a *mutable*
+    // `T[]` rest parameter, so the literals widen and the whole arbitrary types
+    // as `Arbitrary<string>` — which does not fit the `"a" | "b"` the generated
+    // type declares, and fails to compile for every consumer on a strict
+    // tsconfig. A readonly tuple keeps the literal types intact.
+    //
+    // Only scalar members get the assertion: `as const` also makes any array
+    // member a `readonly` tuple, and *that* is the assignment TypeScript really
+    // does refuse (`readonly ["a"]` → `["a"]`). Object and array members never
+    // had the widening problem in the first place, since the generated type for
+    // them is a structural type, not a literal.
+    const literalSafe = chosen.every((value) => value === null || typeof value !== 'object')
+    return literalSafe ? `fc.constantFrom(...([${values}] as const))` : `fc.constantFrom(${values})`
   }
 
   const instanceOf = getMjstInstanceOf(schema)
@@ -573,9 +598,16 @@ export const generateArbitrary = (
   if (needsValidationFilter(schema)) {
     const validatorName = `${selfArbName}Validator`
     const embedded = JSON.stringify(withResolvableDefs(schema, rootSchema))
+    // The predicate is a type guard, not a plain boolean callback. A filtered
+    // arbitrary deliberately generates a *superset* — the combinators cannot
+    // express `if`/`then`, `not`, or `oneOf` exclusivity, so the validator is
+    // what narrows the samples down to the declared type. Written as
+    // `(value) => …` the filter returns the wide type and the assignment fails
+    // to compile; `value is T` says out loud what the runtime check does.
     return (
       `const ${validatorName} = ${VALIDATE_IMPORT_NAME}(${embedded})\n` +
-      `export const ${selfArbName}: fc.Arbitrary<${typeName}> = (${body}).filter((value) => ${validatorName}(value) === true)`
+      `export const ${selfArbName}: fc.Arbitrary<${typeName}> = (${body}).filter(` +
+      `(value): value is ${typeName} => ${validatorName}(value) === true)`
     )
   }
 

@@ -122,6 +122,11 @@ const evalArbitrary = (schema: JSONSchema, typeName = 'Sample'): fc.Arbitrary<un
   const code = generateArbitrary(schema, typeName)
   const js = code
     .replace(/fc\.letrec<[^>]*>/g, 'fc.letrec')
+    // The emitted file is TypeScript; `new Function` parses plain JS. Both
+    // constructs below are type-level only and erase at runtime, so stripping
+    // them leaves the behaviour under test untouched.
+    .replaceAll(' as const', '')
+    .replace(/\(value\): value is [^=]+=>/g, '(value) =>')
     .replace(new RegExp(`export const ${typeName}Arbitrary: fc\\.Arbitrary<[^>]*> = `), 'return ')
   return new Function('fc', '__mjstValidate', js)(fc, validate) as fc.Arbitrary<unknown>
 }
@@ -156,12 +161,12 @@ describe('generated file wiring for the validating filter', () => {
   it('imports the runtime validator only when a filter is emitted', async () => {
     const withFilter = await mainFile({ type: 'string', not: { const: 'x' } })
     expect(withFilter).toContain("import { validate as __mjstValidate } from '@amritk/runtime-validators'")
-    expect(withFilter).toContain('.filter((value) =>')
+    expect(withFilter).toContain('.filter((value): value is Sample =>')
   })
 
   it('omits the runtime-validators import for schemas no filter touches', async () => {
     const plain = await mainFile({ type: 'object', properties: { a: { type: 'string' } }, required: ['a'] })
     expect(plain).not.toContain('runtime-validators')
-    expect(plain).not.toContain('.filter((value) =>')
+    expect(plain).not.toContain('.filter((value): value is Sample =>')
   })
 })
