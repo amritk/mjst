@@ -694,3 +694,160 @@ describe('alias projection identity', () => {
     expect((out.c as Record<string, unknown>).p).toBe(1)
   })
 })
+
+describe('block scalar headers', () => {
+  it('reports text after the block scalar indicators', () => {
+    expect(parseDocument('folded: > first line\n  second line\n').errors.map((e) => e.code)).toContain(
+      'BAD_BLOCK_HEADER',
+    )
+    // `0` is not a legal indentation indicator, and the `0` of `|10` is left over.
+    expect(parseDocument('a: |0\n x\n').errors.map((e) => e.code)).toContain('BAD_BLOCK_HEADER')
+    expect(parseDocument('a: |10\n  x\n').errors.map((e) => e.code)).toContain('BAD_BLOCK_HEADER')
+  })
+
+  it('reports a comment with no whitespace before it', () => {
+    expect(parseDocument('block: ># comment\n  scalar\n').errors.map((e) => e.code)).toContain('BAD_BLOCK_HEADER')
+  })
+
+  it('reports an indicator written twice', () => {
+    expect(parseDocument('a: |--\n  x\n').errors.map((e) => e.code)).toContain('BAD_BLOCK_HEADER')
+    expect(parseDocument('a: |12\n  x\n').errors.map((e) => e.code)).toContain('BAD_BLOCK_HEADER')
+  })
+
+  it('still accepts every legal header, in either indicator order', () => {
+    for (const header of ['|', '>', '|-', '>+', '|2-', '|-2', '> # comment']) {
+      expect(parseDocument(`a: ${header}\n  x\n`).errors).toHaveLength(0)
+    }
+  })
+
+  it('reports a leading blank line indented deeper than the first content line', () => {
+    const doc = parseDocument('block scalar: |\n     \n  content\n')
+    expect(doc.errors.map((e) => e.code)).toContain('BAD_INDENT')
+  })
+
+  it('keeps a more-indented blank line once the content indent is known', () => {
+    const doc = parseDocument('a: |\n  one\n     \n  two\n')
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.toJS()).toEqual({ a: 'one\n   \ntwo\n' })
+  })
+})
+
+describe('quoted scalar escapes and indentation', () => {
+  it('reports an escape the spec does not define, keeping the character', () => {
+    const doc = parseDocument('a: "b\\.c"\n')
+    expect(doc.errors.map((e) => e.code)).toEqual(['BAD_ESCAPE'])
+    expect(doc.toJS()).toEqual({ a: 'b.c' })
+    // `\'` is a single-quoted escape; inside double quotes it means nothing.
+    expect(parseDocument('a: "quoted \\\' scalar"\n').errors.map((e) => e.code)).toContain('BAD_ESCAPE')
+  })
+
+  it('accepts every escape the spec does define', () => {
+    expect(
+      parseDocument('a: "\\0\\a\\b\\t\\n\\v\\f\\r\\e\\ \\"\\/\\\\\\N\\_\\L\\P\\x41\\u0041\\U00000041"\n').errors,
+    ).toHaveLength(0)
+  })
+
+  it('reports a continuation line that does not clear the parent indentation', () => {
+    expect(parseDocument('---\nquoted: "a\nb\nc"\n').errors.map((e) => e.code)).toContain('BAD_INDENT')
+    // Reported once, however many lines are wrong.
+    expect(parseDocument('---\nquoted: "a\nb\nc"\n').errors.filter((e) => e.code === 'BAD_INDENT')).toHaveLength(1)
+  })
+
+  it('accepts a properly indented continuation, and one at the document root', () => {
+    expect(parseDocument('quoted: "a\n  b\n  c"\n').errors).toHaveLength(0)
+    expect(parseDocument('"a\nb\nc"\n').errors).toHaveLength(0)
+  })
+
+  it('reports a quoted key that spans lines', () => {
+    expect(parseDocument('"a\n b": 1\n').errors.map((e) => e.code)).toContain('BAD_IMPLICIT_KEY')
+    expect(parseDocument("'a\n b': 1\n").errors.map((e) => e.code)).toContain('BAD_IMPLICIT_KEY')
+  })
+})
+
+describe('comments that need whitespace before them', () => {
+  it('reports a comment glued to the node it follows', () => {
+    expect(parseDocument('key: "value"# invalid\n').errors.map((e) => e.code)).toEqual(['BAD_COMMENT'])
+    expect(parseDocument('---\n[ a, b ]#invalid\n').errors.map((e) => e.code)).toEqual(['BAD_COMMENT'])
+  })
+
+  it('reports a comment glued to a comma inside a flow collection', () => {
+    expect(parseDocument('---\n[ a, b,#invalid\n]\n').errors.map((e) => e.code)).toEqual(['BAD_COMMENT'])
+  })
+
+  it('still accepts a properly separated comment after every node kind', () => {
+    expect(parseDocument('a: &x 1\nb: *x # fine\nc: "q" # fine\nd: [1] # fine\n').errors).toHaveLength(0)
+    expect(parseDocument('a: [1, 2] # fine\n').errors).toHaveLength(0)
+  })
+
+  it('ends a plain scalar at its comment instead of folding the line below in', () => {
+    // The comment closes the scalar, so `word2` is content no node claims.
+    const doc = parseDocument('word1  # comment\nword2\n')
+    expect(doc.toJS()).toBe('word1')
+    expect(doc.errors.map((e) => e.code)).toContain('UNEXPECTED_CONTENT')
+    const nested = parseDocument('---\nplain: a\n       b # end of scalar\n       c\n')
+    expect(nested.toJS()).toEqual({ plain: 'a b' })
+    expect(nested.errors.map((e) => e.code)).toContain('UNEXPECTED_CONTENT')
+  })
+
+  it('still folds a multi-line plain scalar whose lines carry no comment', () => {
+    expect(parseDocument('plain: a\n  b\n  c\n').toJS()).toEqual({ plain: 'a b c' })
+  })
+})
+
+describe('flow collection boundaries', () => {
+  it('reports a `-` used where a flow entry belongs', () => {
+    expect(parseDocument('[-]\n').errors.map((e) => e.code)).toContain('BAD_SCALAR_START')
+    expect(parseDocument('---\n- [-, -]\n').errors.map((e) => e.code)).toContain('BAD_SCALAR_START')
+  })
+
+  it('keeps a plain scalar that merely starts with `-`', () => {
+    expect(parseDocument('[-1, -x]\n').errors).toHaveLength(0)
+    expect(parseDocument('[-1, -x]\n').toJS()).toEqual([-1, '-x'])
+  })
+
+  it('reports a document marker inside a flow collection', () => {
+    expect(parseDocument('[\n--- ,\n]\n').errors.map((e) => e.code)).toContain('UNEXPECTED_CONTENT')
+  })
+
+  it('reports a single-pair sequence entry whose `:` is on the next line', () => {
+    expect(parseDocument('---\n[ key\n  : value ]\n').errors.map((e) => e.code)).toContain('BAD_IMPLICIT_KEY')
+    expect(parseDocument('---\n[ "key"\n  :value ]\n').errors.map((e) => e.code)).toContain('BAD_IMPLICIT_KEY')
+  })
+
+  it('still lets a flow mapping put its `:` on the next line', () => {
+    // A flow *mapping* entry may be separated across lines; only the compact
+    // single-pair form inside a sequence requires an implicit (one-line) key.
+    expect(parseDocument('{"foo"\n: "bar"}\n').errors).toHaveLength(0)
+    expect(parseDocument('{foo\n: bar}\n').toJS()).toEqual({ foo: 'bar' })
+  })
+
+  it('reports a flow collection used as a block key that spans lines', () => {
+    expect(parseDocument('[23\n]: 42\n').errors.map((e) => e.code)).toContain('BAD_IMPLICIT_KEY')
+    // The same key on one line is a supported shape.
+    expect(parseDocument('[23]: 42\n').errors).toHaveLength(0)
+  })
+})
+
+describe('node property errors', () => {
+  it('reports an anchor or tag written on an alias', () => {
+    expect(parseDocument('key1: &a value\nkey2: &b *a\n').errors.map((e) => e.code)).toContain('BAD_PROPERTY')
+    expect(parseDocument('key1: &a value\nkey2: !!str *a\n').errors.map((e) => e.code)).toContain('BAD_PROPERTY')
+  })
+
+  it('reports two anchors reaching one scalar', () => {
+    expect(parseDocument('top: &node1\n  &v2 val2\n').errors.map((e) => e.code)).toContain('BAD_PROPERTY')
+  })
+
+  it('still accepts an anchor above the collection it describes', () => {
+    // `&node` names the mapping; `&k1` stays part of the key text (a documented
+    // gap), so the two must not read as two anchors on one node.
+    const doc = parseDocument('top1: &node1\n  &k1 key1: one\ntop2: &node2\n  key2: two\n')
+    expect(doc.errors).toHaveLength(0)
+  })
+
+  it('reports a block sequence opened on the line its properties are on', () => {
+    expect(parseDocument('&anchor - sequence entry\n').errors.map((e) => e.code)).toContain('UNEXPECTED_CONTENT')
+    // The sequence below the properties line is the legal shape.
+    expect(parseDocument('&anchor\n- sequence entry\n').errors).toHaveLength(0)
+  })
+})
