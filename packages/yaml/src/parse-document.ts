@@ -104,6 +104,8 @@ const NO_PROPS: NodeProps = Object.freeze({})
 
 const isSpace = (c: number): boolean => c === SPACE || c === TAB
 
+const isBreak = (c: number): boolean => c === NL || c === CR
+
 /**
  * True when the `-` at `pos` is a block sequence-entry indicator: a `-` followed
  * by whitespace, a line break, or end of input. A `-` glued to other content
@@ -125,6 +127,20 @@ const introducerBoundary = (src: string, after: number, len: number): boolean =>
   if (after >= len) return true
   const c = src.charCodeAt(after)
   return c === SPACE || c === TAB || c === NL || c === CR
+}
+
+/**
+ * True when a line break separates `from` from `to`. Used to enforce the one
+ * rule that makes an implicit key implicit: it has to fit on a single line.
+ * Only ever called over a span already known to be short — the whitespace
+ * between a key and its `:`, or the key node's own text.
+ */
+const crossesLine = (src: string, from: number, to: number): boolean => {
+  for (let i = from; i < to; i++) {
+    const c = src.charCodeAt(i)
+    if (c === NL || c === CR) return true
+  }
+  return false
 }
 
 /** Offset just past the next line break (or end of input). */
@@ -521,19 +537,90 @@ const scanPropsSlow = (state: State): NodeProps => {
 
 const attachProps = (node: YamlNode, props: NodeProps, state: State): YamlNode => {
   if (props === NO_PROPS) return node
+  // An alias *is* its target; it names a node rather than being one, so it can
+  // carry neither an anchor nor a tag of its own. Both were dropped silently,
+  // which made `&b *a` look like it had anchored something.
+  if (node.kind === 'alias') {
+    pushError(state, 'BAD_PROPERTY', 'An alias cannot carry an anchor or a tag', node.start, node.end)
+    if (props.anchor) state.anchors.set(props.anchor, node)
+    return node
+  }
   if (props.anchor) {
-    if (node.kind !== 'alias') node.anchor = props.anchor
+    // Two anchors reaching the same scalar — `&a` on its own line above a value
+    // that carries `&b` — is one node with two names, which the spec does not
+    // allow and which silently discarded whichever was applied first. Only
+    // scalars are checked: an anchor written on a *block mapping key* stays part
+    // of the key here (the documented `E76Z` gap), so a collection legitimately
+    // sees both its own anchor and its first key's.
+    if (node.anchor !== undefined && node.kind === 'scalar') {
+      pushError(state, 'BAD_PROPERTY', 'A node cannot carry more than one anchor', node.start, node.end)
+    }
+    node.anchor = props.anchor
     state.anchors.set(props.anchor, node)
   }
-  if (props.tag && node.kind !== 'alias') node.tag = props.tag
+  if (props.tag) node.tag = props.tag
   return node
 }
 
-/** Reads a single- or double-quoted scalar, including multi-line spans. */
-const scanQuoted = (state: State, quote: number): YamlScalar => {
+/**
+ * The characters a `\` may escape inside a double-quoted scalar, as a 128-entry
+ * lookup table: the named escapes (`\n`, `\t`, `\0`, `\N`, `\_`, …), the
+ * numeric introducers `x`/`u`/`U`, and the line break a `\` continuation eats.
+ * Anything else — `\.`, `\'`, a Windows path's `\U`sers — is not an escape the
+ * spec defines, and reading it as the bare letter silently changes the string.
+ *
+ * A table read is what keeps this affordable: the check runs per backslash, and
+ * a double-quoted scalar that carries none never reaches it.
+ */
+const VALID_ESCAPE = /* @__PURE__ */ (() => {
+  const t = new Uint8Array(128)
+  for (const c of '0abtnvfre "/\\N_LPxuU\t\n\r') t[c.charCodeAt(0)] = 1
+  return t
+})()
+
+const reportBadEscape = (state: State, at: number): void => {
+  pushError(state, 'BAD_ESCAPE', `"\\${state.src[at + 1]}" is not a valid escape sequence`, at, at + 2)
+}
+
+/**
+ * Checks the indentation of a continuation line of a multi-line quoted scalar.
+ * Every such line has to clear the block indentation the scalar sits in — a
+ * scalar whose continuation reaches back to its parent's column is ambiguous
+ * with the next entry, and the spec rejects it. Blank lines carry no
+ * indentation and are exempt. Called once per line break of a multi-line quoted
+ * scalar, so single-line scalars — nearly all of them — never see it.
+ */
+const checkQuotedIndent = (state: State, lineStart: number, parentIndent: number): boolean => {
+  const { src, len } = state
+  let i = lineStart
+  while (i < len && src.charCodeAt(i) === SPACE) i++
+  const c = src.charCodeAt(i)
+  if (i >= len || c === NL || c === CR) return false
+  if (i - lineStart > parentIndent) return false
+  pushError(
+    state,
+    'BAD_INDENT',
+    'A quoted scalar continued over lines must be indented deeper than its parent',
+    lineStart,
+    i,
+  )
+  return true
+}
+
+/**
+ * Reads a single- or double-quoted scalar, including multi-line spans.
+ *
+ * `parentIndent` is the column its continuation lines have to clear, or -1 to
+ * skip the check — for a scalar inside a flow collection, whose enclosing
+ * indentation this parser does not track, and for a mapping key, where spanning
+ * lines at all is the error {@link parseBlockMap} reports.
+ */
+const scanQuoted = (state: State, quote: number, parentIndent = -1): YamlScalar => {
   const { src, len } = state
   const start = state.pos
   let i = start + 1
+  /** One indentation report per scalar; a wrongly indented block is usually wrong on every line. */
+  let indentReported = parentIndent < 0
   // Track whether the closing quote was actually found: a scan that runs to `len`
   // without it is an unterminated scalar that would otherwise swallow the rest of
   // the document silently, so we report it (mirroring eemeli's "Missing closing
@@ -553,15 +640,21 @@ const scanQuoted = (state: State, quote: number): YamlScalar => {
           closed = true
           break
         }
-      } else if (c === NL && isDocMarker(src, i + 1, len)) {
+      } else if (c === NL) {
+        if (isDocMarker(src, i + 1, len)) {
+          i++
+          break
+        }
+        if (!indentReported) indentReported = checkQuotedIndent(state, i + 1, parentIndent)
         i++
-        break
       } else i++
     }
   } else {
     while (i < len) {
       const c = src.charCodeAt(i)
       if (c === 92 /* \ */) {
+        const e = src.charCodeAt(i + 1)
+        if (e < 128 && VALID_ESCAPE[e] === 0) reportBadEscape(state, i)
         i += 2
         continue
       }
@@ -570,9 +663,12 @@ const scanQuoted = (state: State, quote: number): YamlScalar => {
         closed = true
         break
       }
-      if (c === NL && isDocMarker(src, i + 1, len)) {
-        i++
-        break
+      if (c === NL) {
+        if (isDocMarker(src, i + 1, len)) {
+          i++
+          break
+        }
+        if (!indentReported) indentReported = checkQuotedIndent(state, i + 1, parentIndent)
       }
       i++
     }
@@ -638,10 +734,10 @@ const reportReservedIndicator = (state: State): void => {
  */
 const checkTrailingContent = (state: State): void => {
   const c = state.src.charCodeAt(state.pos)
-  // Fast path: the node ended flush against a line break, a comment, or end of
-  // input — one read and a few comparisons for the shape nearly every document
-  // has. (`charCodeAt` past the end yields NaN, which the length test catches.)
-  if (c === NL || c === CR || c === HASH || state.pos >= state.len) return
+  // Fast path: the node ended flush against a line break or end of input — one
+  // read and a few comparisons for the shape nearly every document has.
+  // (`charCodeAt` past the end yields NaN, which the length test catches.)
+  if (c === NL || c === CR || state.pos >= state.len) return
   reportTrailingContent(state, c)
 }
 
@@ -649,9 +745,25 @@ const checkTrailingContent = (state: State): void => {
 const reportTrailingContent = (state: State, c: number): void => {
   if (c === SPACE || c === TAB) {
     skipInlineSpaces(state)
+    // A properly separated comment ends the line and is not trailing content.
     if (atLineEnd(state)) return
   }
   const start = state.pos
+  // A `#` glued to the node before it (`"value"# comment`) is not a comment: the
+  // spec requires whitespace in front of one, and without that rule the rest of
+  // the line silently disappears. The source character decides, not the cursor —
+  // some callers skip the separating spaces before getting here.
+  if (state.src.charCodeAt(start) === HASH) {
+    if (start > 0 && isSpace(state.src.charCodeAt(start - 1))) return
+    pushError(
+      state,
+      'BAD_COMMENT',
+      'A comment must be preceded by whitespace',
+      start,
+      plainLineEnd(state.src, start, state.len),
+    )
+    return
+  }
   pushError(
     state,
     'UNEXPECTED_CONTENT',
@@ -673,6 +785,20 @@ const plainLineEnd = (src: string, from: number, len: number): number => {
     if (c !== SPACE && c !== TAB) lastNonSpace = i
   }
   return lastNonSpace
+}
+
+/**
+ * True when a ` #` comment follows the scalar text ending at `from` — i.e. the
+ * line the scalar just read ended in a comment rather than in its own content.
+ *
+ * {@link plainLineEnd} has already trimmed both back, so this only re-reads the
+ * few characters between them. Called once per continuation line a plain scalar
+ * is about to fold, never for a single-line one.
+ */
+const endsAtComment = (src: string, from: number, len: number): boolean => {
+  let i = from
+  while (i < len && isSpace(src.charCodeAt(i))) i++
+  return src.charCodeAt(i) === HASH
 }
 
 /**
@@ -702,6 +828,11 @@ const scanPlainScalar = (state: State, parentIndent: number): YamlScalar => {
     if (i >= len) break
     const indent = i - scan
     if (indent <= parentIndent || c === HASH) break
+    // A comment ends the scalar, so the line below it is not a continuation of
+    // anything — it is content the document did not attach to a node, which the
+    // document-end check reports. Folding it in instead (as this used to)
+    // appended a line the author had commented the scalar closed before.
+    if (endsAtComment(src, valueEnd, len)) break
     // Only a top-level scalar (`parentIndent < 0`) can sit at column 0 alongside
     // a `---`/`...` marker; for nested scalars the indent test above already
     // stopped us, so this short-circuits to a single comparison off the hot path.
@@ -800,6 +931,34 @@ const foldBlockFolded = (lines: string[]): string => {
   return out
 }
 
+/**
+ * Checks that a block scalar's header line ends where the indicators do. Past
+ * them the line may hold only a comment, and a comment needs whitespace in
+ * front of it — so `> text`, `>#comment`, `|0` and `|10` (whose stray `0` the
+ * indicator loop leaves behind) are all headers the spec does not allow. Each
+ * used to be swallowed, with the leftover text re-read as scalar content.
+ *
+ * Runs once per block scalar, on the header line only.
+ */
+const checkBlockHeaderEnd = (state: State): void => {
+  const { src, len } = state
+  const from = state.pos
+  let i = from
+  while (i < len && isSpace(src.charCodeAt(i))) i++
+  const c = src.charCodeAt(i)
+  if (i >= len || c === NL || c === CR) return
+  if (c === HASH && i > from) return
+  pushError(
+    state,
+    'BAD_BLOCK_HEADER',
+    c === HASH
+      ? 'A comment must be preceded by whitespace'
+      : 'A block scalar header holds only its chomping and indentation indicators',
+    i,
+    plainLineEnd(src, i, len),
+  )
+}
+
 /** Reads a `|` literal or `>` folded block scalar with chomping and indent indicators. */
 const scanBlockScalar = (state: State, parentIndent: number): YamlScalar => {
   const { src, len } = state
@@ -808,17 +967,37 @@ const scanBlockScalar = (state: State, parentIndent: number): YamlScalar => {
   state.pos++
   let chomp: 'clip' | 'strip' | 'keep' = 'clip'
   let explicitIndent = 0
+  let sawChomp = false
   for (;;) {
     const c = src.charCodeAt(state.pos)
-    if (c === DASH) chomp = 'strip'
-    else if (c === 43 /* + */) chomp = 'keep'
-    else if (c >= 49 && c <= 57 /* 1-9 */) explicitIndent = c - 48
-    else break
+    // Each indicator may appear once, in either order (`|2-` and `|-2` are the
+    // same header). A repeat — `|--`, `|12` — is not a header the spec allows,
+    // and quietly keeping the last one read a document as if it said something
+    // it did not.
+    if (c === DASH || c === 43 /* + */) {
+      if (sawChomp) pushError(state, 'BAD_BLOCK_HEADER', 'Repeated chomping indicator', state.pos, state.pos + 1)
+      sawChomp = true
+      chomp = c === DASH ? 'strip' : 'keep'
+    } else if (c >= 49 && c <= 57 /* 1-9 */) {
+      if (explicitIndent !== 0) {
+        pushError(state, 'BAD_BLOCK_HEADER', 'Repeated indentation indicator', state.pos, state.pos + 1)
+      }
+      explicitIndent = c - 48
+    } else break
     state.pos++
   }
+  checkBlockHeaderEnd(state)
   finishLine(state)
 
   let contentIndent = explicitIndent ? parentIndent + explicitIndent : -1
+  /**
+   * Deepest indentation seen on a blank line while the content indent is still
+   * unknown. The first content line sets that indent, so a leading blank line
+   * that reached further than it would have to be more-indented content of a
+   * block that had not started — which the spec makes an error rather than
+   * guessing at. Stays -1 once the indent is known (or was given explicitly).
+   */
+  let leadingBlank = -1
   const lines: string[] = []
   let valueEnd = state.pos
   for (;;) {
@@ -832,12 +1011,22 @@ const scanBlockScalar = (state: State, parentIndent: number): YamlScalar => {
       // Whitespace-only line. Once the content indent is known, anything beyond
       // it is real content (literal scalars preserve that extra indentation).
       lines.push(contentIndent !== -1 && indent > contentIndent ? ' '.repeat(indent - contentIndent) : '')
+      if (contentIndent === -1 && indent > leadingBlank) leadingBlank = indent
       state.pos = nextLineStart(src, i, len)
       continue
     }
     if (contentIndent === -1) {
       if (indent <= parentIndent) break
       contentIndent = indent
+      if (leadingBlank > indent) {
+        pushError(
+          state,
+          'BAD_INDENT',
+          'A leading blank line of a block scalar is indented deeper than its first content line',
+          lineStart,
+          i,
+        )
+      }
     }
     if (indent < contentIndent) break
     // A block scalar whose content sits at column 0 — only possible at the
@@ -883,9 +1072,25 @@ const skipFlowWs = (state: State): void => {
   let p = state.pos
   while (p < len) {
     const c = src.charCodeAt(p)
-    if (c === SPACE || c === TAB || c === NL || c === CR) {
+    if (c === SPACE || c === TAB) {
       p++
+    } else if (c === NL || c === CR) {
+      p++
+      // A `---`/`...` at column 0 belongs to the stream, not to the collection
+      // that is still open around it: a flow collection may not span a document
+      // boundary. The check costs one comparison per line break a flow
+      // collection is written across, and nothing at all on a single-line one.
+      const d = src.charCodeAt(p)
+      if ((d === DASH || d === DOT) && isDocMarker(src, p, len)) {
+        pushError(state, 'UNEXPECTED_CONTENT', 'A document marker cannot appear inside a flow collection', p, p + 3)
+      }
     } else if (c === HASH) {
+      // The spec requires whitespace before a comment, so a `#` glued to the
+      // token in front of it (`[ a, b,#not a comment`) is not one — and reading
+      // it as one silently drops the rest of the line.
+      if (p > 0 && !isSpace(src.charCodeAt(p - 1)) && !isBreak(src.charCodeAt(p - 1))) {
+        pushError(state, 'BAD_COMMENT', 'A comment must be preceded by whitespace', p, plainLineEnd(src, p, len))
+      }
       p = nextLineStart(src, p, len)
     } else break
   }
@@ -955,6 +1160,10 @@ const scanFlowPlain = (state: State): YamlScalar => {
     // A line that opens on a flow indicator ends the scalar; the collection
     // parser resumes at that indicator (or an unterminated-flow report there).
     if (j >= len || c === COMMA || c === LBRACKET || c === RBRACKET || c === LBRACE || c === RBRACE) break
+    // A `---`/`...` at column 0 ends the document, so it cannot be folded into a
+    // scalar the flow collection above it left open. Gated on the line starting
+    // at column 0, which a wrapped flow scalar's continuation almost never does.
+    if (j === scan && (c === DASH || c === DOT) && isDocMarker(src, j, len)) break
     // So does a line that opens on the `: ` that separates this key from its
     // value, or on a comment. Both used to be swallowed as continuation text,
     // which left the key carrying a trailing newline (`{foo\n: bar}` keyed the
@@ -1029,9 +1238,34 @@ const parseFlowNodeInner = (state: State): YamlNode => {
   else if (c === STAR) node = scanAlias(state)
   else {
     if (isReservedIndicator(c)) reportReservedIndicator(state)
+    // `-` is the block sequence indicator and has no meaning inside a flow
+    // collection, so `[-]` and `[-, -]` are not sequences of anything — they
+    // read as the plain scalar `"-"`, which is not what the document says.
+    // (`-1` and `-x` are ordinary plain scalars and never reach here.)
+    else if (c === DASH && flowIndicatorBoundary(state.src, state.pos + 1, state.len)) {
+      pushError(
+        state,
+        'BAD_SCALAR_START',
+        'A "-" sequence indicator cannot start a flow collection entry',
+        state.pos,
+        state.pos + 1,
+      )
+    }
     node = scanFlowPlain(state)
   }
   return attachProps(node, props, state)
+}
+
+/**
+ * True when the character at `after` ends a token inside a flow collection —
+ * whitespace, a line break, a `,`, a closing bracket, or end of input. The flow
+ * counterpart of {@link introducerBoundary}, which does not know about the flow
+ * delimiters that end a token without any whitespace.
+ */
+const flowIndicatorBoundary = (src: string, after: number, len: number): boolean => {
+  if (after >= len) return true
+  const c = src.charCodeAt(after)
+  return isSpace(c) || isBreak(c) || c === COMMA || c === RBRACKET || c === RBRACE
 }
 
 /**
@@ -1043,6 +1277,28 @@ const skipFlowExplicitKey = (state: State): void => {
   if (state.src.charCodeAt(state.pos) === QUESTION && introducerBoundary(state.src, state.pos + 1, state.len)) {
     state.pos++
     skipFlowWs(state)
+  }
+}
+
+/**
+ * Reports a single-pair sequence entry whose `:` sits on a line below its key
+ * (`[ key\n : value ]`). The compact `[ key: value ]` form is built on an
+ * *implicit* key, which by definition fits on one line — unlike an entry of a
+ * flow *mapping*, where the spec's separation rules do let `{ "foo"\n: bar }`
+ * put the `:` on the next line, so this check belongs only to the sequence.
+ *
+ * `afterKey` is where the key node ended; only the whitespace between it and
+ * the `:` is scanned, and only once a `:` is actually there.
+ */
+const checkImplicitKeyLine = (state: State, afterKey: number): void => {
+  if (crossesLine(state.src, afterKey, state.pos)) {
+    pushError(
+      state,
+      'BAD_IMPLICIT_KEY',
+      'An implicit key must be followed by its ":" on the same line',
+      afterKey,
+      state.pos + 1,
+    )
   }
 }
 
@@ -1077,11 +1333,13 @@ const parseFlowSeq = (state: State): YamlSeq => {
     if (skipEmptyFlowEntry(state)) continue
     skipFlowExplicitKey(state)
     const item = parseFlowNode(state)
+    const afterItem = state.pos
     skipFlowWs(state)
     if (state.src.charCodeAt(state.pos) === COLON) {
       // `[ key: value ]` — an implicit single-pair mapping as a sequence entry
       // (the shape `!!omap` is written in). Only reached when an item is actually
       // followed by a colon, so plain `[a, b]` sequences pay nothing extra.
+      checkImplicitKeyLine(state, afterItem)
       state.pos++
       skipFlowWs(state)
       const vc = state.src.charCodeAt(state.pos)
@@ -1247,7 +1505,7 @@ const parseInlineValue = (state: State, parentIndent: number): YamlNode | null =
     node = parseFlowMap(state)
     checkTrailingContent(state)
   } else if (c === DQUOTE || c === SQUOTE) {
-    node = scanQuoted(state, c)
+    node = scanQuoted(state, c, parentIndent)
     checkTrailingContent(state)
   } else {
     if (isReservedIndicator(c)) reportReservedIndicator(state)
@@ -1458,6 +1716,13 @@ const parseBlockMap = (state: State, indent: number, firstColon: number, firstKe
       const kc = src.charCodeAt(state.pos)
       if (kc === DQUOTE || kc === SQUOTE) {
         key = scanQuoted(state, kc)
+        // A quoted key is the one key kind that can reach past its own line, and
+        // `findKeyColon` follows it there — so this is where the one-line rule
+        // for implicit keys has to be enforced. The `indexOf` runs on the key's
+        // own text, which the scan just sliced.
+        if (key.source.indexOf('\n') !== -1) {
+          pushError(state, 'BAD_IMPLICIT_KEY', 'An implicit key must be on one line', key.start, key.end)
+        }
       } else if (kc === STAR) {
         // `*ref: value` keys the mapping by the anchored value, so the key has to
         // be a real alias node — slicing it as text would key it by the literal
@@ -1606,6 +1871,19 @@ const parseNodeInner = (state: State, indent: number): YamlNode => {
   const props = scanProps(state)
   if (props.anchor || props.tag) {
     skipInlineSpaces(state)
+    // A block sequence cannot start on the line that carries its properties:
+    // its entries are indentation-relative and there is no column for the
+    // second one to sit at. Without the report `&a - x` read as the plain
+    // scalar `"- x"`, quietly turning a sequence into a string.
+    if (isSeqEntryDash(src, state.pos, len)) {
+      pushError(
+        state,
+        'UNEXPECTED_CONTENT',
+        'A block sequence cannot start on the line its node properties are written on',
+        state.pos,
+        state.pos + 1,
+      )
+    }
     if (atLineEnd(state)) {
       finishLine(state)
       const child = peekLine(state)
@@ -1640,6 +1918,11 @@ const parseNodeInner = (state: State, indent: number): YamlNode => {
     )
     skipInlineSpaces(state)
     if (src.charCodeAt(state.pos) === COLON && introducerBoundary(src, state.pos + 1, len)) {
+      // The collection is this mapping's key, so it is an implicit key and has
+      // to have fit on one line — `[23\n]: 42` does not.
+      if (crossesLine(src, node.start, node.end)) {
+        pushError(state, 'BAD_IMPLICIT_KEY', 'An implicit key must be on one line', node.start, node.end)
+      }
       state.pos++
       return parseBlockMap(state, indent, -1, node)
     }
@@ -1658,7 +1941,7 @@ const parseNodeInner = (state: State, indent: number): YamlNode => {
     return attachProps(parseBlockMap(state, indent, -1), props, state)
   }
   if (cc === DQUOTE || cc === SQUOTE) {
-    const quoted = attachProps(scanQuoted(state, cc), props, state)
+    const quoted = attachProps(scanQuoted(state, cc, indent - 1), props, state)
     checkTrailingContent(state)
     return quoted
   }
