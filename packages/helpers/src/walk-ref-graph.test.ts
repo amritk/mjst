@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import { type RefNode, walkRefGraph } from './walk-ref-graph'
 
@@ -79,15 +79,19 @@ describe('walk-ref-graph', () => {
     expect(root?.schema).toMatchObject({ properties: { payload: { $ref: '#/$defs/schema' } } })
   })
 
-  it('warns and skips a ref that cannot be resolved', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  // Warning and skipping left the generators emitting `parseNope` / `NopeShape`
+  // for a file that was never written, so `mjst` exited 0 having produced output
+  // that cannot compile (and, for validators, cannot even be imported).
+  it('throws on a ref that cannot be resolved', () => {
     const schema = { properties: { missing: { $ref: '#/$defs/nope' } }, $defs: {} }
 
-    const nodes = collect(schema, 'Document')
+    expect(() => collect(schema, 'Document')).toThrow(/Could not resolve \$ref "#\/\$defs\/nope"/)
+  })
 
-    expect(nodes.map((n) => n.filename)).toEqual(['document'])
-    expect(warn).toHaveBeenCalledWith('Warning: Could not resolve ref: #/$defs/nope')
-    warn.mockRestore()
+  it('throws on an unresolvable remote ref rather than emitting a dangling import', () => {
+    const schema = { properties: { x: { $ref: 'https://nope.example/x.json' } } }
+
+    expect(() => collect(schema, 'Document')).toThrow(/https:\/\/nope\.example\/x\.json/)
   })
 
   it('handles circular refs (A → B → A) without infinite looping', () => {
@@ -166,63 +170,128 @@ describe('walk-ref-graph', () => {
 
   it('does not treat a root with shape keywords beside its $ref as an alias', () => {
     // `$ref` plus sibling keywords is a composition, not a pure alias — the
-    // root keeps its own (merged) schema even when the filename collides.
+    // root keeps its own (merged) schema.
     const schema = {
-      title: 'Expr',
+      title: 'Wrapper',
       $ref: '#/$defs/expr',
       type: 'object',
       properties: { extra: { type: 'string' } },
       $defs: { expr: { type: 'object', properties: { kind: { type: 'string' } } } },
     }
 
-    const nodes = collect(schema, 'Expr')
+    const nodes = collect(schema, 'Wrapper')
 
     expect(nodes[0]?.ref).toBeUndefined()
     expect(nodes[0]?.schema).toHaveProperty('properties')
   })
-  describe('filename collisions', () => {
-    it('warns when two definitions reduce to the same filename', () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+  it('maps a root $dynamicAnchor onto the root file so recursion resolves', () => {
+    // The canonical 2020-12 recursive tree. `#node` used to bind to nothing, so
+    // `children` was typed `Node[]` — the DOM interface under most tsconfigs.
+    const schema = {
+      $id: 'https://example.com/tree',
+      $dynamicAnchor: 'node',
+      type: 'object',
+      properties: { data: {}, children: { type: 'array', items: { $dynamicRef: '#node' } } },
+    }
+
+    const nodes = collect(schema, 'Tree')
+
+    // Nothing extra is generated: the anchor's target is the root's own file.
+    expect(nodes.map((n) => n.filename)).toEqual(['tree'])
+    expect(nodes[0]?.schema).toMatchObject({
+      properties: { children: { items: { $ref: '#/$defs/tree' } } },
+    })
+    // Carrying the ref is what makes the generators leave out the self-import.
+    expect(nodes[0]?.ref).toBe('#/$defs/tree')
+  })
+
+  it('throws when a root $dynamicAnchor cannot round-trip through the root type name', () => {
+    const schema = { $dynamicAnchor: 'node', type: 'object', properties: { self: { $dynamicRef: '#node' } } }
+
+    expect(() => collect(schema, 'MyDoc')).toThrow(/does not survive the round trip/)
+  })
+
+  describe('name collisions', () => {
+    it('throws when two definitions reduce to the same filename', () => {
       const schema = {
         type: 'object',
         properties: { a: { $ref: '#/$defs/Pet' }, b: { $ref: '#/$defs/pet' } },
-        $defs: { Pet: { type: 'object' }, pet: { type: 'object' } },
+        $defs: { Pet: { type: 'object', properties: { legs: { type: 'number' } } }, pet: { type: 'object' } },
       }
 
-      const nodes = collect(schema, 'Doc')
-
-      // Only one of the two is generated — that is the behaviour being warned about.
-      expect(nodes.filter((n) => n.filename === 'pet')).toHaveLength(1)
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('both map to "pet.ts"'))
-      warn.mockRestore()
+      expect(() => collect(schema, 'Doc')).toThrow(/both generate the file "pet\.ts"/)
     })
 
-    it('warns when a definition collides with the root type name', () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // `refToName` folds separators away, so these keep distinct files but land
+    // on one type name — and the importer gets two `import { FooBar }` lines.
+    it('throws when two definitions reduce to the same type name', () => {
+      const schema = {
+        type: 'object',
+        properties: { a: { $ref: '#/$defs/foo-bar' }, b: { $ref: '#/$defs/foo.bar' } },
+        $defs: { 'foo-bar': { type: 'object' }, 'foo.bar': { type: 'object', properties: { x: {} } } },
+      }
+
+      expect(() => collect(schema, 'Doc')).toThrow(/both generate the type name "FooBar"/)
+    })
+
+    it('throws when a definition collides with the root type name', () => {
       const schema = {
         type: 'object',
         properties: { c: { $ref: '#/$defs/contact' } },
         $defs: { contact: { type: 'object' } },
       }
 
-      collect(schema, 'Contact')
-
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('the root type Contact'))
-      warn.mockRestore()
+      expect(() => collect(schema, 'Contact')).toThrow(/the root type Contact/)
     })
 
-    it('stays quiet when every definition has its own filename', () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    it('merges two spellings of one definition instead of reporting a collision', () => {
+      // `upgradeDraft07Schema` aliases every URI-keyed definition to a short
+      // name, so a document legitimately reaches one definition two ways.
+      const shared = { type: 'object', properties: { id: { type: 'string' } } }
+      const schema = {
+        allOf: [{ $ref: 'http://example.com/channel.json' }, { $ref: '#/$defs/channel' }],
+        $defs: { 'http://example.com/channel.json': shared, channel: shared },
+      }
+
+      const filenames = collect(schema, 'Document').map((n) => n.filename)
+
+      expect(filenames.filter((f) => f === 'channel')).toHaveLength(1)
+    })
+
+    it('accepts a document where every definition has its own name', () => {
       const schema = {
         type: 'object',
         properties: { a: { $ref: '#/$defs/cat' }, b: { $ref: '#/$defs/dog' } },
         $defs: { cat: { type: 'object' }, dog: { type: 'object' } },
       }
 
-      collect(schema, 'Doc')
+      expect(collect(schema, 'Doc').map((n) => n.filename)).toEqual(['doc', 'cat', 'dog'])
+    })
 
-      expect(warn).not.toHaveBeenCalled()
-      warn.mockRestore()
+    it('keeps non-ASCII definitions distinct instead of collapsing them onto "_"', () => {
+      const schema = {
+        type: 'object',
+        properties: { a: { $ref: '#/$defs/中文' }, b: { $ref: '#/$defs/日本' } },
+        $defs: { 中文: { type: 'object' }, 日本: { type: 'object' } },
+      }
+
+      expect(collect(schema, 'Doc').map((n) => n.typeName)).toEqual(['Doc', '中文', '日本'])
+    })
+
+    it('resolves a plain $anchor ref to a loadable filename', () => {
+      const schema = {
+        type: 'object',
+        properties: { a: { $ref: '#named' } },
+        $defs: { thing: { $anchor: 'named', type: 'object' } },
+      }
+
+      const nodes = collect(schema, 'Doc')
+
+      expect(nodes.map((n) => ({ filename: n.filename, typeName: n.typeName }))).toEqual([
+        { filename: 'doc', typeName: 'Doc' },
+        { filename: 'named', typeName: 'Named' },
+      ])
     })
   })
 })

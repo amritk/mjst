@@ -562,13 +562,17 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions = {}): string
     return refTypeName(schema.$ref, options)
   }
 
-  // Handle $dynamicRef (used for recursive schemas)
+  // A `$dynamicRef` should never reach here: `resolveDynamicRefs` rewrites every
+  // one of them to a concrete `$ref` before generation, and fails the build for
+  // any it cannot bind. If one does survive — a caller reaching into a raw
+  // subschema, say — it names no generated file, so `unknown` is the only honest
+  // answer. Naming the type after the anchor is what used to turn a root
+  // `$dynamicAnchor: "node"` into a reference to the DOM's `Node` interface: no
+  // file, no import, and a clean compile under any tsconfig that includes `DOM`.
+  // The `#meta` special case that lived here was a hand-patch of the same hole
+  // for the one anchor name OpenAPI happens to use.
   if (schema.$dynamicRef) {
-    // For #meta, this refers to the Schema type itself (JSON Schema 2020-12 $dynamicAnchor pattern)
-    if (schema.$dynamicRef === '#meta') {
-      return `Schema${options.typeSuffix ?? ''}`
-    }
-    return refToName(schema.$dynamicRef, options.typeSuffix)
+    return 'unknown'
   }
 
   // Handle const - literal type

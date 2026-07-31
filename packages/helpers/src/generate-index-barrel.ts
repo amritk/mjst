@@ -25,16 +25,36 @@ export type GenerateIndexBarrelOptions = {
 // `export const <Name>` at line starts, so the names can be recovered from the
 // source text without parsing it.
 
+/**
+ * Non-ASCII identifier characters, tested one code point at a time.
+ *
+ * The scan below is charCode-based for speed, and its ASCII-only word test used
+ * to end an identifier at the first non-ASCII character — so a definition named
+ * `中文` produced `export type 中文` that the barrel read as *no name at all*,
+ * and `export const parse中文` that it read as `parse`. Every non-ASCII module
+ * then contributed the same truncated names and the barrel failed to compile
+ * with duplicate identifiers. TypeScript identifiers are ID_Start/ID_Continue
+ * (plus `$`), so that is the set to accept.
+ */
+const NON_ASCII_IDENTIFIER_PART = /[\p{ID_Continue}$]/u
+
+/** True when the code point at `index` may appear inside an identifier. */
+const isIdentifierPart = (content: string, index: number): boolean => {
+  const code = content.charCodeAt(index)
+  if ((code >= 97 && code <= 122) || (code >= 65 && code <= 90) || (code >= 48 && code <= 57)) return true
+  if (code === 95 || code === 36) return true
+  if (code < 128) return false
+  return NON_ASCII_IDENTIFIER_PART.test(String.fromCodePoint(content.codePointAt(index) as number))
+}
+
 /** Reads the identifier following `prefix` when `content` starts with it at `at`. */
 const exportNameAt = (content: string, at: number, prefix: string): string | null => {
   if (!content.startsWith(prefix, at)) return null
   let end = at + prefix.length
-  while (end < content.length) {
-    const code = content.charCodeAt(end)
-    const isWord =
-      (code >= 97 && code <= 122) || (code >= 65 && code <= 90) || (code >= 48 && code <= 57) || code === 95
-    if (!isWord) break
-    end++
+  while (end < content.length && isIdentifierPart(content, end)) {
+    // Advance a whole code point so an astral identifier character is not split
+    // mid-surrogate (and its trailing half misread as the end of the name).
+    end += (content.codePointAt(end) as number) > 0xffff ? 2 : 1
   }
   return end > at + prefix.length ? content.slice(at + prefix.length, end) : null
 }

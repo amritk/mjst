@@ -1,5 +1,7 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { assertSchemaDepth } from './max-schema-depth'
+
 /**
  * Returns true if a $ref value should be queued for processing.
  *
@@ -44,14 +46,15 @@ const isResolvableRef = (ref: string): boolean => {
 export const extractRefs = (schema: JSONSchema): Set<string> => {
   const refs = new Set<string>()
 
-  const traverse = (obj: unknown): void => {
+  const traverse = (obj: unknown, depth: number): void => {
+    assertSchemaDepth(depth, 'extractRefs')
     if (typeof obj !== 'object' || obj === null) {
       return
     }
 
     if (Array.isArray(obj)) {
       for (const item of obj) {
-        traverse(item)
+        traverse(item, depth + 1)
       }
       return
     }
@@ -64,10 +67,10 @@ export const extractRefs = (schema: JSONSchema): Set<string> => {
 
     // Recursively traverse all properties using for...in to avoid intermediate array allocation
     for (const key in record) {
-      traverse(record[key])
+      traverse(record[key], depth + 1)
     }
   }
 
-  traverse(schema)
+  traverse(schema, 0)
   return refs
 }

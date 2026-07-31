@@ -1,5 +1,5 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { getMjstBrand, getMjstInstanceOf, getMjstPrimitive, MJST_EXTENSION_KEY } from './mjst-extension'
 
@@ -17,8 +17,37 @@ describe('getMjstInstanceOf', () => {
   })
 
   it('rejects instanceOf values that are not safe identifiers', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
     expect(getMjstInstanceOf({ 'x-mjst': { instanceOf: 'Date; doEvil()' } })).toBeUndefined()
     expect(getMjstInstanceOf({ 'x-mjst': { instanceOf: '' } })).toBeUndefined()
+
+    warn.mockRestore()
+  })
+
+  // An identifier-shaped name was accepted and emitted verbatim, so
+  // `NotAGlobalClass` produced a TS2304 plus a runtime ReferenceError and
+  // `globalThis` produced `g?: globalThis` (not a type) plus a TypeError from
+  // `x instanceof globalThis`. Only classes the generators handle are honoured.
+  it('warns about and ignores a class the generators do not support', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    expect(getMjstInstanceOf({ 'x-mjst': { instanceOf: 'NotAGlobalClass' } })).toBeUndefined()
+    expect(getMjstInstanceOf({ 'x-mjst': { instanceOf: 'globalThis' } })).toBeUndefined()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('unsupported x-mjst instanceOf "NotAGlobalClass"'))
+
+    warn.mockRestore()
+  })
+
+  it('warns once per unsupported class name rather than once per schema node', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    getMjstInstanceOf({ 'x-mjst': { instanceOf: 'RepeatedClass' } })
+    getMjstInstanceOf({ 'x-mjst': { instanceOf: 'RepeatedClass' } })
+
+    expect(warn.mock.calls.filter(([message]) => String(message).includes('RepeatedClass'))).toHaveLength(1)
+
+    warn.mockRestore()
   })
 
   it('exposes the extension key', () => {

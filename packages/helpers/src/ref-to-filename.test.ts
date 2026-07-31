@@ -61,4 +61,41 @@ describe('ref-to-filename', () => {
   it('handles URI ref with empty fragment (trailing #)', () => {
     expect(refToFilename('http://json-schema.org/draft-07/schema#')).toBe('draft-07-schema')
   })
+
+  // `#` opens a URL fragment in an ESM specifier, so `'./#named.ts'` is
+  // unloadable even when the file exists. A plain `$anchor` ref names the anchor.
+  it('derives a loadable filename from a plain $anchor ref', () => {
+    expect(refToFilename('#named')).toBe('named')
+    expect(refToFilename('#Named')).toBe('named')
+  })
+
+  // A host-only URI has no path to name the file after. Splitting on `/`
+  // regardless left the protocol punctuation in, producing `http:--x` — which
+  // Windows will not even create.
+  it('names a host-only URI after its host', () => {
+    expect(refToFilename('http://x')).toBe('x')
+    expect(refToFilename('https://example.com')).toBe('example-com')
+  })
+
+  it('normalizes names that would otherwise produce a degenerate file', () => {
+    // `.ts`, `...ts`, and a dot-file are all names a build cannot import.
+    expect(refToFilename('#/$defs/')).toMatch(/^ref-[0-9a-z]+$/)
+    expect(refToFilename('#/$defs/..')).toMatch(/^ref-[0-9a-z]+$/)
+    expect(refToFilename('#/$defs/.hidden')).toBe('hidden')
+  })
+
+  it('keeps two degenerate refs on separate files', () => {
+    expect(refToFilename('#/$defs/')).not.toBe(refToFilename('#/$defs/..'))
+  })
+
+  it('folds characters no filesystem or import specifier accepts', () => {
+    expect(refToFilename('#/$defs/a:b*c?d')).toBe('a-b-c-d')
+    expect(refToFilename('#/$defs/foo bar')).toBe('foo-bar')
+  })
+
+  // Not a traversal (every `/` is the split delimiter), but the leftover dashes
+  // made for an ugly name; check the shape stays sane.
+  it('flattens a URI with dot segments into a plain name', () => {
+    expect(refToFilename('http://x.com/../../etc/passwd.json')).toBe('etc-passwd')
+  })
 })

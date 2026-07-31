@@ -107,10 +107,14 @@ describe('build-dynamic-ref-map', () => {
     expect(buildDynamicRefMap(schema)).toEqual({})
   })
 
-  it('skips a $dynamicAnchor on the document root itself', () => {
-    const schema = { $dynamicAnchor: 'meta', type: 'object' as const }
+  // The recursive-tree idiom anchors the root and points `$dynamicRef` back at
+  // it. Leaving the root out left that ref with no target at all, which the
+  // type generator turned into a bare `Node` — the DOM interface, under most
+  // tsconfigs. `walkRefGraph` maps the `#` pointer onto the root's own file.
+  it('maps a $dynamicAnchor on the document root to the root pointer', () => {
+    const schema = { $dynamicAnchor: 'node', type: 'object' as const }
 
-    expect(buildDynamicRefMap(schema)).toEqual({})
+    expect(buildDynamicRefMap(schema)).toEqual({ '#node': '#' })
   })
 
   it('handles multiple $dynamicAnchor definitions', () => {

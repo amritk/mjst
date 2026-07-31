@@ -183,4 +183,44 @@ describe('resolveRef', () => {
 
     expect(result).toBeUndefined()
   })
+
+  // `$anchor` is a core 2020-12 keyword, but every `#`-prefixed ref was treated
+  // as a JSON Pointer, so `#named` matched nothing — and the caller went on to
+  // derive the filename `#named`, producing an import specifier ESM reads as a
+  // URL fragment.
+  it('resolves a plain $anchor ref', () => {
+    const schema = {
+      $defs: {
+        address: { $anchor: 'addr', type: 'object', properties: { city: { type: 'string' } } },
+      },
+    }
+
+    expect(resolveRef('#addr', schema)).toEqual({
+      $anchor: 'addr',
+      type: 'object',
+      properties: { city: { type: 'string' } },
+    })
+  })
+
+  // 2020-12 says a `$dynamicAnchor` also behaves as a plain `$anchor`, so a
+  // static `$ref` is allowed to target one.
+  it('resolves a $ref pointed at a $dynamicAnchor', () => {
+    const schema = { $defs: { node: { $dynamicAnchor: 'node', type: 'object' } } }
+
+    expect(resolveRef('#node', schema)).toEqual({ $dynamicAnchor: 'node', type: 'object' })
+  })
+
+  it('returns undefined for an anchor nothing declares', () => {
+    expect(resolveRef('#nope', { $defs: { a: { type: 'object' } } })).toBeUndefined()
+  })
+
+  // `in` walks the prototype chain, so this used to resolve to `Object.prototype`
+  // and the walker happily generated a file for it.
+  it('does not resolve a pointer into Object.prototype', () => {
+    const schema = { $defs: { a: { type: 'object' } } }
+
+    expect(resolveRef('#/__proto__', schema)).toBeUndefined()
+    expect(resolveRef('#/constructor/prototype', schema)).toBeUndefined()
+    expect(resolveRef('#/$defs/a/toString', schema)).toBeUndefined()
+  })
 })

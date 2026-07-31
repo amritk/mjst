@@ -33,6 +33,34 @@ describe('safe-accessor', () => {
     expect(safeAccessor('input', 'a\\b')).toBe('input["a\\\\b"]')
   })
 
+  // A dot *or* a bracket read walks the prototype chain, so both forms answer
+  // `Object` for `constructor` and `Object.prototype` for `__proto__` on an
+  // input that carries neither. That made `input.constructor === undefined`
+  // impossible to satisfy — `validateDocShape` returned false for every valid
+  // object — and made the parser copy a `__proto__` key the input never had.
+  it('guards Object.prototype member names with an own-property check', () => {
+    expect(safeAccessor('input', 'constructor')).toBe(
+      '(input != null && Object.hasOwn(input, "constructor") ? input["constructor"] : undefined)',
+    )
+    expect(safeAccessor('input', '__proto__')).toBe(
+      '(input != null && Object.hasOwn(input, "__proto__") ? input["__proto__"] : undefined)',
+    )
+  })
+
+  it('guards inherited method names too', () => {
+    for (const key of ['toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf', 'toLocaleString']) {
+      expect(safeAccessor('input', key)).toContain(`Object.hasOwn(input, "${key}")`)
+    }
+  })
+
+  // The `!= null` test already covers what the `?.` was there for, and
+  // `Object.hasOwn` throws on null/undefined, so it has to short-circuit anyway.
+  it('drops the optional-chaining marker in favour of the null guard', () => {
+    expect(safeAccessor('input?', 'toString')).toBe(
+      '(input != null && Object.hasOwn(input, "toString") ? input["toString"] : undefined)',
+    )
+  })
+
   it('returns unquoted key for simple identifiers', () => {
     expect(safeKey('name')).toBe('name')
   })

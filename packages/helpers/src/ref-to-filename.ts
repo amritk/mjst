@@ -20,11 +20,53 @@ export const toKebabCase = (value: string): string =>
     .toLowerCase()
 
 /**
+ * Characters that must not survive into a filename. Anything outside the
+ * identifier characters (plus the `-`/`.` separators the naming scheme already
+ * produces) is folded to `-`, because the derived name has to work as three
+ * things at once: a path on every filesystem (Windows rejects `:*?"<>|`), an
+ * ESM import specifier (`#` opens a URL fragment, so `'./#named.ts'` is
+ * unloadable), and a shell-friendly file the user can actually open.
+ */
+const UNSAFE_FILENAME_CHARS = /[^\p{ID_Continue}.\-]+/gu
+
+/**
+ * A short, stable suffix for a ref whose name normalizes away to nothing
+ * (`#/$defs/`, `#/$defs/..`, `#/$defs/+++`). Without it every such ref would
+ * collapse onto the same fallback name and silently share one output file; a
+ * ref-derived hash keeps distinct definitions distinct. FNV-1a over code
+ * points — no cryptographic claim, just a cheap spread.
+ */
+const stableSuffix = (ref: string): string => {
+  let hash = 0x811c9dc5
+  for (const char of ref) {
+    hash ^= char.codePointAt(0) as number
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return hash.toString(36)
+}
+
+/**
+ * Makes a derived name safe to write to disk and to import, and guarantees it
+ * is non-empty. Leading and trailing `.`/`-` are stripped so a ref like
+ * `#/$defs/..` cannot produce the dot-file `...ts` or a name Windows refuses.
+ */
+const normalizeFilename = (raw: string, ref: string): string => {
+  const cleaned = raw
+    .replace(UNSAFE_FILENAME_CHARS, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^[.\-]+/, '')
+    .replace(/[.\-]+$/, '')
+  return cleaned === '' ? `ref-${stableSuffix(ref)}` : cleaned
+}
+
+/**
  * Derives a unique kebab-case filename from a URI ref.
  *
  * For a plain URI (no fragment), uses the path segments after the host,
  * stripping version numbers, `.json` extension, and joining with `-`.
  * For a URI with a fragment, appends the fragment's last path segment.
+ * A host-only URI (`http://x`) has no path to name the file after, so the host
+ * itself is used rather than letting the protocol punctuation leak in.
  *
  * @example
  * ```ts
@@ -42,7 +84,10 @@ const uriRefToFilename = (uri: string): string => {
   const fragment = hashIndex === -1 ? '' : uri.slice(hashIndex + 1)
 
   // Strip protocol + host, remove .json extension
-  const withoutProtocol = baseUri.replace(/^https?:\/\/[^/]+\//, '')
+  const parsed = /^https?:\/\/([^/]+)(?:\/(.*))?$/.exec(baseUri)
+  const host = parsed?.[1] ?? ''
+  const path = parsed?.[2] ?? ''
+  const withoutProtocol = parsed ? (path === '' ? host : path) : baseUri
   const withoutExt = withoutProtocol.replace(/\.json$/, '')
 
   // Drop structural/noise segments:
@@ -94,12 +139,13 @@ const uriRefToFilename = (uri: string): string => {
  * refToFilename('#/definitions/ServerVariable') // 'server-variable'
  * refToFilename('#/definitions/APIKeySecurityScheme') // 'api-key-security-scheme'
  * refToFilename('http://asyncapi.com/definitions/3.1.0/channel.json') // 'channel'
+ * refToFilename('#named') // 'named' — a plain `$anchor` ref
  * ```
  */
 export const refToFilename = (ref: string): string => {
   // URI ref — derive name from URI path
   if (ref.startsWith('http://') || ref.startsWith('https://')) {
-    return uriRefToFilename(ref)
+    return normalizeFilename(uriRefToFilename(ref), ref)
   }
 
   // Internal ref — extract the last segment after the last /
@@ -112,5 +158,5 @@ export const refToFilename = (ref: string): string => {
     filename = toKebabCase(filename)
   }
 
-  return filename
+  return normalizeFilename(filename, ref)
 }
