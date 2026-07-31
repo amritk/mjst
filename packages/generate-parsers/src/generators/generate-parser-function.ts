@@ -15,6 +15,7 @@ import {
   hasRef,
   hasRequired,
   hasType,
+  hasUniqueItems,
   isObjectSchema,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
@@ -39,10 +40,12 @@ import {
   generateUnionCheck,
   getUnionBranches,
   hasFastPathBlockingKeyword,
+  isExclusiveUnion,
   isInlineObjectArrayProperty,
   isInlineObjectProperty,
   shapeValidatorName,
 } from './generate-type-checks'
+import { generateUniqueItemsCheck } from './generate-unique-items-check'
 import {
   generatePrefixItemsMap,
   generateValidationExpression,
@@ -426,6 +429,31 @@ const generateFallbackValue = (_: string, propSchema: JSONSchema, useRefImports:
 }
 
 /**
+ * Every name an object inherits from `Object.prototype` (`constructor`,
+ * `toString`, `valueOf`, …).
+ *
+ * TypeScript resolves these as *apparent members* of any object type, so a schema
+ * property named `constructor` typed `constructor?: string` makes the fallback
+ * literal `{ ok: "" }` unassignable: TS reads the literal's inherited
+ * `constructor: Function` and reports `Type 'Function' is not assignable to type
+ * 'string'`. The value is genuinely fine at runtime — the parser never puts a
+ * `constructor` on it — so the branch asserts its type rather than pretending the
+ * property does not exist.
+ */
+const PROTOTYPE_MEMBER_NAMES = new Set(Object.getOwnPropertyNames(Object.prototype))
+
+/**
+ * True when the schema declares a property named after an `Object.prototype`
+ * member, which is what forces the assertion described on
+ * {@link PROTOTYPE_MEMBER_NAMES}. Gated on this rather than applied always: an
+ * unconditional assertion would also silence real mismatches between a fallback
+ * literal and the emitted type, which is exactly what the generated-code type
+ * suite exists to catch.
+ */
+const declaresPrototypeMemberProperty = (schema: JSONSchema): boolean =>
+  hasProperties(schema) && Object.keys(schema.properties).some((key) => PROTOTYPE_MEMBER_NAMES.has(key))
+
+/**
  * Generates a fallback object with required properties filled with default values.
  * This is used when input is not an object (undefined, null, etc.).
  */
@@ -489,7 +517,7 @@ const generateFallbackObject = (
     }
   }
   result += '\n      }'
-  return result
+  return declaresPrototypeMemberProperty(schema) ? `${result} as ${typeName}` : result
 }
 
 /**
@@ -649,7 +677,13 @@ const generateNonObjectParser = (
   if (strict && unionCtx && isSchemaObject(schema)) {
     const branches = getUnionBranches(schema)
     if (branches && !unionCtx.stripUnknown && canEnforceUnion(branches, unionCtx.rootSchema)) {
-      const check = generateUnionCheck('input', branches, unionCtx.useRefImports, unionCtx.suffix)
+      const check = generateUnionCheck(
+        'input',
+        branches,
+        unionCtx.useRefImports,
+        unionCtx.suffix,
+        isExclusiveUnion(schema),
+      )
       if (check !== null) {
         return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!(${check})) throw new Error(${quoteJsString(`[${typeName}] value does not match any union branch`)});\n  return input as ${typeName};\n};`
       }
@@ -728,10 +762,22 @@ const generateNonObjectParser = (
   ) {
     const items = schema.items
     const notArrayThrow = `if (!Array.isArray(input)) throw new Error(\`[${typeName}] expected array, got \${input === null ? "null" : typeof input}\`);`
-    // This delegating path bypasses generateScalarStrictAssertion, so enforce the
-    // array-level `contains` constraint here too — otherwise a root array of
-    // objects/$refs would silently ignore it in strict mode.
-    const strictArrayChecks = strict ? generateContainsCheck('input', schema, `[${typeName}]`).join('\n') : ''
+    // This delegating path bypasses generateScalarStrictAssertion, so the
+    // array-level constraints have to be enforced here too — otherwise a root
+    // array of objects/$refs silently ignores them in strict mode. `uniqueItems`
+    // joins `contains` for exactly that reason: with object items it was the one
+    // shape where the constraint was dropped entirely rather than merely
+    // compared the wrong way.
+    const strictArrayChecks = strict
+      ? [
+          ...generateContainsCheck('input', schema, `[${typeName}]`),
+          ...(hasUniqueItems(schema) && schema.uniqueItems === true
+            ? [
+                `  if (!(${generateUniqueItemsCheck('input', schema)})) throw new Error(${quoteJsString(`[${typeName}] must NOT have duplicate items`)});`,
+              ]
+            : []),
+        ].join('\n')
+      : ''
     // validateArray identity-returns the input array when every element parses
     // to itself; this parser is EXPORTED, and exported parsers never alias the
     // value the caller passed in (matching the scalar root-array path's
@@ -2564,7 +2610,7 @@ export const generateShapeValidator = (
   if (!hasProperties(schema) && !('patternProperties' in schema) && !('if' in schema) && !stripUnknown) {
     const branches = getUnionBranches(schema)
     if (branches) {
-      const check = generateUnionCheck('input', branches, useRefImports, suffix)
+      const check = generateUnionCheck('input', branches, useRefImports, suffix, isExclusiveUnion(schema))
       if (check !== null) {
         return `${exportPrefix}const ${fnName} = (input: unknown): boolean => ${check};`
       }

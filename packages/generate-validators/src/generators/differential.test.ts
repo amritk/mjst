@@ -165,7 +165,12 @@ const randomTyped = (rng: () => number, depth: number): Record<string, unknown> 
     const useTuple = rng() < 0.3
     if (useTuple) {
       s.prefixItems = [{ type: pick(rng, ['string', 'number']) }, { type: 'boolean' }]
-      if (rng() < 0.5) s.items = false
+      // A tuple's sibling `items` is the *tail* schema (2020-12), not a check on
+      // every element — `false` closes the tuple, a subschema types the overflow.
+      // Only `false` used to be generated here, so the tail form went unfuzzed.
+      const tail = rng()
+      if (tail < 0.35) s.items = false
+      else if (tail < 0.7) s.items = { type: pick(rng, ['string', 'number', 'boolean']) }
     } else if (rng() < 0.7) {
       s.items = rng() < 0.5 ? { type: pick(rng, ['string', 'number', 'boolean']) } : { type: 'object' }
     }
@@ -273,6 +278,62 @@ describe('differential fuzz vs ajv', () => {
     }
 
     expect(divergences, divergences.join('\n\n')).toEqual([])
+  })
+
+  // The fuzzers above found both of the following, but nothing pinned them, so a
+  // regression would have needed a lucky seed to resurface. Each is the exact
+  // schema/value pair on which the generator used to contradict Ajv.
+  it('applies `items` only past the prefixItems positions', () => {
+    const ajv = new Ajv2020({ allErrors: false, strict: false })
+    const schema = { type: 'array', prefixItems: [{ type: 'string' }], items: { type: 'number' } }
+    const ajvValidate = ajv.compile(schema)
+    const ours = evalValidator(generateValidatorFunction(schema as never, 'Root'))
+
+    // Per 2020-12 `items` is the tail schema: index 0 answers to `prefixItems`
+    // alone. Running the tail check from 0 rejected this, and the emitted type
+    // `[string?, ...number[]]` accepts it — so the type and the validator
+    // disagreed with each other as well as with Ajv.
+    for (const value of [['a', 1, 2], ['a'], [], [1, 1, 2], ['a', 'b'], ['a', 1, 'c']]) {
+      expect(ours(value) === true, `disagreement on ${JSON.stringify(value)}`).toBe(ajvValidate(value) === true)
+    }
+    expect(ours(['a', 1, 2])).toBe(true)
+  })
+
+  it('matches an object or array enum member structurally', () => {
+    const ajv = new Ajv2020({ allErrors: false, strict: false })
+    // `.includes` is SameValueZero — reference equality for objects — so a
+    // freshly parsed `{ a: 1 }` could never match, and `isRoot` was an unsound
+    // type guard on top of the same expression.
+    for (const schema of [
+      { enum: [{ a: 1 }, 'x'] },
+      { type: 'object', properties: { e: { enum: [{ a: 1 }, ['b']] } }, required: ['e'] },
+      { type: 'array', items: { enum: [{ a: 1 }, 2] } },
+    ]) {
+      const ajvValidate = ajv.compile(schema)
+      const ours = evalValidator(generateValidatorFunction(schema as never, 'Root'))
+      const values = [
+        { a: 1 },
+        { a: 2 },
+        'x',
+        { e: { a: 1 } },
+        { e: ['b'] },
+        { e: { a: 2 } },
+        [{ a: 1 }, 2],
+        [{ a: 3 }],
+      ]
+      for (const value of values) {
+        expect(ours(value) === true, `${JSON.stringify(schema)} on ${JSON.stringify(value)}`).toBe(
+          ajvValidate(value) === true,
+        )
+      }
+    }
+  })
+
+  it('keeps NaN membership in an enum, where SameValueZero and === differ', () => {
+    const ours = evalValidator(generateValidatorFunction({ enum: [Number.NaN, 1] } as never, 'Root'))
+    expect(ours(Number.NaN)).toBe(true)
+    expect(ours(1)).toBe(true)
+    expect(ours(2)).not.toBe(true)
   })
 
   it('uniqueItems on object items agrees with ajv across key orders', () => {

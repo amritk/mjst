@@ -24,9 +24,10 @@ describe('generate-enum-check', () => {
   })
 
   it('handles an empty enum array', () => {
-    // With no members the === chain would be empty, so fall back to .includes.
+    // No members means nothing can ever match, and an empty `===` chain would
+    // not even parse — so the check collapses to the constant.
     const result = generateEnumCheck('value', [])
-    expect(result).toBe('[].includes(value as never)')
+    expect(result).toBe('false')
   })
 
   it('uses the provided accessor in the expression', () => {
@@ -44,9 +45,28 @@ describe('generate-enum-check', () => {
     expect(result).toBe('(value === true || value === false)')
   })
 
-  it('falls back to .includes when a member is an object (reference equality)', () => {
+  // `.includes` is SameValueZero, so an object member could only ever match by
+  // reference — i.e. never, for a freshly parsed document. Structural equality
+  // against the known literal is the only comparison that can succeed.
+  it('compares an object member structurally rather than by reference', () => {
     const result = generateEnumCheck('value', [{ a: 1 }, 'x'])
-    expect(result).toBe('[{"a":1},"x"].includes(value as never)')
+    expect(result).toBe(
+      '((typeof value === "object" && value !== null && !Array.isArray(value)' +
+        ' && Object.keys(value as object).length === 1' +
+        ' && (value as Record<string, unknown>).a === 1) || value === "x")',
+    )
+  })
+
+  it('compares an array member element-wise, including its length', () => {
+    const result = generateEnumCheck('value', [['a', 'b']])
+    expect(result).toBe(
+      '((Array.isArray(value) && (value as unknown[]).length === 2' +
+        ' && (value as unknown[])[0] === "a" && (value as unknown[])[1] === "b"))',
+    )
+  })
+
+  it('keeps a NaN member on Number.isNaN, the one case === cannot express', () => {
+    expect(generateEnumCheck('value', [Number.NaN, 1])).toBe('(Number.isNaN(value) || value === 1)')
   })
 })
 

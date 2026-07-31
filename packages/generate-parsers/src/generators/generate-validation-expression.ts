@@ -111,6 +111,29 @@ export const getPrefixItems = (schema: JSONSchema): readonly JSONSchema[] | null
 }
 
 /**
+ * Wraps a per-element boolean check into the `.every(...)` call that proves it
+ * for a whole array, skipping the positions `prefixItems` already owns.
+ *
+ * In 2020-12 `items` is only the *tail* schema: it applies from
+ * `prefixItems.length` onward. Checking every element against it made
+ * `{ prefixItems: [{type:'string'}], items: {type:'number'} }` reject
+ * `["a", 1, 2]` — a value Ajv accepts, and one the `[string?, ...number[]]` type
+ * this generator emits admits, so the strict parser threw on its own declared
+ * type. The index guard is short-circuited rather than sliced so the check stays
+ * allocation-free on the hot path.
+ *
+ * The draft-07 tuple spelling needs no guard: there `items` *is* the tuple and
+ * the tail lives in `additionalItems`, which no item check reads.
+ */
+export const everyTailItem = (accessor: string, itemCheck: string, schema: JSONSchema): string => {
+  const prefix = isSchemaObject(schema) ? (schema as Record<string, unknown>)['prefixItems'] : undefined
+  const tailStart = Array.isArray(prefix) ? prefix.length : 0
+  return tailStart === 0
+    ? `${accessor}.every((_it) => ${itemCheck})`
+    : `${accessor}.every((_it, _ix) => _ix < ${tailStart} || (${itemCheck}))`
+}
+
+/**
  * True when a sibling `items: false` (2020-12) or `additionalItems: false`
  * (draft) caps a tuple's length — any element past the declared prefix is
  * disallowed, so the coercer drops it and strict mode rejects it.

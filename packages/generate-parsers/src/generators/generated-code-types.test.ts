@@ -127,10 +127,64 @@ const CASES: ReadonlyArray<readonly [string, JSONSchema]> = [
       $defs: { contact: { type: 'object', properties: { email: { type: 'string' } }, required: ['email'] } },
     },
   ],
+  // A closed tuple whose `minItems` makes every position required: the emitted
+  // type is `[string, number]`, and the non-object fallback used to hand it a
+  // bare `[]` (TS2322) — so no consumer could compile the file at all.
+  [
+    'required-closed-tuple',
+    {
+      type: 'object',
+      required: ['t'],
+      properties: {
+        t: { type: 'array', prefixItems: [{ type: 'string' }, { type: 'number' }], items: false, minItems: 2 },
+      },
+    },
+  ],
+  [
+    'required-open-tuple-with-tail',
+    {
+      type: 'object',
+      required: ['t'],
+      properties: {
+        t: { type: 'array', prefixItems: [{ type: 'string' }], items: { type: 'number' }, minItems: 3 },
+      },
+    },
+  ],
+  // `constructor` / `toString` are apparent members of every object type, so an
+  // *optional* property of that name makes the fallback object literal
+  // unassignable ("Type 'Function' is not assignable to type 'string'").
+  [
+    'prototype-member-properties',
+    {
+      type: 'object',
+      required: ['ok'],
+      properties: { constructor: { type: 'string' }, toString: { type: 'string' }, ok: { type: 'string' } },
+    },
+  ],
+  [
+    'proto-property',
+    JSON.parse('{"type":"object","required":["__proto__"],"properties":{"__proto__":{"type":"string"}}}') as JSONSchema,
+  ],
 ]
 
+/**
+ * The repo's own flags, not a bare `strict`. Checking under `strict` alone is
+ * what let a whole class of defect through: `exactOptionalPropertyTypes` and
+ * `noUncheckedIndexedAccess` are on in `tsconfig.json`, so they are what a real
+ * consumer compiles this output with — and `noUncheckedIndexedAccess` is what
+ * surfaced the tuple fallback emitting `[]` against a required `[string, number]`.
+ * Keep this list in sync with the root tsconfig's "Best practices" block.
+ */
 const OPTIONS: ts.CompilerOptions = {
   strict: true,
+  exactOptionalPropertyTypes: true,
+  noUncheckedIndexedAccess: true,
+  noImplicitOverride: true,
+  noFallthroughCasesInSwitch: true,
+  useUnknownInCatchVariables: true,
+  allowUnusedLabels: false,
+  allowUnreachableCode: false,
+  noImplicitReturns: true,
   noEmit: true,
   target: ts.ScriptTarget.ESNext,
   module: ts.ModuleKind.ESNext,

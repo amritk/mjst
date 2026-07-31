@@ -140,4 +140,81 @@ describe('get-default-value', () => {
   it('returns 0n for an x-mjst bigint schema', () => {
     expect(getDefaultValue({ 'x-mjst': { primitive: 'bigint' } })).toBe('0n')
   })
+
+  it('returns a bare [] for an array with nothing required', () => {
+    expect(getDefaultValue({ type: 'array', items: { type: 'string' } })).toBe('[]')
+    expect(getDefaultValue({ type: 'array', prefixItems: [{ type: 'string' }] })).toBe('[]')
+  })
+
+  // A bare `[]` is not an instance of a tuple whose positions `minItems` made
+  // required — and the emitted type says `[string, number]`, so the generated
+  // file did not even compile.
+  it('fills the tuple positions a minItems makes required', () => {
+    expect(
+      getDefaultValue({
+        type: 'array',
+        prefixItems: [{ type: 'string' }, { type: 'number' }],
+        items: false,
+        minItems: 2,
+      }),
+    ).toBe('["", 0]')
+  })
+
+  it('fills only up to minItems when the tuple is longer', () => {
+    expect(
+      getDefaultValue({
+        type: 'array',
+        prefixItems: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }],
+        minItems: 2,
+      }),
+    ).toBe('["", 0]')
+  })
+
+  it('pads past the tuple from the items tail', () => {
+    expect(
+      getDefaultValue({ type: 'array', prefixItems: [{ type: 'string' }], items: { type: 'number' }, minItems: 3 }),
+    ).toBe('["", 0, 0]')
+  })
+
+  it('satisfies minItems on a plain (non-tuple) array', () => {
+    expect(getDefaultValue({ type: 'array', items: { type: 'string' }, minItems: 2 })).toBe('["", ""]')
+  })
+
+  it('honours each position own default/enum/const', () => {
+    expect(
+      getDefaultValue({
+        type: 'array',
+        prefixItems: [{ enum: ['a', 'b'] }, { const: 7 }],
+        minItems: 2,
+      }),
+    ).toBe('["a", 7]')
+  })
+
+  // Half a tuple is no more assignable than none of it, so there is nothing to
+  // gain from emitting a partial literal.
+  it('gives up to [] when a required position has no concrete default', () => {
+    expect(
+      getDefaultValue({
+        type: 'array',
+        prefixItems: [{ type: 'string' }, { $ref: '#/$defs/thing' }],
+        minItems: 2,
+      }),
+    ).toBe('[]')
+    expect(getDefaultValue({ type: 'array', prefixItems: [{ type: 'string' }], items: false, minItems: 2 })).toBe('[]')
+  })
+
+  // `minItems` is schema-controlled and unbounded; a pathological value must not
+  // inline thousands of elements into every generated file.
+  it('caps the padding, keeping only what the emitted tuple type requires', () => {
+    expect(
+      getDefaultValue({ type: 'array', prefixItems: [{ type: 'string' }], items: { type: 'number' }, minItems: 5000 }),
+    ).toBe('[""]')
+    expect(getDefaultValue({ type: 'array', items: { type: 'number' }, minItems: 5000 })).toBe('[]')
+  })
+
+  it('reads draft-07 tuple positions from an array-valued items', () => {
+    expect(
+      getDefaultValue({ type: 'array', items: [{ type: 'string' }, { type: 'number' }], minItems: 2 } as never),
+    ).toBe('["", 0]')
+  })
 })

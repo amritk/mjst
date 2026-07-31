@@ -1,3 +1,5 @@
+import { generateDeepEqualCheck } from './generate-deep-equal-check'
+
 /**
  * Generates an enum validation check expression.
  * Returns a string that checks if the value is in the allowed enum values.
@@ -6,22 +8,25 @@
  * b` chain rather than `[a, b].includes(x)`. The `.includes` form allocates a
  * fresh array on every call (this expression runs on the parser hot path); the
  * `===` chain is allocation-free and matches the validators package's
- * `enumMembershipExpr`. It falls back to `.includes` when a member is an
- * object/array (reference equality) or `NaN` (where `includes`'s SameValueZero
- * differs from `===`), so the verdict is unchanged.
+ * `enumMembershipExpr`.
+ *
+ * An object or array member is compared *structurally* via
+ * {@link generateDeepEqualCheck}. `.includes` was SameValueZero — reference
+ * equality — so `{ enum: [{ a: 1 }] }` could never match a freshly parsed
+ * `{ a: 1 }`: the fast path never fired and the strict parser threw on a document
+ * Ajv accepts. `NaN` keeps its own `Number.isNaN` test, the one case `===` cannot
+ * express.
  */
 export const generateEnumCheck = (accessor: string, enumValues: readonly unknown[]): string => {
-  const allPrimitive =
-    enumValues.length > 0 &&
-    enumValues.every((v) => (v === null || typeof v !== 'object') && typeof v !== 'function') &&
-    !enumValues.some((v) => typeof v === 'number' && Number.isNaN(v))
-
-  if (allPrimitive) {
-    return `(${enumValues.map((v) => `${accessor} === ${JSON.stringify(v)}`).join(' || ')})`
-  }
-
-  const serializedEnum = JSON.stringify(enumValues)
-  return `${serializedEnum}.includes(${accessor} as never)`
+  if (enumValues.length === 0) return 'false'
+  const members = enumValues.map((value) => {
+    const check = generateDeepEqualCheck(accessor, value)
+    // A structural member expands to an `&&` chain. `&&` binds tighter than the
+    // `||` below so this is only about readability — but an unparenthesized chain
+    // inside a long disjunction is genuinely hard to read.
+    return value !== null && typeof value === 'object' ? `(${check})` : check
+  })
+  return `(${members.join(' || ')})`
 }
 
 /**

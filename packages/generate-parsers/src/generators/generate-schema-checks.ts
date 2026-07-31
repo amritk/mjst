@@ -26,6 +26,7 @@ import {
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { generateEnumCheck } from './generate-enum-check'
+import { generateUniqueItemsCheck } from './generate-unique-items-check'
 
 /** The primitive JSON Schema types the inference below can resolve to. */
 type InferredType = 'object' | 'array' | 'string' | 'number' | 'boolean' | 'null'
@@ -136,7 +137,7 @@ const generateInferredChecks = (accessor: string, schema: JSONSchema, type: Infe
         checks.push(`${accessor}.length <= ${schema.maxItems}`)
       }
       if (hasUniqueItems(schema) && schema.uniqueItems === true) {
-        checks.push(`new Set(${accessor}).size === ${accessor}.length`)
+        checks.push(generateUniqueItemsCheck(accessor, schema))
       }
       break
     case 'string':
@@ -212,7 +213,9 @@ export const generateSchemaChecks = (accessor: string, schema: JSONSchema): stri
     }
     checks.push(...generateInferredChecks(accessor, schema, inferred))
     if (hasEnum(schema) && schema.enum.length > 0) {
-      checks.push(`${JSON.stringify(schema.enum)}.includes(${accessor} as never)`)
+      // Shares generateEnumCheck with the explicit-type path below: `.includes`
+      // is reference equality, so an object/array member could never match.
+      checks.push(generateEnumCheck(accessor, schema.enum))
     }
     return checks
   }
@@ -266,7 +269,7 @@ export const generateSchemaChecks = (accessor: string, schema: JSONSchema): stri
         checks.push(`${accessor}.length <= ${schema.maxItems}`)
       }
       if (hasUniqueItems(schema) && schema.uniqueItems === true) {
-        checks.push(`new Set(${accessor}).size === ${accessor}.length`)
+        checks.push(generateUniqueItemsCheck(accessor, schema))
       }
       break
     case 'object': {

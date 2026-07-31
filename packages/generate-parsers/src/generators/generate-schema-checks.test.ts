@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest'
 
 import { generateSchemaChecks } from './generate-schema-checks'
 
+/**
+ * The key-order-independent dedupe projection emitted for a `uniqueItems` array
+ * whose elements might be objects. Spelled out once here so the expectations
+ * below stay readable.
+ */
+const CANONICAL_UNIQUE_ITEMS =
+  'new Set((value as unknown[]).map((_u) => JSON.stringify(_u, (_k, _v) => ' +
+  '(_v !== null && typeof _v === "object" && !Array.isArray(_v)) ? ' +
+  'Object.fromEntries(Object.keys(_v).sort().map((_sk) => [_sk, (_v as Record<string, unknown>)[_sk]])) : _v)))' +
+  '.size === value.length'
+
 describe('generate-schema-checks', () => {
   it('returns empty checks for a schema without type and no inferrable keywords', () => {
     const result = generateSchemaChecks('value', { description: 'no type' })
@@ -87,7 +98,7 @@ describe('generate-schema-checks', () => {
     const result = generateSchemaChecks('value', {
       enum: [null, null],
     })
-    expect(result).toEqual(['[null,null].includes(value as never)'])
+    expect(result).toEqual(['(value === null || value === null)'])
   })
 
   // When object and array keywords tie, object wins (matches inferSchemaType priority)
@@ -120,7 +131,7 @@ describe('generate-schema-checks', () => {
     expect(result).toContain('typeof value === "number"')
     expect(result).toContain('value >= 0')
     expect(result).toContain('value <= 10')
-    expect(result).toContain('[0,5,10].includes(value as never)')
+    expect(result).toContain('(value === 0 || value === 5 || value === 10)')
   })
 
   it('returns empty checks for a boolean schema', () => {
@@ -233,8 +244,15 @@ describe('generate-schema-checks', () => {
     expect(result).toEqual(['Array.isArray(value)', 'value.length <= 10'])
   })
 
+  // No `items` means the array may hold objects, so uniqueness has to be
+  // structural — a plain `Set` would compare those by reference.
   it('generates array check with uniqueItems true', () => {
     const result = generateSchemaChecks('value', { type: 'array', uniqueItems: true })
+    expect(result).toEqual(['Array.isArray(value)', CANONICAL_UNIQUE_ITEMS])
+  })
+
+  it('keeps the cheap Set dedupe when the items are provably scalar', () => {
+    const result = generateSchemaChecks('value', { type: 'array', uniqueItems: true, items: { type: 'string' } })
     expect(result).toEqual(['Array.isArray(value)', 'new Set(value).size === value.length'])
   })
 
