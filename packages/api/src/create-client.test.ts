@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
+import { appendCookies } from './append-cookies'
 import { buildParamPath } from './build-param-path'
+import { isMalformedBodyError, isUnexpectedStatusError } from './client-errors'
 import { createApi } from './create-api'
 import type {
   ClientReplyOf,
@@ -21,11 +23,10 @@ import { defineContract } from './define-contract'
 import { defineRoute } from './define-route'
 import { formBodySerializer } from './form-body-serializer'
 import { implementRoute } from './implement-route'
-import { isMalformedBodyError } from './malformed-body-error'
 import { multipartBodySerializer } from './multipart-body-serializer'
 import { toFetchHandler } from './to-fetch-handler'
+import { toSearchParams } from './to-search-params'
 import type { RouteReplyOf } from './types'
-import { isUnexpectedStatusError } from './unexpected-status-error'
 
 /**
  * The contracts are pure data (defineContract) and the server binds handlers
@@ -102,6 +103,7 @@ const makeClient = (captured?: Request[]) => {
       return handler(request)
     },
     pathParams: buildParamPath,
+    queryParams: toSearchParams,
   })
 }
 
@@ -420,6 +422,36 @@ describe('create-client', () => {
     )
   })
 
+  it('throws a pointed error for query objects without a registered serializer', async () => {
+    const client = createClient({ getUser }, 'https://api.test', {
+      fetch: () => Promise.resolve(new Response(null, { status: 404 })),
+      pathParams: buildParamPath,
+    })
+    await expect(client.getUser({ params: { id: 7 }, query: { verbose: true } })).rejects.toThrow(
+      /Contract 'getUser': query needs createClient queryParams \(toSearchParams\)/,
+    )
+    // Omitting the query entirely needs no serializer — nothing to serialize.
+    const reply = await client.getUser({ params: { id: 7 } })
+    expect(reply.status).toBe(404)
+  })
+
+  it('throws a pointed error for cookies without a registered serializer', async () => {
+    const dashboard = defineContract({
+      method: 'get',
+      path: '/dashboard',
+      request: {
+        cookies: { type: 'object', properties: { session: { type: 'string' } }, required: ['session'] },
+      },
+      responses: { 200: { body: { type: 'object' } } },
+    })
+    const client = createClient({ dashboard }, 'https://api.test', {
+      fetch: () => Promise.resolve(new Response('{}', { status: 200 })),
+    })
+    await expect(client.dashboard({ cookies: { session: 'abc' } })).rejects.toThrow(
+      /Contract 'dashboard': cookies need createClient cookies \(appendCookies\)/,
+    )
+  })
+
   it('lets a registered json serializer override the built-in one', async () => {
     const captured: Request[] = []
     const client = createClient({ chat }, 'https://api.test', {
@@ -463,6 +495,7 @@ describe('create-client', () => {
     )
     const client = createClient({ dashboard }, 'https://api.test', {
       fetch: (url, init) => server(new Request(url, init)),
+      cookies: appendCookies,
     })
     const reply = await client.dashboard({ cookies: { session: 'abc 123', visits: 2 } })
     // The value round-trips percent-encoded — the server unquotes and decodes.
@@ -664,6 +697,7 @@ describe('create-client', () => {
         captured.push(request.clone())
         return handler(request)
       },
+      queryParams: toSearchParams,
     })
     // No argument at all.
     const bare = await client.listThings()

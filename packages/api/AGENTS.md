@@ -17,12 +17,21 @@ bun run --filter='@amritk/api' types:check
 ## Invariants — do not break these
 
 - **ESM-only.** No CJS entry point. Keep it that way.
-- **Three entries, each one-way:** `.` (runtime/client/adapters/OpenAPI),
-  `./bundler` (build-time strip plugins), and `./dev` (hot reloading). The
-  dependency only ever points *into* `.`: bundler and dev code may import the
-  runtime, never the reverse. That is what keeps `node:fs` watching and module
-  re-importing out of the graph that ships to Workers and browsers — do not add
-  a fourth entry without the same justification.
+- **Four entries, each one-way:** `.` (runtime/client/adapters/OpenAPI),
+  `./client` (the browser-safe subset of `.`), `./bundler` (build-time strip
+  plugins), and `./dev` (hot reloading). The dependency only ever points *into*
+  `.`: bundler and dev code may import the runtime, never the reverse. That is
+  what keeps `node:fs` watching and module re-importing out of the graph that
+  ships to Workers and browsers — do not add another entry without the same
+  justification.
+- **`./client` must stay browser-safe.** `src/client.ts` re-exports only
+  modules whose transitive imports touch no server code and no `node:*`
+  built-in; `client.test.ts` walks the import graph and pins the exact
+  reachable file set. Adding an export there means updating that list — if the
+  test's diff shows a server module, the export does not belong in `./client`.
+  The same goes for the client opt-ins (`queryParams`, `cookies`, `pathParams`,
+  `serializers`): they are opt-in precisely so `create-client.ts` never
+  imports them statically. Do not "simplify" by importing one directly.
 - **The adapter split is intentional:** hooks / `mounts` / CORS belong to
   `toFetchHandler`, not `toNodeHandler`. Don't add them to the Node adapter.
 - **Lots of exports are compiler plumbing** (`buildQueryObjectFromString`,

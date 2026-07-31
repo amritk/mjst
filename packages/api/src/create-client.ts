@@ -1,9 +1,7 @@
 import type { FromSchema } from '@amritk/runtime-validators'
 
-import { malformedBodyError } from './malformed-body-error'
-import { toSearchParams } from './to-search-params'
+import { malformedBodyError, unexpectedStatusError } from './client-errors'
 import type { AnyContract, BodyType, ResponseContracts } from './types'
-import { unexpectedStatusError } from './unexpected-status-error'
 
 /**
  * One opt-in wire format: how a declared `bodyType` turns a call's `body`
@@ -36,6 +34,25 @@ export type BodySerializer = {
  * `buildParamPath` as the standard implementation.
  */
 export type PathParamsBuilder = (pattern: string, params: Readonly<Record<string, unknown>> | undefined) => string
+
+/**
+ * Serializes a call's `query` object into the search string. Opt-in for the
+ * same reason as {@link PathParamsBuilder}: a JSON-only app whose contracts
+ * never declare query slots skips the serializer bytes entirely. The package
+ * ships `toSearchParams` as the standard implementation (array values repeat
+ * the key, `undefined` is skipped) — the same function the server-side form
+ * parsing mirrors.
+ */
+export type QueryParamsSerializer = (query: Readonly<Record<string, unknown>>) => URLSearchParams
+
+/**
+ * Writes a call's `cookies` object onto the outgoing headers. Opt-in like
+ * {@link PathParamsBuilder}, and doubly so: browsers forbid scripts from
+ * setting the `cookie` header, so a browser bundle can never use the typed
+ * cookies slot — only Node/undici/workers callers register the package's
+ * `appendCookies` implementation.
+ */
+export type CookiesSerializer = (headers: Headers, cookies: Readonly<Record<string, unknown>>) => void
 
 /**
  * Extra `RequestInit` fields passed through to fetch untouched —
@@ -84,6 +101,21 @@ export type ClientOptions = {
    * static-path apps omit it and skip the code entirely.
    */
   readonly pathParams?: PathParamsBuilder
+  /**
+   * Query serializer for calls that pass `query` — pass `toSearchParams`.
+   * Calling with a query object without one throws; apps that never send
+   * query strings omit it and skip the code entirely.
+   */
+  readonly queryParams?: QueryParamsSerializer
+  /**
+   * Cookie-header writer for calls that pass `cookies` — pass
+   * `appendCookies`. Calling with cookies without one throws. Browsers forbid
+   * setting the `cookie` request header, so this is for Node/undici/workers
+   * clients only — browser cookie auth relies on server-set cookies plus
+   * `fetchOptions: { credentials: 'include' }`, and browser bundles omit
+   * this entirely.
+   */
+  readonly cookies?: CookiesSerializer
   /**
    * Default timeout applied to every call, in milliseconds. Implemented with
    * `AbortSignal.timeout`, composed via `AbortSignal.any` when a call also
@@ -325,25 +357,27 @@ type RawInput = {
  * this function — without bundling any server code. This is the
  * framework-agnostic replacement for RPC clients like Hono's `hc`.
  *
- * Per call: `query` serializes repeats for arrays, `body` follows the
+ * Per call: `query` serializes through the registered `queryParams`
+ * serializer (`toSearchParams` repeats the key for arrays), `body` follows the
  * contract's `bodyType` (JSON and the raw `text`/`bytes` encodings are built
  * in — the latter sent verbatim under a raw content type you can override per
  * call via `headers`; register `formBodySerializer` / `multipartBodySerializer`
  * for those two), `params` fill the path template
  * through the registered `pathParams` builder (`buildParamPath`
  * segment-encodes; greedy `{x+}` parameters keep their slashes), declared
- * `headers`/`cookies` are typed, and extra headers and an `AbortSignal` ride
- * along. Every request carries `accept: application/json` unless some header
- * source overrides it. Extra `RequestInit` fields (`credentials`, `cache`,
- * `redirect`, ...) pass through via `fetchOptions` — client-level defaults
- * with per-call overrides — and `timeoutMs` aborts slow calls, composing with
- * a caller `signal` through `AbortSignal.any`. Replies come back as the
- * {@link ClientReply} union; an undeclared status throws (check it with
- * `isUnexpectedStatusError`) and a declared JSON status whose body fails to
- * parse throws too (check it with `isMalformedBodyError` — the `Response` and
- * the parse error ride along). The non-JSON wire formats and the
- * path-template builder are opt-in imports so apps only bundle what their
- * calls actually use.
+ * `headers`/`cookies` are typed (cookies write through the registered
+ * `cookies` serializer, `appendCookies`), and extra headers and an
+ * `AbortSignal` ride along. Every request carries `accept: application/json`
+ * unless some header source overrides it. Extra `RequestInit` fields
+ * (`credentials`, `cache`, `redirect`, ...) pass through via `fetchOptions` —
+ * client-level defaults with per-call overrides — and `timeoutMs` aborts slow
+ * calls, composing with a caller `signal` through `AbortSignal.any`. Replies
+ * come back as the {@link ClientReply} union; an undeclared status throws
+ * (check it with `isUnexpectedStatusError`) and a declared JSON status whose
+ * body fails to parse throws too (check it with `isMalformedBodyError` — the
+ * `Response` and the parse error ride along). The non-JSON wire formats, the
+ * path-template builder, the query serializer, and the cookie writer are all
+ * opt-in imports so apps only bundle what their calls actually use.
  *
  * Browsers forbid setting the `cookie` request header, so the typed `cookies`
  * slot works from Node/undici/workers only. Browser cookie auth should use
@@ -356,6 +390,7 @@ type RawInput = {
  * const client = createClient(contracts, 'https://api.example.com', {
  *   headers: () => ({ authorization: `Bearer ${token}` }),
  *   pathParams: buildParamPath, // only needed for {param} paths
+ *   queryParams: toSearchParams, // only needed for calls that send query
  * })
  *
  * const reply = await client.getUser({ params: { id: 7 } })
@@ -381,6 +416,8 @@ export const createClient = <Contracts extends Readonly<Record<string, AnyContra
     baseHeaders: options?.headers,
     serializers,
     pathParams: options?.pathParams,
+    queryParams: options?.queryParams,
+    cookies: options?.cookies,
     fetchOptions: options?.fetchOptions,
     timeoutMs: options?.timeoutMs,
   }
@@ -398,6 +435,8 @@ type SharedClientState = {
   readonly baseHeaders: ClientOptions['headers']
   readonly serializers: Partial<Record<BodyType, BodySerializer>>
   readonly pathParams: PathParamsBuilder | undefined
+  readonly queryParams: QueryParamsSerializer | undefined
+  readonly cookies: CookiesSerializer | undefined
   readonly fetchOptions: FetchOptions | undefined
   readonly timeoutMs: number | undefined
 }
@@ -422,7 +461,12 @@ const buildMethod = (
     if (input.headers !== undefined) {
       for (const [headerName, value] of Object.entries(input.headers)) headers.set(headerName, String(value))
     }
-    if (input.cookies !== undefined) appendCookies(headers, input.cookies)
+    if (input.cookies !== undefined) {
+      if (shared.cookies === undefined) {
+        throw new Error(`Contract '${name}': cookies need createClient cookies (appendCookies)`)
+      }
+      shared.cookies(headers, input.cookies)
+    }
 
     let body: RequestInit['body'] | undefined
     if (hasBody) {
@@ -462,7 +506,16 @@ const buildMethod = (
       path = shared.pathParams(contract.path, input.params)
     }
 
-    const url = shared.base + path + queryStringOf(input.query)
+    let search = ''
+    if (input.query !== undefined) {
+      if (shared.queryParams === undefined) {
+        throw new Error(`Contract '${name}': query needs createClient queryParams (toSearchParams)`)
+      }
+      const text = shared.queryParams(input.query).toString()
+      if (text !== '') search = '?' + text
+    }
+
+    const url = shared.base + path + search
     // Passthrough options spread first so the fields the client computes
     // (method, headers, body, signal) always win over them.
     const init: RequestInit = { ...shared.fetchOptions, ...input.fetchOptions, method, headers }
@@ -503,21 +556,4 @@ const composeSignal = (
   if (timeoutMs === undefined) return callerSignal
   const timeoutSignal = AbortSignal.timeout(timeoutMs)
   return callerSignal === undefined ? timeoutSignal : AbortSignal.any([callerSignal, timeoutSignal])
-}
-
-const queryStringOf = (query: Readonly<Record<string, unknown>> | undefined): string => {
-  if (query === undefined) return ''
-  const text = toSearchParams(query).toString()
-  return text === '' ? '' : '?' + text
-}
-
-/** Serializes declared cookies onto the `cookie` header (percent-encoded, like the server's decode). */
-const appendCookies = (headers: Headers, cookies: Readonly<Record<string, unknown>>): void => {
-  const pairs = Object.entries(cookies)
-    .filter(([, value]) => value !== undefined)
-    .map(([cookieName, value]) => `${cookieName}=${encodeURIComponent(String(value))}`)
-  if (pairs.length === 0) return
-  const existing = headers.get('cookie')
-  const joined = pairs.join('; ')
-  headers.set('cookie', existing === null ? joined : existing + '; ' + joined)
 }
