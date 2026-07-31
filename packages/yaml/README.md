@@ -213,7 +213,13 @@ Every node carries an exact `[start, end)` source span, and problems are collect
 | `UNEXPECTED_CONTENT` | content after a node ends, or a second root node with no `---` |
 | `UNEXPECTED_COMMA` | an empty flow entry (`[1, , 2]`) |
 | `TAB_INDENT` | a tab used for indentation |
-| `BAD_SCALAR_START` | a plain scalar starting with the reserved `@` or `` ` `` |
+| `BAD_SCALAR_START` | a plain scalar starting with the reserved `@` or `` ` ``, or a `-` where a flow entry belongs (`[-]`) |
+| `BAD_COMMENT` | a `#` with no whitespace before it, so the rest of the line is not a comment (`"value"# …`) |
+| `BAD_ESCAPE` | a `\` escape double-quoted YAML does not define (`"a\.b"`) |
+| `BAD_BLOCK_HEADER` | a `|`/`>` header with a repeated indicator or trailing text (`|10`, `> text`) |
+| `BAD_INDENT` | a block scalar's leading blank line reaching past its first content line, or a quoted scalar continued at its parent's column |
+| `BAD_IMPLICIT_KEY` | a key that does not fit on one line, or a `[ key\n : value ]` whose `:` is on the next |
+| `BAD_PROPERTY` | an anchor or tag on an alias, or two anchors on one scalar |
 | `BAD_TAG` | a verbatim tag missing its closing `>`, or a tag holding a flow indicator |
 | `UNKNOWN_TAG_HANDLE` | a tag handle no `%TAG` directive declared |
 | `BAD_DIRECTIVE` | a malformed `%YAML` version, or content after it |
@@ -231,7 +237,9 @@ Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNK
 - **Implicit timestamps.** An untagged ISO date string stays a string; only an explicit `!!timestamp` produces a `Date`.
 - **Directives on a line a plain scalar could claim.** The rules around directives are enforced — a directive needs a `...` footer before it and a `---` after it, and its version must parse — with one exception: when the offending `%` line could equally be read as a continuation of the plain scalar above it, the scalar wins. Reporting it would mean rejecting a valid document (the suite's `XLQ9`) to catch an invalid one.
 - **Node properties on block mapping keys.** An anchor or tag written on a mapping key (`&a key: value`) stays part of the key text instead of being applied to it.
-- **Multi-line implicit keys.** A key spanning lines, or one past the spec's 1024-character limit, is accepted rather than rejected.
+- **The 1024-character implicit key limit.** A key that spans lines *is* reported, but a single-line key longer than the spec allows is not — the check needs lookahead the hot path does not do.
+- **`: ` inside a plain scalar.** The spec ends a plain scalar at a `: `, which makes `key: v1\n  k2: v2` an error; here the second line folds into the scalar instead. Enforcing it costs a key scan on every continuation line of every multi-line scalar.
+- **Flow collection indentation.** Flow scanning is delimiter-driven, so a `[`/`{` written across lines is read the same whether or not its continuation lines clear the block indentation around them.
 - **Carriage-return-only line breaks.** `\r\n` and `\n` are both handled; a lone `\r` as a line terminator is not.
 
 If you need full YAML 1.2 conformance, use [`yaml`](https://www.npmjs.com/package/yaml). If you need a small, fast, position-aware parser for diagnostics, use this.
@@ -242,7 +250,7 @@ The boundary above is not a claim — it is checked. `src/conformance.test.ts` r
 official [YAML test suite](https://github.com/yaml/yaml-test-suite) (402 cases) on
 every build:
 
-**336 / 402 cases pass (83.6%).**
+**365 / 402 cases pass (90.8%).**
 
 Every case that does not is listed in `src/conformance-expected-failures.test-utils.ts`
 with the reason it does not, and the test fails if a case moves in *either*
@@ -250,10 +258,13 @@ direction — a regression breaks the build, and so does a case that starts pass
 without its entry being removed. The suite is a dev dependency; none of it reaches
 the published bundle.
 
-The 66 remaining cases are roughly: invalid documents we accept without a
-diagnostic (~36), the tab rules above (~13), shapes we mis-scan and now report
-rather than silently mis-parse (~8), documented projections to richer JavaScript
-types than JSON can express (3), and a handful of structural differences (~6).
+The 37 remaining cases are: the tab rules above (12), invalid documents we
+accept without a diagnostic — plain scalars that swallow a `: ` (5), flow
+collections indented back to their parent (2), and properties written on a block
+mapping key (4) — shapes we mis-scan and now report rather than silently
+mis-parse (6), one duplicate-key case rejected by design, documented projections
+to richer JavaScript types than JSON can express (3), and four remaining output
+differences.
 
 ---
 
