@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { CLI_BIN, ROOT, runNode } from './e2e-helpers'
+import { CLI_BIN, ROOT, runCommand, runNode } from './e2e-helpers'
 
 /**
  * Smoke test for the compiled `dist/` artifacts — the exact files that ship to
@@ -19,9 +19,9 @@ import { CLI_BIN, ROOT, runNode } from './e2e-helpers'
  * Requires a prior `bun run build`; run via `bun run test:dist`.
  */
 
-/** Every compiled `.js` module shipped by the non-private workspace packages. */
-const collectDistModules = async (): Promise<string[]> => {
-  const modules: string[] = []
+/** Every file shipped under `dist/` by the non-private workspace packages, filtered by suffix. */
+const collectDistFiles = async (suffixes: readonly string[]): Promise<string[]> => {
+  const files: string[] = []
   const packagesDir = join(ROOT, 'packages')
 
   for (const entry of await readdir(packagesDir, { withFileTypes: true })) {
@@ -40,12 +40,31 @@ const collectDistModules = async (): Promise<string[]> => {
     }
 
     for (const file of await readdir(distDir, { recursive: true })) {
-      if (file.endsWith('.js')) modules.push(join(distDir, file))
+      if (suffixes.some((suffix) => file.endsWith(suffix))) files.push(join(distDir, file))
     }
   }
 
-  return modules
+  return files
 }
+
+/** Every compiled `.js` module shipped by the non-private workspace packages. */
+const collectDistModules = async (): Promise<string[]> => collectDistFiles(['.js'])
+
+/**
+ * `import`/`export`/`import()`/`require()` specifiers starting with `#` — the
+ * subpath-imports form declared in `imports`. Matches the quoted specifier of a
+ * `from '...'` clause, a bare `import '...'`, and dynamic `import('...')`.
+ */
+const SUBPATH_IMPORT = /(?:\bfrom|\bimport|\brequire)\s*\(?\s*(['"])(#[^'"]*)\1/g
+
+/**
+ * The helper sources `@amritk/generate-parsers` reads out of an *installed*
+ * `@amritk/helpers` in `--helpers=embedded` mode. Mirrors `RuntimeHelperName`
+ * in `packages/generate-parsers/src/helpers/collect-helpers.ts`; keep in sync.
+ */
+const RUNTIME_HELPER_SOURCES = ['has-ref', 'is-object', 'validate-array', 'validate-record'].map(
+  (helper) => `src/${helper}.ts`,
+)
 
 describe('dist-smoke', () => {
   let workDir: string
@@ -56,6 +75,49 @@ describe('dist-smoke', () => {
 
   afterAll(async () => {
     await rm(workDir, { recursive: true, force: true })
+  })
+
+  it('the @amritk/helpers tarball ships exactly the runtime-helper sources', async () => {
+    // Embedded-mode generation reads `src/<helper>.ts` out of the *installed*
+    // @amritk/helpers, so those four sources must survive into the tarball —
+    // omitting them (as an earlier `files: ["dist"]` did) made `bunx mjst`
+    // crash on a missing `src/is-object.ts`. The rest of `src/` is generator
+    // code nothing reads at runtime, and shipping it cost ~110 kB. Asserted
+    // against the real packer rather than the `files` array, because the two
+    // disagree on negation patterns.
+    const { stdout } = await runCommand('npm', ['pack', '--dry-run', '--json'], {
+      cwd: join(ROOT, 'packages/helpers'),
+    })
+    const [tarball] = JSON.parse(stdout) as [{ files: { path: string }[] }]
+    const sources = tarball.files.map((file) => file.path).filter((path) => path.startsWith('src/'))
+
+    expect(sources.sort()).toEqual(RUNTIME_HELPER_SOURCES)
+  })
+
+  it('no `#` subpath-import specifier survives into dist', async () => {
+    // generate-parsers, generate-validators and generate-examples declare
+    // `imports: { "#generators/*": "./src/generators/*.ts" }` and publish that
+    // map, but their `files` ships no `src/` — so any `#` specifier that
+    // reached dist would resolve to a path missing from the tarball. tsc-alias
+    // rewrites all of them today; this pins that, because the failure mode
+    // (ERR_MODULE_NOT_FOUND only for installed consumers) is invisible to the
+    // aliased unit tests and to a repo-local `node dist/...`, where the
+    // untrimmed source tree still satisfies the mapping.
+    const files = await collectDistFiles(['.js', '.d.ts'])
+    expect(files.length).toBeGreaterThan(40)
+
+    const offenders: string[] = []
+    for (const file of files) {
+      const source = await readFile(file, 'utf-8')
+      SUBPATH_IMPORT.lastIndex = 0
+      let match = SUBPATH_IMPORT.exec(source)
+      while (match !== null) {
+        offenders.push(`${file.slice(ROOT.length + 1)} → ${match[2]}`)
+        match = SUBPATH_IMPORT.exec(source)
+      }
+    }
+
+    expect(offenders).toEqual([])
   })
 
   it('every compiled module loads under Node ESM', async () => {

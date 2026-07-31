@@ -2,7 +2,9 @@
   "name": "@amritk/generate-markdown",
   "version": "0.4.5",
   "description": "Generate markdown documentation from JSON Schemas.",
+  "main": "./dist/index.js",
   "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "type": "module",
   "sideEffects": false,
   "engines": {

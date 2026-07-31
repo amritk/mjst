@@ -19,9 +19,25 @@ export type PackageJson = {
   catalogs?: Record<string, Record<string, string>>
 } & Partial<Record<(typeof DEP_FIELDS)[number], Record<string, string>>>
 
+/**
+ * Resolves a `workspace:` specifier to the range that ships in the manifest.
+ *
+ * The bare/`*` form becomes `^<version>`, not an exact pin. Every inter-package
+ * edge in this repo uses that form, and pinning them exactly means a consumer
+ * who installs two `@amritk/*` packages published at different times gets two
+ * copies of their shared dependency — which silently breaks the module-level
+ * caches those packages rely on (e.g. the `WeakMap` validator cache in
+ * `@amritk/runtime-validators`' `interpreter/prepare.ts` is per-copy, so the
+ * second copy re-interprets every schema). A caret lets the installer dedupe
+ * them onto one version.
+ *
+ * Pre-1.0 a caret is still narrow — npm treats `^0.y.z` as `>=0.y.z <0.(y+1).0`,
+ * so it only widens across patch releases of the same minor, and this repo's
+ * house rule already routes breaking changes through a minor bump.
+ */
 export const resolveWorkspace = (spec: string, version: string): string => {
   const range = spec.slice('workspace:'.length)
-  if (range === '' || range === '*') return version
+  if (range === '' || range === '*') return `^${version}`
   if (range === '^' || range === '~') return `${range}${version}`
   // workspace:1.2.3 / workspace:^1.0.0 — keep the explicit range
   return range

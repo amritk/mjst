@@ -39,10 +39,13 @@
   "scripts": {
     "dev": "bun run --conditions=development ./src/cli.ts",
     "start": "bun run ./src/cli.ts",
-    "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f && node ../../scripts/strip-comments.mjs",
+    "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f && node ../../scripts/strip-comments.mjs && node ../../scripts/chmod-bin.mjs",
     "types:check": "tsgo -p . --noEmit",
     "test": "NODE_ENV=production vitest run --root ../.. cli",
     "generate-readme": "bun run ./scripts/generate-readme.ts"
+  },
+  "exports": {
+    "./package.json": "./package.json"
   },
   "dependencies": {
     "@amritk/adapters": "workspace:*",
@@ -50,16 +53,16 @@
     "@amritk/generate-examples": "workspace:*",
     "@amritk/generate-parsers": "workspace:*",
     "@amritk/generate-validators": "workspace:*",
-    "@amritk/generate-markdown": "workspace:*",
     "@amritk/helpers": "workspace:*",
     "@amritk/lint": "workspace:*",
     "@amritk/resolve-refs": "workspace:*",
     "@amritk/yaml": "workspace:*",
     "fast-glob": "^3.3.2",
+    "json-schema-typed": "catalog:",
     "yargs": "^17.7.2"
   },
   "devDependencies": {
-    "json-schema-typed": "catalog:",
+    "@amritk/generate-markdown": "workspace:*",
     "@types/yargs": "^17.0.33"
   }
 }

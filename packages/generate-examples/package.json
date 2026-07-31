@@ -2,7 +2,9 @@
   "name": "@amritk/generate-examples",
   "version": "0.5.6",
   "description": "Generate fast-check arbitraries and example values from JSON Schemas.",
+  "main": "./dist/index.js",
   "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "type": "module",
   "sideEffects": false,
   "engines": {
@@ -60,10 +62,14 @@
     "ajv": "^8.17.1"
   },
   "peerDependencies": {
-    "fast-check": ">=3"
+    "fast-check": ">=3",
+    "@amritk/runtime-validators": ">=0.9"
   },
   "peerDependenciesMeta": {
     "fast-check": {
+      "optional": true
+    },
+    "@amritk/runtime-validators": {
       "optional": true
     }
   }
