@@ -81,9 +81,14 @@ describe('bench-scope', () => {
 
   // helpers sits under every benchmarked package except yaml, which is
   // deliberately zero-dependency — so its suite must stay out of the scope.
+  // `runtime` is in only because runtime-validators keeps helpers as a
+  // devDependency, and the graph merges dev/peer/prod edges: a devDependency
+  // cannot move that package's shipped numbers, so this row is over-broad by
+  // design. Widening beats the alternative — dropping dev edges would also
+  // drop the bench harness edges that genuinely do move numbers.
   it('scopes a helpers change to its dependants', () => {
     const scope = selectSuites(['packages/helpers/src/index.ts'], readWorkspace(`${import.meta.dirname}/..`))
-    expect(names(scope.suites)).toBe('api,codegen,parsers,validators')
+    expect(names(scope.suites)).toBe('api,codegen,parsers,runtime,validators')
   })
 
   // Bench harness code is shared across packages (every bench measures through
@@ -94,10 +99,12 @@ describe('bench-scope', () => {
   })
 
   // api and generate-validators both depend on runtime-validators; nothing
-  // downstream of it feeds the parser benches.
+  // downstream of it feeds the parser benches. Its own `runtime` suite leads,
+  // so an interpreter change is now timed directly rather than only through
+  // the request path that wraps it.
   it('scopes a runtime-validators change to its dependants', () => {
     const scope = selectSuites(['packages/runtime-validators/src/index.ts'], readWorkspace(`${import.meta.dirname}/..`))
-    expect(names(scope.suites)).toBe('api,validators')
+    expect(names(scope.suites)).toBe('api,runtime,validators')
   })
 
   it('explains when a benchmarked package simply does not depend on the change', () => {

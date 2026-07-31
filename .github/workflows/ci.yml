@@ -42,10 +42,40 @@ jobs:
       - name: Type check
         run: bun run types:check
 
-      # Loads every compiled module under plain Node, runs the CLI from dist/
-      # end-to-end (generate → tsc → parse), and installs packed tarballs like
-      # an npm consumer — catches build/pack-step corruption the src-aliased
-      # tests can't see (v0.12.3 of generate-parsers shipped an unparseable
-      # regex that way).
+  # Loads every compiled module under plain Node, runs the CLI from dist/
+  # end-to-end (generate → tsc → parse), and installs packed tarballs like an
+  # npm consumer — catches build/pack-step corruption the src-aliased tests
+  # can't see (v0.12.3 of generate-parsers shipped an unparseable regex that
+  # way).
+  #
+  # Its own job, on a Node matrix, because it is the only thing that runs the
+  # shipped artifacts the way a consumer does. Inside the `check` job it ran on
+  # whatever Node ubuntu-latest happened to carry — 24 today — so the
+  # `engines: node >=20` floor every package advertises was never exercised.
+  # The floor is where a too-new syntax or API in dist/ actually breaks, and it
+  # breaks in a consumer's install rather than in CI.
+  dist:
+    name: Dist artifacts (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The engines floor and the current LTS. Anything in between fails the
+        # same way one of these two does.
+        node: [20, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
       - name: Smoke and e2e test built artifacts
         run: bun run test:dist
