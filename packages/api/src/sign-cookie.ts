@@ -9,8 +9,14 @@
 
 const encoder = new TextEncoder()
 
-// One imported CryptoKey per secret. Keyed by the secret string; a process
-// rarely holds more than one or two, so an unbounded map is fine.
+// One imported CryptoKey per secret, keyed by the secret string. The documented
+// shape is one secret (or two, mid-rotation), and `importKey` is cheap enough
+// that the cache exists purely to skip a per-request await — so a small bound
+// is all it needs. It stops being an accounting detail once a caller signs with
+// a per-tenant or per-session secret: without a bound, that loop retains a
+// CryptoKey for every distinct secret the process has ever seen, forever.
+const MAX_KEYS = 64
+
 const keys = new Map<string, Promise<CryptoKey>>()
 
 const keyFor = (secret: string): Promise<CryptoKey> => {
@@ -20,6 +26,12 @@ const keyFor = (secret: string): Promise<CryptoKey> => {
       'sign',
       'verify',
     ])
+    // Oldest-inserted first (Map preserves insertion order). Evicting a live
+    // key costs one re-import on its next use, never correctness.
+    if (keys.size >= MAX_KEYS) {
+      const oldest = keys.keys().next()
+      if (oldest.done !== true) keys.delete(oldest.value)
+    }
     keys.set(secret, key)
   }
   return key

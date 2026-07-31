@@ -89,4 +89,54 @@ describe('create-etag', () => {
     const result = (await etag(big, get(), {})) as Response
     expect(result.headers.has('etag')).toBe(false)
   })
+
+  it('stops reading an oversized stream instead of buffering it whole', async () => {
+    // The `content-length` pre-check cannot fire on an adapter-built streaming
+    // reply (`new Response(stream).headers.get('content-length')` is null), so
+    // the read itself has to respect maxBytes — otherwise a huge body is fully
+    // buffered just to discover it was over the limit.
+    const etag = createETag({ maxBytes: 1024 })
+    const chunk = new Uint8Array(64 * 1024)
+    let chunksPulled = 0
+    let produced = 0
+    const body = new ReadableStream<Uint8Array>({
+      pull: (controller) => {
+        chunksPulled++
+        if (produced >= 8_000_000) {
+          controller.close()
+          return
+        }
+        produced += chunk.byteLength
+        controller.enqueue(chunk)
+      },
+    })
+    const response = new Response(body, { status: 200, headers: { 'content-type': 'application/octet-stream' } })
+    expect(response.headers.get('content-length')).toBe(null)
+
+    const result = (await etag(response, get(), {})) as Response
+    // One chunk already blows the 1 KiB budget; nothing near the 8 MB body is
+    // read before the decorator bails.
+    expect(chunksPulled).toBeLessThan(4)
+    expect(result.headers.has('etag')).toBe(false)
+
+    // The bail-out must not eat the chunks it already read: the client still
+    // receives the complete body.
+    const bytes = new Uint8Array(await result.arrayBuffer())
+    expect(bytes.byteLength).toBe(produced)
+    expect(produced).toBeGreaterThan(8_000_000)
+  })
+
+  it('cancels the source stream when an oversized passthrough is abandoned', async () => {
+    const etag = createETag({ maxBytes: 8 })
+    let cancelled = false
+    const body = new ReadableStream<Uint8Array>({
+      pull: (controller) => controller.enqueue(new Uint8Array(64)),
+      cancel: () => {
+        cancelled = true
+      },
+    })
+    const result = (await etag(new Response(body, { status: 200 }), get(), {})) as Response
+    await result.body?.cancel()
+    expect(cancelled).toBe(true)
+  })
 })

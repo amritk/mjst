@@ -1,4 +1,5 @@
 import type { FetchOnRequest, FetchOnResponse } from './to-fetch-handler'
+import { writableResponse } from './writable-response'
 
 /**
  * CORS behavior for {@link createCors}. The shape mirrors the common
@@ -107,7 +108,7 @@ export const createCors = (options: CorsOptions): Cors => {
     const allowed = resolve(origin, request)
     if (allowed === undefined) return varies ? appendVary(response) : undefined
 
-    const target = writable(response)
+    const target = writableResponse(response)
     target.headers.set('access-control-allow-origin', allowed)
     if (credentials) target.headers.set('access-control-allow-credentials', 'true')
     if (exposeHeaders !== undefined) target.headers.set('access-control-expose-headers', exposeHeaders)
@@ -145,7 +146,7 @@ const toResolver = (origin: CorsOptions['origin']): ((origin: string, request: R
  * copy.
  */
 const appendVary = (response: Response): Response => {
-  const target = writable(response)
+  const target = writableResponse(response)
   const existing = target.headers.get('vary')
   if (existing === null) {
     target.headers.set('vary', 'origin')
@@ -159,20 +160,4 @@ const appendVary = (response: Response): Response => {
     target.headers.set('vary', existing + ', origin')
   }
   return target
-}
-
-/**
- * Responses created by the adapters have mutable headers, but a `Response`
- * that came out of `fetch` (a proxying mount, say) is immutable — cloning
- * through the constructor is the documented way to get a writable copy.
- */
-const writable = (response: Response): Response => {
-  try {
-    // Probing with a real mutation: there is no public flag for immutability.
-    response.headers.append('x-amritk-probe', '1')
-    response.headers.delete('x-amritk-probe')
-    return response
-  } catch {
-    return new Response(response.body, response)
-  }
 }

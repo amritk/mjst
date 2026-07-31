@@ -669,4 +669,73 @@ describe('to-fetch-handler', () => {
     const cleared = await cookieHandler(new Request('http://localhost/session', { method: 'DELETE' }))
     expect(cleared.headers.getSetCookie()).toEqual(['session=; Max-Age=0', 'csrf=; Max-Age=0'])
   })
+
+  it('turns a throwing onRequest gate into the pipeline 500 instead of letting it escape', async () => {
+    // The ApiResponse translation has a try/catch boundary; the hook chains
+    // did not, so a throwing gate reached the platform (a Workers 1101, a Bun
+    // unhandled rejection) rather than becoming a response at all.
+    const decorated: string[] = []
+    const handler = toFetchHandler(createApi({ routes: [echo] }), {
+      onRequest: () => {
+        throw new Error('gate exploded')
+      },
+      onResponse: (response) => {
+        decorated.push('ran')
+        response.headers.set('x-stamped', 'yes')
+        return undefined
+      },
+    })
+
+    const response = await handler(new Request('http://localhost/echo'))
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({ error: 'internal_error' })
+    // The 500 is still a response like any other, so the decorators see it.
+    expect(decorated).toEqual(['ran'])
+    expect(response.headers.get('x-stamped')).toBe('yes')
+  })
+
+  it('turns a throwing onResponse decorator into the pipeline 500', async () => {
+    // The realistic shape: `createRequestId({ trustInbound: true })` reflects
+    // an arbitrary inbound header value straight into `Headers.set`, so a
+    // CRLF-bearing request id is enough to throw from inside a decorator.
+    const ran: string[] = []
+    const handler = toFetchHandler(createApi({ routes: [echo] }), {
+      onResponse: [
+        (response) => {
+          ran.push('first')
+          response.headers.set('x-first', 'yes')
+          return undefined
+        },
+        (response) => {
+          ran.push('second')
+          response.headers.set('x-echo', 'bad\r\nx-injected: 1')
+          return undefined
+        },
+        () => {
+          ran.push('third')
+          return undefined
+        },
+      ],
+    })
+
+    const response = await handler(new Request('http://localhost/echo'))
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({ error: 'internal_error' })
+    // The chain is abandoned at the failure: running the rest over a
+    // half-decorated response would only compound the damage.
+    expect(ran).toEqual(['first', 'second'])
+    expect(response.headers.get('x-first')).toBeNull()
+  })
+
+  it('turns a rejecting async hook into the pipeline 500 too', async () => {
+    const handler = toFetchHandler(createApi({ routes: [echo] }), {
+      onRequest: async () => {
+        await Promise.resolve()
+        throw new Error('async gate exploded')
+      },
+    })
+    const response = await handler(new Request('http://localhost/echo'))
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({ error: 'internal_error' })
+  })
 })

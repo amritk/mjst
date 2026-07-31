@@ -52,17 +52,46 @@ describe('hash-contracts', () => {
     expect(hashContracts([reordered])).toBe(hashContracts([base]))
   })
 
-  it('ignores handler and refine changes', () => {
-    // Handlers are imported live by the compiled module, so swapping them
-    // must never flag a build as stale.
+  it('ignores handler, guard, and refine body changes', () => {
+    // The compiled module imports these live, so rewriting one must never
+    // flag a build as stale — only adding or removing one does (below).
     const withHandler: AnyRouteContract = { ...base, handler: () => ({ status: 201, body: { name: 'a' } }) }
-    const withOtherHandler: AnyRouteContract = {
-      ...base,
-      handler: () => ({ status: 201, body: { name: 'b' } }),
-      refine: () => undefined,
-    }
+    const withOtherHandler: AnyRouteContract = { ...base, handler: () => ({ status: 201, body: { name: 'b' } }) }
     expect(hashContracts([withHandler])).toBe(hashContracts([base]))
     expect(hashContracts([withOtherHandler])).toBe(hashContracts([base]))
+
+    const guarded: AnyRouteContract = { ...withHandler, guards: [() => undefined] }
+    const guardedDifferently: AnyRouteContract = {
+      ...withHandler,
+      guards: [() => ({ status: 401, body: { error: 'nope' } })],
+    }
+    expect(hashContracts([guardedDifferently])).toBe(hashContracts([guarded]))
+
+    const refined: AnyRouteContract = { ...withHandler, refine: () => undefined }
+    const refinedDifferently: AnyRouteContract = { ...withHandler, refine: () => [{ path: '/x', message: 'no' }] }
+    expect(hashContracts([refinedDifferently])).toBe(hashContracts([refined]))
+  })
+
+  it('changes when a guard, security guard, or refine is added or removed', () => {
+    // The emitter decides at build time whether a route has any of these and
+    // emits (or omits) the code that runs them, so their *presence* is part of
+    // what a compiled module baked. Missing it meant a guard added after a
+    // compile was silently not enforced, with no hash change to warn about it.
+    const withHandler: AnyRouteContract = { ...base, handler: () => ({ status: 201, body: { name: 'a' } }) }
+    const original = hashContracts([withHandler])
+    const variants: AnyRouteContract[] = [
+      { ...withHandler, guards: [() => undefined] },
+      { ...withHandler, securityGuards: [() => undefined] },
+      { ...withHandler, refine: () => undefined },
+    ]
+    for (const variant of variants) {
+      expect(hashContracts([variant])).not.toBe(original)
+    }
+    // A second guard on the same route is a change too — a removal reads as
+    // one from the other side of the comparison.
+    expect(hashContracts([{ ...withHandler, guards: [() => undefined, () => undefined] }])).not.toBe(
+      hashContracts([{ ...withHandler, guards: [() => undefined] }]),
+    )
   })
 
   it('changes when routing or schemas change', () => {

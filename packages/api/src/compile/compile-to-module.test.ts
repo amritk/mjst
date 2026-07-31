@@ -42,6 +42,7 @@ const routes: Record<string, AnyRouteContract> = {
   localsEcho: corpus.localsEcho,
   guardedResource: corpus.guardedResource,
   guardBoom: corpus.guardBoom,
+  rawErrorBoom: corpus.rawErrorBoom,
   secureNote: corpus.secureNote,
   secureReport: corpus.secureReport,
 }
@@ -76,8 +77,8 @@ const emit = (): string =>
     ...OPENAPI_EXTRAS,
     contextExport: 'createAppContext',
     mounts: { '/mounted': 'mountEcho' },
-    onRequestExports: ['gateResolveTenant', 'gateTeapot'],
-    onResponseExports: ['stampHeader', 'stampLocals'],
+    onRequestExports: ['gateResolveTenant', 'gateTeapot', 'gateBoom'],
+    onResponseExports: ['stampHeader', 'stampLocals', 'stampBoom'],
     errorsExport: 'corpusErrors',
     onErrorExport: 'corpusOnError',
     observeExport: 'recordObservation',
@@ -141,8 +142,8 @@ describe('compile-to-module', () => {
         }),
         {
           mounts: { '/mounted': corpus.mountEcho },
-          onRequest: [corpus.gateResolveTenant, corpus.gateTeapot],
-          onResponse: [corpus.stampHeader, corpus.stampLocals],
+          onRequest: [corpus.gateResolveTenant, corpus.gateTeapot, corpus.gateBoom],
+          onResponse: [corpus.stampHeader, corpus.stampLocals, corpus.stampBoom],
           maxBodyBytes: MAX_BODY_BYTES,
         },
       )
@@ -279,6 +280,17 @@ describe('compile-to-module', () => {
         () => new Request('http://localhost/guarded', { headers: { 'x-key': 'secret', 'x-role': 'admin' } }),
         () => new Request('http://localhost/guarded', { headers: { 'x-key': 'wrong', 'x-role': 'admin' } }),
         () => new Request('http://localhost/guard-boom'),
+        // The raw escape hatch on the cold paths: an onError and a notFound
+        // formatter that answer with a built Response must reach the wire
+        // verbatim — body included — in both engines.
+        () => new Request('http://localhost/raw-error'),
+        () => new Request('http://localhost/raw-error', { method: 'HEAD' }),
+        () => new Request('http://localhost/raw-missing'),
+        // A throwing hook must become the pipeline's own 500 rather than
+        // escaping the adapter, on the gate side and the decorator side alike.
+        () => new Request('http://localhost/health', { headers: { 'x-hook-boom': 'request' } }),
+        () => new Request('http://localhost/health', { headers: { 'x-hook-boom': 'response' } }),
+        () => new Request('http://localhost/missing', { headers: { 'x-hook-boom': 'response' } }),
         // Security guards resolved from the document-level default: they run
         // before the body is read, so an unauthenticated caller gets the
         // denial even when the payload could never have parsed, validated, or
@@ -644,6 +656,138 @@ describe('compile-to-module', () => {
       /valid identifier/,
     )
   })
+
+  it('refuses to emit a contract whose strings would escape the generated source', () => {
+    // `defineRoute` and `defineContract` are identity functions with no runtime
+    // validation, so a contract assembled from a config file, a database row,
+    // or an imported OpenAPI document arrives here exactly as written. Every
+    // one of these values lands inside emitted source, so an emit is the last
+    // place to catch them — a throw at build time, never a payload in the
+    // module that ships.
+    // Typed loosely on purpose: the type checker would reject every one of
+    // these contracts, and a contract built at runtime never met it.
+    const hostile = (contract: Record<string, unknown>): AnyRouteContract =>
+      ({
+        method: 'get',
+        path: '/pwn',
+        responses: { 200: { body: { type: 'object' } } },
+        handler: () => ({ status: 200, body: {} }),
+        ...contract,
+      }) as unknown as AnyRouteContract
+
+    // A response key becomes both an identifier fragment
+    // (`serialize_<route>_<status>`) and a bare numeric literal.
+    expect(() =>
+      compileToModule({
+        routesImport: './x',
+        routes: {
+          r: hostile({
+            responses: {
+              '200); globalThis.PWNED = 1; (function(': {
+                body: {
+                  type: 'object',
+                  properties: { a: { type: 'string' } },
+                  required: ['a'],
+                  additionalProperties: false,
+                },
+              },
+            },
+          }),
+        },
+      }),
+    ).toThrow(/must be an integer between 100 and 599/)
+
+    // The same key in expression position, which is what `validateResponses`
+    // adds — the payload would run rather than merely break the build.
+    expect(() =>
+      compileToModule({
+        routesImport: './x',
+        validateResponses: true,
+        routes: { r: hostile({ responses: { '200) { globalThis.PWNED = 1 } if (true': { body: {} } } }) },
+      }),
+    ).toThrow(/must be an integer between 100 and 599/)
+
+    // `bodyType` is interpolated into a single-quoted argument.
+    expect(() =>
+      compileToModule({
+        routesImport: './x',
+        routes: { r: hostile({ request: { body: { type: 'object' }, bodyType: "json') || (PWNED, '" } }) },
+      }),
+    ).toThrow(/unsupported bodyType/)
+
+    // `method` too — `.toUpperCase()` makes it a build break rather than a
+    // payload, but a build break is still a contract deciding what we emit.
+    expect(() =>
+      compileToModule({
+        routesImport: './x',
+        routes: { r: hostile({ method: "get') { PWNED } if (method === 'GET" }) },
+      }),
+    ).toThrow(/unsupported method/)
+
+    // Non-numeric statuses are refused whatever their shape.
+    expect(() => compileToModule({ routesImport: './x', routes: { r: hostile({ responses: { '99': {} } }) } })).toThrow(
+      /must be an integer between 100 and 599/,
+    )
+
+    // The byte cap is interpolated as a bare numeric literal too.
+    expect(() =>
+      compileToModule({
+        routesImport: './x',
+        routes: { health: corpus.health },
+        maxBodyBytes: '1); globalThis.PWNED = 1; (' as unknown as number,
+      }),
+    ).toThrow(/maxBodyBytes/)
+  })
+
+  it('throws at init when guards were added or removed after compile', async () => {
+    const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), '.fixtures-guard-drift')
+    mkdirSync(fixtureDir, { recursive: true })
+    try {
+      // The emitter decides at build time whether a route has guards, and
+      // emits (or omits) the code that runs them. A guard added afterwards used
+      // to leave a compiled server that ran the handler unguarded with no
+      // warning at all — the hash could not change, because it never looked.
+      const bare: AnyRouteContract = {
+        method: 'get',
+        path: '/secret',
+        responses: { 200: { body: { type: 'object' } }, 401: { body: { type: 'object' } } },
+        handler: () => ({ status: 200, body: { secret: 'top' } }),
+      }
+      const guardedSource = `export const secret = {
+  method: 'get',
+  path: '/secret',
+  responses: { 200: { body: { type: 'object' } }, 401: { body: { type: 'object' } } },
+  guards: [() => ({ status: 401, body: { error: 'unauthorized' } })],
+  handler: () => ({ status: 200, body: { secret: 'top' } }),
+}
+`
+      writeFileSync(join(fixtureDir, 'routes-guarded.ts'), guardedSource)
+      writeFileSync(
+        join(fixtureDir, 'generated-guard-drift.ts'),
+        compileToModule({
+          routesImport: './routes-guarded',
+          runtimeImport: '../../index',
+          validatorsImport: '@amritk/runtime-validators',
+          routes: { secret: bare },
+          info,
+        }),
+      )
+
+      // Adding a guard also moves the contracts hash now, so the warning fires
+      // too; the throw is what stops the unguarded module from serving.
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      try {
+        await expect(import(join(fixtureDir, 'generated-guard-drift.ts'))).rejects.toThrow(
+          /guards, security guards, or refine hooks/,
+        )
+        expect(String(errorSpy.mock.calls[0]?.[0])).toMatch(/[Ss]tale/)
+      } finally {
+        errorSpy.mockRestore()
+      }
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  }, 20_000)
 
   it('omits the OpenAPI constant when serving is disabled', () => {
     const source = compileToModule({ routesImport: './x', routes: { health: corpus.health }, openApiPath: false })

@@ -437,6 +437,22 @@ export const guardedResource = defineRoute({
 })
 
 /**
+ * A handler whose thrown error the onError formatter answers with the raw
+ * `Response` escape hatch. Nothing in the corpus used to take a `raw(...)` down
+ * the error path, which is exactly how the compiled engine drifted into
+ * dropping it and answering an empty body.
+ */
+export const rawErrorBoom = defineRoute({
+  method: 'get',
+  path: '/raw-error',
+  security: [],
+  responses: { 200: { body: { type: 'object' } } },
+  handler: () => {
+    throw new Error('answer me raw')
+  },
+})
+
+/**
  * A guard that throws: both engines must route it down the onError path, just
  * like a throwing handler, rather than leaking the rejection.
  */
@@ -764,23 +780,57 @@ export const stampLocals: FetchOnResponse = (response, _request, locals) => {
 }
 
 /**
+ * A gate that throws. The realistic shape is `createRequestId({ trustInbound:
+ * true })` reflecting a CRLF-bearing inbound header into `Headers.set`, but a
+ * plain throw exercises the same path: the rejection must become the
+ * pipeline's own 500 in both engines instead of escaping to the platform
+ * (a Workers 1101, a Bun unhandled rejection).
+ */
+export const gateBoom: FetchOnRequest = (request) => {
+  if (request.headers.get('x-hook-boom') === 'request') throw new Error('gate exploded')
+  return undefined
+}
+
+/** The same for a decorator — it runs after the handler already replied. */
+export const stampBoom: FetchOnResponse = (response, request) => {
+  if (request.headers.get('x-hook-boom') === 'response') {
+    // What a reflected header value actually does: an invalid header value is
+    // rejected by `Headers.set`, from inside a hook with no try/catch above it.
+    response.headers.set('x-echo', 'bad\r\nx-injected: 1')
+  }
+  return undefined
+}
+
+/**
  * A createSentry-style onError: proves both engines hand thrown errors the
  * same route contract and platform values, since everything it reads shows
  * up in the response the differential test compares.
  */
-export const corpusOnError = (error: unknown, request: ApiRequest, details: OnErrorDetails): ApiResponse => ({
-  status: 500,
-  body: {
-    error: 'handled',
-    message: error instanceof Error ? error.message : 'unknown',
-    route: details.route?.path ?? request.path,
-    method: details.route?.method ?? request.method,
-    tenant: (details.env as { tenant?: string } | undefined)?.tenant ?? null,
-    // The locals the gate resolved must be visible here too — the error path
-    // shares the same per-request bag as the pipeline.
-    gateTenant: (request.locals?.['tenant'] as string | undefined) ?? null,
-  },
-})
+export const corpusOnError = (error: unknown, request: ApiRequest, details: OnErrorDetails): ApiResponse => {
+  // The escape hatch on the error path: an error reporter that wants full
+  // control of the wire output hands back a built Response, and both engines
+  // must send it verbatim rather than falling through to an empty body.
+  if (error instanceof Error && error.message === 'answer me raw') {
+    const response = new Response('RAW-ERROR-BODY', {
+      status: 503,
+      headers: { 'content-type': 'text/plain', 'x-served-by': 'raw-error' },
+    })
+    return { status: response.status, ...raw(response) }
+  }
+  return {
+    status: 500,
+    body: {
+      error: 'handled',
+      message: error instanceof Error ? error.message : 'unknown',
+      route: details.route?.path ?? request.path,
+      method: details.route?.method ?? request.method,
+      tenant: (details.env as { tenant?: string } | undefined)?.tenant ?? null,
+      // The locals the gate resolved must be visible here too — the error path
+      // shares the same per-request bag as the pipeline.
+      gateTenant: (request.locals?.['tenant'] as string | undefined) ?? null,
+    },
+  }
+}
 
 /**
  * A custom ValidatorCompiler both engines can share: the interpreter's
@@ -863,13 +913,25 @@ export const endlessStream = defineRoute({
 
 /** Custom error envelopes — both engines must shape cold paths identically. */
 export const corpusErrors: ErrorFormatters = {
-  notFound: (request) => ({
-    status: 404,
-    body: {
-      error: 'nothing at ' + request.path,
-      gateTenant: (request.locals?.['tenant'] as string | undefined) ?? null,
-    },
-  }),
+  notFound: (request) => {
+    // A cold-path formatter reaching for the raw escape hatch — the
+    // "redirect unknown paths to the marketing site" shape. Both engines must
+    // send this Response verbatim, headers and body intact.
+    if (request.path === '/raw-missing') {
+      const response = new Response('RAW-NOT-FOUND', {
+        status: 404,
+        headers: { 'content-type': 'text/plain', 'x-served-by': 'raw-not-found' },
+      })
+      return { status: response.status, ...raw(response) }
+    }
+    return {
+      status: 404,
+      body: {
+        error: 'nothing at ' + request.path,
+        gateTenant: (request.locals?.['tenant'] as string | undefined) ?? null,
+      },
+    }
+  },
   validationFailed: (failure, request) => ({
     status: 422,
     body: {

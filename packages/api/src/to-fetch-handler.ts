@@ -140,10 +140,26 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     return init
   }
 
+  /** The pipeline's own 500 — the shape every uncaught failure collapses to. */
+  const internalError = (): Response => new Response('{"error":"internal_error"}', initFor(500))
+
+  // Hooks run outside the ApiResponse translation's try/catch below, so a
+  // throwing one used to reach the platform (a Workers 1101, a Bun unhandled
+  // rejection) instead of the pipeline's 500 — and `onError` never saw it,
+  // because the handler had already returned. It is not a theoretical hook
+  // either: `createRequestId({ trustInbound: true })` reflects an arbitrary
+  // inbound header value straight into `Headers.set`, so a CRLF-bearing
+  // request id is enough. On a failure the chain is abandoned — a decorator
+  // that cannot run should not have the remaining decorators run over a
+  // half-decorated response — and the bare 500 goes out.
   const finish = async (response: Response, request: Request, locals: RequestLocals): Promise<Response> => {
     let current = response
     for (const hook of onResponse) {
-      current = (await hook(current, request, locals)) ?? current
+      try {
+        current = (await hook(current, request, locals)) ?? current
+      } catch {
+        return internalError()
+      }
     }
     return current
   }
@@ -242,7 +258,7 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
         headers: buildResponseHeaders(response.headers, 'application/json'),
       })
     } catch {
-      return new Response('{"error":"internal_error"}', initFor(500))
+      return internalError()
     }
   }
 
@@ -253,7 +269,15 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     // stage — gates, context factory, handler, decorators — shares it.
     const locals: RequestLocals = {}
     for (const gate of onRequest) {
-      const early = await gate(request, env, executionContext, locals)
+      let early: Response | undefined
+      try {
+        early = await gate(request, env, executionContext, locals)
+      } catch {
+        // Same reasoning as `finish`: a gate is app code with no boundary
+        // above it. Its 500 still flows through the decorators, exactly like
+        // the Response a gate returns on purpose.
+        return finish(internalError(), request, locals)
+      }
       if (early !== undefined) return finish(early, request, locals)
     }
     return finish(await handler(request, env, executionContext, locals), request, locals)

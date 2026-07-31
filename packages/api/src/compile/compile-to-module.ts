@@ -201,6 +201,12 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   // Infinity (the explicit opt-out) reads as "no cap" below; the default cap
   // matches the runtime adapters so both engines cut off at the same byte.
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES
+  // The cap is interpolated as a bare numeric literal, so a non-number (a
+  // config file read without a schema, say) would land as raw source rather
+  // than as a limit. Only a real byte count or the Infinity opt-out is emitted.
+  if (typeof maxBodyBytes !== 'number' || Number.isNaN(maxBodyBytes) || maxBodyBytes < 0) {
+    throw new Error(`maxBodyBytes must be a non-negative number or Infinity, received '${String(maxBodyBytes)}'`)
+  }
   const unboundedBody = maxBodyBytes === Number.POSITIVE_INFINITY
 
   const mounts = Object.entries(options.mounts ?? {}).map(([prefix, exportName]) => {
@@ -340,11 +346,31 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   // taking production down over it would be worse than the drift.
   const contractsHash = hashContracts(routes.map((route) => route.contract))
   const staleWarning = `[@amritk/api] Stale compiled module: the route contracts in ${options.routesImport} no longer match the schemas baked into this module — re-run compileToModule to regenerate it.`
+  // Guards, security guards, and `refine` are *shaped in* at emit time: this
+  // module only contains the code that runs them because the contracts had
+  // them when it was generated. Adding one afterwards would leave a compiled
+  // server that skips it, and removing one would leave a call into
+  // `undefined`. Both are caught by the hash above now, but a warning is the
+  // wrong answer for this particular delta: "serve anyway" for a schema edit
+  // means slightly stale validation, while for a guard it means serving an
+  // endpoint the app believes is authenticated. So the security-shaped delta
+  // is separated out and fails the process at init — a deploy that dies
+  // loudly beats one that quietly stops checking credentials. Everything else
+  // keeps warning and keeps serving, exactly as before.
+  const guardShapes = routes.map(
+    (route) =>
+      `${route.contract.guards?.length ?? 0}/${route.contract.securityGuards?.length ?? 0}/${route.contract.refine !== undefined ? 1 : 0}`,
+  )
+  const guardError = `[@amritk/api] Stale compiled module: the guards, security guards, or refine hooks in ${options.routesImport} no longer match the ones this module was generated against, so they would not be enforced — re-run compileToModule to regenerate it.`
   lines.push(
     '',
     `export const contractsHash = '${contractsHash}'`,
     `if (hashContracts([${routes.map((route) => route.name).join(', ')}]) !== contractsHash) {`,
     `  console.error(${JSON.stringify(staleWarning)})`,
+    '}',
+    `const guardShape = (route) => \`\${route.guards?.length ?? 0}/\${route.securityGuards?.length ?? 0}/\${route.refine !== undefined ? 1 : 0}\``,
+    `if ([${routes.map((route) => route.name).join(', ')}].map(guardShape).join(',') !== ${JSON.stringify(guardShapes.join(','))}) {`,
+    `  throw new Error(${JSON.stringify(guardError)})`,
     '}',
     '',
     "const JSON_HEADERS = { 'content-type': 'application/json' }",
@@ -503,6 +529,12 @@ const emitErrorHelpers = (
       // pipeline's own 500.
       'const toResponse = (r) => {',
       '  try {',
+      // The same escape hatch a handler reply gets: an `onError` or an
+      // `errors.*` formatter may answer with `raw(response)` (a redirect, a
+      // proxied upstream body, a hand-built error page) and that Response goes
+      // out verbatim. Without this the reply fell through to the empty-body
+      // branch and the payload vanished.
+      '    if (r.raw !== undefined) return r.raw',
       '    if (r.contentType !== undefined) {',
       "      return new Response(r.body ?? null, { status: r.status, headers: r.headers === undefined ? { 'content-type': r.contentType } : buildResponseHeaders(r.headers, r.contentType) })",
       '    }',
@@ -684,10 +716,49 @@ type CompiledEntry = {
   readonly paramNames: readonly string[]
 }
 
+/**
+ * The methods this emitter knows how to dispatch. `defineRoute` and
+ * `defineContract` are identity functions with no runtime validation, so a
+ * contract assembled programmatically — from a config file, a database row, a
+ * plugin, an imported OpenAPI document — reaches the emitter exactly as
+ * written. Every one of these values lands inside emitted source, so the
+ * emitter treats a contract as untrusted input and refuses anything it cannot
+ * interpolate safely.
+ */
+const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options'])
+
+/** The body encodings `matchesBodyType` understands — same interpolation risk. */
+const BODY_TYPES = new Set(['json', 'form', 'multipart', 'text', 'bytes'])
+
+/**
+ * Narrows a response key to an HTTP status code. Every status becomes both an
+ * identifier fragment (`serialize_<route>_<status>`) and a bare numeric literal
+ * in expression position, so a key like `200); doSomething(` would otherwise
+ * close the declaration it was meant to name and run whatever followed. Call
+ * sites emit the returned number, never the original key.
+ */
+const assertStatus = (status: string, path: string): number => {
+  const code = Number(status)
+  if (!Number.isInteger(code) || code < 100 || code > 599) {
+    throw new Error(`Response status '${status}' on '${path}' must be an integer between 100 and 599`)
+  }
+  return code
+}
+
 const compileEntry = (name: string, contract: AnyRouteContract): CompiledEntry => {
   if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) {
     throw new Error(`Route key '${name}' must be a valid identifier (it becomes an import name)`)
   }
+  if (typeof contract.method !== 'string' || !HTTP_METHODS.has(contract.method.toLowerCase())) {
+    throw new Error(`Route '${name}' has an unsupported method '${String(contract.method)}'`)
+  }
+  const bodyType = contract.request?.bodyType
+  if (bodyType !== undefined && !BODY_TYPES.has(bodyType)) {
+    throw new Error(`Route '${name}' has an unsupported bodyType '${String(bodyType)}'`)
+  }
+  // Validated here rather than at each emit site so a hostile key fails the
+  // build once, before any of it reaches the output.
+  for (const status of Object.keys(contract.responses)) assertStatus(status, contract.path)
   const segments = parsePathPattern(contract.path)
   const isStatic = segments.every((segment) => typeof segment === 'string')
   return {
@@ -818,10 +889,14 @@ const emitRouteDeclarations = (
   const serialized: number[] = []
   const rawStatuses: Array<readonly [status: number, contentType: string]> = []
   for (const [status, response] of Object.entries(route.contract.responses)) {
+    // Never the raw key: it is attacker-shaped text becoming an identifier
+    // and a numeric literal. `compileEntry` already rejected anything that is
+    // not a status code, and this is where the narrowed number is used.
+    const code = assertStatus(status, route.contract.path)
     if (response.contentType !== undefined) {
       // Raw statuses skip serialization entirely — the body goes straight to
       // the Response constructor, streaming intact.
-      rawStatuses.push([Number(status), response.contentType])
+      rawStatuses.push([code, response.contentType])
       continue
     }
     if (response.body === undefined) continue
@@ -831,8 +906,8 @@ const emitRouteDeclarations = (
     if (emitContext.validateResponses) continue
     const source = generateSerializerSource(response.body)
     if (source !== undefined) {
-      serialized.push(Number(status))
-      lines.push(`const serialize_${route.name}_${status} = ${source}`)
+      serialized.push(code)
+      lines.push(`const serialize_${route.name}_${code} = ${source}`)
     }
   }
 
@@ -842,38 +917,39 @@ const emitRouteDeclarations = (
     // JSON statuses (raw contentType bodies have no JSON value to check),
     // header validators as an open object over the declared header schemas,
     // and the declared-status set for the undeclared-reply 500.
-    const statuses = Object.keys(route.contract.responses).map((status) => Number(status))
+    const statuses = Object.keys(route.contract.responses).map((status) => assertStatus(status, route.contract.path))
     lines.push(`const declared_${route.name} = new Set(${JSON.stringify(statuses)})`)
     replyChecks.push(
       `    if (!declared_${route.name}.has(reply.status)) return invalidResponse(reply.status, undefined, true)`,
     )
     for (const [status, response] of Object.entries(route.contract.responses)) {
+      const code = assertStatus(status, route.contract.path)
       const bodySchema = response.contentType === undefined ? response.body : undefined
       const headerSchemas = response.headers
       if (bodySchema === undefined && headerSchemas === undefined) continue
       const checks: string[] = []
       if (bodySchema !== undefined) {
-        const name = `replyBody_${route.name}_${status}`
+        const name = `replyBody_${route.name}_${code}`
         lines.push(
           `const ${name}Schema = ${JSON.stringify(bodySchema)}`,
           `const ${name} = ${compiledValidationExpression(`${name}Schema`, emitContext, used)}`,
         )
         checks.push(
-          `      if (!${name}.guard(reply.body)) return invalidResponse(${status}, undefined, ${name}.collect(reply.body))`,
+          `      if (!${name}.guard(reply.body)) return invalidResponse(${code}, undefined, ${name}.collect(reply.body))`,
         )
       }
       if (headerSchemas !== undefined) {
-        const name = `replyHeaders_${route.name}_${status}`
+        const name = `replyHeaders_${route.name}_${code}`
         lines.push(
           `const ${name}Schema = ${JSON.stringify({ type: 'object', properties: headerSchemas })}`,
           `const ${name} = ${compiledValidationExpression(`${name}Schema`, emitContext, used)}`,
         )
         checks.push(
           '      const replyHeaders = reply.headers ?? {}',
-          `      if (!${name}.guard(replyHeaders)) return invalidResponse(${status}, 'headers', ${name}.collect(replyHeaders))`,
+          `      if (!${name}.guard(replyHeaders)) return invalidResponse(${code}, 'headers', ${name}.collect(replyHeaders))`,
         )
       }
-      replyChecks.push(`    if (reply.status === ${status}) {`, ...checks, '    }')
+      replyChecks.push(`    if (reply.status === ${code}) {`, ...checks, '    }')
     }
   }
 
@@ -1179,7 +1255,7 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
     // absent one falls through to the parse — same rule as the runtime.
     lines.push(
       "  const bodyContentType = request.headers.get('content-type')",
-      `  if (bodyContentType !== null && !matchesBodyType(bodyContentType, '${bodyType}')) return unsupportedMediaType(bodyContentType, ${ERROR_ARGS})`,
+      `  if (bodyContentType !== null && !matchesBodyType(bodyContentType, ${JSON.stringify(bodyType)})) return unsupportedMediaType(bodyContentType, ${ERROR_ARGS})`,
     )
     const guardAndRun = [
       `    if (!guard${suffix}(body)) return failValidation('body', collect${suffix}, body, ${ERROR_ARGS})`,
@@ -1402,7 +1478,7 @@ const emitDispatch = (
     const dynamics = group.filter((route) => !route.isStatic)
     // No return at the end of the block: an unmatched method falls through to
     // the shared 405/404 tail below, like the runtime pipeline.
-    lines.push(`  if (method === '${method}') {`)
+    lines.push(`  if (method === ${JSON.stringify(method)}) {`)
     for (const route of statics) {
       lines.push(
         `    if (path === ${JSON.stringify(route.staticPath)}) return ${invoke(route, `route_${route.name}(request, url, rawPath, queryIndex, locals${extraArguments})`)}`,
@@ -1472,8 +1548,8 @@ const emitDispatch = (
     lines.push("  const allowSegments = path === '/' ? [] : path.slice(1).split('/')")
     for (const route of dynamics) {
       const conditions = dynamicMatch(route, 'allowSegments').conditions
-      conditions.push(`!allow.includes('${route.method}')`)
-      lines.push(`  if (${conditions.join(' && ')}) allow.push('${route.method}')`)
+      conditions.push(`!allow.includes(${JSON.stringify(route.method)})`)
+      lines.push(`  if (${conditions.join(' && ')}) allow.push(${JSON.stringify(route.method)})`)
     }
   }
   lines.push(
@@ -1514,15 +1590,22 @@ const emitDispatch = (
   // and every outcome — short-circuit, mount, routed reply, 404 — through the
   // decorators. Identical semantics to toFetchHandler's chains.
   if (onResponseExports.length > 0) {
+    // The try/catch is the emitted twin of the fetch adapter's: a decorator
+    // throwing (a reflected request id with a CRLF in it, say) must become the
+    // pipeline's own 500 rather than escaping to the platform, and the chain is
+    // abandoned at the first failure so the remaining decorators never run over
+    // a half-decorated response. One try around the whole chain is
+    // observationally identical to one per hook, since the catch abandons it.
     lines.push(
       'const finishResponse = async (response, request, locals) => {',
       '  let current = response',
       '  let next',
+      '  try {',
     )
     for (const name of onResponseExports) {
-      lines.push(`  next = await ${name}(current, request, locals)`, '  if (next !== undefined) current = next')
+      lines.push(`    next = await ${name}(current, request, locals)`, '    if (next !== undefined) current = next')
     }
-    lines.push('  return current', '}')
+    lines.push('  } catch {', '    return internalError()', '  }', '  return current', '}')
   }
   const finish = (expression: string): string =>
     onResponseExports.length > 0 ? `finishResponse(${expression}, request, locals)` : expression
@@ -1533,10 +1616,17 @@ const emitDispatch = (
     '  const locals = {}',
   )
   if (onRequestExports.length > 0) {
+    // A gate is app code with no boundary above it, so a throw here would reach
+    // the platform instead of the pipeline. Its 500 still flows through the
+    // decorators, exactly like a Response a gate returns on purpose.
     lines.push('  let early')
     for (const name of onRequestExports) {
       lines.push(
-        `  early = await ${name}(request, env, executionContext, locals)`,
+        '  try {',
+        `    early = await ${name}(request, env, executionContext, locals)`,
+        '  } catch {',
+        `    return ${finish('internalError()')}`,
+        '  }',
         `  if (early !== undefined) return ${finish('early')}`,
       )
     }
