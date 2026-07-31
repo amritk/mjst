@@ -414,6 +414,24 @@ const resolveRec = (ctx: InterpreterContext): unknown => {
 }
 
 /**
+ * A boolean-mode child of `ctx`: same root, formats, caches, ref stack and — by
+ * reference — the same work budget, so an exponential branch fan-out draws down
+ * the caller's pool rather than escaping into a fresh one. Only `failed` is
+ * private, which is the whole point: a failing probe must not unwind the caller.
+ */
+const newBranchContext = (ctx: InterpreterContext): InterpreterContext => ({
+  root: ctx.root,
+  formats: ctx.formats,
+  emitErrors: false,
+  caches: ctx.caches,
+  errors: null,
+  failed: false,
+  refStack: ctx.refStack,
+  maxDepth: ctx.maxDepth,
+  budget: ctx.budget,
+})
+
+/**
  * Evaluates a subschema in a pure boolean context — used for the branches of
  * `anyOf` / `oneOf` / `not` / `if`, where a failing branch is expected and must
  * not pollute the caller's error list. Shares the regex and ref caches so the
@@ -426,19 +444,7 @@ const matchesSchema = (
   depth: number,
   collect?: Evaluation | null,
 ): boolean => {
-  const sub: InterpreterContext = {
-    root: ctx.root,
-    formats: ctx.formats,
-    emitErrors: false,
-    caches: ctx.caches,
-    errors: null,
-    failed: false,
-    refStack: ctx.refStack,
-    maxDepth: ctx.maxDepth,
-    // Share the same budget holder by reference so branch evaluation draws down
-    // the caller's pool — an exponential fan-out cannot escape it with a fresh one.
-    budget: ctx.budget,
-  }
+  const sub = newBranchContext(ctx)
   // When the caller is tracking annotations, evaluate the branch into a private
   // tracker and fold it in only if the branch matched — annotations from a
   // failing branch never count toward `unevaluated*`.
@@ -452,9 +458,10 @@ const matchesSchema = (
 /**
  * The allocation-heavy, reusable parts of an object schema node: its property
  * keys, the `required` membership set, the leftover required keys not covered by
- * `properties`, and the compiled `patternProperties` entries. These are a pure
- * function of the schema node, so they are computed once and memoized per node
- * (keyed on the node object) instead of rebuilt on every validation.
+ * `properties`, the compiled `patternProperties` entries, and the entry lists of
+ * the three presence-gated dependency keywords. These are a pure function of the
+ * schema node, so they are computed once and memoized per node (keyed on the node
+ * object) instead of rebuilt on every validation.
  */
 type ObjectMeta = {
   properties: Record<string, unknown> | undefined
@@ -464,6 +471,16 @@ type ObjectMeta = {
   requiredSet: Set<string>
   requiredNotInProps: string[]
   patternEntries: [RegExp, unknown][] | null
+  /**
+   * `dependentRequired` as entries, already filtered to the array-valued ones a
+   * validation would act on. `null` when the keyword is absent, so the (much more
+   * common) node without it never touches this.
+   */
+  dependentRequiredEntries: [string, string[]][] | null
+  /** `dependentSchemas` as entries — see {@link ObjectMeta.dependentRequiredEntries}. */
+  dependentSchemasEntries: [string, unknown][] | null
+  /** Draft-07 `dependencies` as entries — see {@link ObjectMeta.dependentRequiredEntries}. */
+  dependenciesEntries: [string, unknown][] | null
   /**
    * True when none of this node's declared/required keys is a name inherited from
    * `Object.prototype` (`constructor`, `toString`, `__proto__`, …). For such keys
@@ -543,18 +560,33 @@ const getObjectMeta = (s: Record<string, unknown>): ObjectMeta => {
     const patternProperties = isPlainObject(s['patternProperties']) ? s['patternProperties'] : undefined
     const required = Array.isArray(s['required']) ? (s['required'] as string[]) : []
     const knownKeys = properties ? Object.keys(properties) : undefined
+    const dependentRequired = isPlainObject(s['dependentRequired']) ? s['dependentRequired'] : undefined
+    const dependentSchemas = isPlainObject(s['dependentSchemas']) ? s['dependentSchemas'] : undefined
+    const dependencies = isPlainObject(s['dependencies']) ? s['dependencies'] : undefined
     meta = {
       properties,
       knownKeys,
       escapedKeys: knownKeys?.map(escapePointer),
       requiredSet: new Set(required),
-      requiredNotInProps: required.filter((k) => !(properties !== undefined && k in properties)),
+      // `Object.hasOwn`, not `k in properties`: `in` walks `Object.prototype`, so
+      // `required: ['toString']` alongside any `properties` object looked already
+      // covered and was dropped here — and `toString` is not in `knownKeys` either
+      // (that is `Object.keys`), so nothing checked it and the key went silently
+      // unenforced.
+      requiredNotInProps: required.filter((k) => !(properties !== undefined && Object.hasOwn(properties, k))),
       // Compile each `patternProperties` regex once here (a stateless RegExp is
       // safe to share across contexts) so the per-key loop below skips both the
       // shared-cache Map lookup and recompilation.
       patternEntries: patternProperties
         ? Object.entries(patternProperties).map(([source, schema]) => [compilePattern(source), schema])
         : null,
+      // The dependency keywords are iterated as entries, which `Object.entries`
+      // would otherwise rebuild (array + one tuple per key) on every validation.
+      dependentRequiredEntries: dependentRequired
+        ? (Object.entries(dependentRequired).filter(([, deps]) => Array.isArray(deps)) as [string, string[]][])
+        : null,
+      dependentSchemasEntries: dependentSchemas ? Object.entries(dependentSchemas) : null,
+      dependenciesEntries: dependencies ? Object.entries(dependencies) : null,
       safeKeys:
         (knownKeys === undefined || knownKeys.every((k) => !PROTO_MEMBER_NAMES.has(k))) &&
         required.every((k) => !PROTO_MEMBER_NAMES.has(k)),
@@ -582,7 +614,6 @@ const interpretObject = (
 
   const hasAdditional = 'additionalProperties' in s
   const additional = s['additionalProperties']
-  const dependentRequired = isPlainObject(s['dependentRequired']) ? s['dependentRequired'] : undefined
   const minProps = typeof s['minProperties'] === 'number' ? s['minProperties'] : undefined
   const maxProps = typeof s['maxProperties'] === 'number' ? s['maxProperties'] : undefined
 
@@ -620,11 +651,11 @@ const interpretObject = (
     }
   }
 
-  if (dependentRequired) {
-    for (const [trigger, deps] of Object.entries(dependentRequired)) {
-      if (!Array.isArray(deps)) continue
+  const dependentRequiredEntries = meta.dependentRequiredEntries
+  if (dependentRequiredEntries !== null) {
+    for (const [trigger, deps] of dependentRequiredEntries) {
       if (!hasProperty(obj, trigger)) continue
-      for (const dep of deps as string[]) {
+      for (const dep of deps) {
         if (!hasProperty(obj, dep)) {
           fail(ctx, `must have property '${dep}' when '${trigger}' is present`, path)
           if (ctx.failed) return
@@ -635,9 +666,9 @@ const interpretObject = (
 
   // `dependentSchemas` (2020-12): when a property is present, the whole object
   // must also match the associated subschema.
-  const dependentSchemas = isPlainObject(s['dependentSchemas']) ? s['dependentSchemas'] : undefined
-  if (dependentSchemas) {
-    for (const [trigger, subSchema] of Object.entries(dependentSchemas)) {
+  const dependentSchemasEntries = meta.dependentSchemasEntries
+  if (dependentSchemasEntries !== null) {
+    for (const [trigger, subSchema] of dependentSchemasEntries) {
       if (!hasProperty(obj, trigger)) continue
       interpretInPlace(ctx, subSchema, obj, path, evalScope, depth)
       if (ctx.failed) return
@@ -647,9 +678,9 @@ const interpretObject = (
   // `dependencies` (draft-07): the dual-form predecessor of `dependentRequired`
   // + `dependentSchemas`. An array value requires the listed keys; a schema
   // value is applied to the whole object — both gated on the trigger's presence.
-  const dependencies = isPlainObject(s['dependencies']) ? s['dependencies'] : undefined
-  if (dependencies) {
-    for (const [trigger, dep] of Object.entries(dependencies)) {
+  const dependenciesEntries = meta.dependenciesEntries
+  if (dependenciesEntries !== null) {
+    for (const [trigger, dep] of dependenciesEntries) {
       if (!hasProperty(obj, trigger)) continue
       if (Array.isArray(dep)) {
         for (const key of dep as string[]) {
@@ -671,9 +702,12 @@ const interpretObject = (
   // `false` forms mark their keys inside the loop below; the `true` form skips it.
   if (hasAdditional && additional === true && evalScope) evalScope.allProps = true
 
-  const needsLoop = meta.patternEntries !== null || (hasAdditional && additional !== true)
+  // Held in a local (rather than re-read as `meta.patternEntries ?? []`) so the
+  // `additionalProperties`-only case does not allocate a throwaway empty array on
+  // every validation just to iterate nothing.
+  const patternEntries = meta.patternEntries
+  const needsLoop = patternEntries !== null || (hasAdditional && additional !== true)
   if (needsLoop) {
-    const patternEntries = meta.patternEntries ?? []
     for (const k in obj) {
       // `patternProperties` applies to every matching key independently of
       // `properties` — a key declared in both must satisfy both — so it runs even
@@ -681,12 +715,14 @@ const interpretObject = (
       // fallback for keys reached by neither.
       const inProps = properties !== undefined && Object.hasOwn(properties, k)
       let matched = false
-      for (const [regex, patternSchema] of patternEntries) {
-        if (regex.test(k)) {
-          matched = true
-          evalScope?.props.add(k)
-          interpret(ctx, patternSchema, obj[k], childPath(ctx, path, k), null, depth + 1)
-          if (ctx.failed) return
+      if (patternEntries !== null) {
+        for (const [regex, patternSchema] of patternEntries) {
+          if (regex.test(k)) {
+            matched = true
+            evalScope?.props.add(k)
+            interpret(ctx, patternSchema, obj[k], childPath(ctx, path, k), null, depth + 1)
+            if (ctx.failed) return
+          }
         }
       }
 
@@ -704,8 +740,14 @@ const interpretObject = (
   }
 
   if (minProps !== undefined || maxProps !== undefined) {
-    let count = 0
-    for (const _k in obj) count++
+    // Own properties only, as the spec requires. A bare `for…in` also walks the
+    // prototype chain, so `Object.create({ inherited: 1 })` with one own key
+    // counted as two and passed `minProperties: 2`. `Object.keys().length` looks
+    // like the allocating option, but it measured the fastest of the three by a
+    // wide margin (20-key object: 92M ops/s, versus 19M for the old unguarded
+    // `for…in` and 9.5M for a `for…in` with an `Object.hasOwn` guard) — the engine
+    // does not have to materialize a key array to answer `.length`.
+    const count = Object.keys(obj).length
     if (minProps !== undefined && count < minProps) {
       fail(ctx, `must have at least ${minProps} properties`, path)
       if (ctx.failed) return
@@ -719,8 +761,19 @@ const interpretObject = (
   // `propertyNames` — every property *key* (as a string) must match the schema.
   if ('propertyNames' in s) {
     const nameSchema = s['propertyNames']
+    // One scratch context for the whole key loop instead of the fresh nine-field
+    // one `matchesSchema` builds per call — on a 20-key object that was 20
+    // context allocations for what is usually a one-keyword string check.
+    // Reuse is safe because the only per-probe state is `failed` (we reset it):
+    // the caches, ref stack and budget are shared by design, `errors` stays null
+    // in boolean mode, and these probes cannot nest — the key is a string, so the
+    // inner walk never reaches another `propertyNames` at this instance location.
+    let probe: InterpreterContext | null = null
     for (const k in obj) {
-      if (!matchesSchema(ctx, nameSchema, k, depth)) {
+      if (probe === null) probe = newBranchContext(ctx)
+      else probe.failed = false
+      interpret(probe, nameSchema, k, '', null, depth + 1)
+      if (probe.failed) {
         fail(ctx, `property name "${k}" is invalid`, childPath(ctx, path, k))
         if (ctx.failed) return
       }
@@ -806,8 +859,18 @@ const interpretArray = (
     const containsSchema = s['contains']
     const min = typeof s['minContains'] === 'number' ? s['minContains'] : 1
     const max = typeof s['maxContains'] === 'number' ? s['maxContains'] : undefined
+    // `maxContains` needs the exact total (it is an upper bound), and an active
+    // annotation scope needs it to decide whether `contains` marks the array
+    // evaluated — so only when neither is in play can we stop at the first `min`
+    // matches. Without this a 1000-element array matching at index 0 cost the same
+    // as one matching at index 999.
+    const needsExactCount = max !== undefined || evalScope !== null
     let count = 0
-    for (const item of arr) if (matchesSchema(ctx, containsSchema, item, depth)) count++
+    for (const item of arr) {
+      if (!matchesSchema(ctx, containsSchema, item, depth)) continue
+      count++
+      if (!needsExactCount && count >= min) break
+    }
     // Ajv parity for `unevaluatedItems`: a satisfied `contains` marks the *whole*
     // array as evaluated, not just the matching items — but a bare `minContains: 0`
     // (with no `maxContains`) opts out of contributing any evaluated-item annotation
@@ -943,10 +1006,21 @@ const interpretNumber = (ctx: InterpreterContext, s: Record<string, unknown>, va
  * A ref that resolves to the same (schema node, value) pair already being
  * validated higher on the stack is an infinite loop no finite data can escape —
  * e.g. `{ $ref: '#' }`, or mutually recursive `$defs` — so re-entering it would
- * recurse forever and blow the stack. Because the outer frame is already checking
- * that exact node against that exact value, stopping here changes no verdict; it
- * only avoids the non-terminating re-descent. Legitimately deep *data* is
- * unaffected: each level carries a distinct `value`, so no pair repeats.
+ * recurse forever and blow the stack. Legitimately deep *data* is unaffected:
+ * each level carries a distinct `value`, so no pair repeats.
+ *
+ * What the cycle break guarantees: an outer frame is already checking this exact
+ * node against this exact value, so a *conjunctive* re-entry (the value must
+ * satisfy the node, and the outer frame is deciding that) adds nothing and the
+ * verdict is unchanged.
+ *
+ * What it does *not* guarantee: inside a disjunction, returning without failing
+ * is itself a verdict — the branch counts as matched. So
+ * `{ $defs: { n: { anyOf: [{ type: 'string' }, { $ref: '#/$defs/n' }] } },
+ * $ref: '#/$defs/n' }` accepts `123`, even though the only non-recursive branch
+ * demands a string. This is the price of terminating at all on a schema whose
+ * `anyOf` is genuinely unbounded; Ajv stack-overflows on the same input, so
+ * "answers something" beats "crashes the process".
  */
 const interpretRef = (
   ctx: InterpreterContext,
@@ -1100,11 +1174,16 @@ export const interpret = (
       }
     }
     if (!found) {
-      // Build the label only on failure — the success path is the common case and
-      // this `map`/`join` would otherwise allocate on every value, hurting cold.
-      const label = values.map((v) => JSON.stringify(v)).join(', ')
-      fail(ctx, `must be one of: ${label}`, path)
-      if (ctx.failed) return
+      // Build the label only when something will actually read it. `fail` drops
+      // the message in guard mode, and *every* `anyOf`/`oneOf` branch probe runs
+      // in guard mode — so a discriminated union with `enum` discriminators paid a
+      // full `map`/`join` for each branch it rejected, on the valid path. On a
+      // 500-value enum that discarded string was ~99% of the whole validation.
+      if (!ctx.emitErrors) {
+        ctx.failed = true
+        return
+      }
+      fail(ctx, `must be one of: ${values.map((v) => JSON.stringify(v)).join(', ')}`, path)
     }
   }
 

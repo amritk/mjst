@@ -407,6 +407,37 @@ describe('validate', () => {
     }
   })
 
+  it('rejects an ipv4 octet with a leading zero', () => {
+    // `01.2.3.4` is not a dotted quad, and accepting it is the classic
+    // octal-interpretation allowlist bypass: `010` is 8 to some resolvers and 10
+    // to others, so an allowlist and the code behind it can disagree. Ajv rejects
+    // these too.
+    const ipv4 = validate({ type: 'string', format: 'ipv4' }, { formats: 'all' })
+    for (const bad of ['01.2.3.4', '1.02.3.4', '1.2.3.04', '00.0.0.0', '010.010.010.010']) {
+      expect(ipv4(bad), bad).not.toBe(true)
+    }
+    for (const ok of ['0.0.0.0', '1.2.3.4', '255.255.255.255', '192.168.0.1', '10.0.0.100']) {
+      expect(ipv4(ok), ok).toBe(true)
+    }
+    // The IPv6 grammar embeds the same octets, so the fix has to reach there too.
+    const ipv6 = validate({ type: 'string', format: 'ipv6' }, { formats: 'all' })
+    expect(ipv6('::ffff:192.168.0.1')).toBe(true)
+    expect(ipv6('::ffff:192.168.00.1')).not.toBe(true)
+  })
+
+  it('requires an offset on a time, matching RFC 3339 full-time', () => {
+    // A bare `12:00:00` is a `partial-time`, not a `time` — the offset is exactly
+    // the ambiguity the format exists to remove, and Ajv rejects it as well.
+    const time = validate({ type: 'string', format: 'time' }, { formats: 'all' })
+    expect(time('12:00:00')).not.toBe(true)
+    expect(time('12:00:00.123')).not.toBe(true)
+    expect(time('12:00:00Z')).toBe(true)
+    expect(time('12:00:00.123z')).toBe(true)
+    expect(time('12:00:00+05:30')).toBe(true)
+    expect(time('12:00:00-08:00')).toBe(true)
+    expect(time('25:00:00Z')).not.toBe(true)
+  })
+
   it('throws on an unknown `type` keyword instead of matching everything', () => {
     // A typo'd type is a schema error; silently treating it as "always valid"
     // would disable the constraint. Same loud contract as an unresolvable $ref.
@@ -814,6 +845,32 @@ describe('validate', () => {
       expect(validator({ constructor: 1 })).toBe(true)
     })
 
+    it('still enforces a prototype-member required key when properties is present', () => {
+      // The leftover-required list was built with `k in properties`, which walks
+      // `Object.prototype` — so `'toString' in {}` was true, the key looked already
+      // covered and was dropped, and it was absent from the declared-key list too
+      // (that comes from `Object.keys`). Nothing checked it at all. Ajv shares this
+      // bug by default, so the differential fuzz cannot catch it.
+      for (const name of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']) {
+        const validator = validate({ type: 'object', required: [name], properties: {} })
+        expect(validator({}), `${name} must be required`).not.toBe(true)
+        expect(validator(JSON.parse(`{"${name}": 1}`)), `${name} present`).toBe(true)
+      }
+    })
+
+    it('counts only own properties for minProperties and maxProperties', () => {
+      // The count used a bare `for…in`, which walks the prototype chain, so an
+      // object with one own key and one inherited key satisfied `minProperties: 2`.
+      const inherited = Object.create({ fromPrototype: 1 }) as Record<string, unknown>
+      inherited['a'] = 1
+      expect(validate({ type: 'object', minProperties: 2 })(inherited)).not.toBe(true)
+      expect(validate({ type: 'object', maxProperties: 1 })(inherited)).toBe(true)
+      expect(validate({ type: 'object', minProperties: 1 })(inherited)).toBe(true)
+      // Plain objects are unaffected.
+      expect(validate({ type: 'object', minProperties: 2 })({ a: 1, b: 2 })).toBe(true)
+      expect(validate({ type: 'object', maxProperties: 1 })({ a: 1, b: 2 })).not.toBe(true)
+    })
+
     it('validates a real __proto__ property against its subschema', () => {
       const validator = validate({ type: 'object', properties: { ['__proto__']: { type: 'string' } } })
       // Empty object: no own __proto__, so the string subschema does not apply.
@@ -849,6 +906,82 @@ describe('validate', () => {
       const validator = validate(schema)
       expect(validator({ children: [{ children: [] }, { children: [{ children: [] }] }] })).toBe(true)
       expect(validator({ children: [{ children: 'nope' }] })).not.toBe(true)
+    })
+  })
+
+  describe('keywords whose evaluation was reworked for cost', () => {
+    it('still reports every enum value in the failure message', () => {
+      // The label is now built only in error-collecting mode, because the guard
+      // path and every anyOf/oneOf branch probe discarded it. Error mode must be
+      // unchanged.
+      const result = validate({ enum: ['a', 'b', 3, null] })('z')
+      expect(errorsOf(result)[0]?.message).toBe('must be one of: "a", "b", 3, null')
+    })
+
+    it('reports an enum failure alongside the other keywords it fails', () => {
+      // Error mode keeps walking after an enum miss; only the guard path unwinds.
+      const result = validate({ type: 'number', enum: [1, 2] })('z')
+      expect(errorsOf(result).map((e) => e.message)).toEqual(['must be one of: 1, 2', 'must be number'])
+    })
+
+    it('short-circuits contains without changing any verdict', () => {
+      // `contains` stops at the first `minContains` matches when no `maxContains`
+      // and no annotation scope need the exact total — the counts below pin down
+      // the cases where it must NOT stop early.
+      const items = [1, 'a', 2, 'b', 3]
+      expect(validate({ type: 'array', contains: { type: 'string' } })(items)).toBe(true)
+      expect(validate({ type: 'array', contains: { type: 'boolean' } })(items)).not.toBe(true)
+      expect(validate({ type: 'array', contains: { type: 'string' }, minContains: 2 })(items)).toBe(true)
+      expect(validate({ type: 'array', contains: { type: 'string' }, minContains: 3 })(items)).not.toBe(true)
+      // `maxContains` is an upper bound, so the full count is still needed.
+      expect(validate({ type: 'array', contains: { type: 'string' }, maxContains: 1 })(items)).not.toBe(true)
+      expect(validate({ type: 'array', contains: { type: 'string' }, maxContains: 2 })(items)).toBe(true)
+      // `minContains: 0` is trivially satisfied but any `maxContains` still applies.
+      expect(validate({ type: 'array', contains: { type: 'boolean' }, minContains: 0 })(items)).toBe(true)
+    })
+
+    it('keeps the contains annotation exact when unevaluatedItems is in scope', () => {
+      // A satisfied `contains` marks the whole array evaluated, but only while it
+      // stays within `maxContains` — so the annotation path must see every match,
+      // not just the first.
+      const schema = { type: 'array', contains: { type: 'string' }, maxContains: 1, unevaluatedItems: false }
+      expect(validate(schema)(['a'])).toBe(true)
+      expect(validate(schema)(['a', 'b'])).not.toBe(true)
+    })
+
+    it('checks every key against propertyNames, not just the first', () => {
+      // The key loop now reuses one scratch context instead of allocating one per
+      // key, so a failure recorded for an earlier key must not leak into a later
+      // one (and vice versa).
+      const validator = validate({ type: 'object', propertyNames: { maxLength: 3 } })
+      expect(validator({ ab: 1, cd: 2 })).toBe(true)
+      expect(validator({ ab: 1, toolong: 2 })).not.toBe(true)
+      expect(validator({ toolong: 1, ab: 2 })).not.toBe(true)
+      expect(errorsOf(validator({ waytoolong: 1, ab: 2, alsotoolong: 3 }))).toHaveLength(2)
+      // A pattern-based propertyNames over many keys exercises the reuse harder.
+      const prefixed = validate({ type: 'object', propertyNames: { pattern: '^x' } })
+      expect(prefixed({ x1: 1, x2: 2, x3: 3 })).toBe(true)
+      expect(prefixed({ x1: 1, y2: 2, x3: 3 })).not.toBe(true)
+    })
+
+    it('applies the dependency keywords from their memoized entry lists', () => {
+      const dependentRequired = validate({ type: 'object', dependentRequired: { a: ['b', 'c'] } })
+      expect(dependentRequired({})).toBe(true)
+      expect(dependentRequired({ a: 1, b: 2, c: 3 })).toBe(true)
+      expect(dependentRequired({ a: 1, b: 2 })).not.toBe(true)
+      // A non-array value is not a dependency list and is filtered out up front.
+      expect(validate({ type: 'object', dependentRequired: { a: 'b' } })({ a: 1 })).toBe(true)
+
+      const dependentSchemas = validate({ type: 'object', dependentSchemas: { a: { required: ['b'] } } })
+      expect(dependentSchemas({ b: 1 })).toBe(true)
+      expect(dependentSchemas({ a: 1, b: 2 })).toBe(true)
+      expect(dependentSchemas({ a: 1 })).not.toBe(true)
+
+      const dependencies = validate({ type: 'object', dependencies: { a: ['b'], c: { required: ['d'] } } })
+      expect(dependencies({ a: 1, b: 2 })).toBe(true)
+      expect(dependencies({ a: 1 })).not.toBe(true)
+      expect(dependencies({ c: 1 })).not.toBe(true)
+      expect(dependencies({ c: 1, d: 2 })).toBe(true)
     })
   })
 })

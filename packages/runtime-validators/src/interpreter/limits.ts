@@ -13,8 +13,9 @@
  *    budget bounds both. {@link ValidateLimits.maxSteps}.
  *  - **Regex backtracking (ReDoS)** — a schema `pattern` is compiled and run
  *    natively, so a catastrophic pattern like `(a+)+$` pins a CPU on a short
- *    input. These sources are screened for nested unbounded quantifiers before a
- *    validator is built. {@link ValidateLimits.allowUnsafePatterns}.
+ *    input. These sources are screened for the two shapes we can recognize
+ *    soundly before a validator is built — but the screen is a best-effort
+ *    filter, not a guarantee. {@link ValidateLimits.allowUnsafePatterns}.
  *
  * Every limit is generous enough that ordinary schemas and documents never trip
  * it, and each is configurable. Exceeding a runtime limit throws a
@@ -38,9 +39,11 @@ export type ValidateLimits = {
    */
   readonly maxSteps?: number
   /**
-   * When `true`, skip the ReDoS screen so a `pattern` with nested unbounded
-   * quantifiers is compiled and run as-is. Leave `false` (the default) unless
-   * every schema is trusted and known to need such a pattern.
+   * When `true`, skip the ReDoS screen so a `pattern` flagged as prone to
+   * catastrophic backtracking is compiled and run as-is. Leave `false` (the
+   * default) unless every schema is trusted and known to need such a pattern.
+   * Note the screen is a filter for the shapes we can recognize, not a proof of
+   * safety — see the ReDoS screen section below.
    */
   readonly allowUnsafePatterns?: boolean
 }
@@ -100,12 +103,37 @@ export const isValidationLimitError = (value: unknown): value is Error =>
 // --- ReDoS screen ----------------------------------------------------------
 //
 // A schema `pattern` (and each `patternProperties` key) is compiled to a native
-// `RegExp` and run against untrusted input. Catastrophic backtracking needs a
-// repetition nested inside another repetition — "star height" >= 2, e.g.
-// `(a+)+`, `(a*)*`, `(\d+)*`. We compute a conservative star height and reject
-// such sources before a validator is built (unless `allowUnsafePatterns`). The
-// heuristic — the same one `safe-regex` uses — over-approximates: it may flag a
-// few benign patterns, never the reverse, which is the safe direction.
+// `RegExp` and run against untrusted input, so we screen the source for the
+// shapes that drive catastrophic backtracking before a validator is built
+// (unless `allowUnsafePatterns`). Two shapes are recognized:
+//
+//  1. **Nested unbounded repetition** — "star height" >= 2, e.g. `(a+)+`,
+//     `(a*)*`, `(\d+)*`. This is the `safe-regex` heuristic, and it
+//     over-approximates: it can flag a benign pattern, which is the safe
+//     direction.
+//  2. **A provably ambiguous alternation under an unbounded quantifier** — two
+//     branches of a quantified group that match the same single character, so
+//     an n-character input has 2^n parses (`(a|a)+`, `(a|[a-z])+`, `(x|\w)*`).
+//
+// **This is a filter, not a guarantee.** Deciding whether a regex backtracks
+// catastrophically means deciding language ambiguity, which no cheap syntactic
+// pass can do, so patterns that are genuinely exponential still get through.
+// Known gaps: multi-character ambiguous branches (`(a|aa)+`), ambiguity across
+// concatenated quantifiers (`a*a*$`), and two overlapping *classes* with no
+// literal side to pivot on (`([0-9]|\d)+`, `(\s|\n)+`).
+//
+// Rule 2 exists because star height alone missed a whole family: `^(a|a)+$` is
+// star height 1 yet takes over a second on a 29-character input, so the screen's
+// previous claim that it "may flag a few benign patterns, never the reverse" was
+// simply false. Treat the screen as defence in depth behind
+// {@link ValidateLimits.maxSteps} and a request timeout, not as a reason to
+// trust an arbitrary third-party `pattern`.
+//
+// Rule 2 is deliberately *sound* rather than broad: it only fires when two
+// branches provably match a common single character, which no sensible pattern
+// does (it is dead alternation). The tempting broader test — overlapping first
+// characters — is not sound: `(ab|ac)+` shares a first character yet is linear,
+// because the branches diverge before the group can repeat.
 
 /** Reads a quantifier at `i`, returning whether it is an unbounded repetition and the index after it. */
 const readQuantifier = (source: string, i: number): { repetition: boolean; next: number } | null => {
@@ -155,28 +183,114 @@ const groupInnerStart = (source: string, i: number): number => {
   return i + 2
 }
 
+/** Characters that mean something other than themselves in a regex source. */
+const REGEX_METACHARS = '.^$|()[]{}*+?\\'
+
 /**
- * Star height of `source` from `i` until the end or an unmatched `)`: the
- * maximum nesting of unbounded repetitions. `>= 2` is the catastrophic shape.
- * Returns `[height, next]`. Robust to malformed input — it never throws.
+ * The single character `branch` matches, when the branch is exactly one literal
+ * character (`a`, or an escaped punctuation literal like `\.`). Returns `null`
+ * for anything else, including the class shorthands (`\d`, `\w`) and the
+ * zero-width assertions (`\b`), whose escape letter is alphanumeric.
  */
-const scanStarHeight = (source: string, i: number): [number, number] => {
-  let height = 0 // max over the alternation branches / concatenation seen so far
+const singleLiteralChar = (branch: string): string | null => {
+  if (branch.length === 1) return REGEX_METACHARS.includes(branch) ? null : branch
+  if (branch.length === 2 && branch[0] === '\\' && /[^0-9A-Za-z]/.test(branch[1] as string)) return branch[1] as string
+  return null
+}
+
+/** Class shorthands we can evaluate exactly when testing whether a branch matches a character. */
+const CLASS_SHORTHANDS: Readonly<Record<string, RegExp>> = { d: /\d/, w: /\w/, s: /\s/ }
+
+/**
+ * Whether `branch` consumes exactly one character and that character can be
+ * `ch`. Only the forms we can decide exactly answer `true`; anything we cannot
+ * model (a group, a multi-character branch, an unrecognized escape) answers
+ * `false`, which keeps {@link hasAmbiguousAlternation} sound rather than broad.
+ */
+const branchMatchesChar = (branch: string, ch: string): boolean => {
+  if (singleLiteralChar(branch) === ch) return true
+  // `.` matches everything but a line terminator, and we never compile with `s`.
+  if (branch === '.') return ch !== '\n' && ch !== '\r'
+  if (branch.length === 2 && branch[0] === '\\') return CLASS_SHORTHANDS[branch[1] as string]?.test(ch) === true
+  // A bare `[...]` spanning the whole branch is one character too. A character
+  // class cannot backtrack, so compiling and testing it here is exact and safe.
+  if (branch.startsWith('[') && skipClass(branch, 0) === branch.length) {
+    try {
+      return new RegExp(`^${branch}$`, 'u').test(ch)
+    } catch {
+      return false
+    }
+  }
+  return false
+}
+
+/**
+ * Whether two of `branches` provably match the same input, which under an
+ * unbounded quantifier means an n-character input has 2^n parses. Two cases
+ * qualify: branches with identical source (identical language, trivially), and
+ * a single-literal-character branch that another branch also accepts. See the
+ * module doc for why the broader "overlapping first characters" test is not
+ * used — it is not sound.
+ */
+const hasAmbiguousAlternation = (branches: readonly string[]): boolean => {
+  if (branches.length < 2) return false
+  for (let a = 0; a < branches.length; a++) {
+    const x = branches[a] as string
+    const xChar = singleLiteralChar(x)
+    for (let b = a + 1; b < branches.length; b++) {
+      const y = branches[b] as string
+      if (x === y) return true
+      if (xChar !== null && branchMatchesChar(y, xChar)) return true
+      const yChar = singleLiteralChar(y)
+      if (yChar !== null && branchMatchesChar(x, yChar)) return true
+    }
+  }
+  return false
+}
+
+/** What one scanned region of a regex source tells us. See {@link scanRegion}. */
+type RegionScan = {
+  /** Maximum nesting of unbounded repetitions inside the region. `>= 2` is the catastrophic shape. */
+  height: number
+  /** Whether the region contains a quantified, provably ambiguous alternation. */
+  ambiguous: boolean
+  /** The region's own top-level alternation branches, so a quantifier on it can be judged. */
+  branches: string[]
+  /** Index just past the region (at the unmatched `)`, or the end of the source). */
+  next: number
+}
+
+/**
+ * Scans `source` from `i` until the end or an unmatched `)`, collecting both
+ * signals the screen needs. Robust to malformed input — it never throws, and a
+ * source it cannot parse simply scores as safe.
+ */
+const scanRegion = (source: string, i: number): RegionScan => {
+  let height = 0 // max over the alternation branches seen so far
+  let branchHeight = 0 // max over the atoms of the branch being scanned
+  let ambiguous = false
+  const branches: string[] = []
+  let branchStart = i
   let pos = i
   while (pos < source.length) {
     const c = source[pos]
     if (c === ')') break
     if (c === '|') {
+      branches.push(source.slice(branchStart, pos))
+      if (branchHeight > height) height = branchHeight
+      branchHeight = 0
       pos++
+      branchStart = pos
       continue
     }
     let atomHeight = 0
     let after: number
+    let inner: RegionScan | null = null
     if (c === '(') {
-      const inner = groupInnerStart(source, pos)
-      const [h, end] = scanStarHeight(source, inner)
-      atomHeight = h
-      after = source[end] === ')' ? end + 1 : end
+      inner = scanRegion(source, groupInnerStart(source, pos))
+      atomHeight = inner.height
+      if (inner.ambiguous) ambiguous = true
+      after = source[inner.next] === ')' ? inner.next + 1 : inner.next
     } else if (c === '[') {
       after = skipClass(source, pos)
     } else if (c === '\\') {
@@ -186,80 +300,99 @@ const scanStarHeight = (source: string, i: number): [number, number] => {
     }
     const q = readQuantifier(source, after)
     if (q) {
-      if (q.repetition) atomHeight += 1
+      if (q.repetition) {
+        atomHeight += 1
+        // Only an *unbounded* repetition turns an ambiguous alternation into
+        // exponential backtracking: `(a|a){1,10}` tops out at 2^10 parses.
+        if (inner !== null && hasAmbiguousAlternation(inner.branches)) ambiguous = true
+      }
       after = q.next
     }
-    if (atomHeight > height) height = atomHeight
+    if (atomHeight > branchHeight) branchHeight = atomHeight
     pos = after
   }
-  return [height, pos]
+  branches.push(source.slice(branchStart, pos))
+  if (branchHeight > height) height = branchHeight
+  return { height, ambiguous, branches, next: pos }
 }
 
 /**
- * Conservative test for a regex source prone to catastrophic backtracking:
- * star height (nested unbounded repetition) of two or more. See the module doc.
+ * Best-effort test for a regex source prone to catastrophic backtracking:
+ * nested unbounded repetition, or a provably ambiguous alternation under an
+ * unbounded quantifier. A `false` here means "we found nothing", not "this is
+ * safe" — see the module doc for the known gaps.
  */
-export const hasUnsafeRegex = (source: string): boolean => scanStarHeight(source, 0)[0] >= 2
+export const hasUnsafeRegex = (source: string): boolean => {
+  const scan = scanRegion(source, 0)
+  return scan.height >= 2 || scan.ambiguous
+}
 
 // --- Schema pattern walk ---------------------------------------------------
 
-// Keywords whose value is a single subschema.
-const SUBSCHEMA_KEYWORDS = [
-  'additionalProperties',
-  'unevaluatedProperties',
-  'propertyNames',
-  'additionalItems',
-  'unevaluatedItems',
-  'contains',
-  'not',
-  'if',
-  'then',
-  'else',
-] as const
-
-// Keywords whose value is an array of subschemas.
-const SUBSCHEMA_ARRAY_KEYWORDS = ['allOf', 'anyOf', 'oneOf', 'prefixItems'] as const
-
-// Keywords whose value is a record of name -> subschema.
-const SUBSCHEMA_MAP_KEYWORDS = ['properties', 'patternProperties', 'dependentSchemas', '$defs', 'definitions'] as const
-
-const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+/**
+ * Keywords whose value is arbitrary *data*, not a subschema. The walk below
+ * stops at these, because a schema is allowed to carry any JSON there — so
+ * `{ const: { pattern: '(a+)+' } }` describes a literal object with a `pattern`
+ * property, not a regex the validator will ever compile. Everything else is
+ * descended into unconditionally.
+ */
+const DATA_KEYWORDS = new Set(['const', 'enum', 'default', 'examples', 'example'])
 
 /**
- * Visits every regex source a validator would compile from `schema` — the
- * `pattern` keyword and every `patternProperties` key — walking only
- * subschema-bearing positions, so a regex-shaped string sitting in `const`,
- * `enum`, or `default` *data* is never mistaken for a pattern.
+ * Visits every regex source a validator could compile from `schema` — every
+ * string-valued `pattern` key, and every key of a `patternProperties` object.
+ *
+ * The walk is deliberately unrestricted rather than following a list of known
+ * subschema keywords. A keyword list only sees the shapes it knows about: an
+ * OpenAPI document parks its subschemas under `components/schemas` and reaches
+ * them by `$ref`, so a keyword-driven walk declared such a document clean and
+ * then happily compiled and ran its patterns. Chasing `$ref`s instead would fix
+ * that one case and still miss the next unfamiliar layout, so we visit the whole
+ * document and let a `pattern` be a `pattern` wherever it sits.
+ *
+ * The cost is over-screening: a `pattern` key inside data we do not recognize as
+ * data gets screened as if it were a keyword. That is the direction we want —
+ * the failure mode is a loud, build-time error with an `allowUnsafePatterns`
+ * escape hatch, against a live CPU-pinning ReDoS the other way — and
+ * {@link DATA_KEYWORDS} already covers the places a schema legitimately carries
+ * arbitrary data.
+ *
+ * Iterative with an explicit stack, not recursive: this runs from `makeValidator`
+ * *before* `maxDepth` applies, and a 20,000-level nested schema would otherwise
+ * blow the native stack with a `RangeError` that `isValidationLimitError` does
+ * not recognize — turning a rejected schema into a consumer's 500.
  */
-const forEachRegexSource = (schema: unknown, visit: (source: string) => void, seen: Set<object>): void => {
-  if (Array.isArray(schema)) {
-    for (const item of schema) forEachRegexSource(item, visit, seen)
-    return
+const forEachRegexSource = (schema: unknown, visit: (source: string) => void): void => {
+  if (schema === null || typeof schema !== 'object') return
+  const seen = new Set<object>()
+  const stack: object[] = [schema]
+
+  while (stack.length > 0) {
+    const node = stack.pop() as object
+    if (seen.has(node)) continue
+    seen.add(node)
+
+    if (Array.isArray(node)) {
+      for (const item of node) if (item !== null && typeof item === 'object') stack.push(item)
+      continue
+    }
+
+    // One pass over the node's own keys, pushing only the children worth
+    // descending into. A whole OpenAPI document goes through here on every cold
+    // build, so this stays free of per-node `Object.keys` arrays and of stack
+    // entries for the strings and numbers that make up most of a schema.
+    const record = node as Record<string, unknown>
+    for (const key in record) {
+      const child = record[key]
+      if (typeof child === 'string') {
+        if (key === 'pattern') visit(child)
+        continue
+      }
+      if (child === null || typeof child !== 'object') continue
+      if (key === 'patternProperties' && !Array.isArray(child)) for (const source in child) visit(source)
+      if (!DATA_KEYWORDS.has(key)) stack.push(child)
+    }
   }
-  if (!isObject(schema) || seen.has(schema)) return
-  seen.add(schema)
-
-  if (typeof schema['pattern'] === 'string') visit(schema['pattern'])
-
-  const patternProperties = schema['patternProperties']
-  if (isObject(patternProperties)) {
-    for (const source of Object.keys(patternProperties)) visit(source)
-    for (const sub of Object.values(patternProperties)) forEachRegexSource(sub, visit, seen)
-  }
-
-  for (const keyword of SUBSCHEMA_KEYWORDS) forEachRegexSource(schema[keyword], visit, seen)
-  for (const keyword of SUBSCHEMA_ARRAY_KEYWORDS) forEachRegexSource(schema[keyword], visit, seen)
-  for (const keyword of SUBSCHEMA_MAP_KEYWORDS) {
-    if (keyword === 'patternProperties') continue // already handled (keys + values)
-    const map = schema[keyword]
-    if (isObject(map)) for (const sub of Object.values(map)) forEachRegexSource(sub, visit, seen)
-  }
-
-  // `items` is a subschema (2020-12) or, in older drafts, an array of them.
-  forEachRegexSource(schema['items'], visit, seen)
-  // `dependencies` (draft-07) values may be subschemas (object) or key lists (array — skipped).
-  const dependencies = schema['dependencies']
-  if (isObject(dependencies)) for (const sub of Object.values(dependencies)) forEachRegexSource(sub, visit, seen)
 }
 
 /**
@@ -270,17 +403,13 @@ const forEachRegexSource = (schema: unknown, visit: (source: string) => void, se
  */
 export const screenPatterns = (schema: unknown, allowUnsafePatterns: boolean): void => {
   if (allowUnsafePatterns) return
-  forEachRegexSource(
-    schema,
-    (source) => {
-      if (hasUnsafeRegex(source)) {
-        throw validationLimitError(
-          `Unsafe regular expression in schema "pattern": ${JSON.stringify(source)} has nested unbounded ` +
-            'quantifiers (catastrophic backtracking / ReDoS risk). Rewrite it, or pass ' +
-            '`limits: { allowUnsafePatterns: true }` if the schema is trusted.',
-        )
-      }
-    },
-    new Set(),
-  )
+  forEachRegexSource(schema, (source) => {
+    if (hasUnsafeRegex(source)) {
+      throw validationLimitError(
+        `Unsafe regular expression in schema "pattern": ${JSON.stringify(source)} is prone to catastrophic ` +
+          'backtracking (ReDoS risk) — it nests unbounded quantifiers, or repeats an ambiguous alternation. ' +
+          'Rewrite it, or pass `limits: { allowUnsafePatterns: true }` if the schema is trusted.',
+      )
+    }
+  })
 }

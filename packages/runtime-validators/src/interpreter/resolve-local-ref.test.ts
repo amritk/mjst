@@ -67,4 +67,22 @@ describe('resolve-local-ref', () => {
     expect(resolveLocalRef('#node', anchored)).toBe(anchored.$defs.node)
     expect(resolveLocalRef('#missing', anchored)).toBeUndefined()
   })
+
+  it('returns the first anchor in document order when several could match', () => {
+    // The search is a pre-order walk, and it stays one now that it runs from an
+    // explicit stack rather than the call stack.
+    const target = { $anchor: 'dup', type: 'string' }
+    const later = { $anchor: 'dup', type: 'number' }
+    expect(resolveLocalRef('#dup', { $defs: { a: target, b: later } })).toBe(target)
+  })
+
+  it('searches a document nested far past the native stack limit', () => {
+    // The schema is untrusted, so a recursive search overflowed the stack with a
+    // `RangeError` that callers cannot recognize as a limit breach.
+    const target = { $anchor: 'deep', type: 'string' }
+    let buried: unknown = target
+    for (let i = 0; i < 20_000; i++) buried = { not: buried }
+    expect(resolveLocalRef('#deep', { $defs: { buried } })).toBe(target)
+    expect(resolveLocalRef('#absent', { $defs: { buried } })).toBeUndefined()
+  })
 })

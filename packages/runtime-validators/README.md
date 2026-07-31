@@ -25,7 +25,7 @@ The trade is steady-state throughput: a JIT-compiled validator (like Ajv after i
 
 Three entry points, for three different jobs:
 
-- **`validateGuard(schema)`** → `(input) => input is T`. A boolean type guard that short-circuits on the first failure and never allocates. Reach for this when you only need yes/no.
+- **`validateGuard(schema)`** → `(input) => input is T`. A boolean type guard that short-circuits on the first failure and never builds an error object. Reach for this when you only need yes/no.
 - **`validate(schema)`** → `(input) => true | { valid: false, errors }`. Collects every error with a JSON Pointer path, so you can tell a caller exactly what went wrong.
 - **`assert(schema, value)`** → `T`. The one-shot "valid or bust" path: returns the value typed to the schema, or throws a `ValidationFailedError` (carrying the same `errors` array) when it does not match. Reach for this when invalid input is exceptional and you want a parse step, not a result to branch on.
 
@@ -149,7 +149,7 @@ What keeps the interpreter lean:
 
 - **No compile step.** `validate` / `validateGuard` return immediately — there is nothing to build, JIT, or warm up.
 - **Lazy, reused caches.** The only reusable work — compiling `pattern` regexes and resolving `$ref` targets — is memoized the first time it is hit and reused on later calls.
-- **No allocation on the happy path.** The error array is created only when the first error is recorded, so valid input (and the entire guard path) allocates nothing.
+- **Nothing built for errors that never happen.** The error array and every failure message are created only when a failure is actually recorded and will actually be read, so valid input — and the whole guard path — never builds one. That is not the same as zero allocation: a branch probe (`anyOf`, `oneOf`, `not`, `if`, `contains`, `propertyNames`) allocates a small context, `unevaluatedProperties`/`unevaluatedItems` allocate an annotation tracker, and `uniqueItems` builds a `Set`. Everything genuinely reusable — property keys, the `required` set, compiled `patternProperties`, dependency entry lists — is memoized per schema node instead of rebuilt per call.
 - **A `WeakMap` cache** keyed by schema object, so `validate(sameSchema)` hands back the same validator (with its warm caches) per `(mode, formats)`.
 
 > Benchmarks live in [`bench/`](./bench) and run a correctness parity check against Ajv on every case. Correctness is further locked down by [`src/differential.test.ts`](./src/differential.test.ts), a differential fuzz that compares the interpreter's verdict against Ajv's across ~240k random and mutated values (20 schema shapes × 12k values, zero divergences) — so "fast" never comes at the cost of "correct".
@@ -172,7 +172,7 @@ Returns a `Validator`: `(input: unknown) => true | { valid: false; errors: Valid
 
 ### `validateGuard<T>(schema, options?)`
 
-Builds a boolean type guard `(input: unknown) => input is T`. Same options as `validate`; it short-circuits on the first failure and allocates nothing, so it is the faster of the two when you only need yes/no. `T` is inferred from a schema written `as const`; pass it explicitly to override.
+Builds a boolean type guard `(input: unknown) => input is T`. Same options as `validate`; it short-circuits on the first failure and never builds an error object or message, so it is the faster of the two when you only need yes/no. `T` is inferred from a schema written `as const`; pass it explicitly to override.
 
 ### `assert(schema, value, options?)`
 
@@ -189,7 +189,19 @@ is tunable per call via `options.limits`:
 |:---|---:|:---|
 | `maxDepth` | `512` | Deeply-nested data against a recursive schema (`{ items: { $ref: '#' } }`) overflowing the native stack as an uncatchable `RangeError`. |
 | `maxSteps` | `10_000_000` | Exponential combinator blow-up (nested `anyOf`/`oneOf` re-evaluating every branch) and quadratic `uniqueItems`. |
-| `allowUnsafePatterns` | `false` | ReDoS: a `pattern` with nested unbounded quantifiers (`(a+)+$`) is screened out before a validator is built. Set `true` only when every schema is trusted. |
+| `allowUnsafePatterns` | `false` | ReDoS: a `pattern` prone to catastrophic backtracking is screened out before a validator is built. Set `true` only when every schema is trusted. |
+
+> **The ReDoS screen is a filter, not a guarantee.** It rejects two recognizable
+> shapes — nested unbounded quantifiers (`(a+)+$`) and a provably ambiguous
+> alternation under an unbounded quantifier (`(a|a)+$`) — across every `pattern`
+> and `patternProperties` key anywhere in the document. Deciding whether an
+> arbitrary regex backtracks catastrophically means deciding language ambiguity,
+> which no cheap syntactic pass can do, so patterns that are genuinely
+> exponential still get through (`(a|aa)+`, `a*a*$`). Treat it as defence in
+> depth behind `maxSteps` and a request timeout, not as a reason to trust an
+> arbitrary third-party `pattern`. The screen can also over-reach in the other
+> direction and flag a benign pattern; `allowUnsafePatterns: true` is the escape
+> hatch when you have reviewed it yourself.
 
 Exceeding a runtime ceiling **throws** rather than silently returning a verdict —
 the same fail-loud contract as an unresolvable `$ref` or an unknown `type`. The
@@ -245,8 +257,8 @@ The interpreter resolves only **same-document** `$ref`s, but that doesn't mean
 you can't validate against schemas split across files or URLs — you just resolve
 them *before* validating, not during.
 
-This separation is deliberate. `validate` returns a **synchronous**,
-zero-allocation function so it can run on the hot path and inside strict
+This separation is deliberate. `validate` returns a **synchronous**, I/O-free
+function so it can run on the hot path and inside strict
 sandboxes (CSP, Cloudflare Workers, React Native/Hermes). Fetching a remote
 document is asynchronous and, when the schema is third-party, a security
 concern — a `$ref` pointing at `http://169.254.169.254/…` or `file:///etc/passwd`

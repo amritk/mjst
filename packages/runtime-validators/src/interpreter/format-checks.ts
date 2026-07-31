@@ -25,7 +25,12 @@ const URI_REFERENCE = /^(?:[a-zA-Z][a-zA-Z0-9+\-.]*:)?\/?\/?[^\s]*$/
 // 16-bit hex group; `ls32` is the least-significant 32 bits, either two groups
 // or a dotted-quad IPv4.
 const H16 = '[0-9a-fA-F]{1,4}'
-const IPV4_OCTETS = '(?:(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)'
+// The `[1-9]?\d` tail (rather than `1?\d?\d`) is what forbids a leading zero:
+// `01.2.3.4` is not a valid dotted quad, and accepting it is the classic
+// octal-interpretation allowlist bypass — `010` reads as 8 to some resolvers and
+// as 10 to others, so an allowlist and the code behind it can disagree.
+const IPV4_OCTET = '(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)'
+const IPV4_OCTETS = `(?:${IPV4_OCTET}\\.){3}${IPV4_OCTET}`
 const LS32 = `(?:${H16}:${H16}|${IPV4_OCTETS})`
 const IPV6 = new RegExp(
   `^(?:${H16}:){6}${LS32}$|` +
@@ -50,7 +55,11 @@ export const FORMAT_CHECKS: Readonly<Record<string, RegExp>> = {
   'date-time':
     /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])[Tt]([01]\d|2[0-3]):[0-5]\d:([0-5]\d|60)(\.\d+)?([Zz]|[+-]([01]\d|2[0-3]):[0-5]\d)$/,
   date: /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/,
-  time: /^([01]\d|2[0-3]):[0-5]\d:([0-5]\d|60)(\.\d+)?([Zz]|[+-]([01]\d|2[0-3]):[0-5]\d)?$/,
+  // RFC 3339 `full-time` — the offset is *required*, so a bare `12:00:00` is not
+  // a `time` (it is a `partial-time`). Ajv, our differential oracle, rejects it
+  // too, and an offset-less timestamp is exactly the ambiguity the format exists
+  // to remove.
+  time: /^([01]\d|2[0-3]):[0-5]\d:([0-5]\d|60)(\.\d+)?([Zz]|[+-]([01]\d|2[0-3]):[0-5]\d)$/,
   // RFC 3339 duration: the week form (`P4W`) may not be mixed with Y/M/D/T
   // components; the leading `(?!$)` rejects a bare `P`.
   duration: /^P(?!$)(?:\d+W|(?:\d+Y)?(?:\d+M)?(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+S)?)?)$/,
@@ -70,7 +79,7 @@ export const FORMAT_CHECKS: Readonly<Record<string, RegExp>> = {
   // digits, and combining marks allowed in labels. Label/total length is counted
   // in code points, not punycode octets (RFC 5890 exactness is out of scope).
   'idn-hostname': /^(?=.{1,253}$)(?!-)[\p{L}\p{N}\p{M}-]{1,63}(?<!-)(\.(?!-)[\p{L}\p{N}\p{M}-]{1,63}(?<!-))*$/u,
-  ipv4: /^((25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(25[0-5]|2[0-4]\d|1?\d?\d)$/,
+  ipv4: new RegExp(`^${IPV4_OCTETS}$`),
   ipv6: IPV6,
 }
 
