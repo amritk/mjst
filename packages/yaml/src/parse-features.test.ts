@@ -100,11 +100,21 @@ describe('%TAG and %YAML directives', () => {
     expect(parseDocument('%YAML 1.2\n---\na: 1\n').warnings).toHaveLength(0)
   })
 
-  it('warns about a repeated %YAML directive and an unknown directive', () => {
-    expect(parseDocument('%YAML 1.2\n%YAML 1.2\n---\na: 1\n').warnings.map((w) => w.code)).toEqual([
+  it('rejects a repeated %YAML directive but only warns about an unknown one', () => {
+    // At most one %YAML directive is legal, so a second is an error rather than
+    // advice; an unrecognised directive is reserved for future versions and the
+    // spec says to ignore it with a warning.
+    expect(parseDocument('%YAML 1.2\n%YAML 1.2\n---\na: 1\n').errors.map((e) => e.code)).toEqual([
       'DUPLICATE_DIRECTIVE',
     ])
     expect(parseDocument('%FOO bar\n---\na: 1\n').warnings.map((w) => w.code)).toEqual(['UNKNOWN_DIRECTIVE'])
+  })
+
+  it('rejects a %YAML directive whose version is malformed or trailed by content', () => {
+    expect(parseDocument('%YAML 1.1#...\n---\na: 1\n').errors.map((e) => e.code)).toEqual(['BAD_DIRECTIVE'])
+    expect(parseDocument('%YAML 1.2 foo\n---\na: 1\n').errors.map((e) => e.code)).toEqual(['BAD_DIRECTIVE'])
+    // A trailing comment is not trailing content.
+    expect(parseDocument('%YAML 1.2 # ok\n---\na: 1\n').errors).toHaveLength(0)
   })
 })
 
@@ -370,5 +380,154 @@ describe('resource-exhaustion guards', () => {
     expect(({} as { polluted?: unknown }).polluted).toBeUndefined()
     expect(out.safe).toBe(1)
     expect(Object.getOwnPropertyDescriptor(out, '__proto__')?.value).toEqual({ polluted: true })
+  })
+})
+
+describe('nodes written on the `---` line', () => {
+  it('keeps a block scalar opened on the marker line', () => {
+    // The `|` used to be skipped with the rest of the marker line, so the body
+    // below was re-read as a folded plain scalar and lost every line break.
+    expect(parseDocument('--- |\n  line1\n  line2\n').toJS()).toBe('line1\nline2\n')
+    expect(parseDocument('--- >\n  line1\n  line2\n').toJS()).toBe('line1 line2\n')
+  })
+
+  it('measures a marker-line block scalar against column 0, not the marker', () => {
+    // `--- |` puts the indicator at column 4, but the content is the document
+    // root and may legally start at column 0.
+    expect(parseDocument('--- >\nline1\nline2\n').toJS()).toBe('line1 line2\n')
+  })
+
+  it('ends a marker-line block scalar at the next document marker', () => {
+    const docs = parseAllDocuments('--- |\n%!PS\n...\n--- a\n')
+    expect(docs.map((d) => d.toJS())).toEqual(['%!PS\n', 'a'])
+  })
+
+  it('keeps a plain, quoted, or tagged scalar written on the marker line', () => {
+    expect(parseDocument('--- foo  # comment\n').toJS()).toBe('foo')
+    expect(parseDocument('--- "quoted\nstring"\n').toJS()).toBe('quoted string')
+    expect(parseDocument('---\tscalar\n').toJS()).toBe('scalar')
+    expect(parseAllDocuments('--- !!str 1.50\n').map((d) => d.toJS())).toEqual(['1.50'])
+  })
+
+  it('applies a tag written on the marker line to the collection below it', () => {
+    expect(parseDocument('--- !!set\n? a\n? b\n').toJS()).toEqual(new Set(['a', 'b']))
+  })
+
+  it('folds a multi-line plain scalar before !!str reads it', () => {
+    // `!!str` normally returns the raw source so `1.50` keeps its zero, but a
+    // scalar that wraps has line breaks in its source and folded text in its value.
+    expect(parseDocument('--- !!str\nd\ne\n').toJS()).toBe('d e')
+  })
+
+  it('reports a block mapping started on the marker line', () => {
+    expect(parseDocument('--- key1: value1\n    key2: value2\n').errors.map((e) => e.code)).toContain(
+      'UNEXPECTED_CONTENT',
+    )
+    expect(parseDocument('--- &anchor a: b\n').errors.map((e) => e.code)).toContain('UNEXPECTED_CONTENT')
+  })
+
+  it('still accepts a flow collection on the marker line', () => {
+    expect(parseDocument('--- {a: 1, b: 2}\n').toJS()).toEqual({ a: 1, b: 2 })
+    expect(parseDocument('--- [1, 2]\n').errors).toHaveLength(0)
+  })
+
+  it('stops an unterminated quoted scalar at a document marker', () => {
+    // Without this the open quote swallows every document after it.
+    expect(parseDocument('---\n"\n---\n"\n').errors.map((e) => e.code)).toContain('UNTERMINATED_QUOTE')
+    // A `...` that is not a marker (no trailing space) is ordinary content.
+    expect(parseDocument('--- "a\n...x\nb"\n').toJS()).toBe('a ...x b')
+  })
+})
+
+describe('flow scalars spanning lines', () => {
+  it('resolves the core schema for an entry that ends its line', () => {
+    // The single-line form always resolved; the wrapped form returned the raw
+    // text, so the same document typed differently depending on its line breaks.
+    expect(parseDocument('{ a: 1,\n  b: 2 }\n').toJS()).toEqual({ a: 1, b: 2 })
+    expect(parseDocument('[ 1,\n  2.5,\n  true ]\n').toJS()).toEqual([1, 2.5, true])
+  })
+
+  it('ends a key at a `:` that opens the next line', () => {
+    expect(parseDocument('{foo\n: bar}\n').toJS()).toEqual({ foo: 'bar' })
+    expect(parseDocument('k: {\n k\n :\n v\n }\n').toJS()).toEqual({ k: { k: 'v' } })
+  })
+
+  it('does not fold a comment line into the scalar', () => {
+    expect(parseDocument('[ word1\n# comment\n, word2]\n').toJS()).toEqual(['word1', 'word2'])
+  })
+
+  it('still folds a genuinely multi-line scalar to spaced text', () => {
+    expect(parseDocument('[ one\n  two ]\n').toJS()).toEqual(['one two'])
+  })
+})
+
+describe('double-quoted folding and escapes', () => {
+  it('keeps escaped whitespace that sits where folding would strip it', () => {
+    // The `\t` is content; only unescaped trailing whitespace is folding padding.
+    expect(parseDocument('a: "x\\t\n  y"\n').toJS()).toEqual({ a: 'x\t y' })
+    expect(parseDocument('a: "x\t\n  y"\n').toJS()).toEqual({ a: 'x y' })
+  })
+
+  it('swallows the break and the next line indentation on a `\\` continuation', () => {
+    // The escaped break must not first fold to a space the `\` then absorbs.
+    expect(parseDocument('a: "one \\\n  \\ two"\n').toJS()).toEqual({ a: 'one  two' })
+  })
+
+  it('keeps a trailing backslash on the closing line literal', () => {
+    expect(parseDocument('a: "x\\\\"\n').toJS()).toEqual({ a: 'x\\' })
+  })
+})
+
+describe('block scalar folding', () => {
+  it('treats a tab-led line as more-indented, so the breaks around it stay literal', () => {
+    expect(parseDocument('>\n  foo \n \n  \t bar\n\n  baz\n').toJS()).toBe('foo \n\n\t bar\n\nbaz\n')
+  })
+
+  it('keeps leading blank lines and interior indentation in a literal scalar', () => {
+    expect(parseDocument('--- |\n \n  \n  literal\n   \n  \n  text\n\n # Comment\n').toJS()).toBe(
+      '\n\nliteral\n \n\ntext\n',
+    )
+  })
+
+  it('keeps trailing blank lines under `+` chomping', () => {
+    expect(parseAllDocuments('--- |+\n ab\n \n  \n...\n').map((d) => d.toJS())).toEqual(['ab\n\n \n'])
+  })
+})
+
+describe('stream-level directive grammar', () => {
+  it('rejects a directive that no `...` footer precedes', () => {
+    expect(
+      parseAllDocuments('---\nkey: value\n%YAML 1.2\n---\n')
+        .flatMap((d) => d.errors)
+        .map((e) => e.code),
+    ).toContain('UNEXPECTED_DIRECTIVE')
+    // A `...` before it makes the same directive legal.
+    expect(parseAllDocuments('--- |\n%!PS\n...\n%YAML 1.2\n---\n# Empty\n...\n').flatMap((d) => d.errors)).toHaveLength(
+      0,
+    )
+  })
+
+  it('rejects a directive no document follows', () => {
+    const docs = parseAllDocuments('%YAML 1.2\n')
+    expect(docs.flatMap((d) => d.errors).map((e) => e.code)).toContain('UNEXPECTED_DIRECTIVE')
+  })
+
+  it('rejects content after a `...` footer', () => {
+    expect(
+      parseAllDocuments('---\nkey: value\n... invalid\n')
+        .flatMap((d) => d.errors)
+        .map((e) => e.code),
+    ).toContain('UNEXPECTED_CONTENT')
+  })
+
+  it('does not carry a %TAG handle into the next document', () => {
+    const docs = parseAllDocuments('%TAG !p! tag:example.com,2011:\n--- !p!A\na: b\n--- !p!B\nc: d\n')
+    expect(docs[0]?.errors ?? []).toHaveLength(0)
+    expect((docs[1]?.errors ?? []).map((e) => e.code)).toContain('UNKNOWN_TAG_HANDLE')
+  })
+
+  it('rejects a tag holding a flow indicator', () => {
+    expect(parseDocument('---\n!invalid{}tag scalar\n').errors.map((e) => e.code)).toContain('BAD_TAG')
+    expect(parseDocument('- !!str, xxx\n').errors.map((e) => e.code)).toContain('BAD_TAG')
   })
 })
