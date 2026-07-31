@@ -1,4 +1,5 @@
 import { getByPointer, pointerToPath } from './get-by-pointer'
+import { DEFAULT_MAX_DEPTH } from './max-depth'
 import type { RefKeyword } from './reference'
 import type { JsonPath } from './types'
 
@@ -103,7 +104,11 @@ const baseAfterId = (node: Record<string, unknown>, enclosingBase: string): stri
  * every anchor under the base URI it is scoped to. First declaration wins on
  * a duplicate URI or anchor name, matching document order.
  */
-export const buildResourceRegistry = (root: unknown, initialBase: string = SYNTHETIC_BASE): ResourceRegistry => {
+export const buildResourceRegistry = (
+  root: unknown,
+  initialBase: string = SYNTHETIC_BASE,
+  maxDepth: number = DEFAULT_MAX_DEPTH,
+): ResourceRegistry => {
   const resources: ResourceRegistry['resources'] = new Map()
   const staticAnchors: ResourceRegistry['staticAnchors'] = new Map()
   const dynamicAnchors: ResourceRegistry['dynamicAnchors'] = new Map()
@@ -128,10 +133,15 @@ export const buildResourceRegistry = (root: unknown, initialBase: string = SYNTH
     }
   }
 
-  const walk = (node: unknown, base: string, pointer: JsonPath): void => {
-    if (node === null || typeof node !== 'object') return
+  // Stops at `maxDepth` for the same reason the resolvers do — this walk is
+  // recursive, and a pathologically nested document would blow the stack before
+  // resolution even started. Truncating here is safe rather than silent: the
+  // resolver walks at least as deep as this does on the same path, so it hits
+  // its own limit and records the error the caller sees.
+  const walk = (node: unknown, base: string, pointer: JsonPath, depth: number): void => {
+    if (node === null || typeof node !== 'object' || depth > maxDepth) return
     if (Array.isArray(node)) {
-      for (let i = 0; i < node.length; i++) walk(node[i], base, [...pointer, i])
+      for (let i = 0; i < node.length; i++) walk(node[i], base, [...pointer, i], depth + 1)
       return
     }
     const record = node as Record<string, unknown>
@@ -140,7 +150,7 @@ export const buildResourceRegistry = (root: unknown, initialBase: string = SYNTH
     registerAnchors(record, nodeBase, pointer)
     for (const key of Object.keys(record)) {
       if (NON_SCHEMA_KEYWORDS.has(key)) continue
-      walk(record[key], nodeBase, [...pointer, key])
+      walk(record[key], nodeBase, [...pointer, key], depth + 1)
     }
   }
 
@@ -152,7 +162,7 @@ export const buildResourceRegistry = (root: unknown, initialBase: string = SYNTH
   if (!resources.has(withoutFragment(initialBase))) {
     resources.set(withoutFragment(initialBase), { value: root, pointer: [] })
   }
-  walk(root, initialBase, [])
+  walk(root, initialBase, [], 0)
 
   return { resources, staticAnchors, dynamicAnchors, rootBase, root }
 }

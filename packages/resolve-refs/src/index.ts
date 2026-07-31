@@ -1,3 +1,4 @@
+export { assertPublicHost, type HostLookup } from './assert-public-host'
 export { getByPointer, pointerToPath } from './get-by-pointer'
 export { isPrivateHost } from './is-private-host'
 export { type ResolveRefsOptions, resolveRefs } from './resolve-refs'

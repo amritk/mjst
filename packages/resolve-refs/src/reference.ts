@@ -1,4 +1,5 @@
 import { getByPointer, pointerToPath } from './get-by-pointer'
+import { DEFAULT_MAX_DEPTH } from './max-depth'
 import type { JsonPath } from './types'
 
 /**
@@ -39,24 +40,28 @@ export type ResolvedTarget = { value: unknown; pointer: JsonPath }
  */
 const search = (root: unknown, predicate: (obj: Record<string, unknown>) => boolean): ResolvedTarget | undefined => {
   const seen = new Set<object>()
-  const walk = (node: unknown, pointer: JsonPath): ResolvedTarget | undefined => {
-    if (node === null || typeof node !== 'object' || seen.has(node)) return undefined
+  // Depth-capped like every other walk in the package: this one is recursive
+  // too, and an anchor lookup must not be the thing that blows the stack on a
+  // pathologically nested document. An anchor buried past the cap simply is not
+  // found, which the callers already report as an unresolvable reference.
+  const walk = (node: unknown, pointer: JsonPath, depth: number): ResolvedTarget | undefined => {
+    if (node === null || typeof node !== 'object' || seen.has(node) || depth > DEFAULT_MAX_DEPTH) return undefined
     seen.add(node)
     if (!Array.isArray(node) && predicate(node as Record<string, unknown>)) return { value: node, pointer }
     if (Array.isArray(node)) {
       for (let i = 0; i < node.length; i++) {
-        const found = walk(node[i], [...pointer, i])
+        const found = walk(node[i], [...pointer, i], depth + 1)
         if (found) return found
       }
     } else {
       for (const key of Object.keys(node)) {
-        const found = walk((node as Record<string, unknown>)[key], [...pointer, key])
+        const found = walk((node as Record<string, unknown>)[key], [...pointer, key], depth + 1)
         if (found) return found
       }
     }
     return undefined
   }
-  return walk(root, [])
+  return walk(root, [], 0)
 }
 
 /**

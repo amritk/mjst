@@ -156,4 +156,44 @@ describe('resolve-refs', () => {
     const node = (resolved as { ref: object }).ref
     expect(origins?.get(node)).toEqual({ location: '', pointer: ['a/b', 'c~d', 0] })
   })
+
+  it('collects an error instead of throwing on a pathologically nested document', () => {
+    // 20k levels used to unwind the stack with a RangeError, breaking the
+    // package's promise that errors are collected and never thrown.
+    const depth = 20_000
+    const document: unknown = JSON.parse('{"a":'.repeat(depth) + '1' + '}'.repeat(depth))
+
+    const { errors } = resolveRefs(document)
+
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.message).toMatch(/exceeds the maximum depth of 512/)
+  })
+
+  it('reports the depth limit once, however many branches trip it', () => {
+    // Wide and deep: one error per branch would make the error array its own
+    // memory problem.
+    const deep = (): unknown => JSON.parse('{"a":'.repeat(600) + '1' + '}'.repeat(600))
+    const { errors } = resolveRefs({ one: deep(), two: deep(), three: deep() })
+
+    expect(errors).toHaveLength(1)
+  })
+
+  it('resolves normally right up to the depth limit', () => {
+    // A shallow document must not pay for the cap.
+    const { resolved, errors } = resolveRefs(
+      { a: { b: { c: { $ref: '#/$defs/x' } } }, $defs: { x: { type: 'string' } } },
+      { maxDepth: 8 },
+    )
+
+    expect(errors).toEqual([])
+    expect(resolved).toMatchObject({ a: { b: { c: { type: 'string' } } } })
+  })
+
+  it('honors a caller-supplied maxDepth', () => {
+    const { resolved, errors } = resolveRefs({ a: { b: { c: { d: 1 } } } }, { maxDepth: 2 })
+
+    expect(errors[0]?.message).toMatch(/exceeds the maximum depth of 2/)
+    // The subtree past the limit is handed back unresolved rather than dropped.
+    expect(resolved).toMatchObject({ a: { b: { c: { d: 1 } } } })
+  })
 })

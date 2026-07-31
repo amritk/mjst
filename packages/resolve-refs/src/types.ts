@@ -49,9 +49,41 @@ export type ResolveOptions = {
    */
   remote?: boolean
   /**
+   * Whether `$ref`s to other files on disk may be read. Defaults to `true`.
+   * Pass `false` for a document from an untrusted source: the root document
+   * you named is still read (it is what you asked for), but every cross-file
+   * `$ref` out of it is refused. Internal `#/...` refs are unaffected.
+   */
+  localRefs?: boolean
+  /**
+   * Directories a local `$ref` must resolve inside. Defaults to
+   * `[dirname(rootLocation)]` — the folder holding the document being resolved
+   * — so a `$ref` cannot walk out of the document tree it belongs to
+   * (`{"$ref": "../../../etc/passwd"}`, or an absolute `/etc/passwd`).
+   *
+   * Set it explicitly for the common split-spec layout where a document refers
+   * to shared schemas in a sibling folder:
+   *
+   * ```ts
+   * resolveRefsFromFile('./specs/v2/api.json', { allowedRoots: ['./specs'] })
+   * ```
+   *
+   * Entries are resolved against the current working directory. Both the
+   * lexical and the symlink-resolved path must land inside a root, so a symlink
+   * planted in the tree cannot be used to escape it.
+   */
+  allowedRoots?: string[]
+  /**
    * If non-empty, only these hosts (e.g. `api.example.com`) may be fetched for
    * remote `$ref`s. An empty/undefined list allows any host (subject to
-   * `remote`). An explicit entry here always bypasses the private-host guard.
+   * `remote`). An explicit entry here always bypasses the private-host guard
+   * (including the DNS check — see `verifyDns`).
+   *
+   * Matching is case-insensitive. An entry with **no port** (`example.com`)
+   * matches the host on any port; an entry **with** a port
+   * (`example.com:8443`) must match the URL's port exactly, where a URL that
+   * omits the port counts as its protocol default (`443` for https, `80` for
+   * http).
    */
   allowedHosts?: string[]
   /**
@@ -61,6 +93,19 @@ export type ResolveOptions = {
    * endpoint). An explicit `allowedHosts` entry always bypasses this guard.
    */
   allowPrivateHosts?: boolean
+  /**
+   * Resolve each remote host and refuse it when any address it resolves to is
+   * non-public. Defaults to `true`, which is what stops a public-looking name
+   * that points at a private address (`127.0.0.1.nip.io`) — the URL-only guard
+   * cannot see those. Pass `false` where names are resolved somewhere else
+   * (behind an egress proxy) and a local lookup would fail; allow-listed hosts
+   * skip the check either way.
+   *
+   * This narrows DNS rebinding rather than closing it: the record can still
+   * change between the check and the connection, which would take pinning the
+   * socket to the verified address to prevent.
+   */
+  verifyDns?: boolean
   /**
    * Custom content parser. Receives the raw text of every loaded document and
    * its absolute location (file path or URL). Defaults to `JSON.parse`.
@@ -107,15 +152,44 @@ export type ResolveOptions = {
   ) => Promise<Response>
   /** Milliseconds before an unresponsive remote fetch is aborted. Defaults to `30_000`. */
   timeoutMs?: number
+  /**
+   * Milliseconds the whole resolve may take, across every document. Defaults to
+   * `60_000`. `timeoutMs` bounds one hop; without an aggregate budget a document
+   * with hundreds of `$ref`s could hold the process for hours by paying the
+   * per-hop timeout over and over. Once it elapses, no further document is
+   * loaded and the overrun is reported on `errors`.
+   */
+  totalTimeoutMs?: number
   /** Maximum redirect hops to follow per remote document. Defaults to `5`. */
   maxRedirects?: number
+  /**
+   * Maximum number of documents (root included) a single resolve may load.
+   * Defaults to `500`. A hostile document listing hundreds of distinct URLs
+   * otherwise turns this resolver into an egress amplifier — and each fetched
+   * document can add more refs of its own. Once the cap is hit, loading stops
+   * and the remaining refs degrade like any unresolvable ref.
+   */
+  maxDocuments?: number
   /** Maximum bytes buffered per remote document. Defaults to `16` MiB. */
   maxBytes?: number
+  /**
+   * How deep the resolver walks before leaving a subtree unresolved and
+   * recording an error. Defaults to `512`. Guards the recursive walk against a
+   * pathologically nested document, which would otherwise blow the call stack
+   * with a `RangeError` — a thrown error this package promises never to throw.
+   */
+  maxDepth?: number
   /**
    * Whether fetched remote documents may be served from (and stored into) the
    * process-wide session cache. Pass `false` to bypass it for one call: every
    * remote document is re-fetched and nothing new is cached — useful when a
    * remote schema is known to have changed mid-session. Defaults to `true`.
+   *
+   * The cache is keyed by URL **and** by the credentials/transport it was
+   * fetched with (`headers`, `fetch`, `parse`, and the limits), so a call
+   * carrying one tenant's token can never serve its document to a call carrying
+   * different (or no) credentials. It is bounded in both size and age; see
+   * `clearRemoteCache`.
    */
   cache?: boolean
 }

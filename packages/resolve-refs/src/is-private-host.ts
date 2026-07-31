@@ -1,19 +1,34 @@
 /**
  * Best-effort check for a hostname that resolves to a non-public address —
  * loopback, private (RFC 1918 / ULA), link-local (incl. the `169.254.169.254`
- * cloud-metadata endpoint), or otherwise host-local. This is a syntactic guard
- * on the URL only; it does not perform DNS, so a public name that resolves to a
- * private IP is not caught here. It exists to stop the obvious SSRF footguns
- * when resolving remote `$ref`s.
+ * cloud-metadata endpoint), or otherwise host-local — plus a small denylist of
+ * names that always mean "infrastructure endpoint" (`metadata.google.internal`,
+ * anything under `.internal`, …).
+ *
+ * This is a **syntactic** guard on the URL only: it does not perform DNS, so a
+ * public name that resolves to a private IP (`127.0.0.1.nip.io` and friends, or
+ * a rebinding record) is not caught here. Use `assertPublicHost` for that — it
+ * resolves the name and runs every returned address back through this check.
+ * This one stays synchronous and pure because it is the cheap first pass, and
+ * because callers outside the fetch path (the CLI, `@amritk/lint`) use it as a
+ * plain predicate.
  */
 
-/** True for an IPv4 address (given its first two octets) in a non-public range. */
-const isPrivateIpv4 = (a: number, b: number): boolean => {
+/** True for an IPv4 address (as a 32-bit number) in a non-public range. */
+const isPrivateIpv4 = (value: number): boolean => {
+  const a = (value >>> 24) & 0xff
+  const b = (value >>> 16) & 0xff
+  const c = (value >>> 8) & 0xff
   if (a === 10 || a === 127 || a === 0) return true
   if (a === 169 && b === 254) return true // link-local + cloud metadata
   if (a === 172 && b >= 16 && b <= 31) return true
   if (a === 192 && b === 168) return true
   if (a === 100 && b >= 64 && b <= 127) return true // CGNAT
+  if (a === 198 && (b === 18 || b === 19)) return true // 198.18.0.0/15 benchmarking
+  // 192.0.0.0/24 — IETF protocol assignments (DS-Lite `192.0.0.1`, NAT64
+  // discovery, …). Only the /24, so the ordinary public space in 192.0.0.0/16
+  // (TEST-NET-1 aside) stays reachable.
+  if (a === 192 && b === 0 && c === 0) return true
   return false
 }
 
@@ -26,12 +41,12 @@ const parseIpv4Part = (s: string): number | null => {
 }
 
 /**
- * Resolves the first two octets of an IPv4 host written in any inet_aton form
- * (dotted/decimal/octal/hex, 1–4 parts), or `null` if it is not an IPv4 literal.
- * The WHATWG URL parser normalizes these to dotted-decimal before they reach us,
- * but a direct caller (this is an exported guard) can pass the raw form.
+ * Resolves an IPv4 host written in any inet_aton form (dotted/decimal/octal/hex,
+ * 1–4 parts) to its 32-bit value, or `null` if it is not an IPv4 literal. The
+ * WHATWG URL parser normalizes these to dotted-decimal before they reach us, but
+ * a direct caller (this is an exported guard) can pass the raw form.
  */
-const ipv4Octets = (host: string): [number, number] | null => {
+const ipv4Value = (host: string): number | null => {
   if (!/^[0-9a-fx.]+$/i.test(host)) return null
   const parts = host.split('.')
   if (parts.length === 0 || parts.length > 4) return null
@@ -54,7 +69,7 @@ const ipv4Octets = (host: string): [number, number] | null => {
   if (last > 256 ** remaining - 1) return null
   value = value * 256 ** remaining + last
   if (value > 0xffffffff) return null
-  return [(value >>> 24) & 0xff, (value >>> 16) & 0xff]
+  return value >>> 0
 }
 
 /**
@@ -106,6 +121,16 @@ const ipv4EmbeddedInIpv6 = (g: number[]): number | null => {
   return null
 }
 
+/**
+ * Names that always identify infrastructure rather than a public document, no
+ * matter what they resolve to. `metadata.google.internal` / `metadata.goog` are
+ * the GCP instance-metadata endpoints (the `169.254.169.254` IP check misses
+ * them because callers reach them by name), `instance-data` is the EC2 alias,
+ * and a bare `metadata` is the search-domain-completed form of both. Cheap and
+ * unambiguous — nobody publishes a schema at these names.
+ */
+const DENIED_HOST_NAMES = new Set(['metadata', 'metadata.google.internal', 'metadata.goog', 'instance-data'])
+
 export const isPrivateHost = (hostname: string): boolean => {
   // Strip IPv6 brackets and any trailing dot(s): `localhost.` is the FQDN-root
   // form of `localhost` and resolves to the same loopback address, so it must
@@ -115,20 +140,27 @@ export const isPrivateHost = (hostname: string): boolean => {
     .replace(/\.+$/, '')
     .toLowerCase()
   if (host === 'localhost' || host.endsWith('.localhost')) return true
+  if (DENIED_HOST_NAMES.has(host)) return true
+  // `.internal` is an ICANN-reserved TLD for private use (and what AWS/GCP hand
+  // out inside a VPC), so anything under it is by definition not public.
+  if (host.endsWith('.internal') || host.endsWith('.metadata.goog')) return true
 
   if (host.includes(':')) {
     // --- IPv6 (and IPv4-mapped IPv6) ---
     if (host === '::1' || host === '::') return true
-    // fe80::/10 link-local spans fe80–febf (third nibble 8–b).
+    // fe80::/10 link-local spans fe80–febf (third nibble 8–b); fec0::/10 is the
+    // deprecated site-local range (fec0–feff), still routed on plenty of
+    // networks and still not public.
     if (/^fe[89ab][0-9a-f]:/.test(host)) return true
+    if (/^fe[c-f][0-9a-f]:/.test(host)) return true
     if (host.startsWith('fc') || host.startsWith('fd')) return true // fc00::/7 unique-local
 
     // IPv4-mapped/compatible, dotted (`::ffff:127.0.0.1`, `::127.0.0.1`) — the URL
     // parser rewrites these to hex, but a direct caller may pass the dotted form.
     const dotted = /:((?:\d{1,3}\.){3}\d{1,3})$/.exec(host)
     if (dotted?.[1]) {
-      const oct = ipv4Octets(dotted[1])
-      if (oct) return isPrivateIpv4(oct[0], oct[1])
+      const value = ipv4Value(dotted[1])
+      if (value !== null) return isPrivateIpv4(value)
     }
     // Every hex IPv4-in-IPv6 embedding `new URL()` can produce (mapped,
     // compatible, translated, NAT64) — via a full expansion rather than a
@@ -137,13 +169,13 @@ export const isPrivateHost = (hostname: string): boolean => {
     const groups = expandHexIpv6(host)
     if (groups) {
       const embedded = ipv4EmbeddedInIpv6(groups)
-      if (embedded !== null) return isPrivateIpv4((embedded >>> 24) & 0xff, (embedded >>> 16) & 0xff)
+      if (embedded !== null) return isPrivateIpv4(embedded)
     }
     return false
   }
 
   // --- IPv4 (any inet_aton encoding) ---
-  const oct = ipv4Octets(host)
-  if (oct) return isPrivateIpv4(oct[0], oct[1])
+  const value = ipv4Value(host)
+  if (value !== null) return isPrivateIpv4(value)
   return false
 }
