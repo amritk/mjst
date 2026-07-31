@@ -48,6 +48,26 @@ describe('build-cookies-object', () => {
     expect(result).toEqual({ token: 'a=b=c' })
   })
 
+  // Browsers send the most specific cookie first, so an attacker-planted
+  // `Path=/` duplicate lands last — keeping the first value is what stops it
+  // shadowing the real session cookie.
+  it('keeps the first value when a name repeats', () => {
+    const result = buildCookiesObject('  s = xyz ; s=second', new Set(['s']), NO_COERCIONS)
+    expect(result).toEqual({ s: 'xyz' })
+  })
+
+  it('keeps the first value even when it is empty', () => {
+    const result = buildCookiesObject('session=; session=planted', new Set(['session']), NO_COERCIONS)
+    expect(result).toEqual({ session: '' })
+  })
+
+  // `in` would report every prototype member as already present, silently
+  // dropping a cookie the contract declared.
+  it('reads a declared cookie whose name collides with an Object prototype member', () => {
+    const result = buildCookiesObject('toString=ok', new Set(['toString']), NO_COERCIONS)
+    expect(result).toEqual({ toString: 'ok' })
+  })
+
   it('is case-sensitive on names, per RFC 6265', () => {
     const result = buildCookiesObject('Session=upper; session=lower', new Set(['session']), NO_COERCIONS)
     expect(result).toEqual({ session: 'lower' })

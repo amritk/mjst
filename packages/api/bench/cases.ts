@@ -75,6 +75,34 @@ const compiledFetch = (): Promise<CompiledFetch> => {
   return compiled
 }
 
+/**
+ * A deliberately wide routing table — 100 parameterized paths, each served
+ * under five methods — built here rather than in `routes.ts` because
+ * `compileToModule` imports that module wholesale and would emit 500 route
+ * functions for it.
+ *
+ * None of these routes declare request schemas, and that is the point: these
+ * cases exist to isolate *dispatch* from coercion and validation, so a
+ * regression in route matching shows up undiluted. The `/resource/{id}` shape
+ * is the common one, and the one a per-method linear scan handles worst.
+ */
+const WIDE_ROUTE_COUNT = 100
+const wideApi = async (): Promise<{ handle: ApiHandle }> => {
+  const { createApi, defineRoute } = await import('../src/index.ts')
+  const methods = ['get', 'post', 'put', 'patch', 'delete'] as const
+  const routes = Array.from({ length: WIDE_ROUTE_COUNT }, (_unused, index) =>
+    methods.map((method) =>
+      defineRoute({
+        method,
+        path: `/resource${index}/{id}`,
+        responses: { 204: {} },
+        handler: () => ({ status: 204 }),
+      }),
+    ),
+  ).flat()
+  return createApi({ routes })
+}
+
 const POST_BODY = JSON.stringify({ id: 1, name: 'Ada', email: 'ada@example.com' })
 
 export const API_BENCH_CASES: readonly ApiBenchCase[] = [
@@ -100,6 +128,27 @@ export const API_BENCH_CASES: readonly ApiBenchCase[] = [
       const api = await runtimeApi()
       const postRequest = request('POST', '/users', '', { id: 1, name: 'Ada', email: 'ada@example.com' })
       return () => api.handle(postRequest).then((response) => response.status)
+    },
+  },
+  {
+    name: 'dynamic GET, 500-route table, last match (runtime)',
+    setup: async () => {
+      const api = await wideApi()
+      // The last path registered for GET: worst case for a linear scan,
+      // ordinary for a shape-bucketed one.
+      const lastRequest = request('GET', `/resource${WIDE_ROUTE_COUNT - 1}/42`)
+      return () => api.handle(lastRequest).then((response) => response.status)
+    },
+  },
+  {
+    name: 'unroutable path, 500-route table (runtime)',
+    setup: async () => {
+      const api = await wideApi()
+      // What a vulnerability scanner sends. The miss pays the full scan once
+      // for its own method, then again per method while the 405 `allow` list
+      // is worked out — so this is the case that punishes unrouted traffic.
+      const missRequest = request('GET', '/nothing-here/42')
+      return () => api.handle(missRequest).then((response) => response.status)
     },
   },
   {
