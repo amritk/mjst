@@ -729,6 +729,60 @@ export const doubleRead = defineRoute({
   }),
 })
 
+/**
+ * Every declared slot named `__proto__` at once — path parameter, header,
+ * cookie, and body property.
+ *
+ * The schemas are built with `JSON.parse` on purpose: written as object
+ * literals the `__proto__` key would invoke the prototype setter and never
+ * become a property at all, so the contract would silently declare nothing.
+ * Parsing is also how a real contract acquires such a key — a schema loaded
+ * from a config file, a database row, or an imported OpenAPI document.
+ *
+ * This is the regression pin for a compiled-engine validation bypass: the
+ * emitter used to bake schema constants as bare object literals, so the key
+ * vanished at module evaluation and the compiled engine validated a schema the
+ * runtime engine never had. It diverged in both directions — rejecting
+ * `{"__proto__":"abc"}` under `additionalProperties: false` that the runtime
+ * accepted, and accepting `{"__proto__":123}` that the runtime rejected.
+ *
+ * Typed as `AnyRouteContract` because `JSON.parse` returns `any`, so the schemas
+ * carry no literal types for `defineRoute` to derive a handler signature from —
+ * which is exactly the situation of any contract assembled at runtime.
+ */
+export const protoSlots: AnyRouteContract = {
+  method: 'post',
+  path: '/proto/{__proto__}',
+  security: [],
+  request: {
+    params: JSON.parse(
+      '{"type":"object","properties":{"__proto__":{"type":"string","minLength":2}},"required":["__proto__"]}',
+    ),
+    headers: JSON.parse('{"type":"object","properties":{"__proto__":{"type":"string","minLength":3}}}'),
+    cookies: JSON.parse('{"type":"object","properties":{"__proto__":{"type":"string"}}}'),
+    body: JSON.parse(
+      '{"type":"object","properties":{"__proto__":{"type":"string","minLength":3}},"required":["__proto__"],"additionalProperties":false}',
+    ),
+  },
+  responses: { 200: { body: { type: 'object' } } },
+  // Read with `Object.hasOwn` so an absent slot reports as absent instead of
+  // handing back `Object.prototype`, and echoed under ordinary names so the
+  // reply itself never needs a `__proto__` key.
+  handler: ({ params, headers, cookies, body }) => ({
+    status: 200,
+    body: {
+      param: own(params, '__proto__'),
+      header: own(headers, '__proto__'),
+      cookie: own(cookies, '__proto__'),
+      bodyValue: own(body, '__proto__'),
+    },
+  }),
+}
+
+/** The own-property read the corpus handler above needs; `slot['__proto__']` would answer with the prototype. */
+const own = (slot: unknown, key: string): unknown =>
+  typeof slot === 'object' && slot !== null && Object.hasOwn(slot, key) ? (slot as Record<string, unknown>)[key] : null
+
 /** What the corpus observer keeps per observation, engine-comparable. `route` is null for unmatched requests. */
 export type RecordedObservation = { route: string | null; status: number; durationOk: boolean }
 

@@ -223,8 +223,12 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   // One hoisted constant rather than an object literal per call site: the
   // interpreter memoizes prepared validators per (schema, options) pair, so a
   // fresh literal each time would defeat that cache.
+  // Parsed rather than written as a literal, like every other baked constant —
+  // see `jsonConstant`. Nothing here can be named `__proto__` today, but a
+  // single rule ("contract data is parsed, never re-evaluated as source") is
+  // the only version of this that stays true as the emitter grows.
   const validateOptions =
-    options.formats === undefined ? undefined : JSON.stringify({ formats: options.formats } satisfies ValidateOptions)
+    options.formats === undefined ? undefined : jsonConstant({ formats: options.formats } satisfies ValidateOptions)
 
   const emitContext: EmitContext = {
     contextExport,
@@ -834,7 +838,7 @@ const emitRouteDeclarations = (
     const schema = request?.[slot]
     if (schema === undefined) continue
     const suffix = slotSuffix(slot, route.name)
-    lines.push(`const schema${suffix} = ${JSON.stringify(schema)}`)
+    lines.push(`const schema${suffix} = ${jsonConstant(schema)}`)
     if (emitContext.compileExport !== undefined) {
       // With a custom compiler nothing is inlined — the exported compiler
       // builds guard and collector at init, mirroring how the runtime engine
@@ -933,7 +937,7 @@ const emitRouteDeclarations = (
       if (bodySchema !== undefined) {
         const name = `replyBody_${route.name}_${code}`
         lines.push(
-          `const ${name}Schema = ${JSON.stringify(bodySchema)}`,
+          `const ${name}Schema = ${jsonConstant(bodySchema)}`,
           `const ${name} = ${compiledValidationExpression(`${name}Schema`, emitContext, used)}`,
         )
         checks.push(
@@ -943,7 +947,7 @@ const emitRouteDeclarations = (
       if (headerSchemas !== undefined) {
         const name = `replyHeaders_${route.name}_${code}`
         lines.push(
-          `const ${name}Schema = ${JSON.stringify({ type: 'object', properties: headerSchemas })}`,
+          `const ${name}Schema = ${jsonConstant({ type: 'object', properties: headerSchemas })}`,
           `const ${name} = ${compiledValidationExpression(`${name}Schema`, emitContext, used)}`,
         )
         checks.push(
@@ -995,6 +999,44 @@ const emitRouteDeclarations = (
 
 const slotSuffix = (slot: 'params' | 'query' | 'headers' | 'cookies' | 'body', name: string): string =>
   slot.charAt(0).toUpperCase() + slot.slice(1) + '_' + name
+
+/**
+ * Bakes contract data into the emitted module as `JSON.parse('…')` rather than
+ * as a bare object literal.
+ *
+ * An object literal is *not* a faithful copy of the JSON it was printed from:
+ * `{"__proto__": {...}}` written as source runs the prototype setter, so that
+ * key never becomes a property. For a validation schema that is a bypass, not
+ * a cosmetic difference — a contract declaring a property named `__proto__`
+ * (perfectly ordinary in a schema loaded from a config file or an imported
+ * OpenAPI document, where the key really does exist) compiled to a constant
+ * with the constraint silently missing. The compiled engine then accepted
+ * input the runtime engine rejected, and rejected input it accepted, which is
+ * exactly the divergence the differential corpus exists to prevent.
+ *
+ * `JSON.parse` has no such rule: every key lands as an own property, matching
+ * the schema objects the runtime engine holds (which came from a module or a
+ * parsed document, never from re-evaluated source). It is also not a cost —
+ * engines parse a JSON string literal faster than they build the equivalent
+ * object literal.
+ *
+ * The argument is emitted as a single-quoted JS string literal. `JSON.stringify`
+ * output never contains a raw control character or line terminator (it escapes
+ * everything below U+0020, and lone surrogates besides), so escaping the two
+ * characters that could end the literal — `\` and `'` — is sufficient. U+2028
+ * and U+2029 are escaped as well: they are legal unescaped inside a JSON
+ * string but were line terminators in JavaScript source before ES2019, and
+ * generated code should not depend on the parser being new enough.
+ */
+const jsonConstant = (value: unknown): string => {
+  const json = JSON.stringify(value)
+  const escaped = json
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')
+  return `JSON.parse('${escaped}')`
+}
 
 /** The request-context arguments every cold-path helper receives. */
 const ERROR_ARGS = 'request, url, rawPath, queryIndex, locals'
@@ -1080,17 +1122,31 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
   let paramsValue = 'undefined'
   if (request?.params !== undefined) {
     const plan = buildCoercionPlan(request.params)
-    const fields = route.paramNames.map((name, index) => {
+    const captureValue = (name: string, index: number): string => {
       const kind = plan.get(name)
       if (kind === 'number' || kind === 'boolean') {
         used['coercePrimitive'] = true
-        return `${JSON.stringify(name)}: coercePrimitive(p${index}, '${kind}')`
+        return `coercePrimitive(p${index}, '${kind}')`
       }
-      return `${JSON.stringify(name)}: p${index}`
-    })
+      return `p${index}`
+    }
+    // A capture named `{__proto__}` cannot ride in the object literal: the
+    // literal form runs the prototype setter, so the parameter would be gone
+    // before the guard sees it (and `required` could never be satisfied). The
+    // names are known here, so the split costs nothing at runtime — the
+    // ordinary case still emits exactly the literal it always did.
+    const entries = route.paramNames.map((name, index) => [name, captureValue(name, index)] as const)
+    const fields = entries.filter(([name]) => name !== '__proto__')
+    const protoFields = entries.filter(([name]) => name === '__proto__')
     const suffix = slotSuffix('params', route.name)
+    const literal = fields.map(([name, value]) => `${JSON.stringify(name)}: ${value}`).join(', ')
+    lines.push(`  const params = ${literal === '' ? '{}' : `{ ${literal} }`}`)
+    for (const [name, value] of protoFields) {
+      lines.push(
+        `  Object.defineProperty(params, ${JSON.stringify(name)}, { value: ${value}, writable: true, enumerable: true, configurable: true })`,
+      )
+    }
     lines.push(
-      `  const params = { ${fields.join(', ')} }`,
       `  if (!guard${suffix}(params)) return failValidation('params', collect${suffix}, params, ${ERROR_ARGS})`,
     )
     paramsValue = 'params'
@@ -1124,9 +1180,17 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
       const valueExpression =
         kind === 'number' || kind === 'boolean' ? `coercePrimitive(h${index}, '${kind}')` : `h${index}`
       if (kind === 'number' || kind === 'boolean') used['coercePrimitive'] = true
+      // `__proto__` is a legal HTTP field name, and a plain assignment under
+      // that one name runs the prototype setter instead of creating the
+      // property — the same drop `buildHeadersObject` guards against on the
+      // runtime side. The name is known at emit time, so only that case pays.
+      const write =
+        name === '__proto__'
+          ? `Object.defineProperty(headers, ${JSON.stringify(name)}, { value: ${valueExpression}, writable: true, enumerable: true, configurable: true })`
+          : `headers[${JSON.stringify(name)}] = ${valueExpression}`
       lines.push(
         `  const h${index} = request.headers.get(${JSON.stringify(name.toLowerCase())})`,
-        `  if (h${index} !== null) headers[${JSON.stringify(name)}] = ${valueExpression}`,
+        `  if (h${index} !== null) ${write}`,
       )
     })
     lines.push(

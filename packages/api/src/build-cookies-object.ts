@@ -1,4 +1,5 @@
 import { coercePrimitive } from './coerce-primitive'
+import { defineOwnProperty } from './define-own-property'
 import type { Coercion } from './types'
 
 /**
@@ -46,7 +47,9 @@ export const buildCookiesObject = (
         }
         const decoded = decodeCookieValue(value)
         const coercion = coercions.get(name)
-        defineCookie(
+        // `defineOwnProperty`, not `cookies[name] = …`: a declared cookie named
+        // '__proto__' would otherwise hit the prototype setter and vanish.
+        defineOwnProperty(
           cookies,
           name,
           coercion === 'number' || coercion === 'boolean' ? coercePrimitive(decoded, coercion) : decoded,
@@ -56,29 +59,6 @@ export const buildCookiesObject = (
     start = end + 1
   }
   return cookies
-}
-
-/**
- * Writes one declared cookie onto the record, even when it is named
- * `__proto__`.
- *
- * A plain `cookies['__proto__'] = value` runs `Object.prototype`'s `__proto__`
- * setter instead of creating a property, so the value silently disappears: a
- * contract declaring a `__proto__` cookie never sees it, and
- * `required: ['__proto__']` fails on every request no matter what the client
- * sent. The read side already treats the name as ordinary data (`Object.hasOwn`
- * above), so the write side has to as well. Same fix as `defineEntry` in
- * `@amritk/generate-validators` and `setMapKey` in `@amritk/yaml`.
- *
- * Note this is not a pollution hole either way — the setter ignores the string
- * values a cookie header carries — but a dropped value is a real, silent bug.
- */
-const defineCookie = (cookies: Record<string, unknown>, name: string, value: unknown): void => {
-  if (name === '__proto__') {
-    Object.defineProperty(cookies, name, { value, writable: true, enumerable: true, configurable: true })
-    return
-  }
-  cookies[name] = value
 }
 
 const decodeCookieValue = (value: string): string => {

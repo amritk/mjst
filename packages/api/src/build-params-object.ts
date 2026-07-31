@@ -1,4 +1,5 @@
 import { coercePrimitive } from './coerce-primitive'
+import { defineOwnProperty } from './define-own-property'
 import type { Coercion } from './types'
 
 /**
@@ -14,7 +15,13 @@ export const buildParamsObject = (
   const params: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(raw)) {
     const coercion = coercions.get(key)
-    params[key] = coercion === 'number' || coercion === 'boolean' ? coercePrimitive(value, coercion) : value
+    // The matcher already wrote `{__proto__}` as an own property; copying it
+    // with a plain assignment would undo that and drop the capture.
+    defineOwnProperty(
+      params,
+      key,
+      coercion === 'number' || coercion === 'boolean' ? coercePrimitive(value, coercion) : value,
+    )
   }
   return params
 }

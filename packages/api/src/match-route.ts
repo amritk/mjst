@@ -1,4 +1,5 @@
 import { decodeSegment } from './decode-segment'
+import { defineOwnProperty } from './define-own-property'
 import type { CompiledRoute, PathSegment, RouteTable } from './types'
 
 /**
@@ -252,17 +253,23 @@ const matchSegments = (
       if (expected !== actual) return undefined
     } else if (expected !== undefined) {
       params ??= {}
-      params[expected.name] = decodeSegment(actual)
+      // A pattern may name a capture `{__proto__}`; a plain assignment would
+      // run the prototype setter and lose it before validation ever sees it.
+      defineOwnProperty(params, expected.name, decodeSegment(actual))
     }
   }
   if (greedy && typeof tail === 'object') {
     params ??= {}
     // Decoded per segment then rejoined, so an encoded '/' inside one segment
     // cannot masquerade as a separator during matching.
-    params[tail.name] = segments
-      .slice(pattern.length - 1)
-      .map(decodeSegment)
-      .join('/')
+    defineOwnProperty(
+      params,
+      tail.name,
+      segments
+        .slice(pattern.length - 1)
+        .map(decodeSegment)
+        .join('/'),
+    )
   }
   return params ?? EMPTY_PARAMS
 }

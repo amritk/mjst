@@ -92,7 +92,8 @@ describe('formats', () => {
 
     const enforcing = emit('all')
 
-    expect(enforcing).toContain('const VALIDATE_OPTIONS = {"formats":"all"}')
+    // Parsed, not written as a literal — see `jsonConstant` in the emitter.
+    expect(enforcing).toContain(`const VALIDATE_OPTIONS = JSON.parse('{"formats":"all"}')`)
     expect(enforcing).toContain('validateGuard(schemaParams_findUser, VALIDATE_OPTIONS)')
     expect(enforcing).toContain('validate(schemaParams_findUser, VALIDATE_OPTIONS)')
     // No eval anywhere in the output, formats or not.

@@ -114,6 +114,24 @@ describe('match-route', () => {
     expect(matchRoute(table([post]), 'GET', '/users/7/posts/9')?.params).toEqual({ userId: '7', postId: '9' })
   })
 
+  // A pattern is free to name a capture `{__proto__}`. A plain
+  // `params[name] = value` would run the prototype setter, so the capture never
+  // reached the params object and the route's schema saw nothing at all.
+  it('captures a parameter named __proto__ as an ordinary own property', () => {
+    const fixed = route('GET', '/proto/{__proto__}')
+    const captured = matchRoute(table([fixed]), 'GET', '/proto/abc')?.params
+    expect(Object.getOwnPropertyNames(captured ?? {})).toEqual(['__proto__'])
+    expect(captured?.['__proto__']).toBe('abc')
+    expect(Object.getPrototypeOf(captured ?? {})).toBe(Object.prototype)
+  })
+
+  it('captures a greedy tail named __proto__ the same way', () => {
+    const greedy = route('GET', '/proto/{__proto__+}')
+    const captured = matchRoute(table([greedy]), 'GET', '/proto/a/b/c')?.params
+    expect(Object.getOwnPropertyNames(captured ?? {})).toEqual(['__proto__'])
+    expect(captured?.['__proto__']).toBe('a/b/c')
+  })
+
   // Registration order decides which of two overlapping routes wins, and the
   // matcher buckets candidates by their first segment — so a literal-first and
   // a parameter-first route that both match must still be tried in the order
