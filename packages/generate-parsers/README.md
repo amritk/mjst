@@ -162,13 +162,56 @@ Returns: `Promise<GeneratedFile[]>`.
 
 The generator handles:
 
-- `$ref` and `$dynamicRef` resolution, including JSON Schema 2020-12 `$dynamicAnchor`
+- `$ref` and `$dynamicRef` resolution, including JSON Schema 2020-12 `$dynamicAnchor` and a recursive root (`$ref: "#"`)
 - Discriminated and non-discriminated unions (`oneOf` / `anyOf`)
 - Enums and `const` values
 - Nested objects, arrays, records, and tuples (`prefixItems`, and the draft-07 array form of `items`)
 - Multi-type schemas (`type: ["string", "null"]`) and the OpenAPI 3.0 `nullable: true` spelling
 - Composition alongside a declared shape — `allOf` members and sibling unions are intersected into the type, not dropped
 - Pattern-based default values
+
+### Strict-mode validation coverage
+
+A `strict` parser throws on any document the schema rejects, and its accept /
+reject decision is held against [Ajv](https://ajv.js.org) (2020-12) by a set of
+differential fuzz suites. The whole Draft 2020-12 assertion vocabulary is
+enforced:
+
+| family | keywords |
+|:--|:--|
+| types | `type` (single and array form), `enum`, `const` (compared structurally) |
+| numbers | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf` |
+| strings | `minLength`, `maxLength` (counted in Unicode **code points**), `pattern` |
+| arrays | `items`, `prefixItems`, `additionalItems`, `minItems`, `maxItems`, `uniqueItems`, `contains`, `minContains`, `maxContains` |
+| objects | `properties`, `required`, `patternProperties`, `additionalProperties`, `propertyNames`, `minProperties`, `maxProperties`, `dependentRequired`, `dependentSchemas` |
+| composition | `allOf`, `anyOf`, `oneOf`, `not`, `if` / `then` / `else`, `$ref` (with its 2020-12 siblings), boolean schemas |
+| annotations | `unevaluatedProperties`, `unevaluatedItems` — including the keys and indices an `allOf` member, a `$ref` target, a matching `anyOf` / `oneOf` branch, an `if` / `then` / `else` arm, or a triggered `dependentSchemas` entry evaluated |
+
+Constraints bind their own family, with or without a declared `type`:
+`{ minimum: 5 }` rejects `4` and accepts `"anything"`, exactly as JSON Schema
+(and Ajv) specify.
+
+Three deliberate departures:
+
+- **`format` is an annotation**, not an assertion — matching Ajv's own default
+  (`ajv-formats` is opt-in there). Use
+  [`@amritk/runtime-validators`](../runtime-validators), whose `formats` option
+  asserts them.
+- **`multipleOf` compares within a magnitude-scaled tolerance** rather than
+  Ajv's exact `x / m` integer test, so `0.3` satisfies `multipleOf: 0.1` here and
+  fails there. This keeps generated parsers, generated validators, and the
+  runtime interpreter agreeing on the same document; IEEE-754 makes the exact
+  test reject values every author intends as valid.
+- **A type-less schema that declares `properties` still requires an object.**
+  Ajv accepts `"a string"` against `{ properties: { a: {} } }`; a parser has to
+  return the type it declares, and the declared type is an object.
+
+If a strict parser cannot enforce something — a `$ref` cycle it would have to
+inline because the build emits a single file, a subschema using a keyword it
+cannot prove — generation **fails with an error naming the keyword** rather than
+emitting a parser that quietly accepts what the schema forbids. Coercing
+(non-strict) parsers are documented to repair rather than reject, so they ignore
+the rejecting keywords by design.
 
 ---
 

@@ -31,6 +31,16 @@ const files = await buildSchema(schema, 'Document')
    (unless `typesOnly`) runtime helper files.
 4. **Default parsers COERCE invalid input to defaults** rather than throwing;
    pass `strict: true` (the 6th positional) to make them throw.
+5. **Strict mode enforces the whole Draft 2020-12 assertion vocabulary** —
+   including `unevaluatedProperties` / `unevaluatedItems`, `contains` bounds,
+   `propertyNames`, `dependent*`, `patternProperties`, tuple `prefixItems`, and a
+   `$ref`'s 2020-12 siblings — and is held against Ajv by differential fuzz. It
+   deliberately differs on three points (`format` is an annotation, `multipleOf`
+   uses a scaled tolerance, a type-less `properties` schema still requires an
+   object); see the README.
+6. **Strict generation FAILS LOUDLY on anything it cannot enforce** (e.g. a
+   recursive `$ref` it would have to inline when ref imports are off). Catch the
+   error and fall back to a coercing parser if that is not what you want.
 
 Only the `.` entry (`buildSchema`, `GeneratedFile`, `ImportExtension`).
 Install: `bun add @amritk/generate-parsers`.

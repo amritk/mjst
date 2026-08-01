@@ -32,6 +32,8 @@ import { getDiscriminatorValue } from '#helpers/get-discriminator-value'
 import { assertNoUnsupportedKeywords } from './assert-supported-keywords'
 import { generateEnumCaseInsensitiveCoercion } from './generate-enum-check'
 import {
+  generateBackstopAssertion,
+  generateCompositionChecks,
   generateContainsCheck,
   generateKeyedValueChecks,
   generateObjectKeywordChecks,
@@ -39,6 +41,7 @@ import {
   generateObjectStrictAssertion,
   generateScalarStrictAssertion,
   inlineAllOfMembers,
+  type StrictAssertionContext,
 } from './generate-strict-assertion'
 import {
   canEnforceUnion,
@@ -595,6 +598,7 @@ type UnionParserContext = {
 const generateRefUnionDispatch = (
   functionName: string,
   typeName: string,
+  schema: JSONSchema,
   branches: readonly JSONSchema[],
   strict: boolean | undefined,
   ctx: UnionParserContext,
@@ -641,8 +645,26 @@ const generateRefUnionDispatch = (
     const c = cases[i]
     if (c) expr = `_disc === ${JSON.stringify(c.value)} ? ${c.parser}(input) : ${expr}`
   }
-  return `export const ${functionName} = (input: unknown): ${typeName} => {\n  const _disc = ${discExpr};\n  return ${expr};\n};`
+  // Keywords the dispatch itself cannot express (`unevaluatedProperties` across
+  // the branches, a constraining `$ref` sibling) are asserted before dispatching.
+  const backstop = strict ? generateBackstopAssertion('input', schema, `[${typeName}]`, strictContext(ctx)) : []
+  const prelude = backstop.length > 0 ? `${backstop.join('\n')}\n` : ''
+  return `export const ${functionName} = (input: unknown): ${typeName} => {\n${prelude}  const _disc = ${discExpr};\n  return ${expr};\n};`
 }
+
+/**
+ * The strict-assertion view of a parser context. The two carry the same
+ * information under different names; the assertions need the root document (to
+ * resolve `$ref`s inline), the ref-import mode (which decides whether a `$ref` is
+ * enforced by delegation or has to be proven here), the type-name suffix and the
+ * strip mode.
+ */
+const strictContext = (ctx?: UnionParserContext): StrictAssertionContext => ({
+  useRefImports: ctx?.useRefImports ?? false,
+  suffix: ctx?.suffix ?? '',
+  ...(ctx?.rootSchema !== undefined ? { rootSchema: ctx.rootSchema } : {}),
+  ...(ctx?.stripUnknown !== undefined ? { stripUnknown: ctx.stripUnknown } : {}),
+})
 
 const generateNonObjectParser = (
   typeName: string,
@@ -659,7 +681,14 @@ const generateNonObjectParser = (
   if (unionCtx && isSchemaObject(schema) && (hasOneOf(schema) || hasAnyOf(schema))) {
     const branches = hasOneOf(schema) ? schema.oneOf : hasAnyOf(schema) ? schema.anyOf : []
     if (branches.length > 0 && branches.every((b) => isSchemaObject(b) && hasRef(b))) {
-      const dispatch = generateRefUnionDispatch(functionName, typeName, branches as JSONSchema[], strict, unionCtx)
+      const dispatch = generateRefUnionDispatch(
+        functionName,
+        typeName,
+        schema,
+        branches as JSONSchema[],
+        strict,
+        unionCtx,
+      )
       if (dispatch !== null) return dispatch
     }
   }
@@ -671,7 +700,18 @@ const generateNonObjectParser = (
   if (unionCtx?.useRefImports && isSchemaObject(schema) && hasRef(schema) && !hasProperties(schema)) {
     const refName = refToName((schema as { $ref: string }).$ref, unionCtx.suffix)
     if (refName !== typeName) {
-      return `export const ${functionName} = (input: unknown): ${typeName} => ${generateParserName(refName)}(input) as ${typeName};`
+      // 2020-12 keeps a `$ref`'s siblings in force, and the delegated parser
+      // knows nothing about them: `{ $ref: '#/$defs/base', minProperties: 2 }`
+      // used to hand the value straight to `parseBase` and drop the bound. In
+      // strict mode the backstop asserts the whole node (target included) before
+      // delegating.
+      const assertion = strict
+        ? generateBackstopAssertion('input', schema, `[${typeName}]`, strictContext(unionCtx))
+        : []
+      if (assertion.length === 0) {
+        return `export const ${functionName} = (input: unknown): ${typeName} => ${generateParserName(refName)}(input) as ${typeName};`
+      }
+      return `export const ${functionName} = (input: unknown): ${typeName} => {\n${assertion.join('\n')}\n  return ${generateParserName(refName)}(input) as ${typeName};\n};`
     }
   }
 
@@ -691,7 +731,15 @@ const generateNonObjectParser = (
         isExclusiveUnion(schema),
       )
       if (check !== null) {
-        return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!(${check})) throw new Error(${quoteJsString(`[${typeName}] value does not match any union branch`)});\n  return input as ${typeName};\n};`
+        // A union node carries its own keywords too — `unevaluatedProperties`
+        // over the branches, a `$ref` sibling — and this branch returns before
+        // any assertion builder runs, so the backstop is spliced in here.
+        const backstop = generateBackstopAssertion('input', schema, `[${typeName}]`, strictContext(unionCtx))
+        const assertions = [
+          `  if (!(${check})) throw new Error(${quoteJsString(`[${typeName}] value does not match any union branch`)});`,
+          ...backstop,
+        ].join('\n')
+        return `export const ${functionName} = (input: unknown): ${typeName} => {\n${assertions}\n  return input as ${typeName};\n};`
       }
     }
   }
@@ -755,7 +803,7 @@ const generateNonObjectParser = (
     !hasType(schema) &&
     (hasConst(schema) || hasEnum(schema) || hasAllOf(schema) || 'not' in schema || 'if' in schema)
   ) {
-    const assertion = generateScalarStrictAssertion(schema, typeName, unionCtx?.rootSchema)
+    const assertion = generateScalarStrictAssertion(schema, typeName, strictContext(unionCtx))
     if (assertion !== null) {
       return `export const ${functionName} = (input: unknown): ${typeName} => {\n${assertion}\n  return input as ${typeName};\n};`
     }
@@ -804,6 +852,10 @@ const generateNonObjectParser = (
                 `  if (!(${generateUniqueItemsCheck('input', schema)})) throw new Error(${quoteJsString(`[${typeName}] must NOT have duplicate items`)});`,
               ]
             : []),
+          // This path delegates elements to another parser and so never reaches
+          // generateScalarStrictAssertion — `unevaluatedItems` and friends would
+          // be lost with it.
+          ...generateBackstopAssertion('input', schema, `[${typeName}]`, strictContext(unionCtx)),
         ].join('\n')
       : ''
     // validateArray identity-returns the input array when every element parses
@@ -870,6 +922,17 @@ const generateNonObjectParser = (
   // "nothing safe to coerce to" behaviour for a disjunction.
   const isMultiType = isSchemaObject(schema) && Array.isArray(schema.type)
   if (!isSchemaObject(schema) || (!hasType(schema) && !isMultiType)) {
+    // A type-less schema can still constrain its value — `{ minimum: 5 }`,
+    // `{ $ref: … }`, `{ unevaluatedProperties: false }` — and a strict parser
+    // that casts past those promises a validation it never performed. The
+    // assertion builder returns null when there is genuinely nothing to check,
+    // which is the only case that keeps the bare cast.
+    if (strict) {
+      const assertion = generateScalarStrictAssertion(schema, typeName, strictContext(unionCtx))
+      if (assertion !== null) {
+        return `export const ${functionName} = (input: unknown): ${typeName} => {\n${assertion}\n  return input as ${typeName};\n};`
+      }
+    }
     // Schema without type information cannot be validated beyond a cast
     return `export const ${functionName} = (input: unknown): ${typeName} => input as ${typeName};`
   }
@@ -879,7 +942,7 @@ const generateNonObjectParser = (
   }
 
   if (strict) {
-    const assertion = generateScalarStrictAssertion(schema, typeName, unionCtx?.rootSchema)
+    const assertion = generateScalarStrictAssertion(schema, typeName, strictContext(unionCtx))
     if (assertion === null) {
       return `export const ${functionName} = (input: unknown): ${typeName} => input as ${typeName};`
     }
@@ -954,10 +1017,14 @@ const generateNonObjectParser = (
  * (`guard = false`). Returns `''` when the schema carries none of the keywords,
  * so existing output for every other schema is byte-for-byte unchanged.
  */
-const strictObjectKeywordPrelude = (schema: JSONSchema, typeName: string): string => {
+const strictObjectKeywordPrelude = (
+  schema: JSONSchema,
+  typeName: string,
+  context: StrictAssertionContext = {},
+): string => {
   if (!isSchemaObject(schema)) return ''
   const lines = [
-    ...generateObjectKeywordChecks('input', schema, `[${typeName}]`, false),
+    ...generateObjectKeywordChecks('input', schema, `[${typeName}]`, false, context),
     // `required` and the size bounds are the object-level constraints these
     // specialized parsers never had a place for: `{ type: 'object', required:
     // ['a'] }` and `{ type: 'object', minProperties: 2 }` carry no `properties`,
@@ -969,7 +1036,14 @@ const strictObjectKeywordPrelude = (schema: JSONSchema, typeName: string): strin
     // Values behind `patternProperties` / a schema-valued `additionalProperties`:
     // these parsers build their result by copying or coercing, so nothing
     // rejected a wrongly-typed pattern-matched value before this.
-    ...generateKeyedValueChecks('input', schema, `[${typeName}]`),
+    ...generateKeyedValueChecks('input', schema, `[${typeName}]`, context),
+    // Composition on a property-less object: these parsers delegate nothing, so
+    // `{ type: 'object', allOf: [{ $ref: … }] }` had no check at all.
+    ...generateCompositionChecks('input', schema, `[${typeName}]`, context),
+    // Whatever no specialized check above reaches (`unevaluated*`, a `$ref` with
+    // constraining siblings): these parsers never run generateObjectStrictAssertion,
+    // so the backstop has to be spliced in here too.
+    ...generateBackstopAssertion('input', schema, `[${typeName}]`, context),
   ]
   return lines.length > 0 ? `\n${lines.join('\n')}` : ''
 }
@@ -994,10 +1068,15 @@ const requiredWithoutPropertyLines = (schema: JSONSchema, typeName: string): str
  * Returns a shallow copy to avoid mutating the original input. `schema`, when
  * given, supplies any object-level keyword checks the strict parser must enforce.
  */
-const generateEmptyObjectParser = (typeName: string, strict?: boolean, schema?: JSONSchema): string => {
+const generateEmptyObjectParser = (
+  typeName: string,
+  strict?: boolean,
+  schema?: JSONSchema,
+  context: StrictAssertionContext = {},
+): string => {
   const functionName = generateParserName(typeName)
   if (strict) {
-    const prelude = schema !== undefined ? strictObjectKeywordPrelude(schema, typeName) : ''
+    const prelude = schema !== undefined ? strictObjectKeywordPrelude(schema, typeName, context) : ''
     return `export const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);${prelude}\n  return { ...input } as ${typeName};\n};`
   }
   return `export const ${functionName} = (input: unknown): ${typeName} => isObject(input) ? { ...input } as ${typeName} : {} as ${typeName};`
@@ -1176,7 +1255,7 @@ const generateObjectParser = (
 
   if (!hasProperties(schema)) {
     if (strict) {
-      return `${exportPrefix}const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);${strictObjectKeywordPrelude(schema, typeName)}\n  return input as ${typeName};\n};`
+      return `${exportPrefix}const ${functionName} = (input: unknown): ${typeName} => {\n  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);${strictObjectKeywordPrelude(schema, typeName, { useRefImports, suffix, stripUnknown, ...(rootSchema !== undefined ? { rootSchema } : {}) })}\n  return input as ${typeName};\n};`
     }
     return `${exportPrefix}const ${functionName} = (input: unknown): ${typeName} => isObject(input) ? input as ${typeName} : {} as ${typeName};`
   }
@@ -1911,6 +1990,7 @@ const generateStrictCombinedParser = (
   useRefImports: boolean,
   suffix: string,
   strict?: boolean,
+  context: StrictAssertionContext = {},
 ): string => {
   const declaredKeys = hasProperties(schema) ? Object.keys(schema.properties) : []
   // Below the inline threshold a key === "a" || key === "b" chain skips declared
@@ -1957,9 +2037,7 @@ const generateStrictCombinedParser = (
   // covers the object-level keyword checks, so it replaces the keyword-only
   // prelude. `.slice(1)` drops its `isObject` check (emitted just below). Coerce
   // mode (stripUnknown) keeps its lighter prelude.
-  const assertionPrelude = strict
-    ? generateObjectStrictAssertion(schema, typeName, { useRefImports, suffix }).slice(1)
-    : []
+  const assertionPrelude = strict ? generateObjectStrictAssertion(schema, typeName, context).slice(1) : []
   const keywordPrelude = assertionPrelude.length > 0 ? `\n${assertionPrelude.join('\n')}` : ''
 
   return `export const ${functionName} = (input: unknown): ${typeName} => {
@@ -1987,6 +2065,7 @@ const generateCombinedObjectParser = (
   strict?: boolean,
   stripUnknown = false,
   caseInsensitive = false,
+  context: StrictAssertionContext = {},
 ): string => {
   const functionName = generateParserName(typeName)
   const entries = generatePropertyEntries(schema, useRefImports, suffix, caseInsensitive)
@@ -2010,7 +2089,7 @@ const generateCombinedObjectParser = (
       strict,
       true,
       stripUnknown,
-      undefined,
+      context.rootSchema,
       NO_RESERVED_NAMES,
       caseInsensitive,
     )
@@ -2035,6 +2114,7 @@ const generateCombinedObjectParser = (
       useRefImports,
       suffix,
       strict,
+      context,
     )
   }
 
@@ -2053,6 +2133,7 @@ const generateCombinedObjectParser = (
       useRefImports,
       suffix,
       false,
+      context,
     )
   }
 
@@ -2066,7 +2147,7 @@ const generateCombinedObjectParser = (
       strict,
       true,
       stripUnknown,
-      undefined,
+      context.rootSchema,
       NO_RESERVED_NAMES,
       caseInsensitive,
     )
@@ -2091,7 +2172,7 @@ const generateCombinedObjectParser = (
     ? `    throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);`
     : `    return {} as unknown as ${typeName};`
 
-  const keywordPrelude = strict ? strictObjectKeywordPrelude(schema, typeName) : ''
+  const keywordPrelude = strict ? strictObjectKeywordPrelude(schema, typeName, context) : ''
 
   return `export const ${functionName} = (input: unknown): ${typeName} => {
   if (!isObject(input)) {
@@ -2119,16 +2200,17 @@ const generateAdditionalPropertiesParser = (
   useRefImports: boolean,
   suffix: string,
   strict?: boolean,
+  context: StrictAssertionContext = {},
 ): string => {
   const functionName = generateParserName(typeName)
   const additionalProps = schema.additionalProperties
 
   // Check if additionalProps is defined before using it
   if (!additionalProps) {
-    return generateEmptyObjectParser(typeName, strict, schema)
+    return generateEmptyObjectParser(typeName, strict, schema, context)
   }
 
-  const keywordPrelude = strict ? strictObjectKeywordPrelude(schema, typeName) : ''
+  const keywordPrelude = strict ? strictObjectKeywordPrelude(schema, typeName, context) : ''
 
   // If additionalProperties is a $ref and useRefImports is true, generate a loop
   if (useRefImports && isSchemaObject(additionalProps) && hasRef(additionalProps)) {
@@ -2220,11 +2302,12 @@ const generatePatternPropertiesParser = (
   useRefImports: boolean,
   suffix: string,
   strict?: boolean,
+  context: StrictAssertionContext = {},
 ): string => {
   const functionName = generateParserName(typeName)
 
   if (!('patternProperties' in schema) || typeof schema.patternProperties !== 'object') {
-    return generateEmptyObjectParser(typeName, strict, schema)
+    return generateEmptyObjectParser(typeName, strict, schema, context)
   }
 
   const patternProps = schema.patternProperties as Record<string, JSONSchema>
@@ -2232,7 +2315,7 @@ const generatePatternPropertiesParser = (
   // Find the first pattern and its schema
   const patterns = Object.entries(patternProps)
   if (patterns.length === 0) {
-    return generateEmptyObjectParser(typeName, strict, schema)
+    return generateEmptyObjectParser(typeName, strict, schema, context)
   }
 
   const [pattern, patternSchema] = patterns[0] as [string, JSONSchema]
@@ -2259,7 +2342,7 @@ const generatePatternPropertiesParser = (
   const notObjectBranch = strict
     ? `    throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);`
     : `    return {} as unknown as ${typeName};`
-  const keywordPrelude = strict ? strictObjectKeywordPrelude(schema, typeName) : ''
+  const keywordPrelude = strict ? strictObjectKeywordPrelude(schema, typeName, context) : ''
 
   // With `additionalProperties: false`, only keys matching a pattern survive:
   // others are rejected (strict) or stripped (coerce). Start from an empty
@@ -2497,6 +2580,14 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   const stripUnknown = options?.stripUnknown ?? false
   const caseInsensitive = options?.caseInsensitive ?? false
   const suffix = options?.typeSuffix ?? ''
+  // The strict assertions' view of this build: the document `$ref`s resolve
+  // against, and whether those refs are enforced by an imported parser.
+  const context: StrictAssertionContext = {
+    useRefImports,
+    suffix,
+    stripUnknown,
+    ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
+  }
 
   // Special case for the self-referential JSON Schema meta-schema type (e.g.
   // `Schema` / `SchemaObject`) - it can be any JSON Schema. This is an OpenAPI
@@ -2538,7 +2629,24 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
       strict,
       stripUnknown,
       caseInsensitive,
+      context,
     )
+  }
+
+  // A nullable object (`type: ["object", "null"]`) is not an object parser's
+  // job in strict mode: that parser opens with `if (!isObject(input)) throw`,
+  // so it rejected the `null` its own declared type admits. The assertion path
+  // proves the disjunction and then the object shape.
+  if (strict && isSchemaObject(schema) && Array.isArray(schema.type) && (schema.type as string[]).includes('null')) {
+    return generateNonObjectParser(typeName, schema, strict, {
+      useRefImports,
+      suffix,
+      stripUnknown,
+      caseInsensitive,
+      logWarnings,
+      ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
+      ...(options?.reservedNames !== undefined ? { reservedNames: options.reservedNames } : {}),
+    })
   }
 
   // Handle schemas that have explicit properties — generate a full object parser.
@@ -2562,6 +2670,23 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
     )
   }
 
+  // A strict parser must not run the *coercing* conditional/flattening paths
+  // below: they build a result from the branch fragments, which invents
+  // properties the input never had (`{ c: 3 }` came back as `{ c: 3, a: 1 }`)
+  // and leaves the conditional itself unasserted. The assertion path handles
+  // `if`/`then`/`else` directly and returns the value untouched.
+  if (strict && isSchemaObject(schema) && ('if' in schema || 'then' in schema || 'else' in schema)) {
+    return generateNonObjectParser(typeName, schema, strict, {
+      useRefImports,
+      suffix,
+      stripUnknown,
+      caseInsensitive,
+      logWarnings,
+      ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
+      ...(options?.reservedNames !== undefined ? { reservedNames: options.reservedNames } : {}),
+    })
+  }
+
   // Handle conditional schemas (if/then/else) for schemas without explicit properties.
   if (isSchemaObject(schema) && 'if' in schema && 'then' in schema && 'else' in schema) {
     return generateConditionalParser(schema as JSONSchema.Object, typeName, suffix, stripUnknown, caseInsensitive)
@@ -2580,7 +2705,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
       strict,
       true,
       stripUnknown,
-      undefined,
+      context.rootSchema,
       NO_RESERVED_NAMES,
       caseInsensitive,
     )
@@ -2601,7 +2726,14 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
 
   // Handle schemas with patternProperties (but no properties)
   if ('patternProperties' in schema) {
-    return generatePatternPropertiesParser(schema as JSONSchema.Object, typeName, useRefImports, suffix, strict)
+    return generatePatternPropertiesParser(
+      schema as JSONSchema.Object,
+      typeName,
+      useRefImports,
+      suffix,
+      strict,
+      context,
+    )
   }
 
   // Handle schemas with additionalProperties as true or false (but no properties)
@@ -2610,20 +2742,27 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
 
     // If additionalProperties is true or false, validate it is an object
     if (additionalProps === true || additionalProps === false) {
-      return generateEmptyObjectParser(typeName, strict, schema)
+      return generateEmptyObjectParser(typeName, strict, schema, context)
     }
 
     // Otherwise, handle as a schema (could be a $ref or object schema)
-    return generateAdditionalPropertiesParser(schema as JSONSchema.Object, typeName, useRefImports, suffix, strict)
+    return generateAdditionalPropertiesParser(
+      schema as JSONSchema.Object,
+      typeName,
+      useRefImports,
+      suffix,
+      strict,
+      context,
+    )
   }
 
   // Handle empty object schemas
   if ('type' in schema && schema.type === 'object' && !hasProperties(schema)) {
-    return generateEmptyObjectParser(typeName, strict, schema)
+    return generateEmptyObjectParser(typeName, strict, schema, context)
   }
 
   // Default fallback - validate it is an object since we passed the isObjectSchema check
-  return generateEmptyObjectParser(typeName, strict, schema)
+  return generateEmptyObjectParser(typeName, strict, schema, context)
 }
 
 /**
@@ -2638,13 +2777,28 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
 export const generateParserFunction = (
   schema: JSONSchema,
   typeName: string,
-  options?: GenerateParserOptions,
+  rawOptions?: GenerateParserOptions,
 ): string => {
+  // A strict parser resolves `$ref`s inline wherever nothing else enforces them,
+  // and a single-document schema is its own root — without this fallback the
+  // generation-time guard (which applies it) would prove a ref the assertion
+  // builders then silently skipped for want of a document.
+  const options =
+    rawOptions?.strict && rawOptions.rootSchema === undefined && isSchemaObject(schema)
+      ? { ...rawOptions, rootSchema: schema as Record<string, unknown> }
+      : rawOptions
   // Strict parsers promise to throw on violations, so any keyword we cannot
   // enforce must fail loudly at generation rather than emit a permissive parser.
   // Coercing parsers are documented to repair rather than reject, so the guard
   // does not apply to them.
-  if (options?.strict) assertNoUnsupportedKeywords(schema, typeName)
+  if (options?.strict) {
+    assertNoUnsupportedKeywords(schema, typeName, {
+      useRefImports: options.useRefImports ?? false,
+      suffix: options.typeSuffix ?? '',
+      ...(options.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
+      ...(options.stripUnknown !== undefined ? { stripUnknown: options.stripUnknown } : {}),
+    })
+  }
   return selectParserStrategy(schema, typeName, options)
 }
 

@@ -231,23 +231,66 @@ describe('strict parser: object-level keywords alongside patternProperties / add
   })
 })
 
+describe('strict parser: unevaluatedProperties / unevaluatedItems', () => {
+  it('rejects a property no other keyword evaluated', () => {
+    const parse = strictParser({ type: 'object', properties: { a: {} }, unevaluatedProperties: false })
+    expect(parse({ a: 1 })).toEqual({ a: 1 })
+    expect(() => parse({ b: 1 })).toThrow(/must NOT have unevaluated properties/)
+  })
+
+  it('counts the properties an allOf member evaluated', () => {
+    const parse = strictParser({
+      allOf: [{ properties: { a: {} } }],
+      properties: { b: {} },
+      unevaluatedProperties: false,
+    })
+    expect(parse({ a: 1, b: 2 })).toEqual({ a: 1, b: 2 })
+    expect(() => parse({ c: 3 })).toThrow(/must NOT have unevaluated properties/)
+  })
+
+  it('counts a branch only when that branch matches', () => {
+    const parse = strictParser({
+      anyOf: [
+        { properties: { a: { type: 'number' } }, required: ['a'] },
+        { properties: { b: { type: 'number' } }, required: ['b'] },
+      ],
+      unevaluatedProperties: false,
+    })
+    expect(parse({ a: 1 })).toEqual({ a: 1 })
+    // The branch that would have evaluated `a` fails on its type, so `a` is left
+    // unevaluated even though the *other* branch validates the value.
+    expect(() => parse({ b: 1, a: 'no' })).toThrow(/must NOT have unevaluated properties/)
+  })
+
+  it('validates leftovers against a schema-form unevaluatedProperties', () => {
+    const parse = strictParser({ type: 'object', properties: { a: {} }, unevaluatedProperties: { type: 'number' } })
+    expect(parse({ a: 'anything', b: 1 })).toEqual({ a: 'anything', b: 1 })
+    expect(() => parse({ b: 'x' })).toThrow(/must NOT have unevaluated properties/)
+  })
+
+  it('rejects an item past the tuple positions', () => {
+    const parse = strictParser({ type: 'array', prefixItems: [{ type: 'number' }], unevaluatedItems: false })
+    expect(parse([1])).toEqual([1])
+    expect(() => parse([1, 2])).toThrow(/must NOT have unevaluated items/)
+  })
+
+  it('validates leftover items against a schema-form unevaluatedItems', () => {
+    const parse = strictParser({
+      type: 'array',
+      prefixItems: [{ type: 'number' }],
+      unevaluatedItems: { type: 'string' },
+    })
+    expect(parse([1, 'a'])).toEqual([1, 'a'])
+    expect(() => parse([1, 2])).toThrow(/must NOT have unevaluated items/)
+  })
+
+  it('ignores them in coerce mode, like every other rejecting keyword', () => {
+    const parse = coerceParser({ type: 'object', properties: { a: {} }, unevaluatedProperties: false })
+    expect(parse({ b: 1 })).toEqual({ b: 1 })
+  })
+})
+
 describe('generation-time guard (strict only)', () => {
-  it('throws for unevaluatedProperties: false', () => {
-    expect(() =>
-      generateParserFunction({ type: 'object', properties: {}, unevaluatedProperties: false } as never, 'Root', {
-        strict: true,
-      }),
-    ).toThrow(/unevaluatedProperties/)
-  })
-
-  it('throws for unevaluatedItems with a constraining schema', () => {
-    expect(() =>
-      generateParserFunction({ type: 'array', unevaluatedItems: { type: 'string' } } as never, 'Root', {
-        strict: true,
-      }),
-    ).toThrow(/unevaluatedItems/)
-  })
-
   it('allows unevaluatedProperties: true (no constraint)', () => {
     expect(() =>
       generateParserFunction({ type: 'object', properties: {}, unevaluatedProperties: true } as never, 'Root', {
@@ -555,5 +598,152 @@ describe('boolean property schemas', () => {
     const parse = strictParser({ type: 'object', properties: { a: false } })
     expect(parse({ b: 1 })).toEqual({ b: 1 })
     expect(() => parse({ a: 1 })).toThrow(/must NOT have property 'a'/)
+  })
+})
+
+describe('strict parser: $ref', () => {
+  it('resolves a pointer ref inline when no imported parser enforces it', () => {
+    // Single-file generation (no ref imports) has no `parseChild` to delegate to,
+    // so the ref has to be proven where it stands.
+    const parse = strictParser({
+      type: 'object',
+      properties: { a: { $ref: '#/$defs/posInt' } },
+      $defs: { posInt: { type: 'integer', minimum: 0 } },
+    })
+    expect(parse({ a: 1 })).toEqual({ a: 1 })
+    expect(() => parse({ a: -1 })).toThrow(/referenced schema/)
+    expect(() => parse({ a: 'x' })).toThrow(/referenced schema/)
+  })
+
+  it('resolves an $anchor ref', () => {
+    const parse = strictParser({
+      type: 'object',
+      properties: { a: { $ref: '#short' } },
+      $defs: { shortName: { $anchor: 'short', type: 'string', maxLength: 3 } },
+    })
+    expect(parse({ a: 'ab' })).toEqual({ a: 'ab' })
+    expect(() => parse({ a: 'abcd' })).toThrow(/referenced schema/)
+  })
+
+  it('keeps a 2020-12 $ref sibling in force at the root', () => {
+    // Draft-07 ignored a `$ref`'s siblings; 2020-12 applies both, and the
+    // delegated parser knows nothing about them.
+    const parse = evalGenerated<(input: unknown) => unknown>(
+      generateParserFunction(
+        {
+          $ref: '#/$defs/base',
+          minProperties: 2,
+          $defs: { base: { type: 'object', properties: { a: { type: 'string' } } } },
+        } as never,
+        'Root',
+        { strict: true },
+      ),
+      'parseRoot',
+    )
+    expect(parse({ a: 'x', b: 1 })).toEqual({ a: 'x', b: 1 })
+    expect(() => parse({ a: 'x' })).toThrow(/referenced schema/)
+  })
+
+  it('enforces allOf $ref members on a property-less object, which delegates nothing', () => {
+    const parse = strictParser({
+      type: 'object',
+      allOf: [{ $ref: '#/$defs/hasA' }, { $ref: '#/$defs/hasB' }],
+      $defs: { hasA: { required: ['a'] }, hasB: { required: ['b'] } },
+    })
+    expect(parse({ a: 1, b: 2 })).toEqual({ a: 1, b: 2 })
+    expect(() => parse({ a: 1 })).toThrow()
+    expect(() => parse({})).toThrow()
+  })
+
+  it('enforces $ref array items when no imported parser validates them', () => {
+    const parse = strictParser({
+      type: 'array',
+      items: { $ref: '#/$defs/pair' },
+      $defs: { pair: { type: 'object', properties: { a: { type: 'number' } }, required: ['a'] } },
+    })
+    expect(parse([{ a: 1 }])).toEqual([{ a: 1 }])
+    expect(() => parse([{ a: 'x' }])).toThrow()
+    expect(() => parse([null])).toThrow()
+  })
+})
+
+describe('strict parser: constraints with nothing to hang them on', () => {
+  it('enforces a type-less numeric bound', () => {
+    const parse = strictParser({ minimum: 5 })
+    expect(parse(6)).toBe(6)
+    // JSON Schema applies a numeric bound only to numbers.
+    expect(parse('x')).toBe('x')
+    expect(() => parse(4)).toThrow()
+  })
+
+  it('enforces a type-less required', () => {
+    const parse = strictParser({ required: ['a'] })
+    expect(parse({ a: 1 })).toEqual({ a: 1 })
+    expect(parse('not an object')).toBe('not an object')
+    expect(() => parse({})).toThrow()
+  })
+
+  it('enforces each branch of a multi-type schema against its own family', () => {
+    const parse = strictParser({ type: ['string', 'array'], minLength: 3, minItems: 2 })
+    expect(parse('abc')).toBe('abc')
+    expect(parse([1, 2])).toEqual([1, 2])
+    expect(() => parse('ab')).toThrow()
+    expect(() => parse([1])).toThrow()
+    expect(() => parse(5)).toThrow()
+  })
+
+  it('rejects every value for a `false` schema', () => {
+    const parse = strictParser(false)
+    expect(() => parse(1)).toThrow(/no value is valid/)
+    expect(() => parse({})).toThrow(/no value is valid/)
+  })
+
+  it('admits only the empty array for items: false', () => {
+    const parse = strictParser({ type: 'array', items: false })
+    expect(parse([])).toEqual([])
+    expect(() => parse([1])).toThrow()
+  })
+
+  it('measures string length in code points, like Ajv', () => {
+    const min = strictParser({ type: 'string', minLength: 2 })
+    expect(() => min('💩')).toThrow(/at least 2 characters/)
+    expect(min('💩💩')).toBe('💩💩')
+    const max = strictParser({ type: 'string', maxLength: 2 })
+    expect(max('💩💩')).toBe('💩💩')
+    expect(() => max('💩💩💩')).toThrow(/at most 2 characters/)
+  })
+
+  it('enforces a tuple position beyond its type', () => {
+    const parse = strictParser({ type: 'array', prefixItems: [{ type: 'string', maxLength: 2 }] })
+    expect(parse(['ab'])).toEqual(['ab'])
+    expect(() => parse(['abc'])).toThrow()
+  })
+})
+
+describe('strict parser: conditionals', () => {
+  it('asserts if/then/else instead of building a value from the branches', () => {
+    // The coercing conditional path builds its result from the branch fragments,
+    // which invented properties the input never had — a strict parser must return
+    // exactly what it accepted, or throw.
+    const parse = strictParser({
+      if: { properties: { a: { const: 1 } }, required: ['a'] },
+      then: { required: ['b'] },
+      else: { required: ['c'] },
+    })
+    expect(parse({ a: 1, b: 2 })).toEqual({ a: 1, b: 2 })
+    expect(parse({ c: 3 })).toEqual({ c: 3 })
+    expect(() => parse({ a: 1 })).toThrow()
+    expect(() => parse({})).toThrow()
+  })
+
+  it('accepts null for a nullable object root', () => {
+    const parse = strictParser({
+      type: ['object', 'null'],
+      properties: { a: { type: 'string' } },
+      required: ['a'],
+    })
+    expect(parse(null)).toBeNull()
+    expect(parse({ a: 'x' })).toEqual({ a: 'x' })
+    expect(() => parse({})).toThrow()
   })
 })

@@ -212,6 +212,30 @@ describe('walk-ref-graph', () => {
     expect(() => collect(schema, 'MyDoc')).toThrow(/does not survive the round trip/)
   })
 
+  it('maps a plain `$ref: "#"` onto the root file too', () => {
+    // The ordinary spelling of the same recursive tree. `refToFilename('#')` is
+    // not a module and `refToName('#')` is not an identifier, so this used to
+    // emit an import of a `ref-<hash>.ts` that was never generated — output that
+    // does not compile at all.
+    const schema = {
+      type: 'object',
+      properties: { name: { type: 'string' }, child: { $ref: '#' } },
+      required: ['name'],
+    }
+
+    const nodes = collect(schema, 'Root')
+
+    expect(nodes.map((n) => n.filename)).toEqual(['root'])
+    expect(nodes[0]?.schema).toMatchObject({ properties: { child: { $ref: '#/$defs/root' } } })
+    expect(nodes[0]?.ref).toBe('#/$defs/root')
+  })
+
+  it('throws when a `$ref: "#"` cannot round-trip through the root type name', () => {
+    const schema = { type: 'object', properties: { self: { $ref: '#' } } }
+
+    expect(() => collect(schema, 'MyDoc')).toThrow(/does not survive the round trip/)
+  })
+
   describe('name collisions', () => {
     it('throws when two definitions reduce to the same filename', () => {
       const schema = {

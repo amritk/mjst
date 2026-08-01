@@ -943,4 +943,32 @@ describe('build-schema', () => {
       expect(expr).toContain('does not match any union branch')
     })
   })
+
+  describe('recursive root `$ref: "#"`', () => {
+    const schema = {
+      type: 'object',
+      properties: { name: { type: 'string' }, child: { $ref: '#' } },
+      required: ['name'],
+    } as never
+
+    it('types and parses the recursion through the root itself', async () => {
+      // The self-ref used to be named from the pointer `#`, so the root file
+      // imported a `ref-<hash>.ts` that was never generated — output that does
+      // not compile.
+      const files = await buildSchema(schema, 'Root')
+
+      expect(files.map((f) => f.filename).sort()).toEqual(['index.ts', 'root.ts'])
+      const root = files.find((f) => f.filename === 'root.ts')?.content ?? ''
+      expect(root).toContain('child?: Root;')
+      expect(root).toContain('parseRoot(_child)')
+      expect(root).not.toMatch(/from '\.\/ref-/)
+    })
+
+    it('validates the recursive branch in strict mode', async () => {
+      const files = await buildSchema(schema, 'Root', undefined, undefined, undefined, true)
+      const root = files.find((f) => f.filename === 'root.ts')?.content ?? ''
+      expect(root).toContain("missing required property 'name'")
+      expect(root).toContain('parseRoot(_child)')
+    })
+  })
 })
