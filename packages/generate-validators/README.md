@@ -107,6 +107,18 @@ per-item work (a bare `string[]` is free; a closed object with several fields is
 meaningfully slower), which is why array-heavy schemas validate more slowly than
 scalar/object ones.
 
+**A schema needs no `type` for its keywords to be enforced.** `{ minLength: 2 }`,
+`{ required: ['a'] }` and `{ uniqueItems: true }` each emit their check behind a
+runtime test for the family they constrain, so they reject a bad string / object /
+array and *ignore* every other kind of value — which is what JSON Schema means by
+a type-less constraint, and what the interpreter does. One consequence is worth
+knowing: object keywords no longer imply `type: 'object'`, so `validateX` accepts
+`42` against `{ properties: { … } }`, while the emitted TypeScript type still
+describes the object case (as `FromSchema` does in `@amritk/runtime-validators`).
+The verdict is the contract and it matches the interpreter exactly; for that one
+shape `isX` is a weaker type guard than the type it names. Declare a `type` — as
+almost every real schema does — and the guard is exact again.
+
 **`format` emits no check.** JSON Schema treats `format` as an annotation, and so
 does this generator: `{ type: 'string', format: 'uuid' }` produces the `typeof`
 check and nothing more. That matches the interpreter's default, but *not* the
@@ -124,6 +136,36 @@ passes `minimum`/`maximum`/`exclusive*`/`multipleOf`. This matches the interpret
 but differs from validators (e.g. Ajv) that reject `NaN` for `type: "number"`.
 `NaN` never appears in parsed JSON; guard against it upstream if your values can
 be non-JSON.
+
+### Conformance, measured
+
+The semantics above are measured, not asserted.
+`src/generators/conformance.test.ts` generates a validator for each schema in the
+official [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite)
+(the required Draft 2020-12 tests — 1299 cases), compiles and links the emitted
+files in memory, and runs the suite's instances through the real generated code:
+
+**987 / 1299 cases pass (76.0%).**
+
+Read the remaining 312 as two decisions, not three hundred defects. **201** are
+`unevaluatedItems` / `unevaluatedProperties`, which this generator refuses at
+generation time because flat output cannot carry annotations across the applicator
+tree — a build error, never a wrong verdict. **107** are a `$ref` that only
+resolves by applying an enclosing `$id` as a base URI, which also refuses. The
+last four are the `multipleOf` / `pattern` judgement calls above and `$vocabulary`.
+Nothing on the list is a keyword that silently returns the wrong answer.
+
+Every case is named in
+`src/generators/conformance-expected-failures.test-utils.ts` with its reason, and
+the test fails if a case moves in *either* direction — a regression breaks the
+build, and so does a case that starts passing without its entry being removed.
+
+If you need the two refusals to be answers instead, validate with
+[`@amritk/runtime-validators`](../runtime-validators), which implements both
+(**96.2%** on the same corpus) at the cost of interpreting the schema at runtime.
+The corpus is vendored under
+[`fixtures/json-schema-test-suite`](../../fixtures/json-schema-test-suite); none
+of it is published.
 
 ---
 

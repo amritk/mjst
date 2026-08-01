@@ -213,6 +213,42 @@ emitting a parser that quietly accepts what the schema forbids. Coercing
 (non-strict) parsers are documented to repair rather than reject, so they ignore
 the rejecting keywords by design.
 
+### Conformance, measured
+
+The coverage above is not a claim — it is checked against the corpus every
+validator in every language is judged on.
+`src/generators/json-schema-conformance.test.ts` generates a strict parser for
+each schema in the official
+[JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite)
+(the required Draft 2020-12 tests — 1299 cases), links the emitted files in
+memory, and runs the suite's instances through the real generated code:
+
+**1180 / 1299 cases pass (90.8%).**
+
+A case passes only if the parser throws exactly when the spec says invalid *and*
+returns an accepted document unchanged — strict mode does not coerce, so a parser
+that quietly rewrites a valid document fails here too.
+
+Of the 119 that do not, **65 never generate at all**: 48 are a `$ref` that only
+resolves by applying an enclosing `$id` as a base URI (or that names another
+document), and 17 are a keyword strict mode will not approximate. Those cost a
+build error naming the cause, never a wrong verdict. The rest are the honest
+gaps — 29 refs that resolve to the wrong definition under `$id` scoping, the 17
+`ignores a non-object` cases that follow from the third departure above, `contains`
+next to `unevaluated*` (4 cases, where this generator matches Ajv — its
+differential oracle — rather than the spec, while
+[`@amritk/runtime-validators`](../runtime-validators) goes the other way and says
+so), the three `multipleOf` / `pattern` judgement calls above, and one
+`$vocabulary` case.
+
+Every one is listed in
+`src/generators/json-schema-conformance-expected-failures.test-utils.ts` with the
+reason, and the test fails if a case moves in *either* direction — a regression
+breaks the build, and so does a case that starts passing without its entry being
+removed. The corpus is vendored under
+[`fixtures/json-schema-test-suite`](../../fixtures/json-schema-test-suite); none
+of it is published.
+
 ---
 
 ## Benchmarks

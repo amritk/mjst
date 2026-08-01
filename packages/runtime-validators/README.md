@@ -226,11 +226,11 @@ Type-level helpers. `FromSchema<typeof schema>` infers the type a schema (writte
 
 ### Supported keywords
 
-`type` (incl. unions and `integer`), `enum`, `const`, `properties`, `required`, `additionalProperties`, `patternProperties`, `propertyNames`, `minProperties`, `maxProperties`, `dependentRequired`, `dependentSchemas`, `dependencies` (draft-07), `items`/`prefixItems` (2020-12) and array-`items` + `additionalItems` (draft-07), `contains`/`minContains`/`maxContains`, `minItems`, `maxItems`, `uniqueItems`, `unevaluatedProperties`, `unevaluatedItems`, `minLength`, `maxLength`, `pattern`, `format` (opt-in), `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` (both the numeric 2020-12 form and the draft-04 boolean modifier), `multipleOf`, `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, `$ref` (local), `$dynamicRef`/`$dynamicAnchor` (2020-12) and `$recursiveRef`/`$recursiveAnchor` (2019-09, both bound document-globally), `nullable` (OpenAPI 3.0), boolean schemas.
+`type` (incl. unions and `integer`), `enum`, `const`, `properties`, `required`, `additionalProperties`, `patternProperties`, `propertyNames`, `minProperties`, `maxProperties`, `dependentRequired`, `dependentSchemas`, `dependencies` (draft-07), `items`/`prefixItems` (2020-12) and array-`items` + `additionalItems` (draft-07), `contains`/`minContains`/`maxContains`, `minItems`, `maxItems`, `uniqueItems`, `unevaluatedProperties`, `unevaluatedItems`, `minLength`, `maxLength`, `pattern`, `format` (opt-in), `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` (both the numeric 2020-12 form and the draft-04 boolean modifier), `multipleOf`, `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, `$ref` (same-document, including `$id` base-URI scoping), `$dynamicRef`/`$dynamicAnchor` (2020-12, resolved through the dynamic scope), `$recursiveRef`/`$recursiveAnchor` (2019-09, bound document-globally), `nullable` (OpenAPI 3.0), boolean schemas.
 
 > **Unknown `type` values throw.** A `type` outside the seven JSON Schema names (`type: "strng"`) is a schema error, not a data error — the validator throws when the keyword is consulted rather than silently matching everything, the same loud contract as an unresolvable `$ref`.
 
-> Only **local** `$ref`s are supported — the interpreter resolves both JSON-Pointer fragments (`#/$defs/user`) and `$anchor` names (`#user`) within the same document, including recursion, but does not fetch remote ones. To validate against a schema that references other documents, **bundle it first** with [`@amritk/resolve-refs`](../resolve-refs) (see [Remote and cross-file references](#remote-and-cross-file-references) below), then hand the single dereferenced document to `validate`.
+> Only **same-document** `$ref`s are supported — the interpreter resolves JSON-Pointer fragments (`#/$defs/user`), `$anchor` names (`#user`), and refs written against an `$id` as a base URI (relative, absolute, or a URN) as long as the resource they name is in the same document, including recursion. It does not fetch remote ones. To validate against a schema that references other documents, **bundle it first** with [`@amritk/resolve-refs`](../resolve-refs) (see [Remote and cross-file references](#remote-and-cross-file-references) below), then hand the single dereferenced document to `validate`.
 
 > **Built-in `format`s** (opt-in via `options.formats`): `email`, `idn-email`, `date-time`, `date`, `time`, `duration`, `uuid`, `uri`, `iri`, `uri-reference`, `iri-reference`, `uri-template`, `json-pointer`, `relative-json-pointer`, `hostname`, `idn-hostname`, `ipv4`, `ipv6`, `regex` (compiled, not pattern-matched). Unlisted or disabled formats are treated as annotations, matching Ajv's default opt-in behavior.
 
@@ -240,12 +240,38 @@ Type-level helpers. `FromSchema<typeof schema>` infers the type a schema (writte
 
 This is a **pragmatic subset** of JSON Schema — sized for validating data against the kind of schemas real APIs and configs use, not for being an authoritative, spec-complete validator. The following are intentionally left out; if your schemas lean on them, reach for Ajv:
 
-- **Remote / non-local references.** `$ref` to another document or URL, plus `$id` base-URI resolution. Same-document refs — JSON-Pointer fragments, `$anchor` names, `$dynamicRef`/`$dynamicAnchor`, and `$recursiveRef`/`$recursiveAnchor` — resolve (including recursion, with dynamic/recursive anchors bound document-globally rather than by dynamic scope); cross-document ones do not. This is a deliberate split, not a gap: fetching is async and unsafe to do from inside a validator, so it lives in [`@amritk/resolve-refs`](../resolve-refs) instead — bundle once, then validate. See [Remote and cross-file references](#remote-and-cross-file-references).
+- **References into another document.** A `$ref` naming a document that is not this one. Everything within the document resolves — JSON-Pointer fragments, `$anchor` names, embedded resources addressed through their `$id` (relative, absolute, or URN), `$dynamicRef`/`$dynamicAnchor` through the dynamic scope, and `$recursiveRef`/`$recursiveAnchor` (bound document-globally) — including recursion; a target that lives elsewhere does not. This is a deliberate split, not a gap: fetching is async and unsafe to do from inside a validator, so it lives in [`@amritk/resolve-refs`](../resolve-refs) instead — bundle once, then validate. See [Remote and cross-file references](#remote-and-cross-file-references).
 - **`contentEncoding` / `contentMediaType` / `contentSchema`** — treated as annotations (ignored), as they are by default in 2020-12.
 - **Spec-exact `format` coverage.** Formats are opt-in and validated by pragmatic regexes that reject obviously-bad input rather than being RFC-perfect. (The `regex` format is the exception — it compiles the string to confirm it is a valid pattern.)
 - **Draft-2020 exotica** beyond the keywords listed above.
 
 > **Want one of these?** None of these are off the table — "by design" means *not yet*, not *never*. If something here is blocking a real use case, [open an issue](https://github.com/amritk/mjst/issues) describing the schema you need to validate.
+
+### Conformance, measured
+
+The subset above is not a claim — it is checked. `src/conformance.test.ts` runs
+the official [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite)
+(the required Draft 2020-12 tests — 1299 cases) through *both* entry points on
+every build, since `validate` and `validateGuard` share the interpreter but not
+the path through it:
+
+**1250 / 1299 cases pass (96.2%).**
+
+Every case that does not is listed in `src/conformance-expected-failures.test-utils.ts`
+with the reason, and the test fails if a case moves in *either* direction — a
+regression breaks the build, and so does a case that starts passing without its
+entry being removed. The corpus is vendored under
+[`fixtures/json-schema-test-suite`](../../fixtures/json-schema-test-suite) and
+never imported by `src/index.ts`, so none of it reaches the published bundle.
+
+The 49 that remain are one decision, not a list of keywords: **this package does
+no I/O.** 48 of them name a document that is not the one being validated (all of
+`refRemote.json`, a `$ref` at the 2020-12 metaschema, the `dynamicRef` groups that
+reach for `tree.json`), and the 49th is `$vocabulary`, which means fetching the
+metaschema named by `$schema`. Bundle those documents first with
+[`@amritk/resolve-refs`](../resolve-refs) and every one of those shapes validates.
+Every refusal throws, so a schema this package cannot fully resolve fails loudly
+at the call site rather than validating against a subset of what its author wrote.
 
 > **`unevaluatedProperties` / `unevaluatedItems` note.** These are supported and collect annotations across the in-place applicators applied to the *same* schema object — `allOf`, `$ref`/`$dynamicRef`, the taken `if`/`then`/`else` branch, successful `anyOf`/`oneOf` branches, and `dependentSchemas`. The one case not covered is an `unevaluated*` keyword nested *inside* one applicator branch reading annotations produced by a *sibling* branch of an ancestor (e.g. `unevaluatedProperties` inside `allOf[1]` expecting to see keys evaluated by `allOf[0]`); keep `unevaluated*` at the same level as the keywords it should account for.
 

@@ -7,10 +7,14 @@ on. Four packages in this monorepo consume schemas, and all four are held to it
 
 | Package | What is measured | Rate |
 | --- | --- | --- |
-| `@amritk/runtime-validators` | `validate` / `validateGuard` verdicts | 1183 / 1299 (91.1%) |
-| `@amritk/generate-parsers` | strict parsers — generated, linked, executed | 1141 / 1299 (87.8%) |
-| `@amritk/generate-validators` | generated predicate validators | 818 / 1299 (63.0%) |
-| `@amritk/resolve-refs` | verdict preserved after inlining (`$ref` corpus) | 105 / 107 (98.1%) |
+| `@amritk/runtime-validators` | `validate` / `validateGuard` verdicts | 1250 / 1299 (96.2%) |
+| `@amritk/generate-parsers` | strict parsers — generated, linked, executed | 1180 / 1299 (90.8%) |
+| `@amritk/generate-validators` | generated predicate validators | 987 / 1299 (76.0%) |
+| `@amritk/resolve-refs` | verdict preserved after inlining (`$ref` corpus) | 160 / 170 (94.1%) |
+
+`resolve-refs` is scored against the reference-carrying cases the interpreter
+answers correctly, which is the population where a resolution bug is visible at
+all — so its denominator moves as `runtime-validators` improves.
 
 Each suite carries an expected-failure list naming every case it does not pass
 and why, and fails when a case moves in **either** direction — a regression
