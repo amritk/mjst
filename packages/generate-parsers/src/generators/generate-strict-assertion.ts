@@ -14,9 +14,11 @@ import {
   hasMaxItems,
   hasMaximum,
   hasMaxLength,
+  hasMaxProperties,
   hasMinItems,
   hasMinimum,
   hasMinLength,
+  hasMinProperties,
   hasMultipleOf,
   hasPattern,
   hasProperties,
@@ -207,13 +209,47 @@ const generateConstraintChecks = (
     lines.push(...generatePrefixItemsAssertion(acc, field, propSchema, context.rootSchema))
   }
 
+  if (t === 'object') {
+    lines.push(...generateObjectSizeChecks(acc, propSchema, field, true))
+  }
+
+  return lines
+}
+
+/**
+ * Strict-mode `minProperties` / `maxProperties`. Both were read by the coercing
+ * expression builder and the subschema matcher but by nothing on the strict
+ * path, so a strict parser accepted `{}` against `{ minProperties: 2 }` — at the
+ * root, on a property, and inside the empty-object/record parsers alike. `guard`
+ * wraps the comparison in a runtime `isObject` for accessors whose type is
+ * reported separately; callers that have already proven an object pass `false`.
+ */
+export const generateObjectSizeChecks = (acc: string, schema: JSONSchema, label: string, guard: boolean): string[] => {
+  if (!isSchemaObject(schema)) return []
+  const lines: string[] = []
+  const prefix = guard ? `isObject(${acc}) && ` : ''
+  if (hasMinProperties(schema)) {
+    lines.push(
+      `  if (${prefix}Object.keys(${acc}).length < ${schema.minProperties}) ${throwError(`${label} must have at least ${schema.minProperties} properties`)};`,
+    )
+  }
+  if (hasMaxProperties(schema)) {
+    lines.push(
+      `  if (${prefix}Object.keys(${acc}).length > ${schema.maxProperties}) ${throwError(`${label} must have at most ${schema.maxProperties} properties`)};`,
+    )
+  }
   return lines
 }
 
 /**
  * Boolean per-item check (bound to `_it`) for an array schema's `items`, with
- * the error-message fragment describing what was expected. Only scalar types
- * and enums are checked — returns null for anything richer.
+ * the error-message fragment describing what was expected. Scalar types and
+ * enums get their direct check; anything richer that {@link subschemaMatchExpr}
+ * can prove exactly (a nested array, a plain object shape, a bounded string)
+ * falls back to that matcher — without it `{ items: { type: 'array', items:
+ * { type: 'number' } } }` had no element check at all and a strict parser
+ * accepted `[["x"]]`. Items with their own parser (`$ref`, inline objects) are
+ * left out: those are validated by the parser the caller delegates to.
  */
 const generateItemCheck = (schema: JSONSchema): { check: string; message: string } | null => {
   if (!isSchemaObject(schema) || !hasItems(schema) || Array.isArray(schema.items)) return null
@@ -225,8 +261,184 @@ const generateItemCheck = (schema: JSONSchema): { check: string; message: string
   }
 
   const scalarCheck = scalarItemTypeCheck(items, '_it')
-  if (scalarCheck === null || !isSchemaObject(items) || !hasType(items)) return null
-  return { check: scalarCheck, message: `items expected ${typeLabel(items.type as string)}` }
+  if (scalarCheck !== null && isSchemaObject(items) && hasType(items)) {
+    return { check: scalarCheck, message: `items expected ${typeLabel(items.type as string)}` }
+  }
+
+  if (hasRef(items) || isInlineObjectProperty(items)) return null
+  const match = subschemaMatchExpr('_it', items)
+  if (match === null || match === 'true') return null
+  return { check: match, message: 'items do not match the item schema' }
+}
+
+/**
+ * A `["object", "null"]` value that is not null still has to satisfy the
+ * schema's `properties` / `required` / `additionalProperties`, and nothing
+ * asserted them: the multi-type branch only proves the value *is* an object and
+ * {@link generateConstraintChecks} has no property pass, so
+ * `{ type: ['object','null'], properties: { z: { type: 'string' } },
+ * required: ['z'] }` accepted `{}` and `{ z: 1 }` alike. The single-typed view
+ * goes through the exact matcher; a null value is excluded from the test since
+ * the type disjunction already blessed it.
+ */
+const nullableObjectShapeChecks = (
+  acc: string,
+  schema: JSONSchema,
+  type: string,
+  label: string,
+  optional: boolean,
+): string[] => {
+  if (type !== 'object') return []
+  const match = subschemaMatchExpr(acc, { ...(schema as object), type: 'object' } as JSONSchema)
+  if (match === null || match === 'true') return []
+  const presence = optional ? `${acc} !== undefined && ${acc} !== null` : `${acc} !== null`
+  return [`  if (${presence} && !(${match})) ${throwError(`${label} does not match the declared object shape`)};`]
+}
+
+/**
+ * Strict-mode `not`: the value must NOT match the excluded subschema. Enforced
+ * whenever {@link subschemaMatchExpr} can prove the subschema exactly (the same
+ * bar `contains` / `propertyNames` / `dependentSchemas` clear); an unprovable
+ * one is rejected at generation time by the guard, so a strict parser never
+ * silently drops the constraint. `not: false` excludes nothing and emits no check.
+ */
+const generateNotCheck = (acc: string, schema: JSONSchema, label: string, optional: boolean): string[] => {
+  if (!isSchemaObject(schema) || !('not' in schema)) return []
+  const match = subschemaMatchExpr(acc, (schema as Record<string, unknown>)['not'] as JSONSchema)
+  if (match === null || match === 'false') return []
+  const failure = throwError(`${label} must NOT match the excluded schema`)
+  return [optional ? `  if (${acc} !== undefined && (${match})) ${failure};` : `  if (${match}) ${failure};`]
+}
+
+/**
+ * Strict-mode `allOf` members that carry constraints rather than an object
+ * shape: `{ allOf: [{ minLength: 3 }] }` and `{ allOf: [{ type: 'number',
+ * minimum: 5 }] }` were enforced by nothing — {@link inlineAllOfMembers} only
+ * covers members with `properties`/`required` (asserted per property, with
+ * better messages) and a `$ref` member is enforced by its own parser. Everything
+ * else goes through the exact matcher, or is left alone when it cannot be proven
+ * (the generation-time guard reports that case).
+ */
+const generateAllOfChecks = (
+  acc: string,
+  schema: JSONSchema,
+  label: string,
+  optional: boolean,
+  skipInlineMembers = false,
+): string[] => {
+  if (!isSchemaObject(schema) || !Array.isArray(schema.allOf)) return []
+  // Only the object assertion re-asserts the inline members property by property;
+  // every other caller (a property, a type-less root) has no such pass, so
+  // skipping them there would leave `{ allOf: [{ …object… }] }` unenforced.
+  const handledInline = new Set<JSONSchema>(skipInlineMembers ? inlineAllOfMembers(schema) : [])
+  const lines: string[] = []
+  for (const member of schema.allOf) {
+    if (handledInline.has(member)) continue
+    if (isSchemaObject(member) && hasRef(member)) continue
+    const match = subschemaMatchExpr(acc, member)
+    if (match === null || match === 'true') continue
+    const failure = throwError(`${label} does not satisfy all of the declared schemas`)
+    lines.push(optional ? `  if (${acc} !== undefined && !(${match})) ${failure};` : `  if (!(${match})) ${failure};`)
+  }
+  return lines
+}
+
+/**
+ * Strict-mode `if` / `then` / `else`: when the value matches `if`, it must also
+ * match `then`; otherwise it must match `else`. Emitted only when every branch
+ * present can be proven exactly — a half-checked conditional would be worse than
+ * none, and the generation-time guard reports the unprovable case. A bare `if`
+ * with neither `then` nor `else` constrains nothing.
+ */
+const generateConditionalChecks = (acc: string, schema: JSONSchema, label: string): string[] => {
+  if (!isSchemaObject(schema)) return []
+  const record = schema as Record<string, unknown>
+  if (!('if' in record) || (!('then' in record) && !('else' in record))) return []
+  const ifMatch = subschemaMatchExpr(acc, record['if'] as JSONSchema)
+  if (ifMatch === null) return []
+
+  const lines: string[] = []
+  if ('then' in record) {
+    const thenMatch = subschemaMatchExpr(acc, record['then'] as JSONSchema)
+    if (thenMatch === null) return []
+    if (thenMatch !== 'true') {
+      lines.push(`  if ((${ifMatch}) && !(${thenMatch})) ${throwError(`${label} does not satisfy the 'then' schema`)};`)
+    }
+  }
+  if ('else' in record) {
+    const elseMatch = subschemaMatchExpr(acc, record['else'] as JSONSchema)
+    if (elseMatch === null) return []
+    if (elseMatch !== 'true') {
+      lines.push(
+        `  if (!(${ifMatch}) && !(${elseMatch})) ${throwError(`${label} does not satisfy the 'else' schema`)};`,
+      )
+    }
+  }
+  return lines
+}
+
+/**
+ * Strict-mode value checks for keys the schema constrains by *pattern* rather
+ * than by name: `patternProperties` (every key matching the regex) and a
+ * schema-valued `additionalProperties` (every key matched by neither
+ * `properties` nor a pattern). Both were read only by the *building* code paths
+ * — which coerce or copy — so a strict parser accepted `{ s_a: 1 }` against
+ * `patternProperties: { '^s_': { type: 'string' } }`.
+ *
+ * One `Object.keys` walk covers both, and a term is emitted only when
+ * {@link subschemaMatchExpr} proves its subschema exactly. `additionalProperties:
+ * false` is not handled here — that is the unknown-key rejection the parsers
+ * already emit.
+ */
+export const generateKeyedValueChecks = (obj: string, schema: JSONSchema, label: string): string[] => {
+  if (!isSchemaObject(schema)) return []
+  const record = schema as Record<string, unknown>
+  const patternEntries: [string, string][] = []
+  const patternSource = record['patternProperties']
+  if (typeof patternSource === 'object' && patternSource !== null && !Array.isArray(patternSource)) {
+    for (const [pattern, sub] of Object.entries(patternSource as Record<string, unknown>)) {
+      const match = subschemaMatchExpr('_v', sub as JSONSchema)
+      if (match === null || match === 'true') continue
+      patternEntries.push([pattern, match])
+    }
+  }
+
+  // The `additionalProperties` term has to know the *whole* key vocabulary — all
+  // declared names and all declared patterns, including the ones whose own
+  // subschema was too complex to check above — or it would police keys that
+  // another keyword owns.
+  const allPatterns =
+    typeof patternSource === 'object' && patternSource !== null && !Array.isArray(patternSource)
+      ? Object.keys(patternSource as Record<string, unknown>)
+      : []
+  const additional = record['additionalProperties']
+  const additionalMatch =
+    additional !== undefined && typeof additional !== 'boolean'
+      ? subschemaMatchExpr('_v', additional as JSONSchema)
+      : null
+
+  const lines: string[] = []
+  for (const [pattern, match] of patternEntries) {
+    lines.push(
+      `    if (/${escapeRegexPattern(pattern)}/.test(_k) && !(${match})) ${throwError(`${label} invalid value for property `, '_k')};`,
+    )
+  }
+  if (additionalMatch !== null && additionalMatch !== 'true') {
+    const declared = hasProperties(schema) ? Object.keys(schema.properties as Record<string, unknown>) : []
+    const guards: string[] = []
+    if (declared.length > 0) guards.push(`!${JSON.stringify(declared)}.includes(_k)`)
+    for (const pattern of allPatterns) guards.push(`!/${escapeRegexPattern(pattern)}/.test(_k)`)
+    const prefix = guards.length > 0 ? `${guards.join(' && ')} && ` : ''
+    lines.push(`    if (${prefix}!(${additionalMatch})) ${throwError(`${label} invalid value for property `, '_k')};`)
+  }
+
+  if (lines.length === 0) return []
+  return [
+    `  for (const _k of Object.keys(${obj})) {`,
+    `    const _v = (${obj} as Record<string, unknown>)[_k];`,
+    ...lines,
+    `  }`,
+  ]
 }
 
 /**
@@ -435,8 +647,22 @@ const generatePropertyAssertion = (
     )
   }
 
+  // A `false` property schema admits no value at all, so the key must be absent.
+  // The early return below skipped both boolean schemas, which made `false` a
+  // silent no-op.
+  if (propSchema === false) {
+    lines.push(`  if (${JSON.stringify(key)} in input) ${throwError(`[${typeName}] must NOT have property '${key}'`)};`)
+    return lines
+  }
   if (!isSchemaObject(propSchema)) return lines
   if (hasRef(propSchema)) return lines
+
+  // Composition keywords that constrain the value alongside (or instead of) its
+  // `type`. Emitted before the branches below because several of them return
+  // early, and `not`/`allOf`/`if` can ride on any of those shapes.
+  lines.push(...generateNotCheck(acc, propSchema, field, !isRequired))
+  lines.push(...generateAllOfChecks(acc, propSchema, field, !isRequired))
+  lines.push(...generateConditionalChecks(acc, propSchema, field))
 
   // Union properties: enforce membership when every branch check is
   // false-sound (canEnforceUnion), so a value matching no variant throws
@@ -486,6 +712,18 @@ const generatePropertyAssertion = (
     return lines
   }
 
+  // `const` pins the property to one exact value. Nothing on the strict path
+  // read it — only the fast-path guard did, and a guard that merely *declines*
+  // sends the value here — so `{ a: { const: 'x' } }` accepted `{ a: 'y' }`.
+  // Compared structurally (like the root path) so an object/array `const`,
+  // which no `===` could ever match, is enforced rather than skipped.
+  if (hasConst(propSchema)) {
+    const equal = generateDeepEqualCheck(acc, propSchema.const)
+    const failure = throwError(`${field} must be ${JSON.stringify(propSchema.const)}`)
+    lines.push(isRequired ? `  if (!(${equal})) ${failure};` : `  if (${acc} !== undefined && !(${equal})) ${failure};`)
+    return lines
+  }
+
   if (hasEnum(propSchema)) {
     const member = generateEnumCheck(acc, propSchema.enum)
     const label = (propSchema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
@@ -517,6 +755,7 @@ const generatePropertyAssertion = (
     const nonNull = types.filter((type) => type !== 'null')
     if (nonNull.length === 1) {
       lines.push(...generateConstraintChecks(acc, { ...propSchema, type: nonNull[0] } as JSONSchema, field, context))
+      lines.push(...nullableObjectShapeChecks(acc, propSchema, nonNull[0] as string, field, !isRequired))
     }
     return lines
   }
@@ -551,6 +790,16 @@ const generatePropertyAssertion = (
       !isInlineObjectProperty(propSchema)
     ) {
       lines.push(...generateObjectKeywordChecks(acc, propSchema, field, true))
+    }
+    // Pattern-/additional-property value checks, guarded on the value being an
+    // object (the type check reports a non-object separately). Inline object
+    // properties are excluded for `patternProperties` by construction, so this
+    // is the only place these reach a nested object property.
+    if ('patternProperties' in r || (isSchemaObject(propSchema) && typeof r['additionalProperties'] === 'object')) {
+      const keyed = generateKeyedValueChecks(acc, propSchema, field)
+      if (keyed.length > 0) {
+        lines.push(`  if (isObject(${acc})) {`, ...keyed.map((line) => `  ${line}`), `  }`)
+      }
     }
   }
 
@@ -635,6 +884,13 @@ export const generateObjectStrictAssertion = (
     lines.push(...generateObjectKeywordChecks('input', schema, `[${typeName}]`, false))
   }
 
+  // `input` is proven an object above, so these need no runtime guard.
+  lines.push(...generateObjectSizeChecks('input', schema, `[${typeName}]`, false))
+  lines.push(...generateNotCheck('input', schema, `[${typeName}]`, false))
+  lines.push(...generateAllOfChecks('input', schema, `[${typeName}]`, false, true))
+  lines.push(...generateConditionalChecks('input', schema, `[${typeName}]`))
+  lines.push(...generateKeyedValueChecks('input', schema, `[${typeName}]`))
+
   return lines
 }
 
@@ -680,6 +936,13 @@ export const generateScalarStrictAssertion = (
     )
   }
 
+  // Composition at the root. A type-less `{ not: … }` / `{ allOf: […] }` /
+  // `{ if: …, then: … }` root used to reach the "nothing to assert" bail below
+  // and return a validation-free cast.
+  lines.push(...generateNotCheck('input', schema, label, false))
+  lines.push(...generateAllOfChecks('input', schema, label, false))
+  lines.push(...generateConditionalChecks('input', schema, label))
+
   // Array-form `type` at the root — same gap as the property path below.
   const rootMultiType = multiTypeCheck('input', schema, { ignoreConstraints: true })
   if (rootMultiType !== undefined) {
@@ -699,6 +962,7 @@ export const generateScalarStrictAssertion = (
           rootSchema ? { rootSchema } : {},
         ),
       )
+      lines.push(...nullableObjectShapeChecks('input', schema, nonNull[0] as string, label, false))
     }
     return lines.length > 0 ? lines.join('\n') : null
   }

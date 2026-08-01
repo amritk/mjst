@@ -10,6 +10,10 @@ import {
   hasConst,
   hasEnum,
   hasItems,
+  hasMaxItems,
+  hasMaxProperties,
+  hasMinItems,
+  hasMinProperties,
   hasOneOf,
   hasProperties,
   hasRef,
@@ -29,7 +33,9 @@ import { assertNoUnsupportedKeywords } from './assert-supported-keywords'
 import { generateEnumCaseInsensitiveCoercion } from './generate-enum-check'
 import {
   generateContainsCheck,
+  generateKeyedValueChecks,
   generateObjectKeywordChecks,
+  generateObjectSizeChecks,
   generateObjectStrictAssertion,
   generateScalarStrictAssertion,
   inlineAllOfMembers,
@@ -740,7 +746,15 @@ const generateNonObjectParser = (
   // membership here. A typed `const`/`enum` (`{ type: 'string', enum: [...] }`)
   // keeps flowing to the strict scalar path, which asserts it via
   // generateScalarStrictAssertion.
-  if (strict && isSchemaObject(schema) && !hasType(schema) && (hasConst(schema) || hasEnum(schema))) {
+  // `not` / `allOf` / `if` join `const`/`enum` here for the same reason: they
+  // constrain a type-less root, and the no-`type` bail below would otherwise
+  // hand back an unchecked cast from a parser documented to throw.
+  if (
+    strict &&
+    isSchemaObject(schema) &&
+    !hasType(schema) &&
+    (hasConst(schema) || hasEnum(schema) || hasAllOf(schema) || 'not' in schema || 'if' in schema)
+  ) {
     const assertion = generateScalarStrictAssertion(schema, typeName, unionCtx?.rootSchema)
     if (assertion !== null) {
       return `export const ${functionName} = (input: unknown): ${typeName} => {\n${assertion}\n  return input as ${typeName};\n};`
@@ -770,6 +784,20 @@ const generateNonObjectParser = (
     // compared the wrong way.
     const strictArrayChecks = strict
       ? [
+          // `minItems`/`maxItems` were dropped on this path entirely: a root
+          // array of objects or `$ref`s bypasses generateScalarStrictAssertion,
+          // so `{ type: 'array', minItems: 2, items: { type: 'object' } }`
+          // accepted a one-element array.
+          ...(hasMinItems(schema)
+            ? [
+                `  if (input.length < ${schema.minItems}) throw new Error(${quoteJsString(`[${typeName}] must have at least ${schema.minItems} items`)});`,
+              ]
+            : []),
+          ...(hasMaxItems(schema)
+            ? [
+                `  if (input.length > ${schema.maxItems}) throw new Error(${quoteJsString(`[${typeName}] must have at most ${schema.maxItems} items`)});`,
+              ]
+            : []),
           ...generateContainsCheck('input', schema, `[${typeName}]`),
           ...(hasUniqueItems(schema) && schema.uniqueItems === true
             ? [
@@ -928,8 +956,36 @@ const generateNonObjectParser = (
  */
 const strictObjectKeywordPrelude = (schema: JSONSchema, typeName: string): string => {
   if (!isSchemaObject(schema)) return ''
-  const lines = generateObjectKeywordChecks('input', schema, `[${typeName}]`, false)
+  const lines = [
+    ...generateObjectKeywordChecks('input', schema, `[${typeName}]`, false),
+    // `required` and the size bounds are the object-level constraints these
+    // specialized parsers never had a place for: `{ type: 'object', required:
+    // ['a'] }` and `{ type: 'object', minProperties: 2 }` carry no `properties`,
+    // so they land on the empty-object / record paths, which asserted only
+    // `isObject`. Keys that *are* declared are skipped — the per-property
+    // assertions of the combined parser already demand them.
+    ...requiredWithoutPropertyLines(schema, typeName),
+    ...generateObjectSizeChecks('input', schema, `[${typeName}]`, false),
+    // Values behind `patternProperties` / a schema-valued `additionalProperties`:
+    // these parsers build their result by copying or coercing, so nothing
+    // rejected a wrongly-typed pattern-matched value before this.
+    ...generateKeyedValueChecks('input', schema, `[${typeName}]`),
+  ]
   return lines.length > 0 ? `\n${lines.join('\n')}` : ''
+}
+
+/** Presence assertions for `required` keys that have no entry under `properties`. */
+const requiredWithoutPropertyLines = (schema: JSONSchema, typeName: string): string[] => {
+  if (!isSchemaObject(schema) || !hasRequired(schema)) return []
+  const declared = hasProperties(schema) ? (schema.properties as Record<string, JSONSchema>) : {}
+  const lines: string[] = []
+  for (const key of new Set(schema.required)) {
+    if (key in declared) continue
+    lines.push(
+      `  if (!(${JSON.stringify(key)} in input)) throw new Error(${quoteJsString(`[${typeName}] missing required property '${key}'`)});`,
+    )
+  }
+  return lines
 }
 
 /**
@@ -1339,6 +1395,23 @@ const generateObjectParser = (
     }
   }
 
+  // Size bounds join the guard for the same true-soundness reason they join the
+  // shape validator: per-property checks say nothing about how many keys the
+  // object has, so without these the guard returned `{ ...input }` for a value
+  // violating `minProperties` before the assertions could reject it. Pushed to
+  // both check lists (and before the known-keys term) so the guard and the
+  // predicate it is compared against below stay byte-identical.
+  if (canFastPath) {
+    if (hasMinProperties(schema)) {
+      fastPathChecks.push(`Object.keys(input).length >= ${schema.minProperties}`)
+      fastPathAccessorChecks.push(`Object.keys(input).length >= ${schema.minProperties}`)
+    }
+    if (hasMaxProperties(schema)) {
+      fastPathChecks.push(`Object.keys(input).length <= ${schema.maxProperties}`)
+      fastPathAccessorChecks.push(`Object.keys(input).length <= ${schema.maxProperties}`)
+    }
+  }
+
   // The `{ ...input }` fast path preserves extras, so when stripping it may only
   // fire on inputs that carry no undeclared key. For strict + additionalProperties:
   // false the cold path rejects extras instead; folding the known-keys term into
@@ -1574,9 +1647,22 @@ const generateObjectParser = (
         continue
       }
 
-      // Handle non-schema-object properties
+      // Handle non-schema-object properties. A `true` schema accepts any value,
+      // so the value must survive: assigning `undefined` overwrote it in the
+      // `...input` spread (and dropped it entirely from a strip build), which
+      // made a strict parser *mutate* a value it had just accepted. A `false`
+      // schema admits nothing — strict throws before reaching here, and coerce
+      // mode drops the key.
       if (!isSchemaObject(propSchema)) {
-        if (isRequired) {
+        if (propSchema === true) {
+          // An optional one needs no entry while the `...input` spread is there;
+          // only a strip build (which drops the spread) has to name it.
+          if (isRequired) {
+            objectLines.push(`    ${safeLiteralKey(key)}: ${accessor},`)
+          } else if (stripKeys) {
+            objectLines.push(`    ...(${accessor} !== undefined && { ${safeLiteralKey(key)}: ${accessor} }),`)
+          }
+        } else if (isRequired) {
           objectLines.push(`    ${safeLiteralKey(key)}: undefined,`)
         }
         continue
@@ -1652,7 +1738,18 @@ const generateObjectParser = (
     const fields: string[] = []
     for (const { key, varName, isRequired, propSchema } of propInfo) {
       if (!isSchemaObject(propSchema)) {
-        if (isRequired) fields.push(`    ${safeLiteralKey(key)}: undefined,`)
+        // Same reasoning as buildObjectLines: `true` accepts any value, so it
+        // has to be carried across rather than blanked to `undefined`.
+        if (propSchema === true) {
+          const acc = safeAccessor('input', key)
+          fields.push(
+            isRequired
+              ? `    ${safeLiteralKey(key)}: ${acc},`
+              : `    ...(${acc} !== undefined && { ${safeLiteralKey(key)}: ${acc} }),`,
+          )
+        } else if (isRequired) {
+          fields.push(`    ${safeLiteralKey(key)}: undefined,`)
+        }
         continue
       }
       const accessor = shouldCacheVariable(propSchema, canFastPath, useRefImports)
@@ -2684,6 +2781,12 @@ export const generateShapeValidator = (
       checks.push(`(${accessor} === undefined || ${check})`)
     }
   }
+
+  // Size bounds: without them a predicate built purely from per-property checks
+  // said "already the right shape" for a value violating `minProperties`, and
+  // the parser's fast path returned it before any assertion ran.
+  if (hasMinProperties(schema)) checks.push(`Object.keys(input).length >= ${schema.minProperties}`)
+  if (hasMaxProperties(schema)) checks.push(`Object.keys(input).length <= ${schema.maxProperties}`)
 
   // The count form is sound only in conjunction with the typed checks above
   // (they prove every declared key present) and only for plain objects (a

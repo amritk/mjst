@@ -15,9 +15,11 @@ import {
   hasMaxItems,
   hasMaximum,
   hasMaxLength,
+  hasMaxProperties,
   hasMinItems,
   hasMinimum,
   hasMinLength,
+  hasMinProperties,
   hasMultipleOf,
   hasOneOf,
   hasPattern,
@@ -39,6 +41,7 @@ import {
   scalarItemTypeCheck,
   singleTypeCheck,
 } from './generate-validation-expression'
+import { subschemaMatchExpr } from './subschema-match'
 
 /**
  * Boolean type-check expression builders shared by the shape validators, the
@@ -131,10 +134,13 @@ export const isExclusiveUnion = (schema: JSONSchema): boolean =>
 /**
  * True when a schema carries a keyword the strict slow path enforces but which
  * no flat type check can mirror: `contains` (array item counting),
- * `dependentRequired` / `dependentSchemas` (cross-property presence), or
- * `propertyNames` (per-key constraints). A fast path or shape validator that
- * accepted such a value on a bare type check would skip the enforcement, so
- * both must bail when this is true — the slow path then runs the real checks.
+ * `dependentRequired` / `dependentSchemas` (cross-property presence),
+ * `propertyNames` (per-key constraints), the conditional and composition
+ * keywords (`if`/`then`/`else`, `not`, a constraining `allOf`), or per-key value
+ * schemas (`patternProperties`, a constraining `additionalProperties`). A fast
+ * path or shape validator that accepted such a value on a bare type check would
+ * skip the enforcement, so both must bail when this is true — the slow path then
+ * runs the real checks.
  */
 export const hasFastPathBlockingKeyword = (schema: JSONSchema): boolean => {
   if (!isSchemaObject(schema)) return false
@@ -143,8 +149,44 @@ export const hasFastPathBlockingKeyword = (schema: JSONSchema): boolean => {
   // times per property during codegen, and a present-but-malformed keyword still
   // belongs on the slow path, where the typed guards handle it.
   return (
-    'contains' in record || 'dependentSchemas' in record || 'propertyNames' in record || 'dependentRequired' in record
+    'contains' in record ||
+    'dependentSchemas' in record ||
+    'propertyNames' in record ||
+    'dependentRequired' in record ||
+    // Composition and conditionals: the strict assertions now enforce these, but
+    // a guard built from per-property type checks cannot mirror them — it said
+    // "already in shape" for `{ kind: 'a' }` under `if: {kind: 'a'}, then:
+    // {required: ['n']}` and returned before the conditional was ever tested.
+    'if' in record ||
+    'then' in record ||
+    'else' in record ||
+    'not' in record ||
+    'patternProperties' in record ||
+    hasConstrainingAllOf(schema) ||
+    hasConstrainingAdditionalProperties(schema)
   )
+}
+
+/**
+ * True when `allOf` carries a member the fast path would skip. A `$ref` member
+ * is enforced by the parser generated for its target (and spread by the object
+ * parser); anything written inline contributes constraints only the slow path
+ * checks.
+ */
+const hasConstrainingAllOf = (schema: JSONSchema): boolean =>
+  hasAllOf(schema) && schema.allOf.some((member) => !(isSchemaObject(member) && hasRef(member)))
+
+/**
+ * True when `additionalProperties` is a schema that actually narrows its values.
+ * `true` and `{}` permit everything (so the fast path stays), `false` is the
+ * unknown-key rejection the parsers emit themselves, and anything else has to
+ * reach the per-key assertion loop.
+ */
+const hasConstrainingAdditionalProperties = (schema: JSONSchema): boolean => {
+  if (!hasAdditionalProperties(schema)) return false
+  const additional = schema.additionalProperties
+  if (typeof additional === 'boolean') return false
+  return subschemaMatchExpr('_x', additional as JSONSchema) !== 'true'
 }
 
 /**
@@ -227,19 +269,8 @@ export const generatePropertyTypeCheck = (
 
   // Keywords the strict slow path enforces but no flat check can prove: bail so
   // neither the fast path nor the shape validator accepts a value they would
-  // otherwise wave through untested. Inlined here (rather than calling
-  // hasFastPathBlockingKeyword) to reuse the isSchemaObject narrowing above —
-  // this is a codegen hot path hit several times per property. Keep in sync with
-  // hasFastPathBlockingKeyword.
-  const record = schema as Record<string, unknown>
-  if (
-    'contains' in record ||
-    'dependentSchemas' in record ||
-    'propertyNames' in record ||
-    'dependentRequired' in record
-  ) {
-    return null
-  }
+  // otherwise wave through untested.
+  if (hasFastPathBlockingKeyword(schema)) return null
 
   // $ref via shape predicate (deep fast-path through nested types).
   if (useRefImports && hasRef(schema)) {
@@ -344,7 +375,19 @@ export const generatePropertyTypeCheck = (
           (isSchemaObject(items) && hasEnum(items) && items.enum.length > 0
             ? generateEnumCheck('_it', items.enum)
             : null)
-        if (itemCheck) checks.push(everyTailItem(varName, itemCheck, schema))
+        if (itemCheck) {
+          checks.push(everyTailItem(varName, itemCheck, schema))
+        } else if (!(isSchemaObject(items) && (hasRef(items) || isInlineObjectProperty(items)))) {
+          // Richer item schemas — a nested array, a union, a bounded string —
+          // used to contribute *nothing*, leaving `Array.isArray` as the whole
+          // check: this "true-sound" guard waved `{ g: [1] }` through for
+          // `items: { type: 'array' }`. `$ref` and inline-object items are the
+          // two shapes whose elements the caller proves separately (an imported
+          // predicate, the private `_every…` loop), so they stay exempt.
+          const match = subschemaMatchExpr('_it', items)
+          if (match === null) return null
+          if (match !== 'true') checks.push(everyTailItem(varName, match, schema))
+        }
       }
       // Tuple `prefixItems`: every present position must already match its
       // subschema, and a sibling `items: false` bars extra elements. Positions
@@ -366,6 +409,11 @@ export const generatePropertyTypeCheck = (
     }
     case 'object':
       checks.push(`isObject(${varName})`)
+      // A bare `isObject` is not *true-sound* under a size bound: `{}` passed it
+      // while violating `minProperties: 2`, and the fast path then returned the
+      // value without ever reaching the strict assertions.
+      if (hasMinProperties(schema)) checks.push(`Object.keys(${varName}).length >= ${schema.minProperties}`)
+      if (hasMaxProperties(schema)) checks.push(`Object.keys(${varName}).length <= ${schema.maxProperties}`)
       break
     default:
       return null
@@ -421,6 +469,12 @@ export const generateInlineObjectCheck = (
     const allowedKeys = JSON.stringify(Object.keys(schema.properties))
     checks.push(`Object.keys(${varName}).every((_k) => ${allowedKeys}.includes(_k))`)
   }
+
+  // Size bounds, for the same true-soundness reason as the `object` case of
+  // generatePropertyTypeCheck: a branch check that says "matches" for a value
+  // the branch rejects lets a fast path wave it through.
+  if (hasMinProperties(schema)) checks.push(`Object.keys(${varName}).length >= ${schema.minProperties}`)
+  if (hasMaxProperties(schema)) checks.push(`Object.keys(${varName}).length <= ${schema.maxProperties}`)
 
   return checks.join(' && ')
 }
@@ -590,11 +644,10 @@ const canTrustShapeProperty = (
  * rejects. That over-approximation was harmless while the check only fed an
  * `anyOf` disjunction, but a `oneOf` counts matches: an over-matching branch can
  * push the count to 2 and make the strict parser throw on a *valid* value. The
- * trust walk therefore refuses these outright.
+ * trust walk therefore refuses these outright. `minProperties`/`maxProperties`
+ * are absent because the check now emits them exactly.
  */
 const KEYWORDS_INLINE_CHECK_IGNORES = [
-  'minProperties',
-  'maxProperties',
   'propertyNames',
   'dependentRequired',
   'dependentSchemas',

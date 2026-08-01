@@ -91,13 +91,33 @@ describe('subschemaMatchExpr — matchable forms', () => {
   })
 })
 
+describe('subschemaMatchExpr — combinators', () => {
+  it('proves allOf as a conjunction, anyOf as a disjunction, oneOf as an exact count', () => {
+    expect(subschemaMatchExpr('x', { allOf: [{ type: 'string' }] } as never)).toBe('typeof x === "string"')
+    expect(subschemaMatchExpr('x', { anyOf: [{ type: 'string' }, { type: 'number' }] } as never)).toBe(
+      '(typeof x === "string" || typeof x === "number")',
+    )
+    expect(subschemaMatchExpr('x', { oneOf: [{ type: 'string' }, { type: 'number' }] } as never)).toBe(
+      '(((typeof x === "string" ? 1 : 0) + (typeof x === "number" ? 1 : 0)) === 1)',
+    )
+    expect(subschemaMatchExpr('x', { not: { type: 'string' } } as never)).toBe('!(typeof x === "string")')
+  })
+
+  it('still bails when a member is beyond the matcher', () => {
+    expect(subschemaMatchExpr('x', { anyOf: [{ $ref: '#/$defs/x' }] } as never)).toBeNull()
+    expect(subschemaMatchExpr('x', { not: { $ref: '#/$defs/x' } } as never)).toBeNull()
+  })
+
+  it('bounds recursion so a deeply nested combinator cannot blow up the output', () => {
+    let schema: Record<string, unknown> = { type: 'string' }
+    for (let i = 0; i < 12; i++) schema = { allOf: [schema] }
+    expect(subschemaMatchExpr('x', schema as never)).toBeNull()
+  })
+})
+
 describe('subschemaMatchExpr — unprovable forms return null', () => {
   it.each([
     ['$ref', { $ref: '#/$defs/x' }],
-    ['oneOf', { oneOf: [{ type: 'string' }, { type: 'number' }] }],
-    ['anyOf', { anyOf: [{ pattern: '^a' }] }],
-    ['not', { not: { type: 'string' } }],
-    ['allOf', { allOf: [{ type: 'string' }] }],
     ['array-form type', { type: ['string', 'null'] }],
     ['structural const', { const: { a: 1 } }],
     ['schema additionalProperties', { type: 'object', additionalProperties: { type: 'string' } }],

@@ -27,6 +27,7 @@ import {
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { generateEnumCheck } from './generate-enum-check'
+import { generateUniqueItemsCheck } from './generate-unique-items-check'
 
 /**
  * Keywords `subschemaMatchExpr` reads and enforces. A subschema carrying any
@@ -55,6 +56,13 @@ const HANDLED_KEYWORDS: ReadonlySet<string> = new Set([
   'minProperties',
   'maxProperties',
   'additionalProperties',
+  'allOf',
+  'anyOf',
+  'oneOf',
+  'not',
+  'if',
+  'then',
+  'else',
 ])
 
 /**
@@ -122,7 +130,10 @@ const arrayConstraints = (acc: string, schema: JSONSchema, depth: number): strin
   if (hasMinItems(schema)) c.push(`${acc}.length >= ${schema.minItems}`)
   if (hasMaxItems(schema)) c.push(`${acc}.length <= ${schema.maxItems}`)
   if (hasUniqueItems(schema) && schema.uniqueItems === true) {
-    c.push(`new Set((${acc} as unknown[]).map((_u) => JSON.stringify(_u))).size === ${acc}.length`)
+    // A raw `JSON.stringify` key is key-order sensitive, so `[{a:1,b:2},{b:2,a:1}]`
+    // read as distinct — the exact bug generateUniqueItemsCheck exists to fix, and
+    // this matcher promises soundness in *both* directions.
+    c.push(generateUniqueItemsCheck(acc, schema))
   }
   if (hasItems(schema)) {
     if (Array.isArray(schema.items)) return null
@@ -141,17 +152,24 @@ const objectConstraints = (acc: string, schema: JSONSchema, depth: number): stri
 
   const c: string[] = []
   const required = new Set<string>(hasRequired(schema) ? schema.required : [])
+  // Every accessor here is guarded by an object test that runs first (either the
+  // `type: 'object'` assertion or the type-less `!isObject(x) || …` shape), but
+  // TypeScript cannot see that through the emitted `&&` chain: reading a property
+  // off an `unknown` — or off the `object` a nullable-object property narrows to
+  // — is a compile error in the generated file. The cast states what the guard
+  // already proved.
+  const rec = `(${acc} as Record<string, unknown>)`
 
   if (hasProperties(schema)) {
     for (const [key, propSchema] of Object.entries(schema.properties)) {
-      const propAcc = safeAccessor(acc, key)
+      const propAcc = safeAccessor(rec, key)
       const propMatch = subschemaMatchExpr(propAcc, propSchema as JSONSchema, depth + 1)
       if (propMatch === null) return null
       if (required.has(key)) {
         c.push(
           propMatch === 'true'
-            ? `${JSON.stringify(key)} in ${acc}`
-            : `(${JSON.stringify(key)} in ${acc} && ${propMatch})`,
+            ? `${JSON.stringify(key)} in ${rec}`
+            : `(${JSON.stringify(key)} in ${rec} && ${propMatch})`,
         )
       } else if (propMatch !== 'true') {
         c.push(`(${propAcc} === undefined || ${propMatch})`)
@@ -159,14 +177,14 @@ const objectConstraints = (acc: string, schema: JSONSchema, depth: number): stri
       required.delete(key)
     }
   }
-  for (const key of required) c.push(`${JSON.stringify(key)} in ${acc}`)
+  for (const key of required) c.push(`${JSON.stringify(key)} in ${rec}`)
 
-  if (hasMinProperties(schema)) c.push(`Object.keys(${acc}).length >= ${schema.minProperties}`)
-  if (hasMaxProperties(schema)) c.push(`Object.keys(${acc}).length <= ${schema.maxProperties}`)
+  if (hasMinProperties(schema)) c.push(`Object.keys(${rec}).length >= ${schema.minProperties}`)
+  if (hasMaxProperties(schema)) c.push(`Object.keys(${rec}).length <= ${schema.maxProperties}`)
 
   if (hasAdditionalProperties(schema) && (schema as { additionalProperties: unknown }).additionalProperties === false) {
     const allowed = JSON.stringify(hasProperties(schema) ? Object.keys(schema.properties) : [])
-    c.push(`Object.keys(${acc}).every((_k) => ${allowed}.includes(_k))`)
+    c.push(`Object.keys(${rec}).every((_k) => ${allowed}.includes(_k))`)
   }
 
   return c
@@ -210,7 +228,21 @@ export const subschemaMatchExpr = (accessor: string, schema: JSONSchema, depth =
   // through to a permissive result.
   if ('type' in schema && typeof schema.type !== 'string') return null
 
+  // Runaway guard: each combinator level multiplies the emitted expression, and
+  // a pathological schema could otherwise blow the generated file up.
+  if (depth > 8) return null
+
   const checks: string[] = []
+
+  // Combinators. Each is exact when its members are, so they compose without
+  // weakening the both-directions guarantee this matcher promises — and that is
+  // what lets `items`, `contains`, `not`, `patternProperties` and friends handle
+  // a union instead of silently skipping it. `$ref` members still bail (`$ref`
+  // is not a handled keyword), so no conservative shape-validator stub can leak
+  // in here.
+  const combinators = combinatorChecks(accessor, schema, depth)
+  if (combinators === null) return null
+  checks.push(...combinators)
 
   // `const` — a single exact value. Primitives compare with `===`; a structural
   // const would need deep equality, which this flat matcher does not attempt.
@@ -239,6 +271,68 @@ export const subschemaMatchExpr = (accessor: string, schema: JSONSchema, depth =
   // A schema with no proven constraint matches every value.
   if (checks.length === 0) return 'true'
   return checks.length === 1 ? (checks[0] as string) : `(${checks.join(' && ')})`
+}
+
+/**
+ * `allOf` (every member matches), `anyOf` (at least one), `oneOf` (exactly one)
+ * and `not` (none), or `null` when any member is beyond this matcher. Each is
+ * built from member matches that are already exact in both directions, so the
+ * combination is too.
+ */
+const combinatorChecks = (accessor: string, schema: JSONSchema, depth: number): string[] | null => {
+  const record = schema as Record<string, unknown>
+  const checks: string[] = []
+
+  for (const keyword of ['allOf', 'anyOf', 'oneOf'] as const) {
+    const members = record[keyword]
+    if (members === undefined) continue
+    if (!Array.isArray(members) || members.length === 0) return null
+    const matches: string[] = []
+    for (const member of members) {
+      const match = subschemaMatchExpr(accessor, member as JSONSchema, depth + 1)
+      if (match === null) return null
+      matches.push(match)
+    }
+    if (keyword === 'allOf') {
+      const constraining = matches.filter((match) => match !== 'true')
+      if (constraining.length > 0) checks.push(joinAnd(constraining))
+    } else if (keyword === 'anyOf') {
+      if (matches.some((match) => match === 'true')) continue
+      checks.push(matches.length === 1 ? (matches[0] as string) : `(${matches.join(' || ')})`)
+    } else {
+      // `oneOf` counts matches — a value matching two branches is invalid — so a
+      // trivially-true branch cannot be dropped the way an `anyOf` one can.
+      checks.push(
+        matches.length === 1
+          ? (matches[0] as string)
+          : `((${matches.map((match) => `(${match} ? 1 : 0)`).join(' + ')}) === 1)`,
+      )
+    }
+  }
+
+  if ('not' in record) {
+    const match = subschemaMatchExpr(accessor, record['not'] as JSONSchema, depth + 1)
+    if (match === null) return null
+    if (match !== 'false') checks.push(`!(${match})`)
+  }
+
+  // `if` / `then` / `else`. Per 2020-12 a bare `then` or `else` with no `if`
+  // asserts nothing, which is why they are readable keywords here at all: a
+  // schema carrying one used to bail the matcher outright even though it
+  // constrained nothing.
+  if ('if' in record) {
+    const ifMatch = subschemaMatchExpr(accessor, record['if'] as JSONSchema, depth + 1)
+    if (ifMatch === null) return null
+    const branch = (keyword: 'then' | 'else'): string | null | undefined =>
+      keyword in record ? subschemaMatchExpr(accessor, record[keyword] as JSONSchema, depth + 1) : undefined
+    const thenMatch = branch('then')
+    const elseMatch = branch('else')
+    if (thenMatch === null || elseMatch === null) return null
+    if (thenMatch !== undefined && thenMatch !== 'true') checks.push(`(!(${ifMatch}) || ${thenMatch})`)
+    if (elseMatch !== undefined && elseMatch !== 'true') checks.push(`((${ifMatch}) || ${elseMatch})`)
+  }
+
+  return checks
 }
 
 /** Type assertion plus that type's constraints, for a single-`type` schema. */
