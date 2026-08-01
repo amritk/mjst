@@ -25,14 +25,17 @@ Built on that:
   `items`, a satisfied `contains`, `allOf` members, a `$ref` target, a *matching*
   `anyOf` / `oneOf` branch, an `if` / `then` / `else` arm, and a triggered
   `dependentSchemas` entry — and applies the unevaluated schema to what is left.
-- **A whole-schema backstop** now stands behind the per-property assertions, so
-  the keywords no flat check can express are enforced instead of dropped: a
+- **A backstop check** now stands behind the per-property assertions, so the
+  keywords no flat check can express are enforced instead of dropped: a
   `$ref` that no imported parser validates (single-file builds, `allOf` members
   of a property-less object, array `items`, tuple positions), a `$ref` with
   constraining siblings, `items: false`, and constraint keywords with no `type`
   to hang them on (`{ minimum: 5 }`, `{ required: ['a'] }`). The fast path and
   the shape validator decline for those same shapes, so nothing can skip past
-  the check.
+  the check. It proves only the keywords that need it — a bare `required` stays
+  enforceable even when a sibling `allOf` member is too deep to inline — so the
+  whole 982-schema OpenAPI corpus still generates under `strict`, now covered by
+  its own pass in the fixture suite.
 - **A `type` with more than one non-null member** keeps each family's
   constraints: `{ type: ['string','array'], minLength: 3, minItems: 2 }` bounds
   the string by length and the array by count.

@@ -159,6 +159,47 @@ export const backstopReason = (schema: JSONSchema, context: StrictAssertionConte
   return null
 }
 
+/**
+ * The slice of a node the backstop actually has to prove.
+ *
+ * `unevaluated*` and `$ref` need the node whole — the first because its answer
+ * depends on what every sibling keyword evaluated, the second because a ref's
+ * siblings apply alongside its target. A bare constraint needs only itself, and
+ * proving it in isolation is what keeps an ordinary
+ * `{ allOf: [{…}, { $ref: … }], required: ['role'] }` — the OpenAPI idiom —
+ * generating: the `required` is provable even when the surrounding `allOf`
+ * member is too deep (or too unresolvable) to inline, and that member has its
+ * own enforcement anyway.
+ *
+ * `properties` rides along, flattened to `true` schemas, only because
+ * `additionalProperties` needs the declared key names to know which keys it
+ * owns. Their values are irrelevant to that question and are asserted
+ * per-property elsewhere.
+ */
+export const backstopSchema = (schema: JSONSchema, reason: string): JSONSchema => {
+  if (reason !== 'constraints' && reason !== 'items') return schema
+  const record = schema as Record<string, unknown>
+  const residual: Record<string, unknown> = {}
+  for (const keyword of [
+    'type',
+    ...TYPELESS_CONSTRAINT_KEYWORDS,
+    ...TYPELESS_OBJECT_KEYWORDS,
+    'minContains',
+    'maxContains',
+  ]) {
+    if (keyword in record) residual[keyword] = record[keyword]
+  }
+  if ('additionalProperties' in residual && 'properties' in record) {
+    const properties = record['properties']
+    if (typeof properties === 'object' && properties !== null && !Array.isArray(properties)) {
+      residual['properties'] = Object.fromEntries(
+        Object.keys(properties as Record<string, unknown>).map((k) => [k, true]),
+      )
+    }
+  }
+  return residual as JSONSchema
+}
+
 /** The failure message for each backstop reason — vague beats wrong, but not by much. */
 const backstopMessage = (reason: string, label: string): string => {
   switch (reason) {
@@ -193,7 +234,7 @@ export const generateBackstopAssertion = (
 ): string[] => {
   const reason = backstopReason(schema, context)
   if (reason === null) return []
-  const match = subschemaMatchExpr(acc, schema, matchContext(context))
+  const match = subschemaMatchExpr(acc, backstopSchema(schema, reason), matchContext(context))
   if (match === null || match === 'true') return []
   const failure = throwError(backstopMessage(reason, label))
   return [optional ? `  if (${acc} !== undefined && !(${match})) ${failure};` : `  if (!(${match})) ${failure};`]

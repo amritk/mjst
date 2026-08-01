@@ -1,7 +1,7 @@
 import { isSchemaObject } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
-import { backstopReason, type StrictAssertionContext } from './generate-strict-assertion'
+import { backstopReason, backstopSchema, type StrictAssertionContext } from './generate-strict-assertion'
 import { canMatchSubschema } from './subschema-match'
 
 /** Keywords whose value is a schema (or, for `items`/`prefixItems`, a list of them). */
@@ -116,7 +116,7 @@ export const assertNoUnsupportedKeywords = (
     // enforcement is the backstop, so an unprovable node means the keyword would
     // vanish.
     const reason = backstopReason(node as JSONSchema, context)
-    if (reason !== null && !provable(node as JSONSchema)) {
+    if (reason !== null && !provable(backstopSchema(node as JSONSchema, reason))) {
       fail(reason, 'cannot prove the schema it appears in inline')
     }
 
