@@ -161,6 +161,9 @@
     "packages/resolve-refs": {
       "name": "@amritk/resolve-refs",
       "version": "0.4.5",
+      "devDependencies": {
+        "@amritk/runtime-validators": "workspace:*",
+      },
     },
     "packages/runtime-validators": {
       "name": "@amritk/runtime-validators",
