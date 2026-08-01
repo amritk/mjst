@@ -16,59 +16,20 @@
  *    diagnostic; never produces wrong data.
  *  - **rejects** — a valid document reported as an error.
  *  - **output** — parses cleanly but produces a different value.
+ *
+ * What is left is the irreducible part: one case that turns on a deliberate
+ * option default, and three where a richer JavaScript type is the better answer
+ * than the one JSON can write down.
  */
 export const EXPECTED_FAILURES: Record<string, string> = {
   // ---------------------------------------------------------------------------
-  // accepts: tabs where the spec forbids them
-  //
-  // Tab-in-indentation is reported (`TAB_INDENT`), but the spec's finer rules —
-  // tabs inside block scalar indentation, after an indicator, or in a flow
-  // collection's continuation lines — are not modelled. Catching those means
-  // threading a tab check through every scanner, which the block-mapping hot
-  // path would pay for on every line.
-  // ---------------------------------------------------------------------------
-  'Y79Y/0': 'accepts: tab after a `-` sequence indicator',
-  'Y79Y/3': 'accepts: tab in block scalar indentation',
-  'Y79Y/4': 'accepts: tab in block scalar indentation',
-  'Y79Y/5': 'accepts: tab in block scalar indentation',
-  'Y79Y/6': 'accepts: tab before a block mapping value',
-  'Y79Y/7': 'accepts: tab in flow collection indentation',
-  'Y79Y/8': 'accepts: tab in flow collection indentation',
-  'Y79Y/9': 'accepts: tab in flow collection indentation',
-
-  // ---------------------------------------------------------------------------
-  // rejects: tabs the spec allows
-  //
-  // The mirror image. `peekLine` reports any tab in a line's leading whitespace,
-  // which over-reports a tab that is separation rather than indentation.
-  // ---------------------------------------------------------------------------
-  '6CA3': 'rejects: tab indenting a flow collection continuation line',
-  'DK95/0': 'rejects: tab that follows the block indentation rather than forming it',
-  Q5MG: 'rejects: tab before a flow mapping on a continuation line',
-
-  // ---------------------------------------------------------------------------
-  // accepts: a flow collection indented back to its parent's column
-  //
-  // A flow collection written across lines must keep its continuation lines
-  // deeper than the block that holds it. This parser does not track a block
-  // indent inside `[`/`{` — flow scanning is deliberately delimiter-driven, not
-  // column-driven — so a continuation at the parent's column reads the same as
-  // a properly indented one.
-  // ---------------------------------------------------------------------------
-  '9C9N': 'accepts: a wrongly indented flow sequence',
-  'VJP3/0': 'accepts: a flow mapping whose continuation lines sit at the parent indent',
-
-  // ---------------------------------------------------------------------------
-  // rejects: block shapes we mis-scan
-  //
-  // The document is left partly unconsumed, which the document-end check reports
-  // rather than dropping silently. The report is the improvement; parsing this
-  // shape correctly is not in scope.
-  // ---------------------------------------------------------------------------
-  WZ62: 'rejects: a flow collection holding only empty content',
-
-  // ---------------------------------------------------------------------------
   // rejects: by design
+  //
+  // `: a` / `: b` is two entries whose keys are both empty, which the spec's own
+  // "keys are unique" rule (§3.2.1.1) makes a duplicate — but the suite only asks
+  // that the document *compose*, so it reads as valid there. `uniqueKeys` is on
+  // by default because a linter wants the report; `parse(src, { uniqueKeys:
+  // false })` accepts this document.
   // ---------------------------------------------------------------------------
   '2JQS': 'rejects: two entries with an empty key, which `uniqueKeys` treats as duplicates',
 

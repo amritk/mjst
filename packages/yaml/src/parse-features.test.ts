@@ -1002,3 +1002,162 @@ describe('node properties on block mapping keys', () => {
     expect(doc.errors.map((e) => e.code)).toContain('UNEXPECTED_CONTENT')
   })
 })
+
+describe('tabs, indentation, and separation', () => {
+  it('accepts a tab that sits past the indentation a line owes its context', () => {
+    // The value of `foo:` owes one column of indentation; the space supplies it and
+    // the tab is separation. Reporting any leading tab at all rejected this.
+    const doc = parseDocument('foo:\n \tbar\n')
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.toJS()).toEqual({ foo: 'bar' })
+  })
+
+  it('accepts a tab before a root node, which owes no indentation at all', () => {
+    for (const source of ['\t[\n\t]\n', '\t{}\n']) {
+      const doc = parseDocument(source)
+      expect(doc.errors).toHaveLength(0)
+    }
+    expect(parseDocument('\t[\n\t]\n').toJS()).toEqual([])
+    expect(parseDocument('\t{}\n').toJS()).toEqual({})
+  })
+
+  it('still reports a tab that stands in for indentation the line does owe', () => {
+    const doc = parseDocument('---\na:\n\tb:\n\t\tc: value\n')
+    expect(doc.errors.map((e) => e.code)).toContain('TAB_INDENT')
+  })
+
+  it('reports a tab between an indicator and the compact collection it opens', () => {
+    // The collection's entries align under the column it lands on, and indentation
+    // is spaces — so the tab cannot form it.
+    for (const source of ['-\t-\n', '- \t-\n', '?\t-\n', '? -\n:\t-\n', '?\tkey:\n', '? key:\n:\tkey:\n']) {
+      expect(parseDocument(source).errors.map((e) => e.code)).toContain('TAB_INDENT')
+    }
+  })
+
+  it('leaves a tab before a scalar or a nested entry alone', () => {
+    // Separation, not indentation: no collection opens at the tab's column.
+    for (const source of ['-\t-1\n', '- foo:\t bar\n', '? a\n: -\tb\n  -  -\tc\n     - d\n']) {
+      expect(parseDocument(source).errors).toHaveLength(0)
+    }
+    expect(parseDocument('-\t-1\n').toJS()).toEqual([-1])
+  })
+
+  it('reports a tab where a block scalar wanted indentation, and keeps one that is content', () => {
+    // `\t` at column 0 cannot indent the scalar; ` \t` clears the parent and is content.
+    expect(parseDocument('foo: |\n\t\nbar: 1\n').errors.map((e) => e.code)).toContain('TAB_INDENT')
+    const valid = parseDocument('foo: |\n \t\nbar: 1\n')
+    expect(valid.errors).toHaveLength(0)
+    expect(valid.toJS()).toEqual({ foo: '\t\n', bar: 1 })
+  })
+})
+
+describe('flow collection indentation', () => {
+  it('reports a flow sequence whose continuation lines sit at the parent column', () => {
+    const doc = parseDocument('---\nflow: [a,\nb,\nc]\n')
+    expect(doc.errors.map((e) => e.code)).toContain('BAD_INDENT')
+  })
+
+  it('reports a flow mapping whose continuation lines sit at the parent column', () => {
+    expect(parseDocument('k: {\nk\n:\nv\n}\n').errors.map((e) => e.code)).toContain('BAD_INDENT')
+  })
+
+  it('reports it once per collection rather than once per line', () => {
+    const doc = parseDocument('---\nflow: [a,\nb,\nc]\n')
+    expect(doc.errors.filter((e) => e.code === 'BAD_INDENT')).toHaveLength(1)
+  })
+
+  it('accepts a properly indented multi-line flow collection', () => {
+    const doc = parseDocument('flow: [\n  a,\n  b,\n  ]\nnext: 1\n')
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.toJS()).toEqual({ flow: ['a', 'b'], next: 1 })
+  })
+
+  it('lets the closing delimiter sit at the parent column, as every formatter writes it', () => {
+    for (const source of ['flow: [\n  a,\n  b,\n]\nnext: 1\n', 'flow: {\n  a: 1,\n}\nnext: 2\n', '- [\n  a,\n]\n']) {
+      expect(parseDocument(source).errors).toHaveLength(0)
+    }
+    expect(parseDocument('flow: [\n  a,\n  b,\n]\nnext: 1\n').toJS()).toEqual({ flow: ['a', 'b'], next: 1 })
+  })
+
+  it('still reports a closing delimiter further out than its parent', () => {
+    expect(parseDocument('a:\n  b:\n    c: [\n      1,\n]\n').errors.map((e) => e.code)).toContain('BAD_INDENT')
+  })
+
+  it('measures indentation in spaces, so a tab cannot make up the shortfall', () => {
+    expect(parseDocument('- [\n\tfoo,\n foo\n ]\n').errors.map((e) => e.code)).toContain('BAD_INDENT')
+    // The same line with nothing but a tab on it is blank, and blank lines are exempt.
+    const blank = parseDocument('- [\n\t\n foo\n ]\n')
+    expect(blank.errors).toHaveLength(0)
+    expect(blank.toJS()).toEqual([['foo']])
+  })
+
+  it('holds a root-level flow collection to nothing, since the root owes no indentation', () => {
+    const doc = parseDocument('[\na,\nb,\n]\n')
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.toJS()).toEqual(['a', 'b'])
+  })
+})
+
+describe('flow node properties', () => {
+  it('ends a tag shorthand at the flow indicator that follows it', () => {
+    // `!!str,` is not a tag name: inside a flow collection the `,` ends the token.
+    const doc = parseDocument('{\n  foo : !!str,\n  !!str : bar,\n}\n')
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.toJS()).toEqual({ foo: '', '': 'bar' })
+  })
+
+  it('ends an anchor at the flow indicator that follows it', () => {
+    const doc = parseDocument('[ &a x, *a ]\n')
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.toJS()).toEqual(['x', 'x'])
+  })
+
+  it('keeps a flow indicator inside a block-context tag reportable', () => {
+    // Outside a flow collection those characters are tag content, and an illegal one.
+    expect(parseDocument('a: !!str, b\n').errors.map((e) => e.code)).toContain('BAD_TAG')
+  })
+})
+
+describe('implicit key length', () => {
+  const long = 'k'.repeat(1100)
+
+  it('reports a block mapping key whose ":" is more than 1024 characters in', () => {
+    expect(parseDocument(`${long}: 1\n`).errors.map((e) => e.code)).toContain('BAD_IMPLICIT_KEY')
+    expect(parseDocument(`"${long}": 1\n`).errors.map((e) => e.code)).toContain('BAD_IMPLICIT_KEY')
+  })
+
+  it('accepts a key just inside the limit', () => {
+    expect(parseDocument(`${'k'.repeat(1000)}: 1\n`).errors).toHaveLength(0)
+  })
+
+  it('does not apply the cap in a flow mapping, where JSON lives', () => {
+    // `{"…1100 characters…":1}` is valid JSON, and this parser is a JSON superset.
+    for (const source of [`{"${long}":1}\n`, `{${long}: 1}\n`]) {
+      expect(parseDocument(source).errors).toHaveLength(0)
+    }
+  })
+
+  it('lets an explicit key in a flow sequence put its ":" on the next line', () => {
+    // The one-line rule exists to make an *implicit* key cheap to recognize; a `?`
+    // introducer settles it up front, so `[ ? a\n : b ]` is legal where `[ a\n : b ]`
+    // is not.
+    expect(parseDocument('[ ? a\n : b ]\n').errors).toHaveLength(0)
+    expect(parseDocument('[ a\n : b ]\n').errors.map((e) => e.code)).toContain('BAD_IMPLICIT_KEY')
+  })
+})
+
+describe('tab-indented flow scalars', () => {
+  it('ends a wrapped flow scalar at a closing bracket on a tab-indented line', () => {
+    // A wrapped line's leading whitespace is `s-indent s-separate-in-line?`, so tabs
+    // sit in it too. Skipping only spaces left the `]` unseen and folded the line
+    // into the scalar, so `-1` projected as the string `"-1\n"`.
+    expect(parseDocument('[\n\t[\n\t\t1,\n\t\t-1\n\t]\n]\n').toJS()).toEqual([[1, -1]])
+  })
+
+  it('parses tab-indented JSON exactly as JSON.parse does', () => {
+    const source = JSON.stringify({ a: [1, -1, true], b: { c: null } }, null, '\t')
+    const doc = parseDocument(source)
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.toJS()).toEqual(JSON.parse(source))
+  })
+})
