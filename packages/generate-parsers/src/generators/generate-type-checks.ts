@@ -41,7 +41,7 @@ import {
   scalarItemTypeCheck,
   singleTypeCheck,
 } from './generate-validation-expression'
-import { subschemaMatchExpr } from './subschema-match'
+import { hasConstrainingRefSibling, subschemaMatchExpr } from './subschema-match'
 
 /**
  * Boolean type-check expression builders shared by the shape validators, the
@@ -162,6 +162,14 @@ export const hasFastPathBlockingKeyword = (schema: JSONSchema): boolean => {
     'else' in record ||
     'not' in record ||
     'patternProperties' in record ||
+    // `unevaluated*` is answered against the whole node's annotation coverage,
+    // which a per-property guard has no way to reproduce.
+    ('unevaluatedProperties' in record && record['unevaluatedProperties'] !== true) ||
+    ('unevaluatedItems' in record && record['unevaluatedItems'] !== true) ||
+    // A `$ref` guard calls the target's shape validator, which knows nothing
+    // about the siblings 2020-12 still applies: `{ $ref: …, minProperties: 2 }`
+    // was waved through on the target's shape alone.
+    hasConstrainingRefSibling(schema) ||
     hasConstrainingAllOf(schema) ||
     hasConstrainingAdditionalProperties(schema)
   )

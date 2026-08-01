@@ -1,8 +1,8 @@
 import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
+import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
-  hasAdditionalProperties,
   hasConst,
   hasEnum,
   hasExclusiveMaximum,
@@ -24,10 +24,13 @@ import {
   hasUniqueItems,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
+import { maxLengthPassExpr, minLengthPassExpr } from '@amritk/helpers/string-length-check'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { generateDeepEqualCheck } from './generate-deep-equal-check'
 import { generateEnumCheck } from './generate-enum-check'
 import { generateUniqueItemsCheck } from './generate-unique-items-check'
+import { unevaluatedItemsExpr, unevaluatedPropertiesExpr } from './unevaluated-match'
 
 /**
  * Keywords `subschemaMatchExpr` reads and enforces. A subschema carrying any
@@ -51,11 +54,23 @@ const HANDLED_KEYWORDS: ReadonlySet<string> = new Set([
   'maxItems',
   'uniqueItems',
   'items',
+  'prefixItems',
+  'additionalItems',
+  'contains',
+  'minContains',
+  'maxContains',
   'required',
   'properties',
+  'patternProperties',
+  'propertyNames',
+  'dependentRequired',
+  'dependentSchemas',
   'minProperties',
   'maxProperties',
   'additionalProperties',
+  'unevaluatedProperties',
+  'unevaluatedItems',
+  '$ref',
   'allOf',
   'anyOf',
   'oneOf',
@@ -77,6 +92,7 @@ const ANNOTATION_KEYWORDS: ReadonlySet<string> = new Set([
   '$id',
   '$schema',
   '$anchor',
+  '$dynamicAnchor',
   '$vocabulary',
   '$defs',
   'definitions',
@@ -91,12 +107,34 @@ const ANNOTATION_KEYWORDS: ReadonlySet<string> = new Set([
   'contentSchema',
 ])
 
+/**
+ * What the matcher needs beyond the schema node itself: the root document (to
+ * resolve `$ref`), the recursion depth (which seeds collision-free loop variable
+ * names and caps expression growth), and the `$ref` pointers already open on this
+ * path (a cycle cannot be inlined, so it bails rather than recursing forever).
+ */
+export type MatchContext = {
+  readonly rootSchema?: Record<string, unknown>
+  readonly depth?: number
+  readonly seen?: ReadonlySet<string>
+}
+
+const depthOf = (ctx: MatchContext): number => ctx.depth ?? 0
+
+/** One level deeper: same document and open-ref set, next variable generation. */
+const nest = (ctx: MatchContext): MatchContext => ({ ...ctx, depth: depthOf(ctx) + 1 })
+
 const isObjectExpr = (acc: string): string => `typeof ${acc} === "object" && ${acc} !== null && !Array.isArray(${acc})`
 
-/** True when `additionalProperties` is a constraining (non-boolean) schema. */
-const hasSchemaAdditionalProperties = (schema: JSONSchema): boolean =>
-  hasAdditionalProperties(schema) &&
-  typeof (schema as { additionalProperties: unknown }).additionalProperties !== 'boolean'
+/** The `Record` view of an accessor an object check has already proven. */
+const recordOf = (acc: string): string => `(${acc} as Record<string, unknown>)`
+
+/** The `patternProperties` map, or `null` when the schema declares none. */
+const patternEntriesOf = (schema: JSONSchema): [string, JSONSchema][] | null => {
+  const source = (schema as Record<string, unknown>)['patternProperties']
+  if (typeof source !== 'object' || source === null || Array.isArray(source)) return null
+  return Object.entries(source as Record<string, JSONSchema>)
+}
 
 /**
  * String-family constraint checks (no type assertion). Every JSON Schema string
@@ -107,8 +145,11 @@ const hasSchemaAdditionalProperties = (schema: JSONSchema): boolean =>
 const stringConstraints = (acc: string, schema: JSONSchema): string[] => {
   const c: string[] = []
   if (hasPattern(schema)) c.push(`/${escapeRegexPattern(schema.pattern)}/.test(${acc})`)
-  if (hasMinLength(schema)) c.push(`${acc}.length >= ${schema.minLength}`)
-  if (hasMaxLength(schema)) c.push(`${acc}.length <= ${schema.maxLength}`)
+  // Lengths are code-point counts, not UTF-16 units (see string-length-check):
+  // `"💩".length` is 2, so a raw `.length` accepted it against `minLength: 2` —
+  // a value Ajv rejects — and rejected `"💩💩"` against `maxLength: 2`.
+  if (hasMinLength(schema)) c.push(minLengthPassExpr(acc, schema.minLength))
+  if (hasMaxLength(schema)) c.push(maxLengthPassExpr(acc, schema.maxLength))
   return c
 }
 
@@ -124,9 +165,26 @@ const numberConstraints = (acc: string, schema: JSONSchema, integer: boolean): s
   return c
 }
 
+/**
+ * The positional `prefixItems` (or its draft-07 array-`items` spelling) plus the
+ * tail schema that applies from `prefixItems.length` onward — `items` in
+ * 2020-12, `additionalItems` in draft-07. Kept together because reading one
+ * without the other is exactly how a tuple's tail went unchecked.
+ */
+const tupleShape = (schema: JSONSchema): { prefix: readonly JSONSchema[] | null; tail: unknown } => {
+  const s = schema as Record<string, unknown>
+  const declared = s['prefixItems']
+  if (Array.isArray(declared)) return { prefix: declared as JSONSchema[], tail: s['items'] }
+  if (Array.isArray(s['items'])) return { prefix: s['items'] as JSONSchema[], tail: s['additionalItems'] }
+  return { prefix: null, tail: undefined }
+}
+
 /** Array-family constraint checks (no `Array.isArray` assertion). `null` when an item schema is unprovable. */
-const arrayConstraints = (acc: string, schema: JSONSchema, depth: number): string[] | null => {
+const arrayConstraints = (acc: string, schema: JSONSchema, ctx: MatchContext): string[] | null => {
   const c: string[] = []
+  const d = depthOf(ctx)
+  const elements = `(${acc} as unknown[])`
+
   if (hasMinItems(schema)) c.push(`${acc}.length >= ${schema.minItems}`)
   if (hasMaxItems(schema)) c.push(`${acc}.length <= ${schema.maxItems}`)
   if (hasUniqueItems(schema) && schema.uniqueItems === true) {
@@ -135,22 +193,79 @@ const arrayConstraints = (acc: string, schema: JSONSchema, depth: number): strin
     // this matcher promises soundness in *both* directions.
     c.push(generateUniqueItemsCheck(acc, schema))
   }
-  if (hasItems(schema)) {
-    if (Array.isArray(schema.items)) return null
-    const el = `_i${depth}`
-    const itemMatch = subschemaMatchExpr(el, schema.items, depth + 1)
-    if (itemMatch === null) return null
-    if (itemMatch !== 'true') c.push(`(${acc} as unknown[]).every((${el}) => ${itemMatch})`)
+
+  const { prefix, tail } = tupleShape(schema)
+  if (prefix) {
+    // A tuple position constrains only the element that exists there —
+    // `prefixItems` never requires presence (that is `minItems`' job).
+    for (let i = 0; i < prefix.length; i++) {
+      const positional = subschemaMatchExpr(`${elements}[${i}]`, prefix[i] as JSONSchema, nest(ctx))
+      if (positional === null) return null
+      if (positional === 'true') continue
+      c.push(`(${acc}.length <= ${i} || ${positional})`)
+    }
+    if (tail === false) {
+      c.push(`${acc}.length <= ${prefix.length}`)
+    } else if (tail !== undefined && tail !== true) {
+      const el = `_i${d}`
+      const tailMatch = subschemaMatchExpr(el, tail as JSONSchema, nest(ctx))
+      if (tailMatch === null) return null
+      if (tailMatch !== 'true')
+        c.push(`${elements}.every((${el}, _x${d}) => _x${d} < ${prefix.length} || ${tailMatch})`)
+    }
+  } else if ('items' in (schema as Record<string, unknown>)) {
+    // `items: false` with no tuple positions admits only the empty array. The
+    // `hasItems` guard is false for a boolean `items`, so reading it through that
+    // guard (as this did) left `[1]` matching `{ type: 'array', items: false }`.
+    if ((schema as Record<string, unknown>)['items'] === false) {
+      c.push(`${acc}.length === 0`)
+    } else if (hasItems(schema)) {
+      const el = `_i${d}`
+      const itemMatch = subschemaMatchExpr(el, schema.items, nest(ctx))
+      if (itemMatch === null) return null
+      if (itemMatch !== 'true') c.push(`${elements}.every((${el}) => ${itemMatch})`)
+    }
   }
+
+  const contains = containsConstraint(acc, schema, ctx)
+  if (contains === null) return null
+  c.push(...contains)
+
+  const unevaluated = unevaluatedItemsExpr(acc, schema, ctx, subschemaMatchExpr)
+  if (unevaluated === null) return null
+  if (unevaluated !== undefined) c.push(unevaluated)
+
   return c
 }
 
-/** Object-family constraint checks (no object-type assertion). `null` when a property schema is unprovable. */
-const objectConstraints = (acc: string, schema: JSONSchema, depth: number): string[] | null => {
-  // A schema-valued additionalProperties record would leave record values unproven.
-  if (hasSchemaAdditionalProperties(schema)) return null
+/**
+ * `contains` with its `minContains` / `maxContains` bounds, counted over the
+ * array. `minContains: 0` with no `maxContains` constrains nothing (every array
+ * satisfies it), which is why the count is skipped entirely there rather than
+ * emitted as a tautology.
+ */
+const containsConstraint = (acc: string, schema: JSONSchema, ctx: MatchContext): string[] | null => {
+  const s = schema as Record<string, unknown>
+  if (!('contains' in s)) return []
+  const d = depthOf(ctx)
+  const min = typeof s['minContains'] === 'number' ? (s['minContains'] as number) : 1
+  const max = typeof s['maxContains'] === 'number' ? (s['maxContains'] as number) : undefined
+  if (min === 0 && max === undefined) return []
 
+  const el = `_c${d}`
+  const match = subschemaMatchExpr(el, s['contains'] as JSONSchema, nest(ctx))
+  if (match === null) return null
+  const count = `(${acc} as unknown[]).filter((${el}) => ${match}).length`
+  const bounds: string[] = []
+  if (min > 0) bounds.push(`${count} >= ${min}`)
+  if (max !== undefined) bounds.push(`${count} <= ${max}`)
+  return bounds
+}
+
+/** Object-family constraint checks (no object-type assertion). `null` when a property schema is unprovable. */
+const objectConstraints = (acc: string, schema: JSONSchema, ctx: MatchContext): string[] | null => {
   const c: string[] = []
+  const d = depthOf(ctx)
   const required = new Set<string>(hasRequired(schema) ? schema.required : [])
   // Every accessor here is guarded by an object test that runs first (either the
   // `type: 'object'` assertion or the type-less `!isObject(x) || …` shape), but
@@ -158,12 +273,12 @@ const objectConstraints = (acc: string, schema: JSONSchema, depth: number): stri
   // off an `unknown` — or off the `object` a nullable-object property narrows to
   // — is a compile error in the generated file. The cast states what the guard
   // already proved.
-  const rec = `(${acc} as Record<string, unknown>)`
+  const rec = recordOf(acc)
 
   if (hasProperties(schema)) {
     for (const [key, propSchema] of Object.entries(schema.properties)) {
       const propAcc = safeAccessor(rec, key)
-      const propMatch = subschemaMatchExpr(propAcc, propSchema as JSONSchema, depth + 1)
+      const propMatch = subschemaMatchExpr(propAcc, propSchema as JSONSchema, nest(ctx))
       if (propMatch === null) return null
       if (required.has(key)) {
         c.push(
@@ -182,12 +297,118 @@ const objectConstraints = (acc: string, schema: JSONSchema, depth: number): stri
   if (hasMinProperties(schema)) c.push(`Object.keys(${rec}).length >= ${schema.minProperties}`)
   if (hasMaxProperties(schema)) c.push(`Object.keys(${rec}).length <= ${schema.maxProperties}`)
 
-  if (hasAdditionalProperties(schema) && (schema as { additionalProperties: unknown }).additionalProperties === false) {
-    const allowed = JSON.stringify(hasProperties(schema) ? Object.keys(schema.properties) : [])
-    c.push(`Object.keys(${rec}).every((_k) => ${allowed}.includes(_k))`)
+  // The by-key-name keywords (`patternProperties`, `additionalProperties`,
+  // `propertyNames`) all walk the same key list, so they share one `.every`.
+  const keyTerms = keyWalkTerms(`_k${d}`, `_v${d}`, schema, ctx)
+  if (keyTerms === null) return null
+  if (keyTerms.length > 0) {
+    const needsValue = keyTerms.some((term) => term.usesValue)
+    const body = keyTerms.map((term) => term.expr).join(' && ')
+    c.push(
+      needsValue
+        ? `Object.keys(${rec}).every((_k${d}) => { const _v${d} = ${rec}[_k${d}]; return ${body}; })`
+        : `Object.keys(${rec}).every((_k${d}) => ${body})`,
+    )
   }
 
+  const dependent = dependentTerms(rec, acc, schema, ctx)
+  if (dependent === null) return null
+  c.push(...dependent)
+
+  const unevaluated = unevaluatedPropertiesExpr(acc, schema, ctx, subschemaMatchExpr)
+  if (unevaluated === null) return null
+  if (unevaluated !== undefined) c.push(unevaluated)
+
   return c
+}
+
+/**
+ * The per-key terms of the object key walk: every `patternProperties` entry the
+ * key matches, the `additionalProperties` fallback for keys no `properties` name
+ * and no pattern claims, and `propertyNames` (which constrains the key itself,
+ * not its value). `usesValue` tells the caller whether the shared loop has to
+ * bind the value at all — `propertyNames` alone does not.
+ */
+const keyWalkTerms = (
+  keyVar: string,
+  valueVar: string,
+  schema: JSONSchema,
+  ctx: MatchContext,
+): { expr: string; usesValue: boolean }[] | null => {
+  const terms: { expr: string; usesValue: boolean }[] = []
+  const patterns = patternEntriesOf(schema)
+  const declared = hasProperties(schema) ? Object.keys(schema.properties as Record<string, unknown>) : []
+
+  if (patterns) {
+    for (const [pattern, sub] of patterns) {
+      const match = subschemaMatchExpr(valueVar, sub, nest(ctx))
+      if (match === null) return null
+      if (match === 'true') continue
+      terms.push({ expr: `(!/${escapeRegexPattern(pattern)}/.test(${keyVar}) || ${match})`, usesValue: true })
+    }
+  }
+
+  const additional = (schema as Record<string, unknown>)['additionalProperties']
+  if (additional !== undefined && additional !== true) {
+    // `additionalProperties` owns exactly the keys no `properties` name and no
+    // `patternProperties` regex claims — policing more would reject values the
+    // schema allows, policing fewer would accept ones it forbids.
+    const guards: string[] = []
+    if (declared.length > 0) guards.push(`!${JSON.stringify(declared)}.includes(${keyVar})`)
+    if (patterns) for (const [pattern] of patterns) guards.push(`!/${escapeRegexPattern(pattern)}/.test(${keyVar})`)
+    const unclaimed = guards.length > 0 ? guards.join(' && ') : null
+
+    if (additional === false) {
+      terms.push({ expr: unclaimed === null ? 'false' : `!(${unclaimed})`, usesValue: false })
+    } else {
+      const match = subschemaMatchExpr(valueVar, additional as JSONSchema, nest(ctx))
+      if (match === null) return null
+      if (match !== 'true') {
+        terms.push({ expr: unclaimed === null ? match : `(!(${unclaimed}) || ${match})`, usesValue: true })
+      }
+    }
+  }
+
+  const names = (schema as Record<string, unknown>)['propertyNames']
+  if (names !== undefined) {
+    // Keys are always strings, so the name subschema is matched against the key.
+    const match = subschemaMatchExpr(keyVar, names as JSONSchema, nest(ctx))
+    if (match === null) return null
+    if (match !== 'true') terms.push({ expr: match, usesValue: false })
+  }
+
+  return terms
+}
+
+/**
+ * `dependentRequired` (a present trigger key demands its dependencies) and
+ * `dependentSchemas` (a present trigger key subjects the *whole object* to
+ * another schema).
+ */
+const dependentTerms = (rec: string, acc: string, schema: JSONSchema, ctx: MatchContext): string[] | null => {
+  const s = schema as Record<string, unknown>
+  const terms: string[] = []
+
+  const dependentRequired = s['dependentRequired']
+  if (typeof dependentRequired === 'object' && dependentRequired !== null && !Array.isArray(dependentRequired)) {
+    for (const [trigger, deps] of Object.entries(dependentRequired as Record<string, unknown>)) {
+      if (!Array.isArray(deps) || deps.length === 0) continue
+      const present = deps.map((dep) => `${JSON.stringify(dep)} in ${rec}`).join(' && ')
+      terms.push(`(!(${JSON.stringify(trigger)} in ${rec}) || ${deps.length === 1 ? present : `(${present})`})`)
+    }
+  }
+
+  const dependentSchemas = s['dependentSchemas']
+  if (typeof dependentSchemas === 'object' && dependentSchemas !== null && !Array.isArray(dependentSchemas)) {
+    for (const [trigger, sub] of Object.entries(dependentSchemas as Record<string, unknown>)) {
+      const match = subschemaMatchExpr(acc, sub as JSONSchema, nest(ctx))
+      if (match === null) return null
+      if (match === 'true') continue
+      terms.push(`(!(${JSON.stringify(trigger)} in ${rec}) || ${match})`)
+    }
+  }
+
+  return terms
 }
 
 /**
@@ -208,10 +429,10 @@ const objectConstraints = (acc: string, schema: JSONSchema, depth: number): stri
  * types), so a type-less schema guards each family by its runtime type rather
  * than ignoring it — the subtlety `propertyNames: { maxLength: 3 }` depends on.
  *
- * `depth` seeds the `.every` element variable so nested array matches never
- * shadow one another.
+ * `ctx.depth` seeds the loop variable names so nested walks never shadow one
+ * another, and caps how far the expression may grow.
  */
-export const subschemaMatchExpr = (accessor: string, schema: JSONSchema, depth = 0): string | null => {
+export const subschemaMatchExpr = (accessor: string, schema: JSONSchema, ctx: MatchContext = {}): string | null => {
   // Boolean schemas: `true` matches everything, `false` matches nothing.
   if (schema === true) return 'true'
   if (schema === false) return 'false'
@@ -223,47 +444,59 @@ export const subschemaMatchExpr = (accessor: string, schema: JSONSchema, depth =
     if (!HANDLED_KEYWORDS.has(key) && !ANNOTATION_KEYWORDS.has(key)) return null
   }
 
-  // An array-form `type` (multi-type / nullable) is a disjunction we do not
-  // prove inline here; `hasType` is false for it, so without this it would fall
-  // through to a permissive result.
-  if ('type' in schema && typeof schema.type !== 'string') return null
-
   // Runaway guard: each combinator level multiplies the emitted expression, and
   // a pathological schema could otherwise blow the generated file up.
-  if (depth > 8) return null
+  if (depthOf(ctx) > 8) return null
 
   const checks: string[] = []
+
+  // `$ref` applies *alongside* its siblings in 2020-12 (draft-07's "a $ref wins
+  // and its siblings are ignored" rule is gone), so the target's match is one
+  // more conjunct — not a replacement for the rest of this node.
+  const refCheck = refMatch(accessor, schema, ctx)
+  if (refCheck === null) return null
+  if (refCheck !== 'true') checks.push(refCheck)
 
   // Combinators. Each is exact when its members are, so they compose without
   // weakening the both-directions guarantee this matcher promises — and that is
   // what lets `items`, `contains`, `not`, `patternProperties` and friends handle
-  // a union instead of silently skipping it. `$ref` members still bail (`$ref`
-  // is not a handled keyword), so no conservative shape-validator stub can leak
-  // in here.
-  const combinators = combinatorChecks(accessor, schema, depth)
+  // a union instead of silently skipping it.
+  const combinators = combinatorChecks(accessor, schema, ctx)
   if (combinators === null) return null
   checks.push(...combinators)
 
-  // `const` — a single exact value. Primitives compare with `===`; a structural
-  // const would need deep equality, which this flat matcher does not attempt.
-  if (hasConst(schema)) {
-    const c = schema.const
-    if (c !== null && typeof c === 'object') return null
-    checks.push(`${accessor} === ${JSON.stringify(c)}`)
-  }
+  // `const` — a single exact value, compared structurally so an object/array
+  // const (which no `===` could ever match) is proven rather than declined.
+  if (hasConst(schema)) checks.push(`(${generateDeepEqualCheck(accessor, schema.const)})`)
 
-  // `enum` — membership in a fixed set (generateEnumCheck is exact).
+  // `enum` — membership in a fixed set (generateEnumCheck is exact). An empty
+  // enum admits no value at all.
   if (hasEnum(schema)) {
-    if (schema.enum.length === 0) return null
+    if (schema.enum.length === 0) return 'false'
     checks.push(generateEnumCheck(accessor, schema.enum))
   }
 
   if (hasType(schema)) {
-    const typeChecks = buildTypedChecks(accessor, schema, depth)
+    const typeChecks = buildTypedChecks(accessor, schema, ctx)
     if (typeChecks === null) return null
     checks.push(...typeChecks)
+  } else if (Array.isArray(schema.type)) {
+    // An array-form `type` is a disjunction, and each member carries only its own
+    // family's constraints (`{ type: ['string','number'], minLength: 2 }` bounds
+    // the string branch, not the number one). Bailing here — the old behaviour —
+    // left every nullable subschema unprovable.
+    const branches: string[] = []
+    for (const type of schema.type as string[]) {
+      const branch = buildTypedChecks(accessor, { ...schema, type } as JSONSchema & { type: string }, ctx)
+      if (branch === null) return null
+      branches.push(branch.length === 1 ? (branch[0] as string) : `(${branch.join(' && ')})`)
+    }
+    // No type at all admits no value; every other keyword still has to hold.
+    checks.push(
+      branches.length === 0 ? 'false' : branches.length === 1 ? (branches[0] as string) : `(${branches.join(' || ')})`,
+    )
   } else {
-    const typeless = buildTypelessChecks(accessor, schema, depth)
+    const typeless = buildTypelessChecks(accessor, schema, ctx)
     if (typeless === null) return null
     checks.push(...typeless)
   }
@@ -274,12 +507,32 @@ export const subschemaMatchExpr = (accessor: string, schema: JSONSchema, depth =
 }
 
 /**
+ * The `$ref` target's match, `'true'` when the node carries no `$ref`, or `null`
+ * when the reference cannot be inlined: no root document to resolve against, a
+ * target that does not exist, or a cycle (a recursive definition would expand
+ * forever, so the caller falls back to whatever it does for unprovable schemas).
+ */
+const refMatch = (accessor: string, schema: JSONSchema, ctx: MatchContext): string | null => {
+  const ref = (schema as Record<string, unknown>)['$ref']
+  if (typeof ref !== 'string') return 'true'
+  if (ctx.rootSchema === undefined) return null
+  if (ctx.seen?.has(ref)) return null
+
+  const target = resolveRef(ref, ctx.rootSchema)
+  if (target === undefined) return null
+
+  const seen = new Set(ctx.seen ?? [])
+  seen.add(ref)
+  return subschemaMatchExpr(accessor, target as JSONSchema, { ...nest(ctx), seen })
+}
+
+/**
  * `allOf` (every member matches), `anyOf` (at least one), `oneOf` (exactly one)
  * and `not` (none), or `null` when any member is beyond this matcher. Each is
  * built from member matches that are already exact in both directions, so the
  * combination is too.
  */
-const combinatorChecks = (accessor: string, schema: JSONSchema, depth: number): string[] | null => {
+const combinatorChecks = (accessor: string, schema: JSONSchema, ctx: MatchContext): string[] | null => {
   const record = schema as Record<string, unknown>
   const checks: string[] = []
 
@@ -289,7 +542,7 @@ const combinatorChecks = (accessor: string, schema: JSONSchema, depth: number): 
     if (!Array.isArray(members) || members.length === 0) return null
     const matches: string[] = []
     for (const member of members) {
-      const match = subschemaMatchExpr(accessor, member as JSONSchema, depth + 1)
+      const match = subschemaMatchExpr(accessor, member as JSONSchema, nest(ctx))
       if (match === null) return null
       matches.push(match)
     }
@@ -311,7 +564,7 @@ const combinatorChecks = (accessor: string, schema: JSONSchema, depth: number): 
   }
 
   if ('not' in record) {
-    const match = subschemaMatchExpr(accessor, record['not'] as JSONSchema, depth + 1)
+    const match = subschemaMatchExpr(accessor, record['not'] as JSONSchema, nest(ctx))
     if (match === null) return null
     if (match !== 'false') checks.push(`!(${match})`)
   }
@@ -321,10 +574,10 @@ const combinatorChecks = (accessor: string, schema: JSONSchema, depth: number): 
   // schema carrying one used to bail the matcher outright even though it
   // constrained nothing.
   if ('if' in record) {
-    const ifMatch = subschemaMatchExpr(accessor, record['if'] as JSONSchema, depth + 1)
+    const ifMatch = subschemaMatchExpr(accessor, record['if'] as JSONSchema, nest(ctx))
     if (ifMatch === null) return null
     const branch = (keyword: 'then' | 'else'): string | null | undefined =>
-      keyword in record ? subschemaMatchExpr(accessor, record[keyword] as JSONSchema, depth + 1) : undefined
+      keyword in record ? subschemaMatchExpr(accessor, record[keyword] as JSONSchema, nest(ctx)) : undefined
     const thenMatch = branch('then')
     const elseMatch = branch('else')
     if (thenMatch === null || elseMatch === null) return null
@@ -336,7 +589,11 @@ const combinatorChecks = (accessor: string, schema: JSONSchema, depth: number): 
 }
 
 /** Type assertion plus that type's constraints, for a single-`type` schema. */
-const buildTypedChecks = (accessor: string, schema: JSONSchema & { type: string }, depth: number): string[] | null => {
+const buildTypedChecks = (
+  accessor: string,
+  schema: JSONSchema & { type: string },
+  ctx: MatchContext,
+): string[] | null => {
   switch (schema.type) {
     case 'string':
       return [`typeof ${accessor} === "string"`, ...stringConstraints(accessor, schema)]
@@ -349,12 +606,12 @@ const buildTypedChecks = (accessor: string, schema: JSONSchema & { type: string 
     case 'null':
       return [`${accessor} === null`]
     case 'array': {
-      const constraints = arrayConstraints(accessor, schema, depth)
+      const constraints = arrayConstraints(accessor, schema, ctx)
       if (constraints === null) return null
       return [`Array.isArray(${accessor})`, ...constraints]
     }
     case 'object': {
-      const constraints = objectConstraints(accessor, schema, depth)
+      const constraints = objectConstraints(accessor, schema, ctx)
       if (constraints === null) return null
       return [isObjectExpr(accessor), ...constraints]
     }
@@ -368,7 +625,7 @@ const buildTypedChecks = (accessor: string, schema: JSONSchema & { type: string 
  * of its type, so guard each present family by its runtime type. A value of a
  * different type satisfies the family vacuously.
  */
-const buildTypelessChecks = (accessor: string, schema: JSONSchema, depth: number): string[] | null => {
+const buildTypelessChecks = (accessor: string, schema: JSONSchema, ctx: MatchContext): string[] | null => {
   const checks: string[] = []
 
   const strChecks = stringConstraints(accessor, schema)
@@ -377,11 +634,11 @@ const buildTypelessChecks = (accessor: string, schema: JSONSchema, depth: number
   const numChecks = numberConstraints(accessor, schema, false)
   if (numChecks.length > 0) checks.push(`(typeof ${accessor} !== "number" || ${joinAnd(numChecks)})`)
 
-  const arrChecks = arrayConstraints(accessor, schema, depth)
+  const arrChecks = arrayConstraints(accessor, schema, ctx)
   if (arrChecks === null) return null
   if (arrChecks.length > 0) checks.push(`(!Array.isArray(${accessor}) || ${joinAnd(arrChecks)})`)
 
-  const objChecks = objectConstraints(accessor, schema, depth)
+  const objChecks = objectConstraints(accessor, schema, ctx)
   if (objChecks === null) return null
   if (objChecks.length > 0) checks.push(`(!(${isObjectExpr(accessor)}) || ${joinAnd(objChecks)})`)
 
@@ -391,8 +648,21 @@ const buildTypelessChecks = (accessor: string, schema: JSONSchema, depth: number
 const joinAnd = (checks: string[]): string => (checks.length === 1 ? (checks[0] as string) : `(${checks.join(' && ')})`)
 
 /**
+ * True when a `$ref` node carries a keyword that constrains the value on its own.
+ * 2020-12 applies a `$ref`'s siblings alongside the target, so delegating the
+ * whole node to the referenced parser (which knows nothing about them) drops
+ * every one of them — and a fast path built from the target's shape validator
+ * skips them too.
+ */
+export const hasConstrainingRefSibling = (schema: JSONSchema): boolean => {
+  if (!isSchemaObject(schema) || !('$ref' in (schema as Record<string, unknown>))) return false
+  return Object.keys(schema as Record<string, unknown>).some((key) => key !== '$ref' && !ANNOTATION_KEYWORDS.has(key))
+}
+
+/**
  * Whether {@link subschemaMatchExpr} can build an exact matcher for `schema`.
  * The generation-time guard uses this to decide whether a `contains`,
  * `propertyNames`, or `dependentSchemas` subschema is enforceable.
  */
-export const canMatchSubschema = (schema: JSONSchema): boolean => subschemaMatchExpr('_x', schema) !== null
+export const canMatchSubschema = (schema: JSONSchema, rootSchema?: Record<string, unknown>): boolean =>
+  subschemaMatchExpr('_x', schema, rootSchema ? { rootSchema } : {}) !== null

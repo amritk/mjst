@@ -158,24 +158,52 @@ const getRootCache = (rootSchema: JSONSchema): RootCache => {
   return cache
 }
 
+/** True when the document points at its own root — `$ref: "#"` (or `"#/"`) anywhere inside it. */
+const referencesRoot = (value: unknown): boolean => {
+  if (typeof value !== 'object' || value === null) return false
+  if (Array.isArray(value)) return value.some(referencesRoot)
+  const record = value as Record<string, unknown>
+  if (record['$ref'] === ROOT_POINTER || record['$ref'] === '#/') return true
+  for (const key in record) if (referencesRoot(record[key])) return true
+  return false
+}
+
+/** Rewrites every root-pointer `$ref` to the root's `$defs` alias, deep-copying as it goes. */
+const rewriteRootRefs = (value: unknown, rootSelfRef: string): unknown => {
+  if (typeof value !== 'object' || value === null) return value
+  if (Array.isArray(value)) return value.map((item) => rewriteRootRefs(item, rootSelfRef))
+  const out: Record<string, unknown> = {}
+  for (const [key, sub] of Object.entries(value as Record<string, unknown>)) {
+    out[key] =
+      key === '$ref' && (sub === ROOT_POINTER || sub === '#/') ? rootSelfRef : rewriteRootRefs(sub, rootSelfRef)
+  }
+  return out
+}
+
 /**
- * A view of the cache in which an anchor declared on the document root has a
- * nameable target.
+ * A view of the cache in which the document root has a nameable target.
  *
- * `buildDynamicRefMap` points a root `$dynamicAnchor` at the pointer `#`, and
- * nothing downstream can name a file for that: `refToFilename('#')` is not a
- * module and `refToName('#')` is not an identifier. So the root's own body is
- * aliased into `$defs` under the root's filename. Every consumer then resolves
- * the anchor through the ordinary `#/$defs/<name>` path and lands on the type
- * the root file already exports — which is exactly what the recursive-tree
- * idiom means. The alias holds the root *without* its `$defs`, so the document
- * stays acyclic and still survives the structured clone in `resolveDynamicRefs`.
+ * Two shapes need one: a `$dynamicAnchor` declared on the root (which
+ * `buildDynamicRefMap` points at the pointer `#`), and a plain `$ref: "#"` — the
+ * ordinary spelling of a recursive tree. Nothing downstream can name a file for
+ * that pointer: `refToFilename('#')` is not a module and `refToName('#')` is not
+ * an identifier, so a recursive document used to emit an import of a
+ * `ref-<hash>.ts` that was never generated — output that does not compile at
+ * all. So the root's own body is aliased into `$defs` under the root's filename
+ * and every root-pointer ref is rewritten to it. Every consumer then resolves
+ * through the ordinary `#/$defs/<name>` path and lands on the type the root file
+ * already exports — which is exactly what the recursive idiom means. The alias
+ * holds the root *without* its `$defs`, so the document stays acyclic and still
+ * survives the structured clone in `resolveDynamicRefs`.
  */
 const rootAnchoredCache = (base: RootCache, rootFilename: string, rootSelfRef: string): RootCache => {
   const cached = base.rootAnchored.get(rootFilename)
   if (cached) return cached
 
-  const { $defs, ...rootBody } = base.upgraded
+  const rewritten = referencesRoot(base.upgraded)
+    ? (rewriteRootRefs(base.upgraded, rootSelfRef) as Record<string, unknown>)
+    : base.upgraded
+  const { $defs, ...rootBody } = rewritten
   const defs = (typeof $defs === 'object' && $defs !== null ? $defs : {}) as Record<string, unknown>
   if (Object.hasOwn(defs, rootFilename)) {
     throw new Error(
@@ -185,7 +213,7 @@ const rootAnchoredCache = (base: RootCache, rootFilename: string, rootSelfRef: s
   }
 
   const derived: RootCache = {
-    upgraded: { ...base.upgraded, $defs: { ...defs, [rootFilename]: rootBody } },
+    upgraded: { ...rewritten, $defs: { ...defs, [rootFilename]: rootBody } },
     dynamicRefMap: Object.fromEntries(
       Object.entries(base.dynamicRefMap).map(([anchor, pointer]) => [
         anchor,
@@ -263,16 +291,21 @@ export const walkRefGraph = (
   // recursive property was typed `TreeObject`, and nothing would say so.
   const rootSelfRef = `#/$defs/${rootFilename}`
   const rootIsAnchored = Object.values(baseCache.dynamicRefMap).includes(ROOT_POINTER)
-  if (rootIsAnchored && refToName(rootSelfRef, typeSuffix) !== rootTypeName) {
+  // A plain `$ref: "#"` needs the same alias for the same reason (see
+  // rootAnchoredCache) — without it the recursive property was typed and parsed
+  // through a module nothing ever emitted.
+  const rootIsSelfReferenced = referencesRoot(baseCache.upgraded)
+  const needsRootAlias = rootIsAnchored || rootIsSelfReferenced
+  if (needsRootAlias && refToName(rootSelfRef, typeSuffix) !== rootTypeName) {
     throw new Error(
-      `The root schema declares a $dynamicAnchor, which is generated as the root's own file — but the root type ` +
-        `name "${rootTypeName}" does not survive the round trip through ref naming (refs to it would be named ` +
-        `"${refToName(rootSelfRef, typeSuffix)}"). Use a single-word root type name with no type suffix, or move ` +
-        'the $dynamicAnchor onto a $defs entry.',
+      `The root schema is referenced by ${rootIsAnchored ? 'a $dynamicAnchor' : 'a $ref to "#"'}, which is ` +
+        `generated as the root's own file — but the root type name "${rootTypeName}" does not survive the round ` +
+        `trip through ref naming (refs to it would be named "${refToName(rootSelfRef, typeSuffix)}"). Use a ` +
+        'single-word root type name with no type suffix, or move the recursion onto a $defs entry.',
     )
   }
 
-  const cache = rootIsAnchored ? rootAnchoredCache(baseCache, rootFilename, rootSelfRef) : baseCache
+  const cache = needsRootAlias ? rootAnchoredCache(baseCache, rootFilename, rootSelfRef) : baseCache
   const { upgraded, dynamicRefMap } = cache
 
   const processedRefs = new Set<string>()
@@ -306,7 +339,7 @@ export const walkRefGraph = (
   // The root's `$defs` alias is the root's own file, so it must never be walked
   // as a separate definition — and the root node carries it as its `ref` so the
   // generators leave the (self-)import out.
-  if (rootIsAnchored) {
+  if (needsRootAlias) {
     processedRefs.add(rootSelfRef)
     rootNodeRef ??= rootSelfRef
   }
