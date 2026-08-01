@@ -134,6 +134,79 @@ describe('$id base-URI scoping', () => {
     expect(errors).toEqual([])
   })
 
+  it('resolves a #/pointer inside an embedded resource against that resource', () => {
+    // A nested `$id` re-bases the pointers inside it, so `#/$defs/inner` here
+    // means the *resource's* `$defs`, not the document's — which is why the
+    // document deliberately has no `$defs` of its own to fall back to.
+    const { resolved, errors } = resolveRefs({
+      $id: 'http://example.com/defs1.json',
+      properties: {
+        foo: {
+          $id: 'defs2.json',
+          $defs: { inner: { properties: { bar: { type: 'string' } } } },
+          $ref: '#/$defs/inner',
+        },
+      },
+    })
+
+    expect(errors).toEqual([])
+    const foo = (resolved as { properties: { foo: { allOf: unknown[] } } }).properties.foo
+    expect(foo.allOf).toEqual([{ properties: { bar: { type: 'string' } } }])
+  })
+
+  it('resolves a #/pointer inside a resource reached through a URN ref', () => {
+    const { resolved, errors } = resolveRefs({
+      $ref: 'urn:uuid:deadbeef-4321-ffff-ffff-1234feebdaed',
+      $defs: {
+        foo: {
+          $id: 'urn:uuid:deadbeef-4321-ffff-ffff-1234feebdaed',
+          $defs: { bar: { type: 'string' } },
+          $ref: '#/$defs/bar',
+        },
+      },
+    })
+
+    expect(errors).toEqual([])
+    expect(resolved).toMatchObject({ allOf: [{ allOf: [{ type: 'string' }] }] })
+  })
+
+  it('prefers the resource over the document root when both could match a pointer', () => {
+    const { resolved, errors } = resolveRefs({
+      $id: 'https://example.com/root.json',
+      $defs: { shared: { type: 'number' } },
+      properties: {
+        inner: {
+          $id: 'https://example.com/inner.json',
+          $defs: { shared: { type: 'string' } },
+          properties: { it: { $ref: '#/$defs/shared' } },
+        },
+      },
+    })
+
+    expect(errors).toEqual([])
+    const inner = (resolved as { properties: { inner: { properties: { it: unknown } } } }).properties.inner
+    expect(inner.properties.it).toEqual({ type: 'string' })
+  })
+
+  it('falls back to the document root for a pointer that misses within the resource', () => {
+    // Bundled documents in the wild point at the root from inside an `$id`
+    // scope; that has to keep working rather than becoming unresolvable.
+    const { resolved, errors } = resolveRefs({
+      $id: 'https://example.com/root.json',
+      components: { schemas: { Name: { type: 'string' } } },
+      properties: {
+        inner: {
+          $id: 'https://example.com/inner.json',
+          properties: { name: { $ref: '#/components/schemas/Name' } },
+        },
+      },
+    })
+
+    expect(errors).toEqual([])
+    const inner = (resolved as { properties: { inner: { properties: { name: unknown } } } }).properties.inner
+    expect(inner.properties.name).toEqual({ type: 'string' })
+  })
+
   describe('from-file resolver', () => {
     let dir: string
 

@@ -22,9 +22,10 @@ import type { JsonPath } from './types'
  * - A ref whose URI (resolved against the enclosing base) matches an embedded
  *   resource's `$id` resolves to that resource without any fetching; a pointer
  *   or anchor fragment on such a ref applies *within* that resource.
- * - A plain `#/pointer` fragment stays **document-root-relative** (matching the
- *   previous behavior and what bundled real-world documents rely on), even when
- *   it appears inside an embedded resource.
+ * - A `#/pointer` fragment resolves **within the resource it appears in**, per
+ *   the spec: a nested `$id` re-bases the pointers inside it. A pointer that
+ *   matches nothing there falls back to the document root, because bundled
+ *   documents in the wild point at the root from inside an `$id` scope.
  * - `$dynamicRef` prefers a `$dynamicAnchor` in scope, then degrades to `$ref`
  *   semantics. The full dynamic-scope algorithm (outermost anchor along the
  *   *runtime* reference chain) is not modelled — for the single bundled
@@ -238,8 +239,19 @@ export const resolveRefInScope = (
   const { uriPart, fragment } = splitFragment(ref)
 
   if (uriPart === '') {
-    // A plain `#/pointer` stays document-root-relative (see module doc).
     if (isPointerFragment(fragment)) {
+      // A `#/pointer` is relative to the resource it appears in: an embedded
+      // `$id` re-bases the pointers inside it, so `#/$defs/inner` next to an
+      // `$id` means that resource's `$defs`, not the document's.
+      const resource = registry.resources.get(currentBase)
+      if (resource !== undefined) {
+        const scoped = getByPointerWithBase(resource.value, currentBase, resource.pointer, fragment)
+        if (scoped !== undefined) return scoped
+      }
+      // Bundled documents in the wild point at the document root from inside an
+      // `$id` scope (`#/components/schemas/...` in a bundled OpenAPI file), so a
+      // pointer that misses within the resource falls back to the root rather
+      // than being reported unresolvable.
       return getByPointerWithBase(registry.root, registry.rootBase, [], fragment)
     }
     // An anchor name resolves within the current resource's scope.
