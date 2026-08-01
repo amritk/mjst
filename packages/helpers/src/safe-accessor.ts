@@ -68,6 +68,45 @@ export const safeAccessor = (variable: string, key: string): string => {
 }
 
 /**
+ * Generates the expression that is TRUE when `key` is present on the object held
+ * in `variable` — present as an *own* property, never inherited.
+ *
+ * For an `Object.prototype` name a bare `"key" in obj` was the obvious spelling
+ * and the wrong one: `in` walks the prototype chain, so `"toString" in obj` is
+ * true for every object and a `required: ["toString"]` could never be reported
+ * missing. Those names get `Object.hasOwn`, which asks the question `required` /
+ * `dependentRequired` / `dependentSchemas` actually mean.
+ *
+ * Every *other* name keeps `in`, because for them the two agree and the
+ * difference is not free. `Object.hasOwn` is a call the engine cannot fold into
+ * an inline cache the way it folds `in`, and a JSON document's object never
+ * inherits `id` or `name`, so paying for that question at every site buys
+ * nothing. This is the same split {@link safeAccessor} makes on the read side.
+ *
+ * The result binds tighter than `&&`, so it drops straight into a conjunction.
+ * It is *not* safe under a bare `!` — `!"k" in obj` parses as `(!"k") in obj` —
+ * so negate it with {@link missingCheck} rather than by hand.
+ *
+ * @example
+ * hasOwnCheck("input", "name") // '"name" in input'
+ * hasOwnCheck("input", "toString") // 'Object.hasOwn(input, "toString")'
+ */
+export const hasOwnCheck = (variable: string, key: string): string => {
+  const literal = JSON.stringify(key)
+  if (PROTOTYPE_MEMBERS.has(key)) return `Object.hasOwn(${variable}, ${literal})`
+  return `${literal} in ${variable}`
+}
+
+/**
+ * Generates the expression that is TRUE when `key` is absent — the negation of
+ * {@link hasOwnCheck}, with the parentheses `in` needs under a `!`.
+ *
+ * @example
+ * missingCheck("input", "name") // '!("name" in input)'
+ */
+export const missingCheck = (variable: string, key: string): string => `!(${hasOwnCheck(variable, key)})`
+
+/**
  * Generates a safe property key for use in object literals.
  * Wraps keys that are not valid identifiers in quotes.
  *

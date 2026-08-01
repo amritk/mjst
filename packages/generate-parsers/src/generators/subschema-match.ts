@@ -1,7 +1,7 @@
 import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
-import { safeAccessor } from '@amritk/helpers/safe-accessor'
+import { hasOwnCheck, missingCheck, safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
   hasConst,
   hasEnum,
@@ -281,18 +281,14 @@ const objectConstraints = (acc: string, schema: JSONSchema, ctx: MatchContext): 
       const propMatch = subschemaMatchExpr(propAcc, propSchema as JSONSchema, nest(ctx))
       if (propMatch === null) return null
       if (required.has(key)) {
-        c.push(
-          propMatch === 'true'
-            ? `${JSON.stringify(key)} in ${rec}`
-            : `(${JSON.stringify(key)} in ${rec} && ${propMatch})`,
-        )
+        c.push(propMatch === 'true' ? hasOwnCheck(rec, key) : `(${hasOwnCheck(rec, key)} && ${propMatch})`)
       } else if (propMatch !== 'true') {
         c.push(`(${propAcc} === undefined || ${propMatch})`)
       }
       required.delete(key)
     }
   }
-  for (const key of required) c.push(`${JSON.stringify(key)} in ${rec}`)
+  for (const key of required) c.push(hasOwnCheck(rec, key))
 
   if (hasMinProperties(schema)) c.push(`Object.keys(${rec}).length >= ${schema.minProperties}`)
   if (hasMaxProperties(schema)) c.push(`Object.keys(${rec}).length <= ${schema.maxProperties}`)
@@ -393,8 +389,8 @@ const dependentTerms = (rec: string, acc: string, schema: JSONSchema, ctx: Match
   if (typeof dependentRequired === 'object' && dependentRequired !== null && !Array.isArray(dependentRequired)) {
     for (const [trigger, deps] of Object.entries(dependentRequired as Record<string, unknown>)) {
       if (!Array.isArray(deps) || deps.length === 0) continue
-      const present = deps.map((dep) => `${JSON.stringify(dep)} in ${rec}`).join(' && ')
-      terms.push(`(!(${JSON.stringify(trigger)} in ${rec}) || ${deps.length === 1 ? present : `(${present})`})`)
+      const present = deps.map((dep) => hasOwnCheck(rec, dep)).join(' && ')
+      terms.push(`(${missingCheck(rec, trigger)} || ${deps.length === 1 ? present : `(${present})`})`)
     }
   }
 
@@ -404,7 +400,7 @@ const dependentTerms = (rec: string, acc: string, schema: JSONSchema, ctx: Match
       const match = subschemaMatchExpr(acc, sub as JSONSchema, nest(ctx))
       if (match === null) return null
       if (match === 'true') continue
-      terms.push(`(!(${JSON.stringify(trigger)} in ${rec}) || ${match})`)
+      terms.push(`(${missingCheck(rec, trigger)} || ${match})`)
     }
   }
 

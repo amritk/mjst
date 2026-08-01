@@ -19,21 +19,55 @@ const getAnchorMap = (rootSchema: Record<string, unknown>): Record<string, strin
 }
 
 /**
+ * Percent-decodes one reference token. A `$ref` fragment travels as a URI, so a
+ * definition literally named `percent%field` is written `percent%25field` and a
+ * `foo"bar` is written `foo%22bar` — comparing the escaped spelling against the
+ * document's keys never matched either one.
+ *
+ * `decodeURIComponent` throws on a malformed escape, and a definition named
+ * `100% sure` is a naming choice rather than an error, so an undecodable token
+ * falls back to its literal text.
+ */
+const percentDecode = (token: string): string => {
+  if (!token.includes('%')) return token
+  try {
+    return decodeURIComponent(token)
+  } catch {
+    return token
+  }
+}
+
+/**
+ * Splits a JSON Pointer into its reference tokens, decoded the way RFC 6901 says
+ * to read one: percent-escapes first (the pointer arrives as a URI fragment),
+ * then `~1` → `/` and `~0` → `~`.
+ *
+ * Empty tokens are kept. `""` is a perfectly legal member name — `/$defs//$defs/`
+ * addresses the `""` definition nested inside the `""` definition — and dropping
+ * them, which is what filtering falsy parts did, silently walked to a different
+ * node or to nothing at all.
+ */
+const pointerTokens = (pointer: string): string[] => {
+  if (pointer === '') return []
+  // The leading slash is punctuation, not an empty first token.
+  return (pointer.startsWith('/') ? pointer.slice(1) : pointer)
+    .split('/')
+    .map((token) => percentDecode(token).replace(/~1/g, '/').replace(/~0/g, '~'))
+}
+
+/**
  * Navigates a JSON Pointer fragment (e.g. `/$defs/foo` or `/definitions/bar`)
  * through a schema object, returning the target or undefined if not found.
  */
 const navigatePointer = (pointer: string, schema: Record<string, unknown>): Record<string, unknown> | undefined => {
-  const parts = pointer.split('/').filter(Boolean)
   let current = schema
 
-  for (const part of parts) {
-    const decodedPart = part.replace(/~1/g, '/').replace(/~0/g, '~')
-
+  for (const token of pointerTokens(pointer)) {
     // `Object.hasOwn`, not `in`: `#/__proto__` and `#/constructor/prototype`
     // would otherwise walk into `Object.prototype` and hand back a "definition"
     // the document never declared — which the generators then emit a file for.
-    if (current && typeof current === 'object' && Object.hasOwn(current, decodedPart)) {
-      const next = current[decodedPart as keyof typeof current]
+    if (current && typeof current === 'object' && Object.hasOwn(current, token)) {
+      const next = current[token as keyof typeof current]
       if (typeof next === 'object' && next !== null) {
         current = next as Record<string, unknown>
       } else {
@@ -81,7 +115,11 @@ export const resolveRef = (ref: string, rootSchema: Record<string, unknown>): Re
   // derive the filename `#contact` from it, so the generated import specifier
   // opened a URL fragment instead of naming a module.
   if (ref.startsWith('#')) {
-    const fragment = ref.slice(1)
+    // `#/` reads as "the member named ''" by the letter of RFC 6901, but every
+    // document that writes it means the root — and the rest of this codebase
+    // (the URI branch below, `walkRefGraph`'s root-pointer rewrite) already
+    // agrees — so it keeps meaning the root here.
+    const fragment = ref === '#/' ? '' : ref.slice(1)
     if (fragment === '' || fragment.startsWith('/')) return navigatePointer(fragment, rootSchema)
 
     const pointer = getAnchorMap(rootSchema)[fragment]

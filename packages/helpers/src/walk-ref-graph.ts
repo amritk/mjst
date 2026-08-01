@@ -128,6 +128,55 @@ const getAliasRootRef = (schema: JSONSchema): string | null => {
   return SHAPE_KEYWORDS.some((key) => key in record) ? null : record['$ref']
 }
 
+/** The keys whose value is a map of named definitions — the things a `$ref` can name. */
+const DEFINITION_MAP_KEYS = ['$defs', 'definitions'] as const
+
+/**
+ * The object form of a boolean subschema: `true` admits every value and `false`
+ * admits none, which is exactly what `{}` and `{ not: {} }` say.
+ *
+ * The rewrite is confined to definition maps because that is the only place the
+ * two spellings are interchangeable for us. A `$defs` entry is a *named* schema —
+ * the ref graph gives it a file, a type, and a parser, all of which need an
+ * object to read keywords off, so `$defs: { bool: true }` used to resolve to
+ * nothing and stop generation. Elsewhere a boolean is not merely a terse schema:
+ * `additionalProperties: true` and `additionalProperties: {}` mean the same thing
+ * to a validator but generate different *types*, so those are left alone.
+ */
+const expandBooleanDefinitions = (value: unknown): unknown => {
+  if (typeof value !== 'object' || value === null) return value
+  if (Array.isArray(value)) {
+    const mapped = value.map(expandBooleanDefinitions)
+    return mapped.some((item, index) => item !== value[index]) ? mapped : value
+  }
+
+  const record = value as Record<string, unknown>
+  let changed = false
+  const result: Record<string, unknown> = {}
+  for (const [key, sub] of Object.entries(record)) {
+    const next = (DEFINITION_MAP_KEYS as readonly string[]).includes(key)
+      ? expandDefinitionMap(sub)
+      : expandBooleanDefinitions(sub)
+    if (next !== sub) changed = true
+    result[key] = next
+  }
+  return changed ? result : value
+}
+
+/** Replaces each boolean entry of one `$defs`/`definitions` map with its object equivalent. */
+const expandDefinitionMap = (definitions: unknown): unknown => {
+  if (typeof definitions !== 'object' || definitions === null || Array.isArray(definitions)) return definitions
+  const record = definitions as Record<string, unknown>
+  let changed = false
+  const result: Record<string, unknown> = {}
+  for (const [name, definition] of Object.entries(record)) {
+    const next = definition === true ? {} : definition === false ? { not: {} } : expandBooleanDefinitions(definition)
+    if (next !== definition) changed = true
+    result[name] = next
+  }
+  return changed ? result : definitions
+}
+
 const getRootCache = (rootSchema: JSONSchema): RootCache => {
   // Only object roots can key a WeakMap. A boolean root has no refs to walk and
   // the draft-07 upgrade is a no-op for it, so a throwaway cache is fine.
@@ -146,7 +195,10 @@ const getRootCache = (rootSchema: JSONSchema): RootCache => {
   if (existing) return existing
 
   assertIdScopes(rootSchema)
-  const upgraded = upgradeDraft07Schema(rootSchema as Record<string, unknown>)
+  const upgraded = expandBooleanDefinitions(upgradeDraft07Schema(rootSchema as Record<string, unknown>)) as Record<
+    string,
+    unknown
+  >
   const cache: RootCache = {
     upgraded,
     dynamicRefMap: buildDynamicRefMap(upgraded as JSONSchema),
@@ -226,6 +278,29 @@ const rootAnchoredCache = (base: RootCache, rootFilename: string, rootSelfRef: s
   }
   base.rootAnchored.set(rootFilename, derived)
   return derived
+}
+
+/**
+ * Every `$dynamicRef` in the document written as a JSON Pointer rather than an
+ * anchor name.
+ *
+ * Such a ref names no `$dynamicAnchor`, so 2020-12 says it behaves statically and
+ * {@link resolveDynamicRefs} duly degrades it to a plain `$ref` — but nothing
+ * queued the target, so a definition reached only that way went ungenerated and
+ * the file that referenced it imported a module the walk never emitted. The
+ * anchor form needs none of this: it is seeded from the `$dynamicAnchor` map.
+ */
+const dynamicPointerRefs = (value: unknown, into: Set<string> = new Set()): Set<string> => {
+  if (typeof value !== 'object' || value === null) return into
+  if (Array.isArray(value)) {
+    for (const item of value) dynamicPointerRefs(item, into)
+    return into
+  }
+  const record = value as Record<string, unknown>
+  const ref = record['$dynamicRef']
+  if (typeof ref === 'string' && ref.startsWith('#/')) into.add(ref)
+  for (const key in record) dynamicPointerRefs(record[key], into)
+  return into
 }
 
 /** Memoized `resolveRef` keyed by ref string within a single root document. */
@@ -362,7 +437,15 @@ export const walkRefGraph = (
   // Seed dynamic-anchor targets from the memoized map instead of calling
   // extractDynamicAnchorDefs (which would re-walk the whole document — the map
   // already holds exactly those refs as its values).
-  const queue: string[] = [...cachedExtractRefs(cache, upgraded as JSONSchema), ...Object.values(dynamicRefMap)]
+  // A pointer-form `$dynamicRef` is only seeded when it actually resolves: an
+  // unresolvable one is dropped by every downstream consumer (no import is
+  // emitted for it), so queueing it would turn a permissive parser into a build
+  // error for a ref the document never defined.
+  const queue: string[] = [
+    ...cachedExtractRefs(cache, upgraded as JSONSchema),
+    ...Object.values(dynamicRefMap),
+    ...[...dynamicPointerRefs(upgraded)].filter((ref) => cachedResolveRef(cache, ref) !== undefined),
+  ]
 
   // Advance a read cursor instead of `queue.shift()`, whose O(n) element move
   // makes draining a large ref graph quadratic.

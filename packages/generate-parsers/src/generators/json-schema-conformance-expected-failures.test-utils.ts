@@ -4,7 +4,7 @@ import type { ExpectedFailures } from '../../../../fixtures/json-schema-test-sui
  * The official JSON Schema Test Suite cases the *strict* generated parsers do not
  * handle, each with the reason.
  *
- * 158 of 1299. The list exists so the boundary is exact rather than approximate:
+ * 119 of 1299. The list exists so the boundary is exact rather than approximate:
  * `json-schema-conformance.test.ts` fails if a case listed here starts passing
  * (the entry must go) or if a case not listed here starts failing (a regression).
  *
@@ -15,8 +15,8 @@ import type { ExpectedFailures } from '../../../../fixtures/json-schema-test-sui
  * The sections separate the two kinds of gap that matter differently: the ones
  * that stop generation (`refused`, most of the `$id`-based refs) cost a build
  * error and can never produce a wrong verdict, while the ones above them —
- * `implied type`, `union`, `prototype chain`, `annotation` — are cases where a
- * parser is generated and gets the answer wrong.
+ * `implied type` and `annotation` — are cases where a parser is generated and
+ * gets the answer wrong.
  */
 export const EXPECTED_FAILURES: ExpectedFailures = {
   // ---------------------------------------------------------------------------
@@ -65,122 +65,24 @@ export const EXPECTED_FAILURES: ExpectedFailures = {
     'implied type: `properties`/`required`/`patternProperties` compile to an object check, so a non-object is rejected instead of ignored',
 
   // ---------------------------------------------------------------------------
-  // union: composition with nothing to discriminate on
+  // annotation: `contains` annotates the whole array, per Ajv
   //
-  // A `oneOf`/`anyOf`/`allOf` whose branches carry no `type` gives the parser no
-  // way to tell them apart, and the whole composition compiles to a pass-through —
-  // so a value matching none of the branches (or, for `oneOf`, more than one) is
-  // accepted. Discriminated unions and type-distinct branches, which is what the
-  // generator is built for, are enforced; these are the shapes outside that.
+  // The spec says `contains` evaluates only the items that *match* it; Ajv — this
+  // package's differential oracle, and the interpreter's — treats a satisfied
+  // `contains` as evaluating the array whole. `unevaluated-match.ts` deliberately
+  // follows the oracle, because `parser-vocabulary-conformance.differential.test.ts`
+  // holds the generated parsers observationally identical to Ajv on exactly this
+  // shape. The two only part company when `contains` passes and some *other* item
+  // is left over, which is what every case below is built from.
   // ---------------------------------------------------------------------------
-  'allOf.json/allOf combined with anyOf, oneOf/allOf: true, anyOf: false, oneOf: false':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-  'allOf.json/allOf combined with anyOf, oneOf/allOf: true, anyOf: false, oneOf: true':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-  'allOf.json/allOf combined with anyOf, oneOf/allOf: true, anyOf: true, oneOf: false':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-  'anyOf.json/anyOf/neither anyOf valid':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-  'anyOf.json/anyOf with base schema/both anyOf invalid':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-  'anyOf.json/anyOf with boolean schemas, all false':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-  'anyOf.json/nested anyOf, to check validation semantics/anything non-null is invalid':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-  'oneOf.json/oneOf/both oneOf valid':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-  'oneOf.json/oneOf/neither oneOf valid':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-  'oneOf.json/oneOf with base schema/both oneOf valid':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-  'oneOf.json/oneOf with boolean schemas, all true':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-  'oneOf.json/oneOf with boolean schemas, more than one true':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-  'oneOf.json/oneOf with boolean schemas, all false':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-  'oneOf.json/oneOf with empty schema/both valid - invalid':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-  'oneOf.json/oneOf with required/both invalid - invalid':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-  'oneOf.json/oneOf with required/both valid - invalid':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-  'oneOf.json/oneOf with missing optional property/both oneOf valid':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-  'oneOf.json/oneOf with missing optional property/neither oneOf valid':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-  'oneOf.json/nested oneOf, to check validation semantics/anything non-null is invalid':
-    'union: branches with no `type` give the parser nothing to discriminate on, so the composition compiles to no verdict \u2014 matching none of them (or, for `oneOf`, more than one) is still accepted',
-
-  // ---------------------------------------------------------------------------
-  // prototype chain: `required` uses `in`
-  //
-  // `"toString" in {}` is `true`, so a schema requiring `toString`, `constructor`
-  // or `__proto__` is satisfied by an object that has none of them. The suite has
-  // this group precisely to catch it. `Object.hasOwn` is the fix; the generated
-  // *validators* already use it.
-  // ---------------------------------------------------------------------------
-  'required.json/required properties whose names are Javascript object property names/none of the properties mentioned':
-    'prototype chain: `required` compiles to `in`, which finds inherited `toString`/`constructor`, so a missing property reads as present',
-  'required.json/required properties whose names are Javascript object property names/__proto__ present':
-    'prototype chain: `required` compiles to `in`, which finds inherited `toString`/`constructor`, so a missing property reads as present',
-  'required.json/required properties whose names are Javascript object property names/toString present':
-    'prototype chain: `required` compiles to `in`, which finds inherited `toString`/`constructor`, so a missing property reads as present',
-  'required.json/required properties whose names are Javascript object property names/constructor present':
-    'prototype chain: `required` compiles to `in`, which finds inherited `toString`/`constructor`, so a missing property reads as present',
-
-  // ---------------------------------------------------------------------------
-  // annotation: `unevaluated*` reads an incomplete evaluated set
-  //
-  // Where the strict parser does enforce `unevaluatedItems`/`unevaluatedProperties`
-  // rather than refusing the schema, it misses two contributors: items matched by
-  // an adjacent `contains`, and properties evaluated by an in-place applicator
-  // sibling. Both directions of the mistake appear below.
-  // ---------------------------------------------------------------------------
-  'unevaluatedItems.json/unevaluatedItems with $dynamicRef/with no unevaluated items':
-    'annotation: `contains` and in-place applicator siblings do not publish what they evaluated, so `unevaluated*` reads the wrong set',
   'unevaluatedItems.json/unevaluatedItems depends on adjacent contains/contains passes, second item is not evaluated':
-    'annotation: `contains` and in-place applicator siblings do not publish what they evaluated, so `unevaluated*` reads the wrong set',
+    'annotation: a satisfied `contains` marks the whole array evaluated (Ajv parity), so the leftover item is not policed',
   'unevaluatedItems.json/unevaluatedItems depends on multiple nested contains/7 not evaluated, fails unevaluatedItems':
-    'annotation: `contains` and in-place applicator siblings do not publish what they evaluated, so `unevaluated*` reads the wrong set',
+    'annotation: a satisfied `contains` marks the whole array evaluated (Ajv parity), so the leftover item is not policed',
   "unevaluatedItems.json/unevaluatedItems and contains interact to control item dependency relationship/only a's and c's are invalid":
-    'annotation: `contains` and in-place applicator siblings do not publish what they evaluated, so `unevaluated*` reads the wrong set',
+    'annotation: a satisfied `contains` marks the whole array evaluated (Ajv parity), so the leftover item is not policed',
   'unevaluatedItems.json/unevaluatedItems with minContains = 0/all items evaluated by contains':
-    'annotation: `contains` and in-place applicator siblings do not publish what they evaluated, so `unevaluated*` reads the wrong set',
-  'unevaluatedProperties.json/unevaluatedProperties with $dynamicRef/with no unevaluated properties':
-    'annotation: `contains` and in-place applicator siblings do not publish what they evaluated, so `unevaluated*` reads the wrong set',
-  'unevaluatedProperties.json/in-place applicator siblings, anyOf has unevaluated/base case: both properties present':
-    'annotation: `contains` and in-place applicator siblings do not publish what they evaluated, so `unevaluated*` reads the wrong set',
-  'unevaluatedProperties.json/in-place applicator siblings, anyOf has unevaluated/in place applicator siblings, bar is missing':
-    'annotation: `contains` and in-place applicator siblings do not publish what they evaluated, so `unevaluated*` reads the wrong set',
-
-  // ---------------------------------------------------------------------------
-  // pointer: `$ref` fragments are matched, not decoded
-  //
-  // A JSON Pointer is percent-decoded and `~0`/`~1`-unescaped before it is walked.
-  // The ref graph compares the fragment as written, so a definition whose name
-  // contains `%` or `"` — or a pointer with an empty token — is never found, and
-  // generation stops.
-  // ---------------------------------------------------------------------------
-  'ref.json/escaped pointer ref':
-    'pointer: a `$ref` fragment is matched literally, so `%25` / `%22` are never decoded back to `%` / `"`',
-  'ref.json/refs with quote':
-    'pointer: a `$ref` fragment is matched literally, so `%25` / `%22` are never decoded back to `%` / `"`',
-  'ref.json/empty tokens in $ref json-pointer':
-    'pointer: an empty JSON-Pointer token (`#/$defs//$defs/`) does not resolve',
-
-  // ---------------------------------------------------------------------------
-  // boolean subschema as a ref target
-  //
-  // `$defs: { bool: true }` is a legal definition, but the ref graph only names
-  // object subschemas, so a `$ref` at it resolves to nothing.
-  // ---------------------------------------------------------------------------
-  'dynamicRef.json/$dynamicRef points to a boolean schema':
-    'boolean subschema: a `$defs` entry of `true`/`false` is not a definition the ref graph can name',
-  'ref.json/$ref to boolean schema true':
-    'boolean subschema: a `$defs` entry of `true`/`false` is not a definition the ref graph can name',
-  'ref.json/$ref to boolean schema false':
-    'boolean subschema: a `$defs` entry of `true`/`false` is not a definition the ref graph can name',
+    'annotation: `minContains: 0` with no `maxContains` opts out of annotating entirely (Ajv parity), so items the `contains` did match read as unevaluated',
 
   // ---------------------------------------------------------------------------
   // refused: keywords strict mode cannot prove inline
@@ -210,6 +112,10 @@ export const EXPECTED_FAILURES: ExpectedFailures = {
   // A `$ref` written against an `$id` — relative, absolute, or a URN — a
   // `$dynamicRef` resolved through the dynamic scope, and anything in another
   // document have no in-document target, and generation stops naming the ref.
+  // The two `unevaluated*` entries at the end are the exception: a bare relative
+  // ref (`./baseSchema`) is not a form the walker recognizes at all, so it is
+  // dropped rather than refused — and the definition carrying the keyword under
+  // test is simply never applied.
   // ---------------------------------------------------------------------------
   'anchor.json/Location-independent identifier with absolute URI':
     'base URI: the target is another document, which the generator does not fetch',
@@ -251,6 +157,10 @@ export const EXPECTED_FAILURES: ExpectedFailures = {
     'base URI: the target is another document, which the generator does not fetch',
   'refRemote.json/$ref to $ref finds detached $anchor':
     'base URI: the target is another document, which the generator does not fetch',
+  'unevaluatedItems.json/unevaluatedItems with $dynamicRef/with no unevaluated items':
+    'base URI: `$ref: "./baseSchema"` is addressed through an `$id`, so the definition carrying `unevaluatedItems` is never named or applied',
+  'unevaluatedProperties.json/unevaluatedProperties with $dynamicRef/with no unevaluated properties':
+    'base URI: `$ref: "./baseSchema"` is addressed through an `$id`, so the definition carrying `unevaluatedProperties` is never named or applied',
 
   // ---------------------------------------------------------------------------
   // base URI: refs that resolve, but to the wrong definition

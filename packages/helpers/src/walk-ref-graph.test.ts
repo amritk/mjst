@@ -236,6 +236,53 @@ describe('walk-ref-graph', () => {
     expect(() => collect(schema, 'MyDoc')).toThrow(/does not survive the round trip/)
   })
 
+  // `$defs: { bool: true }` is a legal definition, but a boolean carries no
+  // keywords for a generator to read, so the ref used to resolve to nothing and
+  // generation stopped on it. `{}` and `{ not: {} }` say the same thing in a form
+  // the ref graph can name.
+  it('expands a boolean definition into its object equivalent', () => {
+    const schema = {
+      type: 'object',
+      properties: { yes: { $ref: '#/$defs/yes' }, no: { $ref: '#/$defs/no' } },
+      $defs: { yes: true, no: false },
+    }
+
+    const nodes = collect(schema, 'Doc')
+
+    expect(nodes.map((n) => n.filename)).toEqual(['doc', 'yes', 'no'])
+    expect(nodes[1]?.schema).toEqual({})
+    expect(nodes[2]?.schema).toEqual({ not: {} })
+  })
+
+  it('leaves boolean subschemas outside a definition map alone', () => {
+    // `additionalProperties: true` and `additionalProperties: {}` validate the
+    // same but generate different types, so only `$defs` entries are rewritten.
+    const schema = { type: 'object', additionalProperties: true, properties: { a: true } }
+
+    expect(collect(schema, 'Doc')[0]?.schema).toEqual(schema)
+  })
+
+  // A pointer-form `$dynamicRef` names no `$dynamicAnchor`, so it behaves like a
+  // plain `$ref` — and its target has to be generated, or the file that
+  // references it imports a module nothing emitted.
+  it('generates the target of a pointer-form $dynamicRef', () => {
+    const schema = {
+      type: 'object',
+      properties: { thing: { $dynamicRef: '#/$defs/thing' } },
+      $defs: { thing: { type: 'string' } },
+    }
+
+    expect(collect(schema, 'Doc').map((n) => n.filename)).toEqual(['doc', 'thing'])
+  })
+
+  it('ignores a pointer-form $dynamicRef the document never defines', () => {
+    // Nothing downstream emits an import for an unresolvable ref, so queueing it
+    // would turn a permissive parser into a build error.
+    const schema = { type: 'object', properties: { thing: { $dynamicRef: '#/$defs/missing' } } }
+
+    expect(collect(schema, 'Doc').map((n) => n.filename)).toEqual(['doc'])
+  })
+
   describe('name collisions', () => {
     it('throws when two definitions reduce to the same filename', () => {
       const schema = {

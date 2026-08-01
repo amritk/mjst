@@ -174,13 +174,58 @@ describe('generate-strict-assertion array items and unions', () => {
     expect(() => parse({ extra: true })).toThrow("[Doc] field 'extra' does not match any allowed variant")
   })
 
-  it('leaves a union property unenforced when a branch cannot be checked safely', () => {
-    // The allOf branch has no false-sound membership check, so strict mode
-    // must keep the historical pass-through instead of guessing.
+  it('falls back to the exact matcher when a branch has no flat membership check', () => {
+    // The `allOf` branch gives the flat union check nothing to work with, but the
+    // matcher proves both branches one at a time — so `true` matches neither and
+    // is rejected instead of passing through.
     const parse = strictParser(
       {
         type: 'object',
         properties: { x: { oneOf: [{ type: 'string' }, { allOf: [{ type: 'object' }] }] } },
+        required: ['x'],
+      },
+      'Doc',
+    )
+
+    expect(parse({ x: 'ok' })).toEqual({ x: 'ok' })
+    expect(parse({ x: {} })).toEqual({ x: {} })
+    expect(() => parse({ x: true })).toThrow("[Doc] field 'x' does not match exactly one of the declared schemas")
+  })
+
+  // `{ oneOf: [{ type: 'integer' }, { minimum: 2 }] }` has nothing to
+  // discriminate on, and used to compile to `parseRoot = (input) => input`.
+  it('enforces a root union whose branches share no type', () => {
+    const parse = strictParser({ oneOf: [{ type: 'integer' }, { minimum: 2 }] }, 'Root')
+
+    expect(parse(1)).toBe(1)
+    expect(parse('foo')).toBe('foo')
+    // 3 matches both branches, which is what `oneOf` forbids.
+    expect(() => parse(3)).toThrow('[Root] does not match exactly one of the declared schemas')
+    expect(() => parse(1.5)).toThrow('[Root] does not match exactly one of the declared schemas')
+  })
+
+  it('enforces a root anyOf whose branches share no type', () => {
+    const parse = strictParser({ anyOf: [{ type: 'integer' }, { minimum: 2 }] }, 'Root')
+
+    expect(parse(1)).toBe(1)
+    expect(parse(2.5)).toBe(2.5)
+    expect(() => parse(1.5)).toThrow('[Root] does not match any of the declared schemas')
+  })
+
+  it('rejects everything for a union whose branches are all false', () => {
+    const parse = strictParser({ anyOf: [false, false] }, 'Root')
+
+    expect(() => parse('anything')).toThrow('[Root] does not match any of the declared schemas')
+  })
+
+  it('leaves a union property unenforced when a branch cannot be proven at all', () => {
+    // An `x-mjst` branch describes a runtime class, which is not a JSON Schema
+    // shape either the flat check or the matcher can express — so strict mode
+    // keeps the historical pass-through rather than guessing at the branch.
+    const parse = strictParser(
+      {
+        type: 'object',
+        properties: { x: { oneOf: [{ type: 'string' }, { 'x-mjst': { instanceOf: 'Date' } }] } },
         required: ['x'],
       },
       'Doc',
