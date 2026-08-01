@@ -18,9 +18,9 @@ import { canMatchSubschema } from './subschema-match'
  *    properties/items were evaluated" bookkeeping these require; only the
  *    runtime interpreter does. A `true` value permits everything and is allowed.
  *
- *  - `contains`, `propertyNames`, or `dependentSchemas` whose subschema uses a
- *    form {@link canMatchSubschema} cannot prove inline (a `$ref`, a combinator,
- *    a schema-valued record, …). The parser enforces these keywords only for
+ *  - `contains`, `not`, `propertyNames`, or `dependentSchemas` whose subschema
+ *    uses a form {@link canMatchSubschema} cannot prove inline (a `$ref`, a
+ *    schema-valued record, …). The parser enforces these keywords only for
  *    subschemas it can match exactly; anything else would be silently ignored.
  *
  * This runs for strict generation only — coercing parsers are documented to be
@@ -54,6 +54,12 @@ export const assertNoUnsupportedKeywords = (schema: JSONSchema, typeName: string
 
     if ('contains' in record && !canMatchSubschema(record['contains'] as JSONSchema)) {
       fail('contains', 'cannot prove its subschema inline')
+    }
+
+    // `not` joins the same family: it is enforced through the exact matcher, so
+    // a subschema the matcher cannot prove would leave the exclusion unchecked.
+    if ('not' in record && !canMatchSubschema(record['not'] as JSONSchema)) {
+      fail('not', 'cannot prove its subschema inline')
     }
 
     if ('propertyNames' in record && isSchemaObject(record['propertyNames'] as JSONSchema)) {

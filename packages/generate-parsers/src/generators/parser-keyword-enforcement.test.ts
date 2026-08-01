@@ -262,14 +262,21 @@ describe('generation-time guard (strict only)', () => {
     ).toThrow(/contains/)
   })
 
-  it('throws for a propertyNames subschema it cannot prove inline (combinator)', () => {
+  it('throws for a propertyNames subschema it cannot prove inline ($ref)', () => {
     expect(() =>
-      generateParserFunction(
-        { type: 'object', propertyNames: { anyOf: [{ pattern: '^a' }, { pattern: '^b' }] } } as never,
-        'Root',
-        { strict: true },
-      ),
+      generateParserFunction({ type: 'object', propertyNames: { $ref: '#/$defs/name' } } as never, 'Root', {
+        strict: true,
+      }),
     ).toThrow(/propertyNames/)
+  })
+
+  it('accepts — and enforces — a combinator propertyNames subschema', () => {
+    const parse = strictParser({
+      type: 'object',
+      propertyNames: { anyOf: [{ pattern: '^a' }, { pattern: '^b' }] },
+    })
+    expect(parse({ ab: 1, ba: 2 })).toEqual({ ab: 1, ba: 2 })
+    expect(() => parse({ zz: 1 })).toThrow(/invalid property name/)
   })
 
   it('throws for a dependentSchemas subschema it cannot prove inline ($ref)', () => {
@@ -298,17 +305,255 @@ describe('strict parser: typed record (additionalProperties)', () => {
   it('throws on a wrong-typed record value instead of coercing it', () => {
     const parse = strictParser({ type: 'object', additionalProperties: { type: 'number' } })
     expect(parse({ a: 1, b: 2 })).toEqual({ a: 1, b: 2 })
-    expect(() => parse({ a: 'not-a-number' })).toThrow(/record value must be number/)
+    expect(() => parse({ a: 'not-a-number' })).toThrow(/invalid value for property a/)
   })
 
   it('enforces integrality for an integer-valued record', () => {
     const parse = strictParser({ type: 'object', additionalProperties: { type: 'integer' } })
     expect(parse({ a: 3 })).toEqual({ a: 3 })
-    expect(() => parse({ a: 1.5 })).toThrow(/record value must be integer/)
+    expect(() => parse({ a: 1.5 })).toThrow(/invalid value for property a/)
   })
 
   it('coerce mode still repairs a wrong-typed record value', () => {
     const parse = coerceParser({ type: 'object', additionalProperties: { type: 'number' } })
     expect(parse({ a: 'not-a-number' })).toEqual({ a: 0 })
+  })
+})
+
+/**
+ * Regressions for the keyword families that were silently unenforced in strict
+ * mode. Every one of them needs *both* halves to hold: the slow-path assertion
+ * has to reject the value, and the fast-path guard has to decline to wave it
+ * through first — a guard built from flat per-property type checks cannot mirror
+ * any of these, so each schema below is also a `hasFastPathBlockingKeyword`
+ * case. `parser-composition-conformance.differential.test.ts` fuzzes the same
+ * surface against Ajv; these pin the individual failures with readable messages.
+ */
+describe('strict parser: const', () => {
+  it('enforces a scalar const on a property', () => {
+    const parse = strictParser({ type: 'object', properties: { a: { const: 'x' } }, required: ['a'] })
+    expect(parse({ a: 'x' })).toEqual({ a: 'x' })
+    expect(() => parse({ a: 'y' })).toThrow(/must be "x"/)
+    expect(() => parse({ a: 1 })).toThrow(/must be "x"/)
+  })
+
+  it('enforces a structural const by deep equality, key order included', () => {
+    const parse = strictParser({ type: 'object', properties: { a: { const: { p: 1, q: 2 } } }, required: ['a'] })
+    expect(parse({ a: { p: 1, q: 2 } })).toEqual({ a: { p: 1, q: 2 } })
+    expect(parse({ a: { q: 2, p: 1 } })).toEqual({ a: { q: 2, p: 1 } })
+    expect(() => parse({ a: { p: 1 } })).toThrow()
+    expect(() => parse({ a: 'z' })).toThrow()
+  })
+
+  it('enforces `const: null` without treating an absent key as a match', () => {
+    const parse = strictParser({ type: 'object', properties: { a: { const: null } }, required: ['a'] })
+    expect(parse({ a: null })).toEqual({ a: null })
+    expect(() => parse({ a: 0 })).toThrow()
+    expect(() => parse({})).toThrow(/missing required property/)
+  })
+
+  it('coerce mode still repairs a non-const value', () => {
+    const parse = coerceParser({ type: 'object', properties: { a: { const: 'x' } }, required: ['a'] })
+    expect(parse({ a: 'y' })).toEqual({ a: 'x' })
+  })
+})
+
+describe('strict parser: minProperties / maxProperties', () => {
+  it('enforces both bounds on a root object with no declared properties', () => {
+    const parse = strictParser({ type: 'object', minProperties: 2, maxProperties: 3 })
+    expect(parse({ a: 1, b: 2 })).toEqual({ a: 1, b: 2 })
+    expect(() => parse({ a: 1 })).toThrow(/at least 2 properties/)
+    expect(() => parse({ a: 1, b: 2, c: 3, d: 4 })).toThrow(/at most 3 properties/)
+  })
+
+  it('enforces them alongside declared properties, past the fast-path guard', () => {
+    const parse = strictParser({ type: 'object', properties: { a: { type: 'string' } }, minProperties: 2 })
+    expect(parse({ a: 'x', b: 1 })).toEqual({ a: 'x', b: 1 })
+    expect(() => parse({ a: 'x' })).toThrow(/at least 2 properties/)
+  })
+
+  it('enforces them on a nested object property', () => {
+    const parse = strictParser({
+      type: 'object',
+      properties: { a: { type: 'object', minProperties: 2 } },
+      required: ['a'],
+    })
+    expect(parse({ a: { x: 1, y: 2 } })).toEqual({ a: { x: 1, y: 2 } })
+    expect(() => parse({ a: { x: 1 } })).toThrow(/at least 2 properties/)
+  })
+})
+
+describe('strict parser: required without declared properties', () => {
+  it('still demands the key', () => {
+    const parse = strictParser({ type: 'object', required: ['a'] })
+    expect(parse({ a: 1 })).toEqual({ a: 1 })
+    expect(() => parse({})).toThrow(/missing required property 'a'/)
+  })
+})
+
+describe('strict parser: not', () => {
+  it('rejects a value matching the excluded schema at the root', () => {
+    const parse = strictParser({ not: { type: 'string' } })
+    expect(parse(1)).toBe(1)
+    expect(() => parse('x')).toThrow(/must NOT match the excluded schema/)
+  })
+
+  it('rejects one on a property, alongside the property type', () => {
+    const parse = strictParser({
+      type: 'object',
+      properties: { a: { type: 'string', not: { const: 'nope' } } },
+      required: ['a'],
+    })
+    expect(parse({ a: 'ok' })).toEqual({ a: 'ok' })
+    expect(() => parse({ a: 'nope' })).toThrow(/must NOT match/)
+    expect(() => parse({ a: 1 })).toThrow(/expected string/)
+  })
+
+  it('refuses to generate when the excluded subschema cannot be proven inline', () => {
+    expect(() => strictParser({ not: { $ref: '#/$defs/x' } })).toThrow(/unsupported keyword "not"/)
+  })
+})
+
+describe('strict parser: allOf', () => {
+  it('enforces constraint-only members at the root', () => {
+    const parse = strictParser({ allOf: [{ type: 'number', minimum: 5 }, { multipleOf: 2 }] })
+    expect(parse(6)).toBe(6)
+    expect(() => parse(5)).toThrow() // odd
+    expect(() => parse(4)).toThrow() // below the minimum
+    expect(() => parse('x')).toThrow() // not a number
+  })
+
+  it('enforces object members of a type-less allOf root', () => {
+    const parse = strictParser({
+      allOf: [
+        { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] },
+        { type: 'object', properties: { b: { type: 'number' } }, required: ['b'] },
+      ],
+    })
+    expect(parse({ a: 'x', b: 1 })).toEqual({ a: 'x', b: 1 })
+    expect(() => parse({ a: 'x' })).toThrow()
+    expect(() => parse({ a: 1, b: 1 })).toThrow()
+  })
+
+  it('enforces a constraint-only member on a property', () => {
+    const parse = strictParser({
+      type: 'object',
+      properties: { a: { allOf: [{ type: 'string' }, { minLength: 3 }] } },
+      required: ['a'],
+    })
+    expect(parse({ a: 'abc' })).toEqual({ a: 'abc' })
+    expect(() => parse({ a: 'ab' })).toThrow()
+    expect(() => parse({ a: 1 })).toThrow()
+  })
+})
+
+describe('strict parser: if / then / else', () => {
+  it('applies `then` only when `if` matches', () => {
+    const parse = strictParser({
+      type: 'object',
+      properties: { kind: { type: 'string' }, n: { type: 'number' } },
+      if: { properties: { kind: { const: 'a' } }, required: ['kind'] },
+      then: { required: ['n'] },
+    })
+    expect(parse({ kind: 'a', n: 1 })).toEqual({ kind: 'a', n: 1 })
+    expect(parse({ kind: 'b' })).toEqual({ kind: 'b' })
+    expect(() => parse({ kind: 'a' })).toThrow(/'then' schema/)
+  })
+
+  it('applies `else` on the other branch', () => {
+    const parse = strictParser({
+      type: 'object',
+      properties: { kind: { type: 'string' } },
+      if: { required: ['kind'] },
+      then: { required: ['n'] },
+      else: { required: ['m'] },
+    })
+    expect(parse({ kind: 'a', n: 1 })).toEqual({ kind: 'a', n: 1 })
+    expect(parse({ m: 1 })).toEqual({ m: 1 })
+    expect(() => parse({})).toThrow(/'else' schema/)
+  })
+})
+
+describe('strict parser: pattern-matched and additional property values', () => {
+  it('enforces a patternProperties value schema', () => {
+    const parse = strictParser({ type: 'object', patternProperties: { '^s_': { type: 'string' } } })
+    expect(parse({ s_a: 'ok', other: 1 })).toEqual({ s_a: 'ok', other: 1 })
+    expect(() => parse({ s_a: 1 })).toThrow(/invalid value for property s_a/)
+  })
+
+  it('enforces additionalProperties value constraints beyond the bare type', () => {
+    const parse = strictParser({ type: 'object', additionalProperties: { type: 'string', minLength: 3 } })
+    expect(parse({ a: 'abc' })).toEqual({ a: 'abc' })
+    expect(() => parse({ a: 'ab' })).toThrow(/invalid value for property a/)
+  })
+
+  it('exempts keys owned by `properties` or a pattern from the additionalProperties schema', () => {
+    const parse = strictParser({
+      type: 'object',
+      properties: { a: { type: 'string' } },
+      patternProperties: { '^s_': { type: 'boolean' } },
+      additionalProperties: { type: 'number' },
+    })
+    expect(parse({ a: 'x', s_v: true, other: 1 })).toEqual({ a: 'x', s_v: true, other: 1 })
+    expect(() => parse({ a: 'x', other: 'nope' })).toThrow(/invalid value for property other/)
+  })
+})
+
+describe('strict parser: array items beyond scalars', () => {
+  it('enforces a nested-array item schema', () => {
+    const parse = strictParser({
+      type: 'object',
+      properties: { g: { type: 'array', items: { type: 'array', items: { type: 'number' } } } },
+      required: ['g'],
+    })
+    expect(parse({ g: [[1, 2]] })).toEqual({ g: [[1, 2]] })
+    expect(() => parse({ g: [['x']] })).toThrow()
+    expect(() => parse({ g: [1] })).toThrow()
+  })
+
+  it('enforces a union item schema', () => {
+    const parse = strictParser({ type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'number' }] } })
+    expect(parse(['x', 1])).toEqual(['x', 1])
+    expect(() => parse([true])).toThrow()
+  })
+
+  it('enforces minItems / maxItems on a root array of objects', () => {
+    const parse = strictParser({
+      type: 'array',
+      minItems: 2,
+      maxItems: 3,
+      items: { type: 'object', properties: { a: { type: 'string' } } },
+    })
+    expect(parse([{ a: 'x' }, { a: 'y' }])).toEqual([{ a: 'x' }, { a: 'y' }])
+    expect(() => parse([{ a: 'x' }])).toThrow(/at least 2 items/)
+    expect(() => parse([{}, {}, {}, {}])).toThrow(/at most 3 items/)
+  })
+})
+
+describe('strict parser: nullable object properties', () => {
+  it('validates the object shape when the value is not null', () => {
+    const parse = strictParser({
+      type: 'object',
+      properties: { a: { type: ['object', 'null'], properties: { z: { type: 'string' } }, required: ['z'] } },
+      required: ['a'],
+    })
+    expect(parse({ a: null })).toEqual({ a: null })
+    expect(parse({ a: { z: 'x' } })).toEqual({ a: { z: 'x' } })
+    expect(() => parse({ a: {} })).toThrow(/declared object shape/)
+    expect(() => parse({ a: { z: 1 } })).toThrow(/declared object shape/)
+  })
+})
+
+describe('boolean property schemas', () => {
+  it('carries a `true`-schema value through instead of blanking it', () => {
+    const parse = strictParser({ type: 'object', properties: { a: true }, required: ['a'] })
+    expect(parse({ a: 1 })).toEqual({ a: 1 })
+    expect(() => parse({})).toThrow(/missing required property/)
+  })
+
+  it('rejects any value for a `false`-schema property', () => {
+    const parse = strictParser({ type: 'object', properties: { a: false } })
+    expect(parse({ b: 1 })).toEqual({ b: 1 })
+    expect(() => parse({ a: 1 })).toThrow(/must NOT have property 'a'/)
   })
 })

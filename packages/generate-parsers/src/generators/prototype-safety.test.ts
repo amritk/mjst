@@ -42,7 +42,11 @@ describe('prototype safety in pattern-property parsers', () => {
   it('does not let a "__proto__" input key reassign the result prototype', () => {
     const schema = {
       type: 'object',
-      patternProperties: { '^.*$': { type: 'string' } },
+      // The pattern subschema permits any value: this test is about the
+      // *assignment*, and an object-valued `__proto__` is the pollution vector.
+      // (A `type: 'string'` pattern would legitimately reject that value now
+      // that strict mode enforces pattern-property values.)
+      patternProperties: { '^.*$': {} },
       additionalProperties: false,
     } as const
     const code = generateParserFunction(schema as never, 'Bag', { strict: true })
