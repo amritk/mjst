@@ -63,6 +63,15 @@ for (const error of doc.errors) {
 10. **An anchor or tag on a mapping key describes the KEY.** `&a a: b` anchors
    the scalar `a`, so `*a` is `'a'` — not the mapping. Properties on a line of
    their own above the mapping describe the mapping.
+11. **JSON parses as JSON.** YAML 1.2 is a strict superset, and this parser
+   matches `JSON.parse` exactly — same value, zero diagnostics — for JSON in any
+   spelling (compact, pretty, **tab-indented**, CRLF). Pinned by
+   `src/json-superset.test.ts` over a generated corpus, so hand a `.json`
+   document straight to `parse` rather than branching on the extension.
+12. **A tab is only an error where indentation belongs.** `TAB_INDENT` fires on a
+   tab whose column falls inside the indentation a line owes its context — so
+   `\t[a]` at the root and `foo:` over `⟨space⟩⟨tab⟩bar` are fine, `\tb:` under
+   an `a:` is not. Don't assume a leading tab always reports.
 
 Exports: `parse`, `parseDocument`, `parseAllDocuments`, `nodeAtPath`,
 `lineCounter`, `keyText`, the guards

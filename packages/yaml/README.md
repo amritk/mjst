@@ -28,6 +28,8 @@ It targets the YAML that real configuration and OpenAPI documents use: block and
 
 **OpenAPI compatibility.** OpenAPI restricts its YAML to the JSON-compatible subset — *"tags MUST be limited to those allowed by the JSON Schema ruleset"* and map keys must be scalar strings — and that subset is exactly what's covered above. Keeping `version: 1.0.0` a string (rather than a float) and *not* coercing untagged ISO dates into `Date`s is the correct, round-trip-safe behavior an OpenAPI tool needs.
 
+**JSON in, same value out.** YAML 1.2 is a strict superset of JSON, so a `.json` document goes through this parser and comes out as `JSON.parse` would have produced it — which is what lets `@amritk/lint` route both formats through one code path and lets a `$ref` point at either. That is checked rather than assumed: `src/json-superset.test.ts` runs a generated corpus (every value in six spellings — compact, 2-space, **tab-indented**, CRLF, and with leading/trailing blank lines) against `JSON.parse` and requires an identical value *and* zero diagnostics for each, and `@amritk/lint` pins the two parsers to identical data, diagnostics, and `line:column` ranges for every path in a JSON document.
+
 Beyond that JSON-compatible core, the common extended tags resolve too, for general config files (Kubernetes, CI, Ansible) that use them — matching `yaml` (eemeli): `!!binary` → `Uint8Array`, `!!timestamp` → `Date`, `!!set` → `Set`, and `!!omap` → `Map`. These fire only on an *explicit* tag, so they never change how a tagless OpenAPI document parses. (A conformant OpenAPI spec won't contain them.)
 
 ---
@@ -160,7 +162,7 @@ equivalent to import.
 | yaml | 35.5 KB | 4.0× larger |
 | js-yaml | 14.4 KB | 1.6× larger |
 
-Correctness is pinned two ways: a differential test suite (`src/differential.test.ts`) parses a battery of documents — including full OpenAPI specs — and asserts byte-identical data output against `yaml`, and `src/conformance.test.ts` measures the parser against the official YAML test suite (see [Conformance, measured](#conformance-measured)). Where `js-yaml` diverges (its `!!timestamp` type turns ISO strings into `Date`s, which is wrong for a JSON superset), we instead agree with `yaml`.
+Correctness is pinned three ways: a differential test suite (`src/differential.test.ts`) parses a battery of documents — including full OpenAPI specs — and asserts byte-identical data output against `yaml`; `src/json-superset.test.ts` holds a generated JSON corpus to `JSON.parse` exactly; and `src/conformance.test.ts` measures the parser against the official YAML test suite (see [Conformance, measured](#conformance-measured)). Where `js-yaml` diverges (its `!!timestamp` type turns ISO strings into `Date`s, which is wrong for a JSON superset), we instead agree with `yaml`.
 
 ---
 
@@ -221,14 +223,14 @@ Every node carries an exact `[start, end)` source span, and problems are collect
 | `UNTERMINATED_QUOTE` | a quoted scalar that never closes |
 | `UNEXPECTED_CONTENT` | content after a node ends, a second root node with no `---`, or a block sequence opened on the line of the key it belongs to (`key: - a`) |
 | `UNEXPECTED_COMMA` | an empty flow entry (`[1, , 2]`) |
-| `TAB_INDENT` | a tab used for indentation |
+| `TAB_INDENT` | a tab standing where indentation belongs — in a line's leading whitespace, in a block scalar's, or between an indicator and the compact collection it opens (`-\t- x`) |
 | `BAD_SCALAR_START` | a plain scalar starting with the reserved `@` or `` ` ``, or a `-` where a flow entry belongs (`[-]`) |
 | `BAD_SCALAR_CONTENT` | a `: ` inside a plain scalar, which the spec ends the scalar at (`a: b: c`, or a continuation line that reads as a mapping entry) |
 | `BAD_COMMENT` | a `#` with no whitespace before it, so the rest of the line is not a comment (`"value"# …`) |
 | `BAD_ESCAPE` | a `\` escape double-quoted YAML does not define (`"a\.b"`) |
 | `BAD_BLOCK_HEADER` | a `|`/`>` header with a repeated indicator or trailing text (`|10`, `> text`) |
-| `BAD_INDENT` | a block scalar's leading blank line reaching past its first content line, or a quoted scalar continued at its parent's column |
-| `BAD_IMPLICIT_KEY` | a key that does not fit on one line, or a `[ key\n : value ]` whose `:` is on the next |
+| `BAD_INDENT` | a block scalar's leading blank line reaching past its first content line, a quoted scalar continued at its parent's column, or a flow collection whose continuation lines do not clear the block that holds it |
+| `BAD_IMPLICIT_KEY` | a key that does not fit on one line, a block key whose `:` sits more than 1024 characters in, or a `[ key\n : value ]` whose `:` is on the next line |
 | `BAD_PROPERTY` | an anchor or tag on an alias, or two anchors on one scalar |
 | `BAD_TAG` | a verbatim tag missing its closing `>`, or a tag holding a flow indicator |
 | `UNKNOWN_TAG_HANDLE` | a tag handle no `%TAG` directive declared |
@@ -241,13 +243,13 @@ Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNK
 
 ### Not supported
 
-- **Tab indentation.** Forbidden by YAML 1.2; reported as a `TAB_INDENT` error rather than parsed. (Tabs *after* content — e.g. separating a key from its value — are fine.) The spec's finer tab rules, such as a tab inside a block scalar's indentation, are not modelled.
+- **Tab indentation.** Forbidden by YAML 1.2; reported as a `TAB_INDENT` error rather than parsed. Whether a given tab *is* indentation depends on the column it sits at, and that is now tracked: a tab is separation (and legal) once the spaces before it already satisfy the indentation the line owes its context, which is why `\t[a]` at the document root and a `foo:` whose value line reads `⟨space⟩⟨tab⟩bar` both parse clean, while `\tb:` under an `a:` does not. The rule is applied in a line's leading whitespace, inside a block scalar, in a flow collection's continuation lines, and in the separation between an indicator and a compact collection opened on its line (`-\t- x`).
 - **Schema selection.** Always the 1.2 core schema — no JSON, failsafe, or YAML 1.1 schema switch. A `%YAML 1.1` document parses, with a warning that its schema differences are not applied.
 - **YAML 1.1-only scalar forms.** `yes`/`no`/`on`/`off` booleans, sexagesimal numbers (`1:30:00`), and underscore digit groups (`1_000`) stay strings, per the 1.2 core schema.
 - **Implicit timestamps.** An untagged ISO date string stays a string; only an explicit `!!timestamp` produces a `Date`.
 - **Directives on a line a plain scalar could claim.** The rules around directives are enforced — a directive needs a `...` footer before it and a `---` after it, and its version must parse — with one exception: when the offending `%` line could equally be read as a continuation of the plain scalar above it, the scalar wins. Reporting it would mean rejecting a valid document (the suite's `XLQ9`) to catch an invalid one.
-- **The 1024-character implicit key limit.** A key that spans lines *is* reported, but a single-line key longer than the spec allows is not — the check needs lookahead the hot path does not do.
-- **Flow collection indentation.** Flow scanning is delimiter-driven, so a `[`/`{` written across lines is read the same whether or not its continuation lines clear the block indentation around them.
+- **The 1024-character implicit key limit in flow context.** A block mapping key whose `:` sits more than 1024 characters in *is* reported (`BAD_IMPLICIT_KEY`). The spec writes the same cap into the flow-context production, and there it is deliberately not enforced: a flow mapping is where JSON lives, `{"…1100 characters…": 1}` is valid JSON, and rejecting a valid JSON document is the worse of the two errors. `yaml` (eemeli) draws the line in the same place.
+- **Flow collection indentation, at the closing delimiter.** A flow collection's *content* lines must clear the indentation of the block that holds them, and a line that does not is reported (`BAD_INDENT`). Its **closing** `]`/`}` is held only to the parent's own column, one short of what the spec asks: closing a multi-line flow collection at the parent's column is how Prettier and hand-written manifests both write it, and `yaml` and `js-yaml` both accept it. A closing delimiter *further out* than its parent is still reported.
 - **Shared alias identity.** An alias to a collection projects to a *copy*, not the same object: for `a: &x {p: 1}` / `b: *x` / `c: *x`, `b` and `c` are equal but `b !== c`, and mutating one does not change the other. The spec makes them one node. Copying keeps `toJS()` a plain tree — which is what a path-keyed position index, a JSON round-trip, and any consumer that edits the projection all assume — and the cost of re-expanding aliases is capped by an expansion budget, so a billion-laughs document throws a catchable error instead of hanging.
 
 If you need full YAML 1.2 conformance, use [`yaml`](https://www.npmjs.com/package/yaml). If you need a small, fast, position-aware parser for diagnostics, use this.
@@ -258,7 +260,7 @@ The boundary above is not a claim — it is checked. `src/conformance.test.ts` r
 official [YAML test suite](https://github.com/yaml/yaml-test-suite) (402 cases) on
 every build:
 
-**384 / 402 cases pass (95.5%).**
+**398 / 402 cases pass (99.0%).**
 
 Every case that does not is listed in `src/conformance-expected-failures.test-utils.ts`
 with the reason it does not, and the test fails if a case moves in *either*
@@ -266,11 +268,16 @@ direction — a regression breaks the build, and so does a case that starts pass
 without its entry being removed. The suite is a dev dependency; none of it reaches
 the published bundle.
 
-The 18 remaining cases are: the tab rules above (11), flow collections indented
-back to their parent (2), one flow collection holding only empty content that we
-mis-scan and report rather than silently mis-parse, one duplicate-key case
-rejected by design, and the documented projections to richer JavaScript types
-than JSON can express (3).
+What is left is the irreducible part — no missing feature, just four cases where
+the right answer is not the suite's:
+
+- **`2JQS`** — `: a` / `: b`, two entries whose keys are both empty. The spec's own
+  "keys are unique" rule makes that a duplicate; the suite only asks that the
+  document compose, so it reads as valid there. `uniqueKeys` is on by default
+  because a linter wants the report — `parse(src, { uniqueKeys: false })` accepts it.
+- **`565N` / `2XXW` / `J7PZ`** — `!!binary` projects to a `Uint8Array`, `!!set` to a
+  `Set`, `!!omap` to a `Map`, all three matching `yaml` (eemeli), where the suite
+  expects the plain string or object those serialize to.
 
 ---
 

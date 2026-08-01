@@ -89,6 +89,22 @@ type State = {
   /** Whether this document already carried a `%YAML` directive (at most one is legal). */
   yamlDirective: boolean
   /**
+   * Block indentation the flow collection currently being scanned sits in — the
+   * column its continuation lines have to clear. Set by {@link enterFlow} wherever
+   * block context opens a `[`/`{`, and read only by {@link checkFlowIndent}, i.e.
+   * once per line break a flow collection is written across. A flow collection
+   * cannot hold a block one, so the innermost value is always the right one and
+   * nothing has to be saved and restored around the nesting.
+   */
+  flowIndent: number
+  /**
+   * Whether the current flow collection already reported a continuation line that
+   * failed to clear {@link State.flowIndent} — a collection written at the wrong
+   * column is usually wrong on every line, and one report per collection is what a
+   * diagnostic consumer wants.
+   */
+  flowIndentReported: boolean
+  /**
    * Reused by `peekLine` to avoid allocating a result object per line. Callers
    * read it immediately and never hold it across another `peekLine`, so a single
    * shared instance is safe and keeps large documents allocation-light.
@@ -181,8 +197,20 @@ const isDocMarker = (src: string, i: number, len: number): boolean => {
  * Advances the cursor to the start of the next line with real content, skipping
  * blank lines and full-line comments. Leaves `state.pos` parked at the start of
  * that line (column 0) so indentation can be measured deterministically.
+ *
+ * `minIndent` is how many columns of *indentation* the line owes its context —
+ * `n` for a sibling entry of a block collection at that column, `n + 1` for a
+ * child of it, and 0 at the document root. It only matters when a tab turns up in
+ * the leading whitespace: YAML 1.2 spells indentation as spaces
+ * (`s-indent ::= s-space × n`), but a tab *past* the indentation is ordinary
+ * separation (`s-white`), and the two are told apart only by the column the tab
+ * sits at. Every caller knows that column; `peekLine` cannot derive it, which is
+ * why reporting used to fire on any leading tab at all and rejected three valid
+ * documents (`\t[…]` and `\t{}` at the root, and a `foo:` whose value line reads
+ * `⟨space⟩⟨tab⟩bar`). Costs nothing on a tab-free line — the argument is only
+ * read on the cold branch below.
  */
-const peekLine = (state: State): LineInfo => {
+const peekLine = (state: State, minIndent: number): LineInfo => {
   const { src, len, line } = state
   let p = state.pos
   while (p < len) {
@@ -195,10 +223,11 @@ const peekLine = (state: State): LineInfo => {
       continue
     }
     if (c === TAB) {
-      // Cold path: a tab sits in the indentation whitespace. YAML 1.2 forbids
-      // tabs for indentation, so skip the run of tabs/spaces to find the real
-      // content, then — only once we know content actually follows (a tab-only
-      // line is just blank) — record a single error and keep parsing.
+      // Cold path: a tab sits in the line's leading whitespace. Skip the run of
+      // tabs/spaces to find the real content, then — only once we know content
+      // actually follows (a tab-only line is just blank) and the tab really did
+      // land inside the indentation the context requires — record a single error
+      // and keep parsing.
       let j = i
       while (j < len && (src.charCodeAt(j) === TAB || src.charCodeAt(j) === SPACE)) j++
       const cj = src.charCodeAt(j)
@@ -206,7 +235,7 @@ const peekLine = (state: State): LineInfo => {
         p = nextLineStart(src, j, len)
         continue
       }
-      if (state.tabReportedAt !== p) {
+      if (i - p < minIndent && state.tabReportedAt !== p) {
         pushError(state, 'TAB_INDENT', 'Tabs cannot be used for indentation', i, j)
         state.tabReportedAt = p
       }
@@ -234,6 +263,45 @@ const skipInlineSpaces = (state: State): void => {
   let p = state.pos
   while (p < len && isSpace(src.charCodeAt(p))) p++
   state.pos = p
+}
+
+/**
+ * Skips the separation whitespace after a block indicator (`-`, `?`, `:`), and
+ * reports a tab in it when what follows is a *compact* block collection opened on
+ * the indicator's own line.
+ *
+ * A tab is ordinary separation in front of a scalar or a flow collection — `-\tfoo`
+ * and `-\t-1` are both valid documents — but a compact collection takes its
+ * indentation from the column it lands on (`s-l+block-indented(n,c) ::=
+ * s-indent(m) (ns-l-compact-sequence | ns-l-compact-mapping)`), and indentation is
+ * spaces. So `-\t-`, `?\tkey:` and `:\t- x` are invalid where the same shapes
+ * written with spaces are not — a distinction that only exists on this line, which
+ * is why {@link peekLine}'s indentation check cannot make it.
+ *
+ * The space run is scanned separately from the tab test so the ordinary path pays
+ * exactly what {@link skipInlineSpaces} did: a `SPACE` comparison per character,
+ * then one `TAB` comparison. Everything past that comparison is cold.
+ */
+const skipIndicatorSeparation = (state: State): void => {
+  const { src, len } = state
+  let p = state.pos
+  while (p < len && src.charCodeAt(p) === SPACE) p++
+  if (src.charCodeAt(p) === TAB) {
+    reportCompactTab(state, p)
+    return
+  }
+  state.pos = p
+}
+
+/** The cold half of {@link skipIndicatorSeparation}: a tab really is in the separation. */
+const reportCompactTab = (state: State, tabPos: number): void => {
+  const { src, len } = state
+  let p = tabPos
+  while (p < len && isSpace(src.charCodeAt(p))) p++
+  state.pos = p
+  if (isSeqEntryDash(src, p, len) || findKeyColon(src, p, len) >= 0) {
+    pushError(state, 'TAB_INDENT', 'Tabs cannot be used for indentation', tabPos, p)
+  }
 }
 
 /** True when the rest of the current line holds nothing but a comment. */
@@ -513,16 +581,37 @@ const findKeyColon = (src: string, from: number, len: number): number => {
   return -1
 }
 
-/** Reads `&anchor` / `!tag` properties that precede a node value on its line. */
-const scanProps = (state: State): NodeProps => {
+/**
+ * Reads `&anchor` / `!tag` properties that precede a node value on its line.
+ *
+ * `flow` marks the flow-collection caller, where a `,` or a bracket ends the token
+ * with no whitespace in front of it. Without it `!!str,` in `{ foo : !!str, }` read
+ * as a tag whose name held the comma — which the tag-character check then reported,
+ * while the comma it had swallowed left the mapping looking unterminated and shifted
+ * every entry after it. The block caller must *not* stop there: outside a flow
+ * collection those characters are ordinary tag content.
+ */
+const scanProps = (state: State, flow = false): NodeProps => {
   const { src } = state
   const c = src.charCodeAt(state.pos)
   // Fast path: the vast majority of values carry no properties.
   if (c !== AMP && c !== BANG && c !== SPACE && c !== TAB) return NO_PROPS
-  return scanPropsSlow(state)
+  return scanPropsSlow(state, flow)
 }
 
-const scanPropsSlow = (state: State): NodeProps => {
+/** Offset of the end of a `&anchor` / `!tag` token starting at `from`. */
+const propTokenEnd = (src: string, from: number, len: number, flow: boolean): number => {
+  let i = from
+  while (i < len) {
+    const c = src.charCodeAt(i)
+    if (isSpace(c) || c === NL || c === CR) break
+    if (flow && (c === COMMA || c === LBRACKET || c === RBRACKET || c === LBRACE || c === RBRACE)) break
+    i++
+  }
+  return i
+}
+
+const scanPropsSlow = (state: State, flow = false): NodeProps => {
   const { src, len } = state
   let anchor: string | undefined
   let tag: string | undefined
@@ -530,13 +619,11 @@ const scanPropsSlow = (state: State): NodeProps => {
     skipInlineSpaces(state)
     const c = src.charCodeAt(state.pos)
     if (c === AMP) {
-      let i = state.pos + 1
-      while (i < len && !isSpace(src.charCodeAt(i)) && src.charCodeAt(i) !== NL && src.charCodeAt(i) !== CR) i++
+      const i = propTokenEnd(src, state.pos + 1, len, flow)
       anchor = src.slice(state.pos + 1, i)
       state.pos = i
     } else if (c === BANG) {
-      let i = state.pos + 1
-      while (i < len && !isSpace(src.charCodeAt(i)) && src.charCodeAt(i) !== NL && src.charCodeAt(i) !== CR) i++
+      const i = propTokenEnd(src, state.pos + 1, len, flow)
       tag = resolveTag(state, src.slice(state.pos, i), state.pos)
       state.pos = i
     } else {
@@ -1090,6 +1177,16 @@ const scanBlockScalar = (state: State, parentIndent: number): YamlScalar => {
     while (i < len && src.charCodeAt(i) === SPACE) i++
     const c = src.charCodeAt(i)
     const indent = i - lineStart
+    // A tab cannot stand in for the block scalar's indentation, so a line whose
+    // spaces run out short of it and continue with a tab is not a line of this
+    // scalar at all — `foo: |` over a lone `\t` reads as an empty scalar followed
+    // by stray content, which is what the loop below already decides. What was
+    // missing is saying so: the same line written ` \t` *is* valid content, and
+    // the two differ only in the column the tab sits at. One comparison per line
+    // of a block scalar, and the branch is taken only when a tab is really there.
+    if (c === TAB && indent < (contentIndent === -1 ? parentIndent + 1 : contentIndent)) {
+      pushError(state, 'TAB_INDENT', 'Tabs cannot be used for indentation', i, i + 1)
+    }
     if (c === NL || c === CR || i >= len) {
       // Whitespace-only line. Once the content indent is known, anything beyond
       // it is real content (literal scalars preserve that extra indentation).
@@ -1149,6 +1246,75 @@ const scanBlockScalar = (state: State, parentIndent: number): YamlScalar => {
   }
 }
 
+/**
+ * Records the block indentation a flow collection opened from block context sits
+ * in, so {@link checkFlowIndent} can hold its continuation lines to it. Called at
+ * the two places block context reaches a `[`/`{`; a nested flow collection keeps
+ * the enclosing block's column, which is the looser of the two readings the spec
+ * allows and so can never reject a document it should accept.
+ */
+const enterFlow = (state: State, blockIndent: number): void => {
+  state.flowIndent = blockIndent
+  state.flowIndentReported = false
+}
+
+/**
+ * Checks that a line a flow collection is continued onto clears the indentation of
+ * the block that holds the collection. YAML 1.2 requires it — `ns-flow-node(n+1)`
+ * inside `s-l+flow-in-block(n)`, with every continuation line prefixed by
+ * `s-flow-line-prefix(n+1)` — and without the check a flow collection written back
+ * at its parent's own column reads exactly like a properly indented one, so
+ * `flow: [a,` over a column-0 `b,` parsed clean.
+ *
+ * Indentation is counted in *spaces* only, which folds the tab rule in for free: a
+ * tab is separation, so it cannot make up the shortfall, and a line whose
+ * whitespace is nothing but tabs is blank and exempt.
+ *
+ * A line that opens on the collection's *closing* delimiter is held to the parent's
+ * own column rather than one past it. The spec asks for one past, but
+ *
+ *     flow: [
+ *       a,
+ *       b,
+ *     ]
+ *
+ * is how everything from Prettier to hand-written Kubernetes manifests closes a
+ * multi-line flow collection, and both `yaml` (eemeli) and `js-yaml` accept it.
+ * Rejecting a document that ubiquitous to enforce a column is the wrong trade; a
+ * closing bracket *further out* than its parent (`c: [` at column 4 over a `]` at
+ * column 0) is still reported, which is where the two parsers agree.
+ *
+ * Runs once per line break inside a flow collection, so a single-line `{ … }` — the
+ * shape configuration and OpenAPI documents are full of — never reaches it.
+ */
+const checkFlowIndent = (state: State, lineStart: number): void => {
+  const { src, len } = state
+  let i = lineStart
+  while (i < len && src.charCodeAt(i) === SPACE) i++
+  let c = src.charCodeAt(i)
+  if (c === TAB) {
+    // Look past the tab run only to answer "is there content on this line at
+    // all"; the spaces before it are still all the indentation the line has.
+    let j = i
+    while (j < len && isSpace(src.charCodeAt(j))) j++
+    c = src.charCodeAt(j)
+    if (j >= len) return
+  }
+  // A blank line, or one holding only a comment, carries no indentation to judge.
+  if (i >= len || c === NL || c === CR || c === HASH) return
+  const indent = i - lineStart
+  if (indent > state.flowIndent) return
+  if ((c === RBRACKET || c === RBRACE) && indent >= state.flowIndent) return
+  state.flowIndentReported = true
+  pushError(
+    state,
+    'BAD_INDENT',
+    'A flow collection continued over lines must be indented deeper than its parent',
+    lineStart,
+    i,
+  )
+}
+
 /** Skips whitespace, line breaks, and comments — used between flow tokens. */
 const skipFlowWs = (state: State): void => {
   const { src, len } = state
@@ -1166,7 +1332,7 @@ const skipFlowWs = (state: State): void => {
       const d = src.charCodeAt(p)
       if ((d === DASH || d === DOT) && isDocMarker(src, p, len)) {
         pushError(state, 'UNEXPECTED_CONTENT', 'A document marker cannot appear inside a flow collection', p, p + 3)
-      }
+      } else if (!state.flowIndentReported) checkFlowIndent(state, p)
     } else if (c === HASH) {
       // The spec requires whitespace before a comment, so a `#` glued to the
       // token in front of it (`[ a, b,#not a comment`) is not one — and reading
@@ -1233,7 +1399,16 @@ const scanFlowPlain = (state: State): YamlScalar => {
   for (;;) {
     if (scan >= len) break
     let j = scan
-    while (j < len && src.charCodeAt(j) === SPACE) j++
+    // A wrapped flow line's leading whitespace is `s-flow-line-prefix(n) ::=
+    // s-indent(n) s-separate-in-line?`, and `s-separate-in-line` is `s-white+` — so
+    // tabs sit in it just as spaces do, and none of it is content. Skipping only
+    // spaces left the cursor parked on a tab, which no branch below recognizes:
+    // the `]` that ended a tab-indented line was not seen as the flow indicator it
+    // is, and the line folded into the scalar as an empty segment. That is how
+    // `JSON.stringify(value, null, '\t')` — tab-indented JSON, which every editor
+    // and `jq --tab` emits — turned the last entry before a `]` into a string with
+    // a trailing newline: `-1` came back as `"-1\n"`.
+    while (j < len && isSpace(src.charCodeAt(j))) j++
     const c = j < len ? src.charCodeAt(j) : 0
     if (c === NL || c === CR) {
       segments.push('')
@@ -1311,7 +1486,7 @@ const parseFlowNode = (state: State): YamlNode => {
 
 const parseFlowNodeInner = (state: State): YamlNode => {
   skipFlowWs(state)
-  const props = scanProps(state)
+  const props = scanProps(state, true)
   skipFlowWs(state)
   const c = state.src.charCodeAt(state.pos)
   let node: YamlNode
@@ -1355,12 +1530,19 @@ const flowIndicatorBoundary = (src: string, after: number, len: number): boolean
  * Consumes an explicit `? ` key introducer inside a flow collection. The entry
  * that follows is parsed exactly like an implicit one — the `?` only marks the
  * key, it does not change its shape — so skipping it is the whole job.
+ *
+ * Returns whether it found one, which is the one thing the `?` does change: the
+ * key it introduces is explicit, so the rule that exists only to keep an
+ * *implicit* key cheap to recognize — that it fits on one line — does not bind it,
+ * and `[ ? a\n : b ]` is a valid entry where `[ a\n : b ]` is not.
  */
-const skipFlowExplicitKey = (state: State): void => {
+const skipFlowExplicitKey = (state: State): boolean => {
   if (state.src.charCodeAt(state.pos) === QUESTION && introducerBoundary(state.src, state.pos + 1, state.len)) {
     state.pos++
     skipFlowWs(state)
+    return true
   }
+  return false
 }
 
 /**
@@ -1383,6 +1565,44 @@ const checkImplicitKeyLine = (state: State, afterKey: number): void => {
       state.pos + 1,
     )
   }
+}
+
+/**
+ * How far past the start of an implicit key its `:` may sit. YAML 1.2 caps it
+ * (§7.4.2, `ns-s-implicit-yaml-key(c)`: "the ':' indicator must appear at most
+ * 1024 Unicode characters beyond the start of the key") so a processor can decide
+ * whether a line is a mapping entry with bounded lookahead.
+ *
+ * Enforced in **block** context only, matching `yaml` (eemeli). The spec writes the
+ * same cap into the flow-context production, but a flow mapping is where JSON
+ * lives — `{"…1100 characters…": 1}` is valid JSON — and this package's whole
+ * premise is that JSON parses as YAML. Rejecting a valid JSON document to enforce a
+ * lookahead bound the flow scanner does not need is the worse of the two errors.
+ */
+const MAX_IMPLICIT_KEY_LENGTH = 1024
+
+/**
+ * Reports a block-context implicit key whose `:` sits further past the key's start
+ * than the spec allows.
+ *
+ * The caller already holds both offsets, so enforcing the rule is a subtraction and
+ * a comparison — the "lookahead the hot path does not do" this was previously
+ * documented as needing turned out to be lookahead `findKeyColon` had already done.
+ * The comparison stays at the call site (a mapping entry is the parser's hottest
+ * unit of work) and only the report lives here.
+ *
+ * Offsets are UTF-16 code units rather than Unicode characters, so a key built from
+ * astral characters is measured slightly short of its true length; at four figures
+ * of key text that is not a distinction worth a second pass to make.
+ */
+const reportLongImplicitKey = (state: State, keyStart: number, colon: number): void => {
+  pushError(
+    state,
+    'BAD_IMPLICIT_KEY',
+    `An implicit key may not run more than ${MAX_IMPLICIT_KEY_LENGTH} characters before its ":"`,
+    keyStart,
+    colon + 1,
+  )
 }
 
 /**
@@ -1414,7 +1634,7 @@ const parseFlowSeq = (state: State): YamlSeq => {
       break
     }
     if (skipEmptyFlowEntry(state)) continue
-    skipFlowExplicitKey(state)
+    const explicitKey = skipFlowExplicitKey(state)
     const item = parseFlowNode(state)
     const afterItem = state.pos
     skipFlowWs(state)
@@ -1422,7 +1642,7 @@ const parseFlowSeq = (state: State): YamlSeq => {
       // `[ key: value ]` — an implicit single-pair mapping as a sequence entry
       // (the shape `!!omap` is written in). Only reached when an item is actually
       // followed by a colon, so plain `[a, b]` sequences pay nothing extra.
-      checkImplicitKeyLine(state, afterItem)
+      if (!explicitKey) checkImplicitKeyLine(state, afterItem)
       state.pos++
       skipFlowWs(state)
       const vc = state.src.charCodeAt(state.pos)
@@ -1545,7 +1765,7 @@ const parseFlowMap = (state: State): YamlMap => {
 const parsePropsOnlyValue = (state: State, props: NodeProps, parentIndent: number): YamlNode => {
   const propsEnd = state.pos
   finishLine(state)
-  const child = peekLine(state)
+  const child = peekLine(state, parentIndent + 1)
   if (!child.eof && child.indent > parentIndent) {
     state.pos = child.contentPos
     return attachProps(parseNode(state, child.indent, parentIndent), props, state)
@@ -1592,9 +1812,11 @@ const parseInlineValue = (state: State, parentIndent: number): YamlNode | null =
     checkTrailingContent(state)
   } else if (c === PIPE || c === GT) node = scanBlockScalar(state, parentIndent)
   else if (c === LBRACKET) {
+    enterFlow(state, parentIndent)
     node = parseFlowSeq(state)
     checkTrailingContent(state)
   } else if (c === LBRACE) {
+    enterFlow(state, parentIndent)
     node = parseFlowMap(state)
     checkTrailingContent(state)
   } else if (c === DQUOTE || c === SQUOTE) {
@@ -1648,10 +1870,14 @@ const columnOf = (src: string, pos: number): number => {
  */
 const parseValueOrChild = (state: State, indent: number, compact = false): YamlNode | null => {
   const { src, len } = state
-  skipInlineSpaces(state)
+  // Only the `compact` callers can legally open a collection here, so only they
+  // owe the indentation-is-spaces rule; the implicit-key caller's version of this
+  // shape is reported as the invalid nesting it is, further down.
+  if (compact) skipIndicatorSeparation(state)
+  else skipInlineSpaces(state)
   if (atLineEnd(state)) {
     finishLine(state)
-    const child = peekLine(state)
+    const child = peekLine(state, indent + 1)
     if (!child.eof && child.indent > indent) {
       state.pos = child.contentPos
       return parseNode(state, child.indent, indent)
@@ -1822,7 +2048,7 @@ const parseBlockMap = (
       explicit = firstColon < 0
       keyProps = firstProps
     } else {
-      const line = peekLine(state)
+      const line = peekLine(state, indent)
       if (line.eof || line.indent !== indent) break
       const lineStart = state.pos
       contentPos = line.contentPos
@@ -1878,7 +2104,7 @@ const parseBlockMap = (
         keyProps,
         state,
       )
-      const vline = peekLine(state)
+      const vline = peekLine(state, indent)
       if (
         !vline.eof &&
         vline.indent === indent &&
@@ -1890,6 +2116,7 @@ const parseBlockMap = (
       }
     } else {
       const lineContentPos = contentPos
+      if (colon - lineContentPos > MAX_IMPLICIT_KEY_LENGTH) reportLongImplicitKey(state, lineContentPos, colon)
       state.pos = contentPos
       const kc = src.charCodeAt(state.pos)
       if (kc === DQUOTE || kc === SQUOTE) {
@@ -1929,7 +2156,7 @@ const parseBlockMap = (
       if (atLineEnd(state)) {
         // Value lives on the following lines (or is empty).
         finishLine(state)
-        const child = peekLine(state)
+        const child = peekLine(state, indent + 1)
         if (!child.eof && child.indent > indent) {
           state.pos = child.contentPos
           value = parseNode(state, child.indent, indent)
@@ -1967,7 +2194,7 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
   let firstEntry = true
   for (;;) {
     if (!firstEntry) {
-      const line = peekLine(state)
+      const line = peekLine(state, indent)
       if (line.eof || line.indent !== indent) break
       contentPos = line.contentPos
     }
@@ -1977,7 +2204,9 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
 
     const dashPos = contentPos
     state.pos = dashPos + 1
-    skipInlineSpaces(state)
+    // A `- ` entry may open a compact collection on its own line, so the
+    // separation after the indicator is held to the indentation rule.
+    skipIndicatorSeparation(state)
 
     let item: YamlNode
     // One character read serves both questions this line asks: whether the entry
@@ -1986,7 +2215,7 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
     const ic = src.charCodeAt(state.pos)
     if (state.pos >= len || ic === NL || ic === CR || ic === HASH) {
       finishLine(state)
-      const child = peekLine(state)
+      const child = peekLine(state, indent + 1)
       if (!child.eof && child.indent > indent) {
         state.pos = child.contentPos
         item = parseNode(state, child.indent, indent)
@@ -2073,7 +2302,7 @@ const parseNodeInner = (state: State, indent: number, parentIndent: number): Yam
     }
     if (atLineEnd(state)) {
       finishLine(state)
-      const child = peekLine(state)
+      const child = peekLine(state, parentIndent + 1)
       // Properties may sit on a line of their own, with the node they describe
       // below them. What the node has to clear is the *parent's* indentation,
       // not the property line's own column — the two are usually equal (`e:` /
@@ -2106,6 +2335,7 @@ const parseNodeInner = (state: State, indent: number, parentIndent: number): Yam
   // it is parsed; until it did, the trailing `: value` and every sibling entry
   // of that mapping were silently discarded.
   if (cc === STAR || cc === LBRACKET || cc === LBRACE) {
+    if (cc !== STAR) enterFlow(state, parentIndent)
     const node = attachProps(
       cc === STAR ? scanAlias(state) : cc === LBRACKET ? parseFlowSeq(state) : parseFlowMap(state),
       props,
@@ -2216,7 +2446,7 @@ const skipDocumentHead = (state: State): number => {
   const { src, len } = state
   if (src.charCodeAt(0) === 0xfeff) state.pos = 1
   for (;;) {
-    const line = peekLine(state)
+    const line = peekLine(state, 0)
     if (line.eof) return -1
     const c = src.charCodeAt(line.contentPos)
     if (c === PERCENT) {
@@ -2471,6 +2701,8 @@ const newState = (source: string, options: ParseOptions): State => ({
   depth: 0,
   tagHandles: null,
   yamlDirective: false,
+  flowIndent: -1,
+  flowIndentReported: false,
   line: { eof: false, indent: 0, contentPos: 0 },
 })
 
@@ -2487,7 +2719,7 @@ const newState = (source: string, options: ParseOptions): State => ({
 const checkDocumentEnd = (state: State): void => {
   if (state.pos >= state.len) return
   finishLineIfMidLine(state)
-  const line = peekLine(state)
+  const line = peekLine(state, 0)
   if (line.eof) return
   const c = state.src.charCodeAt(line.contentPos)
   if ((c === DASH || c === DOT) && isDocMarker(state.src, line.contentPos, state.len)) {
@@ -2518,7 +2750,7 @@ const checkDocumentEnd = (state: State): void => {
  */
 const warnIfMoreDocuments = (state: State, markerPos: number): void => {
   state.pos = nextLineStart(state.src, markerPos + 3, state.len)
-  if (peekLine(state).eof) return
+  if (peekLine(state, 0).eof) return
   pushWarning(
     state,
     'MULTIPLE_DOCUMENTS',
@@ -2550,7 +2782,7 @@ export const parseDocument = (source: string, options: ParseOptions = {}): YamlD
     checkDocumentEnd(state)
     return finishDocument(state, contents)
   }
-  const head = peekLine(state)
+  const head = peekLine(state, 0)
   if (!head.eof) {
     // Stop a bare `...` document-end marker from being read as a scalar.
     const c = source.charCodeAt(head.contentPos)
@@ -2587,7 +2819,7 @@ const skipStreamHead = (state: State, closed: boolean): number => {
   let seen = 0
   let sawDirective = false
   for (;;) {
-    const line = peekLine(state)
+    const line = peekLine(state, 0)
     if (line.eof) break
     const p = line.contentPos
     const c = src.charCodeAt(p)
@@ -2678,7 +2910,7 @@ export const parseAllDocuments = (source: string, options: ParseOptions = {}): Y
       bodyConsumed = true
     }
     if (!bodyConsumed) {
-      const line = peekLine(state)
+      const line = peekLine(state, 0)
       if (!line.eof) {
         const p = line.contentPos
         const c = src.charCodeAt(p)
