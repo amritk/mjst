@@ -12,8 +12,10 @@
  * external documents. Callers that need remote refs should bundle them into
  * `$defs` first (the same thing the build-time generators expect).
  *
- * `$anchor` search is global within the document (we do not implement `$id`
- * base-URI scoping), which matches the common single-document case. Returns the
+ * `$id` base-URI scoping lives in `resolve-scoped-ref.ts` and runs *first* for
+ * any document that declares an `$id`; this resolver is the document-global
+ * fallback behind it, so a fragment that names nothing in its own resource can
+ * still find an anchor declared elsewhere in the same document. Returns the
  * resolved subschema, or `undefined` when the reference does not resolve so the
  * caller can fail loudly rather than silently accepting anything.
  */
@@ -31,10 +33,24 @@ export const resolveLocalRef = (ref: string, root: unknown): unknown => {
   // also creates an ordinary anchor, so a plain `#x` ref resolves to either.
   if (!pointer.startsWith('/')) return findAnchor(root, pointer, ANCHOR_KEYWORDS, new Set())
 
-  const parts = pointer.split('/').slice(1)
-  let current: unknown = root
+  return walkJsonPointer(root, pointer)
+}
 
-  for (const rawPart of parts) {
+/**
+ * Walks a JSON Pointer (`/$defs/user`, or `''` for the whole document) from
+ * `start`, returning the value it names or `undefined` when it does not resolve.
+ *
+ * `visit` is called with each object node the walk passes *through* — including
+ * `start` — which is how the `$id`-scoped resolver notices that a pointer
+ * crossed into an embedded resource and picks up its base URI. Callers that do
+ * not care about that omit it and pay nothing.
+ */
+export const walkJsonPointer = (start: unknown, pointer: string, visit?: (node: object) => void): unknown => {
+  let current: unknown = start
+  if (visit && current !== null && typeof current === 'object') visit(current)
+  if (pointer === '') return current
+
+  for (const rawPart of pointer.split('/').slice(1)) {
     // A `$ref` fragment is a URI, so each token is percent-decoded (RFC 6901 §6)
     // before the JSON Pointer `~1`/`~0` unescaping — otherwise `#/$defs/a%20b`
     // would look for the literal key `a%20b` instead of `a b` and fail to resolve.
@@ -65,6 +81,7 @@ export const resolveLocalRef = (ref: string, root: unknown): unknown => {
       if (!Object.hasOwn(container, part)) return undefined
       current = container[part]
     }
+    if (visit && current !== null && typeof current === 'object') visit(current)
   }
 
   return current

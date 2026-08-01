@@ -339,8 +339,24 @@ export const hasUnsafeRegex = (source: string): boolean => {
 const DATA_KEYWORDS = new Set(['const', 'enum', 'default', 'examples', 'example'])
 
 /**
+ * What one build-time walk of the schema tells {@link screenSchema}'s caller
+ * beyond "the patterns are safe".
+ */
+export type SchemaScreen = {
+  /**
+   * Whether the document declares an `$id` anywhere. When it does not — nearly
+   * every schema — there is exactly one base URI in play and the interpreter can
+   * skip building an `$id` resource registry entirely. Reporting it from *this*
+   * walk rather than a second one keeps the cold path to a single traversal,
+   * which is the cost this package is judged on.
+   */
+  readonly declaresId: boolean
+}
+
+/**
  * Visits every regex source a validator could compile from `schema` — every
- * string-valued `pattern` key, and every key of a `patternProperties` object.
+ * string-valued `pattern` key, and every key of a `patternProperties` object —
+ * and reports whether the document declares an `$id` along the way.
  *
  * The walk is deliberately unrestricted rather than following a list of known
  * subschema keywords. A keyword list only sees the shapes it knows about: an
@@ -362,10 +378,11 @@ const DATA_KEYWORDS = new Set(['const', 'enum', 'default', 'examples', 'example'
  * blow the native stack with a `RangeError` that `isValidationLimitError` does
  * not recognize — turning a rejected schema into a consumer's 500.
  */
-const forEachRegexSource = (schema: unknown, visit: (source: string) => void): void => {
-  if (schema === null || typeof schema !== 'object') return
+const walkSchema = (schema: unknown, visit: ((source: string) => void) | null): SchemaScreen => {
+  if (schema === null || typeof schema !== 'object') return { declaresId: false }
   const seen = new Set<object>()
   const stack: object[] = [schema]
+  let declaresId = false
 
   while (stack.length > 0) {
     const node = stack.pop() as object
@@ -385,31 +402,42 @@ const forEachRegexSource = (schema: unknown, visit: (source: string) => void): v
     for (const key in record) {
       const child = record[key]
       if (typeof child === 'string') {
-        if (key === 'pattern') visit(child)
+        if (key === 'pattern') visit?.(child)
+        else if (key === '$id' && child !== '') declaresId = true
         continue
       }
       if (child === null || typeof child !== 'object') continue
-      if (key === 'patternProperties' && !Array.isArray(child)) for (const source in child) visit(source)
+      if (visit && key === 'patternProperties' && !Array.isArray(child)) for (const source in child) visit(source)
       if (!DATA_KEYWORDS.has(key)) stack.push(child)
     }
   }
+
+  return { declaresId }
 }
 
 /**
- * Screens every `pattern`/`patternProperties` source in `schema` for
- * catastrophic backtracking, throwing a {@link validationLimitError} on the
- * first unsafe one. Runs once when a validator is built, so an unsafe schema
- * fails fast at construction rather than mid-request.
+ * Walks `schema` once at validator-build time, screening every
+ * `pattern`/`patternProperties` source for catastrophic backtracking — throwing
+ * a {@link validationLimitError} on the first unsafe one, so an unsafe schema
+ * fails fast at construction rather than mid-request — and reporting the
+ * {@link SchemaScreen} facts the interpreter needs before it starts.
+ *
+ * With `allowUnsafePatterns` the regex screen is skipped but the walk still
+ * runs: it is the same traversal either way, and its other findings are not
+ * optional.
  */
-export const screenPatterns = (schema: unknown, allowUnsafePatterns: boolean): void => {
-  if (allowUnsafePatterns) return
-  forEachRegexSource(schema, (source) => {
-    if (hasUnsafeRegex(source)) {
-      throw validationLimitError(
-        `Unsafe regular expression in schema "pattern": ${JSON.stringify(source)} is prone to catastrophic ` +
-          'backtracking (ReDoS risk) — it nests unbounded quantifiers, or repeats an ambiguous alternation. ' +
-          'Rewrite it, or pass `limits: { allowUnsafePatterns: true }` if the schema is trusted.',
-      )
-    }
-  })
-}
+export const screenSchema = (schema: unknown, allowUnsafePatterns: boolean): SchemaScreen =>
+  walkSchema(
+    schema,
+    allowUnsafePatterns
+      ? null
+      : (source) => {
+          if (hasUnsafeRegex(source)) {
+            throw validationLimitError(
+              `Unsafe regular expression in schema "pattern": ${JSON.stringify(source)} is prone to catastrophic ` +
+                'backtracking (ReDoS risk) — it nests unbounded quantifiers, or repeats an ambiguous alternation. ' +
+                'Rewrite it, or pass `limits: { allowUnsafePatterns: true }` if the schema is trusted.',
+            )
+          }
+        },
+  )

@@ -1,5 +1,6 @@
-import { type InterpreterContext, interpret, newValidatorCaches } from '@/interpreter/interpret'
-import { limitsCacheKey, type ResolvedLimits, resolveLimits, screenPatterns } from '@/interpreter/limits'
+import { type InterpreterContext, interpret, NO_DYNAMIC_SCOPE, newValidatorCaches } from '@/interpreter/interpret'
+import { limitsCacheKey, type ResolvedLimits, resolveLimits, screenSchema } from '@/interpreter/limits'
+import { buildSchemaRegistry } from '@/interpreter/schema-registry'
 import type { ValidateOptions, ValidationResult } from '@/types'
 
 /**
@@ -46,10 +47,18 @@ const makeValidator = (
   emitErrors: boolean,
   limits: ResolvedLimits,
 ): ((input: unknown) => unknown) => {
-  // Screen every `pattern`/`patternProperties` source once, up front, so a
-  // schema carrying a ReDoS-prone regex fails loudly here (at build time) rather
-  // than mid-request. Skipped when `allowUnsafePatterns` is set.
-  screenPatterns(schema, limits.allowUnsafePatterns)
+  // One walk of the schema, up front. It screens every
+  // `pattern`/`patternProperties` source so a ReDoS-prone regex fails loudly
+  // here (at build time) rather than mid-request, and it tells us whether the
+  // document declares an `$id`.
+  const screen = screenSchema(schema, limits.allowUnsafePatterns)
+
+  // The `$id` resource registry costs a second walk, so it is built only for the
+  // documents that actually need one — and once per validator, never per call.
+  // For everything else `registry` stays `null` and the interpreter's whole
+  // base-URI apparatus switches off.
+  const registry = screen.declaresId ? buildSchemaRegistry(schema) : null
+  const rootScope = registry === null ? NO_DYNAMIC_SCOPE : [registry.rootBase]
 
   // One caches holder, captured here and shared across every call of this
   // validator. Its maps stay null until the schema actually hits a `pattern` or
@@ -60,6 +69,7 @@ const makeValidator = (
   return (input: unknown): unknown => {
     const ctx: InterpreterContext = {
       root: schema,
+      registry,
       formats,
       emitErrors,
       caches,
@@ -70,7 +80,7 @@ const makeValidator = (
       // A fresh budget per call: the ceiling is per-validation, not per-validator.
       budget: { steps: limits.maxSteps },
     }
-    interpret(ctx, schema, input, '')
+    interpret(ctx, schema, input, '', null, 0, rootScope)
     if (emitErrors) {
       return (ctx.errors === null ? true : { valid: false, errors: ctx.errors }) satisfies ValidationResult
     }

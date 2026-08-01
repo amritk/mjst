@@ -11,14 +11,12 @@ const DYNAMIC_ANCHOR_KEYWORDS = ['$dynamicAnchor'] as const
  * `$dynamicAnchor` (`$dynamicAnchor: "meta"`). This is the pattern OpenAPI 3.1
  * uses so a media-type `schema` can late-bind to the root JSON Schema dialect.
  *
- * We resolve to the document-global `$dynamicAnchor` rather than implementing
- * the full dynamic-scope algorithm (walk the dynamic scope, bind to the
- * *outermost* matching anchor). For a single bundled document — what the
- * build-time generators already assume, and what `buildDynamicRefMap` in
- * `@amritk/helpers` does — there is exactly one anchor per name, so the two
- * agree. If we ever need true recursive-schema dynamic binding (e.g. the JSON
- * Schema meta-schema referencing itself through extension dialects), this is
- * where that scope tracking would go.
+ * This is the resolver for a document that declares no `$id`. The real
+ * dynamic-scope algorithm — walk the resources evaluation passed through and
+ * bind to the *outermost* matching anchor — lives in `resolve-scoped-ref.ts`
+ * and runs whenever the document has base URIs to scope anchors to. Without an
+ * `$id` there is exactly one resource in play, so a name can only be declared
+ * once and the document-global lookup here gives the same answer.
  *
  * A `$dynamicRef` with no matching `$dynamicAnchor`, or one written as a plain
  * JSON Pointer (`#/$defs/x`), falls back to {@link resolveLocalRef} so it still

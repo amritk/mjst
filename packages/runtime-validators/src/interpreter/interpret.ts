@@ -2,10 +2,12 @@ import { FORMAT_CHECKS, isValidRegex } from '@/interpreter/format-checks'
 import { validationLimitError } from '@/interpreter/limits'
 import { resolveDynamicRef, resolveRecursiveRef } from '@/interpreter/resolve-dynamic-ref'
 import { resolveLocalRef } from '@/interpreter/resolve-local-ref'
+import { resolveScopedDynamicRef, resolveScopedRef, type ScopedTarget } from '@/interpreter/resolve-scoped-ref'
+import type { SchemaRegistry } from '@/interpreter/schema-registry'
 import type { ValidationError } from '@/types'
 
 /**
- * The two genuinely reusable artifacts of a validation — compiled `RegExp`s and
+ * The genuinely reusable artifacts of a validation — compiled `RegExp`s and
  * resolved `$ref` targets — held in one place and shared across a run and its
  * nested branch contexts. Each map is allocated lazily on first use, so the
  * common schema that has neither a `pattern` nor a `$ref` never allocates them —
@@ -14,9 +16,43 @@ import type { ValidationError } from '@/types'
 export type ValidatorCaches = {
   regex: Map<string, RegExp> | null
   ref: Map<string, unknown> | null
+  /** Resolved `$ref`s for a document with `$id`s, keyed by the base in scope plus the ref. */
+  scopedRef: Map<string, ScopedTarget> | null
 }
 
-export const newValidatorCaches = (): ValidatorCaches => ({ regex: null, ref: null })
+export const newValidatorCaches = (): ValidatorCaches => ({ regex: null, ref: null, scopedRef: null })
+
+/**
+ * The dynamic scope: the base URIs of the schema resources evaluation has
+ * entered to reach the current node, outermost first. `$dynamicRef` walks it to
+ * find the outermost matching `$dynamicAnchor`, and its last entry is always the
+ * base URI in scope, which is what a plain `$ref` resolves against.
+ *
+ * It is threaded as an immutable array parameter rather than kept as a mutable
+ * stack on the context precisely because the interpreter forks: `anyOf` probes,
+ * `not`, and every early return would each need their own unwind. Copying only
+ * ever happens when a resource boundary is actually crossed, and a document with
+ * no `$id` shares one empty array for the whole run.
+ */
+export type DynamicScope = readonly string[]
+
+/** The scope for a document that declares no `$id` — shared, so it never allocates. */
+export const NO_DYNAMIC_SCOPE: DynamicScope = []
+
+/** Extends `scope` with `base`, unless we are already in that resource. */
+const enterResource = (scope: DynamicScope, base: string): DynamicScope =>
+  base === scope[scope.length - 1] ? scope : [...scope, base]
+
+/**
+ * The scope in effect *at* `node`, accounting for an `$id` it declares. Called
+ * only for documents that have a registry, so `$id`-free schemas never pay for
+ * the lookup.
+ */
+const scopeAtNode = (registry: SchemaRegistry, node: Record<string, unknown>, scope: DynamicScope): DynamicScope => {
+  if (typeof node['$id'] !== 'string') return scope
+  const base = registry.baseOf.get(node)
+  return base === undefined ? scope : enterResource(scope, base)
+}
 
 /**
  * Mutable state threaded through a single validation run.
@@ -30,6 +66,11 @@ export const newValidatorCaches = (): ValidatorCaches => ({ regex: null, ref: nu
 export type InterpreterContext = {
   /** The root schema document, used to resolve local `$ref` pointers. */
   readonly root: unknown
+  /**
+   * The document's `$id` resource registry, or `null` when it declares no `$id`
+   * — in which case every base-URI code path below is skipped outright.
+   */
+  readonly registry: SchemaRegistry | null
   /** Enabled string formats, or `'all'`. */
   readonly formats: 'all' | ReadonlySet<string>
   /**
@@ -346,12 +387,19 @@ const getRegex = (ctx: InterpreterContext, source: string): RegExp => {
   return re
 }
 
+/** The message a ref that resolves to nothing in this document fails with. */
+const unresolvableRef = (keyword: string, ref: string): Error =>
+  new Error(
+    `Cannot resolve ${keyword} "${ref}". Only refs into the same document are supported — ` +
+      'a JSON Pointer, an `$anchor`, or a URI naming an `$id` declared in this schema.',
+  )
+
 /**
- * Resolves a local `$ref`, caching the target. Throws on an unresolvable ref —
- * the same loud failure the generated validator produced — so a bad pointer is
- * never silently treated as "anything goes".
+ * Resolves a document-local `$ref` with no `$id` in play, caching the target.
+ * Throws on an unresolvable ref — the same loud failure the generated validator
+ * produced — so a bad pointer is never silently treated as "anything goes".
  */
-const resolveRef = (ctx: InterpreterContext, ref: string): unknown => {
+const resolvePlainRef = (ctx: InterpreterContext, ref: string): unknown => {
   let cache = ctx.caches.ref
   if (cache === null) {
     cache = new Map()
@@ -360,19 +408,67 @@ const resolveRef = (ctx: InterpreterContext, ref: string): unknown => {
   let resolved = cache.get(ref)
   if (resolved === undefined) {
     resolved = resolveLocalRef(ref, ctx.root)
-    if (resolved === undefined) {
-      throw new Error(`Cannot resolve $ref "${ref}". Only local refs into the same document are supported.`)
-    }
+    if (resolved === undefined) throw unresolvableRef('$ref', ref)
     cache.set(ref, resolved)
   }
   return resolved
 }
 
 /**
- * Resolves a `$dynamicRef` target, caching it. Keyed separately from `$ref`
- * (the `dyn:` prefix) because the same fragment can resolve differently as a
- * dynamic anchor than as a static pointer. Throws on an unresolvable ref, the
- * same loud failure {@link resolveRef} produces.
+ * Resolves a `$ref` against the base URI in scope, caching the target under
+ * `base` + ref (the same ref string resolves differently from inside different
+ * `$id` scopes, so the ref alone is not a key).
+ *
+ * A ref that names nothing in its own resource falls back to the document-global
+ * resolver. That keeps a bundled document working when it mixes an `$id` with
+ * root-relative `#/$defs/...` pointers, and it can only ever *add* an answer —
+ * a URI that does resolve in scope never reaches it.
+ */
+const resolveScoped = (ctx: InterpreterContext, registry: SchemaRegistry, ref: string, base: string): ScopedTarget => {
+  // A space is an unambiguous separator here: `base` comes out of `URL.href`, so
+  // it can never contain one.
+  const key = `${base} ${ref}`
+  let cache = ctx.caches.scopedRef
+  if (cache === null) {
+    cache = new Map()
+    ctx.caches.scopedRef = cache
+  }
+  const cached = cache.get(key)
+  if (cached !== undefined) return cached
+
+  const scoped = resolveScopedRef(registry, ref, base)
+  const resolved = scoped ?? fallbackTarget(ctx, ref, base)
+  cache.set(key, resolved)
+  return resolved
+}
+
+/**
+ * The document-global answer for a ref that named nothing in its own resource,
+ * keeping the referrer's base so the scope does not shift. Throws when even that
+ * finds nothing, which is where an unresolvable ref finally fails loudly.
+ */
+const fallbackTarget = (ctx: InterpreterContext, ref: string, base: string): ScopedTarget => {
+  const value = resolveLocalRef(ref, ctx.root)
+  if (value === undefined) throw unresolvableRef('$ref', ref)
+  return { value, base }
+}
+
+/** {@link fallbackTarget} for `$dynamicRef`, which may still bind to a `$dynamicAnchor`. */
+const dynamicFallbackTarget = (ctx: InterpreterContext, ref: string, base: string): ScopedTarget => {
+  const value = resolveDynamicRef(ref, ctx.root)
+  if (value === undefined) throw unresolvableRef('$dynamicRef', ref)
+  return { value, base }
+}
+
+/**
+ * Resolves a `$dynamicRef` target. Keyed separately from `$ref` (the `dyn:`
+ * prefix) because the same fragment can resolve differently as a dynamic anchor
+ * than as a static pointer. Throws on an unresolvable ref, the same loud failure
+ * {@link resolvePlainRef} produces.
+ *
+ * The `$id`-aware path is deliberately *not* cached: its answer depends on the
+ * dynamic scope the reference was reached through, which is the whole point of
+ * `$dynamicRef`. It is a couple of map lookups, so there is little to cache.
  */
 const resolveDyn = (ctx: InterpreterContext, ref: string): unknown => {
   const key = `dyn:${ref}`
@@ -384,9 +480,7 @@ const resolveDyn = (ctx: InterpreterContext, ref: string): unknown => {
   let resolved = cache.get(key)
   if (resolved === undefined) {
     resolved = resolveDynamicRef(ref, ctx.root)
-    if (resolved === undefined) {
-      throw new Error(`Cannot resolve $dynamicRef "${ref}". Only local refs into the same document are supported.`)
-    }
+    if (resolved === undefined) throw unresolvableRef('$dynamicRef', ref)
     cache.set(key, resolved)
   }
   return resolved
@@ -421,6 +515,7 @@ const resolveRec = (ctx: InterpreterContext): unknown => {
  */
 const newBranchContext = (ctx: InterpreterContext): InterpreterContext => ({
   root: ctx.root,
+  registry: ctx.registry,
   formats: ctx.formats,
   emitErrors: false,
   caches: ctx.caches,
@@ -442,6 +537,7 @@ const matchesSchema = (
   schema: unknown,
   value: unknown,
   depth: number,
+  scope: DynamicScope,
   collect?: Evaluation | null,
 ): boolean => {
   const sub = newBranchContext(ctx)
@@ -449,7 +545,7 @@ const matchesSchema = (
   // tracker and fold it in only if the branch matched — annotations from a
   // failing branch never count toward `unevaluated*`.
   const branchEval = collect ? newEvaluation() : null
-  interpret(sub, schema, value, '', branchEval, depth + 1)
+  interpret(sub, schema, value, '', branchEval, depth + 1, scope)
   const ok = !sub.failed
   if (ok && collect && branchEval) mergeEvaluation(collect, branchEval)
   return ok
@@ -604,6 +700,7 @@ const interpretObject = (
   path: string,
   evalScope: Evaluation | null,
   depth: number,
+  scope: DynamicScope,
 ): void => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return
   const obj = value as Record<string, unknown>
@@ -632,11 +729,11 @@ const interpretObject = (
         else {
           // Build the child path from the pre-escaped key (a bare concat, no
           // per-call scan), only in error mode where it is actually read.
-          interpret(ctx, properties[key], pv, emitErrors ? `${path}/${escapedKeys[i]}` : path, null, depth + 1)
+          interpret(ctx, properties[key], pv, emitErrors ? `${path}/${escapedKeys[i]}` : path, null, depth + 1, scope)
           evalScope?.props.add(key)
         }
       } else if (present) {
-        interpret(ctx, properties[key], pv, emitErrors ? `${path}/${escapedKeys[i]}` : path)
+        interpret(ctx, properties[key], pv, emitErrors ? `${path}/${escapedKeys[i]}` : path, null, depth + 1, scope)
         evalScope?.props.add(key)
       }
       if (ctx.failed) return
@@ -670,7 +767,7 @@ const interpretObject = (
   if (dependentSchemasEntries !== null) {
     for (const [trigger, subSchema] of dependentSchemasEntries) {
       if (!hasProperty(obj, trigger)) continue
-      interpretInPlace(ctx, subSchema, obj, path, evalScope, depth)
+      interpretInPlace(ctx, subSchema, obj, path, evalScope, depth, scope)
       if (ctx.failed) return
     }
   }
@@ -690,7 +787,7 @@ const interpretObject = (
           }
         }
       } else {
-        interpretInPlace(ctx, dep, obj, path, evalScope, depth)
+        interpretInPlace(ctx, dep, obj, path, evalScope, depth, scope)
         if (ctx.failed) return
       }
     }
@@ -720,7 +817,7 @@ const interpretObject = (
           if (regex.test(k)) {
             matched = true
             evalScope?.props.add(k)
-            interpret(ctx, patternSchema, obj[k], childPath(ctx, path, k), null, depth + 1)
+            interpret(ctx, patternSchema, obj[k], childPath(ctx, path, k), null, depth + 1, scope)
             if (ctx.failed) return
           }
         }
@@ -733,7 +830,7 @@ const interpretObject = (
         if (ctx.failed) return
       } else if (isPlainObject(additional)) {
         evalScope?.props.add(k)
-        interpret(ctx, additional, obj[k], childPath(ctx, path, k), null, depth + 1)
+        interpret(ctx, additional, obj[k], childPath(ctx, path, k), null, depth + 1, scope)
         if (ctx.failed) return
       }
     }
@@ -772,7 +869,7 @@ const interpretObject = (
     for (const k in obj) {
       if (probe === null) probe = newBranchContext(ctx)
       else probe.failed = false
-      interpret(probe, nameSchema, k, '', null, depth + 1)
+      interpret(probe, nameSchema, k, '', null, depth + 1, scope)
       if (probe.failed) {
         fail(ctx, `property name "${k}" is invalid`, childPath(ctx, path, k))
         if (ctx.failed) return
@@ -789,6 +886,7 @@ const interpretArray = (
   path: string,
   evalScope: Evaluation | null,
   depth: number,
+  scope: DynamicScope,
 ): void => {
   if (!Array.isArray(value)) return
   const arr = value as unknown[]
@@ -822,7 +920,7 @@ const interpretArray = (
   if (tuple) {
     for (let index = 0; index < tuple.length; index++) {
       if (arr.length > index) {
-        interpret(ctx, tuple[index], arr[index], childPath(ctx, path, index), null, depth + 1)
+        interpret(ctx, tuple[index], arr[index], childPath(ctx, path, index), null, depth + 1, scope)
         evalScope?.items.add(index)
         if (ctx.failed) return
       }
@@ -836,7 +934,7 @@ const interpretArray = (
     }
   } else if (rest !== undefined && rest !== true) {
     for (let i = start; i < arr.length; i++) {
-      interpret(ctx, rest, arr[i], childPath(ctx, path, i), null, depth + 1)
+      interpret(ctx, rest, arr[i], childPath(ctx, path, i), null, depth + 1, scope)
       if (ctx.failed) return
     }
     // A tail `items`/`additionalItems` schema sweeps every index from `start` on.
@@ -860,25 +958,28 @@ const interpretArray = (
     const min = typeof s['minContains'] === 'number' ? s['minContains'] : 1
     const max = typeof s['maxContains'] === 'number' ? s['maxContains'] : undefined
     // `maxContains` needs the exact total (it is an upper bound), and an active
-    // annotation scope needs it to decide whether `contains` marks the array
-    // evaluated — so only when neither is in play can we stop at the first `min`
-    // matches. Without this a 1000-element array matching at index 0 cost the same
-    // as one matching at index 999.
+    // annotation scope needs every match (not just the first `min`) — so only
+    // when neither is in play can we stop early. Without this a 1000-element
+    // array matching at index 0 cost the same as one matching at index 999.
     const needsExactCount = max !== undefined || evalScope !== null
+    // The indices `contains` matched, which is the annotation it publishes for a
+    // sibling `unevaluatedItems`. Collected only when something is listening, so
+    // the ordinary `contains` check still allocates nothing.
+    const matched: number[] | null = evalScope === null ? null : []
     let count = 0
-    for (const item of arr) {
-      if (!matchesSchema(ctx, containsSchema, item, depth)) continue
+    for (let i = 0; i < arr.length; i++) {
+      if (!matchesSchema(ctx, containsSchema, arr[i], depth, scope)) continue
       count++
+      matched?.push(i)
       if (!needsExactCount && count >= min) break
     }
-    // Ajv parity for `unevaluatedItems`: a satisfied `contains` marks the *whole*
-    // array as evaluated, not just the matching items — but a bare `minContains: 0`
-    // (with no `maxContains`) opts out of contributing any evaluated-item annotation
-    // at all. When `maxContains` is also present, Ajv still marks the array evaluated,
-    // so only `minContains: 0` *without* `maxContains` suppresses it. (This
-    // intentionally tracks Ajv, the differential oracle, over the stricter spec letter.)
-    if (evalScope && (min !== 0 || max !== undefined) && count >= min && (max === undefined || count <= max)) {
-      evalScope.allItems = true
+    // A `contains` that is satisfied evaluates exactly the items it matched —
+    // not the whole array. That distinction is the entire point of pairing
+    // `contains` with `unevaluatedItems`, and it is one of the few places we
+    // knowingly diverge from Ajv (which marks every index evaluated); see the
+    // note in `differential.test.ts`.
+    if (evalScope !== null && matched !== null && count >= min && (max === undefined || count <= max)) {
+      for (const index of matched) evalScope.items.add(index)
     }
     if (count < min) {
       fail(ctx, `must contain at least ${min} matching items`, path)
@@ -1029,13 +1130,14 @@ const interpretRef = (
   path: string,
   evalScope: Evaluation | null,
   depth: number,
+  scope: DynamicScope,
 ): void => {
   const stack = ctx.refStack
   for (let i = 0; i < stack.length; i += 2) {
     if (stack[i] === target && stack[i + 1] === value) return
   }
   stack.push(target, value)
-  interpretInPlace(ctx, target, value, path, evalScope, depth)
+  interpretInPlace(ctx, target, value, path, evalScope, depth, scope)
   stack.length -= 2
 }
 
@@ -1058,13 +1160,14 @@ const interpretInPlace = (
   path: string,
   parentScope: Evaluation | null,
   depth: number,
+  scope: DynamicScope,
 ): void => {
   if (parentScope === null) {
-    interpret(ctx, schema, value, path, null, depth + 1)
+    interpret(ctx, schema, value, path, null, depth + 1, scope)
     return
   }
   const childScope = newEvaluation()
-  interpret(ctx, schema, value, path, childScope, depth + 1)
+  interpret(ctx, schema, value, path, childScope, depth + 1, scope)
   mergeEvaluation(parentScope, childScope)
 }
 
@@ -1081,6 +1184,7 @@ export const interpret = (
   path: string,
   evaluation: Evaluation | null = null,
   depth = 0,
+  dynamicScope: DynamicScope = NO_DYNAMIC_SCOPE,
 ): void => {
   // In guard mode the first failure unwinds the whole walk; in error mode this
   // is never set, so every branch runs and collects.
@@ -1112,6 +1216,13 @@ export const interpret = (
   // is configured for OpenAPI schemas.
   if (s['nullable'] === true && value === null) return
 
+  // An `$id` here opens a new schema resource: refs written below resolve
+  // against its URI, and it joins the dynamic scope a `$dynamicRef` searches.
+  // Gated on the registry so a document without a single `$id` — nearly all of
+  // them — pays one null check per node and nothing else.
+  const registry = ctx.registry
+  const scope = registry === null ? dynamicScope : scopeAtNode(registry, s, dynamicScope)
+
   // `unevaluated*` consults annotations gathered by every other keyword applied
   // to this same instance. Inherit the ancestor's tracker when one is in scope;
   // otherwise start one only if this node carries an `unevaluated*` keyword, so
@@ -1124,7 +1235,13 @@ export const interpret = (
   // forever. Sibling keywords still apply per 2020-12, so we do not stop here.
   const ref = s['$ref']
   if (typeof ref === 'string') {
-    interpretRef(ctx, resolveRef(ctx, ref), value, path, evalScope, depth)
+    const base = registry === null ? undefined : scope[scope.length - 1]
+    if (registry === null || base === undefined) {
+      interpretRef(ctx, resolvePlainRef(ctx, ref), value, path, evalScope, depth, scope)
+    } else {
+      const target = resolveScoped(ctx, registry, ref, base)
+      interpretRef(ctx, target.value, value, path, evalScope, depth, enterResource(scope, target.base))
+    }
     if (ctx.failed) return
   }
 
@@ -1132,7 +1249,13 @@ export const interpret = (
   // `$ref`, sibling keywords still apply, so we do not stop here.
   const dynRef = s['$dynamicRef']
   if (typeof dynRef === 'string') {
-    interpretRef(ctx, resolveDyn(ctx, dynRef), value, path, evalScope, depth)
+    const base = registry === null ? undefined : scope[scope.length - 1]
+    if (registry === null || base === undefined) {
+      interpretRef(ctx, resolveDyn(ctx, dynRef), value, path, evalScope, depth, scope)
+    } else {
+      const target = resolveScopedDynamicRef(registry, dynRef, base, scope) ?? dynamicFallbackTarget(ctx, dynRef, base)
+      interpretRef(ctx, target.value, value, path, evalScope, depth, enterResource(scope, target.base))
+    }
     if (ctx.failed) return
   }
 
@@ -1140,7 +1263,7 @@ export const interpret = (
   // value is `"#"`: late-binds to the `$recursiveAnchor: true` subschema,
   // falling back to the document root.
   if (typeof s['$recursiveRef'] === 'string') {
-    interpretRef(ctx, resolveRec(ctx), value, path, evalScope, depth)
+    interpretRef(ctx, resolveRec(ctx), value, path, evalScope, depth, scope)
     if (ctx.failed) return
   }
 
@@ -1214,8 +1337,8 @@ export const interpret = (
   // schema analysis, no allocation), so it costs the cold one-shot path nothing.
   if (typeof value === 'object') {
     if (value !== null) {
-      if (Array.isArray(value)) interpretArray(ctx, s, value, path, evalScope, depth)
-      else interpretObject(ctx, s, value, path, evalScope, depth)
+      if (Array.isArray(value)) interpretArray(ctx, s, value, path, evalScope, depth, scope)
+      else interpretObject(ctx, s, value, path, evalScope, depth, scope)
       if (ctx.failed) return
     }
   } else if (typeof value === 'string') {
@@ -1228,7 +1351,7 @@ export const interpret = (
 
   if (Array.isArray(s['allOf'])) {
     for (const sub of s['allOf']) {
-      interpretInPlace(ctx, sub, value, path, evalScope, depth)
+      interpretInPlace(ctx, sub, value, path, evalScope, depth, scope)
       if (ctx.failed) return
     }
   }
@@ -1238,7 +1361,7 @@ export const interpret = (
     for (const sub of s['anyOf']) {
       // When tracking annotations, evaluate every branch (each match contributes
       // its evaluated keys); otherwise short-circuit on the first match.
-      if (matchesSchema(ctx, sub, value, depth, evalScope)) {
+      if (matchesSchema(ctx, sub, value, depth, scope, evalScope)) {
         ok = true
         if (!evalScope) break
       }
@@ -1252,7 +1375,7 @@ export const interpret = (
   if (Array.isArray(s['oneOf']) && s['oneOf'].length > 0) {
     let count = 0
     for (const sub of s['oneOf']) {
-      if (matchesSchema(ctx, sub, value, depth, evalScope)) count++
+      if (matchesSchema(ctx, sub, value, depth, scope, evalScope)) count++
     }
     if (count !== 1) {
       fail(ctx, 'must match exactly one schema in oneOf', path)
@@ -1262,24 +1385,24 @@ export const interpret = (
 
   if ('not' in s) {
     // `not` produces no annotations — a passing inner schema means failure.
-    if (matchesSchema(ctx, s['not'], value, depth)) {
+    if (matchesSchema(ctx, s['not'], value, depth, scope)) {
       fail(ctx, 'must not match schema', path)
       if (ctx.failed) return
     }
   }
 
   if ('if' in s) {
-    if (matchesSchema(ctx, s['if'], value, depth, evalScope)) {
-      if ('then' in s) interpretInPlace(ctx, s['then'], value, path, evalScope, depth)
+    if (matchesSchema(ctx, s['if'], value, depth, scope, evalScope)) {
+      if ('then' in s) interpretInPlace(ctx, s['then'], value, path, evalScope, depth, scope)
     } else if ('else' in s) {
-      interpretInPlace(ctx, s['else'], value, path, evalScope, depth)
+      interpretInPlace(ctx, s['else'], value, path, evalScope, depth, scope)
     }
   }
 
   // `unevaluatedProperties` / `unevaluatedItems` (2020-12) run last: every other
   // keyword above has recorded what it evaluated into `evalScope`, so these act
   // on exactly what is left over.
-  if (nodeUnevaluated && evalScope) interpretUnevaluated(ctx, s, value, path, evalScope, depth)
+  if (nodeUnevaluated && evalScope) interpretUnevaluated(ctx, s, value, path, evalScope, depth, scope)
 }
 
 /**
@@ -1295,6 +1418,7 @@ const interpretUnevaluated = (
   path: string,
   evalScope: Evaluation,
   depth: number,
+  scope: DynamicScope,
 ): void => {
   if ('unevaluatedProperties' in s && typeof value === 'object' && value !== null && !Array.isArray(value)) {
     const up = s['unevaluatedProperties']
@@ -1305,7 +1429,7 @@ const interpretUnevaluated = (
         if (up === false) {
           fail(ctx, 'must NOT have unevaluated properties', childPath(ctx, path, k))
         } else if (up !== true && isPlainObject(up)) {
-          interpret(ctx, up, obj[k], childPath(ctx, path, k), null, depth + 1)
+          interpret(ctx, up, obj[k], childPath(ctx, path, k), null, depth + 1, scope)
         }
         evalScope.props.add(k)
         if (ctx.failed) return
@@ -1323,7 +1447,7 @@ const interpretUnevaluated = (
         if (ui === false) {
           fail(ctx, 'must NOT have unevaluated items', childPath(ctx, path, i))
         } else if (ui !== true && isPlainObject(ui)) {
-          interpret(ctx, ui, arr[i], childPath(ctx, path, i), null, depth + 1)
+          interpret(ctx, ui, arr[i], childPath(ctx, path, i), null, depth + 1, scope)
         }
         evalScope.items.add(i)
         if (ctx.failed) return
