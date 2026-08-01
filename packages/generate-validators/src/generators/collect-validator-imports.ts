@@ -1,8 +1,9 @@
 import { refToFilename } from '@amritk/helpers/ref-to-filename'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
-import { hasRef } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
+import { collectEmittedRefs } from './collect-emitted-refs'
 
 /**
  * Options for controlling how validator imports are collected.
@@ -48,68 +49,6 @@ const canonicalFilename = (ref: string): string => {
 }
 
 /**
- * Recursively walks a schema and yields every `$ref` the validator emitter can
- * turn into a `validateX(...)` call, in traversal order. The emitter recurses
- * into far more than properties/items/additionalProperties/top-level
- * combinators: it also delegates for `patternProperties`, `propertyNames`,
- * `if`/`then`/`else`, `contains`, `prefixItems`, `dependentSchemas`, `not`, and
- * objects nested inside any combinator branch. A `$ref` reached by *any* of those
- * paths must become an import, or the generated file references an undefined
- * `validateX`. (Mirrors the parsers package's `collect-imports` traversal.)
- */
-const collectDirectRefs = (value: unknown, refs: string[] = []): string[] => {
-  if (typeof value !== 'object' || value === null) return refs
-
-  if (Array.isArray(value)) {
-    for (const item of value) collectDirectRefs(item, refs)
-    return refs
-  }
-
-  const schema = value as Record<string, unknown>
-
-  // A `$ref` is a leaf: the emitter delegates the whole value to the referenced
-  // validator, so record the ref and do not descend past it.
-  if (hasRef(schema)) {
-    refs.push(schema.$ref as string)
-    return refs
-  }
-
-  // Every keyword whose subschema(s) the emitter recurses into. `properties` and
-  // `patternProperties` hold subschemas as object *values*; the combinator/tuple
-  // keywords hold them in arrays; the rest are single subschemas. We deliberately
-  // do NOT descend into `$defs`/`definitions` — those are split into their own
-  // generated files, not inlined by this validator. `collectDirectRefs`
-  // self-guards on non-objects, so a keyword that is a boolean or missing is a
-  // harmless no-op.
-  // `dependencies` (draft-07) is dual-form: a string array (dependentRequired) or
-  // a subschema (dependentSchemas). The emitter delegates the schema form via
-  // `validateX`, so a `$ref` inside it must be imported; the string-array form is
-  // a harmless no-op here (its values are strings, not schemas).
-  const subSchemaMaps = ['properties', 'patternProperties', 'dependentSchemas', 'dependencies']
-  for (const mapKey of subSchemaMaps) {
-    const map = schema[mapKey]
-    if (typeof map === 'object' && map !== null && !Array.isArray(map)) {
-      for (const sub of Object.values(map)) collectDirectRefs(sub, refs)
-    }
-  }
-
-  const singleSubSchemas = ['items', 'additionalProperties', 'propertyNames', 'contains', 'if', 'then', 'else', 'not']
-  for (const key of singleSubSchemas) {
-    if (key in schema) collectDirectRefs(schema[key], refs)
-  }
-
-  const arraySubSchemas = ['oneOf', 'anyOf', 'allOf', 'prefixItems']
-  for (const key of arraySubSchemas) {
-    const arr = schema[key]
-    if (Array.isArray(arr)) {
-      for (const sub of arr) collectDirectRefs(sub, refs)
-    }
-  }
-
-  return refs
-}
-
-/**
  * Collects import statements for all $ref dependencies of a schema.
  * Each import brings in both the generated TypeScript type and validator function.
  *
@@ -125,7 +64,7 @@ export const collectValidatorImports = (schema: JSONSchema, options?: CollectVal
   const rootSchema = options?.rootSchema
   const typeSuffix = options?.typeSuffix ?? ''
 
-  const refs = collectDirectRefs(schema)
+  const refs = collectEmittedRefs(schema)
   const seen = new Set<string>()
   const imports: string[] = []
 

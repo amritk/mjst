@@ -35,8 +35,16 @@ import {
   isObjectSchema,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
+import {
+  maxLengthFailExpr,
+  maxLengthPassExpr,
+  minLengthFailExpr,
+  minLengthPassExpr,
+} from '@amritk/helpers/string-length-check'
 import { unknownKeyCheck } from '@amritk/helpers/unknown-key-check'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
+import { assertGeneratableRefs } from './assert-generatable-refs'
 
 /**
  * Derives the validator function name from a type name.
@@ -164,6 +172,15 @@ const enumMembershipExpr = (values: unknown[], acc: string): string => {
   return `(${parts.join(' || ')})`
 }
 
+/**
+ * What a `false` subschema reports when it is reached.
+ *
+ * `false` is the schema no instance satisfies, so arriving at it *is* the
+ * failure — there is nothing more specific to say about the value. The wording
+ * is Ajv's, which is the phrasing most people will already have seen for this.
+ */
+const FALSE_SCHEMA_MESSAGE = 'boolean schema is false'
+
 const SCALAR_ITEM_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'null'])
 
 /**
@@ -232,6 +249,20 @@ const wrongTypeCondition = (accessor: string, type: string): string => {
  * required-presence check. A multi-type is validated as the *disjunction* of its
  * per-type checks (the value must match at least one).
  */
+/**
+ * True when a schema *declares* itself an object — a literal `type: "object"`.
+ *
+ * Deliberately narrower than `isObjectSchema`, which also answers true for a
+ * schema that merely carries `properties`. Those are not the same claim: in JSON
+ * Schema `{ "properties": { … } }` says nothing at all about a string or a
+ * number, it only describes what an object must look like *if* the instance is
+ * one. Routing on the declared type keeps the object fast path (the flat guard,
+ * the hoisted known-key sets) for schemas that really mean "this is an object",
+ * and sends everything else through the shared runtime-guarded emitters, where a
+ * non-object is ignored instead of rejected.
+ */
+const declaresObjectType = (schema: JSONSchema): boolean => hasType(schema) && schema.type === 'object'
+
 const getTypeArray = (schema: JSONSchema): string[] | null => {
   if (!isSchemaObject(schema) || !('type' in schema) || !Array.isArray(schema.type)) return null
   return schema.type as string[]
@@ -368,6 +399,31 @@ const generatePropertyChecks = (
   suffix: string,
   ctx: NestingContext,
 ): string[] => {
+  // A `false` property schema says the key may not appear at all, and it used to
+  // emit nothing — so `{ properties: { b: false } }` accepted `{ "b": 1 }`. The
+  // check only needs the key's *presence*, never a read of its value, so it is
+  // built here rather than in the per-property emitter below. When the key is
+  // `required` as well the object is unsatisfiable: absent fails `required`,
+  // present fails `false`.
+  if (propSchema === false) {
+    const path = `\`${ctx.pathPrefix}/${pointerSegment(key)}\``
+    const parentPath = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
+    if (isRequired) {
+      return [
+        `  if (${missingCheck(ctx.objVar, key)}) {`,
+        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+        `  } else {`,
+        `    errors.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`,
+        `  }`,
+      ]
+    }
+    return [
+      `  if (${hasOwnCheck(ctx.objVar, key)}) {`,
+      `    errors.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`,
+      `  }`,
+    ]
+  }
+
   const lines = generatePropertyCheckLines(key, propSchema, isRequired, suffix, ctx)
   if (lines.length === 0 || !PROTOTYPE_MEMBERS.has(key)) return lines
   return [`  const ${protoLocalName(key, ctx.depth)} = ${propertyRead(ctx.objVar, key)}`, ...lines]
@@ -386,9 +442,8 @@ const generatePropertyCheckLines = (
 ): string[] => {
   if (!isSchemaObject(propSchema)) {
     // A boolean `true` (accept-anything) schema carries no shape checks, but a
-    // required key must still be present. `false` never validates a present value,
-    // which the strict-key / additionalProperties path handles; here we only need
-    // to enforce presence for `true`.
+    // required key must still be present. `false` never gets here —
+    // {@link generatePropertyChecks} handles it before this point.
     if (isRequired && propSchema === true) {
       const parentPath = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
       return [
@@ -661,13 +716,20 @@ const generateConstraintChecks = (
       lines.push(`    errors.push({ message: ${msg}, path: ${path} })`)
       lines.push(`  }`)
     }
+    // Lengths are Unicode *code point* counts, not UTF-16 code units, so both
+    // bounds go through the shared `string-length-check` emitter. A bare
+    // `.length` counted `"💩"` as two characters — accepting it against
+    // `minLength: 2` and rejecting `"💩💩"` against `maxLength: 2`, both of which
+    // contradict Ajv and the runtime interpreter. The emitted expression keeps
+    // `.length` as its first, short-circuiting term, so the scan is only paid by
+    // the strings whose answer it could change.
     if (hasMinLength(propSchema)) {
-      lines.push(`  if (typeof ${raw} === 'string' && ${raw}.length < ${propSchema.minLength}) {`)
+      lines.push(`  if (typeof ${raw} === 'string' && ${minLengthFailExpr(raw, propSchema.minLength)}) {`)
       lines.push(`    errors.push({ message: 'must have at least ${propSchema.minLength} characters', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasMaxLength(propSchema)) {
-      lines.push(`  if (typeof ${raw} === 'string' && ${raw}.length > ${propSchema.maxLength}) {`)
+      lines.push(`  if (typeof ${raw} === 'string' && ${maxLengthFailExpr(raw, propSchema.maxLength)}) {`)
       lines.push(`    errors.push({ message: 'must have at most ${propSchema.maxLength} characters', path: ${path} })`)
       lines.push(`  }`)
     }
@@ -767,7 +829,7 @@ const generateConstraintChecks = (
     hasMinItems(propSchema) ||
     hasMaxItems(propSchema) ||
     (hasUniqueItems(propSchema) && propSchema.uniqueItems === true) ||
-    isSchemaObject(sp['contains'] as JSONSchema) ||
+    'contains' in sp ||
     Array.isArray(sp['prefixItems']) ||
     (sp['items'] === false && !Array.isArray(sp['prefixItems']))
   ) {
@@ -800,8 +862,10 @@ const generateConstraintChecks = (
 
     // `contains` — at least `minContains` (default 1) and at most `maxContains`
     // items must match the subschema. `minContains: 0` makes any array (even
-    // empty) satisfy the lower bound.
-    if (isSchemaObject(sp['contains'] as JSONSchema)) {
+    // empty) satisfy the lower bound. A boolean `contains` counts too:
+    // `contains: true` matches every item (so only an empty array fails) and
+    // `contains: false` matches none (so every array fails).
+    if ('contains' in sp) {
       const min = typeof sp['minContains'] === 'number' ? sp['minContains'] : 1
       const max = typeof sp['maxContains'] === 'number' ? (sp['maxContains'] as number) : undefined
       const matchExpr = generateMatchesExpr('_c', sp['contains'] as JSONSchema, suffix, ctx)
@@ -873,8 +937,19 @@ const generateValueChecks = (
   ctx: NestingContext,
   required = false,
 ): string[] => {
-  if (!isSchemaObject(propSchema)) return []
   const lines: string[] = []
+
+  // `false` rejects every instance, so a value that reaches this position is
+  // invalid simply by being there. Without this an `allOf: [false]`, a
+  // `then: false`, or a `false` behind `patternProperties` emitted no check at
+  // all and the branch that should have failed the instance passed it. `true`
+  // (and a bare `{}`) accepts everything and falls through to the `[]` below.
+  if (propSchema === false) {
+    const report = `errors.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`
+    if (required) return [`  ${report}`]
+    return [`  if (${raw} !== undefined) {`, `    ${report}`, `  }`]
+  }
+  if (!isSchemaObject(propSchema)) return []
 
   // Optional values skip validation when absent, so their leaf checks are
   // `!== undefined`-guarded. Array items are unconditionally present — a sparse
@@ -936,6 +1011,26 @@ const generateValueChecks = (
     if (wrongType) {
       lines.push(`  if (${presence}(${wrongType})) {`)
       lines.push(`    errors.push({ message: 'must be ${typLabel}', path: ${path} })`)
+      lines.push(`  }`)
+    }
+  }
+
+  // Multi-type subschema (array `type`, e.g. `["integer","boolean"]`). `hasType`
+  // only recognises a *string* `type`, so this used to emit nothing — and an
+  // empty check list is how {@link generateMatchesExpr} spells "matches
+  // everything", which made `{ not: { type: ["integer","boolean"] } }` reject
+  // every instance. The value is valid when it matches ANY listed type.
+  const typeArray = getTypeArray(propSchema)
+  if (typeArray) {
+    const allWrong = typeArray
+      .map((t) => wrongTypeCondition(raw, t))
+      .filter((c) => c !== '')
+      .map((c) => `(${c})`)
+      .join(' && ')
+    if (allWrong) {
+      const label = typeArray.map((t) => typeofString(t)).join(' or ')
+      lines.push(`  if (${presence}(${allWrong})) {`)
+      lines.push(`    errors.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${path} })`)
       lines.push(`  }`)
     }
   }
@@ -1155,7 +1250,7 @@ const generateInlineObjectChecks = (
   innerLines.push(...generateDependentSchemasChecks(propSchema, suffix, child))
   innerLines.push(...generateDependenciesChecks(propSchema, suffix, child))
   innerLines.push(...generateMinMaxPropertiesChecks(propSchema, child))
-  if (hasPropertyNames(propSchema) && isSchemaObject(propSchema.propertyNames)) {
+  if (hasPropertyNames(propSchema)) {
     innerLines.push(...generatePropertyNameChecks(propSchema.propertyNames, suffix, child))
   }
 
@@ -1179,11 +1274,10 @@ const generateInlineObjectChecks = (
  * interpreter, which runs `matchesSchema(nameSchema, key)` per key, so a
  * subschema carrying a combinator, `type`, `multipleOf`, etc. is enforced too.
  * A key is always a present string, so the value checks run in `required` mode
- * (no `!== undefined` guard).
+ * (no `!== undefined` guard) — which is also what makes a `propertyNames: false`
+ * reject every key rather than emit nothing.
  */
 const generatePropertyNameChecks = (nameSchema: JSONSchema, suffix: string, ctx: NestingContext): string[] => {
-  if (!isSchemaObject(nameSchema)) return []
-
   const at = `\`${ctx.pathPrefix}/\${_name}\``
   const nameCtx: NestingContext = {
     objVar: ctx.objVar,
@@ -1560,7 +1654,7 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: s
 
   // propertyNames — every key (always a string) must satisfy the subschema. This
   // mirrors the interpreter, which runs the full subschema against each key.
-  if (hasPropertyNames(schema) && isSchemaObject(schema.propertyNames)) {
+  if (hasPropertyNames(schema)) {
     propertyLines.push(...generatePropertyNameChecks(schema.propertyNames, suffix, ctx))
   }
 
@@ -1687,8 +1781,10 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
     case 'string': {
       const parts = [`typeof ${acc} === 'string'`]
       if (hasPattern(schema)) parts.push(`/${escapeRegexPattern(schema.pattern)}/.test(${acc})`)
-      if (hasMinLength(schema)) parts.push(`!(${acc}.length < ${schema.minLength})`)
-      if (hasMaxLength(schema)) parts.push(`!(${acc}.length > ${schema.maxLength})`)
+      // The exact negations of the validator's length conditions, from the same
+      // `string-length-check` emitter, so the guard counts code points too.
+      if (hasMinLength(schema)) parts.push(minLengthPassExpr(acc, schema.minLength))
+      if (hasMaxLength(schema)) parts.push(maxLengthPassExpr(acc, schema.maxLength))
       return parts.join(' && ')
     }
     case 'number':
@@ -1847,7 +1943,13 @@ export const generateBooleanGuard = (schema: JSONSchema, typeName: string, _suff
   // guard would reject `null` while the validator accepts it.
   const rewritten = rewriteNullable(schema) as JSONSchema
 
-  if (isObjectSchema(rewritten)) {
+  // Only a schema that declares `type: "object"` gets the flat object guard. A
+  // type-less schema carrying `properties` *ignores* non-objects — so does
+  // `validateX` — and it can also carry keywords from other families alongside,
+  // which the object parts do not model. Both would make the guard disagree with
+  // the validator, and a guard that disagrees is worse than no guard, so those
+  // fall back to calling `validateX`.
+  if (declaresObjectType(rewritten)) {
     const parts = booleanObjectParts(rewritten, 'input', 'obj')
     if (parts === null) return fallback
     return [
@@ -1872,7 +1974,17 @@ export const generateBooleanGuard = (schema: JSONSchema, typeName: string, _suff
 const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: string): string => {
   const vName = validatorName(typeName)
 
+  // A boolean root. `false` is the schema no instance satisfies — it used to
+  // share the `true` branch and accept everything, which is the one direction a
+  // validator must never be wrong in. `true` really does accept everything.
   if (!isSchemaObject(schema)) {
+    if (schema === false) {
+      return [
+        `export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`,
+        `  return { valid: false, errors: [{ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: _path }] }`,
+        `}`,
+      ].join('\n')
+    }
     return [`export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`, `  return true`, `}`].join(
       '\n',
     )
@@ -1969,7 +2081,6 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
         checks.push(`    errors.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${rootPath} })`)
         checks.push(`  }`)
       }
-      checks.push(...generateConstraintChecks('', 'input', rootPath, schema, suffix, ctx))
     } else if (hasType(schema)) {
       const t = schema.type as string
       const wrongType = wrongTypeCondition('input', t)
@@ -1978,9 +2089,15 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
         checks.push(`    errors.push({ message: 'must be ${typeofString(t)}', path: ${rootPath} })`)
         checks.push(`  }`)
       }
-      checks.push(...generateConstraintChecks('', 'input', rootPath, schema, suffix, ctx))
     }
 
+    // Constraint checks run whether or not a `type` was declared — they gate on
+    // keyword presence and carry their own runtime-type guards. Running them only
+    // under a declared `type` is what let
+    // `{ allOf: [{ prefixItems: [...] }], items: {...} }` drop its `items`
+    // entirely: the schema has a combinator and no `type`, so nothing outside the
+    // `allOf` was ever emitted.
+    checks.push(...generateConstraintChecks('', 'input', rootPath, schema, suffix, ctx))
     checks.push(...generateCombinatorChecks('', 'input', rootPath, schema, suffix, ctx))
     const body = checks.join('\n').replaceAll('errors.push(', '(errors ??= []).push(')
     const hoistedBlock = ctx.hoisted.length > 0 ? `${ctx.hoisted.join('\n')}\n\n` : ''
@@ -2072,9 +2189,32 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
     ].join('\n')
   }
 
-  return [`export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`, `  return true`, `}`].join(
-    '\n',
-  )
+  // A schema with no `type` at all. It still constrains things: in JSON Schema a
+  // keyword applies to the instances of *its own family* and ignores every other
+  // one, so `{ minLength: 2 }` rejects `"a"` while accepting `42`, `[]` and
+  // `null`. The generator used to hang every check off the declared `type` and so
+  // emitted `validateRoot = () => true` here — the quietest way to be wrong, and
+  // the single biggest gap in its conformance. The shared constraint emitter
+  // already gates on keyword presence and guards each check with a runtime type
+  // test (`typeof x === 'string'`, `Array.isArray(x)`, the object block's own
+  // shape check), which is exactly the semantics needed, so hand it the whole
+  // schema and let it decide what applies.
+  const typelessCtx = createRootContext()
+  const typelessChecks = generateConstraintChecks('', 'input', '`${_path}`', schema, suffix, typelessCtx)
+  if (typelessChecks.length === 0) {
+    return [`export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`, `  return true`, `}`].join(
+      '\n',
+    )
+  }
+
+  const typelessHoisted = typelessCtx.hoisted.length > 0 ? `${typelessCtx.hoisted.join('\n')}\n\n` : ''
+  return [
+    `${typelessHoisted}export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+    `  let errors: ValidationError[] | undefined`,
+    typelessChecks.join('\n').replaceAll('errors.push(', '(errors ??= []).push('),
+    `  return errors !== undefined ? { valid: false, errors } : true`,
+    `}`,
+  ].join('\n')
 }
 
 /**
@@ -2227,12 +2367,13 @@ const rewriteNullable = (node: unknown): unknown => {
  */
 export const generateValidatorFunction = (schema: JSONSchema, typeName: string, suffix = ''): string => {
   assertNoUnsupportedKeywords(schema, typeName)
+  assertGeneratableRefs(schema, typeName)
 
   // Fold OpenAPI `nullable: true` into the `anyOf` form the generator already
   // enforces, so the emitted checks match the interpreter's null short-circuit.
   const rewritten = rewriteNullable(schema) as JSONSchema
 
-  if (isObjectSchema(rewritten)) {
+  if (declaresObjectType(rewritten)) {
     return generateObjectValidator(rewritten, typeName, suffix)
   }
 
