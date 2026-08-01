@@ -95,6 +95,39 @@ describe('resolve-refs-from-file', () => {
     })
   })
 
+  it('leaves a $ref-shaped object in instance data alone, and never loads what it names', async () => {
+    // `enum` holds values: this one is an object that happens to have a `$ref`
+    // key. Inlining it would change the schema, and fetching the document it
+    // names would turn a literal into a network request.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    writeFileSync(join(dir, 'pet.json'), JSON.stringify({ Pet: { type: 'object' } }))
+    writeFileSync(
+      join(dir, 'api.json'),
+      JSON.stringify({
+        properties: { kind: { enum: [{ $ref: './pet.json#/Pet' }, { $ref: 'https://example.com/s.json#/Foo' }] } },
+      }),
+    )
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    expect(errors).toEqual([])
+    expect(resolved).toEqual({
+      properties: { kind: { enum: [{ $ref: './pet.json#/Pet' }, { $ref: 'https://example.com/s.json#/Foo' }] } },
+    })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('resolves a cross-file $ref under a definition named after a value keyword', async () => {
+    // Under `$defs` the key `enum` is a name, so what it holds is still a schema.
+    writeFileSync(join(dir, 'pet.json'), JSON.stringify({ Pet: { type: 'object' } }))
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ $defs: { enum: { $ref: './pet.json#/Pet' } } }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    expect(errors).toEqual([])
+    expect(resolved).toEqual({ $defs: { enum: { type: 'object' } } })
+  })
+
   it('omits the origin map unless trackOrigins is set', async () => {
     writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: '#/b' }, b: { value: 1 } }))
 

@@ -11,22 +11,8 @@ import type { ExpectedFailures } from '../../../fixtures/json-schema-test-suite/
  * Keys are case ids — `<file>/<group description>/<test description>` — or a
  * `/`-bounded prefix of one. Look one up in
  * `fixtures/json-schema-test-suite/draft2020-12/<file>`.
+ *
+ * Empty is the goal, and currently the truth: every reference-carrying case in
+ * the suite survives resolution unchanged.
  */
-export const EXPECTED_FAILURES: ExpectedFailures = {
-  // ---------------------------------------------------------------------------
-  // `$ref` in a value position
-  //
-  // `{ "enum": [ { "$ref": "#/$defs/a_string" } ] }` references nothing: `enum`
-  // holds *instances*, and one of them happens to be an object with a `$ref` key.
-  // The resolver walks the document structurally, so it inlines that object and
-  // turns "the enum containing `{"$ref": …}`" into "the enum containing
-  // `{"type": "string"}`" — a different document in both directions. The suite
-  // carries this group under exactly that name.
-  //
-  // Closing it means knowing which keywords take schemas and which take values
-  // (`enum`, `const`, `default`, `examples`) rather than treating every object
-  // with a `$ref` key as a reference.
-  // ---------------------------------------------------------------------------
-  'ref.json/naive replacement of $ref with its destination is not correct':
-    'value position: a `$ref`-shaped object inside `enum` is data, not a reference, and is inlined anyway',
-}
+export const EXPECTED_FAILURES: ExpectedFailures = {}

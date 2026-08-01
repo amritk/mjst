@@ -1,3 +1,4 @@
+import { childRole, type NodeRole } from './child-role'
 import { getByPointer, pointerToPath } from './get-by-pointer'
 import { DEFAULT_MAX_DEPTH } from './max-depth'
 import type { RefKeyword } from './reference'
@@ -59,10 +60,6 @@ export type ResourceRegistry = {
  * a real `$id`.
  */
 export const SYNTHETIC_BASE = 'https://mjst-internal.invalid/document'
-
-// Keywords whose values are data, not subschemas — an `$id`/`$anchor` key
-// inside an enum member or example value is instance data, not a declaration.
-const NON_SCHEMA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples'])
 
 /** `new URL(ref, base).href`, or `undefined` when the pair does not parse. */
 export const resolveUri = (ref: string, base: string): string | undefined => {
@@ -138,19 +135,22 @@ export const buildResourceRegistry = (
   // resolution even started. Truncating here is safe rather than silent: the
   // resolver walks at least as deep as this does on the same path, so it hits
   // its own limit and records the error the caller sees.
-  const walk = (node: unknown, base: string, pointer: JsonPath, depth: number): void => {
-    if (node === null || typeof node !== 'object' || depth > maxDepth) return
+  // `role` keeps the walk from reading declarations out of data: an `$id` or
+  // `$anchor` key inside an enum member or a default value is part of that
+  // value, and a definition *named* `$id` under `$defs` is a name, not one
+  // either (see `child-role.ts`).
+  const walk = (node: unknown, base: string, pointer: JsonPath, depth: number, role: NodeRole): void => {
+    if (node === null || typeof node !== 'object' || depth > maxDepth || role === 'value') return
     if (Array.isArray(node)) {
-      for (let i = 0; i < node.length; i++) walk(node[i], base, [...pointer, i], depth + 1)
+      for (let i = 0; i < node.length; i++) walk(node[i], base, [...pointer, i], depth + 1, childRole(role, i))
       return
     }
     const record = node as Record<string, unknown>
-    const nodeBase = baseAfterId(record, base)
+    const nodeBase = role === 'schemaMap' ? base : baseAfterId(record, base)
     if (nodeBase !== base && !resources.has(nodeBase)) resources.set(nodeBase, { value: node, pointer })
-    registerAnchors(record, nodeBase, pointer)
+    if (role !== 'schemaMap') registerAnchors(record, nodeBase, pointer)
     for (const key of Object.keys(record)) {
-      if (NON_SCHEMA_KEYWORDS.has(key)) continue
-      walk(record[key], nodeBase, [...pointer, key], depth + 1)
+      walk(record[key], nodeBase, [...pointer, key], depth + 1, childRole(role, key))
     }
   }
 
@@ -162,7 +162,7 @@ export const buildResourceRegistry = (
   if (!resources.has(withoutFragment(initialBase))) {
     resources.set(withoutFragment(initialBase), { value: root, pointer: [] })
   }
-  walk(root, initialBase, [], 0)
+  walk(root, initialBase, [], 0, 'schema')
 
   return { resources, staticAnchors, dynamicAnchors, rootBase, root }
 }

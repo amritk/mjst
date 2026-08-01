@@ -1,7 +1,9 @@
+import { childRole, type NodeRole } from './child-role'
 import { pointerToPath } from './get-by-pointer'
 import { DEFAULT_MAX_DEPTH, depthLimitError } from './max-depth'
 import { type ResolvedTarget, readReference, resolveFragment } from './reference'
 import { baseOfNode, buildResourceRegistry, type ResourceRegistry, resolveRefInScope } from './resource-registry'
+import { roleAtPath } from './role-at-path'
 import { assignKey } from './safe-assign'
 import type { JsonPath, OriginMap, ResolveError, ResolveResult } from './types'
 
@@ -59,6 +61,10 @@ type DepthLimits = { maxDepth: number; reported: boolean }
  *
  * `base` is the current `$id` base URI, used to scope anchor lookups and to
  * match refs against embedded resources (see `resource-registry.ts`).
+ *
+ * `role` is where the node sits in the vocabulary (see `child-role.ts`): only a
+ * schema position carries references, so a `$ref` inside an `enum` member stays
+ * the data it is.
  */
 const resolveInternal = (
   node: unknown,
@@ -70,8 +76,13 @@ const resolveInternal = (
   errors: ResolveError[],
   limits: DepthLimits,
   depth: number,
+  role: NodeRole,
 ): unknown => {
   if (node === null || typeof node !== 'object') return node
+  // Instance data: `enum`, `const`, `default` and `examples` hold values, so
+  // whatever keys they contain are part of the value. Hand the subtree back
+  // untouched rather than reading a `$ref` (or an `$id`) out of a literal.
+  if (role === 'value') return node
   if (depth > limits.maxDepth) {
     // Past the limit we hand the subtree back untouched instead of unwinding the
     // stack with a RangeError. Nothing is lost — the branch simply keeps its
@@ -85,13 +96,19 @@ const resolveInternal = (
     return node
   }
   if (Array.isArray(node)) {
-    return node.map((item) => resolveInternal(item, root, registry, base, cache, origins, errors, limits, depth + 1))
+    return node.map((item, index) =>
+      resolveInternal(item, root, registry, base, cache, origins, errors, limits, depth + 1, childRole(role, index)),
+    )
   }
 
   const obj = node as Record<string, unknown>
+  // A map of author-chosen names to schemas (`properties`, `$defs`, …) is not
+  // itself a schema: a property named `$ref` or `$id` is a property name, so the
+  // map's own keys are never read as keywords.
+  const isSchema = role !== 'schemaMap'
   // A subschema's `$id` re-bases everything inside it, its own `$ref` included.
-  const nodeBase = typeof obj['$id'] === 'string' ? baseOfNode(registry, obj, base) : base
-  const reference = readReference(obj)
+  const nodeBase = isSchema && typeof obj['$id'] === 'string' ? baseOfNode(registry, obj, base) : base
+  const reference = isSchema ? readReference(obj) : undefined
   if (reference) {
     const { keyword, value: ref } = reference
 
@@ -153,7 +170,18 @@ const resolveInternal = (
           key,
           key === keyword
             ? obj[key]
-            : resolveInternal(obj[key], root, registry, nodeBase, cache, origins, errors, limits, depth + 1),
+            : resolveInternal(
+                obj[key],
+                root,
+                registry,
+                nodeBase,
+                cache,
+                origins,
+                errors,
+                limits,
+                depth + 1,
+                childRole(role, key),
+              ),
         )
       }
       return kept
@@ -176,7 +204,20 @@ const resolveInternal = (
         return obj
       }
       pointer = found.pointer
-      target = resolveInternal(found.value, root, registry, targetBase, cache, origins, errors, limits, depth + 1)
+      // The target is walked with the role it has where it is *defined*, so the
+      // same ref resolves the same way whoever points at it (see roleAtPath).
+      target = resolveInternal(
+        found.value,
+        root,
+        registry,
+        targetBase,
+        cache,
+        origins,
+        errors,
+        limits,
+        depth + 1,
+        roleAtPath(pointer),
+      )
       cache.set(cacheKey, { target, pointer })
       // Stamp the inlined node with the path it was defined at (see resolveAt).
       // First-write-wins so the deepest definition stamps before any outer ref that
@@ -193,7 +234,18 @@ const resolveInternal = (
       assignKey(
         siblings,
         key,
-        resolveInternal(obj[key], root, registry, nodeBase, cache, origins, errors, limits, depth + 1),
+        resolveInternal(
+          obj[key],
+          root,
+          registry,
+          nodeBase,
+          cache,
+          origins,
+          errors,
+          limits,
+          depth + 1,
+          childRole(role, key),
+        ),
       )
     }
 
@@ -231,7 +283,18 @@ const resolveInternal = (
     assignKey(
       result,
       key,
-      resolveInternal(obj[key], root, registry, nodeBase, cache, origins, errors, limits, depth + 1),
+      resolveInternal(
+        obj[key],
+        root,
+        registry,
+        nodeBase,
+        cache,
+        origins,
+        errors,
+        limits,
+        depth + 1,
+        childRole(role, key),
+      ),
     )
   }
   return result
@@ -246,6 +309,10 @@ const resolveInternal = (
  * broken by keeping the original reference node, so recursive schemas keep
  * their recursive branch.
  *
+ * Only references in *schema* positions are inlined: a `$ref`-shaped object
+ * inside `enum`, `const`, `default` or `examples` is instance data and is kept
+ * verbatim (see `child-role.ts`).
+ *
  * @example
  * ```ts
  * const { resolved, errors } = resolveRefs(document)
@@ -259,6 +326,18 @@ export const resolveRefs = (data: unknown, options: ResolveRefsOptions = {}): Re
   const errors: ResolveError[] = []
   const limits: DepthLimits = { maxDepth: options.maxDepth ?? DEFAULT_MAX_DEPTH, reported: false }
   const registry = buildResourceRegistry(data, undefined, limits.maxDepth)
-  const resolved = resolveInternal(data, data, registry, registry.rootBase, new Map(), origins, errors, limits, 0)
+  // The document root is a schema; every other role follows from its keys.
+  const resolved = resolveInternal(
+    data,
+    data,
+    registry,
+    registry.rootBase,
+    new Map(),
+    origins,
+    errors,
+    limits,
+    0,
+    'schema',
+  )
   return origins ? { resolved, errors, origins } : { resolved, errors }
 }

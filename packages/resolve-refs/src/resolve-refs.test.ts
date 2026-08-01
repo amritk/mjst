@@ -189,6 +189,110 @@ describe('resolve-refs', () => {
     expect(resolved).toMatchObject({ a: { b: { c: { type: 'string' } } } })
   })
 
+  it('leaves a $ref-shaped object inside enum alone', () => {
+    // The suite calls this one "naive replacement of $ref with its destination
+    // is not correct": `enum` holds instances, and this instance happens to be
+    // an object with a `$ref` key. Inlining it would change the schema from
+    // "matches the object `{$ref: …}`" to "matches the object `{type: string}`".
+    const { resolved, errors } = resolveRefs({
+      $defs: { a_string: { type: 'string' } },
+      enum: [{ $ref: '#/$defs/a_string' }],
+    })
+
+    expect(errors).toEqual([])
+    expect(resolved).toEqual({
+      $defs: { a_string: { type: 'string' } },
+      enum: [{ $ref: '#/$defs/a_string' }],
+    })
+  })
+
+  it('leaves $ref-shaped objects inside const, default and examples alone', () => {
+    const value = { $ref: '#/$defs/a_string' }
+    const { resolved, errors } = resolveRefs({
+      $defs: { a_string: { type: 'string' } },
+      properties: {
+        a: { const: value },
+        b: { default: value },
+        c: { examples: [value] },
+      },
+    })
+
+    expect(errors).toEqual([])
+    expect(resolved).toMatchObject({
+      properties: { a: { const: value }, b: { default: value }, c: { examples: [value] } },
+    })
+  })
+
+  it('resolves a $ref that points into instance data by copying the data', () => {
+    // The target is a value, so it is inlined exactly as written — the `$ref`
+    // key inside it is part of the data, not another hop.
+    const { resolved, errors } = resolveRefs({
+      $defs: { sample: { const: { $ref: '#/$defs/a_string' } }, a_string: { type: 'string' } },
+      properties: { a: { $ref: '#/$defs/sample/const' } },
+    })
+
+    expect(errors).toEqual([])
+    expect(resolved).toMatchObject({ properties: { a: { $ref: '#/$defs/a_string' } } })
+  })
+
+  it('resolves a definition named after a value keyword', () => {
+    // The trap in the fix: under `$defs` the key `enum` is a name the author
+    // chose, so its value is still a schema and its refs still resolve.
+    const { resolved, errors } = resolveRefs({
+      $defs: { enum: { $ref: '#/$defs/a_string' }, a_string: { type: 'string' } },
+      properties: { a: { $ref: '#/$defs/enum' } },
+    })
+
+    expect(errors).toEqual([])
+    expect(resolved).toMatchObject({ properties: { a: { type: 'string' } }, $defs: { enum: { type: 'string' } } })
+  })
+
+  it('resolves a $ref inside a property named after a value keyword', () => {
+    const { resolved, errors } = resolveRefs({
+      $defs: { a_string: { type: 'string' } },
+      properties: { const: { $ref: '#/$defs/a_string' }, default: { $ref: '#/$defs/a_string' } },
+    })
+
+    expect(errors).toEqual([])
+    expect(resolved).toMatchObject({ properties: { const: { type: 'string' }, default: { type: 'string' } } })
+  })
+
+  it('treats a property named $ref as a property name, not a reference', () => {
+    // `properties` is keyed by property names, so `{"$ref": …}` here declares a
+    // property called `$ref` — the map itself is not a reference node.
+    const { resolved, errors } = resolveRefs({
+      $defs: { 'is-string': { type: 'string' } },
+      properties: { $ref: { $ref: '#/$defs/is-string' } },
+    })
+
+    expect(errors).toEqual([])
+    expect(resolved).toMatchObject({ properties: { $ref: { type: 'string' } } })
+  })
+
+  it('ignores an $id or $anchor that is part of a value', () => {
+    // An `$id` inside a default value is data: it must not register a resource
+    // that a ref could then bind to.
+    const { errors } = resolveRefs({
+      properties: { a: { default: { $id: 'https://example.com/fake', $anchor: 'fake' } } },
+      $defs: { b: { $ref: '#fake' } },
+    })
+
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.message).toMatch(/Cannot resolve internal \$ref "#fake"/)
+  })
+
+  it('keeps resolving inside unrecognized keywords', () => {
+    // Extension territory (OpenAPI, `x-` blocks) is not a vocabulary we model,
+    // so the structural walk there stays exactly as it was.
+    const { resolved, errors } = resolveRefs({
+      components: { schemas: { Pet: { enum: [{ $ref: '#/$defs/a_string' }] } } },
+      $defs: { a_string: { type: 'string' } },
+    })
+
+    expect(errors).toEqual([])
+    expect(resolved).toMatchObject({ components: { schemas: { Pet: { enum: [{ type: 'string' }] } } } })
+  })
+
   it('honors a caller-supplied maxDepth', () => {
     const { resolved, errors } = resolveRefs({ a: { b: { c: { d: 1 } } } }, { maxDepth: 2 })
 

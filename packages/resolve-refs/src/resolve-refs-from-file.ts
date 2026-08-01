@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve as resolvePath } from 'node:path'
 
 import { assertPublicHost } from './assert-public-host'
+import { childRole, type NodeRole } from './child-role'
 import { isContainedPath } from './is-contained-path'
 import { isPrivateHost } from './is-private-host'
 import { DEFAULT_MAX_DEPTH, depthLimitError } from './max-depth'
@@ -15,6 +16,7 @@ import {
   type ScopedTarget,
   SYNTHETIC_BASE,
 } from './resource-registry'
+import { roleAtPath } from './role-at-path'
 import { assignKey } from './safe-assign'
 import type { JsonPath, OriginMap, ResolveError, ResolveOptions, ResolveResult } from './types'
 
@@ -474,6 +476,10 @@ const TOTAL_TIMEOUT_MS = 60_000
  * `allowedRoots`), the limits on the resolve as a whole (`maxDocuments`,
  * `totalTimeoutMs`, `maxDepth`), and whether the session cache is used
  * (`cache`).
+ *
+ * Only references in *schema* positions are followed: a `$ref`-shaped object
+ * inside `enum`, `const`, `default` or `examples` is instance data, so it is
+ * kept verbatim and the document it names is never loaded (see `child-role.ts`).
  */
 export const resolveRefsFromFile = async (filename: string, options: ResolveOptions = {}): Promise<ResolveResult> => {
   const rootLocation = isRemote(filename) ? filename : resolvePath(filename)
@@ -532,22 +538,35 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
   /**
    * Collects the document parts of refs under `node` that are NOT `$id`-internal.
    * Stops at `maxDepth` like the resolve pass does — a subtree we refuse to
-   * resolve does not need its documents fetched either.
+   * resolve does not need its documents fetched either. Value positions are
+   * skipped for the same reason the resolve pass skips them: a `$ref` inside an
+   * `enum` member is data, and fetching the document it names would turn a
+   * literal into a network request.
    */
-  const collectRefTargets = (node: unknown, location: string, base: string, out: Set<string>, depth: number): void => {
-    if (node === null || typeof node !== 'object') return
+  const collectRefTargets = (
+    node: unknown,
+    location: string,
+    base: string,
+    out: Set<string>,
+    depth: number,
+    role: NodeRole,
+  ): void => {
+    if (node === null || typeof node !== 'object' || role === 'value') return
     if (depth > maxDepth) {
       reportDepthLimit()
       return
     }
     if (Array.isArray(node)) {
-      for (const item of node) collectRefTargets(item, location, base, out, depth + 1)
+      node.forEach((item, index) => {
+        collectRefTargets(item, location, base, out, depth + 1, childRole(role, index))
+      })
       return
     }
     const obj = node as Record<string, unknown>
     const registry = registryFor(location)
-    const nodeBase = typeof obj['$id'] === 'string' ? baseOfNode(registry, obj, base) : base
-    const reference = readReference(obj)
+    const isSchema = role !== 'schemaMap'
+    const nodeBase = isSchema && typeof obj['$id'] === 'string' ? baseOfNode(registry, obj, base) : base
+    const reference = isSchema ? readReference(obj) : undefined
     if (reference && reference.keyword !== '$recursiveRef') {
       const scoped = resolveRefInScope(registry, reference.keyword, reference.value, nodeBase)
       if (scoped === 'external') {
@@ -559,7 +578,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     // alongside the referenced schema (2020-12) and may carry their own refs.
     for (const key of Object.keys(obj)) {
       if (reference && key === reference.keyword) continue
-      collectRefTargets(obj[key], location, nodeBase, out, depth + 1)
+      collectRefTargets(obj[key], location, nodeBase, out, depth + 1, childRole(role, key))
     }
   }
 
@@ -585,7 +604,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     while (queue.length > 0) {
       const location = queue.shift() as string
       const out = new Set<string>()
-      collectRefTargets(docCache.get(location), location, registryFor(location).rootBase, out, 0)
+      collectRefTargets(docCache.get(location), location, registryFor(location).rootBase, out, 0, 'schema')
       for (const filePart of out) {
         const target = joinLocation(location, filePart)
         if (seen.has(target)) continue
@@ -635,10 +654,15 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
    * (`refCache`); the CYCLE sentinel short-circuits re-entrant resolution.
    *
    * `baseLocation` is the location of the document `node` belongs to; `base` is
-   * the current `$id` base URI within that document.
+   * the current `$id` base URI within that document; `role` is where the node
+   * sits in the vocabulary (see `child-role.ts`), which decides whether a `$ref`
+   * key here is a reference at all.
    */
-  const resolveAt = (node: unknown, baseLocation: string, base: string, depth: number): unknown => {
+  const resolveAt = (node: unknown, baseLocation: string, base: string, depth: number, role: NodeRole): unknown => {
     if (node === null || typeof node !== 'object') return node
+    // Instance data (`enum`, `const`, `default`, `examples`): a `$ref` key in
+    // here belongs to the value, so the subtree is handed back untouched.
+    if (role === 'value') return node
     if (depth > maxDepth) {
       // Past the limit we hand the subtree back untouched instead of unwinding
       // the stack with a RangeError. Nothing is lost — the branch simply keeps
@@ -647,12 +671,16 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       return node
     }
     if (Array.isArray(node)) {
-      return node.map((item) => resolveAt(item, baseLocation, base, depth + 1))
+      return node.map((item, index) => resolveAt(item, baseLocation, base, depth + 1, childRole(role, index)))
     }
     const obj = node as Record<string, unknown>
     const registry = registryFor(baseLocation)
-    const nodeBase = typeof obj['$id'] === 'string' ? baseOfNode(registry, obj, base) : base
-    const reference = readReference(obj)
+    // A map of author-chosen names to schemas (`properties`, `$defs`, …) is not
+    // itself a schema, so its keys are names — a property named `$ref` is a
+    // property, not a reference.
+    const isSchema = role !== 'schemaMap'
+    const nodeBase = isSchema && typeof obj['$id'] === 'string' ? baseOfNode(registry, obj, base) : base
+    const reference = isSchema ? readReference(obj) : undefined
     if (reference) {
       const { keyword, value } = reference
 
@@ -713,7 +741,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         const kept: Record<string, unknown> = {}
         for (const key of Object.keys(obj)) {
           if (key === keyword) continue
-          assignKey(kept, key, resolveAt(obj[key], baseLocation, nodeBase, depth + 1))
+          assignKey(kept, key, resolveAt(obj[key], baseLocation, nodeBase, depth + 1, childRole(role, key)))
         }
         // Always rewritten to a static `$ref`: the dynamic binding was already
         // decided when the cycle was entered.
@@ -752,7 +780,9 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
           }
         }
         pointer = found?.pointer ?? []
-        resolved = resolveAt(found?.value, targetLocation, targetBase, depth + 1)
+        // The target is walked with the role it has where it is *defined*, so a
+        // ref resolves the same way whoever points at it (see roleAtPath).
+        resolved = resolveAt(found?.value, targetLocation, targetBase, depth + 1, roleAtPath(pointer))
         refCache.set(cacheKey, { value: resolved, pointer })
         // Stamp the inlined node with where it was defined so a consumer can map a
         // resolved-tree node back to its source document/path. Only objects/arrays are
@@ -768,7 +798,9 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       const siblingKeys = Object.keys(obj).filter((key) => key !== keyword)
       if (siblingKeys.length === 0) return resolved
       const siblings: Record<string, unknown> = {}
-      for (const key of siblingKeys) assignKey(siblings, key, resolveAt(obj[key], baseLocation, nodeBase, depth + 1))
+      for (const key of siblingKeys) {
+        assignKey(siblings, key, resolveAt(obj[key], baseLocation, nodeBase, depth + 1, childRole(role, key)))
+      }
 
       // Annotation-only siblings (OpenAPI Reference Objects): inline the target
       // with the annotations overriding — never wrap in `allOf`, which is not
@@ -798,13 +830,14 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     }
     const result: Record<string, unknown> = {}
     for (const key of Object.keys(obj)) {
-      assignKey(result, key, resolveAt(obj[key], baseLocation, nodeBase, depth + 1))
+      assignKey(result, key, resolveAt(obj[key], baseLocation, nodeBase, depth + 1, childRole(role, key)))
     }
     return result
   }
 
   const rootRegistry = registryFor(rootLocation)
-  const resolved = resolveAt(docCache.get(rootLocation), rootLocation, rootRegistry.rootBase, 0)
+  // The document root is a schema; every other role follows from its keys.
+  const resolved = resolveAt(docCache.get(rootLocation), rootLocation, rootRegistry.rootBase, 0, 'schema')
 
   // Attach cross-document cycle targets under `$defs` so every `#/$defs/<name>`
   // ref emitted by the CYCLE branch resolves within the output document.
