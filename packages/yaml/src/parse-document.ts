@@ -143,11 +143,25 @@ const crossesLine = (src: string, from: number, to: number): boolean => {
   return false
 }
 
-/** Offset just past the next line break (or end of input). */
+/**
+ * Offset just past the next line break (or end of input).
+ *
+ * YAML 1.2 §5.4 defines `b-break ::= CR LF | CR | LF`, so a lone CR ends a line
+ * exactly like an LF does. Every other scanner in this file already treats CR as
+ * a break; this one used to look only for LF, which meant a CR-delimited
+ * document had all of its lines jumped over in one go — `a: 1\rb: 2\rc: 3\r`
+ * parsed to `{ a: 1 }` with no error at all, the worst failure mode a parser
+ * built for diagnostics can have. CR LF is consumed as a single break so a
+ * Windows document does not gain a phantom empty line between every pair.
+ */
 const nextLineStart = (src: string, from: number, len: number): number => {
   let i = from
-  while (i < len && src.charCodeAt(i) !== NL) i++
-  return i < len ? i + 1 : len
+  for (; i < len; i++) {
+    const c = src.charCodeAt(i)
+    if (c === NL) return i + 1
+    if (c === CR) return src.charCodeAt(i + 1) === NL ? i + 2 : i + 1
+  }
+  return len
 }
 
 /**
@@ -236,12 +250,14 @@ const finishLine = (state: State): void => {
 /**
  * Consumes to the next line only when the cursor is mid-line. Block collections
  * and block scalars already end parked at a line start; scalars, aliases, and
- * flow collections end mid-line and need flushing. The `prev char was \n` test
- * lets one helper serve every node kind.
+ * flow collections end mid-line and need flushing. The `prev char was a line
+ * break` test lets one helper serve every node kind — and it has to accept a
+ * lone CR too, or a CR-delimited document flushes a line it already consumed.
  */
 const finishLineIfMidLine = (state: State): void => {
-  if (state.pos > 0 && state.pos < state.len && state.src.charCodeAt(state.pos - 1) !== NL) {
-    finishLine(state)
+  if (state.pos > 0 && state.pos < state.len) {
+    const prev = state.src.charCodeAt(state.pos - 1)
+    if (prev !== NL && prev !== CR) finishLine(state)
   }
 }
 
@@ -626,9 +642,15 @@ const scanQuoted = (state: State, quote: number, parentIndent = -1): YamlScalar 
   // the document silently, so we report it (mirroring eemeli's "Missing closing
   // quote" and the `UNTERMINATED_FLOW` handling for `[`/`{`).
   let closed = false
+  // Where the scalar's *content* stops, tracked separately from `i` because the
+  // two only coincide when a closing delimiter was consumed. Backing up one
+  // character from `i` unconditionally (as this used to) eats the last real
+  // character of an unterminated scalar — `a: "abcd` recovered as `"abc"` — and
+  // the recovered text is exactly what a linter echoes back at the author.
+  let contentEnd = len
   // A `---`/`...` at column 0 ends the document even with a quote still open, so
   // an unterminated quoted scalar stops there instead of swallowing every
-  // document after it. The per-character cost is the `c === NL` test; the marker
+  // document after it. The per-character cost is the line-break test; the marker
   // check itself only runs on the line breaks a multi-line quoted scalar has.
   if (quote === SQUOTE) {
     while (i < len) {
@@ -636,17 +658,23 @@ const scanQuoted = (state: State, quote: number, parentIndent = -1): YamlScalar 
       if (c === SQUOTE) {
         if (src.charCodeAt(i + 1) === SQUOTE) i += 2
         else {
+          contentEnd = i
           i++
           closed = true
           break
         }
-      } else if (c === NL) {
-        if (isDocMarker(src, i + 1, len)) {
-          i++
+      } else if (c === NL || c === CR) {
+        // The next line starts past the whole break, which `nextLineStart`
+        // resolves — CR LF is one break, so `i + 1` would land on the LF and
+        // hand `checkQuotedIndent` a phantom empty line to measure.
+        const after = nextLineStart(src, i, len)
+        if (isDocMarker(src, after, len)) {
+          contentEnd = i
+          i = after
           break
         }
-        if (!indentReported) indentReported = checkQuotedIndent(state, i + 1, parentIndent)
-        i++
+        if (!indentReported) indentReported = checkQuotedIndent(state, after, parentIndent)
+        i = after
       } else i++
     }
   } else {
@@ -659,23 +687,31 @@ const scanQuoted = (state: State, quote: number, parentIndent = -1): YamlScalar 
         continue
       }
       if (c === DQUOTE) {
+        contentEnd = i
         i++
         closed = true
         break
       }
-      if (c === NL) {
-        if (isDocMarker(src, i + 1, len)) {
-          i++
+      if (c === NL || c === CR) {
+        // Same as the single-quoted branch: resolve the break with
+        // `nextLineStart` so CR LF advances once and the indent check sees the
+        // real next line rather than the LF half of the pair.
+        const after = nextLineStart(src, i, len)
+        if (isDocMarker(src, after, len)) {
+          contentEnd = i
+          i = after
           break
         }
-        if (!indentReported) indentReported = checkQuotedIndent(state, i + 1, parentIndent)
+        if (!indentReported) indentReported = checkQuotedIndent(state, after, parentIndent)
+        i = after
+        continue
       }
       i++
     }
   }
   if (!closed) pushError(state, 'UNTERMINATED_QUOTE', 'Missing closing quote', start, i)
   const source = src.slice(start, i)
-  const inner = src.slice(start + 1, i - 1)
+  const inner = src.slice(start + 1, contentEnd)
   const value = quote === SQUOTE ? resolveSingleQuoted(inner) : resolveDoubleQuoted(inner)
   state.pos = i
   return { kind: 'scalar', value, source, style: quote === SQUOTE ? 'single' : 'double', start, end: i }
@@ -1552,8 +1588,15 @@ const parseValueOrChild = (state: State, indent: number): YamlNode | null => {
  * written `*ref` means the anchored value, not the literal text), and a
  * collection key renders in flow style. Both used to collapse — to `*ref` and to
  * the empty string respectively — which silently merged distinct keys.
+ *
+ * Exported because anything that addresses a node *by* the key `toJS()` produced
+ * has to agree with this exactly. `nodeAtPath` learned that the hard way: it
+ * carried its own simplified version that returned `'null'` for a null key,
+ * `'*ref'` for an alias, and `''` for every collection key — so the three key
+ * kinds this function handles specially were unreachable by path, and a
+ * `closest` lookup quietly reported the *parent's* source span instead.
  */
-const keyText = (node: YamlNode): string => {
+export const keyText = (node: YamlNode): string => {
   if (node.kind === 'scalar') {
     const v = node.value
     // Keys are usually strings already — skip the String() round-trip.
@@ -1929,6 +1972,14 @@ const parseNodeInner = (state: State, indent: number): YamlNode => {
     checkTrailingContent(state)
     return node
   }
+  // `indent - 1` is this function's convention for "the parent's indentation",
+  // and a block scalar's explicit indentation indicator counts from there
+  // (`c-l+literal(n)` holds `l-literal-content(n+m,t)`). At the document root
+  // that makes the parent -1 — `l-bare-document ::= s-l+block-node(-1,block-in)`
+  // — so a root `|2` keeps one leading space of its two-space content, and so
+  // does `--- |2`. `yaml` (eemeli) strips both; `js-yaml` agrees with us, the
+  // spec reads our way, and the yaml-test-suite pins neither. Deliberate, and
+  // pinned by tests in `parse-features.test.ts` so it cannot drift silently.
   if (cc === PIPE || cc === GT) return attachProps(scanBlockScalar(state, indent - 1), props, state)
 
   // A line beginning with a quote may be a quoted *key* (e.g. `"200":`), so the
@@ -2236,7 +2287,14 @@ const applyMerge = (target: Record<string, unknown>, value: unknown): void => {
   }
   if (value && typeof value === 'object') {
     for (const [k, v] of Object.entries(value)) {
-      if (!(k in target)) setMapKey(target, k, v)
+      // `k in target` walks the prototype chain, so every `Object.prototype`
+      // member — `toString`, `valueOf`, `constructor`, `hasOwnProperty`,
+      // `__proto__`, … — looked like a key the target already had and was
+      // silently dropped from the merge, with no diagnostic. Only *own* keys
+      // may shadow a merged one. This stays pollution-safe because `setMapKey`
+      // still defines `__proto__` as a plain data property rather than
+      // assigning through the prototype setter.
+      if (!Object.hasOwn(target, k)) setMapKey(target, k, v)
     }
   }
 }
@@ -2273,13 +2331,41 @@ const checkDocumentEnd = (state: State): void => {
   const line = peekLine(state)
   if (line.eof) return
   const c = state.src.charCodeAt(line.contentPos)
-  if ((c === DASH || c === DOT) && isDocMarker(state.src, line.contentPos, state.len)) return
+  if ((c === DASH || c === DOT) && isDocMarker(state.src, line.contentPos, state.len)) {
+    warnIfMoreDocuments(state, line.contentPos)
+    return
+  }
   pushError(
     state,
     'UNEXPECTED_CONTENT',
     'Unexpected content after the document node — start a new document with "---"',
     line.contentPos,
     plainLineEnd(state.src, line.contentPos, state.len),
+  )
+}
+
+/**
+ * Warns when a `---`/`...` marker has another document under it.
+ *
+ * Reading only the first document of a stream is deliberate and documented, but
+ * a caller on `parse()` only ever sees the data — truncated input is
+ * indistinguishable from a document that genuinely held those keys alone, which
+ * is silent data loss for anyone who did not read the docs first. A bare
+ * trailing marker (`a: 1\n...\n`) closes the stream without hiding anything, so
+ * we look past it and only warn when real content follows.
+ *
+ * Advancing `state.pos` here is safe: `checkDocumentEnd` is the last thing
+ * `parseDocument` does with the cursor.
+ */
+const warnIfMoreDocuments = (state: State, markerPos: number): void => {
+  state.pos = nextLineStart(state.src, markerPos + 3, state.len)
+  if (peekLine(state).eof) return
+  pushWarning(
+    state,
+    'MULTIPLE_DOCUMENTS',
+    'Only the first document of this stream was parsed — use parseAllDocuments to read the rest',
+    markerPos,
+    markerPos + 3,
   )
 }
 

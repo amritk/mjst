@@ -29,13 +29,31 @@ describe('load-config', () => {
     })
   })
 
-  it('ignores non-string values for known keys', async () => {
+  // A wrong type used to be dropped silently, so the run generated with the
+  // defaults while the user believed the config had taken effect.
+  it('rejects wrong value types and names every offending key', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
     await writeFile(configPath, JSON.stringify({ schema: 123, outDir: true }))
 
-    const result = await loadConfig(configPath)
+    await expect(loadConfig(configPath)).rejects.toThrow(
+      /\/schema: expected string, received number[\s\S]*\/outDir: expected string, received boolean/,
+    )
+  })
 
-    expect(result).toEqual({})
+  it('rejects an unknown key rather than ignoring the typo', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', outDir: 'o', strcit: true }))
+
+    await expect(loadConfig(configPath)).rejects.toThrow(/\/strcit: unknown option/)
+  })
+
+  // Editors point at the config schema with `$schema`; it describes the file
+  // rather than configuring a run, so it is not an unknown option.
+  it('accepts the $schema metadata key', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ $schema: './config.schema.json', schema: 's.json', outDir: 'o' }))
+
+    expect(await loadConfig(configPath)).toEqual({ schema: 's.json', outDir: 'o' })
   })
 
   it('throws for non-object config files', async () => {
@@ -45,8 +63,12 @@ describe('load-config', () => {
     await expect(loadConfig(configPath)).rejects.toThrow('Config file must be a JSON object')
   })
 
-  it('throws for missing config files', async () => {
-    await expect(loadConfig('/nonexistent/config.json')).rejects.toThrow()
+  it('throws an actionable error for a missing config file', async () => {
+    // Not the raw `ENOENT: no such file or directory, open …`, which reads like
+    // an internal failure rather than "that path is not there".
+    await expect(loadConfig('/nonexistent/config.json')).rejects.toThrow(
+      'Config file not found: /nonexistent/config.json',
+    )
   })
 
   it('loads strict boolean from config file', async () => {
@@ -85,22 +107,18 @@ describe('load-config', () => {
     expect(result).toEqual({ schema: 's.json', outDir: 'o', caseInsensitive: true })
   })
 
-  it('ignores non-boolean caseInsensitive value', async () => {
+  it('rejects a non-boolean caseInsensitive value', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
     await writeFile(configPath, JSON.stringify({ schema: 's.json', caseInsensitive: 'yes' }))
 
-    const result = await loadConfig(configPath)
-
-    expect(result).toEqual({ schema: 's.json' })
+    await expect(loadConfig(configPath)).rejects.toThrow('/caseInsensitive: expected boolean, received string.')
   })
 
-  it('ignores non-boolean stripUnknown value', async () => {
+  it('rejects a non-boolean stripUnknown value', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
     await writeFile(configPath, JSON.stringify({ schema: 's.json', stripUnknown: 'yes' }))
 
-    const result = await loadConfig(configPath)
-
-    expect(result).toEqual({ schema: 's.json' })
+    await expect(loadConfig(configPath)).rejects.toThrow('/stripUnknown: expected boolean, received string.')
   })
 
   it('loads the reference-resolution keys from a config file', async () => {
@@ -127,13 +145,32 @@ describe('load-config', () => {
     })
   })
 
-  it('ignores an allowedHosts value that is not an array of strings', async () => {
+  it('rejects an allowedHosts value that is not an array of strings', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
     await writeFile(configPath, JSON.stringify({ schema: 's.json', allowedHosts: ['ok', 42] }))
 
+    await expect(loadConfig(configPath)).rejects.toThrow('/allowedHosts: expected string[], received array.')
+  })
+
+  // Entries are handed back verbatim: they are resolved against the process cwd
+  // later, exactly like `schema` and `outDir`, rather than against this file.
+  it('loads allowedRoots from a config file without rewriting the paths', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(
+      configPath,
+      JSON.stringify({ schema: 's.json', outDir: 'o', allowedRoots: ['./specs', '../shared'] }),
+    )
+
     const result = await loadConfig(configPath)
 
-    expect(result).toEqual({ schema: 's.json' })
+    expect(result).toEqual({ schema: 's.json', outDir: 'o', allowedRoots: ['./specs', '../shared'] })
+  })
+
+  it('rejects an allowedRoots value that is not an array of strings', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', allowedRoots: './specs' }))
+
+    await expect(loadConfig(configPath)).rejects.toThrow('/allowedRoots: expected string[], received string.')
   })
 
   it('loads examples boolean from config file', async () => {
@@ -145,13 +182,11 @@ describe('load-config', () => {
     expect(result).toEqual({ schema: 's.json', outDir: 'o', examples: true })
   })
 
-  it('ignores non-boolean examples value', async () => {
+  it('rejects a non-boolean examples value', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
     await writeFile(configPath, JSON.stringify({ schema: 's.json', examples: 'yes' }))
 
-    const result = await loadConfig(configPath)
-
-    expect(result).toEqual({ schema: 's.json' })
+    await expect(loadConfig(configPath)).rejects.toThrow('/examples: expected boolean, received string.')
   })
 
   it('loads schemaDir from a config file', async () => {
@@ -163,13 +198,11 @@ describe('load-config', () => {
     expect(result).toEqual({ schemaDir: './schemas', outDir: 'output' })
   })
 
-  it('ignores non-boolean strict value', async () => {
+  it('rejects a non-boolean strict value', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
     await writeFile(configPath, JSON.stringify({ schema: 's.json', strict: 'yes' }))
 
-    const result = await loadConfig(configPath)
-
-    expect(result).toEqual({ schema: 's.json' })
+    await expect(loadConfig(configPath)).rejects.toThrow('/strict: expected boolean, received string.')
   })
 
   it('loads helpers, typeSuffix, and banner keys from a config file', async () => {
@@ -184,31 +217,39 @@ describe('load-config', () => {
     expect(result).toEqual({ schema: 's.json', helpers: 'embedded', typeSuffix: 'Object', banner: 'Generated file' })
   })
 
-  it('loads importExt and drops an invalid value', async () => {
+  it('loads importExt and rejects a value outside the enum', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}-ext.json`)
     await writeFile(configPath, JSON.stringify({ schema: 's.json', importExt: 'ts' }))
     expect(await loadConfig(configPath)).toEqual({ schema: 's.json', importExt: 'ts' })
 
     await writeFile(configPath, JSON.stringify({ schema: 's.json', importExt: 'mjs' }))
-    expect(await loadConfig(configPath)).toEqual({ schema: 's.json' })
+    await expect(loadConfig(configPath)).rejects.toThrow('/importExt: expected one of js, ts, received "mjs".')
   })
 
-  it('loads rootType from a config file and ignores a non-string value', async () => {
+  it('loads rootType from a config file and rejects a non-string value', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}-root.json`)
     await writeFile(configPath, JSON.stringify({ schema: 's.json', rootType: 'Program' }))
     expect(await loadConfig(configPath)).toEqual({ schema: 's.json', rootType: 'Program' })
 
     await writeFile(configPath, JSON.stringify({ schema: 's.json', rootType: 42 }))
-    expect(await loadConfig(configPath)).toEqual({ schema: 's.json' })
+    await expect(loadConfig(configPath)).rejects.toThrow('/rootType: expected string, received number.')
   })
 
-  it('loads a boolean banner and ignores an invalid helpers value', async () => {
+  it('loads a boolean banner and rejects an invalid helpers value', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ banner: true }))
+    expect(await loadConfig(configPath)).toEqual({ banner: true })
+
     await writeFile(configPath, JSON.stringify({ banner: true, helpers: 'bogus' }))
+    await expect(loadConfig(configPath)).rejects.toThrow(
+      '/helpers: expected one of package, embedded, received "bogus".',
+    )
+  })
 
-    const result = await loadConfig(configPath)
+  it('loads the force flag from a config file', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}-force.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', outDir: 'o', force: true }))
 
-    // `banner: true` is kept; the unknown helpers mode is dropped rather than trusted.
-    expect(result).toEqual({ banner: true })
+    expect(await loadConfig(configPath)).toEqual({ schema: 's.json', outDir: 'o', force: true })
   })
 })

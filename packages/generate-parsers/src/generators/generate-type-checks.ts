@@ -31,7 +31,9 @@ import {
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { generateEnumCheck } from './generate-enum-check'
+import { generateUniqueItemsCheck } from './generate-unique-items-check'
 import {
+  everyTailItem,
   getPrefixItems,
   prefixItemsCapsLength,
   scalarItemTypeCheck,
@@ -113,6 +115,18 @@ export const getUnionBranches = (schema: JSONSchema): readonly JSONSchema[] | nu
   if (hasAnyOf(schema) && schema.anyOf.length > 0) return schema.anyOf
   return null
 }
+
+/**
+ * True when {@link getUnionBranches} came from a `oneOf` rather than an `anyOf` —
+ * i.e. the value must match *exactly one* branch, not at least one.
+ *
+ * The distinction was dropped before: both spellings produced a plain
+ * disjunction, so `{ oneOf: [{…a}, {…b}] }` accepted `{ a: 'x', b: 1 }`, which
+ * matches both branches. Ajv, the runtime interpreter, and `generate-validators`
+ * all reject it, so the two mjst engines disagreed on the same contract.
+ */
+export const isExclusiveUnion = (schema: JSONSchema): boolean =>
+  isSchemaObject(schema) && !hasAllOf(schema) && !('not' in schema) && hasOneOf(schema) && schema.oneOf.length > 0
 
 /**
  * True when a schema carries a keyword the strict slow path enforces but which
@@ -245,7 +259,7 @@ export const generatePropertyTypeCheck = (
   // disjunction of the branch checks.
   const branches = getUnionBranches(schema)
   if (branches) {
-    return generateUnionCheck(varName, branches, useRefImports, suffix)
+    return generateUnionCheck(varName, branches, useRefImports, suffix, isExclusiveUnion(schema))
   }
 
   // Remaining composition (allOf, not, or a union mixed with them) cannot be
@@ -311,11 +325,18 @@ export const generatePropertyTypeCheck = (
       if (hasMinItems(schema)) checks.push(`${varName}.length >= ${schema.minItems}`)
       if (hasMaxItems(schema)) checks.push(`${varName}.length <= ${schema.maxItems}`)
       if (hasUniqueItems(schema) && schema.uniqueItems === true) {
-        checks.push(`new Set(${varName}).size === ${varName}.length`)
+        // A bare `new Set` compares objects by reference, so two structurally
+        // equal items counted as distinct and this *true-sound* check waved a
+        // duplicate-carrying array onto the fast path. generateUniqueItemsCheck
+        // keeps the cheap Set for provably-scalar items and switches to a
+        // canonical projection otherwise.
+        checks.push(generateUniqueItemsCheck(varName, schema))
       }
       // For a scalar or enum item type, every element must already be well-typed
       // to take the fast path; a mismatched element routes the array to the slow
-      // path where each element is coerced (or, in strict mode, throws).
+      // path where each element is coerced (or, in strict mode, throws). The
+      // `items` tail starts after the `prefixItems` positions (see everyTailItem),
+      // which the tuple block below checks against their own subschemas.
       if (hasItems(schema) && !Array.isArray(schema.items)) {
         const items = schema.items
         const itemCheck =
@@ -323,7 +344,7 @@ export const generatePropertyTypeCheck = (
           (isSchemaObject(items) && hasEnum(items) && items.enum.length > 0
             ? generateEnumCheck('_it', items.enum)
             : null)
-        if (itemCheck) checks.push(`${varName}.every((_it) => ${itemCheck})`)
+        if (itemCheck) checks.push(everyTailItem(varName, itemCheck, schema))
       }
       // Tuple `prefixItems`: every present position must already match its
       // subschema, and a sibling `items: false` bars extra elements. Positions
@@ -405,17 +426,26 @@ export const generateInlineObjectCheck = (
 }
 
 /**
- * Generates a union membership check: true when `varName` matches at least one
- * branch of a `oneOf`/`anyOf`. Inline object branches get a per-property check;
- * everything else goes through {@link generatePropertyTypeCheck} ($refs call
- * the imported shape validator, consts/enums/scalars check directly). Returns
- * null when any branch cannot be checked.
+ * Generates a union membership check. Inline object branches get a per-property
+ * check; everything else goes through {@link generatePropertyTypeCheck} ($refs
+ * call the imported shape validator, consts/enums/scalars check directly).
+ * Returns null when any branch cannot be checked.
+ *
+ * `exclusive` (a `oneOf` — see {@link isExclusiveUnion}) counts the matching
+ * branches and demands exactly one, instead of the `anyOf` disjunction. The count
+ * form is *tighter* than the disjunction it replaces — anything it accepts, the
+ * disjunction accepted too — so a true-sound caller (a fast path, a shape
+ * validator) can only get safer: a value it now declines merely takes the slow
+ * path, which re-validates. A caller that *throws* on a false result needs each
+ * branch check to be exact in both directions, which is precisely what
+ * {@link canEnforceUnion} certifies.
  */
 export const generateUnionCheck = (
   varName: string,
   branches: readonly JSONSchema[],
   useRefImports: boolean,
   suffix: string,
+  exclusive = false,
 ): string | null => {
   if (branches.length === 0) return null
 
@@ -429,9 +459,14 @@ export const generateUnionCheck = (
     if (check === null) return null
     parts.push(`(${check})`)
   }
+  // A single branch cannot match twice, so `oneOf` with one member collapses to
+  // the plain check and keeps the cheaper output.
+  if (parts.length === 1) return parts[0] as string
+  // Fully parenthesized: callers splice this into `&&` chains and `!(…)` tests.
+  if (exclusive) return `((${parts.map((part) => `(${part} ? 1 : 0)`).join(' + ')}) === 1)`
   // Callers conjoin this with other checks, so a multi-branch disjunction must
   // carry its own parentheses — `a || b && c` binds the wrong way without them.
-  return parts.length === 1 ? (parts[0] as string) : `(${parts.join(' || ')})`
+  return `(${parts.join(' || ')})`
 }
 
 /**
@@ -549,6 +584,24 @@ const canTrustShapeProperty = (
   return canTrustPropertyCheck(propSchema, rootSchema, visiting)
 }
 
+/**
+ * Object-level keywords {@link generateInlineObjectCheck} does not look at, so a
+ * branch carrying one gets a check that says "matches" for a value the schema
+ * rejects. That over-approximation was harmless while the check only fed an
+ * `anyOf` disjunction, but a `oneOf` counts matches: an over-matching branch can
+ * push the count to 2 and make the strict parser throw on a *valid* value. The
+ * trust walk therefore refuses these outright.
+ */
+const KEYWORDS_INLINE_CHECK_IGNORES = [
+  'minProperties',
+  'maxProperties',
+  'propertyNames',
+  'dependentRequired',
+  'dependentSchemas',
+  'contains',
+  'unevaluatedProperties',
+] as const
+
 /** Mirrors {@link generateInlineObjectCheck}: non-null AND every property check is trustworthy. */
 const canTrustInlineObjectCheck = (
   schema: JSONSchema,
@@ -559,6 +612,8 @@ const canTrustInlineObjectCheck = (
   if (hasAllOf(schema) || hasOneOf(schema) || hasAnyOf(schema) || 'not' in schema) return false
   if ('patternProperties' in schema || 'if' in schema) return false
   if (hasAdditionalProperties(schema) && typeof schema.additionalProperties !== 'boolean') return false
+  const record = schema as Record<string, unknown>
+  if (KEYWORDS_INLINE_CHECK_IGNORES.some((keyword) => keyword in record)) return false
 
   return Object.values(schema.properties).every((propSchema) => canTrustPropertyCheck(propSchema, rootSchema, visiting))
 }

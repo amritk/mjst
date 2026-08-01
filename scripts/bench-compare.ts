@@ -30,6 +30,8 @@ import { readWorkspace, SUITES, selectSuites } from './bench-scope.ts'
  *   - codegen — buildSchema time per parser (ms), timed in-process per tree
  *   - yaml — parse throughput (ops/s) per YAML_BENCH_CASE, source-mapped tree
  *     and plain data
+ *   - runtime — runtime-validators throughput (ops/s, valid + invalid input)
+ *     per RUNTIME_BENCH_CASE, through the guard and error-collecting entries
  *
  * Only the suites the change can actually move are run: `--changed <file>`
  * takes a newline-separated list of the PR's changed paths and narrows the
@@ -372,6 +374,37 @@ const run = async (): Promise<void> => {
       head: statOf(headResult, 'valid'),
       parityOk: pairParityOk(baseResult, headResult),
     })
+  }
+
+  const runtimeCases = suites.has('runtime')
+    ? ((await import(pathToFileURL(join(head, 'packages/runtime-validators/bench/cases.ts')).href)) as {
+        RUNTIME_BENCH_CASES: readonly { name: string }[]
+      })
+    : { RUNTIME_BENCH_CASES: [] }
+
+  if (suites.has('runtime')) console.error('runtime-validators (validate ops/s)…')
+  for (const benchCase of runtimeCases.RUNTIME_BENCH_CASES) {
+    // `false` — time the built dist, not the sources. The interpreter's
+    // modules reach for each other through the package's `@/*` path alias,
+    // which Bun resolves against the tsconfig in the worker's working
+    // directory; that directory is the bench folder, where the alias is
+    // invisible. Same reason the api workers above take `false`, and the
+    // bench workflow already builds this one package in both trees for them.
+    const { base: baseResult, head: headResult } = abbaPair(
+      (tree) => runWorker(tree, 'runtime-validators', benchCase.name, false),
+      betterOps,
+    )
+    for (const metric of ['valid', 'invalid'] as const) {
+      progress({
+        suite: 'runtime',
+        caseName: benchCase.name,
+        metric: `${metric} ops/s`,
+        higherIsBetter: true,
+        base: statOf(baseResult, metric),
+        head: statOf(headResult, metric),
+        parityOk: pairParityOk(baseResult, headResult),
+      })
+    }
   }
 
   const lines: string[] = []

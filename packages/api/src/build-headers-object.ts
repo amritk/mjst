@@ -1,4 +1,5 @@
 import { coercePrimitive } from './coerce-primitive'
+import { defineOwnProperty } from './define-own-property'
 import type { CompiledHeaders } from './types'
 
 /**
@@ -18,7 +19,14 @@ export const buildHeadersObject = (
     const raw = header(lookup)
     if (raw === undefined) continue
     const coercion = compiled.coercions.get(property)
-    headers[property] = coercion === 'number' || coercion === 'boolean' ? coercePrimitive(raw, coercion) : raw
+    // `__proto__` is a perfectly legal HTTP field name (it is a token), so a
+    // contract may declare it. A plain assignment would run the prototype
+    // setter and drop the value, leaving `required` unsatisfiable.
+    defineOwnProperty(
+      headers,
+      property,
+      coercion === 'number' || coercion === 'boolean' ? coercePrimitive(raw, coercion) : raw,
+    )
   }
   return headers
 }

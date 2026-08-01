@@ -1,3 +1,23 @@
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
+import { buildAnchorMap } from './build-anchor-map'
+
+/**
+ * Anchor maps are memoized per root document: `resolveRef` is called once per
+ * ref and scanning the whole document for `$anchor` declarations on each call
+ * would turn ref resolution quadratic. Schemas are treated as immutable here,
+ * and the `WeakMap` drops the entry once the caller releases the document.
+ */
+const anchorMaps = new WeakMap<object, Record<string, string>>()
+
+const getAnchorMap = (rootSchema: Record<string, unknown>): Record<string, string> => {
+  const existing = anchorMaps.get(rootSchema)
+  if (existing) return existing
+  const map = buildAnchorMap(rootSchema as JSONSchema)
+  anchorMaps.set(rootSchema, map)
+  return map
+}
+
 /**
  * Navigates a JSON Pointer fragment (e.g. `/$defs/foo` or `/definitions/bar`)
  * through a schema object, returning the target or undefined if not found.
@@ -9,7 +29,10 @@ const navigatePointer = (pointer: string, schema: Record<string, unknown>): Reco
   for (const part of parts) {
     const decodedPart = part.replace(/~1/g, '/').replace(/~0/g, '~')
 
-    if (current && typeof current === 'object' && decodedPart in current) {
+    // `Object.hasOwn`, not `in`: `#/__proto__` and `#/constructor/prototype`
+    // would otherwise walk into `Object.prototype` and hand back a "definition"
+    // the document never declared — which the generators then emit a file for.
+    if (current && typeof current === 'object' && Object.hasOwn(current, decodedPart)) {
       const next = current[decodedPart as keyof typeof current]
       if (typeof next === 'object' && next !== null) {
         current = next as Record<string, unknown>
@@ -27,8 +50,10 @@ const navigatePointer = (pointer: string, schema: Record<string, unknown>): Reco
 /**
  * Resolves a JSON Schema $ref pointer to the actual schema definition.
  *
- * Supports three ref forms:
- * - Internal: `#/$defs/contact` — navigates the root schema by JSON Pointer
+ * Supports four ref forms:
+ * - Internal pointer: `#/$defs/contact` — navigates the root schema by JSON Pointer
+ * - Internal anchor: `#contact` — resolves against the document's `$anchor` /
+ *   `$dynamicAnchor` declarations (see {@link buildAnchorMap})
  * - URI key: `http://example.com/foo.json` — looks up the key directly in `$defs`
  * - URI with fragment: `http://example.com/foo.json#/definitions/bar` — looks up
  *   the base URI in `$defs`, then navigates the fragment within that definition
@@ -50,9 +75,17 @@ const navigatePointer = (pointer: string, schema: Record<string, unknown>): Reco
  * ```
  */
 export const resolveRef = (ref: string, rootSchema: Record<string, unknown>): Record<string, unknown> | undefined => {
-  // Internal reference: navigate from root by JSON Pointer
+  // Internal reference: either a JSON Pointer (`#`, `#/$defs/x`) or a plain
+  // `$anchor` name (`#contact`). Treating the anchor form as a pointer — which
+  // is what happened before — never matched anything, and the caller went on to
+  // derive the filename `#contact` from it, so the generated import specifier
+  // opened a URL fragment instead of naming a module.
   if (ref.startsWith('#')) {
-    return navigatePointer(ref.slice(1), rootSchema)
+    const fragment = ref.slice(1)
+    if (fragment === '' || fragment.startsWith('/')) return navigatePointer(fragment, rootSchema)
+
+    const pointer = getAnchorMap(rootSchema)[fragment]
+    return pointer === undefined ? undefined : navigatePointer(pointer.slice(1), rootSchema)
   }
 
   // URI ref: may have a fragment (e.g. "http://foo.com/bar.json#/definitions/baz")

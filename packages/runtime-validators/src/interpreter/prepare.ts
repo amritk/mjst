@@ -10,6 +10,19 @@ import type { ValidateOptions, ValidationResult } from '@/types'
  */
 const cache = new WeakMap<object, Map<string, (input: unknown) => unknown>>()
 
+/**
+ * How many distinct configurations we will remember per schema. The outer
+ * `WeakMap` collects with the schema, but the inner `Map` lives as long as the
+ * schema does, so an unbounded one is a leak: a caller deriving `limits` from
+ * each request (a per-request `maxSteps`, say) mints a new key every call and
+ * pins a validator forever — 200,000 distinct values cost ~85 MB. Past this many
+ * variants we simply stop caching and hand back a fresh validator. That is the
+ * right trade: a schema used with more than a handful of configurations is being
+ * varied per call, which the cache could never have helped anyway, and building a
+ * validator here is cheap (there is no compile step).
+ */
+const MAX_CACHED_VARIANTS = 16
+
 const normalizeFormats = (formats: ValidateOptions['formats']): 'all' | ReadonlySet<string> => {
   if (formats === 'all') return 'all'
   if (formats === undefined) return new Set()
@@ -94,6 +107,6 @@ export const prepareValidator = (
   if (existing) return existing
 
   const validator = makeValidator(schema, formats, emitErrors, limits)
-  byKey.set(key, validator)
+  if (byKey.size < MAX_CACHED_VARIANTS) byKey.set(key, validator)
   return validator
 }

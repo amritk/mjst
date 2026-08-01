@@ -1,5 +1,6 @@
 import type { FetchOnRequest, FetchOnResponse } from './to-fetch-handler'
 import type { RequestLocals } from './types'
+import { writableResponse } from './writable-response'
 
 /**
  * Options for {@link createRequestId}.
@@ -79,8 +80,12 @@ export const createRequestId = (options?: RequestIdOptions): RequestId => {
     const id = locals[localsKey]
     // The gate always sets it; the guard covers a handler mounted with only
     // `onResponse` wired, where no gate ran.
-    if (typeof id === 'string') response.headers.set(header, id)
-    return undefined
+    if (typeof id !== 'string') return undefined
+    // A response proxied out of a mount carries immutable headers, so the set
+    // goes through the writability probe rather than throwing the reply away.
+    const target = writableResponse(response)
+    target.headers.set(header, id)
+    return target
   }
 
   return { onRequest, onResponse }

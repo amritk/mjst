@@ -1,6 +1,6 @@
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from 'node:http'
-import { Readable } from 'node:stream'
 
+import { importNodeModule } from './import-node-module'
 import { waitForDrain } from './wait-for-drain'
 
 /**
@@ -75,7 +75,7 @@ const respond = async (
   outgoing: ServerResponse,
 ): Promise<void> => {
   try {
-    const response = await handler(toRequest(incoming), env)
+    const response = await handler(await toRequest(incoming), env)
 
     const headers: OutgoingHttpHeaders = {}
     for (const [name, value] of response.headers) {
@@ -131,8 +131,12 @@ const respond = async (
  * `host` header with a `localhost` fallback for HTTP/1.0 clients that omit
  * it — fetch handlers built on this framework only ever read the path and
  * query anyway.
+ *
+ * Async only because `node:stream` is loaded on demand (see
+ * {@link importNodeModule}) — a static import of it would break every
+ * Workers/browser bundle of the package root, adapter unused or not.
  */
-const toRequest = (incoming: IncomingMessage): Request => {
+const toRequest = async (incoming: IncomingMessage): Promise<Request> => {
   const method = (incoming.method ?? 'GET').toUpperCase()
   const url = 'http://' + (incoming.headers.host ?? 'localhost') + (incoming.url ?? '/')
   const headers = new Headers()
@@ -148,5 +152,6 @@ const toRequest = (incoming: IncomingMessage): Request => {
   // rejects one); everything else streams the socket straight through —
   // duplex 'half' is what the fetch spec requires for stream bodies.
   if (method === 'GET' || method === 'HEAD') return new Request(url, { method, headers })
+  const { Readable } = await importNodeModule<typeof import('node:stream')>('stream')
   return new Request(url, { method, headers, body: Readable.toWeb(incoming), duplex: 'half' })
 }

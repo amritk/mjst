@@ -42,9 +42,12 @@ bun add @amritk/helpers
 | Subpath | Exports | Purpose |
 |:---|:---|:---|
 | `@amritk/helpers/extract-refs` | `extractRefs` | Collect every `$ref` reachable from a schema. |
-| `@amritk/helpers/resolve-ref` | `resolveRef` | Resolve a JSON pointer `$ref` against a root schema. |
+| `@amritk/helpers/resolve-ref` | `resolveRef` | Resolve a `$ref` — JSON Pointer, `$anchor` name, or URI — against a root schema. |
+| `@amritk/helpers/build-anchor-map` | `buildAnchorMap` | Build a map of `$anchor` / `$dynamicAnchor` name → JSON Pointer. |
 | `@amritk/helpers/build-dynamic-ref-map` | `buildDynamicRefMap` | Build a map of `$dynamicAnchor` → resolved location. |
 | `@amritk/helpers/resolve-dynamic-refs` | `resolveDynamicRefs` | Replace `$dynamicRef` occurrences using the map above. |
+| `@amritk/helpers/assert-id-scopes` | `assertIdScopes` | Reject a document that relies on unsupported `$id` base-URI scoping. |
+| `@amritk/helpers/max-schema-depth` | `MAX_SCHEMA_DEPTH`, `assertSchemaDepth` | The nesting cap every recursive walker enforces. |
 | `@amritk/helpers/upgrade-draft07-schema` | `upgradeDraft07Schema`, `isDraft07Schema` | Upgrade a Draft-07 schema to 2020-12. |
 | `@amritk/helpers/ref-to-filename` | `refToFilename`, `toKebabCase` | Convert a `$ref` to a stable filename. |
 | `@amritk/helpers/ref-to-name` | `refToName` | Convert a `$ref` to a TypeScript identifier (PascalCase). |

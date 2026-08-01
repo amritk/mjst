@@ -27,5 +27,22 @@ bun run --filter='@amritk/lint' types:check
   display is the caller's job.
 - **OpenAPI support lives in the `./rules/openapi` subpath**, layered on top of
   core — never merge it into the root entry.
+- **No `eval`, no `new Function`, no dynamic code construction anywhere in the
+  engine.** A ruleset is data — often YAML written by someone other than the
+  person running the linter — so `[?(...)]` filters are parsed into an AST and
+  interpreted (`core/filter-expression.ts`, `core/filter.ts`). An expression the
+  grammar does not cover must become a `CompiledPath.error` (which
+  `createRuleset` throws on), never a predicate that silently matches nothing.
+- **Regular expressions built from document content must be unambiguous.** The
+  `casing` patterns are written so no input can be matched two ways; the
+  ambiguous Spectral originals took minutes on a 46-character `operationId`.
+  Check any new pattern under `node`, not `bun` — JSC caps backtracking at ~1.3 s
+  and hides the problem.
+- **Depth is attacker-controlled.** Walkers over document data are iterative, and
+  the parsers cap nesting (`MAX_NESTING_DEPTH`) and report a diagnostic; a
+  malformed document must never throw out of `lintDocument`.
+- **The OpenAPI meta-schemas are generated modules.** Edit the vendored `.json`,
+  then run `node scripts/generate-schema-modules.mjs`; the build fails on drift.
+  Keep the imports static so the subpath stays bundler-safe.
 
 Add a changeset for every change (`bunx changeset`).

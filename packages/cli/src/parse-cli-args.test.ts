@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseCliArgs } from './parse-cli-args'
+import { flagTakesValue, parseCliArgs } from './parse-cli-args'
 
 describe('parse-cli-args', () => {
   it('parses --schema and --outDir with space-separated values', () => {
@@ -428,5 +428,63 @@ describe('parse-cli-args', () => {
       /Flag "--allowed-hosts" expects a value/,
     )
     expect(() => parseCliArgs(['--allowed-hosts'])).toThrow(/expects a value/)
+  })
+
+  it('parses --allowed-roots as a comma-separated list', () => {
+    expect(parseCliArgs(['--allowed-roots', './specs,../shared'])).toEqual({ allowedRoots: ['./specs', '../shared'] })
+    expect(parseCliArgs(['--allowed-roots=./specs,../shared'])).toEqual({ allowedRoots: ['./specs', '../shared'] })
+  })
+
+  it('accumulates repeated --allowed-roots flags and trims blanks', () => {
+    expect(parseCliArgs(['--allowed-roots', './a', '--allowed-roots', ' ./b , ./c '])).toEqual({
+      allowedRoots: ['./a', './b', './c'],
+    })
+  })
+
+  it('requires a value for --allowed-roots', () => {
+    expect(() => parseCliArgs(['--allowed-roots', '--out-dir', 'dist'])).toThrow(
+      /Flag "--allowed-roots" expects a value/,
+    )
+    expect(() => parseCliArgs(['--allowed-roots'])).toThrow(/expects a value/)
+  })
+
+  it('accepts the camelCase spelling of --allowed-roots', () => {
+    expect(parseCliArgs(['--allowedRoots', './specs'])).toEqual({ allowedRoots: ['./specs'] })
+  })
+
+  // `--allowed-roots` swallows its value, so a `-v` directory name must not be
+  // mistaken for a version request by the raw-argv scan in `cli.ts`.
+  it('reports that --allowed-roots takes a value', () => {
+    expect(flagTakesValue('allowed-roots')).toBe(true)
+    expect(flagTakesValue('allowedRoots')).toBe(true)
+  })
+
+  it('parses the --force flag', () => {
+    expect(parseCliArgs(['--force'])).toEqual({ force: true })
+    expect(parseCliArgs(['--force=false'])).toEqual({ force: false })
+  })
+
+  // A typo'd subcommand used to run a perfectly ordinary generation and exit 0,
+  // which is the same silent-success failure as a lint path that matches nothing.
+  it('rejects a stray positional such as a misspelled subcommand', () => {
+    expect(() => parseCliArgs(['genrate', '--schema', 's.json', '--out-dir', 'dist'])).toThrow(
+      /Unexpected argument "genrate"/,
+    )
+  })
+
+  it('accepts the -- terminator instead of rejecting it as an unknown flag', () => {
+    expect(parseCliArgs(['--schema', 's.json', '--out-dir', 'dist', '--'])).toEqual({
+      schema: 's.json',
+      outDir: 'dist',
+    })
+  })
+
+  // `--config` is consumed before this parser runs, but a bare one still means the
+  // user asked for a config file we never loaded — generating from the defaults
+  // instead is the wrong kind of quiet.
+  it('requires a value for --config', () => {
+    expect(() => parseCliArgs(['--schema', 's.json', '--config'])).toThrow(/Flag "--config" expects a value/)
+    expect(() => parseCliArgs(['--config', '--out-dir', 'dist'])).toThrow(/Flag "--config" expects a value/)
+    expect(() => parseCliArgs(['--config='])).toThrow(/Flag "--config" expects a value/)
   })
 })

@@ -25,8 +25,10 @@
   },
   "files": [
     "dist",
-    "src/**/*.ts",
-    "!src/**/*.test.ts",
+    "src/has-ref.ts",
+    "src/is-object.ts",
+    "src/validate-array.ts",
+    "src/validate-record.ts",
     "AI.md"
   ],
   "publishConfig": {
@@ -47,6 +49,13 @@
       "types": "./dist/*.d.ts",
       "import": "./dist/*.js",
       "default": "./dist/*.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "*": [
+        "./dist/*.d.ts"
+      ]
     }
   }
 }

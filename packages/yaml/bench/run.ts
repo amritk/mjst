@@ -1,3 +1,4 @@
+import { unlink } from 'node:fs/promises'
 import { gzipSync } from 'node:zlib'
 import jsyaml from 'js-yaml'
 import { parse as eemeli, parseDocument as eemeliDoc } from 'yaml'
@@ -70,23 +71,49 @@ for (const [name, src] of Object.entries(FIXTURES)) {
   )
 }
 
-console.log('\n=== 3. Bundle size (minified + gzipped, smaller is better) ===\n')
+console.log('\n=== 3. Bundle size (minified + gzipped, smaller is better) ===')
+console.log('    What each parser adds to an app that parses to data *and* to a positioned tree.\n')
 
-const bundleSize = async (entry: string): Promise<number> => {
-  const built = await Bun.build({ entrypoints: [entry], minify: true, target: 'node' })
-  const code = await built.outputs[0]?.text()
-  return code ? gzipSync(code).length : 0
+/**
+ * Bundles a generated *consumer* of a parser, not the parser's own entry point.
+ *
+ * Pointing `Bun.build` straight at `src/index.ts` measured nothing: the barrel
+ * is pure re-exports and the package declares `sideEffects: false`, so the whole
+ * parser tree-shook away and the bench proudly reported `0.1 KB` for us and
+ * `294x larger` for `yaml` — a number that would have gone into the README. The
+ * entry below references every import it names, which is what forces the
+ * bundler to actually pull the implementation in.
+ *
+ * The entry has to live inside the package so bare specifiers (`yaml`,
+ * `js-yaml`) resolve against its `node_modules`, hence the write-and-delete.
+ */
+const bundleSize = async (specifier: string, named: readonly string[]): Promise<number> => {
+  const entry = new URL(`./.bundle-probe-${named[0]}-${Math.random().toString(36).slice(2)}.ts`, import.meta.url)
+  const imports = named.join(', ')
+  await Bun.write(entry, `import { ${imports} } from '${specifier}'\nexport const used = [${imports}]\n`)
+  try {
+    const built = await Bun.build({ entrypoints: [entry.pathname], minify: true, target: 'node' })
+    const code = await built.outputs[0]?.text()
+    return code ? gzipSync(code).length : 0
+  } finally {
+    await unlink(entry)
+  }
 }
 
-const entries: Record<string, string> = {
-  '@amritk/yaml': new URL('../src/index.ts', import.meta.url).pathname,
-  yaml: 'yaml',
-  'js-yaml': 'js-yaml',
+/**
+ * The API surface a real consumer imports. `js-yaml` has no positioned-tree
+ * equivalent, so it only gets `load` — which is exactly why its bundle is
+ * smaller than it looks: it is not doing the same job.
+ */
+const entries: Record<string, [specifier: string, named: readonly string[]]> = {
+  '@amritk/yaml': ['../src/index', ['parse', 'parseDocument', 'nodeAtPath', 'lineCounter']],
+  yaml: ['yaml', ['parse', 'parseDocument']],
+  'js-yaml': ['js-yaml', ['load']],
 }
 const sizes: Record<string, number> = {}
-for (const [name, entry] of Object.entries(entries)) {
+for (const [name, [specifier, named]] of Object.entries(entries)) {
   try {
-    sizes[name] = await bundleSize(entry)
+    sizes[name] = await bundleSize(specifier, named)
   } catch (err) {
     console.log(`  (could not bundle ${name}: ${(err as Error).message})`)
   }

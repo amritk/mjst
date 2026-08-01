@@ -31,15 +31,25 @@ const remote = await resolveRefsFromFile('https://api.example.com/schema.json', 
 2. **Errors are collected, never thrown.** A missing file, refused host, or bad
    URL lands on `result.errors` while the rest still resolves. Always check it.
 3. **Default-deny SSRF guard.** Remote refs to loopback / private / link-local /
-   `169.254.169.254` are refused unless `allowPrivateHosts: true` or an explicit
-   `allowedHosts` entry.
-4. **JSON-only by default** (`JSON.parse`). For YAML pass a custom
+   `169.254.169.254` / metadata hosts by name (`metadata.google.internal`,
+   `*.internal`) are refused unless `allowPrivateHosts: true` or an explicit
+   `allowedHosts` entry. Hostnames are also resolved and refused when they point
+   at a private address (`verifyDns: false` opts out).
+4. **Local `$ref`s are confined to the root document's directory.** A
+   `{"$ref": "../common/schemas.json"}` is refused by default — pass
+   `allowedRoots: ['./specs']` (or whatever contains both files) to allow it.
+   `localRefs: false` refuses cross-file reads entirely.
+5. **JSON-only by default** (`JSON.parse`). For YAML pass a custom
    `parse: (content, location) => …` (e.g. wrapping `@amritk/yaml`).
-5. **`origins` exists only with `trackOrigins: true`.** Cycles are preserved (the
+6. **`origins` exists only with `trackOrigins: true`.** Cycles are preserved (the
    cycle point stays a `$ref`), so output is not always fully flat. The remote
-   cache is process-wide — `clearRemoteCache()` or `cache: false` when a schema
-   may have changed.
+   cache is process-wide but credential-scoped and bounded (10 min TTL, 256
+   entries) — `clearRemoteCache()` / `clearRemoteCache(url)` or `cache: false`
+   when a schema may have changed.
+7. **A resolve is bounded** by `maxDocuments` (500), `totalTimeoutMs` (60s), and
+   `maxDepth` (512). Hitting one is an entry on `errors`, never a throw.
 
 Exports: `resolveRefs`, `resolveRefsFromFile`, `clearRemoteCache`,
-`getByPointer`, `pointerToPath`, `isPrivateHost` + types. Only the `.` entry.
+`getByPointer`, `pointerToPath`, `isPrivateHost`, `assertPublicHost` + types.
+Only the `.` entry.
 Install: `bun add @amritk/resolve-refs`.

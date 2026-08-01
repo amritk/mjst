@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process'
-import { mkdir, readdir, unlink, writeFile } from 'node:fs/promises'
+import { readdir, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { buildSchema } from '@amritk/generate-parsers'
@@ -12,22 +12,25 @@ const execFileAsync = promisify(execFile)
 
 import type { CliConfig } from './cli-config'
 import { combineGeneratedFiles } from './combine-files'
+import { createOutputWriter, type OutputWriter } from './create-output-writer'
 import { detectHelpersMode } from './detect-helpers-mode'
 import { emitExamples } from './emit-examples'
+import { ensureOutputDir } from './ensure-output-dir'
 import { HELP_TEXT } from './help-text'
 import { loadConfig } from './load-config'
 import { loadSchema } from './load-schema'
 import { parseCliArgs } from './parse-cli-args'
+import { parseMetaRequest } from './parse-meta-request'
 import { readVersion } from './read-version'
 import { resolveImportExt } from './resolve-import-ext'
 
-/** True when the args request the CLI version (`version`, `--version`, or `-v`). */
-const isVersionRequest = (args: readonly string[]): boolean =>
-  args[0] === 'version' || args.includes('--version') || args.includes('-v')
-
-/** True when the args request usage help (`help`, `--help`, or `-h`). */
-const isHelpRequest = (args: readonly string[]): boolean =>
-  args[0] === 'help' || args.includes('--help') || args.includes('-h')
+/**
+ * A valid TypeScript identifier. `rootType` becomes both a `export type <name>`
+ * and — lowercased — the output filename, so anything else either emits source
+ * that does not compile or, in the case of `../../Escaped`, writes outside the
+ * output directory entirely.
+ */
+const ROOT_TYPE_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/
 
 /** The schema's base filename without extension, used to derive the root type name. */
 const schemaBaseName = (schemaPath: string): string => basename(schemaPath).replace(/\.[^.]+$/, '')
@@ -79,38 +82,64 @@ const resolveBanner = (banner: boolean | string | undefined): string => {
   return `/**\n * ${text}\n */\n\n`
 }
 
-/** Writes a generated file, creating any parent directories the filename implies. */
-const writeGeneratedFile = async (baseDir: string, filename: string, content: string): Promise<void> => {
-  const filePath = join(baseDir, filename)
-  await mkdir(dirname(filePath), { recursive: true })
-  await writeFile(filePath, content, 'utf-8')
+/**
+ * Stages every file, then commits them in one go, so a failure part-way through
+ * leaves the output directory exactly as it was. Returns the committed paths
+ * (relative to the writer's root) in the order they were staged.
+ */
+const commitOrDiscard = async (writer: OutputWriter, stageAll: () => Promise<void>): Promise<string[]> => {
+  try {
+    await stageAll()
+  } catch (error) {
+    await writer.discard()
+    throw error
+  }
+  return writer.commit()
+}
+
+/** One schema's worth of example output: what to generate, and where it lands. */
+type ExampleTask = {
+  readonly schema: unknown
+  readonly rootTypeName: string
+  /** Mirrors the schema's nested location under `--schema-dir`; `''` for a single schema. */
+  readonly subDir?: string
 }
 
 /**
- * Emits fast-check arbitrary + example files for one schema (delegating to
- * {@link emitExamples}) and logs each written path. The files land in an
- * `examples/` subdirectory of `outputDir` so they never collide with the parser
- * files, which share the same `<name>.ts` / `index.ts` names. `subDir` mirrors a
- * schema's nested location under `--schema-dir`. The example sources are left out
- * of `--build`: they import the `fast-check` peer dependency and are meant to be
- * consumed by tests, not compiled alongside the runtime parsers.
+ * Emits fast-check arbitrary + example files (delegating to {@link emitExamples})
+ * and logs each written path. The files land in an `examples/` subdirectory of
+ * `outputDir` so they never collide with the parser files, which share the same
+ * `<name>.ts` / `index.ts` names. The example sources are left out of `--build`:
+ * they import the `fast-check` peer dependency and are meant to be consumed by
+ * tests, not compiled alongside the runtime parsers.
+ *
+ * Every task shares one writer, so the example tree lands as a unit — and it is a
+ * *second* writer, created after the parser tree has committed. That ordering
+ * matters: a writer reads the manifest once, at creation, so an examples writer
+ * made too early would not see the paths the parser run just claimed and would
+ * drop them from the manifest it writes. Keeping the examples out of the parser
+ * writer is what keeps them out of the `--build` file list, which is exactly the
+ * set of paths that run committed.
  */
 const runExamples = async (
   config: Partial<CliConfig>,
-  schema: unknown,
-  rootTypeName: string,
   outputDir: string,
-  subDir = '',
+  tasks: readonly ExampleTask[],
 ): Promise<void> => {
-  const written = await emitExamples({
-    schema: schema as JSONSchema,
-    rootTypeName,
-    outputDir,
-    subDir,
-    bannerPrefix: config.banner ? resolveBanner(config.banner) : '',
-    // Spread conditionally: `exactOptionalPropertyTypes` rejects an explicit
-    // `undefined` for the optional `typeSuffix`.
-    ...(config.typeSuffix !== undefined ? { typeSuffix: config.typeSuffix } : {}),
+  const writer = await createOutputWriter(outputDir, config.force)
+  const written = await commitOrDiscard(writer, async () => {
+    for (const task of tasks) {
+      await emitExamples({
+        schema: task.schema as JSONSchema,
+        rootTypeName: task.rootTypeName,
+        writer,
+        subDir: task.subDir ?? '',
+        bannerPrefix: config.banner ? resolveBanner(config.banner) : '',
+        // Spread conditionally: `exactOptionalPropertyTypes` rejects an explicit
+        // `undefined` for the optional `typeSuffix`.
+        ...(config.typeSuffix !== undefined ? { typeSuffix: config.typeSuffix } : {}),
+      })
+    }
   })
 
   for (const path of written) {
@@ -120,7 +149,9 @@ const runExamples = async (
 
 /**
  * Compiles the generated `.ts` files to `.js`/`.d.ts` with a temporary tsconfig,
- * then removes the intermediate sources. `tsFiles` are paths relative to `outputDir`.
+ * then removes the intermediate sources. `tsFiles` are paths relative to
+ * `outputDir` — and, critically, only the files this run committed, so the
+ * cleanup can never delete something that was already in the output directory.
  */
 const buildOutput = async (outputDir: string, tsFiles: readonly string[], typesOnly?: boolean): Promise<void> => {
   // Write a minimal tsconfig so tsc can compile the generated files without
@@ -169,14 +200,16 @@ const buildOutput = async (outputDir: string, tsFiles: readonly string[], typesO
     await unlink(tsconfigPath)
   }
 
-  // Remove the intermediate .ts files now that .js and .d.ts have been produced
+  // Remove the intermediate .ts files now that .js and .d.ts have been produced.
+  // Under --types-only tsc emits declarations only, so claiming a `.js` per file
+  // (and counting it) advertised output that was never written.
   for (const file of tsFiles) {
     await unlink(join(outputDir, file))
-    console.log(`Built: ${file.replace(/\.ts$/, '.js')}`)
+    if (!typesOnly) console.log(`Built: ${file.replace(/\.ts$/, '.js')}`)
     console.log(`Built: ${file.replace(/\.ts$/, '.d.ts')}`)
   }
 
-  console.log(`\nTotal files built: ${tsFiles.length * 2}`)
+  console.log(`\nTotal files built: ${tsFiles.length * (typesOnly ? 1 : 2)}`)
 }
 
 /** Recursively collects every `*.json` file under `dir`, returning absolute paths. */
@@ -201,38 +234,37 @@ const findJsonSchemas = async (dir: string): Promise<string[]> => {
 }
 
 /**
- * Emits validator files (`validateX` / `isX`) for one schema into `validatorsSubDir`
- * (a path relative to `outputDir`). The validators carry the same schema-derived
+ * Stages validator files (`validateX` / `isX`) for one schema into `validatorsSubDir`
+ * (a path relative to the writer's root). The validators carry the same schema-derived
  * filenames as the parsers, so they live in their own subdirectory to avoid
- * colliding. Returns the written `.ts` paths relative to `outputDir` so the caller
- * can fold them into a `--build` compilation.
+ * colliding. Returns the staged `.ts` paths so the caller can fold them into a
+ * `--build` compilation.
  */
 const runValidators = async (
   config: Partial<CliConfig>,
   schema: unknown,
   rootTypeName: string,
-  outputDir: string,
+  writer: OutputWriter,
   validatorsSubDir: string,
 ): Promise<string[]> => {
   const files = await buildValidatorSchema(schema as JSONSchema, rootTypeName, config.typeSuffix)
-  const written: string[] = []
+  const staged: string[] = []
 
   for (const file of files) {
     const content = config.banner ? resolveBanner(config.banner) + file.content : file.content
     const relFilename = join(validatorsSubDir, file.filename)
-    await writeGeneratedFile(outputDir, relFilename, content)
-    written.push(relFilename)
-    console.log(`Generated: ${relFilename}`)
+    await writer.stage(relFilename, content)
+    staged.push(relFilename)
   }
 
-  return written
+  return staged
 }
 
 /** Generates parsers for a single schema (the original one-schema-in, one-outDir-out flow). */
 const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputDir: string): Promise<void> => {
   const schema = await loadSchema(config, schemaPath)
 
-  await mkdir(outputDir, { recursive: true })
+  await ensureOutputDir(outputDir)
 
   const helpersMode = resolveHelpersMode(config, outputDir)
 
@@ -255,25 +287,27 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
     config.caseInsensitive,
   )
 
-  for (const file of files) {
-    const isHelper = file.filename.startsWith('_helpers/')
-    const content = config.banner && !isHelper ? resolveBanner(config.banner) + file.content : file.content
-    await writeGeneratedFile(outputDir, file.filename, content)
-    console.log(`Generated: ${file.filename}`)
-  }
+  const writer = await createOutputWriter(outputDir, config.force)
+  const written = await commitOrDiscard(writer, async () => {
+    for (const file of files) {
+      const isHelper = file.filename.startsWith('_helpers/')
+      const content = config.banner && !isHelper ? resolveBanner(config.banner) + file.content : file.content
+      await writer.stage(file.filename, content)
+    }
 
-  const validatorFiles = config.validators
-    ? await runValidators(config, schema, rootTypeName, outputDir, 'validators')
-    : []
+    if (config.validators) await runValidators(config, schema, rootTypeName, writer, 'validators')
+  })
+
+  for (const filename of written) console.log(`Generated: ${filename}`)
 
   if (config.examples) {
-    await runExamples(config, schema, rootTypeName, outputDir)
+    await runExamples(config, outputDir, [{ schema, rootTypeName }])
   }
 
   if (config.build) {
-    await buildOutput(outputDir, [...files.map((f) => f.filename), ...validatorFiles], config.typesOnly)
+    await buildOutput(outputDir, written, config.typesOnly)
   } else {
-    console.log(`\nTotal files generated: ${files.length + validatorFiles.length}`)
+    console.log(`\nTotal files generated: ${written.length}`)
   }
 }
 
@@ -281,11 +315,26 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
  * Generates a single self-contained file from one schema, concatenating every
  * generated definition (and dropping the cross-file imports that are no longer
  * needed) into `outFilePath`. Currently used for types-only output.
+ *
+ * The writer is rooted at the file's own directory, which is where its
+ * `.mjst-manifest.json` lands. That is a deliberate trade: `--out-file` usually
+ * points *into* hand-written source (`--out-file src/types.ts`), so the manifest
+ * ends up beside code mjst does not own. We take it anyway, because the
+ * alternatives are worse. Ownership has to outlive the process — without a record
+ * on disk the second run cannot tell its own output from a file somebody typed,
+ * leaving only "always clobber" (the bug this closes) or "always demand
+ * `--force`" (which breaks the regenerate-on-schema-change loop that is the whole
+ * point of `--out-file`). Anything further away — a cache under `node_modules`,
+ * say — disappears on a clean checkout, so CI would refuse to regenerate. And the
+ * directory is already one mjst writes into on this path: `--examples` puts an
+ * `examples/` tree there and `--build` drops the compiled `.d.ts` beside the
+ * source. The manifest lists only the paths this run generated, so it never
+ * claims a sibling; it is a hidden file the user can gitignore.
  */
 const runSingleFile = async (config: Partial<CliConfig>, schemaPath: string, outFilePath: string): Promise<void> => {
   const schema = await loadSchema(config, schemaPath)
   const outputDir = dirname(outFilePath)
-  await mkdir(outputDir, { recursive: true })
+  await ensureOutputDir(outputDir)
 
   const rootTypeName = config.rootType ?? deriveRootTypeName(schema, schemaBaseName(schemaPath))
   console.log(`Root type: ${rootTypeName}`)
@@ -307,17 +356,27 @@ const runSingleFile = async (config: Partial<CliConfig>, schemaPath: string, out
   )
 
   const combined = combineGeneratedFiles(files)
-  await writeFile(outFilePath, config.banner ? resolveBanner(config.banner) + combined : combined, 'utf-8')
+
+  // Same writer as the directory flows, and for the same reason twice over: the
+  // target is often a hand-written `src/types.ts`, which used to be overwritten
+  // silently — and then, under `--build`, deleted along with the other
+  // intermediate sources, so the user was left with neither their file nor a
+  // warning. `--build` is now handed the path this run actually committed.
+  const writer = await createOutputWriter(outputDir, config.force)
+  const written = await commitOrDiscard(writer, async () => {
+    await writer.stage(basename(outFilePath), config.banner ? resolveBanner(config.banner) + combined : combined)
+  })
+
   console.log(`Generated: ${relative(process.cwd(), outFilePath)}`)
 
   if (config.examples) {
-    await runExamples(config, schema, rootTypeName, outputDir)
+    await runExamples(config, outputDir, [{ schema, rootTypeName }])
   }
 
   if (config.build) {
-    await buildOutput(outputDir, [basename(outFilePath)], config.typesOnly)
+    await buildOutput(outputDir, written, config.typesOnly)
   } else {
-    console.log(`\nTotal files generated: 1`)
+    console.log(`\nTotal files generated: ${written.length}`)
   }
 }
 
@@ -340,74 +399,77 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
     process.exit(1)
   }
 
-  await mkdir(outputDir, { recursive: true })
+  await ensureOutputDir(outputDir)
 
   const helpersMode = resolveHelpersMode(config, outputDir)
 
   // Helper sources are identical across schemas, so collect them by filename and
   // write the deduplicated set once at the output root.
   const sharedHelpers = new Map<string, string>()
-  const writtenTsFiles: string[] = []
+  const writer = await createOutputWriter(outputDir, config.force)
+  /** Example emission is deferred until the parser tree has landed (see below). */
+  const exampleTasks: ExampleTask[] = []
 
-  for (const schemaFile of schemaFiles) {
-    const relPath = relative(schemaDir, schemaFile)
-    const relNoExt = relPath.slice(0, -'.json'.length)
-    const schemaSubDir = join(outputDir, relNoExt)
-    // Depth of the schema's output subdirectory, used to build the relative import
-    // path back to the shared `_helpers/` at the output root (../, ../../, ...).
-    const depth = relNoExt.split(sep).filter(Boolean).length
-    const helpersImportPrefix = '../'.repeat(depth)
+  const stageAll = async (): Promise<void> => {
+    for (const schemaFile of schemaFiles) {
+      const relPath = relative(schemaDir, schemaFile)
+      const relNoExt = relPath.slice(0, -'.json'.length)
+      // Depth of the schema's output subdirectory, used to build the relative import
+      // path back to the shared `_helpers/` at the output root (../, ../../, ...).
+      const depth = relNoExt.split(sep).filter(Boolean).length
+      const helpersImportPrefix = '../'.repeat(depth)
 
-    const schema = await loadSchema(config, schemaFile)
-    const rootTypeName = deriveRootTypeName(schema, schemaBaseName(schemaFile))
-    console.log(`\n${relPath} → ${relNoExt}/ (root type: ${rootTypeName})`)
+      const schema = await loadSchema(config, schemaFile)
+      const rootTypeName = deriveRootTypeName(schema, schemaBaseName(schemaFile))
+      console.log(`\n${relPath} → ${relNoExt}/ (root type: ${rootTypeName})`)
 
-    const files = await buildSchema(
-      schema as JSONSchema,
-      rootTypeName,
-      undefined,
-      config.typesOnly,
-      config.logWarnings,
-      config.strict,
-      helpersMode,
-      helpersImportPrefix,
-      config.readonly,
-      config.stripUnknown,
-      config.typeSuffix,
-      resolveImportExt(config),
-      config.caseInsensitive,
-    )
+      const files = await buildSchema(
+        schema as JSONSchema,
+        rootTypeName,
+        undefined,
+        config.typesOnly,
+        config.logWarnings,
+        config.strict,
+        helpersMode,
+        helpersImportPrefix,
+        config.readonly,
+        config.stripUnknown,
+        config.typeSuffix,
+        resolveImportExt(config),
+        config.caseInsensitive,
+      )
 
-    for (const file of files) {
-      if (file.filename.startsWith('_helpers/')) {
-        sharedHelpers.set(file.filename, file.content)
-        continue
+      for (const file of files) {
+        if (file.filename.startsWith('_helpers/')) {
+          sharedHelpers.set(file.filename, file.content)
+          continue
+        }
+
+        const content = config.banner ? resolveBanner(config.banner) + file.content : file.content
+        await writer.stage(join(relNoExt, file.filename), content)
       }
 
-      const content = config.banner ? resolveBanner(config.banner) + file.content : file.content
-      await writeGeneratedFile(schemaSubDir, file.filename, content)
-      const relativeFilename = join(relNoExt, file.filename)
-      writtenTsFiles.push(relativeFilename)
-      console.log(`Generated: ${relativeFilename}`)
+      if (config.validators) {
+        // Mirror the parser layout under a top-level `validators/` tree so each
+        // schema's validators sit beside their parser counterparts without sharing
+        // a filename.
+        await runValidators(config, schema, rootTypeName, writer, join('validators', relNoExt))
+      }
+
+      if (config.examples) exampleTasks.push({ schema, rootTypeName, subDir: relNoExt })
     }
 
-    if (config.validators) {
-      // Mirror the parser layout under a top-level `validators/` tree so each
-      // schema's validators sit beside their parser counterparts without sharing
-      // a filename.
-      const validatorFiles = await runValidators(config, schema, rootTypeName, outputDir, join('validators', relNoExt))
-      writtenTsFiles.push(...validatorFiles)
-    }
-
-    if (config.examples) {
-      await runExamples(config, schema, rootTypeName, outputDir, relNoExt)
+    for (const [filename, content] of sharedHelpers) {
+      await writer.stage(filename, content)
     }
   }
 
-  for (const [filename, content] of sharedHelpers) {
-    await writeGeneratedFile(outputDir, filename, content)
-    writtenTsFiles.push(filename)
-    console.log(`Generated: ${filename}`)
+  const writtenTsFiles = await commitOrDiscard(writer, stageAll)
+
+  for (const filename of writtenTsFiles) console.log(`Generated: ${filename}`)
+
+  if (exampleTasks.length > 0) {
+    await runExamples(config, outputDir, exampleTasks)
   }
 
   if (config.build) {
@@ -443,14 +505,16 @@ const run = async (): Promise<void> => {
     process.exit(result.code)
   }
 
-  if (isVersionRequest(args)) {
+  const metaRequest = parseMetaRequest(args)
+
+  if (metaRequest === 'version') {
     console.log(await readVersion())
     return
   }
 
   // Bare `mjst` and `mjst --help` both print usage rather than erroring on a
   // missing --out-dir — a first-run user needs to see the flags, not a failure.
-  if (args.length === 0 || isHelpRequest(args)) {
+  if (args.length === 0 || metaRequest === 'help') {
     console.log(HELP_TEXT)
     return
   }
@@ -464,6 +528,17 @@ const run = async (): Promise<void> => {
 
   if (config.outDir && config.outFile) {
     console.error('Error: provide only one of --out-dir or --out-file, not both.')
+    process.exit(1)
+  }
+
+  // The root type name becomes a TypeScript identifier *and* the output filename,
+  // so an unchecked value is both a compile error (`export type ../../X = …`) and
+  // a path traversal — `--root-type '../../Escaped'` wrote outside --out-dir, from
+  // a config file as readily as from the command line.
+  if (config.rootType !== undefined && !ROOT_TYPE_PATTERN.test(config.rootType)) {
+    console.error(
+      `Error: invalid --root-type "${config.rootType}". Expected a TypeScript identifier (letters, digits, _ or $, not starting with a digit).`,
+    )
     process.exit(1)
   }
 

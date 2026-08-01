@@ -144,11 +144,16 @@ npx mjst --schema ./order.json --out-dir ./generated
 
 Same-document refs (`#/$defs/...`) are left untouched — the generator resolves those
 itself into named type files, so nothing changes for schemas that only reference
-themselves. Local cross-file refs resolve from disk with no extra flags. Remote
-(`http(s)`) refs stay **offline by default**: a schema with a remote `$ref` fails
-rather than making a network call unless you opt in.
+themselves. Local cross-file refs resolve from disk with no extra flags, as long as
+they stay **inside the schema's own directory** — a `$ref` cannot walk out of the tree
+it belongs to (`../../../etc/passwd`, or an absolute path) unless you name the extra
+directory with `--allowed-roots`. Remote (`http(s)`) refs stay **offline by default**:
+a schema with a remote `$ref` fails rather than making a network call unless you opt in.
 
 ```bash
+# Let a split spec reach a sibling folder: v1/api.json → ../common/user.json
+npx mjst --schema ./specs/v1/api.json --out-dir ./generated --allowed-roots ./specs
+
 # Allow remote $ref fetches
 npx mjst --schema ./order.json --out-dir ./generated --resolve-remote
 
@@ -158,6 +163,11 @@ npx mjst --schema ./order.json --out-dir ./generated --allowed-hosts schemas.exa
 # …permitting private/loopback hosts (off by default as an SSRF guard)
 npx mjst --schema ./order.json --out-dir ./generated --resolve-remote --allow-private-hosts
 ```
+
+`--allowed-roots` takes a comma-separated list (or repeat the flag) and resolves each
+entry against the current working directory. It **adds** to the schema's own directory
+rather than replacing it, and everything outside the resulting set is still refused —
+so widening the roots for a shared `common/` folder does not reopen the whole disk.
 
 Unresolvable references (a missing file, a refused host, a bad URL) fail the run with
 the underlying reason rather than emitting a half-resolved schema. This works with
@@ -211,9 +221,10 @@ With no `-r`, mjst discovers a `.lint.{yaml,yml,json,js,mjs}` ruleset by walking
 | `--resolve-remote` | Fetch `http(s)` `$ref`s while resolving (off by default; a lint run stays offline). |
 | `--allowed-hosts` | Restrict remote `$ref` fetches to these hosts (implies `--resolve-remote`). |
 | `--allow-private-hosts` | Permit remote `$ref`s to private/loopback hosts (SSRF guard, off by default). |
+| `--allowed-roots` | Extra directories a local `$ref` may resolve into, on top of the document's own (repeat the flag). |
 | `-q`, `--quiet` | Suppress the findings report (the exit code still reflects findings). |
 
-By default `mjst lint` dereferences `$ref`, `$dynamicRef`/`$dynamicAnchor`, and `$recursiveRef`/`$recursiveAnchor` before running rules, so rules with `resolved: true` (the ruleset default) see through references. Internal and local cross-file refs resolve from disk — a finding on a cross-file node reports that file's own `line:column` — while remote refs are only fetched when you opt in with `--resolve-remote` or `--allowed-hosts`.
+By default `mjst lint` dereferences `$ref`, `$dynamicRef`/`$dynamicAnchor`, and `$recursiveRef`/`$recursiveAnchor` before running rules, so rules with `resolved: true` (the ruleset default) see through references. Internal and local cross-file refs resolve from disk — a finding on a cross-file node reports that file's own `line:column` — as long as they stay inside the linted document's own directory; use `--allowed-roots` to let a document reach a shared sibling folder. Remote refs are only fetched when you opt in with `--resolve-remote` or `--allowed-hosts`.
 
 The exit code is `0` when no finding reaches `--fail-severity`, `1` when one does, and `2` on a usage error. Run `mjst lint --help` for the full list.
 
@@ -350,6 +361,15 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
 <td colspan="4">Compile the generated TypeScript files to .js and .d.ts output. A temporary tsconfig is written to the output directory, tsc is invoked, and the intermediate .ts source files are removed when compilation succeeds.</td>
 </tr>
 <tr>
+<td>💥 <code>force</code></td>
+<td><code>--force</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Allow generated files to overwrite files that already exist in the output destination. By default a collision with a file mjst did not generate (a hand-written index.ts, say) aborts the run before anything is written, because the generator would otherwise replace it — and, under build, delete it along with the other intermediate sources. Regenerating never needs this flag: each run records what it wrote in a .mjst-manifest.json at the root of the output directory, and anything listed there is replaced freely.</td>
+</tr>
+<tr>
 <td>⚠️ <code>logWarnings</code></td>
 <td><code>--log-warnings</code></td>
 <td><code>boolean</code></td>
@@ -467,13 +487,22 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
 <td colspan="4">Permit remote $refs to private, loopback, and link-local hosts. Off by default: such targets are refused as a best-effort SSRF guard (notably the 169.254.169.254 cloud-metadata endpoint). An explicit allowedHosts entry always bypasses this guard.</td>
 </tr>
 <tr>
+<td>📂 <code>allowedRoots</code></td>
+<td><code>--allowed-roots &lt;dirs&gt;</code></td>
+<td><code>array</code></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">Extra directories a local (cross-file) $ref may resolve into. By default a local $ref is confined to the schema's own directory, so '{"$ref": "../../../etc/passwd"}' (or an absolute path) reads nothing. List a root here for the ordinary split-spec layout where v1/api.json refers to a shared common/user.json one level up. The schema's own directory is always allowed, so these roots widen the default rather than replacing it, and a $ref that still lands outside every root is refused. Accepts a comma-separated list or the flag repeated; relative entries resolve against the current working directory, from a config file as well as from the flag.<br><strong>Examples:</strong> <code>["./specs"]</code></td>
+</tr>
+<tr>
 <td>⚙️ <code>config</code></td>
 <td><code>--config &lt;path&gt;</code></td>
 <td><code>string</code></td>
 <td align="center"></td>
 </tr>
 <tr>
-<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, validators, examples, build, logWarnings, strict, stripUnknown, caseInsensitive, readonly, helpers, typeSuffix, banner, importExt, rootType, resolveRemote, allowedHosts, allowPrivateHosts). CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
+<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, validators, examples, build, force, logWarnings, strict, stripUnknown, caseInsensitive, readonly, helpers, typeSuffix, banner, importExt, rootType, resolveRemote, allowedHosts, allowPrivateHosts, allowedRoots) and are validated: an unknown key or a wrong value type fails the run instead of being ignored. CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
 </tr>
 </tbody>
 </table>

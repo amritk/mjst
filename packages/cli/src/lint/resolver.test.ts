@@ -1,6 +1,6 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { run } from './run'
@@ -23,6 +23,24 @@ const setup = (docName: string, doc: string): { dir: string; file: string } => {
   const file = join(dir, docName)
   writeFileSync(file, doc)
   return { dir, file }
+}
+
+/**
+ * The split-spec layout that local-`$ref` confinement refuses by default: the
+ * linted document sits in `v1/` and reaches a shared schema in a sibling
+ * `common/`. The ruleset is passed explicitly (rather than discovered) so the
+ * walk-up never picks a `.lint.*` from somewhere above the temp directory.
+ */
+const splitSpec = (ref: string): { root: string; ruleset: string; file: string } => {
+  const root = tmp('lint-roots-')
+  const ruleset = join(root, '.lint.yaml')
+  writeFileSync(ruleset, RULESET)
+  mkdirSync(join(root, 'v1'))
+  mkdirSync(join(root, 'common'))
+  writeFileSync(join(root, 'common', 'shared.json'), JSON.stringify({ c: { name: 'NotKebab' } }))
+  const file = join(root, 'v1', 'doc.json')
+  writeFileSync(file, JSON.stringify({ config: { $ref: ref } }))
+  return { root, ruleset, file }
 }
 
 describe('$ref resolution in mjst lint', () => {
@@ -101,5 +119,61 @@ describe('$ref resolution in mjst lint', () => {
     expect(code).toBe(1)
     expect(stdout).toContain('unresolved-ref')
     expect(stdout).toContain('#/defs/missing')
+  })
+
+  it('refuses a sibling-directory $ref without --allowed-roots and names the flag', async () => {
+    const { ruleset, file } = splitSpec('../common/shared.json#/c')
+
+    const { stdout, code } = await run([file, '-r', ruleset])
+    expect(code).toBe(1)
+    expect(stdout).toContain('Refusing to read local $ref')
+    // The library's own wording ("set allowedRoots") is a dead end at a terminal.
+    expect(stdout).toContain('pass --allowed-roots <dir>')
+  })
+
+  it('resolves a sibling-directory $ref once --allowed-roots names the shared parent', async () => {
+    const { root, ruleset, file } = splitSpec('../common/shared.json#/c')
+
+    const { stdout, code } = await run([file, '-r', ruleset, '--allowed-roots', root])
+    // The target inlines, so the casing rule fires on the referenced file's node.
+    expect(code).toBe(1)
+    expect(stdout).toContain('config-name-kebab')
+    expect(stdout).not.toContain('Refusing to read local $ref')
+  })
+
+  // `--allowed-roots` replaces the resolver's default, so the CLI re-adds each
+  // document's own directory: naming a shared folder must not cut off the refs a
+  // document already resolved.
+  it('keeps a document own directory allowed alongside --allowed-roots', async () => {
+    const { root, ruleset, file } = splitSpec('./neighbour.json#/c')
+    writeFileSync(join(root, 'v1', 'neighbour.json'), JSON.stringify({ c: { name: 'NotKebab' } }))
+
+    const { stdout, code } = await run([file, '-r', ruleset, '--allowed-roots', join(root, 'common')])
+    expect(code).toBe(1)
+    expect(stdout).toContain('config-name-kebab')
+    expect(stdout).not.toContain('Refusing to read local $ref')
+  })
+
+  // Widening the roots must not dissolve the confinement: a ref that climbs past
+  // every named root is still refused.
+  it('still refuses a traversing $ref when --allowed-roots names a legitimate directory', async () => {
+    const outside = tmp('lint-outside-')
+    writeFileSync(join(outside, 'secret.json'), JSON.stringify({ c: { name: 'NotKebab' } }))
+    const { root, ruleset, file } = splitSpec(join('..', '..', basename(outside), 'secret.json') + '#/c')
+
+    const { stdout, code } = await run([file, '-r', ruleset, '--allowed-roots', root])
+    expect(code).toBe(1)
+    expect(stdout).toContain('Refusing to read local $ref')
+    expect(stdout).not.toContain('config-name-kebab')
+  })
+
+  it('rejects an unknown resolution flag rather than silently ignoring it', async () => {
+    const { ruleset, file } = splitSpec('../common/shared.json#/c')
+
+    // `.strict()` is what stops `--allowed-root` (singular) from quietly running
+    // with the confinement still in place.
+    const { code, stderr } = await run([file, '-r', ruleset, '--allowed-root', '/tmp'])
+    expect(code).toBe(2)
+    expect(stderr).toContain('mjst lint --help')
   })
 })

@@ -21,8 +21,8 @@
 
 It is **zero-dependency** and tuned to be **small and fast**. Against the two parsers people reach for on the web:
 
-- **vs [`yaml`](https://www.npmjs.com/package/yaml) (eemeli)** — the only other parser here that also tracks source positions — building the source-mapped tree is **~25–30× faster**, and the bundle is **~5.4× smaller**.
-- **vs [`js-yaml`](https://www.npmjs.com/package/js-yaml)** — which has **no concept of source positions** — parsing straight to data is **~1.4–2× faster**, the bundle is **~2× smaller**, and we *also* hand you the positioned tree it cannot produce.
+- **vs [`yaml`](https://www.npmjs.com/package/yaml) (eemeli)** — the only other parser here that also tracks source positions — building the source-mapped tree is **~25–30× faster**, and the bundle is **~4× smaller**.
+- **vs [`js-yaml`](https://www.npmjs.com/package/js-yaml)** — which has **no concept of source positions** — parsing straight to data is **~1.4–2× faster**, the bundle is **~1.6× smaller**, and we *also* hand you the positioned tree it cannot produce.
 
 It targets the YAML that real configuration and OpenAPI documents use: block and flow collections, all three quoting styles, literal/folded block scalars with chomping, comments, anchors, aliases, merge keys, explicit `? key` / `: value` entries, and multi-document (`---`-separated) streams. Scalars resolve via the YAML 1.2 **core schema** — so an OpenAPI `version: 1.0.0` stays the string `"1.0.0"` instead of turning into a number — and the core-schema `!!` tags (`!!str`, `!!int`, `!!float`, `!!bool`, `!!null`) coerce a value when written.
 
@@ -89,7 +89,7 @@ docs.map((d) => d.toJS())
 // → [{ kind: 'Service' }, { kind: 'Deployment' }]
 ```
 
-Each document gets its own `contents`, `errors`, `warnings`, and anchor scope (an alias in one document does not resolve an anchor declared in another). `parseDocument` reads only the first document of a stream.
+Each document gets its own `contents`, `errors`, `warnings`, and anchor scope (an alias in one document does not resolve an anchor declared in another). `parseDocument` reads only the first document of a stream, and warns (`MULTIPLE_DOCUMENTS`) when it had to leave one behind.
 
 ### Walk the tree
 
@@ -117,6 +117,7 @@ if (isMap(contents)) {
 | `parseAllDocuments(source, options?)` | Parse a multi-document (`---`-separated) stream to an array of documents, each with its own anchors and problems. |
 | `nodeAtPath(root, path, closest?)` | Resolve a JSON path to its node (carrying `start`/`end`), optionally falling back to the closest ancestor. |
 | `lineCounter(source)` | Build an `offset → { line, col }` mapper (1-based). |
+| `keyText(node)` | The string a mapping key projects to in `toJS()` output — the same string `nodeAtPath` matches a path segment against. Use it when you walk the tree yourself and need your paths to line up with the projected data. |
 | `isScalar` / `isMap` / `isSeq` / `isPair` / `isAlias` | Narrowing guards over the node union. |
 
 **Options**
@@ -146,13 +147,18 @@ Run it yourself with `bun run bench`. Representative numbers (Bun, Linux):
 | medium | 20.0k | 918 | 10.1k | 21.8× | 1.99× |
 | large | 315 | 18.5 | 218 | 17.0× | 1.44× |
 
-**Bundle size** (minified + gzipped):
+**Bundle size** (minified + gzipped) — what each parser adds to an application
+that imports it. The bench bundles a small consumer of each library rather than
+the library's own entry point, so the numbers reflect code that is actually
+reachable. Ours covers the full surface (`parse`, `parseDocument`, `nodeAtPath`,
+`lineCounter`); `js-yaml` gets only `load`, because it has no positioned-tree
+equivalent to import.
 
 | | size | |
 | --- | --- | --- |
-| **@amritk/yaml** | **6.6 KB** | — |
-| yaml | 35.6 KB | 5.4× larger |
-| js-yaml | 13.5 KB | 2.0× larger |
+| **@amritk/yaml** | **8.8 KB** | — |
+| yaml | 35.5 KB | 4.0× larger |
+| js-yaml | 14.4 KB | 1.6× larger |
 
 Correctness is pinned two ways: a differential test suite (`src/differential.test.ts`) parses a battery of documents — including full OpenAPI specs — and asserts byte-identical data output against `yaml`, and `src/conformance.test.ts` measures the parser against the official YAML test suite (see [Conformance, measured](#conformance-measured)). Where `js-yaml` diverges (its `!!timestamp` type turns ISO strings into `Date`s, which is wrong for a JSON superset), we instead agree with `yaml`.
 
@@ -199,6 +205,7 @@ schema** for scalar typing. The exact boundaries:
 - A root node written on the `---` line itself — `--- foo`, `--- |`, `--- !!str`, or a quoted scalar spanning the lines below it. Its content is measured against column 0, not the column the marker pushed it to, so `--- >` may hold a block scalar starting at column 0.
 - `%TAG` directives (handles are resolved) and `%YAML` (the version is reported, not applied — resolution is always the 1.2 core schema).
 - Comments (full-line and inline), blank lines, and a leading byte-order mark.
+- All three YAML line breaks — `\n`, `\r\n`, and a lone `\r` — count as one break each, in the parser and in `lineCounter`'s positions.
 
 **Diagnostics**
 
@@ -227,7 +234,7 @@ Every node carries an exact `[start, end)` source span, and problems are collect
 | `UNEXPECTED_DIRECTIVE` | a directive with no `...` before it or no `---` after it |
 | `DEPTH_LIMIT` | nesting past the parser's depth cap |
 
-Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNKNOWN_DIRECTIVE`, and a malformed `%TAG` directive (`BAD_DIRECTIVE`).
+Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNKNOWN_DIRECTIVE`, a malformed `%TAG` directive (`BAD_DIRECTIVE`), and `MULTIPLE_DOCUMENTS` — `parseDocument` found a second document after a `---`/`...` marker and read only the first, so switch to `parseAllDocuments` if you want the rest.
 
 ### Not supported
 
@@ -240,7 +247,7 @@ Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNK
 - **The 1024-character implicit key limit.** A key that spans lines *is* reported, but a single-line key longer than the spec allows is not — the check needs lookahead the hot path does not do.
 - **`: ` inside a plain scalar.** The spec ends a plain scalar at a `: `, which makes `key: v1\n  k2: v2` an error; here the second line folds into the scalar instead. Enforcing it costs a key scan on every continuation line of every multi-line scalar.
 - **Flow collection indentation.** Flow scanning is delimiter-driven, so a `[`/`{` written across lines is read the same whether or not its continuation lines clear the block indentation around them.
-- **Carriage-return-only line breaks.** `\r\n` and `\n` are both handled; a lone `\r` as a line terminator is not.
+- **Shared alias identity.** An alias to a collection projects to a *copy*, not the same object: for `a: &x {p: 1}` / `b: *x` / `c: *x`, `b` and `c` are equal but `b !== c`, and mutating one does not change the other. The spec makes them one node. Copying keeps `toJS()` a plain tree — which is what a path-keyed position index, a JSON round-trip, and any consumer that edits the projection all assume — and the cost of re-expanding aliases is capped by an expansion budget, so a billion-laughs document throws a catchable error instead of hanging.
 
 If you need full YAML 1.2 conformance, use [`yaml`](https://www.npmjs.com/package/yaml). If you need a small, fast, position-aware parser for diagnostics, use this.
 

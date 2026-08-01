@@ -1,11 +1,30 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { loadSchema } from './load-schema'
 
 const tmp = (): string => mkdtempSync(join(tmpdir(), 'mjst-load-schema-'))
+
+/**
+ * Builds the split-spec layout the confinement default trips over: a versioned
+ * document referencing a shared schema in a sibling folder.
+ *
+ * ```
+ * <root>/v1/api.json      → { "$ref": "../common/user.json" }
+ * <root>/common/user.json
+ * ```
+ */
+const splitSpec = (): { root: string; main: string } => {
+  const root = tmp()
+  mkdirSync(join(root, 'v1'))
+  mkdirSync(join(root, 'common'))
+  writeFileSync(join(root, 'common', 'user.json'), JSON.stringify({ type: 'object' }))
+  const main = join(root, 'v1', 'api.json')
+  writeFileSync(main, JSON.stringify({ type: 'object', properties: { user: { $ref: '../common/user.json' } } }))
+  return { root, main }
+}
 
 /** Writes `content` (JSON-stringified) to `name` under a fresh temp dir; returns the file path. */
 const write = (dir: string, name: string, content: unknown): string => {
@@ -84,5 +103,67 @@ describe('loadSchema', () => {
     // With remote resolution off (the default), the http $ref is refused rather
     // than fetched, so the run fails with a clear reason and makes no request.
     await expect(loadSchema({}, main)).rejects.toThrow(/remote \$ref resolution is disabled/)
+  })
+
+  it('refuses a sibling-directory $ref without allowedRoots', async () => {
+    const { main } = splitSpec()
+
+    await expect(loadSchema({}, main)).rejects.toThrow(/Refusing to read local \$ref/)
+  })
+
+  // The whole point of the flag: the library message names a library option, which
+  // is unreachable from a terminal, so the CLI has to name its own flag instead.
+  it('names --allowed-roots in the refusal so the message is actionable', async () => {
+    const { main } = splitSpec()
+
+    await expect(loadSchema({}, main)).rejects.toThrow(/pass --allowed-roots <dir>/)
+  })
+
+  it('resolves a sibling-directory $ref once allowedRoots names the shared parent', async () => {
+    const { root, main } = splitSpec()
+
+    const schema = (await loadSchema({ allowedRoots: [root] }, main)) as { properties: { user: unknown } }
+    expect(schema.properties.user).toEqual({ type: 'object' })
+  })
+
+  // `allowedRoots` replaces the resolver's default outright, so the CLI keeps the
+  // schema's own directory in the list — naming a shared folder must not revoke
+  // the one directory a user would never think to list.
+  it('keeps the schema own directory allowed alongside the named roots', async () => {
+    const { root, main } = splitSpec()
+    writeFileSync(join(root, 'v1', 'local.json'), JSON.stringify({ type: 'string' }))
+    writeFileSync(
+      main,
+      JSON.stringify({
+        type: 'object',
+        properties: { user: { $ref: '../common/user.json' }, id: { $ref: './local.json' } },
+      }),
+    )
+
+    const schema = (await loadSchema({ allowedRoots: [join(root, 'common')] }, main)) as {
+      properties: { user: unknown; id: unknown }
+    }
+    expect(schema.properties.user).toEqual({ type: 'object' })
+    expect(schema.properties.id).toEqual({ type: 'string' })
+  })
+
+  // The flag widens confinement; it must not dissolve it. A `$ref` that climbs
+  // out of every named root stays refused, which is what keeps `--allowed-roots`
+  // from being a way back to reading arbitrary files.
+  it('still refuses a $ref that traverses outside the named roots', async () => {
+    const { root, main } = splitSpec()
+    const outside = tmp()
+    writeFileSync(join(outside, 'secret.json'), JSON.stringify({ type: 'string' }))
+    const traversingRef = join('..', '..', basename(outside), 'secret.json')
+    writeFileSync(main, JSON.stringify({ type: 'object', properties: { leaked: { $ref: traversingRef } } }))
+
+    await expect(loadSchema({ allowedRoots: [root] }, main)).rejects.toThrow(/Refusing to read local \$ref/)
+  })
+
+  it('still refuses an absolute $ref outside the named roots', async () => {
+    const { root, main } = splitSpec()
+    writeFileSync(main, JSON.stringify({ type: 'object', properties: { leaked: { $ref: '/etc/hostname' } } }))
+
+    await expect(loadSchema({ allowedRoots: [root] }, main)).rejects.toThrow(/Refusing to read local \$ref/)
   })
 })

@@ -60,6 +60,35 @@ describe('prototype safety in pattern-property parsers', () => {
   })
 })
 
+describe('a property named after an Object.prototype member', () => {
+  it('asserts the non-object fallback literal, which TypeScript otherwise rejects', () => {
+    // `constructor` is an *apparent* member of every object type, so the literal
+    // `{ ok: "" }` carries an inherited `constructor: Function` that does not fit
+    // the declared `constructor?: string` — "Type 'Function' is not assignable to
+    // type 'string'", and the whole generated file failed to compile.
+    const schema = {
+      type: 'object',
+      required: ['ok'],
+      properties: { constructor: { type: 'string' }, ok: { type: 'string' } },
+    } as const
+    const code = generateParserFunction(schema as never, 'Doc')
+    expect(code).toContain('      } as Doc;')
+
+    const parse = evalParser<(i: unknown) => Record<string, unknown>>(code, 'parseDoc')
+    expect(parse(undefined)).toEqual({ ok: '' })
+    // The read still goes through an own-property guard, so an *absent*
+    // `constructor` stays absent instead of picking up `Object`'s.
+    expect(Object.hasOwn(parse(JSON.parse('{"ok":"x"}')), 'constructor')).toBe(false)
+  })
+
+  it('leaves the fallback unasserted when no such property is declared', () => {
+    const schema = { type: 'object', required: ['ok'], properties: { ok: { type: 'string' } } } as const
+    // An unconditional assertion would hide genuine fallback/type mismatches,
+    // which is exactly what the generated-code type suite exists to catch.
+    expect(generateParserFunction(schema as never, 'Doc')).not.toContain('      } as Doc;')
+  })
+})
+
 describe('a declared property literally named "__proto__"', () => {
   it('materializes as an own property, not the object-literal prototype setter', () => {
     // Built via JSON.parse so `__proto__` is a genuine own key (an object

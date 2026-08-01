@@ -1,4 +1,6 @@
+export { type BoundedCache, createBoundedCache } from './bounded-cache'
 export { createDocument, type Document, type IDocumentOptions } from './document'
+export { type CompiledFilter, compileFilter, type FilterFn } from './filter'
 export { detectFormats, type Format } from './formats'
 export { globToRegExp, matchesGlob } from './glob'
 export { type CompiledPath, compileQuery, type IQueryMatch, query, queryCompiled, queryMany } from './jsonpath'

@@ -49,7 +49,21 @@ describe('resolve-dynamic-refs', () => {
     expect(schema.properties.schema).toEqual({ $dynamicRef: '#meta' })
   })
 
-  it('returns schema unchanged when dynamicRefMap is empty', () => {
+  it('returns schema unchanged when it carries no $dynamicRef', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: {
+        schema: { type: 'string' as const },
+      },
+    }
+
+    expect(resolveDynamicRefs(schema, {})).toBe(schema)
+  })
+
+  // Leaving an unmapped `$dynamicRef` in place was the silent failure: the type
+  // generator then named the type after the anchor, so `#node` compiled against
+  // the DOM's `Node` and shipped the wrong type instead of failing the build.
+  it('throws when a $dynamicRef has no $dynamicAnchor to bind to', () => {
     const schema = {
       type: 'object' as const,
       properties: {
@@ -57,9 +71,15 @@ describe('resolve-dynamic-refs', () => {
       },
     }
 
-    const result = resolveDynamicRefs(schema, {})
+    expect(() => resolveDynamicRefs(schema, {})).toThrow(/Unresolvable \$dynamicRef "#meta"/)
+  })
 
-    expect(result).toEqual(schema)
+  // A pointer form names no anchor, so 2020-12 says it behaves like a plain
+  // `$ref` — which keeps a bundled document that spells it that way working.
+  it('degrades a JSON Pointer $dynamicRef to a plain $ref', () => {
+    const schema = { properties: { a: { $dynamicRef: '#/$defs/thing' } } }
+
+    expect(resolveDynamicRefs(schema, {})).toEqual({ properties: { a: { $ref: '#/$defs/thing' } } })
   })
 
   it('returns non-object schemas unchanged', () => {

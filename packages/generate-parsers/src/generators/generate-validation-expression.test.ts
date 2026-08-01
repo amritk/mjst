@@ -824,11 +824,14 @@ describe('generate-validation-expression', () => {
     )
   })
 
-  it('falls back to the default for an unknown instanceOf with no coercion', () => {
+  // An instanceOf naming a class the generators do not support is ignored, not
+  // emitted: `input?.value instanceof CustomThing` compiled to a TS2304 and
+  // threw a ReferenceError at runtime, because nothing declares that class.
+  it('ignores an unsupported instanceOf instead of referencing a class that does not exist', () => {
     const schema = { 'x-mjst': { instanceOf: 'CustomThing' } }
     const result = generateValidationExpression('value', schema, '{}', true)
 
-    expect(result).toBe('input?.value instanceof CustomThing ? input?.value : {}')
+    expect(result).toBe('input?.value ?? {}')
   })
 
   it('checks typeof bigint for a required x-mjst primitive field', () => {

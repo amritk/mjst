@@ -77,20 +77,51 @@ const CASES: string[] = [
   // Anchors, aliases, and merge keys.
   'a: &x\n  k: 1\nb: *x\n',
   'base: &b {p: 1, q: 2}\nuse:\n  <<: *b\n  q: 3\n',
+  // Merged keys that collide with an `Object.prototype` member. A prototype-chain
+  // membership test (`k in target`) drops every one of these silently, and no
+  // real-world fixture happens to name a key `toString`.
+  'base: &b\n  toString: TS\n  valueOf: VO\n  constructor: C\n  hasOwnProperty: HOP\nuse:\n  <<: *b\n',
+  'base: &b\n  toString: TS\nuse:\n  <<: *b\n  toString: mine\n',
   // Realistic documents.
   FIXTURES.small,
   FIXTURES.medium,
   FIXTURES.large,
 ]
 
+const label = (source: string): string =>
+  source.length > 40
+    ? `${source.slice(0, 37).replace(/\n/g, '\\n')}…`
+    : source.replace(/\n/g, '\\n').replace(/\r/g, '\\r')
+
 describe('differential', () => {
   for (const [index, source] of CASES.entries()) {
-    const label = source.length > 40 ? `${source.slice(0, 37).replace(/\n/g, '\\n')}…` : source.replace(/\n/g, '\\n')
-    it(`matches yaml for case ${index}: ${label}`, () => {
+    it(`matches yaml for case ${index}: ${label(source)}`, () => {
       // `yaml` defaults merge keys off; we default them on, so enable them here
       // to line the two up on the `<<` case.
       expect(ours(source)).toEqual(eemeli(source, { merge: true }))
     })
+  }
+
+  /**
+   * Every case above re-run with its LF breaks swapped for CR LF and for a lone
+   * CR. YAML 1.2 §5.4 makes all three one line break (`b-break ::= CR LF | CR |
+   * LF`), so each variant must project to what `yaml` produces for the *LF*
+   * original — the reference is still external, we have just moved which
+   * spelling of the same document we feed ourselves. (Comparing lone CR against
+   * `yaml` on the CR text itself is not an option: `yaml` does not accept a lone
+   * CR as a break, and neither did we — a CR-delimited document lost every line
+   * after the first, silently.)
+   */
+  for (const [name, brk] of [
+    ['CR LF', '\r\n'],
+    ['lone CR', '\r'],
+  ] as const) {
+    for (const [index, source] of CASES.entries()) {
+      const converted = source.replace(/\n/g, brk)
+      it(`matches yaml with ${name} breaks for case ${index}: ${label(source)}`, { timeout: 30_000 }, () => {
+        expect(ours(converted)).toEqual(eemeli(source, { merge: true }))
+      })
+    }
   }
 
   // Large, real-world public specs we don't control — the documents this

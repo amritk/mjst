@@ -22,6 +22,13 @@ const nestedAnyOf = (depth: number): unknown => {
   return schema
 }
 
+/** Wraps `leaf` in `depth` levels of `{ not: … }` — a schema deep enough to overflow a recursive walk. */
+const nestedSchema = (depth: number, leaf: unknown = { type: 'string' }): unknown => {
+  let schema = leaf
+  for (let i = 0; i < depth; i++) schema = { not: schema }
+  return schema
+}
+
 describe('limits', () => {
   it('flags nested unbounded quantifiers as unsafe and leaves ordinary patterns alone', () => {
     for (const unsafe of ['(a+)+', '(a*)*', '(a+)*', '(\\d+)+$', '([a-z]+)+', '((a+))+']) {
@@ -46,10 +53,87 @@ describe('limits', () => {
     expect(validator('aaaa')).toBe(true)
   })
 
+  it('flags an ambiguous alternation repeated by an unbounded quantifier', () => {
+    // Star height 1, so the nested-quantifier rule misses these entirely — yet
+    // `/^(a|a)+$/.test('a'.repeat(28) + '!')` takes well over a second, doubling
+    // with each added character. Two branches that provably match the same single
+    // character give an n-character input 2^n parses.
+    for (const unsafe of ['^(a|a)+$', '(a|[a-z])+', '(x|\\w)*', '(\\.|.)+', '(ab|ab)+', '(5|\\d){1,}']) {
+      expect(hasUnsafeRegex(unsafe), unsafe).toBe(true)
+    }
+    // A bounded quantifier caps the blow-up (2^10 parses), so it is not flagged.
+    expect(hasUnsafeRegex('(a|a){1,10}')).toBe(false)
+    // Documenting the gap, not endorsing it: the screen only proves ambiguity when
+    // one branch is a single literal character, so two overlapping *classes* get
+    // through even though they are genuinely exponential. See the module comment.
+    expect(hasUnsafeRegex('([0-9]|\\d)+')).toBe(false)
+  })
+
+  it('leaves unambiguous alternations alone, including ones sharing a first character', () => {
+    // `(ab|ac)+` shares a first character but is linear — the branches diverge
+    // before the group can repeat — so a first-character overlap test would be a
+    // false positive here. We only flag provable single-character ambiguity.
+    for (const safe of [
+      '^(ab|ac)+$',
+      '^(https?|ftp)://',
+      '^(GET|POST|PUT|DELETE)$',
+      '^(\\+|-)?\\d+(\\.\\d+)?$',
+      '^(a|b|c)+$',
+      '(foo|bar)*',
+    ]) {
+      expect(hasUnsafeRegex(safe), safe).toBe(false)
+    }
+  })
+
+  it('screens a pattern that is only reachable through a $ref into an unfamiliar container', () => {
+    // OpenAPI parks its subschemas under `components/schemas` and reaches them by
+    // `$ref`. A screen that walks a fixed list of subschema keywords never sees
+    // them, so this pattern used to be compiled and run unscreened — 30 characters
+    // of input then burned over a second of CPU.
+    expect(() =>
+      validateGuard({
+        $ref: '#/components/schemas/A',
+        components: { schemas: { A: { type: 'string', pattern: '^(a+)+$' } } },
+      }),
+    ).toThrow(/backtracking|ReDoS/i)
+
+    // Same for a container we have never heard of at all.
+    expect(() => validate({ 'x-vendor-bag': { anything: { pattern: '(a*)*' } } })).toThrow(/backtracking|ReDoS/i)
+  })
+
   it('does not mistake a regex-shaped string in const/enum data for a pattern', () => {
     // `(a+)+` here is a data constant, not a `pattern` keyword — must not be screened.
     expect(validate({ const: '(a+)+' })('(a+)+')).toBe(true)
     expect(validate({ enum: ['(a*)*', 'ok'] })('ok')).toBe(true)
+    // The walk is otherwise unrestricted, so the data keywords are what keep an
+    // object *value* carrying a `pattern` property from being screened as one.
+    expect(validate({ const: { pattern: '(a+)+' } })({ pattern: '(a+)+' })).toBe(true)
+    expect(validate({ enum: [{ pattern: '(a*)*' }] })({ pattern: '(a*)*' })).toBe(true)
+    expect(validate({ type: 'object', default: { pattern: '(a+)+' } })({})).toBe(true)
+  })
+
+  it('rejects a schema nested far past the native stack limit without a RangeError', () => {
+    // The pattern screen and the anchor search both run before `maxDepth` applies,
+    // so a recursive walk there surfaced as an uncatchable `RangeError` —
+    // `isValidationLimitError` returned false and a consumer's limit handler fell
+    // through to a 500. Building must succeed; the depth cap then does its job.
+    const guard = validateGuard(nestedSchema(20_000))
+    let thrown: unknown
+    try {
+      guard('x')
+    } catch (error) {
+      thrown = error
+    }
+    expect(isValidationLimitError(thrown)).toBe(true)
+    expect((thrown as Error).message).toMatch(/maximum depth/i)
+  })
+
+  it('finds an $anchor buried below the native stack limit', () => {
+    // The anchor search walks the whole document, so it faces the same depth as
+    // the pattern screen and must survive it.
+    const schema = { $ref: '#deep', $defs: { buried: nestedSchema(20_000, { $anchor: 'deep', type: 'string' }) } }
+    expect(validateGuard(schema)('hello')).toBe(true)
+    expect(validateGuard(schema)(42)).toBe(false)
   })
 
   it('rejects deeply nested data against a recursive schema instead of overflowing the stack', () => {

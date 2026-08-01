@@ -54,4 +54,15 @@ describe('create-request-id', () => {
     expect(getRequestId(undefined)).toBeUndefined()
     expect(getRequestId({})).toBeUndefined()
   })
+
+  it('echoes the id onto a response whose headers are immutable', async () => {
+    // A proxied mount's reply — mutating it in place throws, and the throw
+    // escapes the adapter as a platform error rather than a 500.
+    const requestId = createRequestId({ generate: () => 'fixed-id' })
+    const locals: RequestLocals = {}
+    requestId.onRequest(new Request('http://localhost/'), undefined, undefined, locals)
+    const proxied = Response.redirect('https://example.com/next', 302)
+    const decorated = await requestId.onResponse(proxied, new Request('http://localhost/'), locals)
+    expect((decorated as Response).headers.get('x-request-id')).toBe('fixed-id')
+  })
 })

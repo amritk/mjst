@@ -18,9 +18,16 @@ refs, and remote (http/https) documents — into a single dereferenced document.
   subset.
 - **Cross-file + remote.** Relative refs resolve against the document they appear
   in (a ref inside a remote doc stays remote, one inside a local file stays
-  local). Fetched remote documents are cached for the lifetime of the process.
+  local). Fetched remote documents are cached for the session, keyed by URL *and*
+  by the credentials they were fetched with.
 - **Default-deny SSRF guard.** Remote refs to loopback, private, link-local, and
-  cloud-metadata (`169.254.169.254`) hosts are refused unless you opt in.
+  cloud-metadata hosts — by IP (`169.254.169.254`) *and* by name
+  (`metadata.google.internal`, anything under `.internal`) — are refused unless
+  you opt in. Hostnames are additionally resolved and refused when any address
+  they point at is non-public, so `127.0.0.1.nip.io` does not slip through.
+- **Default-deny local reads.** A local `$ref` may only resolve **under the root
+  document's directory**. `{"$ref": "../../../etc/passwd"}` is refused; widen it
+  with `allowedRoots` when your spec legitimately spans folders.
 - **OpenAPI Reference Objects.** A `$ref` whose only siblings are `summary` /
   `description` inlines the target with those annotations overriding — matching
   OpenAPI 3.1 Reference Object semantics, where an `allOf` wrapper would be
@@ -48,23 +55,62 @@ const remote = await resolveRefsFromFile('https://api.example.com/schema.json', 
 | Option | Default | Description |
 |:---|:---|:---|
 | `remote` | `true` | Whether http(s) refs may be fetched at all. |
-| `allowedHosts` | `[]` | If non-empty, only these hosts may be fetched. An explicit entry bypasses the private-host guard. |
+| `localRefs` | `true` | Whether `$ref`s to other files on disk may be read. `false` still reads the root document you named — it refuses everything a ref reaches out to. |
+| `allowedRoots` | `[dirname(root)]` | Directories a local `$ref` must resolve inside. The default confines a ref to the folder holding the root document. |
+| `allowedHosts` | `[]` | If non-empty, only these hosts may be fetched. Matched case-insensitively; an entry without a port matches any port, one with a port must match it (a URL that omits the port counts as its protocol default). An explicit entry bypasses the private-host and DNS guards. |
 | `allowPrivateHosts` | `false` | Allow loopback/private/link-local targets. Left off, these are refused as an SSRF guard. |
+| `verifyDns` | `true` | Resolve each remote host and refuse it when any address it resolves to is non-public. Pass `false` where names resolve at an egress proxy rather than locally. |
 | `headers` | — | Extra headers for remote requests (record, or `(url) => headers` for per-host credentials). Never sent across a cross-origin redirect. |
 | `fetch` | global `fetch` | Custom fetch implementation. The SSRF guard still evaluates every hop before it is called. |
 | `timeoutMs` | `30_000` | Abort an unresponsive remote fetch after this many milliseconds. |
+| `totalTimeoutMs` | `60_000` | Wall-clock budget for the whole resolve, across every document. |
+| `maxDocuments` | `500` | Documents (root included) a single resolve may load. |
 | `maxRedirects` | `5` | Redirect hops to follow per remote document (each hop re-runs the SSRF guard). |
 | `maxBytes` | `16` MiB | Refuse to buffer a remote document larger than this. |
+| `maxDepth` | `512` | How deep to walk before leaving a subtree unresolved and recording an error. |
 | `cache` | `true` | Pass `false` to bypass the process-wide session cache for this call — everything is re-fetched, nothing is stored. |
 | `parse` | `JSON.parse` | Custom content parser (e.g. YAML-aware). |
 | `trackOrigins` | `false` | Record a per-node origin map on the result. |
 
-Errors (a missing file, a refused host, a bad URL) are collected on
-`result.errors` rather than thrown; the corresponding ref resolves to `{}` so the
-rest of the document still resolves.
+Errors (a missing file, a refused host, a refused path, a bad URL, a document too
+deeply nested) are collected on `result.errors` rather than thrown; the
+corresponding ref resolves to `{}` so the rest of the document still resolves.
 
 `clearRemoteCache()` drops every cached remote document — useful in tests or
-long-lived sessions where remote schemas may change.
+long-lived sessions where remote schemas may change. Pass a URL
+(`clearRemoteCache(url)`) to drop just that one. The cache expires entries after
+10 minutes and evicts the least recently used past 256 documents, so a long-lived
+process does not accumulate every schema it has ever seen.
+
+### Security posture
+
+The remote path has always been default-deny; the local path now matches it.
+
+- **Local reads are confined** to `dirname(rootLocation)` unless you pass
+  `allowedRoots`. This is deliberately strict: a ref like `../common/schemas.json`
+  — an ordinary split-spec layout — is refused until you opt in, because the same
+  shape is what reads `/etc/passwd` out of a document you did not write. Both the
+  lexical and the symlink-resolved path must land inside a root, so a symlink
+  planted in the tree cannot be used to escape it. The root document itself is
+  exempt: it is the file you explicitly named.
+- **The session cache is credential-scoped.** Its key covers the request headers,
+  the `fetch`/`parse` callbacks, and the transfer limits, so a document fetched
+  with one tenant's token is invisible to a call carrying different (or no)
+  credentials — and no caller inherits another's `fetch`. In-flight coalescing
+  uses the same key.
+- **The SSRF guard runs in two passes.** `isPrivateHost` is synchronous and reads
+  only the URL (every IPv4 encoding, IPv4-in-IPv6 embeddings, ULA/link-local/
+  site-local IPv6, plus a name denylist for cloud-metadata endpoints).
+  `assertPublicHost` then resolves the name and refuses it when any address is
+  non-public. Both run on every redirect hop.
+- **Known residual gap: DNS rebinding.** A record that changes between the check
+  and the connection still wins; closing that requires pinning the socket to the
+  verified address, which Node's `fetch` does not let us do. What the DNS pass
+  buys is that a name *statically* pointing at a private address is refused —
+  which is the case that actually shows up.
+- **A resolve is bounded** by `maxDocuments`, `totalTimeoutMs`, and `maxDepth`, so
+  a hostile document cannot use the resolver as an egress amplifier, hold the
+  process for hours, or crash it with nesting.
 
 ## `$id` scoping
 

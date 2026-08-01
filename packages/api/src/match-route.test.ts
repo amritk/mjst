@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { matchRoute } from './match-route'
+import { allowedMethods, matchRoute } from './match-route'
 import { parsePathPattern } from './parse-path-pattern'
 import type { AnyRouteContract, CompiledRoute, RouteTable } from './types'
 
@@ -107,5 +107,77 @@ describe('match-route', () => {
     const files = route('GET', '/files/v2/{path+}')
     expect(matchRoute(table([files]), 'GET', '/files/v1/a/b')).toBeUndefined()
     expect(matchRoute(table([files]), 'GET', '/files/v2/a/b')?.params).toEqual({ path: 'a/b' })
+  })
+
+  it('captures several parameters in one path', () => {
+    const post = route('GET', '/users/{userId}/posts/{postId}')
+    expect(matchRoute(table([post]), 'GET', '/users/7/posts/9')?.params).toEqual({ userId: '7', postId: '9' })
+  })
+
+  // A pattern is free to name a capture `{__proto__}`. A plain
+  // `params[name] = value` would run the prototype setter, so the capture never
+  // reached the params object and the route's schema saw nothing at all.
+  it('captures a parameter named __proto__ as an ordinary own property', () => {
+    const fixed = route('GET', '/proto/{__proto__}')
+    const captured = matchRoute(table([fixed]), 'GET', '/proto/abc')?.params
+    expect(Object.getOwnPropertyNames(captured ?? {})).toEqual(['__proto__'])
+    expect(captured?.['__proto__']).toBe('abc')
+    expect(Object.getPrototypeOf(captured ?? {})).toBe(Object.prototype)
+  })
+
+  it('captures a greedy tail named __proto__ the same way', () => {
+    const greedy = route('GET', '/proto/{__proto__+}')
+    const captured = matchRoute(table([greedy]), 'GET', '/proto/a/b/c')?.params
+    expect(Object.getOwnPropertyNames(captured ?? {})).toEqual(['__proto__'])
+    expect(captured?.['__proto__']).toBe('a/b/c')
+  })
+
+  // Registration order decides which of two overlapping routes wins, and the
+  // matcher buckets candidates by their first segment — so a literal-first and
+  // a parameter-first route that both match must still be tried in the order
+  // they were registered, not in bucket order.
+  it('prefers whichever of a literal-first and parameter-first route was registered first', () => {
+    const tenant = route('GET', '/{tenant}/settings')
+    const admin = route('GET', '/admin/{page}')
+    expect(matchRoute(table([tenant, admin]), 'GET', '/admin/settings')?.route).toBe(tenant)
+    expect(matchRoute(table([admin, tenant]), 'GET', '/admin/settings')?.route).toBe(admin)
+  })
+
+  // Same rule across the greedy/fixed split: a greedy tail and a fixed pattern
+  // of the same length both match a two-segment path.
+  it('prefers whichever of a greedy tail and a fixed route was registered first', () => {
+    const greedy = route('GET', '/files/{path+}')
+    const fixed = route('GET', '/files/{dir}/{name}')
+    expect(matchRoute(table([greedy, fixed]), 'GET', '/files/docs/a.txt')?.params).toEqual({ path: 'docs/a.txt' })
+    expect(matchRoute(table([fixed, greedy]), 'GET', '/files/docs/a.txt')?.params).toEqual({
+      dir: 'docs',
+      name: 'a.txt',
+    })
+  })
+
+  it('matches a greedy tail on a path longer than every fixed route', () => {
+    const greedy = route('GET', '/files/{path+}')
+    const fixed = route('GET', '/files/{dir}/{name}')
+    expect(matchRoute(table([fixed, greedy]), 'GET', '/files/a/b/c/d/e')?.params).toEqual({ path: 'a/b/c/d/e' })
+  })
+
+  it('rejects a path longer than every route when nothing is greedy', () => {
+    const user = route('GET', '/users/{id}')
+    expect(matchRoute(table([user]), 'GET', '/users/1/2/3/4')).toBeUndefined()
+  })
+
+  it('lists the other methods serving a path, static and dynamic alike', () => {
+    const routes = [route('GET', '/users/{id}'), route('DELETE', '/users/{id}'), route('POST', '/health')]
+    expect(allowedMethods(table(routes), '/users/7', 'PUT').sort()).toEqual(['DELETE', 'GET'])
+    expect(allowedMethods(table(routes), '/health', 'GET')).toEqual(['POST'])
+  })
+
+  it('leaves the requesting method out of the allow list and normalizes the path', () => {
+    const routes = [route('GET', '/users/{id}'), route('DELETE', '/users/{id}')]
+    expect(allowedMethods(table(routes), '/users/7/', 'GET')).toEqual(['DELETE'])
+  })
+
+  it('returns no allowed methods for a path nothing serves', () => {
+    expect(allowedMethods(table([route('GET', '/users/{id}')]), '/nothing/7', 'GET')).toEqual([])
   })
 })

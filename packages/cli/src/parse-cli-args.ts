@@ -16,6 +16,7 @@ type MutableConfig = {
   validators?: boolean
   examples?: boolean
   build?: boolean
+  force?: boolean
   logWarnings?: boolean
   strict?: boolean
   stripUnknown?: boolean
@@ -29,7 +30,13 @@ type MutableConfig = {
   resolveRemote?: boolean
   allowedHosts?: string[]
   allowPrivateHosts?: boolean
+  allowedRoots?: string[]
 }
+
+// Flags that take a value and accumulate across repeats instead of overwriting.
+// They are handled apart from VALUE_KEYS because a second `--allowed-hosts` has
+// to append rather than replace the first one.
+const LIST_KEYS = new Set<keyof MutableConfig>(['allowedHosts', 'allowedRoots'])
 
 // Boolean flags toggle on by presence and accept `--flag=false` to opt out.
 const BOOLEAN_KEYS = new Set<keyof MutableConfig>([
@@ -37,6 +44,7 @@ const BOOLEAN_KEYS = new Set<keyof MutableConfig>([
   'validators',
   'examples',
   'build',
+  'force',
   'logWarnings',
   'strict',
   'stripUnknown',
@@ -68,6 +76,24 @@ const EXTERNAL_VALUE_KEYS = new Set<string>(['config'])
 /** Normalizes a CLI flag name to its camelCase config key so both `--out-dir` and `--outDir` map to `outDir`. */
 const toCamelCase = (key: string): string => key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())
 
+/**
+ * True when `--<flagName>` consumes the argument that follows it (`--banner`
+ * takes an optional one, which still swallows the next non-flag token).
+ *
+ * Exported because whoever inspects raw argv before parsing — the version/help
+ * detection in `cli.ts` — has to know that the `-v` in `--type-suffix -v` is a
+ * *value*, not a request to print the version.
+ */
+export const flagTakesValue = (flagName: string): boolean => {
+  const key = toCamelCase(flagName)
+  return (
+    VALUE_KEYS.has(key as keyof MutableConfig) ||
+    LIST_KEYS.has(key as keyof MutableConfig) ||
+    EXTERNAL_VALUE_KEYS.has(key) ||
+    key === 'banner'
+  )
+}
+
 const parseHelpersValue = (value: string): 'package' | 'embedded' | undefined => {
   if (value === 'package' || value === 'embedded') return value
   return undefined
@@ -82,17 +108,22 @@ const parseInputValue = (value: string): SourceFormat | undefined =>
   (SOURCE_FORMATS as readonly string[]).includes(value) ? (value as SourceFormat) : undefined
 
 /**
- * Appends the hosts in `value` (comma-separated) onto `allowedHosts`. Repeating
- * `--allowed-hosts` accumulates, so `--allowed-hosts a.com --allowed-hosts b.com`
- * and `--allowed-hosts a.com,b.com` are equivalent. Blank entries are dropped.
+ * Appends the comma-separated entries in `value` onto a list flag. Repeating the
+ * flag accumulates, so `--allowed-hosts a.com --allowed-hosts b.com` and
+ * `--allowed-hosts a.com,b.com` are equivalent. Blank entries are dropped.
+ *
+ * `--allowed-roots` shares this convention rather than inventing a second one.
+ * The one thing it cannot express is a directory whose name contains a comma —
+ * repeat the flag is not enough there, but a path like that is rare enough that
+ * a second syntax is not worth the confusion.
  */
-const appendAllowedHosts = (config: MutableConfig, value: string): void => {
-  const hosts = value
+const appendListValue = (config: MutableConfig, key: 'allowedHosts' | 'allowedRoots', value: string): void => {
+  const entries = value
     .split(',')
-    .map((host) => host.trim())
-    .filter((host) => host.length > 0)
-  if (hosts.length === 0) return
-  config.allowedHosts = [...(config.allowedHosts ?? []), ...hosts]
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+  if (entries.length === 0) return
+  config[key] = [...(config[key] ?? []), ...entries]
 }
 
 /** Assigns a value-flag onto the config. Returns false for unknown keys. */
@@ -163,6 +194,9 @@ const assignBoolean = (config: MutableConfig, key: string, value: boolean): bool
     case 'build':
       config.build = value
       return true
+    case 'force':
+      config.force = value
+      return true
     case 'logWarnings':
       config.logWarnings = value
       return true
@@ -202,8 +236,20 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
 
-    if (!arg || !arg.startsWith('--')) {
-      continue
+    if (!arg) continue
+
+    // A bare `--` ends the flags. Nothing after it is meaningful to the generate
+    // command (it takes no positionals), but rejecting the terminator itself as an
+    // unknown flag is worse than useless — shells and task runners insert it.
+    if (arg === '--') break
+
+    if (!arg.startsWith('--')) {
+      // The generate command is flags-only, so a stray positional is a mistake
+      // worth failing on: `mjst genrate --schema … --out-dir …` used to run a
+      // perfectly normal generation and exit 0, hiding the typo'd subcommand.
+      throw new Error(
+        `Unexpected argument "${arg}". mjst takes flags only — did you mean a subcommand (\`mjst lint\`, \`mjst compile-api\`)?`,
+      )
     }
 
     // Handle --flag=value syntax
@@ -214,13 +260,18 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
       if (key === 'banner') {
         // --banner=false → false, --banner=true → true, --banner=<text> → custom string
         config.banner = value === 'false' ? false : value === 'true' ? true : value
-      } else if (key === 'allowedHosts') {
-        appendAllowedHosts(config, value)
+      } else if (LIST_KEYS.has(key as keyof MutableConfig)) {
+        appendListValue(config, key as 'allowedHosts' | 'allowedRoots', value)
       } else if (BOOLEAN_KEYS.has(key as keyof MutableConfig)) {
         assignBoolean(config, key, value !== 'false')
       } else if (VALUE_KEYS.has(key as keyof MutableConfig)) {
         assignValue(config, key, value)
-      } else if (!EXTERNAL_VALUE_KEYS.has(key)) {
+      } else if (EXTERNAL_VALUE_KEYS.has(key)) {
+        // `--config=` with nothing after it loaded no config and generated with
+        // the defaults instead — the user asked for a config file, so say that we
+        // did not get one.
+        if (value === '') throw new Error(`Flag "--${arg.slice(2, equalsIndex)}" expects a value.`)
+      } else {
         // An unrecognized flag is almost always a typo (e.g. `--strcit`). Silently
         // dropping it means the user gets non-strict output while believing they
         // asked for strict — fail loudly instead of guessing intent.
@@ -245,13 +296,14 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
       continue
     }
 
-    // --allowed-hosts takes a value (comma-separated) and accumulates when repeated.
-    if (key === 'allowedHosts') {
+    // --allowed-hosts / --allowed-roots take a value (comma-separated) and
+    // accumulate when repeated.
+    if (LIST_KEYS.has(key as keyof MutableConfig)) {
       const value = args[i + 1]
       if (value === undefined || value.startsWith('--')) {
         throw new Error(`Flag "--${flagName}" expects a value.`)
       }
-      appendAllowedHosts(config, value)
+      appendListValue(config, key as 'allowedHosts' | 'allowedRoots', value)
       i++
       continue
     }
@@ -275,10 +327,15 @@ export const parseCliArgs = (args: readonly string[]): Partial<CliConfig> => {
       continue
     }
 
-    // A flag consumed elsewhere (e.g. `--config`) still swallows its value here.
+    // A flag consumed elsewhere (e.g. `--config`) still swallows its value here,
+    // and still has to have one: a bare `--config` used to be dropped silently, so
+    // the run generated from CLI flags alone as if no config had been asked for.
     if (EXTERNAL_VALUE_KEYS.has(key)) {
       const value = args[i + 1]
-      if (value !== undefined && !value.startsWith('--')) i++
+      if (value === undefined || value.startsWith('--')) {
+        throw new Error(`Flag "--${flagName}" expects a value.`)
+      }
+      i++
       continue
     }
 

@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { createApi } from '../create-api'
 import { hashContracts } from '../hash-contracts'
-import { toFetchHandler } from '../to-fetch-handler'
+import { HOOK_ERROR_MESSAGE, toFetchHandler } from '../to-fetch-handler'
 import type { AnyRouteContract } from '../types'
 import { compileToModule } from './compile-to-module'
 import * as corpus from './compile-to-module.test-utils'
@@ -42,8 +42,10 @@ const routes: Record<string, AnyRouteContract> = {
   localsEcho: corpus.localsEcho,
   guardedResource: corpus.guardedResource,
   guardBoom: corpus.guardBoom,
+  rawErrorBoom: corpus.rawErrorBoom,
   secureNote: corpus.secureNote,
   secureReport: corpus.secureReport,
+  protoSlots: corpus.protoSlots,
 }
 const info = { title: 'Differential', version: '1.0.0' }
 
@@ -76,8 +78,8 @@ const emit = (): string =>
     ...OPENAPI_EXTRAS,
     contextExport: 'createAppContext',
     mounts: { '/mounted': 'mountEcho' },
-    onRequestExports: ['gateResolveTenant', 'gateTeapot'],
-    onResponseExports: ['stampHeader', 'stampLocals'],
+    onRequestExports: ['gateResolveTenant', 'gateTeapot', 'gateBoom'],
+    onResponseExports: ['stampHeader', 'stampLocals', 'stampBoom'],
     errorsExport: 'corpusErrors',
     onErrorExport: 'corpusOnError',
     observeExport: 'recordObservation',
@@ -141,8 +143,8 @@ describe('compile-to-module', () => {
         }),
         {
           mounts: { '/mounted': corpus.mountEcho },
-          onRequest: [corpus.gateResolveTenant, corpus.gateTeapot],
-          onResponse: [corpus.stampHeader, corpus.stampLocals],
+          onRequest: [corpus.gateResolveTenant, corpus.gateTeapot, corpus.gateBoom],
+          onResponse: [corpus.stampHeader, corpus.stampLocals, corpus.stampBoom],
           maxBodyBytes: MAX_BODY_BYTES,
         },
       )
@@ -279,6 +281,17 @@ describe('compile-to-module', () => {
         () => new Request('http://localhost/guarded', { headers: { 'x-key': 'secret', 'x-role': 'admin' } }),
         () => new Request('http://localhost/guarded', { headers: { 'x-key': 'wrong', 'x-role': 'admin' } }),
         () => new Request('http://localhost/guard-boom'),
+        // The raw escape hatch on the cold paths: an onError and a notFound
+        // formatter that answer with a built Response must reach the wire
+        // verbatim — body included — in both engines.
+        () => new Request('http://localhost/raw-error'),
+        () => new Request('http://localhost/raw-error', { method: 'HEAD' }),
+        () => new Request('http://localhost/raw-missing'),
+        // A throwing hook must become the pipeline's own 500 rather than
+        // escaping the adapter, on the gate side and the decorator side alike.
+        () => new Request('http://localhost/health', { headers: { 'x-hook-boom': 'request' } }),
+        () => new Request('http://localhost/health', { headers: { 'x-hook-boom': 'response' } }),
+        () => new Request('http://localhost/missing', { headers: { 'x-hook-boom': 'response' } }),
         // Security guards resolved from the document-level default: they run
         // before the body is read, so an unauthenticated caller gets the
         // denial even when the payload could never have parsed, validated, or
@@ -395,6 +408,27 @@ describe('compile-to-module', () => {
         // Unmatched requests with the tenant gate: the 404 formatter and the
         // unmatched observer both see the shared locals.
         () => new Request('http://localhost/nowhere', { headers: { 'x-tenant': 'acme-inc' } }),
+        // Slots declared under the name `__proto__`. The compiled engine used
+        // to bake its schema constants as bare object literals, which dropped
+        // the key at module evaluation and left it validating a schema the
+        // runtime engine never had — so these disagreed in *both* directions.
+        () => proto('/proto/abc', '{"__proto__":"body"}', { header: 'hdr', cookie: 'ck' }),
+        // The bypass: a value violating the declared type. The compiled engine
+        // answered 200 because the constraint had disappeared.
+        () => proto('/proto/abc', '{"__proto__":123}'),
+        // The mirror image: legal input under `additionalProperties: false`,
+        // which the compiled engine used to reject as an unknown key.
+        () => proto('/proto/abc', '{"__proto__":"abc"}'),
+        // Required-ness, minLength, and the closed object over the same name.
+        () => proto('/proto/abc', '{}'),
+        () => proto('/proto/abc', '{"__proto__":"ab"}'),
+        () => proto('/proto/abc', '{"__proto__":"body","extra":1}'),
+        // The path capture and the header carry the name too: a too-short
+        // capture is a 422, and an absent header reports absent rather than
+        // handing the handler `Object.prototype`.
+        () => proto('/proto/a', '{"__proto__":"body"}'),
+        () => proto('/proto/abc', '{"__proto__":"body"}', { header: 'xy' }),
+        () => proto('/proto/abc', '{"__proto__":"body"}', { cookie: 'only' }),
       ]
 
       for (const makeRequest of cases) {
@@ -470,10 +504,96 @@ describe('compile-to-module', () => {
       const authenticated = await compiledModule.fetch(note('{"title":"note"}', 'corpus-key'), ENV)
       expect(authenticated.status).toBe(200)
       expect(await authenticated.json()).toMatchObject({ key: 'corpus-key', contextRuns: 1 })
+
+      // Same idea for the hook boundary: the loop proves the engines agree on
+      // the hook-boom cases, and this pins that what they agree on is the
+      // error reaching `onError` rather than both quietly swallowing it. A
+      // status-only comparison passed even when both engines dropped it.
+      const hookBoom = (kind: string) => new Request('http://localhost/health', { headers: { 'x-hook-boom': kind } })
+      for (const kind of ['request', 'response']) {
+        for (const [engine, answer] of [
+          ['runtime', await runtime(hookBoom(kind), ENV)],
+          ['compiled', await compiledModule.fetch(hookBoom(kind), ENV)],
+        ] as const) {
+          expect(answer.status, engine + ' ' + kind).toBe(500)
+          // `route: undefined` — a hook belongs to no route — so corpusOnError
+          // falls back to the request's own path and method.
+          expect(await answer.json(), engine + ' ' + kind).toMatchObject({
+            error: 'handled',
+            route: '/health',
+            method: 'GET',
+            tenant: 'acme',
+            gateTenant: 'anonymous',
+          })
+        }
+      }
     } finally {
       rmSync(fixtureDir, { recursive: true, force: true })
     }
   })
+
+  it('logs a thrown hook identically in both engines when the app wired no onError', async () => {
+    // The onError-less half of the hook boundary. Without a sink to report to
+    // there is only one place left for the error to go, and it has to be the
+    // same place in both engines — otherwise "compiled" quietly means "no
+    // telemetry", which is the whole failure this fix exists to close.
+    const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), '.fixtures-hook-log')
+    mkdirSync(fixtureDir, { recursive: true })
+    try {
+      const hookRoutes = { health: corpus.health }
+      const source = compileToModule({
+        routesImport: '../compile-to-module.test-utils',
+        runtimeImport: '../../index',
+        validatorsImport: '@amritk/runtime-validators',
+        routes: hookRoutes,
+        info,
+        onRequestExports: ['gateBoom'],
+        onResponseExports: ['stampBoom'],
+      })
+      // No onError to hand it to, so the emitted helper is the log alone.
+      expect(source).toContain('const hookError = (error, request, locals, env, executionContext) => {')
+      expect(source).toContain(`console.error(${JSON.stringify(HOOK_ERROR_MESSAGE)}, error)`)
+
+      const fixturePath = join(fixtureDir, 'generated-hook-log.ts')
+      writeFileSync(fixturePath, source)
+      const compiledModule = (await import(fixturePath)) as {
+        fetch: (request: Request, env?: unknown) => Response | Promise<Response>
+      }
+      const runtime = toFetchHandler(createApi({ routes: Object.values(hookRoutes), info }), {
+        onRequest: [corpus.gateBoom],
+        onResponse: [corpus.stampBoom],
+      })
+
+      for (const kind of ['request', 'response']) {
+        const make = (): Request => new Request('http://localhost/health', { headers: { 'x-hook-boom': kind } })
+        const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+        try {
+          const fromRuntime = await runtime(make(), ENV)
+          const runtimeLog = spy.mock.calls.splice(0)
+          const fromCompiled = await compiledModule.fetch(make(), ENV)
+          const compiledLog = spy.mock.calls.splice(0)
+
+          expect(fromCompiled.status, kind).toBe(fromRuntime.status)
+          expect(fromRuntime.status, kind).toBe(500)
+          expect(await fromCompiled.text(), kind).toBe(await fromRuntime.text())
+          // One report per engine, same prefix, same error object.
+          expect(runtimeLog.length, kind).toBe(1)
+          expect(
+            compiledLog.map((call) => String(call[0])),
+            kind,
+          ).toEqual(runtimeLog.map((call) => String(call[0])))
+          expect(String(runtimeLog[0]?.[0]), kind).toBe(HOOK_ERROR_MESSAGE)
+          expect(String((compiledLog[0]?.[1] as Error | undefined)?.message), kind).toBe(
+            String((runtimeLog[0]?.[1] as Error | undefined)?.message),
+          )
+        } finally {
+          spy.mockRestore()
+        }
+      }
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  }, 20_000)
 
   it('applies the default 1 MiB body cap, and Infinity restores unbounded reads, identically to the runtime', async () => {
     const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), '.fixtures-body-cap')
@@ -643,6 +763,203 @@ describe('compile-to-module', () => {
     expect(() => compileToModule({ routesImport: './x', routes: { 'not-an-identifier': corpus.health } })).toThrow(
       /valid identifier/,
     )
+  })
+
+  it('refuses to emit a contract whose strings would escape the generated source', () => {
+    // `defineRoute` and `defineContract` are identity functions with no runtime
+    // validation, so a contract assembled from a config file, a database row,
+    // or an imported OpenAPI document arrives here exactly as written. Every
+    // one of these values lands inside emitted source, so an emit is the last
+    // place to catch them — a throw at build time, never a payload in the
+    // module that ships.
+    // Typed loosely on purpose: the type checker would reject every one of
+    // these contracts, and a contract built at runtime never met it.
+    const hostile = (contract: Record<string, unknown>): AnyRouteContract =>
+      ({
+        method: 'get',
+        path: '/pwn',
+        responses: { 200: { body: { type: 'object' } } },
+        handler: () => ({ status: 200, body: {} }),
+        ...contract,
+      }) as unknown as AnyRouteContract
+
+    // A response key becomes both an identifier fragment
+    // (`serialize_<route>_<status>`) and a bare numeric literal.
+    expect(() =>
+      compileToModule({
+        routesImport: './x',
+        routes: {
+          r: hostile({
+            responses: {
+              '200); globalThis.PWNED = 1; (function(': {
+                body: {
+                  type: 'object',
+                  properties: { a: { type: 'string' } },
+                  required: ['a'],
+                  additionalProperties: false,
+                },
+              },
+            },
+          }),
+        },
+      }),
+    ).toThrow(/must be an integer between 100 and 599/)
+
+    // The same key in expression position, which is what `validateResponses`
+    // adds — the payload would run rather than merely break the build.
+    expect(() =>
+      compileToModule({
+        routesImport: './x',
+        validateResponses: true,
+        routes: { r: hostile({ responses: { '200) { globalThis.PWNED = 1 } if (true': { body: {} } } }) },
+      }),
+    ).toThrow(/must be an integer between 100 and 599/)
+
+    // `bodyType` is interpolated into a single-quoted argument.
+    expect(() =>
+      compileToModule({
+        routesImport: './x',
+        routes: { r: hostile({ request: { body: { type: 'object' }, bodyType: "json') || (PWNED, '" } }) },
+      }),
+    ).toThrow(/unsupported bodyType/)
+
+    // `method` too — `.toUpperCase()` makes it a build break rather than a
+    // payload, but a build break is still a contract deciding what we emit.
+    expect(() =>
+      compileToModule({
+        routesImport: './x',
+        routes: { r: hostile({ method: "get') { PWNED } if (method === 'GET" }) },
+      }),
+    ).toThrow(/unsupported method/)
+
+    // Non-numeric statuses are refused whatever their shape.
+    expect(() => compileToModule({ routesImport: './x', routes: { r: hostile({ responses: { '99': {} } }) } })).toThrow(
+      /must be an integer between 100 and 599/,
+    )
+
+    // The byte cap is interpolated as a bare numeric literal too.
+    expect(() =>
+      compileToModule({
+        routesImport: './x',
+        routes: { health: corpus.health },
+        maxBodyBytes: '1); globalThis.PWNED = 1; (' as unknown as number,
+      }),
+    ).toThrow(/maxBodyBytes/)
+  })
+
+  it('throws at init when guards were added or removed after compile', async () => {
+    const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), '.fixtures-guard-drift')
+    mkdirSync(fixtureDir, { recursive: true })
+    try {
+      // The emitter decides at build time whether a route has guards, and
+      // emits (or omits) the code that runs them. A guard added afterwards used
+      // to leave a compiled server that ran the handler unguarded with no
+      // warning at all — the hash could not change, because it never looked.
+      const bare: AnyRouteContract = {
+        method: 'get',
+        path: '/secret',
+        responses: { 200: { body: { type: 'object' } }, 401: { body: { type: 'object' } } },
+        handler: () => ({ status: 200, body: { secret: 'top' } }),
+      }
+      const guardedSource = `export const secret = {
+  method: 'get',
+  path: '/secret',
+  responses: { 200: { body: { type: 'object' } }, 401: { body: { type: 'object' } } },
+  guards: [() => ({ status: 401, body: { error: 'unauthorized' } })],
+  handler: () => ({ status: 200, body: { secret: 'top' } }),
+}
+`
+      writeFileSync(join(fixtureDir, 'routes-guarded.ts'), guardedSource)
+      writeFileSync(
+        join(fixtureDir, 'generated-guard-drift.ts'),
+        compileToModule({
+          routesImport: './routes-guarded',
+          runtimeImport: '../../index',
+          validatorsImport: '@amritk/runtime-validators',
+          routes: { secret: bare },
+          info,
+        }),
+      )
+
+      // Adding a guard also moves the contracts hash now, so the warning fires
+      // too; the throw is what stops the unguarded module from serving.
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      try {
+        await expect(import(join(fixtureDir, 'generated-guard-drift.ts'))).rejects.toThrow(
+          /guards, security guards, or refine hooks/,
+        )
+        expect(String(errorSpy.mock.calls[0]?.[0])).toMatch(/[Ss]tale/)
+      } finally {
+        errorSpy.mockRestore()
+      }
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  }, 20_000)
+
+  // The regression pin for the emitter side of the corpus case above: a bare
+  // object literal is not a faithful copy of the JSON it was printed from, so
+  // any contract data re-evaluated as source silently loses a `__proto__` key.
+  it('bakes every schema constant through JSON.parse rather than an object literal', () => {
+    const source = emit()
+    const schemaConstants = source.match(/^const \w*(?:schema|Schema)\w* = .*$/gm) ?? []
+    expect(schemaConstants.length).toBeGreaterThan(0)
+    for (const declaration of schemaConstants) {
+      expect(declaration, declaration).toMatch(/ = JSON\.parse\('/)
+    }
+    // Belt and braces: `JSON.stringify` of an object always opens `{"`, so no
+    // constant anywhere in the module may start that way — this catches a new
+    // emission site the name-based scan above would not know to look at.
+    expect(source).not.toMatch(/=\s*\{"/)
+
+    // Reply validators and the interpreter options are baked the same way.
+    const validated = compileToModule({
+      routesImport: './x',
+      routes: { strictHeaders: corpus.strictHeaders },
+      validateResponses: true,
+      formats: 'all',
+    })
+    expect(validated).toContain("const replyBody_strictHeaders_200Schema = JSON.parse('")
+    expect(validated).toContain("const replyHeaders_strictHeaders_200Schema = JSON.parse('")
+    expect(validated).toMatch(/const VALIDATE_OPTIONS\w* = JSON\.parse\('/)
+    expect(validated).not.toMatch(/=\s*\{"/)
+  })
+
+  it('escapes a baked schema so hostile strings survive the round trip', () => {
+    // Everything that could end the emitted string literal early or change its
+    // meaning: quotes of both kinds, backslashes, newlines and other control
+    // characters, the two separators that were line terminators in JS source
+    // before ES2019, a lone surrogate, and an astral character.
+    const hostile = JSON.parse(
+      JSON.stringify({
+        type: 'object',
+        properties: {
+          [`quote"and'quote`]: { const: 'back\\slash and \'single\' and "double"' },
+          ctl: { const: 'line\nbreak\ttab\rreturn\u0000nul' },
+          // Legal unescaped inside a JSON string, but line terminators in JS source before ES2019.
+          separators: { const: 'para\u2029line\u2028sep' },
+          astral: { const: '🚀\ud800' },
+          [`__proto__`]: { const: 'kept' },
+        },
+      }),
+    ) as Record<string, unknown>
+    const route = {
+      method: 'post',
+      path: '/hostile',
+      request: { body: hostile },
+      responses: { 200: { body: { type: 'object' } } },
+      handler: () => ({ status: 200, body: {} }),
+    } as unknown as AnyRouteContract
+
+    const source = compileToModule({ routesImport: './x', routes: { hostile: route } })
+    const declaration = source.split('\n').find((line) => line.startsWith('const schemaBody_hostile = '))
+    expect(declaration).toBeDefined()
+    // Evaluating the emitted expression is the only assertion that proves the
+    // escaping: a wrong escape either throws here or yields a different value.
+    const expression = declaration?.slice('const schemaBody_hostile = '.length) ?? ''
+    const baked = new Function(`return ${expression}`)() as Record<string, unknown>
+    expect(baked).toEqual(hostile)
+    expect(Object.getOwnPropertyNames(baked['properties'] as object)).toContain('__proto__')
   })
 
   it('omits the OpenAPI constant when serving is disabled', () => {
@@ -895,6 +1212,20 @@ const note = (body: string, key?: string): Request =>
         : { 'content-type': 'application/json', 'x-api-key': key },
     body,
   })
+
+/**
+ * The `__proto__`-slot route: the body rides as raw text so a case can send a
+ * value no object literal could express. Headers go through a `Headers`
+ * instance rather than an object literal — assigning `__proto__` onto a plain
+ * object would hit the prototype setter and the header would never be sent,
+ * which is the very bug under test.
+ */
+const proto = (path: string, body: string, slots?: { header?: string; cookie?: string }): Request => {
+  const headers = new Headers({ 'content-type': 'application/json' })
+  if (slots?.header !== undefined) headers.set('__proto__', slots.header)
+  if (slots?.cookie !== undefined) headers.set('cookie', `__proto__=${slots.cookie}`)
+  return new Request('http://localhost' + path, { method: 'POST', headers, body })
+}
 
 const slotAsync = (body: unknown): Request =>
   new Request('http://localhost/slots-async', {

@@ -123,14 +123,30 @@ describe('defaults that contradict the declared type', () => {
 })
 
 describe('self-imports', () => {
-  it('does not import from its own file when a definition collides with the root name', async () => {
+  // The root type `Contact` and a `$defs.contact` both want `contact.ts`. Only
+  // one of them can be written, so every `#/$defs/contact` reference silently
+  // picked up the root's shape instead. A wrong type that compiles is worse
+  // than a failed build, so the walker refuses the document outright.
+  it('rejects a definition that collides with the root type name', async () => {
     const schema: JSONSchema = {
       type: 'object',
       properties: { c: { $ref: '#/$defs/contact' } },
       $defs: { contact: { type: 'object', properties: { email: { type: 'string' } } } },
     }
 
-    const files = await buildSchema(schema, 'Contact')
+    await expect(buildSchema(schema, 'Contact')).rejects.toThrow(/the root type Contact/)
+  })
+
+  it('does not import from its own file for a self-referencing definition', async () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { c: { $ref: '#/$defs/contact' } },
+      $defs: {
+        contact: { type: 'object', properties: { manager: { $ref: '#/$defs/contact' } } },
+      },
+    }
+
+    const files = await buildSchema(schema, 'Document')
     const contact = files.find((file) => file.filename === 'contact.ts')?.content ?? ''
     expect(contact).not.toContain("from './contact.js'")
   })

@@ -437,6 +437,22 @@ export const guardedResource = defineRoute({
 })
 
 /**
+ * A handler whose thrown error the onError formatter answers with the raw
+ * `Response` escape hatch. Nothing in the corpus used to take a `raw(...)` down
+ * the error path, which is exactly how the compiled engine drifted into
+ * dropping it and answering an empty body.
+ */
+export const rawErrorBoom = defineRoute({
+  method: 'get',
+  path: '/raw-error',
+  security: [],
+  responses: { 200: { body: { type: 'object' } } },
+  handler: () => {
+    throw new Error('answer me raw')
+  },
+})
+
+/**
  * A guard that throws: both engines must route it down the onError path, just
  * like a throwing handler, rather than leaking the rejection.
  */
@@ -713,6 +729,60 @@ export const doubleRead = defineRoute({
   }),
 })
 
+/**
+ * Every declared slot named `__proto__` at once — path parameter, header,
+ * cookie, and body property.
+ *
+ * The schemas are built with `JSON.parse` on purpose: written as object
+ * literals the `__proto__` key would invoke the prototype setter and never
+ * become a property at all, so the contract would silently declare nothing.
+ * Parsing is also how a real contract acquires such a key — a schema loaded
+ * from a config file, a database row, or an imported OpenAPI document.
+ *
+ * This is the regression pin for a compiled-engine validation bypass: the
+ * emitter used to bake schema constants as bare object literals, so the key
+ * vanished at module evaluation and the compiled engine validated a schema the
+ * runtime engine never had. It diverged in both directions — rejecting
+ * `{"__proto__":"abc"}` under `additionalProperties: false` that the runtime
+ * accepted, and accepting `{"__proto__":123}` that the runtime rejected.
+ *
+ * Typed as `AnyRouteContract` because `JSON.parse` returns `any`, so the schemas
+ * carry no literal types for `defineRoute` to derive a handler signature from —
+ * which is exactly the situation of any contract assembled at runtime.
+ */
+export const protoSlots: AnyRouteContract = {
+  method: 'post',
+  path: '/proto/{__proto__}',
+  security: [],
+  request: {
+    params: JSON.parse(
+      '{"type":"object","properties":{"__proto__":{"type":"string","minLength":2}},"required":["__proto__"]}',
+    ),
+    headers: JSON.parse('{"type":"object","properties":{"__proto__":{"type":"string","minLength":3}}}'),
+    cookies: JSON.parse('{"type":"object","properties":{"__proto__":{"type":"string"}}}'),
+    body: JSON.parse(
+      '{"type":"object","properties":{"__proto__":{"type":"string","minLength":3}},"required":["__proto__"],"additionalProperties":false}',
+    ),
+  },
+  responses: { 200: { body: { type: 'object' } } },
+  // Read with `Object.hasOwn` so an absent slot reports as absent instead of
+  // handing back `Object.prototype`, and echoed under ordinary names so the
+  // reply itself never needs a `__proto__` key.
+  handler: ({ params, headers, cookies, body }) => ({
+    status: 200,
+    body: {
+      param: own(params, '__proto__'),
+      header: own(headers, '__proto__'),
+      cookie: own(cookies, '__proto__'),
+      bodyValue: own(body, '__proto__'),
+    },
+  }),
+}
+
+/** The own-property read the corpus handler above needs; `slot['__proto__']` would answer with the prototype. */
+const own = (slot: unknown, key: string): unknown =>
+  typeof slot === 'object' && slot !== null && Object.hasOwn(slot, key) ? (slot as Record<string, unknown>)[key] : null
+
 /** What the corpus observer keeps per observation, engine-comparable. `route` is null for unmatched requests. */
 export type RecordedObservation = { route: string | null; status: number; durationOk: boolean }
 
@@ -764,23 +834,57 @@ export const stampLocals: FetchOnResponse = (response, _request, locals) => {
 }
 
 /**
+ * A gate that throws. The realistic shape is `createRequestId({ trustInbound:
+ * true })` reflecting a CRLF-bearing inbound header into `Headers.set`, but a
+ * plain throw exercises the same path: the rejection must become the
+ * pipeline's own 500 in both engines instead of escaping to the platform
+ * (a Workers 1101, a Bun unhandled rejection).
+ */
+export const gateBoom: FetchOnRequest = (request) => {
+  if (request.headers.get('x-hook-boom') === 'request') throw new Error('gate exploded')
+  return undefined
+}
+
+/** The same for a decorator — it runs after the handler already replied. */
+export const stampBoom: FetchOnResponse = (response, request) => {
+  if (request.headers.get('x-hook-boom') === 'response') {
+    // What a reflected header value actually does: an invalid header value is
+    // rejected by `Headers.set`, from inside a hook with no try/catch above it.
+    response.headers.set('x-echo', 'bad\r\nx-injected: 1')
+  }
+  return undefined
+}
+
+/**
  * A createSentry-style onError: proves both engines hand thrown errors the
  * same route contract and platform values, since everything it reads shows
  * up in the response the differential test compares.
  */
-export const corpusOnError = (error: unknown, request: ApiRequest, details: OnErrorDetails): ApiResponse => ({
-  status: 500,
-  body: {
-    error: 'handled',
-    message: error instanceof Error ? error.message : 'unknown',
-    route: details.route?.path ?? request.path,
-    method: details.route?.method ?? request.method,
-    tenant: (details.env as { tenant?: string } | undefined)?.tenant ?? null,
-    // The locals the gate resolved must be visible here too — the error path
-    // shares the same per-request bag as the pipeline.
-    gateTenant: (request.locals?.['tenant'] as string | undefined) ?? null,
-  },
-})
+export const corpusOnError = (error: unknown, request: ApiRequest, details: OnErrorDetails): ApiResponse => {
+  // The escape hatch on the error path: an error reporter that wants full
+  // control of the wire output hands back a built Response, and both engines
+  // must send it verbatim rather than falling through to an empty body.
+  if (error instanceof Error && error.message === 'answer me raw') {
+    const response = new Response('RAW-ERROR-BODY', {
+      status: 503,
+      headers: { 'content-type': 'text/plain', 'x-served-by': 'raw-error' },
+    })
+    return { status: response.status, ...raw(response) }
+  }
+  return {
+    status: 500,
+    body: {
+      error: 'handled',
+      message: error instanceof Error ? error.message : 'unknown',
+      route: details.route?.path ?? request.path,
+      method: details.route?.method ?? request.method,
+      tenant: (details.env as { tenant?: string } | undefined)?.tenant ?? null,
+      // The locals the gate resolved must be visible here too — the error path
+      // shares the same per-request bag as the pipeline.
+      gateTenant: (request.locals?.['tenant'] as string | undefined) ?? null,
+    },
+  }
+}
 
 /**
  * A custom ValidatorCompiler both engines can share: the interpreter's
@@ -863,13 +967,25 @@ export const endlessStream = defineRoute({
 
 /** Custom error envelopes — both engines must shape cold paths identically. */
 export const corpusErrors: ErrorFormatters = {
-  notFound: (request) => ({
-    status: 404,
-    body: {
-      error: 'nothing at ' + request.path,
-      gateTenant: (request.locals?.['tenant'] as string | undefined) ?? null,
-    },
-  }),
+  notFound: (request) => {
+    // A cold-path formatter reaching for the raw escape hatch — the
+    // "redirect unknown paths to the marketing site" shape. Both engines must
+    // send this Response verbatim, headers and body intact.
+    if (request.path === '/raw-missing') {
+      const response = new Response('RAW-NOT-FOUND', {
+        status: 404,
+        headers: { 'content-type': 'text/plain', 'x-served-by': 'raw-not-found' },
+      })
+      return { status: response.status, ...raw(response) }
+    }
+    return {
+      status: 404,
+      body: {
+        error: 'nothing at ' + request.path,
+        gateTenant: (request.locals?.['tenant'] as string | undefined) ?? null,
+      },
+    }
+  },
   validationFailed: (failure, request) => ({
     status: 422,
     body: {

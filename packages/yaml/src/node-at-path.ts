@@ -1,4 +1,5 @@
 import { isMap, isSeq } from './guards'
+import { keyText } from './parse-document'
 import type { YamlNode } from './types'
 
 /** A path into a document, e.g. `['paths', '/pets', 'get']` or `['tags', 0]`. */
@@ -11,7 +12,10 @@ export type NodePath = readonly (string | number)[]
  * When `closest` is true and the full path is missing, it returns the deepest
  * ancestor that does exist — exactly what a linter wants so a diagnostic can
  * still point at the nearest real source span instead of nowhere. Keys are
- * compared as strings so a numeric path segment matches a stringified map key.
+ * compared as strings so a numeric path segment matches a stringified map key —
+ * using the parser's own {@link keyText}, so the strings a path is written in
+ * are exactly the ones `toJS()` produced. Anything less means a caller that
+ * walks the projected data cannot then locate the node it came from.
  */
 export const nodeAtPath = (root: YamlNode | null, path: NodePath, closest = false): YamlNode | undefined => {
   let node: YamlNode | null | undefined = root
@@ -24,7 +28,7 @@ export const nodeAtPath = (root: YamlNode | null, path: NodePath, closest = fals
     if (isMap(node)) {
       const key = String(segment)
       for (const pair of node.items) {
-        if (keyOf(pair.key) === key) {
+        if (keyText(pair.key) === key) {
           next = pair.value
           break
         }
@@ -40,10 +44,4 @@ export const nodeAtPath = (root: YamlNode | null, path: NodePath, closest = fals
   }
 
   return node ?? undefined
-}
-
-const keyOf = (node: YamlNode): string => {
-  if (node.kind === 'scalar') return node.value === null ? 'null' : String(node.value)
-  if (node.kind === 'alias') return '*' + node.source
-  return ''
 }

@@ -44,6 +44,61 @@ const defaultMatchesType = (value: unknown, schema: JSONSchema): boolean => {
 }
 
 /**
+ * How many elements a fallback array is willing to synthesize. `minItems` is
+ * schema-controlled and unbounded, and a `minItems: 10000` node would otherwise
+ * inline a ten-thousand-element literal into every generated file. Past this we
+ * fill only the declared tuple positions, which is what the emitted type actually
+ * requires; the `minItems` shortfall is a coercion imperfection, not a
+ * compilation failure.
+ */
+const MAX_FALLBACK_ITEMS = 32
+
+/**
+ * The literal for an `array` fallback.
+ *
+ * A bare `[]` was wrong in two ways. It ignores `minItems`, so the "repaired"
+ * value is not an instance of its own schema — and it ignores `prefixItems`,
+ * whose positions below `minItems` the type generator emits as *required* tuple
+ * members. `{ prefixItems: [{type:'string'},{type:'number'}], minItems: 2 }`
+ * therefore produced `t: []` against a declared `[string, number]`: `TS2322`, so
+ * the whole generated file failed to compile in coerce and readonly modes. This
+ * mirrors the `object` case, which already fills in its required properties.
+ *
+ * Falls back to `[]` when a needed position has no concrete default of its own
+ * (an unresolvable `$ref`, a type-less schema) — a half-filled tuple is no more
+ * assignable than an empty one, so there is nothing to gain by emitting one.
+ */
+const arrayFallback = (schema: JSONSchema): string => {
+  const record = schema as Record<string, unknown>
+  // 2020-12 spells tuple positions `prefixItems`; draft-07 used an array-valued
+  // `items` with the tail in `additionalItems`.
+  const positions = Array.isArray(record['prefixItems'])
+    ? (record['prefixItems'] as JSONSchema[])
+    : Array.isArray(record['items'])
+      ? (record['items'] as JSONSchema[])
+      : []
+  const tail = Array.isArray(record['items']) ? record['additionalItems'] : record['items']
+  const minItems = typeof record['minItems'] === 'number' ? (record['minItems'] as number) : 0
+
+  // Past the cap, fall back to what the emitted tuple type requires — positions
+  // below `minItems` — which is the part that has to compile.
+  const wanted = minItems > MAX_FALLBACK_ITEMS ? Math.min(minItems, positions.length) : minItems
+  if (wanted === 0) return '[]'
+
+  const elements: string[] = []
+  for (let i = 0; i < wanted; i++) {
+    // Past the declared positions the element schema is the `items` tail; a
+    // `false` (closed tuple) or absent tail leaves nothing to build from.
+    const elementSchema = i < positions.length ? positions[i] : tail
+    if (elementSchema === undefined || typeof elementSchema === 'boolean') return '[]'
+    const element = getDefaultValue(elementSchema as JSONSchema)
+    if (element === 'undefined') return '[]'
+    elements.push(element)
+  }
+  return `[${elements.join(', ')}]`
+}
+
+/**
  * Returns the default value for a JSON Schema property.
  * Priority order: explicit default > first enum value > first example > union first schema > pattern-based > type-based.
  * These defaults ensure that parsing never fails, even with missing data.
@@ -137,7 +192,7 @@ export const getDefaultValue = (schema: JSONSchema): string => {
     case 'null':
       return 'null'
     case 'array':
-      return '[]'
+      return arrayFallback(schema)
     case 'object': {
       // A bare `{}` omits required properties, leaving the default invalid against
       // its own type. Populate each required property with its own default so the

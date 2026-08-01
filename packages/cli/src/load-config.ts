@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import type { SourceFormat } from '@amritk/adapters/source-format'
 
 import type { CliConfig } from './cli-config'
+import { validateConfig } from './validate-config'
 
 const SOURCE_FORMATS: readonly string[] = ['json', 'typebox', 'zod', 'valibot', 'effect']
 
@@ -19,10 +20,19 @@ const isStringArray = (value: unknown): value is string[] =>
 /**
  * Loads a JSON config file and returns the relevant CLI config properties.
  * The config file should have the same keys as the CLI flags (schema, outDir).
+ *
+ * Every key is validated up front (see {@link validateConfig}), so the `typeof`
+ * guards below are only here to narrow the types for TypeScript — by the time we
+ * reach them, nothing can fail them.
  */
 export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>> => {
   const absolutePath = resolve(configPath)
-  const raw = await readFile(absolutePath, 'utf-8')
+  const raw = await readFile(absolutePath, 'utf-8').catch((error: NodeJS.ErrnoException) => {
+    // The raw `ENOENT: no such file or directory, open '/abs/path'` reads like an
+    // internal failure; the user asked for a config file that is not there.
+    if (error.code === 'ENOENT') throw new Error(`Config file not found: ${absolutePath}`)
+    throw error
+  })
   const parsed: unknown = JSON.parse(raw)
 
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
@@ -30,6 +40,7 @@ export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>
   }
 
   const obj = parsed as Record<string, unknown>
+  validateConfig(obj, configPath)
 
   return {
     ...(typeof obj['schema'] === 'string' && { schema: obj['schema'] }),
@@ -42,6 +53,7 @@ export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>
     ...(typeof obj['typesOnly'] === 'boolean' && { typesOnly: obj['typesOnly'] }),
     ...(typeof obj['examples'] === 'boolean' && { examples: obj['examples'] }),
     ...(typeof obj['build'] === 'boolean' && { build: obj['build'] }),
+    ...(typeof obj['force'] === 'boolean' && { force: obj['force'] }),
     ...(typeof obj['logWarnings'] === 'boolean' && { logWarnings: obj['logWarnings'] }),
     ...(typeof obj['strict'] === 'boolean' && { strict: obj['strict'] }),
     ...(typeof obj['stripUnknown'] === 'boolean' && { stripUnknown: obj['stripUnknown'] }),
@@ -56,5 +68,9 @@ export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>
     ...(typeof obj['resolveRemote'] === 'boolean' && { resolveRemote: obj['resolveRemote'] }),
     ...(isStringArray(obj['allowedHosts']) && { allowedHosts: obj['allowedHosts'] }),
     ...(typeof obj['allowPrivateHosts'] === 'boolean' && { allowPrivateHosts: obj['allowPrivateHosts'] }),
+    // Kept as written: like `schema` and `outDir`, a relative entry is resolved
+    // against the process working directory rather than the config file's
+    // directory, so one rule covers both flags and config keys.
+    ...(isStringArray(obj['allowedRoots']) && { allowedRoots: obj['allowedRoots'] }),
   }
 }

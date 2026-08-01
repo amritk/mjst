@@ -1,5 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { assertSchemaDepth } from './max-schema-depth'
 import { isSchemaObject } from './schema-guards'
 
 /** Escapes a JSON Pointer segment (RFC 6901): `~` → `~0`, `/` → `~1`. */
@@ -25,6 +26,14 @@ const NON_SCHEMA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples'])
  * the first occurrence in document order wins, matching how the resolvers bind
  * a name to a single document-global target.
  *
+ * The document root is included, mapping to the pointer `#`. That is the
+ * canonical recursive-tree idiom (`{ $id: '.../tree', $dynamicAnchor: 'node',
+ * items: { $dynamicRef: '#node' } }`), and leaving it out meant the ref had no
+ * target at all: the type generator fell back to the anchor's *name*, so
+ * `#node` became the type `Node` — never generated, never imported, and under
+ * the `DOM` lib silently bound to the DOM `Node` interface instead of failing.
+ * `walkRefGraph` turns the `#` pointer into the root's own generated file.
+ *
  * @example
  * // Given a schema with $defs.schema having $dynamicAnchor: "meta"
  * buildDynamicRefMap(rootSchema)
@@ -34,28 +43,26 @@ export const buildDynamicRefMap = (rootSchema: JSONSchema): Record<string, strin
   const map: Record<string, string> = {}
   if (!isSchemaObject(rootSchema)) return map
 
-  const walk = (node: unknown, pointer: string): void => {
+  const walk = (node: unknown, pointer: string, depth: number): void => {
+    assertSchemaDepth(depth, 'buildDynamicRefMap')
     if (node === null || typeof node !== 'object') return
     if (Array.isArray(node)) {
-      for (let i = 0; i < node.length; i++) walk(node[i], `${pointer}/${i}`)
+      for (let i = 0; i < node.length; i++) walk(node[i], `${pointer}/${i}`, depth + 1)
       return
     }
 
     const record = node as Record<string, unknown>
     const anchor = record['$dynamicAnchor']
-    // The document root is skipped: mapping it would rewrite `$dynamicRef` to
-    // `$ref: "#"`, a self-reference the file-per-definition generators cannot
-    // name an output file for. Every nested subschema gets a real pointer.
-    if (pointer !== '' && typeof anchor === 'string' && !(`#${anchor}` in map)) {
+    if (typeof anchor === 'string' && !(`#${anchor}` in map)) {
       map[`#${anchor}`] = `#${pointer}`
     }
 
     for (const key of Object.keys(record)) {
       if (NON_SCHEMA_KEYWORDS.has(key)) continue
-      walk(record[key], `${pointer}/${escapeSegment(key)}`)
+      walk(record[key], `${pointer}/${escapeSegment(key)}`, depth + 1)
     }
   }
 
-  walk(rootSchema, '')
+  walk(rootSchema, '', 0)
   return map
 }

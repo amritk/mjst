@@ -66,4 +66,26 @@ describe('ref-to-name', () => {
   it('splits on spaces and other non-identifier characters', () => {
     expect(refToName('#/$defs/foo bar')).toBe('FooBar')
   })
+
+  // Splitting on `[^A-Za-z0-9]` dropped every character of a non-ASCII name, so
+  // each one fell through to the `_` fallback and a document with two of them
+  // emitted two types called `_`. TypeScript identifiers are defined in terms of
+  // ID_Start/ID_Continue, so these names are legal to emit verbatim.
+  it('keeps non-ASCII definition names instead of collapsing them to "_"', () => {
+    expect(refToName('#/$defs/中文')).toBe('中文')
+    expect(refToName('#/$defs/日本')).toBe('日本')
+    expect(refToName('#/$defs/Ключ')).toBe('Ключ')
+    expect(refToName('#/$defs/café-münchen')).toBe('CaféMünchen')
+  })
+
+  it('appends the suffix to a non-ASCII name', () => {
+    expect(refToName('#/$defs/中文', 'Object')).toBe('中文Object')
+  })
+
+  // Nothing identifier-shaped survives, so `refToFilename` hands over a
+  // ref-derived fallback — distinct per ref, rather than one shared `_`.
+  it('keeps two names that normalize away to nothing distinct', () => {
+    expect(refToName('#/$defs/+++')).not.toBe(refToName('#/$defs/---'))
+    expect(refToName('#/$defs/+++')).toMatch(/^Ref[0-9a-z]+$/)
+  })
 })

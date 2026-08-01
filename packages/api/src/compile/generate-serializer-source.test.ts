@@ -53,4 +53,28 @@ describe('generate-serializer-source', () => {
       }),
     ).toBeUndefined()
   })
+
+  // The emitted reader is `body["<key>"]`, which answers with the inherited
+  // member rather than `undefined` when a prototype-shadowing property is
+  // absent: a `__proto__` property would serialize as `Object.prototype`
+  // (`{}`) and an optional `toString` would be emitted on every reply. Neither
+  // matches `JSON.stringify`, which is what the runtime engine sends, so these
+  // fall back to it — the same bail the inline guard emitter makes.
+  it('bails on a property whose name shadows an Object.prototype member', () => {
+    expect(
+      generateSerializerSource(
+        JSON.parse(
+          '{"type":"object","properties":{"__proto__":{"type":"string"}},"required":["__proto__"],"additionalProperties":false}',
+        ),
+      ),
+    ).toBeUndefined()
+    expect(
+      generateSerializerSource({
+        type: 'object',
+        properties: { ok: { type: 'boolean' }, toString: { type: 'string' } },
+        required: ['ok'],
+        additionalProperties: false,
+      }),
+    ).toBeUndefined()
+  })
 })

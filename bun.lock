@@ -32,7 +32,6 @@
         "json-schema-typed": "catalog:",
       },
       "peerDependencies": {
-        "@sinclair/typebox": ">=0.34",
         "@valibot/to-json-schema": ">=1",
         "effect": ">=3",
         "valibot": ">=1",
@@ -40,7 +39,6 @@
         "zod-to-json-schema": ">=3",
       },
       "optionalPeers": [
-        "@sinclair/typebox",
         "@valibot/to-json-schema",
         "effect",
         "valibot",
@@ -50,7 +48,7 @@
     },
     "packages/api": {
       "name": "@amritk/api",
-      "version": "0.11.0",
+      "version": "0.12.0",
       "dependencies": {
         "@amritk/runtime-validators": "workspace:*",
       },
@@ -61,7 +59,7 @@
     },
     "packages/cli": {
       "name": "@amritk/mjst",
-      "version": "0.13.7",
+      "version": "0.13.9",
       "bin": {
         "mjst": "./dist/cli.js",
       },
@@ -69,7 +67,6 @@
         "@amritk/adapters": "workspace:*",
         "@amritk/api": "workspace:*",
         "@amritk/generate-examples": "workspace:*",
-        "@amritk/generate-markdown": "workspace:*",
         "@amritk/generate-parsers": "workspace:*",
         "@amritk/generate-validators": "workspace:*",
         "@amritk/helpers": "workspace:*",
@@ -77,11 +74,12 @@
         "@amritk/resolve-refs": "workspace:*",
         "@amritk/yaml": "workspace:*",
         "fast-glob": "^3.3.2",
+        "json-schema-typed": "catalog:",
         "yargs": "^17.7.2",
       },
       "devDependencies": {
+        "@amritk/generate-markdown": "workspace:*",
         "@types/yargs": "^17.0.33",
-        "json-schema-typed": "catalog:",
       },
     },
     "packages/generate-examples": {
@@ -110,11 +108,11 @@
       "name": "@amritk/generate-parsers",
       "version": "0.18.0",
       "dependencies": {
-        "@amritk/generate-markdown": "workspace:*",
         "@amritk/helpers": "workspace:*",
         "json-schema-typed": "catalog:",
       },
       "devDependencies": {
+        "@amritk/generate-markdown": "workspace:*",
         "@sinclair/typebox": "^0.34.49",
         "ajv": "^8.17.1",
         "zod": "^4.4.3",
@@ -147,7 +145,7 @@
     },
     "packages/lint": {
       "name": "@amritk/lint",
-      "version": "0.4.2",
+      "version": "0.4.3",
       "dependencies": {
         "@amritk/runtime-validators": "workspace:*",
         "@amritk/yaml": "workspace:*",
@@ -175,7 +173,7 @@
     },
     "packages/yaml": {
       "name": "@amritk/yaml",
-      "version": "0.3.5",
+      "version": "0.4.0",
       "devDependencies": {
         "js-yaml": "^4.1.0",
         "yaml": "^2.6.0",

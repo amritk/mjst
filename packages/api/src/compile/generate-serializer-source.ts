@@ -1,3 +1,5 @@
+import { PROTO_KEYS } from './generate-guard-source'
+
 /**
  * Emits a schema-derived JSON serializer (as JavaScript source) in the
  * fast-json-stringify style: known keys concatenated positionally instead of
@@ -35,6 +37,13 @@ export const generateSerializerSource = (schema: unknown): string | undefined =>
 
   const entries = Object.entries(properties)
   if (entries.some(([, property]) => pieceFor(property) === undefined)) return undefined
+  // The emitted reader is `body["<key>"]`, which for a prototype-shadowing name
+  // returns the inherited member instead of `undefined` when the reply omits
+  // it: a `__proto__` property would serialize as `Object.prototype` (`{}`)
+  // and an optional `toString` would always be emitted, neither of which is
+  // what `JSON.stringify` — the runtime engine's serializer — produces. Bail
+  // to that instead, exactly as the inline guard emitter does.
+  if (entries.some(([key]) => PROTO_KEYS.has(key))) return undefined
 
   // Required keys are emitted first so optional ones can always prefix a
   // comma. Key order may differ from a JSON.stringify of the same object,

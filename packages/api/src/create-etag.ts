@@ -52,20 +52,37 @@ export const createETag = (options?: ETagOptions): FetchOnResponse => {
     if (response.headers.get('content-type')?.includes('text/event-stream')) return undefined
     if (response.body === null) return undefined
 
+    // A free early-out when the producer declared a size. It rarely fires on
+    // adapter-built replies (`new Response('abc').headers.get('content-length')`
+    // is `null`), which is why the read below has to enforce the cap itself.
     const declared = response.headers.get('content-length')
     if (declared !== null && Number(declared) > maxBytes) return undefined
 
-    // Buffer once. `response.body` cannot be read twice, so the rebuilt
-    // response below reuses these exact bytes.
-    const bytes = new Uint8Array(await response.arrayBuffer())
-    if (bytes.byteLength > maxBytes) {
-      return new Response(bytes, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-      })
+    // Read against the cap rather than buffering first and checking after:
+    // `arrayBuffer()` on an 8 MB stream would hold all 8 MB in memory to then
+    // decide the 1 MiB limit was exceeded, which turns an opt-in optimization
+    // into a memory-DoS. The moment the running count passes `maxBytes` the
+    // response is handed back with the chunks already read replayed in front
+    // of the untouched remainder — nothing more is buffered, and the body
+    // keeps streaming to the client.
+    const reader = response.body.getReader()
+    const chunks: Uint8Array[] = []
+    let total = 0
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      chunks.push(value)
+      total += value.byteLength
+      if (total > maxBytes) {
+        return new Response(resume(chunks, reader), {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        })
+      }
     }
 
+    const bytes = concat(chunks, total)
     const etag = `"${hash(bytes)}"`
     const ifNoneMatch = request.headers.get('if-none-match')
     if (ifNoneMatch !== null && matchesIfNoneMatch(ifNoneMatch, etag)) {
@@ -81,4 +98,40 @@ export const createETag = (options?: ETagOptions): FetchOnResponse => {
     headers.set('etag', etag)
     return new Response(bytes, { status: response.status, statusText: response.statusText, headers })
   }
+}
+
+/**
+ * A stream that replays the chunks already pulled off `reader`, then keeps
+ * pulling from it. This is what makes the over-cap bail-out free: the bytes
+ * read while counting are not lost and not re-buffered, they are simply handed
+ * on, and the rest of the body is never held in memory at all.
+ */
+const resume = (chunks: readonly Uint8Array[], reader: ReadableStreamDefaultReader<Uint8Array>): ReadableStream =>
+  new ReadableStream<Uint8Array>({
+    start: (controller) => {
+      for (const chunk of chunks) controller.enqueue(chunk)
+    },
+    pull: async (controller) => {
+      const { done, value } = await reader.read()
+      if (done) {
+        controller.close()
+        return
+      }
+      controller.enqueue(value)
+    },
+    // A client that hangs up must cancel the source too, or the producer keeps
+    // generating bytes nobody will ever read.
+    cancel: (reason) => reader.cancel(reason),
+  })
+
+/** Flattens the counted chunks into the single buffer the hash function takes. */
+const concat = (chunks: readonly Uint8Array[], total: number): Uint8Array => {
+  if (chunks.length === 1 && chunks[0] !== undefined) return chunks[0]
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return bytes
 }

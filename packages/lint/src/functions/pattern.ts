@@ -1,3 +1,4 @@
+import { createBoundedCache } from '../core/bounded-cache'
 import type { RulesetFunction } from '../core/types'
 
 /** Options for {@link pattern}. */
@@ -10,8 +11,10 @@ export type IPatternOptions = {
 // node, so we memoize by the raw pattern string (which carries its own flags in
 // the `/re/flags` form). A failed compile is cached as its `Error` so a bad
 // pattern is reported without being re-thrown on every node. Mirrors Spectral's
-// own module-level cache.
-const cache = new Map<string, RegExp | Error>()
+// own module-level cache, but bounded: the keys come from rulesets, and a
+// long-lived service taking a ruleset per request would otherwise leak an entry
+// per distinct pattern for the life of the process.
+const cache = createBoundedCache<string, RegExp | Error>(500)
 
 /** Parses a `/pattern/flags` string (or a bare pattern) into a RegExp, or the compile error. */
 const toRegExp = (pattern: string): RegExp | Error => {

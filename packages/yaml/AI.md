@@ -32,7 +32,8 @@ for (const error of doc.errors) {
 2. **Nodes carry `start` / `end` inline** (not a `range` tuple). `end` is
    **exclusive**, and offsets are char offsets — convert with `lineCounter`
    (1-based line/col).
-3. **`parseDocument` reads only the FIRST document** of a `---` stream. Use
+3. **`parseDocument` reads only the FIRST document** of a `---` stream, and
+   pushes a `MULTIPLE_DOCUMENTS` **warning** when it leaves one behind. Use
    `parseAllDocuments` for multi-doc; each doc has its own anchor scope.
 4. **Values materialize lazily via `toJS()`** (resolves aliases + merge keys);
    `parse()` === `parseDocument().toJS()`. `pair.value` can be `null` (e.g.
@@ -42,16 +43,24 @@ for (const error of doc.errors) {
    `UNTERMINATED_FLOW`, `TAB_INDENT`, `UNEXPECTED_DIRECTIVE`, and the
    syntax-level `BAD_COMMENT` / `BAD_ESCAPE` / `BAD_BLOCK_HEADER` /
    `BAD_INDENT` / `BAD_IMPLICIT_KEY` / `BAD_PROPERTY`. A misplaced or malformed
-   directive is an **error**; only an unknown directive and a non-1.2 `%YAML`
-   version are warnings. A document with errors still parses — check
-   `doc.errors` rather than assuming a throw.
+   directive is an **error**; an unknown directive, a non-1.2 `%YAML` version,
+   and `MULTIPLE_DOCUMENTS` are warnings. A document with errors still parses —
+   check `doc.errors` rather than assuming a throw.
 6. **`node.tag` keeps a local tag's `!`.** `!!str` → `'str'`, `!custom` →
    `'!custom'`. Only the core/extended schema tags coerce a value; a local tag
    passes it through. `!<verbatim>` and `%TAG` handles resolve to the same form.
 7. **A collection mapping key projects to its flow rendering.** `[a, b]: v`
    becomes `{ '[ a, b ]': 'v' }`, and an empty key becomes `''` (not `'null'`),
-   because a JS object key can only be a string.
+   because a JS object key can only be a string. `keyText(node)` is exported so
+   you can compute that string yourself — `nodeAtPath` matches path segments
+   against it, so a path built any other way will not find the node.
+8. **All three YAML line breaks work**: `\n`, `\r\n`, and a lone `\r`, in both
+   the parser and `lineCounter`.
+9. **Two aliases to one anchored collection project to two copies**, not one
+   shared object (`b !== c` for `b: *x` / `c: *x`). Deliberate — `toJS()` is a
+   plain tree, not an object graph.
 
 Exports: `parse`, `parseDocument`, `parseAllDocuments`, `nodeAtPath`,
-`lineCounter`, the guards `isScalar`/`isMap`/`isSeq`/`isPair`/`isAlias`, + node
-types. Only the `.` entry. Install: `bun add @amritk/yaml`.
+`lineCounter`, `keyText`, the guards
+`isScalar`/`isMap`/`isSeq`/`isPair`/`isAlias`, + node types. Only the `.` entry.
+Install: `bun add @amritk/yaml`.

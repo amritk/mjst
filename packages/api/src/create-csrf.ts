@@ -1,4 +1,5 @@
 import type { FetchOnRequest, FetchOnResponse } from './to-fetch-handler'
+import { writableResponse } from './writable-response'
 
 /**
  * Options for {@link createCsrf}.
@@ -97,7 +98,12 @@ export const createCsrf = (options?: CsrfOptions): Csrf => {
     // Seed a token whenever the request arrived without one, so the next
     // unsafe request has something to echo.
     if (parseCookie(request.headers.get('cookie'), cookieName) === undefined) {
-      response.headers.append('set-cookie', `${cookieName}=${generate()}; ${attributes}`)
+      // A response proxied out of a mount has immutable headers, so the append
+      // has to go through the writability probe or it throws — and a throwing
+      // decorator costs the whole response.
+      const target = writableResponse(response)
+      target.headers.append('set-cookie', `${cookieName}=${generate()}; ${attributes}`)
+      return target
     }
     return undefined
   }

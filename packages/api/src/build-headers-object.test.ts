@@ -68,6 +68,30 @@ describe('build-headers-object', () => {
     expect(compiled.guard(result)).toBe(false)
   })
 
+  // `__proto__` is a valid HTTP field name (it is a token), so a contract may
+  // declare it. A plain `headers[name] = value` would run the prototype setter
+  // instead of creating the property: the value disappeared and a
+  // `required: ['__proto__']` could never be satisfied.
+  it('keeps a declared header named __proto__ as an ordinary own property', () => {
+    const compiled = compiledHeaders(
+      JSON.parse('{"type":"object","properties":{"__proto__":{"type":"string"}},"required":["__proto__"]}'),
+    )
+    // Parsed, not a literal: `{ __proto__: 'sent' }` would set the object's
+    // prototype and the header would never be there to read.
+    const result = buildHeadersObject(lookup(JSON.parse('{"__proto__":"sent"}')), compiled)
+    expect(Object.getOwnPropertyNames(result)).toEqual(['__proto__'])
+    expect(result['__proto__']).toBe('sent')
+    expect(Object.getPrototypeOf(result)).toBe(Object.prototype)
+    // The point of the fix: the declared slot now validates like any other.
+    expect(compiled.guard(result)).toBe(true)
+  })
+
+  it('coerces a declared header named __proto__ like any other', () => {
+    const compiled = compiledHeaders(JSON.parse('{"type":"object","properties":{"__proto__":{"type":"integer"}}}'))
+    const result = buildHeadersObject(lookup(JSON.parse('{"__proto__":"42"}')), compiled)
+    expect(result['__proto__']).toBe(42)
+  })
+
   it('never reads undeclared headers', () => {
     const compiled = compiledHeaders({ type: 'object', properties: { 'x-known': { type: 'string' } } })
     const seen: string[] = []

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -470,6 +470,256 @@ describe('resolve-refs-from-file', () => {
     await resolveRefsFromFile(join(dir, 'api.json'), opts)
     await resolveRefsFromFile(join(dir, 'api.json'), opts)
     expect(fetchSpy).toHaveBeenCalledTimes(3)
+  })
+
+  it('refuses a local $ref that escapes the root document directory', async () => {
+    // The path-traversal read this guard exists for: the spec sits in a
+    // subfolder and reaches up into a file it has no business reading.
+    const sub = join(dir, 'sub')
+    mkdirSync(sub)
+    writeFileSync(join(dir, 'secret.json'), JSON.stringify({ apiKey: 'SUPER-SECRET-VALUE' }))
+    writeFileSync(join(sub, 'spec.json'), JSON.stringify({ leak: { $ref: '../secret.json' } }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(sub, 'spec.json'))
+
+    // The refused document degrades to {}, so the secret never reaches the output.
+    expect(resolved).toEqual({ leak: {} })
+    expect(errors[0]?.message).toMatch(/Refusing to read local \$ref/)
+    // The error names the escape hatch so the fix is obvious from the message.
+    expect(errors[0]?.message).toMatch(/allowedRoots/)
+  })
+
+  it('refuses an absolute local $ref outside the root document directory', async () => {
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ a: { $ref: '/etc/passwd' } }))
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    expect(errors[0]?.message).toMatch(/Refusing to read local \$ref .*\/etc\/passwd/)
+  })
+
+  it('allows a cross-directory local $ref when allowedRoots opts in', async () => {
+    // The normal split-spec layout: a version folder referencing shared schemas.
+    const sub = join(dir, 'sub')
+    mkdirSync(sub)
+    writeFileSync(join(dir, 'common.json'), JSON.stringify({ Pet: { type: 'object' } }))
+    writeFileSync(join(sub, 'spec.json'), JSON.stringify({ pet: { $ref: '../common.json#/Pet' } }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(sub, 'spec.json'), { allowedRoots: [dir] })
+
+    expect(errors).toEqual([])
+    expect(resolved).toEqual({ pet: { type: 'object' } })
+  })
+
+  it('refuses every cross-file local $ref when localRefs is disabled', async () => {
+    writeFileSync(join(dir, 'pet.json'), JSON.stringify({ Pet: { type: 'object' } }))
+    writeFileSync(
+      join(dir, 'api.json'),
+      JSON.stringify({ pet: { $ref: './pet.json#/Pet' }, internal: { $ref: '#/pet' } }),
+    )
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'api.json'), { localRefs: false })
+
+    expect(errors[0]?.message).toMatch(/local \$ref resolution is disabled/)
+  })
+
+  it('still reads the root document itself, which the caller named explicitly', async () => {
+    // Confinement applies to what a `$ref` reaches, not to the file you asked for.
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ a: { $ref: '#/b' }, b: { value: 1 } }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'), { localRefs: false })
+
+    expect(errors).toEqual([])
+    expect(resolved).toMatchObject({ a: { value: 1 } })
+  })
+
+  it('refuses a local $ref reached through a symlink pointing out of the root', async () => {
+    const sub = join(dir, 'sub')
+    mkdirSync(sub)
+    writeFileSync(join(dir, 'secret.json'), JSON.stringify({ apiKey: 'SUPER-SECRET-VALUE' }))
+    writeFileSync(join(sub, 'spec.json'), JSON.stringify({ leak: { $ref: './link.json' } }))
+    symlinkSync(join(dir, 'secret.json'), join(sub, 'link.json'))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(sub, 'spec.json'))
+
+    expect(resolved).toEqual({ leak: {} })
+    expect(errors[0]?.message).toMatch(/Refusing to read local \$ref/)
+  })
+
+  it('does not serve a credentialed remote document to a caller without those credentials', async () => {
+    // The multi-tenant leak: caller A fetches with a token, caller B must not be
+    // handed A's private document from the process-wide cache.
+    const url = 'https://reg.example.com/s.json'
+    const fetchA = vi
+      .fn<(u: string, i: object) => Promise<Response>>()
+      .mockResolvedValue(new Response(JSON.stringify({ Private: { tenant: 'A' } }), { status: 200 }))
+    const fetchB = vi
+      .fn<(u: string, i: object) => Promise<Response>>()
+      .mockResolvedValue(new Response(JSON.stringify({ Private: { tenant: 'B' } }), { status: 200 }))
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ x: { $ref: `${url}#/Private` } }))
+
+    const a = await resolveRefsFromFile(join(dir, 'api.json'), {
+      allowedHosts: ['reg.example.com'],
+      fetch: fetchA,
+      headers: { authorization: 'Bearer TENANT-A' },
+    })
+    const b = await resolveRefsFromFile(join(dir, 'api.json'), {
+      allowedHosts: ['reg.example.com'],
+      fetch: fetchB,
+    })
+
+    expect(a.resolved).toMatchObject({ x: { tenant: 'A' } })
+    expect(b.resolved).toMatchObject({ x: { tenant: 'B' } })
+    // B's own fetch was used — it did not inherit A's document or A's transport.
+    expect(fetchB).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not coalesce concurrent loads that carry different credentials', async () => {
+    const url = 'https://reg.example.com/s.json'
+    const fetchFor = (tenant: string) =>
+      vi
+        .fn<(u: string, i: object) => Promise<Response>>()
+        .mockResolvedValue(new Response(JSON.stringify({ Private: { tenant } }), { status: 200 }))
+    const fetchA = fetchFor('A')
+    const fetchB = fetchFor('B')
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ x: { $ref: `${url}#/Private` } }))
+
+    const [a, b] = await Promise.all([
+      resolveRefsFromFile(join(dir, 'api.json'), {
+        allowedHosts: ['reg.example.com'],
+        fetch: fetchA,
+        headers: { authorization: 'Bearer TENANT-A' },
+      }),
+      resolveRefsFromFile(join(dir, 'api.json'), {
+        allowedHosts: ['reg.example.com'],
+        fetch: fetchB,
+        headers: { authorization: 'Bearer TENANT-B' },
+      }),
+    ])
+
+    expect(a.resolved).toMatchObject({ x: { tenant: 'A' } })
+    expect(b.resolved).toMatchObject({ x: { tenant: 'B' } })
+    expect(fetchA).toHaveBeenCalledTimes(1)
+    expect(fetchB).toHaveBeenCalledTimes(1)
+  })
+
+  it('serves the session cache to a repeat caller with identical credentials', async () => {
+    // The credential-aware key must not defeat caching for the ordinary case.
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ Foo: { type: 'string' } }), { status: 200 }))
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ x: { $ref: 'https://api.example.com/s.json#/Foo' } }))
+    const opts = { allowedHosts: ['api.example.com'], headers: { authorization: 'Bearer same' } }
+
+    await resolveRefsFromFile(join(dir, 'api.json'), opts)
+    await resolveRefsFromFile(join(dir, 'api.json'), { ...opts, headers: { Authorization: 'Bearer same' } })
+
+    // Header names are case-insensitive, so both calls share the one entry.
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops a single URL from the session cache', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ Foo: { type: 'string' } }), { status: 200 }))
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ x: { $ref: 'https://api.example.com/s.json#/Foo' } }))
+    const opts = { allowedHosts: ['api.example.com'] }
+
+    await resolveRefsFromFile(join(dir, 'api.json'), opts)
+    clearRemoteCache('https://api.example.com/s.json')
+    await resolveRefsFromFile(join(dir, 'api.json'), opts)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+  })
+
+  it('caps how many documents a single resolve loads', async () => {
+    // Each file refs the next, so the fan-out is only bounded by the cap.
+    for (let i = 0; i < 6; i++) {
+      writeFileSync(join(dir, `d${i}.json`), JSON.stringify({ next: { $ref: `./d${i + 1}.json` }, i }))
+    }
+    writeFileSync(join(dir, 'd6.json'), JSON.stringify({ i: 6 }))
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'd0.json'), { maxDocuments: 3 })
+
+    expect(errors.some((e) => /Refusing to load more than 3 documents/.test(e.message))).toBe(true)
+  })
+
+  it('stops loading documents once the aggregate deadline has elapsed', async () => {
+    writeFileSync(join(dir, 'pet.json'), JSON.stringify({ Pet: { type: 'object' } }))
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ pet: { $ref: './pet.json#/Pet' } }))
+
+    // A budget already spent by the time the first ref is reached.
+    const { errors } = await resolveRefsFromFile(join(dir, 'api.json'), { totalTimeoutMs: 0 })
+
+    expect(errors.some((e) => /Resolve deadline of 0ms elapsed/.test(e.message))).toBe(true)
+  })
+
+  it('records an error instead of throwing on a pathologically nested document', async () => {
+    // Deep enough to blow the call stack before the depth cap existed.
+    const depth = 20_000
+    writeFileSync(join(dir, 'api.json'), '{"a":'.repeat(depth) + '1' + '}'.repeat(depth))
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    expect(errors.filter((e) => /exceeds the maximum depth/.test(e.message))).toHaveLength(1)
+  })
+
+  it('matches allowedHosts case-insensitively and on any port by default', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(() =>
+        Promise.resolve(new Response(JSON.stringify({ Foo: { type: 'string' } }), { status: 200 })),
+      )
+    writeFileSync(
+      join(dir, 'api.json'),
+      JSON.stringify({
+        a: { $ref: 'https://EXAMPLE.com/s.json#/Foo' },
+        b: { $ref: 'https://example.com:8443/s.json#/Foo' },
+      }),
+    )
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'), {
+      allowedHosts: ['EXAMPLE.com'],
+    })
+
+    expect(errors).toEqual([])
+    expect(resolved).toMatchObject({ a: { type: 'string' }, b: { type: 'string' } })
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+  })
+
+  it('honors a port on an allowedHosts entry, including the protocol default', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ Foo: { type: 'string' } }), { status: 200 }),
+    )
+    writeFileSync(
+      join(dir, 'api.json'),
+      JSON.stringify({
+        ok: { $ref: 'https://example.com/s.json#/Foo' },
+        bad: { $ref: 'https://example.com:8443/s.json#/Foo' },
+      }),
+    )
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'), {
+      allowedHosts: ['example.com:443'],
+    })
+
+    // The URL omits the port, which counts as the https default of 443…
+    expect(resolved).toMatchObject({ ok: { type: 'string' } })
+    // …while a different port on the same host is not covered by that entry.
+    expect((resolved as { bad: unknown }).bad).toBeUndefined()
+    expect(errors[0]?.message).toMatch(/host is not in the allow-list/)
+  })
+
+  it('refuses a cloud-metadata host reached by name', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    writeFileSync(
+      join(dir, 'api.json'),
+      JSON.stringify({ x: { $ref: 'http://metadata.google.internal/computeMetadata/v1/#/token' } }),
+    )
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    expect(errors[0]?.message).toMatch(/Refusing to resolve remote \$ref/)
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 
   it('coalesces two concurrent resolves of the same remote URL into one fetch', async () => {

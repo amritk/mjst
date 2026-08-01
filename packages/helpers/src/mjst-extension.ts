@@ -30,13 +30,23 @@ export type MjstExtension = {
   readonly brand?: string
 }
 
-// Only identifier-safe class names are honoured, so a malicious or malformed
-// schema cannot inject arbitrary code into the generated output.
-const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/
+// The runtime classes we know how to generate type/runtime handling for. An
+// identifier-shaped name is not enough: the name lands verbatim in the emitted
+// TypeScript, so `instanceOf: 'NotAGlobalClass'` compiled to a `TS2304` plus a
+// runtime `ReferenceError`, and `instanceOf: 'globalThis'` produced `g?:
+// globalThis` — not a type — plus a `TypeError` from `x instanceof globalThis`.
+// Allow-listing mirrors how `primitive` is handled (see SUPPORTED_PRIMITIVES):
+// a hint we cannot generate for degrades to ordinary type handling. Add entries
+// here as the generators grow support (and keep the adapters' maps in step).
+const SUPPORTED_INSTANCE_CLASSES = new Set(['Date'])
 
 // The non-JSON primitives we know how to generate type/runtime handling for.
 // Anything outside this set is ignored so unknown hints degrade gracefully.
 const SUPPORTED_PRIMITIVES = new Set(['bigint'])
+
+// One warning per unsupported class name, not one per schema node: the readers
+// run many times over a single document and a repeated line reads like a loop.
+const warnedInstanceClasses = new Set<string>()
 
 // Brand names are embedded inside a single-quoted string literal in generated
 // output, so we only allow characters that cannot break out of the literal.
@@ -54,12 +64,24 @@ const readExtensionString = (schema: JSONSchema, field: keyof MjstExtension): st
 
 /**
  * Reads the `instanceOf` class name from a schema's `x-mjst` extension, when it
- * is present and a safe identifier. Returns undefined otherwise so callers fall
- * back to ordinary type handling.
+ * names a class the generators actually support (see
+ * {@link SUPPORTED_INSTANCE_CLASSES}). Anything else is warned about once and
+ * ignored, so callers fall back to ordinary type handling rather than emitting
+ * a reference to a class that does not exist.
  */
 export const getMjstInstanceOf = (schema: JSONSchema): string | undefined => {
   const instanceOf = readExtensionString(schema, 'instanceOf')
-  return instanceOf !== undefined && IDENTIFIER.test(instanceOf) ? instanceOf : undefined
+  if (instanceOf === undefined) return undefined
+  if (SUPPORTED_INSTANCE_CLASSES.has(instanceOf)) return instanceOf
+
+  if (instanceOf !== '' && !warnedInstanceClasses.has(instanceOf)) {
+    warnedInstanceClasses.add(instanceOf)
+    console.warn(
+      `Warning: ignoring unsupported x-mjst instanceOf "${instanceOf}". ` +
+        `Supported classes: ${[...SUPPORTED_INSTANCE_CLASSES].join(', ')}.`,
+    )
+  }
+  return undefined
 }
 
 /**

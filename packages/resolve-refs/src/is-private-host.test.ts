@@ -37,8 +37,41 @@ describe('is-private-host', () => {
     expect(isPrivateHost('fe9a::1')).toBe(true)
     expect(isPrivateHost('feba::1')).toBe(true)
     expect(isPrivateHost('febf::1')).toBe(true)
-    // fec0:: is outside fe80::/10 (third nibble c), so it is not link-local.
-    expect(isPrivateHost('fec0::1')).toBe(false)
+  })
+
+  it('flags the deprecated fec0::/10 site-local range', () => {
+    // Deprecated by RFC 3879 but still routed on plenty of networks, and never
+    // public — it used to slip through because only fe80::/10 was checked.
+    expect(isPrivateHost('fec0::1')).toBe(true)
+    expect(isPrivateHost('feff::1')).toBe(true)
+  })
+
+  it('flags the benchmarking and IETF-protocol IPv4 ranges', () => {
+    expect(isPrivateHost('198.18.0.1')).toBe(true) // 198.18.0.0/15 benchmarking
+    expect(isPrivateHost('198.19.255.255')).toBe(true)
+    expect(isPrivateHost('192.0.0.1')).toBe(true) // 192.0.0.0/24 protocol assignments
+    // Only the /24 — the rest of 192.0.0.0/16 is ordinary public space.
+    expect(isPrivateHost('198.20.0.1')).toBe(false)
+    expect(isPrivateHost('192.0.1.1')).toBe(false)
+  })
+
+  it('flags cloud-metadata hosts reached by name, not just by IP', () => {
+    // The IP check misses these entirely: callers reach the metadata service by
+    // name, and `metadata` is what a search domain completes to inside a VPC.
+    expect(isPrivateHost('metadata.google.internal')).toBe(true)
+    expect(isPrivateHost('metadata.goog')).toBe(true)
+    expect(isPrivateHost('metadata')).toBe(true)
+    expect(isPrivateHost('instance-data')).toBe(true)
+    // The trailing-dot FQDN form must not slip past either.
+    expect(isPrivateHost('metadata.google.internal.')).toBe(true)
+  })
+
+  it('flags anything under the reserved .internal TLD', () => {
+    expect(isPrivateHost('db.internal')).toBe(true)
+    expect(isPrivateHost('ip-10-0-0-1.eu-west-1.compute.internal')).toBe(true)
+    // A name that merely *contains* "internal" is still public.
+    expect(isPrivateHost('internal.example.com')).toBe(false)
+    expect(isPrivateHost('myinternal.com')).toBe(false)
   })
 
   it('flags IPv4-mapped IPv6 loopback in both dotted and hex form', () => {

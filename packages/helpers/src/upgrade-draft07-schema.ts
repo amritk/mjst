@@ -19,6 +19,7 @@
  * Only applied when the schema declares `$schema: http://json-schema.org/draft-07/schema`.
  */
 
+import { assertSchemaDepth } from './max-schema-depth'
 import { refToFilename, toKebabCase } from './ref-to-filename'
 
 /**
@@ -31,9 +32,10 @@ export const isDraft07Schema = (schema: Record<string, unknown>): boolean =>
  * Rewrites `$ref` values in a schema tree using an explicit string→string map.
  * Also rewrites bare `$ref: "#"` to the given `selfRef` path when provided.
  */
-const rewriteRefs = (obj: unknown, refMap: ReadonlyMap<string, string>, selfRef?: string): unknown => {
+const rewriteRefs = (obj: unknown, refMap: ReadonlyMap<string, string>, selfRef?: string, depth = 0): unknown => {
+  assertSchemaDepth(depth, 'upgradeDraft07Schema')
   if (typeof obj !== 'object' || obj === null) return obj
-  if (Array.isArray(obj)) return obj.map((item) => rewriteRefs(item, refMap, selfRef))
+  if (Array.isArray(obj)) return obj.map((item) => rewriteRefs(item, refMap, selfRef, depth + 1))
 
   const record = obj as Record<string, unknown>
   const result: Record<string, unknown> = {}
@@ -48,7 +50,7 @@ const rewriteRefs = (obj: unknown, refMap: ReadonlyMap<string, string>, selfRef?
         result[key] = value
       }
     } else {
-      result[key] = rewriteRefs(value, refMap, selfRef)
+      result[key] = rewriteRefs(value, refMap, selfRef, depth + 1)
     }
   }
 
@@ -159,9 +161,10 @@ export const upgradeDraft07Schema = (schema: Record<string, unknown>): Record<st
  * `hoistNestedDefs` can map them to their hoisted root-level equivalents.
  * Does NOT hoist — hoisting is done separately at the root level.
  */
-const renameNestedDefs = (obj: unknown): unknown => {
+const renameNestedDefs = (obj: unknown, depth = 0): unknown => {
+  assertSchemaDepth(depth, 'upgradeDraft07Schema')
   if (typeof obj !== 'object' || obj === null) return obj
-  if (Array.isArray(obj)) return obj.map(renameNestedDefs)
+  if (Array.isArray(obj)) return obj.map((item) => renameNestedDefs(item, depth + 1))
 
   const record = obj as Record<string, unknown>
   const result: Record<string, unknown> = {}
@@ -171,7 +174,7 @@ const renameNestedDefs = (obj: unknown): unknown => {
       result[key] = value.replace('#/definitions/', '#/$defs/')
     } else {
       const outKey = key === 'definitions' ? '$defs' : key
-      result[outKey] = renameNestedDefs(value)
+      result[outKey] = renameNestedDefs(value, depth + 1)
     }
   }
 

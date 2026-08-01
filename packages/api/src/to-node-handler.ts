@@ -1,6 +1,6 @@
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from 'node:http'
-import { validateHeaderName, validateHeaderValue } from 'node:http'
 
+import { importNodeModule } from './import-node-module'
 import { DEFAULT_MAX_BODY_BYTES, payloadTooLargeError } from './payload-too-large'
 import type { Api, ApiRequest, RequestLocals } from './types'
 import { waitForDrain } from './wait-for-drain'
@@ -164,6 +164,11 @@ export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandl
       // separate header lines — exactly what repeated `set-cookie` needs — so
       // each element validates individually.
       if (response.headers !== undefined) {
+        // `node:http` is loaded on demand (see importNodeModule): a static
+        // import of it would break every Workers/browser bundle of the package
+        // root, whether or not this adapter is ever called. The module is
+        // cached after the first request, so this awaits nothing in practice.
+        const { validateHeaderName, validateHeaderValue } = await importNodeModule<typeof import('node:http')>('http')
         for (const [name, value] of Object.entries(headers)) {
           validateHeaderName(name)
           if (Array.isArray(value)) {

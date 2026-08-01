@@ -1,4 +1,5 @@
 import { pointerToPath } from './get-by-pointer'
+import { DEFAULT_MAX_DEPTH, depthLimitError } from './max-depth'
 import { type ResolvedTarget, readReference, resolveFragment } from './reference'
 import { baseOfNode, buildResourceRegistry, type ResourceRegistry, resolveRefInScope } from './resource-registry'
 import { assignKey } from './safe-assign'
@@ -22,6 +23,13 @@ export type ResolveRefsOptions = {
    * Defaults to `false`.
    */
   trackOrigins?: boolean
+  /**
+   * How deep the resolver walks before leaving a subtree unresolved and
+   * recording an error. Defaults to `512`. The walk is recursive, so a
+   * pathologically nested document would otherwise unwind the stack with a
+   * `RangeError` — a thrown error this package promises never to throw.
+   */
+  maxDepth?: number
 }
 
 /**
@@ -32,6 +40,13 @@ export type ResolveRefsOptions = {
  * too; every other sibling keyword keeps the spec-correct `allOf` combination.
  */
 const ANNOTATION_ONLY_SIBLINGS = new Set(['summary', 'description'])
+
+/**
+ * The depth budget for one resolve pass, carried through the walk. `reported`
+ * is mutable on purpose: it is how the walk records the limit exactly once
+ * instead of once per branch that trips it.
+ */
+type DepthLimits = { maxDepth: number; reported: boolean }
 
 /**
  * Single-pass internal `$ref` resolver. Each unique ref string is resolved
@@ -53,10 +68,24 @@ const resolveInternal = (
   cache: Map<string, CacheValue>,
   origins: OriginMap | undefined,
   errors: ResolveError[],
+  limits: DepthLimits,
+  depth: number,
 ): unknown => {
   if (node === null || typeof node !== 'object') return node
+  if (depth > limits.maxDepth) {
+    // Past the limit we hand the subtree back untouched instead of unwinding the
+    // stack with a RangeError. Nothing is lost — the branch simply keeps its
+    // `$ref`s — and the failure is on `errors` where callers look. Reported once
+    // per resolve: a document that is wide *and* deep would otherwise push an
+    // error per branch and turn the error array into its own memory problem.
+    if (!limits.reported) {
+      limits.reported = true
+      errors.push(depthLimitError(limits.maxDepth))
+    }
+    return node
+  }
   if (Array.isArray(node)) {
-    return node.map((item) => resolveInternal(item, root, registry, base, cache, origins, errors))
+    return node.map((item) => resolveInternal(item, root, registry, base, cache, origins, errors, limits, depth + 1))
   }
 
   const obj = node as Record<string, unknown>
@@ -122,7 +151,9 @@ const resolveInternal = (
         assignKey(
           kept,
           key,
-          key === keyword ? obj[key] : resolveInternal(obj[key], root, registry, nodeBase, cache, origins, errors),
+          key === keyword
+            ? obj[key]
+            : resolveInternal(obj[key], root, registry, nodeBase, cache, origins, errors, limits, depth + 1),
         )
       }
       return kept
@@ -145,7 +176,7 @@ const resolveInternal = (
         return obj
       }
       pointer = found.pointer
-      target = resolveInternal(found.value, root, registry, targetBase, cache, origins, errors)
+      target = resolveInternal(found.value, root, registry, targetBase, cache, origins, errors, limits, depth + 1)
       cache.set(cacheKey, { target, pointer })
       // Stamp the inlined node with the path it was defined at (see resolveAt).
       // First-write-wins so the deepest definition stamps before any outer ref that
@@ -159,7 +190,11 @@ const resolveInternal = (
     if (siblingKeys.length === 0) return target
     const siblings: Record<string, unknown> = {}
     for (const key of siblingKeys) {
-      assignKey(siblings, key, resolveInternal(obj[key], root, registry, nodeBase, cache, origins, errors))
+      assignKey(
+        siblings,
+        key,
+        resolveInternal(obj[key], root, registry, nodeBase, cache, origins, errors, limits, depth + 1),
+      )
     }
 
     // Annotation-only siblings (OpenAPI Reference Objects): inline the target
@@ -193,7 +228,11 @@ const resolveInternal = (
 
   const result: Record<string, unknown> = {}
   for (const key of Object.keys(obj)) {
-    assignKey(result, key, resolveInternal(obj[key], root, registry, nodeBase, cache, origins, errors))
+    assignKey(
+      result,
+      key,
+      resolveInternal(obj[key], root, registry, nodeBase, cache, origins, errors, limits, depth + 1),
+    )
   }
   return result
 }
@@ -218,7 +257,8 @@ const resolveInternal = (
 export const resolveRefs = (data: unknown, options: ResolveRefsOptions = {}): ResolveResult => {
   const origins: OriginMap | undefined = options.trackOrigins ? new Map() : undefined
   const errors: ResolveError[] = []
-  const registry = buildResourceRegistry(data)
-  const resolved = resolveInternal(data, data, registry, registry.rootBase, new Map(), origins, errors)
+  const limits: DepthLimits = { maxDepth: options.maxDepth ?? DEFAULT_MAX_DEPTH, reported: false }
+  const registry = buildResourceRegistry(data, undefined, limits.maxDepth)
+  const resolved = resolveInternal(data, data, registry, registry.rootBase, new Map(), origins, errors, limits, 0)
   return origins ? { resolved, errors, origins } : { resolved, errors }
 }

@@ -118,6 +118,75 @@ describe('cli', () => {
     expect(stdout).toBe('')
   })
 
+  // The failure this pins: with no TTY (CI) an empty stdin pipe made a typo'd path
+  // lint an empty document, print "No problems found", and exit 0 — a lint gate
+  // that silently passes. `stdin` is supplied here to stand in for that pipe.
+  it('exits non-zero when the document arguments match no files', async () => {
+    const dir = tmp('lint-nomatch-')
+    const { code, stdout, stderr } = await run([join(dir, 'typo-path/**/*.yaml')], { stdin: '' })
+
+    expect(code).toBe(2)
+    expect(stdout).toBe('')
+    expect(stderr).toContain('No files matched:')
+  })
+
+  it('still lints stdin when no document arguments were given at all', async () => {
+    const dir = tmp('lint-stdin2-')
+    writeFileSync(join(dir, '.lint.yaml'), RULESET)
+    const { code, stdout } = await run(['--stdin-filepath', join(dir, 'doc.yaml')], { stdin: 'name: my-service\n' })
+
+    expect(code).toBe(0)
+    expect(stdout).toContain('No problems found')
+  })
+
+  // Without `.strict()` a mistyped flag was dropped and the run used the defaults
+  // while reporting success — the same class of silent miss as the one above.
+  it('rejects an unknown flag instead of linting with the defaults', async () => {
+    const dir = tmp('lint-strict-')
+    const file = join(dir, 'doc.yaml')
+    writeFileSync(file, 'name: my-service\n')
+
+    const { code, stdout, stderr } = await run([file, '--bogus-flag', 'xyz'])
+
+    expect(code).toBe(2)
+    expect(stdout).toBe('')
+    expect(stderr).toContain('Unknown argument')
+  })
+
+  it('rejects a mistyped value for a known flag', async () => {
+    const dir = tmp('lint-choice-')
+    const file = join(dir, 'doc.yaml')
+    writeFileSync(file, 'name: my-service\n')
+
+    const { code, stderr } = await run([file, '--fail-severity', 'wrn'])
+
+    expect(code).toBe(2)
+    expect(stderr).toContain('fail-severity')
+  })
+
+  it('reports a non-numeric --concurrency instead of crashing on Invalid array length', async () => {
+    const dir = tmp('lint-conc-bad-')
+    const file = join(dir, 'doc.yaml')
+    writeFileSync(file, 'name: my-service\n')
+
+    const { code, stderr } = await run([file, '--concurrency', 'abc'])
+
+    expect(code).toBe(2)
+    expect(stderr).toContain('Invalid --concurrency value')
+  })
+
+  it('keeps the documents positional working under strict parsing', async () => {
+    const dir = tmp('lint-pos-')
+    writeFileSync(join(dir, '.lint.yaml'), RULESET)
+    for (let i = 0; i < 2; i++) writeFileSync(join(dir, `doc${i}.yaml`), 'version: 1\n')
+
+    const { code, stdout } = await run([join(dir, 'doc0.yaml'), join(dir, 'doc1.yaml')])
+
+    expect(code).toBe(1)
+    expect(stdout).toContain('doc0.yaml')
+    expect(stdout).toContain('doc1.yaml')
+  })
+
   it('warns about a structurally invalid ruleset on stderr without crashing', async () => {
     const dir = tmp('lint-badrs-')
     const file = join(dir, 'doc.yaml')

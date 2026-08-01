@@ -1,5 +1,6 @@
 import type { FetchOnRequest, FetchOnResponse } from './to-fetch-handler'
 import type { RequestLocals } from './types'
+import { writableResponse } from './writable-response'
 
 /**
  * The counter a {@link RateLimitStore} returns for one hit: how many requests
@@ -195,10 +196,13 @@ export const createRateLimit = (options: RateLimitOptions): RateLimit => {
   const onResponse: FetchOnResponse = (response, _request, locals) => {
     const stamped = locals[LOCALS_KEY] as StampedHeaders | undefined
     if (stamped === undefined) return undefined
-    response.headers.set('ratelimit-limit', String(stamped.limit))
-    response.headers.set('ratelimit-remaining', String(stamped.remaining))
-    response.headers.set('ratelimit-reset', String(stamped.reset))
-    return undefined
+    // A proxied mount's response has immutable headers; setting them directly
+    // would throw and cost the whole reply, so the probe runs first.
+    const target = writableResponse(response)
+    target.headers.set('ratelimit-limit', String(stamped.limit))
+    target.headers.set('ratelimit-remaining', String(stamped.remaining))
+    target.headers.set('ratelimit-reset', String(stamped.reset))
+    return target
   }
 
   return { onRequest, onResponse }

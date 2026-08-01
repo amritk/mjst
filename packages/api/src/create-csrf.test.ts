@@ -72,4 +72,15 @@ describe('create-csrf', () => {
     const exempt = new Request('http://localhost/api/webhook', { method: 'POST' })
     expect(await csrf.onRequest(exempt, undefined, undefined, {})).toBeUndefined()
   })
+
+  it('seeds the cookie on a response whose headers are immutable', async () => {
+    // What a proxying mount returns: mutating its headers in place throws, and
+    // a throwing decorator would cost the whole response.
+    const csrf = createCsrf()
+    const proxied = Response.redirect('https://example.com/next', 302)
+    const decorated = await csrf.onResponse(proxied, request('GET'), {})
+    expect(decorated).toBeInstanceOf(Response)
+    expect((decorated as Response).headers.get('set-cookie')).toContain('csrf_token=')
+    expect((decorated as Response).status).toBe(302)
+  })
 })

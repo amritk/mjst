@@ -9,10 +9,10 @@ export type IOasSchemaOptions = {
 
 /**
  * Validates a whole OpenAPI document against the official structural meta-schema
- * for a given `version`, loading that version's schema lazily on first use. The
+ * for a given `version`, parsing that version's schema on first use. The
  * `*-schema` rules are format-gated to a single version, so linting a document
- * only ever reads its own version's schema file — the other versions' schemas
- * are never loaded. Delegates the actual validation to the built-in `schema`
+ * only ever parses its own version's schema — the other versions stay as
+ * unparsed text. Delegates the actual validation to the built-in `schema`
  * function (which caches the prepared validator by schema identity).
  */
 export const oasSchema: RulesetFunction<unknown, IOasSchemaOptions> = (input, options, context) => {

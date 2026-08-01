@@ -36,4 +36,17 @@ describe('sign-cookie', () => {
     const signed = await cookies.sign('x')
     expect(await cookies.unsign(signed)).toBe('x')
   })
+
+  it('keeps signing correctly past the key-cache bound', async () => {
+    // A per-tenant rotation loop pushes far more distinct secrets through the
+    // cache than it retains. Eviction must only cost a re-import, never a
+    // wrong signature — including for the very first secret, long evicted.
+    const first = await signCookie('session-1', 'secret-0')
+    for (let index = 1; index <= 200; index++) {
+      const signed = await signCookie('session-1', `secret-${index}`)
+      expect(await unsignCookie(signed, `secret-${index}`)).toBe('session-1')
+    }
+    expect(await unsignCookie(first, 'secret-0')).toBe('session-1')
+    expect(await unsignCookie(first, 'secret-1')).toBeUndefined()
+  })
 })

@@ -6,7 +6,7 @@ import { buildParamsObject } from './build-params-object'
 import { buildQueryObject } from './build-query-object'
 import { buildQueryObjectFromString } from './build-query-object-from-string'
 import type { RouteMatch } from './match-route'
-import { matchRoute } from './match-route'
+import { allowedMethods, matchRoute } from './match-route'
 import { matchesIfNoneMatch } from './matches-if-none-match'
 import { matchesBodyType, parseFormBody, parseMultipartBody } from './parse-body'
 import { isPayloadTooLargeError } from './payload-too-large'
@@ -114,14 +114,11 @@ export const handleRequest = (
   }
   if (match === undefined) {
     // The path may be served under other methods — that is a 405 with an
-    // `allow` header, not a 404. Cold path, so scanning the method list is
-    // cheaper than maintaining a per-path index for every request.
-    const allow: string[] = []
-    for (const method of internals.table.methods) {
-      if (method !== request.method && matchRoute(internals.table, method, request.path) !== undefined) {
-        allow.push(method)
-      }
-    }
+    // `allow` header, not a 404. `allowedMethods` answers from the routing
+    // index rather than re-running the whole matcher once per known method,
+    // which is what used to make an unroutable path several times as
+    // expensive to reject as a real request is to serve.
+    const allow = allowedMethods(internals.table, request.path, request.method)
     let miss: ApiResponse
     if (allow.length > 0) {
       // GET routes implicitly serve HEAD (see the fallback above), so the

@@ -79,11 +79,12 @@ jobs:
         run: bun install --frozen-lockfile
         working-directory: .bench-baseline
 
-      # The api bench workers time @amritk/runtime-validators as its built
-      # dist (what production traffic runs; its TS sources also use path
-      # aliases Bun cannot resolve across packages), so both trees need that
-      # one package compiled. `|| true` keeps ancient baselines without the
-      # package from failing the job — their api rows report n/a anyway.
+      # The api and runtime bench workers both time @amritk/runtime-validators
+      # as its built dist (what production traffic runs; its TS sources also
+      # use path aliases Bun cannot resolve from the worker's bench cwd), so
+      # both trees need that one package compiled. `|| true` keeps ancient
+      # baselines without the package from failing the job — their api and
+      # runtime rows report n/a anyway.
       - name: Build runtime-validators (PR)
         run: bun run --filter='@amritk/runtime-validators' build
 

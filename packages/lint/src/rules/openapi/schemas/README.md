@@ -2,8 +2,12 @@
 
 These are the official OpenAPI JSON Schema documents from
 [spec.openapis.org](https://spec.openapis.org/oas/), vendored as raw `.json`
-files and loaded by [`index.ts`](./index.ts). They back the `oas2-schema` /
-`oas3-schema` / `oas3_1-schema` / `oas3_2-schema` rules.
+files. `scripts/generate-schema-modules.mjs` turns each one into the sibling
+`.ts` module that [`index.ts`](./index.ts) imports — a static import so the
+package can be bundled, and so it runs where `createRequire` does not exist
+(Workers, Deno). The build fails if a `.json` file and its module drift apart.
+They back the `oas2-schema` / `oas3-schema` / `oas3_1-schema` / `oas3_2-schema`
+rules.
 
 | File | Source | Adaptation |
 | --- | --- | --- |
@@ -36,3 +40,9 @@ but never fetches remote documents.
 For 3.0 / 3.1 / 3.2, re-download the URL above and replace the file verbatim.
 For 2.0, re-inline the external draft-04 metaschema fragments the schema
 references (they are stable — the draft-04 metaschema has not changed).
+
+Then regenerate the modules and commit both the `.json` and the `.ts`:
+
+```sh
+cd packages/lint && node scripts/generate-schema-modules.mjs
+```

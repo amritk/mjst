@@ -1,5 +1,5 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import { buildSchema } from './build-schema'
 
@@ -276,7 +276,10 @@ describe('build-schema', () => {
     expect(parameterFile?.content).not.toContain('parseParameter')
   })
 
-  it('warns and skips when a $ref cannot be resolved', async () => {
+  // Warning and carrying on still emitted `parseNonexistent` and imported
+  // `Nonexistent` from a file that was never written, so generation exited 0
+  // with output that cannot compile. Failing here is the whole point.
+  it('throws when a $ref cannot be resolved', async () => {
     const schema: JSONSchema = {
       type: 'object',
       properties: {
@@ -286,15 +289,7 @@ describe('build-schema', () => {
       $defs: {},
     }
 
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
-
-    const result = await buildSchema(schema, 'Document')
-
-    expect(warnSpy).toHaveBeenCalledWith('Warning: Could not resolve ref: #/$defs/nonexistent')
-    // The root document file should still be generated despite the unresolvable ref
-    expect(result.some((file) => file.filename === 'document.ts')).toBe(true)
-
-    warnSpy.mockRestore()
+    await expect(buildSchema(schema, 'Document')).rejects.toThrow(/Could not resolve \$ref "#\/\$defs\/nonexistent"/)
   })
 
   it('generates intersection type for schema with allOf $ref', async () => {

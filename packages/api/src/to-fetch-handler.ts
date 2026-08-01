@@ -140,10 +140,106 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     return init
   }
 
-  const finish = async (response: Response, request: Request, locals: RequestLocals): Promise<Response> => {
+  /** The pipeline's own 500 — the shape every uncaught failure collapses to. */
+  const internalError = (): Response => new Response('{"error":"internal_error"}', initFor(500))
+
+  /**
+   * Turns a pipeline reply into a `Response`. Shared by the routed path and
+   * the hook-error path so an `onError` reply serializes exactly the same way
+   * a handler reply does — raw escape hatch, raw content types, custom headers
+   * and all.
+   */
+  const toResponse = (response: ApiResponse): Response => {
+    // A handler that returned a raw web Response (the escape hatch) sends it
+    // verbatim — still through the onResponse decorators, since `finish`
+    // wraps whatever this handler returns.
+    if (response.raw !== undefined) return response.raw
+
+    // Raw statuses (contract-declared contentType) pass the body straight to
+    // the Response constructor: a string, bytes, or a live ReadableStream.
+    if (response.contentType !== undefined) {
+      return new Response((response.body ?? null) as StreamingBody | null, {
+        status: response.status,
+        headers:
+          response.headers === undefined
+            ? { 'content-type': response.contentType }
+            : buildResponseHeaders(response.headers, response.contentType),
+      })
+    }
+    if (response.headers === undefined) {
+      if (response.body === undefined) return new Response(null, { status: response.status })
+      return new Response(JSON.stringify(response.body), initFor(response.status))
+    }
+    if (response.body === undefined) {
+      return new Response(null, { status: response.status, headers: buildResponseHeaders(response.headers) })
+    }
+    // Custom headers win over the default content-type, matching Response.json.
+    return new Response(JSON.stringify(response.body), {
+      status: response.status,
+      headers: buildResponseHeaders(response.headers, 'application/json'),
+    })
+  }
+
+  /**
+   * What a thrown hook becomes. The hooks are the one class of app code that
+   * runs outside `api.handle`, so the pipeline's own `onError` boundary never
+   * sees them — this hands the error to the very same sink instead, with
+   * `route: undefined` because a hook belongs to no route. An app that wired
+   * no `onError` gets a `console.error`: before the chains were wrapped, a
+   * throwing hook at least surfaced as a platform-level unhandled error (a
+   * Workers 1101, a Bun unhandled rejection), and swapping that for a silent
+   * `{"error":"internal_error"}` would make the failure undiagnosable. The
+   * one to picture is `createRequestId({ trustInbound: true })` reflecting a
+   * CRLF-bearing inbound id into `Headers.set` — a bare 500 tells you nothing
+   * about which decorator threw, or that one threw at all.
+   *
+   * `onError` is app code too, so a throwing reporter (or a reply that will
+   * not serialize) falls through to the same log and the bare 500.
+   */
+  const hookError = (
+    error: unknown,
+    request: Request,
+    locals: RequestLocals,
+    env: unknown,
+    executionContext: unknown,
+  ): Response => {
+    const onError = api.onError
+    if (onError !== undefined) {
+      try {
+        return toResponse(
+          onError(error, hookApiRequest(request, locals, maxBodyBytes), { route: undefined, env, executionContext }),
+        )
+      } catch {
+        // Reporting failed; fall through to the log and the bare 500.
+      }
+    }
+    console.error(HOOK_ERROR_MESSAGE, error)
+    return internalError()
+  }
+
+  // Hooks run outside the ApiResponse translation's try/catch below, so a
+  // throwing one used to reach the platform (a Workers 1101, a Bun unhandled
+  // rejection) instead of the pipeline's 500. It is not a theoretical hook
+  // either: `createRequestId({ trustInbound: true })` reflects an arbitrary
+  // inbound header value straight into `Headers.set`, so a CRLF-bearing
+  // request id is enough. On a failure the chain is abandoned — a decorator
+  // that cannot run should not have the remaining decorators run over a
+  // half-decorated response — and the error goes to `hookError`, which reports
+  // it rather than dropping it on the floor.
+  const finish = async (
+    response: Response,
+    request: Request,
+    locals: RequestLocals,
+    env: unknown,
+    executionContext: unknown,
+  ): Promise<Response> => {
     let current = response
     for (const hook of onResponse) {
-      current = (await hook(current, request, locals)) ?? current
+      try {
+        current = (await hook(current, request, locals)) ?? current
+      } catch (error) {
+        return hookError(error, request, locals, env, executionContext)
+      }
     }
     return current
   }
@@ -211,38 +307,9 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     // already returned. Without this boundary the rejection escapes to the
     // platform instead of becoming the pipeline's own 500 shape.
     try {
-      if (request.method === 'HEAD') return headResponse(response)
-
-      // A handler that returned a raw web Response (the escape hatch) sends it
-      // verbatim — still through the onResponse decorators, since `finish`
-      // wraps whatever this handler returns.
-      if (response.raw !== undefined) return response.raw
-
-      // Raw statuses (contract-declared contentType) pass the body straight to
-      // the Response constructor: a string, bytes, or a live ReadableStream.
-      if (response.contentType !== undefined) {
-        return new Response((response.body ?? null) as StreamingBody | null, {
-          status: response.status,
-          headers:
-            response.headers === undefined
-              ? { 'content-type': response.contentType }
-              : buildResponseHeaders(response.headers, response.contentType),
-        })
-      }
-      if (response.headers === undefined) {
-        if (response.body === undefined) return new Response(null, { status: response.status })
-        return new Response(JSON.stringify(response.body), initFor(response.status))
-      }
-      if (response.body === undefined) {
-        return new Response(null, { status: response.status, headers: buildResponseHeaders(response.headers) })
-      }
-      // Custom headers win over the default content-type, matching Response.json.
-      return new Response(JSON.stringify(response.body), {
-        status: response.status,
-        headers: buildResponseHeaders(response.headers, 'application/json'),
-      })
+      return request.method === 'HEAD' ? headResponse(response) : toResponse(response)
     } catch {
-      return new Response('{"error":"internal_error"}', initFor(500))
+      return internalError()
     }
   }
 
@@ -253,10 +320,62 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     // stage — gates, context factory, handler, decorators — shares it.
     const locals: RequestLocals = {}
     for (const gate of onRequest) {
-      const early = await gate(request, env, executionContext, locals)
-      if (early !== undefined) return finish(early, request, locals)
+      let early: Response | undefined
+      try {
+        early = await gate(request, env, executionContext, locals)
+      } catch (error) {
+        // Same reasoning as `finish`: a gate is app code with no boundary
+        // above it. Its reported 500 still flows through the decorators,
+        // exactly like the Response a gate returns on purpose.
+        return finish(hookError(error, request, locals, env, executionContext), request, locals, env, executionContext)
+      }
+      if (early !== undefined) return finish(early, request, locals, env, executionContext)
     }
-    return finish(await handler(request, env, executionContext, locals), request, locals)
+    return finish(await handler(request, env, executionContext, locals), request, locals, env, executionContext)
+  }
+}
+
+/**
+ * What an unreported hook failure is logged under. Prefixed so it is greppable
+ * next to the package's other reports, and exported so `compileToModule` can
+ * bake the identical string — the two engines have to be indistinguishable on
+ * the telemetry too, not only on the wire.
+ */
+export const HOOK_ERROR_MESSAGE = '[@amritk/api] An onRequest/onResponse hook threw:'
+
+/**
+ * The `ApiRequest` an `onError` implementation is handed for a hook failure.
+ * The hooks run outside `api.handle`, so no `ApiRequest` exists yet — this
+ * builds the same shape the pipeline would have, from the raw platform
+ * request, and the pathname is sliced out exactly the way the per-request path
+ * does it so both engines report the identical `path`.
+ *
+ * Cold path only (one per 500), so it never touches the hot handler.
+ */
+const hookApiRequest = (request: Request, locals: RequestLocals, maxBodyBytes: number): ApiRequest => {
+  const url = request.url
+  const schemeEnd = url.indexOf('://')
+  const pathStart = url.indexOf('/', schemeEnd === -1 ? 0 : schemeEnd + 3)
+  const queryIndex = pathStart === -1 ? -1 : url.indexOf('?', pathStart)
+  const path = pathStart === -1 ? '/' : queryIndex === -1 ? url.slice(pathStart) : url.slice(pathStart, queryIndex)
+  let bytes: Promise<Uint8Array> | undefined
+  const readAllBytes = (): Promise<Uint8Array> =>
+    (bytes ??=
+      maxBodyBytes === Number.POSITIVE_INFINITY
+        ? request.arrayBuffer().then((buffer) => new Uint8Array(buffer))
+        : readBodyCapped(request, maxBodyBytes))
+  return {
+    method: request.method,
+    path,
+    searchParams: () => new URLSearchParams(queryIndex === -1 ? '' : url.slice(queryIndex + 1)),
+    queryString: () => (queryIndex === -1 ? '' : url.slice(queryIndex + 1)),
+    header: (name) => request.headers.get(name) ?? undefined,
+    readBody: () => readAllBytes().then((buffer) => JSON.parse(DECODER.decode(buffer)) as unknown),
+    readText: () => readAllBytes().then((buffer) => DECODER.decode(buffer)),
+    readBytes: readAllBytes,
+    signal: request.signal,
+    raw: request,
+    locals,
   }
 }
 

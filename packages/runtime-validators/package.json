@@ -2,7 +2,9 @@
   "name": "@amritk/runtime-validators",
   "version": "0.9.1",
   "description": "Extremely fast, eval-free runtime JSON Schema validation. Interprets a schema you do not know ahead of time — no new Function, no build step, runs anywhere.",
+  "main": "./dist/index.js",
   "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "type": "module",
   "sideEffects": false,
   "engines": {

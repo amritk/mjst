@@ -28,6 +28,7 @@ Output:
   --validators          Also emit validateX/isX validators into a validators/ subdir
   --examples            Also emit fast-check arbitraries + example values under examples/
   --build               Compile the generated files to .js/.d.ts (implies --import-ext js)
+  --force               Overwrite pre-existing files in the output destination
   --import-ext <ext>    Extension on generated relative imports: ts (default) or js
   --helpers <mode>      Runtime helpers: package or embedded (default: auto-detect from package.json)
   --root-type <name>    Root type name for a single --schema run (default: schema title or filename)
@@ -45,6 +46,8 @@ Reference resolution:
   --resolve-remote      Fetch http(s) $refs while resolving cross-file/remote refs (off by default)
   --allowed-hosts <h>   Restrict remote $ref fetches to these hosts (comma-separated; implies --resolve-remote)
   --allow-private-hosts Permit remote $refs to private/loopback hosts (SSRF guard, off by default)
+  --allowed-roots <d>   Extra directories a local $ref may resolve into, on top of the schema's own
+                        (comma-separated; relative to the current directory)
 
 Misc:
   --config <path>       JSON config file with the same keys; CLI flags take precedence

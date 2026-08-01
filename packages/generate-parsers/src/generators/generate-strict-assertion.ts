@@ -29,15 +29,23 @@ import {
 } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { generateDeepEqualCheck } from './generate-deep-equal-check'
 import { generateEnumCheck } from './generate-enum-check'
 import {
   canEnforceUnion,
   generateUnionCheck,
   getUnionBranches,
+  isExclusiveUnion,
   isInlineObjectProperty,
   multiTypeCheck,
 } from './generate-type-checks'
-import { getPrefixItems, prefixItemsCapsLength, scalarItemTypeCheck } from './generate-validation-expression'
+import { generateUniqueItemsCheck } from './generate-unique-items-check'
+import {
+  everyTailItem,
+  getPrefixItems,
+  prefixItemsCapsLength,
+  scalarItemTypeCheck,
+} from './generate-validation-expression'
 import { subschemaMatchExpr } from './subschema-match'
 
 /**
@@ -176,20 +184,23 @@ const generateConstraintChecks = (
       )
     }
     if (hasUniqueItems(propSchema) && propSchema.uniqueItems === true) {
-      // Deep-equality dedupe via JSON keys, matching the interpreter's semantics —
-      // a plain `new Set` would only catch primitive duplicates, not equal objects.
+      // Structural dedupe, matching the interpreter and Ajv: see
+      // generateUniqueItemsCheck for why a raw `JSON.stringify` key (which is
+      // key-order sensitive) let `[{a:1,b:2},{b:2,a:1}]` through.
       lines.push(
-        `  if (Array.isArray(${acc}) && new Set(${acc}.map((_u) => JSON.stringify(_u))).size !== ${acc}.length) ${throwError(`${field} must NOT have duplicate items`)};`,
+        `  if (Array.isArray(${acc}) && !(${generateUniqueItemsCheck(acc, propSchema)})) ${throwError(`${field} must NOT have duplicate items`)};`,
       )
     }
     // Item types: the fast path proves them via `.every`, but this slow path
     // used to check only length/uniqueness, letting e.g. a number slip into a
     // declared `string[]`. Enforce scalar and enum item schemas here; richer
-    // item schemas ($refs, objects) are validated by their own parsers.
+    // item schemas ($refs, objects) are validated by their own parsers. The
+    // `items` tail starts after the `prefixItems` positions (see everyTailItem),
+    // which generatePrefixItemsAssertion asserts against their own subschemas.
     const itemCheck = generateItemCheck(propSchema)
     if (itemCheck) {
       lines.push(
-        `  if (Array.isArray(${acc}) && !${acc}.every((_it) => ${itemCheck.check})) ${throwError(`${field} ${itemCheck.message}`)};`,
+        `  if (Array.isArray(${acc}) && !${everyTailItem(acc, itemCheck.check, propSchema)}) ${throwError(`${field} ${itemCheck.message}`)};`,
       )
     }
     // Tuple `prefixItems`: assert each position and cap length under items:false.
@@ -332,10 +343,9 @@ const generatePrefixItemsAssertion = (
     const present = `Array.isArray(${acc}) && ${acc}.length > ${i}`
 
     if (isSchemaObject(pos) && hasEnum(pos) && pos.enum.length > 0) {
-      const allowed = JSON.stringify(pos.enum)
       const label = (pos.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
       lines.push(
-        `  if (${present} && !(${allowed} as readonly unknown[]).includes(${el})) ${throwError(`${field}[${i}] must be one of: ${label}`)};`,
+        `  if (${present} && !${generateEnumCheck(el, pos.enum)}) ${throwError(`${field}[${i}] must be one of: ${label}`)};`,
       )
       continue
     }
@@ -435,7 +445,13 @@ const generatePropertyAssertion = (
   const unionBranches = getUnionBranches(propSchema)
   if (unionBranches) {
     if (!context.stripUnknown && canEnforceUnion(unionBranches, context.rootSchema)) {
-      const check = generateUnionCheck(acc, unionBranches, context.useRefImports ?? false, context.suffix ?? '')
+      const check = generateUnionCheck(
+        acc,
+        unionBranches,
+        context.useRefImports ?? false,
+        context.suffix ?? '',
+        isExclusiveUnion(propSchema),
+      )
       if (check !== null) {
         const failure = throwError(`${field} does not match any allowed variant`)
         lines.push(
@@ -471,16 +487,12 @@ const generatePropertyAssertion = (
   }
 
   if (hasEnum(propSchema)) {
-    const allowed = JSON.stringify(propSchema.enum)
+    const member = generateEnumCheck(acc, propSchema.enum)
     const label = (propSchema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
     if (isRequired) {
-      lines.push(
-        `  if (!(${allowed} as readonly unknown[]).includes(${acc})) ${throwError(`${field} must be one of: ${label}`)};`,
-      )
+      lines.push(`  if (!${member}) ${throwError(`${field} must be one of: ${label}`)};`)
     } else {
-      lines.push(
-        `  if (${acc} !== undefined && !(${allowed} as readonly unknown[]).includes(${acc})) ${throwError(`${field} must be one of: ${label}`)};`,
-      )
+      lines.push(`  if (${acc} !== undefined && !${member}) ${throwError(`${field} must be one of: ${label}`)};`)
     }
     return lines
   }
@@ -654,18 +666,17 @@ export const generateScalarStrictAssertion = (
 
   // `const` / `enum` apply to a root value regardless of a declared `type` — a
   // root `{ enum: [...] }` or `{ const: ... }` must reject a non-member, not
-  // silently coerce it. `const` is compared through `JSON.stringify` so it works
-  // for any JSON value; the value must match exactly.
+  // silently coerce it. Both compare *structurally* against the known literal:
+  // `JSON.stringify(input) !== '{"a":1,"b":2}'` rejected a reordered-but-equal
+  // object, and `.includes` could never match an object member at all.
   if (hasConst(schema)) {
-    const wanted = JSON.stringify(JSON.stringify(schema.const))
     lines.push(
-      `  if (JSON.stringify(input) !== ${wanted}) ${throwError(`${label} must be ${JSON.stringify(schema.const)}`)};`,
+      `  if (!(${generateDeepEqualCheck('input', schema.const)})) ${throwError(`${label} must be ${JSON.stringify(schema.const)}`)};`,
     )
   } else if (hasEnum(schema)) {
-    const allowed = JSON.stringify(schema.enum)
     const enumLabel = (schema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
     lines.push(
-      `  if (!(${allowed} as readonly unknown[]).includes(input)) ${throwError(`${label} must be one of: ${enumLabel}`)};`,
+      `  if (!${generateEnumCheck('input', schema.enum)}) ${throwError(`${label} must be one of: ${enumLabel}`)};`,
     )
   }
 

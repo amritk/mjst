@@ -947,23 +947,28 @@ describe('generateTypeDefinition', () => {
     expect(result).toStrictEqual('export type Restricted = Record<`x-${string}`, never>;')
   })
 
-  it('generates Schema type for property with $dynamicRef pointing to #meta', () => {
-    // $dynamicRef: '#meta' is a JSON Schema 2020-12 pattern used for recursive
-    // schema definitions that refer to the root Schema type itself.
+  // In the real pipeline `resolveDynamicRefs` rewrites every `$dynamicRef` to a
+  // concrete `$ref` (and fails the build for any it cannot bind) before a schema
+  // reaches this function. One that survives names no generated file, so the
+  // only honest type is `unknown`. Naming the type after the anchor instead is
+  // what turned a root `$dynamicAnchor: "node"` into a reference to the DOM's
+  // `Node` interface: never generated, never imported, and compiling cleanly.
+  it('types an unbound $dynamicRef as unknown rather than naming a type nobody exports', () => {
     const schema: JSONSchema.Object = {
       type: 'object',
       properties: {
         schema: { $dynamicRef: '#meta' },
+        node: { $dynamicRef: '#node' },
       },
     }
 
     const result = generateTypeDefinition(schema, 'SchemaContainer')
 
-    expect(result).toContain('schema?: Schema')
+    expect(result).toContain('schema?: unknown')
+    expect(result).toContain('node?: unknown')
   })
 
-  it('generates type name from non-meta $dynamicRef', () => {
-    // A $dynamicRef other than '#meta' is converted via refToName like a $ref.
+  it('types a pointer-form $dynamicRef as unknown too', () => {
     const schema: JSONSchema.Object = {
       type: 'object',
       properties: {
@@ -973,7 +978,7 @@ describe('generateTypeDefinition', () => {
 
     const result = generateTypeDefinition(schema, 'ContentContainer')
 
-    expect(result).toContain('content?: Schema')
+    expect(result).toContain('content?: unknown')
   })
 
   it('generates union type for schema with array of types', () => {

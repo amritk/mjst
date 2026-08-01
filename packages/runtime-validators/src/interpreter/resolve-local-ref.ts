@@ -80,19 +80,30 @@ const ANCHOR_KEYWORDS = ['$anchor', '$dynamicAnchor'] as const
  * JSON-derived and acyclic, and this runs at most once per ref (the caller
  * memoizes it). Shared by the static and dynamic resolvers so the traversal
  * exists in exactly one place.
+ *
+ * Iterative with an explicit stack rather than recursive, because the schema is
+ * untrusted: a deeply nested document (20,000 levels of `{ "not": … }`) would
+ * otherwise overflow the native stack with a `RangeError`, which is uncatchable
+ * by the {@link isValidationLimitError} contract callers handle. Children are
+ * pushed in reverse so popping visits them in key order — the same pre-order
+ * traversal (and therefore the same "first anchor wins") the recursion had.
  */
 export const findAnchor = (node: unknown, name: unknown, keywords: readonly string[], seen: Set<object>): unknown => {
-  if (node === null || typeof node !== 'object' || seen.has(node)) return undefined
-  seen.add(node)
+  const stack: unknown[] = [node]
 
-  if (!Array.isArray(node)) {
-    const record = node as Record<string, unknown>
-    for (const keyword of keywords) if (record[keyword] === name) return node
+  while (stack.length > 0) {
+    const current = stack.pop()
+    if (current === null || typeof current !== 'object' || seen.has(current)) continue
+    seen.add(current)
+
+    const record = current as Record<string, unknown>
+    if (!Array.isArray(current)) {
+      for (const keyword of keywords) if (record[keyword] === name) return current
+    }
+
+    const keys = Object.keys(record)
+    for (let i = keys.length - 1; i >= 0; i--) stack.push(record[keys[i] as string])
   }
 
-  for (const key in node) {
-    const found = findAnchor((node as Record<string, unknown>)[key], name, keywords, seen)
-    if (found !== undefined) return found
-  }
   return undefined
 }

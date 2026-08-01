@@ -1,5 +1,12 @@
 import { fnv1aHex } from './fnv1a-hex'
-import type { AnyContract } from './types'
+import type { AnyContract, AnyRouteContract } from './types'
+
+/**
+ * What {@link hashContracts} reads. The schema half comes from
+ * {@link AnyContract}; the guard slots only exist on {@link AnyRouteContract},
+ * and are optional here so a plain contract (no handler, no guards) hashes too.
+ */
+export type HashableContract = AnyContract & Pick<AnyRouteContract, 'guards' | 'securityGuards'>
 
 /**
  * A stable fingerprint over everything `compileToModule` bakes into a
@@ -11,9 +18,18 @@ import type { AnyContract } from './types'
  *
  * The compiled module embeds this hash at emit time and recomputes it over
  * the live contracts at init, which is how schema edits that silently drifted
- * from a stale build get surfaced. Handlers, `refine` hooks, and `guards` are
+ * from a stale build get surfaced. Handler, `refine`, and `guard` *bodies* are
  * deliberately excluded — the emitted module imports and calls them live, so
- * changing them never makes a build stale.
+ * rewriting one never makes a build stale.
+ *
+ * Their **presence** is another matter, and is fingerprinted. The emitter
+ * decides at build time whether a route has guards, security guards, or a
+ * refine at all, and emits (or omits) the code that runs them. Adding a guard
+ * to a route without regenerating therefore used to produce a compiled server
+ * that ran the handler with no guard and no warning — the hash could not
+ * change, because it never looked. Counting the guards and noting whether
+ * `refine` exists keeps the "swapping a guard body is not staleness" promise
+ * while catching every add and remove.
  *
  * The hash is computed over a canonical serialization (object keys sorted at
  * every level), so it is insensitive to property declaration order but
@@ -21,15 +37,16 @@ import type { AnyContract } from './types'
  * of the comparison must pass the same order, which the emitter guarantees by
  * baking the array in its own emit order.
  */
-export const hashContracts = (routes: ReadonlyArray<AnyContract>): string =>
+export const hashContracts = (routes: ReadonlyArray<HashableContract>): string =>
   fnv1aHex(sortedStringify(routes.map(contractFields)))
 
 /**
  * Picks exactly the contract-relevant fields. An explicit pick (rather than
- * hashing the whole contract) keeps functions like `handler`, `refine`, and
- * `guards` out of the fingerprint by construction.
+ * hashing the whole contract) keeps the function *bodies* — `handler`,
+ * `refine`, `guards` — out of the fingerprint by construction, while the
+ * presence-only counts below still record that they exist.
  */
-const contractFields = (contract: AnyContract): Record<string, unknown> => {
+const contractFields = (contract: HashableContract): Record<string, unknown> => {
   const request = contract.request
   return {
     method: contract.method,
@@ -52,6 +69,9 @@ const contractFields = (contract: AnyContract): Record<string, unknown> => {
             cookies: request.cookies,
           },
     responses: contract.responses,
+    guards: contract.guards?.length ?? 0,
+    securityGuards: contract.securityGuards?.length ?? 0,
+    refine: contract.refine !== undefined,
   }
 }
 

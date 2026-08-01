@@ -1083,6 +1083,23 @@ export type Api = {
   readonly openApi: () => OpenApiDocument
   /** The contracts this API was built from. */
   readonly routes: ReadonlyArray<AnyRouteContract>
+  /**
+   * The app's {@link ApiOptions.onError}, re-exposed so an adapter can report
+   * failures that happen *outside* `handle` through the same sink the pipeline
+   * uses. `toFetchHandler`'s gates and response decorators are the case: they
+   * run before and after the API, so an error thrown in one never reaches the
+   * pipeline's own boundary, and without this seam it would vanish into a bare
+   * 500 with nothing logged anywhere. `undefined` when the app wired no
+   * `onError`, in which case the adapter falls back to `console.error` —
+   * silence is the one outcome that is never acceptable for a thrown hook.
+   *
+   * `details.route` is `undefined` for these, since a hook is not attached to
+   * any route.
+   *
+   * Spelled `| undefined` so a wrapper (`createHotApi`) can forward the live
+   * build's sink through a getter under `exactOptionalPropertyTypes`.
+   */
+  readonly onError?: ((error: unknown, request: ApiRequest, details: OnErrorDetails) => ApiResponse) | undefined
 }
 
 /**

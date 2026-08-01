@@ -30,6 +30,12 @@ export type Suite = {
  * Every suite `bench-compare.ts` can run, in table order. `codegen` shares
  * generate-parsers with `parsers`: it times `buildSchema` (compile time)
  * rather than the parser it emits (run time).
+ *
+ * `runtime` times @amritk/runtime-validators directly. It used to be covered
+ * only through `api`, which runs the interpreter behind a whole request path —
+ * so an interpreter regression arrived diluted by request overhead, and one in
+ * a keyword the api bench's contracts happen not to use arrived not at all,
+ * even though @amritk/lint runs those keywords on every schema rule.
  */
 export const SUITES: readonly Suite[] = [
   { name: 'parsers', pkgDir: 'generate-parsers' },
@@ -37,6 +43,7 @@ export const SUITES: readonly Suite[] = [
   { name: 'api', pkgDir: 'api' },
   { name: 'codegen', pkgDir: 'generate-parsers' },
   { name: 'yaml', pkgDir: 'yaml' },
+  { name: 'runtime', pkgDir: 'runtime-validators' },
 ]
 
 /** One workspace package, reduced to what the dependant walk needs. */

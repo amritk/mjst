@@ -1,18 +1,31 @@
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { exit } from 'node:process'
 
-// tsgo compiles the .ts sources but does not copy asset files, so the raw
-// OpenAPI meta-schema .json documents (loaded via require() in
-// src/rules/openapi/schemas/index.ts) must be copied next to the compiled
-// output. The sources stay pretty-printed for reviewability, but the copies
-// are minified — JSON.parse does not care, and it roughly halves the bytes
-// these schemas add to the published package. Run after the TypeScript
-// build. cwd is the package root.
-const from = 'src/rules/openapi/schemas'
-const to = 'dist/rules/openapi/schemas'
-mkdirSync(to, { recursive: true })
-for (const name of readdirSync(from)) {
-  if (!name.endsWith('.json')) continue
-  const document = JSON.parse(readFileSync(join(from, name), 'utf-8'))
-  writeFileSync(join(to, name), JSON.stringify(document))
+import { readSchemaModuleDigest, SCHEMA_DIRECTORY, SCHEMA_NAMES, schemaDigest } from './generate-schema-modules.mjs'
+
+// The OpenAPI meta-schemas used to be raw `.json` files copied next to the
+// compiled output and pulled in with `require()`. That made the package
+// impossible to bundle (a computed `require` specifier is invisible to a
+// bundler) and broken on Workers and Deno, so the schemas now live in generated
+// `.ts` modules that compile into `dist` like any other source file — nothing is
+// left to copy.
+//
+// What is left to check is drift: the generated modules are derived from the
+// vendored `.json` files, so a refreshed schema that nobody regenerated would
+// silently publish the old bytes. This step runs in the build (still under its
+// original file name, since the package manifest that invokes it is owned
+// elsewhere) and fails loudly instead. cwd is the package root.
+//
+// Drift is compared by digest rather than by exact text, so reformatting a
+// generated module (quotes, line width) is never mistaken for a stale schema.
+const stale = SCHEMA_NAMES.filter((name) => readSchemaModuleDigest(name) !== schemaDigest(name))
+
+if (stale.length > 0) {
+  console.error(
+    `${stale.map((name) => `${SCHEMA_DIRECTORY}/${name}.ts`).join(', ')} ` +
+      `${stale.length === 1 ? 'is' : 'are'} out of date with the vendored .json schema${stale.length === 1 ? '' : 's'}.\n` +
+      'Run `node scripts/generate-schema-modules.mjs` from packages/lint and rebuild.',
+  )
+  exit(1)
 }
+
+console.log(`schema modules in sync (${SCHEMA_NAMES.length} files)`)

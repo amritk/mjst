@@ -1,5 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { assertIdScopes } from './assert-id-scopes'
 import { buildDynamicRefMap } from './build-dynamic-ref-map'
 import { extractRefs } from './extract-refs'
 import { refToFilename } from './ref-to-filename'
@@ -57,9 +58,43 @@ type RootCache = {
   dynamicRefMap: Record<string, string>
   resolveRefCache: Map<string, Record<string, unknown> | undefined>
   extractRefsCache: WeakMap<object, Set<string>>
+  /**
+   * Root-anchored variants of this cache, keyed by root filename. A document
+   * whose *root* carries a `$dynamicAnchor` needs an extra `$defs` alias so the
+   * anchor has a nameable target (see {@link rootAnchoredCache}), and that alias
+   * depends on the caller's root type name — which the document-keyed cache
+   * cannot know. Rare enough that the extra map costs nothing in practice.
+   */
+  rootAnchored: Map<string, RootCache>
 }
 
 const rootCaches = new WeakMap<object, RootCache>()
+
+/** `buildDynamicRefMap` uses this pointer for an anchor declared on the root itself. */
+const ROOT_POINTER = '#'
+
+/**
+ * Who claimed a generated filename or type name. `label` names the claimant in
+ * a collision message; `resolved` is the subschema it resolved to, which is
+ * what tells a genuine clash apart from two spellings of one definition.
+ */
+type NameOwner = {
+  readonly label: string
+  readonly resolved: unknown
+}
+
+/**
+ * True when two refs name what is, for generation purposes, one definition —
+ * so sharing a filename is correct rather than a collision.
+ *
+ * Identity covers the common case: `upgradeDraft07Schema` aliases every
+ * URI-keyed definition to a short name by assigning the *same* object, and a
+ * document may spell one target several ways. The serialized comparison is the
+ * fallback for hand-authored documents that duplicate a definition under both
+ * spellings, where the two objects are equal but distinct. It only runs after a
+ * name clash, so the cost never touches the common path.
+ */
+const sameDefinition = (a: unknown, b: unknown): boolean => a === b || JSON.stringify(a) === JSON.stringify(b)
 
 /**
  * Keywords that give a schema a shape of its own. A root carrying any of these
@@ -98,21 +133,71 @@ const getRootCache = (rootSchema: JSONSchema): RootCache => {
   // the draft-07 upgrade is a no-op for it, so a throwaway cache is fine.
   if (typeof rootSchema !== 'object' || rootSchema === null) {
     const upgraded = rootSchema as unknown as Record<string, unknown>
-    return { upgraded, dynamicRefMap: {}, resolveRefCache: new Map(), extractRefsCache: new WeakMap() }
+    return {
+      upgraded,
+      dynamicRefMap: {},
+      resolveRefCache: new Map(),
+      extractRefsCache: new WeakMap(),
+      rootAnchored: new Map(),
+    }
   }
 
   const existing = rootCaches.get(rootSchema)
   if (existing) return existing
 
+  assertIdScopes(rootSchema)
   const upgraded = upgradeDraft07Schema(rootSchema as Record<string, unknown>)
   const cache: RootCache = {
     upgraded,
     dynamicRefMap: buildDynamicRefMap(upgraded as JSONSchema),
     resolveRefCache: new Map(),
     extractRefsCache: new WeakMap(),
+    rootAnchored: new Map(),
   }
   rootCaches.set(rootSchema, cache)
   return cache
+}
+
+/**
+ * A view of the cache in which an anchor declared on the document root has a
+ * nameable target.
+ *
+ * `buildDynamicRefMap` points a root `$dynamicAnchor` at the pointer `#`, and
+ * nothing downstream can name a file for that: `refToFilename('#')` is not a
+ * module and `refToName('#')` is not an identifier. So the root's own body is
+ * aliased into `$defs` under the root's filename. Every consumer then resolves
+ * the anchor through the ordinary `#/$defs/<name>` path and lands on the type
+ * the root file already exports — which is exactly what the recursive-tree
+ * idiom means. The alias holds the root *without* its `$defs`, so the document
+ * stays acyclic and still survives the structured clone in `resolveDynamicRefs`.
+ */
+const rootAnchoredCache = (base: RootCache, rootFilename: string, rootSelfRef: string): RootCache => {
+  const cached = base.rootAnchored.get(rootFilename)
+  if (cached) return cached
+
+  const { $defs, ...rootBody } = base.upgraded
+  const defs = (typeof $defs === 'object' && $defs !== null ? $defs : {}) as Record<string, unknown>
+  if (Object.hasOwn(defs, rootFilename)) {
+    throw new Error(
+      `The root schema declares a $dynamicAnchor, so its own definition is aliased as "${rootSelfRef}" — ` +
+        `but "${rootFilename}" is already a definition in $defs. Rename one so each gets its own file.`,
+    )
+  }
+
+  const derived: RootCache = {
+    upgraded: { ...base.upgraded, $defs: { ...defs, [rootFilename]: rootBody } },
+    dynamicRefMap: Object.fromEntries(
+      Object.entries(base.dynamicRefMap).map(([anchor, pointer]) => [
+        anchor,
+        pointer === ROOT_POINTER ? rootSelfRef : pointer,
+      ]),
+    ),
+    resolveRefCache: new Map(),
+    extractRefsCache: new WeakMap(),
+    rootAnchored: new Map(),
+  }
+  base.rootAnchored.set(rootFilename, derived)
+  return derived
 }
 
 /** Memoized `resolveRef` keyed by ref string within a single root document. */
@@ -143,8 +228,14 @@ const cachedExtractRefs = (cache: RootCache, schema: JSONSchema): Set<string> =>
  * ref, rewritten `$dynamicRef` to `$ref`, and derived the type/file names — so
  * callers only have to turn `node.schema` into file content. Definitions
  * reachable only via `$dynamicAnchor` are seeded too, so nothing the generated
- * code imports goes ungenerated. A ref that fails to resolve is reported via
- * `console.warn` and skipped, matching the generators' prior behavior.
+ * code imports goes ungenerated.
+ *
+ * The walker throws rather than degrading whenever it cannot produce output that
+ * would actually work: an unresolvable `$ref`, a `$dynamicRef` with no anchor to
+ * bind to, or two definitions that reduce to one filename or one type name. Each
+ * of those used to warn (or say nothing) and carry on, which meant `mjst` exited
+ * 0 having written TypeScript that either does not compile or — worse — compiles
+ * to the wrong type.
  *
  * Resolution work is memoized per root document (see {@link RootCache}), so
  * running several generators over the same loaded schema does the expensive
@@ -162,19 +253,32 @@ export const walkRefGraph = (
   visit: (node: RefNode) => void,
 ): void => {
   const typeSuffix = options.typeSuffix ?? ''
-  const cache = getRootCache(rootSchema)
+  const baseCache = getRootCache(rootSchema)
+  const rootFilename = rootTypeName.toLowerCase()
+
+  // A `$dynamicAnchor` on the document root needs the root aliased into `$defs`
+  // before anything can name it. The alias is reachable as `#/$defs/<root
+  // filename>`, so the name every consumer derives from it has to come back as
+  // the root type name — otherwise the root file would export `Tree` while the
+  // recursive property was typed `TreeObject`, and nothing would say so.
+  const rootSelfRef = `#/$defs/${rootFilename}`
+  const rootIsAnchored = Object.values(baseCache.dynamicRefMap).includes(ROOT_POINTER)
+  if (rootIsAnchored && refToName(rootSelfRef, typeSuffix) !== rootTypeName) {
+    throw new Error(
+      `The root schema declares a $dynamicAnchor, which is generated as the root's own file — but the root type ` +
+        `name "${rootTypeName}" does not survive the round trip through ref naming (refs to it would be named ` +
+        `"${refToName(rootSelfRef, typeSuffix)}"). Use a single-word root type name with no type suffix, or move ` +
+        'the $dynamicAnchor onto a $defs entry.',
+    )
+  }
+
+  const cache = rootIsAnchored ? rootAnchoredCache(baseCache, rootFilename, rootSelfRef) : baseCache
   const { upgraded, dynamicRefMap } = cache
 
   const processedRefs = new Set<string>()
-  const processedFilenames = new Set<string>()
-  /** Which ref claimed each filename, so a later collision can name both sides. */
-  const filenameOwners = new Map<string, string>()
-
-  // Root node first — its filename reserves a slot so a later ref that maps to
-  // the same name does not emit a duplicate file.
-  const rootFilename = rootTypeName.toLowerCase()
-  processedFilenames.add(rootFilename)
-  filenameOwners.set(rootFilename, `the root type ${rootTypeName}`)
+  /** Which ref claimed each generated name, so a collision can name both sides. */
+  const filenameOwners = new Map<string, NameOwner>()
+  const typeNameOwners = new Map<string, NameOwner>()
 
   // An alias root (a document that is just `$ref: '#/$defs/x'`) whose derived
   // filename equals its target's would reserve the filename for a wrapper that
@@ -184,14 +288,34 @@ export const walkRefGraph = (
   // generators can exclude the self-import.
   let rootNodeSchema = upgraded as JSONSchema
   let rootNodeRef: string | undefined
+  let rootTarget: unknown = upgraded
   const aliasRef = getAliasRootRef(upgraded as JSONSchema)
   if (aliasRef && refToFilename(aliasRef) === rootFilename) {
     const resolved = cachedResolveRef(cache, aliasRef)
     if (resolved) {
       rootNodeSchema = resolved as JSONSchema
       rootNodeRef = aliasRef
+      // The root node *is* this definition now, so the ref must not come round
+      // again as a separate file — and the root owns the target for collision
+      // purposes, so another spelling of the same definition still merges.
+      rootTarget = resolved
+      processedRefs.add(aliasRef)
     }
   }
+
+  // The root's `$defs` alias is the root's own file, so it must never be walked
+  // as a separate definition — and the root node carries it as its `ref` so the
+  // generators leave the (self-)import out.
+  if (rootIsAnchored) {
+    processedRefs.add(rootSelfRef)
+    rootNodeRef ??= rootSelfRef
+  }
+
+  // The root's names reserve a slot so a later ref that maps to either one is
+  // reported instead of silently overwriting it.
+  const rootOwner: NameOwner = { label: `the root type ${rootTypeName}`, resolved: rootTarget }
+  filenameOwners.set(rootFilename, rootOwner)
+  typeNameOwners.set(rootTypeName, rootOwner)
 
   visit({
     ref: rootNodeRef,
@@ -216,30 +340,59 @@ export const walkRefGraph = (
 
     const resolved = cachedResolveRef(cache, ref)
     if (!resolved) {
-      console.warn(`Warning: Could not resolve ref: ${ref}`)
-      continue
+      // Warning-and-skip used to leave the generators emitting the type name and
+      // the parser/validator call for a file that was never produced, so the
+      // output only failed later — at `tsc`, or at runtime with a
+      // `ReferenceError`, and `mjst` itself still exited 0. `escapeRegexPattern`
+      // already sets the precedent: a schema the generator cannot honour stops
+      // the build rather than producing code that cannot work.
+      throw new Error(
+        `Could not resolve $ref "${ref}". Nothing in the document defines it, so the generated output would ` +
+          'reference a type and a function that are never emitted. Fix the ref, or drop it from the schema.',
+      )
     }
 
+    // Two definitions that reduce to one name used to collapse silently, and a
+    // silently wrong type is the worst outcome available — so a real collision
+    // now stops the build. Renaming has to be the caller's call: the name is
+    // what every emitted import is keyed on.
+    //
+    // Filenames collide on case and separators (`Pet`/`pet`); the first one
+    // generated won and the second was dropped, so every reference to it got
+    // the other one's shape. Type names collide more widely still, because
+    // `refToName` folds separators away (`foo-bar`, `foo.bar`, and `fooBar` all
+    // become `FooBar`) — and that half was worse, since both files *were*
+    // emitted and the importer ended up with two `import { FooBar }` lines that
+    // do not parse.
     const filename = refToFilename(ref)
-    if (processedFilenames.has(filename)) {
-      // Two definitions that reduce to one filename (`Pet`/`pet`, `foo-bar`/`foo.bar`)
-      // silently collapse: the first one generated wins and the second is dropped,
-      // so every reference to it gets the wrong type with no other signal. Warn
-      // loudly — renaming the definition is the only fix, and it has to be the
-      // caller's, since the name is what the emitted imports are keyed on.
-      const owner = filenameOwners.get(filename)
-      if (owner !== undefined && owner !== ref) {
-        console.warn(
-          `Warning: ${ref} and ${owner} both map to "${filename}.ts" — only ${owner} was generated, so ` +
-            `every reference to the other resolves to the wrong type. Rename one so each gets its own file.`,
+    const typeName = refToName(ref, typeSuffix)
+    const fileOwner = filenameOwners.get(filename)
+
+    if (fileOwner) {
+      // Same target under two spellings is not a collision: `upgradeDraft07Schema`
+      // deliberately aliases every URI-keyed definition to a short name, so both
+      // refs point at the identical object and one file serves both.
+      if (!sameDefinition(fileOwner.resolved, resolved)) {
+        throw new Error(
+          `"${ref}" and ${fileOwner.label} both generate the file "${filename}.ts", so only one of them can be ` +
+            'emitted and every reference to the other would resolve to the wrong type. Rename one definition.',
         )
       }
     } else {
-      processedFilenames.add(filename)
-      filenameOwners.set(filename, ref)
+      const typeOwner = typeNameOwners.get(typeName)
+      if (typeOwner) {
+        throw new Error(
+          `"${ref}" and ${typeOwner.label} both generate the type name "${typeName}" from different files, so the ` +
+            'generated output would import that name twice and fail to parse. Rename one definition.',
+        )
+      }
+
+      const owner: NameOwner = { label: `"${ref}"`, resolved }
+      filenameOwners.set(filename, owner)
+      typeNameOwners.set(typeName, owner)
       visit({
         ref,
-        typeName: refToName(ref, typeSuffix),
+        typeName,
         filename,
         schema: resolveDynamicRefs(resolved as JSONSchema, dynamicRefMap),
         rootSchema: upgraded,

@@ -2,7 +2,9 @@
   "name": "@amritk/generate-parsers",
   "version": "0.18.0",
   "description": "Generate TypeScript parsers and type definitions from JSON Schemas.",
+  "main": "./dist/index.js",
   "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "type": "module",
   "sideEffects": false,
   "engines": {
@@ -54,10 +56,10 @@
   },
   "dependencies": {
     "json-schema-typed": "catalog:",
-    "@amritk/helpers": "workspace:*",
-    "@amritk/generate-markdown": "workspace:*"
+    "@amritk/helpers": "workspace:*"
   },
   "devDependencies": {
+    "@amritk/generate-markdown": "workspace:*",
     "@sinclair/typebox": "^0.34.49",
     "ajv": "^8.17.1",
     "zod": "^4.4.3"

@@ -1,4 +1,5 @@
 import { coercePrimitive } from './coerce-primitive'
+import { defineOwnProperty } from './define-own-property'
 import type { Coercion } from './types'
 
 /**
@@ -8,7 +9,9 @@ import type { Coercion } from './types'
  * reach validation. Values are unquoted (RFC 6265 allows DQUOTE-wrapped
  * values) and percent-decoded, matching what cookie middleware ecosystems
  * (cookie-parser, hono/cookie) hand applications; malformed escapes fall
- * back to the raw text rather than failing the request.
+ * back to the raw text rather than failing the request. A repeated name keeps
+ * its **first** value, which is both what the `cookie` package everyone runs
+ * behind does and the safer default — see the note on the loop below.
  *
  * Exported so `compileToModule` output can import it — both engines must
  * parse the header identically.
@@ -31,14 +34,26 @@ export const buildCookiesObject = (
     // parsers everyone already runs behind do.
     if (eq !== -1 && eq < end) {
       const name = header.slice(start, eq).trim()
-      if (names.has(name)) {
+      // First occurrence wins. Browsers send the most specific cookie first
+      // (RFC 6265 orders by longer path, then earlier creation), so a
+      // `Path=/` cookie a sibling subdomain planted arrives *after* the real
+      // `Path=/app` session cookie — last-wins would let it shadow the real
+      // one. `Object.hasOwn`, not `in`: a declared cookie legitimately named
+      // 'toString' must not look like it is already set.
+      if (names.has(name) && !Object.hasOwn(cookies, name)) {
         let value = header.slice(eq + 1, end).trim()
         if (value.length > 1 && value.startsWith('"') && value.endsWith('"')) {
           value = value.slice(1, -1)
         }
         const decoded = decodeCookieValue(value)
         const coercion = coercions.get(name)
-        cookies[name] = coercion === 'number' || coercion === 'boolean' ? coercePrimitive(decoded, coercion) : decoded
+        // `defineOwnProperty`, not `cookies[name] = …`: a declared cookie named
+        // '__proto__' would otherwise hit the prototype setter and vanish.
+        defineOwnProperty(
+          cookies,
+          name,
+          coercion === 'number' || coercion === 'boolean' ? coercePrimitive(decoded, coercion) : decoded,
+        )
       }
     }
     start = end + 1

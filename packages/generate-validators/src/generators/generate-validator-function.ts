@@ -45,6 +45,75 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 const validatorName = (typeName: string): string => `validate${typeName}`
 
 /**
+ * The generated expression that reads `key` off the object held in `objVar`.
+ *
+ * Delegates to the shared {@link safeAccessor} rather than emitting a bare
+ * `obj["key"]`, because bracket notation walks the prototype chain exactly like a
+ * dot does: `obj["constructor"]` on `{}` hands back `Object`'s constructor, so a
+ * schema declaring a `constructor` / `toString` / `hasOwnProperty` property made
+ * every valid document fail its type check. `safeAccessor` wraps those names in an
+ * own-property guard and leaves every other key as a plain read.
+ */
+const propertyRead = (objVar: string, key: string): string => safeAccessor(objVar, key)
+
+/**
+ * Every name an ordinary object inherits from `Object.prototype`
+ * (`constructor`, `toString`, `hasOwnProperty`, `__proto__`, …).
+ *
+ * Two things follow for a schema that declares one as a property name. Reading it
+ * needs {@link safeAccessor}'s own-property guard, or the prototype's value
+ * answers instead of the document's. And that guard is a *ternary*, which
+ * TypeScript cannot narrow — so a constrained check like
+ * `typeof X === 'string' && X.length < 3` would not compile with the read
+ * inlined twice. {@link protoLocalName} gives such a key a local to be read into
+ * once, which restores narrowing and pays the guard once per property instead of
+ * once per check.
+ */
+const PROTOTYPE_MEMBERS = new Set(Object.getOwnPropertyNames(Object.prototype))
+
+/**
+ * The local a prototype-member property is read into. Every `Object.prototype`
+ * name is a plain identifier, so the key can go straight into the variable name;
+ * the depth keeps nested objects from colliding.
+ */
+const protoLocalName = (key: string, depth: number): string => `_own${depth}_${key}`
+
+/**
+ * The generated expression that is TRUE when `key` is present on the object held
+ * in `objVar` — meaning present as an *own* property, never inherited.
+ *
+ * For a prototype-member name a bare `key in obj` was the obvious spelling and
+ * the wrong one: `in` walks the prototype chain, so `'toString' in obj` is true
+ * for every object and a `required: ["toString"]` could never be reported
+ * missing. Those names get `Object.hasOwn`, which asks the question `required` /
+ * `dependentRequired` actually mean and matches the runtime interpreter's
+ * presence test.
+ *
+ * Every *other* name gets `in` back, because for them the two agree and the
+ * difference is not free. `Object.hasOwn` is a call the engine cannot fold into
+ * an inline cache the way it folds `in`; measured over the assert-loose shape
+ * (ten presence checks), spelling all of them `hasOwn` cost about half the valid
+ * throughput and a fifth of the invalid. A JSON document's object never inherits
+ * `id` or `name`, so paying for that question at every site bought nothing. This
+ * is the same split {@link PROTOTYPE_MEMBERS} already drives on the read side,
+ * and the same one `@amritk/runtime-validators` makes with its `safeKeys` flag.
+ *
+ * The result binds tighter than `&&`, so it can be dropped straight into a
+ * conjunction. It is *not* safe under a bare `!` — `!"k" in obj` parses as
+ * `(!"k") in obj` — so negate it with {@link missingCheck} rather than by hand.
+ */
+const hasOwnCheck = (objVar: string, key: string): string => {
+  if (PROTOTYPE_MEMBERS.has(key)) return `Object.hasOwn(${objVar}, ${JSON.stringify(key)})`
+  return `${JSON.stringify(key)} in ${objVar}`
+}
+
+/**
+ * The generated expression that is TRUE when `key` is absent — the negation of
+ * {@link hasOwnCheck}, with the parentheses `in` needs under a `!`.
+ */
+const missingCheck = (objVar: string, key: string): string => `!(${hasOwnCheck(objVar, key)})`
+
+/**
  * Returns the TypeScript typeof string for a JSON Schema primitive type.
  */
 const typeofString = (type: string): string => {
@@ -64,6 +133,35 @@ const constMismatchCondition = (accessor: string, value: unknown): string => {
     return `${accessor} !== ${JSON.stringify(value)}`
   }
   return `!valuesEqual(${accessor}, ${JSON.stringify(value)})`
+}
+
+/**
+ * Builds the membership test for an `enum`, used by every enum site so the
+ * validator, the boolean guard, and the array/dynamic-key paths all reach the
+ * same verdict.
+ *
+ * Each member gets the cheapest comparison that is still exact for it, and the
+ * results are OR-ed. A primitive compares with `===` — no per-call array
+ * allocation and no linear scan, so the common case stays on the allocation-free
+ * hot path. `NaN` gets `Number.isNaN`, the one primitive `===` cannot express.
+ *
+ * An object or array member compares *structurally*, via the `valuesEqual`
+ * runtime helper. The old `.includes` was SameValueZero — reference equality for
+ * objects — so `{ enum: [{ a: 1 }] }` could never match a freshly parsed
+ * `{ a: 1 }`: the validator rejected a document Ajv and the interpreter both
+ * accept, and `isX` was an unsound type guard built on the same expression.
+ * `const` has always used `valuesEqual`; `enum` is that question asked once per
+ * member.
+ */
+const enumMembershipExpr = (values: unknown[], acc: string): string => {
+  // An empty `enum` matches nothing, and an empty `||` chain would not even parse.
+  if (values.length === 0) return 'false'
+  const parts = values.map((value) => {
+    if (typeof value === 'number' && Number.isNaN(value)) return `Number.isNaN(${acc})`
+    if (value !== null && typeof value === 'object') return `valuesEqual(${acc}, ${JSON.stringify(value)})`
+    return `${acc} === ${JSON.stringify(value)}`
+  })
+  return `(${parts.join(' || ')})`
 }
 
 const SCALAR_ITEM_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'null'])
@@ -245,7 +343,7 @@ const generateMissingRequiredChecks = (schema: JSONSchema, ctx: NestingContext):
   const lines: string[] = []
   for (const key of schema.required) {
     if (Object.hasOwn(props, key)) continue
-    lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
+    lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
     lines.push(
       `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
     )
@@ -255,11 +353,31 @@ const generateMissingRequiredChecks = (schema: JSONSchema, ctx: NestingContext):
 }
 
 /**
- * Generates validation lines for a single property in an object schema.
- * Handles $ref delegation, enum checks, type checks, string/number constraints,
- * and recursion into inline nested objects.
+ * Generates validation lines for a single property in an object schema, reading a
+ * prototype-member key (`constructor`, `__proto__`, …) into a local first.
+ *
+ * That read is an own-property ternary (see {@link PROTOTYPE_MEMBERS}), and
+ * TypeScript will not narrow a ternary — so inlining it into a constrained check
+ * emits `X.length < 3` on an `unknown`, which does not compile. Binding it once
+ * also stops the guard from re-running for every check on the same property.
  */
 const generatePropertyChecks = (
+  key: string,
+  propSchema: JSONSchema,
+  isRequired: boolean,
+  suffix: string,
+  ctx: NestingContext,
+): string[] => {
+  const lines = generatePropertyCheckLines(key, propSchema, isRequired, suffix, ctx)
+  if (lines.length === 0 || !PROTOTYPE_MEMBERS.has(key)) return lines
+  return [`  const ${protoLocalName(key, ctx.depth)} = ${propertyRead(ctx.objVar, key)}`, ...lines]
+}
+
+/**
+ * The per-property checks themselves. Handles $ref delegation, enum checks, type
+ * checks, string/number constraints, and recursion into inline nested objects.
+ */
+const generatePropertyCheckLines = (
   key: string,
   propSchema: JSONSchema,
   isRequired: boolean,
@@ -274,7 +392,7 @@ const generatePropertyChecks = (
     if (isRequired && propSchema === true) {
       const parentPath = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
       return [
-        `  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`,
+        `  if (${missingCheck(ctx.objVar, key)}) {`,
         `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
         `  }`,
       ]
@@ -282,7 +400,7 @@ const generatePropertyChecks = (
     return []
   }
 
-  const raw = `${ctx.objVar}[${JSON.stringify(key)}]`
+  const raw = PROTOTYPE_MEMBERS.has(key) ? protoLocalName(key, ctx.depth) : propertyRead(ctx.objVar, key)
   const path = `\`${ctx.pathPrefix}/${pointerSegment(key)}\``
   // Missing-property errors report at the parent object's path. At the root
   // that is the `_path` parameter itself; inside nested objects it is the
@@ -308,7 +426,7 @@ const generatePropertyChecks = (
     ]
 
     if (isRequired) {
-      lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
+      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
       lines.push(
         `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
       )
@@ -327,7 +445,7 @@ const generatePropertyChecks = (
   const instanceOf = getMjstInstanceOf(propSchema)
   if (instanceOf) {
     if (isRequired) {
-      lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
+      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
       lines.push(
         `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
       )
@@ -346,7 +464,7 @@ const generatePropertyChecks = (
   const primitive = getMjstPrimitive(propSchema)
   if (primitive) {
     if (isRequired) {
-      lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
+      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
       lines.push(
         `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
       )
@@ -366,7 +484,7 @@ const generatePropertyChecks = (
     const mismatch = constMismatchCondition(raw, propSchema.const)
     const msg = JSON.stringify(`must be ${JSON.stringify(propSchema.const)}`)
     if (isRequired) {
-      lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
+      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
       lines.push(
         `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
       )
@@ -383,19 +501,19 @@ const generatePropertyChecks = (
 
   // enum
   if (hasEnum(propSchema)) {
-    const allowed = JSON.stringify(propSchema.enum)
+    const member = enumMembershipExpr(propSchema.enum as unknown[], raw)
     const label = (propSchema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
 
     if (isRequired) {
-      lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
+      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
       lines.push(
         `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
       )
-      lines.push(`  } else if (!(${allowed} as unknown[]).includes(${raw})) {`)
+      lines.push(`  } else if (!${member}) {`)
       lines.push(`    errors.push({ message: ${JSON.stringify(`must be one of: ${label}`)}, path: ${path} })`)
       lines.push(`  }`)
     } else {
-      lines.push(`  if (${raw} !== undefined && !(${allowed} as unknown[]).includes(${raw})) {`)
+      lines.push(`  if (${raw} !== undefined && !${member}) {`)
       lines.push(`    errors.push({ message: ${JSON.stringify(`must be one of: ${label}`)}, path: ${path} })`)
       lines.push(`  }`)
     }
@@ -417,7 +535,7 @@ const generatePropertyChecks = (
     const label = typeArray.map((t) => typeofString(t)).join(' or ')
 
     if (isRequired) {
-      lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
+      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
       lines.push(
         `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
       )
@@ -446,7 +564,7 @@ const generatePropertyChecks = (
     const typLabel = typeofString(t)
 
     if (isRequired) {
-      lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
+      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
       lines.push(
         `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
       )
@@ -488,7 +606,7 @@ const generatePropertyChecks = (
     // Type-less required property. Presence must be enforced even when the schema
     // contributes no other checks (e.g. `{}` — an accept-anything schema), so a
     // missing required key is still an error. Any extra checks run in the `else`.
-    lines.push(`  if (!(${JSON.stringify(key)} in ${ctx.objVar})) {`)
+    lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
     lines.push(
       `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
     )
@@ -605,14 +723,23 @@ const generateConstraintChecks = (
   // validator uses). This keeps array-heavy throughput close to a bare type check
   // while still fully validating every item. The loop variables carry the nesting
   // depth so item loops can nest (array-of-arrays) without colliding.
+  //
+  // In 2020-12 `items` is the *tail* schema: it applies only from
+  // `prefixItems.length` onward, and the tuple block below owns the positions
+  // before that. Starting the loop at 0 made `{ prefixItems: [{type:'string'}],
+  // items: {type:'number'} }` demand a number at index 0 too, so `["a", 1, 2]` —
+  // valid to Ajv, and accepted by the `[string?, ...number[]]` type this very
+  // generator emits — was reported invalid by its own validator.
   if (hasItems(propSchema)) {
     const itemSchema = propSchema.items
+    const prefix = sp['prefixItems']
+    const firstTailIndex = Array.isArray(prefix) ? prefix.length : 0
     const iv = `_i${ctx.depth}`
     const itemPath = `\`${path.slice(1, -1)}/\${${iv}}\``
     if (hasRef(itemSchema)) {
       const vName = validatorName(refToName(itemSchema.$ref, suffix))
       lines.push(`  if (Array.isArray(${raw})) {`)
-      lines.push(`    for (let ${iv} = 0; ${iv} < ${raw}.length; ${iv}++) {`)
+      lines.push(`    for (let ${iv} = ${firstTailIndex}; ${iv} < ${raw}.length; ${iv}++) {`)
       lines.push(`      const _ir = ${vName}(${raw}[${iv}], ${itemPath})`)
       lines.push(`      if (_ir !== true) errors.push(..._ir.errors)`)
       lines.push(`    }`)
@@ -622,7 +749,7 @@ const generateConstraintChecks = (
       const detail = generateValueChecks('', itemVar, itemPath, itemSchema, suffix, ctx, true)
       if (detail.length > 0) {
         lines.push(`  if (Array.isArray(${raw})) {`)
-        lines.push(`    for (let ${iv} = 0; ${iv} < ${raw}.length; ${iv}++) {`)
+        lines.push(`    for (let ${iv} = ${firstTailIndex}; ${iv} < ${raw}.length; ${iv}++) {`)
         lines.push(`      const ${itemVar} = ${raw}[${iv}]`)
         lines.push(...detail.map((l) => `    ${l}`))
         lines.push(`    }`)
@@ -795,9 +922,8 @@ const generateValueChecks = (
   }
 
   if (hasEnum(propSchema)) {
-    const allowed = JSON.stringify(propSchema.enum)
     const label = (propSchema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
-    lines.push(`  if (${presence}!(${allowed} as unknown[]).includes(${raw})) {`)
+    lines.push(`  if (${presence}!${enumMembershipExpr(propSchema.enum as unknown[], raw)}) {`)
     lines.push(`    errors.push({ message: ${JSON.stringify(`must be one of: ${label}`)}, path: ${path} })`)
     lines.push(`  }`)
     return lines
@@ -1084,7 +1210,7 @@ const generateDependentRequiredChecks = (schema: JSONSchema, ctx: NestingContext
     if (!Array.isArray(deps)) continue
     for (const dep of deps) {
       const msg = JSON.stringify(`must have property '${dep}' when '${trigger}' is present`)
-      lines.push(`  if (${JSON.stringify(trigger)} in ${obj} && !(${JSON.stringify(dep)} in ${obj})) {`)
+      lines.push(`  if (${hasOwnCheck(obj, trigger)} && ${missingCheck(obj, dep)}) {`)
       lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
       lines.push(`  }`)
     }
@@ -1113,7 +1239,7 @@ const generateDependentSchemasChecks = (schema: JSONSchema, suffix: string, ctx:
     if (sub === true) continue
     if (sub === false) {
       const msg = JSON.stringify(`must NOT have property '${trigger}'`)
-      lines.push(`  if (${JSON.stringify(trigger)} in ${obj}) {`)
+      lines.push(`  if (${hasOwnCheck(obj, trigger)}) {`)
       lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
       lines.push(`  }`)
       continue
@@ -1123,7 +1249,7 @@ const generateDependentSchemasChecks = (schema: JSONSchema, suffix: string, ctx:
     // variable against it and gate the whole block on the trigger's presence.
     const checks = generateValueChecks('', obj, objPath, sub as JSONSchema, suffix, ctx)
     if (checks.length === 0) continue
-    lines.push(`  if (${JSON.stringify(trigger)} in ${obj}) {`)
+    lines.push(`  if (${hasOwnCheck(obj, trigger)}) {`)
     lines.push(...checks.map((line) => `  ${line}`))
     lines.push(`  }`)
   }
@@ -1154,7 +1280,7 @@ const generateDependenciesChecks = (schema: JSONSchema, suffix: string, ctx: Nes
       for (const key of value as unknown[]) {
         if (typeof key !== 'string') continue
         const msg = JSON.stringify(`must have property '${key}' when '${trigger}' is present`)
-        lines.push(`  if (${JSON.stringify(trigger)} in ${obj} && !(${JSON.stringify(key)} in ${obj})) {`)
+        lines.push(`  if (${hasOwnCheck(obj, trigger)} && ${missingCheck(obj, key)}) {`)
         lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
         lines.push(`  }`)
       }
@@ -1164,7 +1290,7 @@ const generateDependenciesChecks = (schema: JSONSchema, suffix: string, ctx: Nes
     if (value === true) continue
     if (value === false) {
       const msg = JSON.stringify(`must NOT have property '${trigger}'`)
-      lines.push(`  if (${JSON.stringify(trigger)} in ${obj}) {`)
+      lines.push(`  if (${hasOwnCheck(obj, trigger)}) {`)
       lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
       lines.push(`  }`)
       continue
@@ -1172,7 +1298,7 @@ const generateDependenciesChecks = (schema: JSONSchema, suffix: string, ctx: Nes
     if (!isSchemaObject(value as JSONSchema)) continue
     const checks = generateValueChecks('', obj, objPath, value as JSONSchema, suffix, ctx)
     if (checks.length === 0) continue
-    lines.push(`  if (${JSON.stringify(trigger)} in ${obj}) {`)
+    lines.push(`  if (${hasOwnCheck(obj, trigger)}) {`)
     lines.push(...checks.map((line) => `  ${line}`))
     lines.push(`  }`)
   }
@@ -1517,25 +1643,6 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: s
 const guardName = (typeName: string): string => `is${typeName}`
 
 /**
- * Builds the membership test for an `enum`, matching the slow path's
- * `[...].includes(value)` verdict exactly. For the common all-primitive case it
- * emits a parenthesized `a === x || a === y` chain — no per-call array
- * allocation and no linear scan, so it stays on the allocation-free hot path —
- * and falls back to `.includes` when a member is an object/array (reference
- * equality) or `NaN` (where `includes`'s SameValueZero differs from `===`).
- */
-const enumMembershipExpr = (values: unknown[], acc: string): string => {
-  const allPrimitive =
-    values.length > 0 &&
-    values.every((v) => (v === null || typeof v !== 'object') && typeof v !== 'function') &&
-    !values.some((v) => typeof v === 'number' && Number.isNaN(v))
-  if (allPrimitive) {
-    return `(${values.map((v) => `${acc} === ${JSON.stringify(v)}`).join(' || ')})`
-  }
-  return `(${JSON.stringify(values)} as unknown[]).includes(${acc})`
-}
-
-/**
  * Builds a boolean expression that is TRUE iff `acc` satisfies `schema`, with the
  * *exact same verdict* as the error-collecting validator — or `null` when the
  * schema carries something the flat form can't faithfully mirror ($ref, unions,
@@ -1692,6 +1799,12 @@ const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string): st
   for (const key of keys) {
     const propSchema = properties[key]
     if (propSchema === undefined || !isSchemaObject(propSchema)) return null
+    // A prototype-member key reads through an own-property ternary, and this is a
+    // pure *expression* — there is nowhere to bind it to a local, so a constrained
+    // check would inline the un-narrowable ternary twice and fail to compile.
+    // Defer the whole guard to `validateX`, which does bind it. Such a key is
+    // pathological anyway, so losing the flat guard for it costs nothing real.
+    if (PROTOTYPE_MEMBERS.has(key)) return null
     const member = safeAccessor(objAcc, key)
     const expr = booleanLeafExpr(propSchema, member)
     if (expr === null) return null
@@ -1817,11 +1930,10 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
 
   // Top-level enum
   if (hasEnum(schema)) {
-    const allowed = JSON.stringify(schema.enum)
     const label = (schema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
     return [
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
-      `  if (!(${allowed} as unknown[]).includes(input)) {`,
+      `  if (!${enumMembershipExpr(schema.enum as unknown[], 'input')}) {`,
       `    return { valid: false, errors: [{ message: ${JSON.stringify(`must be one of: ${label}`)}, path: _path }] }`,
       `  }`,
       `  return true`,
@@ -2022,6 +2134,27 @@ const SUBSCHEMA_LIST_KEYS = new Set(['allOf', 'anyOf', 'oneOf', 'prefixItems'])
 const SUBSCHEMA_MAP_KEYS = new Set(['properties', 'patternProperties', 'dependentSchemas', '$defs', 'definitions'])
 
 /**
+ * Copies one entry onto a plain record, even when the key is `__proto__`.
+ *
+ * A plain `record['__proto__'] = value` invokes `Object.prototype`'s `__proto__`
+ * setter instead of creating a property, so the entry silently disappears from
+ * the copy. {@link rewriteNullable} runs over *every* schema (not only nullable
+ * ones), which is how a schema declaring `properties: { "__proto__": {...} }`
+ * used to reach the emitters with that property already gone — the generated
+ * validator carried no checks for it at all, a straight validation bypass, and
+ * `required: ["__proto__"]` degraded to a bare presence check. Defining the
+ * property is the same fix `@amritk/helpers/validate-record` applies on the
+ * runtime side.
+ */
+const defineEntry = (target: Record<string, unknown>, key: string, value: unknown): void => {
+  if (key === '__proto__') {
+    Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true })
+    return
+  }
+  target[key] = value
+}
+
+/**
  * Rewrites OpenAPI 3.0 `nullable: true` into a form the generator already
  * enforces. A node `{ nullable: true, ...rest }` accepts a value iff the value is
  * `null` OR it matches `rest` — exactly `{ anyOf: [{ type: 'null' }, rest] }`.
@@ -2041,26 +2174,28 @@ const rewriteNullable = (node: unknown): unknown => {
   for (const [key, value] of Object.entries(src)) {
     if (key === 'nullable') continue // folded into the `anyOf` wrapper below
     if (SINGLE_SUBSCHEMA_KEYS.has(key)) {
-      out[key] = rewriteNullable(value)
+      defineEntry(out, key, rewriteNullable(value))
     } else if (key === 'items') {
       // `items` is either a single subschema (2020-12) or a tuple array (draft).
-      out[key] = Array.isArray(value) ? value.map(rewriteNullable) : rewriteNullable(value)
+      defineEntry(out, key, Array.isArray(value) ? value.map(rewriteNullable) : rewriteNullable(value))
     } else if (SUBSCHEMA_LIST_KEYS.has(key) && Array.isArray(value)) {
-      out[key] = value.map(rewriteNullable)
+      defineEntry(out, key, value.map(rewriteNullable))
     } else if (SUBSCHEMA_MAP_KEYS.has(key) && typeof value === 'object' && value !== null) {
       const mapped: Record<string, unknown> = {}
-      for (const [name, sub] of Object.entries(value as Record<string, unknown>)) mapped[name] = rewriteNullable(sub)
-      out[key] = mapped
+      for (const [name, sub] of Object.entries(value as Record<string, unknown>)) {
+        defineEntry(mapped, name, rewriteNullable(sub))
+      }
+      defineEntry(out, key, mapped)
     } else if (key === 'dependencies' && typeof value === 'object' && value !== null) {
       // Dual-form: an array value lists required keys (data), a schema value is a
       // subschema.
       const mapped: Record<string, unknown> = {}
       for (const [name, sub] of Object.entries(value as Record<string, unknown>)) {
-        mapped[name] = Array.isArray(sub) ? sub : rewriteNullable(sub)
+        defineEntry(mapped, name, Array.isArray(sub) ? sub : rewriteNullable(sub))
       }
-      out[key] = mapped
+      defineEntry(out, key, mapped)
     } else {
-      out[key] = value
+      defineEntry(out, key, value)
     }
   }
 

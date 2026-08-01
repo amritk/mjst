@@ -62,6 +62,18 @@ export type CliConfig = {
    */
   readonly build?: boolean
   /**
+   * When true, generated files may overwrite files that already exist in the
+   * output destination. By default a collision with a file mjst did not generate
+   * (a hand-written `index.ts`, say) aborts the run rather than silently
+   * replacing it — and with `build`, deleting it afterwards. Regeneration does
+   * not need this: each run records what it wrote in a `.mjst-manifest.json` at
+   * the root of the output directory, and reclaims those paths freely. With
+   * `outFile` the "output directory" is the directory holding that file, so the
+   * manifest lands beside it — generated examples and the `build` output already
+   * do.
+   */
+  readonly force?: boolean
+  /**
    * When true, the generated parsers emit a console.warn for every input key
    * that is not declared in the schema's properties.
    */
@@ -161,4 +173,17 @@ export type CliConfig = {
    * always bypasses this guard.
    */
   readonly allowPrivateHosts?: boolean
+  /**
+   * Extra directories a local (cross-file) `$ref` may resolve into. A local
+   * `$ref` is confined to the schema's own directory by default, so a
+   * `{"$ref": "../../../etc/passwd"}` reads nothing; this is the escape hatch for
+   * the ordinary split-spec layout where `v1/api.json` refers to a shared
+   * `common/user.json` one level up.
+   *
+   * The schema's own directory is always allowed, so the listed roots widen the
+   * default rather than replacing it. Entries are resolved against the process
+   * working directory — including entries that came from a config file, which
+   * matches how `schema` and `outDir` are treated.
+   */
+  readonly allowedRoots?: readonly string[]
 }

@@ -87,11 +87,19 @@ const ANNOTATIONS = new Set([
 const ANNOTATIONS_WITH_FORMAT = new Set([...ANNOTATIONS, 'format'])
 
 /**
- * Property names the interpreter tests with `Object.hasOwn` instead of the
- * `!== undefined` fast path (they shadow `Object.prototype` members). The
- * inline form only emits the fast path, so schemas declaring these bail.
+ * Property names that shadow an `Object.prototype` member, so reading them off
+ * a plain object returns the inherited value rather than `undefined` when the
+ * property is absent.
+ *
+ * The interpreter tests these with `Object.hasOwn`; the emitters only have the
+ * `!== undefined` fast path, which would report an absent `toString` as present
+ * (and, for `__proto__`, hand back `Object.prototype` itself). Both the inline
+ * guard emitter and the serializer emitter bail on a schema declaring one, so
+ * the interpreter and `JSON.stringify` — which get it right — take over.
+ *
+ * Exported so the two emitters cannot drift apart on which names are risky.
  */
-const PROTO_KEYS = new Set([
+export const PROTO_KEYS = new Set([
   'constructor',
   '__proto__',
   'prototype',

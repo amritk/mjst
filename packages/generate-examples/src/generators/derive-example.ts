@@ -52,11 +52,26 @@ const charForClass = (inner: string): string => {
   const first = inner.replace(/^\^/, '')[0]
   return first && first !== '\\' ? first : 'a'
 }
+/**
+ * The control characters a regex escape stands for. Without these, `\n` sampled
+ * as the literal letter `n` — so a pattern like `a\nb` produced `"anb"`, which
+ * fails its own regex and quietly shipped as the example.
+ */
+const CONTROL_ESCAPES: Readonly<Record<string, string>> = {
+  n: '\n',
+  r: '\r',
+  t: '\t',
+  f: '\f',
+  v: '\v',
+}
+
 const charForEscape = (esc: string): string => {
   if (esc === '\\d') return '5'
   if (esc === '\\w') return 'a'
   if (esc === '\\s') return ' '
-  return esc[1] ?? 'a'
+  const char = esc[1]
+  if (char === undefined) return 'a'
+  return CONTROL_ESCAPES[char] ?? char
 }
 
 /** Splits `s` on top-level `|`, respecting `[...]` and `(...)` nesting. */
@@ -185,37 +200,53 @@ const sampleFromPattern = (pattern: string, minLength: number): string | undefin
   return sampleAlt(body)
 }
 
+/**
+ * A canonical instance of each string `format` we can produce one for. The list
+ * tracks `@amritk/runtime-validators`' `FORMAT_CHECKS`, since that interpreter is
+ * what decides whether an emitted example is accepted — a format missing here
+ * falls back to the bare `"string"`, which almost never satisfies its own format.
+ */
+const FORMAT_EXAMPLES: Readonly<Record<string, string>> = {
+  email: 'user@example.com',
+  'idn-email': 'user@example.com',
+  uuid: '00000000-0000-0000-0000-000000000000',
+  uri: 'https://example.com',
+  iri: 'https://example.com',
+  // `url` is not a JSON Schema format, but OpenAPI documents use it constantly.
+  url: 'https://example.com',
+  'uri-reference': 'https://example.com',
+  'iri-reference': 'https://example.com',
+  'uri-template': 'https://example.com/{id}',
+  'date-time': '1970-01-01T00:00:00.000Z',
+  date: '1970-01-01',
+  time: '00:00:00.000Z',
+  duration: 'P1D',
+  'json-pointer': '/example',
+  'relative-json-pointer': '0/example',
+  hostname: 'example.com',
+  'idn-hostname': 'example.com',
+  ipv4: '127.0.0.1',
+  ipv6: '::1',
+  // The `regex` format asks for a string that *compiles* as a regular expression.
+  regex: '^example$',
+}
+
 /** Returns a representative string honouring `format`, `pattern`, and length. */
 const exampleString = (schema: JSONSchema): string => {
   if (hasFormat(schema)) {
-    switch (schema.format) {
-      case 'email':
-        return 'user@example.com'
-      case 'uuid':
-        return '00000000-0000-0000-0000-000000000000'
-      case 'uri':
-      case 'url':
-        return 'https://example.com'
-      case 'date-time':
-        return '1970-01-01T00:00:00.000Z'
-      case 'date':
-        return '1970-01-01'
-      case 'time':
-        return '00:00:00.000Z'
-      case 'hostname':
-        return 'example.com'
-      case 'ipv4':
-        return '127.0.0.1'
-      case 'ipv6':
-        return '::1'
-    }
+    const formatted = FORMAT_EXAMPLES[schema.format]
+    if (formatted !== undefined) return formatted
   }
 
   const minLength = hasMinLength(schema) ? schema.minLength : 0
   if (hasPattern(schema)) {
     const sampled = sampleFromPattern(schema.pattern, minLength)
-    // Only trust the sampler when it actually matches and fits the length bound.
-    if (sampled !== undefined && new RegExp(schema.pattern).test(sampled)) {
+    // Only trust the sampler when it actually matches *and* fits both length
+    // bounds. `minLength` used to be checked on the way in (as a repeat count)
+    // but never on the way out, so `{ pattern: '^ab$', minLength: 5 }` happily
+    // returned `"ab"`. Falling through instead lets the caller notice that
+    // nothing satisfies the schema rather than emitting a value that does not.
+    if (sampled !== undefined && sampled.length >= minLength && new RegExp(schema.pattern).test(sampled)) {
       if (!(hasMaxLength(schema) && sampled.length > schema.maxLength)) return sampled
     }
   }
@@ -227,35 +258,128 @@ const exampleString = (schema: JSONSchema): string => {
 }
 
 /**
+ * The per-root-document state `deriveExample` threads through its recursion.
+ *
+ * `values` is the whole point: a `$ref` reachable by several paths used to be
+ * re-derived once *per path*, so any fan-out in the definition graph cost
+ * exponential time — a 25-definition graph with three refs per definition took
+ * ~20s, and adding two more definitions roughly quadrupled that.
+ * `@amritk/helpers/walk-ref-graph` memoizes `resolveRef`/`extractRefs` per root
+ * document for the same reason; this is the same idea one layer up.
+ *
+ * `active` is the cycle guard the path-scoped `seen` set used to be: it holds
+ * exactly the refs on the current derivation path, so a recursive definition
+ * still short-circuits to `null`. As one shared mutable set it also drops the
+ * `new Set([...seen, ref])` copy that made every node cost O(depth) on its own.
+ *
+ * `cycleBroken` is what makes the two safe together. A value produced by cutting
+ * a cycle depends on *where* the cut fell, so it must not be memoized: any
+ * short-circuit raises the flag, and a ref is only recorded in `values` when its
+ * own subtree derived without one. That is also why the memo survives between
+ * top-level calls — if `R`'s expansion could ever reach an ancestor of `R`, that
+ * ancestor is on a cycle with `R` and the flag would have been raised the first
+ * time `R` was derived, so `R` would never have been cached at all.
+ */
+type DeriveContext = {
+  readonly rootSchema: Record<string, unknown> | undefined
+  readonly values: Map<string, unknown>
+  readonly active: Set<string>
+  cycleBroken: boolean
+}
+
+/**
+ * One context per root document, dropped as soon as the caller releases the
+ * schema. JSON Schema inputs are treated as immutable here (exactly as
+ * `walk-ref-graph` does), so a run that emits hundreds of files from one loaded
+ * document derives each definition once instead of once per referencing file.
+ */
+const contexts = new WeakMap<object, DeriveContext>()
+
+const newContext = (rootSchema: Record<string, unknown> | undefined): DeriveContext => ({
+  rootSchema,
+  values: new Map(),
+  active: new Set(),
+  cycleBroken: false,
+})
+
+const contextFor = (rootSchema: Record<string, unknown> | undefined): DeriveContext => {
+  if (rootSchema === undefined) return newContext(undefined)
+  const existing = contexts.get(rootSchema)
+  if (existing) return existing
+  const created = newContext(rootSchema)
+  contexts.set(rootSchema, created)
+  return created
+}
+
+/**
  * Derives a single concrete, schema-valid value from a JSON Schema.
  *
  * Prefers explicit hints in this order: `const`, `examples[0]`, `default`,
  * `enum[0]`; otherwise produces a canonical value for the declared type.
- * `$ref`s are resolved and inlined by value; recursive refs short-circuit to
- * `null` (tracked via `seen`).
+ * `$ref`s are resolved and inlined by value; a recursive ref short-circuits to
+ * `null` where the cycle closes.
  *
- * Note: values constrained only by `pattern` are not guaranteed to match the
- * pattern — use the generated arbitrary when pattern fidelity matters.
+ * Derived values are memoized per `$ref` per root document, so the returned
+ * value may share sub-objects with a value returned for a sibling schema. That
+ * is safe for the generator (it serializes and never mutates), but treat the
+ * result as read-only.
+ *
+ * Some schemas have no derivable instance (an unsatisfiable `pattern` +
+ * `minLength`, a `oneOf` every candidate matches twice); this returns the
+ * closest structural value it built. {@link generateExampleConst} validates the
+ * final value and warns when that happens, rather than letting an invalid
+ * example ship silently.
  */
-export const deriveExample = (
-  schema: JSONSchema,
-  rootSchema?: Record<string, unknown>,
-  seen: ReadonlySet<string> = new Set(),
-): unknown => {
+export const deriveExample = (schema: JSONSchema, rootSchema?: Record<string, unknown>): unknown => {
+  const ctx = contextFor(rootSchema)
+  // A previous call can only have left `active` dirty by unwinding through an
+  // exception, but a stale ancestor there would silently truncate this
+  // derivation — so start every top-level call from a clean path.
+  ctx.active.clear()
+  ctx.cycleBroken = false
+  return derive(schema, ctx)
+}
+
+/** The recursive entry point, threading the shared {@link DeriveContext}. */
+const derive = (schema: JSONSchema, ctx: DeriveContext): unknown => {
   if (!isSchemaObject(schema)) return null
-  const base = deriveBase(schema, rootSchema, seen)
+  const base = deriveBase(schema, ctx)
   // Keywords the structural deriver can't fully honour (`if`/`then`/`else`,
   // `not`, `oneOf` exclusivity) are reconciled by validating candidates against a
   // real validator and picking the first that passes.
-  return needsValidationFilter(schema) ? refineExample(schema, base, rootSchema, seen) : base
+  return needsValidationFilter(schema) ? refineExample(schema, base, ctx) : base
+}
+
+/**
+ * Resolves a `$ref` and derives its value, reusing the memo when the ref has
+ * already been derived cycle-free. See {@link DeriveContext} for why a
+ * cycle-truncated result is deliberately left out of the memo.
+ */
+const deriveRef = (ref: string, ctx: DeriveContext): unknown => {
+  if (ctx.active.has(ref)) {
+    ctx.cycleBroken = true
+    return null
+  }
+  if (ctx.values.has(ref)) return ctx.values.get(ref)
+  if (!ctx.rootSchema) return null
+  const resolved = resolveRef(ref, ctx.rootSchema)
+  if (!resolved) return null
+
+  const outerBroken = ctx.cycleBroken
+  ctx.cycleBroken = false
+  ctx.active.add(ref)
+  try {
+    const value = derive(resolved as JSONSchema, ctx)
+    if (!ctx.cycleBroken) ctx.values.set(ref, value)
+    ctx.cycleBroken = outerBroken || ctx.cycleBroken
+    return value
+  } finally {
+    ctx.active.delete(ref)
+  }
 }
 
 /** Structural derivation for a node, before any validating refinement. */
-const deriveBase = (
-  schema: JSONSchema,
-  rootSchema: Record<string, unknown> | undefined,
-  seen: ReadonlySet<string>,
-): unknown => {
+const deriveBase = (schema: JSONSchema, ctx: DeriveContext): unknown => {
   if (!isSchemaObject(schema)) return null
   if (hasConst(schema)) return schema.const
   if (hasExamples(schema) && Array.isArray(schema.examples) && schema.examples.length > 0) return schema.examples[0]
@@ -267,13 +391,7 @@ const deriveBase = (
     return fitting !== undefined ? fitting : schema.enum[0]
   }
 
-  if (hasRef(schema)) {
-    const ref = schema.$ref
-    if (seen.has(ref) || !rootSchema) return null
-    const resolved = resolveRef(ref, rootSchema)
-    if (!resolved) return null
-    return deriveExample(resolved as JSONSchema, rootSchema, new Set([...seen, ref]))
-  }
+  if (hasRef(schema)) return deriveRef(schema.$ref, ctx)
 
   const instanceOf = getMjstInstanceOf(schema)
   if (instanceOf === 'Date') return new Date(0)
@@ -283,17 +401,17 @@ const deriveBase = (
   // `allOf` must satisfy every branch at once, so derive from a single schema
   // that merges the branches (and the node's own keywords) rather than picking
   // one branch — picking one would ignore the others' constraints.
-  if (hasAllOf(schema)) return deriveExample(mergeAllOf(schema), rootSchema, seen)
+  if (hasAllOf(schema)) return derive(mergeAllOf(schema), ctx)
 
-  if (hasOneOf(schema) && schema.oneOf[0] !== undefined) return deriveExample(schema.oneOf[0], rootSchema, seen)
-  if (hasAnyOf(schema) && schema.anyOf[0] !== undefined) return deriveExample(schema.anyOf[0], rootSchema, seen)
+  if (hasOneOf(schema) && schema.oneOf[0] !== undefined) return derive(schema.oneOf[0], ctx)
+  if (hasAnyOf(schema) && schema.anyOf[0] !== undefined) return derive(schema.anyOf[0], ctx)
 
-  if (hasType(schema)) return deriveForType(schema.type, schema, rootSchema, seen)
+  if (hasType(schema)) return deriveForType(schema.type, schema, ctx)
 
   // Multi-type schemas (`type: ['string', 'null']`) derive from their first
   // member type; `hasType` only matches a single string `type`.
   if (Array.isArray(schema.type) && schema.type.length > 0) {
-    return deriveForType(schema.type[0] as string, schema, rootSchema, seen)
+    return deriveForType(schema.type[0] as string, schema, ctx)
   }
 
   return null
@@ -310,27 +428,42 @@ const structuralOnly = (schema: JSONSchema): JSONSchema => {
 }
 
 /**
+ * Nudges a value away from itself so it can escape a `not`. Only the shapes with
+ * an obvious "next" value are perturbed — a suffixed string, a stepped number, a
+ * flipped boolean, `null` swapped for a plain string — because the point is to
+ * clear a narrow exclusion (`not: { const: 'string' }`), not to search the space.
+ * The caller validates the result, so a perturbation that does not help is
+ * simply discarded.
+ */
+const perturb = (value: unknown): unknown[] => {
+  if (typeof value === 'string') return [`${value}-1`, '']
+  if (typeof value === 'number') return [value + 1, value - 1]
+  if (typeof value === 'boolean') return [!value]
+  if (value === null) return ['string', 0]
+  if (Array.isArray(value)) return [[], [...value, null]]
+  if (typeof value === 'object') return [{}]
+  return []
+}
+
+/**
  * Reconciles keywords the structural deriver can't satisfy on its own
  * (`if`/`then`/`else`, `not`, `oneOf` exclusivity). It validates the structural
  * `base` against the full schema and, if it fails, tries alternative candidates —
- * each `oneOf` branch, and the `then`/`else` branches merged with the structural
- * siblings — returning the first that validates. Falls back to `base` when none
- * do (a best-effort for schemas that can't be satisfied structurally, e.g. an
- * adversarial `not`).
+ * each `oneOf` branch, the `then`/`else` branches merged with the structural
+ * siblings, and (for `not`) a perturbation of `base` — returning the first that
+ * validates.
+ *
+ * When nothing validates it returns `base` unchanged. That is the honest answer
+ * for a schema with no derivable instance, but it is *not* silent:
+ * {@link generateExampleConst} re-validates the final value and warns.
  */
-const refineExample = (
-  schema: JSONSchema,
-  base: unknown,
-  rootSchema: Record<string, unknown> | undefined,
-  seen: ReadonlySet<string>,
-): unknown => {
-  const check = makeInstanceCheck(schema, rootSchema)
+const refineExample = (schema: JSONSchema, base: unknown, ctx: DeriveContext): unknown => {
+  const check = makeInstanceCheck(schema, ctx.rootSchema)
   if (check(base)) return base
 
   const raw = schema as Record<string, unknown>
   const structural = structuralOnly(schema)
-  const combine = (branch: unknown): unknown =>
-    deriveExample({ allOf: [structural, branch as JSONSchema] } as JSONSchema, rootSchema, seen)
+  const combine = (branch: unknown): unknown => derive({ allOf: [structural, branch as JSONSchema] } as JSONSchema, ctx)
 
   const candidates: unknown[] = []
   if (hasOneOf(schema)) {
@@ -340,8 +473,12 @@ const refineExample = (
     if (raw['then'] !== undefined) candidates.push(combine(raw['then']))
     if (raw['else'] !== undefined) candidates.push(combine(raw['else']))
     // `if` failing (so neither `then` nor a matched `else` applies) is also valid.
-    candidates.push(deriveExample(structural, rootSchema, seen))
+    candidates.push(derive(structural, ctx))
   }
+  // A `not` had no candidate at all, so the canonical value it forbids (the
+  // very common `not: { const: 'string' }` / `not: { enum: [...] }`) was handed
+  // back verbatim. Offer the nudged values instead.
+  if ('not' in raw) candidates.push(...perturb(base))
 
   for (const candidate of candidates) if (check(candidate)) return candidate
   return base
@@ -367,12 +504,7 @@ const satisfiesScalarConstraints = (schema: JSONSchema, value: unknown): boolean
 }
 
 /** Derives a canonical value for a single declared `type`. */
-const deriveForType = (
-  type: string,
-  schema: JSONSchema,
-  rootSchema: Record<string, unknown> | undefined,
-  seen: ReadonlySet<string>,
-): unknown => {
+const deriveForType = (type: string, schema: JSONSchema, ctx: DeriveContext): unknown => {
   switch (type) {
     case 'string':
       return exampleString(schema)
@@ -384,12 +516,30 @@ const deriveForType = (
     case 'null':
       return null
     case 'array':
-      return deriveArray(schema, rootSchema, seen)
+      return deriveArray(schema, ctx)
     case 'object':
-      return deriveObject(schema, rootSchema, seen)
+      return deriveObject(schema, ctx)
     default:
       return null
   }
+}
+
+/**
+ * Records a derived property on the value being built.
+ *
+ * A plain `out[key] = value` is a trap for exactly one key: `__proto__` resolves
+ * to `Object.prototype`'s prototype *setter*, so the assignment creates no own
+ * property (and, for an object value, silently reparents `out`). A schema with a
+ * `__proto__` property therefore emitted an example missing the very key its
+ * generated type declares as required. `defineProperty` writes a normal own
+ * property, and every other key keeps the fast path.
+ */
+const setProperty = (out: Record<string, unknown>, key: string, value: unknown): void => {
+  if (key === '__proto__') {
+    Object.defineProperty(out, key, { value, writable: true, enumerable: true, configurable: true })
+    return
+  }
+  out[key] = value
 }
 
 /**
@@ -400,11 +550,7 @@ const deriveForType = (
  * add keys once their trigger is present, and `minProperties`/`maxProperties`
  * bound the key count.
  */
-const deriveObject = (
-  schema: JSONSchema,
-  rootSchema: Record<string, unknown> | undefined,
-  seen: ReadonlySet<string>,
-): Record<string, unknown> => {
+const deriveObject = (schema: JSONSchema, ctx: DeriveContext): Record<string, unknown> => {
   const out: Record<string, unknown> = {}
 
   const patternEntries: Array<[RegExp, JSONSchema]> = hasPatternProperties(schema)
@@ -422,7 +568,7 @@ const deriveObject = (
   // With `additionalProperties: false`, extra keys are still allowed when they
   // match a `patternProperties` entry; only a fully closed object forbids all.
   const extrasAllowed = !additionalClosed || patternEntries.length > 0
-  const nameCheck = hasPropertyNames(schema) ? makeInstanceCheck(schema.propertyNames, rootSchema) : undefined
+  const nameCheck = hasPropertyNames(schema) ? makeInstanceCheck(schema.propertyNames, ctx.rootSchema) : undefined
 
   // The value schema for a key not declared in `properties`: the matching
   // `patternProperties` (intersected when several match), else `additionalProperties`.
@@ -432,32 +578,40 @@ const deriveObject = (
     if (matches.length > 1) return { allOf: matches } as JSONSchema
     return additionalSchema
   }
+  // A key that is neither declared in `properties` nor matched by a
+  // `patternProperties` entry cannot legally be invented on a closed object, so
+  // do not: `{ properties: { a }, required: ['a', 'b'], additionalProperties:
+  // false }` used to gain a `"b": null` that `additionalProperties: false` then
+  // rejected. Such a schema has no valid instance at all; leaving the key out
+  // keeps the example as close to valid as it can get, and the final check in
+  // `generateExampleConst` reports the schema rather than papering over it.
   const addKey = (key: string): void => {
     const sub = valueSchemaFor(key)
-    out[key] = sub !== undefined ? deriveExample(sub, rootSchema, seen) : null
+    if (sub === undefined && additionalClosed) return
+    setProperty(out, key, sub !== undefined ? derive(sub, ctx) : null)
   }
 
   if (hasProperties(schema)) {
     for (const [key, propSchema] of Object.entries(schema.properties)) {
-      out[key] = deriveExample(propSchema, rootSchema, seen)
+      setProperty(out, key, derive(propSchema, ctx))
     }
   }
   // A required key with no `properties` entry still needs a value.
   if (hasRequired(schema)) {
-    for (const key of schema.required) if (!(key in out)) addKey(key)
+    for (const key of schema.required) if (!Object.hasOwn(out, key)) addKey(key)
   }
   // `dependentRequired`: once a trigger key is present, its dependencies must be too.
   if (hasDependentRequired(schema)) {
     for (const [trigger, deps] of Object.entries(schema.dependentRequired)) {
-      if (!(trigger in out)) continue
-      for (const dep of deps) if (!(dep in out)) addKey(dep)
+      if (!Object.hasOwn(out, trigger)) continue
+      for (const dep of deps) if (!Object.hasOwn(out, dep)) addKey(dep)
     }
   }
   // `dependentSchemas`: once a trigger key is present, the object must also
   // satisfy the dependency subschema — apply its `properties`/`required`.
   if (hasDependentSchemas(schema)) {
     for (const [trigger, sub] of Object.entries(schema.dependentSchemas)) {
-      if (trigger in out && isSchemaObject(sub)) applyDependentSchema(out, sub, rootSchema, seen)
+      if (Object.hasOwn(out, trigger) && isSchemaObject(sub)) applyDependentSchema(out, sub, ctx)
     }
   }
   // Synthesize filler keys to reach `minProperties` when extras are allowed.
@@ -466,7 +620,7 @@ const deriveObject = (
     let guard = 0
     while (Object.keys(out).length < schema.minProperties && guard++ < schema.minProperties + 50) {
       const key = synthKey(n++, patternEntries, schema, nameCheck)
-      if (key === undefined || key in out) continue
+      if (key === undefined || Object.hasOwn(out, key)) continue
       addKey(key)
     }
   }
@@ -478,23 +632,18 @@ const deriveObject = (
 }
 
 /** Applies a `dependentSchemas` branch's object shape (`properties`/`required`) in place. */
-const applyDependentSchema = (
-  out: Record<string, unknown>,
-  sub: JSONSchema,
-  rootSchema: Record<string, unknown> | undefined,
-  seen: ReadonlySet<string>,
-): void => {
+const applyDependentSchema = (out: Record<string, unknown>, sub: JSONSchema, ctx: DeriveContext): void => {
   if (hasProperties(sub)) {
     for (const [key, propSchema] of Object.entries(sub.properties)) {
-      if (!(key in out)) out[key] = deriveExample(propSchema, rootSchema, seen)
+      if (!Object.hasOwn(out, key)) setProperty(out, key, derive(propSchema, ctx))
     }
   }
   if (hasRequired(sub)) {
     const propSchemas = hasProperties(sub) ? sub.properties : {}
     for (const key of sub.required) {
-      if (key in out) continue
+      if (Object.hasOwn(out, key)) continue
       const propSchema = propSchemas[key]
-      out[key] = propSchema !== undefined ? deriveExample(propSchema, rootSchema, seen) : null
+      setProperty(out, key, propSchema !== undefined ? derive(propSchema, ctx) : null)
     }
   }
 }
@@ -538,7 +687,7 @@ const enforceMaxProperties = (out: Record<string, unknown>, schema: JSONSchema, 
   const protectedKeys = new Set<string>(hasRequired(schema) ? schema.required : [])
   if (hasDependentRequired(schema)) {
     for (const [trigger, deps] of Object.entries(schema.dependentRequired)) {
-      if (trigger in out) for (const dep of deps) protectedKeys.add(dep)
+      if (Object.hasOwn(out, trigger)) for (const dep of deps) protectedKeys.add(dep)
     }
   }
   for (const key of Object.keys(out)) {
@@ -586,11 +735,7 @@ const deriveNumber = (schema: JSONSchema, isInteger: boolean): number => {
  * single item value. The count is clamped into `[minItems, maxItems]` so a
  * `maxItems: 0` yields `[]` and a `minItems` is always met.
  */
-const deriveArray = (
-  schema: JSONSchema,
-  rootSchema: Record<string, unknown> | undefined,
-  seen: ReadonlySet<string>,
-): unknown[] => {
+const deriveArray = (schema: JSONSchema, ctx: DeriveContext): unknown[] => {
   const items = hasItems(schema) ? schema.items : undefined
   const prefixItems = (schema as Record<string, unknown>)['prefixItems']
   // A tuple is `prefixItems` (2020-12) or the draft-07 array-form `items`.
@@ -607,13 +752,13 @@ const deriveArray = (
   const rest = items !== undefined && !Array.isArray(items) && isSchemaObject(items) ? items : undefined
 
   if (prefix) {
-    const tuple = prefix.map((item) => deriveExample(item, rootSchema, seen))
+    const tuple = prefix.map((item) => derive(item, ctx))
     // Pad up to `minItems`: with the rest schema when one is present, otherwise
     // (in 2020-12 additional items past `prefixItems` are unconstrained unless
     // `items: false`) with a plain `null`.
     const itemsClosed = (schema as Record<string, unknown>)['items'] === false
     while (tuple.length < min && tuple.length < max) {
-      if (rest !== undefined) tuple.push(deriveExample(rest, rootSchema, seen))
+      if (rest !== undefined) tuple.push(derive(rest, ctx))
       else if (itemsClosed) break
       else tuple.push(null)
     }
@@ -629,16 +774,50 @@ const deriveArray = (
   // The element schema: the uniform `items`, else the `contains` subschema.
   const elem = rest ?? contains
 
+  // With `uniqueItems` over a closed value set, walk the set instead of
+  // perturbing one value: `distinctify` would push `'a'` to `'a1'`, which the
+  // set (`enum: ['a', 'b']`, `type: 'boolean'`) does not contain.
+  const choices = unique && contains === undefined ? closedValueSet(elem) : undefined
+
   // Prefer a non-empty example, satisfy `minItems` and `minContains`, never exceed `maxItems`.
-  const count = Math.min(Math.max(min, minContains, max === 0 ? 0 : 1), max)
+  const wanted = Math.min(Math.max(min, minContains, max === 0 ? 0 : 1), max)
+  // A set of N values cannot fill more than N distinct slots. When `minItems`
+  // asks for more (`minItems: 3` over booleans) the schema has no valid
+  // instance; stopping at N keeps the array at least *unique*, and the final
+  // check in `generateExampleConst` reports the schema.
+  const count = choices !== undefined ? Math.min(wanted, choices.length) : wanted
+
   const result: unknown[] = []
   for (let i = 0; i < count; i++) {
+    if (choices !== undefined) {
+      result.push(choices[i])
+      continue
+    }
     // Make the first `minContains` items satisfy `contains`; the rest use `items`.
     const itemSchema = contains !== undefined && i < minContains ? contains : elem
-    const base = itemSchema !== undefined ? deriveExample(itemSchema, rootSchema, seen) : null
+    const base = itemSchema !== undefined ? derive(itemSchema, ctx) : null
     result.push(unique ? distinctify(base, i, itemSchema) : base)
   }
   return result
+}
+
+/**
+ * The complete set of values an item schema admits, when that set is finite and
+ * small enough to enumerate: `const`, `enum`, `boolean`, `null`. `uniqueItems`
+ * needs distinct elements, and for these schemas the {@link distinctify}
+ * perturbation would step straight out of the schema, so the caller walks this
+ * set instead. `undefined` means the value space is open and perturbing is fine.
+ */
+const closedValueSet = (schema: JSONSchema | undefined): unknown[] | undefined => {
+  if (schema === undefined || !isSchemaObject(schema)) return undefined
+  if (hasConst(schema)) return [schema.const]
+  if (hasEnum(schema)) {
+    const fitting = schema.enum.filter((value) => satisfiesScalarConstraints(schema, value))
+    return fitting.length > 0 ? fitting : [...schema.enum]
+  }
+  if (hasType(schema) && schema.type === 'boolean') return [true, false]
+  if (hasType(schema) && schema.type === 'null') return [null]
+  return undefined
 }
 
 /**
@@ -729,6 +908,16 @@ export const mergeAllOf = (schema: JSONSchema): JSONSchema => {
 }
 
 /**
+ * Object-literal key form that survives the one runtime-dangerous name,
+ * `__proto__`. Quoting does not help: `{ "__proto__": v }` is still the
+ * prototype-setter syntax, so the emitted example would lose the key (and take
+ * `v` as its prototype) no matter how carefully we derived it. The computed form
+ * `{ ["__proto__"]: v }` defines a normal own property — the same fix
+ * `generate-parsers` applies in `safeLiteralKey`.
+ */
+const serializeKey = (key: string): string => (key === '__proto__' ? '["__proto__"]' : JSON.stringify(key))
+
+/**
  * Serializes a derived value into a TypeScript source expression. Handles the
  * non-JSON values `deriveExample` can produce (`Date`, `bigint`) in addition to
  * plain JSON.
@@ -740,14 +929,57 @@ export const serializeValue = (value: unknown): string => {
   if (value !== null && typeof value === 'object') {
     const entries = Object.entries(value)
       .filter(([, v]) => v !== undefined)
-      .map(([key, v]) => `${JSON.stringify(key)}: ${serializeValue(v)}`)
+      .map(([key, v]) => `${serializeKey(key)}: ${serializeValue(v)}`)
     return `{ ${entries.join(', ')} }`
   }
   return JSON.stringify(value)
 }
 
+/** The arbitrary that stays trustworthy when an example cannot be derived. */
+const arbitraryName = (typeName: string): string => `${typeName}Arbitrary`
+
+/**
+ * How much of the offending value to quote. Enough to recognize it in the emitted
+ * file; a real-world schema can derive a value tens of kilobytes wide, and a
+ * warning nobody can read is barely better than no warning at all.
+ */
+const WARNING_VALUE_LIMIT = 240
+
+/**
+ * Reports an example that does not satisfy the schema it was derived from.
+ *
+ * The deriver is best-effort by construction — some schemas have no derivable
+ * instance (`{ pattern: '^ab$', minLength: 5 }`), some have no instance at all
+ * (a `oneOf` whose branches every value matches twice), and some use a keyword
+ * no structural rule can honour. Returning the closest value is fine; returning
+ * it *quietly* is not, because an example that fails its own schema goes on to
+ * seed fixtures, tests, and docs where it reads as authoritative. So say so, and
+ * point at the value, once per generated file.
+ */
+const warnInvalidExample = (
+  schema: JSONSchema,
+  typeName: string,
+  value: unknown,
+  rootSchema?: Record<string, unknown>,
+): void => {
+  const check = makeInstanceCheck(schema, rootSchema, { checkFormats: true })
+  if (check(value)) return
+  const serialized = serializeValue(value)
+  const quoted = serialized.length > WARNING_VALUE_LIMIT ? `${serialized.slice(0, WARNING_VALUE_LIMIT)}…` : serialized
+  console.warn(
+    `Warning: the derived example for ${typeName} does not validate against its own schema — ` +
+      `${quoted}. It is emitted anyway so the file still compiles, but treat it as a placeholder: ` +
+      `either the schema has no instance, or it uses a constraint the deriver cannot satisfy ` +
+      `structurally (see the README's "Known limits"). ${arbitraryName(typeName)} is unaffected.`,
+  )
+}
+
 /**
  * Generates an exported const holding a concrete, schema-valid example value.
+ *
+ * The derived value is validated against its own schema before being emitted; a
+ * value that fails is still written (so the generated file compiles) but is
+ * reported via `console.warn` rather than shipping as a silently-wrong fixture.
  *
  * @example
  * ```typescript
@@ -761,5 +993,6 @@ export const generateExampleConst = (
   rootSchema?: Record<string, unknown>,
 ): string => {
   const value = deriveExample(schema, rootSchema)
+  warnInvalidExample(schema, typeName, value, rootSchema)
   return `export const ${exampleName(typeName)}: ${typeName} = ${serializeValue(value)}`
 }

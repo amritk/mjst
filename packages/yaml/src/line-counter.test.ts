@@ -28,4 +28,28 @@ describe('line-counter', () => {
   it('handles an empty source', () => {
     expect(lineCounter('').linePos(0)).toEqual({ line: 1, col: 1 })
   })
+
+  // YAML 1.2 §5.4 makes CR LF, a lone CR, and a lone LF all one line break, so
+  // positions have to advance the line for each of the three — otherwise a
+  // diagnostic in a CR-delimited document points at a line that is not there.
+  it('advances the line on a lone CR', () => {
+    const lc = lineCounter('a: 1\rb: 2\rc: 3\r')
+    expect(lc.linePos(0)).toEqual({ line: 1, col: 1 })
+    expect(lc.linePos(5)).toEqual({ line: 2, col: 1 })
+    expect(lc.linePos(10)).toEqual({ line: 3, col: 1 })
+  })
+
+  it('counts CR LF as a single break', () => {
+    const lc = lineCounter('a: 1\r\nb: 2\r\n')
+    expect(lc.linePos(6)).toEqual({ line: 2, col: 1 })
+    expect(lc.linePos(12)).toEqual({ line: 3, col: 1 })
+  })
+
+  it('handles a document mixing all three break styles', () => {
+    // Lines: `a: 1` (CR), `b: 2` (CR LF), `c: 3` (LF).
+    const lc = lineCounter('a: 1\rb: 2\r\nc: 3\n')
+    expect(lc.linePos(5)).toEqual({ line: 2, col: 1 })
+    expect(lc.linePos(11)).toEqual({ line: 3, col: 1 })
+    expect(lc.linePos(16)).toEqual({ line: 4, col: 1 })
+  })
 })

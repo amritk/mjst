@@ -82,4 +82,15 @@ describe('create-rate-limit', () => {
     expect(blocked?.status).toBe(429)
     expect(await blocked?.json()).toMatchObject({ error: 'slow down' })
   })
+
+  it('stamps headers on a response whose headers are immutable', async () => {
+    // A proxied mount's reply is header-guarded; setting on it directly throws.
+    const limit = createRateLimit({ limit: 10, windowMs: 60_000, key: () => 'k' })
+    const locals: RequestLocals = {}
+    await limit.onRequest(req(), undefined, undefined, locals)
+    const proxied = Response.redirect('https://example.com/next', 302)
+    const decorated = await limit.onResponse(proxied, req(), locals)
+    expect((decorated as Response).headers.get('ratelimit-limit')).toBe('10')
+    expect((decorated as Response).headers.get('ratelimit-remaining')).toBe('9')
+  })
 })

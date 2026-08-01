@@ -28,9 +28,9 @@ describe('generate-validator-function', () => {
     const code = generateValidatorFunction(schema, 'Info')
 
     expect(code).toContain('export const validateInfo')
-    expect(code).toContain('"name" in obj')
+    expect(code).toContain('!("name" in obj)')
     expect(code).toContain("must have required property 'name'")
-    expect(code).toContain('typeof obj["name"] !== \'string\'')
+    expect(code).toContain("typeof obj.name !== 'string'")
     expect(code).toContain('must be string')
   })
 
@@ -41,8 +41,8 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Stats')
 
-    expect(code).toContain('obj["count"] !== undefined')
-    expect(code).toContain('typeof obj["count"] !== \'number\'')
+    expect(code).toContain('obj.count !== undefined')
+    expect(code).toContain("typeof obj.count !== 'number'")
     expect(code).toContain('must be number')
   })
 
@@ -54,7 +54,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Config')
 
-    expect(code).toContain('typeof obj["enabled"] !== \'boolean\'')
+    expect(code).toContain("typeof obj.enabled !== 'boolean'")
     expect(code).toContain('must be boolean')
   })
 
@@ -182,8 +182,8 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Record')
 
-    expect(code).toContain('obj["kind"] !== "user"')
-    expect(code).toContain('obj["version"] !== 2')
+    expect(code).toContain('obj.kind !== "user"')
+    expect(code).toContain('obj.version !== 2')
     expect(code).toContain('must be \\"user\\"')
   })
 
@@ -194,7 +194,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Record')
 
-    expect(code).toContain('!valuesEqual(obj["meta"], {"a":1})')
+    expect(code).toContain('!valuesEqual(obj.meta, {"a":1})')
   })
 
   it('dedupes scalar-item uniqueItems by a JSON projection', () => {
@@ -221,7 +221,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Doc')
 
-    expect(code).toContain('!allUnique(obj["rows"] as unknown[])')
+    expect(code).toContain('!allUnique(obj.rows as unknown[])')
     // The key-order-sensitive stringify projection must NOT drive the dedupe here.
     expect(code).not.toContain('map((_u) => JSON.stringify(_u))')
   })
@@ -233,7 +233,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Doc')
 
-    expect(code).toContain('!allUnique(obj["anything"] as unknown[])')
+    expect(code).toContain('!allUnique(obj.anything as unknown[])')
   })
 
   it('generates a top-level const validator', () => {
@@ -272,7 +272,7 @@ describe('generate-validator-function', () => {
       '_name.length > 3',
     )
     expect(generateValidatorFunction({ type: 'object', propertyNames: { enum: ['a', 'b'] } }, 'Dict')).toContain(
-      '.includes(_name)',
+      '(_name === "a" || _name === "b")',
     )
     expect(generateValidatorFunction({ type: 'object', propertyNames: { const: 'only' } }, 'Dict')).toContain(
       '_name !== "only"',
@@ -330,7 +330,7 @@ describe('generate-validator-function', () => {
     const code = generateValidatorFunction(schema, 'Document')
 
     expect(code).toContain('validateInfo(')
-    expect(code).toContain('"info" in obj')
+    expect(code).toContain('!("info" in obj)')
   })
 
   it('generates a scalar string validator', () => {
@@ -382,8 +382,8 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Event')
 
-    expect(code).toContain('"createdAt" in obj')
-    expect(code).toContain('!(obj["createdAt"] instanceof Date)')
+    expect(code).toContain('!("createdAt" in obj)')
+    expect(code).toContain('!(obj.createdAt instanceof Date)')
     expect(code).toContain('must be Date')
   })
 
@@ -394,7 +394,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Event')
 
-    expect(code).toContain('obj["createdAt"] !== undefined && !(obj["createdAt"] instanceof Date)')
+    expect(code).toContain('obj.createdAt !== undefined && !(obj.createdAt instanceof Date)')
   })
 
   it('generates an instanceof check for a top-level x-mjst Date schema', () => {
@@ -412,7 +412,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Account')
 
-    expect(code).toContain('typeof obj["balance"] !== "bigint"')
+    expect(code).toContain('typeof obj.balance !== "bigint"')
     expect(code).toContain('must be bigint')
   })
 
@@ -423,7 +423,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Account')
 
-    expect(code).toContain('obj["balance"] !== undefined && typeof obj["balance"] !== "bigint"')
+    expect(code).toContain('obj.balance !== undefined && typeof obj.balance !== "bigint"')
   })
 
   it('generates a typeof check for a top-level x-mjst bigint schema', () => {

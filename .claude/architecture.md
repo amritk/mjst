@@ -33,7 +33,7 @@ mjst/
 
 Command-line entry point. Reads CLI flags and/or a JSON config file, loads a schema, runs the generator, and writes TypeScript output. It also carries a `lint` subcommand (`mjst lint <files>`) that lints JSON/YAML documents via `@amritk/lint` and prints a compact `file:line:col` report.
 
-- **Depends on:** `@amritk/generate-parsers`, `@amritk/generate-markdown`, `@amritk/lint`
+- **Depends on:** `@amritk/generate-parsers`, `@amritk/lint` (`@amritk/generate-markdown` is a **dev** dependency — only `scripts/generate-readme.ts` uses it, and that script is not published)
 - **Bin:** `mjst` → `dist/cli.js` (built for the Node target)
 - **Config schema:** `config.schema.json` — also drives the CLI README table via `@amritk/generate-markdown`. The `lint` subcommand has its own independent flags (see the CLI README).
 
@@ -57,7 +57,7 @@ A fast, **format-agnostic** JSON/YAML style-guide linter — the library behind 
 
 Core code generator. Given a `JSONSchema` and a root type name, produces an array of `GeneratedFile` objects — TypeScript type definitions plus optional runtime parser functions that validate and coerce unknown input.
 
-- **Depends on:** `@amritk/helpers`, `@amritk/generate-markdown`, `json-schema-typed`
+- **Depends on:** `@amritk/helpers`, `json-schema-typed` (`@amritk/generate-markdown` is a **dev** dependency — only `scripts/generate-readme.ts` uses it, and that script is not published)
 - **Subpath imports:**
   - `#generators/*` → `./src/generators/*.ts`
   - `#helpers/*` → `./src/helpers/*.ts`
@@ -102,7 +102,7 @@ Converts schemas authored in external libraries into Draft 2020-12 JSON Schema s
 
 ### `@amritk/resolve-refs` (`packages/resolve-refs`)
 
-Resolves and inlines `$ref`s into a single dereferenced document — internal (`#/...`) pointers, cross-file refs, and remote http(s) documents. A one-pass, cycle-safe resolver: each unique ref resolves once, and a self-reference terminates at `{}` rather than looping. Fetched remote documents are cached in memory for the lifetime of the process (and concurrent loads of the same URL are coalesced onto one request); local files are re-read each pass (they may change on disk in a long-lived session). Remote fetches are guarded by a **default-deny SSRF check** (`isPrivateHost`) — loopback, private, link-local, IPv4-mapped IPv6, and cloud-metadata (`169.254.169.254`) hosts are refused unless explicitly allow-listed. Redirects are followed manually (`redirect: 'manual'`) with the guard re-applied to every hop, so an allow-listed host cannot bounce to a private address.
+Resolves and inlines `$ref`s into a single dereferenced document — internal (`#/...`) pointers, cross-file refs, and remote http(s) documents. A one-pass, cycle-safe resolver: each unique ref resolves once, and a self-reference is *kept* as a `$ref` that resolves within the output document rather than looping or collapsing the recursive branch. Fetched remote documents are cached in memory for the session — keyed by URL **and** by the credentials/transport they were fetched with, so one tenant's document can never be served to a call carrying different credentials — bounded by size and TTL, with concurrent loads of the same URL (and same credentials) coalesced onto one request; local files are re-read each pass (they may change on disk in a long-lived session). Remote fetches are guarded by a **default-deny SSRF check**: `isPrivateHost` refuses loopback, private, link-local, IPv4-mapped IPv6, and cloud-metadata hosts by IP (`169.254.169.254`) *and* by name (`metadata.google.internal`, anything under `.internal`), and `assertPublicHost` additionally resolves the hostname and refuses it when any address it points at is non-public (closing the `127.0.0.1.nip.io` gap; true DNS-rebinding protection would need connection pinning, which Node's `fetch` does not expose). Redirects are followed manually (`redirect: 'manual'`) with both guards re-applied to every hop, so an allow-listed host cannot bounce to a private address. Local `$ref`s are confined the same way: by default a ref may only resolve **under the root document's directory**, so `{"$ref": "../../etc/passwd"}` is refused (widen it with `allowedRoots`, or turn cross-file reads off entirely with `localRefs: false`). A resolve is also bounded as a whole by `maxDocuments`, `totalTimeoutMs`, and `maxDepth`.
 
 - **Depends on:** nothing. Documents are parsed as JSON only (mjst deals in JSON Schema), and there is no `@amritk/*` dependency, so it stays a slim, standalone resolver.
 - **Entry points:** `resolveRefs(data)` — in-memory, internal refs only; `resolveRefsFromFile(filename, options)` — from disk or a URL, including cross-file and remote refs. Errors are collected on the result (never thrown); a refused or missing target degrades to `{}`.
@@ -126,7 +126,7 @@ Categories:
 
 - **Schema traversal:** `extract-refs`, `resolve-ref`, `build-dynamic-ref-map`, `resolve-dynamic-refs`, `extract-dynamic-anchor-defs`, `upgrade-draft07-schema`, `ref-to-filename`, `ref-to-name`, `schema-guards`, `walk-ref-graph`
 - **Codegen utilities:** `generate-type-definition`, `generate-index-barrel`, `parse-documentation`, `safe-accessor`
-- **Runtime helpers (referenced from generated output):** `is-object`, `validate-array`, `validate-record`, `has-ref`. In `--helpers=embedded` mode (default when `@amritk/helpers` is not resolvable from `outDir`), these sources are snapshotted at `@amritk/generate-parsers` build time and emitted into `outDir/_helpers/` so the generated output is self-contained.
+- **Runtime helpers (referenced from generated output):** `is-object`, `validate-array`, `validate-record`, `has-ref`. In `--helpers=embedded` mode (default when `@amritk/helpers` is not resolvable from `outDir`), `@amritk/generate-parsers` reads these sources **at generation time, off disk**: `src/generators/build-schema.ts` locates the installed package with `createRequire(import.meta.url).resolve('@amritk/helpers/package.json')` and reads `src/<helper>.ts` from it (falling back to `dist/<helper>.js`), then emits the content into `outDir/_helpers/` so the generated output is self-contained. Nothing is snapshotted into the generator at build time — which is why `@amritk/helpers`' `files` must keep shipping those four `src/*.ts` files.
 
 ## Import Conventions
 
