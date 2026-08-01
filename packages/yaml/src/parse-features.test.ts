@@ -269,6 +269,77 @@ describe('explicit ? / : mapping entries', () => {
     const { errors } = parseDocument('? [a]\n: 1\n? [b]\n: 2\n')
     expect(errors).toHaveLength(0)
   })
+
+  it('takes the ? introducer over a later ": " on the same line', () => {
+    // `? earth: blue` is an explicit key holding a mapping, not a key spelled
+    // `? earth`.
+    const doc = parseDocument('? earth: blue\n: 1\n')
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.toJS()).toEqual({ '{ earth: blue }': 1 })
+  })
+})
+
+describe('block collections opened on an explicit key line', () => {
+  it('parses a sequence whose first entry shares the ":" line', () => {
+    expect(parseDocument('? a\n: - one\n  - two\n').toJS()).toEqual({ a: ['one', 'two'] })
+  })
+
+  it('parses a mapping whose first entry shares the "?" line', () => {
+    expect(parseDocument('- ? earth: blue\n  : moon: white\n').toJS()).toEqual([
+      { '{ earth: blue }': { moon: 'white' } },
+    ])
+  })
+
+  it('sets the collection indent from the entry column, not the introducer', () => {
+    // The nested `- c` / `- d` sequence opens at column 5 and its second entry
+    // has to align there, not under the outer `-` at column 2.
+    expect(parseDocument('? a\n: - b\n  -  - c\n     - d\n').toJS()).toEqual({ a: ['b', ['c', 'd']] })
+  })
+
+  it('reports the same shape after an implicit key, where it is invalid', () => {
+    const doc = parseDocument('key: - a\n     - b\n')
+    expect(doc.errors.map((e) => e.code)).toContain('UNEXPECTED_CONTENT')
+  })
+
+  it('still reads a "-" that is not an entry indicator as a scalar', () => {
+    expect(parseDocument('key: -1\n').errors).toHaveLength(0)
+    expect(parseDocument('key: -1\n').toJS()).toEqual({ key: -1 })
+    expect(parseDocument('key: -x\n').toJS()).toEqual({ key: '-x' })
+  })
+})
+
+describe('": " inside a plain scalar', () => {
+  it('reports a second mapping indicator on the value line', () => {
+    const doc = parseDocument('a: b: c: d\n')
+    expect(doc.errors.map((e) => e.code)).toEqual(['BAD_SCALAR_CONTENT'])
+  })
+
+  it('reports a continuation line that reads as a mapping entry', () => {
+    expect(parseDocument('k1: v1\n k2: v2\n').errors.map((e) => e.code)).toEqual(['BAD_SCALAR_CONTENT'])
+    expect(parseDocument('this\n is\n  invalid: x\n').errors.map((e) => e.code)).toEqual(['BAD_SCALAR_CONTENT'])
+    expect(parseDocument('key:\n  word1 word2\n  no: key\n').errors.map((e) => e.code)).toEqual(['BAD_SCALAR_CONTENT'])
+  })
+
+  it('reports a colon that ends the scalar line', () => {
+    expect(parseDocument('a: b:\n').errors.map((e) => e.code)).toEqual(['BAD_SCALAR_CONTENT'])
+  })
+
+  it('reports once per scalar, not once per line', () => {
+    expect(parseDocument('a: b: c\n   d: e\n   f: g\n').errors).toHaveLength(1)
+  })
+
+  it('leaves a colon that separates nothing alone', () => {
+    // No white space after the `:`, so it is ordinary scalar text.
+    expect(parseDocument('a: http://example.com/x\n').errors).toHaveLength(0)
+    expect(parseDocument('a: 12:30\n').toJS()).toEqual({ a: '12:30' })
+    expect(parseDocument('a: b :c\n').errors).toHaveLength(0)
+  })
+
+  it('does not apply to quoted, block, or flow scalars', () => {
+    expect(parseDocument("a: 'b: c'\n").toJS()).toEqual({ a: 'b: c' })
+    expect(parseDocument('a: >-\n  b: c\n').toJS()).toEqual({ a: 'b: c' })
+    expect(parseDocument('a: "b: c"\n').errors).toHaveLength(0)
+  })
 })
 
 describe('multi-line plain scalars in flow collections', () => {
@@ -839,8 +910,8 @@ describe('node property errors', () => {
   })
 
   it('still accepts an anchor above the collection it describes', () => {
-    // `&node` names the mapping; `&k1` stays part of the key text (a documented
-    // gap), so the two must not read as two anchors on one node.
+    // `&node1` names the mapping and `&k1` names its first key — two anchors, on
+    // two different nodes, so neither is a redefinition of the other.
     const doc = parseDocument('top1: &node1\n  &k1 key1: one\ntop2: &node2\n  key2: two\n')
     expect(doc.errors).toHaveLength(0)
   })
@@ -849,5 +920,85 @@ describe('node property errors', () => {
     expect(parseDocument('&anchor - sequence entry\n').errors.map((e) => e.code)).toContain('UNEXPECTED_CONTENT')
     // The sequence below the properties line is the legal shape.
     expect(parseDocument('&anchor\n- sequence entry\n').errors).toHaveLength(0)
+  })
+})
+
+describe('indentation measured against the parent, not the node', () => {
+  it('folds a continuation line that steps back but still clears the mapping', () => {
+    // `bar` is indented past `a:` (column 0), which is all a continuation needs
+    // — it does not have to reach the column `foo` happens to start at.
+    const doc = parseDocument('a:\n  foo\n bar\n')
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.toJS()).toEqual({ a: 'foo bar' })
+  })
+
+  it('folds a sequence entry whose continuation looks like a second entry', () => {
+    expect(parseDocument('- single multiline\n - sequence entry\n').toJS()).toEqual([
+      'single multiline - sequence entry',
+    ])
+  })
+
+  it('still ends the scalar at a line that reaches the parent column', () => {
+    expect(parseDocument('a:\n  foo\nbar\n').errors.map((e) => e.code)).toContain('UNEXPECTED_CONTENT')
+  })
+
+  it('attaches a tag to the zero-indented sequence it introduces', () => {
+    expect(parseDocument('sequence: !!seq\n- entry\n- !!seq\n - nested\n').toJS()).toEqual({
+      sequence: ['entry', ['nested']],
+    })
+  })
+
+  it('attaches an anchor on its own line to the zero-indented sequence below', () => {
+    const doc = parseDocument('seq:\n &anchor\n- a\n- b\n')
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.toJS()).toEqual({ seq: ['a', 'b'] })
+  })
+
+  it('counts a block scalar indentation indicator from the mapping, not the tag line', () => {
+    expect(parseDocument('literal: |2\n  value\nfolded:\n   !foo\n  >1\n value\n').toJS()).toEqual({
+      literal: 'value\n',
+      folded: 'value\n',
+    })
+  })
+})
+
+describe('node properties on block mapping keys', () => {
+  it('anchors the key, not the mapping the key opens', () => {
+    // `&a` names the scalar `a` — so `*a` is the string, not the whole map.
+    const doc = parseDocument('&a a: b\nx: *a\n')
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.toJS()).toEqual({ a: 'b', x: 'a' })
+  })
+
+  it('resolves an alias to a key anchored further up the mapping', () => {
+    expect(parseDocument('&a a: &b b\n*b : *a\n').toJS()).toEqual({ a: 'b', b: 'a' })
+  })
+
+  it('applies a tag written on a key', () => {
+    expect(parseDocument('!!str 23: 1\n').toJS()).toEqual({ '23': 1 })
+    expect(parseDocument('!!str &a1 "foo":\n  bar\nbaz: *a1\n').toJS()).toEqual({ foo: 'bar', baz: 'foo' })
+  })
+
+  it('reads an anchor name that ends in a colon', () => {
+    // `&a:` names `a:`, so the separator is the *next* colon on the line — the
+    // one after `key`. Scanning for the separator first would split `&a` off.
+    expect(parseDocument('&a: key: &a value\nfoo:\n  *a:\n').toJS()).toEqual({ key: 'value', foo: 'key' })
+  })
+
+  it('reports properties written on an alias used as a key', () => {
+    const doc = parseDocument('key1: &alias value1\n&b *alias : value2\n')
+    expect(doc.errors.map((e) => e.code)).toContain('BAD_PROPERTY')
+  })
+
+  it('keeps properties on a line of their own describing the collection below', () => {
+    const doc = parseDocument('&whole\na: 1\nb: 2\n')
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.contents?.anchor).toBe('whole')
+  })
+
+  it('does not swallow the line that ends the mapping', () => {
+    // `&stray` opens no entry, so it is content the document never attached.
+    const doc = parseDocument('a: 1\n&stray\n')
+    expect(doc.errors.map((e) => e.code)).toContain('UNEXPECTED_CONTENT')
   })
 })

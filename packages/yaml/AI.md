@@ -42,7 +42,8 @@ for (const error of doc.errors) {
    include `DUPLICATE_KEY`, `UNRESOLVED_ALIAS`, `UNEXPECTED_CONTENT`,
    `UNTERMINATED_FLOW`, `TAB_INDENT`, `UNEXPECTED_DIRECTIVE`, and the
    syntax-level `BAD_COMMENT` / `BAD_ESCAPE` / `BAD_BLOCK_HEADER` /
-   `BAD_INDENT` / `BAD_IMPLICIT_KEY` / `BAD_PROPERTY`. A misplaced or malformed
+   `BAD_INDENT` / `BAD_IMPLICIT_KEY` / `BAD_PROPERTY` /
+   `BAD_SCALAR_CONTENT` (a `: ` inside a plain scalar). A misplaced or malformed
    directive is an **error**; an unknown directive, a non-1.2 `%YAML` version,
    and `MULTIPLE_DOCUMENTS` are warnings. A document with errors still parses —
    check `doc.errors` rather than assuming a throw.
@@ -59,6 +60,9 @@ for (const error of doc.errors) {
 9. **Two aliases to one anchored collection project to two copies**, not one
    shared object (`b !== c` for `b: *x` / `c: *x`). Deliberate — `toJS()` is a
    plain tree, not an object graph.
+10. **An anchor or tag on a mapping key describes the KEY.** `&a a: b` anchors
+   the scalar `a`, so `*a` is `'a'` — not the mapping. Properties on a line of
+   their own above the mapping describe the mapping.
 
 Exports: `parse`, `parseDocument`, `parseAllDocuments`, `nodeAtPath`,
 `lineCounter`, `keyText`, the guards

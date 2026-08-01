@@ -200,7 +200,9 @@ schema** for scalar typing. The exact boundaries:
 **References, documents, and trivia**
 
 - Anchors (`&name`) and aliases (`*name`); `<<` merge keys (toggle with the `merge` option). Anchors and aliases work as mapping keys, and an alias key resolves to the anchored value.
+- Node properties written on a mapping key (`&a key: value`, `!!str 23: v`) apply to **the key**, so a later `*a` resolves to the key — not to the mapping it opens. Properties on a line of their own above the mapping describe the mapping itself.
 - Collections as mapping keys, both explicit (`? [a, b]` / `: value`) and implicit (`[a, b]: value`). A JavaScript object can only be keyed by a string, so a collection key projects to its flow rendering — `{ '[ a, b ]': 'value' }`.
+- Compact block collections opened on an explicit entry's introducer line — `? a` / `: - one` is a sequence, `? earth: blue` a mapping — with their remaining entries aligned under that first one.
 - Multi-document streams (`---` / `...`) via `parseAllDocuments`, each document with its own anchor scope, tag handles, and problem list.
 - A root node written on the `---` line itself — `--- foo`, `--- |`, `--- !!str`, or a quoted scalar spanning the lines below it. Its content is measured against column 0, not the column the marker pushed it to, so `--- >` may hold a block scalar starting at column 0.
 - `%TAG` directives (handles are resolved) and `%YAML` (the version is reported, not applied — resolution is always the 1.2 core schema).
@@ -217,10 +219,11 @@ Every node carries an exact `[start, end)` source span, and problems are collect
 | `UNRESOLVED_ALIAS` | `*name` with no matching anchor in scope |
 | `UNTERMINATED_FLOW` | a `[` or `{` that never closes |
 | `UNTERMINATED_QUOTE` | a quoted scalar that never closes |
-| `UNEXPECTED_CONTENT` | content after a node ends, or a second root node with no `---` |
+| `UNEXPECTED_CONTENT` | content after a node ends, a second root node with no `---`, or a block sequence opened on the line of the key it belongs to (`key: - a`) |
 | `UNEXPECTED_COMMA` | an empty flow entry (`[1, , 2]`) |
 | `TAB_INDENT` | a tab used for indentation |
 | `BAD_SCALAR_START` | a plain scalar starting with the reserved `@` or `` ` ``, or a `-` where a flow entry belongs (`[-]`) |
+| `BAD_SCALAR_CONTENT` | a `: ` inside a plain scalar, which the spec ends the scalar at (`a: b: c`, or a continuation line that reads as a mapping entry) |
 | `BAD_COMMENT` | a `#` with no whitespace before it, so the rest of the line is not a comment (`"value"# …`) |
 | `BAD_ESCAPE` | a `\` escape double-quoted YAML does not define (`"a\.b"`) |
 | `BAD_BLOCK_HEADER` | a `|`/`>` header with a repeated indicator or trailing text (`|10`, `> text`) |
@@ -243,9 +246,7 @@ Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNK
 - **YAML 1.1-only scalar forms.** `yes`/`no`/`on`/`off` booleans, sexagesimal numbers (`1:30:00`), and underscore digit groups (`1_000`) stay strings, per the 1.2 core schema.
 - **Implicit timestamps.** An untagged ISO date string stays a string; only an explicit `!!timestamp` produces a `Date`.
 - **Directives on a line a plain scalar could claim.** The rules around directives are enforced — a directive needs a `...` footer before it and a `---` after it, and its version must parse — with one exception: when the offending `%` line could equally be read as a continuation of the plain scalar above it, the scalar wins. Reporting it would mean rejecting a valid document (the suite's `XLQ9`) to catch an invalid one.
-- **Node properties on block mapping keys.** An anchor or tag written on a mapping key (`&a key: value`) stays part of the key text instead of being applied to it.
 - **The 1024-character implicit key limit.** A key that spans lines *is* reported, but a single-line key longer than the spec allows is not — the check needs lookahead the hot path does not do.
-- **`: ` inside a plain scalar.** The spec ends a plain scalar at a `: `, which makes `key: v1\n  k2: v2` an error; here the second line folds into the scalar instead. Enforcing it costs a key scan on every continuation line of every multi-line scalar.
 - **Flow collection indentation.** Flow scanning is delimiter-driven, so a `[`/`{` written across lines is read the same whether or not its continuation lines clear the block indentation around them.
 - **Shared alias identity.** An alias to a collection projects to a *copy*, not the same object: for `a: &x {p: 1}` / `b: *x` / `c: *x`, `b` and `c` are equal but `b !== c`, and mutating one does not change the other. The spec makes them one node. Copying keeps `toJS()` a plain tree — which is what a path-keyed position index, a JSON round-trip, and any consumer that edits the projection all assume — and the cost of re-expanding aliases is capped by an expansion budget, so a billion-laughs document throws a catchable error instead of hanging.
 
@@ -257,7 +258,7 @@ The boundary above is not a claim — it is checked. `src/conformance.test.ts` r
 official [YAML test suite](https://github.com/yaml/yaml-test-suite) (402 cases) on
 every build:
 
-**365 / 402 cases pass (90.8%).**
+**384 / 402 cases pass (95.5%).**
 
 Every case that does not is listed in `src/conformance-expected-failures.test-utils.ts`
 with the reason it does not, and the test fails if a case moves in *either*
@@ -265,13 +266,11 @@ direction — a regression breaks the build, and so does a case that starts pass
 without its entry being removed. The suite is a dev dependency; none of it reaches
 the published bundle.
 
-The 37 remaining cases are: the tab rules above (12), invalid documents we
-accept without a diagnostic — plain scalars that swallow a `: ` (5), flow
-collections indented back to their parent (2), and properties written on a block
-mapping key (4) — shapes we mis-scan and now report rather than silently
-mis-parse (6), one duplicate-key case rejected by design, documented projections
-to richer JavaScript types than JSON can express (3), and four remaining output
-differences.
+The 18 remaining cases are: the tab rules above (11), flow collections indented
+back to their parent (2), one flow collection holding only empty content that we
+mis-scan and report rather than silently mis-parse, one duplicate-key case
+rejected by design, and the documented projections to richer JavaScript types
+than JSON can express (3).
 
 ---
 

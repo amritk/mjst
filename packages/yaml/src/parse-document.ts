@@ -562,13 +562,10 @@ const attachProps = (node: YamlNode, props: NodeProps, state: State): YamlNode =
     return node
   }
   if (props.anchor) {
-    // Two anchors reaching the same scalar — `&a` on its own line above a value
+    // Two anchors reaching the same node — `&a` on its own line above a value
     // that carries `&b` — is one node with two names, which the spec does not
-    // allow and which silently discarded whichever was applied first. Only
-    // scalars are checked: an anchor written on a *block mapping key* stays part
-    // of the key here (the documented `E76Z` gap), so a collection legitimately
-    // sees both its own anchor and its first key's.
-    if (node.anchor !== undefined && node.kind === 'scalar') {
+    // allow and which silently discarded whichever was applied first.
+    if (node.anchor !== undefined) {
       pushError(state, 'BAD_PROPERTY', 'A node cannot carry more than one anchor', node.start, node.end)
     }
     node.anchor = props.anchor
@@ -824,6 +821,42 @@ const plainLineEnd = (src: string, from: number, len: number): number => {
 }
 
 /**
+ * Offset of a `: ` mapping-value indicator inside the plain scalar text
+ * `[from, end)`, or -1 when there is none.
+ *
+ * A plain scalar may not hold one: YAML 1.2's `ns-plain-char` ends the scalar at
+ * a `:` that is followed by white space or a line break, which is what makes
+ * `a: b: c` and a continuation line like `k1: v1` / ` k2: v2` errors rather than
+ * strings. Without the check both fold into the value silently — the author
+ * wrote a mapping and got the text of one.
+ *
+ * `indexOf` does the scanning, so a scalar with no `:` at all — nearly all of
+ * them — costs one native pass that finds nothing, rather than a per-character
+ * test in {@link plainLineEnd}'s loop. Only a scalar that really does hold a
+ * colon (`http://…`, `12:30`) pays for the follow-up comparisons.
+ */
+const plainColonAt = (src: string, from: number, end: number): number => {
+  let i = src.indexOf(':', from)
+  while (i !== -1 && i < end) {
+    // A `:` at the very end of the scalar's text is followed by the line break
+    // `plainLineEnd` trimmed, so it separates just as much as `: ` does.
+    if (i + 1 >= end || isSpace(src.charCodeAt(i + 1))) return i
+    i = src.indexOf(':', i + 1)
+  }
+  return -1
+}
+
+const reportPlainColon = (state: State, at: number): void => {
+  pushError(
+    state,
+    'BAD_SCALAR_CONTENT',
+    'A plain scalar cannot contain ": " — quote the value, or indent it as a nested mapping',
+    at,
+    at + 1,
+  )
+}
+
+/**
  * True when a ` #` comment follows the scalar text ending at `from` — i.e. the
  * line the scalar just read ended in a comment rather than in its own content.
  *
@@ -846,6 +879,13 @@ const scanPlainScalar = (state: State, parentIndent: number): YamlScalar => {
   const { src, len } = state
   const start = state.pos
   let valueEnd = plainLineEnd(src, start, len)
+  /** One `: ` report per scalar — a value the author meant as a mapping is wrong once, not once a line. */
+  let colonReported = false
+  const firstColon = plainColonAt(src, start, valueEnd)
+  if (firstColon >= 0) {
+    reportPlainColon(state, firstColon)
+    colonReported = true
+  }
 
   let segments: string[] | null = null
   let scan = nextLineStart(src, valueEnd, len)
@@ -877,6 +917,13 @@ const scanPlainScalar = (state: State, parentIndent: number): YamlScalar => {
     // document to catch an invalid one — the worse of the two errors.
     if (parentIndent < 0 && (c === DASH || c === DOT) && isDocMarker(src, i, len)) break
     const lineEnd = plainLineEnd(src, i, len)
+    if (!colonReported) {
+      const colon = plainColonAt(src, i, lineEnd)
+      if (colon >= 0) {
+        reportPlainColon(state, colon)
+        colonReported = true
+      }
+    }
     if (!segments) segments = [src.slice(start, valueEnd)]
     segments.push(src.slice(i, lineEnd))
     valueEnd = lineEnd
@@ -1501,7 +1548,17 @@ const parsePropsOnlyValue = (state: State, props: NodeProps, parentIndent: numbe
   const child = peekLine(state)
   if (!child.eof && child.indent > parentIndent) {
     state.pos = child.contentPos
-    return attachProps(parseNode(state, child.indent), props, state)
+    return attachProps(parseNode(state, child.indent, parentIndent), props, state)
+  }
+  // A block sequence is the one collection allowed to sit at its mapping's own
+  // column, so `sequence: !!seq` over a zero-indented `- entry` list is the tag
+  // describing that list. The untagged shape (`sequence:` / `- entry`) has
+  // always been read this way in `parseBlockMap`; without the same rule here the
+  // tag ended an empty node and the sequence was left for the document-end check
+  // to report as stray content.
+  if (!child.eof && child.indent === parentIndent && isSeqEntryDash(state.src, child.contentPos, state.len)) {
+    state.pos = child.contentPos
+    return attachProps(parseBlockSeq(state, parentIndent), props, state)
   }
   // Nothing below to describe, so the properties belong to an empty node
   // (`a: &anchor`). It has to be materialized rather than collapsed to a plain
@@ -1545,9 +1602,35 @@ const parseInlineValue = (state: State, parentIndent: number): YamlNode | null =
     checkTrailingContent(state)
   } else {
     if (isReservedIndicator(c)) reportReservedIndicator(state)
+    // A block sequence may open on the `:` line of an *explicit* key, and
+    // `parseValueOrChild` takes that shape before it ever gets here. Reaching a
+    // `- ` entry indicator on this path therefore means the key was implicit
+    // (`key: - a`), which the spec does not allow — the entries below have no
+    // column to align under. It folded into the value as the text `"- a - b"`.
+    else if (c === DASH && isSeqEntryDash(state.src, state.pos, state.len)) {
+      pushError(
+        state,
+        'UNEXPECTED_CONTENT',
+        'A block sequence cannot start on the line of the key it belongs to',
+        state.pos,
+        state.pos + 1,
+      )
+    }
     node = scanPlainScalar(state, parentIndent)
   }
   return attachProps(node, props, state)
+}
+
+/**
+ * The column `pos` sits at, counted back to the start of its line. Only reached
+ * when a block collection is found opening on a `?`/`:` introducer line: that
+ * column is the indentation its remaining entries align under, and nothing on
+ * the way here recorded it.
+ */
+const columnOf = (src: string, pos: number): number => {
+  let i = pos
+  while (i > 0 && !isBreak(src.charCodeAt(i - 1))) i--
+  return pos - i
 }
 
 /**
@@ -1555,8 +1638,15 @@ const parseInlineValue = (state: State, parentIndent: number): YamlNode | null =
  * inline value on the same line, or a block node on the deeper-indented lines
  * below. Mirrors the implicit `key:` value handling but is reached only on the
  * cold explicit-entry path, so the hot block-mapping loop stays untouched.
+ *
+ * `compact` marks the two callers where the introducer really is a `?`/`:`
+ * token, which the spec lets a block collection open on — `? a` / `: - b` is a
+ * sequence whose first entry shares the `:` line (`ns-l-compact-sequence`), and
+ * `? earth: blue` a mapping whose first entry shares the `?` line. The other
+ * caller hands over an *implicit* key (`[a, b]: …`), where the same shape is
+ * invalid and has to stay an ordinary inline value so it gets reported.
  */
-const parseValueOrChild = (state: State, indent: number): YamlNode | null => {
+const parseValueOrChild = (state: State, indent: number, compact = false): YamlNode | null => {
   const { src, len } = state
   skipInlineSpaces(state)
   if (atLineEnd(state)) {
@@ -1564,7 +1654,7 @@ const parseValueOrChild = (state: State, indent: number): YamlNode | null => {
     const child = peekLine(state)
     if (!child.eof && child.indent > indent) {
       state.pos = child.contentPos
-      return parseNode(state, child.indent)
+      return parseNode(state, child.indent, indent)
     }
     if (!child.eof && child.indent === indent) {
       if (isSeqEntryDash(src, child.contentPos, len)) {
@@ -1573,6 +1663,13 @@ const parseValueOrChild = (state: State, indent: number): YamlNode | null => {
       }
     }
     return null
+  }
+  if (compact) {
+    // Both shapes set their own indentation from the column the first entry
+    // landed on, which is past the introducer rather than at it.
+    if (isSeqEntryDash(src, state.pos, len)) return parseBlockSeq(state, columnOf(src, state.pos))
+    const colon = findKeyColon(src, state.pos, len)
+    if (colon >= 0) return parseBlockMap(state, columnOf(src, state.pos), colon)
   }
   const node = parseInlineValue(state, indent)
   finishLineIfMidLine(state)
@@ -1673,8 +1770,21 @@ const stringifyFlow = (node: YamlNode): string => {
  * document-level node, so it hands the finished one over here with the cursor
  * already past the `:`. It is consumed before the entry loop starts, which keeps
  * the loop — the hottest code in the parser — free of any test for it.
+ *
+ * `firstProps` carries the `&anchor` / `!tag` properties `parseNodeInner`
+ * scanned off the head of the first key's line. They describe the *key*, not the
+ * mapping that key opens, so they cannot be attached before the key exists —
+ * which makes the entry loop their owner rather than the caller. Later entries
+ * scan their own; only the first one's are already consumed by the time we
+ * get here.
  */
-const parseBlockMap = (state: State, indent: number, firstColon: number, firstKey: YamlNode | null = null): YamlMap => {
+const parseBlockMap = (
+  state: State,
+  indent: number,
+  firstColon: number,
+  firstKey: YamlNode | null = null,
+  firstProps: NodeProps = NO_PROPS,
+): YamlMap => {
   const { src, len } = state
   const items: YamlPair[] = []
   // Duplicate-key tracking; see `trackKey` for why small maps avoid the `Set`.
@@ -1704,25 +1814,46 @@ const parseBlockMap = (state: State, indent: number, firstColon: number, firstKe
   for (;;) {
     let colon: number
     let explicit: boolean
+    let keyProps: NodeProps
     if (firstEntry) {
       // `parseNode` already classified this line: a non-negative `firstColon` is
       // an inline `key:`; a negative one signals an explicit `?` introducer.
       colon = firstColon
       explicit = firstColon < 0
+      keyProps = firstProps
     } else {
       const line = peekLine(state)
       if (line.eof || line.indent !== indent) break
+      const lineStart = state.pos
       contentPos = line.contentPos
-      const c = src.charCodeAt(contentPos)
+      let c = src.charCodeAt(contentPos)
       // A `-` entry indicator at this indent is a sequence, not a mapping key.
       if (isSeqEntryDash(src, contentPos, len)) break
-      colon = findKeyColon(src, contentPos, len)
-      if (colon < 0) {
-        // No inline colon: either an explicit `? key` entry or the end of the map.
-        if (c === QUESTION && introducerBoundary(src, contentPos + 1, len)) explicit = true
-        else break
-      } else {
-        explicit = false
+      keyProps = NO_PROPS
+      // `&` and `!` cannot begin a plain scalar, so a key line that opens on one
+      // is carrying node properties — and the key starts past them. Reading the
+      // key's own text has to wait for that, and so does `findKeyColon`: an
+      // anchor name may itself hold a `:` (`&a: key: value` anchors `key` as
+      // `a:`), which the colon scan would otherwise mistake for the separator.
+      // One character comparison per entry buys all of that; the scan itself
+      // only ever runs for a key that really is annotated.
+      if (c === AMP || c === BANG) {
+        state.pos = contentPos
+        keyProps = scanPropsSlow(state)
+        skipInlineSpaces(state)
+        contentPos = state.pos
+        c = src.charCodeAt(contentPos)
+      }
+      // The `? ` introducer outranks any `: ` later on the line — see the same
+      // ordering in `parseNodeInner`.
+      explicit = c === QUESTION && introducerBoundary(src, contentPos + 1, len)
+      colon = explicit ? -1 : findKeyColon(src, contentPos, len)
+      if (colon < 0 && !explicit) {
+        // Neither an inline `key:` nor a `? key`: the mapping ends here. Rewind
+        // over any properties consumed above, so whatever ends it is reported at
+        // the line it starts on rather than mid-line.
+        state.pos = lineStart
+        break
       }
     }
     firstEntry = false
@@ -1735,14 +1866,18 @@ const parseBlockMap = (state: State, indent: number, firstColon: number, firstKe
       // line leaves the value null.
       const qStart = contentPos
       state.pos = contentPos + 1
-      key = parseValueOrChild(state, indent) ?? {
-        kind: 'scalar',
-        value: null,
-        source: '',
-        style: 'plain',
-        start: qStart + 1,
-        end: qStart + 1,
-      }
+      key = attachProps(
+        parseValueOrChild(state, indent, true) ?? {
+          kind: 'scalar',
+          value: null,
+          source: '',
+          style: 'plain',
+          start: qStart + 1,
+          end: qStart + 1,
+        },
+        keyProps,
+        state,
+      )
       const vline = peekLine(state)
       if (
         !vline.eof &&
@@ -1751,7 +1886,7 @@ const parseBlockMap = (state: State, indent: number, firstColon: number, firstKe
         introducerBoundary(src, vline.contentPos + 1, len)
       ) {
         state.pos = vline.contentPos + 1
-        value = parseValueOrChild(state, indent)
+        value = parseValueOrChild(state, indent, true)
       }
     } else {
       const lineContentPos = contentPos
@@ -1784,6 +1919,9 @@ const parseBlockMap = (state: State, indent: number, firstColon: number, firstKe
           end,
         }
       }
+      // Before the value, so a value that aliases the key it sits beside
+      // (`&a a: *a`) finds the anchor already registered.
+      key = attachProps(key, keyProps, state)
 
       state.pos = colon + 1
       skipInlineSpaces(state)
@@ -1794,7 +1932,7 @@ const parseBlockMap = (state: State, indent: number, firstColon: number, firstKe
         const child = peekLine(state)
         if (!child.eof && child.indent > indent) {
           state.pos = child.contentPos
-          value = parseNode(state, child.indent)
+          value = parseNode(state, child.indent, indent)
         } else if (!child.eof && child.indent === indent) {
           if (isSeqEntryDash(src, child.contentPos, len)) {
             state.pos = child.contentPos
@@ -1851,7 +1989,7 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
       const child = peekLine(state)
       if (!child.eof && child.indent > indent) {
         state.pos = child.contentPos
-        item = parseNode(state, child.indent)
+        item = parseNode(state, child.indent, indent)
       } else {
         item = { kind: 'scalar', value: null, source: '', style: 'plain', start: dashPos + 1, end: dashPos + 1 }
       }
@@ -1861,7 +1999,9 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
       // on: `- |` at column 0 may hold content indented by one, which the item's
       // content column (2) would reject — dropping the scalar's body.
       item =
-        ic === PIPE || ic === GT ? scanBlockScalar(state, indent) : parseNode(state, state.pos - contentPos + indent)
+        ic === PIPE || ic === GT
+          ? scanBlockScalar(state, indent)
+          : parseNode(state, state.pos - contentPos + indent, indent)
       finishLineIfMidLine(state)
     }
     items.push(item)
@@ -1874,10 +2014,6 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
 }
 
 /**
- * Parses a block node (mapping, sequence, or scalar) whose first token sits at
- * column `indent`. The cursor is assumed to be at that first token.
- */
-/**
  * Hard cap on parser nesting. Every collection level adds a couple of stack
  * frames, so this stays comfortably below the native limit while allowing far
  * deeper structures than any real document uses.
@@ -1885,12 +2021,20 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
 const MAX_PARSE_DEPTH = 1000
 
 /**
- * Depth-guarded entry point for node parsing. Adversarial input such as
- * `[`-repeated-100000-times would otherwise recurse until the JS engine throws a
- * `RangeError`; instead we report a parse error, abandon the rest of the input,
- * and return an empty scalar so callers unwind cleanly with a diagnostic.
+ * Parses a block node (mapping, sequence, or scalar) whose first token sits at
+ * column `indent`. The cursor is assumed to be at that first token.
+ *
+ * `parentIndent` is the column the node's *own* continuation has to clear —
+ * the indentation of the collection that holds it, which the spec calls `n`. It
+ * is not `indent - 1`: a node need only be indented more than its parent, so it
+ * can start several columns further in (`a:` / `⟨3 spaces⟩foo`) and still fold a
+ * line that sits between the two. Assuming `indent - 1` cut every such document
+ * short — a zero-indented sequence under a `key:` was orphaned, a plain scalar
+ * stopped at the first line that stepped back, and a block scalar measured its
+ * indentation indicator from the wrong column. Callers that genuinely are the
+ * parent (the document root) pass -1.
  */
-const parseNode = (state: State, indent: number): YamlNode => {
+const parseNode = (state: State, indent: number, parentIndent: number): YamlNode => {
   if (state.depth >= MAX_PARSE_DEPTH) {
     const pos = state.pos
     pushError(state, 'DEPTH_LIMIT', `Exceeded maximum nesting depth of ${MAX_PARSE_DEPTH}`, pos, pos)
@@ -1900,12 +2044,12 @@ const parseNode = (state: State, indent: number): YamlNode => {
     return { kind: 'scalar', value: null, source: '', style: 'plain', start: pos, end: pos }
   }
   state.depth++
-  const node = parseNodeInner(state, indent)
+  const node = parseNodeInner(state, indent, parentIndent)
   state.depth--
   return node
 }
 
-const parseNodeInner = (state: State, indent: number): YamlNode => {
+const parseNodeInner = (state: State, indent: number, parentIndent: number): YamlNode => {
   const { src, len } = state
   if (isSeqEntryDash(src, state.pos, len)) {
     return parseBlockSeq(state, indent)
@@ -1931,13 +2075,21 @@ const parseNodeInner = (state: State, indent: number): YamlNode => {
       finishLine(state)
       const child = peekLine(state)
       // Properties may sit on a line of their own, with the node they describe
-      // below them. What the node has to clear is the *parent's* indentation —
-      // `indent - 1` by this function's convention, the same bound it hands to
-      // the scalar scanners — not the property line's own column, which is where
-      // the node usually starts too (`e:` / `&node` / `- x: y` all at one level).
-      if (!child.eof && child.indent >= indent) {
+      // below them. What the node has to clear is the *parent's* indentation,
+      // not the property line's own column — the two are usually equal (`e:` /
+      // `&node` / `- x: y` all at one level), but a `seq:` whose `&anchor` sits
+      // one column in and whose entries then return to column 0 is legal, and
+      // measuring against the anchor's column orphaned the whole sequence.
+      if (!child.eof && child.indent > parentIndent) {
         state.pos = child.contentPos
-        return attachProps(parseNode(state, child.indent), props, state)
+        return attachProps(parseNode(state, child.indent, parentIndent), props, state)
+      }
+      // …and a block sequence may return to the parent's own column, which is
+      // the only shape that reaches back this far. See `parsePropsOnlyValue`,
+      // which the sibling spelling (`seq: &anchor`) goes through.
+      if (!child.eof && child.indent === parentIndent && isSeqEntryDash(src, child.contentPos, len)) {
+        state.pos = child.contentPos
+        return attachProps(parseBlockSeq(state, parentIndent), props, state)
       }
       return attachProps(
         { kind: 'scalar', value: null, source: '', style: 'plain', start: state.pos, end: state.pos },
@@ -1972,32 +2124,39 @@ const parseNodeInner = (state: State, indent: number): YamlNode => {
     checkTrailingContent(state)
     return node
   }
-  // `indent - 1` is this function's convention for "the parent's indentation",
-  // and a block scalar's explicit indentation indicator counts from there
-  // (`c-l+literal(n)` holds `l-literal-content(n+m,t)`). At the document root
-  // that makes the parent -1 — `l-bare-document ::= s-l+block-node(-1,block-in)`
-  // — so a root `|2` keeps one leading space of its two-space content, and so
-  // does `--- |2`. `yaml` (eemeli) strips both; `js-yaml` agrees with us, the
-  // spec reads our way, and the yaml-test-suite pins neither. Deliberate, and
-  // pinned by tests in `parse-features.test.ts` so it cannot drift silently.
-  if (cc === PIPE || cc === GT) return attachProps(scanBlockScalar(state, indent - 1), props, state)
+  // A block scalar's explicit indentation indicator counts from the parent's
+  // indentation (`c-l+literal(n)` holds `l-literal-content(n+m,t)`). At the
+  // document root the parent is -1 — `l-bare-document ::= s-l+block-node(-1,
+  // block-in)` — so a root `|2` keeps one leading space of its two-space
+  // content, and so does `--- |2`. `yaml` (eemeli) strips both; `js-yaml` agrees
+  // with us, the spec reads our way, and the yaml-test-suite pins neither.
+  // Deliberate, and pinned by tests in `parse-features.test.ts` so it cannot
+  // drift silently.
+  if (cc === PIPE || cc === GT) return attachProps(scanBlockScalar(state, parentIndent), props, state)
 
-  // A line beginning with a quote may be a quoted *key* (e.g. `"200":`), so the
-  // mapping check has to come before treating the quote as a standalone scalar.
-  const colon = findKeyColon(src, state.pos, len)
-  if (colon >= 0) return attachProps(parseBlockMap(state, indent, colon), props, state)
-  // An explicit `? key` introducer also starts a mapping; `-1` tells
-  // `parseBlockMap` the first entry has no inline colon to reuse.
+  // An explicit `? ` introducer is settled by the first two characters, so it
+  // outranks any `: ` further along the line: `? earth: blue` is an explicit key
+  // holding a compact mapping, not a key called `? earth`. Testing the colon
+  // first read the `?` as ordinary text and folded the rest of the entry in
+  // after it.
   if (cc === QUESTION && introducerBoundary(src, state.pos + 1, len)) {
     return attachProps(parseBlockMap(state, indent, -1), props, state)
   }
+  // A line beginning with a quote may be a quoted *key* (e.g. `"200":`), so the
+  // mapping check has to come before treating the quote as a standalone scalar.
+  const colon = findKeyColon(src, state.pos, len)
+  // Properties written on the same line as the first key belong to that key, not
+  // to the mapping it opens — `&a a: b` anchors the scalar `a`, so a later `*a`
+  // is the string `"a"` and not the whole map. (Properties on a line of their own
+  // above the mapping *do* describe the mapping; that path returned above.)
+  if (colon >= 0) return parseBlockMap(state, indent, colon, null, props)
   if (cc === DQUOTE || cc === SQUOTE) {
-    const quoted = attachProps(scanQuoted(state, cc, indent - 1), props, state)
+    const quoted = attachProps(scanQuoted(state, cc, parentIndent), props, state)
     checkTrailingContent(state)
     return quoted
   }
   if (isReservedIndicator(cc)) reportReservedIndicator(state)
-  return attachProps(scanPlainScalar(state, indent - 1), props, state)
+  return attachProps(scanPlainScalar(state, parentIndent), props, state)
 }
 
 /**
@@ -2045,7 +2204,7 @@ const parseDocMarkerNode = (state: State, contentPos: number): YamlNode => {
     )
   }
   state.pos = contentPos
-  return parseNode(state, 0)
+  return parseNode(state, 0, -1)
 }
 
 /**
@@ -2399,7 +2558,7 @@ export const parseDocument = (source: string, options: ParseOptions = {}): YamlD
       c === 46 /* . */ && source.charCodeAt(head.contentPos + 1) === 46 && source.charCodeAt(head.contentPos + 2) === 46
     if (!isDocEnd) {
       state.pos = head.contentPos
-      contents = parseNode(state, head.indent)
+      contents = parseNode(state, head.indent, -1)
       checkDocumentEnd(state)
     }
   }
@@ -2555,7 +2714,7 @@ export const parseAllDocuments = (source: string, options: ParseOptions = {}): Y
             )
           }
           state.pos = p
-          contents = parseNode(state, line.indent)
+          contents = parseNode(state, line.indent, -1)
           finishLineIfMidLine(state)
           bodyConsumed = true
         }
