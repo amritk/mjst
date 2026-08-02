@@ -79,5 +79,27 @@ const emit = async (entrypoint: string, outputName: string, target: 'node' | 'br
   writeFileSync(join(fixtureDir, outputName), await output.text())
 }
 
+/**
+ * The paired body-read comparison, as its own worker. It shares nothing with
+ * the cross-framework bundle on purpose: it measures four ways of reading a
+ * body, not four frameworks.
+ */
+const bodyEntryPath = join(fixtureDir, 'workerd-body-entry.ts')
+writeFileSync(
+  bodyEntryPath,
+  `import { runBodyRounds } from '../body-strategies.ts'
+
+export default {
+  async fetch(request: Request): Promise<Response> {
+    const params = new URL(request.url).searchParams
+    const rounds = Number(params.get('rounds') ?? 7)
+    const warmupMs = Number(params.get('warmupMs') ?? 1500)
+    return Response.json(await runBodyRounds(rounds, warmupMs))
+  },
+}
+`,
+)
+
 await emit(compiledPath, 'generated-vs-frameworks.mjs', 'node')
 await emit(workerEntryPath, 'workerd-bench.mjs', 'browser')
+await emit(bodyEntryPath, 'workerd-body.mjs', 'browser')
