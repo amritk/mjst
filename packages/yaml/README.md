@@ -137,17 +137,17 @@ Run it yourself with `bun run bench`. Representative numbers (Bun, Linux):
 
 | fixture | @amritk/yaml | yaml (eemeli) | speedup |
 | --- | --- | --- | --- |
-| small (155 B) | 297k ops/s | 11.4k ops/s | **25.9×** |
-| medium (2 KB) | 27.7k ops/s | 918 ops/s | **30.2×** |
-| large (100 KB) | 529 ops/s | 21.1 ops/s | **25.1×** |
+| small (155 B) | 295k ops/s | 10.7k ops/s | **27.5×** |
+| medium (2 KB) | 34.8k ops/s | 853 ops/s | **40.8×** |
+| large (100 KB) | 687 ops/s | 21.3 ops/s | **32.3×** |
 
 **Parse to plain data** — all three can do this.
 
 | fixture | @amritk/yaml | yaml | js-yaml | vs yaml | vs js-yaml |
 | --- | --- | --- | --- | --- | --- |
-| small | 238k | 12.0k | 115k | 19.8× | 2.08× |
-| medium | 20.0k | 918 | 10.1k | 21.8× | 1.99× |
-| large | 315 | 18.5 | 218 | 17.0× | 1.44× |
+| small | 256k | 12.5k | 151k | 20.6× | 1.70× |
+| medium | 23.2k | 930 | 11.8k | 24.9× | 1.96× |
+| large | 427 | 23.0 | 212 | 18.6× | 2.01× |
 
 **Bundle size** (minified + gzipped) — what each parser adds to an application
 that imports it. The bench bundles a small consumer of each library rather than
@@ -158,9 +158,9 @@ equivalent to import.
 
 | | size | |
 | --- | --- | --- |
-| **@amritk/yaml** | **8.8 KB** | — |
-| yaml | 35.5 KB | 4.0× larger |
-| js-yaml | 14.4 KB | 1.6× larger |
+| **@amritk/yaml** | **10.4 KB** | — |
+| yaml | 35.5 KB | 3.4× larger |
+| js-yaml | 14.4 KB | 1.4× larger |
 
 Correctness is pinned three ways: a differential test suite (`src/differential.test.ts`) parses a battery of documents — including full OpenAPI specs — and asserts byte-identical data output against `yaml`; `src/json-superset.test.ts` holds a generated JSON corpus to `JSON.parse` exactly; and `src/conformance.test.ts` measures the parser against the official YAML test suite (see [Conformance, measured](#conformance-measured)). Where `js-yaml` diverges (its `!!timestamp` type turns ISO strings into `Date`s, which is wrong for a JSON superset), we instead agree with `yaml`.
 

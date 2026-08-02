@@ -1149,19 +1149,50 @@ export default compiled // { fetch }
 // dev server instead: toFetchHandler(createApi({ routes: Object.values(routes), validateResponses: true }))
 ```
 
-Measured under Node/V8 (same engine as workerd), Request → Response, against
-the standard Workers stack — one session, same machine:
+`Request` → `Response` through the whole stack — a fresh `Request` per
+operation, exactly what a server runtime hands you — against the standard
+Workers stack, on the same three routes. Reproduce with `bun run bench:vs`
+(Node) or `bun run bench:vs:bun`.
+
+Under **Node/V8** — the engine workerd runs:
 
 | case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
 |:--|--:|--:|--:|--:|
-| static GET | ~339k ops/s | ~361k | ~392k | **~530k** |
-| dynamic GET, params validated | ~311k ¹ | ~209k | ~302k | **~381k** |
-| POST, body validated | ~74k ¹ | ~63k | ~74k | **~82k** |
+| static GET | ~175k ops/s ¹ | ~178k | ~121k | **~183k** |
+| dynamic GET, params validated | ~133k ¹ | ~65k | ~82k | **~124k** |
+| POST, body validated | ~51k ¹ | ~46k | ~43k | **~54k** |
 
-<sub>¹ hono-bare does no validation; every @amritk/api column validates.</sub>
+Under **Bun/JavaScriptCore**, where web-standard `Request`/`Response` objects
+are far cheaper to build than undici's and more of the difference is the
+framework rather than the runtime:
 
-Even the runtime (development) engine now sits at or above unvalidated Hono
-while validating; the compiled engine leads every case by 22–57%.
+| case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
+|:--|--:|--:|--:|--:|
+| static GET | ~218k ops/s ¹ | ~209k | ~236k | **~435k** |
+| dynamic GET, params validated | ~183k ¹ | ~82k | ~148k | **~274k** |
+| POST, body validated | ~188k ¹ | ~91k | ~112k | **~160k** |
+
+<sub>¹ hono-bare does no validation; every @amritk/api column validates, and
+the runtime column validates responses too (`validateResponses: true`, the
+development configuration). Every column is checked for the same status on
+every case before it is timed.</sub>
+
+Read the ratios, not the absolutes. Against the like-for-like column —
+`hono + zod`, the other stack that actually validates — the compiled engine
+leads every case on both runtimes: 1.03–1.9× on Node, 1.8–3.3× on Bun, widest
+on the dynamic GET where params and query are coerced and checked. Against
+*unvalidated* Hono it is level on Node and ~1.5–2× ahead on Bun's GET cases,
+while trailing on POST, where reading and parsing the body dominates whatever
+the framework does with it. The runtime (development) engine — no build step,
+response validation on — lands around `hono + zod` on Node and above it on
+Bun.
+
+The two runtimes disagree because building the `Request` and `Response`
+objects is itself a large fixed cost on Node's undici, paid identically by
+every column. That compresses the table toward the runtime's floor and hides
+framework differences the same code shows plainly under JavaScriptCore, so
+neither table is the whole picture: Node/V8 is the conservative number for a
+workerd deployment, Bun the clearer view of what the engine itself costs.
 
 ### App context: Drizzle, sessions, anything per-request
 
