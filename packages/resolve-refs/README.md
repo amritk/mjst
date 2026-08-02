@@ -150,25 +150,19 @@ the corpus of `$ref` shapes the spec authors wrote for exactly this purpose.
 [`@amritk/runtime-validators`](../runtime-validators) — once through the original
 schema, once through the resolved one — and requires both to agree with the spec:
 
-**160 / 170 cases pass (94.1%).**
+**170 / 170 cases pass (100%).**
 
 The corpus is the reference-carrying cases the interpreter already answers
 correctly *before* resolution, so a disagreement afterwards is the resolver's and
 nobody else's.
 
-The 10 that remain are all one shape: a `$dynamicRef` that binds through the
-dynamic scope. It resolves at evaluation time to the outermost `$dynamicAnchor`
-along the chain of references actually taken, and inlining collapses it to a
-single target by construction — so a resolver that inlines cannot be right about
-it in general. Seven of the ten end up at a weaker target (the resolved document
-accepts an instance the spec rejects) and three at a stricter one (it rejects one
-the spec accepts); each entry in
-`src/conformance-expected-failures.test-utils.ts` says which. Pointer-form
-`$dynamicRef`s and unambiguous anchor names are handled, and are deliberately not
-on that list.
-
-The test fails if a listed case starts passing without its entry being removed,
-or if any other case starts failing. The corpus is vendored under
+Getting the last ten meant *not* answering them: a `$dynamicRef` whose
+`$dynamicAnchor` name is declared more than once binds at evaluation time, and
+inlining collapses that to one target by construction. Those are now kept in the
+output with the scaffolding they need, exactly as a reference cycle is — see
+[`$id` scoping](#id-scoping) above. The expected-failure list is empty and kept in
+place, so the build names the first case that regresses rather than letting a
+percentage tick down. The corpus is vendored under
 [`fixtures/json-schema-test-suite`](../../fixtures/json-schema-test-suite); none
 of it is published.
 

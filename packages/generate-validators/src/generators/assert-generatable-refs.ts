@@ -5,9 +5,11 @@ import { collectEmittedRefs } from './collect-emitted-refs'
  * only ones a generated file exists for: an in-document pointer or anchor
  * (`#/$defs/foo`, `#contact`) and an absolute HTTP(S) URI keyed into `$defs`.
  *
- * Everything else — a relative path (`int.json`, `node`, `folder/x.json`), an
- * absolute path (`/absref/foobar.json`), a URN (`urn:uuid:…`) — only resolves by
- * applying the enclosing `$id` as a base URI, which this pipeline does not do.
+ * A ref written against an enclosing `$id` is no longer among the exceptions —
+ * `normalizeRefScopes` rewrites those to document-root pointers before anything
+ * here runs. What still arrives in another shape (a relative path `int.json`, an
+ * absolute path `/absref/foobar.json`, a URN) is one whose target is not in this
+ * document at all, and generation reads no files.
  */
 const isGeneratableRef = (ref: string): boolean =>
   ref.startsWith('#') || ref.startsWith('http://') || ref.startsWith('https://')
@@ -34,10 +36,11 @@ export const assertGeneratableRefs = (schema: unknown, typeName: string): void =
   for (const ref of collectEmittedRefs(schema)) {
     if (isGeneratableRef(ref)) continue
     throw new Error(
-      `[${typeName}] unsupported $ref "${ref}": it only resolves by applying an enclosing "$id" as a base URI, ` +
-        'which this generator does not do, so the validator it would call is never emitted. Rewrite the ref as an ' +
-        'in-document pointer (e.g. "#/$defs/name") or an absolute http(s) URI keyed in "$defs", or validate this ' +
-        'schema with the runtime interpreter instead.',
+      `[${typeName}] unresolvable $ref "${ref}": its target is not in this document, and generation reads no ` +
+        'files, so the validator it would call is never emitted. Inline the other document first with ' +
+        '@amritk/resolve-refs, rewrite the ref as an in-document pointer (e.g. "#/$defs/name") or an absolute ' +
+        'http(s) URI keyed in "$defs", or validate this schema with the runtime interpreter, which takes ' +
+        'documents you already have via its `schemas` option.',
     )
   }
 }

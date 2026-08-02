@@ -124,10 +124,19 @@ does this generator: `{ type: 'string', format: 'uuid' }` produces the `typeof`
 check and nothing more. That matches the interpreter's default, but *not* the
 interpreter run with `{ formats: 'all' }` — as `@amritk/lint` and
 `createApi({ formats })` do — so a generated validator accepts strings those
-reject. Two keywords are handled the other way: `unevaluatedProperties` and
-`unevaluatedItems` are not implemented and **throw at generation time** rather
-than silently widening the verdict, because unlike `format` there is no reading of
-the spec under which ignoring them is correct.
+reject.
+
+**`unevaluatedProperties` / `unevaluatedItems` are generated**, not refused. Each
+emits a flat expression computing what the interpreter computes as annotations: per
+key or index, a boolean that is true when some keyword evaluated it. Keywords that
+must succeed for the value to be valid at all (`allOf` members, a `$ref` target, a
+satisfied `contains`) count unconditionally — sound, because the test is one
+conjunct of a validator that also asserts them — while conditional applicators
+(`anyOf` / `oneOf` branches, `if` / `then` / `else`, `dependentSchemas`) carry their
+condition, hoisted out of the per-key loop. Four shapes still refuse, each named as
+a shape rather than as a keyword: coverage running through a `$dynamicRef`, an
+unresolvable or cyclic `$ref` at the same instance location, a walk deeper than
+eight applicators, and a node under `additionalItems`.
 
 One further divergence is worth calling out: **`NaN` satisfies a constrained number.**
 Because the numeric bound checks are the exact negation of the error condition
@@ -145,24 +154,28 @@ official [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema
 (the required Draft 2020-12 tests — 1299 cases), compiles and links the emitted
 files in memory, and runs the suite's instances through the real generated code:
 
-**987 / 1299 cases pass (76.0%).**
+**1238 / 1299 cases pass (95.3%).**
 
-Read the remaining 312 as two decisions, not three hundred defects. **201** are
-`unevaluatedItems` / `unevaluatedProperties`, which this generator refuses at
-generation time because flat output cannot carry annotations across the applicator
-tree — a build error, never a wrong verdict. **107** are a `$ref` that only
-resolves by applying an enclosing `$id` as a base URI, which also refuses. The
-last four are the `multipleOf` / `pattern` judgement calls above and `$vocabulary`.
-Nothing on the list is a keyword that silently returns the wrong answer.
+Of the 61 that do not, **48 are a `$ref` whose target is not in the schema handed
+in** — another document, which generation does not go and fetch. Bundle it first
+with [`@amritk/resolve-refs`](../resolve-refs), which is what `mjst` does, and they
+generate. The remaining 13: five `$dynamicRef`s whose binding depends on the
+evaluation path (a generator emits one function per definition, shared by every
+path that reaches it, so it cannot bind per path), two definitions in different
+embedded resources that reduce to one filename, two `$id`-scoped in-document
+pointers, the three `multipleOf` / `pattern` judgement calls above, and
+`$vocabulary`. Every one refuses at generation with a message naming the cause —
+nothing on the list is a keyword that silently returns the wrong answer.
 
 Every case is named in
 `src/generators/conformance-expected-failures.test-utils.ts` with its reason, and
 the test fails if a case moves in *either* direction — a regression breaks the
 build, and so does a case that starts passing without its entry being removed.
 
-If you need the two refusals to be answers instead, validate with
-[`@amritk/runtime-validators`](../runtime-validators), which implements both
-(**96.2%** on the same corpus) at the cost of interpreting the schema at runtime.
+If you need one of those refusals to be an answer instead, validate with
+[`@amritk/runtime-validators`](../runtime-validators), which passes the same corpus
+in full (**1299/1299**) and takes documents you already have through its `schemas`
+option, at the cost of interpreting the schema at runtime.
 The corpus is vendored under
 [`fixtures/json-schema-test-suite`](../../fixtures/json-schema-test-suite); none
 of it is published.

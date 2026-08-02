@@ -223,23 +223,26 @@ each schema in the official
 (the required Draft 2020-12 tests — 1299 cases), links the emitted files in
 memory, and runs the suite's instances through the real generated code:
 
-**1180 / 1299 cases pass (90.8%).**
+**1222 / 1299 cases pass (94.1%).**
 
 A case passes only if the parser throws exactly when the spec says invalid *and*
 returns an accepted document unchanged — strict mode does not coerce, so a parser
 that quietly rewrites a valid document fails here too.
 
-Of the 119 that do not, **65 never generate at all**: 48 are a `$ref` that only
-resolves by applying an enclosing `$id` as a base URI (or that names another
-document), and 17 are a keyword strict mode will not approximate. Those cost a
-build error naming the cause, never a wrong verdict. The rest are the honest
-gaps — 29 refs that resolve to the wrong definition under `$id` scoping, the 17
-`ignores a non-object` cases that follow from the third departure above, `contains`
-next to `unevaluated*` (4 cases, where this generator matches Ajv — its
-differential oracle — rather than the spec, while
-[`@amritk/runtime-validators`](../runtime-validators) goes the other way and says
-so), the three `multipleOf` / `pattern` judgement calls above, and one
-`$vocabulary` case.
+Of the 77 that do not, **37 are a `$ref` whose target is not in the schema handed
+in** — another document, which generation does not go and fetch. Bundle it first
+with [`@amritk/resolve-refs`](../resolve-refs), which is what the `mjst` CLI does,
+and they generate. Another **12** are a keyword strict mode will not approximate
+(a cyclic `$ref` with siblings, a cyclic `unevaluatedProperties`) and **2** are two
+embedded resources whose definitions reduce to one filename: all of those cost a
+build error naming the cause, never a wrong verdict.
+
+The rest are honest gaps: the **12** `ignores a non-object` cases that follow from
+the third departure above, **6** where a URN-scoped recursive `$ref` points back at
+a root, **4** `$dynamicRef`s whose binding depends on the evaluation path (a
+generator emits one function per definition, shared by every path that reaches it),
+the three `multipleOf` / `pattern` judgement calls above, and one `$vocabulary`
+case.
 
 Every one is listed in
 `src/generators/json-schema-conformance-expected-failures.test-utils.ts` with the
