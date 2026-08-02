@@ -27,6 +27,7 @@
     "dev": "bun --conditions development packages/cli/src/cli.ts",
     "types:check": "bun run --workspaces types:check",
     "lint:check": "bun run check",
+    "versions:check": "bun run scripts/check-version-line.ts",
     "check": "biome check .",
     "format": "biome check --write --formatter-enabled=true --linter-enabled=false .",
     "lint": "biome lint .",

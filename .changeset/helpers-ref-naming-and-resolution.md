@@ -1,8 +1,8 @@
 ---
-'@amritk/helpers': major
-'@amritk/generate-parsers': major
-'@amritk/generate-validators': major
-'@amritk/generate-examples': major
+'@amritk/helpers': minor
+'@amritk/generate-parsers': minor
+'@amritk/generate-validators': minor
+'@amritk/generate-examples': minor
 ---
 
 Fix `$ref`-graph naming and reference resolution, and stop degrading silently.

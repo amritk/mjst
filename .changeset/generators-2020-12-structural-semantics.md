@@ -1,6 +1,6 @@
 ---
-'@amritk/generate-validators': major
-'@amritk/generate-parsers': major
+'@amritk/generate-validators': minor
+'@amritk/generate-parsers': minor
 ---
 
 Make both generators agree with Draft 2020-12 — and with each other — on
