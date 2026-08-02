@@ -14,12 +14,21 @@ over Ajv reads ~97–720× rather than ~110–1100×.
 
 The `api` table was the one that could not be reproduced at all: it compared against
 Hono, and no such benchmark existed in the repo — so its numbers could neither be
-checked nor refreshed. `packages/api/bench/vs-frameworks.ts` now runs that
-comparison (bare Hono, Hono + `@hono/zod-validator`, the runtime engine, and the
-compiled engine, all `Request` → `Response` on the same three routes, with a status
-parity check before timing), under Node via `bun run bench:vs` and under Bun via
-`bun run bench:vs:bun`. The README reports both, because they tell materially
-different stories: undici's `Request`/`Response` construction is a large fixed cost
-every column pays, which compresses the Node table toward the runtime's floor.
+checked nor refreshed. `packages/api/bench/` now runs that comparison (bare Hono,
+Hono + `@hono/zod-validator`, the runtime engine, and the compiled engine, all
+`Request` → `Response` on the same three routes, with a status parity check before
+timing) on all three runtimes this package targets: **workerd** via Miniflare
+(`bun run bench:workerd`), Node (`bun run bench:vs`), and Bun
+(`bun run bench:vs:bun`). The stacks live in one shared module so a column cannot
+drift between runtimes.
 
-No published code changed — READMEs, a new benchmark, and `devDependencies` only.
+The workerd run measures inside a real isolate — the loop runs in the Worker itself,
+one fresh isolate per cell, because timing from outside would measure Miniflare's
+loopback hop and a reused isolate moves the numbers 30–40%. It also changes what the
+README can claim: under workerd the compiled engine's *peak* trials match bare Hono
+(~153k vs ~154k ops/s on the static GET), but its median is 15–35% lower because
+workerd pauses the `@amritk/api` columns far more often than it pauses Hono. That
+pattern is consistent with allocating more per request than Hono does, is not yet
+diagnosed, and is now stated in the README as open work rather than smoothed over.
+
+No published code changed — READMEs, benchmarks, and `devDependencies` only.

@@ -50,7 +50,9 @@
     "prebench:vs": "bun run bench:vs:build",
     "bench:vs": "node ./bench/.fixtures/vs-frameworks.mjs",
     "prebench:vs:bun": "bun run bench:vs:build",
-    "bench:vs:bun": "bun ./bench/.fixtures/vs-frameworks.mjs"
+    "bench:vs:bun": "bun ./bench/.fixtures/vs-frameworks.mjs",
+    "prebench:workerd": "bun run bench:vs:build",
+    "bench:workerd": "bun run ./bench/run-workerd.ts"
   },
   "exports": {
     ".": {
@@ -81,6 +83,7 @@
     "@hey-api/openapi-ts": "^0.99.0",
     "@hono/zod-validator": "^0.9.0",
     "hono": "^4.12.32",
+    "miniflare": "^4.20260722.0",
     "typescript": "^5.9.0",
     "zod": "^4.4.3"
   }
