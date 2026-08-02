@@ -25,6 +25,36 @@ describe('prepare', () => {
     expect(prepareValidator(schema, late, false)(42)).toBe(false)
   })
 
+  it('keys the cache on the registry, so two registries never share a validator', () => {
+    // A stale hit here would be a silently wrong verdict: same schema, same
+    // options, but a `$ref` resolved against somebody else's document.
+    const schema = { $ref: 'https://example.com/a.json' }
+    const first = { schemas: { 'https://example.com/a.json': { type: 'string' } } }
+    const second = { schemas: { 'https://example.com/a.json': { type: 'number' } } }
+
+    expect(prepareValidator(schema, first, false)).toBe(prepareValidator(schema, first, false))
+    expect(prepareValidator(schema, second, false)).not.toBe(prepareValidator(schema, first, false))
+    expect(prepareValidator(schema, first, false)('x')).toBe(true)
+    expect(prepareValidator(schema, second, false)('x')).toBe(false)
+    // And no registry at all is a third, distinct configuration.
+    expect(prepareValidator(schema, undefined, false)).not.toBe(prepareValidator(schema, first, false))
+  })
+
+  it('notices a document added to a registry it has already seen', () => {
+    // The contract is that a registry is immutable once passed, but building one
+    // up across calls is the mistake that contract invites — so the URI set is
+    // part of the key and an added document is a miss rather than a stale hit.
+    const schema = { $ref: 'https://example.com/b.json' }
+    const schemas: Record<string, unknown> = {}
+    const options = { schemas }
+
+    const before = prepareValidator(schema, options, false)
+    schemas['https://example.com/b.json'] = { type: 'string' }
+
+    expect(prepareValidator(schema, options, false)).not.toBe(before)
+    expect(prepareValidator(schema, options, false)('x')).toBe(true)
+  })
+
   it('caches the first configurations a schema is asked for', () => {
     const schema = { type: 'number' }
     const first = { limits: { maxDepth: 42 } }

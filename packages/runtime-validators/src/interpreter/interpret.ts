@@ -71,6 +71,14 @@ export type InterpreterContext = {
    * — in which case every base-URI code path below is skipped outright.
    */
   readonly registry: SchemaRegistry | null
+  /**
+   * Whether the 2020-12 validation vocabulary asserts. Almost always `true`; it
+   * is `false` only when the schema's `$schema` names a registered metaschema
+   * whose `$vocabulary` leaves that vocabulary out, which turns `type`, `enum`,
+   * `required`, the bounds and friends into pure annotations. See
+   * `asserts-validation.ts`.
+   */
+  readonly assertsValidation: boolean
   /** Enabled string formats, or `'all'`. */
   readonly formats: 'all' | ReadonlySet<string>
   /**
@@ -387,11 +395,16 @@ const getRegex = (ctx: InterpreterContext, source: string): RegExp => {
   return re
 }
 
-/** The message a ref that resolves to nothing in this document fails with. */
+/**
+ * The message a ref that resolves to nothing fails with. It names the one thing
+ * the caller can do about it: this package never fetches, but it will happily
+ * resolve a document you hand it.
+ */
 const unresolvableRef = (keyword: string, ref: string): Error =>
   new Error(
-    `Cannot resolve ${keyword} "${ref}". Only refs into the same document are supported — ` +
-      'a JSON Pointer, an `$anchor`, or a URI naming an `$id` declared in this schema.',
+    `Cannot resolve ${keyword} "${ref}". It matches no JSON Pointer, \`$anchor\`, or \`$id\` in this schema, ` +
+      'and no document was registered under that URI. This package does no I/O — load the document yourself and ' +
+      'pass it as `{ schemas: { "<uri>": document } }`.',
   )
 
 /**
@@ -516,6 +529,7 @@ const resolveRec = (ctx: InterpreterContext): unknown => {
 const newBranchContext = (ctx: InterpreterContext): InterpreterContext => ({
   root: ctx.root,
   registry: ctx.registry,
+  assertsValidation: ctx.assertsValidation,
   formats: ctx.formats,
   emitErrors: false,
   caches: ctx.caches,
@@ -708,11 +722,16 @@ const interpretObject = (
   const meta = getObjectMeta(s)
   const { properties, knownKeys, escapedKeys, requiredSet, safeKeys } = meta
   const emitErrors = ctx.emitErrors
+  // `required`, `dependentRequired` and the property-count bounds are
+  // validation-vocabulary; `properties`, `patternProperties`,
+  // `additionalProperties`, `dependentSchemas` and `propertyNames` are
+  // applicators and always apply.
+  const asserts = ctx.assertsValidation
 
   const hasAdditional = 'additionalProperties' in s
   const additional = s['additionalProperties']
-  const minProps = typeof s['minProperties'] === 'number' ? s['minProperties'] : undefined
-  const maxProps = typeof s['maxProperties'] === 'number' ? s['maxProperties'] : undefined
+  const minProps = asserts && typeof s['minProperties'] === 'number' ? s['minProperties'] : undefined
+  const maxProps = asserts && typeof s['maxProperties'] === 'number' ? s['maxProperties'] : undefined
 
   if (properties && knownKeys && escapedKeys) {
     for (let i = 0; i < knownKeys.length; i++) {
@@ -725,8 +744,9 @@ const interpretObject = (
       const pv = obj[key]
       const present = safeKeys ? pv !== undefined : Object.hasOwn(obj, key)
       if (requiredSet.has(key)) {
-        if (!present) fail(ctx, `must have required property '${key}'`, path)
-        else {
+        if (!present) {
+          if (asserts) fail(ctx, `must have required property '${key}'`, path)
+        } else {
           // Build the child path from the pre-escaped key (a bare concat, no
           // per-call scan), only in error mode where it is actually read.
           interpret(ctx, properties[key], pv, emitErrors ? `${path}/${escapedKeys[i]}` : path, null, depth + 1, scope)
@@ -741,14 +761,16 @@ const interpretObject = (
   }
 
   // Required keys with no `properties` entry still need a presence check.
-  for (const key of meta.requiredNotInProps) {
-    if (safeKeys ? obj[key] === undefined : !Object.hasOwn(obj, key)) {
-      fail(ctx, `must have required property '${key}'`, path)
-      if (ctx.failed) return
+  if (asserts) {
+    for (const key of meta.requiredNotInProps) {
+      if (safeKeys ? obj[key] === undefined : !Object.hasOwn(obj, key)) {
+        fail(ctx, `must have required property '${key}'`, path)
+        if (ctx.failed) return
+      }
     }
   }
 
-  const dependentRequiredEntries = meta.dependentRequiredEntries
+  const dependentRequiredEntries = asserts ? meta.dependentRequiredEntries : null
   if (dependentRequiredEntries !== null) {
     for (const [trigger, deps] of dependentRequiredEntries) {
       if (!hasProperty(obj, trigger)) continue
@@ -891,9 +913,12 @@ const interpretArray = (
   if (!Array.isArray(value)) return
   const arr = value as unknown[]
 
-  const minItems = typeof s['minItems'] === 'number' ? s['minItems'] : undefined
-  const maxItems = typeof s['maxItems'] === 'number' ? s['maxItems'] : undefined
-  const uniqueRequired = s['uniqueItems'] === true
+  // The count bounds and `uniqueItems` are validation-vocabulary; `prefixItems`,
+  // `items` and `contains` are applicators and always apply.
+  const asserts = ctx.assertsValidation
+  const minItems = asserts && typeof s['minItems'] === 'number' ? s['minItems'] : undefined
+  const maxItems = asserts && typeof s['maxItems'] === 'number' ? s['maxItems'] : undefined
+  const uniqueRequired = asserts && s['uniqueItems'] === true
 
   let tuple: unknown[] | undefined
   let rest: unknown
@@ -955,8 +980,10 @@ const interpretArray = (
   // applies. Branch matches are evaluated as booleans so they never leak errors.
   if ('contains' in s) {
     const containsSchema = s['contains']
-    const min = typeof s['minContains'] === 'number' ? s['minContains'] : 1
-    const max = typeof s['maxContains'] === 'number' ? s['maxContains'] : undefined
+    // `minContains`/`maxContains` are validation-vocabulary; `contains` itself is
+    // an applicator, and its own "at least one match" assertion stands either way.
+    const min = asserts && typeof s['minContains'] === 'number' ? s['minContains'] : 1
+    const max = asserts && typeof s['maxContains'] === 'number' ? s['maxContains'] : undefined
     // `maxContains` needs the exact total (it is an upper bound), and an active
     // annotation scope needs every match (not just the first `min`) — so only
     // when neither is in play can we stop early. Without this a 1000-element
@@ -995,35 +1022,40 @@ const interpretArray = (
 const interpretString = (ctx: InterpreterContext, s: Record<string, unknown>, value: unknown, path: string): void => {
   if (typeof value !== 'string') return
 
-  // Length is measured in code points per spec, but `value.length` (UTF-16 code
-  // units) is an upper bound on it — and equal unless the string holds a surrogate
-  // pair. So the cheap unit count is authoritative except in a narrow band near
-  // each bound, and the exact `codePointLength` scan is only paid there. This
-  // keeps the common ASCII / short-string path allocation- and scan-free.
-  const minLength = s['minLength']
-  if (typeof minLength === 'number') {
-    const units = value.length
-    // units < min ⇒ code points < min (fail). units >= 2·min ⇒ code points >= min
-    // (each point is ≤ 2 units), so only the band [min, 2·min) needs the exact count.
-    if (units < minLength || (units < 2 * minLength && codePointLength(value) < minLength)) {
-      fail(ctx, `must have at least ${minLength} characters`, path)
+  // The length and pattern bounds are validation-vocabulary; `format` below is
+  // its own vocabulary and survives a dialect that drops validation.
+  if (ctx.assertsValidation) {
+    // Length is measured in code points per spec, but `value.length` (UTF-16 code
+    // units) is an upper bound on it — and equal unless the string holds a surrogate
+    // pair. So the cheap unit count is authoritative except in a narrow band near
+    // each bound, and the exact `codePointLength` scan is only paid there. This
+    // keeps the common ASCII / short-string path allocation- and scan-free.
+    const minLength = s['minLength']
+    if (typeof minLength === 'number') {
+      const units = value.length
+      // units < min ⇒ code points < min (fail). units >= 2·min ⇒ code points >= min
+      // (each point is ≤ 2 units), so only the band [min, 2·min) needs the exact count.
+      if (units < minLength || (units < 2 * minLength && codePointLength(value) < minLength)) {
+        fail(ctx, `must have at least ${minLength} characters`, path)
+        if (ctx.failed) return
+      }
+    }
+    const maxLength = s['maxLength']
+    if (typeof maxLength === 'number') {
+      // units <= max ⇒ code points <= max (pass); only an over-long unit count needs
+      // the exact scan, where surrogate pairs may still bring it within bounds.
+      if (value.length > maxLength && codePointLength(value) > maxLength) {
+        fail(ctx, `must have at most ${maxLength} characters`, path)
+        if (ctx.failed) return
+      }
+    }
+    const pattern = s['pattern']
+    if (typeof pattern === 'string' && !getRegex(ctx, pattern).test(value)) {
+      fail(ctx, `must match pattern ${pattern}`, path)
       if (ctx.failed) return
     }
   }
-  const maxLength = s['maxLength']
-  if (typeof maxLength === 'number') {
-    // units <= max ⇒ code points <= max (pass); only an over-long unit count needs
-    // the exact scan, where surrogate pairs may still bring it within bounds.
-    if (value.length > maxLength && codePointLength(value) > maxLength) {
-      fail(ctx, `must have at most ${maxLength} characters`, path)
-      if (ctx.failed) return
-    }
-  }
-  const pattern = s['pattern']
-  if (typeof pattern === 'string' && !getRegex(ctx, pattern).test(value)) {
-    fail(ctx, `must match pattern ${pattern}`, path)
-    if (ctx.failed) return
-  }
+
   const format = s['format']
   if (typeof format === 'string') {
     const enabled = ctx.formats === 'all' || ctx.formats.has(format)
@@ -1267,7 +1299,14 @@ export const interpret = (
     if (ctx.failed) return
   }
 
-  if ('const' in s) {
+  // `const`, `enum` and `type` below belong to the validation vocabulary, as do
+  // some of the keywords the type-specific blocks read. A dialect that leaves
+  // that vocabulary out keeps them as annotations — still legal to write, but
+  // they never make an instance invalid. See `asserts-validation.ts`; the flag is
+  // `true` for every ordinary schema, so this costs one boolean read.
+  const asserts = ctx.assertsValidation
+
+  if (asserts && 'const' in s) {
     const c = s['const']
     if (isPrimitiveEnumValue(c)) {
       if (value !== c) fail(ctx, `must be equal to ${JSON.stringify(c)}`, path)
@@ -1277,7 +1316,7 @@ export const interpret = (
     if (ctx.failed) return
   }
 
-  if (Array.isArray(s['enum'])) {
+  if (asserts && Array.isArray(s['enum'])) {
     const values = s['enum'] as unknown[]
     // Membership is memoized per schema node: an all-primitive enum resolves to a
     // `Set` for O(1) lookup instead of re-scanning `every(isPrimitiveEnumValue)`
@@ -1310,7 +1349,7 @@ export const interpret = (
     }
   }
 
-  const rawType = s['type']
+  const rawType = asserts ? s['type'] : undefined
   if (typeof rawType === 'string') {
     // The common single-type case: check it directly without wrapping it in a
     // throwaway one-element array (which this hot path would otherwise allocate
@@ -1345,7 +1384,9 @@ export const interpret = (
     interpretString(ctx, s, value, path)
     if (ctx.failed) return
   } else if (typeof value === 'number') {
-    interpretNumber(ctx, s, value, path)
+    // Every keyword `interpretNumber` reads is validation-vocabulary, so a
+    // dialect without it skips the call outright.
+    if (asserts) interpretNumber(ctx, s, value, path)
     if (ctx.failed) return
   }
 

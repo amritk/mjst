@@ -85,6 +85,37 @@ export type ValidateOptions = {
    * ({@link isValidationLimitError}).
    */
   readonly limits?: ValidateLimits
+  /**
+   * Other schema documents you have **already loaded**, keyed by the absolute
+   * URI a `$ref` names them by. Supplying them makes those URIs resolvable, so a
+   * schema can reference a document that is not the one being validated.
+   *
+   * This package still never fetches and never reads a file — it cannot be told
+   * a URL, only a document — so `validate` stays a pure, synchronous function of
+   * its inputs. Loading is yours to do (or `@amritk/resolve-refs`'), and however
+   * you do it, the result comes back through here.
+   *
+   * Each registered document is a schema resource like any other: its own `$id`,
+   * `$anchor`s, `$dynamicAnchor`s and nested embedded resources all become
+   * resolvable, a `$ref` from one registered document into another resolves, and
+   * `$dynamicRef` bookending works across documents. A document with no `$id`
+   * resolves its relative `$ref`s against the URI you registered it under, and
+   * one whose `$id` disagrees with that URI answers to both.
+   *
+   * Treat the map and the documents in it as immutable once passed. Validators
+   * are cached per `(schema, options)`, and the registry takes part in that key
+   * by identity — hand over a *new* object when the set of documents changes,
+   * rather than mutating one you already passed.
+   *
+   * @example
+   * ```typescript
+   * const validator = validate(
+   *   { $ref: 'https://example.com/user.json' },
+   *   { schemas: { 'https://example.com/user.json': userSchema } },
+   * )
+   * ```
+   */
+  readonly schemas?: Readonly<Record<string, unknown>>
 }
 
 export type { ValidateLimits }

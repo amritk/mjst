@@ -7,10 +7,11 @@
  * - **`$anchor` name** (`#node`) — a plain-name fragment, resolved by searching
  *   the document for an object whose `$anchor` equals that name.
  *
- * Only *local* refs are handled — pointers into the same document. Remote/URI
- * refs are out of scope: the interpreter is self-contained and never fetches
- * external documents. Callers that need remote refs should bundle them into
- * `$defs` first (the same thing the build-time generators expect).
+ * Only *local* refs are handled — pointers into the same document. A ref naming
+ * another document by URI is answered a layer up, by `resolve-scoped-ref.ts`
+ * against the registry, which is where a caller-supplied document (see
+ * `ValidateOptions.schemas`) becomes reachable. Nothing at either layer fetches:
+ * the interpreter resolves what it was given and fails loudly otherwise.
  *
  * `$id` base-URI scoping lives in `resolve-scoped-ref.ts` and runs *first* for
  * any document that declares an `$id`; this resolver is the document-global

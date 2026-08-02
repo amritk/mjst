@@ -100,6 +100,60 @@ describe('schema-registry', () => {
     expect(registry?.resources.get('https://example.com/dup')).toBe(root.allOf[0])
   })
 
+  it('registers a caller-supplied document under the URI it was given', () => {
+    const user = { type: 'object' }
+    const registry = buildSchemaRegistry({ type: 'array' }, { 'https://example.com/user.json': user })
+
+    expect(registry?.resources.get('https://example.com/user.json')).toBe(user)
+  })
+
+  it('builds a registry for registered documents even when the root declares no $id', () => {
+    // Without this the whole base-URI apparatus would stay switched off and a
+    // `$ref` by URI would never reach the document the caller handed over.
+    expect(buildSchemaRegistry({ $ref: 'https://example.com/a.json' }, { 'https://example.com/a.json': {} })).not.toBe(
+      null,
+    )
+    // Nothing registered and no `$id` is still the common case, and still null.
+    expect(buildSchemaRegistry({ type: 'string' }, {})).toBeNull()
+  })
+
+  it('registers the anchors and embedded resources inside a registered document', () => {
+    const documents = {
+      'https://example.com/lib.json': {
+        $defs: { a: { $anchor: 'a' }, b: { $dynamicAnchor: 'b' }, c: { $id: 'c.json' } },
+      },
+    }
+    const registry = buildSchemaRegistry({ type: 'string' }, documents)
+    const defs = documents['https://example.com/lib.json'].$defs
+
+    expect(registry?.anchors.get('https://example.com/lib.json#a')).toBe(defs.a)
+    expect(registry?.dynamicAnchors.get('https://example.com/lib.json#b')).toBe(defs.b)
+    // A relative `$id` inside the document composes against the URI it arrived
+    // under, exactly as it would have against the URL it was fetched from.
+    expect(registry?.resources.get('https://example.com/c.json')).toBe(defs.c)
+  })
+
+  it('keeps a registered document reachable by both its retrieval URI and its own $id', () => {
+    const document = { $id: 'https://example.com/declared.json', type: 'string' }
+    const registry = buildSchemaRegistry({ type: 'array' }, { 'https://example.com/fetched.json': document })
+
+    expect(registry?.resources.get('https://example.com/fetched.json')).toBe(document)
+    expect(registry?.resources.get('https://example.com/declared.json')).toBe(document)
+  })
+
+  it('lets the document under validation win a clash with a registered one', () => {
+    const root = { $id: 'https://example.com/same.json', type: 'string' }
+    const registry = buildSchemaRegistry(root, { 'https://example.com/same.json': { type: 'number' } })
+
+    expect(registry?.resources.get('https://example.com/same.json')).toBe(root)
+  })
+
+  it('skips a registered entry that is not an object', () => {
+    const registry = buildSchemaRegistry({ $id: 'https://example.com/root' }, { 'https://example.com/x.json': 'nope' })
+
+    expect(registry?.resources.get('https://example.com/x.json')).toBeUndefined()
+  })
+
   it('survives a cyclic in-memory schema graph', () => {
     // Schemas parsed from JSON are trees, but `validate` is a plain function over
     // an arbitrary value, so the walk must terminate on a self-referential one.

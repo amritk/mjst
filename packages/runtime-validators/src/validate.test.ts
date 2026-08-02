@@ -1106,4 +1106,176 @@ describe('validate', () => {
       expect(dependencies({ c: 1, d: 2 })).toBe(true)
     })
   })
+
+  describe('registered schema documents', () => {
+    it('resolves a $ref to a document supplied through `schemas`', () => {
+      const validator = validate(
+        { type: 'array', items: { $ref: 'https://example.com/user.json' } },
+        { schemas: { 'https://example.com/user.json': { type: 'object', required: ['name'] } } },
+      )
+
+      expect(validator([{ name: 'Ada' }])).toBe(true)
+      expect(validator([{}])).not.toBe(true)
+    })
+
+    it('resolves a JSON Pointer and an $anchor into a registered document', () => {
+      const schemas = {
+        'https://example.com/defs.json': {
+          $defs: { positive: { type: 'integer', minimum: 1 }, named: { $anchor: 'named', type: 'string' } },
+        },
+      }
+
+      expect(validate({ $ref: 'https://example.com/defs.json#/$defs/positive' }, { schemas })(3)).toBe(true)
+      expect(validate({ $ref: 'https://example.com/defs.json#/$defs/positive' }, { schemas })(0)).not.toBe(true)
+      expect(validate({ $ref: 'https://example.com/defs.json#named' }, { schemas })('x')).toBe(true)
+      expect(validate({ $ref: 'https://example.com/defs.json#named' }, { schemas })(1)).not.toBe(true)
+    })
+
+    it('resolves a relative $ref inside a registered document against the URI it was registered under', () => {
+      // A document with no `$id` of its own still has a base URI: the one the
+      // caller registered it under. This is what makes a directory of files that
+      // reference each other by filename work.
+      const validator = validate(
+        { $ref: 'https://example.com/nested/outer.json' },
+        {
+          schemas: {
+            'https://example.com/nested/outer.json': { type: 'object', properties: { foo: { $ref: 'inner.json' } } },
+            'https://example.com/nested/inner.json': { type: 'string' },
+          },
+        },
+      )
+
+      expect(validator({ foo: 'ok' })).toBe(true)
+      expect(validator({ foo: 1 })).not.toBe(true)
+    })
+
+    it('lets a registered document answer to both its retrieval URI and its own $id', () => {
+      // The two can legitimately disagree — a document served from one URL while
+      // declaring another — and refs written inside it resolve against the `$id`.
+      const schemas = {
+        'https://example.com/fetched-from.json': {
+          $id: 'https://example.com/calls-itself.json',
+          $defs: { bar: { type: 'string' } },
+          $ref: '#/$defs/bar',
+        },
+      }
+
+      expect(validate({ $ref: 'https://example.com/fetched-from.json' }, { schemas })('x')).toBe(true)
+      expect(validate({ $ref: 'https://example.com/fetched-from.json' }, { schemas })(1)).not.toBe(true)
+      expect(validate({ $ref: 'https://example.com/calls-itself.json' }, { schemas })('x')).toBe(true)
+    })
+
+    it('resolves a $ref into an embedded resource of a registered document', () => {
+      const validator = validate(
+        { $ref: 'https://example.com/inner-id.json' },
+        {
+          schemas: {
+            'https://example.com/outer.json': {
+              $defs: { embedded: { $id: 'inner-id.json', type: 'integer' } },
+            },
+          },
+        },
+      )
+
+      expect(validator(7)).toBe(true)
+      expect(validator('7')).not.toBe(true)
+    })
+
+    it('bookends a $dynamicRef across documents', () => {
+      // The extension declares its own `$dynamicAnchor` and pulls in a generic
+      // document by `$ref`; the generic document's `$dynamicRef` must bind to the
+      // *outermost* anchor, which lives in the schema under validation.
+      const validator = validate(
+        {
+          $id: 'https://example.com/strict-list.json',
+          $ref: 'https://example.com/list.json',
+          $defs: { item: { $dynamicAnchor: 'item', type: 'string' } },
+        },
+        {
+          schemas: {
+            'https://example.com/list.json': {
+              $id: 'https://example.com/list.json',
+              type: 'array',
+              items: { $dynamicRef: '#item' },
+              $defs: { item: { $dynamicAnchor: 'item' } },
+            },
+          },
+        },
+      )
+
+      expect(validator(['a', 'b'])).toBe(true)
+      // Without bookending this would fall back to `list.json`'s own permissive
+      // anchor and accept anything.
+      expect(validator(['a', 2])).not.toBe(true)
+    })
+
+    it('still throws for a $ref naming a document nobody registered, and says how to supply it', () => {
+      const validator = validate(
+        { $ref: 'https://example.com/absent.json' },
+        { schemas: { 'https://example.com/present.json': { type: 'string' } } },
+      )
+
+      expect(() => validator('x')).toThrow(/Cannot resolve/)
+      expect(() => validator('x')).toThrow(/schemas/)
+    })
+
+    it('ignores a registered entry that is not a schema object', () => {
+      // Registering junk should not corrupt the registry; the URI simply names
+      // nothing, and the ref fails as loudly as if it had never been registered.
+      const validator = validate(
+        { $ref: 'https://example.com/junk.json' },
+        { schemas: { 'https://example.com/junk.json': 'not a schema' } },
+      )
+      expect(() => validator('x')).toThrow(/Cannot resolve/)
+    })
+
+    it('turns the validation vocabulary off when a registered metaschema omits it', () => {
+      // A dialect that leaves the validation vocabulary out of `$vocabulary`
+      // keeps `minimum` and friends as annotations. Reading that used to require
+      // fetching the metaschema; now the caller can just hand it over.
+      const metaschema = {
+        $id: 'https://example.com/no-validation.json',
+        $vocabulary: {
+          'https://json-schema.org/draft/2020-12/vocab/core': true,
+          'https://json-schema.org/draft/2020-12/vocab/applicator': true,
+        },
+      }
+      const schemas = { 'https://example.com/no-validation.json': metaschema }
+
+      const relaxed = validate(
+        {
+          $schema: 'https://example.com/no-validation.json',
+          properties: { n: { type: 'string', minimum: 10 }, bad: false },
+        },
+        { schemas },
+      )
+
+      expect(relaxed({ n: 1 })).toBe(true)
+      // Applicators are a different vocabulary and keep working.
+      expect(relaxed({ bad: 'anything' })).not.toBe(true)
+
+      // The same schema against a dialect that does include validation.
+      const strict = validate(
+        {
+          $schema: 'https://example.com/with-validation.json',
+          properties: { n: { type: 'string', minimum: 10 } },
+        },
+        {
+          schemas: {
+            'https://example.com/with-validation.json': {
+              $vocabulary: { 'https://json-schema.org/draft/2020-12/vocab/validation': true },
+            },
+          },
+        },
+      )
+      expect(strict({ n: 1 })).not.toBe(true)
+    })
+
+    it('keeps enforcing everything when the metaschema was not registered', () => {
+      // The strict answer is the safe default: an unknown dialect never quietly
+      // switches assertions off.
+      const validator = validate({ $schema: 'https://example.com/unknown.json', minimum: 10 })
+      expect(validator(1)).not.toBe(true)
+    })
+  })
 })

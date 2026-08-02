@@ -1,6 +1,6 @@
 /**
- * The in-document `$id` registry — JSON Schema 2020-12's base-URI machinery,
- * built once per validator and consulted whenever a `$ref` needs resolving.
+ * The `$id` registry — JSON Schema 2020-12's base-URI machinery, built once per
+ * validator and consulted whenever a `$ref` needs resolving.
  *
  * A subschema carrying `$id` is an *embedded resource*: its `$id` resolved
  * against the base in scope becomes the new base URI, every `$ref` written
@@ -10,15 +10,26 @@
  * nothing to resolve against — even when the resource it names sits a few lines
  * further down the same document.
  *
- * The walk stays entirely in memory: a URI that matches no embedded resource is
- * simply not found, and the caller fails loudly. Fetching the document behind it
- * is `@amritk/resolve-refs`' job — this package does no I/O by design.
+ * The registry also holds the documents a caller handed us through
+ * `ValidateOptions.schemas`. Each one is a schema resource in its own right, so
+ * it goes through exactly the same walk under its own retrieval URI: its `$id`,
+ * its anchors and its embedded resources all register, and a `$ref` from one
+ * registered document into another resolves like any other. That is what keeps
+ * "we do no I/O" honest without also meaning "we cannot be told" — the walk
+ * still never fetches anything, it only reads what it was given.
+ *
+ * A URI that matches no resource here is simply not found, and the caller fails
+ * loudly. Fetching the document behind it is `@amritk/resolve-refs`' job.
  *
  * {@link buildSchemaRegistry} returns `null` for a document that declares no
- * `$id` at all, which is the overwhelmingly common case. That `null` is the
- * interpreter's switch: it keeps the whole base-URI apparatus (and its per-node
- * cost) out of the hot path for schemas that never needed it.
+ * `$id` and has no registered companions, which is the overwhelmingly common
+ * case. That `null` is the interpreter's switch: it keeps the whole base-URI
+ * apparatus (and its per-node cost) out of the hot path for schemas that never
+ * needed it.
  */
+
+/** Documents the caller has already loaded, keyed by the absolute URI a `$ref` names them by. */
+export type SchemaDocuments = Readonly<Record<string, unknown>>
 
 /** A document's embedded resources and anchors, keyed by resolved absolute URI. */
 export type SchemaRegistry = {
@@ -83,35 +94,54 @@ const baseAfterId = (node: Record<string, unknown>, enclosing: string): string =
 }
 
 /**
- * Walks `root` once, registering every embedded resource and every anchor under
- * the base URI it is scoped to. First declaration wins on a duplicate URI or
- * anchor name, matching document order.
+ * The absolute form of a URI a caller registered a document under. Keys are
+ * meant to be absolute already, so this only normalizes the spelling (`URL`
+ * canonicalization, fragment dropped). A key `URL` cannot parse is kept
+ * verbatim: string equality still matches it, so an unusual scheme resolves
+ * rather than silently disappearing.
+ */
+const normalizeUri = (uri: string): string => {
+  try {
+    return withoutFragment(new URL(uri).href)
+  } catch {
+    return uri
+  }
+}
+
+/** The tables a walk fills in, held together so one set can serve several documents. */
+type RegistryTables = {
+  readonly resources: Map<string, unknown>
+  readonly anchors: Map<string, unknown>
+  readonly dynamicAnchors: Map<string, unknown>
+  readonly baseOf: WeakMap<object, string>
+}
+
+/**
+ * Walks one schema resource, registering every embedded resource and every
+ * anchor under the base URI it is scoped to. First declaration wins on a
+ * duplicate URI or anchor name, matching document order.
  *
- * Returns `null` when the document declares no `$id` anywhere — there is then
- * exactly one base URI in play, so the plain document-local resolver already
- * gives the spec's answer and the interpreter can skip all of this.
+ * Returns whether the walk saw an `$id` — the fact that decides whether a
+ * registry is needed at all for a lone document.
  *
  * Iterative with an explicit stack rather than recursive, for the same reason
  * the pattern screen is: the schema is untrusted, and a 20,000-level nested
  * document would otherwise overflow the native stack with a `RangeError` that
  * `isValidationLimitError` does not recognize.
  */
-export const buildSchemaRegistry = (root: unknown): SchemaRegistry | null => {
-  if (root === null || typeof root !== 'object') return null
-
-  const resources = new Map<string, unknown>()
-  const anchors = new Map<string, unknown>()
-  const dynamicAnchors = new Map<string, unknown>()
-  const baseOf = new WeakMap<object, string>()
+const walkResource = (root: object, rootBase: string, tables: RegistryTables): boolean => {
+  const { resources, anchors, dynamicAnchors, baseOf } = tables
   let sawId = false
 
   // `seen` guards a shared or cyclic object graph. A schema parsed from JSON is
-  // a tree, but this is a plain function over an arbitrary in-memory value.
+  // a tree, but this is a plain function over an arbitrary in-memory value. It is
+  // per-document on purpose: the same object registered under two URIs should
+  // register its anchors under both bases, not just the first.
   const seen = new Set<object>()
   // Parallel stacks (node + the base in scope for it) rather than one stack of
   // `{ node, base }` pairs, so the walk allocates nothing per node.
   const nodes: object[] = [root]
-  const bases: string[] = [SYNTHETIC_BASE]
+  const bases: string[] = [rootBase]
 
   while (nodes.length > 0) {
     const node = nodes.pop() as object
@@ -165,13 +195,57 @@ export const buildSchemaRegistry = (root: unknown): SchemaRegistry | null => {
     }
   }
 
-  if (!sawId) return null
+  return sawId
+}
 
-  const rootBase = baseOf.get(root) ?? SYNTHETIC_BASE
+/**
+ * Builds the registry for `root` plus any documents the caller registered.
+ *
+ * Registered documents are walked under their retrieval URI, which is what makes
+ * the suite's `retrieved nested refs resolve relative to their URI not $id` case
+ * work: a document with no `$id` of its own still gives relative `$ref`s inside
+ * it something to resolve against, and one whose `$id` disagrees with the URI it
+ * was fetched from answers to both.
+ *
+ * Returns `null` when there is nothing to resolve against — no `$id` anywhere in
+ * `root` and no registered documents — so the interpreter can skip the base-URI
+ * apparatus entirely for the schemas that never needed it.
+ */
+export const buildSchemaRegistry = (root: unknown, documents?: SchemaDocuments): SchemaRegistry | null => {
+  if (root === null || typeof root !== 'object') return null
+
+  const tables: RegistryTables = {
+    resources: new Map<string, unknown>(),
+    anchors: new Map<string, unknown>(),
+    dynamicAnchors: new Map<string, unknown>(),
+    baseOf: new WeakMap<object, string>(),
+  }
+
+  // The document under validation goes first, so its declarations win a clash
+  // with a registered one.
+  const sawId = walkResource(root, SYNTHETIC_BASE, tables)
+
+  let registered = false
+  if (documents !== undefined) {
+    for (const uri of Object.keys(documents)) {
+      const document = documents[uri]
+      if (document === null || typeof document !== 'object') continue
+      registered = true
+      const base = normalizeUri(uri)
+      // The retrieval URI names the document even when its `$id` says otherwise,
+      // which is the whole point of registering it under a URI.
+      if (!tables.resources.has(base)) tables.resources.set(base, document)
+      walkResource(document, base, tables)
+    }
+  }
+
+  if (!sawId && !registered) return null
+
+  const rootBase = tables.baseOf.get(root) ?? SYNTHETIC_BASE
   // The root answers to its own `$id` and to the synthetic base, so both
   // spellings of a self-reference land on it.
-  if (!resources.has(rootBase)) resources.set(rootBase, root)
-  if (!resources.has(SYNTHETIC_BASE)) resources.set(SYNTHETIC_BASE, root)
+  if (!tables.resources.has(rootBase)) tables.resources.set(rootBase, root)
+  if (!tables.resources.has(SYNTHETIC_BASE)) tables.resources.set(SYNTHETIC_BASE, root)
 
-  return { rootBase, resources, anchors, dynamicAnchors, baseOf }
+  return { rootBase, ...tables }
 }

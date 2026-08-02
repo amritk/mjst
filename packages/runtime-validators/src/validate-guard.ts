@@ -17,6 +17,10 @@ import type { Guard, ValidateOptions } from './types'
  * `as const`, or via this function's `const` inference), so you do not have to
  * spell it out. You can still pass an explicit type argument to override it.
  *
+ * Options match {@link validate}'s, including {@link ValidateOptions.schemas} —
+ * hand over documents you have already loaded, keyed by absolute URI, and a
+ * `$ref` naming one of them resolves. Nothing here fetches or reads a file.
+ *
  * @example
  * ```typescript
  * const isUser = validateGuard({

@@ -22,6 +22,13 @@ import type { ValidateOptions, Validator } from './types'
  * {@link Infer}. No `as const` is needed at the call site; the inference site
  * supplies it.
  *
+ * `$ref` resolves inside the schema you pass — JSON Pointers, `$anchor`s, and
+ * any `$id` the document declares. To reference a *different* document, load it
+ * yourself and register it under its URI with {@link ValidateOptions.schemas};
+ * the package still never fetches and never reads a file, so this stays a pure,
+ * synchronous function of its inputs. A `$ref` to a URI nobody registered throws
+ * rather than quietly accepting anything.
+ *
  * @example
  * ```typescript
  * const validator = validate({
@@ -34,6 +41,14 @@ import type { ValidateOptions, Validator } from './types'
  * validator({})              // { valid: false, errors: [{ message: "must have required property 'name'", path: '' }] }
  *
  * type Named = Infer<typeof validator> // { name: string }
+ * ```
+ *
+ * @example Referencing another document you have already loaded
+ * ```typescript
+ * const validator = validate(
+ *   { type: 'array', items: { $ref: 'https://example.com/user.json' } },
+ *   { schemas: { 'https://example.com/user.json': userSchema } },
+ * )
  * ```
  */
 export const validate = <const S = unknown>(schema: S, options?: ValidateOptions): Validator<FromSchema<S>> => {

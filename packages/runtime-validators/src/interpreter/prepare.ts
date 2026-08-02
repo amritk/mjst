@@ -1,13 +1,14 @@
+import { assertsValidation } from '@/interpreter/asserts-validation'
 import { type InterpreterContext, interpret, NO_DYNAMIC_SCOPE, newValidatorCaches } from '@/interpreter/interpret'
 import { limitsCacheKey, type ResolvedLimits, resolveLimits, screenSchema } from '@/interpreter/limits'
-import { buildSchemaRegistry } from '@/interpreter/schema-registry'
+import { buildSchemaRegistry, type SchemaDocuments } from '@/interpreter/schema-registry'
 import type { ValidateOptions, ValidationResult } from '@/types'
 
 /**
- * Caches one prepared validator per `(schema, mode, formats)`. The schema object
- * is the cache key (via a `WeakMap`), so asking for a validator for the same
- * schema twice — common when one is built per request or on a hot path —
- * returns the same closure, and with it the same warm regex/`$ref` caches.
+ * Caches one prepared validator per `(schema, mode, formats, limits, schemas)`.
+ * The schema object is the cache key (via a `WeakMap`), so asking for a validator
+ * for the same schema twice — common when one is built per request or on a hot
+ * path — returns the same closure, and with it the same warm regex/`$ref` caches.
  */
 const cache = new WeakMap<object, Map<string, (input: unknown) => unknown>>()
 
@@ -30,9 +31,51 @@ const normalizeFormats = (formats: ValidateOptions['formats']): 'all' | Readonly
   return new Set(formats)
 }
 
-const cacheKey = (emitErrors: boolean, formats: 'all' | ReadonlySet<string>, limits: ResolvedLimits): string => {
+/**
+ * A stable token per caller-supplied registry object. Two different registries
+ * must never share a cache entry — the schema is the same, so nothing else in
+ * the key would tell them apart, and handing back a validator built against
+ * another registry would resolve a `$ref` to the wrong document and return a
+ * silently wrong verdict.
+ *
+ * The token is issued by *identity*, in a `WeakMap` so it is collected with the
+ * registry it describes.
+ */
+const registryTokens = new WeakMap<object, string>()
+let registriesSeen = 0
+
+/**
+ * The registry's contribution to the cache key: its identity, plus the set of
+ * URIs it currently holds.
+ *
+ * Identity alone would be the exact analogue of how the schema itself is keyed,
+ * and the documented contract is that a registry is immutable once passed. The
+ * URI list is the cheap tripwire for the mistake that contract invites anyway —
+ * building the registry up across calls — so an added or removed document is a
+ * cache miss rather than a stale validator. Swapping the *contents* of a URI in
+ * place is still undetectable, exactly as mutating the schema object is.
+ *
+ * Costs nothing at all when no registry was supplied, which is the usual case.
+ */
+const registryKey = (schemas: SchemaDocuments | undefined): string => {
+  if (schemas === undefined) return ''
+  let token = registryTokens.get(schemas)
+  if (token === undefined) {
+    registriesSeen += 1
+    token = `r${registriesSeen}`
+    registryTokens.set(schemas, token)
+  }
+  return `${token}:${Object.keys(schemas).sort().join(',')}`
+}
+
+const cacheKey = (
+  emitErrors: boolean,
+  formats: 'all' | ReadonlySet<string>,
+  limits: ResolvedLimits,
+  schemas: SchemaDocuments | undefined,
+): string => {
   const formatsKey = formats === 'all' ? '*' : [...formats].sort().join(',')
-  return `${emitErrors ? 'e' : 'g'}|${formatsKey}|${limitsCacheKey(limits)}`
+  return `${emitErrors ? 'e' : 'g'}|${formatsKey}|${limitsCacheKey(limits)}|${registryKey(schemas)}`
 }
 
 /**
@@ -46,6 +89,7 @@ const makeValidator = (
   formats: 'all' | ReadonlySet<string>,
   emitErrors: boolean,
   limits: ResolvedLimits,
+  schemas: SchemaDocuments | undefined,
 ): ((input: unknown) => unknown) => {
   // One walk of the schema, up front. It screens every
   // `pattern`/`patternProperties` source so a ReDoS-prone regex fails loudly
@@ -53,12 +97,25 @@ const makeValidator = (
   // document declares an `$id`.
   const screen = screenSchema(schema, limits.allowUnsafePatterns)
 
+  // Registered documents are schemas the validator will really run, so they get
+  // the same up-front regex screen. A ReDoS-prone `pattern` hiding in a document
+  // the caller loaded from elsewhere is exactly the case worth catching here.
+  if (schemas !== undefined) {
+    for (const uri of Object.keys(schemas)) screenSchema(schemas[uri], limits.allowUnsafePatterns)
+  }
+
   // The `$id` resource registry costs a second walk, so it is built only for the
   // documents that actually need one — and once per validator, never per call.
   // For everything else `registry` stays `null` and the interpreter's whole
-  // base-URI apparatus switches off.
-  const registry = screen.declaresId ? buildSchemaRegistry(schema) : null
+  // base-URI apparatus switches off. A caller-supplied registry always needs one:
+  // the schema may declare no `$id` of its own and still `$ref` a document by URI.
+  const registry = screen.declaresId || schemas !== undefined ? buildSchemaRegistry(schema, schemas) : null
   const rootScope = registry === null ? NO_DYNAMIC_SCOPE : [registry.rootBase]
+
+  // A registered metaschema can switch the validation vocabulary off for this
+  // document. Read once, here — with no registry there is nothing to read, so
+  // the ordinary schema pays a single null check.
+  const asserts = assertsValidation(schema, registry)
 
   // One caches holder, captured here and shared across every call of this
   // validator. Its maps stay null until the schema actually hits a `pattern` or
@@ -70,6 +127,7 @@ const makeValidator = (
     const ctx: InterpreterContext = {
       root: schema,
       registry,
+      assertsValidation: asserts,
       formats,
       emitErrors,
       caches,
@@ -99,11 +157,12 @@ export const prepareValidator = (
 ): ((input: unknown) => unknown) => {
   const formats = normalizeFormats(options?.formats)
   const limits = resolveLimits(options?.limits)
+  const schemas = options?.schemas
 
   // Only object/array schemas can be WeakMap keys. Boolean schemas are trivial,
   // so skipping the cache for them costs nothing.
   if (typeof schema !== 'object' || schema === null) {
-    return makeValidator(schema, formats, emitErrors, limits)
+    return makeValidator(schema, formats, emitErrors, limits, schemas)
   }
 
   let byKey = cache.get(schema)
@@ -112,11 +171,11 @@ export const prepareValidator = (
     cache.set(schema, byKey)
   }
 
-  const key = cacheKey(emitErrors, formats, limits)
+  const key = cacheKey(emitErrors, formats, limits, schemas)
   const existing = byKey.get(key)
   if (existing) return existing
 
-  const validator = makeValidator(schema, formats, emitErrors, limits)
+  const validator = makeValidator(schema, formats, emitErrors, limits, schemas)
   if (byKey.size < MAX_CACHED_VARIANTS) byKey.set(key, validator)
   return validator
 }

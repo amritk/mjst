@@ -7,6 +7,7 @@ import {
   type SuiteCase,
 } from '../../../fixtures/json-schema-test-suite/load-suite'
 import { EXPECTED_FAILURES } from './conformance-expected-failures.test-utils'
+import { loadSuiteDocuments } from './conformance-remotes.test-utils'
 import { validate } from './validate'
 import { validateGuard } from './validate-guard'
 
@@ -25,15 +26,26 @@ import { validateGuard } from './validate-guard'
  * short-circuiting boolean path). They share the interpreter but not the code
  * path through it, and a divergence between them is a bug on its own — so a
  * case only counts as handled when both agree with the spec.
+ *
+ * Every case is run with the suite's own `remotes/` documents registered through
+ * the public `schemas` option. The suite's protocol is to serve those from an
+ * HTTP server at `http://localhost:1234/`, and the registry is the sanctioned
+ * equivalent for a validator that does no I/O: same documents, same URIs, handed
+ * over instead of fetched. It answers the retrieval step and nothing else — the
+ * interpreter still has to do all the base-URI, anchor and cross-document
+ * `$dynamicRef` work the cases are actually testing.
  */
+
+/** The suite's remote documents, keyed by the URIs its HTTP server would serve them from. */
+const DOCUMENTS = loadSuiteDocuments()
 
 /** Runs one case, returning `null` when it conforms or a short reason when it does not. */
 const check = (testCase: SuiteCase): string | null => {
   let result: unknown
   let guarded: boolean
   try {
-    result = validate(testCase.schema)(testCase.data)
-    guarded = validateGuard(testCase.schema)(testCase.data)
+    result = validate(testCase.schema, { schemas: DOCUMENTS })(testCase.data)
+    guarded = validateGuard(testCase.schema, { schemas: DOCUMENTS })(testCase.data)
   } catch (error) {
     return `threw: ${(error as Error).message}`
   }
