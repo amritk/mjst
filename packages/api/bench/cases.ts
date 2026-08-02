@@ -111,7 +111,7 @@ export const API_BENCH_CASES: readonly ApiBenchCase[] = [
     setup: async () => {
       const api = await runtimeApi()
       const staticRequest = request('GET', '/health')
-      return () => api.handle(staticRequest).then((response) => response.status)
+      return async () => (await api.handle(staticRequest)).status
     },
   },
   {
@@ -119,7 +119,7 @@ export const API_BENCH_CASES: readonly ApiBenchCase[] = [
     setup: async () => {
       const api = await runtimeApi()
       const dynamicRequest = request('GET', '/users/42', 'verbose=true')
-      return () => api.handle(dynamicRequest).then((response) => response.status)
+      return async () => (await api.handle(dynamicRequest)).status
     },
   },
   {
@@ -127,7 +127,7 @@ export const API_BENCH_CASES: readonly ApiBenchCase[] = [
     setup: async () => {
       const api = await runtimeApi()
       const postRequest = request('POST', '/users', '', { id: 1, name: 'Ada', email: 'ada@example.com' })
-      return () => api.handle(postRequest).then((response) => response.status)
+      return async () => (await api.handle(postRequest)).status
     },
   },
   {
@@ -137,7 +137,7 @@ export const API_BENCH_CASES: readonly ApiBenchCase[] = [
       // The last path registered for GET: worst case for a linear scan,
       // ordinary for a shape-bucketed one.
       const lastRequest = request('GET', `/resource${WIDE_ROUTE_COUNT - 1}/42`)
-      return () => api.handle(lastRequest).then((response) => response.status)
+      return async () => (await api.handle(lastRequest)).status
     },
   },
   {
@@ -148,7 +148,7 @@ export const API_BENCH_CASES: readonly ApiBenchCase[] = [
       // for its own method, then again per method while the 405 `allow` list
       // is worked out — so this is the case that punishes unrouted traffic.
       const missRequest = request('GET', '/nothing-here/42')
-      return () => api.handle(missRequest).then((response) => response.status)
+      return async () => (await api.handle(missRequest)).status
     },
   },
   {

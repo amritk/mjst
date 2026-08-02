@@ -401,10 +401,19 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     // consumer of this request — gates, context factory, handler, error
     // formatters, observers — reads and writes the same object, exactly like
     // the runtime adapter's single ApiRequest.
+    // `signal` is inherited rather than an own accessor. Reading
+    // `Request.signal` eagerly is expensive on workerd (the first touch
+    // materializes a host-backed AbortSignal), but an own accessor is
+    // expensive too — it pushes the request object out of V8's in-object
+    // slots, which measured as 852 to 1276 bytes allocated per request inside
+    // workerd. On the prototype, instances stay plain data objects and the
+    // lazy read is free. The runtime adapter's API_REQUEST_PROTO is the twin.
+    'const API_REQUEST_PROTO = { get signal() { return this.raw.signal } }',
     'const makeApiRequest = (request, url, rawPath, queryIndex, locals) => {',
     '  let bytes',
     `  const readAllBytes = () => (bytes ??= ${readAllBytesExpression})`,
     '  return {',
+    '    __proto__: API_REQUEST_PROTO,',
     '    method: request.method,',
     '    path: rawPath,',
     "    searchParams: () => new URLSearchParams(queryIndex === -1 ? '' : url.slice(queryIndex + 1)),",
@@ -413,7 +422,6 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     '    readBody: () => readAllBytes().then((buffer) => JSON.parse(DECODER.decode(buffer))),',
     '    readText: () => readAllBytes().then((buffer) => DECODER.decode(buffer)),',
     '    readBytes: readAllBytes,',
-    '    signal: request.signal,',
     '    raw: request,',
     '    locals,',
     '  }',

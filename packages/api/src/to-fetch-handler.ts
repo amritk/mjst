@@ -125,11 +125,18 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
   const onResponse = toArray(options?.onResponse)
   const maxBodyBytes = options?.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES
 
-  // One ResponseInit per status code, reused across requests — building JSON
-  // responses via `new Response(string, cachedInit)` instead of
-  // `Response.json` benchmarked ~40% faster through the whole pipeline
-  // (Response.json constructs a Headers object per call). The map stays tiny:
-  // it can only hold statuses the app's handlers actually return.
+  // One ResponseInit per status code, reused across requests, so a JSON reply
+  // is `new Response(string, cachedInit)` rather than `Response.json` — which
+  // constructs a Headers object per call. The map stays tiny: it can only hold
+  // statuses the app's handlers actually return.
+  //
+  // How much that buys depends entirely on the runtime, so it is worth being
+  // precise. On Node/undici it is worth about 10% on the static GET through
+  // the whole pipeline (104k vs 93k ops/s). Inside workerd it is worth
+  // nothing measurable — cached init, a cached `Headers` instance, and plain
+  // `Response.json` all land within the run-to-run noise of each other. It is
+  // kept because it costs nothing anywhere and helps on one runtime, not
+  // because it is load-bearing.
   const inits = new Map<number, ResponseInit>()
   const initFor = (status: number): ResponseInit => {
     let init = inits.get(status)
@@ -244,7 +251,7 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     return current
   }
 
-  const handler = async (
+  const handler = (
     request: Request,
     env?: unknown,
     executionContext?: unknown,
@@ -263,7 +270,8 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     const path = pathStart === -1 ? '/' : queryIndex === -1 ? url.slice(pathStart) : url.slice(pathStart, queryIndex)
 
     for (const [prefix, mount] of mounts) {
-      if (path === prefix || path.startsWith(prefix + '/')) return mount(request, env, executionContext)
+      if (path === prefix || path.startsWith(prefix + '/'))
+        return Promise.resolve(mount(request, env, executionContext))
     }
 
     // All three readers share one buffered read, so the body can be read
@@ -283,7 +291,11 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     // created lazily on first `locals` access, so the zero-hook fast path
     // never allocates for it.
     let locals = sharedLocals
-    const apiRequest: ApiRequest = {
+    // Asserted rather than annotated: `__proto__` is not a member of
+    // ApiRequest — it is how the literal gets its prototype, and `signal`
+    // arrives from there. See API_REQUEST_PROTO for why that matters.
+    const apiRequest = {
+      __proto__: API_REQUEST_PROTO,
       method: request.method,
       path,
       searchParams: () => new URLSearchParams(queryIndex === -1 ? '' : url.slice(queryIndex + 1)),
@@ -292,25 +304,30 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
       readBody: () => readAllBytes().then((buffer) => JSON.parse(DECODER.decode(buffer)) as unknown),
       readText: () => readAllBytes().then((buffer) => DECODER.decode(buffer)),
       readBytes: readAllBytes,
-      signal: request.signal,
       raw: request,
       get locals(): RequestLocals {
         locals ??= {}
         return locals
       },
-    }
-    const response = await api.handle(apiRequest, env, executionContext)
-
+    } as ApiRequest
     // Translating an ApiResponse into a Response can itself throw — a circular
     // reply body breaks JSON.stringify, an invalid header name breaks the
     // Headers constructor — and `onError` never sees it because the handler
     // already returned. Without this boundary the rejection escapes to the
     // platform instead of becoming the pipeline's own 500 shape.
-    try {
-      return request.method === 'HEAD' ? headResponse(response) : toResponse(response)
-    } catch {
-      return internalError()
+    const settle = (response: ApiResponse): Response => {
+      try {
+        return request.method === 'HEAD' ? headResponse(response) : toResponse(response)
+      } catch {
+        return internalError()
+      }
     }
+    // `handle` answers synchronously when the route never suspended. Checking
+    // for that costs one property read and saves the promise plus the
+    // microtask turn; `Promise.resolve` puts the sync reply back into the
+    // shape every fetch runtime expects.
+    const handled = api.handle(apiRequest, env, executionContext)
+    return isThenable(handled) ? handled.then(settle) : Promise.resolve(settle(handled))
   }
 
   if (onRequest.length === 0 && onResponse.length === 0) return handler
@@ -379,8 +396,35 @@ const hookApiRequest = (request: Request, locals: RequestLocals, maxBodyBytes: n
   }
 }
 
+/**
+ * The prototype every per-request {@link ApiRequest} inherits, carrying one
+ * member: `signal`.
+ *
+ * It is a getter because reading `Request.signal` eagerly is expensive on
+ * workerd — the first touch materializes a host-backed AbortSignal, and paying
+ * that on every request, for handlers that overwhelmingly never look at it,
+ * made the isolate collect far more often than the byte count suggests.
+ *
+ * It lives on a prototype rather than in the object literal because an *own*
+ * accessor is itself expensive: it pushes the object out of V8's in-object
+ * slots, which measured as a 50% increase in bytes allocated per request
+ * inside workerd (852 to 1276) when the compiled engine's request object grew
+ * its first accessor. Inherited, the instances stay plain data objects and the
+ * lazy read costs nothing. Reading through the receiver means `this` is the
+ * request object, so destructuring still evaluates it correctly.
+ */
+const API_REQUEST_PROTO: ThisType<{ readonly raw: Request }> & { readonly signal: AbortSignal | undefined } = {
+  get signal(): AbortSignal | undefined {
+    return this.raw.signal
+  },
+}
+
 /** Shared across every response with a JSON body and no custom headers. */
 const JSON_HEADERS: Readonly<Record<string, string>> = Object.freeze({ 'content-type': 'application/json' })
+
+/** Whether `handle` (or a mount) answered with a promise rather than a value. */
+const isThenable = <T>(value: T | Promise<T>): value is Promise<T> =>
+  typeof (value as { then?: unknown } | undefined)?.then === 'function'
 
 const toArray = <T>(value: T | ReadonlyArray<T> | undefined): ReadonlyArray<T> =>
   value === undefined ? [] : Array.isArray(value) ? value : [value as T]

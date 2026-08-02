@@ -83,10 +83,10 @@ export const handleRequest = (
   request: ApiRequest,
   env?: unknown,
   executionContext?: unknown,
-): Promise<ApiResponse> => {
-  // Deliberately not an async function: the matched path hands off to
-  // `runRoute` (async) untouched, so a request pays for exactly one async
-  // frame — a second one here measurably taxes the whole pipeline.
+): ApiResponse | Promise<ApiResponse> => {
+  // Deliberately not an async function, and neither is `runRoute`: a request
+  // that never suspends should never allocate a frame or a promise, and the
+  // ones that do suspend pay for exactly one frame rather than two.
   if (
     internals.openApiPath !== undefined &&
     (request.method === 'GET' || request.method === 'HEAD') &&
@@ -98,7 +98,7 @@ export const handleRequest = (
     if (internals.openApiGuards !== undefined) {
       return guardOpenApi(internals, internals.openApiGuards, request, env, executionContext)
     }
-    return Promise.resolve(serveOpenApi(internals, request))
+    return serveOpenApi(internals, request)
   }
 
   const errors = internals.errors
@@ -158,7 +158,7 @@ export const handleRequest = (
         // A throwing observer must never fail the request it watched.
       }
     }
-    return Promise.resolve(miss)
+    return miss
   }
 
   const observe = internals.observe
@@ -166,7 +166,10 @@ export const handleRequest = (
 
   const start = performance.now()
   const routeMatch = match
-  return runRoute(internals, match, request, env, executionContext).then((response) => {
+  // Observed routes are timed to the end of the reply, so this one does wait —
+  // but only for routes that actually suspended.
+  const running = runRoute(internals, match, request, env, executionContext)
+  return Promise.resolve(running).then((response) => {
     try {
       observe({
         route: routeMatch.route.contract,
@@ -250,68 +253,127 @@ const guardOpenApi = async (
 }
 
 /**
+ * What a thrown handler, guard, context factory, or refine becomes. Shared so
+ * the synchronous and asynchronous halves of the pipeline below cannot drift
+ * on the one thing it would be worst to get wrong.
+ */
+const routeError = (
+  internals: ApiInternals,
+  error: unknown,
+  route: RouteMatch['route'],
+  request: ApiRequest,
+  env: unknown,
+  executionContext: unknown,
+): ApiResponse => {
+  // A handler that read the body itself (webhook verification, uploads) hits
+  // the size limit as a thrown error — that is the transport's 413, not a
+  // handler crash.
+  if (isPayloadTooLargeError(error)) return internals.errors?.payloadTooLarge?.(request) ?? PAYLOAD_TOO_LARGE
+  return internals.onError !== undefined
+    ? internals.onError(error, request, { route: route.contract, env, executionContext })
+    : INTERNAL_ERROR
+}
+
+/** Narrow a handler/guard return to "is this actually a promise". */
+const isThenable = (value: unknown): value is Promise<unknown> =>
+  typeof (value as { then?: unknown } | undefined)?.then === 'function'
+
+/**
  * The matched-route section of the pipeline: coerce + validate declared
  * inputs, run the handler, (optionally) validate the reply. Split out so the
  * observe wrapper above times exactly this — the part whose duration belongs
  * to the route.
+ *
+ * Deliberately not an `async` function, and split into the three stages below
+ * for the same reason. A route with no declared body, no `refine`, no context
+ * factory, no guards, and a synchronous handler never suspends — and paying
+ * for an async frame and its promise on every such request was measurable
+ * inside workerd. The stages hand off synchronously until something genuinely
+ * asynchronous appears, at which point the rest of the request rides a promise
+ * exactly as it used to.
  */
-const runRoute = async (
+const runRoute = (
+  internals: ApiInternals,
+  match: RouteMatch,
+  request: ApiRequest,
+  env: unknown,
+  executionContext: unknown,
+): ApiResponse | Promise<ApiResponse> => {
+  // Security guards suspend before anything else happens, so that whole shape
+  // stays on the asynchronous path. Slot validation is shared with it, which
+  // is what keeps the two orderings identical.
+  if (match.route.contract.securityGuards !== undefined) {
+    return runSecuredRoute(internals, match, request, env, executionContext)
+  }
+  return runSlots(internals, match, request, env, executionContext, undefined, false)
+}
+
+/**
+ * Security guards (resolved from the route's OpenAPI `security` by
+ * `secureRoutes`) gate the request before anything is parsed or validated: an
+ * unauthenticated caller must not reach the body reader, the multipart parser,
+ * the schema error detail, or `refine` — all of which are app-visible work that
+ * a deny-by-default API owes nobody. They gate on the session, so the context
+ * factory runs first here; the usual "build the context after validation"
+ * saving does not apply to a route whose whole point is to reject before
+ * validation. The context is handed on below, so the factory still runs
+ * exactly once per request.
+ */
+const runSecuredRoute = async (
   internals: ApiInternals,
   match: RouteMatch,
   request: ApiRequest,
   env: unknown,
   executionContext: unknown,
 ): Promise<ApiResponse> => {
+  const route = match.route
+  const securityGuards = route.contract.securityGuards ?? []
+  let appContext: unknown
+  let denied: RouteReplyValue | RawReply | undefined
+  try {
+    if (internals.createContext !== undefined) {
+      appContext = await internals.createContext({ request, env, executionContext, locals: request.locals })
+    }
+    // The validated slots do not exist yet — a security guard reads the
+    // session and the raw `request`, which is what `SecurityGuard` documents.
+    const gate = {
+      params: undefined,
+      query: undefined,
+      body: undefined,
+      headers: undefined,
+      cookies: undefined,
+      context: appContext,
+      request,
+    } as unknown as ErasedRequestContext
+    for (const guard of securityGuards) {
+      denied = await guard(gate)
+      if (denied !== undefined) break
+    }
+  } catch (error) {
+    return routeError(internals, error, route, request, env, executionContext)
+  }
+  // A denial is an ordinary reply: it takes the same response-validation and
+  // serialization path a handler reply would.
+  if (denied !== undefined) return finishReply(denied, route)
+  return runSlots(internals, match, request, env, executionContext, appContext, true)
+}
+
+/**
+ * Coercion and validation for every declared slot except the body. All of it
+ * is synchronous, which is what lets a route with no body stay off the
+ * asynchronous path entirely.
+ */
+const runSlots = (
+  internals: ApiInternals,
+  match: RouteMatch,
+  request: ApiRequest,
+  env: unknown,
+  executionContext: unknown,
+  appContext: unknown,
+  contextBuilt: boolean,
+): ApiResponse | Promise<ApiResponse> => {
   const errors = internals.errors
   const route = match.route
-
-  // Security guards (resolved from the route's OpenAPI `security` by
-  // `secureRoutes`) gate the request before anything is parsed or validated:
-  // an unauthenticated caller must not reach the body reader, the multipart
-  // parser, the schema error detail, or `refine` — all of which are app-visible
-  // work that a deny-by-default API owes nobody. They gate on the session, so
-  // the context factory runs first here; the usual "build the context after
-  // validation" saving does not apply to a route whose whole point is to
-  // reject before validation. The context is reused below, so the factory
-  // still runs exactly once per request.
-  const securityGuards = route.contract.securityGuards
-  let appContext: unknown
-  let contextBuilt = false
-  if (securityGuards !== undefined) {
-    let denied: RouteReplyValue | RawReply | undefined
-    try {
-      if (internals.createContext !== undefined) {
-        appContext = await internals.createContext({ request, env, executionContext, locals: request.locals })
-      }
-      contextBuilt = true
-      // The validated slots do not exist yet — a security guard reads the
-      // session and the raw `request`, which is what `SecurityGuard` documents.
-      const gate = {
-        params: undefined,
-        query: undefined,
-        body: undefined,
-        headers: undefined,
-        cookies: undefined,
-        context: appContext,
-        request,
-      } as unknown as ErasedRequestContext
-      for (const guard of securityGuards) {
-        denied = await guard(gate)
-        if (denied !== undefined) break
-      }
-    } catch (error) {
-      // A guard that read the body itself (a signature check) hits the size
-      // limit as a thrown error — the transport's 413, exactly as it is for the
-      // handler below.
-      if (isPayloadTooLargeError(error)) return errors?.payloadTooLarge?.(request) ?? PAYLOAD_TOO_LARGE
-      return internals.onError !== undefined
-        ? internals.onError(error, request, { route: route.contract, env, executionContext })
-        : INTERNAL_ERROR
-    }
-    // A denial is an ordinary reply: it takes the same response-validation and
-    // serialization path a handler reply would.
-    if (denied !== undefined) return finishReply(denied, route)
-  }
 
   let params: unknown
   if (route.params !== undefined) {
@@ -346,37 +408,186 @@ const runRoute = async (
     }
   }
 
+  if (route.body === undefined) {
+    return runTail(
+      internals,
+      match,
+      request,
+      env,
+      executionContext,
+      params,
+      query,
+      headers,
+      cookies,
+      undefined,
+      appContext,
+      contextBuilt,
+    )
+  }
+  return runBody(
+    internals,
+    match,
+    request,
+    env,
+    executionContext,
+    params,
+    query,
+    headers,
+    cookies,
+    appContext,
+    contextBuilt,
+  )
+}
+
+/** Reading the body always suspends, so this stage is unconditionally async. */
+const runBody = async (
+  internals: ApiInternals,
+  match: RouteMatch,
+  request: ApiRequest,
+  env: unknown,
+  executionContext: unknown,
+  params: unknown,
+  query: unknown,
+  headers: unknown,
+  cookies: unknown,
+  appContext: unknown,
+  contextBuilt: boolean,
+): Promise<ApiResponse> => {
+  const errors = internals.errors
+  const route = match.route
+  const declared = route.body
+  if (declared === undefined) throw new Error('runBody called without a declared body')
+
+  const bodyType = declared.bodyType
+  // Enforced only when the client actually declared a media type: a present
+  // but contradictory content-type is a 415, an absent one gets the benefit
+  // of the doubt and fails on the parse instead (keeps bare curl working).
+  const contentType = request.header('content-type')
+  if (contentType !== undefined && !matchesBodyType(contentType, bodyType)) {
+    return errors?.unsupportedMediaType?.(contentType, request) ?? UNSUPPORTED_MEDIA_TYPE
+  }
   let body: unknown
-  if (route.body !== undefined) {
-    const bodyType = route.body.bodyType
-    // Enforced only when the client actually declared a media type: a present
-    // but contradictory content-type is a 415, an absent one gets the benefit
-    // of the doubt and fails on the parse instead (keeps bare curl working).
-    const contentType = request.header('content-type')
-    if (contentType !== undefined && !matchesBodyType(contentType, bodyType)) {
-      return errors?.unsupportedMediaType?.(contentType, request) ?? UNSUPPORTED_MEDIA_TYPE
-    }
-    try {
-      body =
-        bodyType === 'json'
-          ? await request.readBody()
-          : bodyType === 'text'
-            ? // Raw text: the decoded body, validated against the schema as-is.
-              await request.readText()
-            : bodyType === 'bytes'
-              ? // Raw bytes: handed to the handler untouched (uploads, binary).
-                await request.readBytes()
-              : bodyType === 'form'
-                ? parseFormBody(await request.readText(), route.body.coercions)
-                : await parseMultipartBody(await request.readBytes(), contentType, route.body.coercions)
-    } catch (error) {
-      if (isPayloadTooLargeError(error)) return errors?.payloadTooLarge?.(request) ?? PAYLOAD_TOO_LARGE
-      if (bodyType === 'json') return errors?.invalidJson?.(request) ?? INVALID_JSON
-      return errors?.invalidBody?.(request) ?? INVALID_BODY
-    }
-    if (!route.body.guard(body)) return validationFailure('body', route.body.collect, body, errors, request)
+  try {
+    body =
+      bodyType === 'json'
+        ? await request.readBody()
+        : bodyType === 'text'
+          ? // Raw text: the decoded body, validated against the schema as-is.
+            await request.readText()
+          : bodyType === 'bytes'
+            ? // Raw bytes: handed to the handler untouched (uploads, binary).
+              await request.readBytes()
+            : bodyType === 'form'
+              ? parseFormBody(await request.readText(), declared.coercions)
+              : await parseMultipartBody(await request.readBytes(), contentType, declared.coercions)
+  } catch (error) {
+    if (isPayloadTooLargeError(error)) return errors?.payloadTooLarge?.(request) ?? PAYLOAD_TOO_LARGE
+    if (bodyType === 'json') return errors?.invalidJson?.(request) ?? INVALID_JSON
+    return errors?.invalidBody?.(request) ?? INVALID_BODY
+  }
+  if (!declared.guard(body)) return validationFailure('body', declared.collect, body, errors, request)
+
+  return runTail(
+    internals,
+    match,
+    request,
+    env,
+    executionContext,
+    params,
+    query,
+    headers,
+    cookies,
+    body,
+    appContext,
+    contextBuilt,
+  )
+}
+
+/**
+ * Refine, the context factory, guards, the handler, and the reply tail.
+ *
+ * Stays synchronous when none of the first three are configured and the
+ * handler returns a value — the common shape, and the whole reason the stages
+ * above hand off the way they do. The moment any of them is present the rest
+ * of the request moves onto {@link runTailAsync}, which is the original
+ * straight-line code.
+ */
+const runTail = (
+  internals: ApiInternals,
+  match: RouteMatch,
+  request: ApiRequest,
+  env: unknown,
+  executionContext: unknown,
+  params: unknown,
+  query: unknown,
+  headers: unknown,
+  cookies: unknown,
+  body: unknown,
+  appContext: unknown,
+  contextBuilt: boolean,
+): ApiResponse | Promise<ApiResponse> => {
+  const route = match.route
+  if (
+    route.contract.refine !== undefined ||
+    route.contract.guards !== undefined ||
+    (!contextBuilt && internals.createContext !== undefined)
+  ) {
+    return runTailAsync(
+      internals,
+      match,
+      request,
+      env,
+      executionContext,
+      params,
+      query,
+      headers,
+      cookies,
+      body,
+      appContext,
+      contextBuilt,
+    )
   }
 
+  // The erased handler type exists for contract assignability (see
+  // AnyRouteContract); the values really do match the contract's schemas at
+  // this point, which is what the cast asserts.
+  const context = { params, query, body, headers, cookies, context: appContext, request } as ErasedRequestContext
+  let returned: RouteReplyValue | RawReply | Promise<RouteReplyValue | RawReply>
+  try {
+    returned = route.contract.handler(context)
+  } catch (error) {
+    return routeError(internals, error, route, request, env, executionContext)
+  }
+  // `finishReply` sits outside the error boundary in both branches, exactly as
+  // it did when this was one `try` followed by a `return` — a reply that fails
+  // to serialize is not a handler error.
+  if (isThenable(returned)) {
+    return returned.then(
+      (reply) => finishReply(reply as RouteReplyValue | RawReply, route),
+      (error: unknown) => routeError(internals, error, route, request, env, executionContext),
+    )
+  }
+  return finishReply(returned, route)
+}
+
+/** The tail for routes whose refine, context factory, or guards can suspend. */
+const runTailAsync = async (
+  internals: ApiInternals,
+  match: RouteMatch,
+  request: ApiRequest,
+  env: unknown,
+  executionContext: unknown,
+  params: unknown,
+  query: unknown,
+  headers: unknown,
+  cookies: unknown,
+  body: unknown,
+  appContext: unknown,
+  contextBuilt: boolean,
+): Promise<ApiResponse> => {
+  const errors = internals.errors
+  const route = match.route
+  let context: unknown = appContext
   let reply: RouteReplyValue | RawReply
   try {
     // Refinement runs after every slot validated (its whole point is seeing
@@ -399,12 +610,17 @@ const runRoute = async (
     // with security guards already built it above, before validation, and that
     // one value is reused — the factory runs once per request either way.
     if (!contextBuilt && internals.createContext !== undefined) {
-      appContext = await internals.createContext({ request, env, executionContext, locals: request.locals })
+      context = await internals.createContext({ request, env, executionContext, locals: request.locals })
     }
-    // The erased handler type exists for contract assignability (see
-    // AnyRouteContract); the values really do match the contract's schemas at
-    // this point, which is what the cast asserts.
-    const context = { params, query, body, headers, cookies, context: appContext, request } as ErasedRequestContext
+    const routeContext = {
+      params,
+      query,
+      body,
+      headers,
+      cookies,
+      context,
+      request,
+    } as unknown as ErasedRequestContext
     // Guards run after the context factory (they gate on the session it
     // resolved) and before the handler, in order, first denial winning. A
     // guard's reply is a normal reply — it falls through to the same response
@@ -414,19 +630,13 @@ const runRoute = async (
     const guards = route.contract.guards
     if (guards !== undefined) {
       for (const guard of guards) {
-        denied = await guard(context)
+        denied = await guard(routeContext)
         if (denied !== undefined) break
       }
     }
-    reply = denied ?? (await route.contract.handler(context))
+    reply = denied ?? (await route.contract.handler(routeContext))
   } catch (error) {
-    // A handler that read the body itself (webhook verification, uploads)
-    // hits the size limit as a thrown error — that is the transport's 413,
-    // not a handler crash.
-    if (isPayloadTooLargeError(error)) return errors?.payloadTooLarge?.(request) ?? PAYLOAD_TOO_LARGE
-    return internals.onError !== undefined
-      ? internals.onError(error, request, { route: route.contract, env, executionContext })
-      : INTERNAL_ERROR
+    return routeError(internals, error, route, request, env, executionContext)
   }
 
   return finishReply(reply, route)
