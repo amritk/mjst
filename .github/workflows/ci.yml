@@ -24,6 +24,13 @@ jobs:
       - name: Lint
         run: bun run check
 
+      # Keeps the whole workspace pre-1.0. `major` on a 0.x package means
+      # 1.0.0 to changesets, so six separate PRs each marking a breaking
+      # codegen change as `major` — all correct in isolation — silently put
+      # four packages at 1.0.0 in the release PR. See scripts/check-version-line.ts.
+      - name: Version line
+        run: bun run versions:check
+
       - name: Test
         run: bun run test
 
