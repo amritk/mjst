@@ -1149,19 +1149,74 @@ export default compiled // { fetch }
 // dev server instead: toFetchHandler(createApi({ routes: Object.values(routes), validateResponses: true }))
 ```
 
-Measured under Node/V8 (same engine as workerd), Request → Response, against
-the standard Workers stack — one session, same machine:
+`Request` → `Response` through the whole stack — a fresh `Request` per
+operation, exactly what a server runtime hands you — against the standard
+Workers stack, on the same three routes, on all three runtimes this package
+targets. Reproduce with `bun run bench:workerd`, `bun run bench:vs` (Node), or
+`bun run bench:vs:bun`.
+
+Under **workerd**, the runtime `compileToModule` exists for, measured inside a
+real isolate (Miniflare, one fresh isolate per cell) rather than in a stand-in
+that shares its engine:
 
 | case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
 |:--|--:|--:|--:|--:|
-| static GET | ~339k ops/s | ~361k | ~392k | **~530k** |
-| dynamic GET, params validated | ~311k ¹ | ~209k | ~302k | **~381k** |
-| POST, body validated | ~74k ¹ | ~63k | ~74k | **~82k** |
+| static GET | **~143k ops/s** ¹ | ~140k | ~73k | ~110k |
+| dynamic GET, params validated | ~136k ¹ | ~78k | ~70k | **~87k** |
+| POST, body validated | ~40k ¹ | ~32k | ~30k | **~35k** |
 
-<sub>¹ hono-bare does no validation; every @amritk/api column validates.</sub>
+Under **Node/V8** — the same engine workerd runs, without workerd around it:
 
-Even the runtime (development) engine now sits at or above unvalidated Hono
-while validating; the compiled engine leads every case by 22–57%.
+| case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
+|:--|--:|--:|--:|--:|
+| static GET | ~173k ops/s ¹ | ~177k | ~120k | **~174k** |
+| dynamic GET, params validated | ~133k ¹ | ~65k | ~82k | **~124k** |
+| POST, body validated | ~51k ¹ | ~46k | ~43k | **~54k** |
+
+Under **Bun/JavaScriptCore**, where web-standard `Request`/`Response` objects
+are far cheaper to build than undici's and more of the difference is the
+framework rather than the runtime:
+
+| case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
+|:--|--:|--:|--:|--:|
+| static GET | ~218k ops/s ¹ | ~209k | ~236k | **~435k** |
+| dynamic GET, params validated | ~183k ¹ | ~82k | ~148k | **~274k** |
+| POST, body validated | ~188k ¹ | ~91k | ~112k | **~160k** |
+
+<sub>¹ hono-bare does no validation; every @amritk/api column validates, and
+the runtime column validates responses too (`validateResponses: true`, the
+development configuration). Every column is checked for the same status on
+every case before it is timed.</sub>
+
+Read the ratios, not the absolutes. Against the like-for-like column —
+`hono + zod`, the other stack that actually validates — the compiled engine
+leads every case on Bun (1.8–3.3×), matches or leads on Node (1.0–1.9×), and
+leads the two validated cases under workerd (~1.1×), widest wherever params
+and query have to be coerced and checked. Against *unvalidated* Hono it is
+ahead on Bun's GET
+cases (~1.5–2×), level on Node, and behind under workerd. The runtime
+(development) engine — no build step, response validation on — lands around
+`hono + zod` on Node, above it on Bun, and below it on workerd.
+
+**The workerd row deserves its caveat, because it is the one that disagrees.**
+The gap there is not per-request work: the compiled engine's *fastest* trials
+hit ~153k ops/s on the static GET and ~137k on the dynamic one, level with
+bare Hono's ~154k and ~139k. What differs is how often workerd pauses each
+column — the slowest trials on the `@amritk/api` columns run an order of
+magnitude under their own peak, while Hono's stay within ~10% of theirs. That
+pattern is consistent with this engine allocating more per request than Hono
+does and workerd's isolate charging for it, but the cause has not been pinned
+down and the medians above are what you should plan against. Fixing it is
+open work, not a footnote to argue away.
+
+The three runtimes disagree for a reason worth knowing. Building the `Request`
+and `Response` objects is itself a large fixed cost on Node's undici, paid
+identically by every column, which compresses that table toward the runtime's
+floor; JavaScriptCore's are cheap enough that the same code shows its
+differences plainly. So no single table is the whole picture: workerd is the
+number to plan a Workers deployment against, Node the conservative
+general-purpose one, and Bun the clearest view of what the engine itself
+costs.
 
 ### App context: Drizzle, sessions, anything per-request
 

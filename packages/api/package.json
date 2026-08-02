@@ -45,7 +45,14 @@
     "types:check": "tsgo -p . --noEmit",
     "test": "NODE_ENV=production vitest run --root ../.. packages/api",
     "prebench": "bun run --filter='@amritk/runtime-validators' build",
-    "bench": "bun run ./bench/run.ts"
+    "bench": "bun run ./bench/run.ts",
+    "bench:vs:build": "bun run --filter='@amritk/runtime-validators' build && bun run ./bench/emit-compiled.ts && bun build ./bench/vs-frameworks.ts --target=node --external=@amritk/runtime-validators --outfile ./bench/.fixtures/vs-frameworks.mjs",
+    "prebench:vs": "bun run bench:vs:build",
+    "bench:vs": "node ./bench/.fixtures/vs-frameworks.mjs",
+    "prebench:vs:bun": "bun run bench:vs:build",
+    "bench:vs:bun": "bun ./bench/.fixtures/vs-frameworks.mjs",
+    "prebench:workerd": "bun run bench:vs:build",
+    "bench:workerd": "bun run ./bench/run-workerd.ts"
   },
   "exports": {
     ".": {
@@ -74,6 +81,10 @@
   },
   "devDependencies": {
     "@hey-api/openapi-ts": "^0.99.0",
-    "typescript": "^5.9.0"
+    "@hono/zod-validator": "^0.9.0",
+    "hono": "^4.12.32",
+    "miniflare": "^4.20260722.0",
+    "typescript": "^5.9.0",
+    "zod": "^4.4.3"
   }
 }

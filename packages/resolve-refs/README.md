@@ -190,10 +190,10 @@ produce byte-identical output before either is timed. Representative numbers
 
 | schema | cached | naive | speedup |
 |:---|---:|---:|---:|
-| chain (40 `$ref` → `$ref` links) | ~2.6k ops/s | ~0.8k ops/s | **~3.2×** |
-| reuse-heavy (50 refs → 1 def) | ~4.5k ops/s | ~8k ops/s | ~0.5× |
-| cyclic tree | ~27k ops/s | ~74k ops/s | ~0.37× |
-| wide-distinct (60 defs, each used once) | ~2.3k ops/s | ~7.3k ops/s | ~0.32× |
+| chain (40 `$ref` → `$ref` links) | ~2.7k ops/s | ~0.77k ops/s | **~3.6×** |
+| reuse-heavy (50 refs → 1 def) | ~4.2k ops/s | ~8.9k ops/s | ~0.47× |
+| cyclic tree | ~32k ops/s | ~99k ops/s | ~0.32× |
+| wide-distinct (60 defs, each used once) | ~2.3k ops/s | ~7.7k ops/s | ~0.29× |
 
 Memoization overtakes the naive walk only on the **chain** shape, where a long
 indirection path is expensive to re-resolve and the cache collapses it to one
@@ -207,4 +207,4 @@ rows are kept in the table precisely to show that trade honestly rather than
 cherry-picking the one shape the cache wins.
 
 Opting into `trackOrigins` (which records where each inlined value came from) adds
-roughly **0–20%** on top, within run-to-run noise on these small schemas.
+roughly **0–15%** on top, within run-to-run noise on these small schemas.
