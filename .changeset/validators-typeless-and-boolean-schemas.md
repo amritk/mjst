@@ -1,5 +1,5 @@
 ---
-'@amritk/generate-validators': major
+'@amritk/generate-validators': minor
 ---
 
 Enforce the keywords a schema declares without a `type`, and stop emitting

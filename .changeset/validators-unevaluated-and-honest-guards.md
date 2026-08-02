@@ -1,5 +1,5 @@
 ---
-'@amritk/generate-validators': major
+'@amritk/generate-validators': minor
 ---
 
 Generate `unevaluatedItems` / `unevaluatedProperties`, and stop `isX` claiming a

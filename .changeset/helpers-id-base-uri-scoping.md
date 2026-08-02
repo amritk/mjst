@@ -1,5 +1,5 @@
 ---
-'@amritk/generate-parsers': major
+'@amritk/generate-parsers': minor
 '@amritk/helpers': minor
 ---
 
