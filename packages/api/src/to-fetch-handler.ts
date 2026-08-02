@@ -315,13 +315,19 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     // Headers constructor — and `onError` never sees it because the handler
     // already returned. Without this boundary the rejection escapes to the
     // platform instead of becoming the pipeline's own 500 shape.
-    return api.handle(apiRequest, env, executionContext).then((response) => {
+    const settle = (response: ApiResponse): Response => {
       try {
         return request.method === 'HEAD' ? headResponse(response) : toResponse(response)
       } catch {
         return internalError()
       }
-    })
+    }
+    // `handle` answers synchronously when the route never suspended. Checking
+    // for that costs one property read and saves the promise plus the
+    // microtask turn; `Promise.resolve` puts the sync reply back into the
+    // shape every fetch runtime expects.
+    const handled = api.handle(apiRequest, env, executionContext)
+    return isThenable(handled) ? handled.then(settle) : Promise.resolve(settle(handled))
   }
 
   if (onRequest.length === 0 && onResponse.length === 0) return handler
@@ -415,6 +421,10 @@ const API_REQUEST_PROTO: ThisType<{ readonly raw: Request }> & { readonly signal
 
 /** Shared across every response with a JSON body and no custom headers. */
 const JSON_HEADERS: Readonly<Record<string, string>> = Object.freeze({ 'content-type': 'application/json' })
+
+/** Whether `handle` (or a mount) answered with a promise rather than a value. */
+const isThenable = <T>(value: T | Promise<T>): value is Promise<T> =>
+  typeof (value as { then?: unknown } | undefined)?.then === 'function'
 
 const toArray = <T>(value: T | ReadonlyArray<T> | undefined): ReadonlyArray<T> =>
   value === undefined ? [] : Array.isArray(value) ? value : [value as T]

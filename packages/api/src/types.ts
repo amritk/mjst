@@ -1071,8 +1071,21 @@ export type Api = {
    * Match, validate, run the handler, and produce a response. `env` and
    * `executionContext` are optional platform values (Workers bindings and
    * execution context) forwarded to the {@link ContextFactory}.
+   *
+   * Returns the response *synchronously* when nothing along the route's path
+   * was asynchronous — no declared body to read, no `refine`, no context
+   * factory, no guards, and a handler that returned a value rather than a
+   * promise. An `async` frame and its promise are not free, and on workerd the
+   * difference is measurable, so the pipeline stays synchronous when it can.
+   * Adapters must therefore treat the result as `ApiResponse | Promise<...>`;
+   * `await` handles both, and a thenable check avoids the microtask turn
+   * entirely.
    */
-  readonly handle: (request: ApiRequest, env?: unknown, executionContext?: unknown) => Promise<ApiResponse>
+  readonly handle: (
+    request: ApiRequest,
+    env?: unknown,
+    executionContext?: unknown,
+  ) => ApiResponse | Promise<ApiResponse>
   /**
    * Whether a method + path would be handled (routes or the OpenAPI document
    * path). Lets middleware-style adapters pass unmatched requests along
