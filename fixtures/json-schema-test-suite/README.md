@@ -26,21 +26,25 @@ behind. The boundary cannot move silently.
 `draft2020-12/` — the suite's **required** tests for Draft 2020-12: 46 files,
 383 groups, 1299 cases, byte-for-byte as published.
 
+`remotes/` — the documents those tests reference by URI. Upstream they are served
+over HTTP at `http://localhost:1234/`, which is the protocol the suite expects an
+implementation to follow; `remotes/draft2020-12/integer.json` is
+`http://localhost:1234/draft2020-12/integer.json`. Nothing here fetches anything,
+so a suite that wants these hands them to the package under test through whatever
+API it offers for supplying documents it did not load itself.
+
 Deliberately not vendored:
 
 - **`optional/`** — the suite's own name for behavior an implementation may
   decline: `format` assertion, arbitrary-precision numbers, ECMAScript regex
   corner cases. The required set is the bar implementations report against.
-- **`remotes/`** — documents served over HTTP at `localhost:1234` for the
-  `refRemote.json` cases. Nothing here fetches during validation (that is
-  `@amritk/resolve-refs`' job, and its SSRF guard refuses loopback by design),
-  so those cases are listed as expected failures rather than staged.
 - **Other drafts** — the packages target 2020-12; draft-07 input is upgraded to
   it before anything sees it.
 
 | Path | Source | License |
 | --- | --- | --- |
 | `draft2020-12/*.json` | [`json-schema-org/JSON-Schema-Test-Suite`](https://github.com/json-schema-org/JSON-Schema-Test-Suite) — `tests/draft2020-12/*.json` | MIT (© 2012 Julian Berman) |
+| `remotes/draft2020-12/**` | same repository — `remotes/draft2020-12/**` | MIT (© 2012 Julian Berman) |
 
 To refresh, re-fetch the same files from upstream and commit the result. A case
 whose `description` changed upstream surfaces as an unknown expected-failure key,
