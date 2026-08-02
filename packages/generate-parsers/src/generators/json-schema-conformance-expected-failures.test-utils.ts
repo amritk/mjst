@@ -4,7 +4,7 @@ import type { ExpectedFailures } from '../../../../fixtures/json-schema-test-sui
  * The official JSON Schema Test Suite cases the *strict* generated parsers do not
  * handle, each with the reason.
  *
- * 119 of 1299. The list exists so the boundary is exact rather than approximate:
+ * 77 of 1299. The list exists so the boundary is exact rather than approximate:
  * `json-schema-conformance.test.ts` fails if a case listed here starts passing
  * (the entry must go) or if a case not listed here starts failing (a regression).
  *
@@ -12,11 +12,12 @@ import type { ExpectedFailures } from '../../../../fixtures/json-schema-test-sui
  * `/`-bounded prefix of one when a whole group or file falls to a single cause.
  * Look one up in `fixtures/json-schema-test-suite/draft2020-12/<file>`.
  *
- * The sections separate the two kinds of gap that matter differently: the ones
- * that stop generation (`refused`, most of the `$id`-based refs) cost a build
- * error and can never produce a wrong verdict, while the ones above them —
- * `implied type` and `annotation` — are cases where a parser is generated and
- * gets the answer wrong.
+ * What is left divides into three kinds. Most of it — anything whose target is
+ * another document — is out of reach by design: the generator does no I/O, and
+ * the suite hands it a schema with no way to supply the documents it references.
+ * The rest is either a deliberate difference (`implied type`) or a shape strict
+ * mode refuses rather than under-enforce, which costs a build error and can never
+ * produce a wrong verdict.
  */
 export const EXPECTED_FAILURES: ExpectedFailures = {
   // ---------------------------------------------------------------------------
@@ -53,6 +54,10 @@ export const EXPECTED_FAILURES: ExpectedFailures = {
     'implied type: `properties`/`required`/`patternProperties` compile to an object check, so a non-object is rejected instead of ignored',
   'ref.json/root pointer ref/recursive match':
     'implied type: `properties`/`required`/`patternProperties` compile to an object check, so a non-object is rejected instead of ignored',
+  // The URN `$id` now resolves; what is left is a recursive `$ref` back to a root
+  // that declares `properties`, so the recursive slot is typed as that object.
+  'ref.json/simple URN base URI with $ref via the URN/valid under the URN IDed schema':
+    'implied type: `properties`/`required`/`patternProperties` compile to an object check, so a non-object is rejected instead of ignored',
   'required.json/required validation/ignores arrays':
     'implied type: `properties`/`required`/`patternProperties` compile to an object check, so a non-object is rejected instead of ignored',
   'required.json/required validation/ignores strings':
@@ -65,24 +70,87 @@ export const EXPECTED_FAILURES: ExpectedFailures = {
     'implied type: `properties`/`required`/`patternProperties` compile to an object check, so a non-object is rejected instead of ignored',
 
   // ---------------------------------------------------------------------------
-  // annotation: `contains` annotates the whole array, per Ajv
+  // another document: the target is not in the schema handed to the generator
   //
-  // The spec says `contains` evaluates only the items that *match* it; Ajv — this
-  // package's differential oracle, and the interpreter's — treats a satisfied
-  // `contains` as evaluating the array whole. `unevaluated-match.ts` deliberately
-  // follows the oracle, because `parser-vocabulary-conformance.differential.test.ts`
-  // holds the generated parsers observationally identical to Ajv on exactly this
-  // shape. The two only part company when `contains` passes and some *other* item
-  // is left over, which is what every case below is built from.
+  // `$id` is now applied as a base URI, so every ref that names something *inside*
+  // the document resolves — relative, absolute, URN, absolute-path, pointer- or
+  // anchor-into-resource alike. These are the ones left over: the URI names a
+  // document the suite serves from `remotes/`, and the generator does no I/O (that
+  // is `@amritk/resolve-refs`' job) and is handed no way to supply it.
+  //
+  // An absolute URI stops generation, which is the safe outcome. A *bare relative*
+  // ref (`extendible-dynamic-ref.json`) is not a form `extractRefs` recognizes at
+  // all, so it is dropped instead, and the definition it names is simply never
+  // applied — which is why a few of these fail as a verdict rather than a refusal.
   // ---------------------------------------------------------------------------
-  'unevaluatedItems.json/unevaluatedItems depends on adjacent contains/contains passes, second item is not evaluated':
-    'annotation: a satisfied `contains` marks the whole array evaluated (Ajv parity), so the leftover item is not policed',
-  'unevaluatedItems.json/unevaluatedItems depends on multiple nested contains/7 not evaluated, fails unevaluatedItems':
-    'annotation: a satisfied `contains` marks the whole array evaluated (Ajv parity), so the leftover item is not policed',
-  "unevaluatedItems.json/unevaluatedItems and contains interact to control item dependency relationship/only a's and c's are invalid":
-    'annotation: a satisfied `contains` marks the whole array evaluated (Ajv parity), so the leftover item is not policed',
-  'unevaluatedItems.json/unevaluatedItems with minContains = 0/all items evaluated by contains':
-    'annotation: `minContains: 0` with no `maxContains` opts out of annotating entirely (Ajv parity), so items the `contains` did match read as unevaluated',
+  'defs.json': 'another document: the target is the 2020-12 metaschema, which the generator does not fetch',
+  'ref.json/remote ref, containing refs itself':
+    'another document: the target is the 2020-12 metaschema, which the generator does not fetch',
+  'dynamicRef.json/$ref to $dynamicRef finds detached $dynamicAnchor':
+    'another document: the target is `detached-dynamicref.json`, which the generator does not fetch',
+  'dynamicRef.json/tests for implementation dynamic anchor and reference link/correct extended schema':
+    'another document: `$ref: "extendible-dynamic-ref.json"` is dropped rather than refused, so the definition it names is never applied',
+  'dynamicRef.json/$ref and $dynamicAnchor are independent of order - $defs first/incorrect parent schema':
+    'another document: `$ref: "extendible-dynamic-ref.json"` is dropped rather than refused, so the definition it names is never applied',
+  'dynamicRef.json/$ref and $dynamicAnchor are independent of order - $defs first/incorrect extended schema':
+    'another document: `$ref: "extendible-dynamic-ref.json"` is dropped rather than refused, so the definition it names is never applied',
+  'dynamicRef.json/$ref and $dynamicAnchor are independent of order - $ref first/incorrect parent schema':
+    'another document: `$ref: "extendible-dynamic-ref.json"` is dropped rather than refused, so the definition it names is never applied',
+  'dynamicRef.json/$ref and $dynamicAnchor are independent of order - $ref first/incorrect extended schema':
+    'another document: `$ref: "extendible-dynamic-ref.json"` is dropped rather than refused, so the definition it names is never applied',
+  'refRemote.json/remote ref': 'another document: the target is served from the suite’s `remotes/`, not the schema',
+  'refRemote.json/fragment within remote ref':
+    'another document: the target is served from the suite’s `remotes/`, not the schema',
+  'refRemote.json/anchor within remote ref':
+    'another document: the target is served from the suite’s `remotes/`, not the schema',
+  'refRemote.json/ref within remote ref':
+    'another document: the target is served from the suite’s `remotes/`, not the schema',
+  'refRemote.json/base URI change':
+    'another document: the target is served from the suite’s `remotes/`, not the schema',
+  'refRemote.json/base URI change - change folder/number is valid':
+    'another document: the target is served from the suite’s `remotes/`, not the schema',
+  'refRemote.json/base URI change - change folder in subschema/number is valid':
+    'another document: the target is served from the suite’s `remotes/`, not the schema',
+  'refRemote.json/remote ref with ref to defs/valid':
+    'another document: the target is served from the suite’s `remotes/`, not the schema',
+  'refRemote.json/Location-independent identifier in remote ref':
+    'another document: the target is served from the suite’s `remotes/`, not the schema',
+  'refRemote.json/remote HTTP ref with different $id':
+    'another document: the target is served from the suite’s `remotes/`, not the schema',
+  'refRemote.json/remote HTTP ref with different URN $id':
+    'another document: the target is served from the suite’s `remotes/`, not the schema',
+  'refRemote.json/remote HTTP ref with nested absolute ref':
+    'another document: the target is served from the suite’s `remotes/`, not the schema',
+  'refRemote.json/$ref to $ref finds detached $anchor':
+    'another document: the target is served from the suite’s `remotes/`, not the schema',
+  'refRemote.json/root ref in remote ref/string is valid':
+    'another document: the target is served from the suite’s `remotes/`, not the schema',
+  'refRemote.json/root ref in remote ref/null is valid':
+    'another document: the target is served from the suite’s `remotes/`, not the schema',
+  'refRemote.json/retrieved nested refs resolve relative to their URI not $id/string is valid':
+    'another document: the target is served from the suite’s `remotes/`, not the schema',
+
+  // ---------------------------------------------------------------------------
+  // dynamic scope: which `$dynamicAnchor` wins depends on the evaluation path
+  //
+  // A `$dynamicRef` binds to the outermost resource in the *dynamic scope* — the
+  // chain of resources evaluation actually passed through — which a generator
+  // cannot know, because it emits one function per definition and that function
+  // is shared by every path that reaches it. The static approximation binds each
+  // anchor name document-wide, first declaration winning, which is right for the
+  // recursive-tree and `strict-tree` idioms and for every non-bookended reference
+  // (those degrade to a plain `$ref`, which is now resolved through `$id` too).
+  // These are the cases where the two answers differ. Use
+  // `@amritk/runtime-validators`, which evaluates the scope as it walks.
+  // ---------------------------------------------------------------------------
+  'dynamicRef.json/after leaving a dynamic scope, it is not used by a $dynamicRef/string matches /$defs/thingy, but the $dynamicRef does not stop here':
+    'dynamic scope: the anchor is bound document-wide (first declaration wins), not to the outermost resource the evaluation passed through',
+  'dynamicRef.json/after leaving a dynamic scope, it is not used by a $dynamicRef/first_scope is not in dynamic scope for the $dynamicRef':
+    'dynamic scope: the anchor is bound document-wide (first declaration wins), not to the outermost resource the evaluation passed through',
+  'dynamicRef.json/multiple dynamic paths to the $dynamicRef keyword/number list with string values':
+    'dynamic scope: one generated definition is shared by both paths, so the anchor cannot resolve differently per path',
+  'dynamicRef.json/multiple dynamic paths to the $dynamicRef keyword/string list with number values':
+    'dynamic scope: one generated definition is shared by both paths, so the anchor cannot resolve differently per path',
 
   // ---------------------------------------------------------------------------
   // refused: keywords strict mode cannot prove inline
@@ -90,155 +158,43 @@ export const EXPECTED_FAILURES: ExpectedFailures = {
   // Strict mode's contract is that a parsed value provably satisfies the schema,
   // so a keyword it cannot inline stops generation instead of producing a parser
   // that would accept what the schema rejects. Cost: a build error, never a wrong
-  // verdict. The coercing parser or `@amritk/runtime-validators` takes these.
+  // verdict. Every one of these is a schema that refers back into itself, which
+  // the inline matcher will not unroll. The coercing parser or
+  // `@amritk/runtime-validators` takes them.
   // ---------------------------------------------------------------------------
   'dynamicRef.json/strict-tree schema, guards against misspelled properties':
-    'refused: strict mode cannot prove `unevaluatedProperties` inline, and refuses rather than emit a parser that accepts what the schema rejects',
-  'ref.json/ref to if':
-    'refused: strict mode cannot prove `$ref` inline, and refuses rather than emit a parser that accepts what the schema rejects',
-  'ref.json/ref to then':
-    'refused: strict mode cannot prove `$ref` inline, and refuses rather than emit a parser that accepts what the schema rejects',
-  'ref.json/ref to else':
-    'refused: strict mode cannot prove `$ref` inline, and refuses rather than emit a parser that accepts what the schema rejects',
-  'refRemote.json/base URI change':
-    'refused: strict mode cannot prove `constraints` inline, and refuses rather than emit a parser that accepts what the schema rejects',
+    'refused: strict mode cannot prove `unevaluatedProperties` inline through a recursive `$ref`, and refuses rather than emit a parser that accepts what the schema rejects',
   'unevaluatedProperties.json/unevaluatedProperties + single cyclic ref':
-    'refused: strict mode cannot prove `unevaluatedProperties` inline, and refuses rather than emit a parser that accepts what the schema rejects',
-
-  // ---------------------------------------------------------------------------
-  // base URI: refs that only resolve by applying `$id` (refused)
-  //
-  // The ref graph is walked within one document, by JSON Pointer and `$anchor`.
-  // A `$ref` written against an `$id` — relative, absolute, or a URN — a
-  // `$dynamicRef` resolved through the dynamic scope, and anything in another
-  // document have no in-document target, and generation stops naming the ref.
-  // The two `unevaluated*` entries at the end are the exception: a bare relative
-  // ref (`./baseSchema`) is not a form the walker recognizes at all, so it is
-  // dropped rather than refused — and the definition carrying the keyword under
-  // test is simply never applied.
-  // ---------------------------------------------------------------------------
-  'anchor.json/Location-independent identifier with absolute URI':
-    'base URI: the target is another document, which the generator does not fetch',
-  'anchor.json/Location-independent identifier with base URI change in subschema':
-    'base URI: the target is another document, which the generator does not fetch',
-  'defs.json': 'base URI: the target is another document, which the generator does not fetch',
-  'dynamicRef.json/A $dynamicRef to an $anchor in the same schema resource behaves like a normal $ref to an $anchor':
-    'base URI: `$dynamicRef` "#items" is addressed through an `$id`, not by a `$dynamicAnchor` name',
+    'refused: strict mode cannot prove `unevaluatedProperties` inline through a cyclic `$ref`, and refuses rather than emit a parser that accepts what the schema rejects',
   'dynamicRef.json/A $dynamicRef that initially resolves to a schema with a matching $dynamicAnchor resolves to the first $dynamicAnchor in the dynamic scope':
-    'base URI: `$dynamicRef` "extended#meta" is addressed through an `$id`, not by a `$dynamicAnchor` name',
+    'refused: the ref now resolves, but the resulting cycle leaves the root’s sibling `const` unprovable inline, so generation stops rather than drop it',
   'dynamicRef.json/A $dynamicRef that initially resolves to a schema without a matching $dynamicAnchor behaves like a normal $ref to $anchor':
-    'base URI: `$dynamicRef` "extended#meta" is addressed through an `$id`, not by a `$dynamicAnchor` name',
-  'dynamicRef.json/after leaving a dynamic scope, it is not used by a $dynamicRef':
-    'base URI: `$dynamicRef` "inner_scope#thingy" is addressed through an `$id`, not by a `$dynamicAnchor` name',
-  'dynamicRef.json/$ref to $dynamicRef finds detached $dynamicAnchor':
-    'base URI: the target is another document, which the generator does not fetch',
-  'ref.json/remote ref, containing refs itself':
-    'base URI: the target is another document, which the generator does not fetch',
-  'ref.json/refs with relative uris and defs': 'base URI: a nested `$id` re-bases the `#/$defs/...` pointers inside it',
-  'ref.json/relative refs with absolute uris and defs':
-    'base URI: a nested `$id` re-bases the `#/$defs/...` pointers inside it',
-  'ref.json/$id must be resolved against nearest parent, not just immediate parent':
-    'base URI: "http://example.com/b/d.json" resolves only by applying `$id` as a base URI',
-  'ref.json/URN ref with nested pointer ref': 'base URI: a nested `$id` re-bases the `#/$defs/...` pointers inside it',
-  'refRemote.json/remote ref': 'base URI: the target is another document, which the generator does not fetch',
-  'refRemote.json/fragment within remote ref':
-    'base URI: the target is another document, which the generator does not fetch',
-  'refRemote.json/anchor within remote ref':
-    'base URI: the target is another document, which the generator does not fetch',
-  'refRemote.json/ref within remote ref':
-    'base URI: the target is another document, which the generator does not fetch',
-  'refRemote.json/Location-independent identifier in remote ref':
-    'base URI: the target is another document, which the generator does not fetch',
-  'refRemote.json/remote HTTP ref with different $id':
-    'base URI: the target is another document, which the generator does not fetch',
-  'refRemote.json/remote HTTP ref with different URN $id':
-    'base URI: the target is another document, which the generator does not fetch',
-  'refRemote.json/remote HTTP ref with nested absolute ref':
-    'base URI: the target is another document, which the generator does not fetch',
-  'refRemote.json/$ref to $ref finds detached $anchor':
-    'base URI: the target is another document, which the generator does not fetch',
-  'unevaluatedItems.json/unevaluatedItems with $dynamicRef/with no unevaluated items':
-    'base URI: `$ref: "./baseSchema"` is addressed through an `$id`, so the definition carrying `unevaluatedItems` is never named or applied',
-  'unevaluatedProperties.json/unevaluatedProperties with $dynamicRef/with no unevaluated properties':
-    'base URI: `$ref: "./baseSchema"` is addressed through an `$id`, so the definition carrying `unevaluatedProperties` is never named or applied',
+    'refused: the ref now resolves, but the resulting cycle leaves the root’s sibling `const` unprovable inline, so generation stops rather than drop it',
 
   // ---------------------------------------------------------------------------
-  // base URI: refs that resolve, but to the wrong definition
+  // name collision: two embedded resources, one definition name
   //
-  // The cases the walker does not refuse: it finds *a* definition for the ref and
-  // generates against it, where `$id` scoping or dynamic scope would have selected
-  // another. Unlike the group above, these fail as a verdict rather than a build
-  // error — the schema generates, and the parser is measured against a schema its
-  // author did not write.
+  // Each resource carries its own `$defs/stuff`, and both reduce to the file
+  // `stuff.ts`. Emitting one would silently give every reference to the other the
+  // wrong type, so the walker stops and says which two definitions clash. Renaming
+  // has to be the caller's call — the name is what every emitted import is keyed on.
   // ---------------------------------------------------------------------------
-  'anchor.json/same $anchor with different base uri/$ref resolves to /$defs/A/allOf/1':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'dynamicRef.json/A $dynamicRef resolves to the first $dynamicAnchor still in scope that is encountered when the schema is evaluated/An array of strings is valid':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'dynamicRef.json/A $dynamicRef without anchor in fragment behaves identical to $ref/An array of numbers is valid':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  "dynamicRef.json/A $dynamicRef with intermediate scopes that don't include a matching $dynamicAnchor does not affect dynamic scope resolution/An array of strings is valid":
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'dynamicRef.json/An $anchor with the same name as a $dynamicAnchor is not used for dynamic scope resolution':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'dynamicRef.json/A $dynamicRef without a matching $dynamicAnchor in the same schema resource behaves like a normal $ref to $anchor':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'dynamicRef.json/A $dynamicRef with a non-matching $dynamicAnchor in the same schema resource behaves like a normal $ref to $anchor':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'dynamicRef.json/multiple dynamic paths to the $dynamicRef keyword/number list with string values':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'dynamicRef.json/multiple dynamic paths to the $dynamicRef keyword/string list with number values':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'dynamicRef.json/tests for implementation dynamic anchor and reference link/correct extended schema':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'dynamicRef.json/$ref and $dynamicAnchor are independent of order - $defs first/incorrect parent schema':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'dynamicRef.json/$ref and $dynamicAnchor are independent of order - $defs first/incorrect extended schema':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'dynamicRef.json/$ref and $dynamicAnchor are independent of order - $ref first/incorrect parent schema':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'dynamicRef.json/$ref and $dynamicAnchor are independent of order - $ref first/incorrect extended schema':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'dynamicRef.json/$dynamicRef skips over intermediate resources - direct reference/integer property passes':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'dynamicRef.json/$dynamicRef avoids the root of each schema, but scopes are still registered/data is sufficient for schema at second#/$defs/length':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'ref.json/Recursive references between schemas/valid tree':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'ref.json/order of evaluation: $id and $ref/data is valid against first definition':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'ref.json/order of evaluation: $id and $ref on nested schema/data is valid against nested sibling':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'ref.json/simple URN base URI with $ref via the URN/valid under the URN IDed schema':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'ref.json/URN base URI with URN and JSON pointer ref/a string is valid':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'ref.json/URN base URI with URN and anchor ref/a string is valid':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'ref.json/ref with absolute-path-reference/a string is valid':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'refRemote.json/base URI change - change folder/number is valid':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'refRemote.json/base URI change - change folder in subschema/number is valid':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'refRemote.json/root ref in remote ref/string is valid':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'refRemote.json/root ref in remote ref/null is valid':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'refRemote.json/remote ref with ref to defs/valid':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
-  'refRemote.json/retrieved nested refs resolve relative to their URI not $id/string is valid':
-    'base URI: the ref resolves, but to the definition the `$id` scope (or the dynamic scope) says it should not',
+  'dynamicRef.json/$dynamicRef avoids the root of each schema, but scopes are still registered':
+    'name collision: `first`, `second`, and `third` each declare `$defs/stuff`, which all reduce to one filename',
 
   // ---------------------------------------------------------------------------
   // arithmetic and regex flags
   //
-  // Judgement calls rather than missing features. `multipleOf` compares the
-  // quotient to its nearest integer within a scaled tolerance (the shared
-  // `@amritk/helpers/multiple-of-check`); a quotient that overflows to `Infinity`
-  // makes that comparison `NaN`, which the check reads as passing. And `pattern`
-  // compiles without the `u` flag, so ECMAScript Unicode property escapes are
-  // inert. Both shared with `@amritk/generate-validators`.
+  // Judgement calls rather than missing features, and both are shared verbatim
+  // with `@amritk/generate-validators` and `@amritk/runtime-validators` — changing
+  // either here alone would make two packages in this repo disagree about one
+  // schema, which is the thing the differential suites exist to prevent.
+  // `multipleOf` compares the quotient to its nearest integer within a scaled
+  // tolerance (`@amritk/helpers/multiple-of-check`); a quotient that overflows to
+  // `Infinity` makes that comparison `NaN`, which the check reads as passing. And
+  // `pattern` compiles without the `u` flag, so ECMAScript Unicode property
+  // escapes are inert — and turning `u` on would also make a handful of otherwise
+  // legal patterns a syntax error in the emitted regex literal.
   // ---------------------------------------------------------------------------
   'multipleOf.json/float division = inf':
     'arithmetic: an overflowing quotient makes the tolerance comparison `NaN`, and `NaN > tolerance` is false, so the value reads as a clean multiple',

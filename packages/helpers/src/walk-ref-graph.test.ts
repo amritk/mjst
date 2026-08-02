@@ -365,4 +365,45 @@ describe('walk-ref-graph', () => {
       ])
     })
   })
+
+  // `$id` is applied as a base URI before the walk, so a ref written in any of
+  // 2020-12's forms becomes an ordinary, nameable definition.
+  it('walks a ref that only resolves by applying $id as a base URI', () => {
+    const schema = {
+      $id: 'http://localhost:1234/tree',
+      type: 'object',
+      properties: { nodes: { type: 'array', items: { $ref: 'node' } } },
+      $defs: { node: { $id: 'http://localhost:1234/node', type: 'object', properties: { v: { type: 'number' } } } },
+    }
+
+    const nodes = collect(schema, 'Doc')
+
+    expect(nodes.map((n) => ({ ref: n.ref, filename: n.filename }))).toEqual([
+      { ref: undefined, filename: 'doc' },
+      { ref: '#/$defs/node', filename: 'node' },
+    ])
+  })
+
+  // The dangerous half of `$id` scoping: the inner `t` is what the author wrote,
+  // and the walker used to generate against the outer one without saying so.
+  it('generates the definition the $id scope selects, not the document root’s', () => {
+    const schema = {
+      type: 'object',
+      properties: { inner: { $ref: '#/$defs/inner' } },
+      $defs: {
+        t: { type: 'string' },
+        inner: {
+          $id: 'https://example.com/inner',
+          $defs: { t: { type: 'number' } },
+          type: 'object',
+          properties: { value: { $ref: '#/$defs/t' } },
+        },
+      },
+    }
+
+    const nodes = collect(schema, 'Doc')
+
+    expect(nodes.map((n) => n.ref)).toEqual([undefined, '#/$defs/inner', '#/$defs/inner/$defs/t'])
+    expect(nodes[2]?.schema).toEqual({ type: 'number' })
+  })
 })

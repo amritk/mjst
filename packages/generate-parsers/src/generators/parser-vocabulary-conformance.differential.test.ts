@@ -97,7 +97,14 @@ const arrayFragments: readonly Schema[] = [
   { type: 'array', prefixItems: [{ type: 'number' }], unevaluatedItems: { type: 'string' } },
   { type: 'array', contains: { $ref: '#/$defs/posInt' } },
   { type: 'array', contains: { const: 1 }, minContains: 2, maxContains: 3 },
-  { type: 'array', contains: { type: 'number' }, unevaluatedItems: false },
+  // Deliberately absent: `contains` next to an `unevaluated*` keyword. Ajv marks
+  // the *whole* array evaluated once `contains` is satisfied, while 2020-12 says
+  // only the items it matched are — and the official suite agrees with the spec.
+  // The generated parsers follow the spec (and `@amritk/runtime-validators`, so
+  // the two packages cannot disagree about one schema), which makes Ajv an
+  // unusable oracle for that one pairing. `json-schema-conformance.test.ts` and
+  // `subschema-match.test.ts` cover it instead. Everything else about `contains`
+  // and about `unevaluated*` keeps fuzzing here.
   { type: 'array', items: { $ref: '#/$defs/pair' } },
   { type: 'array', items: false },
   { type: 'array', uniqueItems: true, minItems: 1 },

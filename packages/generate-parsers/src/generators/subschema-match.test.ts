@@ -327,11 +327,36 @@ describe('subschemaMatchExpr — unevaluated keywords', () => {
     expect(schemaForm([1, 2])).toBe(false)
   })
 
-  it('treats a satisfied contains as evaluating the whole array (Ajv parity)', () => {
+  // 2020-12 says `contains` evaluates only the items that match it, so a
+  // leftover item is still the `unevaluatedItems` keyword's business. Ajv marks
+  // the whole array evaluated instead, which is why the fuzz corpus excludes
+  // this pairing (see parser-vocabulary-conformance.differential.test.ts).
+  it('treats contains as evaluating only the items it matches', () => {
     const p = predicate({ type: 'array', contains: { type: 'number' }, unevaluatedItems: false })
     expect(p([1])).toBe(true)
-    expect(p([1, 'a'])).toBe(true)
+    expect(p([1, 'a'])).toBe(false)
     expect(p(['a'])).toBe(false)
+  })
+
+  it('lets unevaluatedItems police what contains did not match', () => {
+    const p = predicate({ type: 'array', contains: { type: 'number' }, unevaluatedItems: { type: 'string' } })
+    expect(p([1, 'a'])).toBe(true)
+    expect(p([1, true])).toBe(false)
+  })
+
+  // `minContains: 0` makes `contains` vacuously satisfied, but it still
+  // annotates every item it happens to match.
+  it('keeps annotating matched items when minContains is 0', () => {
+    const p = predicate({ type: 'array', contains: { type: 'string' }, minContains: 0, unevaluatedItems: false })
+    expect(p([])).toBe(true)
+    expect(p(['foo', 'bar'])).toBe(true)
+    expect(p(['foo', 0])).toBe(false)
+  })
+
+  // A `contains` that admits anything leaves nothing for `unevaluatedItems`.
+  it('treats an always-matching contains as evaluating the whole array', () => {
+    const p = predicate({ type: 'array', contains: true, unevaluatedItems: false })
+    expect(p([1, 'a', null])).toBe(true)
   })
 })
 

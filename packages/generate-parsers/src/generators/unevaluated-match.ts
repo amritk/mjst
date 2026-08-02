@@ -16,15 +16,15 @@ import type { MatchContext } from './subschema-match'
  *
  * The one simplification the generated form allows itself is that a keyword
  * which must succeed for the value to be valid at all — `allOf` members, a
- * `$ref` target, `contains` — is treated as having annotated. That is sound
- * because the emitted coverage expression is always one conjunct of a chain that
- * *also* asserts those keywords: if one of them fails the whole match is false
+ * `$ref` target — is treated as having annotated. That is sound because the
+ * emitted coverage expression is always one conjunct of a chain that *also*
+ * asserts those keywords: if one of them fails the whole match is false
  * regardless of what the unevaluated term said. Only the genuinely conditional
  * applicators (`anyOf` / `oneOf` branches, `if`/`then`/`else`,
  * `dependentSchemas`) carry their condition into the expression.
  *
- * Semantics are pinned to Ajv (the differential oracle) exactly where it and the
- * spec letter drift apart — see the `contains` note below.
+ * `contains` is the interesting one, because it annotates *per item* rather than
+ * wholesale — see {@link containsCoverage}.
  */
 
 /** What a schema (and its in-place applicators) evaluates at one instance location. */
@@ -117,17 +117,40 @@ const ownItemCoverage = (
       : null
   if (prefix && prefix.length > 0) terms.push(`${indexVar} < ${prefix.length}`)
 
-  // Ajv parity: a satisfied `contains` marks the *whole* array evaluated, not
-  // just the matching items — but a bare `minContains: 0` (with no
-  // `maxContains`) opts out of annotating at all. This intentionally tracks the
-  // oracle over the stricter spec letter, exactly as the interpreter does.
-  if ('contains' in schema) {
-    const min = typeof schema['minContains'] === 'number' ? (schema['minContains'] as number) : 1
-    const max = typeof schema['maxContains'] === 'number' ? (schema['maxContains'] as number) : undefined
-    if (min !== 0 || max !== undefined) return { all: true, terms }
-  }
-
+  // `contains` is deliberately *not* here: it annotates per item, so it needs the
+  // matcher and the array accessor. See {@link containsCoverage}.
   return { all: false, terms }
+}
+
+/**
+ * What an adjacent `contains` leaves evaluated: only the items that actually
+ * match its subschema, which 2020-12 is explicit about.
+ *
+ * Ajv — this package's differential oracle — instead marks the *whole* array
+ * evaluated once `contains` is satisfied, and `unevaluated-match.ts` used to
+ * follow the oracle. `@amritk/runtime-validators` has since moved to the spec,
+ * and two packages in one repo disagreeing about the same schema is exactly what
+ * the differential suites exist to prevent, so this follows the spec too. The
+ * `parser-vocabulary-conformance.differential.test.ts` corpus excludes the
+ * `contains` + `unevaluated*` pairing for that reason.
+ *
+ * `minContains` / `maxContains` do not enter into it. They decide whether
+ * `contains` is *satisfied*, which the assertion chain checks separately; the
+ * annotation is per item either way.
+ */
+const containsCoverage = (
+  schema: Record<string, unknown>,
+  indexVar: string,
+  acc: string,
+  ctx: MatchContext,
+  match: MatchFn,
+): Coverage | null => {
+  if (!('contains' in schema)) return NONE
+  const itemMatch = match(`(${acc} as unknown[])[${indexVar}]`, schema['contains'] as JSONSchema, nest(ctx))
+  if (itemMatch === null) return null
+  // A `contains` that matches anything evaluates every item there is.
+  if (itemMatch === 'true') return { all: true, terms: [] }
+  return { all: false, terms: [itemMatch] }
 }
 
 /**
@@ -156,6 +179,12 @@ const coverageOf = (
     kind === 'properties'
       ? ownPropertyCoverage(s, varName, ignoreOwnUnevaluated)
       : ownItemCoverage(s, varName, ignoreOwnUnevaluated)
+
+  if (kind === 'items') {
+    const contains = containsCoverage(s, varName, acc, ctx, match)
+    if (contains === null) return null
+    coverage = merge(coverage, contains)
+  }
 
   // `$ref` and `allOf` must both succeed for the value to be valid, so their
   // annotations always count (see the module note).

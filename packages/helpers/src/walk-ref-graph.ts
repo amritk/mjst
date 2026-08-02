@@ -3,6 +3,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { assertIdScopes } from './assert-id-scopes'
 import { buildDynamicRefMap } from './build-dynamic-ref-map'
 import { extractRefs } from './extract-refs'
+import { normalizeRefScopes } from './normalize-ref-scopes'
 import { refToFilename } from './ref-to-filename'
 import { refToName } from './ref-to-name'
 import { resolveDynamicRefs } from './resolve-dynamic-refs'
@@ -194,11 +195,15 @@ const getRootCache = (rootSchema: JSONSchema): RootCache => {
   const existing = rootCaches.get(rootSchema)
   if (existing) return existing
 
-  assertIdScopes(rootSchema)
-  const upgraded = expandBooleanDefinitions(upgradeDraft07Schema(rootSchema as Record<string, unknown>)) as Record<
+  const expanded = expandBooleanDefinitions(upgradeDraft07Schema(rootSchema as Record<string, unknown>)) as Record<
     string,
     unknown
   >
+  assertIdScopes(expanded as JSONSchema)
+  // Applying `$id` as a base URI *once*, here, is what lets everything
+  // downstream — ref resolution, naming, the emitted import graph — keep
+  // treating a `$ref` as a plain document-root pointer.
+  const upgraded = normalizeRefScopes(expanded)
   const cache: RootCache = {
     upgraded,
     dynamicRefMap: buildDynamicRefMap(upgraded as JSONSchema),
