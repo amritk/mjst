@@ -1156,30 +1156,30 @@ targets. Reproduce with `bun run bench:workerd`, `bun run bench:vs` (Node), or
 `bun run bench:vs:bun`.
 
 Every table below was re-measured together on one machine (Bun 1.3.11 /
-Node 22, Linux x64, workerd 1.20260722). That machine is slower than the one
-earlier revisions of this table were taken on — bare Hono reads ~136k ops/s on
-Node here against ~173k there — so the absolute numbers moved down across
-every column at once. Compare columns within a table, not against a figure you
-remember.
+Node 22, Linux x64, workerd 1.20260722), after the pipeline changes described
+below. That machine is slower than the one earlier revisions of this table were
+taken on — bare Hono reads ~148k ops/s on Node here against ~173k there — so
+the absolute numbers sit lower across every column at once. Compare columns
+within a table, not against a figure you remember.
 
 Under **workerd**, the runtime `compileToModule` exists for, measured inside a
 real isolate (Miniflare, one fresh isolate per cell) rather than in a stand-in
-that shares its engine. Each cell is the median of seven isolates, because
+that shares its engine. Each cell is the median of five isolates, because
 isolates differ from one another by more than trials within one isolate do:
 
 | case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
 |:--|--:|--:|--:|--:|
-| static GET | ~86k ops/s ¹ | ~83k | ~69k | **~98k** |
-| dynamic GET, params validated | ~91k ¹ | ~55k | ~61k | **~93k** |
-| POST, body validated | **~30k** ¹ | ~25k | ~23k | ~25k |
+| static GET | ~104k ops/s ¹ | ~98k | ~93k | **~105k** |
+| dynamic GET, params validated | ~93k ¹ | ~65k | ~69k | **~104k** |
+| POST, body validated | **~31k** ¹ | ~25k | ~25k | ~29k |
 
 Under **Node/V8** — the same engine workerd runs, without workerd around it:
 
 | case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
 |:--|--:|--:|--:|--:|
-| static GET | ~136k ops/s ¹ | ~134k | ~100k | **~158k** |
-| dynamic GET, params validated | **~126k** ¹ | ~57k | ~71k | ~118k |
-| POST, body validated | **~50k** ¹ | ~44k | ~35k | ~46k |
+| static GET | ~148k ops/s ¹ | ~143k | ~109k | **~151k** |
+| dynamic GET, params validated | **~123k** ¹ | ~58k | ~81k | **~123k** |
+| POST, body validated | **~53k** ¹ | ~43k | ~36k | ~46k |
 
 Under **Bun/JavaScriptCore**, where web-standard `Request`/`Response` objects
 are far cheaper to build than undici's and more of the difference is the
@@ -1187,9 +1187,9 @@ framework rather than the runtime:
 
 | case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
 |:--|--:|--:|--:|--:|
-| static GET | ~200k ops/s ¹ | ~194k | ~206k | **~381k** |
-| dynamic GET, params validated | ~165k ¹ | ~75k | ~144k | **~229k** |
-| POST, body validated | **~144k** ¹ | ~79k | ~86k | ~125k |
+| static GET | ~185k ops/s ¹ | ~159k | ~272k | **~349k** |
+| dynamic GET, params validated | ~144k ¹ | ~61k | ~145k | **~245k** |
+| POST, body validated | **~146k** ¹ | ~80k | ~100k | ~131k |
 
 <sub>¹ hono-bare does no validation; every @amritk/api column validates, and
 the runtime column validates responses too (`validateResponses: true`, the
@@ -1198,14 +1198,16 @@ every case before it is timed.</sub>
 
 Read the ratios, not the absolutes. Against the like-for-like column —
 `hono + zod`, the other stack that actually validates — the compiled engine
-leads every case on Bun (1.6–3.1×), Node (1.1–2.1×), and workerd (1.0–1.7×),
+leads every case on Bun (1.6–4.0×), Node (1.1–2.1×), and workerd (1.1–1.6×),
 widest wherever params and query have to be coerced and checked. Against
-*unvalidated* Hono it leads the GET cases on Bun (1.4–1.9×) and on workerd
-(1.0–1.1×), leads Node's static GET (1.2×), and trails on the POST case
-everywhere (0.83–0.92×) — that case is dominated by reading and parsing the
-body, which every column pays and none of the compiler's work removes. The
-runtime (development) engine — no build step, response validation on — lands
-around `hono + zod` on Node and workerd, and above it on Bun.
+*unvalidated* Hono it leads the GET cases on Bun (1.7–1.9×) and on workerd
+(1.0–1.1×), matches on Node's, and trails on the POST case everywhere
+(0.87–0.94×) — that case is dominated by reading and parsing the body, which
+every column pays and none of the compiler's work removes. The runtime
+(development) engine — no build step, response validation on — now lands level
+with `hono + zod` under workerd (0.95–1.06×), well above it on Bun
+(1.25–2.38×), and mixed on Node, where it trails on the static GET and the POST
+but leads the dynamic one (0.76–1.40×).
 
 **On the pauses this table used to warn about.** An earlier revision reported
 that workerd stalled the `@amritk/api` columns far more often than Hono, and
@@ -1229,11 +1231,33 @@ the deferral and gives the layout back. The compiled engine now allocates
 **816 bytes per request and stalls on 0 of 60 batches**, matching both Hono
 columns, where before it stalled on 5 and lost 29% of its wall clock to them.
 
-The runtime engine is not finished. It still stalls (4–9 batches in 60,
-run to run) and allocates ~2172 bytes per request — enough that a collection
-lands inside every measurement window and its allocation slope will not even
-fit. Response validation is part of that and is meant to be, but not all of
-it. That one is open work, and the medians above are what to plan against.
+The runtime engine had a second, unrelated cost: it ran the whole request
+through an `async` pipeline even when nothing in it suspended. A route with no
+declared body, no `refine`, no context factory, no guards, and a synchronous
+handler never needs to yield, and the frame and promise were pure overhead.
+`Api.handle` now returns `ApiResponse | Promise<ApiResponse>` and the pipeline
+stays synchronous until something genuinely asynchronous appears. On the static
+GET that took it from 2115 to 1510 bytes per request and from ~69k to ~93k
+ops/s — from 0.80× bare Hono to level with it.
+
+What that did *not* fix is the pause. The runtime engine's batch times under
+workerd are still bimodal: a p95 around 3.3× its median, a discrete ~40 ms
+event rather than a broad spread. Removing the async machinery did not move it
+and neither did turning response validation off, so it is a major collection
+driven by something still unaccounted for. The compiled engine — the production
+path — does not show it, and its p95 sits within a few percent of its median.
+That one is open work, and the medians above are what to plan against.
+
+One more thing the measurements settled. The body read is the POST case's
+dominant cost, and `bun run bench:workerd:body` compares four ways of doing it,
+paired inside each round so machine drift cancels. Reading through workerd's
+native `text()` and parsing in JS is worth 1.20–1.23× over the `arrayBuffer` +
+`TextDecoder` route both engines take today; native `json()`, which is what
+Hono uses, is worth only 1.11–1.12× — it loses to `text()` plus a JS parse.
+Neither is free: the engines buffer bytes so that `readBody`, `readText`, and
+`readBytes` all stay available on the same request, which is what a webhook
+handler verifying an HMAC over the exact bytes needs, and a native read
+consumes the body once. That trade is not made here.
 
 The three runtimes disagree for a reason worth knowing. Building the `Request`
 and `Response` objects is itself a large fixed cost on Node's undici, paid
