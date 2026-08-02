@@ -100,6 +100,8 @@ export const createBenchHandler = (compiled: FetchLike): { fetch: FetchLike } =>
       const median = sorted[Math.floor(sorted.length / 2)] ?? 0
       const stalled = batches.filter((duration) => duration > median * PAUSE_FACTOR)
       const total = batches.reduce((sum, duration) => sum + duration, 0)
+      const at = (percentile: number): number =>
+        sorted[Math.min(sorted.length - 1, Math.floor((sorted.length * percentile) / 100))] ?? 0
       return json({
         column: column.label,
         case: benchCase.label,
@@ -109,6 +111,15 @@ export const createBenchHandler = (compiled: FetchLike): { fetch: FetchLike } =>
         slowestBatchMs: sorted[sorted.length - 1] ?? 0,
         stalledBatches: stalled.length,
         stalledMsShare: total > 0 ? stalled.reduce((sum, duration) => sum + duration, 0) / total : 0,
+        // The stall count alone is misleading, because a fixed multiple of the
+        // median rewards a column for having a *slow* median: bare Hono scored
+        // zero stalls on the static GET while being the most variable column in
+        // the table, purely because its median was high enough to put the
+        // threshold above its own worst batch. The tail ratio says the same
+        // thing without that bias — how much worse the bad batches are than the
+        // typical one, which is what a pause actually is.
+        p95Ms: at(95),
+        tailRatio: median > 0 ? at(95) / median : 0,
       })
     }
 

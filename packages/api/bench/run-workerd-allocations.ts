@@ -52,6 +52,20 @@ const INSPECTOR_PORT = 9329
 const OP_COUNTS = [100, 200, 400, 800] as const
 const READINGS_PER_COUNT = 15
 
+/**
+ * Successively smaller windows to fall back on, and the fit quality a slope
+ * has to reach before it is believed. A heavy column collects inside every
+ * window at the base sizes; dividing the ladder is what makes it measurable.
+ */
+const LADDER_DIVISORS = (process.env['LADDER'] ?? '1,4,16').split(',').map(Number)
+const MIN_R2 = 0.9
+
+/** `DEBUG=1` prints the raw per-reading deltas, which is how a bad fit gets diagnosed. */
+const DEBUG = process.env['DEBUG'] === '1'
+
+/** Restricts the sweep to one column index, for iterating on a single engine. */
+const COLUMN_FILTER = process.env['COLUMN'] ?? ''
+
 type HeapUsage = { readonly usedSize: number }
 
 type Inspector = {
@@ -161,12 +175,13 @@ const median = (values: readonly number[]): number => {
  * those medians against the op count cancels the constant cost of the dispatch
  * and the heap read alike, leaving the slope: bytes per request.
  */
-const bytesPerRequest = async (
+const measureLadder = async (
   columnIndex: number,
   caseIndex: number,
-): Promise<{ readonly bytesPerOp: number; readonly r2: number; readonly kept: number }> => {
+  ladder: readonly number[],
+): Promise<readonly Point[]> => {
   const points: Point[] = []
-  for (const ops of OP_COUNTS) {
+  for (const ops of ladder) {
     const clean = await withIsolate(async (dispatch, inspector) => {
       // A priming run so the isolate is past its first-call lazy work before
       // any reading counts; otherwise the smallest window carries all of it.
@@ -181,10 +196,46 @@ const bytesPerRequest = async (
       }
       return deltas
     })
+    if (DEBUG)
+      console.log(
+        `    [debug] column ${columnIndex} ops ${ops}: ${clean.length} clean of ${READINGS_PER_COUNT} — ${clean.join(', ')}`,
+      )
     if (clean.length > 0) points.push({ ops, bytes: median(clean) })
   }
-  if (points.length < 3) return { bytesPerOp: Number.NaN, r2: 0, kept: points.length }
-  return { ...fit(points), kept: points.length }
+  return points
+}
+
+/**
+ * Bytes per request for one column on one case.
+ *
+ * Each op count gets its own isolate, and inside it the same window is read
+ * many times over. A window whose heap went backwards had a collection land
+ * inside it — that delta measures the collector, not the engine, so it is
+ * dropped and the median of the survivors stands for the window. Regressing
+ * those medians against the op count cancels the constant cost of the dispatch
+ * and the heap read alike, leaving the slope: bytes per request.
+ *
+ * The ladder shrinks when the fit is bad. A column that allocates enough to
+ * collect inside every window at these sizes yields nothing but noise — the
+ * runtime engine did exactly that, fitting r² 0.01 on a *negative* slope — and
+ * the fix is smaller windows, not a different statistic.
+ */
+const bytesPerRequest = async (
+  columnIndex: number,
+  caseIndex: number,
+): Promise<{ readonly bytesPerOp: number; readonly r2: number; readonly ladder: readonly number[] }> => {
+  for (const divisor of LADDER_DIVISORS) {
+    const ladder = OP_COUNTS.map((ops) => Math.max(10, Math.round(ops / divisor)))
+    const points = await measureLadder(columnIndex, caseIndex, ladder)
+    if (points.length < 3) continue
+    const fitted = fit(points)
+    if (fitted.bytesPerOp > 0 && fitted.r2 >= MIN_R2) return { ...fitted, ladder }
+    if (DEBUG)
+      console.log(
+        `    [debug] column ${columnIndex} ladder /${divisor} rejected: slope ${Math.round(fitted.bytesPerOp)} r² ${fitted.r2.toFixed(2)}`,
+      )
+  }
+  return { bytesPerOp: Number.NaN, r2: 0, ladder: [] }
 }
 
 const parity = (await withIsolate(async (dispatch) => dispatch('/parity'))) as { columns: readonly string[] }
@@ -196,28 +247,31 @@ console.log('\n=== @amritk/api vs hono — allocation and pause behaviour inside
 console.log(`Runtime: workerd (Miniflare), driven from ${typeof Bun !== 'undefined' ? `Bun ${Bun.version}` : 'Node'}`)
 console.log('Bytes/req is the slope of heap growth against request count, taken over')
 console.log(`op counts ${OP_COUNTS.join(', ')} in fresh isolates; r² is the fit quality.`)
-console.log('Stalled batches are batches of 2048 requests that ran more than 2x the')
-console.log('median batch — the pause claim, measured rather than inferred.\n')
+console.log('Batches are 2048 requests each, timed inside the isolate. p95/median is')
+console.log('the pause signal: near 1.0 means the slow batches look like the typical')
+console.log('one, and a large ratio means the column is being stopped.\n')
 
-const staticCaseIndex = CASES.findIndex((benchCase) => benchCase.label === 'static GET')
-const caseIndex = staticCaseIndex === -1 ? 0 : staticCaseIndex
+/** `CASE` selects which case to profile; unset, the static GET. */
+const CASE_FILTER = process.env['CASE'] ?? 'static GET'
+const matchedCase = CASES.findIndex((benchCase) => benchCase.label.includes(CASE_FILTER))
+const caseIndex = matchedCase === -1 ? 0 : matchedCase
 console.log(`Case: ${CASES[caseIndex]?.label}\n`)
 
 console.log(
-  `  ${pad('column', 26)}${padStart('bytes/req', 12)}${padStart('r²', 8)}${padStart('median batch', 14)}${padStart('stalled', 10)}${padStart('stall share', 13)}`,
+  `  ${pad('column', 26)}${padStart('bytes/req', 12)}${padStart('r²', 8)}${padStart('median batch', 14)}${padStart('p95', 10)}${padStart('p95/median', 12)}`,
 )
 for (const [columnIndex, label] of parity.columns.entries()) {
+  if (!label.includes(COLUMN_FILTER)) continue
   const allocation = await bytesPerRequest(columnIndex, caseIndex)
   const pauses = (await withIsolate(async (dispatch) =>
     dispatch(`/pauses?column=${columnIndex}&case=${caseIndex}`),
   )) as {
-    batches: number
     medianBatchMs: number
-    stalledBatches: number
-    stalledMsShare: number
+    p95Ms: number
+    tailRatio: number
   }
   console.log(
-    `  ${pad(label, 26)}${padStart(Number.isNaN(allocation.bytesPerOp) ? 'n/a' : Math.round(allocation.bytesPerOp).toString(), 12)}${padStart(allocation.r2.toFixed(2), 8)}${padStart(`${pauses.medianBatchMs.toFixed(2)} ms`, 14)}${padStart(`${pauses.stalledBatches}/${pauses.batches}`, 10)}${padStart(`${(pauses.stalledMsShare * 100).toFixed(0)}%`, 13)}`,
+    `  ${pad(label, 26)}${padStart(Number.isNaN(allocation.bytesPerOp) ? 'n/a' : Math.round(allocation.bytesPerOp).toString(), 12)}${padStart(allocation.r2.toFixed(2), 8)}${padStart(`${pauses.medianBatchMs.toFixed(0)} ms`, 14)}${padStart(`${pauses.p95Ms.toFixed(0)} ms`, 10)}${padStart(`${pauses.tailRatio.toFixed(2)}x`, 12)}`,
   )
 }
 console.log('')

@@ -418,7 +418,19 @@ const runRoute = async (
         if (denied !== undefined) break
       }
     }
-    reply = denied ?? (await route.contract.handler(context))
+    if (denied !== undefined) {
+      reply = denied
+    } else {
+      // Awaited only when the handler actually returned a promise. `await` on
+      // a plain value still allocates promise machinery and costs a microtask
+      // turn, and a synchronous handler is the common case — the compiled
+      // engine emits the same thenable check for the same reason.
+      const returned = route.contract.handler(context)
+      reply =
+        typeof (returned as { then?: unknown } | undefined)?.then === 'function'
+          ? await (returned as Promise<RouteReplyValue | RawReply>)
+          : (returned as RouteReplyValue | RawReply)
+    }
   } catch (error) {
     // A handler that read the body itself (webhook verification, uploads)
     // hits the size limit as a thrown error — that is the transport's 413,

@@ -251,7 +251,7 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     return current
   }
 
-  const handler = async (
+  const handler = (
     request: Request,
     env?: unknown,
     executionContext?: unknown,
@@ -270,7 +270,8 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     const path = pathStart === -1 ? '/' : queryIndex === -1 ? url.slice(pathStart) : url.slice(pathStart, queryIndex)
 
     for (const [prefix, mount] of mounts) {
-      if (path === prefix || path.startsWith(prefix + '/')) return mount(request, env, executionContext)
+      if (path === prefix || path.startsWith(prefix + '/'))
+        return Promise.resolve(mount(request, env, executionContext))
     }
 
     // All three readers share one buffered read, so the body can be read
@@ -309,18 +310,18 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
         return locals
       },
     } as ApiRequest
-    const response = await api.handle(apiRequest, env, executionContext)
-
     // Translating an ApiResponse into a Response can itself throw — a circular
     // reply body breaks JSON.stringify, an invalid header name breaks the
     // Headers constructor — and `onError` never sees it because the handler
     // already returned. Without this boundary the rejection escapes to the
     // platform instead of becoming the pipeline's own 500 shape.
-    try {
-      return request.method === 'HEAD' ? headResponse(response) : toResponse(response)
-    } catch {
-      return internalError()
-    }
+    return api.handle(apiRequest, env, executionContext).then((response) => {
+      try {
+        return request.method === 'HEAD' ? headResponse(response) : toResponse(response)
+      } catch {
+        return internalError()
+      }
+    })
   }
 
   if (onRequest.length === 0 && onResponse.length === 0) return handler
