@@ -290,7 +290,11 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     // created lazily on first `locals` access, so the zero-hook fast path
     // never allocates for it.
     let locals = sharedLocals
-    const apiRequest: ApiRequest = {
+    // Asserted rather than annotated: `__proto__` is not a member of
+    // ApiRequest — it is how the literal gets its prototype, and `signal`
+    // arrives from there. See API_REQUEST_PROTO for why that matters.
+    const apiRequest = {
+      __proto__: API_REQUEST_PROTO,
       method: request.method,
       path,
       searchParams: () => new URLSearchParams(queryIndex === -1 ? '' : url.slice(queryIndex + 1)),
@@ -299,14 +303,12 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
       readBody: () => readAllBytes().then((buffer) => JSON.parse(DECODER.decode(buffer)) as unknown),
       readText: () => readAllBytes().then((buffer) => DECODER.decode(buffer)),
       readBytes: readAllBytes,
-      // `signal` is inherited, not an own accessor — see API_REQUEST_PROTO.
-      __proto__: API_REQUEST_PROTO,
       raw: request,
       get locals(): RequestLocals {
         locals ??= {}
         return locals
       },
-    }
+    } as ApiRequest
     const response = await api.handle(apiRequest, env, executionContext)
 
     // Translating an ApiResponse into a Response can itself throw — a circular
@@ -404,9 +406,9 @@ const hookApiRequest = (request: Request, locals: RequestLocals, maxBodyBytes: n
  * lazy read costs nothing. Reading through the receiver means `this` is the
  * request object, so destructuring still evaluates it correctly.
  */
-const API_REQUEST_PROTO = {
+const API_REQUEST_PROTO: ThisType<{ readonly raw: Request }> & { readonly signal: AbortSignal | undefined } = {
   get signal(): AbortSignal | undefined {
-    return (this as { readonly raw: Request }).raw.signal
+    return this.raw.signal
   },
 }
 
