@@ -84,6 +84,31 @@ describe('generated-code-syntax', () => {
     ).toEqual([])
   })
 
+  it('emits a parseable validator for the unevaluated keywords', () => {
+    // These emit an arrow inside a `.every(...)` inside an `if (!(…))`, with the
+    // branch conditions bound to locals ahead of it — more nesting than anything
+    // else the generator produces, and the easiest place to drop a paren.
+    const schema: JSONSchema = {
+      properties: { foo: { type: 'string' } },
+      patternProperties: { '^x-': true },
+      allOf: [{ properties: { bar: true } }],
+      anyOf: [{ required: ['baz'], properties: { baz: true } }],
+      if: { required: ['foo'] },
+      then: { properties: { qux: true } },
+      dependentSchemas: { foo: { properties: { dep: true } } },
+      unevaluatedProperties: { type: 'string' },
+    }
+    expect(syntaxErrors(generateValidatorFunction(schema, 'Uneval'))).toEqual([])
+
+    const arraySchema: JSONSchema = {
+      prefixItems: [{ type: 'string' }],
+      contains: { type: 'number' },
+      allOf: [{ prefixItems: [true, true] }],
+      unevaluatedItems: false,
+    }
+    expect(syntaxErrors(generateValidatorFunction(arraySchema, 'UnevalItems'))).toEqual([])
+  })
+
   it('emits a parseable boolean guard for a mixed object schema', () => {
     const schema: JSONSchema = {
       type: 'object',

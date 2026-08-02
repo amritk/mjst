@@ -64,7 +64,7 @@ export const collectValidatorImports = (schema: JSONSchema, options?: CollectVal
   const rootSchema = options?.rootSchema
   const typeSuffix = options?.typeSuffix ?? ''
 
-  const refs = collectEmittedRefs(schema)
+  const refs = collectEmittedRefs(schema, [], rootSchema)
   const seen = new Set<string>()
   const imports: string[] = []
 

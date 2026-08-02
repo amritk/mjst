@@ -51,11 +51,20 @@ describe('format is an annotation', () => {
     expect(generated({})).not.toBe(true)
   })
 
-  it('throws instead for narrowing keywords it does not implement', () => {
+  it('never quietly ignores a narrowing keyword the way it ignores format', () => {
     // The contrast that defines the rule: ignoring `format` is a defensible
-    // reading of the spec, ignoring `unevaluatedProperties` is not.
+    // reading of the spec, ignoring `unevaluatedProperties` is not. So the
+    // generator either enforces it…
     const schema = { type: 'object', properties: { a: {} }, unevaluatedProperties: false }
+    const generated = evalValidator(generateValidatorFunction(schema as never, 'Root'))
+    expect(generated({ a: 1 })).toBe(true)
+    expect(generated({ b: 1 })).not.toBe(true)
+    expect(validate(schema as never)({ b: 1 })).not.toBe(true)
 
-    expect(() => generateValidatorFunction(schema as never, 'Root')).toThrow(/unsupported keyword/)
+    // …or, for the shapes flat code genuinely cannot see through, refuses to
+    // generate at all. Never a validator that says yes where the interpreter
+    // says no.
+    const dynamic = { $dynamicRef: '#node', properties: { a: {} }, unevaluatedProperties: false }
+    expect(() => generateValidatorFunction(dynamic as never, 'Root')).toThrow(/unsupported "unevaluatedProperties"/)
   })
 })

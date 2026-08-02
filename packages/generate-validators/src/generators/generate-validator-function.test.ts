@@ -1147,6 +1147,32 @@ describe('generate-validator-function', () => {
       }
     })
 
+    it('drops the `is` when the emitted type would not describe everything the validator accepts', () => {
+      // `{ properties: { … } }` with no `type` reads as "*if* it is an object…",
+      // so `validateRoot(42)` is true while the emitted type is `{ a: string }`.
+      // Narrowing there would be a silent lie at every call site, so the guard
+      // keeps the check and gives up the predicate.
+      const implicit = { properties: { a: { type: 'string' as const } }, required: ['a'] }
+      expect(generateBooleanGuard(implicit, 'Root')).toBe(
+        'export const isRoot = (input: unknown): boolean => validateRoot(input) === true',
+      )
+      const { validate, guard } = evalBoth(implicit, 'Root')
+      for (const value of [42, 'x', null, [], { a: 'ok' }, { a: 1 }, {}]) {
+        expect(guard(value), `disagreement on ${JSON.stringify(value)}`).toBe(validate(value) === true)
+      }
+
+      // A declared `type` pins the family, so the narrowing is true and stays.
+      expect(generateBooleanGuard({ ...implicit, type: 'object' as const }, 'Root')).toContain('input is Root')
+      // So does a combinator whose every branch pins one.
+      expect(
+        generateBooleanGuard({ anyOf: [{ type: 'string' as const }, { type: 'number' as const }] }, 'Root'),
+      ).toContain('input is Root')
+      // But not one whose branches are themselves implicit object shapes.
+      expect(generateBooleanGuard({ allOf: [{ properties: { a: { type: 'string' as const } } }] }, 'Root')).toContain(
+        '(input: unknown): boolean',
+      )
+    })
+
     it('agrees with `validateX(input) === true` across many mutated inputs', () => {
       const schema = {
         type: 'object' as const,
@@ -1452,16 +1478,30 @@ describe('generate-validator-function', () => {
     expect(validate({})).not.toBe(true) // required presence still enforced
   })
 
-  it('throws for a constraining unevaluatedProperties (unsupported keyword)', () => {
-    // The generator has no support for `unevaluatedProperties`, so rather than
-    // emit a validator that silently accepts what the interpreter rejects it must
-    // fail loudly at generation time.
-    expect(() =>
+  it('enforces a constraining unevaluatedProperties against the keys its siblings evaluated', () => {
+    const validate = evalValidator(
       generateValidatorFunction(
         { type: 'object', properties: { a: { type: 'string' } }, unevaluatedProperties: false },
         'X',
       ),
-    ).toThrow(/unsupported keyword "unevaluatedProperties"/)
+    )
+    expect(validate({ a: 'ok' })).toBe(true)
+    expect(validate({})).toBe(true)
+    // `b` is evaluated by nothing, which is exactly what the keyword forbids.
+    expect(validate({ a: 'ok', b: 1 })).not.toBe(true)
+  })
+
+  it('refuses an unevaluatedProperties whose coverage runs through a $dynamicRef', () => {
+    // The keyword is implemented, but its coverage has to be worked out at
+    // generation time and a `$dynamicRef` only picks its target at validation
+    // time. Refusing for that *shape* is the honest report; emitting a check
+    // built on a guess would accept documents the interpreter rejects.
+    expect(() =>
+      generateValidatorFunction(
+        { $dynamicRef: '#node', properties: { a: { type: 'string' } }, unevaluatedProperties: false },
+        'X',
+      ),
+    ).toThrow(/unsupported "unevaluatedProperties"/)
   })
 
   it('allows unevaluatedProperties: true since it constrains nothing', () => {
