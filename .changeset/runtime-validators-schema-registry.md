@@ -42,3 +42,17 @@ documents to `schemas`, which is the sanctioned equivalent of the HTTP server th
 suite would otherwise expect: same documents, same URIs, handed over instead of
 fetched, with the interpreter still doing all the base-URI, anchor and
 cross-document work the cases exist to test.
+
+The dialect itself ships alongside, as an opt-in subpath:
+
+```ts
+import { metaschema } from '@amritk/runtime-validators/metaschema'
+
+validate(userSchema, { schemas: metaschema }) // "is this a valid 2020-12 schema?"
+```
+
+Eight documents (the dialect plus its seven vocabulary metaschemas), ~7.9 KB of
+JSON, reachable only through that subpath — the main entry never imports it, so a
+caller who does not ask for it ships none of it. A test holds the copy to Ajv's
+vendored specification text by deep equality, which makes Ajv a *check* on the
+transcription rather than a runtime dependency of it.

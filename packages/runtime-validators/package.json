@@ -50,6 +50,11 @@
       "development": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./metaschema": {
+      "development": "./src/metaschema/index.ts",
+      "types": "./dist/metaschema/index.d.ts",
+      "default": "./dist/metaschema/index.js"
     }
   },
   "devDependencies": {

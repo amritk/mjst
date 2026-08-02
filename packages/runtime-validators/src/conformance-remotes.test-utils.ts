@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { join } from 'node:path'
+
+import { metaschema } from './metaschema'
 
 /**
  * The documents the official JSON Schema Test Suite expects a validator to be
@@ -17,11 +18,18 @@ import { join } from 'node:path'
  * resolve the base URIs, walk the anchors and get the `$dynamicRef` bookending
  * right across documents — only the retrieval step is answered for it, which is
  * the one thing this package will never do itself.
+ *
+ * The dialect metaschema goes in alongside them. A few cases (`defs.json`, and
+ * `ref.json`'s "remote ref, containing refs itself") validate a schema *against
+ * its own dialect* by `$ref`ing `https://json-schema.org/draft/2020-12/schema`,
+ * which the suite does not ship in `remotes/` — it assumes a validator knows the
+ * dialect it implements. This one does: the documents come from the package's
+ * own `@amritk/runtime-validators/metaschema` export, so nothing in the
+ * measurement path reaches into another package's internals.
  */
 export const loadSuiteDocuments = (): Record<string, unknown> => {
-  const documents: Record<string, unknown> = {}
+  const documents: Record<string, unknown> = { ...metaschema }
   collectRemotes(REMOTES_DIR, 'http://localhost:1234/draft2020-12', documents)
-  collectMetaschema(documents)
   return documents
 }
 
@@ -39,32 +47,5 @@ const collectRemotes = (dir: string, prefix: string, documents: Record<string, u
     const full = join(dir, entry.name)
     if (entry.isDirectory()) collectRemotes(full, `${prefix}/${entry.name}`, documents)
     else if (entry.name.endsWith('.json')) documents[`${prefix}/${entry.name}`] = JSON.parse(readFileSync(full, 'utf8'))
-  }
-}
-
-/**
- * Adds the official Draft 2020-12 metaschema and the seven vocabulary
- * metaschemas it is assembled from.
- *
- * A few suite cases (`defs.json`, and `ref.json`'s "remote ref, containing refs
- * itself") validate a schema *against its own dialect*, which means `$ref`ing
- * `https://json-schema.org/draft/2020-12/schema`. The suite does not ship that
- * document in `remotes/` — it assumes a validator knows the dialect it
- * implements — so a harness has to bring its own copy. Ajv is already this
- * package's differential oracle and vendors the specification text verbatim, so
- * we read it from there rather than keeping a second copy in sync.
- */
-const collectMetaschema = (documents: Record<string, unknown>): void => {
-  const require = createRequire(import.meta.url)
-  const schemaPath = require.resolve('ajv/dist/refs/json-schema-2020-12/schema.json')
-  documents['https://json-schema.org/draft/2020-12/schema'] = JSON.parse(readFileSync(schemaPath, 'utf8'))
-
-  const metaDir = join(schemaPath, '..', 'meta')
-  for (const entry of readdirSync(metaDir).sort()) {
-    if (!entry.endsWith('.json')) continue
-    const name = entry.slice(0, -'.json'.length)
-    documents[`https://json-schema.org/draft/2020-12/meta/${name}`] = JSON.parse(
-      readFileSync(join(metaDir, entry), 'utf8'),
-    )
   }
 }
