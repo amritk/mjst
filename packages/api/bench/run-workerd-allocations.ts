@@ -96,7 +96,9 @@ const connectInspector = async (): Promise<Inspector> => {
 }
 
 /** One isolate, with the inspector attached, for the duration of `body`. */
-const withIsolate = async <T>(body: (dispatch: (path: string) => Promise<unknown>, inspector: Inspector) => Promise<T>): Promise<T> => {
+const withIsolate = async <T>(
+  body: (dispatch: (path: string) => Promise<unknown>, inspector: Inspector) => Promise<T>,
+): Promise<T> => {
   const mf = new Miniflare({
     modules: true,
     scriptPath: WORKER,
@@ -195,7 +197,7 @@ console.log(`Runtime: workerd (Miniflare), driven from ${typeof Bun !== 'undefin
 console.log('Bytes/req is the slope of heap growth against request count, taken over')
 console.log(`op counts ${OP_COUNTS.join(', ')} in fresh isolates; r² is the fit quality.`)
 console.log('Stalled batches are batches of 2048 requests that ran more than 2x the')
-console.log("median batch — the pause claim, measured rather than inferred.\n")
+console.log('median batch — the pause claim, measured rather than inferred.\n')
 
 const staticCaseIndex = CASES.findIndex((benchCase) => benchCase.label === 'static GET')
 const caseIndex = staticCaseIndex === -1 ? 0 : staticCaseIndex

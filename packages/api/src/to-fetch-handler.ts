@@ -125,11 +125,18 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
   const onResponse = toArray(options?.onResponse)
   const maxBodyBytes = options?.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES
 
-  // One ResponseInit per status code, reused across requests — building JSON
-  // responses via `new Response(string, cachedInit)` instead of
-  // `Response.json` benchmarked ~40% faster through the whole pipeline
-  // (Response.json constructs a Headers object per call). The map stays tiny:
-  // it can only hold statuses the app's handlers actually return.
+  // One ResponseInit per status code, reused across requests, so a JSON reply
+  // is `new Response(string, cachedInit)` rather than `Response.json` — which
+  // constructs a Headers object per call. The map stays tiny: it can only hold
+  // statuses the app's handlers actually return.
+  //
+  // How much that buys depends entirely on the runtime, so it is worth being
+  // precise. On Node/undici it is worth about 10% on the static GET through
+  // the whole pipeline (104k vs 93k ops/s). Inside workerd it is worth
+  // nothing measurable — cached init, a cached `Headers` instance, and plain
+  // `Response.json` all land within the run-to-run noise of each other. It is
+  // kept because it costs nothing anywhere and helps on one runtime, not
+  // because it is load-bearing.
   const inits = new Map<number, ResponseInit>()
   const initFor = (status: number): ResponseInit => {
     let init = inits.get(status)
@@ -292,14 +299,8 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
       readBody: () => readAllBytes().then((buffer) => JSON.parse(DECODER.decode(buffer)) as unknown),
       readText: () => readAllBytes().then((buffer) => DECODER.decode(buffer)),
       readBytes: readAllBytes,
-      // Read through a getter, not eagerly. On workerd `Request.signal`
-      // materializes a host-backed AbortSignal on first touch, and taking one
-      // per request — for handlers that overwhelmingly never look at it — was
-      // enough to make the isolate collect far more often than the byte count
-      // suggests. See the benchmark note in the README.
-      get signal(): AbortSignal | undefined {
-        return request.signal
-      },
+      // `signal` is inherited, not an own accessor — see API_REQUEST_PROTO.
+      __proto__: API_REQUEST_PROTO,
       raw: request,
       get locals(): RequestLocals {
         locals ??= {}
@@ -384,6 +385,29 @@ const hookApiRequest = (request: Request, locals: RequestLocals, maxBodyBytes: n
     raw: request,
     locals,
   }
+}
+
+/**
+ * The prototype every per-request {@link ApiRequest} inherits, carrying one
+ * member: `signal`.
+ *
+ * It is a getter because reading `Request.signal` eagerly is expensive on
+ * workerd — the first touch materializes a host-backed AbortSignal, and paying
+ * that on every request, for handlers that overwhelmingly never look at it,
+ * made the isolate collect far more often than the byte count suggests.
+ *
+ * It lives on a prototype rather than in the object literal because an *own*
+ * accessor is itself expensive: it pushes the object out of V8's in-object
+ * slots, which measured as a 50% increase in bytes allocated per request
+ * inside workerd (852 to 1276) when the compiled engine's request object grew
+ * its first accessor. Inherited, the instances stay plain data objects and the
+ * lazy read costs nothing. Reading through the receiver means `this` is the
+ * request object, so destructuring still evaluates it correctly.
+ */
+const API_REQUEST_PROTO = {
+  get signal(): AbortSignal | undefined {
+    return (this as { readonly raw: Request }).raw.signal
+  },
 }
 
 /** Shared across every response with a JSON body and no custom headers. */

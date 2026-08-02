@@ -64,6 +64,14 @@ const ops = (value: number): string =>
  */
 const REPEATS = Number(process.env['REPEATS'] ?? 5)
 
+/**
+ * Restricts the run to the cases whose label contains this string. Measuring
+ * one case at a time is how an engine change gets iterated on without paying
+ * for the whole table each time; unset, every case runs.
+ */
+const CASE_FILTER = process.env['CASE'] ?? ''
+const SELECTED = CASES.filter((benchCase) => benchCase.label.includes(CASE_FILTER))
+
 const median = (values: readonly number[]): number => {
   const sorted = [...values].sort((a, b) => a - b)
   return sorted[Math.floor(sorted.length / 2)] ?? 0
@@ -77,7 +85,8 @@ console.log('highest]" over those per-isolate medians, so the bracket is how muc
 console.log('cell moves between isolates rather than between trials.\n')
 
 console.log(`  ${pad('case', 32)}${parity.columns.map((label) => padStart(label, 30)).join('')}`)
-for (const [caseIndex, benchCase] of CASES.entries()) {
+for (const benchCase of SELECTED) {
+  const caseIndex = CASES.indexOf(benchCase)
   const cells: string[] = []
   for (const columnIndex of parity.columns.keys()) {
     const medians: number[] = []
@@ -86,9 +95,7 @@ for (const [caseIndex, benchCase] of CASES.entries()) {
       medians.push(stats.median)
     }
     const sorted = [...medians].sort((a, b) => a - b)
-    cells.push(
-      padStart(`${ops(median(medians))} [${ops(sorted[0] ?? 0)}..${ops(sorted[sorted.length - 1] ?? 0)}]`, 30),
-    )
+    cells.push(padStart(`${ops(median(medians))} [${ops(sorted[0] ?? 0)}..${ops(sorted[sorted.length - 1] ?? 0)}]`, 30))
   }
   console.log(`  ${pad(benchCase.label, 32)}${cells.join('')}`)
 }
