@@ -48,6 +48,14 @@ export type ResourceRegistry = {
   staticAnchors: Map<string, { value: unknown; pointer: JsonPath }>
   /** `${base}#${name}` → target, for `$dynamicAnchor` only. */
   dynamicAnchors: Map<string, { value: unknown; pointer: JsonPath }>
+  /**
+   * `$dynamicAnchor` names the document declares more than once — the names a
+   * `$dynamicRef` cannot be bound to statically, because which declaration wins
+   * is decided by the dynamic scope at evaluation time. A name declared once (or
+   * not at all) is absent from this set and stays inlinable; see
+   * `dynamic-scope.ts` for what the resolver does with the rest.
+   */
+  ambiguousDynamicAnchors: Set<string>
   /** The document root's base URI (its root `$id` resolved, or the initial base). */
   rootBase: string
   /** The document root value, for root-relative pointer lookups. */
@@ -87,7 +95,7 @@ export const splitFragment = (ref: string): { uriPart: string; fragment: string 
 }
 
 /** The base URI a subschema establishes via `$id`, or the enclosing base. */
-const baseAfterId = (node: Record<string, unknown>, enclosingBase: string): string => {
+export const baseAfterId = (node: Record<string, unknown>, enclosingBase: string): string => {
   const id = node['$id']
   if (typeof id !== 'string' || id === '') return enclosingBase
   const resolved = resolveUri(id, enclosingBase)
@@ -110,6 +118,10 @@ export const buildResourceRegistry = (
   const resources: ResourceRegistry['resources'] = new Map()
   const staticAnchors: ResourceRegistry['staticAnchors'] = new Map()
   const dynamicAnchors: ResourceRegistry['dynamicAnchors'] = new Map()
+  // Counted by *name* rather than by `${base}#${name}`: a `$dynamicRef` binds
+  // across resources, so two declarations of the same name anywhere in the
+  // document are already enough to make the binding a runtime question.
+  const dynamicAnchorCounts = new Map<string, number>()
 
   const rootBase =
     root !== null && typeof root === 'object' && !Array.isArray(root)
@@ -124,6 +136,7 @@ export const buildResourceRegistry = (
     }
     const dynamicAnchor = node['$dynamicAnchor']
     if (typeof dynamicAnchor === 'string') {
+      dynamicAnchorCounts.set(dynamicAnchor, (dynamicAnchorCounts.get(dynamicAnchor) ?? 0) + 1)
       const key = `${base}#${dynamicAnchor}`
       // Per 2020-12 a `$dynamicAnchor` also creates an ordinary anchor.
       if (!dynamicAnchors.has(key)) dynamicAnchors.set(key, { value: node, pointer })
@@ -165,7 +178,12 @@ export const buildResourceRegistry = (
   }
   walk(root, initialBase, [], 0, 'schema')
 
-  return { resources, staticAnchors, dynamicAnchors, rootBase, root }
+  const ambiguousDynamicAnchors = new Set<string>()
+  for (const [name, count] of dynamicAnchorCounts) {
+    if (count > 1) ambiguousDynamicAnchors.add(name)
+  }
+
+  return { resources, staticAnchors, dynamicAnchors, ambiguousDynamicAnchors, rootBase, root }
 }
 
 /**
