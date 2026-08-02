@@ -1,7 +1,8 @@
-import { describe, expectTypeOf, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 
 import type { FromSchema } from './from-schema'
 import type { Infer } from './infer'
+import type { Check, Guard } from './types'
 import { validate } from './validate'
 import { validateGuard } from './validate-guard'
 
@@ -228,5 +229,73 @@ describe('from-schema', () => {
       required: ['x', 'y'],
     })
     expectTypeOf<Infer<typeof isPoint>>().toEqualTypeOf<Point>()
+  })
+
+  it('drops the narrowing for a typeless schema whose keywords only describe the object case', () => {
+    // `{ properties: … }` ignores a non-object, so the interpreter accepts `42` —
+    // and it does, at runtime, today. `FromSchema` describes only the object case,
+    // so `input is { a?: string }` would be a lie. The verdict stays; the claim goes.
+    const check = validateGuard({ properties: { a: { type: 'string' } } })
+    expect(check(42)).toBe(true)
+
+    const value: unknown = { a: 'x' }
+    if (check(value)) {
+      // Deliberately *not* narrowed — this is the whole point of the change.
+      expectTypeOf(value).toEqualTypeOf<unknown>()
+    }
+    // The inferred shape is still recoverable, it is just not asserted.
+    expectTypeOf<Infer<typeof check>>().toEqualTypeOf<{ a?: string }>()
+  })
+
+  it('drops the narrowing for the other implicit-shape keywords too', () => {
+    const required = validateGuard({ required: ['a'] })
+    const items = validateGuard({ items: { type: 'string' } })
+    expectTypeOf(required).toEqualTypeOf<Check<{ [key: string]: unknown }>>()
+    expectTypeOf(items).toEqualTypeOf<Check<string[]>>()
+    // The runtime verdict is unchanged: object/array keywords ignore other types.
+    expect(required(42)).toBe(true)
+    expect(items('nope')).toBe(true)
+  })
+
+  it('keeps the predicate wherever the schema pins the instance to one type', () => {
+    // The common case, and the one that must never regress.
+    expectTypeOf(validateGuard({ type: 'object', properties: { a: { type: 'string' } } })).toEqualTypeOf<
+      Guard<{ a?: string }>
+    >()
+    expectTypeOf(validateGuard({ type: 'string' })).toEqualTypeOf<Guard<string>>()
+    expectTypeOf(validateGuard({ enum: ['a', 'b'] })).toEqualTypeOf<Guard<'a' | 'b'>>()
+    expectTypeOf(validateGuard({ const: 42 })).toEqualTypeOf<Guard<42>>()
+    // A `$ref` hands the verdict to the referenced schema, which answers for itself.
+    expectTypeOf(validateGuard({ $ref: '#/$defs/x' })).toEqualTypeOf<Guard<unknown>>()
+  })
+
+  it('judges a combinator by its branches', () => {
+    // Every branch pins a type, so the union describes everything accepted.
+    expectTypeOf(validateGuard({ anyOf: [{ type: 'string' }, { type: 'number' }] })).toEqualTypeOf<
+      Guard<string | number>
+    >()
+    // One branch carries only applicator keywords, so the union does not.
+    expectTypeOf(
+      validateGuard({ anyOf: [{ type: 'string' }, { properties: { a: { type: 'number' } } }] }),
+    ).toEqualTypeOf<Check<string | { a?: number }>>()
+  })
+
+  it('keeps the predicate when the schema type is not a literal', () => {
+    // A schema value handed over at runtime cannot be judged either way, and the
+    // useful default is the one every caller already depends on.
+    const schema: unknown = { properties: { a: { type: 'string' } } }
+    expectTypeOf(validateGuard(schema)).toEqualTypeOf<Guard<unknown>>()
+  })
+
+  it('still honours an explicit type argument for an implicit-shape schema', () => {
+    // Asking for the narrowing deliberately is always taken at face value — the
+    // caller has said they know the instance is an object.
+    type Shape = { a?: string }
+    const isShape = validateGuard<Shape>({ properties: { a: { type: 'string' } } })
+
+    const value: unknown = { a: 'x' }
+    if (isShape(value)) {
+      expectTypeOf(value).toEqualTypeOf<Shape>()
+    }
   })
 })

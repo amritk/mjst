@@ -54,6 +54,25 @@ export type Validator<T = unknown> = ((input: unknown) => ValidationResult) & {
 export type Guard<T = unknown> = (input: unknown) => input is T
 
 /**
+ * A boolean check that deliberately does *not* narrow.
+ *
+ * {@link validateGuard} returns this instead of a {@link Guard} for the one family
+ * of schemas where narrowing would be a lie: a schema with no `type` (or `enum` /
+ * `const` / `$ref`) that carries object- or array-shaped keywords, such as
+ * `{ properties: { a: { type: 'string' } } }`. JSON Schema reads that as "**if**
+ * the instance is an object, its `a` is a string", so `42` passes — while the
+ * inferred type describes only the object case. The verdict is right either way;
+ * it is the `input is T` claim that would be wrong, so it is dropped.
+ *
+ * It still carries the inferred type as a phantom, so `Infer<typeof check>` names
+ * the shape the schema describes. Add `type: 'object'` to the schema and you get
+ * a narrowing {@link Guard} back — which is what you wanted if you expected one.
+ */
+export type Check<T = unknown> = ((input: unknown) => boolean) & {
+  readonly [output]?: T
+}
+
+/**
  * The error `assert` throws when its input fails validation.
  *
  * It is a plain `Error` — so `instanceof Error`, stack traces, and ordinary

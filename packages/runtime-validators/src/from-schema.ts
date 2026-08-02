@@ -132,6 +132,81 @@ type ImplicitShape<S> = S extends { properties: unknown }
             ? ArrayShape<S>
             : unknown
 
+/**
+ * The keyword set {@link ImplicitShape} reads. Kept as one union right next to it
+ * so the two cannot drift: anything that makes `ImplicitShape` produce a shape
+ * has to appear here, because that is exactly when the shape is a *partial*
+ * description of what the interpreter accepts.
+ */
+type ImplicitShapeKeyword =
+  | { properties: unknown }
+  | { required: unknown }
+  | { additionalProperties: unknown }
+  | { patternProperties: unknown }
+  | { prefixItems: unknown }
+  | { items: unknown }
+
+/** A keyword that pins the instance to one JSON family, making the inferred type total. */
+type PinsTheType = { type: unknown } | { enum: unknown } | { const: unknown } | { $ref: unknown }
+
+/**
+ * Whether {@link FromSchema} describes *every* value the interpreter accepts for
+ * `S` — the question that decides whether {@link validateGuard} may hand back a
+ * type predicate rather than a plain boolean check.
+ *
+ * A `type`, `enum` or `const` pins the instance to one JSON family and the
+ * inferred type says exactly that family, so the predicate is honest. A `$ref`
+ * hands the verdict to the referenced schema, which answers for itself.
+ *
+ * What is *not* honest is `{ properties: { a: { type: 'string' } } }`. JSON Schema
+ * reads that as "**if** the instance is an object, its `a` is a string" — `42` and
+ * `"x"` satisfy it, and the interpreter accepts them — while `FromSchema` infers
+ * `{ a?: string }`. Both halves are right on their own; together they make
+ * `input is { a?: string }` a lie, and a lying predicate is worse than none
+ * because it narrows silently at every call site.
+ *
+ * Widening `FromSchema` instead would keep the narrowing *and* make it true, but
+ * the implicit shape is genuinely useful for the object schemas people actually
+ * write, so the inference stays and only the guard's *claim* is walked back.
+ * `@amritk/generate-validators` reached the same conclusion for its generated
+ * `isX` (see `typeDescribesEveryAcceptedValue` there) — the two packages tell the
+ * same story about the same schemas.
+ *
+ * Answers `true` for anything it cannot prove unsound, including a schema whose
+ * type is not a literal (`unknown`, or a wide `JSONSchema`). Narrowing is the
+ * overwhelmingly common and useful case; only a *demonstrably* partial shape
+ * gives it up.
+ */
+export type TypeDescribesEveryAcceptedValue<S> = [S] extends [object]
+  ? [S] extends [PinsTheType]
+    ? true
+    : [S] extends [ImplicitShapeKeyword]
+      ? false
+      : BranchesDescribeEveryAcceptedValue<S>
+  : true
+
+/**
+ * A combinator's inferred type is built out of its branches, so it is only as
+ * total as they are: `anyOf: [{ type: 'string' }, { type: 'number' }]` describes
+ * everything it accepts, while a branch carrying only `properties` does not.
+ */
+type BranchesDescribeEveryAcceptedValue<S> = And<
+  And<TupleDescribes<BranchesOf<S, 'allOf'>>, TupleDescribes<BranchesOf<S, 'anyOf'>>>,
+  TupleDescribes<BranchesOf<S, 'oneOf'>>
+>
+
+/** The branch tuple under `allOf` / `anyOf` / `oneOf`, or `[]` when the keyword is absent. */
+type BranchesOf<S, K extends 'allOf' | 'anyOf' | 'oneOf'> =
+  S extends Record<K, infer A extends readonly unknown[]> ? A : []
+
+/** `true` only when every branch in the tuple describes everything it accepts. */
+type TupleDescribes<A extends readonly unknown[]> = A extends readonly [infer Head, ...infer Rest]
+  ? And<TypeDescribesEveryAcceptedValue<Head>, TupleDescribes<Rest>>
+  : true
+
+/** Boolean `and` at the type level. */
+type And<A, B> = A extends true ? (B extends true ? true : false) : false
+
 /** The object shape: known `properties` plus whatever index signature the additional/pattern keywords imply. */
 type ObjectShape<S> = Simplify<KnownProps<S> & IndexSignature<S>>
 
