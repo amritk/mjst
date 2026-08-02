@@ -413,7 +413,11 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     '    readBody: () => readAllBytes().then((buffer) => JSON.parse(DECODER.decode(buffer))),',
     '    readText: () => readAllBytes().then((buffer) => DECODER.decode(buffer)),',
     '    readBytes: readAllBytes,',
-    '    signal: request.signal,',
+    // A getter, not an eager read: workerd materializes a host-backed
+    // AbortSignal the first time `Request.signal` is touched, and paying that
+    // per request — for handlers that almost never read it — drove the isolate
+    // into collecting far more often than the byte count suggests.
+    '    get signal() { return request.signal },',
     '    raw: request,',
     '    locals,',
     '  }',

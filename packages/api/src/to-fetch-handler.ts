@@ -292,7 +292,14 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
       readBody: () => readAllBytes().then((buffer) => JSON.parse(DECODER.decode(buffer)) as unknown),
       readText: () => readAllBytes().then((buffer) => DECODER.decode(buffer)),
       readBytes: readAllBytes,
-      signal: request.signal,
+      // Read through a getter, not eagerly. On workerd `Request.signal`
+      // materializes a host-backed AbortSignal on first touch, and taking one
+      // per request — for handlers that overwhelmingly never look at it — was
+      // enough to make the isolate collect far more often than the byte count
+      // suggests. See the benchmark note in the README.
+      get signal(): AbortSignal | undefined {
+        return request.signal
+      },
       raw: request,
       get locals(): RequestLocals {
         locals ??= {}

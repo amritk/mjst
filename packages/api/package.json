@@ -52,7 +52,9 @@
     "prebench:vs:bun": "bun run bench:vs:build",
     "bench:vs:bun": "bun ./bench/.fixtures/vs-frameworks.mjs",
     "prebench:workerd": "bun run bench:vs:build",
-    "bench:workerd": "bun run ./bench/run-workerd.ts"
+    "bench:workerd": "bun run ./bench/run-workerd.ts",
+    "bench:workerd:allocations": "bun run ./bench/run-workerd-allocations.ts",
+    "prebench:workerd:allocations": "bun run bench:vs:build"
   },
   "exports": {
     ".": {

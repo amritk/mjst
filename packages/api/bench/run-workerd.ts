@@ -24,7 +24,7 @@ import { CASES } from './stacks.ts'
 
 const WORKER = './bench/.fixtures/workerd-bench.mjs'
 
-type Measurement = { readonly median: number; readonly max: number }
+type Measurement = { readonly median: number; readonly min: number; readonly max: number }
 
 /**
  * One measurement in its own isolate. workerd refuses a script path that
@@ -55,21 +55,41 @@ const padStart = (value: string, width: number): string => value.padStart(width)
 const ops = (value: number): string =>
   value >= 1_000_000 ? `${(value / 1_000_000).toFixed(2)}M` : `${Math.round(value / 1000)}k`
 
+/**
+ * How many fresh isolates each cell is measured in. The median over a single
+ * isolate's trials is already robust to the odd paused trial, but isolates
+ * differ from one another by more than that — repeating the whole measurement
+ * and taking the median of the per-isolate medians is what makes a cell
+ * reproducible run to run. `REPEATS` on the environment overrides it.
+ */
+const REPEATS = Number(process.env['REPEATS'] ?? 5)
+
+const median = (values: readonly number[]): number => {
+  const sorted = [...values].sort((a, b) => a - b)
+  return sorted[Math.floor(sorted.length / 2)] ?? 0
+}
+
 console.log('\n=== @amritk/api vs hono — Request → Response, inside workerd ===\n')
 console.log(`Runtime: workerd (Miniflare), driven from ${typeof Bun !== 'undefined' ? `Bun ${Bun.version}` : 'Node'}`)
 console.log("Each cell is a fresh isolate, timed from inside, so Miniflare's loopback hop")
-console.log('is excluded. "peak" is the fastest of the timed trials — the rate a column')
-console.log('reaches when workerd is not pausing it.\n')
+console.log(`is excluded, repeated in ${REPEATS} isolates. Each cell reads "median [lowest..`)
+console.log('highest]" over those per-isolate medians, so the bracket is how much the')
+console.log('cell moves between isolates rather than between trials.\n')
 
-console.log(`  ${pad('case', 32)}${parity.columns.map((label) => padStart(label, 26)).join('')}`)
+console.log(`  ${pad('case', 32)}${parity.columns.map((label) => padStart(label, 30)).join('')}`)
 for (const [caseIndex, benchCase] of CASES.entries()) {
   const cells: string[] = []
   for (const columnIndex of parity.columns.keys()) {
-    const stats = (await measure(`/measure?column=${columnIndex}&case=${caseIndex}`)) as Measurement
-    cells.push(padStart(`${ops(stats.median)} ops/s (peak ${ops(stats.max)})`, 26))
+    const medians: number[] = []
+    for (let repeat = 0; repeat < REPEATS; repeat++) {
+      const stats = (await measure(`/measure?column=${columnIndex}&case=${caseIndex}`)) as Measurement
+      medians.push(stats.median)
+    }
+    const sorted = [...medians].sort((a, b) => a - b)
+    cells.push(
+      padStart(`${ops(median(medians))} [${ops(sorted[0] ?? 0)}..${ops(sorted[sorted.length - 1] ?? 0)}]`, 30),
+    )
   }
   console.log(`  ${pad(benchCase.label, 32)}${cells.join('')}`)
 }
 console.log('')
-console.log('The gap between median and peak is the finding: workerd pauses the @amritk/api')
-console.log('columns far more often than it pauses Hono, while their peak rates are close.\n')
