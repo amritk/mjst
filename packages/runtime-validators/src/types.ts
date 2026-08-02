@@ -54,6 +54,25 @@ export type Validator<T = unknown> = ((input: unknown) => ValidationResult) & {
 export type Guard<T = unknown> = (input: unknown) => input is T
 
 /**
+ * A boolean check that deliberately does *not* narrow.
+ *
+ * {@link validateGuard} returns this instead of a {@link Guard} for the one family
+ * of schemas where narrowing would be a lie: a schema with no `type` (or `enum` /
+ * `const` / `$ref`) that carries object- or array-shaped keywords, such as
+ * `{ properties: { a: { type: 'string' } } }`. JSON Schema reads that as "**if**
+ * the instance is an object, its `a` is a string", so `42` passes — while the
+ * inferred type describes only the object case. The verdict is right either way;
+ * it is the `input is T` claim that would be wrong, so it is dropped.
+ *
+ * It still carries the inferred type as a phantom, so `Infer<typeof check>` names
+ * the shape the schema describes. Add `type: 'object'` to the schema and you get
+ * a narrowing {@link Guard} back — which is what you wanted if you expected one.
+ */
+export type Check<T = unknown> = ((input: unknown) => boolean) & {
+  readonly [output]?: T
+}
+
+/**
  * The error `assert` throws when its input fails validation.
  *
  * It is a plain `Error` — so `instanceof Error`, stack traces, and ordinary
@@ -85,6 +104,37 @@ export type ValidateOptions = {
    * ({@link isValidationLimitError}).
    */
   readonly limits?: ValidateLimits
+  /**
+   * Other schema documents you have **already loaded**, keyed by the absolute
+   * URI a `$ref` names them by. Supplying them makes those URIs resolvable, so a
+   * schema can reference a document that is not the one being validated.
+   *
+   * This package still never fetches and never reads a file — it cannot be told
+   * a URL, only a document — so `validate` stays a pure, synchronous function of
+   * its inputs. Loading is yours to do (or `@amritk/resolve-refs`'), and however
+   * you do it, the result comes back through here.
+   *
+   * Each registered document is a schema resource like any other: its own `$id`,
+   * `$anchor`s, `$dynamicAnchor`s and nested embedded resources all become
+   * resolvable, a `$ref` from one registered document into another resolves, and
+   * `$dynamicRef` bookending works across documents. A document with no `$id`
+   * resolves its relative `$ref`s against the URI you registered it under, and
+   * one whose `$id` disagrees with that URI answers to both.
+   *
+   * Treat the map and the documents in it as immutable once passed. Validators
+   * are cached per `(schema, options)`, and the registry takes part in that key
+   * by identity — hand over a *new* object when the set of documents changes,
+   * rather than mutating one you already passed.
+   *
+   * @example
+   * ```typescript
+   * const validator = validate(
+   *   { $ref: 'https://example.com/user.json' },
+   *   { schemas: { 'https://example.com/user.json': userSchema } },
+   * )
+   * ```
+   */
+  readonly schemas?: Readonly<Record<string, unknown>>
 }
 
 export type { ValidateLimits }

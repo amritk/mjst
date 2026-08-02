@@ -663,6 +663,104 @@ describe('generate-validator-function', () => {
     })
   })
 
+  // A schema with no `type` used to compile to `() => true`. In JSON Schema a
+  // keyword constrains the instances of its own family and ignores every other
+  // one, so each of these has to reject its own kind of value and wave the rest
+  // through — the two halves are equally load-bearing.
+  it.each([
+    [{ minLength: 2 }, 'a', ['ab', 42, [], null, {}]],
+    [{ maxItems: 1 }, [1, 2], [[1], 'long string', 42, {}]],
+    // Scalar items so the emitted dedupe stays inline; the structural form calls
+    // the `allUnique` runtime helper, which this harness does not link.
+    [{ uniqueItems: true, items: { type: 'number' } }, [1, 1], [[1, 2], 'aa', 42]],
+    [{ required: ['a'] }, {}, [{ a: 1 }, 'a', 42, [], null]],
+    [{ minimum: 3 }, 2, [3, '2', [], null]],
+    [{ patternProperties: { '^x-': { type: 'number' } } }, { 'x-a': 'no' }, [{ 'x-a': 1 }, { b: 'no' }, 'a', 42]],
+    [{ dependentRequired: { a: ['b'] } }, { a: 1 }, [{ a: 1, b: 2 }, {}, 42, 'a']],
+    [{ propertyNames: { maxLength: 2 } }, { abc: 1 }, [{ ab: 1 }, 42, []]],
+    [{ contains: { type: 'number' } }, ['a'], [['a', 1], 'not an array', 42]],
+  ] as const)('enforces a type-less %j against its own family and ignores the rest', (schema, invalid, valid) => {
+    const validate = evalValidator(generateValidatorFunction(schema as never, 'Loose'))
+
+    expect(validate(invalid), `${JSON.stringify(invalid)} should be rejected`).not.toBe(true)
+    for (const value of valid) {
+      expect(validate(value), `${JSON.stringify(value)} should be accepted`).toBe(true)
+    }
+  })
+
+  it('ignores non-objects for a type-less schema carrying object keywords', () => {
+    // `{ properties: … }` describes what an object must look like *if* the
+    // instance is one. Reading it as "this is an object" made every string,
+    // array and number fail — stricter than the spec, and stricter than the
+    // `Root` type the same schema generates.
+    const validate = evalValidator(
+      generateValidatorFunction({ properties: { foo: { type: 'integer' as const } } }, 'Loose'),
+    )
+
+    expect(validate({ foo: 'not an integer' })).not.toBe(true)
+    expect(validate({ foo: 1 })).toBe(true)
+    for (const value of ['a string', 42, [], null, true]) {
+      expect(validate(value), `${JSON.stringify(value)} should be ignored`).toBe(true)
+    }
+  })
+
+  it('rejects everything for a root `false` schema and accepts everything for `true`', () => {
+    const rejectAll = evalValidator(generateValidatorFunction(false, 'Never'))
+    const acceptAll = evalValidator(generateValidatorFunction(true, 'Any'))
+
+    for (const value of [{}, 'a', 42, null, [], true]) {
+      expect(rejectAll(value), `${JSON.stringify(value)} should be rejected`).not.toBe(true)
+      expect(acceptAll(value), `${JSON.stringify(value)} should be accepted`).toBe(true)
+    }
+  })
+
+  it('treats a `false` subschema as rejecting wherever it appears', () => {
+    // Each of these used to emit no check at all, so the branch that should have
+    // failed the instance passed it.
+    const property = evalValidator(
+      generateValidatorFunction({ type: 'object' as const, properties: { foo: true, bar: false } }, 'Props'),
+    )
+    expect(property({ foo: 1 })).toBe(true)
+    expect(property({ bar: 1 })).not.toBe(true)
+
+    const allOf = evalValidator(generateValidatorFunction({ allOf: [true, false] }, 'AllOf'))
+    expect(allOf('anything')).not.toBe(true)
+
+    const thenElse = evalValidator(
+      generateValidatorFunction({ if: { type: 'string' as const }, then: false, else: true }, 'Cond'),
+    )
+    expect(thenElse('a string')).not.toBe(true)
+    expect(thenElse(42)).toBe(true)
+
+    const names = evalValidator(generateValidatorFunction({ propertyNames: false }, 'NoKeys'))
+    expect(names({})).toBe(true)
+    expect(names({ a: 1 })).not.toBe(true)
+  })
+
+  it('counts code points, not UTF-16 units, for minLength and maxLength', () => {
+    // "💩" is one code point but two code units, so a bare `.length` accepted it
+    // against `minLength: 2` and rejected "💩💩" against `maxLength: 2` — both
+    // the opposite of what Ajv and the runtime interpreter say.
+    const atLeastTwo = evalValidator(generateValidatorFunction({ type: 'string' as const, minLength: 2 }, 'Long'))
+    expect(atLeastTwo('💩')).not.toBe(true)
+    expect(atLeastTwo('💩💩')).toBe(true)
+
+    const atMostTwo = evalValidator(generateValidatorFunction({ type: 'string' as const, maxLength: 2 }, 'Short'))
+    expect(atMostTwo('💩💩')).toBe(true)
+    expect(atMostTwo('💩💩💩')).not.toBe(true)
+  })
+
+  it('inverts a multi-type subschema under `not`', () => {
+    // An array `type` is not a string `type`, so the subschema emitted no checks
+    // — and "no checks" is how a match expression spells "matches everything",
+    // which made this `not` reject every instance.
+    const validate = evalValidator(generateValidatorFunction({ not: { type: ['integer', 'boolean'] } }, 'NotBoth'))
+
+    expect(validate('foo')).toBe(true)
+    expect(validate(1)).not.toBe(true)
+    expect(validate(true)).not.toBe(true)
+  })
+
   describe('happy-path guard', () => {
     // The early `return true` block (an `&&` chain that proves validity without
     // allocating an errors array) only appears when the guard is emitted; the
@@ -1049,6 +1147,32 @@ describe('generate-validator-function', () => {
       }
     })
 
+    it('drops the `is` when the emitted type would not describe everything the validator accepts', () => {
+      // `{ properties: { … } }` with no `type` reads as "*if* it is an object…",
+      // so `validateRoot(42)` is true while the emitted type is `{ a: string }`.
+      // Narrowing there would be a silent lie at every call site, so the guard
+      // keeps the check and gives up the predicate.
+      const implicit = { properties: { a: { type: 'string' as const } }, required: ['a'] }
+      expect(generateBooleanGuard(implicit, 'Root')).toBe(
+        'export const isRoot = (input: unknown): boolean => validateRoot(input) === true',
+      )
+      const { validate, guard } = evalBoth(implicit, 'Root')
+      for (const value of [42, 'x', null, [], { a: 'ok' }, { a: 1 }, {}]) {
+        expect(guard(value), `disagreement on ${JSON.stringify(value)}`).toBe(validate(value) === true)
+      }
+
+      // A declared `type` pins the family, so the narrowing is true and stays.
+      expect(generateBooleanGuard({ ...implicit, type: 'object' as const }, 'Root')).toContain('input is Root')
+      // So does a combinator whose every branch pins one.
+      expect(
+        generateBooleanGuard({ anyOf: [{ type: 'string' as const }, { type: 'number' as const }] }, 'Root'),
+      ).toContain('input is Root')
+      // But not one whose branches are themselves implicit object shapes.
+      expect(generateBooleanGuard({ allOf: [{ properties: { a: { type: 'string' as const } } }] }, 'Root')).toContain(
+        '(input: unknown): boolean',
+      )
+    })
+
     it('agrees with `validateX(input) === true` across many mutated inputs', () => {
       const schema = {
         type: 'object' as const,
@@ -1354,16 +1478,30 @@ describe('generate-validator-function', () => {
     expect(validate({})).not.toBe(true) // required presence still enforced
   })
 
-  it('throws for a constraining unevaluatedProperties (unsupported keyword)', () => {
-    // The generator has no support for `unevaluatedProperties`, so rather than
-    // emit a validator that silently accepts what the interpreter rejects it must
-    // fail loudly at generation time.
-    expect(() =>
+  it('enforces a constraining unevaluatedProperties against the keys its siblings evaluated', () => {
+    const validate = evalValidator(
       generateValidatorFunction(
         { type: 'object', properties: { a: { type: 'string' } }, unevaluatedProperties: false },
         'X',
       ),
-    ).toThrow(/unsupported keyword "unevaluatedProperties"/)
+    )
+    expect(validate({ a: 'ok' })).toBe(true)
+    expect(validate({})).toBe(true)
+    // `b` is evaluated by nothing, which is exactly what the keyword forbids.
+    expect(validate({ a: 'ok', b: 1 })).not.toBe(true)
+  })
+
+  it('refuses an unevaluatedProperties whose coverage runs through a $dynamicRef', () => {
+    // The keyword is implemented, but its coverage has to be worked out at
+    // generation time and a `$dynamicRef` only picks its target at validation
+    // time. Refusing for that *shape* is the honest report; emitting a check
+    // built on a guess would accept documents the interpreter rejects.
+    expect(() =>
+      generateValidatorFunction(
+        { $dynamicRef: '#node', properties: { a: { type: 'string' } }, unevaluatedProperties: false },
+        'X',
+      ),
+    ).toThrow(/unsupported "unevaluatedProperties"/)
   })
 
   it('allows unevaluatedProperties: true since it constrains nothing', () => {

@@ -7,7 +7,12 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!fixtures/openapi/**/*.json", "!packages/lint/src/rules/openapi/schemas/*.json"]
+    "includes": [
+      "**",
+      "!fixtures/openapi/**/*.json",
+      "!fixtures/json-schema-test-suite/**/*.json",
+      "!packages/lint/src/rules/openapi/schemas/*.json"
+    ]
   },
   "formatter": {
     "enabled": true,

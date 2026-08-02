@@ -30,10 +30,13 @@ if (node && isObjectSchema(node) && hasProperties(node)) {
    JSON-pointer `$ref`s, plain `$anchor` names (`#named`), and URI keys in
    `$defs`, and returns `undefined` on a miss (no throw) — guard the result.
 3. **`walkRefGraph` throws, it does not degrade.** An unresolvable `$ref`, a
-   `$dynamicRef` with no anchor, two definitions that reduce to one filename or
-   one type name, and `$id` base-URI scoping all fail generation. Each of those
-   used to warn and carry on, which shipped TypeScript that either did not
-   compile or bound to the wrong type.
+   `$dynamicRef` with no anchor, and two definitions that reduce to one filename
+   or one type name all fail generation. Each of those used to warn and carry on,
+   which shipped TypeScript that either did not compile or bound to the wrong
+   type. `$id` base-URI scoping is *resolved*, not refused — `normalizeRefScopes`
+   rewrites every ref to a document-root pointer first — and only the residue the
+   spec calls unresolvable (a fragment ref naming nothing in its own resource)
+   still throws, via `assertIdScopes`.
 4. **Two similar guards:** `isSchemaObject` narrows to a non-boolean schema;
    `isObjectSchema` narrows to a `type: object` schema. Don't confuse them.
 5. **Some modules are copied verbatim into generated output** (`is-object`,

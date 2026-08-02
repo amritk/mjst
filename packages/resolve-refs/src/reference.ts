@@ -1,3 +1,4 @@
+import { childRole, type NodeRole } from './child-role'
 import { getByPointer, pointerToPath } from './get-by-pointer'
 import { DEFAULT_MAX_DEPTH } from './max-depth'
 import type { JsonPath } from './types'
@@ -37,6 +38,10 @@ export type ResolvedTarget = { value: unknown; pointer: JsonPath }
  * Depth-first search for the first object in `root` satisfying `predicate`,
  * returning it with the path to it. `seen` guards against cyclic inputs. Used to
  * locate `$anchor`/`$dynamicAnchor`/`$recursiveAnchor` targets.
+ *
+ * The search is role-aware (see `child-role.ts`) so an anchor is only found
+ * where an anchor can be *declared*: an `$anchor` key inside an `enum` member is
+ * part of that value, and one under `properties` is a property name.
  */
 const search = (root: unknown, predicate: (obj: Record<string, unknown>) => boolean): ResolvedTarget | undefined => {
   const seen = new Set<object>()
@@ -44,24 +49,27 @@ const search = (root: unknown, predicate: (obj: Record<string, unknown>) => bool
   // too, and an anchor lookup must not be the thing that blows the stack on a
   // pathologically nested document. An anchor buried past the cap simply is not
   // found, which the callers already report as an unresolvable reference.
-  const walk = (node: unknown, pointer: JsonPath, depth: number): ResolvedTarget | undefined => {
+  const walk = (node: unknown, pointer: JsonPath, depth: number, role: NodeRole): ResolvedTarget | undefined => {
     if (node === null || typeof node !== 'object' || seen.has(node) || depth > DEFAULT_MAX_DEPTH) return undefined
+    if (role === 'value') return undefined
     seen.add(node)
-    if (!Array.isArray(node) && predicate(node as Record<string, unknown>)) return { value: node, pointer }
+    if (!Array.isArray(node) && role !== 'schemaMap' && predicate(node as Record<string, unknown>)) {
+      return { value: node, pointer }
+    }
     if (Array.isArray(node)) {
       for (let i = 0; i < node.length; i++) {
-        const found = walk(node[i], [...pointer, i], depth + 1)
+        const found = walk(node[i], [...pointer, i], depth + 1, childRole(role, i))
         if (found) return found
       }
     } else {
       for (const key of Object.keys(node)) {
-        const found = walk((node as Record<string, unknown>)[key], [...pointer, key], depth + 1)
+        const found = walk((node as Record<string, unknown>)[key], [...pointer, key], depth + 1, childRole(role, key))
         if (found) return found
       }
     }
     return undefined
   }
-  return walk(root, [], 0)
+  return walk(root, [], 0, 'schema')
 }
 
 /**

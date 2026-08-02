@@ -3,6 +3,14 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve as resolvePath } from 'node:path'
 
 import { assertPublicHost } from './assert-public-host'
+import { childRole, type NodeRole } from './child-role'
+import {
+  bindsAtEvaluationTime,
+  declaresAmbiguousAnchor,
+  inliningKeepsScope,
+  isScopeSensitive,
+  type ScopeSensitiveNodes,
+} from './dynamic-scope'
 import { isContainedPath } from './is-contained-path'
 import { isPrivateHost } from './is-private-host'
 import { DEFAULT_MAX_DEPTH, depthLimitError } from './max-depth'
@@ -15,6 +23,7 @@ import {
   type ScopedTarget,
   SYNTHETIC_BASE,
 } from './resource-registry'
+import { roleAtPath } from './role-at-path'
 import { assignKey } from './safe-assign'
 import type { JsonPath, OriginMap, ResolveError, ResolveOptions, ResolveResult } from './types'
 
@@ -23,8 +32,9 @@ import type { JsonPath, OriginMap, ResolveError, ResolveOptions, ResolveResult }
 // hoisting the target into `$defs` when it lives in another file) instead of
 // recursing forever.
 const CYCLE = Symbol('cycle')
-// The inlined value plus the in-document path it came from (for `origins`).
-type CacheValue = { value: unknown; pointer: JsonPath } | typeof CYCLE
+// The inlined value, the in-document path it came from (for `origins`), and the
+// `$id` base it was defined under (for the scope check in `resolveAt`).
+type CacheValue = { value: unknown; pointer: JsonPath; base: string } | typeof CYCLE
 
 /** See {@link ANNOTATION_ONLY_SIBLINGS} in resolve-refs.ts — same rule here. */
 const ANNOTATION_ONLY_SIBLINGS = new Set(['summary', 'description'])
@@ -474,6 +484,18 @@ const TOTAL_TIMEOUT_MS = 60_000
  * `allowedRoots`), the limits on the resolve as a whole (`maxDocuments`,
  * `totalTimeoutMs`, `maxDepth`), and whether the session cache is used
  * (`cache`).
+ *
+ * Only references in *schema* positions are followed: a `$ref`-shaped object
+ * inside `enum`, `const`, `default` or `examples` is instance data, so it is
+ * kept verbatim and the document it names is never loaded (see `child-role.ts`).
+ *
+ * As in {@link resolveRefs}, a reference the resolver cannot answer without
+ * changing what the document accepts is *kept* rather than guessed at, and
+ * resolves within the output: a cycle (rewritten to a root-relative `$ref`, its
+ * target hoisted into `$defs` when it came from another file), and — for a
+ * resolve that stayed inside a single document — a `$dynamicRef` whose anchor
+ * name is declared more than once. Neither is reported on `errors`; nothing
+ * failed.
  */
 export const resolveRefsFromFile = async (filename: string, options: ResolveOptions = {}): Promise<ResolveResult> => {
   const rootLocation = isRemote(filename) ? filename : resolvePath(filename)
@@ -532,22 +554,35 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
   /**
    * Collects the document parts of refs under `node` that are NOT `$id`-internal.
    * Stops at `maxDepth` like the resolve pass does — a subtree we refuse to
-   * resolve does not need its documents fetched either.
+   * resolve does not need its documents fetched either. Value positions are
+   * skipped for the same reason the resolve pass skips them: a `$ref` inside an
+   * `enum` member is data, and fetching the document it names would turn a
+   * literal into a network request.
    */
-  const collectRefTargets = (node: unknown, location: string, base: string, out: Set<string>, depth: number): void => {
-    if (node === null || typeof node !== 'object') return
+  const collectRefTargets = (
+    node: unknown,
+    location: string,
+    base: string,
+    out: Set<string>,
+    depth: number,
+    role: NodeRole,
+  ): void => {
+    if (node === null || typeof node !== 'object' || role === 'value') return
     if (depth > maxDepth) {
       reportDepthLimit()
       return
     }
     if (Array.isArray(node)) {
-      for (const item of node) collectRefTargets(item, location, base, out, depth + 1)
+      node.forEach((item, index) => {
+        collectRefTargets(item, location, base, out, depth + 1, childRole(role, index))
+      })
       return
     }
     const obj = node as Record<string, unknown>
     const registry = registryFor(location)
-    const nodeBase = typeof obj['$id'] === 'string' ? baseOfNode(registry, obj, base) : base
-    const reference = readReference(obj)
+    const isSchema = role !== 'schemaMap'
+    const nodeBase = isSchema && typeof obj['$id'] === 'string' ? baseOfNode(registry, obj, base) : base
+    const reference = isSchema ? readReference(obj) : undefined
     if (reference && reference.keyword !== '$recursiveRef') {
       const scoped = resolveRefInScope(registry, reference.keyword, reference.value, nodeBase)
       if (scoped === 'external') {
@@ -559,7 +594,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     // alongside the referenced schema (2020-12) and may carry their own refs.
     for (const key of Object.keys(obj)) {
       if (reference && key === reference.keyword) continue
-      collectRefTargets(obj[key], location, nodeBase, out, depth + 1)
+      collectRefTargets(obj[key], location, nodeBase, out, depth + 1, childRole(role, key))
     }
   }
 
@@ -585,7 +620,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     while (queue.length > 0) {
       const location = queue.shift() as string
       const out = new Set<string>()
-      collectRefTargets(docCache.get(location), location, registryFor(location).rootBase, out, 0)
+      collectRefTargets(docCache.get(location), location, registryFor(location).rootBase, out, 0, 'schema')
       for (const filePart of out) {
         const target = joinLocation(location, filePart)
         if (seen.has(target)) continue
@@ -623,6 +658,23 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
 
   const origins: OriginMap | undefined = options.trackOrigins ? new Map() : undefined
   const refCache = new Map<string, CacheValue>()
+  // Output nodes that must not be relocated across an `$id` boundary — the kept
+  // references and the `$dynamicAnchor`s they may bind to (see `dynamic-scope.ts`).
+  const sensitive: ScopeSensitiveNodes = new WeakSet()
+  /**
+   * The `$dynamicAnchor` names whose binding this pass refuses to guess.
+   *
+   * Keeping a `$dynamicRef` only helps when the scaffolding it binds against
+   * survives into the output, and that is guaranteed exactly when the resolve
+   * stayed inside one document: the output is then that document with its refs
+   * inlined, so `resolveRefs` semantics apply verbatim. Once several documents
+   * are flattened into one, the anchors a `$dynamicRef` may reach are spread
+   * across files that no longer exist on their own, and a kept keyword could
+   * resolve to nothing — so a multi-document resolve keeps inlining the
+   * lexically nearest anchor, as it always has.
+   */
+  const ambiguousDynamicAnchors =
+    docCache.size === 1 ? registryFor(rootLocation).ambiguousDynamicAnchors : new Set<string>()
   // Cycle targets living in other documents are hoisted into the root's `$defs`
   // under these names once resolution completes (see the CYCLE branch).
   const hoists = new Map<string, string>()
@@ -635,10 +687,15 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
    * (`refCache`); the CYCLE sentinel short-circuits re-entrant resolution.
    *
    * `baseLocation` is the location of the document `node` belongs to; `base` is
-   * the current `$id` base URI within that document.
+   * the current `$id` base URI within that document; `role` is where the node
+   * sits in the vocabulary (see `child-role.ts`), which decides whether a `$ref`
+   * key here is a reference at all.
    */
-  const resolveAt = (node: unknown, baseLocation: string, base: string, depth: number): unknown => {
+  const resolveAt = (node: unknown, baseLocation: string, base: string, depth: number, role: NodeRole): unknown => {
     if (node === null || typeof node !== 'object') return node
+    // Instance data (`enum`, `const`, `default`, `examples`): a `$ref` key in
+    // here belongs to the value, so the subtree is handed back untouched.
+    if (role === 'value') return node
     if (depth > maxDepth) {
       // Past the limit we hand the subtree back untouched instead of unwinding
       // the stack with a RangeError. Nothing is lost — the branch simply keeps
@@ -647,14 +704,37 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       return node
     }
     if (Array.isArray(node)) {
-      return node.map((item) => resolveAt(item, baseLocation, base, depth + 1))
+      const items = node.map((item, index) => resolveAt(item, baseLocation, base, depth + 1, childRole(role, index)))
+      if (items.some((item) => isScopeSensitive(sensitive, item))) sensitive.add(items)
+      return items
     }
     const obj = node as Record<string, unknown>
     const registry = registryFor(baseLocation)
-    const nodeBase = typeof obj['$id'] === 'string' ? baseOfNode(registry, obj, base) : base
-    const reference = readReference(obj)
+    // A map of author-chosen names to schemas (`properties`, `$defs`, …) is not
+    // itself a schema, so its keys are names — a property named `$ref` is a
+    // property, not a reference.
+    const isSchema = role !== 'schemaMap'
+    const nodeBase = isSchema && typeof obj['$id'] === 'string' ? baseOfNode(registry, obj, base) : base
+    const reference = isSchema ? readReference(obj) : undefined
     if (reference) {
       const { keyword, value } = reference
+
+      // A `$dynamicRef` naming an anchor declared more than once has no single
+      // target to inline — the dynamic scope picks one when the document is
+      // evaluated — so the keyword is kept for the validator to answer, with its
+      // siblings resolved around it.
+      if (bindsAtEvaluationTime(keyword, value, ambiguousDynamicAnchors)) {
+        const kept: Record<string, unknown> = {}
+        for (const key of Object.keys(obj)) {
+          assignKey(
+            kept,
+            key,
+            key === keyword ? obj[key] : resolveAt(obj[key], baseLocation, nodeBase, depth + 1, childRole(role, key)),
+          )
+        }
+        sensitive.add(kept)
+        return kept
+      }
 
       // Classify the ref: `$id`-internal (this document), or external (another
       // document, or a fragment resolved the legacy way against this one).
@@ -689,6 +769,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
           : `${keyword} ${targetLocation}#${fragment}`
       let resolved: unknown
       let pointer: JsonPath
+      let targetBase = nodeBase
       const cached = refCache.get(cacheKey)
       if (cached === CYCLE) {
         // Mid-resolution revisit — a reference cycle. Keep a reference instead
@@ -713,7 +794,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         const kept: Record<string, unknown> = {}
         for (const key of Object.keys(obj)) {
           if (key === keyword) continue
-          assignKey(kept, key, resolveAt(obj[key], baseLocation, nodeBase, depth + 1))
+          assignKey(kept, key, resolveAt(obj[key], baseLocation, nodeBase, depth + 1, childRole(role, key)))
         }
         // Always rewritten to a static `$ref`: the dynamic binding was already
         // decided when the cycle was entered.
@@ -723,10 +804,10 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       if (cached !== undefined) {
         resolved = cached.value
         pointer = cached.pointer
+        targetBase = cached.base
       } else {
         refCache.set(cacheKey, CYCLE)
         let found: ResolvedTarget | undefined
-        let targetBase: string
         if (scoped !== undefined) {
           found = scoped
           targetBase = scoped.base
@@ -752,8 +833,10 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
           }
         }
         pointer = found?.pointer ?? []
-        resolved = resolveAt(found?.value, targetLocation, targetBase, depth + 1)
-        refCache.set(cacheKey, { value: resolved, pointer })
+        // The target is walked with the role it has where it is *defined*, so a
+        // ref resolves the same way whoever points at it (see roleAtPath).
+        resolved = resolveAt(found?.value, targetLocation, targetBase, depth + 1, roleAtPath(pointer))
+        refCache.set(cacheKey, { value: resolved, pointer, base: targetBase })
         // Stamp the inlined node with where it was defined so a consumer can map a
         // resolved-tree node back to its source document/path. Only objects/arrays are
         // stamped (primitives can't key the map). First-write-wins: resolution recurses
@@ -765,10 +848,40 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         }
       }
 
+      // Inlining copies the target into *this* node's `$id` scope. A target that
+      // carries a kept `$dynamicRef` (or a `$dynamicAnchor` one may bind to) only
+      // means what it meant where it was defined, so when the copy would land
+      // under a different base the reference is kept instead — same rule as the
+      // in-memory resolver (see `dynamic-scope.ts`).
+      if (isScopeSensitive(sensitive, resolved) && !inliningKeepsScope(resolved, nodeBase, targetBase)) {
+        const kept: Record<string, unknown> = {}
+        for (const key of Object.keys(obj)) {
+          assignKey(
+            kept,
+            key,
+            key === keyword ? obj[key] : resolveAt(obj[key], baseLocation, nodeBase, depth + 1, childRole(role, key)),
+          )
+        }
+        sensitive.add(kept)
+        return kept
+      }
+
       const siblingKeys = Object.keys(obj).filter((key) => key !== keyword)
       if (siblingKeys.length === 0) return resolved
       const siblings: Record<string, unknown> = {}
-      for (const key of siblingKeys) assignKey(siblings, key, resolveAt(obj[key], baseLocation, nodeBase, depth + 1))
+      let siblingIsSensitive = false
+      for (const key of siblingKeys) {
+        const child = resolveAt(obj[key], baseLocation, nodeBase, depth + 1, childRole(role, key))
+        assignKey(siblings, key, child)
+        if (isScopeSensitive(sensitive, child)) siblingIsSensitive = true
+      }
+      // The reference node may itself be scaffolding: a schema can carry both a
+      // `$dynamicAnchor` and a reference, and the anchor still has to stay in the
+      // resource that registers it.
+      const inlineIsSensitive =
+        siblingIsSensitive ||
+        isScopeSensitive(sensitive, resolved) ||
+        declaresAmbiguousAnchor(obj, ambiguousDynamicAnchors)
 
       // Annotation-only siblings (OpenAPI Reference Objects): inline the target
       // with the annotations overriding — never wrap in `allOf`, which is not
@@ -781,6 +894,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
           }
           for (const key of Object.keys(siblings)) assignKey(overridden, key, siblings[key])
           if (origins && !origins.has(overridden)) origins.set(overridden, { location: targetLocation, pointer })
+          if (inlineIsSensitive) sensitive.add(overridden)
           return overridden
         }
         // A non-object target (boolean schema, primitive) has no members to
@@ -794,17 +908,24 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       const merged = { ...siblings, allOf: [...existingAllOf, resolved] }
       // Stamp the wrapper too, so origin lookups resolve for a ref-with-siblings node.
       if (origins && !origins.has(merged)) origins.set(merged, { location: targetLocation, pointer })
+      if (inlineIsSensitive) sensitive.add(merged)
       return merged
     }
     const result: Record<string, unknown> = {}
     for (const key of Object.keys(obj)) {
-      assignKey(result, key, resolveAt(obj[key], baseLocation, nodeBase, depth + 1))
+      const child = resolveAt(obj[key], baseLocation, nodeBase, depth + 1, childRole(role, key))
+      assignKey(result, key, child)
+      if (isScopeSensitive(sensitive, child)) sensitive.add(result)
     }
+    // A `$dynamicAnchor` a kept `$dynamicRef` might bind to is scaffolding: it
+    // registers its name against the resource it sits in, so it has to stay there.
+    if (isSchema && declaresAmbiguousAnchor(obj, ambiguousDynamicAnchors)) sensitive.add(result)
     return result
   }
 
   const rootRegistry = registryFor(rootLocation)
-  const resolved = resolveAt(docCache.get(rootLocation), rootLocation, rootRegistry.rootBase, 0)
+  // The document root is a schema; every other role follows from its keys.
+  const resolved = resolveAt(docCache.get(rootLocation), rootLocation, rootRegistry.rootBase, 0, 'schema')
 
   // Attach cross-document cycle targets under `$defs` so every `#/$defs/<name>`
   // ref emitted by the CYCLE branch resolves within the output document.

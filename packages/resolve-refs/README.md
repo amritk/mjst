@@ -125,15 +125,46 @@ full spec:
 - **Anchors** bind within the resource that declares them first; an anchor not
   found in scope falls back to a document-global search (compatibility with
   documents that reference across sibling resources).
-- A plain `#/pointer` fragment stays **document-root-relative** — the behavior
-  bundled real-world documents rely on — even inside an embedded resource.
+- A plain `#/pointer` fragment resolves **within the resource in scope** first,
+  and falls back to the document root when it matches nothing there — which is
+  the behavior bundled real-world documents rely on (a bundled OpenAPI file points
+  at `#/components/schemas/…` from inside an `$id` scope). When both could match,
+  the resource wins, which is the order the spec asks for.
 - `$dynamicRef` prefers a `$dynamicAnchor` in scope, then degrades to `$ref`
-  semantics. The full dynamic-scope algorithm (outermost anchor along the
-  runtime reference chain) is not modelled.
+  semantics; a pointer-form `$dynamicRef` (`#/$defs/items`) resolves exactly like
+  a `$ref`, which is what the spec says it is. The full dynamic-scope algorithm
+  (outermost anchor along the runtime reference chain) is not modelled, and
+  cannot be by a resolver that inlines — see [Conformance, measured](#conformance-measured).
 - Document **retrieval is unaffected**: which file/URL an external ref loads
   from is derived from the referencing document's *location*, never its `$id` —
   a root `$id` naming a remote URL cannot turn a local sibling-file ref into a
   network fetch.
+
+## Conformance, measured
+
+Inlining a document must not change what it accepts, and that is checked against
+the corpus of `$ref` shapes the spec authors wrote for exactly this purpose.
+`src/conformance.test.ts` takes every reference-carrying case in the official
+[JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite)
+(required Draft 2020-12 tests), validates the instance twice with
+[`@amritk/runtime-validators`](../runtime-validators) — once through the original
+schema, once through the resolved one — and requires both to agree with the spec:
+
+**170 / 170 cases pass (100%).**
+
+The corpus is the reference-carrying cases the interpreter already answers
+correctly *before* resolution, so a disagreement afterwards is the resolver's and
+nobody else's.
+
+Getting the last ten meant *not* answering them: a `$dynamicRef` whose
+`$dynamicAnchor` name is declared more than once binds at evaluation time, and
+inlining collapses that to one target by construction. Those are now kept in the
+output with the scaffolding they need, exactly as a reference cycle is — see
+[`$id` scoping](#id-scoping) above. The expected-failure list is empty and kept in
+place, so the build names the first case that regresses rather than letting a
+percentage tick down. The corpus is vendored under
+[`fixtures/json-schema-test-suite`](../../fixtures/json-schema-test-suite); none
+of it is published.
 
 ## Documents
 

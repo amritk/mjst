@@ -3,7 +3,7 @@ import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extens
 import { multipleOfFailExpr } from '@amritk/helpers/multiple-of-check'
 import { quoteJsString } from '@amritk/helpers/quote-js-string'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
-import { safeAccessor } from '@amritk/helpers/safe-accessor'
+import { hasOwnCheck, missingCheck, safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
   hasConst,
   hasDependentRequired,
@@ -542,6 +542,92 @@ const generateAllOfChecks = (
 }
 
 /**
+ * The flat membership check for a `oneOf`/`anyOf` node, or `null` when the fast
+ * form does not apply — which is exactly the cue {@link generateUnionMatchChecks}
+ * needs to step in without emitting the same verdict twice.
+ */
+const flatUnionCheck = (acc: string, schema: JSONSchema, context: StrictAssertionContext): string | null => {
+  const branches = getUnionBranches(schema)
+  if (branches === null || context.stripUnknown === true) return null
+  if (!canEnforceUnion(branches, context.rootSchema)) return null
+  return generateUnionCheck(
+    acc,
+    branches,
+    context.useRefImports ?? false,
+    context.suffix ?? '',
+    isExclusiveUnion(schema),
+  )
+}
+
+/**
+ * Strict-mode `anyOf` / `oneOf` proven with the exact matcher — the fallback for
+ * every union the flat membership check cannot express.
+ *
+ * {@link generateUnionCheck} is the preferred form (a per-branch shape check the
+ * fast path can reuse), but it only speaks `type` / `enum` / `$ref` /
+ * inline-object, so a branch like `{ minimum: 2 }`, a bare `true`, or a
+ * `required`-only object made it return null — and the composition then compiled
+ * to nothing at all: `{ oneOf: [{ type: 'integer' }, { minimum: 2 }] }` accepted
+ * every value. Branches with nothing to discriminate on are still *checkable*
+ * one at a time, which is what the matcher does; `oneOf` counts the matches so
+ * "more than one branch" fails too. A member the matcher cannot prove leaves the
+ * keyword alone, the same bar `not` and `allOf` hold to.
+ */
+const generateUnionMatchChecks = (
+  acc: string,
+  schema: JSONSchema,
+  label: string,
+  optional: boolean,
+  context: StrictAssertionContext,
+): string[] => {
+  if (!isSchemaObject(schema)) return []
+  const record = schema as Record<string, unknown>
+  // `getUnionBranches` prefers `oneOf`, so that is the one keyword the flat check
+  // may already have covered on this node.
+  const covered =
+    flatUnionCheck(acc, schema, context) === null ? undefined : isExclusiveUnion(schema) ? 'oneOf' : 'anyOf'
+  const lines: string[] = []
+
+  for (const keyword of ['anyOf', 'oneOf'] as const) {
+    if (keyword === covered) continue
+    const members = record[keyword]
+    if (!Array.isArray(members) || members.length === 0) continue
+
+    const matches: string[] = []
+    for (const member of members) {
+      const match = subschemaMatchExpr(acc, member as JSONSchema, matchContext(context))
+      if (match === null) break
+      matches.push(match)
+    }
+    if (matches.length !== members.length) continue
+
+    const check = unionMatchExpr(keyword, matches)
+    if (check === null || check === 'true') continue
+    const failure = throwError(
+      `${label} does not match ${keyword === 'anyOf' ? 'any of' : 'exactly one of'} the declared schemas`,
+    )
+    lines.push(optional ? `  if (${acc} !== undefined && !(${check})) ${failure};` : `  if (!(${check})) ${failure};`)
+  }
+
+  return lines
+}
+
+/**
+ * Folds per-branch matches into the keyword's verdict: `anyOf` is a disjunction
+ * (and is vacuous once a branch matches everything), `oneOf` counts the matching
+ * branches and demands exactly one — a value matching two is invalid, so a
+ * trivially-true branch cannot be dropped there the way an `anyOf` one can.
+ */
+const unionMatchExpr = (keyword: 'anyOf' | 'oneOf', matches: readonly string[]): string | null => {
+  if (keyword === 'anyOf') {
+    if (matches.includes('true')) return null
+    return matches.length === 1 ? (matches[0] as string) : `(${matches.join(' || ')})`
+  }
+  if (matches.length === 1) return matches[0] as string
+  return `((${matches.map((match) => `(${match} ? 1 : 0)`).join(' + ')}) === 1)`
+}
+
+/**
  * Strict-mode `if` / `then` / `else`: when the value matches `if`, it must also
  * match `then`; otherwise it must match `else`. Emitted only when every branch
  * present can be proven exactly — a half-checked conditional would be worse than
@@ -692,7 +778,7 @@ const generateDependentRequiredChecks = (obj: string, schema: JSONSchema, label:
     if (!Array.isArray(deps)) continue
     for (const dep of deps) {
       lines.push(
-        `  if (${JSON.stringify(trigger)} in ${obj} && !(${JSON.stringify(dep)} in ${obj})) ${throwError(`${label} must have property '${dep}' when '${trigger}' is present`)};`,
+        `  if (${hasOwnCheck(obj, trigger)} && ${missingCheck(obj, dep)}) ${throwError(`${label} must have property '${dep}' when '${trigger}' is present`)};`,
       )
     }
   }
@@ -718,15 +804,13 @@ const generateDependentSchemasChecks = (
   for (const [trigger, sub] of Object.entries(dep as Record<string, unknown>)) {
     if (sub === true) continue
     if (sub === false) {
-      lines.push(
-        `  if (${JSON.stringify(trigger)} in ${obj}) ${throwError(`${label} must NOT have property '${trigger}'`)};`,
-      )
+      lines.push(`  if (${hasOwnCheck(obj, trigger)}) ${throwError(`${label} must NOT have property '${trigger}'`)};`)
       continue
     }
     const match = subschemaMatchExpr(obj, sub as JSONSchema, matchContext(context))
     if (match === null || match === 'true') continue
     lines.push(
-      `  if (${JSON.stringify(trigger)} in ${obj} && !(${match})) ${throwError(`${label} does not satisfy the schema required when '${trigger}' is present`)};`,
+      `  if (${hasOwnCheck(obj, trigger)} && !(${match})) ${throwError(`${label} does not satisfy the schema required when '${trigger}' is present`)};`,
     )
   }
   return lines
@@ -848,6 +932,7 @@ export const generateCompositionChecks = (
 ): string[] => [
   ...generateNotCheck(acc, schema, label, false, context),
   ...generateAllOfChecks(acc, schema, label, false, context),
+  ...generateUnionMatchChecks(acc, schema, label, false, context),
   ...generateConditionalChecks(acc, schema, label, context),
 ]
 
@@ -896,7 +981,7 @@ const generatePropertyAssertion = (
 
   if (isRequired) {
     lines.push(
-      `  if (!(${JSON.stringify(key)} in input)) ${throwError(`[${typeName}] missing required property '${key}'`)};`,
+      `  if (${missingCheck('input', key)}) ${throwError(`[${typeName}] missing required property '${key}'`)};`,
     )
   }
 
@@ -904,7 +989,7 @@ const generatePropertyAssertion = (
   // The early return below skipped both boolean schemas, which made `false` a
   // silent no-op.
   if (propSchema === false) {
-    lines.push(`  if (${JSON.stringify(key)} in input) ${throwError(`[${typeName}] must NOT have property '${key}'`)};`)
+    lines.push(`  if (${hasOwnCheck('input', key)}) ${throwError(`[${typeName}] must NOT have property '${key}'`)};`)
     return lines
   }
   if (!isSchemaObject(propSchema)) return lines
@@ -922,6 +1007,7 @@ const generatePropertyAssertion = (
   // early, and `not`/`allOf`/`if` can ride on any of those shapes.
   lines.push(...generateNotCheck(acc, propSchema, field, !isRequired, context))
   lines.push(...generateAllOfChecks(acc, propSchema, field, !isRequired, context))
+  lines.push(...generateUnionMatchChecks(acc, propSchema, field, !isRequired, context))
   lines.push(...generateConditionalChecks(acc, propSchema, field, context))
 
   // Union properties: enforce membership when every branch check is
@@ -1121,7 +1207,7 @@ export const generateObjectStrictAssertion = (
   // the inline-object union check has always covered the same case.
   for (const key of required) {
     lines.push(
-      `  if (!(${JSON.stringify(key)} in input)) ${throwError(`[${typeName}] missing required property '${key}'`)};`,
+      `  if (${missingCheck('input', key)}) ${throwError(`[${typeName}] missing required property '${key}'`)};`,
     )
   }
 
@@ -1148,6 +1234,7 @@ export const generateObjectStrictAssertion = (
   lines.push(...generateObjectSizeChecks('input', schema, `[${typeName}]`, false))
   lines.push(...generateNotCheck('input', schema, `[${typeName}]`, false, context))
   lines.push(...generateAllOfChecks('input', schema, `[${typeName}]`, false, context, true))
+  lines.push(...generateUnionMatchChecks('input', schema, `[${typeName}]`, false, context))
   lines.push(...generateConditionalChecks('input', schema, `[${typeName}]`, context))
   lines.push(...generateKeyedValueChecks('input', schema, `[${typeName}]`, context))
   lines.push(...generateBackstopAssertion('input', schema, `[${typeName}]`, context))
@@ -1208,6 +1295,7 @@ export const generateScalarStrictAssertion = (
   // and return a validation-free cast.
   lines.push(...generateNotCheck('input', schema, label, false, context))
   lines.push(...generateAllOfChecks('input', schema, label, false, context))
+  lines.push(...generateUnionMatchChecks('input', schema, label, false, context))
   lines.push(...generateConditionalChecks('input', schema, label, context))
 
   // Array-form `type` at the root — same gap as the property path below.

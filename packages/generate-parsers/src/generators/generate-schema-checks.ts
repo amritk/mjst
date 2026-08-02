@@ -1,6 +1,7 @@
 import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
+import { hasOwnCheck } from '@amritk/helpers/safe-accessor'
 import {
   hasAdditionalProperties,
   hasConst,
@@ -114,7 +115,7 @@ const generateInferredChecks = (accessor: string, schema: JSONSchema, type: Infe
       checks.push(`typeof ${accessor} === "object" && ${accessor} !== null && !Array.isArray(${accessor})`)
       if (hasRequired(schema) && schema.required.length > 0) {
         for (const requiredKey of schema.required) {
-          checks.push(`${JSON.stringify(requiredKey)} in ${accessor}`)
+          checks.push(hasOwnCheck(accessor, requiredKey))
         }
       }
       if (hasMinProperties(schema)) {
@@ -277,7 +278,7 @@ export const generateSchemaChecks = (accessor: string, schema: JSONSchema): stri
       // Check required properties exist
       if (hasRequired(schema) && schema.required.length > 0) {
         for (const requiredKey of schema.required) {
-          checks.push(`${JSON.stringify(requiredKey)} in ${accessor}`)
+          checks.push(hasOwnCheck(accessor, requiredKey))
         }
       }
       // Check minProperties

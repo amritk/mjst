@@ -16,6 +16,19 @@ describe('validate-guard', () => {
     expect(isUser(null)).toBe(false)
   })
 
+  it('resolves a $ref into a document supplied through `schemas`', () => {
+    // The guard shares the interpreter with `validate` but not the code path
+    // through it, so the registry has to reach both entry points.
+    const isTagged = validateGuard(
+      { $ref: 'https://example.com/tag.json' },
+      { schemas: { 'https://example.com/tag.json': { type: 'string', minLength: 2 } } },
+    )
+
+    expect(isTagged('ok')).toBe(true)
+    expect(isTagged('x')).toBe(false)
+    expect(isTagged(7)).toBe(false)
+  })
+
   it('always returns a boolean, never an error object', () => {
     const guard = validateGuard({ type: 'string' })
     expect(guard('x')).toBe(true)

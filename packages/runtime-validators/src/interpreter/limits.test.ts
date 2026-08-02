@@ -48,6 +48,17 @@ describe('limits', () => {
     expect(() => validate({ properties: { name: { pattern: '(x*)*' } } })).toThrow()
   })
 
+  it('screens the patterns in a registered document too', () => {
+    // A document the caller loaded from elsewhere is a schema this validator will
+    // really run, so it gets the same up-front screen as the one under validation.
+    expect(() =>
+      validate(
+        { $ref: 'https://example.com/lib.json' },
+        { schemas: { 'https://example.com/lib.json': { pattern: '(a+)+$' } } },
+      ),
+    ).toThrow(/catastrophic backtracking|ReDoS/i)
+  })
+
   it('lets an unsafe pattern through when explicitly opted in', () => {
     const validator = validate({ type: 'string', pattern: '(a+)+$' }, { limits: { allowUnsafePatterns: true } })
     expect(validator('aaaa')).toBe(true)

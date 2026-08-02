@@ -1,11 +1,9 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { buildResourceRegistry, DATA_KEYWORDS, escapePointerSegment } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
-import { isSchemaObject } from './schema-guards'
-
-// Keywords whose values are data, not subschemas — an `$id` inside an example
-// value is instance data and scopes nothing.
-const NON_SCHEMA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples'])
+import { resolveRef } from './resolve-ref'
+import { resolveScopedRef } from './resolve-scoped-ref'
 
 /** True when a subschema declares targets a fragment ref could legitimately mean. */
 const declaresLocalTargets = (record: Record<string, unknown>): boolean =>
@@ -14,71 +12,72 @@ const declaresLocalTargets = (record: Record<string, unknown>): boolean =>
   typeof record['$anchor'] === 'string'
 
 /**
- * Fails a document that relies on `$id` base-URI scoping, which this package
- * does not implement.
+ * Fails a document whose `$id` scoping this package cannot honour.
  *
  * In 2020-12 an `$id` on a subschema starts a new resource, and a `#/...` ref
- * inside it resolves against *that* resource — not the document root. Ref
- * resolution here always navigates from the root, so an embedded resource with
- * its own `$defs/t` and an inner `$ref: "#/$defs/t"` quietly picks up the
- * *outer* `$defs/t`: a different type, no warning, exit 0. A wrong type that
- * compiles is the worst outcome available, so the detectable shape of it is
- * rejected up front instead.
+ * inside it resolves against *that* resource rather than the document root.
+ * {@link normalizeRefScopes} implements that, so nearly every such document now
+ * generates correctly. What is left is the residue: a fragment ref inside an
+ * embedded resource that names nothing in the resource it belongs to. The spec
+ * calls that unresolvable, but the resolvers here navigate from the document
+ * root, so it would quietly pick up the *outer* definition of the same name — a
+ * different type, no warning, exit 0. A wrong type that compiles is the worst
+ * outcome available, so it is rejected up front instead.
  *
- * The check is deliberately narrow. It only fires when a non-root `$id` scope
- * both contains a fragment ref and declares local targets of its own (`$defs`,
- * `definitions`, or an `$anchor`) — that is exactly the ambiguous case. A
- * decorative `$id` with nothing local to point at has only one possible reading,
- * so it stays silent and keeps working.
- *
- * TODO: replace this with real base-URI resolution — build an `$id` → resource
- * map during the upgrade pass and resolve fragments against the innermost
- * enclosing base URI — and delete the check.
+ * The check stays deliberately narrow: it only fires when the enclosing resource
+ * declares ref targets of its own (`$defs`, `definitions`, or an `$anchor`),
+ * which is exactly the ambiguous case. A decorative `$id` with nothing local to
+ * point at has only one possible reading, so it stays silent and keeps working.
  */
 export const assertIdScopes = (rootSchema: JSONSchema): void => {
-  if (!isSchemaObject(rootSchema)) return
+  const registry = buildResourceRegistry(rootSchema)
+  if (registry === null) return
 
   /**
-   * `scopeId` is the nearest enclosing non-root `$id`, or null while still in
-   * the root resource. `scopeOwnsTargets` says whether that scope declared ref
-   * targets of its own. The root's `$id` is the document base, not a nested
-   * scope, so `isRoot` keeps it from opening one.
+   * `resource` is the nearest enclosing non-root resource — the node that opened
+   * the scope, plus the base URI it established — or null while still in the
+   * document's own resource.
    */
   const walk = (
     node: unknown,
-    scopeId: string | null,
-    scopeOwnsTargets: boolean,
+    pointer: string,
+    enclosing: string,
+    resource: Record<string, unknown> | null,
     depth: number,
-    isRoot: boolean,
   ): void => {
     assertSchemaDepth(depth, 'assertIdScopes')
     if (node === null || typeof node !== 'object') return
     if (Array.isArray(node)) {
-      for (const item of node) walk(item, scopeId, scopeOwnsTargets, depth + 1, false)
+      for (let index = 0; index < node.length; index++) {
+        walk(node[index], `${pointer}/${index}`, enclosing, resource, depth + 1)
+      }
       return
     }
 
     const record = node as Record<string, unknown>
-    const id = record['$id']
-    const startsScope = !isRoot && typeof id === 'string' && id !== ''
-    const nextScopeId = startsScope ? id : scopeId
-    const nextOwnsTargets = startsScope ? declaresLocalTargets(record) : scopeOwnsTargets
+    const declared = registry.baseAt.get(pointer)
+    const base = declared ?? enclosing
+    const scope = declared !== undefined && pointer !== '' ? record : resource
 
-    const ref = record['$ref']
-    if (nextScopeId !== null && nextOwnsTargets && typeof ref === 'string' && ref.startsWith('#') && ref !== '#') {
+    for (const key of ['$ref', '$dynamicRef'] as const) {
+      const ref = record[key]
+      if (typeof ref !== 'string' || !ref.startsWith('#') || ref === '#') continue
+      if (scope === null || !declaresLocalTargets(scope)) continue
+      const target = resolveScopedRef(registry, ref, base)
+      if (target !== undefined && resolveRef(`#${target.pointer}`, rootSchema as Record<string, unknown>)) continue
       throw new Error(
-        `The subschema with $id "${nextScopeId}" declares its own definitions and contains the ref "${ref}". ` +
-          '$id base-URI scoping is not supported: that ref would be resolved against the document root, ' +
-          'silently selecting a different definition. Hoist the embedded resource into the root $defs ' +
-          '(or drop the inner $id) so every fragment ref names one target.',
+        `The subschema with $id "${scope['$id'] as string}" declares its own definitions and contains the ref ` +
+          `"${ref}", which names nothing inside it. $id base-URI scoping makes that ref unresolvable, but ` +
+          'resolving it from the document root would silently select a different definition. Point the ref at a ' +
+          'definition the embedded resource declares, hoist the resource into the root $defs, or drop the inner $id.',
       )
     }
 
     for (const key of Object.keys(record)) {
-      if (NON_SCHEMA_KEYWORDS.has(key)) continue
-      walk(record[key], nextScopeId, nextOwnsTargets, depth + 1, false)
+      if (DATA_KEYWORDS.has(key)) continue
+      walk(record[key], `${pointer}/${escapePointerSegment(key)}`, base, scope, depth + 1)
     }
   }
 
-  walk(rootSchema, null, false, 0, true)
+  walk(rootSchema, '', registry.rootBase, null, 0)
 }

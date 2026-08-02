@@ -14,10 +14,24 @@ import { generateValidatorFunction } from './generate-validator-function'
  *   - draft-07 dual-form `dependencies` (array + schema)
  *   - OpenAPI 3.0 `nullable: true`
  *   - full `propertyNames` subschemas (not just pattern/length/enum/const/$ref)
+ *   - `unevaluatedProperties` / `unevaluatedItems`
  *
  * The interpreter is the reference: it enforces all of these. For every schema ×
  * value pair the two must return the same valid/invalid verdict. Messages are a
  * separate concern — only the boolean verdict is the contract here.
+ *
+ * `unevaluated*` earns the most attention because the generator answers it in a
+ * completely different way: the interpreter collects annotations as it walks,
+ * while the generated code reconstructs the same answer as a flat expression. Two
+ * implementations of one rule is exactly the situation where a shared oracle is
+ * worth more than any number of hand-written expectations, so the cases below run
+ * every applicator that publishes annotations — and a fuzz pass runs their
+ * combinations.
+ *
+ * The schemas here are deliberately `$ref`-free: {@link evalValidator} compiles a
+ * single function, and a `$ref` compiles to a call into a sibling file that only
+ * exists in a full `buildValidatorSchema` output. `$ref` coverage lives in
+ * `conformance.test.ts`, which links the whole generated set.
  */
 
 const evalValidator = (code: string): ((input: unknown) => unknown) => {
@@ -180,6 +194,161 @@ describe('generator/interpreter verdict parity', () => {
     // A number-typed propertyNames rejects every key (keys are always strings).
     assertParity({ type: 'object', propertyNames: { type: 'number' } }, values)
   })
+
+  it('agrees on unevaluatedProperties against the adjacent property keywords', () => {
+    const values: unknown[] = [{}, { foo: 1 }, { bar: 1 }, { foo: 1, bar: 1 }, { 'x-a': 1 }, 42, 'str', null, [1]]
+    assertParity({ properties: { foo: true }, unevaluatedProperties: false }, values)
+    assertParity({ patternProperties: { '^x-': true }, unevaluatedProperties: false }, values)
+    // A schema-form `additionalProperties` sweeps every key, so the unevaluated
+    // keyword has nothing left to police — the generator must not invent work here.
+    assertParity({ properties: { foo: true }, additionalProperties: true, unevaluatedProperties: false }, values)
+    assertParity(
+      { properties: { foo: true }, additionalProperties: { type: 'number' }, unevaluatedProperties: false },
+      values,
+    )
+    // A schema-form unevaluated validates the leftovers instead of forbidding them.
+    assertParity({ properties: { foo: true }, unevaluatedProperties: { type: 'string' } }, [
+      ...values,
+      { foo: 1, bar: 'ok' },
+    ])
+    // `propertyNames` inspects keys but evaluates nothing.
+    assertParity({ propertyNames: { type: 'string' }, unevaluatedProperties: false }, values)
+  })
+
+  it('agrees on unevaluatedProperties across the in-place applicators', () => {
+    const values: unknown[] = [{}, { a: 1 }, { b: 1 }, { a: 1, b: 1 }, { a: 1, b: 1, c: 1 }, { c: 1 }]
+    assertParity(
+      { allOf: [{ properties: { a: true } }, { properties: { b: true } }], unevaluatedProperties: false },
+      values,
+    )
+    assertParity(
+      {
+        anyOf: [
+          { required: ['a'], properties: { a: true } },
+          { required: ['b'], properties: { b: true } },
+        ],
+        unevaluatedProperties: false,
+      },
+      values,
+    )
+    assertParity(
+      {
+        oneOf: [
+          { required: ['a'], properties: { a: true } },
+          { required: ['b'], properties: { b: true } },
+        ],
+        unevaluatedProperties: false,
+      },
+      values,
+    )
+    // A `not` discards its annotations, so nothing inside it counts as evaluated.
+    assertParity({ not: { not: { properties: { a: true } } }, unevaluatedProperties: false }, values)
+    // Cousins cannot see each other: the inner node's coverage is its own subtree.
+    assertParity({ allOf: [{ properties: { a: true } }, { unevaluatedProperties: false }] }, values)
+    // A nested unevaluated that is not `false` sweeps the leftovers itself.
+    assertParity(
+      { allOf: [{ properties: { a: true } }, { unevaluatedProperties: true }], unevaluatedProperties: false },
+      values,
+    )
+  })
+
+  it('agrees on unevaluatedProperties with if/then/else and dependentSchemas', () => {
+    const values: unknown[] = [
+      {},
+      { foo: 'then' },
+      { foo: 'then', bar: 1 },
+      { foo: 'else' },
+      { foo: 'else', baz: 'x' },
+      { baz: 'x' },
+    ]
+    const ifSchema = { properties: { foo: { const: 'then' } }, required: ['foo'] }
+    assertParity(
+      {
+        if: ifSchema,
+        then: { properties: { bar: true } },
+        else: { properties: { baz: true } },
+        unevaluatedProperties: false,
+      },
+      values,
+    )
+    // `then` missing: only the `if` and `else` branches publish anything.
+    assertParity({ if: ifSchema, else: { properties: { baz: true } }, unevaluatedProperties: false }, values)
+    assertParity({ if: ifSchema, then: { properties: { bar: true } }, unevaluatedProperties: false }, values)
+    // A bare `if` still publishes what it matched.
+    assertParity({ if: { patternProperties: { foo: { type: 'string' } } }, unevaluatedProperties: false }, [
+      ...values,
+      { foo: 'a' },
+      { bar: 'a' },
+    ])
+    assertParity(
+      {
+        properties: { foo2: {} },
+        dependentSchemas: { foo: {}, foo2: { properties: { bar: {} } } },
+        unevaluatedProperties: false,
+      },
+      [...values, { foo: '' }, { bar: '' }, { foo2: '', bar: '' }],
+    )
+  })
+
+  it('agrees on unevaluatedItems against the adjacent array keywords', () => {
+    const values: unknown[] = [[], ['a'], ['a', 1], ['a', 1, true], [1], 'not-array', 42, {}, null]
+    assertParity({ prefixItems: [{ type: 'string' }], unevaluatedItems: false }, values)
+    assertParity({ prefixItems: [{ type: 'string' }], items: true, unevaluatedItems: false }, values)
+    assertParity({ prefixItems: [{ type: 'string' }], unevaluatedItems: { type: 'number' } }, values)
+    assertParity({ items: { type: 'string' }, unevaluatedItems: false }, values)
+    assertParity({ unevaluatedItems: { type: 'null' } }, [...values, [null], [null, null]])
+    assertParity({ allOf: [{ prefixItems: [true] }, { unevaluatedItems: false }] }, values)
+  })
+
+  it('agrees on unevaluatedItems and contains, which publishes only what it matched', () => {
+    // The distinction this pins down: the interpreter marks exactly the indices
+    // `contains` matched, where Ajv marks the whole array. The generated term has
+    // to look at the element, not the position.
+    const values: unknown[] = [[], [1], ['a'], [1, 'a'], [1, 2], [1, 2, 'a'], ['a', 'b'], ['a', 0]]
+    assertParity({ prefixItems: [true], contains: { type: 'string' }, unevaluatedItems: false }, values)
+    assertParity({ contains: { type: 'string' }, minContains: 0, unevaluatedItems: false }, values)
+    assertParity({ contains: { type: 'string' }, maxContains: 1, unevaluatedItems: false }, values)
+    assertParity(
+      {
+        allOf: [{ contains: { multipleOf: 2 } }, { contains: { multipleOf: 3 } }],
+        unevaluatedItems: { multipleOf: 5 },
+      },
+      [[2, 3, 4, 5, 6], [2, 3, 4, 7, 8], [2, 3], []],
+    )
+    // Nested `if`s over `contains`: each level's annotations ride on its own condition.
+    assertParity(
+      {
+        if: { contains: { const: 'a' } },
+        then: { if: { contains: { const: 'b' } }, then: { if: { contains: { const: 'c' } } } },
+        unevaluatedItems: false,
+      },
+      [[], ['a', 'a'], ['a', 'b', 'a'], ['c', 'a', 'c', 'b'], ['b', 'b'], ['c', 'c'], ['c', 'b', 'c'], ['c', 'a', 'c']],
+    )
+  })
+
+  it('agrees on unevaluated keywords nested inside another instance location', () => {
+    // The annotations for one instance location say nothing about another: a
+    // property's own unevaluated keyword sees only what that property's schema
+    // evaluated, and an uncle branch that also visits it does not count.
+    assertParity({ properties: { foo: { properties: { bar: true }, unevaluatedProperties: false } } }, [
+      { foo: { bar: 1 } },
+      { foo: { bar: 1, faz: 1 } },
+      { foo: 1 },
+      {},
+    ])
+    assertParity(
+      {
+        properties: { foo: { properties: { bar: true }, unevaluatedProperties: false } },
+        anyOf: [{ properties: { foo: { properties: { faz: true } } } }],
+      },
+      [{ foo: { bar: 1 } }, { foo: { bar: 1, faz: 1 } }],
+    )
+    assertParity({ prefixItems: [{ prefixItems: [true, true], unevaluatedItems: false }], unevaluatedItems: false }, [
+      [['a', 'b']],
+      [['a', 'b'], 'c'],
+      [['a', 'b', 'c']],
+    ])
+  })
 })
 
 // Deterministic PRNG so a failure reproduces exactly. (mulberry32)
@@ -268,4 +437,96 @@ describe('generator/interpreter fuzz parity', () => {
 
     expect(divergences, divergences.join('\n\n')).toEqual([])
   })
+
+  it('agrees across random unevaluated schemas and values', { timeout: 60_000 }, () => {
+    const rng = makeRng(0x5eed)
+    const divergences: string[] = []
+
+    for (let si = 0; si < 500 && divergences.length < 10; si++) {
+      const schema = randomUnevaluatedSchema(rng)
+      let generated: (v: unknown) => unknown
+      try {
+        generated = evalValidator(generateValidatorFunction(schema as never, 'Root'))
+      } catch (e) {
+        // A refusal is a legitimate answer for a shape the flat form cannot see
+        // through — but none of the shapes minted here is one, so it is a failure.
+        divergences.push(`compile threw: ${(e as Error).message}\n  schema: ${JSON.stringify(schema)}`)
+        continue
+      }
+      const interpreted = validate(schema as never)
+
+      for (let t = 0; t < 24 && divergences.length < 10; t++) {
+        const value = rng() < 0.5 ? randomUnevaluatedObject(rng) : randomUnevaluatedArray(rng)
+        let gen: boolean
+        try {
+          gen = generated(value) === true
+        } catch (e) {
+          divergences.push(
+            `threw: ${(e as Error).message}\n  schema: ${JSON.stringify(schema)}\n  value: ${JSON.stringify(value)}`,
+          )
+          break
+        }
+        if (gen !== (interpreted(value) === true)) {
+          divergences.push(
+            `schema: ${JSON.stringify(schema)}\n  value: ${JSON.stringify(value)}\n  generated=${gen} interpreter=${!gen}`,
+          )
+        }
+      }
+    }
+
+    expect(divergences, divergences.join('\n\n')).toEqual([])
+  })
 })
+
+/** Keys and elements small enough that random values collide often, which is what makes coverage interesting. */
+const UNEVALUATED_KEYS = ['a', 'b', 'c']
+const UNEVALUATED_ELEMENTS: unknown[] = ['s', 2, 3, true, null]
+
+const randomUnevaluatedObject = (rng: () => number): Record<string, unknown> => {
+  const out: Record<string, unknown> = {}
+  for (const key of UNEVALUATED_KEYS) {
+    if (rng() < 0.5) out[key] = pick(rng, UNEVALUATED_ELEMENTS)
+  }
+  if (rng() < 0.3) out['x-extra'] = 1
+  return out
+}
+
+const randomUnevaluatedArray = (rng: () => number): unknown[] =>
+  Array.from({ length: Math.floor(rng() * 4) }, () => pick(rng, UNEVALUATED_ELEMENTS))
+
+/** A property-shaped subschema that evaluates some of the keys, for the applicators to carry. */
+const randomPropertyBranch = (rng: () => number): Record<string, unknown> => {
+  const branch: Record<string, unknown> = { properties: { [pick(rng, UNEVALUATED_KEYS)]: true } }
+  if (rng() < 0.5) branch['required'] = [pick(rng, UNEVALUATED_KEYS)]
+  return branch
+}
+
+/** An array-shaped subschema, likewise. */
+const randomItemBranch = (rng: () => number): Record<string, unknown> =>
+  rng() < 0.5 ? { prefixItems: [true] } : { contains: { type: pick(rng, ['string', 'number', 'boolean']) } }
+
+/**
+ * A schema built out of the applicators that publish annotations, with an
+ * `unevaluated*` keyword on top. Both keywords go on the same node so one random
+ * value exercises the object and the array side of the same generated validator.
+ */
+const randomUnevaluatedSchema = (rng: () => number): Record<string, unknown> => {
+  const s: Record<string, unknown> = {}
+  if (rng() < 0.6) s['properties'] = { [pick(rng, UNEVALUATED_KEYS)]: true }
+  if (rng() < 0.3) s['patternProperties'] = { '^x-': true }
+  if (rng() < 0.4) s['prefixItems'] = [true]
+  if (rng() < 0.3) s['contains'] = { type: pick(rng, ['string', 'number']) }
+  if (rng() < 0.4) s['allOf'] = [rng() < 0.5 ? randomPropertyBranch(rng) : randomItemBranch(rng)]
+  if (rng() < 0.4) s['anyOf'] = [randomPropertyBranch(rng), randomItemBranch(rng)]
+  if (rng() < 0.25) s['oneOf'] = [randomPropertyBranch(rng), { required: ['x-extra'], properties: { 'x-extra': true } }]
+  if (rng() < 0.3) {
+    s['if'] = randomPropertyBranch(rng)
+    if (rng() < 0.7) s['then'] = randomPropertyBranch(rng)
+    if (rng() < 0.5) s['else'] = randomItemBranch(rng)
+  }
+  if (rng() < 0.25) s['dependentSchemas'] = { a: randomPropertyBranch(rng) }
+  if (rng() < 0.2) s['not'] = { const: 'never-matches-anything' }
+  s['unevaluatedProperties'] = rng() < 0.6 ? false : { type: pick(rng, ['string', 'number']) }
+  s['unevaluatedItems'] = rng() < 0.6 ? false : { type: pick(rng, ['string', 'number']) }
+  return s
+}

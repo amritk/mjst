@@ -82,6 +82,40 @@ const CASES: ReadonlyArray<readonly [string, JSONSchema]> = [
       required: ['toString'],
     },
   ],
+  // The `unevaluated*` output is the densest expression the generator emits — a
+  // `.every` arrow over a cast accessor, branch conditions bound to locals, and a
+  // match IIFE nested inside — so it is exactly the shape most likely to stop
+  // compiling under `noUncheckedIndexedAccess` and friends.
+  [
+    'unevaluated-properties',
+    {
+      properties: { foo: { type: 'string' } },
+      patternProperties: { '^x-': { type: 'number' } },
+      allOf: [{ properties: { bar: { type: 'boolean' } } }],
+      anyOf: [{ required: ['baz'], properties: { baz: { type: 'string' } } }],
+      dependentSchemas: { foo: { properties: { dep: { type: 'string' } } } },
+      unevaluatedProperties: { type: 'string' },
+    },
+  ],
+  [
+    'unevaluated-items',
+    {
+      prefixItems: [{ type: 'string' }],
+      contains: { type: 'number' },
+      if: { minItems: 2 },
+      then: { allOf: [{ prefixItems: [true, true] }] },
+      unevaluatedItems: false,
+    },
+  ],
+  [
+    'unevaluated-through-ref',
+    {
+      $ref: '#/$defs/base',
+      properties: { own: { type: 'string' } },
+      unevaluatedProperties: false,
+      $defs: { base: { properties: { inherited: { type: 'string' } } } },
+    },
+  ],
   [
     'proto-property',
     JSON.parse(

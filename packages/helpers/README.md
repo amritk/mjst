@@ -46,7 +46,7 @@ bun add @amritk/helpers
 | `@amritk/helpers/build-anchor-map` | `buildAnchorMap` | Build a map of `$anchor` / `$dynamicAnchor` name → JSON Pointer. |
 | `@amritk/helpers/build-dynamic-ref-map` | `buildDynamicRefMap` | Build a map of `$dynamicAnchor` → resolved location. |
 | `@amritk/helpers/resolve-dynamic-refs` | `resolveDynamicRefs` | Replace `$dynamicRef` occurrences using the map above. |
-| `@amritk/helpers/assert-id-scopes` | `assertIdScopes` | Reject a document that relies on unsupported `$id` base-URI scoping. |
+| `@amritk/helpers/assert-id-scopes` | `assertIdScopes` | Reject a document whose `$id`-scoped fragment ref resolves to nothing in its own resource. |
 | `@amritk/helpers/max-schema-depth` | `MAX_SCHEMA_DEPTH`, `assertSchemaDepth` | The nesting cap every recursive walker enforces. |
 | `@amritk/helpers/upgrade-draft07-schema` | `upgradeDraft07Schema`, `isDraft07Schema` | Upgrade a Draft-07 schema to 2020-12. |
 | `@amritk/helpers/ref-to-filename` | `refToFilename`, `toKebabCase` | Convert a `$ref` to a stable filename. |

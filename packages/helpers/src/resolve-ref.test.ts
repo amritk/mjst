@@ -214,6 +214,40 @@ describe('resolveRef', () => {
     expect(resolveRef('#nope', { $defs: { a: { type: 'object' } } })).toBeUndefined()
   })
 
+  // A `$ref` fragment travels as a URI, so a definition named `percent%field` is
+  // written `percent%25field`. Matching the escaped spelling against the
+  // document's keys found nothing, and generation stopped on an unresolvable ref.
+  it('percent-decodes a pointer token before matching it', () => {
+    const schema = { $defs: { 'percent%field': { type: 'string' }, 'foo"bar': { type: 'number' } } }
+
+    expect(resolveRef('#/$defs/percent%25field', schema)).toEqual({ type: 'string' })
+    expect(resolveRef('#/$defs/foo%22bar', schema)).toEqual({ type: 'number' })
+  })
+
+  it('leaves an undecodable token alone rather than throwing', () => {
+    // `100% sure` is a naming choice, not a malformed escape to report.
+    const schema = { $defs: { '100% sure': { type: 'boolean' } } }
+
+    expect(resolveRef('#/$defs/100% sure', schema)).toEqual({ type: 'boolean' })
+  })
+
+  // `""` is a legal member name: `#/$defs//$defs/` addresses the `""` definition
+  // nested inside the `""` definition. Filtering empty parts out walked to the
+  // wrong node, or to none at all.
+  it('keeps empty pointer tokens', () => {
+    const schema = { $defs: { '': { $defs: { '': { type: 'number' } } } } }
+
+    expect(resolveRef('#/$defs//$defs/', schema)).toEqual({ type: 'number' })
+  })
+
+  // Every document that writes `#/` means the root, and the rest of the pipeline
+  // already reads it that way.
+  it('treats "#/" as the whole document', () => {
+    const schema = { $defs: { a: { type: 'object' } } }
+
+    expect(resolveRef('#/', schema)).toEqual(schema)
+  })
+
   // `in` walks the prototype chain, so this used to resolve to `Object.prototype`
   // and the walker happily generated a file for it.
   it('does not resolve a pointer into Object.prototype', () => {

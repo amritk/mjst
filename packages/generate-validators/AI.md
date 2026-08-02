@@ -37,7 +37,10 @@ const files = await buildValidatorSchema(schema, 'Document')
 5. **`format` emits no check.** It stays an annotation, like the interpreter's
    default — but *not* like the interpreter run with `{ formats: 'all' }`
    (`@amritk/lint`, `createApi({ formats })`), which rejects strings a generated
-   validator accepts. `unevaluatedProperties`/`unevaluatedItems` go the other
-   way: unimplemented, so generation **throws** instead of widening the verdict.
+   validator accepts. `unevaluatedProperties`/`unevaluatedItems` *are* generated;
+   four shapes still refuse (coverage through a `$dynamicRef`, an unresolvable or
+   cyclic `$ref` at the same instance location, a walk deeper than eight
+   applicators, a node under `additionalItems`), and generation **throws** for
+   those rather than widening the verdict.
 
 Only the `.` entry. Install: `bun add @amritk/generate-validators`.

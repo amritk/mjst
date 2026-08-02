@@ -1,3 +1,4 @@
+import { childRole, type NodeRole } from './child-role'
 import { getByPointer, pointerToPath } from './get-by-pointer'
 import { DEFAULT_MAX_DEPTH } from './max-depth'
 import type { RefKeyword } from './reference'
@@ -21,9 +22,10 @@ import type { JsonPath } from './types'
  * - A ref whose URI (resolved against the enclosing base) matches an embedded
  *   resource's `$id` resolves to that resource without any fetching; a pointer
  *   or anchor fragment on such a ref applies *within* that resource.
- * - A plain `#/pointer` fragment stays **document-root-relative** (matching the
- *   previous behavior and what bundled real-world documents rely on), even when
- *   it appears inside an embedded resource.
+ * - A `#/pointer` fragment resolves **within the resource it appears in**, per
+ *   the spec: a nested `$id` re-bases the pointers inside it. A pointer that
+ *   matches nothing there falls back to the document root, because bundled
+ *   documents in the wild point at the root from inside an `$id` scope.
  * - `$dynamicRef` prefers a `$dynamicAnchor` in scope, then degrades to `$ref`
  *   semantics. The full dynamic-scope algorithm (outermost anchor along the
  *   *runtime* reference chain) is not modelled — for the single bundled
@@ -46,6 +48,14 @@ export type ResourceRegistry = {
   staticAnchors: Map<string, { value: unknown; pointer: JsonPath }>
   /** `${base}#${name}` → target, for `$dynamicAnchor` only. */
   dynamicAnchors: Map<string, { value: unknown; pointer: JsonPath }>
+  /**
+   * `$dynamicAnchor` names the document declares more than once — the names a
+   * `$dynamicRef` cannot be bound to statically, because which declaration wins
+   * is decided by the dynamic scope at evaluation time. A name declared once (or
+   * not at all) is absent from this set and stays inlinable; see
+   * `dynamic-scope.ts` for what the resolver does with the rest.
+   */
+  ambiguousDynamicAnchors: Set<string>
   /** The document root's base URI (its root `$id` resolved, or the initial base). */
   rootBase: string
   /** The document root value, for root-relative pointer lookups. */
@@ -59,10 +69,6 @@ export type ResourceRegistry = {
  * a real `$id`.
  */
 export const SYNTHETIC_BASE = 'https://mjst-internal.invalid/document'
-
-// Keywords whose values are data, not subschemas — an `$id`/`$anchor` key
-// inside an enum member or example value is instance data, not a declaration.
-const NON_SCHEMA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples'])
 
 /** `new URL(ref, base).href`, or `undefined` when the pair does not parse. */
 export const resolveUri = (ref: string, base: string): string | undefined => {
@@ -89,7 +95,7 @@ export const splitFragment = (ref: string): { uriPart: string; fragment: string 
 }
 
 /** The base URI a subschema establishes via `$id`, or the enclosing base. */
-const baseAfterId = (node: Record<string, unknown>, enclosingBase: string): string => {
+export const baseAfterId = (node: Record<string, unknown>, enclosingBase: string): string => {
   const id = node['$id']
   if (typeof id !== 'string' || id === '') return enclosingBase
   const resolved = resolveUri(id, enclosingBase)
@@ -112,6 +118,10 @@ export const buildResourceRegistry = (
   const resources: ResourceRegistry['resources'] = new Map()
   const staticAnchors: ResourceRegistry['staticAnchors'] = new Map()
   const dynamicAnchors: ResourceRegistry['dynamicAnchors'] = new Map()
+  // Counted by *name* rather than by `${base}#${name}`: a `$dynamicRef` binds
+  // across resources, so two declarations of the same name anywhere in the
+  // document are already enough to make the binding a runtime question.
+  const dynamicAnchorCounts = new Map<string, number>()
 
   const rootBase =
     root !== null && typeof root === 'object' && !Array.isArray(root)
@@ -126,6 +136,7 @@ export const buildResourceRegistry = (
     }
     const dynamicAnchor = node['$dynamicAnchor']
     if (typeof dynamicAnchor === 'string') {
+      dynamicAnchorCounts.set(dynamicAnchor, (dynamicAnchorCounts.get(dynamicAnchor) ?? 0) + 1)
       const key = `${base}#${dynamicAnchor}`
       // Per 2020-12 a `$dynamicAnchor` also creates an ordinary anchor.
       if (!dynamicAnchors.has(key)) dynamicAnchors.set(key, { value: node, pointer })
@@ -138,19 +149,22 @@ export const buildResourceRegistry = (
   // resolution even started. Truncating here is safe rather than silent: the
   // resolver walks at least as deep as this does on the same path, so it hits
   // its own limit and records the error the caller sees.
-  const walk = (node: unknown, base: string, pointer: JsonPath, depth: number): void => {
-    if (node === null || typeof node !== 'object' || depth > maxDepth) return
+  // `role` keeps the walk from reading declarations out of data: an `$id` or
+  // `$anchor` key inside an enum member or a default value is part of that
+  // value, and a definition *named* `$id` under `$defs` is a name, not one
+  // either (see `child-role.ts`).
+  const walk = (node: unknown, base: string, pointer: JsonPath, depth: number, role: NodeRole): void => {
+    if (node === null || typeof node !== 'object' || depth > maxDepth || role === 'value') return
     if (Array.isArray(node)) {
-      for (let i = 0; i < node.length; i++) walk(node[i], base, [...pointer, i], depth + 1)
+      for (let i = 0; i < node.length; i++) walk(node[i], base, [...pointer, i], depth + 1, childRole(role, i))
       return
     }
     const record = node as Record<string, unknown>
-    const nodeBase = baseAfterId(record, base)
+    const nodeBase = role === 'schemaMap' ? base : baseAfterId(record, base)
     if (nodeBase !== base && !resources.has(nodeBase)) resources.set(nodeBase, { value: node, pointer })
-    registerAnchors(record, nodeBase, pointer)
+    if (role !== 'schemaMap') registerAnchors(record, nodeBase, pointer)
     for (const key of Object.keys(record)) {
-      if (NON_SCHEMA_KEYWORDS.has(key)) continue
-      walk(record[key], nodeBase, [...pointer, key], depth + 1)
+      walk(record[key], nodeBase, [...pointer, key], depth + 1, childRole(role, key))
     }
   }
 
@@ -162,9 +176,14 @@ export const buildResourceRegistry = (
   if (!resources.has(withoutFragment(initialBase))) {
     resources.set(withoutFragment(initialBase), { value: root, pointer: [] })
   }
-  walk(root, initialBase, [], 0)
+  walk(root, initialBase, [], 0, 'schema')
 
-  return { resources, staticAnchors, dynamicAnchors, rootBase, root }
+  const ambiguousDynamicAnchors = new Set<string>()
+  for (const [name, count] of dynamicAnchorCounts) {
+    if (count > 1) ambiguousDynamicAnchors.add(name)
+  }
+
+  return { resources, staticAnchors, dynamicAnchors, ambiguousDynamicAnchors, rootBase, root }
 }
 
 /**
@@ -238,8 +257,19 @@ export const resolveRefInScope = (
   const { uriPart, fragment } = splitFragment(ref)
 
   if (uriPart === '') {
-    // A plain `#/pointer` stays document-root-relative (see module doc).
     if (isPointerFragment(fragment)) {
+      // A `#/pointer` is relative to the resource it appears in: an embedded
+      // `$id` re-bases the pointers inside it, so `#/$defs/inner` next to an
+      // `$id` means that resource's `$defs`, not the document's.
+      const resource = registry.resources.get(currentBase)
+      if (resource !== undefined) {
+        const scoped = getByPointerWithBase(resource.value, currentBase, resource.pointer, fragment)
+        if (scoped !== undefined) return scoped
+      }
+      // Bundled documents in the wild point at the document root from inside an
+      // `$id` scope (`#/components/schemas/...` in a bundled OpenAPI file), so a
+      // pointer that misses within the resource falls back to the root rather
+      // than being reported unresolvable.
       return getByPointerWithBase(registry.root, registry.rootBase, [], fragment)
     }
     // An anchor name resolves within the current resource's scope.

@@ -213,6 +213,45 @@ emitting a parser that quietly accepts what the schema forbids. Coercing
 (non-strict) parsers are documented to repair rather than reject, so they ignore
 the rejecting keywords by design.
 
+### Conformance, measured
+
+The coverage above is not a claim — it is checked against the corpus every
+validator in every language is judged on.
+`src/generators/json-schema-conformance.test.ts` generates a strict parser for
+each schema in the official
+[JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite)
+(the required Draft 2020-12 tests — 1299 cases), links the emitted files in
+memory, and runs the suite's instances through the real generated code:
+
+**1222 / 1299 cases pass (94.1%).**
+
+A case passes only if the parser throws exactly when the spec says invalid *and*
+returns an accepted document unchanged — strict mode does not coerce, so a parser
+that quietly rewrites a valid document fails here too.
+
+Of the 77 that do not, **37 are a `$ref` whose target is not in the schema handed
+in** — another document, which generation does not go and fetch. Bundle it first
+with [`@amritk/resolve-refs`](../resolve-refs), which is what the `mjst` CLI does,
+and they generate. Another **12** are a keyword strict mode will not approximate
+(a cyclic `$ref` with siblings, a cyclic `unevaluatedProperties`) and **2** are two
+embedded resources whose definitions reduce to one filename: all of those cost a
+build error naming the cause, never a wrong verdict.
+
+The rest are honest gaps: the **12** `ignores a non-object` cases that follow from
+the third departure above, **6** where a URN-scoped recursive `$ref` points back at
+a root, **4** `$dynamicRef`s whose binding depends on the evaluation path (a
+generator emits one function per definition, shared by every path that reaches it),
+the three `multipleOf` / `pattern` judgement calls above, and one `$vocabulary`
+case.
+
+Every one is listed in
+`src/generators/json-schema-conformance-expected-failures.test-utils.ts` with the
+reason, and the test fails if a case moves in *either* direction — a regression
+breaks the build, and so does a case that starts passing without its entry being
+removed. The corpus is vendored under
+[`fixtures/json-schema-test-suite`](../../fixtures/json-schema-test-suite); none
+of it is published.
+
 ---
 
 ## Benchmarks

@@ -15,6 +15,12 @@ import { validate } from './validate'
  * deliberately exclude the keywords where we *intend* to differ from Ajv
  * (`nullable`, lenient non-schema nodes) — those have dedicated unit tests.
  *
+ * `contains` next to `unevaluatedItems` is excluded for the same reason: Ajv
+ * marks the *whole* array evaluated once `contains` is satisfied, while 2020-12
+ * says only the matched items are, and the official test suite agrees with the
+ * spec. We follow the spec there, so Ajv is not a usable oracle for that pair —
+ * `validate.test.ts` and `conformance.test.ts` cover it instead.
+ *
  * `multipleOf` with a repeating-fraction divisor (`0.1`, `0.01`) is also out of
  * scope: we judge multiples by distance to the nearest integer, while Ajv's
  * default check is `value / multipleOf !== parseInt(...)`. The two disagree both
@@ -311,14 +317,15 @@ const CASES: Case[] = [
     seeds: [['a', 1], ['a'], ['a', 1, true], [], ['a', 1, 2]],
   },
   {
-    name: 'unevaluatedItems schema with contains',
+    name: 'unevaluatedItems schema with prefixItems and allOf',
     dialect: '2020',
     schema: {
       type: 'array',
-      contains: { type: 'number' },
-      unevaluatedItems: { type: 'string' },
+      prefixItems: [{ type: 'string' }],
+      allOf: [{ prefixItems: [true, { type: 'number' }] }],
+      unevaluatedItems: { type: 'boolean' },
     },
-    seeds: [[1], [1, 'a'], ['a', 1, 'b'], ['a'], [1, 2], ['a', 1, 5]],
+    seeds: [['a'], ['a', 1], ['a', 1, true], ['a', 1, 'b'], [], ['a', 'b']],
   },
 ]
 

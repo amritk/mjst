@@ -164,7 +164,8 @@ Builds an error-collecting validator that interprets the schema on the fly.
 
 | Parameter | Type | Description |
 |:---|:---|:---|
-| `schema` | `unknown` | A JSON Schema (object, or a boolean schema). Local `$ref`s into the same document are resolved, including recursion. |
+| `schema` | `unknown` | A JSON Schema (object, or a boolean schema). Same-document `$ref`s resolve — pointers, `$anchor`s, and refs written against an `$id` as a base URI — including recursion. |
+| `options.schemas` | `Record<string, unknown>` | Documents you have already loaded, keyed by the absolute URI a `$ref` names them by — see [Referencing other documents](#referencing-other-documents). |
 | `options.formats` | `'all' \| string[]` | String formats to enforce. Unlisted formats are treated as annotations (not validated), matching Ajv's opt-in behavior. |
 | `options.limits` | `ValidateLimits` | Per-validation resource ceilings — see [Resource limits](#resource-limits). |
 
@@ -226,11 +227,11 @@ Type-level helpers. `FromSchema<typeof schema>` infers the type a schema (writte
 
 ### Supported keywords
 
-`type` (incl. unions and `integer`), `enum`, `const`, `properties`, `required`, `additionalProperties`, `patternProperties`, `propertyNames`, `minProperties`, `maxProperties`, `dependentRequired`, `dependentSchemas`, `dependencies` (draft-07), `items`/`prefixItems` (2020-12) and array-`items` + `additionalItems` (draft-07), `contains`/`minContains`/`maxContains`, `minItems`, `maxItems`, `uniqueItems`, `unevaluatedProperties`, `unevaluatedItems`, `minLength`, `maxLength`, `pattern`, `format` (opt-in), `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` (both the numeric 2020-12 form and the draft-04 boolean modifier), `multipleOf`, `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, `$ref` (local), `$dynamicRef`/`$dynamicAnchor` (2020-12) and `$recursiveRef`/`$recursiveAnchor` (2019-09, both bound document-globally), `nullable` (OpenAPI 3.0), boolean schemas.
+`type` (incl. unions and `integer`), `enum`, `const`, `properties`, `required`, `additionalProperties`, `patternProperties`, `propertyNames`, `minProperties`, `maxProperties`, `dependentRequired`, `dependentSchemas`, `dependencies` (draft-07), `items`/`prefixItems` (2020-12) and array-`items` + `additionalItems` (draft-07), `contains`/`minContains`/`maxContains`, `minItems`, `maxItems`, `uniqueItems`, `unevaluatedProperties`, `unevaluatedItems`, `minLength`, `maxLength`, `pattern`, `format` (opt-in), `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` (both the numeric 2020-12 form and the draft-04 boolean modifier), `multipleOf`, `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, `$ref` (same-document, including `$id` base-URI scoping), `$dynamicRef`/`$dynamicAnchor` (2020-12, resolved through the dynamic scope), `$recursiveRef`/`$recursiveAnchor` (2019-09, bound document-globally), `nullable` (OpenAPI 3.0), boolean schemas.
 
 > **Unknown `type` values throw.** A `type` outside the seven JSON Schema names (`type: "strng"`) is a schema error, not a data error — the validator throws when the keyword is consulted rather than silently matching everything, the same loud contract as an unresolvable `$ref`.
 
-> Only **local** `$ref`s are supported — the interpreter resolves both JSON-Pointer fragments (`#/$defs/user`) and `$anchor` names (`#user`) within the same document, including recursion, but does not fetch remote ones. To validate against a schema that references other documents, **bundle it first** with [`@amritk/resolve-refs`](../resolve-refs) (see [Remote and cross-file references](#remote-and-cross-file-references) below), then hand the single dereferenced document to `validate`.
+> The interpreter never fetches anything, but it is not limited to one document. Same-document `$ref`s resolve on their own — JSON-Pointer fragments (`#/$defs/user`), `$anchor` names (`#user`), and refs written against an `$id` as a base URI (relative, absolute, or a URN), including recursion. For a `$ref` into *another* document you have two options: hand the document over with `options.schemas`, or bundle everything into one with [`@amritk/resolve-refs`](../resolve-refs) first. See [Referencing other documents](#referencing-other-documents).
 
 > **Built-in `format`s** (opt-in via `options.formats`): `email`, `idn-email`, `date-time`, `date`, `time`, `duration`, `uuid`, `uri`, `iri`, `uri-reference`, `iri-reference`, `uri-template`, `json-pointer`, `relative-json-pointer`, `hostname`, `idn-hostname`, `ipv4`, `ipv6`, `regex` (compiled, not pattern-matched). Unlisted or disabled formats are treated as annotations, matching Ajv's default opt-in behavior.
 
@@ -240,35 +241,90 @@ Type-level helpers. `FromSchema<typeof schema>` infers the type a schema (writte
 
 This is a **pragmatic subset** of JSON Schema — sized for validating data against the kind of schemas real APIs and configs use, not for being an authoritative, spec-complete validator. The following are intentionally left out; if your schemas lean on them, reach for Ajv:
 
-- **Remote / non-local references.** `$ref` to another document or URL, plus `$id` base-URI resolution. Same-document refs — JSON-Pointer fragments, `$anchor` names, `$dynamicRef`/`$dynamicAnchor`, and `$recursiveRef`/`$recursiveAnchor` — resolve (including recursion, with dynamic/recursive anchors bound document-globally rather than by dynamic scope); cross-document ones do not. This is a deliberate split, not a gap: fetching is async and unsafe to do from inside a validator, so it lives in [`@amritk/resolve-refs`](../resolve-refs) instead — bundle once, then validate. See [Remote and cross-file references](#remote-and-cross-file-references).
+- **Fetching.** No `fetch`, no filesystem, no cache — that is what keeps `validate` synchronous and safe to run under a strict CSP. It is not a limit on *which* documents can be referenced, only on who loads them: pass what you have to `options.schemas` and refs into it resolve like any other, or bundle first with [`@amritk/resolve-refs`](../resolve-refs), which owns the network and its policy. A URI you did not supply throws, naming it. See [Referencing other documents](#referencing-other-documents).
 - **`contentEncoding` / `contentMediaType` / `contentSchema`** — treated as annotations (ignored), as they are by default in 2020-12.
 - **Spec-exact `format` coverage.** Formats are opt-in and validated by pragmatic regexes that reject obviously-bad input rather than being RFC-perfect. (The `regex` format is the exception — it compiles the string to confirm it is a valid pattern.)
 - **Draft-2020 exotica** beyond the keywords listed above.
 
 > **Want one of these?** None of these are off the table — "by design" means *not yet*, not *never*. If something here is blocking a real use case, [open an issue](https://github.com/amritk/mjst/issues) describing the schema you need to validate.
 
+### Conformance, measured
+
+The subset above is not a claim — it is checked. `src/conformance.test.ts` runs
+the official [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite)
+(the required Draft 2020-12 tests — 1299 cases) through *both* entry points on
+every build, since `validate` and `validateGuard` share the interpreter but not
+the path through it:
+
+**1299 / 1299 cases pass — the whole suite.**
+
+`src/conformance-expected-failures.test-utils.ts` is empty, and stays in place
+empty: the test fails if any case starts failing, so the build names the first
+regression instead of letting a percentage tick down. The corpus is vendored under
+[`fixtures/json-schema-test-suite`](../../fixtures/json-schema-test-suite) and
+never imported by `src/index.ts`, so none of it reaches the published bundle.
+
+The cases that reference other documents — all of `refRemote.json`, the
+`dynamicRef` groups reaching for `tree.json`, the refs at the dialect metaschema —
+run with those documents supplied through `options.schemas`, which is the
+sanctioned equivalent of the HTTP server the suite would otherwise expect: same
+documents, same URIs, handed over instead of fetched. The interpreter still does
+every bit of the base-URI, anchor and cross-document `$dynamicRef` work those cases
+exist to test; only the retrieval step is answered for it, and that is the one
+thing this package will never do itself.
+
 > **`unevaluatedProperties` / `unevaluatedItems` note.** These are supported and collect annotations across the in-place applicators applied to the *same* schema object — `allOf`, `$ref`/`$dynamicRef`, the taken `if`/`then`/`else` branch, successful `anyOf`/`oneOf` branches, and `dependentSchemas`. The one case not covered is an `unevaluated*` keyword nested *inside* one applicator branch reading annotations produced by a *sibling* branch of an ancestor (e.g. `unevaluatedProperties` inside `allOf[1]` expecting to see keys evaluated by `allOf[0]`); keep `unevaluated*` at the same level as the keywords it should account for.
 
 ---
 
-## Remote and cross-file references
+## Referencing other documents
 
-The interpreter resolves only **same-document** `$ref`s, but that doesn't mean
-you can't validate against schemas split across files or URLs — you just resolve
-them *before* validating, not during.
+The interpreter never fetches. That is deliberate: `validate` returns a
+**synchronous**, I/O-free function so it can run on the hot path and inside strict
+sandboxes (CSP, Cloudflare Workers, React Native/Hermes), and a `$ref` pointing at
+`http://169.254.169.254/…` or `file:///etc/passwd` would otherwise turn a validator
+into an SSRF gadget.
 
-This separation is deliberate. `validate` returns a **synchronous**, I/O-free
-function so it can run on the hot path and inside strict
-sandboxes (CSP, Cloudflare Workers, React Native/Hermes). Fetching a remote
-document is asynchronous and, when the schema is third-party, a security
-concern — a `$ref` pointing at `http://169.254.169.254/…` or `file:///etc/passwd`
-would turn the validator into an SSRF gadget. So the fetching lives in a
-dedicated, async, I/O-aware package — [`@amritk/resolve-refs`](../resolve-refs) —
-which caches documents, coalesces concurrent loads, and applies a default-deny
-SSRF guard (loopback, private, link-local, and cloud-metadata hosts are refused
-unless explicitly allow-listed, with the guard re-applied on every redirect hop).
+Not fetching does not mean not knowing. **Hand over the documents you already
+have** and refs into them resolve like any other — each is a full schema resource,
+so its own `$id`, `$anchor`s, `$dynamicAnchor`s and embedded resources all
+register, and `$dynamicRef` bookending works across documents:
 
-Bundle once, then validate the single dereferenced document:
+```typescript
+import { validate } from '@amritk/runtime-validators'
+
+const isValid = validate(schema, {
+  schemas: {
+    'https://example.com/address.json': addressSchema,
+    'https://example.com/user.json': userSchema,
+  },
+})
+```
+
+Pass the registry as an immutable value. The prepared-validator cache keys on its
+identity *and* its URI set, so adding or removing a document is a cache miss rather
+than a stale hit; swapping the contents under a URI in place is undetectable,
+exactly as mutating the schema object is.
+
+That includes the dialect itself, which is how you validate a schema *as* a schema
+— and what lets `$vocabulary` be read, so a custom metaschema that omits the
+validation vocabulary turns those keywords into annotations:
+
+```typescript
+import { metaschema } from '@amritk/runtime-validators/metaschema'
+
+validate(userSuppliedSchema, { schemas: metaschema }) // is this valid 2020-12?
+```
+
+The eight specification documents are ~7.9 KB and live behind that subpath, so a
+caller who never asks for them ships none of it.
+
+**The alternative is to bundle first**, which is the right answer when the
+documents live on disk or behind a URL:
+[`@amritk/resolve-refs`](../resolve-refs) is the async, I/O-aware half — it caches
+documents, coalesces concurrent loads, and applies a default-deny SSRF guard
+(loopback, private, link-local and cloud-metadata hosts refused unless
+allow-listed, re-applied on every redirect hop):
 
 ```typescript
 import { resolveRefsFromFile } from '@amritk/resolve-refs'
@@ -282,9 +338,8 @@ const isValid = validate(schema)
 isValid(value)
 ```
 
-The two halves compose cleanly: `resolve-refs` owns the network and its policy
-(timeouts, caching, allow-lists), while `runtime-validators` stays a pure
-function of `(schema, value)`.
+Either way the split holds: `resolve-refs` owns the network and its policy,
+`runtime-validators` stays a pure function of its inputs.
 
 ---
 

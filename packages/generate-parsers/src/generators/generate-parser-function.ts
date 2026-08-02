@@ -2,7 +2,7 @@ import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { quoteJsString } from '@amritk/helpers/quote-js-string'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
-import { safeAccessor, safeKey } from '@amritk/helpers/safe-accessor'
+import { missingCheck, safeAccessor, safeKey } from '@amritk/helpers/safe-accessor'
 import {
   hasAdditionalProperties,
   hasAllOf,
@@ -796,12 +796,22 @@ const generateNonObjectParser = (
   // generateScalarStrictAssertion.
   // `not` / `allOf` / `if` join `const`/`enum` here for the same reason: they
   // constrain a type-less root, and the no-`type` bail below would otherwise
-  // hand back an unchecked cast from a parser documented to throw.
+  // hand back an unchecked cast from a parser documented to throw. `oneOf` /
+  // `anyOf` are here for a narrower reason: the flat union block above already
+  // took every union it can turn into a membership check, so what reaches this
+  // point is a union with nothing to discriminate on — branches the matcher can
+  // still prove one at a time.
   if (
     strict &&
     isSchemaObject(schema) &&
     !hasType(schema) &&
-    (hasConst(schema) || hasEnum(schema) || hasAllOf(schema) || 'not' in schema || 'if' in schema)
+    (hasConst(schema) ||
+      hasEnum(schema) ||
+      hasAllOf(schema) ||
+      hasOneOf(schema) ||
+      hasAnyOf(schema) ||
+      'not' in schema ||
+      'if' in schema)
   ) {
     const assertion = generateScalarStrictAssertion(schema, typeName, strictContext(unionCtx))
     if (assertion !== null) {
@@ -1056,7 +1066,7 @@ const requiredWithoutPropertyLines = (schema: JSONSchema, typeName: string): str
   for (const key of new Set(schema.required)) {
     if (key in declared) continue
     lines.push(
-      `  if (!(${JSON.stringify(key)} in input)) throw new Error(${quoteJsString(`[${typeName}] missing required property '${key}'`)});`,
+      `  if (${missingCheck('input', key)}) throw new Error(${quoteJsString(`[${typeName}] missing required property '${key}'`)});`,
     )
   }
   return lines

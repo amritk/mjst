@@ -67,7 +67,7 @@ export const generateValidatorFile = (
     typeSuffix,
     ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
   })
-  const validatorFunction = generateValidatorFunction(schema, typeName, typeSuffix)
+  const validatorFunction = generateValidatorFunction(schema, typeName, typeSuffix, options?.rootSchema)
   const booleanGuard = generateBooleanGuard(schema, typeName, typeSuffix)
 
   // `.js` extension so the relative import resolves under Node ESM, not only Bun.

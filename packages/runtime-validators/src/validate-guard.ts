@@ -1,7 +1,20 @@
 import { prepareValidator } from '@/interpreter/prepare'
 
-import type { FromSchema } from './from-schema'
-import type { Guard, ValidateOptions } from './types'
+import type { FromSchema, TypeDescribesEveryAcceptedValue } from './from-schema'
+import type { Check, Guard, ValidateOptions } from './types'
+
+/**
+ * What {@link validateGuard} hands back when it infers the type from the schema:
+ * a narrowing {@link Guard} whenever that narrowing is sound, and a non-narrowing
+ * {@link Check} for the schemas where it would not be.
+ *
+ * The test is written `extends false` rather than `extends true` on purpose:
+ * narrowing is the default, and it is given up only for a schema whose inferred
+ * type is *demonstrably* partial. A schema whose type is not a literal — a plain
+ * `JSONSchema` value handed over at runtime, say — cannot be judged either way
+ * and keeps the predicate, exactly as before.
+ */
+type InferredGuard<S> = TypeDescribesEveryAcceptedValue<S> extends false ? Check<FromSchema<S>> : Guard<FromSchema<S>>
 
 /**
  * Builds the fastest kind of validator: a boolean type guard.
@@ -16,6 +29,20 @@ import type { Guard, ValidateOptions } from './types'
  * the input. By default the guard type is inferred from the schema (written
  * `as const`, or via this function's `const` inference), so you do not have to
  * spell it out. You can still pass an explicit type argument to override it.
+ *
+ * One family of schemas is the exception, and it is the honest kind: a schema
+ * with no `type` (nor `enum` / `const` / `$ref`) carrying only object- or
+ * array-shaped keywords — `{ properties: { a: { type: 'string' } } }`,
+ * `{ required: ['a'] }`. JSON Schema has those keywords ignore an instance of the
+ * wrong runtime type, so `42` passes, while the inferred type describes only the
+ * object case. Narrowing there would be a silent lie at every call site, so those
+ * get a non-narrowing {@link Check} — same verdict, no `input is`. Declare
+ * `type: 'object'` and the predicate comes back; an explicit type argument is
+ * always taken at face value.
+ *
+ * Options match {@link validate}'s, including {@link ValidateOptions.schemas} —
+ * hand over documents you have already loaded, keyed by absolute URI, and a
+ * `$ref` naming one of them resolves. Nothing here fetches or reads a file.
  *
  * @example
  * ```typescript
@@ -33,6 +60,6 @@ import type { Guard, ValidateOptions } from './types'
 export const validateGuard = <T = never, const S = unknown>(
   schema: S,
   options?: ValidateOptions,
-): Guard<[T] extends [never] ? FromSchema<S> : T> => {
-  return prepareValidator(schema, options, false) as unknown as Guard<[T] extends [never] ? FromSchema<S> : T>
+): [T] extends [never] ? InferredGuard<S> : Guard<T> => {
+  return prepareValidator(schema, options, false) as unknown as [T] extends [never] ? InferredGuard<S> : Guard<T>
 }

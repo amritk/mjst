@@ -35,8 +35,18 @@ import {
   isObjectSchema,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
+import {
+  maxLengthFailExpr,
+  maxLengthPassExpr,
+  minLengthFailExpr,
+  minLengthPassExpr,
+} from '@amritk/helpers/string-length-check'
 import { unknownKeyCheck } from '@amritk/helpers/unknown-key-check'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
+import { assertGeneratableRefs } from './assert-generatable-refs'
+import { assertUnevaluatedGeneratable, UNPROVABLE_COVERAGE_MESSAGE } from './assert-unevaluated-generatable'
+import { type UnevaluatedMatchFn, unevaluatedItemsExpr, unevaluatedPropertiesExpr } from './unevaluated-match'
 
 /**
  * Derives the validator function name from a type name.
@@ -164,6 +174,15 @@ const enumMembershipExpr = (values: unknown[], acc: string): string => {
   return `(${parts.join(' || ')})`
 }
 
+/**
+ * What a `false` subschema reports when it is reached.
+ *
+ * `false` is the schema no instance satisfies, so arriving at it *is* the
+ * failure — there is nothing more specific to say about the value. The wording
+ * is Ajv's, which is the phrasing most people will already have seen for this.
+ */
+const FALSE_SCHEMA_MESSAGE = 'boolean schema is false'
+
 const SCALAR_ITEM_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'null'])
 
 /**
@@ -232,6 +251,20 @@ const wrongTypeCondition = (accessor: string, type: string): string => {
  * required-presence check. A multi-type is validated as the *disjunction* of its
  * per-type checks (the value must match at least one).
  */
+/**
+ * True when a schema *declares* itself an object — a literal `type: "object"`.
+ *
+ * Deliberately narrower than `isObjectSchema`, which also answers true for a
+ * schema that merely carries `properties`. Those are not the same claim: in JSON
+ * Schema `{ "properties": { … } }` says nothing at all about a string or a
+ * number, it only describes what an object must look like *if* the instance is
+ * one. Routing on the declared type keeps the object fast path (the flat guard,
+ * the hoisted known-key sets) for schemas that really mean "this is an object",
+ * and sends everything else through the shared runtime-guarded emitters, where a
+ * non-object is ignored instead of rejected.
+ */
+const declaresObjectType = (schema: JSONSchema): boolean => hasType(schema) && schema.type === 'object'
+
 const getTypeArray = (schema: JSONSchema): string[] | null => {
   if (!isSchemaObject(schema) || !('type' in schema) || !Array.isArray(schema.type)) return null
   return schema.type as string[]
@@ -256,9 +289,22 @@ type NestingContext = {
    * known-keys Set) is paid once at module load instead of on every call.
    */
   hoisted: string[]
+  /**
+   * The whole document this schema came from, when the caller knows it. Only the
+   * `unevaluated*` emitters need it: working out what a node's `$ref` evaluated
+   * means reading the target's keywords, and a delegating `validateX(...)` call
+   * cannot report that back.
+   */
+  rootSchema?: Record<string, unknown> | undefined
 }
 
-const createRootContext = (): NestingContext => ({ objVar: 'obj', pathPrefix: '${_path}', depth: 0, hoisted: [] })
+const createRootContext = (rootSchema?: Record<string, unknown>): NestingContext => ({
+  objVar: 'obj',
+  pathPrefix: '${_path}',
+  depth: 0,
+  hoisted: [],
+  rootSchema,
+})
 
 /**
  * Renders a schema-controlled property name as a static error-path segment.
@@ -368,7 +414,40 @@ const generatePropertyChecks = (
   suffix: string,
   ctx: NestingContext,
 ): string[] => {
-  const lines = generatePropertyCheckLines(key, propSchema, isRequired, suffix, ctx)
+  // A `false` property schema says the key may not appear at all, and it used to
+  // emit nothing — so `{ properties: { b: false } }` accepted `{ "b": 1 }`. The
+  // check only needs the key's *presence*, never a read of its value, so it is
+  // built here rather than in the per-property emitter below. When the key is
+  // `required` as well the object is unsatisfiable: absent fails `required`,
+  // present fails `false`.
+  if (propSchema === false) {
+    const path = `\`${ctx.pathPrefix}/${pointerSegment(key)}\``
+    const parentPath = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
+    if (isRequired) {
+      return [
+        `  if (${missingCheck(ctx.objVar, key)}) {`,
+        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+        `  } else {`,
+        `    errors.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`,
+        `  }`,
+      ]
+    }
+    return [
+      `  if (${hasOwnCheck(ctx.objVar, key)}) {`,
+      `    errors.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`,
+      `  }`,
+    ]
+  }
+
+  const raw = PROTOTYPE_MEMBERS.has(key) ? protoLocalName(key, ctx.depth) : propertyRead(ctx.objVar, key)
+  const lines = [
+    ...generatePropertyCheckLines(key, propSchema, isRequired, suffix, ctx),
+    // `unevaluated*` is a sibling of everything else the property declares, and
+    // several of the branches above return early, so it is appended here rather
+    // than emitted inside them. The checks carry their own runtime type guard, so
+    // an absent optional property is inert and needs no presence gate.
+    ...generateUnevaluatedChecks(raw, `\`${ctx.pathPrefix}/${pointerSegment(key)}\``, propSchema, suffix, ctx),
+  ]
   if (lines.length === 0 || !PROTOTYPE_MEMBERS.has(key)) return lines
   return [`  const ${protoLocalName(key, ctx.depth)} = ${propertyRead(ctx.objVar, key)}`, ...lines]
 }
@@ -386,9 +465,8 @@ const generatePropertyCheckLines = (
 ): string[] => {
   if (!isSchemaObject(propSchema)) {
     // A boolean `true` (accept-anything) schema carries no shape checks, but a
-    // required key must still be present. `false` never validates a present value,
-    // which the strict-key / additionalProperties path handles; here we only need
-    // to enforce presence for `true`.
+    // required key must still be present. `false` never gets here —
+    // {@link generatePropertyChecks} handles it before this point.
     if (isRequired && propSchema === true) {
       const parentPath = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
       return [
@@ -661,13 +739,20 @@ const generateConstraintChecks = (
       lines.push(`    errors.push({ message: ${msg}, path: ${path} })`)
       lines.push(`  }`)
     }
+    // Lengths are Unicode *code point* counts, not UTF-16 code units, so both
+    // bounds go through the shared `string-length-check` emitter. A bare
+    // `.length` counted `"💩"` as two characters — accepting it against
+    // `minLength: 2` and rejecting `"💩💩"` against `maxLength: 2`, both of which
+    // contradict Ajv and the runtime interpreter. The emitted expression keeps
+    // `.length` as its first, short-circuiting term, so the scan is only paid by
+    // the strings whose answer it could change.
     if (hasMinLength(propSchema)) {
-      lines.push(`  if (typeof ${raw} === 'string' && ${raw}.length < ${propSchema.minLength}) {`)
+      lines.push(`  if (typeof ${raw} === 'string' && ${minLengthFailExpr(raw, propSchema.minLength)}) {`)
       lines.push(`    errors.push({ message: 'must have at least ${propSchema.minLength} characters', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasMaxLength(propSchema)) {
-      lines.push(`  if (typeof ${raw} === 'string' && ${raw}.length > ${propSchema.maxLength}) {`)
+      lines.push(`  if (typeof ${raw} === 'string' && ${maxLengthFailExpr(raw, propSchema.maxLength)}) {`)
       lines.push(`    errors.push({ message: 'must have at most ${propSchema.maxLength} characters', path: ${path} })`)
       lines.push(`  }`)
     }
@@ -767,7 +852,7 @@ const generateConstraintChecks = (
     hasMinItems(propSchema) ||
     hasMaxItems(propSchema) ||
     (hasUniqueItems(propSchema) && propSchema.uniqueItems === true) ||
-    isSchemaObject(sp['contains'] as JSONSchema) ||
+    'contains' in sp ||
     Array.isArray(sp['prefixItems']) ||
     (sp['items'] === false && !Array.isArray(sp['prefixItems']))
   ) {
@@ -800,8 +885,10 @@ const generateConstraintChecks = (
 
     // `contains` — at least `minContains` (default 1) and at most `maxContains`
     // items must match the subschema. `minContains: 0` makes any array (even
-    // empty) satisfy the lower bound.
-    if (isSchemaObject(sp['contains'] as JSONSchema)) {
+    // empty) satisfy the lower bound. A boolean `contains` counts too:
+    // `contains: true` matches every item (so only an empty array fails) and
+    // `contains: false` matches none (so every array fails).
+    if ('contains' in sp) {
       const min = typeof sp['minContains'] === 'number' ? sp['minContains'] : 1
       const max = typeof sp['maxContains'] === 'number' ? (sp['maxContains'] as number) : undefined
       const matchExpr = generateMatchesExpr('_c', sp['contains'] as JSONSchema, suffix, ctx)
@@ -865,6 +952,24 @@ const generateConstraintChecks = (
  * with the combinator generators.
  */
 const generateValueChecks = (
+  key: string,
+  raw: string,
+  path: string,
+  propSchema: JSONSchema,
+  suffix: string,
+  ctx: NestingContext,
+  required = false,
+): string[] => [
+  ...generateValueCheckLines(key, raw, path, propSchema, suffix, ctx, required),
+  // Appended rather than folded into the checks above because several of those
+  // branches (`$ref`, `const`, `enum`, x-mjst) return early: `unevaluated*` is a
+  // sibling of whatever else the node declares, and dropping it would leave the
+  // validator accepting documents the interpreter rejects.
+  ...generateUnevaluatedChecks(raw, path, propSchema, suffix, ctx),
+]
+
+/** The body of {@link generateValueChecks}, minus the `unevaluated*` siblings. */
+const generateValueCheckLines = (
   _key: string,
   raw: string,
   path: string,
@@ -873,8 +978,19 @@ const generateValueChecks = (
   ctx: NestingContext,
   required = false,
 ): string[] => {
-  if (!isSchemaObject(propSchema)) return []
   const lines: string[] = []
+
+  // `false` rejects every instance, so a value that reaches this position is
+  // invalid simply by being there. Without this an `allOf: [false]`, a
+  // `then: false`, or a `false` behind `patternProperties` emitted no check at
+  // all and the branch that should have failed the instance passed it. `true`
+  // (and a bare `{}`) accepts everything and falls through to the `[]` below.
+  if (propSchema === false) {
+    const report = `errors.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`
+    if (required) return [`  ${report}`]
+    return [`  if (${raw} !== undefined) {`, `    ${report}`, `  }`]
+  }
+  if (!isSchemaObject(propSchema)) return []
 
   // Optional values skip validation when absent, so their leaf checks are
   // `!== undefined`-guarded. Array items are unconditionally present — a sparse
@@ -940,6 +1056,26 @@ const generateValueChecks = (
     }
   }
 
+  // Multi-type subschema (array `type`, e.g. `["integer","boolean"]`). `hasType`
+  // only recognises a *string* `type`, so this used to emit nothing — and an
+  // empty check list is how {@link generateMatchesExpr} spells "matches
+  // everything", which made `{ not: { type: ["integer","boolean"] } }` reject
+  // every instance. The value is valid when it matches ANY listed type.
+  const typeArray = getTypeArray(propSchema)
+  if (typeArray) {
+    const allWrong = typeArray
+      .map((t) => wrongTypeCondition(raw, t))
+      .filter((c) => c !== '')
+      .map((c) => `(${c})`)
+      .join(' && ')
+    if (allWrong) {
+      const label = typeArray.map((t) => typeofString(t)).join(' or ')
+      lines.push(`  if (${presence}(${allWrong})) {`)
+      lines.push(`    errors.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${path} })`)
+      lines.push(`  }`)
+    }
+  }
+
   // Constraint and combinator checks run regardless of a declared `type`: they
   // gate on keyword presence + a runtime-type guard, so a type-less subschema
   // (a combinator branch like `{ required: [...] }` or `{ minItems: 2 }`) is
@@ -955,6 +1091,7 @@ const generateValueChecks = (
     pathPrefix: path.slice(1, -1),
     depth: ctx.depth + 1,
     hoisted: ctx.hoisted,
+    rootSchema: ctx.rootSchema,
   }
   lines.push(...generateConstraintChecks('', raw, path, propSchema, suffix, valueCtx))
   lines.push(...generateCombinatorChecks('', raw, path, propSchema, suffix, valueCtx))
@@ -979,6 +1116,76 @@ const generateMatchesExpr = (raw: string, sub: JSONSchema, suffix: string, ctx: 
   // are already `_m.push`), and nested match IIFEs each shadow their own `_m`.
   const body = checks.join('\n').replaceAll('errors.push(', '_m.push(')
   return `((): boolean => { const _m: ValidationError[] = []\n${body}\n    return _m.length === 0 })()`
+}
+
+/**
+ * The matcher {@link unevaluatedPropertiesExpr} and {@link unevaluatedItemsExpr}
+ * use to turn a branch (or the unevaluated subschema itself) into a boolean.
+ * Each call gets a context one level deeper than the last so the locals inside
+ * the nested match expressions cannot collide.
+ */
+const unevaluatedMatcher =
+  (suffix: string, ctx: NestingContext): UnevaluatedMatchFn =>
+  (accessor, schema, depth) =>
+    generateMatchesExpr(accessor, schema, suffix, { ...ctx, depth: ctx.depth + depth + 1 })
+
+/**
+ * Emits `unevaluatedProperties` / `unevaluatedItems` for one schema node.
+ *
+ * Both keywords police whatever the node's *other* keywords left untouched, which
+ * the runtime interpreter answers by collecting annotations as it walks. There is
+ * no walk here, so `unevaluated-match.ts` computes the same thing as an
+ * expression — per key (or index), is it covered? — and this wraps that in the
+ * runtime type guard the keyword implies: `unevaluatedProperties` says nothing
+ * about an array or a scalar, and `unevaluatedItems` says nothing about anything
+ * but an array.
+ *
+ * The branch conditions come back as `const` declarations rather than inline
+ * expressions so a per-key loop reads a boolean instead of re-running a whole
+ * `anyOf` match once per key.
+ *
+ * Throws when the node's coverage cannot be proven inline. That is the same shape
+ * {@link assertUnevaluatedGeneratable} refuses up front, so reaching it here means
+ * the gate and the emitters disagree — better a loud failure than a validator that
+ * quietly accepts what the interpreter rejects.
+ */
+const generateUnevaluatedChecks = (
+  raw: string,
+  path: string,
+  schema: JSONSchema,
+  suffix: string,
+  ctx: NestingContext,
+): string[] => {
+  if (!isSchemaObject(schema)) return []
+  const s = schema as Record<string, unknown>
+  if (!('unevaluatedProperties' in s) && !('unevaluatedItems' in s)) return []
+
+  const match = unevaluatedMatcher(suffix, ctx)
+  const lines: string[] = []
+
+  const properties = unevaluatedPropertiesExpr(raw, schema, ctx.rootSchema, ctx.depth, match)
+  if (properties === null) throw new Error(UNPROVABLE_COVERAGE_MESSAGE('unevaluatedProperties'))
+  if (properties !== undefined) {
+    lines.push(`  if (typeof ${raw} === 'object' && ${raw} !== null && !Array.isArray(${raw})) {`)
+    for (const statement of properties.setup) lines.push(`    ${statement}`)
+    lines.push(`    if (!(${properties.expr})) {`)
+    lines.push(`      errors.push({ message: 'must NOT have unevaluated properties', path: ${path} })`)
+    lines.push(`    }`)
+    lines.push(`  }`)
+  }
+
+  const items = unevaluatedItemsExpr(raw, schema, ctx.rootSchema, ctx.depth, match)
+  if (items === null) throw new Error(UNPROVABLE_COVERAGE_MESSAGE('unevaluatedItems'))
+  if (items !== undefined) {
+    lines.push(`  if (Array.isArray(${raw})) {`)
+    for (const statement of items.setup) lines.push(`    ${statement}`)
+    lines.push(`    if (!(${items.expr})) {`)
+    lines.push(`      errors.push({ message: 'must NOT have unevaluated items', path: ${path} })`)
+    lines.push(`    }`)
+    lines.push(`  }`)
+  }
+
+  return lines
 }
 
 /**
@@ -1135,6 +1342,7 @@ const generateInlineObjectChecks = (
     pathPrefix: key === '' ? ctx.pathPrefix : `${ctx.pathPrefix}/${pointerSegment(key)}`,
     depth: ctx.depth + 1,
     hoisted: ctx.hoisted,
+    rootSchema: ctx.rootSchema,
   }
 
   const required = new Set(hasRequired(propSchema) ? propSchema.required : [])
@@ -1155,7 +1363,7 @@ const generateInlineObjectChecks = (
   innerLines.push(...generateDependentSchemasChecks(propSchema, suffix, child))
   innerLines.push(...generateDependenciesChecks(propSchema, suffix, child))
   innerLines.push(...generateMinMaxPropertiesChecks(propSchema, child))
-  if (hasPropertyNames(propSchema) && isSchemaObject(propSchema.propertyNames)) {
+  if (hasPropertyNames(propSchema)) {
     innerLines.push(...generatePropertyNameChecks(propSchema.propertyNames, suffix, child))
   }
 
@@ -1179,17 +1387,17 @@ const generateInlineObjectChecks = (
  * interpreter, which runs `matchesSchema(nameSchema, key)` per key, so a
  * subschema carrying a combinator, `type`, `multipleOf`, etc. is enforced too.
  * A key is always a present string, so the value checks run in `required` mode
- * (no `!== undefined` guard).
+ * (no `!== undefined` guard) — which is also what makes a `propertyNames: false`
+ * reject every key rather than emit nothing.
  */
 const generatePropertyNameChecks = (nameSchema: JSONSchema, suffix: string, ctx: NestingContext): string[] => {
-  if (!isSchemaObject(nameSchema)) return []
-
   const at = `\`${ctx.pathPrefix}/\${_name}\``
   const nameCtx: NestingContext = {
     objVar: ctx.objVar,
     pathPrefix: `${ctx.pathPrefix}/\${_name}`,
     depth: ctx.depth + 1,
     hoisted: ctx.hoisted,
+    rootSchema: ctx.rootSchema,
   }
   const checks = generateValueChecks('', '_name', at, nameSchema, suffix, nameCtx, true)
   if (checks.length === 0) return []
@@ -1357,6 +1565,24 @@ const hasObjectLevelCombinator = (schema: JSONSchema): boolean => {
   return hasAllOf(schema) || hasAnyOf(schema) || hasOneOf(schema) || 'not' in schema || 'if' in schema
 }
 
+/**
+ * True when a node carries a *constraining* `unevaluatedProperties` /
+ * `unevaluatedItems`. A `true` value permits everything, so it constrains
+ * nothing and is not worth bailing a flat guard for.
+ *
+ * The flat guards cannot mirror these: the check they need is a per-key sweep
+ * over coverage the guard has no way to express, so a guard that ignored one
+ * would return `true` for a document `validateX` rejects.
+ */
+const carriesUnevaluated = (schema: JSONSchema): boolean => {
+  if (!isSchemaObject(schema)) return false
+  const s = schema as Record<string, unknown>
+  return (
+    ('unevaluatedProperties' in s && s['unevaluatedProperties'] !== true) ||
+    ('unevaluatedItems' in s && s['unevaluatedItems'] !== true)
+  )
+}
+
 const guardPropConditions = (key: string, propSchema: JSONSchema, objAcc: string): string[] | null => {
   if (!isSchemaObject(propSchema)) return null
 
@@ -1384,7 +1610,8 @@ const guardPropConditions = (key: string, propSchema: JSONSchema, objAcc: string
     hasExclusiveMinimum(propSchema) ||
     hasExclusiveMaximum(propSchema) ||
     hasMultipleOf(propSchema) ||
-    hasItems(propSchema)
+    hasItems(propSchema) ||
+    carriesUnevaluated(propSchema)
   ) {
     return null
   }
@@ -1471,6 +1698,7 @@ const guardObjectConditions = (schema: JSONSchema, raw: string, objAcc: string):
   // by this flat guard, so bail — otherwise the guard's early `return true` would
   // accept documents the combinators reject.
   if (hasObjectLevelCombinator(schema)) return null
+  if (carriesUnevaluated(schema)) return null
 
   let strict = false
   if (hasAdditionalProperties(schema)) {
@@ -1519,11 +1747,16 @@ const guardObjectConditions = (schema: JSONSchema, raw: string, objAcc: string):
  * Generates a validator function body for an object schema, checking each
  * property's presence and type and collecting all errors.
  */
-const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: string): string => {
+const generateObjectValidator = (
+  schema: JSONSchema,
+  typeName: string,
+  suffix: string,
+  rootSchema: Record<string, unknown> | undefined,
+): string => {
   const vName = validatorName(typeName)
   const required = new Set(hasRequired(schema) ? schema.required : [])
   const properties = hasProperties(schema) ? schema.properties : {}
-  const ctx = createRootContext()
+  const ctx = createRootContext(rootSchema)
 
   const propertyLines: string[] = []
 
@@ -1560,7 +1793,7 @@ const generateObjectValidator = (schema: JSONSchema, typeName: string, suffix: s
 
   // propertyNames — every key (always a string) must satisfy the subschema. This
   // mirrors the interpreter, which runs the full subschema against each key.
-  if (hasPropertyNames(schema) && isSchemaObject(schema.propertyNames)) {
+  if (hasPropertyNames(schema)) {
     propertyLines.push(...generatePropertyNameChecks(schema.propertyNames, suffix, ctx))
   }
 
@@ -1665,6 +1898,7 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
     'if' in schema ||
     'contains' in schema ||
     'prefixItems' in schema ||
+    carriesUnevaluated(schema) ||
     getMjstInstanceOf(schema) !== undefined ||
     getMjstPrimitive(schema) !== undefined
   ) {
@@ -1687,8 +1921,10 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
     case 'string': {
       const parts = [`typeof ${acc} === 'string'`]
       if (hasPattern(schema)) parts.push(`/${escapeRegexPattern(schema.pattern)}/.test(${acc})`)
-      if (hasMinLength(schema)) parts.push(`!(${acc}.length < ${schema.minLength})`)
-      if (hasMaxLength(schema)) parts.push(`!(${acc}.length > ${schema.maxLength})`)
+      // The exact negations of the validator's length conditions, from the same
+      // `string-length-check` emitter, so the guard counts code points too.
+      if (hasMinLength(schema)) parts.push(minLengthPassExpr(acc, schema.minLength))
+      if (hasMaxLength(schema)) parts.push(maxLengthPassExpr(acc, schema.maxLength))
       return parts.join(' && ')
     }
     case 'number':
@@ -1776,6 +2012,7 @@ const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string): st
   // Object-level combinators change the verdict but can't be expressed flat, so
   // defer to the validator rather than emit a guard that ignores them.
   if (hasObjectLevelCombinator(schema)) return null
+  if (carriesUnevaluated(schema)) return null
 
   let strict = false
   if (hasAdditionalProperties(schema)) {
@@ -1829,7 +2066,57 @@ const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string): st
 }
 
 /**
- * Generates the exported boolean type-guard `isTypeName(input): input is TypeName`.
+ * The keywords that describe an object without claiming the instance *is* one.
+ * A schema carrying any of them but no `type` still emits a structured type,
+ * because that is the only shape worth writing down — see
+ * {@link typeDescribesEveryAcceptedValue} for what that costs the guard.
+ */
+const IMPLICIT_OBJECT_KEYWORDS = ['properties', 'patternProperties', 'additionalProperties'] as const
+
+/**
+ * True when every value `validateX` accepts is described by the emitted type — the
+ * question that decides whether `isX` may be a type *predicate*.
+ *
+ * A `type`, an `enum`, or a `const` pins the instance to one JSON family, and the
+ * emitted type says exactly that family, so the predicate is honest. A `$ref`
+ * hands both the type and the verdict to the referenced schema, which answers the
+ * question for itself.
+ *
+ * What is not honest is a schema like `{ properties: { a: { type: 'string' } } }`.
+ * JSON Schema reads that as "*if* the instance is an object, its `a` is a string"
+ * — `42` and `"x"` satisfy it — while the emitted type is `{ a: string }`. Both
+ * halves are right on their own; together they make `input is Root` a lie, and a
+ * lying predicate is worse than no predicate because it narrows silently at every
+ * call site. So those schemas keep the same boolean check and drop the `is`, and a
+ * caller who wants the object type asserts it deliberately.
+ *
+ * Widening the emitted type instead would be the better fix — it would keep the
+ * narrowing *and* make it true — but that type comes from
+ * `@amritk/helpers/generate-type-definition`, and `FromSchema`'s `ImplicitShape`
+ * in `@amritk/runtime-validators` makes the same inference for the same schema, so
+ * the two would have to move together.
+ */
+const typeDescribesEveryAcceptedValue = (schema: JSONSchema): boolean => {
+  // A boolean schema has no shape to contradict: its type is `unknown`.
+  if (!isSchemaObject(schema)) return true
+  const s = schema as Record<string, unknown>
+  if ('type' in s || 'enum' in s || 'const' in s || '$ref' in s) return true
+
+  // The type of a combinator is built out of its branches, so it is as honest as
+  // they are — a union of `{ type: 'string' }` and `{ type: 'number' }` describes
+  // every value the validator accepts, while a branch carrying only `properties`
+  // does not.
+  for (const keyword of ['allOf', 'anyOf', 'oneOf'] as const) {
+    const branches = s[keyword]
+    if (!Array.isArray(branches)) continue
+    if (!(branches as JSONSchema[]).every((branch) => typeDescribesEveryAcceptedValue(branch))) return false
+  }
+
+  return !IMPLICIT_OBJECT_KEYWORDS.some((keyword) => keyword in s)
+}
+
+/**
+ * Generates the exported boolean guard `isTypeName`.
  *
  * Unlike `validateTypeName` (which returns rich `ValidationResult` errors), this
  * is a single flat boolean predicate — no error array, no cold-path call — so V8
@@ -1837,21 +2124,33 @@ const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string): st
  * compiled checker. It returns the *same verdict* as the validator. When the
  * schema carries anything the flat form can't mirror exactly, it falls back to
  * `validateTypeName(input) === true`, which is always correct.
+ *
+ * The signature is `input is TypeName` whenever that narrowing is sound, and a
+ * plain `boolean` when it is not — see {@link typeDescribesEveryAcceptedValue}.
  */
 export const generateBooleanGuard = (schema: JSONSchema, typeName: string, _suffix = ''): string => {
   const name = guardName(typeName)
-  const fallback = `export const ${name} = (input: unknown): input is ${typeName} => ${validatorName(typeName)}(input) === true`
+  const returns = typeDescribesEveryAcceptedValue(rewriteNullable(schema) as JSONSchema)
+    ? `input is ${typeName}`
+    : 'boolean'
+  const fallback = `export const ${name} = (input: unknown): ${returns} => ${validatorName(typeName)}(input) === true`
 
   // Fold `nullable: true` into `anyOf` so the guard's verdict matches the
   // validator's (which applies the same rewrite). Without this a nullable node's
   // guard would reject `null` while the validator accepts it.
   const rewritten = rewriteNullable(schema) as JSONSchema
 
-  if (isObjectSchema(rewritten)) {
+  // Only a schema that declares `type: "object"` gets the flat object guard. A
+  // type-less schema carrying `properties` *ignores* non-objects — so does
+  // `validateX` — and it can also carry keywords from other families alongside,
+  // which the object parts do not model. Both would make the guard disagree with
+  // the validator, and a guard that disagrees is worse than no guard, so those
+  // fall back to calling `validateX`.
+  if (declaresObjectType(rewritten)) {
     const parts = booleanObjectParts(rewritten, 'input', 'obj')
     if (parts === null) return fallback
     return [
-      `export const ${name} = (input: unknown): input is ${typeName} => {`,
+      `export const ${name} = (input: unknown): ${returns} => {`,
       `  const obj = input as Record<string, unknown>`,
       `  return (`,
       parts.map((part) => `    ${part}`).join(' &&\n'),
@@ -1863,16 +2162,31 @@ export const generateBooleanGuard = (schema: JSONSchema, typeName: string, _suff
   // Non-object roots (scalar, enum, array) can often be expressed inline too.
   const expr = booleanLeafExpr(rewritten, 'input')
   if (expr === null) return fallback
-  return `export const ${name} = (input: unknown): input is ${typeName} => ${expr}`
+  return `export const ${name} = (input: unknown): ${returns} => ${expr}`
 }
 
 /**
  * Generates a validator function for a non-object schema (primitive, array, enum, $ref).
  */
-const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: string): string => {
+const generateScalarValidator = (
+  schema: JSONSchema,
+  typeName: string,
+  suffix: string,
+  rootSchema: Record<string, unknown> | undefined,
+): string => {
   const vName = validatorName(typeName)
 
+  // A boolean root. `false` is the schema no instance satisfies — it used to
+  // share the `true` branch and accept everything, which is the one direction a
+  // validator must never be wrong in. `true` really does accept everything.
   if (!isSchemaObject(schema)) {
+    if (schema === false) {
+      return [
+        `export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`,
+        `  return { valid: false, errors: [{ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: _path }] }`,
+        `}`,
+      ].join('\n')
+    }
     return [`export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`, `  return true`, `}`].join(
       '\n',
     )
@@ -1946,7 +2260,7 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
   // against the input via the shared combinator generator — correct `oneOf`
   // (exactly one) and inline branches included, not just `$ref` branches.
   if (hasAllOf(schema) || hasAnyOf(schema) || hasOneOf(schema) || 'not' in schema || 'if' in schema) {
-    const ctx = createRootContext()
+    const ctx = createRootContext(rootSchema)
     const checks: string[] = []
     // The root path expression the shared emitters use, as a template literal body.
     const rootPath = '`${_path}`'
@@ -1969,7 +2283,6 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
         checks.push(`    errors.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${rootPath} })`)
         checks.push(`  }`)
       }
-      checks.push(...generateConstraintChecks('', 'input', rootPath, schema, suffix, ctx))
     } else if (hasType(schema)) {
       const t = schema.type as string
       const wrongType = wrongTypeCondition('input', t)
@@ -1978,9 +2291,15 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
         checks.push(`    errors.push({ message: 'must be ${typeofString(t)}', path: ${rootPath} })`)
         checks.push(`  }`)
       }
-      checks.push(...generateConstraintChecks('', 'input', rootPath, schema, suffix, ctx))
     }
 
+    // Constraint checks run whether or not a `type` was declared — they gate on
+    // keyword presence and carry their own runtime-type guards. Running them only
+    // under a declared `type` is what let
+    // `{ allOf: [{ prefixItems: [...] }], items: {...} }` drop its `items`
+    // entirely: the schema has a combinator and no `type`, so nothing outside the
+    // `allOf` was ever emitted.
+    checks.push(...generateConstraintChecks('', 'input', rootPath, schema, suffix, ctx))
     checks.push(...generateCombinatorChecks('', 'input', rootPath, schema, suffix, ctx))
     const body = checks.join('\n').replaceAll('errors.push(', '(errors ??= []).push(')
     const hoistedBlock = ctx.hoisted.length > 0 ? `${ctx.hoisted.join('\n')}\n\n` : ''
@@ -2035,7 +2354,7 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
     // minimum:5}` or `{type:'array', minItems:2}` root accepted invalid input.
     // `raw` is `input`; `path` is the root `_path` (as a template so the shared
     // emitter's `path.slice(1,-1)` for array-item indices still works).
-    const rootCtx = createRootContext()
+    const rootCtx = createRootContext(rootSchema)
     const constraintLines = generateConstraintChecks('', 'input', '`${_path}`', schema, suffix, rootCtx)
 
     if (!wrongType) {
@@ -2072,47 +2391,64 @@ const generateScalarValidator = (schema: JSONSchema, typeName: string, suffix: s
     ].join('\n')
   }
 
-  return [`export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`, `  return true`, `}`].join(
-    '\n',
-  )
+  // A schema with no `type` at all. It still constrains things: in JSON Schema a
+  // keyword applies to the instances of *its own family* and ignores every other
+  // one, so `{ minLength: 2 }` rejects `"a"` while accepting `42`, `[]` and
+  // `null`. The generator used to hang every check off the declared `type` and so
+  // emitted `validateRoot = () => true` here — the quietest way to be wrong, and
+  // the single biggest gap in its conformance. The shared constraint emitter
+  // already gates on keyword presence and guards each check with a runtime type
+  // test (`typeof x === 'string'`, `Array.isArray(x)`, the object block's own
+  // shape check), which is exactly the semantics needed, so hand it the whole
+  // schema and let it decide what applies.
+  const typelessCtx = createRootContext(rootSchema)
+  const typelessChecks = generateConstraintChecks('', 'input', '`${_path}`', schema, suffix, typelessCtx)
+  if (typelessChecks.length === 0) {
+    return [`export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`, `  return true`, `}`].join(
+      '\n',
+    )
+  }
+
+  const typelessHoisted = typelessCtx.hoisted.length > 0 ? `${typelessCtx.hoisted.join('\n')}\n\n` : ''
+  return [
+    `${typelessHoisted}export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+    `  let errors: ValidationError[] | undefined`,
+    typelessChecks.join('\n').replaceAll('errors.push(', '(errors ??= []).push('),
+    `  return errors !== undefined ? { valid: false, errors } : true`,
+    `}`,
+  ].join('\n')
 }
 
 /**
- * Throws when a schema (anywhere in its subtree) uses a keyword this generator
- * does not implement but which *narrows* the set of valid documents. Today that
- * is `unevaluatedProperties` / `unevaluatedItems` with a constraining value
- * (`false` or a subschema). The generator has no support for them — only the
- * runtime interpreter does — so silently emitting a validator would produce one
- * that ACCEPTS documents the interpreter REJECTS: a wrong verdict, worse than an
- * error. `unevaluated*: true` is a no-op (it permits everything), so it is
- * allowed through.
+ * Generates the validator for a root schema that carries `unevaluatedProperties`
+ * / `unevaluatedItems` itself.
  *
- * We deliberately throw rather than implement the keywords: doing them correctly
- * requires tracking which properties/items each combinator branch "evaluated",
- * which is a large, separate feature. Failing loudly at generation time surfaces
- * the gap instead of shipping a validator that lies.
+ * Those keywords sit alongside whatever else the root declares — a `$ref`, a
+ * `type`, a combinator — and the specialised root emitters each own one of those
+ * shapes and return early, so none of them is the right place to hang a sibling
+ * keyword that applies to all of them. {@link generateValueChecks} already
+ * validates an arbitrary schema against an arbitrary accessor, which is exactly
+ * the general case, so an unevaluated root is emitted through it. The only cost
+ * is the object fast path, which such a schema could not have used anyway (the
+ * flat guard cannot express a coverage sweep).
  */
-const assertNoUnsupportedKeywords = (schema: JSONSchema, typeName: string): void => {
-  const visit = (node: unknown): void => {
-    if (typeof node !== 'object' || node === null) return
-    if (Array.isArray(node)) {
-      for (const item of node) visit(item)
-      return
-    }
-    const record = node as Record<string, unknown>
-    for (const keyword of ['unevaluatedProperties', 'unevaluatedItems'] as const) {
-      // `true` permits everything → no constraint → safe to ignore.
-      if (keyword in record && record[keyword] !== true) {
-        throw new Error(
-          `[${typeName}] unsupported keyword "${keyword}": the validator generator does not implement it and would ` +
-            `silently accept documents the interpreter rejects. Validate this schema with the runtime interpreter, ` +
-            `or remove the keyword.`,
-        )
-      }
-    }
-    for (const value of Object.values(record)) visit(value)
-  }
-  visit(schema)
+const generateUnevaluatedRootValidator = (
+  schema: JSONSchema,
+  typeName: string,
+  suffix: string,
+  rootSchema: Record<string, unknown> | undefined,
+): string => {
+  const ctx = createRootContext(rootSchema)
+  const checks = generateValueChecks('', 'input', '`${_path}`', schema, suffix, ctx, true)
+  const body = checks.join('\n').replaceAll('errors.push(', '(errors ??= []).push(')
+  const hoistedBlock = ctx.hoisted.length > 0 ? `${ctx.hoisted.join('\n')}\n\n` : ''
+  return [
+    `${hoistedBlock}export const ${validatorName(typeName)} = (input: unknown, _path = ''): ValidationResult => {`,
+    `  let errors: ValidationError[] | undefined`,
+    body,
+    `  return errors !== undefined ? { valid: false, errors } : true`,
+    `}`,
+  ].join('\n')
 }
 
 /** Keywords whose value is a single subschema (or a boolean schema). */
@@ -2225,16 +2561,31 @@ const rewriteNullable = (node: unknown): unknown => {
  * // }
  * ```
  */
-export const generateValidatorFunction = (schema: JSONSchema, typeName: string, suffix = ''): string => {
-  assertNoUnsupportedKeywords(schema, typeName)
+export const generateValidatorFunction = (
+  schema: JSONSchema,
+  typeName: string,
+  suffix = '',
+  rootSchema?: Record<string, unknown>,
+): string => {
+  assertGeneratableRefs(schema, typeName)
 
   // Fold OpenAPI `nullable: true` into the `anyOf` form the generator already
   // enforces, so the emitted checks match the interpreter's null short-circuit.
   const rewritten = rewriteNullable(schema) as JSONSchema
 
-  if (isObjectSchema(rewritten)) {
-    return generateObjectValidator(rewritten, typeName, suffix)
+  // A node's own `$defs` are the document its `$ref`s resolve against when the
+  // caller did not say otherwise — which is the case for a root schema generated
+  // on its own, as every test and every single-file consumer does.
+  const document = rootSchema ?? (schema as Record<string, unknown>)
+  assertUnevaluatedGeneratable(rewritten, typeName, document, unevaluatedMatcher(suffix, createRootContext(document)))
+
+  if (carriesUnevaluated(rewritten)) {
+    return generateUnevaluatedRootValidator(rewritten, typeName, suffix, document)
   }
 
-  return generateScalarValidator(rewritten, typeName, suffix)
+  if (declaresObjectType(rewritten)) {
+    return generateObjectValidator(rewritten, typeName, suffix, document)
+  }
+
+  return generateScalarValidator(rewritten, typeName, suffix, document)
 }

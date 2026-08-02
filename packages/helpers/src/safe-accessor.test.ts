@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { safeAccessor, safeKey } from './safe-accessor'
+import { hasOwnCheck, missingCheck, safeAccessor, safeKey } from './safe-accessor'
 
 describe('safe-accessor', () => {
   it('uses dot notation for simple identifiers', () => {
@@ -59,6 +59,32 @@ describe('safe-accessor', () => {
     expect(safeAccessor('input?', 'toString')).toBe(
       '(input != null && Object.hasOwn(input, "toString") ? input["toString"] : undefined)',
     )
+  })
+
+  // `in` walks the prototype chain, so `"toString" in {}` is true and a
+  // `required: ["toString"]` could never be reported missing. Only the names an
+  // object can actually inherit pay for `Object.hasOwn` — it is the slower test,
+  // and no JSON document inherits `id`.
+  it('presence-checks Object.prototype member names with Object.hasOwn', () => {
+    expect(hasOwnCheck('input', 'toString')).toBe('Object.hasOwn(input, "toString")')
+    expect(hasOwnCheck('input', '__proto__')).toBe('Object.hasOwn(input, "__proto__")')
+    expect(hasOwnCheck('input', 'constructor')).toBe('Object.hasOwn(input, "constructor")')
+  })
+
+  it('keeps the cheaper `in` for every other name', () => {
+    expect(hasOwnCheck('input', 'id')).toBe('"id" in input')
+    expect(hasOwnCheck('input', 'x-linkedin')).toBe('"x-linkedin" in input')
+  })
+
+  it('escapes schema-controlled key names in a presence check', () => {
+    expect(hasOwnCheck('input', 'it"s')).toBe('"it\\"s" in input')
+  })
+
+  // `!"k" in obj` parses as `(!"k") in obj`, which is why the negation is not
+  // something a caller should spell by hand.
+  it('parenthesizes the negated presence check', () => {
+    expect(missingCheck('input', 'id')).toBe('!("id" in input)')
+    expect(missingCheck('input', 'toString')).toBe('!(Object.hasOwn(input, "toString"))')
   })
 
   it('returns unquoted key for simple identifiers', () => {

@@ -4,9 +4,56 @@ import { assertIdScopes } from './assert-id-scopes'
 
 describe('assert-id-scopes', () => {
   // The misresolution the check exists for: `#/$defs/t` inside the embedded
-  // resource means the *inner* `t`, but resolution navigates from the document
-  // root and quietly hands back the outer one — a different type, exit 0.
-  it('rejects a fragment ref inside an embedded resource that has its own $defs', () => {
+  // resource means the *inner* `t`, and the inner resource has no `t` — so the
+  // ref is unresolvable, but navigating from the document root quietly hands
+  // back the outer one instead: a different type, exit 0.
+  it('rejects a fragment ref that names nothing inside the resource it belongs to', () => {
+    const schema = {
+      $defs: {
+        t: { type: 'string' as const },
+        inner: {
+          $id: 'https://example.com/inner',
+          $defs: { u: { type: 'number' as const } },
+          properties: { value: { $ref: '#/$defs/t' } },
+        },
+      },
+    }
+
+    expect(() => assertIdScopes(schema)).toThrow(/names nothing inside it/)
+  })
+
+  it('names the offending $id and ref so the report is actionable', () => {
+    const schema = {
+      $defs: {
+        inner: {
+          $id: 'https://example.com/inner',
+          $anchor: 'thing',
+          properties: { value: { $ref: '#missing' } },
+        },
+      },
+    }
+
+    expect(() => assertIdScopes(schema)).toThrow(/https:\/\/example\.com\/inner.*#missing/s)
+  })
+
+  // A `$dynamicRef` addresses its target the same way, so it is screened too.
+  it('rejects an unresolvable fragment $dynamicRef inside an embedded resource', () => {
+    const schema = {
+      $defs: {
+        inner: {
+          $id: 'https://example.com/inner',
+          $defs: { t: { $dynamicAnchor: 'other' } },
+          properties: { value: { $dynamicRef: '#thing' } },
+        },
+      },
+    }
+
+    expect(() => assertIdScopes(schema)).toThrow(/names nothing inside it/)
+  })
+
+  // The whole point of base-URI resolution: this ref *does* name the inner `t`,
+  // so it is no longer ambiguous and must not fail a build.
+  it('accepts a fragment ref the embedded resource actually declares', () => {
     const schema = {
       $defs: {
         t: { type: 'string' as const },
@@ -18,10 +65,10 @@ describe('assert-id-scopes', () => {
       },
     }
 
-    expect(() => assertIdScopes(schema)).toThrow(/\$id base-URI scoping is not supported/)
+    expect(() => assertIdScopes(schema)).not.toThrow()
   })
 
-  it('names the offending $id and ref so the report is actionable', () => {
+  it('accepts an anchor ref the embedded resource declares', () => {
     const schema = {
       $defs: {
         inner: {
@@ -32,7 +79,7 @@ describe('assert-id-scopes', () => {
       },
     }
 
-    expect(() => assertIdScopes(schema)).toThrow(/https:\/\/example\.com\/inner.*#thing/s)
+    expect(() => assertIdScopes(schema)).not.toThrow()
   })
 
   // The root's `$id` is the document's base URI, not a nested scope.
@@ -79,6 +126,15 @@ describe('assert-id-scopes', () => {
         t: { type: 'string' as const },
         a: { type: 'object' as const, examples: [{ $id: 'https://example.com/x', $ref: '#/$defs/t' }] },
       },
+    }
+
+    expect(() => assertIdScopes(schema)).not.toThrow()
+  })
+
+  it('accepts a document that declares no $id at all', () => {
+    const schema = {
+      $defs: { t: { type: 'string' as const } },
+      properties: { value: { $ref: '#/$defs/t' } },
     }
 
     expect(() => assertIdScopes(schema)).not.toThrow()

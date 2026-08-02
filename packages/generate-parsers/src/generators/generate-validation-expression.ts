@@ -2,7 +2,7 @@ import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
-import { safeAccessor } from '@amritk/helpers/safe-accessor'
+import { hasOwnCheck, safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
   hasAdditionalProperties,
   hasAllOf,
@@ -487,7 +487,7 @@ export const generateValidationExpression = (
         // Check required properties exist
         if (hasRequired(schema) && schema.required.length > 0) {
           for (const requiredKey of schema.required) {
-            checks.push(`${JSON.stringify(requiredKey)} in ${accessor}`)
+            checks.push(hasOwnCheck(accessor, requiredKey))
           }
         }
         // Check minProperties

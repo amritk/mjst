@@ -167,6 +167,13 @@ JSON Schema file
 
 - **Framework:** [Vitest](https://vitest.dev). See `.claude/testing.md`.
 - **Convention:** test files colocated with implementation, named `*.test.ts`.
+- **Conformance suites:** the packages that implement a spec are measured against
+  that spec's official test suite, with an expected-failure list naming every case
+  they do not pass and why — `packages/yaml` against the YAML test suite, and
+  `runtime-validators` / `generate-parsers` / `generate-validators` /
+  `resolve-refs` against the vendored JSON Schema Test Suite
+  (`fixtures/json-schema-test-suite`). Each fails when a case moves in *either*
+  direction, so a boundary can never move silently.
 - **Mocking:** avoided unless necessary (e.g. `generate-markdown` tests stub `node:fs/promises`).
 - **Aliases:** `vitest.config.ts` aliases the `@amritk/*` package names back to source so tests run without a build step.
 

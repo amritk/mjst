@@ -2,7 +2,7 @@ import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
 import { multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
-import { safeAccessor } from '@amritk/helpers/safe-accessor'
+import { hasOwnCheck, safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
   hasAdditionalProperties,
   hasAllOf,
@@ -469,7 +469,7 @@ export const generateInlineObjectCheck = (
 
   // `required` keys without a declared property schema still need a presence check.
   for (const key of required) {
-    checks.push(`${JSON.stringify(key)} in ${varName}`)
+    checks.push(hasOwnCheck(varName, key))
   }
 
   // additionalProperties: false — extras make the value invalid for this branch.

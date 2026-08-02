@@ -107,15 +107,36 @@ per-item work (a bare `string[]` is free; a closed object with several fields is
 meaningfully slower), which is why array-heavy schemas validate more slowly than
 scalar/object ones.
 
+**A schema needs no `type` for its keywords to be enforced.** `{ minLength: 2 }`,
+`{ required: ['a'] }` and `{ uniqueItems: true }` each emit their check behind a
+runtime test for the family they constrain, so they reject a bad string / object /
+array and *ignore* every other kind of value — which is what JSON Schema means by
+a type-less constraint, and what the interpreter does. One consequence is worth
+knowing: object keywords no longer imply `type: 'object'`, so `validateX` accepts
+`42` against `{ properties: { … } }`, while the emitted TypeScript type still
+describes the object case (as `FromSchema` does in `@amritk/runtime-validators`).
+The verdict is the contract and it matches the interpreter exactly; for that one
+shape `isX` is a weaker type guard than the type it names. Declare a `type` — as
+almost every real schema does — and the guard is exact again.
+
 **`format` emits no check.** JSON Schema treats `format` as an annotation, and so
 does this generator: `{ type: 'string', format: 'uuid' }` produces the `typeof`
 check and nothing more. That matches the interpreter's default, but *not* the
 interpreter run with `{ formats: 'all' }` — as `@amritk/lint` and
 `createApi({ formats })` do — so a generated validator accepts strings those
-reject. Two keywords are handled the other way: `unevaluatedProperties` and
-`unevaluatedItems` are not implemented and **throw at generation time** rather
-than silently widening the verdict, because unlike `format` there is no reading of
-the spec under which ignoring them is correct.
+reject.
+
+**`unevaluatedProperties` / `unevaluatedItems` are generated**, not refused. Each
+emits a flat expression computing what the interpreter computes as annotations: per
+key or index, a boolean that is true when some keyword evaluated it. Keywords that
+must succeed for the value to be valid at all (`allOf` members, a `$ref` target, a
+satisfied `contains`) count unconditionally — sound, because the test is one
+conjunct of a validator that also asserts them — while conditional applicators
+(`anyOf` / `oneOf` branches, `if` / `then` / `else`, `dependentSchemas`) carry their
+condition, hoisted out of the per-key loop. Four shapes still refuse, each named as
+a shape rather than as a keyword: coverage running through a `$dynamicRef`, an
+unresolvable or cyclic `$ref` at the same instance location, a walk deeper than
+eight applicators, and a node under `additionalItems`.
 
 One further divergence is worth calling out: **`NaN` satisfies a constrained number.**
 Because the numeric bound checks are the exact negation of the error condition
@@ -124,6 +145,40 @@ passes `minimum`/`maximum`/`exclusive*`/`multipleOf`. This matches the interpret
 but differs from validators (e.g. Ajv) that reject `NaN` for `type: "number"`.
 `NaN` never appears in parsed JSON; guard against it upstream if your values can
 be non-JSON.
+
+### Conformance, measured
+
+The semantics above are measured, not asserted.
+`src/generators/conformance.test.ts` generates a validator for each schema in the
+official [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite)
+(the required Draft 2020-12 tests — 1299 cases), compiles and links the emitted
+files in memory, and runs the suite's instances through the real generated code:
+
+**1238 / 1299 cases pass (95.3%).**
+
+Of the 61 that do not, **48 are a `$ref` whose target is not in the schema handed
+in** — another document, which generation does not go and fetch. Bundle it first
+with [`@amritk/resolve-refs`](../resolve-refs), which is what `mjst` does, and they
+generate. The remaining 13: five `$dynamicRef`s whose binding depends on the
+evaluation path (a generator emits one function per definition, shared by every
+path that reaches it, so it cannot bind per path), two definitions in different
+embedded resources that reduce to one filename, two `$id`-scoped in-document
+pointers, the three `multipleOf` / `pattern` judgement calls above, and
+`$vocabulary`. Every one refuses at generation with a message naming the cause —
+nothing on the list is a keyword that silently returns the wrong answer.
+
+Every case is named in
+`src/generators/conformance-expected-failures.test-utils.ts` with its reason, and
+the test fails if a case moves in *either* direction — a regression breaks the
+build, and so does a case that starts passing without its entry being removed.
+
+If you need one of those refusals to be an answer instead, validate with
+[`@amritk/runtime-validators`](../runtime-validators), which passes the same corpus
+in full (**1299/1299**) and takes documents you already have through its `schemas`
+option, at the cost of interpreting the schema at runtime.
+The corpus is vendored under
+[`fixtures/json-schema-test-suite`](../../fixtures/json-schema-test-suite); none
+of it is published.
 
 ---
 
