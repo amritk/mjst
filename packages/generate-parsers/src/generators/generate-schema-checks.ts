@@ -1,4 +1,4 @@
-import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
+import { regexLiteral } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
 import { hasOwnCheck } from '@amritk/helpers/safe-accessor'
@@ -144,7 +144,7 @@ const generateInferredChecks = (accessor: string, schema: JSONSchema, type: Infe
     case 'string':
       checks.push(`typeof ${accessor} === "string"`)
       if (hasPattern(schema)) {
-        checks.push(`/${escapeRegexPattern(schema.pattern)}/.test(${accessor})`)
+        checks.push(`${regexLiteral(schema.pattern)}.test(${accessor})`)
       }
       if (hasMinLength(schema)) {
         checks.push(`${accessor}.length >= ${schema.minLength}`)
@@ -225,7 +225,7 @@ export const generateSchemaChecks = (accessor: string, schema: JSONSchema): stri
     case 'string': {
       checks.push(`typeof ${accessor} === "string"`)
       if (hasPattern(schema)) {
-        checks.push(`/${escapeRegexPattern(schema.pattern)}/.test(${accessor})`)
+        checks.push(`${regexLiteral(schema.pattern)}.test(${accessor})`)
       }
       if (hasMinLength(schema)) {
         checks.push(`${accessor}.length >= ${schema.minLength}`)

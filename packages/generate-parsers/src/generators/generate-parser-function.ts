@@ -1,4 +1,4 @@
-import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
+import { regexLiteral } from '@amritk/helpers/escape-regex-pattern'
 import { quoteJsString } from '@amritk/helpers/quote-js-string'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
@@ -2013,7 +2013,7 @@ const generateStrictCombinedParser = (
   const loopLines: string[] = [`    if (${knownKeyCheck.isKnown('key')}) continue;`]
   if (refPattern) {
     const parserName = generateParserName(refToName((refPattern[1] as { $ref: string }).$ref, suffix))
-    loopLines.push(`    if (/${escapeRegexPattern(refPattern[0])}/.test(key)) {`)
+    loopLines.push(`    if (${regexLiteral(refPattern[0])}.test(key)) {`)
     loopLines.push(`      ${safeResultAssign('key', `${parserName}(input[key])`)}`)
     loopLines.push(`      continue;`)
     loopLines.push(`    }`)
@@ -2021,7 +2021,7 @@ const generateStrictCombinedParser = (
 
   const keepConditions = patterns
     .filter(([p]) => !(refPattern && p === refPattern[0]))
-    .map(([p]) => `/${escapeRegexPattern(p)}/.test(key)`)
+    .map(([p]) => `${regexLiteral(p)}.test(key)`)
   if (keepConditions.length > 0) {
     loopLines.push(`    if (${keepConditions.join(' || ')}) {`)
     loopLines.push(`      ${safeResultAssign('key', 'input[key]')}`)
@@ -2168,7 +2168,7 @@ const generateCombinedObjectParser = (
   const parserName = generateParserName(refToName(ref, suffix))
   const assignmentCode = `(result as Record<string, unknown>)[key] = ${parserName}(value);`
 
-  const escapedPattern = escapeRegexPattern(pattern)
+  const patternLiteral = regexLiteral(pattern)
 
   const inputSpread = '    ...input,'
   let objectProperties = inputSpread
@@ -2192,7 +2192,7 @@ ${notObjectBranch}
 ${objectProperties}
   } as unknown as ${typeName};
   for (const key in input) {
-    if (/${escapedPattern}/.test(key)) {
+    if (${patternLiteral}.test(key)) {
       const value = input[key];
       ${assignmentCode}
     }
@@ -2347,7 +2347,7 @@ const generatePatternPropertiesParser = (
   }
 
   // Escape the pattern for safe inclusion in generated code
-  const escapedPattern = escapeRegexPattern(pattern)
+  const patternLiteral = regexLiteral(pattern)
 
   const notObjectBranch = strict
     ? `    throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);`
@@ -2359,14 +2359,14 @@ const generatePatternPropertiesParser = (
   // object rather than spreading every input key.
   const strictKeys = hasAdditionalProperties(schema) && schema.additionalProperties === false
   if (strictKeys) {
-    const loopLines: string[] = [`    if (/${escapedPattern}/.test(key)) {`]
+    const loopLines: string[] = [`    if (${patternLiteral}.test(key)) {`]
     if (patternValueExpr) {
       loopLines.push(`      const value = input[key];`)
       loopLines.push(`      ${safeResultAssign('key', patternValueExpr)}`)
     }
     loopLines.push(`      continue;`)
     loopLines.push(`    }`)
-    const keepConditions = patterns.slice(1).map(([p]) => `/${escapeRegexPattern(p)}/.test(key)`)
+    const keepConditions = patterns.slice(1).map(([p]) => `${regexLiteral(p)}.test(key)`)
     if (keepConditions.length > 0) {
       loopLines.push(`    if (${keepConditions.join(' || ')}) {`)
       loopLines.push(`      ${safeResultAssign('key', 'input[key]')}`)
@@ -2396,7 +2396,7 @@ ${notObjectBranch}
     ...input,
   } as unknown as ${typeName};
   for (const key in input) {
-    if (/${escapedPattern}/.test(key)) {
+    if (${patternLiteral}.test(key)) {
       const value = input[key];
       ${patternAssignment}
     }

@@ -1,4 +1,4 @@
-import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
+import { regexFlagsFor, regexLiteral } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { multipleOfFailExpr, multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
 import { refToName } from '@amritk/helpers/ref-to-name'
@@ -362,7 +362,11 @@ const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): strin
   let patternGuard = ''
   if (patterns.length > 0) {
     const patternsName = `_patterns${ctx.hoisted.length}`
-    ctx.hoisted.push(`const ${patternsName} = [${patterns.map((p) => `new RegExp(${JSON.stringify(p)})`).join(', ')}]`)
+    // Hoisted as `new RegExp` rather than literals because the sources are only
+    // known as strings here; the flags still come from `regexFlagsFor`, so these
+    // read `pattern` the same way every emitted literal does.
+    const compiled = patterns.map((p) => `new RegExp(${JSON.stringify(p)}, ${JSON.stringify(regexFlagsFor(p))})`)
+    ctx.hoisted.push(`const ${patternsName} = [${compiled.join(', ')}]`)
     patternGuard = ` && !${patternsName}.some((re) => re.test(_key${d}))`
   }
 
@@ -733,9 +737,9 @@ const generateConstraintChecks = (
   // String constraints
   if (hasPattern(propSchema) || hasMinLength(propSchema) || hasMaxLength(propSchema)) {
     if (hasPattern(propSchema)) {
-      const re = escapeRegexPattern(propSchema.pattern)
+      const re = regexLiteral(propSchema.pattern)
       const msg = JSON.stringify(`must match pattern ${propSchema.pattern}`)
-      lines.push(`  if (typeof ${raw} === 'string' && !/${re}/.test(${raw})) {`)
+      lines.push(`  if (typeof ${raw} === 'string' && !${re}.test(${raw})) {`)
       lines.push(`    errors.push({ message: ${msg}, path: ${path} })`)
       lines.push(`  }`)
     }
@@ -1272,7 +1276,7 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
   const patternEntries = Object.entries(patternsRecord)
 
   for (const [pattern, sub] of patternEntries) {
-    const re = escapeRegexPattern(pattern)
+    const re = regexLiteral(pattern)
     const kv = `_pk${d}`
     const valueChecks = generateValueChecks(
       `\${${kv}}`,
@@ -1284,7 +1288,7 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
     )
     if (valueChecks.length === 0) continue
     lines.push(`  for (const ${kv} in ${obj}) {`)
-    lines.push(`    if (/${re}/.test(${kv})) {`)
+    lines.push(`    if (${re}.test(${kv})) {`)
     lines.push(...valueChecks.map((line) => `    ${line}`))
     lines.push(`    }`)
     lines.push(`  }`)
@@ -1308,7 +1312,7 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
       lines.push(`  for (const ${kv} in ${obj}) {`)
       if (known.length > 0) lines.push(`    if (${JSON.stringify(known)}.includes(${kv})) continue`)
       for (const pattern of Object.keys(patternsRecord)) {
-        lines.push(`    if (/${escapeRegexPattern(pattern)}/.test(${kv})) continue`)
+        lines.push(`    if (${regexLiteral(pattern)}.test(${kv})) continue`)
       }
       lines.push(...valueChecks.map((line) => `    ${line}`))
       lines.push(`  }`)
@@ -1920,7 +1924,7 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
     // false — get the identical verdict.
     case 'string': {
       const parts = [`typeof ${acc} === 'string'`]
-      if (hasPattern(schema)) parts.push(`/${escapeRegexPattern(schema.pattern)}/.test(${acc})`)
+      if (hasPattern(schema)) parts.push(`${regexLiteral(schema.pattern)}.test(${acc})`)
       // The exact negations of the validator's length conditions, from the same
       // `string-length-check` emitter, so the guard counts code points too.
       if (hasMinLength(schema)) parts.push(minLengthPassExpr(acc, schema.minLength))

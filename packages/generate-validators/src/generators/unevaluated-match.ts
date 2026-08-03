@@ -1,4 +1,4 @@
-import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
+import { regexLiteral } from '@amritk/helpers/escape-regex-pattern'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { isSchemaObject } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
@@ -134,7 +134,7 @@ const ownPropertyCoverage = (
   const patterns = schema['patternProperties']
   if (typeof patterns === 'object' && patterns !== null && !Array.isArray(patterns)) {
     for (const pattern of Object.keys(patterns as Record<string, unknown>)) {
-      terms.push(`/${escapeRegexPattern(pattern)}/.test(${keyVar})`)
+      terms.push(`${regexLiteral(pattern)}.test(${keyVar})`)
     }
   }
   return { all: false, terms }

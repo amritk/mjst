@@ -37,6 +37,7 @@ const lineTerminatorEscapes: Record<number, string> = {
 // cost is the validating `new RegExp` compile. Schemas carry a bounded set of
 // patterns; the cap only guards a pathological long-lived process.
 const escapeCache = new Map<string, string>()
+const flagCache = new Map<string, string>()
 const ESCAPE_CACHE_LIMIT = 1000
 
 export const escapeRegexPattern = (pattern: string): string => {
@@ -85,3 +86,45 @@ export const escapeRegexPattern = (pattern: string): string => {
   escapeCache.set(pattern, escaped)
   return escaped
 }
+
+/**
+ * The flags a generated regex for `pattern` should carry: `'u'` where the
+ * pattern is a legal Unicode-mode regex, `''` where it is not.
+ *
+ * A 2020-12 `pattern` is meant to be read as Unicode — Ajv compiles with `u` by
+ * default, and so does `@amritk/runtime-validators` (`compilePattern` in
+ * `interpreter/interpret.ts`) — and without the flag `\p{L}` is misread as a
+ * literal `p` and `^.$` rejects a single astral character. The flag is not
+ * unconditional because `u` also outlaws escapes that are legal without it
+ * (`\-`, a bare `\p`), and a pattern using one would turn into a syntax error in
+ * the emitted regex literal. Compiling here is the same decision the interpreter
+ * makes at runtime, taken once at generation time instead.
+ */
+export const regexFlagsFor = (pattern: string): string => {
+  const cached = flagCache.get(pattern)
+  if (cached !== undefined) return cached
+  let flags = ''
+  try {
+    new RegExp(pattern, 'u')
+    flags = 'u'
+  } catch {
+    flags = ''
+  }
+  if (flagCache.size >= ESCAPE_CACHE_LIMIT) flagCache.delete(flagCache.keys().next().value as string)
+  flagCache.set(pattern, flags)
+  return flags
+}
+
+/**
+ * A complete regex literal for a JSON Schema `pattern` — the escaped body
+ * between slashes, with the flags {@link regexFlagsFor} picks.
+ *
+ * Emit sites take this rather than interpolating `escapeRegexPattern` into their
+ * own `/…/`, so the flag decision is made in one place and cannot be forgotten
+ * at one of the dozen places a pattern reaches generated code.
+ *
+ * @example
+ * regexLiteral('\\p{L}+') // → '/\\p{L}+/u'
+ * @throws if `pattern` is not a valid regular expression.
+ */
+export const regexLiteral = (pattern: string): string => `/${escapeRegexPattern(pattern)}/${regexFlagsFor(pattern)}`

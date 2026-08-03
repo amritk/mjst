@@ -1002,7 +1002,7 @@ describe('generate-parser-function', () => {
     ...input,
   } as unknown as Paths;
   for (const key in input) {
-    if (/^\\//.test(key)) {
+    if (/^\\//u.test(key)) {
       const value = input[key];
       (result as Record<string, unknown>)[key] = parsePathItem(value);
     }
@@ -1069,7 +1069,7 @@ describe('generate-parser-function', () => {
     ...input,
   } as unknown as SimplePaths;
   for (const key in input) {
-    if (/^\\//.test(key)) {
+    if (/^\\//u.test(key)) {
       const value = input[key];
       (result as Record<string, unknown>)[key] = parsePathItem(value);
     }
@@ -1195,7 +1195,7 @@ describe('generate-parser-function', () => {
     ...(input.default !== undefined && { default: parseResponse(input.default) }),
   } as unknown as Responses;
   for (const key in input) {
-    if (/^[1-5](?:[0-9]{2}|XX)$/.test(key)) {
+    if (/^[1-5](?:[0-9]{2}|XX)$/u.test(key)) {
       const value = input[key];
       (result as Record<string, unknown>)[key] = parseResponse(value);
     }

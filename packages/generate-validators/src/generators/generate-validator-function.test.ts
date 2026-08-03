@@ -167,11 +167,11 @@ describe('generate-validator-function', () => {
 
     // The bare slashes are escaped (\/) and the digit classes keep their single
     // backslash, so the literal is valid and means what the pattern says.
-    expect(code).toContain('!/^\\d{4}\\/\\d{2}\\/\\d{2}$/.test(')
+    expect(code).toContain('!/^\\d{4}\\/\\d{2}\\/\\d{2}$/u.test(')
     // Sanity check: the emitted regex source actually parses and matches.
-    const emitted = /!\/(.+)\/\.test\(/.exec(code)?.[1]
+    const emitted = /!\/(.+)\/u\.test\(/.exec(code)?.[1]
     expect(emitted).toBeDefined()
-    expect(new RegExp(emitted as string).test('2024/01/02')).toBe(true)
+    expect(new RegExp(emitted as string, 'u').test('2024/01/02')).toBe(true)
   })
 
   it('checks a const property for an exact value', () => {
@@ -263,7 +263,7 @@ describe('generate-validator-function', () => {
     const code = generateValidatorFunction(schema, 'Dict')
 
     expect(code).toContain('for (const _name of Object.keys(obj))')
-    expect(code).toContain('!/^[a-z]+$/.test(_name)')
+    expect(code).toContain('!/^[a-z]+$/u.test(_name)')
     expect(code).toContain('must match pattern')
   })
 
@@ -350,7 +350,7 @@ describe('generate-validator-function', () => {
     expect(code).toContain('let errors: ValidationError[] | undefined')
     expect(code).toContain('(errors ??= []).push({ message: "must match pattern')
     // The pattern body keeps its backslash (\d), so the emitted literal is a digit class.
-    expect(code).toContain('!/^\\d+$/.test(input)')
+    expect(code).toContain('!/^\\d+$/u.test(input)')
     expect(code).toContain("(errors ??= []).push({ message: 'must have at least 2 characters'")
     expect(code).toContain("(errors ??= []).push({ message: 'must have at most 4 characters'")
     expect(code).toContain('return errors !== undefined ? { valid: false, errors } : true')

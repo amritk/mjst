@@ -26,7 +26,7 @@ describe('generate-validation-expression', () => {
     const result = generateValidationExpression('code', schema, '""', true)
 
     expect(result).toContain('typeof input?.code === "string"')
-    expect(result).toContain('/^[A-Z]/.test(input?.code)')
+    expect(result).toContain('/^[A-Z]/u.test(input?.code)')
   })
 
   it('generates string validation with minLength', () => {
@@ -99,9 +99,7 @@ describe('generate-validation-expression', () => {
 
     expect(result).toContain('typeof input?.quantity === "number"')
     // multipleOf uses the interpreter's epsilon-relative division check, not `% === 0`.
-    expect(result).toContain(
-      'Math.abs(input?.quantity / 5 - Math.round(input?.quantity / 5)) <= 1e-8 * Math.max(1, Math.abs(input?.quantity / 5))',
-    )
+    expect(result).toContain('(Number.isInteger(input?.quantity) && input?.quantity % 5 === 0)')
   })
 
   it('generates integer type validation', () => {
@@ -506,7 +504,7 @@ describe('generate-validation-expression', () => {
     const result = generateValidationExpression('code', schema, '""', true)
 
     expect(result).toContain('typeof input?.code === "string"')
-    expect(result).toContain('/^[A-Z]/.test(input?.code)')
+    expect(result).toContain('/^[A-Z]/u.test(input?.code)')
     expect(result).toContain('input?.code.length >= 3')
     expect(result).toContain('input?.code.length <= 10')
   })
@@ -523,9 +521,7 @@ describe('generate-validation-expression', () => {
     expect(result).toContain('typeof input?.score === "number"')
     expect(result).toContain('input?.score >= 0')
     expect(result).toContain('input?.score <= 100')
-    expect(result).toContain(
-      'Math.abs(input?.score / 5 - Math.round(input?.score / 5)) <= 1e-8 * Math.max(1, Math.abs(input?.score / 5))',
-    )
+    expect(result).toContain('(Number.isInteger(input?.score) && input?.score % 5 === 0)')
   })
 
   it('combines multiple array constraints', () => {
@@ -641,9 +637,7 @@ describe('generate-validation-expression', () => {
     expect(result).toContain('input?.count <= 100')
     expect(result).toContain('input?.count > 5')
     expect(result).toContain('input?.count < 105')
-    expect(result).toContain(
-      'Math.abs(input?.count / 10 - Math.round(input?.count / 10)) <= 1e-8 * Math.max(1, Math.abs(input?.count / 10))',
-    )
+    expect(result).toContain('(Number.isInteger(input?.count) && input?.count % 10 === 0)')
   })
 
   it('handles empty required array', () => {

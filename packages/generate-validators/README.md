@@ -162,13 +162,15 @@ a shape rather than as a keyword: coverage running through a `$dynamicRef`, an
 unresolvable or cyclic `$ref` at the same instance location, a walk deeper than
 eight applicators, and a node under `additionalItems`.
 
-One further divergence is worth calling out: **`NaN` satisfies a constrained number.**
+One further divergence is worth calling out: **`NaN` satisfies a bounded number.**
 Because the numeric bound checks are the exact negation of the error condition
 (e.g. `!(x < minimum)`), and every comparison against `NaN` is `false`, a `NaN`
-passes `minimum`/`maximum`/`exclusive*`/`multipleOf`. This matches the interpreter
-but differs from validators (e.g. Ajv) that reject `NaN` for `type: "number"`.
-`NaN` never appears in parsed JSON; guard against it upstream if your values can
-be non-JSON.
+passes `minimum`/`maximum`/`exclusive*` — where both Ajv and
+`@amritk/runtime-validators` reject it. `multipleOf` is not in that list: it is
+emitted from the shared `@amritk/helpers/multiple-of-check`, whose two branches
+(`Number.isInteger` for an integer divisor, a `<=` tolerance for a fractional
+one) both read `NaN` as a failure, matching the interpreter. `NaN` never appears
+in parsed JSON; guard against it upstream if your values can be non-JSON.
 
 ### Conformance, measured
 
@@ -178,7 +180,7 @@ official [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema
 (the required Draft 2020-12 tests — 1281 cases), compiles and links the emitted
 files in memory, and runs the suite's instances through the real generated code:
 
-**1268 / 1281 cases pass (99.0%).**
+**1271 / 1281 cases pass (99.2%).**
 
 The suite's `remotes/` documents and the 2020-12 dialect metaschema are supplied
 through the `schemas` option, which is how the suite intends a validator that does
@@ -186,13 +188,12 @@ no I/O to answer the retrieval step. Everything else — applying the base URIs,
 walking anchors across documents, naming and emitting a file per definition — the
 generator still has to do.
 
-Of the 13 that do not pass: five `$dynamicRef`s whose binding depends on the
+Of the 10 that do not pass: five `$dynamicRef`s whose binding depends on the
 evaluation path (a generator emits one function per definition, shared by every
 path that reaches it, so it cannot bind per path), two definitions in different
 embedded resources that reduce to one filename, two `$id`-scoped in-document
-pointers, the three `multipleOf` / `pattern` judgement calls above, and
-`$vocabulary`. Nothing on the list is a keyword that silently returns the wrong
-answer.
+pointers, and `$vocabulary`. Nothing on the list is a keyword that silently
+returns the wrong answer.
 
 Every case is named in
 `src/generators/conformance-expected-failures.test-utils.ts` with its reason, and
