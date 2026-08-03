@@ -1,8 +1,8 @@
 import { isDeepStrictEqual } from 'node:util'
-import { metaschema } from '@amritk/runtime-validators/metaschema'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'vitest'
 
+import { loadDialectMetaschema } from '../../../../fixtures/json-schema-test-suite/dialect-metaschema'
 import {
   compareToExpected,
   conformanceRate,
@@ -46,11 +46,11 @@ import { EXPECTED_FAILURES } from './json-schema-conformance-expected-failures.t
  * step is answered — the generator still has to apply the base URIs, walk the
  * anchors across documents, name and emit a parser for every definition it
  * reaches, and produce an import graph that links and type-checks. The
- * metaschema comes from `@amritk/runtime-validators/metaschema`, a published
- * export rather than another package's internals, and covers the cases that
- * parse a schema against its own dialect.
+ * metaschema is the published `@amritk/runtime-validators/metaschema`, re-exported
+ * by the shared fixtures rather than reached for through another package's
+ * internals, and covers the cases that parse a schema against its own dialect.
  */
-const DOCUMENTS = { ...metaschema, ...loadSuiteRemotes() }
+const DOCUMENTS = { ...loadDialectMetaschema(), ...loadSuiteRemotes() }
 
 /** Builds and links the strict parser for one group's schema. */
 const compile = async (schema: unknown): Promise<((input: unknown) => unknown) | string> => {

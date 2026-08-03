@@ -42,8 +42,9 @@ builds exactly that map, keyed by the URIs the suite would have served them from
 
 The dialect metaschema is not part of `remotes/`: the cases that validate a
 schema against its own dialect (`defs.json`, `ref.json`'s "remote ref, containing
-refs itself") assume an implementation knows the dialect it implements. Each
-package supplies its own copy, from `@amritk/runtime-validators/metaschema`.
+refs itself") assume an implementation knows the dialect it implements. It is
+supplied separately, by `dialect-metaschema.ts`, which re-exports the published
+`@amritk/runtime-validators/metaschema` so there is one copy and one drift guard.
 
 Deliberately not vendored:
 

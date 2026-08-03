@@ -1,7 +1,7 @@
-import { metaschema } from '@amritk/runtime-validators/metaschema'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'vitest'
 
+import { loadDialectMetaschema } from '../../../../fixtures/json-schema-test-suite/dialect-metaschema'
 import {
   compareToExpected,
   conformanceRate,
@@ -39,12 +39,12 @@ import { linkGenerated } from './link-generated.test-utils'
  * does no I/O is given the already-parsed documents instead. That answers the
  * retrieval step and nothing else — the generator still has to apply the base
  * URIs, walk the anchors across documents, name a file for each definition it
- * reaches, and emit an import graph that links. The metaschema comes from
- * `@amritk/runtime-validators/metaschema`, a published export rather than
- * another package's internals, and covers the cases that validate a schema
- * against its own dialect.
+ * reaches, and emit an import graph that links. The metaschema is the published
+ * `@amritk/runtime-validators/metaschema`, re-exported by the shared fixtures
+ * rather than reached for through another package's internals, and covers the
+ * cases that validate a schema against its own dialect.
  */
-const DOCUMENTS = { ...metaschema, ...loadSuiteRemotes() }
+const DOCUMENTS = { ...loadDialectMetaschema(), ...loadSuiteRemotes() }
 
 /**
  * Generates and links the validator for one group's schema. Cases are generated
