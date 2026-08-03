@@ -1478,6 +1478,34 @@ describe('generate-validator-function', () => {
     expect(validate({})).not.toBe(true) // required presence still enforced
   })
 
+  // A union `type` on the *root* used to emit the type check and nothing else,
+  // so every sibling constraint was dropped. This is the shape the 2020-12
+  // metaschema's own root is written in, which is how it went unnoticed: the
+  // generated dialect validator accepted `{ type: 1 }` as a valid schema.
+  it('enforces sibling constraints on a root with a union type', () => {
+    const validate = evalValidator(
+      generateValidatorFunction(
+        { type: ['object', 'boolean'], properties: { name: { type: 'string' } }, required: ['name'] },
+        'Node',
+      ),
+    )
+    expect(validate({ name: 'ok' })).toBe(true)
+    expect(validate({ name: 42 })).not.toBe(true) // property type still checked
+    expect(validate({})).not.toBe(true) // required presence still checked
+    expect(validate('nope')).not.toBe(true) // and the union itself still applies
+    // The constraints carry their own runtime guards, so a member of the union
+    // they do not apply to is untouched.
+    expect(validate(true)).toBe(true)
+  })
+
+  it('keeps a root union type with no constraints a pure type check', () => {
+    const validate = evalValidator(generateValidatorFunction({ type: ['string', 'null'] }, 'Name'))
+
+    expect(validate('ok')).toBe(true)
+    expect(validate(null)).toBe(true)
+    expect(validate(42)).not.toBe(true)
+  })
+
   it('enforces a constraining unevaluatedProperties against the keys its siblings evaluated', () => {
     const validate = evalValidator(
       generateValidatorFunction(

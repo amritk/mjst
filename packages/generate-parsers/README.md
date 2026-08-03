@@ -94,8 +94,36 @@ Every option after the first two is **positional** — pass them in this order:
 | 11 | `typeSuffix` | `string` | `''` | Suffix appended to every `$ref`-derived type name (`'Object'` turns `Contact` into `ContactObject`). The root type name is unaffected. |
 | 12 | `importExt` | `'js' \| 'ts'` | `'js'` | Extension emitted on relative import specifiers. `'js'` is the NodeNext form for output you compile; `'ts'` emits the literal on-disk paths so the sources run unbuilt. |
 | 13 | `caseInsensitive` | `boolean` | `false` | Normalize a mis-cased string to the exact casing of an enum/const member it matches case-insensitively. Coerce mode only. |
+| 14 | `schemas` | `Record<string, unknown>` | — | Documents you have **already loaded**, keyed by the absolute URI a `$ref` names them by. See below. |
 
 Returns: `Promise<GeneratedFile[]>`.
+
+#### Referencing another document
+
+A `$ref` to a URI is resolvable once you hand over the document behind it — pass
+it as the 14th argument:
+
+```typescript
+const files = await buildSchema(
+  { $ref: 'https://example.com/user.json' },
+  'Document',
+  undefined, false, false, true, 'embedded', './', false, false, '', 'js', false,
+  { 'https://example.com/user.json': userSchema },
+)
+```
+
+Each registered document becomes a resource of the generated document: its `$id`,
+its `$anchor`s and `$dynamicAnchor`s and its own embedded resources all resolve, a
+`$ref` from one registered document into another resolves, and each definition
+reached gets a file, a type and a parser like any other. A document with no `$id`
+resolves its relative `$ref`s against the URI you registered it under; one whose
+`$id` disagrees answers to both.
+
+Nothing is fetched — you cannot pass a URL, only a document — so generation stays
+a pure function of its inputs. Loading is yours to do, or
+[`@amritk/resolve-refs`](../resolve-refs)'. Registering more than the schema uses
+costs nothing: only the documents actually reached are emitted. A `$ref` to a URI
+nobody registered still stops the build, with a message naming the ref.
 
 > [!NOTE]
 > `importExt` defaults to `'js'` here, whereas the [`mjst` CLI](../cli) defaults it to
@@ -220,29 +248,29 @@ validator in every language is judged on.
 `src/generators/json-schema-conformance.test.ts` generates a strict parser for
 each schema in the official
 [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite)
-(the required Draft 2020-12 tests — 1299 cases), links the emitted files in
+(the required Draft 2020-12 tests — 1281 cases), links the emitted files in
 memory, and runs the suite's instances through the real generated code:
 
-**1222 / 1299 cases pass (94.1%).**
+**1237 / 1281 cases pass (96.6%).**
 
 A case passes only if the parser throws exactly when the spec says invalid *and*
 returns an accepted document unchanged — strict mode does not coerce, so a parser
 that quietly rewrites a valid document fails here too.
 
-Of the 77 that do not, **37 are a `$ref` whose target is not in the schema handed
-in** — another document, which generation does not go and fetch. Bundle it first
-with [`@amritk/resolve-refs`](../resolve-refs), which is what the `mjst` CLI does,
-and they generate. Another **12** are a keyword strict mode will not approximate
-(a cyclic `$ref` with siblings, a cyclic `unevaluatedProperties`) and **2** are two
-embedded resources whose definitions reduce to one filename: all of those cost a
-build error naming the cause, never a wrong verdict.
+The suite's `remotes/` documents and the 2020-12 dialect metaschema are supplied
+through the `schemas` option, which is how the suite intends a generator that does
+no I/O to answer the retrieval step. Everything else — applying the base URIs,
+walking anchors across documents, emitting a parser per definition and an import
+graph that links — the generator still has to do.
 
-The rest are honest gaps: the **12** `ignores a non-object` cases that follow from
-the third departure above, **6** where a URN-scoped recursive `$ref` points back at
-a root, **4** `$dynamicRef`s whose binding depends on the evaluation path (a
-generator emits one function per definition, shared by every path that reaches it),
-the three `multipleOf` / `pattern` judgement calls above, and one `$vocabulary`
-case.
+Of the 44 that do not, **18** are the `ignores a non-object` cases that follow
+from the third departure above, and **12** are a keyword strict mode will not
+approximate (a cyclic `$ref` with siblings, a cyclic `unevaluatedProperties`) —
+those cost a build error naming the cause, never a wrong verdict. The rest: **8**
+`$dynamicRef`s whose binding depends on the evaluation path (a generator emits one
+function per definition, shared by every path that reaches it), **2** embedded
+resources whose definitions reduce to one filename, the three `multipleOf` /
+`pattern` judgement calls above, and one `$vocabulary` case.
 
 Every one is listed in
 `src/generators/json-schema-conformance-expected-failures.test-utils.ts` with the

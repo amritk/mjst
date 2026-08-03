@@ -113,6 +113,14 @@ export type GeneratedFile = {
  *   mode only — strict parsers still reject a casing mismatch. The normalization lives on
  *   the coercion failure branch, so correctly-cased input keeps the exact-match fast path
  *   and the hot path is unaffected.
+ * @param schemas - Other schema documents you have **already loaded**, keyed by the absolute
+ *   URI a `$ref` names them by. Supplying them makes those URIs resolvable, so the schema can
+ *   reference a document that is not itself — each one becomes a resource of the generated
+ *   document, with its own `$id`, anchors and nested resources all resolvable, and a `$ref`
+ *   from one registered document into another resolving too. Nothing is fetched here: loading
+ *   is yours to do (or `@amritk/resolve-refs`'), and a `$ref` to a URI nobody registered still
+ *   stops generation. Only the documents actually referenced get files, so registering more
+ *   than the schema uses costs nothing in the output.
  * @returns An array of generated TypeScript files
  *
  * @example
@@ -159,6 +167,7 @@ export const buildSchema = async (
   typeSuffix = '',
   importExt: ImportExtension = 'js',
   caseInsensitive = false,
+  schemas?: Readonly<Record<string, unknown>>,
 ): Promise<GeneratedFile[]> => {
   const files: GeneratedFile[] = []
   const usedHelpers = new Set<RuntimeHelperName>()
@@ -168,7 +177,7 @@ export const buildSchema = async (
   // once, for the whole document, so parsers accept null where the schema allows it.
   const foldedSchema = foldNullable(rootSchema)
 
-  walkRefGraph(foldedSchema, rootTypeName, { typeSuffix }, (node) => {
+  walkRefGraph(foldedSchema, rootTypeName, { typeSuffix, ...(schemas !== undefined ? { schemas } : {}) }, (node) => {
     // `index` is reserved for the barrel below, so never let a definition of
     // that name overwrite it.
     if (node.filename === 'index') return

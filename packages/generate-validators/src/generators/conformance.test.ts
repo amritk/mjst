@@ -1,10 +1,12 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'vitest'
 
+import { loadDialectMetaschema } from '../../../../fixtures/json-schema-test-suite/dialect-metaschema'
 import {
   compareToExpected,
   conformanceRate,
   loadSuiteCases,
+  loadSuiteRemotes,
   type SuiteCase,
 } from '../../../../fixtures/json-schema-test-suite/load-suite'
 import { buildValidatorSchema } from './build-schema'
@@ -30,13 +32,28 @@ import { linkGenerated } from './link-generated.test-utils'
  */
 
 /**
+ * The suite's `remotes/` documents plus the dialect metaschema, handed to the
+ * generator through its public `schemas` registry.
+ *
+ * The suite serves these over HTTP at `http://localhost:1234/`; a generator that
+ * does no I/O is given the already-parsed documents instead. That answers the
+ * retrieval step and nothing else — the generator still has to apply the base
+ * URIs, walk the anchors across documents, name a file for each definition it
+ * reaches, and emit an import graph that links. The metaschema is the published
+ * `@amritk/runtime-validators/metaschema`, re-exported by the shared fixtures
+ * rather than reached for through another package's internals, and covers the
+ * cases that validate a schema against its own dialect.
+ */
+const DOCUMENTS = { ...loadDialectMetaschema(), ...loadSuiteRemotes() }
+
+/**
  * Generates and links the validator for one group's schema. Cases are generated
  * per group rather than per case — a suite group is one schema and many
  * instances — which is a third of the codegen work for the same coverage.
  */
 const compile = async (schema: unknown): Promise<((input: unknown) => unknown) | string> => {
   try {
-    const files = await buildValidatorSchema(schema as JSONSchema, 'Root')
+    const files = await buildValidatorSchema(schema as JSONSchema, 'Root', '', DOCUMENTS)
     const validator = linkGenerated<(input: unknown) => unknown>(files, 'index', 'validateRoot')
     return typeof validator === 'function' ? validator : 'generated no validateRoot export'
   } catch (error) {

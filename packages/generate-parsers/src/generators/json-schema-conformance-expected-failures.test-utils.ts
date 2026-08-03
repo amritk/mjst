@@ -4,7 +4,7 @@ import type { ExpectedFailures } from '../../../../fixtures/json-schema-test-sui
  * The official JSON Schema Test Suite cases the *strict* generated parsers do not
  * handle, each with the reason.
  *
- * 77 of 1299. The list exists so the boundary is exact rather than approximate:
+ * 44 of 1281. The list exists so the boundary is exact rather than approximate:
  * `json-schema-conformance.test.ts` fails if a case listed here starts passing
  * (the entry must go) or if a case not listed here starts failing (a regression).
  *
@@ -12,12 +12,17 @@ import type { ExpectedFailures } from '../../../../fixtures/json-schema-test-sui
  * `/`-bounded prefix of one when a whole group or file falls to a single cause.
  * Look one up in `fixtures/json-schema-test-suite/draft2020-12/<file>`.
  *
- * What is left divides into three kinds. Most of it — anything whose target is
- * another document — is out of reach by design: the generator does no I/O, and
- * the suite hands it a schema with no way to supply the documents it references.
- * The rest is either a deliberate difference (`implied type`) or a shape strict
- * mode refuses rather than under-enforce, which costs a build error and can never
- * produce a wrong verdict.
+ * What used to dominate this list was the cross-document `$ref`, and it is gone:
+ * documents handed to the generator through its `schemas` registry are folded
+ * into the one being generated, so a ref into `integer.json`, `tree.json` or the
+ * 2020-12 metaschema resolves and is enforced like anything else. The generator
+ * still does no I/O — the caller loads the documents — but it can now be told.
+ *
+ * What is left divides into three kinds: a deliberate difference (`implied
+ * type`), the `$dynamicRef` cases where one generated function is shared by
+ * every path that reaches it, and shapes strict mode refuses rather than
+ * under-enforce — which costs a build error and can never produce a wrong
+ * verdict.
  */
 export const EXPECTED_FAILURES: ExpectedFailures = {
   // ---------------------------------------------------------------------------
@@ -70,67 +75,6 @@ export const EXPECTED_FAILURES: ExpectedFailures = {
     'implied type: `properties`/`required`/`patternProperties` compile to an object check, so a non-object is rejected instead of ignored',
 
   // ---------------------------------------------------------------------------
-  // another document: the target is not in the schema handed to the generator
-  //
-  // `$id` is now applied as a base URI, so every ref that names something *inside*
-  // the document resolves — relative, absolute, URN, absolute-path, pointer- or
-  // anchor-into-resource alike. These are the ones left over: the URI names a
-  // document the suite serves from `remotes/`, and the generator does no I/O (that
-  // is `@amritk/resolve-refs`' job) and is handed no way to supply it.
-  //
-  // An absolute URI stops generation, which is the safe outcome. A *bare relative*
-  // ref (`extendible-dynamic-ref.json`) is not a form `extractRefs` recognizes at
-  // all, so it is dropped instead, and the definition it names is simply never
-  // applied — which is why a few of these fail as a verdict rather than a refusal.
-  // ---------------------------------------------------------------------------
-  'defs.json': 'another document: the target is the 2020-12 metaschema, which the generator does not fetch',
-  'ref.json/remote ref, containing refs itself':
-    'another document: the target is the 2020-12 metaschema, which the generator does not fetch',
-  'dynamicRef.json/$ref to $dynamicRef finds detached $dynamicAnchor':
-    'another document: the target is `detached-dynamicref.json`, which the generator does not fetch',
-  'dynamicRef.json/tests for implementation dynamic anchor and reference link/correct extended schema':
-    'another document: `$ref: "extendible-dynamic-ref.json"` is dropped rather than refused, so the definition it names is never applied',
-  'dynamicRef.json/$ref and $dynamicAnchor are independent of order - $defs first/incorrect parent schema':
-    'another document: `$ref: "extendible-dynamic-ref.json"` is dropped rather than refused, so the definition it names is never applied',
-  'dynamicRef.json/$ref and $dynamicAnchor are independent of order - $defs first/incorrect extended schema':
-    'another document: `$ref: "extendible-dynamic-ref.json"` is dropped rather than refused, so the definition it names is never applied',
-  'dynamicRef.json/$ref and $dynamicAnchor are independent of order - $ref first/incorrect parent schema':
-    'another document: `$ref: "extendible-dynamic-ref.json"` is dropped rather than refused, so the definition it names is never applied',
-  'dynamicRef.json/$ref and $dynamicAnchor are independent of order - $ref first/incorrect extended schema':
-    'another document: `$ref: "extendible-dynamic-ref.json"` is dropped rather than refused, so the definition it names is never applied',
-  'refRemote.json/remote ref': 'another document: the target is served from the suite’s `remotes/`, not the schema',
-  'refRemote.json/fragment within remote ref':
-    'another document: the target is served from the suite’s `remotes/`, not the schema',
-  'refRemote.json/anchor within remote ref':
-    'another document: the target is served from the suite’s `remotes/`, not the schema',
-  'refRemote.json/ref within remote ref':
-    'another document: the target is served from the suite’s `remotes/`, not the schema',
-  'refRemote.json/base URI change':
-    'another document: the target is served from the suite’s `remotes/`, not the schema',
-  'refRemote.json/base URI change - change folder/number is valid':
-    'another document: the target is served from the suite’s `remotes/`, not the schema',
-  'refRemote.json/base URI change - change folder in subschema/number is valid':
-    'another document: the target is served from the suite’s `remotes/`, not the schema',
-  'refRemote.json/remote ref with ref to defs/valid':
-    'another document: the target is served from the suite’s `remotes/`, not the schema',
-  'refRemote.json/Location-independent identifier in remote ref':
-    'another document: the target is served from the suite’s `remotes/`, not the schema',
-  'refRemote.json/remote HTTP ref with different $id':
-    'another document: the target is served from the suite’s `remotes/`, not the schema',
-  'refRemote.json/remote HTTP ref with different URN $id':
-    'another document: the target is served from the suite’s `remotes/`, not the schema',
-  'refRemote.json/remote HTTP ref with nested absolute ref':
-    'another document: the target is served from the suite’s `remotes/`, not the schema',
-  'refRemote.json/$ref to $ref finds detached $anchor':
-    'another document: the target is served from the suite’s `remotes/`, not the schema',
-  'refRemote.json/root ref in remote ref/string is valid':
-    'another document: the target is served from the suite’s `remotes/`, not the schema',
-  'refRemote.json/root ref in remote ref/null is valid':
-    'another document: the target is served from the suite’s `remotes/`, not the schema',
-  'refRemote.json/retrieved nested refs resolve relative to their URI not $id/string is valid':
-    'another document: the target is served from the suite’s `remotes/`, not the schema',
-
-  // ---------------------------------------------------------------------------
   // dynamic scope: which `$dynamicAnchor` wins depends on the evaluation path
   //
   // A `$dynamicRef` binds to the outermost resource in the *dynamic scope* — the
@@ -151,6 +95,18 @@ export const EXPECTED_FAILURES: ExpectedFailures = {
     'dynamic scope: one generated definition is shared by both paths, so the anchor cannot resolve differently per path',
   'dynamicRef.json/multiple dynamic paths to the $dynamicRef keyword/string list with number values':
     'dynamic scope: one generated definition is shared by both paths, so the anchor cannot resolve differently per path',
+  // `extendible-dynamic-ref.json` now resolves and its `$dynamicAnchor` is
+  // applied — what is left is which anchor the extending schema's `$dynamicRef`
+  // binds to, which is a property of the evaluation path rather than of the
+  // document.
+  'dynamicRef.json/$ref and $dynamicAnchor are independent of order - $defs first/incorrect parent schema':
+    'dynamic scope: the extended anchor binds statically, so the extending schema’s constraint is not applied on this path',
+  'dynamicRef.json/$ref and $dynamicAnchor are independent of order - $defs first/incorrect extended schema':
+    'dynamic scope: the extended anchor binds statically, so the extending schema’s constraint is not applied on this path',
+  'dynamicRef.json/$ref and $dynamicAnchor are independent of order - $ref first/incorrect parent schema':
+    'dynamic scope: the extended anchor binds statically, so the extending schema’s constraint is not applied on this path',
+  'dynamicRef.json/$ref and $dynamicAnchor are independent of order - $ref first/incorrect extended schema':
+    'dynamic scope: the extended anchor binds statically, so the extending schema’s constraint is not applied on this path',
 
   // ---------------------------------------------------------------------------
   // refused: keywords strict mode cannot prove inline

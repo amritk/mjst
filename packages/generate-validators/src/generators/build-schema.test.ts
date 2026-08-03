@@ -199,4 +199,52 @@ describe('build-schema', () => {
     // Scalar-item arrays keep the cheap JSON-projection dedupe.
     expect(docFile?.content).toContain('map((_u) => JSON.stringify(_u))')
   })
+
+  // The registry is what makes "we do no I/O" stop meaning "we cannot be told":
+  // a ref into a document the caller loaded resolves like any other.
+  it('resolves a $ref into a registered document', async () => {
+    const files = await buildValidatorSchema({ $ref: 'https://example.com/user.json' } as JSONSchema, 'Doc', '', {
+      'https://example.com/user.json': { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+    })
+
+    expect(files.map((f) => f.filename)).toContain('user.ts')
+    expect(files.find((f) => f.filename === 'doc.ts')?.content).toContain('validateUser')
+  })
+
+  it('resolves a ref from one registered document into another', async () => {
+    const files = await buildValidatorSchema({ $ref: 'https://example.com/a.json' } as JSONSchema, 'Doc', '', {
+      'https://example.com/a.json': { type: 'object', properties: { b: { $ref: 'b.json' } } },
+      'https://example.com/b.json': { type: 'string' },
+    })
+
+    expect(files.map((f) => f.filename)).toEqual(expect.arrayContaining(['a.ts', 'b.ts']))
+  })
+
+  // A caller should be able to point the registry at everything they happen to
+  // have loaded without paying for it in the output.
+  it('emits nothing for a registered document the schema never references', async () => {
+    const files = await buildValidatorSchema({ type: 'string' } as JSONSchema, 'Doc', '', {
+      'https://example.com/unused.json': { type: 'object' },
+    })
+
+    expect(files.map((f) => f.filename)).not.toContain('unused.ts')
+  })
+
+  // An unreferenced companion used to be walked anyway, so a dangling ref inside
+  // one could fail a build that never asked for it.
+  it('ignores a dangling ref inside an unreferenced registered document', async () => {
+    const files = await buildValidatorSchema({ type: 'string' } as JSONSchema, 'Doc', '', {
+      'https://example.com/unused.json': { $ref: 'https://example.com/never-registered.json' },
+    })
+
+    expect(files.map((f) => f.filename)).toContain('doc.ts')
+  })
+
+  it('still refuses a $ref to a URI nobody registered', async () => {
+    await expect(
+      buildValidatorSchema({ $ref: 'https://example.com/missing.json' } as JSONSchema, 'Doc', '', {
+        'https://example.com/other.json': { type: 'string' },
+      }),
+    ).rejects.toThrow(/Could not resolve \$ref/)
+  })
 })

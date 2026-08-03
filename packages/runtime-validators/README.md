@@ -252,11 +252,11 @@ This is a **pragmatic subset** of JSON Schema — sized for validating data agai
 
 The subset above is not a claim — it is checked. `src/conformance.test.ts` runs
 the official [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite)
-(the required Draft 2020-12 tests — 1299 cases) through *both* entry points on
+(the required Draft 2020-12 tests — 1281 cases) through *both* entry points on
 every build, since `validate` and `validateGuard` share the interpreter but not
 the path through it:
 
-**1299 / 1299 cases pass — the whole suite.**
+**1281 / 1281 cases pass — the whole suite.**
 
 `src/conformance-expected-failures.test-utils.ts` is empty, and stays in place
 empty: the test fails if any case starts failing, so the build names the first

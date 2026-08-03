@@ -1,6 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
-
+import { loadSuiteRemotes } from '../../../fixtures/json-schema-test-suite/load-suite'
 import { metaschema } from './metaschema'
 
 /**
@@ -27,25 +25,4 @@ import { metaschema } from './metaschema'
  * own `@amritk/runtime-validators/metaschema` export, so nothing in the
  * measurement path reaches into another package's internals.
  */
-export const loadSuiteDocuments = (): Record<string, unknown> => {
-  const documents: Record<string, unknown> = { ...metaschema }
-  collectRemotes(REMOTES_DIR, 'http://localhost:1234/draft2020-12', documents)
-  return documents
-}
-
-/** Where the suite's `remotes/` tree is vendored, alongside the cases themselves. */
-const REMOTES_DIR = new URL('../../../fixtures/json-schema-test-suite/remotes/draft2020-12', import.meta.url).pathname
-
-/**
- * Reads every `.json` under `dir` into `documents`, keyed by the URI the suite
- * would have served it from. Subdirectories keep their path segment, because
- * that is exactly what the `retrieved nested refs resolve relative to their URI
- * not $id` case is testing.
- */
-const collectRemotes = (dir: string, prefix: string, documents: Record<string, unknown>): void => {
-  for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-    const full = join(dir, entry.name)
-    if (entry.isDirectory()) collectRemotes(full, `${prefix}/${entry.name}`, documents)
-    else if (entry.name.endsWith('.json')) documents[`${prefix}/${entry.name}`] = JSON.parse(readFileSync(full, 'utf8'))
-  }
-}
+export const loadSuiteDocuments = (): Record<string, unknown> => ({ ...metaschema, ...loadSuiteRemotes() })
