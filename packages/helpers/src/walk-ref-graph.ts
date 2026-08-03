@@ -3,7 +3,9 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { assertIdScopes } from './assert-id-scopes'
 import { buildDynamicRefMap } from './build-dynamic-ref-map'
 import { extractRefs } from './extract-refs'
+import { graftExternalSchemas } from './graft-external-schemas'
 import { normalizeRefScopes } from './normalize-ref-scopes'
+import { pruneExternalSchemas } from './prune-external-schemas'
 import { refToFilename } from './ref-to-filename'
 import { refToName } from './ref-to-name'
 import { resolveDynamicRefs } from './resolve-dynamic-refs'
@@ -44,6 +46,29 @@ export type WalkRefGraphOptions = {
    * Defaults to `''`.
    */
   readonly typeSuffix?: string
+  /**
+   * Other schema documents you have **already loaded**, keyed by the absolute
+   * URI a `$ref` names them by. Supplying them makes those URIs resolvable, so
+   * the schema being generated can reference a document that is not itself.
+   *
+   * Nothing here fetches: the walker cannot be told a URL, only a document, so
+   * generation stays a pure function of its inputs. Loading is yours to do (or
+   * `@amritk/resolve-refs`'), and however you do it the result comes back
+   * through here. A `$ref` to a URI nobody registered is still refused.
+   *
+   * Each registered document is a schema resource like any other — its `$id`,
+   * `$anchor`s, `$dynamicAnchor`s and nested embedded resources all become
+   * resolvable, and a `$ref` from one registered document into another resolves
+   * too. A document with no `$id` resolves its relative `$ref`s against the URI
+   * you registered it under, and one whose `$id` disagrees answers to both. See
+   * {@link graftExternalSchemas}.
+   *
+   * Only the documents actually reached get files, so registering more than the
+   * schema uses costs nothing in the output. Treat the map and the documents in
+   * it as immutable once passed: walks are memoized per `(schema, schemas)` by
+   * identity, so hand over a *new* object when the set of documents changes.
+   */
+  readonly schemas?: Readonly<Record<string, unknown>>
 }
 
 /**
@@ -70,6 +95,16 @@ type RootCache = {
 }
 
 const rootCaches = new WeakMap<object, RootCache>()
+
+/**
+ * Caches for walks that carry a registry, keyed by the schema *and* by the
+ * registry object. A grafted document is a different document — different
+ * resources, different pointers — so it cannot share the plain per-root entry,
+ * and two registries over one root are two distinct walks. Identity is the key
+ * because the registry is documented as immutable once passed, which is the same
+ * contract `@amritk/runtime-validators` puts on `ValidateOptions.schemas`.
+ */
+const registryCaches = new WeakMap<object, WeakMap<object, RootCache>>()
 
 /** `buildDynamicRefMap` uses this pointer for an anchor declared on the root itself. */
 const ROOT_POINTER = '#'
@@ -178,9 +213,10 @@ const expandDefinitionMap = (definitions: unknown): unknown => {
   return changed ? result : definitions
 }
 
-const getRootCache = (rootSchema: JSONSchema): RootCache => {
+const getRootCache = (rootSchema: JSONSchema, schemas: Readonly<Record<string, unknown>> | undefined): RootCache => {
   // Only object roots can key a WeakMap. A boolean root has no refs to walk and
-  // the draft-07 upgrade is a no-op for it, so a throwaway cache is fine.
+  // the draft-07 upgrade is a no-op for it, so a throwaway cache is fine — and
+  // with no refs there is nothing a registry could resolve either.
   if (typeof rootSchema !== 'object' || rootSchema === null) {
     const upgraded = rootSchema as unknown as Record<string, unknown>
     return {
@@ -192,18 +228,27 @@ const getRootCache = (rootSchema: JSONSchema): RootCache => {
     }
   }
 
-  const existing = rootCaches.get(rootSchema)
-  if (existing) return existing
+  const registry = schemas !== undefined && Object.keys(schemas).length > 0 ? schemas : undefined
+  const cached = registry === undefined ? rootCaches.get(rootSchema) : registryCaches.get(rootSchema)?.get(registry)
+  if (cached) return cached
 
-  const expanded = expandBooleanDefinitions(upgradeDraft07Schema(rootSchema as Record<string, unknown>)) as Record<
-    string,
-    unknown
-  >
+  // Grafting happens before the upgrade so a registered draft-07 document is
+  // upgraded with everything else, and before the `$id` pass so its resources
+  // are in the registry that pass reads.
+  const grafted =
+    registry === undefined ? undefined : graftExternalSchemas(rootSchema as Record<string, unknown>, registry)
+  const combined = grafted?.document ?? (rootSchema as Record<string, unknown>)
+  const expanded = expandBooleanDefinitions(upgradeDraft07Schema(combined)) as Record<string, unknown>
   assertIdScopes(expanded as JSONSchema)
   // Applying `$id` as a base URI *once*, here, is what lets everything
   // downstream — ref resolution, naming, the emitted import graph — keep
   // treating a `$ref` as a plain document-root pointer.
-  const upgraded = normalizeRefScopes(expanded)
+  const normalized = normalizeRefScopes(expanded)
+  // A caller may register more than the schema uses. Dropping the rest here, once
+  // the refs are pointers and reachability is finally knowable, is what keeps an
+  // unused companion from seeding the queue below or contributing an anchor —
+  // everything after this point sees an ordinary single document.
+  const upgraded = grafted === undefined ? normalized : pruneExternalSchemas(normalized, grafted.names)
   const cache: RootCache = {
     upgraded,
     dynamicRefMap: buildDynamicRefMap(upgraded as JSONSchema),
@@ -211,7 +256,12 @@ const getRootCache = (rootSchema: JSONSchema): RootCache => {
     extractRefsCache: new WeakMap(),
     rootAnchored: new Map(),
   }
-  rootCaches.set(rootSchema, cache)
+  if (registry === undefined) rootCaches.set(rootSchema, cache)
+  else {
+    const byRegistry = registryCaches.get(rootSchema) ?? new WeakMap<object, RootCache>()
+    byRegistry.set(registry, cache)
+    registryCaches.set(rootSchema, byRegistry)
+  }
   return cache
 }
 
@@ -345,13 +395,19 @@ const cachedExtractRefs = (cache: RootCache, schema: JSONSchema): Set<string> =>
  * 0 having written TypeScript that either does not compile or — worse — compiles
  * to the wrong type.
  *
+ * A `$ref` whose target is another document resolves when that document is
+ * handed over through {@link WalkRefGraphOptions.schemas} — the walker folds the
+ * registered documents into the one it is walking, so cross-document refs become
+ * ordinary pointers and get files and type names by the same rules as everything
+ * else. Nothing is ever fetched; a URI nobody registered is still refused.
+ *
  * Resolution work is memoized per root document (see {@link RootCache}), so
  * running several generators over the same loaded schema does the expensive
  * walking once.
  *
  * @param rootSchema - The root JSON Schema to walk.
  * @param rootTypeName - The name for the root type (e.g. `'Document'`).
- * @param options - Naming options ({@link WalkRefGraphOptions}).
+ * @param options - Naming and registry options ({@link WalkRefGraphOptions}).
  * @param visit - Called once per output file with a fully prepared {@link RefNode}.
  */
 export const walkRefGraph = (
@@ -361,7 +417,7 @@ export const walkRefGraph = (
   visit: (node: RefNode) => void,
 ): void => {
   const typeSuffix = options.typeSuffix ?? ''
-  const baseCache = getRootCache(rootSchema)
+  const baseCache = getRootCache(rootSchema, options.schemas)
   const rootFilename = rootTypeName.toLowerCase()
 
   // A `$dynamicAnchor` on the document root needs the root aliased into `$defs`

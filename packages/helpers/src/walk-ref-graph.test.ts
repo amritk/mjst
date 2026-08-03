@@ -406,4 +406,48 @@ describe('walk-ref-graph', () => {
     expect(nodes.map((n) => n.ref)).toEqual([undefined, '#/$defs/inner', '#/$defs/inner/$defs/t'])
     expect(nodes[2]?.schema).toEqual({ type: 'number' })
   })
+
+  describe('registered documents', () => {
+    /** Walks with a registry, collecting the filenames the walk produced. */
+    const filenames = (rootSchema: Parameters<typeof walkRefGraph>[0], schemas: Record<string, unknown>): string[] => {
+      const names: string[] = []
+      walkRefGraph(rootSchema, 'Doc', { schemas }, (node) => names.push(node.filename))
+      return names
+    }
+
+    it('gives a registered document a file of its own', () => {
+      expect(
+        filenames({ $ref: 'https://example.com/user.json' }, { 'https://example.com/user.json': { type: 'object' } }),
+      ).toEqual(['doc', 'user'])
+    })
+
+    it('follows an anchor into a registered document', () => {
+      const names = filenames(
+        { $ref: 'https://example.com/a.json#thing' },
+        { 'https://example.com/a.json': { $defs: { t: { $anchor: 'thing', type: 'string' } } } },
+      )
+
+      expect(names).toEqual(['doc', 't'])
+    })
+
+    // Reachability is what decides this, not registration: a caller may register
+    // everything they happen to have loaded.
+    it('skips a registered document nothing references', () => {
+      expect(filenames({ type: 'string' }, { 'https://example.com/unused.json': { type: 'object' } })).toEqual(['doc'])
+    })
+
+    it('refuses a ref to a URI nobody registered', () => {
+      expect(() =>
+        filenames({ $ref: 'https://example.com/missing.json' }, { 'https://example.com/other.json': {} }),
+      ).toThrow(/Could not resolve \$ref/)
+    })
+
+    it('leaves a walk with no registry untouched', () => {
+      const schema = { $ref: '#/$defs/a', $defs: { a: { type: 'string' } } }
+      const names: string[] = []
+      walkRefGraph(schema, 'Doc', {}, (node) => names.push(node.filename))
+
+      expect(names).toEqual(['doc', 'a'])
+    })
+  })
 })

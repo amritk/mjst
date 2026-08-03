@@ -7,10 +7,14 @@ on. Four packages in this monorepo consume schemas, and all four are held to it
 
 | Package | What is measured | Rate |
 | --- | --- | --- |
-| `@amritk/runtime-validators` | `validate` / `validateGuard` verdicts | **1299 / 1299 (100%)** |
-| `@amritk/generate-validators` | generated predicate validators | 1238 / 1299 (95.3%) |
-| `@amritk/generate-parsers` | strict parsers — generated, linked, executed | 1222 / 1299 (94.1%) |
+| `@amritk/runtime-validators` | `validate` / `validateGuard` verdicts | **1281 / 1281 (100%)** |
+| `@amritk/generate-validators` | generated predicate validators | 1268 / 1281 (99.0%) |
+| `@amritk/generate-parsers` | strict parsers — generated, linked, executed | 1237 / 1281 (96.6%) |
 | `@amritk/resolve-refs` | verdict preserved after inlining (`$ref` corpus) | **170 / 170 (100%)** |
+
+All four are run with the `remotes/` documents below supplied through whatever
+API the package offers for documents it did not load itself — the registry, for
+the three that have one. None of them fetches anything; see "What is vendored".
 
 `resolve-refs` is scored against the reference-carrying cases the interpreter
 answers correctly, which is the population where a resolution bug is visible at
@@ -23,15 +27,23 @@ behind. The boundary cannot move silently.
 
 ## What is vendored
 
-`draft2020-12/` — the suite's **required** tests for Draft 2020-12: 46 files,
-383 groups, 1299 cases, byte-for-byte as published.
+`draft2020-12/` — the suite's **required** tests for Draft 2020-12: 45 files,
+379 groups, 1281 cases, byte-for-byte as published. Upstream's `content.json` is
+not among them, so `contentEncoding`/`contentMediaType` — annotation-only
+keywords in 2020-12 — are not measured here.
 
 `remotes/` — the documents those tests reference by URI. Upstream they are served
 over HTTP at `http://localhost:1234/`, which is the protocol the suite expects an
 implementation to follow; `remotes/draft2020-12/integer.json` is
 `http://localhost:1234/draft2020-12/integer.json`. Nothing here fetches anything,
 so a suite that wants these hands them to the package under test through whatever
-API it offers for supplying documents it did not load itself.
+API it offers for supplying documents it did not load itself — `loadSuiteRemotes()`
+builds exactly that map, keyed by the URIs the suite would have served them from.
+
+The dialect metaschema is not part of `remotes/`: the cases that validate a
+schema against its own dialect (`defs.json`, `ref.json`'s "remote ref, containing
+refs itself") assume an implementation knows the dialect it implements. Each
+package supplies its own copy, from `@amritk/runtime-validators/metaschema`.
 
 Deliberately not vendored:
 

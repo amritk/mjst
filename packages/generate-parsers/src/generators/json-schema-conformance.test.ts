@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util'
+import { metaschema } from '@amritk/runtime-validators/metaschema'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'vitest'
 
@@ -6,6 +7,7 @@ import {
   compareToExpected,
   conformanceRate,
   loadSuiteCases,
+  loadSuiteRemotes,
   type SuiteCase,
 } from '../../../../fixtures/json-schema-test-suite/load-suite'
 import { buildSchema } from './build-schema'
@@ -35,10 +37,40 @@ import { EXPECTED_FAILURES } from './json-schema-conformance-expected-failures.t
  * serve, even though refusing is the right thing to do with it.
  */
 
+/**
+ * The suite's `remotes/` documents plus the dialect metaschema, handed to the
+ * generator through its public `schemas` registry.
+ *
+ * The suite serves these over HTTP at `http://localhost:1234/`; a generator that
+ * does no I/O is given the already-parsed documents instead. Only the retrieval
+ * step is answered — the generator still has to apply the base URIs, walk the
+ * anchors across documents, name and emit a parser for every definition it
+ * reaches, and produce an import graph that links and type-checks. The
+ * metaschema comes from `@amritk/runtime-validators/metaschema`, a published
+ * export rather than another package's internals, and covers the cases that
+ * parse a schema against its own dialect.
+ */
+const DOCUMENTS = { ...metaschema, ...loadSuiteRemotes() }
+
 /** Builds and links the strict parser for one group's schema. */
 const compile = async (schema: unknown): Promise<((input: unknown) => unknown) | string> => {
   try {
-    const files = await buildSchema(schema as JSONSchema, 'Root', undefined, false, false, true, 'embedded')
+    const files = await buildSchema(
+      schema as JSONSchema,
+      'Root',
+      undefined,
+      false,
+      false,
+      true,
+      'embedded',
+      './',
+      false,
+      false,
+      '',
+      'js',
+      false,
+      DOCUMENTS,
+    )
     const parse = linkGenerated<(input: unknown) => unknown>(files, 'index', 'parseRoot')
     return typeof parse === 'function' ? parse : 'generated no parseRoot export'
   } catch (error) {

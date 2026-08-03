@@ -84,15 +84,39 @@ if (!result.valid) {
 
 ## API
 
-### `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?)`
+### `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?, schemas?)`
 
 | Parameter | Type | Default | Description |
 |:---|:---|:---|:---|
 | `rootSchema` | `JSONSchema` | — | The root schema to traverse. `$ref` and `$dynamicRef` are resolved recursively. Draft-07 schemas are upgraded to 2020-12 automatically. |
 | `rootTypeName` | `string` | — | Name used for the root type (e.g. `"Document"`). |
 | `typeSuffix` | `string` | `''` | Suffix appended to every `$ref`-derived type name (`'Object'` turns `Contact` into `ContactObject`). The root type name is unaffected. |
+| `schemas` | `Record<string, unknown>` | — | Documents you have **already loaded**, keyed by the absolute URI a `$ref` names them by. See below. |
 
 Returns: `Promise<GeneratedFile[]>` where `GeneratedFile = { filename: string; content: string }`.
+
+#### Referencing another document
+
+A `$ref` to a URI is resolvable once you hand over the document behind it:
+
+```typescript
+const files = await buildValidatorSchema({ $ref: 'https://example.com/user.json' }, 'Document', '', {
+  'https://example.com/user.json': userSchema,
+})
+```
+
+Each registered document becomes a resource of the generated document: its `$id`,
+its `$anchor`s and `$dynamicAnchor`s and its own embedded resources all resolve, a
+`$ref` from one registered document into another resolves, and each definition
+reached gets a file and a type like any other. A document with no `$id` resolves
+its relative `$ref`s against the URI you registered it under; one whose `$id`
+disagrees answers to both.
+
+Nothing is fetched — you cannot pass a URL, only a document — so generation stays
+a pure function of its inputs. Loading is yours to do, or
+[`@amritk/resolve-refs`](../resolve-refs)'. Registering more than the schema uses
+costs nothing: only the documents actually reached are emitted. A `$ref` to a URI
+nobody registered still stops the build, with a message naming the ref.
 
 ---
 
@@ -151,21 +175,24 @@ be non-JSON.
 The semantics above are measured, not asserted.
 `src/generators/conformance.test.ts` generates a validator for each schema in the
 official [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite)
-(the required Draft 2020-12 tests — 1299 cases), compiles and links the emitted
+(the required Draft 2020-12 tests — 1281 cases), compiles and links the emitted
 files in memory, and runs the suite's instances through the real generated code:
 
-**1238 / 1299 cases pass (95.3%).**
+**1268 / 1281 cases pass (99.0%).**
 
-Of the 61 that do not, **48 are a `$ref` whose target is not in the schema handed
-in** — another document, which generation does not go and fetch. Bundle it first
-with [`@amritk/resolve-refs`](../resolve-refs), which is what `mjst` does, and they
-generate. The remaining 13: five `$dynamicRef`s whose binding depends on the
+The suite's `remotes/` documents and the 2020-12 dialect metaschema are supplied
+through the `schemas` option, which is how the suite intends a validator that does
+no I/O to answer the retrieval step. Everything else — applying the base URIs,
+walking anchors across documents, naming and emitting a file per definition — the
+generator still has to do.
+
+Of the 13 that do not pass: five `$dynamicRef`s whose binding depends on the
 evaluation path (a generator emits one function per definition, shared by every
 path that reaches it, so it cannot bind per path), two definitions in different
 embedded resources that reduce to one filename, two `$id`-scoped in-document
 pointers, the three `multipleOf` / `pattern` judgement calls above, and
-`$vocabulary`. Every one refuses at generation with a message naming the cause —
-nothing on the list is a keyword that silently returns the wrong answer.
+`$vocabulary`. Nothing on the list is a keyword that silently returns the wrong
+answer.
 
 Every case is named in
 `src/generators/conformance-expected-failures.test-utils.ts` with its reason, and
@@ -174,8 +201,7 @@ build, and so does a case that starts passing without its entry being removed.
 
 If you need one of those refusals to be an answer instead, validate with
 [`@amritk/runtime-validators`](../runtime-validators), which passes the same corpus
-in full (**1299/1299**) and takes documents you already have through its `schemas`
-option, at the cost of interpreting the schema at runtime.
+in full (**1281/1281**), at the cost of interpreting the schema at runtime.
 The corpus is vendored under
 [`fixtures/json-schema-test-suite`](../../fixtures/json-schema-test-suite); none
 of it is published.

@@ -2318,25 +2318,45 @@ const generateScalarValidator = (
   // value is valid when it matches any listed type.
   const rootTypeArray = getTypeArray(schema)
   if (rootTypeArray) {
+    const ctx = createRootContext(rootSchema)
+    const rootPath = '`${_path}`'
+    const checks: string[] = []
+
     const allWrong = rootTypeArray
       .map((t) => wrongTypeCondition('input', t))
       .filter((c) => c !== '')
       .map((c) => `(${c})`)
       .join(' && ')
-    const label = rootTypeArray.map((t) => typeofString(t)).join(' or ')
-    if (!allWrong) {
+    if (allWrong) {
+      const label = rootTypeArray.map((t) => typeofString(t)).join(' or ')
+      checks.push(`  if (${allWrong}) {`)
+      checks.push(`    errors.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${rootPath} })`)
+      checks.push(`  }`)
+    }
+
+    // The sibling constraints apply too. Emitting only the type check is what let
+    // `{ type: ['object', 'boolean'], properties: {…} }` — the shape the 2020-12
+    // metaschema's own root is written in — accept every object going, because a
+    // union `type` sent the schema down this path instead of the object one. The
+    // shared emitters carry their own runtime-type guards, so a member of the
+    // union the constraint does not apply to (a boolean, here) still passes.
+    checks.push(...generateConstraintChecks('', 'input', rootPath, schema, suffix, ctx))
+
+    if (checks.length === 0) {
       return [
         `export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`,
         `  return true`,
         `}`,
       ].join('\n')
     }
+
+    const body = checks.join('\n').replaceAll('errors.push(', '(errors ??= []).push(')
+    const hoistedBlock = ctx.hoisted.length > 0 ? `${ctx.hoisted.join('\n')}\n\n` : ''
     return [
-      `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
-      `  if (${allWrong}) {`,
-      `    return { valid: false, errors: [{ message: ${JSON.stringify(`must be ${label}`)}, path: _path }] }`,
-      `  }`,
-      `  return true`,
+      `${hoistedBlock}export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+      `  let errors: ValidationError[] | undefined`,
+      body,
+      `  return errors !== undefined ? { valid: false, errors } : true`,
       `}`,
     ].join('\n')
   }

@@ -1,6 +1,48 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+/**
+ * The suite's `remotes/` documents, keyed by the URIs its HTTP server would
+ * serve them from — the map every package here takes as its "documents I have
+ * already loaded" registry.
+ *
+ * The suite's own protocol is to serve these from `http://localhost:1234/`, so
+ * `remotes/draft2020-12/integer.json` is
+ * `http://localhost:1234/draft2020-12/integer.json`. Every implementation in
+ * every language runs `refRemote.json` by making those URIs resolvable one way
+ * or another; a harness with an HTTP server does it with a socket, and we do it
+ * by handing the already-parsed documents to the public API. Nothing about the
+ * measurement changes — the package under test still has to resolve the base
+ * URIs, walk the anchors, and get `$dynamicRef` bookending right across
+ * documents — only the retrieval step is answered for it, which is the one thing
+ * none of these packages will ever do themselves.
+ *
+ * The dialect metaschema is deliberately *not* included: it is not part of
+ * `remotes/`, and each package supplies its own copy (or declines to) rather
+ * than reaching into another package's internals.
+ *
+ * @param draft - Which vendored draft's remotes to load. Defaults to `draft2020-12`.
+ */
+export const loadSuiteRemotes = (draft = 'draft2020-12'): Record<string, unknown> => {
+  const documents: Record<string, unknown> = {}
+  collectRemotes(join(SUITE_DIR, 'remotes', draft), `http://localhost:1234/${draft}`, documents)
+  return documents
+}
+
+/**
+ * Reads every `.json` under `dir` into `documents`, keyed by the URI the suite
+ * would have served it from. Subdirectories keep their path segment, because
+ * that is exactly what the `retrieved nested refs resolve relative to their URI
+ * not $id` case is testing.
+ */
+const collectRemotes = (dir: string, prefix: string, documents: Record<string, unknown>): void => {
+  for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) collectRemotes(full, `${prefix}/${entry.name}`, documents)
+    else if (entry.name.endsWith('.json')) documents[`${prefix}/${entry.name}`] = JSON.parse(readFileSync(full, 'utf8'))
+  }
+}
+
 /** Root directory holding the vendored suite files. */
 const SUITE_DIR = new URL('.', import.meta.url).pathname
 

@@ -101,22 +101,39 @@ export const allUnique = (arr: readonly unknown[]): boolean => {
  *
  * @param rootSchema - The root JSON Schema to build from
  * @param rootTypeName - The name for the root type (e.g. "Document")
+ * @param typeSuffix - Suffix appended to every type name derived from a `$ref`
+ *   (e.g. `'Object'` → `ContactObject`). Defaults to `''`. The root type name is
+ *   used verbatim and is not affected.
+ * @param schemas - Other schema documents you have **already loaded**, keyed by
+ *   the absolute URI a `$ref` names them by. Supplying them makes those URIs
+ *   resolvable, so the schema can reference a document that is not itself — each
+ *   one becomes a resource of the generated document, with its own `$id`,
+ *   anchors and nested resources all resolvable. Nothing is fetched here:
+ *   loading is yours to do (or `@amritk/resolve-refs`'), and a `$ref` to a URI
+ *   nobody registered still stops generation. Only the documents actually
+ *   referenced get files.
  * @returns An array of generated TypeScript files
  *
  * @example
  * ```typescript
  * const files = await buildValidatorSchema(schema, 'Document')
  * // files → [{ filename: 'document.ts', content: '...' }, { filename: 'info.ts', ... }, ...]
+ *
+ * // Referencing a document you loaded yourself:
+ * const withRemote = await buildValidatorSchema({ $ref: 'https://example.com/user.json' }, 'Document', '', {
+ *   'https://example.com/user.json': userSchema,
+ * })
  * ```
  */
 export const buildValidatorSchema = async (
   rootSchema: JSONSchema,
   rootTypeName: string,
   typeSuffix = '',
+  schemas?: Readonly<Record<string, unknown>>,
 ): Promise<GeneratedFile[]> => {
   const files: GeneratedFile[] = []
 
-  walkRefGraph(rootSchema, rootTypeName, { typeSuffix }, (node) => {
+  walkRefGraph(rootSchema, rootTypeName, { typeSuffix, ...(schemas !== undefined ? { schemas } : {}) }, (node) => {
     // `validation-result` and `index` are reserved output filenames, so never
     // let a definition of either name overwrite them.
     if (node.filename === 'validation-result' || node.filename === 'index') return
