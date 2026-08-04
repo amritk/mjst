@@ -1,5 +1,317 @@
 # @amritk/yaml
 
+## 0.5.0
+
+### Minor Changes
+
+- 7839a38: Read the block shapes that were folding structure into strings
+
+  Nineteen more YAML test suite cases — 365/402 to **384/402 (95.5%)**. Every one
+  of them was a document whose structure the parser flattened into text or
+  orphaned entirely, and none of them produced a diagnostic saying so.
+
+  **Node properties written on a mapping key now apply to the key.** `&a a: b`
+  anchors the scalar `a`, so `*a` is the string `"a"`; before, the anchor stayed
+  inside the key's text and every alias to it reported `UNRESOLVED_ALIAS` and
+  projected to nothing. The same for tags — `!!str 23: v` keyed the mapping by the
+  literal `"!!str 23"` rather than by `"23"`. Anchor names that hold a `:` work
+  too (`&a: key: value` anchors `key` as `a:`), which needs the properties scanned
+  before the key separator is looked for, not after. Properties on a line of their
+  own above the mapping still describe the mapping. Reaching this costs one
+  character comparison per mapping entry — the scan itself only runs for a key
+  that is actually annotated.
+
+  **A `: ` inside a plain scalar is reported** (`BAD_SCALAR_CONTENT`). The spec
+  ends a plain scalar there, so `a: b: c: d` is an error and not the string
+  `"b: c: d"`; so is a continuation line that reads as a mapping entry, which is
+  what a mis-indented `k1: v1` / `⟨space⟩k2: v2` is. The scan is an `indexOf`, so
+  a scalar with no colon in it — nearly all of them — pays one native pass that
+  finds nothing. Quoted, block, and flow scalars are unaffected.
+
+  **Block collections may open on an explicit entry's introducer line.** `? a` /
+  `: - one` is a sequence whose first entry shares the `:` line, and
+  `? earth: blue` a mapping whose first entry shares the `?` line; both folded
+  into the value as text. Their remaining entries align under that first one, not
+  under the introducer. The mirror-image shape after an _implicit_ key
+  (`key: - a`) is invalid YAML and is now reported rather than folded. Relatedly,
+  a `? ` introducer is settled by the first two characters, so it outranks any
+  `: ` further along the line — testing the colon first read `? earth: blue` as a
+  key called `? earth`.
+
+  **Indentation is measured against the parent, not against the node.** The
+  parser treated "the parent's column" as one less than the column the node
+  started at, which is only true when a node begins exactly one column in. When it
+  did not, documents were cut short: a plain scalar stopped at the first
+  continuation line that stepped back (`a:` / `⟨2 spaces⟩foo` / `⟨1 space⟩bar`
+  dropped `bar`, and a sequence entry that wrapped was split into two entries), a
+  zero-indented sequence introduced by a tag or an anchor was orphaned and
+  reported as stray content (`sequence: !!seq` over a `- entry` list, `seq:` /
+  `⟨1 space⟩&anchor` over one), and a block scalar counted its indentation
+  indicator from the wrong column. The document root still measures against -1, so
+  `--- |2` is unchanged.
+
+  The `parseAllDocuments` / `parseDocument` API, `toJS()` projection, and every
+  node's `[start, end)` span are unchanged, and the parser's throughput is
+  unchanged on all three benchmark fixtures.
+
+- 007aa05: Support lone-`\r` line breaks, stop `<<` dropping inherited-name keys, and make
+  `nodeAtPath` agree with `toJS()`
+
+  Five silent-data-loss bugs, each in a path the differential corpus and the
+  yaml-test-suite do not reach.
+
+  **A lone `\r` truncated the document, with no diagnostic at all.** The scanner
+  skipped to the next line by looking only for `\n`, so a CR-delimited document had
+  every line after the first jumped over — `a: 1\rb: 2\rc: 3\r` parsed to
+  `{ a: 1 }` and reported zero errors, and a single stray CR inside an otherwise-LF
+  file made one key vanish. YAML 1.2 §5.4 makes all three of `CR LF`, `CR`, and
+  `LF` a line break, and now so do we — in the parser and in `lineCounter`, so
+  positions stay exact. `CR LF` still counts once. The differential suite re-runs
+  every case in all three break styles.
+
+  **`<<` dropped any merged key that shares a name with an `Object.prototype`
+  member.** The "does the target already have this key?" test walked the prototype
+  chain, so `toString`, `valueOf`, `constructor`, `hasOwnProperty`,
+  `isPrototypeOf`, `__proto__` and friends were silently discarded from the merge.
+  Only own keys shadow a merged one now; `__proto__` is still defined as plain data
+  rather than assigned through the prototype setter, so the pollution guard holds.
+
+  **`nodeAtPath` could not find the keys `toJS()` produces.** It carried its own
+  simplified key-stringifier that returned `'null'` for a null key, `'*ref'` for an
+  alias key, and `''` for every collection key — so `null: v`, `*a : v`, and
+  `[a, b]: v` were unreachable by path, and a `closest: true` lookup quietly
+  returned the _parent's_ source span: a diagnostic pointing at the wrong line. It
+  now uses the parser's own projection, which is exported as `keyText` for anyone
+  building paths by hand.
+
+  **An unterminated quoted scalar lost its last character.** The recovery sliced
+  off a closing quote that was never there, so `a: "abcd` recovered as `"abc"` —
+  the wrong text for a linter to echo back. The `UNTERMINATED_QUOTE` error was
+  always correct; the text now is too.
+
+  **`parseDocument` truncated a `---` stream without saying so.** Reading only the
+  first document is intended, but a caller on `parse()` sees only the data. It now
+  pushes a `MULTIPLE_DOCUMENTS` warning pointing at the marker and naming
+  `parseAllDocuments`. A trailing marker with nothing under it stays quiet.
+
+  Also: `lineCounter` builds its index with `indexOf` instead of a per-character
+  loop — 2.6–3.6× faster, taking it from ~18% of parse+index cost to ~6%. And the
+  bundle-size benchmark now bundles a consumer of each parser rather than the
+  barrel, which tree-shook to a 156-byte stub and made the README's size table
+  fiction; the corrected numbers are in the README.
+
+- 1b720e2: Parse the node written on a `---` line, and stop flow scalars losing their type
+
+  Four silent-data-loss bugs, each in a branch that was already cold.
+
+  **A node written on the `---` line was discarded.** The document head skipped
+  the whole marker line, so `--- |` lost its block-scalar indicator and re-read
+  the body as a folded plain scalar (line breaks gone), `--- foo` lost the scalar
+  entirely, and a tag or anchor on the marker line never applied. The node is now
+  parsed and measured against column 0 rather than the column the marker pushed it
+  to, so `--- >` may hold content starting at column 0. A block _mapping_ on the
+  marker line is invalid YAML and is now reported. This is also what makes
+  `--- !!set` / `--- !!omap` reach their `Set` / `Map` projections.
+
+  **A flow scalar that ended its line lost its core-schema type.** `{ a: 1, b: 2 }`
+  resolved `b` to the number `2`, but the same document wrapped —
+  `{ a: 1,\n  b: 2 }` — resolved it to the _string_ `"2"`, because the multi-line
+  path folded the segments without resolving them. Every entry of a flow
+  collection written across lines was affected. Such a scalar also now ends at a
+  `:` or `#` that opens the next line, instead of folding it in — `{foo\n: bar}`
+  used to key the mapping by `"foo\n"`.
+
+  **Double-quoted folding ran before escapes were resolved,** so it could not tell
+  an escaped `\t` (content) from a literal trailing tab (padding), and it turned a
+  `\` line-continuation's break into a space the `\` then absorbed. Escapes are now
+  resolved per line first, and folding strips only whitespace the document wrote
+  literally.
+
+  **A block-folded scalar treated only a space as "more indented",** so a break
+  beside a tab-led line folded to a space and the blank line next to it was lost.
+
+  Also: an unterminated quoted scalar now stops at a `---`/`...` marker instead of
+  swallowing every document after it; `!!str` over a wrapped plain scalar reads the
+  folded text rather than un-folding it; and the stream-level directive rules are
+  enforced — a directive needs a `...` before it and a `---` after it, its version
+  must parse, a second `%YAML` is an error rather than a warning, and a tag may not
+  hold a flow indicator. New code: `UNEXPECTED_DIRECTIVE`.
+
+  Conformance against the official YAML test suite is **336/402 (83.6%)**, up from
+  293/402, with every remaining gap still listed and reasoned.
+
+- c1a176f: Report the syntax errors that were quietly changing what a document said
+
+  Twenty-nine more YAML test suite cases, every one of them in a branch that was
+  already cold — a block scalar header, a backslash, a `#`, a node property.
+
+  **A block scalar header was accepted whatever followed it.** `folded: > first
+line` dropped `first line` and re-read the body below as the scalar; `|10` took
+  the `1` as an indentation indicator and threw the `0` away; `>#comment` read a
+  comment the spec does not allow there; and a repeated indicator (`|--`) silently
+  kept the last one. The header now ends where its indicators do, and anything
+  past it is a `BAD_BLOCK_HEADER`. A leading blank line indented deeper than the
+  block's first content line — which makes the block's own indentation ambiguous —
+  is a `BAD_INDENT`.
+
+  **A `\` escape the spec does not define passed through as the bare letter,** so
+  `"a\.b"` became `a.b` and `"it\'s"` became `it's`, each silently dropping a
+  character the document wrote. Undefined escapes are now `BAD_ESCAPE`; the value
+  is still produced, so nothing that parsed stops parsing.
+
+  **A `#` with no whitespace before it is not a comment.** `key: "value"# text`,
+  `[ a, b ]#text`, and `[ a, b,#text` each dropped the rest of the line as though
+  it were one (`BAD_COMMENT`). The mirror image is fixed too: a comment _does_ end
+  a plain scalar, so `word1 # comment` followed by `word2` no longer folds `word2`
+  into the value — it is reported as content no node claims.
+
+  **An implicit key has to fit on one line.** A quoted key spanning lines
+  (`"a\nb": 1`), a flow collection used as a block key across lines (`[23\n]: 42`),
+  and a compact `[ key\n : value ]` sequence entry are now `BAD_IMPLICIT_KEY`. A
+  flow _mapping_ may still write `{ "foo"\n: bar }` — the spec allows that one.
+
+  **Node properties are checked where they land.** An anchor or tag written on an
+  alias (`key: &b *a`) was dropped without a word, and two anchors reaching one
+  scalar kept only the second: both are now `BAD_PROPERTY`. A block sequence
+  opened on a properties line (`&anchor - entry`) read as the plain scalar
+  `"- entry"` and is now reported.
+
+  **Also:** a multi-line quoted scalar whose continuation lines do not clear their
+  parent's indentation is a `BAD_INDENT`; a `-` where a flow entry belongs (`[-]`)
+  is a `BAD_SCALAR_START`; and a `---`/`...` marker inside a flow collection, or
+  in the middle of a wrapped flow scalar, ends the document instead of being
+  absorbed into it.
+
+  New codes: `BAD_BLOCK_HEADER`, `BAD_COMMENT`, `BAD_ESCAPE`, `BAD_IMPLICIT_KEY`,
+  `BAD_INDENT`, `BAD_PROPERTY`.
+
+  Conformance against the official YAML test suite is **365/402 (90.8%)**, up from
+  336/402, with every remaining gap still listed and reasoned. Measured against
+  main with the ABBA bench harness over three full runs, every fixture is within
+  noise: the one cell that ever flagged — `large (data)`, at -8.9% — came from the
+  run sharing the machine with a test suite, and read -1.5% and +3.2% in the two
+  runs that had it to themselves.
+
+- 00eb0c9: Read tabs by the column they sit at, hold a flow collection to its parent's
+  indentation, and pin JSON as the superset it is
+
+  YAML 1.2 test suite conformance goes from **384/402 (95.5%) to 398/402 (99.0%)**.
+  What is left is four cases where the right answer is not the suite's — one
+  duplicate-key case that turns on the `uniqueKeys` default, and three tags that
+  project to a `Uint8Array`/`Set`/`Map` — so this closes the boundary rather than
+  moving it. Parse throughput is unchanged: an order-balanced A/B over the bench
+  fixtures lands every case inside run-to-run noise (medians −3% to +1.6% against a
+  4–6% CV, with min-of-runs favouring the new code).
+
+  **A tab is only an error where indentation belongs.** Indentation in YAML is
+  spaces (`s-indent ::= s-space × n`), but a tab _past_ the indentation is ordinary
+  separation — and the two are told apart only by the column the tab sits at.
+  `peekLine` reported any leading tab at all, which cut both ways: it rejected three
+  valid documents (`\t[…]` and `\t{}` at the document root, and a `foo:` whose value
+  line reads `⟨space⟩⟨tab⟩bar`) while missing the tabs that really are indentation.
+  Every caller knows the column its line owes, so it now passes it in, and the same
+  rule is applied in the three other places a tab can stand for indentation:
+
+  - Inside a block scalar — `foo: |` over a lone `\t` is reported, where the same
+    line written ` \t` is valid content and still parses to `"\t\n"`.
+  - In the separation between a block indicator and a **compact collection** opened
+    on its line. A compact collection takes its indentation from the column it lands
+    on, so `-\t-`, `?\tkey:` and `:\t- x` are invalid — while `-\tfoo` and `-\t-1`
+    are ordinary separation and stay valid.
+  - In a flow collection's continuation lines (below).
+
+  **A flow collection is held to the indentation of the block that holds it.** Flow
+  scanning is delimiter-driven, so `flow: [a,` over a column-0 `b,` read exactly
+  like a properly indented collection and parsed clean; it is now reported once per
+  collection as `BAD_INDENT`. Indentation is counted in spaces, which folds the tab
+  rule in for free. The closing `]`/`}` is deliberately held one column looser than
+  the spec asks — to the parent's own column rather than one past it — because
+  closing a multi-line flow collection at the parent's column is how Prettier and
+  hand-written manifests both write it, and `yaml` and `js-yaml` both accept it.
+
+  **A tag or anchor inside a flow collection ends at the flow indicator.** In
+  `{ foo : !!str, }` the tag token swallowed the comma, which the tag-character check
+  then reported while the missing comma left the mapping looking unterminated and
+  shifted every entry after it. Outside a flow collection those characters are still
+  ordinary tag content, so a block-context `!!str,` is still a `BAD_TAG`.
+
+  **Tab-indented JSON parsed to the wrong value.** A wrapped flow line's leading
+  whitespace is `s-indent(n) s-separate-in-line?`, so tabs sit in it as spaces do —
+  but the flow scalar scanner skipped only spaces, so the `]` closing a tab-indented
+  line was never seen as the flow indicator it is and the line folded into the scalar
+  instead. `JSON.stringify(value, null, '\t')` — what `jq --tab` and every
+  "indent with tabs" editor setting emit — therefore turned the last entry before a
+  `]` into a string with a trailing newline: `-1` came back as `"-1\n"`.
+
+  **The 1024-character implicit key limit is enforced in block context.** YAML caps
+  how far past a key's start its `:` may sit so a processor can recognize a mapping
+  entry with bounded lookahead; a longer block key is now `BAD_IMPLICIT_KEY`. It is
+  deliberately _not_ enforced in flow context, matching `yaml` (eemeli): a flow
+  mapping is where JSON lives, `{"…1100 characters…": 1}` is valid JSON, and
+  rejecting a valid JSON document is the worse of the two errors. Relatedly, an
+  explicit key in a flow sequence may now put its `:` on the next line
+  (`[ ? a\n : b ]`) — the one-line rule exists to keep an _implicit_ key cheap to
+  recognize, and a `?` settles that up front.
+
+  **The JSON-superset property is now checked, not assumed.** `@amritk/lint` routes
+  `.json` documents through the YAML parser and `resolveRefsFromFile` hands it
+  whatever a `$ref` points at, so "JSON parses as YAML" is load-bearing.
+  `src/json-superset.test.ts` runs a generated corpus against `JSON.parse` — every
+  value in six spellings (compact, 2-space, tab-indented, CRLF, and with
+  leading/trailing blank lines), requiring an identical value _and_ zero diagnostics
+  for each — and `@amritk/lint` gains a matching test holding `parseJson` and
+  `parseYaml` to identical data, diagnostics, and `line:column` ranges for every path
+  in a JSON document.
+
+### Patch Changes
+
+- 2c9982c: Fix the published manifests so the packages install, resolve, and dedupe correctly
+
+  **Types resolve on TypeScript's default config.** Every package was
+  exports-only: nine declared `"module": "./dist/index.js"` (a field neither Node
+  nor TypeScript reads) and nothing declared `types`. A consumer on
+  `moduleResolution: "node10"` — still the default when `module` is `commonjs` —
+  cannot see `exports` at all, so `import { lintDocument } from '@amritk/lint'`
+  failed with `TS2307: Cannot find module '@amritk/lint' or its corresponding type
+declarations`. Each package with a `.` export now also declares `main` and
+  `types`; `@amritk/helpers` and `@amritk/adapters` have no `.` export (they are
+  subpath-only), so they declare a `typesVersions` wildcard mapping instead, which
+  gives their subpaths the same node10 fallback. All of it is ignored under
+  `node16`/`nodenext`/`bundler`, where `exports` still wins.
+
+  **`workspace:*` resolves to a caret, not an exact pin.** All fourteen
+  inter-package edges shipped as exact versions, so installing two `@amritk/*`
+  packages published at different times pulled in two copies of their shared
+  dependency. That is not merely wasteful: the module-level caches those packages
+  rely on are per-copy, so the `WeakMap` validator cache in
+  `@amritk/runtime-validators` silently stopped hitting. Pre-1.0 a caret stays
+  narrow (`^0.9.1` is `>=0.9.1 <0.10.0`) and breaking changes here already ride a
+  minor bump.
+
+  **`@amritk/helpers` stops shipping 21 source files it does not need.** Embedded
+  mode reads four helper sources (`is-object`, `validate-array`,
+  `validate-record`, `has-ref`) out of the installed package at generation time,
+  so `src` has to ship — but only those four. `files` now lists them explicitly
+  instead of globbing all of `src`, cutting the tarball from 78 files / 206 kB to
+  63 / 112 kB.
+
+  **Two packages no longer declare a dependency they never import.**
+  `@amritk/mjst` and `@amritk/generate-parsers` both listed
+  `@amritk/generate-markdown` under `dependencies`, but the only importer is each
+  package's `scripts/generate-readme.ts`, which is not published. Both moved to
+  `devDependencies`. `@amritk/adapters` likewise dropped its
+  `@sinclair/typebox` peer dependency: the TypeBox adapter is purely structural
+  (it strips symbol keys) and imports nothing. `valibot` stays — it is a genuine
+  transitive peer of `@valibot/to-json-schema`.
+
+  **`@amritk/mjst` fixes.** `json-schema-typed` moved to `dependencies`, because
+  the shipped `dist/emit-examples.d.ts` imports types from it. The package gained
+  an `exports` map, so it is no longer deep-importable in its entirety. And the
+  build now marks `dist/cli.js` executable: `npm pack` records on-disk modes, and
+  package managers only `chmod` bin targets when they link them, so flows that
+  consume the tarball directly (vendoring, Docker `npm pack` + `tar -x`) hit
+  `EACCES`.
+
 ## 0.4.0
 
 ### Minor Changes

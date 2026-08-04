@@ -1,5 +1,204 @@
 # @amritk/lint
 
+## 0.4.4
+
+### Patch Changes
+
+- 874856f: Stop rulesets from executing code, and close two document-driven hangs
+
+  **A `[?(...)]` filter in a `given` is no longer JavaScript.** Filter bodies were
+  handed straight to `new Function`, so a `given` string in a YAML or JSON ruleset
+  — data, to any caller's eye — ran arbitrary code in the linting process:
+  `$[?(globalThis.x = {home: process.env.HOME})]` leaked the environment,
+  `import('node:fs')` wrote files. Filters are now parsed into a small AST and
+  interpreted (`@`, `@.x`, `@['x']`, `@property`, `@parentProperty`, `@parent`,
+  `@path`, `@root`, `$`, the comparison and logical operators, `!`, numeric
+  negation, string/number/boolean/null/`undefined`/`void 0` literals, regex
+  literals, `.length`, and a fixed list of pure methods — `indexOf`,
+  `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `match`, `test`,
+  `toLowerCase`, `toUpperCase`, `trim`). Member reads see own properties only, so
+  `@.constructor` and `@['__proto__']` are plain `undefined`. Verified
+  node-for-node identical to the old evaluator on the shipped `oas` filters across
+  every vendored real-world spec. An expression outside the grammar is now a
+  ruleset error naming the rule, instead of a filter that silently matches
+  nothing — which also fixes filters quietly disabling themselves wherever
+  `new Function` is unavailable (CSP, Workers).
+
+  **The `casing` function no longer hangs on a long identifier.** `camel`/`pascal`
+  compiled to a pattern where digits could be consumed two ways, so a value from
+  the linted document could force exponential backtracking: a 46-character
+  `operationId` took over 100 seconds on Node (Bun's regex engine caps
+  backtracking, which hid it). The patterns are rewritten to be unambiguous, and
+  verified by brute force to accept exactly the same strings as before. Same for
+  the second overlap, a separator character the style already uses (`kebab` with
+  `separator: '-'`), which was exponential from ~40 characters.
+
+  **A deeply nested document is a diagnostic, not a crash.** `'['.repeat(20000)` —
+  a 40 KB file — took the process down with `RangeError: Maximum call stack size
+exceeded`, while every other malformed document came back as findings. JSON
+  parsing now enforces the same 1000-level nesting limit `@amritk/yaml` does and
+  reports it as a parser diagnostic, and the JSONPath descent walker is iterative.
+
+  **Rulesets are built once, not per document.** `lintDocument` re-normalized the
+  ruleset and re-read every `extends` file on every call (~3.6 ms per document
+  with a 200-rule `extends` file; `fixDocument` paid it up to 11× per document).
+  The built `Ruleset` is memoized per `(definition object, basePath, restrictTo)`,
+  and `fixDocument` builds one for the whole loop — 200 lints of a small document
+  went from 750 ms to ~120 ms — so editing a ruleset file mid-run also stops
+  changing results half way through. Treat a definition you have passed in as
+  frozen; pass a fresh object to force a rebuild.
+
+  **`@amritk/lint/rules/openapi` can be bundled.** The four OpenAPI meta-schemas
+  were loaded through `createRequire` with a computed specifier, invisible to
+  bundlers (esbuild produced a 524-byte module that threw `Cannot find module
+'./oas31.json'`) and unavailable on Workers and Deno. They are now generated
+  `.ts` modules imported statically, each holding its schema as JSON text that is
+  still parsed lazily on first use.
+
+  **`fixDocument` reports whether it converged.** The result gains `converged` and
+  `passes`, and `applied` is de-duplicated by rule code and path: two fixers that
+  undo each other used to report 11 applied fixes for one problem with no way to
+  tell a fixpoint from giving up at the pass cap.
+
+  **Also:** `alphabetical` no longer treats `'0x10'`, `'1e2'`, or `' 5'` as
+  numbers (they were flagged out of order though lexicographically sorted); the
+  module-level JSONPath, filter, and pattern caches are bounded; `extends` and
+  custom-function resolution accept an optional `restrictTo` root; and the ruleset
+  trust boundary is documented in the README and AI.md.
+
+- 2c9982c: Fix the published manifests so the packages install, resolve, and dedupe correctly
+
+  **Types resolve on TypeScript's default config.** Every package was
+  exports-only: nine declared `"module": "./dist/index.js"` (a field neither Node
+  nor TypeScript reads) and nothing declared `types`. A consumer on
+  `moduleResolution: "node10"` — still the default when `module` is `commonjs` —
+  cannot see `exports` at all, so `import { lintDocument } from '@amritk/lint'`
+  failed with `TS2307: Cannot find module '@amritk/lint' or its corresponding type
+declarations`. Each package with a `.` export now also declares `main` and
+  `types`; `@amritk/helpers` and `@amritk/adapters` have no `.` export (they are
+  subpath-only), so they declare a `typesVersions` wildcard mapping instead, which
+  gives their subpaths the same node10 fallback. All of it is ignored under
+  `node16`/`nodenext`/`bundler`, where `exports` still wins.
+
+  **`workspace:*` resolves to a caret, not an exact pin.** All fourteen
+  inter-package edges shipped as exact versions, so installing two `@amritk/*`
+  packages published at different times pulled in two copies of their shared
+  dependency. That is not merely wasteful: the module-level caches those packages
+  rely on are per-copy, so the `WeakMap` validator cache in
+  `@amritk/runtime-validators` silently stopped hitting. Pre-1.0 a caret stays
+  narrow (`^0.9.1` is `>=0.9.1 <0.10.0`) and breaking changes here already ride a
+  minor bump.
+
+  **`@amritk/helpers` stops shipping 21 source files it does not need.** Embedded
+  mode reads four helper sources (`is-object`, `validate-array`,
+  `validate-record`, `has-ref`) out of the installed package at generation time,
+  so `src` has to ship — but only those four. `files` now lists them explicitly
+  instead of globbing all of `src`, cutting the tarball from 78 files / 206 kB to
+  63 / 112 kB.
+
+  **Two packages no longer declare a dependency they never import.**
+  `@amritk/mjst` and `@amritk/generate-parsers` both listed
+  `@amritk/generate-markdown` under `dependencies`, but the only importer is each
+  package's `scripts/generate-readme.ts`, which is not published. Both moved to
+  `devDependencies`. `@amritk/adapters` likewise dropped its
+  `@sinclair/typebox` peer dependency: the TypeBox adapter is purely structural
+  (it strips symbol keys) and imports nothing. `valibot` stays — it is a genuine
+  transitive peer of `@valibot/to-json-schema`.
+
+  **`@amritk/mjst` fixes.** `json-schema-typed` moved to `dependencies`, because
+  the shipped `dist/emit-examples.d.ts` imports types from it. The package gained
+  an `exports` map, so it is no longer deep-importable in its entirety. And the
+  build now marks `dist/cli.js` executable: `npm pack` records on-disk modes, and
+  package managers only `chmod` bin targets when they link them, so flows that
+  consume the tarball directly (vendoring, Docker `npm pack` + `tar -x`) hit
+  `EACCES`.
+
+- 00eb0c9: Read tabs by the column they sit at, hold a flow collection to its parent's
+  indentation, and pin JSON as the superset it is
+
+  YAML 1.2 test suite conformance goes from **384/402 (95.5%) to 398/402 (99.0%)**.
+  What is left is four cases where the right answer is not the suite's — one
+  duplicate-key case that turns on the `uniqueKeys` default, and three tags that
+  project to a `Uint8Array`/`Set`/`Map` — so this closes the boundary rather than
+  moving it. Parse throughput is unchanged: an order-balanced A/B over the bench
+  fixtures lands every case inside run-to-run noise (medians −3% to +1.6% against a
+  4–6% CV, with min-of-runs favouring the new code).
+
+  **A tab is only an error where indentation belongs.** Indentation in YAML is
+  spaces (`s-indent ::= s-space × n`), but a tab _past_ the indentation is ordinary
+  separation — and the two are told apart only by the column the tab sits at.
+  `peekLine` reported any leading tab at all, which cut both ways: it rejected three
+  valid documents (`\t[…]` and `\t{}` at the document root, and a `foo:` whose value
+  line reads `⟨space⟩⟨tab⟩bar`) while missing the tabs that really are indentation.
+  Every caller knows the column its line owes, so it now passes it in, and the same
+  rule is applied in the three other places a tab can stand for indentation:
+
+  - Inside a block scalar — `foo: |` over a lone `\t` is reported, where the same
+    line written ` \t` is valid content and still parses to `"\t\n"`.
+  - In the separation between a block indicator and a **compact collection** opened
+    on its line. A compact collection takes its indentation from the column it lands
+    on, so `-\t-`, `?\tkey:` and `:\t- x` are invalid — while `-\tfoo` and `-\t-1`
+    are ordinary separation and stay valid.
+  - In a flow collection's continuation lines (below).
+
+  **A flow collection is held to the indentation of the block that holds it.** Flow
+  scanning is delimiter-driven, so `flow: [a,` over a column-0 `b,` read exactly
+  like a properly indented collection and parsed clean; it is now reported once per
+  collection as `BAD_INDENT`. Indentation is counted in spaces, which folds the tab
+  rule in for free. The closing `]`/`}` is deliberately held one column looser than
+  the spec asks — to the parent's own column rather than one past it — because
+  closing a multi-line flow collection at the parent's column is how Prettier and
+  hand-written manifests both write it, and `yaml` and `js-yaml` both accept it.
+
+  **A tag or anchor inside a flow collection ends at the flow indicator.** In
+  `{ foo : !!str, }` the tag token swallowed the comma, which the tag-character check
+  then reported while the missing comma left the mapping looking unterminated and
+  shifted every entry after it. Outside a flow collection those characters are still
+  ordinary tag content, so a block-context `!!str,` is still a `BAD_TAG`.
+
+  **Tab-indented JSON parsed to the wrong value.** A wrapped flow line's leading
+  whitespace is `s-indent(n) s-separate-in-line?`, so tabs sit in it as spaces do —
+  but the flow scalar scanner skipped only spaces, so the `]` closing a tab-indented
+  line was never seen as the flow indicator it is and the line folded into the scalar
+  instead. `JSON.stringify(value, null, '\t')` — what `jq --tab` and every
+  "indent with tabs" editor setting emit — therefore turned the last entry before a
+  `]` into a string with a trailing newline: `-1` came back as `"-1\n"`.
+
+  **The 1024-character implicit key limit is enforced in block context.** YAML caps
+  how far past a key's start its `:` may sit so a processor can recognize a mapping
+  entry with bounded lookahead; a longer block key is now `BAD_IMPLICIT_KEY`. It is
+  deliberately _not_ enforced in flow context, matching `yaml` (eemeli): a flow
+  mapping is where JSON lives, `{"…1100 characters…": 1}` is valid JSON, and
+  rejecting a valid JSON document is the worse of the two errors. Relatedly, an
+  explicit key in a flow sequence may now put its `:` on the next line
+  (`[ ? a\n : b ]`) — the one-line rule exists to keep an _implicit_ key cheap to
+  recognize, and a `?` settles that up front.
+
+  **The JSON-superset property is now checked, not assumed.** `@amritk/lint` routes
+  `.json` documents through the YAML parser and `resolveRefsFromFile` hands it
+  whatever a `$ref` points at, so "JSON parses as YAML" is load-bearing.
+  `src/json-superset.test.ts` runs a generated corpus against `JSON.parse` — every
+  value in six spellings (compact, 2-space, tab-indented, CRLF, and with
+  leading/trailing blank lines), requiring an identical value _and_ zero diagnostics
+  for each — and `@amritk/lint` gains a matching test holding `parseJson` and
+  `parseYaml` to identical data, diagnostics, and `line:column` ranges for every path
+  in a JSON document.
+
+- Updated dependencies [213ecc4]
+- Updated dependencies [798fd7a]
+- Updated dependencies [2c9982c]
+- Updated dependencies [bc09e15]
+- Updated dependencies [b152c4e]
+- Updated dependencies [15e480e]
+- Updated dependencies [140412b]
+- Updated dependencies [7839a38]
+- Updated dependencies [007aa05]
+- Updated dependencies [1b720e2]
+- Updated dependencies [c1a176f]
+- Updated dependencies [00eb0c9]
+  - @amritk/runtime-validators@0.10.0
+  - @amritk/yaml@0.5.0
+
 ## 0.4.3
 
 ### Patch Changes

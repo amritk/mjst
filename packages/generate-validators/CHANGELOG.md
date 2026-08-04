@@ -1,5 +1,403 @@
 # @amritk/generate-validators
 
+## 0.12.0
+
+### Minor Changes
+
+- de0952c: Make both generators agree with Draft 2020-12 — and with each other — on
+  structural equality, tuple `items`, `oneOf`, and prototype-member property names.
+
+  The two generators disagreed with Ajv and with one another on the same schemas.
+  Where they differed, `generate-validators` was usually right: it already shipped
+  `valuesEqual` / `allUnique`, which `generate-parsers` never adopted.
+
+  **`@amritk/generate-validators`**
+
+  - A property named `__proto__` was silently dropped. The `nullable` rewrite runs
+    over _every_ schema and copied `properties` with a plain assignment, which fires
+    the `Object.prototype` setter instead of creating a key — so
+    `{"properties":{"__proto__":{"type":"string","minLength":3}}}` emitted a
+    validator with no checks at all, and `required: ["__proto__"]` degraded to a
+    bare presence check. A validation bypass.
+  - `constructor` / `toString` / `hasOwnProperty` properties were read straight off
+    the object, so the _prototype's_ value answered: a valid document was reported
+    as `must be string` at `/hasOwnProperty`, and a required `toString` could never
+    be reported missing (`'toString' in obj` is always true). Reads now go through
+    an own-property guard, and presence uses `Object.hasOwn` — but only for the
+    names that can actually be inherited. Every other key keeps the plain `in` it
+    always had, because `Object.hasOwn` is a call the engine cannot fold the way it
+    folds `in`, and spending it on `id` or `name` bought nothing while costing
+    roughly half the throughput on an all-present object.
+  - `items` alongside `prefixItems` was applied to the prefix positions too. Per
+    2020-12 `items` is the tail schema, so `{prefixItems:[{type:'string'}],
+items:{type:'number'}}` rejected `["a", 1, 2]` — which Ajv accepts, and which
+    the `[string?, ...number[]]` type this generator emits already admits.
+  - `enum` members that are objects or arrays could never match: `.includes` is
+    SameValueZero, i.e. reference equality. `enum` now compares structurally via
+    `valuesEqual`, the way `const` always has — which also makes `isX` a sound type
+    guard again.
+
+  **`@amritk/generate-parsers`**
+
+  - The same `prefixItems` + `items` defect, in both the fast path and the strict
+    assertion.
+  - The same `enum`-with-object-members defect. Members are now compared by an
+    unrolled structural check against the known literal.
+  - `const` deep equality used `JSON.stringify`, which is key-order sensitive, so
+    `{b: 2, a: 1}` was rejected against `const: {a: 1, b: 2}` — and it serialized the
+    whole value on every call to do it.
+  - `uniqueItems` used a `JSON.stringify` dedupe key (or a bare `Set`, which
+    compares objects by reference), so `[{a:1,b:2},{b:2,a:1}]` was accepted where
+    Ajv and `generate-validators` both reject. It now projects through a
+    key-order-independent canonical form when items may be structural, keeping the
+    cheap native `Set` when they are provably scalar. A root array of objects
+    skipped the constraint entirely and now enforces it.
+  - `oneOf` exclusivity was not enforced — both `oneOf` and `anyOf` compiled to a
+    plain disjunction, so a value matching two branches was accepted. `oneOf` now
+    requires exactly one match.
+  - The array fallback was a bare `[]`, ignoring `prefixItems` and `minItems`. It is
+    not an instance of its own schema, and against a required closed tuple it is not
+    even assignable — `TS2322: Type '[]' is not assignable to type '[string,
+number]'` made non-strict and `readonly` output fail to compile.
+  - A schema property named after an `Object.prototype` member produced an
+    unsatisfiable type: TypeScript reads the inherited `constructor: Function` on the
+    fallback object literal and rejects it against `constructor?: string`.
+
+  Both packages now type-check their generated output under the repo's real
+  compiler flags (`exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`), not
+  `strict` alone — `generate-validators` had no such suite at all — and both pin the
+  semantics above against Ajv (or, for prototype-member names, against
+  `@amritk/runtime-validators`, since Ajv has those bugs itself).
+
+- 213ecc4: Take documents you already loaded, so a `$ref` to another document generates
+
+  **On the official JSON Schema Test Suite: `generate-validators` 1238 → 1268 /
+  1281 (99.0%), `generate-parsers` 1222 → 1237 / 1281 (96.6%).**
+
+  Both generators gain a `schemas` option: documents you have already loaded, keyed
+  by the absolute URI a `$ref` names them by. It is the build-time counterpart of
+  `@amritk/runtime-validators`' `ValidateOptions.schemas`, and it keeps the same
+  promise — nothing is fetched, you cannot pass a URL, only a document. What changes
+  is that "we do no I/O" no longer also means "we cannot be told".
+
+  A cross-document `$ref` was the single largest gap in both packages, and it is
+  gone. `refRemote.json` passes in full; so do the `dynamicRef.json` groups that
+  reach `tree.json` and `extendible-dynamic-ref.json`, and — with the dialect
+  metaschema registered — `defs.json` and `ref.json`'s "remote ref, containing refs
+  itself".
+
+  Each registered document becomes a resource of the document being generated: its
+  `$id`, its `$anchor`s and `$dynamicAnchor`s and its own embedded resources all
+  resolve, a `$ref` from one registered document into another resolves, and every
+  definition reached gets a file, a type and a validator/parser by the ordinary
+  rules. A document with no `$id` resolves its relative `$ref`s against the URI it
+  was registered under; one whose `$id` disagrees answers to both. Registering more
+  than the schema uses costs nothing — only the documents actually reached are
+  emitted — and a `$ref` to a URI nobody registered still stops the build with a
+  message naming the ref.
+
+  The mechanism is one pass, not a second addressing mode. `@amritk/helpers` gains
+  `graftExternalSchemas`, which embeds the registered documents into the root before
+  the `$id` pass, and `pruneExternalSchemas`, which drops the unreferenced ones once
+  the refs are pointers and reachability is finally knowable. Everything downstream —
+  the ref-graph walk, the naming, the emitted import graph — keeps working on a
+  single document and needed no change. `walkRefGraph` carries the option and
+  memoizes per `(schema, schemas)` by identity.
+
+  **Fixed: a root schema with a union `type` dropped every sibling constraint.**
+  `{ type: ['object', 'boolean'], properties: {…}, required: [...] }` emitted the
+  type check and nothing else, so it accepted any object at all. The multi-type root
+  branch now emits the shared constraint checks the single-type and combinator
+  branches already did; they carry their own runtime-type guards, so a member of the
+  union a constraint does not apply to is still untouched. This is the shape the
+  2020-12 metaschema's own root is written in, which is how it went unnoticed — the
+  generated dialect validator accepted `{ type: 1 }` as a valid schema.
+
+  `@amritk/runtime-validators` is unchanged in behaviour; its conformance figures are
+  restated against the corpus that is actually vendored (1281 cases, not 1299 — the
+  README's count never matched, and upstream's `content.json` is not among the
+  vendored files). The suite's `remotes/` loader moves to the shared fixtures
+  bookkeeping so all four conformance suites use one walk.
+
+- eb80ca6: Fix `$ref`-graph naming and reference resolution, and stop degrading silently.
+
+  Generation now fails loudly instead of writing output that cannot work:
+
+  - Two definitions that reduce to one filename (`Pet`/`pet`) or one type name
+    (`foo-bar`/`foo.bar`/`fooBar` all become `FooBar`) are an error. The filename
+    case used to drop one definition and give every reference to it the other
+    one's shape; the type-name case emitted both files and left the importer with
+    two `import { FooBar }` lines that do not parse.
+  - An unresolvable `$ref` is an error. It used to warn while the generators still
+    emitted the type name and the parser/validator call for a file that was never
+    written.
+  - A `$dynamicRef` with no `$dynamicAnchor` to bind to is an error. Leaving it in
+    place made the type generator name the type after the anchor, so the canonical
+    recursive-tree idiom (`$dynamicAnchor: "node"`) produced a reference to the
+    DOM's `Node` interface — a clean compile with the wrong type.
+  - A document that relies on `$id` base-URI scoping is rejected rather than
+    resolving its inner fragments against the document root and silently selecting
+    a different definition.
+  - Every recursive schema walker enforces a nesting cap and reports it by name
+    instead of dying with a bare stack-overflow.
+
+  And several things that were broken now work:
+
+  - Non-ASCII definition names (CJK, Cyrillic, accented) keep their characters
+    instead of collapsing onto the single type name `_`, and the generated
+    `index.ts` barrel re-exports them correctly.
+  - A root-level `$dynamicAnchor` is generated as the root's own file, so the
+    2020-12 recursive-tree idiom produces a real self-referencing type.
+  - A plain `$anchor` ref (`$ref: "#named"`) resolves, instead of producing the
+    unloadable import specifier `'./#named.ts'`.
+  - Derived filenames are normalized: no more `.ts`, `...ts`, `http:--x.ts`, or
+    characters Windows and ESM specifiers reject. `$ref: "#/__proto__"` no longer
+    resolves to `Object.prototype`.
+  - Generated readers guard `Object.prototype` member names (`constructor`,
+    `toString`, `__proto__`, …) with `Object.hasOwn`, so a schema with a
+    `constructor` property no longer fails its own shape check for every valid
+    object, and the parser no longer fabricates a `__proto__` key.
+  - `x-mjst` `instanceOf` is allow-listed to the classes the generators support,
+    so an arbitrary identifier is warned about and ignored instead of being
+    emitted verbatim into the output.
+
+- 947d44a: Enforce the keywords a schema declares without a `type`, and stop emitting
+  validators that call functions nobody wrote
+
+  Measured against the official JSON Schema Test Suite, generation goes from
+  818/1299 to **987/1299 (76.0%)**.
+
+  - **A schema with no root `type` compiled to `validateRoot = () => true`.** The
+    generator hung every check off the declared type, so `{ "minLength": 2 }`,
+    `{ "required": ["a"] }`, `{ "uniqueItems": true }`, `{ "contains": … }`,
+    `{ "patternProperties": … }`, `{ "propertyNames": … }` and
+    `{ "dependentRequired": … }` all accepted everything — the largest silent gap
+    this generator had. Each keyword now emits its check behind its own runtime type
+    test, so it rejects its own family and ignores every other kind of value, which
+    is what JSON Schema means by a type-less constraint. The same gate was
+    suppressing constraint checks next to a root combinator, so
+    `{ allOf: [{ prefixItems: … }], items: … }` silently dropped its `items` too.
+  - **Object keywords no longer imply `type: "object"`.** `{ "properties": … }`
+    ignores a non-object instead of rejecting it, matching the interpreter. Note the
+    inferred TypeScript type still describes the object case (as
+    `FromSchema`/`ImplicitShape` in `@amritk/runtime-validators` does), so for that
+    shape `isX` is a weaker type guard than it was — the verdict, which is the
+    contract, matches the interpreter exactly.
+  - **Boolean subschemas do something.** A root of `false` rejects every instance
+    (it used to accept them all), and a `false` sitting in a `properties`, `allOf`,
+    `then`/`else`, `patternProperties`, `dependentSchemas`, `prefixItems`,
+    `contains` or `propertyNames` position now emits a real check.
+  - **A `not` over a `type` array emitted nothing**, and "no checks" is how the
+    matcher spells "matches everything" — so the `not` rejected every instance.
+  - **Unresolvable `$ref`s produced output that does not compile.** For a ref the
+    walker never queues (a relative path, an absolute path, a URN), the emitter
+    derived a name from the ref string and called `validateIntJson(…)` without
+    anything emitting it. Generation now refuses, naming the ref — the same answer
+    the other unsupported paths already give, and a failure next to its cause rather
+    than in the consumer's build.
+  - **String lengths count code points, not UTF-16 units**, in both the validator
+    and the guard, via the shared `@amritk/helpers/string-length-check` (`.length`
+    stays the short-circuiting first term).
+
+  `unevaluatedItems`/`unevaluatedProperties` still refuse at generation by design —
+  flat output cannot carry annotations across the applicator tree — and `$id`
+  base-URI resolution remains unimplemented, so those refuse rather than guess.
+
+- 7757788: Generate `unevaluatedItems` / `unevaluatedProperties`, and stop `isX` claiming a
+  narrowing it cannot make
+
+  **On the official JSON Schema Test Suite: 987/1299 → 1238 / 1299 (95.3%).**
+
+  The position that flat generated code cannot carry annotations across the
+  applicator tree turned out to be wrong, and it was costing 201 cases — two thirds
+  of everything this package failed. Both keywords are now emitted as a flat
+  _expression_ computing what the interpreter computes as annotations: for each key
+  or index, a boolean that is true when some keyword evaluated it. Keywords that
+  must succeed for the value to be valid at all (`allOf` members, a `$ref` target, a
+  satisfied `contains`) count unconditionally — sound, because the emitted test is
+  one conjunct of a validator that also asserts them — while conditional applicators
+  (`anyOf`/`oneOf` branches, `if`/`then`/`else`, `dependentSchemas`) carry their
+  condition, hoisted to a `const` before the loop so a per-key sweep reads a boolean
+  instead of re-running a match.
+
+  `contains` publishes only the indices it matched, per the spec and
+  `@amritk/runtime-validators`, rather than Ajv's whole-array mark.
+
+  Four shapes still refuse, each with a message naming the shape rather than the
+  keyword: coverage running through a `$dynamicRef`, an unresolvable or cyclic
+  `$ref` at the same instance location, a walk deeper than eight applicators, and a
+  node under `additionalItems`. No case in the suite hits any of them.
+
+  Parity with the interpreter is the contract and is enforced as one:
+  `interpreter-parity.test.ts` gains six hand-written groups plus a 500-schema ×
+  24-value fuzz pass — 12,000 pairs, no divergence.
+
+  **`isX` no longer lies.** For a schema with no `type`/`enum`/`const`/`$ref` but
+  object-shaped keywords (recursively, so a union of implicit-object branches counts
+  too), the emitted type describes the object case while the validator — correctly —
+  also accepts non-objects. The guard now returns `boolean` for exactly those
+  schemas instead of `input is X`; the check itself is unchanged and still in
+  lockstep with `validateX`. Every schema that declares a `type` keeps its type
+  predicate.
+
+  The complete fix is to widen the emitted type so the narrowing becomes true, which
+  lives in `@amritk/helpers/generate-type-definition` and has to move together with
+  `FromSchema`'s `ImplicitShape` in `@amritk/runtime-validators`, since both make the
+  identical inference for the identical schema. Until they do, a guard that declines
+  to narrow beats one that narrows wrongly.
+
+  Also inherited from `@amritk/helpers`: `$ref`s written against an enclosing `$id`
+  now resolve, which closed most of this package's ref failures without a change
+  here.
+
+### Patch Changes
+
+- 9cb45a0: Emit the interpreter's own `multipleOf` check, and compile `pattern` in Unicode
+  mode — closing the last two places where generated code and
+  `@amritk/runtime-validators` could disagree about a document.
+
+  `@amritk/helpers/multiple-of-check` claimed to mirror the interpreter and had
+  drifted from it. The interpreter splits on the divisor (an exact `%` when it is
+  an integer, a quotient within `2·ε·|q|` when it is not); the emitter still
+  divided in every case and allowed `1e-8·|q|` — roughly 10⁷× the actual
+  representation error. Generated validators and parsers therefore **accepted
+  values the interpreter rejects**: `1000000.005` against `multipleOf: 0.01` (a
+  half-cent past a whole dollar amount) passed, and so did any value whose quotient
+  overflows to `Infinity`, because the old fail expression asked `NaN > tolerance`
+  and got `false`. The emitter now produces the interpreter's two branches
+  verbatim, so both verdicts flip to invalid and the two implementations agree
+  again. `0.3` still satisfies `multipleOf: 0.1`, which is what the tolerance is
+  for.
+
+  A `pattern` now compiles with the `u` flag wherever the pattern admits one, the
+  same try-`u`-then-fall-back decision the interpreter makes at runtime, taken once
+  at generation time by the new `regexLiteral` / `regexFlagsFor` in
+  `@amritk/helpers/escape-regex-pattern`. Without the flag a Unicode property
+  escape is inert — `\p{Letter}` was read as a literal `p{Letter}` — and `^.$`
+  rejected a single astral character. Every emit site now goes through
+  `regexLiteral` rather than interpolating an escaped body into its own `/…/`, so
+  the flag decision is made in one place instead of at a dozen call sites.
+
+  Measured against the official JSON Schema Test Suite, this closes three cases in
+  each generator: `@amritk/generate-validators` moves to **1271 / 1281 (99.2%)**
+  and strict `@amritk/generate-parsers` to **1240 / 1281 (96.8%)**.
+
+- ef77708: Reject `NaN` against a numeric bound, matching `@amritk/runtime-validators`.
+
+  Bounds were emitted as their direct failure condition (`x < minimum`) rather than
+  the negated pass condition (`!(x >= minimum)`). The two agree on every ordinary
+  value and are opposite for `NaN`, which compares `false` against every operator:
+  the direct form read that as "not out of bounds" and let a `NaN` through
+  `minimum` / `maximum` / `exclusiveMinimum` / `exclusiveMaximum`, where the
+  interpreter and Ajv both reject it. Generated validators, strict generated
+  parsers, and the compiled API engine's inlined guards all now write the negated
+  form — so a `NaN` fails a bounded number everywhere in the toolchain. A bare
+  `{ type: 'number' }` with no constraint still accepts it, as Ajv does; only a
+  bound or `multipleOf` rejects it.
+
+  Two internal inconsistencies close with it: `@amritk/generate-parsers` emitted the
+  un-negated `x >= min` in its inline matchers and the direct `x < min` in its
+  strict assertions, so the same schema could answer differently depending on which
+  path ran, and `@amritk/api`'s compiled engine disagreed with its own runtime
+  engine for a value the two are documented to be observationally identical on.
+
+  `interpreter-parity.test.ts` now covers the numeric keywords — bounds, the
+  draft-04 boolean `exclusive*` form, and `multipleOf` across integer, fractional,
+  and quotient-overflowing divisors — over a value set built to separate the two
+  spellings (`NaN`, `±Infinity`, `1e308`, `1000000.005`). Nothing pinned these
+  before, which is how the drift got in.
+
+- 798fd7a: Measure every schema-consuming package against the official JSON Schema Test
+  Suite, the way `@amritk/yaml` is measured against the YAML test suite
+
+  The required Draft 2020-12 tests (46 files, 383 groups, 1299 cases) are vendored
+  under `fixtures/json-schema-test-suite`, and four packages now run them on every
+  build. Each carries an expected-failure list naming every case it does not pass
+  and why, and each suite fails when a case moves in **either** direction — a
+  regression breaks the build, and so does a case that starts passing while its
+  entry stays behind. Nothing is published: the corpus and the harnesses live
+  outside every `files` list.
+
+  | package                       | measured on                                      | rate                |
+  | ----------------------------- | ------------------------------------------------ | ------------------- |
+  | `@amritk/runtime-validators`  | `validate` and `validateGuard` verdicts          | 1250 / 1299 (96.2%) |
+  | `@amritk/generate-parsers`    | strict parsers, generated → linked → executed    | 1180 / 1299 (90.8%) |
+  | `@amritk/generate-validators` | generated predicate validators, likewise         | 987 / 1299 (76.0%)  |
+  | `@amritk/resolve-refs`        | verdict preserved after inlining (`$ref` corpus) | 160 / 170 (94.1%)   |
+
+  The generators are measured through the code they emit, not the source text they
+  emit: each suite schema is generated whole, compiled, and linked in memory, so the
+  `$ref`'d sibling files and the embedded runtime helpers run too. `resolve-refs`
+  has no verdicts of its own, so it is held to semantic preservation — the resolved
+  document must accept exactly what the original did, judged by
+  `@amritk/runtime-validators` over the cases the interpreter already answers
+  correctly, which is the population where a resolution bug is visible and nothing
+  else is.
+
+  Those rates are where the packages _end up_. The suites were written first and
+  found real defects — a validator that accepted everything for a schema without a
+  `type`, `required` satisfied by an inherited `toString`, refs that emitted
+  uncompilable output, `$ref`-shaped data inlined as a reference — each fixed in its
+  own commit alongside this one. What remains is documented case by case, and each
+  package's README carries a "Conformance, measured" section with its number and the
+  reasons behind it.
+
+- 2c9982c: Fix the published manifests so the packages install, resolve, and dedupe correctly
+
+  **Types resolve on TypeScript's default config.** Every package was
+  exports-only: nine declared `"module": "./dist/index.js"` (a field neither Node
+  nor TypeScript reads) and nothing declared `types`. A consumer on
+  `moduleResolution: "node10"` — still the default when `module` is `commonjs` —
+  cannot see `exports` at all, so `import { lintDocument } from '@amritk/lint'`
+  failed with `TS2307: Cannot find module '@amritk/lint' or its corresponding type
+declarations`. Each package with a `.` export now also declares `main` and
+  `types`; `@amritk/helpers` and `@amritk/adapters` have no `.` export (they are
+  subpath-only), so they declare a `typesVersions` wildcard mapping instead, which
+  gives their subpaths the same node10 fallback. All of it is ignored under
+  `node16`/`nodenext`/`bundler`, where `exports` still wins.
+
+  **`workspace:*` resolves to a caret, not an exact pin.** All fourteen
+  inter-package edges shipped as exact versions, so installing two `@amritk/*`
+  packages published at different times pulled in two copies of their shared
+  dependency. That is not merely wasteful: the module-level caches those packages
+  rely on are per-copy, so the `WeakMap` validator cache in
+  `@amritk/runtime-validators` silently stopped hitting. Pre-1.0 a caret stays
+  narrow (`^0.9.1` is `>=0.9.1 <0.10.0`) and breaking changes here already ride a
+  minor bump.
+
+  **`@amritk/helpers` stops shipping 21 source files it does not need.** Embedded
+  mode reads four helper sources (`is-object`, `validate-array`,
+  `validate-record`, `has-ref`) out of the installed package at generation time,
+  so `src` has to ship — but only those four. `files` now lists them explicitly
+  instead of globbing all of `src`, cutting the tarball from 78 files / 206 kB to
+  63 / 112 kB.
+
+  **Two packages no longer declare a dependency they never import.**
+  `@amritk/mjst` and `@amritk/generate-parsers` both listed
+  `@amritk/generate-markdown` under `dependencies`, but the only importer is each
+  package's `scripts/generate-readme.ts`, which is not published. Both moved to
+  `devDependencies`. `@amritk/adapters` likewise dropped its
+  `@sinclair/typebox` peer dependency: the TypeBox adapter is purely structural
+  (it strips symbol keys) and imports nothing. `valibot` stays — it is a genuine
+  transitive peer of `@valibot/to-json-schema`.
+
+  **`@amritk/mjst` fixes.** `json-schema-typed` moved to `dependencies`, because
+  the shipped `dist/emit-examples.d.ts` imports types from it. The package gained
+  an `exports` map, so it is no longer deep-importable in its entirety. And the
+  build now marks `dist/cli.js` executable: `npm pack` records on-disk modes, and
+  package managers only `chmod` bin targets when they link them, so flows that
+  consume the tarball directly (vendoring, Docker `npm pack` + `tar -x`) hit
+  `EACCES`.
+
+- Updated dependencies [213ecc4]
+- Updated dependencies [9cb45a0]
+- Updated dependencies [5afbfd4]
+- Updated dependencies [eb80ca6]
+- Updated dependencies [2c9982c]
+- Updated dependencies [f439570]
+- Updated dependencies [fa8620c]
+  - @amritk/helpers@0.15.0
+
 ## 0.11.12
 
 ### Patch Changes

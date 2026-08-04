@@ -1,5 +1,179 @@
 # @amritk/generate-examples
 
+## 0.6.0
+
+### Minor Changes
+
+- eb80ca6: Fix `$ref`-graph naming and reference resolution, and stop degrading silently.
+
+  Generation now fails loudly instead of writing output that cannot work:
+
+  - Two definitions that reduce to one filename (`Pet`/`pet`) or one type name
+    (`foo-bar`/`foo.bar`/`fooBar` all become `FooBar`) are an error. The filename
+    case used to drop one definition and give every reference to it the other
+    one's shape; the type-name case emitted both files and left the importer with
+    two `import { FooBar }` lines that do not parse.
+  - An unresolvable `$ref` is an error. It used to warn while the generators still
+    emitted the type name and the parser/validator call for a file that was never
+    written.
+  - A `$dynamicRef` with no `$dynamicAnchor` to bind to is an error. Leaving it in
+    place made the type generator name the type after the anchor, so the canonical
+    recursive-tree idiom (`$dynamicAnchor: "node"`) produced a reference to the
+    DOM's `Node` interface — a clean compile with the wrong type.
+  - A document that relies on `$id` base-URI scoping is rejected rather than
+    resolving its inner fragments against the document root and silently selecting
+    a different definition.
+  - Every recursive schema walker enforces a nesting cap and reports it by name
+    instead of dying with a bare stack-overflow.
+
+  And several things that were broken now work:
+
+  - Non-ASCII definition names (CJK, Cyrillic, accented) keep their characters
+    instead of collapsing onto the single type name `_`, and the generated
+    `index.ts` barrel re-exports them correctly.
+  - A root-level `$dynamicAnchor` is generated as the root's own file, so the
+    2020-12 recursive-tree idiom produces a real self-referencing type.
+  - A plain `$anchor` ref (`$ref: "#named"`) resolves, instead of producing the
+    unloadable import specifier `'./#named.ts'`.
+  - Derived filenames are normalized: no more `.ts`, `...ts`, `http:--x.ts`, or
+    characters Windows and ESM specifiers reject. `$ref: "#/__proto__"` no longer
+    resolves to `Object.prototype`.
+  - Generated readers guard `Object.prototype` member names (`constructor`,
+    `toString`, `__proto__`, …) with `Object.hasOwn`, so a schema with a
+    `constructor` property no longer fails its own shape check for every valid
+    object, and the parser no longer fabricates a `__proto__` key.
+  - `x-mjst` `instanceOf` is allow-listed to the classes the generators support,
+    so an arbitrary identifier is warned about and ignored instead of being
+    emitted verbatim into the output.
+
+### Patch Changes
+
+- d989bc4: Make generation linear in the `$ref` graph, and stop shipping examples that fail their own schema
+
+  **A `$ref` reachable by several paths is derived once, not once per path.**
+  `deriveExample` tracked visited refs in a _path-scoped_ set with no memo table,
+  so every fan-out in the definition graph re-expanded the same subtree
+  exponentially: a 25-definition graph with three refs per definition took ~20
+  seconds, and adding two more definitions roughly quadrupled that. Derivation is
+  now memoized per ref per root document — the pattern
+  `@amritk/helpers/walk-ref-graph` already uses for `resolveRef` — with the cycle
+  guard kept exact: a value produced by cutting a cycle is deliberately not
+  memoized, so a recursive definition still terminates at the same place. The same
+  graph at 400 definitions now derives in ~7 ms.
+
+  **A validating check no longer carries the whole document.** Every check spliced
+  the root's entire `$defs` into the schema it validated, and the interpreter
+  screens each `pattern` in whatever it is handed — so a 959-definition OpenAPI
+  document paid for all 959 definitions on each of the thousand-odd checks a
+  generation run makes, and embedded the whole document into every generated file
+  carrying a validating filter. Only the definitions a schema's `$ref`s actually
+  reach travel with it now (a reference that cannot be pinned to one definition —
+  an `$anchor` name, or a `$dynamicRef`/`$recursiveRef`, whose target is picked
+  from the dynamic scope at validation time — still falls back to the full set).
+  Generating the OpenAI corpus went
+  from ~3.6 s to ~0.3 s, and its generated output from 119 MB to 2.7 MB.
+
+  **Generated arbitraries compile under a strict tsconfig.** `fc.constantFrom("a",
+"b")` infers `Arbitrary<string>`, which does not fit the `"a" | "b"` the
+  generated type declares — so _any_ schema with an `enum` property produced a
+  file no consumer on `strict` could build. Scalar members are now spread from a
+  `const`-asserted tuple, and a filtered arbitrary's predicate is written as a
+  type guard (`(value): value is Foo => …`), which is what it has always been: the
+  combinators generate a superset and the runtime validator narrows it. A new
+  suite type-checks generated files against the real `fast-check` declarations
+  under `strict`, `exactOptionalPropertyTypes`, and `noUncheckedIndexedAccess`.
+
+  **An example that fails its own schema is now reported instead of shipped
+  quietly.** Every `fooExample` is validated (formats included) before it is
+  written; a value that does not satisfy the schema is still emitted, so the
+  module compiles, but the generator warns and names the type. Several cases that
+  used to fail silently now produce valid values: `not` gets a perturbation
+  candidate (`not: { const: 'string' }` no longer returns `"string"`),
+  `uniqueItems` over a closed value set walks the set instead of suffixing a
+  string out of its own `enum`, `pattern` sampling honours `minLength` and reads
+  control escapes (`a\nb` produced `"anb"`), and static examples now cover every
+  `format` `@amritk/runtime-validators` checks — `duration`, `json-pointer`,
+  `relative-json-pointer`, `uri-template`, `uri-reference`, `regex`, and the `idn-`
+  /`iri` variants. A key that `additionalProperties: false` forbids is no longer
+  invented. The remaining limits are written down in the README.
+
+  **A `__proto__` property survives.** Both the derived value (`out[key] = …` hit
+  `Object.prototype`'s prototype setter, so the key vanished) and the emitted
+  source (a _quoted_ `"__proto__":` in an object literal is still the setter, in
+  the example value and in the `fc.record` config — where it also reassigned the
+  config object's prototype to an `Arbitrary`). The value uses `defineProperty`
+  and the source uses the computed `["__proto__"]:` form, matching what
+  `generate-parsers` already does.
+
+  **A schema the validator refuses no longer kills the run — and no longer goes
+  unmentioned.** A `$ref` pointing outside the document (`#/components/schemas/…`
+  in a bare fragment) threw out of `buildExampleSchema`. Those checks are opinions
+  about a candidate value, so an undecidable schema now abstains. It also warns
+  once, naming the schema and the reason, because a filter that switches itself
+  off silently is indistinguishable from one that ran and approved of everything.
+
+- 2c9982c: Fix the published manifests so the packages install, resolve, and dedupe correctly
+
+  **Types resolve on TypeScript's default config.** Every package was
+  exports-only: nine declared `"module": "./dist/index.js"` (a field neither Node
+  nor TypeScript reads) and nothing declared `types`. A consumer on
+  `moduleResolution: "node10"` — still the default when `module` is `commonjs` —
+  cannot see `exports` at all, so `import { lintDocument } from '@amritk/lint'`
+  failed with `TS2307: Cannot find module '@amritk/lint' or its corresponding type
+declarations`. Each package with a `.` export now also declares `main` and
+  `types`; `@amritk/helpers` and `@amritk/adapters` have no `.` export (they are
+  subpath-only), so they declare a `typesVersions` wildcard mapping instead, which
+  gives their subpaths the same node10 fallback. All of it is ignored under
+  `node16`/`nodenext`/`bundler`, where `exports` still wins.
+
+  **`workspace:*` resolves to a caret, not an exact pin.** All fourteen
+  inter-package edges shipped as exact versions, so installing two `@amritk/*`
+  packages published at different times pulled in two copies of their shared
+  dependency. That is not merely wasteful: the module-level caches those packages
+  rely on are per-copy, so the `WeakMap` validator cache in
+  `@amritk/runtime-validators` silently stopped hitting. Pre-1.0 a caret stays
+  narrow (`^0.9.1` is `>=0.9.1 <0.10.0`) and breaking changes here already ride a
+  minor bump.
+
+  **`@amritk/helpers` stops shipping 21 source files it does not need.** Embedded
+  mode reads four helper sources (`is-object`, `validate-array`,
+  `validate-record`, `has-ref`) out of the installed package at generation time,
+  so `src` has to ship — but only those four. `files` now lists them explicitly
+  instead of globbing all of `src`, cutting the tarball from 78 files / 206 kB to
+  63 / 112 kB.
+
+  **Two packages no longer declare a dependency they never import.**
+  `@amritk/mjst` and `@amritk/generate-parsers` both listed
+  `@amritk/generate-markdown` under `dependencies`, but the only importer is each
+  package's `scripts/generate-readme.ts`, which is not published. Both moved to
+  `devDependencies`. `@amritk/adapters` likewise dropped its
+  `@sinclair/typebox` peer dependency: the TypeBox adapter is purely structural
+  (it strips symbol keys) and imports nothing. `valibot` stays — it is a genuine
+  transitive peer of `@valibot/to-json-schema`.
+
+  **`@amritk/mjst` fixes.** `json-schema-typed` moved to `dependencies`, because
+  the shipped `dist/emit-examples.d.ts` imports types from it. The package gained
+  an `exports` map, so it is no longer deep-importable in its entirety. And the
+  build now marks `dist/cli.js` executable: `npm pack` records on-disk modes, and
+  package managers only `chmod` bin targets when they link them, so flows that
+  consume the tarball directly (vendoring, Docker `npm pack` + `tar -x`) hit
+  `EACCES`.
+
+- Updated dependencies [213ecc4]
+- Updated dependencies [9cb45a0]
+- Updated dependencies [5afbfd4]
+- Updated dependencies [eb80ca6]
+- Updated dependencies [798fd7a]
+- Updated dependencies [2c9982c]
+- Updated dependencies [f439570]
+- Updated dependencies [fa8620c]
+- Updated dependencies [bc09e15]
+- Updated dependencies [b152c4e]
+- Updated dependencies [15e480e]
+- Updated dependencies [140412b]
+  - @amritk/helpers@0.15.0
+  - @amritk/runtime-validators@0.10.0
+
 ## 0.5.6
 
 ### Patch Changes

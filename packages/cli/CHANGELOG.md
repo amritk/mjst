@@ -1,5 +1,188 @@
 # @amritk/mjst
 
+## 0.14.0
+
+### Minor Changes
+
+- 2c08493: Add `--allowed-roots` so a split spec can reach a sibling directory again
+
+  `@amritk/resolve-refs` now confines a local `$ref` to the directory holding the
+  document it appears in, which closed a real path-traversal hole
+  (`{"$ref": "/etc/passwd"}` used to be read and inlined). The CLI inherited that
+  default with no way to widen it, so a completely ordinary multi-version layout —
+  `specs/v1/api.json` referencing `../common/user.json` — started failing, and the
+  error told the user to "set allowedRoots", a _library_ option nothing on the
+  command line could reach.
+
+  `--allowed-roots <dirs>` is that escape hatch, on both `mjst generate` and
+  `mjst lint`, alongside an `allowedRoots` config-file key. On the generate path it
+  takes a comma-separated list or the flag repeated (matching `--allowed-hosts`);
+  on `lint` you repeat the flag (matching its `--allowed-hosts`). Relative entries
+  resolve against the current working directory, from a config file as readily as
+  from the flag, which is how `schema` and `outDir` already behave.
+
+  Two things it deliberately does not do. It does not replace the default: the
+  schema's (or linted document's) own directory stays allowed, so naming a shared
+  `common/` folder cannot revoke the one directory nobody would think to list. And
+  it does not widen anything on its own — there is no implicit default drawn from
+  the config file's location, because a config file usually sits at the repo root
+  and quietly granting read access to the whole project tree is not a decision
+  anyone would read into `--config`. A `$ref` that lands outside every named root
+  is still refused.
+
+  Refusals now name the flag that exists (`pass --allowed-roots <dir> …`) instead
+  of leaving the library's option name as the only lead.
+
+- a8f96c9: Stop the CLI from succeeding quietly, and make generation safe to write
+
+  **`mjst lint` no longer exits 0 when its file arguments match nothing.** A glob
+  or path that resolved to zero files fell through to the stdin branch; in CI
+  there is no TTY, so stdin is an empty pipe and the linter dutifully reported
+  "No problems found" on an empty document and exited 0. A typo'd path turned a
+  lint gate into a silent no-op that reported success. Document arguments that
+  match nothing now exit 2 with `No files matched: …`, and only a run with no
+  document arguments at all reads stdin.
+
+  **`mjst lint` rejects unknown flags.** yargs was built without `.strict()`, so
+  `--bogus-flag`, a mistyped `--fail-severity`, or a misspelled `--allowed-hosts`
+  was dropped and the run silently used the defaults — the opposite of the
+  generate command's deliberate strictness. A non-numeric `--concurrency` now
+  reports what is wrong instead of crashing with `Invalid array length`.
+
+  **Generation never clobbers a file it did not write.** A generated name that
+  collided with a hand-written file (`index.ts` is the common one) overwrote it
+  without a word, and `--build` then deleted it along with the other intermediate
+  sources. Each run records what it wrote in a `.mjst-manifest.json` at the root
+  of the output directory: paths listed there are reclaimed freely, so
+  regenerating still needs no ceremony, while anything else aborts the run before
+  a byte is written. The new `--force` flag opts out. This covers every output the
+  CLI produces — the parser tree, `--validators`, `--examples`, and `--out-file`,
+  which is the one most likely to be aimed at hand-written source
+  (`--out-file src/types.ts` used to overwrite that file silently and, under
+  `--build`, delete it afterwards). For `--out-file` the manifest lands in the
+  directory holding the file, alongside the `--build` output and any generated
+  examples.
+
+  **Generation is atomic.** Files are staged under temporary names and renamed
+  into place only once the whole set has been written, so a mid-run failure (a
+  `_helpers` path occupied by a regular file, a full disk) leaves the output
+  directory exactly as it found it instead of a half-generated tree.
+
+  **`--root-type` is validated, and writes are confined to the output
+  directory.** `--root-type '../../Escaped'` — from the command line or from a
+  config file — wrote outside `--out-dir` and emitted a type name that could not
+  compile. The name must now be a TypeScript identifier, and the writer
+  independently refuses any path that resolves outside the output directory.
+
+  **Config files are validated.** Every key was guarded by a `typeof` check whose
+  failure branch was "drop it", so `{"strcit": true, "strict": "true"}` generated
+  non-strict output and exited 0 while the same typo on the command line was
+  rejected. Unknown keys and wrong types now fail with the offending pointer and
+  the expected type, and `config.schema.json` closes the object with
+  `additionalProperties: false`.
+
+  **`-v` / `-h` / `--version` / `--help` are only honored in flag position.** Both
+  predicates scanned the whole argv, so any flag whose _value_ was `-v` (say
+  `--type-suffix -v`) printed the version, generated nothing, and exited 0.
+
+  Smaller argument-parsing fixes: `--` is accepted as the end-of-flags terminator
+  instead of being rejected as an unknown flag; `--config` with no value is an
+  error rather than a silently skipped config file; a missing config file reports
+  `Config file not found: …` instead of a raw `ENOENT`; an `--out-dir` pointing at
+  an existing file explains itself instead of surfacing `EEXIST … mkdir`; a stray
+  positional (`mjst genrate --schema …`) is rejected rather than quietly generating
+  as if the typo were not there; and `--build --types-only` no longer claims to
+  have built `.js` files that were never emitted.
+
+- 2c9982c: Fix the published manifests so the packages install, resolve, and dedupe correctly
+
+  **Types resolve on TypeScript's default config.** Every package was
+  exports-only: nine declared `"module": "./dist/index.js"` (a field neither Node
+  nor TypeScript reads) and nothing declared `types`. A consumer on
+  `moduleResolution: "node10"` — still the default when `module` is `commonjs` —
+  cannot see `exports` at all, so `import { lintDocument } from '@amritk/lint'`
+  failed with `TS2307: Cannot find module '@amritk/lint' or its corresponding type
+declarations`. Each package with a `.` export now also declares `main` and
+  `types`; `@amritk/helpers` and `@amritk/adapters` have no `.` export (they are
+  subpath-only), so they declare a `typesVersions` wildcard mapping instead, which
+  gives their subpaths the same node10 fallback. All of it is ignored under
+  `node16`/`nodenext`/`bundler`, where `exports` still wins.
+
+  **`workspace:*` resolves to a caret, not an exact pin.** All fourteen
+  inter-package edges shipped as exact versions, so installing two `@amritk/*`
+  packages published at different times pulled in two copies of their shared
+  dependency. That is not merely wasteful: the module-level caches those packages
+  rely on are per-copy, so the `WeakMap` validator cache in
+  `@amritk/runtime-validators` silently stopped hitting. Pre-1.0 a caret stays
+  narrow (`^0.9.1` is `>=0.9.1 <0.10.0`) and breaking changes here already ride a
+  minor bump.
+
+  **`@amritk/helpers` stops shipping 21 source files it does not need.** Embedded
+  mode reads four helper sources (`is-object`, `validate-array`,
+  `validate-record`, `has-ref`) out of the installed package at generation time,
+  so `src` has to ship — but only those four. `files` now lists them explicitly
+  instead of globbing all of `src`, cutting the tarball from 78 files / 206 kB to
+  63 / 112 kB.
+
+  **Two packages no longer declare a dependency they never import.**
+  `@amritk/mjst` and `@amritk/generate-parsers` both listed
+  `@amritk/generate-markdown` under `dependencies`, but the only importer is each
+  package's `scripts/generate-readme.ts`, which is not published. Both moved to
+  `devDependencies`. `@amritk/adapters` likewise dropped its
+  `@sinclair/typebox` peer dependency: the TypeBox adapter is purely structural
+  (it strips symbol keys) and imports nothing. `valibot` stays — it is a genuine
+  transitive peer of `@valibot/to-json-schema`.
+
+  **`@amritk/mjst` fixes.** `json-schema-typed` moved to `dependencies`, because
+  the shipped `dist/emit-examples.d.ts` imports types from it. The package gained
+  an `exports` map, so it is no longer deep-importable in its entirety. And the
+  build now marks `dist/cli.js` executable: `npm pack` records on-disk modes, and
+  package managers only `chmod` bin targets when they link them, so flows that
+  consume the tarball directly (vendoring, Docker `npm pack` + `tar -x`) hit
+  `EACCES`.
+
+### Patch Changes
+
+- Updated dependencies [a342117]
+- Updated dependencies [f5a52b7]
+- Updated dependencies [365c6c1]
+- Updated dependencies [299ed2a]
+- Updated dependencies [2eed2e5]
+- Updated dependencies [d989bc4]
+- Updated dependencies [de0952c]
+- Updated dependencies [213ecc4]
+- Updated dependencies [9cb45a0]
+- Updated dependencies [ef77708]
+- Updated dependencies [5afbfd4]
+- Updated dependencies [eb80ca6]
+- Updated dependencies [798fd7a]
+- Updated dependencies [874856f]
+- Updated dependencies [2c9982c]
+- Updated dependencies [f439570]
+- Updated dependencies [fa8620c]
+- Updated dependencies [cb0ef39]
+- Updated dependencies [08b2833]
+- Updated dependencies [d749ee2]
+- Updated dependencies [945e8f2]
+- Updated dependencies [f9f790a]
+- Updated dependencies [0d4bed2]
+- Updated dependencies [947d44a]
+- Updated dependencies [7757788]
+- Updated dependencies [7839a38]
+- Updated dependencies [007aa05]
+- Updated dependencies [1b720e2]
+- Updated dependencies [c1a176f]
+- Updated dependencies [00eb0c9]
+  - @amritk/api@0.13.0
+  - @amritk/generate-examples@0.6.0
+  - @amritk/generate-validators@0.12.0
+  - @amritk/generate-parsers@0.19.0
+  - @amritk/helpers@0.15.0
+  - @amritk/resolve-refs@0.5.0
+  - @amritk/lint@0.4.4
+  - @amritk/adapters@0.4.0
+  - @amritk/yaml@0.5.0
+
 ## 0.13.9
 
 ### Patch Changes
