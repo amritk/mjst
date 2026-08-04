@@ -1,5 +1,250 @@
 # @amritk/resolve-refs
 
+## 0.5.0
+
+### Minor Changes
+
+- d749ee2: Keep a `$dynamicRef` the dynamic scope has to answer, instead of inlining one
+  wrong target
+
+  A `$dynamicRef` binds at _evaluation_ time to the outermost `$dynamicAnchor` of
+  its name along the chain of resources actually being applied, so the same keyword
+  can resolve to different schemas depending on where evaluation entered from.
+  Inlining happens once, which means a resolver that inlines every `$dynamicRef` is
+  guessing — and a wrong guess changes what the document accepts, in both
+  directions.
+
+  So it no longer guesses. Where the binding is decidable it inlines as before:
+
+  - a **pointer fragment** (`#`, `#/$defs/items`) is a plain `$ref` per the spec —
+    there is no anchor to late-bind to;
+  - an **anchor name declared at most once** in the document has only one schema the
+    dynamic lookup could ever reach.
+
+  Where it is not decidable — an anchor name declared twice or more — the
+  `$dynamicRef` stays in the output, along with the scaffolding it needs to resolve
+  at validation time: the `$dynamicAnchor`s it may bind to and the `$id`s that
+  delimit the resources those anchors live in. Inlining anything whose copy would
+  drop a resource out of that chain is held back for the same reason. This is the
+  move the resolver already makes for a reference cycle — keep the reference rather
+  than collapse it to one wrong answer — now covering both cases under one rule.
+
+  Consumers see no new API and no new errors: a kept reference is not a failure, it
+  is a reference the resolver could not answer without changing the document's
+  meaning, resolvable against the output exactly as it was against the input.
+  `trackOrigins` records nothing for one, because nothing was copied in its place.
+
+  On the `$ref` corpus of the official JSON Schema Test Suite the package is now at
+  **170 / 170**.
+
+  Two limits stay, documented in the code: a multi-document `resolveRefsFromFile`
+  still inlines (preservation only helps when the scaffolding survives into the
+  output, which a single-document resolve guarantees and a flattened multi-document
+  one does not), and 2019-09's `$recursiveRef` has the same defect but no corpus to
+  move it against.
+
+- 945e8f2: Close the local-file, cache-scoping, and fan-out gaps in the resolver's guards
+
+  This package's selling point is a default-deny SSRF guard. These are the places
+  the guard did not reach.
+
+  **Local `$ref`s are now confined to the root document's directory.** `$ref`
+  resolution against the filesystem had no containment check and no way to turn it
+  off: `{"$ref": "../../../etc/passwd"}` (or an absolute path) read whatever the
+  process could read, and any caller supplying the YAML `parse` callback the docs
+  recommend got arbitrary text, not just JSON. A local ref must now resolve under
+  `dirname(rootLocation)`; both the lexical and the symlink-resolved path have to
+  land inside it, so a symlink planted in the tree cannot be used to escape.
+
+  This is a **behavior change**: a legitimate cross-directory ref
+  (`../common/schemas.json` — a very normal split-spec layout) now fails until you
+  widen it with the new `allowedRoots`, which the refusal message names. The
+  default was chosen to match the stance the remote path already took — deny, then
+  opt in — since the escaping ref and the traversal attack are the same shape and
+  only the caller can tell them apart. The root document you name is exempt; it is
+  what you asked for. `localRefs: false` refuses cross-file reads entirely.
+
+  **The session cache no longer leaks documents across credentials.** It was keyed
+  by URL alone, so a call carrying one tenant's `Authorization` header handed that
+  tenant's private document straight to a later call carrying no credentials at
+  all — and in-flight coalescing additionally made the second caller inherit the
+  first one's `fetch`, `timeoutMs`, and `maxBytes`. Both keys now include a digest
+  of the effective headers plus the `fetch`/`parse` identities and the transfer
+  limits. The cache is also bounded now (10-minute TTL, 256 entries, LRU
+  eviction) instead of growing for the life of the process, and
+  `clearRemoteCache(url)` can drop a single document.
+
+  **A resolve is bounded as a whole.** A root document with 500 `$ref`s to distinct
+  URLs drove 501 fetches with nothing but the per-hop timeout bounding it — an
+  egress amplifier and a host scanner, from the resolver's network position. New
+  `maxDocuments` (500) and `totalTimeoutMs` (60s, applied across the whole resolve
+  and not just per hop) cap it.
+
+  **Deeply nested documents no longer throw.** `'{"a":'.repeat(20000)` raised
+  `RangeError: Maximum call stack size exceeded` out of the walkers, breaking the
+  package's stated contract that errors are collected and never thrown. Every
+  recursive walk is depth-capped (`maxDepth`, default 512); past the limit the
+  subtree is left unresolved and one `ResolveError` is recorded.
+
+  **The SSRF guard is no longer name-blind.** `metadata.google.internal`,
+  `metadata.goog`, `metadata`, `instance-data`, and anything under the reserved
+  `.internal` TLD are refused by name — the IP check missed all of them, because
+  callers reach the metadata service by name. The new `assertPublicHost` also
+  resolves each remote hostname and refuses it when _any_ address it points at is
+  non-public, which closes the `127.0.0.1.nip.io` class of bypass; it fails closed,
+  and `verifyDns: false` (or an `allowedHosts` entry) opts out where names resolve
+  at an egress proxy. DNS rebinding is narrowed, not closed: pinning the connection
+  to the verified address is not something Node's `fetch` exposes, and the README
+  says so rather than overclaiming.
+
+  **Missing IP ranges added:** `fec0::/10` (deprecated site-local),
+  `198.18.0.0/15` (benchmarking), and `192.0.0.0/24` (IETF protocol assignments).
+
+  **`allowedHosts` is no longer a footgun.** Matching was case-sensitive and
+  port-exact, so `['example.com']` refused `https://example.com:8443/a.json` and
+  `['EXAMPLE.com']` refused everything — failing closed, but pushing users toward
+  `allowPrivateHosts`, which is a real hole. Entries now match case-insensitively;
+  an entry without a port matches any port, and one with a port must match it
+  (a URL that omits the port counts as its protocol default).
+
+### Patch Changes
+
+- 798fd7a: Measure every schema-consuming package against the official JSON Schema Test
+  Suite, the way `@amritk/yaml` is measured against the YAML test suite
+
+  The required Draft 2020-12 tests (46 files, 383 groups, 1299 cases) are vendored
+  under `fixtures/json-schema-test-suite`, and four packages now run them on every
+  build. Each carries an expected-failure list naming every case it does not pass
+  and why, and each suite fails when a case moves in **either** direction — a
+  regression breaks the build, and so does a case that starts passing while its
+  entry stays behind. Nothing is published: the corpus and the harnesses live
+  outside every `files` list.
+
+  | package                       | measured on                                      | rate                |
+  | ----------------------------- | ------------------------------------------------ | ------------------- |
+  | `@amritk/runtime-validators`  | `validate` and `validateGuard` verdicts          | 1250 / 1299 (96.2%) |
+  | `@amritk/generate-parsers`    | strict parsers, generated → linked → executed    | 1180 / 1299 (90.8%) |
+  | `@amritk/generate-validators` | generated predicate validators, likewise         | 987 / 1299 (76.0%)  |
+  | `@amritk/resolve-refs`        | verdict preserved after inlining (`$ref` corpus) | 160 / 170 (94.1%)   |
+
+  The generators are measured through the code they emit, not the source text they
+  emit: each suite schema is generated whole, compiled, and linked in memory, so the
+  `$ref`'d sibling files and the embedded runtime helpers run too. `resolve-refs`
+  has no verdicts of its own, so it is held to semantic preservation — the resolved
+  document must accept exactly what the original did, judged by
+  `@amritk/runtime-validators` over the cases the interpreter already answers
+  correctly, which is the population where a resolution bug is visible and nothing
+  else is.
+
+  Those rates are where the packages _end up_. The suites were written first and
+  found real defects — a validator that accepted everything for a schema without a
+  `type`, `required` satisfied by an inherited `toString`, refs that emitted
+  uncompilable output, `$ref`-shaped data inlined as a reference — each fixed in its
+  own commit alongside this one. What remains is documented case by case, and each
+  package's README carries a "Conformance, measured" section with its number and the
+  reasons behind it.
+
+- 2c9982c: Fix the published manifests so the packages install, resolve, and dedupe correctly
+
+  **Types resolve on TypeScript's default config.** Every package was
+  exports-only: nine declared `"module": "./dist/index.js"` (a field neither Node
+  nor TypeScript reads) and nothing declared `types`. A consumer on
+  `moduleResolution: "node10"` — still the default when `module` is `commonjs` —
+  cannot see `exports` at all, so `import { lintDocument } from '@amritk/lint'`
+  failed with `TS2307: Cannot find module '@amritk/lint' or its corresponding type
+declarations`. Each package with a `.` export now also declares `main` and
+  `types`; `@amritk/helpers` and `@amritk/adapters` have no `.` export (they are
+  subpath-only), so they declare a `typesVersions` wildcard mapping instead, which
+  gives their subpaths the same node10 fallback. All of it is ignored under
+  `node16`/`nodenext`/`bundler`, where `exports` still wins.
+
+  **`workspace:*` resolves to a caret, not an exact pin.** All fourteen
+  inter-package edges shipped as exact versions, so installing two `@amritk/*`
+  packages published at different times pulled in two copies of their shared
+  dependency. That is not merely wasteful: the module-level caches those packages
+  rely on are per-copy, so the `WeakMap` validator cache in
+  `@amritk/runtime-validators` silently stopped hitting. Pre-1.0 a caret stays
+  narrow (`^0.9.1` is `>=0.9.1 <0.10.0`) and breaking changes here already ride a
+  minor bump.
+
+  **`@amritk/helpers` stops shipping 21 source files it does not need.** Embedded
+  mode reads four helper sources (`is-object`, `validate-array`,
+  `validate-record`, `has-ref`) out of the installed package at generation time,
+  so `src` has to ship — but only those four. `files` now lists them explicitly
+  instead of globbing all of `src`, cutting the tarball from 78 files / 206 kB to
+  63 / 112 kB.
+
+  **Two packages no longer declare a dependency they never import.**
+  `@amritk/mjst` and `@amritk/generate-parsers` both listed
+  `@amritk/generate-markdown` under `dependencies`, but the only importer is each
+  package's `scripts/generate-readme.ts`, which is not published. Both moved to
+  `devDependencies`. `@amritk/adapters` likewise dropped its
+  `@sinclair/typebox` peer dependency: the TypeBox adapter is purely structural
+  (it strips symbol keys) and imports nothing. `valibot` stays — it is a genuine
+  transitive peer of `@valibot/to-json-schema`.
+
+  **`@amritk/mjst` fixes.** `json-schema-typed` moved to `dependencies`, because
+  the shipped `dist/emit-examples.d.ts` imports types from it. The package gained
+  an `exports` map, so it is no longer deep-importable in its entirety. And the
+  build now marks `dist/cli.js` executable: `npm pack` records on-disk modes, and
+  package managers only `chmod` bin targets when they link them, so flows that
+  consume the tarball directly (vendoring, Docker `npm pack` + `tar -x`) hit
+  `EACCES`.
+
+- 08b2833: Resolve a `#/pointer` inside an `$id` scope against the resource that declares it
+
+  A fragment-only ref was hard-coded to resolve against the document root, so
+  `{ "$id": "…/base.json", "$defs": { "inner": … }, "properties": { "x": { "$ref": "#/$defs/inner" } } }`
+  nested inside a larger document reported "Cannot resolve internal `$ref`" — the
+  pointer names a definition of the _embedded resource_, not of the root. It now
+  looks in the resource named by the base URI in scope first, and falls back to the
+  document root only when the pointer matches nothing there. The fallback is what
+  keeps bundled documents working: a bundled OpenAPI file points at
+  `#/components/schemas/…` from inside an `$id` scope, and when both could match the
+  resource wins, which is the order the spec asks for.
+
+  That also settles pointer-form `$dynamicRef`s (`#/$defs/items`) inside an `$id`
+  scope: the spec says a `$dynamicRef` whose fragment is a pointer behaves exactly
+  like `$ref`, so resolving it against its enclosing resource is right by
+  construction.
+
+  On the `$ref` corpus of the official JSON Schema Test Suite the package is at
+  **160 / 170**. The corpus grew from 107 with `@amritk/runtime-validators`' `$id`
+  work — it is the reference-carrying cases the interpreter answers correctly, which
+  is the population where a resolution bug is visible at all. What is left is one
+  documented limit: a `$dynamicRef` binds at evaluation time to the outermost
+  `$dynamicAnchor` along the _dynamic_ scope, so inlining it statically collapses it
+  to a single target and cannot be right in general.
+
+- f9f790a: Stop inlining a `$ref`-shaped object that is data, not a reference
+
+  `{ "$defs": { "a_string": { "type": "string" } }, "enum": [ { "$ref": "#/$defs/a_string" } ] }`
+  references nothing. `enum` holds _instances_, and one of them happens to be an
+  object with a `$ref` key — but the walk was purely structural, so it inlined that
+  object and turned "the enum containing `{"$ref": …}`" into "the enum containing
+  `{"type": "string"}`", changing what the document matches in both directions. The
+  official suite carries the case under exactly that name: _"naive replacement of
+  `$ref` with its destination is not correct"_.
+
+  Every structural walk in the package now carries the **role** of the node it is
+  at — a schema, a map of author-chosen names to schemas, instance data, or
+  something outside the vocabulary. `enum` / `const` / `default` / `examples` hand
+  their subtree back untouched; `properties` / `patternProperties` / `$defs` /
+  `definitions` / `dependentSchemas` / `dependencies` suppress keyword reading one
+  level down, so a definition legitimately _named_ `enum` is still a definition and
+  a property named `$ref` is still a property — the trap in the naive version of
+  this fix, which the resource registry had; and an unrecognized keyword yields
+  `unknown`, which is absorbing, so OpenAPI's `components`/`paths` and `x-` vendor
+  blocks are walked exactly as before.
+
+  Two consequences beyond the inlining itself: the resource registry no longer
+  registers an `$id`/`$anchor` that is part of a value or a property name, and
+  `resolveRefsFromFile` no longer reads a file or opens a network connection for a
+  `$ref` string sitting inside an `enum`.
+
+  This takes the package to **107 / 107** on the `$ref` corpus of the official JSON
+  Schema Test Suite, with an empty expected-failure list.
+
 ## 0.4.5
 
 ### Patch Changes

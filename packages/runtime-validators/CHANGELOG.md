@@ -1,5 +1,362 @@
 # @amritk/runtime-validators
 
+## 0.10.0
+
+### Minor Changes
+
+- bc09e15: `validateGuard` stops narrowing where the inferred type cannot describe every
+  accepted value
+
+  `FromSchema` infers an object shape from applicator keywords alone, so
+  `{ properties: { a: { type: 'string' } } }` infers `{ a?: string }`. The
+  interpreter — correctly — accepts a non-object against that schema, because JSON
+  Schema's object keywords ignore values that are not objects. The guard was
+  therefore handing back `input is { a?: string }` for a `42` it had just approved.
+
+  For exactly those schemas — no `type`, `enum`, `const` or `$ref`, but
+  `properties`, `required`, `additionalProperties`, `patternProperties`,
+  `prefixItems` or `items` present, recursing through `allOf`/`anyOf`/`oneOf`
+  branches — `validateGuard` now returns a `Check<T>` instead of a `Guard<T>`: the
+  same runtime function, no type predicate. Every schema that declares a `type` (or
+  `enum`/`const`/`$ref`) keeps its predicate, and so does a schema whose type is not
+  a literal — narrowing is surrendered only when the inference is _demonstrably_
+  partial, never because the checker could not decide.
+
+  `Check<T>` keeps the erased phantom carrier `Validator` already uses, so
+  `Infer<typeof check>` still recovers the schema's type rather than collapsing to
+  `never`, and it is assignable anywhere `(input: unknown) => boolean` is. It reads
+  as "checks for this, does not claim it".
+
+  The runtime is untouched. This mirrors the same fix in
+  `@amritk/generate-validators`, whose generated `isX` had the identical hole — the
+  two now tell one story about the same schemas, and the type-level predicate sits
+  next to `ImplicitShape` so the keyword lists cannot drift apart.
+
+- b152c4e: Resolve `$ref` against `$id` as a base URI, and give `$dynamicRef` a real dynamic
+  scope
+
+  Measured against the official JSON Schema Test Suite, the interpreter goes from
+  1183/1299 to **1250/1299 (96.2%)**. Sixty-seven cases, one cause: a `$ref` written
+  against an `$id` — relative (`"list"`), absolute
+  (`"http://example.com/b/d.json"`), or a URN — had nothing to resolve against and
+  threw, even when the resource it named sat _inside the same document_.
+
+  The document is now walked once into a registry of its embedded resources: each
+  `$id` composed against the base of its parent, and each resource's `$anchor`s and
+  `$dynamicAnchor`s registered under it. A ref resolves against the base in scope at
+  the referring node — relative, absolute, URN, absolute-path, pointer-into-resource
+  and anchor-in-resource forms all work — and `$dynamicRef` implements bookending
+  properly: it goes dynamic only when static resolution already lands on a
+  `$dynamicAnchor` of that name, then takes the outermost resource in the dynamic
+  scope declaring it.
+
+  Two behavior changes fall out of that, both spec-correct and both confined to
+  documents that declare an `$id`:
+
+  - A `#/pointer` inside an `$id` scope resolves within that resource rather than at
+    the document root. A scoped ref that names nothing in its own resource still
+    falls back to the document-global lookup, so a bundled schema that worked before
+    works unchanged — the new path can only _add_ an answer.
+  - `contains` publishes the indices it matched rather than sweeping the whole
+    array, so an adjacent `unevaluatedItems` sees the right set. This is where the
+    spec and Ajv disagree; the suite agrees with the spec, and so do we. The pair is
+    excluded from the Ajv differential corpus and covered by unit tests plus the
+    suite instead.
+
+  Cost is kept off the common path: the registry is `null` for a document with no
+  `$id` at all, the `$id` scan is fused into the pattern-screening walk that already
+  happened, and resolutions are memoized per validator. Eval-free, synchronous,
+  zero-dependency and no-I/O all hold.
+
+  What remains unimplemented is now one decision rather than two: this package does
+  no I/O, so a `$ref` naming _another document_ (and `$vocabulary`, which means
+  fetching a metaschema) still throws. Bundle with `@amritk/resolve-refs` first.
+
+- 140412b: Take documents the caller already has: `validate(schema, { schemas })`
+
+  The interpreter does no I/O — no `fetch`, no filesystem — which is what lets it
+  run under a strict CSP and on Workers. Until now that also meant it could not be
+  _told_ about a document it did not receive, so a `$ref` naming another schema
+  threw and the answer was always "bundle it first".
+
+  `ValidateOptions.schemas` closes that without giving up anything: a plain record
+  of absolute URI → document, for schemas the caller has already loaded. A
+  registered document is a full schema resource — walked under its retrieval URI, so
+  its `$id`, `$anchor`s, `$dynamicAnchor`s and nested embedded resources all
+  register, a document with no `$id` resolves relative refs against the URI it was
+  registered under, and one whose `$id` disagrees answers to both. Cross-document
+  `$dynamicRef` bookending works. A URI that was _not_ registered still throws, now
+  with a message showing how to supply it.
+
+  It is a record rather than an `addSchema` call on purpose: `addSchema` implies
+  mutable global state, and this package stays a pure function of its inputs. Pass
+  the registry as an immutable value — the prepared-validator cache keys on its
+  identity _and_ its URI set, so adding or removing a document is a cache miss
+  rather than a stale hit (swapping the contents under a URI in place is
+  undetectable, exactly as mutating the schema object is, and is documented as
+  such).
+
+  With the metaschema registered, `$vocabulary` can finally be read: a custom
+  dialect that omits the validation vocabulary turns `minimum` and friends into
+  annotations instead of assertions. Two limits, both documented: it is read from
+  the root `$schema` rather than per schema resource, and it defaults to enforcing
+  whenever the metaschema was not registered, which is the stricter answer.
+
+  Nothing changes for callers who pass no registry: the key work is skipped, the
+  registry build stays gated on the document declaring an `$id`, and the vocabulary
+  check short-circuits.
+
+  **The package now passes the official JSON Schema Test Suite in full — 1299 / 1299
+  required Draft 2020-12 cases.** The harness hands the suite's own `remotes/`
+  documents to `schemas`, which is the sanctioned equivalent of the HTTP server the
+  suite would otherwise expect: same documents, same URIs, handed over instead of
+  fetched, with the interpreter still doing all the base-URI, anchor and
+  cross-document work the cases exist to test.
+
+  The dialect itself ships alongside, as an opt-in subpath:
+
+  ```ts
+  import { metaschema } from "@amritk/runtime-validators/metaschema";
+
+  validate(userSchema, { schemas: metaschema }); // "is this a valid 2020-12 schema?"
+  ```
+
+  Eight documents (the dialect plus its seven vocabulary metaschemas), ~7.9 KB of
+  JSON, reachable only through that subpath — the main entry never imports it, so a
+  caller who does not ask for it ships none of it. A test holds the copy to Ajv's
+  vendored specification text by deep equality, which makes Ajv a _check_ on the
+  transcription rather than a runtime dependency of it.
+
+### Patch Changes
+
+- 213ecc4: Take documents you already loaded, so a `$ref` to another document generates
+
+  **On the official JSON Schema Test Suite: `generate-validators` 1238 → 1268 /
+  1281 (99.0%), `generate-parsers` 1222 → 1237 / 1281 (96.6%).**
+
+  Both generators gain a `schemas` option: documents you have already loaded, keyed
+  by the absolute URI a `$ref` names them by. It is the build-time counterpart of
+  `@amritk/runtime-validators`' `ValidateOptions.schemas`, and it keeps the same
+  promise — nothing is fetched, you cannot pass a URL, only a document. What changes
+  is that "we do no I/O" no longer also means "we cannot be told".
+
+  A cross-document `$ref` was the single largest gap in both packages, and it is
+  gone. `refRemote.json` passes in full; so do the `dynamicRef.json` groups that
+  reach `tree.json` and `extendible-dynamic-ref.json`, and — with the dialect
+  metaschema registered — `defs.json` and `ref.json`'s "remote ref, containing refs
+  itself".
+
+  Each registered document becomes a resource of the document being generated: its
+  `$id`, its `$anchor`s and `$dynamicAnchor`s and its own embedded resources all
+  resolve, a `$ref` from one registered document into another resolves, and every
+  definition reached gets a file, a type and a validator/parser by the ordinary
+  rules. A document with no `$id` resolves its relative `$ref`s against the URI it
+  was registered under; one whose `$id` disagrees answers to both. Registering more
+  than the schema uses costs nothing — only the documents actually reached are
+  emitted — and a `$ref` to a URI nobody registered still stops the build with a
+  message naming the ref.
+
+  The mechanism is one pass, not a second addressing mode. `@amritk/helpers` gains
+  `graftExternalSchemas`, which embeds the registered documents into the root before
+  the `$id` pass, and `pruneExternalSchemas`, which drops the unreferenced ones once
+  the refs are pointers and reachability is finally knowable. Everything downstream —
+  the ref-graph walk, the naming, the emitted import graph — keeps working on a
+  single document and needed no change. `walkRefGraph` carries the option and
+  memoizes per `(schema, schemas)` by identity.
+
+  **Fixed: a root schema with a union `type` dropped every sibling constraint.**
+  `{ type: ['object', 'boolean'], properties: {…}, required: [...] }` emitted the
+  type check and nothing else, so it accepted any object at all. The multi-type root
+  branch now emits the shared constraint checks the single-type and combinator
+  branches already did; they carry their own runtime-type guards, so a member of the
+  union a constraint does not apply to is still untouched. This is the shape the
+  2020-12 metaschema's own root is written in, which is how it went unnoticed — the
+  generated dialect validator accepted `{ type: 1 }` as a valid schema.
+
+  `@amritk/runtime-validators` is unchanged in behaviour; its conformance figures are
+  restated against the corpus that is actually vendored (1281 cases, not 1299 — the
+  README's count never matched, and upstream's `content.json` is not among the
+  vendored files). The suite's `remotes/` loader moves to the shared fixtures
+  bookkeeping so all four conformance suites use one walk.
+
+- 798fd7a: Measure every schema-consuming package against the official JSON Schema Test
+  Suite, the way `@amritk/yaml` is measured against the YAML test suite
+
+  The required Draft 2020-12 tests (46 files, 383 groups, 1299 cases) are vendored
+  under `fixtures/json-schema-test-suite`, and four packages now run them on every
+  build. Each carries an expected-failure list naming every case it does not pass
+  and why, and each suite fails when a case moves in **either** direction — a
+  regression breaks the build, and so does a case that starts passing while its
+  entry stays behind. Nothing is published: the corpus and the harnesses live
+  outside every `files` list.
+
+  | package                       | measured on                                      | rate                |
+  | ----------------------------- | ------------------------------------------------ | ------------------- |
+  | `@amritk/runtime-validators`  | `validate` and `validateGuard` verdicts          | 1250 / 1299 (96.2%) |
+  | `@amritk/generate-parsers`    | strict parsers, generated → linked → executed    | 1180 / 1299 (90.8%) |
+  | `@amritk/generate-validators` | generated predicate validators, likewise         | 987 / 1299 (76.0%)  |
+  | `@amritk/resolve-refs`        | verdict preserved after inlining (`$ref` corpus) | 160 / 170 (94.1%)   |
+
+  The generators are measured through the code they emit, not the source text they
+  emit: each suite schema is generated whole, compiled, and linked in memory, so the
+  `$ref`'d sibling files and the embedded runtime helpers run too. `resolve-refs`
+  has no verdicts of its own, so it is held to semantic preservation — the resolved
+  document must accept exactly what the original did, judged by
+  `@amritk/runtime-validators` over the cases the interpreter already answers
+  correctly, which is the population where a resolution bug is visible and nothing
+  else is.
+
+  Those rates are where the packages _end up_. The suites were written first and
+  found real defects — a validator that accepted everything for a schema without a
+  `type`, `required` satisfied by an inherited `toString`, refs that emitted
+  uncompilable output, `$ref`-shaped data inlined as a reference — each fixed in its
+  own commit alongside this one. What remains is documented case by case, and each
+  package's README carries a "Conformance, measured" section with its number and the
+  reasons behind it.
+
+- 2c9982c: Fix the published manifests so the packages install, resolve, and dedupe correctly
+
+  **Types resolve on TypeScript's default config.** Every package was
+  exports-only: nine declared `"module": "./dist/index.js"` (a field neither Node
+  nor TypeScript reads) and nothing declared `types`. A consumer on
+  `moduleResolution: "node10"` — still the default when `module` is `commonjs` —
+  cannot see `exports` at all, so `import { lintDocument } from '@amritk/lint'`
+  failed with `TS2307: Cannot find module '@amritk/lint' or its corresponding type
+declarations`. Each package with a `.` export now also declares `main` and
+  `types`; `@amritk/helpers` and `@amritk/adapters` have no `.` export (they are
+  subpath-only), so they declare a `typesVersions` wildcard mapping instead, which
+  gives their subpaths the same node10 fallback. All of it is ignored under
+  `node16`/`nodenext`/`bundler`, where `exports` still wins.
+
+  **`workspace:*` resolves to a caret, not an exact pin.** All fourteen
+  inter-package edges shipped as exact versions, so installing two `@amritk/*`
+  packages published at different times pulled in two copies of their shared
+  dependency. That is not merely wasteful: the module-level caches those packages
+  rely on are per-copy, so the `WeakMap` validator cache in
+  `@amritk/runtime-validators` silently stopped hitting. Pre-1.0 a caret stays
+  narrow (`^0.9.1` is `>=0.9.1 <0.10.0`) and breaking changes here already ride a
+  minor bump.
+
+  **`@amritk/helpers` stops shipping 21 source files it does not need.** Embedded
+  mode reads four helper sources (`is-object`, `validate-array`,
+  `validate-record`, `has-ref`) out of the installed package at generation time,
+  so `src` has to ship — but only those four. `files` now lists them explicitly
+  instead of globbing all of `src`, cutting the tarball from 78 files / 206 kB to
+  63 / 112 kB.
+
+  **Two packages no longer declare a dependency they never import.**
+  `@amritk/mjst` and `@amritk/generate-parsers` both listed
+  `@amritk/generate-markdown` under `dependencies`, but the only importer is each
+  package's `scripts/generate-readme.ts`, which is not published. Both moved to
+  `devDependencies`. `@amritk/adapters` likewise dropped its
+  `@sinclair/typebox` peer dependency: the TypeBox adapter is purely structural
+  (it strips symbol keys) and imports nothing. `valibot` stays — it is a genuine
+  transitive peer of `@valibot/to-json-schema`.
+
+  **`@amritk/mjst` fixes.** `json-schema-typed` moved to `dependencies`, because
+  the shipped `dist/emit-examples.d.ts` imports types from it. The package gained
+  an `exports` map, so it is no longer deep-importable in its entirety. And the
+  build now marks `dist/cli.js` executable: `npm pack` records on-disk modes, and
+  package managers only `chmod` bin targets when they link them, so flows that
+  consume the tarball directly (vendoring, Docker `npm pack` + `tar -x`) hit
+  `EACCES`.
+
+- 15e480e: Widen the ReDoS screen, fix five correctness defects, and cut five allocations off the hot path
+
+  **The ReDoS screen only looked where it expected schemas to be.** It walked a
+  fixed list of subschema keywords, so an OpenAPI-shaped document — subschemas
+  parked under `components/schemas` and reached by `$ref` — was declared clean and
+  its `pattern`s were then compiled and run unscreened. `{ $ref:
+'#/components/schemas/A', components: { schemas: { A: { pattern: '^(a+)+$' } } } }`
+  burned ~1.3 s of CPU on a 31-character input, while the same pattern inlined at
+  the root was correctly rejected. The walk is now unrestricted: every
+  string-valued `pattern` key and every `patternProperties` key anywhere in the
+  document is screened, wherever it sits. Chasing `$ref`s instead would have fixed
+  that one layout and missed the next unfamiliar one. `const`, `enum`, `default`,
+  `examples` and `example` are still skipped, because a schema is allowed to carry
+  arbitrary data there and `{ const: { pattern: '(a+)+' } }` describes an object,
+  not a regex. This does cost cold build time in proportion to the document
+  actually being screened — an ordinary component schema is unchanged (~0.016 ms),
+  but handing `validate` a whole OpenAPI document now costs ~0.25 ms once, where
+  the old walk visited almost none of it.
+
+  **The screen's documented guarantee was false, and is now both honest and
+  stronger.** It claimed to "flag a few benign patterns, never the reverse", but it
+  only recognized _nested_ unbounded quantifiers: `^(a|a)+$` is star height 1, so
+  it passed — and takes over a second on a 29-character input, doubling with each
+  added character. The screen now also rejects a provably ambiguous alternation
+  under an unbounded quantifier (two branches that match the same single
+  character), and the docs say plainly that this is a filter for recognizable
+  shapes, not a proof of safety — `(a|aa)+` and `a*a*$` still get through. The new
+  rule is deliberately sound rather than broad: the tempting "overlapping first
+  characters" test would flag `(ab|ac)+`, which is linear. Zero new flags across a
+  sweep of 27 ordinary real-world patterns.
+
+  **A deeply nested schema threw an uncatchable `RangeError`.** The pattern screen
+  and the `$anchor` search both recursed per schema level, and both run before
+  `maxDepth` applies — so 20,000 nested `{ "not": … }` levels overflowed the native
+  stack, `isValidationLimitError` returned `false`, and a consumer's limit handler
+  fell through to a 500. (At 10,000 levels it correctly threw
+  `ValidationLimitError`.) Both walks are now iterative with an explicit stack, so
+  the depth cap does its job and an anchor buried 20,000 levels down still
+  resolves.
+
+  **`required` was silently unenforced for prototype-member names.** The
+  leftover-required list was built with `k in properties`, which walks
+  `Object.prototype` — so `'toString' in {}` was `true`, the key looked already
+  covered and was dropped, and it was absent from the declared-key list too (that
+  comes from `Object.keys`). Nothing checked it: `{ required: ['constructor'],
+properties: {} }` accepted `{}`. Ajv shares this bug by default, so the
+  differential fuzz could not catch it; there are explicit tests now.
+
+  **`format: 'ipv4'` accepted leading zeros** (`01.2.3.4`), the classic
+  octal-interpretation allowlist bypass, and the same octets are embedded in the
+  IPv6 grammar. **`format: 'time'` accepted a bare `12:00:00`** with no offset,
+  which RFC 3339 `full-time` requires. Both now match Ajv exactly.
+  **`minProperties`/`maxProperties` counted inherited properties** — a `for…in`
+  without an own-property guard — so `Object.create({ inherited: 1 })` with one own
+  key satisfied `minProperties: 2`.
+
+  **Five hot-path costs, measured before and after:**
+
+  - The `enum` failure message was built eagerly and thrown away in guard mode. A
+    500-value enum cost 16.4k ops/s on a miss versus 5.1M on a hit — ~99% of the
+    work was a discarded string. This also hit the _valid_ path, because every
+    non-matching `anyOf`/`oneOf` branch probe runs in guard mode: a 20-branch
+    discriminated union with `enum` discriminators went 9.5k → 251k ops/s (26×).
+    The miss itself is now 5.6M ops/s (340–540×).
+  - `contains` evaluated every element even after it had enough matches. A
+    1000-element array matching at index 0 went 8.1k → 5.1M ops/s (630–740×). The early
+    exit is taken only when `maxContains` is absent and no annotation scope is
+    active — both need the exact total.
+  - `dependentRequired` / `dependentSchemas` / `dependencies` rebuilt their
+    `Object.entries` on every validation. Their entry lists are now memoized on the
+    per-node metadata alongside the property keys and compiled `patternProperties`,
+    worth 1.3–1.9× on a one-entry keyword. An `additionalProperties`-only object
+    schema also stopped allocating a throwaway empty pattern array per call (1.12×).
+  - `propertyNames` allocated a nine-field interpreter context per key. One scratch
+    context is now reused across the key loop — safe because the only per-probe
+    state is the `failed` flag and these probes cannot nest, the key being a string.
+    A 20-key object gains 1.9–2.5×.
+  - The own-property count for `minProperties`/`maxProperties` uses
+    `Object.keys().length`, which measured 92M ops/s against 19M for the old
+    unguarded `for…in` and 9.5M for a `for…in` with a `hasOwn` guard — so the fix is
+    also 1.14× faster than the bug.
+
+  **The per-schema validator cache is bounded.** The outer `WeakMap` collects with
+  the schema, but the inner `Map` keyed on mode/formats/limits lived as long as the
+  schema did, so a caller deriving `limits` per request pinned a validator forever:
+  200,000 distinct values retained 82.3 MB. Past 16 configurations it now hands
+  back an uncached validator (0.5 MB), which costs nothing — there is no compile
+  step.
+
+  **Two documentation claims corrected.** The README said valid input "and the
+  entire guard path allocates nothing"; branch probes, annotation trackers and
+  `uniqueItems` sets all allocate, so it now says what is actually true — nothing
+  is built for errors that never happen. And the `$ref` cycle-break comment claimed
+  "stopping here changes no verdict", which holds in a conjunctive position but not
+  inside a disjunction, where returning valid _is_ a verdict.
+
 ## 0.9.1
 
 ### Patch Changes

@@ -1,5 +1,329 @@
 # @amritk/api
 
+## 0.13.0
+
+### Minor Changes
+
+- 299ed2a: Keep the runtime pipeline synchronous when the request never suspends
+
+  **`Api.handle` now returns `ApiResponse | Promise<ApiResponse>`.** It answers
+  synchronously when nothing along the route's path was asynchronous — no
+  declared body to read, no `refine`, no context factory, no guards, and a
+  handler that returned a value rather than a promise. This is the breaking part:
+  `await api.handle(...)` is unaffected, but code calling `.then()` on the result
+  directly must handle a plain value. The bench harness in this repo did exactly
+  that and is updated alongside.
+
+  **Why.** An `async` frame and its promise are not free, and on workerd the
+  difference is large enough to see. On the static GET, measured inside a real
+  isolate with `bench:workerd:allocations`, the runtime engine allocated 2115
+  bytes per request; it now allocates 1510, a 29% cut. Throughput on that case
+  went from ~69k to ~93k ops/s — from 0.80x bare Hono to roughly level with it.
+
+  **How.** `runRoute` is no longer one async function. It is a synchronous
+  dispatcher over three stages that hand off to each other synchronously until
+  something genuinely asynchronous appears:
+
+  - `runSecuredRoute` — security guards suspend before anything else happens, so
+    that whole shape stays asynchronous, and rejoins the shared stages after.
+  - `runSlots` — coercion and validation for params, query, headers, and cookies,
+    all of which were already synchronous.
+  - `runBody` — reading a declared body always suspends, so this stage is
+    unconditionally asynchronous.
+  - `runTail` — refine, the context factory, guards, and the handler. Synchronous
+    when none of the first three are configured and the handler returns a value;
+    otherwise it delegates to `runTailAsync`, which is the original straight-line
+    code.
+
+  The error tail is factored into one `routeError` helper the synchronous and
+  asynchronous halves share, so the two cannot drift on payload-too-large
+  detection or the `onError` contract. `finishReply` stays outside the error
+  boundary in both, exactly where it was.
+
+  **What did not change.** Ordering is identical: security guards still run
+  before any parsing, the context factory still runs after validation on
+  unsecured routes and before it on secured ones, and it still runs exactly once
+  per request. The differential corpus that holds the runtime and compiled
+  engines observationally identical passes unchanged.
+
+  **Still open.** The runtime engine's batch-time distribution is still bimodal
+  under workerd — a p95 around 3.3x its median, which is a major collection
+  rather than allocation volume. Neither the async work above nor removing
+  response validation moved it. The compiled engine, which is the production
+  path, does not show it.
+
+- 0d4bed2: Security and correctness fixes across the compiled engine, the fetch adapter, and the hook helpers.
+
+  - **`compileToModule` no longer interpolates contract strings into generated source unchecked.** Response status keys, `bodyType`, `method`, and `maxBodyBytes` are validated at emit time and emitted from narrowed values, so a programmatically-built contract (from a config file, a database row, an imported OpenAPI document) can no longer inject code into the module that ships. `defineRoute`/`defineContract` are identity functions with no runtime validation, which is what made this reachable.
+  - **Guards added or removed after a compile are no longer silently unenforced.** `hashContracts` now fingerprints the _presence_ of `guards`, `securityGuards`, and `refine` (their bodies are still excluded, so rewriting one is not staleness), and the emitted module additionally **throws** at init when that shape drifted — a deploy that fails loudly beats one that quietly stops checking credentials. Ordinary schema drift keeps warning and keeps serving.
+  - **The compiled engine honours the `raw` escape hatch on the error paths.** An `onError` or `errors.*` formatter returning `raw(response)` used to lose its body in the compiled module while the runtime engine sent it.
+  - **`createETag` enforces `maxBytes` while reading** instead of buffering the whole body first. A large streamed reply was fully buffered just to discover it was over the limit; the cap now bails mid-read and passes the response through without losing already-read chunks.
+  - **A throwing `onRequest`/`onResponse` hook becomes the pipeline's 500** in both engines instead of escaping to the platform (a Workers 1101, a Bun unhandled rejection).
+  - **New `writableResponse` export**, used by `createCors`, `createCsrf`, `createRateLimit`, and `createRequestId`. A `Response` from a proxying mount has immutable headers, so mutating them directly threw — and per the previous point, that throw cost the whole reply.
+  - **`createDocs` escapes `cdn` and `integrity`**, pins the Scalar bundle version (new `SCALAR_VERSION` export and `version` option) instead of floating on `@latest`, and accepts an `integrity` option for subresource integrity.
+  - **`signCookie`'s imported-key cache is bounded**, so a per-tenant secret-rotation loop no longer retains a `CryptoKey` per distinct secret forever.
+  - **The package root no longer pulls `node:*` into a Workers or browser bundle.** `node:http`, `node:stream`, and `node:events` reached the root entry through the Node adapters and broke `esbuild --platform=browser` outright (resolution runs before tree-shaking). The adapters now load their built-ins on demand and `waitForDrain` dropped `node:events` entirely; a graph-walking test over `index.ts` pins the invariant.
+
+### Patch Changes
+
+- a342117: Close a compiled-engine validation bypass, and stop dropping `__proto__`-named headers and path parameters
+
+  **`compileToModule` baked its schema constants as object literals, which is not
+  a faithful copy of the JSON they were printed from.** A JavaScript object
+  literal treats `__proto__` as the prototype setter, so a contract declaring a
+  property under that name — perfectly ordinary in a schema loaded from a config
+  file, a database row, or an imported OpenAPI document, where the key really is
+  an own property — compiled to a constant with that property silently missing.
+  The compiled engine then validated a schema the runtime engine never had, and
+  diverged in both directions: it rejected `{"__proto__":"abc"}` under
+  `additionalProperties: false` that the runtime accepted, and accepted
+  `{"__proto__":123}` against `{"type":"string","minLength":3}` that the runtime
+  rejected. The second is a validation bypass in the production engine — the
+  declared constraint was simply gone.
+
+  Every constant baked from contract data — request schemas for all five slots,
+  response body and header schemas, and the interpreter's options — now emits as
+  `JSON.parse('…')`, where each key lands as an own property. The argument is a
+  correctly-escaped single-quoted string literal (backslashes, single quotes, and
+  U+2028/U+2029, which are legal unescaped in JSON but were line terminators in
+  pre-ES2019 JavaScript source), pinned by a round-trip test over hostile input.
+  There is no startup cost: a JSON string literal evaluates about 13% faster than
+  the equivalent object literal at module init on a 46 KB schema, and the emitted
+  module grows by 14 bytes per constant (0.6% on a realistic module). The
+  precomputed OpenAPI document was never affected — it was already a string
+  literal.
+
+  The differential corpus gained a route declaring `__proto__` as its path
+  parameter, header, cookie, _and_ body property at once, so the two engines are
+  now pinned to agree on the correct answer for all of them, and the emitter has
+  an invariant test that no schema constant may be a bare object literal.
+
+  **Headers and path parameters named `__proto__` are no longer dropped.** The
+  same write-side bug the cookie parser had: `__proto__` is a valid HTTP field
+  name (it is a token) and a valid path-template capture name, but a plain
+  `record[name] = value` runs the prototype setter instead of creating the
+  property. A contract declaring one saw nothing, and `required: ['__proto__']`
+  could never be satisfied. Fixed in the route matcher, the params builder, and
+  the headers builder through a shared `defineOwnProperty`, which the cookie
+  parser now shares too; the compiled engine unrolls its own params and headers
+  builders, so it emits the equivalent `Object.defineProperty` for that one name
+  and pays nothing for every other.
+
+  Also: the schema-derived response serializer now declines any property whose
+  name shadows an `Object.prototype` member, falling back to `JSON.stringify` —
+  its `body["<key>"]` reader would otherwise answer with the inherited member
+  rather than `undefined` when the reply omits the property, so a `__proto__`
+  property serialized as `{}` and an optional `toString` was emitted on every
+  reply. This is the same bail the inline guard emitter already made, and the two
+  now share one list of risky names.
+
+- f5a52b7: Report thrown adapter hooks instead of swallowing them, and stop dropping a `__proto__` cookie
+
+  **A throwing `onRequest` gate or `onResponse` decorator is no longer silent.**
+  Wrapping the hook chains stopped a throwing hook from escaping to the platform,
+  but the caught error was then dropped on the floor: no log, and the app's own
+  `onError` — which every routed failure already goes through — was never
+  consulted. The motivating case is exactly the one that needs telemetry:
+  `createRequestId({ trustInbound: true })` reflecting a CRLF-bearing inbound
+  `x-request-id` into `Headers.set` answered a bare `{"error":"internal_error"}`
+  with no indication that a decorator threw, or which one. Before the wrapping the
+  throw at least surfaced as a platform-level unhandled error, so the fix traded a
+  crash for an undiagnosable 500.
+
+  A thrown hook now goes to the app's `onError` (with `route: undefined` — a hook
+  belongs to no route), whose reply shapes the response exactly like a handler
+  error's does, raw-`Response` escape hatch included. An app that wired no
+  `onError` gets a `console.error` instead, because silence is the one outcome
+  that is never acceptable here; a reporter that throws falls back to the same log
+  and the bare 500. `Api` gained an optional `onError` so the adapter can reach the
+  sink the app already configured — the hooks run outside `handle`, so the
+  pipeline's own boundary never sees them. `compileToModule` emits the identical
+  helper, and the two-engine differential corpus now pins that both engines report
+  the same error, through the same sink, with the same log line.
+
+  **A contract declaring a cookie named `__proto__` now actually receives it.**
+  The read side treated the name as ordinary data, but the write side was a plain
+  `cookies[name] = value`, which runs `Object.prototype`'s `__proto__` setter
+  rather than creating a property — so the value silently vanished and
+  `required: ['__proto__']` failed for every request no matter what the client
+  sent. Same `defineProperty` fix already applied in `@amritk/generate-validators`
+  and `@amritk/yaml`. Both engines share this parser, so the compiled engine picks
+  it up unchanged.
+
+- 365c6c1: Bucket route dispatch by shape, and fix two request-parsing defects
+
+  **Route lookup no longer scans every parameterized route.** The runtime engine
+  kept one list of dynamic routes per method and walked it in registration order,
+  re-running the segment matcher against each candidate. At 500 routes that was
+  ~7.3 µs per lookup, and a miss cost the same as a hit. Dynamic routes are now
+  bucketed by segment count and by their first literal segment, so a lookup only
+  ever touches candidates that could match the shape in front of it: ~0.55 µs at
+  500 routes, and flat as the table grows. Precedence is unchanged — the buckets
+  are precomputed with the wildcard-first routes merged into each literal's list
+  in registration order, so which of two overlapping routes wins is exactly what
+  it was, greedy tails and static-over-dynamic included.
+
+  **An unroutable path is no longer the most expensive request an API serves.**
+  Building the 405 `allow` header re-ran the _whole_ matcher once per method the
+  API declares, so a path from a vulnerability scanner cost up to seven times the
+  scan — ~45 µs of pure dispatch on a 500-route table, versus ~3 µs to serve a
+  real request. The static half of that answer is now precomputed at startup (the
+  same table the compiled engine emits as `ALLOW_STATIC`) and the dynamic half
+  reuses one path split across all methods: ~0.9 µs. The static hit path also
+  stopped building a `method + ' ' + path` key per request.
+
+  **Duplicate cookie names now resolve first-wins, not last-wins.** Browsers send
+  the most specific cookie first (RFC 6265 orders by longer path, then earlier
+  creation), so a `Path=/` cookie planted from a sibling subdomain arrives _after_
+  the real session cookie — and last-wins let it shadow it. First-wins is what the
+  `cookie` package behind Express, Hono, and Fastify does, and what the rest of the
+  stack assumes. Both engines share this parser, so they stay identical.
+
+  **`buildParamPath` rejects `.` and `..` path parameters.** Dots are unreserved,
+  so `encodeURIComponent` left them alone and `client.getUser({ params: { id:
+'..' } })` built `/users/..`, which the URL parser then collapsed _before the
+  request was sent_ — the call silently hit a different endpoint. It now throws.
+  Greedy `{name+}` tails are checked per segment for the same reason: WHATWG URL
+  normalizes `%2e%2e` too, so a literal `..` path component cannot be transmitted
+  at all, which makes one there always an unintended traversal rather than a
+  directory name.
+
+  The bench harness gains two dispatch cases — `dynamic GET, 500-route table, last
+match (runtime)` and `unroutable path, 500-route table (runtime)` — so the PR
+  delta table catches a regression in either.
+
+- 2eed2e5: Stop paying for an AbortSignal on every request, and re-measure the cross-framework tables
+
+  **Both engines materialized a host-backed `AbortSignal` per request.** The
+  per-request `ApiRequest` was built with `signal: request.signal`, read eagerly.
+  On workerd that first touch constructs a host object backed by C++ state —
+  cheap in bytes, expensive to collect — for handlers that overwhelmingly never
+  look at it. Hono never creates one at all. Reading it through a getter defers
+  the cost to the handlers that actually want it. `hookApiRequest` still reads it
+  eagerly: that path runs once per 500 and hands its object straight to an
+  `onError` reporter.
+
+  **The getter has to be inherited, not owned.** An own accessor pushes the
+  object out of V8's in-object slots. The compiled engine's request object had no
+  accessor before this change, and gaining one took it from 852 to 1276 bytes
+  allocated per request inside workerd. On a shared prototype the instances stay
+  plain data objects and the deferral is free. Both engines get the same
+  treatment, as the differential corpus requires.
+
+  **Measured, not inferred.** The README previously reported that workerd stalled
+  the `@amritk/api` columns far more often than Hono and guessed the cause was
+  allocating more per request. That guess was wrong: on the static GET the
+  compiled engine already allocated 852 bytes per request against bare Hono's
+  1220, and turned a batch of 2048 requests around faster than Hono did. It
+  allocated less and ran quicker, then periodically got stopped. After the fix it
+  allocates 816 bytes per request and stalls on 0 of 60 batches, where before it
+  stalled on 5 and lost 29% of its wall clock to them. The runtime engine still
+  stalls and still allocates ~2172 bytes per request; that is called out in the
+  README as open work rather than presented as solved.
+
+  **New: `bun run bench:workerd:allocations`.** Reads the isolate's heap over
+  workerd's inspector either side of a run of exactly N requests and regresses
+  the delta against N, so the Miniflare loopback hop lands in the intercept and
+  cancels; it also times fixed batches inside the isolate and reports how many
+  ran more than twice the median. workerd accepts `HeapProfiler.startSampling`
+  but answers with an empty profile, so there is no per-call-frame attribution to
+  be had from the runtime. `bench/run-workerd.ts` now repeats each cell across
+  several fresh isolates and reports the median of the per-isolate medians —
+  a single isolate's median is robust to a paused trial, but isolates differ from
+  each other by more than that, which was enough to hide effects this size.
+
+  **The cached-`ResponseInit` comment claimed ~40% and was measured on neither
+  runtime it gets read on.** Measured now: on Node it is worth about 10% on the
+  static GET (104k vs 93k ops/s against `Response.json`); inside workerd the
+  cached init, a cached `Headers` instance, and plain `Response.json` are
+  indistinguishable. The code stays — it costs nothing anywhere and helps on one
+  runtime — but the comment now says so.
+
+  All three tables were re-measured together on one machine, which is slower than
+  the one earlier revisions used, so the absolutes moved down across every column
+  at once. The README says that where the tables are.
+
+- ef77708: Reject `NaN` against a numeric bound, matching `@amritk/runtime-validators`.
+
+  Bounds were emitted as their direct failure condition (`x < minimum`) rather than
+  the negated pass condition (`!(x >= minimum)`). The two agree on every ordinary
+  value and are opposite for `NaN`, which compares `false` against every operator:
+  the direct form read that as "not out of bounds" and let a `NaN` through
+  `minimum` / `maximum` / `exclusiveMinimum` / `exclusiveMaximum`, where the
+  interpreter and Ajv both reject it. Generated validators, strict generated
+  parsers, and the compiled API engine's inlined guards all now write the negated
+  form — so a `NaN` fails a bounded number everywhere in the toolchain. A bare
+  `{ type: 'number' }` with no constraint still accepts it, as Ajv does; only a
+  bound or `multipleOf` rejects it.
+
+  Two internal inconsistencies close with it: `@amritk/generate-parsers` emitted the
+  un-negated `x >= min` in its inline matchers and the direct `x < min` in its
+  strict assertions, so the same schema could answer differently depending on which
+  path ran, and `@amritk/api`'s compiled engine disagreed with its own runtime
+  engine for a value the two are documented to be observationally identical on.
+
+  `interpreter-parity.test.ts` now covers the numeric keywords — bounds, the
+  draft-04 boolean `exclusive*` form, and `multipleOf` across integer, fractional,
+  and quotient-overflowing divisors — over a value set built to separate the two
+  spellings (`NaN`, `±Infinity`, `1e308`, `1000000.005`). Nothing pinned these
+  before, which is how the drift got in.
+
+- 2c9982c: Fix the published manifests so the packages install, resolve, and dedupe correctly
+
+  **Types resolve on TypeScript's default config.** Every package was
+  exports-only: nine declared `"module": "./dist/index.js"` (a field neither Node
+  nor TypeScript reads) and nothing declared `types`. A consumer on
+  `moduleResolution: "node10"` — still the default when `module` is `commonjs` —
+  cannot see `exports` at all, so `import { lintDocument } from '@amritk/lint'`
+  failed with `TS2307: Cannot find module '@amritk/lint' or its corresponding type
+declarations`. Each package with a `.` export now also declares `main` and
+  `types`; `@amritk/helpers` and `@amritk/adapters` have no `.` export (they are
+  subpath-only), so they declare a `typesVersions` wildcard mapping instead, which
+  gives their subpaths the same node10 fallback. All of it is ignored under
+  `node16`/`nodenext`/`bundler`, where `exports` still wins.
+
+  **`workspace:*` resolves to a caret, not an exact pin.** All fourteen
+  inter-package edges shipped as exact versions, so installing two `@amritk/*`
+  packages published at different times pulled in two copies of their shared
+  dependency. That is not merely wasteful: the module-level caches those packages
+  rely on are per-copy, so the `WeakMap` validator cache in
+  `@amritk/runtime-validators` silently stopped hitting. Pre-1.0 a caret stays
+  narrow (`^0.9.1` is `>=0.9.1 <0.10.0`) and breaking changes here already ride a
+  minor bump.
+
+  **`@amritk/helpers` stops shipping 21 source files it does not need.** Embedded
+  mode reads four helper sources (`is-object`, `validate-array`,
+  `validate-record`, `has-ref`) out of the installed package at generation time,
+  so `src` has to ship — but only those four. `files` now lists them explicitly
+  instead of globbing all of `src`, cutting the tarball from 78 files / 206 kB to
+  63 / 112 kB.
+
+  **Two packages no longer declare a dependency they never import.**
+  `@amritk/mjst` and `@amritk/generate-parsers` both listed
+  `@amritk/generate-markdown` under `dependencies`, but the only importer is each
+  package's `scripts/generate-readme.ts`, which is not published. Both moved to
+  `devDependencies`. `@amritk/adapters` likewise dropped its
+  `@sinclair/typebox` peer dependency: the TypeBox adapter is purely structural
+  (it strips symbol keys) and imports nothing. `valibot` stays — it is a genuine
+  transitive peer of `@valibot/to-json-schema`.
+
+  **`@amritk/mjst` fixes.** `json-schema-typed` moved to `dependencies`, because
+  the shipped `dist/emit-examples.d.ts` imports types from it. The package gained
+  an `exports` map, so it is no longer deep-importable in its entirety. And the
+  build now marks `dist/cli.js` executable: `npm pack` records on-disk modes, and
+  package managers only `chmod` bin targets when they link them, so flows that
+  consume the tarball directly (vendoring, Docker `npm pack` + `tar -x`) hit
+  `EACCES`.
+
+- Updated dependencies [213ecc4]
+- Updated dependencies [798fd7a]
+- Updated dependencies [2c9982c]
+- Updated dependencies [bc09e15]
+- Updated dependencies [b152c4e]
+- Updated dependencies [15e480e]
+- Updated dependencies [140412b]
+  - @amritk/runtime-validators@0.10.0
+
 ## 0.12.0
 
 ### Minor Changes
