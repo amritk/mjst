@@ -225,11 +225,14 @@ Three deliberate departures:
   (`ajv-formats` is opt-in there). Use
   [`@amritk/runtime-validators`](../runtime-validators), whose `formats` option
   asserts them.
-- **`multipleOf` compares within a magnitude-scaled tolerance** rather than
-  Ajv's exact `x / m` integer test, so `0.3` satisfies `multipleOf: 0.1` here and
-  fails there. This keeps generated parsers, generated validators, and the
-  runtime interpreter agreeing on the same document; IEEE-754 makes the exact
-  test reject values every author intends as valid.
+- **`multipleOf` compares within a magnitude-scaled tolerance** for a fractional
+  divisor, rather than Ajv's exact `x / m` integer test, so `0.3` satisfies
+  `multipleOf: 0.1` here and fails there. IEEE-754 makes the exact test reject
+  values every author intends as valid. An integer divisor takes the exact `%`
+  path, which needs no tolerance. Both branches are emitted from
+  `@amritk/helpers/multiple-of-check`, which mirrors the runtime interpreter's
+  own check — so parsers, validators, and the interpreter cannot disagree about
+  a document.
 - **A type-less schema that declares `properties` still requires an object.**
   Ajv accepts `"a string"` against `{ properties: { a: {} } }`; a parser has to
   return the type it declares, and the declared type is an object.
@@ -251,7 +254,7 @@ each schema in the official
 (the required Draft 2020-12 tests — 1281 cases), links the emitted files in
 memory, and runs the suite's instances through the real generated code:
 
-**1237 / 1281 cases pass (96.6%).**
+**1240 / 1281 cases pass (96.8%).**
 
 A case passes only if the parser throws exactly when the spec says invalid *and*
 returns an accepted document unchanged — strict mode does not coerce, so a parser
@@ -263,14 +266,13 @@ no I/O to answer the retrieval step. Everything else — applying the base URIs,
 walking anchors across documents, emitting a parser per definition and an import
 graph that links — the generator still has to do.
 
-Of the 44 that do not, **18** are the `ignores a non-object` cases that follow
+Of the 41 that do not, **18** are the `ignores a non-object` cases that follow
 from the third departure above, and **12** are a keyword strict mode will not
 approximate (a cyclic `$ref` with siblings, a cyclic `unevaluatedProperties`) —
 those cost a build error naming the cause, never a wrong verdict. The rest: **8**
 `$dynamicRef`s whose binding depends on the evaluation path (a generator emits one
 function per definition, shared by every path that reaches it), **2** embedded
-resources whose definitions reduce to one filename, the three `multipleOf` /
-`pattern` judgement calls above, and one `$vocabulary` case.
+resources whose definitions reduce to one filename, and one `$vocabulary` case.
 
 Every one is listed in
 `src/generators/json-schema-conformance-expected-failures.test-utils.ts` with the

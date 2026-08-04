@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { escapeRegexPattern } from './escape-regex-pattern'
+import { escapeRegexPattern, regexFlagsFor, regexLiteral } from './escape-regex-pattern'
 
 describe('escape-regex-pattern', () => {
   it('escapes bare forward slashes so the regex literal does not close early', () => {
@@ -56,5 +56,30 @@ describe('escape-regex-pattern', () => {
     expect(escapeRegexPattern('a\u2029b')).toBe('a\\u2029b')
     // The escaped body still compiles and matches the original character.
     expect(new RegExp(escapeRegexPattern('a\nb')).test('a\nb')).toBe(true)
+  })
+
+  it('picks the `u` flag for a pattern that admits it, and none for one that does not', () => {
+    expect(regexFlagsFor('^[a-z]+$')).toBe('u')
+    expect(regexFlagsFor('\\p{Letter}')).toBe('u')
+    // `\-` outside a character class is an identity escape `u` mode forbids, so a
+    // pattern using one has to compile without the flag rather than fail to compile.
+    expect(regexFlagsFor('\\-')).toBe('')
+    expect(() => new RegExp('\\-', 'u')).toThrow()
+  })
+
+  it('builds a complete literal whose flags follow the pattern', () => {
+    expect(regexLiteral('^[a-z]+$')).toBe('/^[a-z]+$/u')
+    expect(regexLiteral('\\d{4}/\\d{2}')).toBe('/\\d{4}\\/\\d{2}/u')
+    expect(regexLiteral('\\-')).toBe('/\\-/')
+    expect(regexLiteral('')).toBe('/(?:)/u')
+  })
+
+  it('reads a Unicode property escape as a property, which is what the flag is for', () => {
+    // Without `u`, `\p{Letter}` is the literal `p{Letter}` and matches nothing
+    // sensible — the JSON Schema Test Suite case this closes.
+    expect(new RegExp('\\p{Letter}').test('a')).toBe(false)
+    const literal = regexLiteral('\\p{Letter}')
+    const [, source, flags] = /^\/(.*)\/(\w*)$/.exec(literal) as RegExpExecArray
+    expect(new RegExp(source as string, flags).test('a')).toBe(true)
   })
 })

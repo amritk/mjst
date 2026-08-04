@@ -1,4 +1,4 @@
-import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
+import { regexLiteral } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
@@ -428,7 +428,7 @@ export const generateValidationExpression = (
       case 'string': {
         checks.push(`typeof ${accessor} === "string"`)
         if (hasPattern(schema)) {
-          checks.push(`/${escapeRegexPattern(schema.pattern)}/.test(${accessor})`)
+          checks.push(`${regexLiteral(schema.pattern)}.test(${accessor})`)
         }
         if (hasMinLength(schema)) {
           checks.push(`${accessor}.length >= ${schema.minLength}`)

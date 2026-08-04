@@ -4,7 +4,7 @@ import type { ExpectedFailures } from '../../../../fixtures/json-schema-test-sui
  * The official JSON Schema Test Suite cases the *strict* generated parsers do not
  * handle, each with the reason.
  *
- * 44 of 1281. The list exists so the boundary is exact rather than approximate:
+ * 41 of 1281. The list exists so the boundary is exact rather than approximate:
  * `json-schema-conformance.test.ts` fails if a case listed here starts passing
  * (the entry must go) or if a case not listed here starts failing (a regression).
  *
@@ -17,6 +17,12 @@ import type { ExpectedFailures } from '../../../../fixtures/json-schema-test-sui
  * into the one being generated, so a ref into `integer.json`, `tree.json` or the
  * 2020-12 metaschema resolves and is enforced like anything else. The generator
  * still does no I/O — the caller loads the documents — but it can now be told.
+ *
+ * The arithmetic and regex entries are gone as well, and closed by deferring to
+ * `@amritk/runtime-validators` rather than by a fresh judgement call: `multipleOf`
+ * now emits the interpreter's own two-branch check, and `pattern` compiles with
+ * the `u` flag wherever the pattern admits it — the same try-`u`-then-fall-back
+ * decision the interpreter makes at runtime, taken once at generation time.
  *
  * What is left divides into three kinds: a deliberate difference (`implied
  * type`), the `$dynamicRef` cases where one generated function is shared by
@@ -137,27 +143,6 @@ export const EXPECTED_FAILURES: ExpectedFailures = {
   // ---------------------------------------------------------------------------
   'dynamicRef.json/$dynamicRef avoids the root of each schema, but scopes are still registered':
     'name collision: `first`, `second`, and `third` each declare `$defs/stuff`, which all reduce to one filename',
-
-  // ---------------------------------------------------------------------------
-  // arithmetic and regex flags
-  //
-  // Judgement calls rather than missing features, and both are shared verbatim
-  // with `@amritk/generate-validators` and `@amritk/runtime-validators` — changing
-  // either here alone would make two packages in this repo disagree about one
-  // schema, which is the thing the differential suites exist to prevent.
-  // `multipleOf` compares the quotient to its nearest integer within a scaled
-  // tolerance (`@amritk/helpers/multiple-of-check`); a quotient that overflows to
-  // `Infinity` makes that comparison `NaN`, which the check reads as passing. And
-  // `pattern` compiles without the `u` flag, so ECMAScript Unicode property
-  // escapes are inert — and turning `u` on would also make a handful of otherwise
-  // legal patterns a syntax error in the emitted regex literal.
-  // ---------------------------------------------------------------------------
-  'multipleOf.json/float division = inf':
-    'arithmetic: an overflowing quotient makes the tolerance comparison `NaN`, and `NaN > tolerance` is false, so the value reads as a clean multiple',
-  'pattern.json/pattern with Unicode property escape requires unicode mode/ASCII letters match':
-    'regex: `pattern` compiles without the `u` flag, so a Unicode property escape never matches',
-  'pattern.json/pattern with Unicode property escape requires unicode mode/Non-ASCII letters match':
-    'regex: `pattern` compiles without the `u` flag, so a Unicode property escape never matches',
 
   // ---------------------------------------------------------------------------
   // vocabulary: `$vocabulary` in a custom metaschema

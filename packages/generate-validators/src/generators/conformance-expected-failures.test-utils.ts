@@ -6,17 +6,23 @@ import type { ExpectedFailures } from '../../../../fixtures/json-schema-test-sui
  *
  * The generator is a build-time subset by design — it trades keyword coverage for
  * flat, readable, dependency-free output — but the subset is no longer where the
- * gap is: 13 of 1281 cases are left. What used to dominate this list was the
+ * gap is: 10 of 1281 cases are left. What used to dominate this list was the
  * cross-document `$ref`, and that is gone: documents handed to the generator
  * through its `schemas` registry are folded into the one being generated, so a
  * ref into `integer.json`, `tree.json` or the 2020-12 metaschema resolves, gets a
  * file, and is enforced like anything else. Nothing is fetched — the caller does
  * the loading — but "we do no I/O" no longer means "we cannot be told".
  *
+ * The arithmetic and regex entries are gone too, and both closed by deferring to
+ * `@amritk/runtime-validators` rather than by a new judgement call: `multipleOf`
+ * emits the interpreter's own two-branch check (exact `%` for an integer divisor,
+ * a quotient within `2·ε·|q|` otherwise), and `pattern` compiles with the `u`
+ * flag wherever the pattern admits it, which is what the interpreter and Ajv
+ * both do.
+ *
  * What is left is `$dynamicRef` resolved through the dynamic scope (which a
  * generator that emits one function per definition cannot follow), one filename
- * collision, one `$id`-scoping residue, and a short tail of arithmetic/regex
- * judgement calls.
+ * collision, one `$id`-scoping residue, and `$vocabulary`.
  *
  * Keys are case ids — `<file>/<group description>/<test description>` — or a
  * `/`-bounded prefix of one when a whole group or file falls to a single cause.
@@ -88,21 +94,4 @@ export const EXPECTED_FAILURES: ExpectedFailures = {
     '`$id` scope: the inner `#/$defs/...` pointer is re-based by a nested `$id`, so it resolves to the outer definition',
   'ref.json/relative refs with absolute uris and defs/invalid on inner field':
     '`$id` scope: the inner `#/$defs/...` pointer is re-based by a nested `$id`, so it resolves to the outer definition',
-
-  // ---------------------------------------------------------------------------
-  // arithmetic and regex flags
-  //
-  // Judgement calls rather than missing features. `multipleOf` compares the
-  // quotient to its nearest integer within a scaled tolerance (the shared
-  // `@amritk/helpers/multiple-of-check`, chosen so `0.3` satisfies
-  // `multipleOf: 0.1`); a quotient that overflows to `Infinity` makes that
-  // comparison `NaN`, which the check reads as passing. And `pattern` compiles
-  // without the `u` flag, so ECMAScript Unicode property escapes are inert.
-  // ---------------------------------------------------------------------------
-  'multipleOf.json/float division = inf':
-    'arithmetic: an overflowing quotient makes the tolerance comparison `NaN`, and `NaN > tolerance` is false, so the value reads as a clean multiple',
-  'pattern.json/pattern with Unicode property escape requires unicode mode/ASCII letters match':
-    'regex: `pattern` compiles without the `u` flag, so a Unicode property escape never matches',
-  'pattern.json/pattern with Unicode property escape requires unicode mode/Non-ASCII letters match':
-    'regex: `pattern` compiles without the `u` flag, so a Unicode property escape never matches',
 }

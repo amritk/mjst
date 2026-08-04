@@ -63,7 +63,7 @@ describe('generate-schema-checks', () => {
     const result = generateSchemaChecks('value', {
       pattern: '^[a-z]+$',
     })
-    expect(result).toEqual(['typeof value === "string"', '/^[a-z]+$/.test(value)'])
+    expect(result).toEqual(['typeof value === "string"', '/^[a-z]+$/u.test(value)'])
   })
 
   it('infers number type from minimum keyword', () => {
@@ -146,7 +146,7 @@ describe('generate-schema-checks', () => {
 
   it('generates string check with pattern', () => {
     const result = generateSchemaChecks('value', { type: 'string', pattern: '^[a-z]+$' })
-    expect(result).toEqual(['typeof value === "string"', '/^[a-z]+$/.test(value)'])
+    expect(result).toEqual(['typeof value === "string"', '/^[a-z]+$/u.test(value)'])
   })
 
   it('generates string check with minLength', () => {
@@ -192,10 +192,7 @@ describe('generate-schema-checks', () => {
   it('generates number check with multipleOf', () => {
     const result = generateSchemaChecks('value', { type: 'number', multipleOf: 5 })
     // multipleOf uses the interpreter's epsilon-relative division check, not `% === 0`.
-    expect(result).toEqual([
-      'typeof value === "number"',
-      'Math.abs(value / 5 - Math.round(value / 5)) <= 1e-8 * Math.max(1, Math.abs(value / 5))',
-    ])
+    expect(result).toEqual(['typeof value === "number"', '(Number.isInteger(value) && value % 5 === 0)'])
   })
 
   it('generates typeof check for integer type', () => {
@@ -220,7 +217,7 @@ describe('generate-schema-checks', () => {
       'value <= 10',
       'value > 0',
       'value < 11',
-      'Math.abs(value / 2 - Math.round(value / 2)) <= 1e-8 * Math.max(1, Math.abs(value / 2))',
+      '(Number.isInteger(value) && value % 2 === 0)',
     ])
   })
 

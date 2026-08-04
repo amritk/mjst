@@ -1,4 +1,4 @@
-import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
+import { regexLiteral } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { multipleOfFailExpr } from '@amritk/helpers/multiple-of-check'
 import { quoteJsString } from '@amritk/helpers/quote-js-string'
@@ -303,9 +303,9 @@ const generateConstraintChecks = (
 
   if (t === 'string') {
     if (hasPattern(propSchema)) {
-      const pattern = escapeRegexPattern(propSchema.pattern)
+      const patternLiteral = regexLiteral(propSchema.pattern)
       lines.push(
-        `  if (typeof ${acc} === "string" && !/${pattern}/.test(${acc})) ${throwError(`${field} must match pattern ${propSchema.pattern}`)};`,
+        `  if (typeof ${acc} === "string" && !${patternLiteral}.test(${acc})) ${throwError(`${field} must match pattern ${propSchema.pattern}`)};`,
       )
     }
     // Lengths count code points, not UTF-16 units: `"💩".length` is 2, so a raw
@@ -324,24 +324,30 @@ const generateConstraintChecks = (
   }
 
   if (t === 'number' || t === 'integer') {
+    // Each bound is the *pass* condition, negated — `!(x >= min)`, not `x < min`.
+    // They differ only for `NaN`, which compares `false` against every operator:
+    // the direct form reads that as "not out of bounds" and lets a `NaN` through,
+    // where the interpreter, Ajv, and this package's own inline matchers
+    // (`generate-schema-checks`, `subschema-match`, which emit the un-negated
+    // `x >= min`) all reject it.
     if (hasMinimum(propSchema)) {
       lines.push(
-        `  if (typeof ${acc} === "number" && ${acc} < ${propSchema.minimum}) ${throwError(`${field} must be >= ${propSchema.minimum}`)};`,
+        `  if (typeof ${acc} === "number" && !(${acc} >= ${propSchema.minimum})) ${throwError(`${field} must be >= ${propSchema.minimum}`)};`,
       )
     }
     if (hasMaximum(propSchema)) {
       lines.push(
-        `  if (typeof ${acc} === "number" && ${acc} > ${propSchema.maximum}) ${throwError(`${field} must be <= ${propSchema.maximum}`)};`,
+        `  if (typeof ${acc} === "number" && !(${acc} <= ${propSchema.maximum})) ${throwError(`${field} must be <= ${propSchema.maximum}`)};`,
       )
     }
     if (hasExclusiveMinimum(propSchema)) {
       lines.push(
-        `  if (typeof ${acc} === "number" && ${acc} <= ${propSchema.exclusiveMinimum}) ${throwError(`${field} must be > ${propSchema.exclusiveMinimum}`)};`,
+        `  if (typeof ${acc} === "number" && !(${acc} > ${propSchema.exclusiveMinimum})) ${throwError(`${field} must be > ${propSchema.exclusiveMinimum}`)};`,
       )
     }
     if (hasExclusiveMaximum(propSchema)) {
       lines.push(
-        `  if (typeof ${acc} === "number" && ${acc} >= ${propSchema.exclusiveMaximum}) ${throwError(`${field} must be < ${propSchema.exclusiveMaximum}`)};`,
+        `  if (typeof ${acc} === "number" && !(${acc} < ${propSchema.exclusiveMaximum})) ${throwError(`${field} must be < ${propSchema.exclusiveMaximum}`)};`,
       )
     }
     if (hasMultipleOf(propSchema)) {
@@ -714,14 +720,14 @@ export const generateKeyedValueChecks = (
   const lines: string[] = []
   for (const [pattern, match] of patternEntries) {
     lines.push(
-      `    if (/${escapeRegexPattern(pattern)}/.test(_k) && !(${match})) ${throwError(`${label} invalid value for property `, '_k')};`,
+      `    if (${regexLiteral(pattern)}.test(_k) && !(${match})) ${throwError(`${label} invalid value for property `, '_k')};`,
     )
   }
   if (additionalMatch !== null && additionalMatch !== 'true') {
     const declared = hasProperties(schema) ? Object.keys(schema.properties as Record<string, unknown>) : []
     const guards: string[] = []
     if (declared.length > 0) guards.push(`!${JSON.stringify(declared)}.includes(_k)`)
-    for (const pattern of allPatterns) guards.push(`!/${escapeRegexPattern(pattern)}/.test(_k)`)
+    for (const pattern of allPatterns) guards.push(`!${regexLiteral(pattern)}.test(_k)`)
     const prefix = guards.length > 0 ? `${guards.join(' && ')} && ` : ''
     lines.push(`    if (${prefix}!(${additionalMatch})) ${throwError(`${label} invalid value for property `, '_k')};`)
   }

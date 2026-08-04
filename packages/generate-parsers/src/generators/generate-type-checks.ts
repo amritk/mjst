@@ -1,4 +1,4 @@
-import { escapeRegexPattern } from '@amritk/helpers/escape-regex-pattern'
+import { regexLiteral } from '@amritk/helpers/escape-regex-pattern'
 import { multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
@@ -338,7 +338,7 @@ export const generatePropertyTypeCheck = (
   switch (schema.type) {
     case 'string': {
       checks.push(`typeof ${varName} === "string"`)
-      if (hasPattern(schema)) checks.push(`/${escapeRegexPattern(schema.pattern)}/.test(${varName})`)
+      if (hasPattern(schema)) checks.push(`${regexLiteral(schema.pattern)}.test(${varName})`)
       if (hasMinLength(schema)) checks.push(`${varName}.length >= ${schema.minLength}`)
       if (hasMaxLength(schema)) checks.push(`${varName}.length <= ${schema.maxLength}`)
       break

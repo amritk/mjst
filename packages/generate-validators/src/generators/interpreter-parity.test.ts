@@ -15,6 +15,17 @@ import { generateValidatorFunction } from './generate-validator-function'
  *   - OpenAPI 3.0 `nullable: true`
  *   - full `propertyNames` subschemas (not just pattern/length/enum/const/$ref)
  *   - `unevaluatedProperties` / `unevaluatedItems`
+ *   - the numeric keywords — `minimum` / `maximum` / `exclusive*` / `multipleOf`
+ *
+ * The numeric block is the newest and the one that shows why this file exists:
+ * nothing pinned it, and the two implementations drifted apart twice over. The
+ * emitted `multipleOf` kept a tolerance the interpreter had since tightened
+ * (accepting `1000000.005` against `multipleOf: 0.01`), and the bounds were
+ * emitted as direct failure conditions (`x < min`) where the interpreter negates
+ * the pass condition (`!(x >= min)`) — identical for every ordinary value and
+ * opposite for `NaN`. Neither divergence could show up in the conformance suite,
+ * whose corpus is JSON and so holds no `NaN` and no value large enough to
+ * overflow a quotient. Hence the deliberately hostile values below.
  *
  * The interpreter is the reference: it enforces all of these. For every schema ×
  * value pair the two must return the same valid/invalid verdict. Messages are a
@@ -59,7 +70,98 @@ const assertParity = (schema: Record<string, unknown>, values: readonly unknown[
   expect(divergences, `schema ${JSON.stringify(schema)}\n${divergences.join('\n')}`).toEqual([])
 }
 
+/**
+ * Values chosen to separate the two ways a numeric check can be written. The
+ * ordinary numbers catch an off-by-one on the bound; `NaN` catches a bound
+ * written as its failure condition rather than its negated pass condition; the
+ * infinities and `1e308` catch a `multipleOf` whose quotient stops being finite.
+ */
+const NUMERIC_VALUES: unknown[] = [
+  0,
+  1,
+  2,
+  2.5,
+  3,
+  5,
+  10,
+  -1,
+  -5,
+  0.1,
+  0.3,
+  1000000.005,
+  1234567.89,
+  1e21,
+  1e308,
+  Number.NaN,
+  Number.POSITIVE_INFINITY,
+  Number.NEGATIVE_INFINITY,
+  Number.EPSILON,
+  'not-a-number',
+  null,
+  true,
+  {},
+  [],
+]
+
 describe('generator/interpreter verdict parity', () => {
+  it('agrees on the numeric bounds, including for NaN and the infinities', () => {
+    for (const type of ['number', 'integer'] as const) {
+      assertParity({ type, minimum: 2 }, NUMERIC_VALUES)
+      assertParity({ type, maximum: 5 }, NUMERIC_VALUES)
+      assertParity({ type, exclusiveMinimum: 2 }, NUMERIC_VALUES)
+      assertParity({ type, exclusiveMaximum: 5 }, NUMERIC_VALUES)
+      assertParity({ type, minimum: 2, maximum: 5 }, NUMERIC_VALUES)
+      assertParity({ type, exclusiveMinimum: 0, exclusiveMaximum: 10 }, NUMERIC_VALUES)
+      // Draft-04's boolean form: `exclusiveMinimum: true` makes the paired
+      // `minimum` strict, so `2` fails where it passes above.
+      assertParity({ type, minimum: 2, exclusiveMinimum: true }, NUMERIC_VALUES)
+      assertParity({ type, maximum: 5, exclusiveMaximum: true }, NUMERIC_VALUES)
+    }
+    // A bare `type` with no bound accepts the non-finite values, as Ajv does —
+    // the asymmetry is the point, so it is pinned rather than assumed.
+    assertParity({ type: 'number' }, NUMERIC_VALUES)
+    // Type-less: the bound binds its own family and ignores everything else.
+    assertParity({ minimum: 2 }, NUMERIC_VALUES)
+    assertParity({ exclusiveMaximum: 5 }, NUMERIC_VALUES)
+  })
+
+  it('agrees on multipleOf for integer, fractional, and overflowing divisors', () => {
+    assertParity({ type: 'number', multipleOf: 2 }, NUMERIC_VALUES)
+    assertParity({ type: 'number', multipleOf: 1 }, NUMERIC_VALUES)
+    assertParity({ type: 'integer', multipleOf: 5 }, NUMERIC_VALUES)
+    // The fractional divisors: `0.1` is the case the tolerance exists for (`0.3`
+    // must pass), `0.01` the one it must not swallow (`1000000.005` must fail),
+    // and `0.123456789` the one whose quotient overflows for `1e308`.
+    assertParity({ type: 'number', multipleOf: 0.1 }, NUMERIC_VALUES)
+    assertParity({ type: 'number', multipleOf: 0.01 }, NUMERIC_VALUES)
+    assertParity({ type: 'number', multipleOf: 0.123456789 }, NUMERIC_VALUES)
+    // Combined with a bound, which is how they appear in real schemas.
+    assertParity({ type: 'number', minimum: 0, maximum: 100, multipleOf: 0.5 }, NUMERIC_VALUES)
+    assertParity({ minimum: 0, multipleOf: 3 }, NUMERIC_VALUES)
+  })
+
+  it('agrees on the numeric keywords in the positions that compile differently', () => {
+    // A bounded property, a bounded array item, and a bounded `propertyNames`
+    // value each go through a different emitter — the per-property assertion, the
+    // per-item boolean fast path, and the key loop — so each is checked.
+    assertParity({ type: 'object', properties: { n: { type: 'number', minimum: 2, multipleOf: 0.1 } } }, [
+      ...NUMERIC_VALUES.map((n) => ({ n })),
+      {},
+      'not-an-object',
+    ])
+    assertParity({ type: 'array', items: { type: 'number', minimum: 2, maximum: 5 } }, [
+      ...NUMERIC_VALUES.map((n) => [n]),
+      [],
+      [2, 3, 4],
+      [2, Number.NaN],
+      'not-an-array',
+    ])
+    assertParity({ type: 'array', prefixItems: [{ type: 'number', exclusiveMinimum: 0 }] }, [
+      ...NUMERIC_VALUES.map((n) => [n]),
+      [],
+    ])
+  })
+
   it('agrees on minProperties / maxProperties', () => {
     const values: unknown[] = [
       {},
