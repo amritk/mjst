@@ -232,17 +232,23 @@ const emitChecks = (schema: unknown, value: string, indent: string, state: Guard
           ? `${indent}if (!Number.isInteger(${value})) return false`
           : `${indent}if (typeof ${value} !== 'number') return false`,
       )
+      // Each bound is emitted as the negated *pass* condition (`!(x >= min)`)
+      // rather than the direct failure one (`x < min`). They differ only for
+      // `NaN`, which compares `false` against every operator: the direct form
+      // would let a `NaN` through a bounded number where the runtime engine —
+      // `@amritk/runtime-validators`, which writes its bounds the same way —
+      // rejects it, and the two engines have to answer identically.
       for (const [keyword, operator] of [
-        ['minimum', '<'],
-        ['maximum', '>'],
-        ['exclusiveMinimum', '<='],
-        ['exclusiveMaximum', '>='],
+        ['minimum', '>='],
+        ['maximum', '<='],
+        ['exclusiveMinimum', '>'],
+        ['exclusiveMaximum', '<'],
       ] as const) {
         if (!keys.has(keyword)) continue
         const bound = take(keyword)
         // Draft-04 boolean exclusive* changes meaning — bail rather than guess.
         if (typeof bound !== 'number') return undefined
-        lines.push(`${indent}if (${value} ${operator} ${JSON.stringify(bound)}) return false`)
+        lines.push(`${indent}if (!(${value} ${operator} ${JSON.stringify(bound)})) return false`)
       }
       return keys.size === 0 ? lines : undefined
     }

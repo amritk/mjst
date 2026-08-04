@@ -162,15 +162,15 @@ a shape rather than as a keyword: coverage running through a `$dynamicRef`, an
 unresolvable or cyclic `$ref` at the same instance location, a walk deeper than
 eight applicators, and a node under `additionalItems`.
 
-One further divergence is worth calling out: **`NaN` satisfies a bounded number.**
-Because the numeric bound checks are the exact negation of the error condition
-(e.g. `!(x < minimum)`), and every comparison against `NaN` is `false`, a `NaN`
-passes `minimum`/`maximum`/`exclusive*` — where both Ajv and
-`@amritk/runtime-validators` reject it. `multipleOf` is not in that list: it is
-emitted from the shared `@amritk/helpers/multiple-of-check`, whose two branches
-(`Number.isInteger` for an integer divisor, a `<=` tolerance for a fractional
-one) both read `NaN` as a failure, matching the interpreter. `NaN` never appears
-in parsed JSON; guard against it upstream if your values can be non-JSON.
+One edge worth calling out: **`NaN` fails a constrained number but satisfies an
+unconstrained one.** Every bound is emitted as the negated *pass* condition
+(`!(x >= minimum)`, not `x < minimum`), and `NaN` compares `false` against every
+operator, so it fails the bound — and `multipleOf` rejects it on both branches of
+the shared `@amritk/helpers/multiple-of-check`. A bare `{ type: 'number' }` with
+no constraint still accepts it, as Ajv does. This matches
+`@amritk/runtime-validators` exactly, and the match is pinned value-by-value in
+`interpreter-parity.test.ts` rather than asserted here. `NaN` never appears in
+parsed JSON, so this only matters for values built in memory.
 
 ### Conformance, measured
 

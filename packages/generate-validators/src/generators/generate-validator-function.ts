@@ -770,30 +770,34 @@ const generateConstraintChecks = (
     hasExclusiveMaximum(propSchema) ||
     hasMultipleOf(propSchema)
   ) {
+    // Every bound is written as the *pass* condition, negated — `!(x >= min)`
+    // rather than `x < min`. The two differ only for `NaN`, which compares
+    // `false` against every operator: the direct form reads that as "no error"
+    // and lets a `NaN` through a bounded number, while the interpreter (and
+    // Ajv's `strict: false` oracle) reject it. `booleanLeafExpr` carries the
+    // un-negated half of the same expression, so the fast path agrees.
     if (hasMinimum(propSchema)) {
       // Draft-04 `exclusiveMinimum: true` makes the paired `minimum` strict.
       const strict = hasStrictExclusiveMinimum(propSchema)
-      const op = strict ? '<=' : '<'
       const rel = strict ? '>' : '>='
-      lines.push(`  if (typeof ${raw} === 'number' && ${raw} ${op} ${propSchema.minimum}) {`)
+      lines.push(`  if (typeof ${raw} === 'number' && !(${raw} ${rel} ${propSchema.minimum})) {`)
       lines.push(`    errors.push({ message: 'must be ${rel} ${propSchema.minimum}', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasMaximum(propSchema)) {
       const strict = hasStrictExclusiveMaximum(propSchema)
-      const op = strict ? '>=' : '>'
       const rel = strict ? '<' : '<='
-      lines.push(`  if (typeof ${raw} === 'number' && ${raw} ${op} ${propSchema.maximum}) {`)
+      lines.push(`  if (typeof ${raw} === 'number' && !(${raw} ${rel} ${propSchema.maximum})) {`)
       lines.push(`    errors.push({ message: 'must be ${rel} ${propSchema.maximum}', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasExclusiveMinimum(propSchema)) {
-      lines.push(`  if (typeof ${raw} === 'number' && ${raw} <= ${propSchema.exclusiveMinimum}) {`)
+      lines.push(`  if (typeof ${raw} === 'number' && !(${raw} > ${propSchema.exclusiveMinimum})) {`)
       lines.push(`    errors.push({ message: 'must be > ${propSchema.exclusiveMinimum}', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasExclusiveMaximum(propSchema)) {
-      lines.push(`  if (typeof ${raw} === 'number' && ${raw} >= ${propSchema.exclusiveMaximum}) {`)
+      lines.push(`  if (typeof ${raw} === 'number' && !(${raw} < ${propSchema.exclusiveMaximum})) {`)
       lines.push(`    errors.push({ message: 'must be < ${propSchema.exclusiveMaximum}', path: ${path} })`)
       lines.push(`  }`)
     }
@@ -1918,10 +1922,12 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
   const t = schema.type as string
 
   switch (t) {
-    // Each constraint is the exact negation of the validator's error condition
-    // (`!(len < min)`, not `len >= min`) so edge values — most importantly `NaN`,
-    // which the validator accepts for a constrained number since `NaN < min` is
-    // false — get the identical verdict.
+    // Each constraint is the exact negation of the validator's error condition,
+    // so edge values — `NaN` above all, which compares `false` against every
+    // operator — get the identical verdict on both paths. The numeric bounds are
+    // written as the pass condition (`x >= min`) because the validator's error
+    // condition is its negation; the length checks come from the same
+    // `string-length-check` emitter the validator uses, for the same reason.
     case 'string': {
       const parts = [`typeof ${acc} === 'string'`]
       if (hasPattern(schema)) parts.push(`${regexLiteral(schema.pattern)}.test(${acc})`)
@@ -1935,12 +1941,10 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
     case 'integer': {
       const parts = [`typeof ${acc} === 'number'`]
       if (t === 'integer') parts.push(`Number.isInteger(${acc})`)
-      if (hasMinimum(schema))
-        parts.push(`!(${acc} ${hasStrictExclusiveMinimum(schema) ? '<=' : '<'} ${schema.minimum})`)
-      if (hasMaximum(schema))
-        parts.push(`!(${acc} ${hasStrictExclusiveMaximum(schema) ? '>=' : '>'} ${schema.maximum})`)
-      if (hasExclusiveMinimum(schema)) parts.push(`!(${acc} <= ${schema.exclusiveMinimum})`)
-      if (hasExclusiveMaximum(schema)) parts.push(`!(${acc} >= ${schema.exclusiveMaximum})`)
+      if (hasMinimum(schema)) parts.push(`${acc} ${hasStrictExclusiveMinimum(schema) ? '>' : '>='} ${schema.minimum}`)
+      if (hasMaximum(schema)) parts.push(`${acc} ${hasStrictExclusiveMaximum(schema) ? '<' : '<='} ${schema.maximum}`)
+      if (hasExclusiveMinimum(schema)) parts.push(`${acc} > ${schema.exclusiveMinimum}`)
+      if (hasExclusiveMaximum(schema)) parts.push(`${acc} < ${schema.exclusiveMaximum}`)
       if (hasMultipleOf(schema)) parts.push(multipleOfPassExpr(acc, schema.multipleOf))
       return parts.join(' && ')
     }

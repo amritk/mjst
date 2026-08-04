@@ -291,10 +291,11 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Bounds')
 
-    // A strict bound flips `<`/`>` to `<=`/`>=` so the boundary itself is rejected.
-    expect(code).toContain('<= 0')
+    // A strict bound flips the pass condition from `>=`/`<=` to `>`/`<`, so the
+    // boundary itself is rejected. The check is the negated pass condition.
+    expect(code).toContain('!(obj.n > 0)')
     expect(code).toContain('must be > 0')
-    expect(code).toContain('>= 10')
+    expect(code).toContain('!(obj.n < 10)')
     expect(code).toContain('must be < 10')
   })
 
@@ -1074,9 +1075,11 @@ describe('generate-validator-function', () => {
       expect(guard({ a: 1, nested: { foo: 'x', extra: 1 } })).toBe(false)
     })
 
-    it('matches the validator on NaN for a constrained number (both accept it)', () => {
-      // The validator uses `typeof === number` + `value < min` (NaN passes both),
-      // so the guard must too — `!(value < min)`, not `value >= min`.
+    it('matches the validator on NaN for a bounded number (both reject it)', () => {
+      // Bounds are emitted as the negated *pass* condition (`!(value >= min)`),
+      // which `NaN` fails — matching `@amritk/runtime-validators` and Ajv. The
+      // guard carries the un-negated half of the same expression, so it must
+      // reach the same verdict rather than the one the operator alone suggests.
       const { validate, guard } = evalBoth(
         {
           type: 'object' as const,
@@ -1085,10 +1088,15 @@ describe('generate-validator-function', () => {
         },
         'T',
       )
-      expect(validate({ n: NaN })).toBe(true)
-      expect(guard({ n: NaN })).toBe(true)
+      expect(validate({ n: NaN })).not.toBe(true)
+      expect(guard({ n: NaN })).toBe(false)
       expect(guard({ n: 5 })).toBe(true)
       expect(guard({ n: 20 })).toBe(false)
+      // An unbounded number still accepts `NaN`, as Ajv does — only a bound
+      // (or `multipleOf`) rejects it.
+      const bare = evalBoth({ type: 'object' as const, properties: { n: { type: 'number' as const } } }, 'U')
+      expect(bare.validate({ n: NaN })).toBe(true)
+      expect(bare.guard({ n: NaN })).toBe(true)
     })
 
     it('deeply validates object array items — validator and guard agree', () => {

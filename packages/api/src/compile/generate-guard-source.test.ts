@@ -38,8 +38,10 @@ describe('generate-guard-source', () => {
     expect(guard?.expression).toContain('codePoints(v0) > 8')
     expect(guard?.declarations.join('\n')).toMatch(/const metric_rx\d+ = compileRx\("\^\[a-z\]\+\$"\)/)
     expect(guard?.expression).toMatch(/metric_rx\d+\.test\(v0\)/)
-    expect(guard?.expression).toContain('if (v2 < 0) return false')
-    expect(guard?.expression).toContain('if (v2 >= 100) return false')
+    // Bounds are the negated pass condition, so `NaN` — false against every
+    // operator — fails them here exactly as it does in the runtime engine.
+    expect(guard?.expression).toContain('if (!(v2 >= 0)) return false')
+    expect(guard?.expression).toContain('if (!(v2 < 100)) return false')
   })
 
   it('inlines enum, const, nullable, closed objects, and primitive arrays', () => {
