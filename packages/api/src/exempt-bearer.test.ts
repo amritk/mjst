@@ -40,6 +40,25 @@ describe('exempt-bearer', () => {
     expect(allowed).toBeUndefined()
   })
 
+  it('does not exempt a request that also carries cookies', () => {
+    // The bypass this guard exists for: a cross-site page adds a junk bearer
+    // header to a credentialed request, which would switch the check off while
+    // the victim's cookie goes on authenticating the call.
+    expect(exemptBearer(post({ authorization: 'Bearer anything', cookie: 'session=victim' }))).toBe(false)
+  })
+
+  it('keeps checking a cookie-bearing request even when the bearer token is well-formed', async () => {
+    const csrf = createCsrf({ exempt: exemptBearer })
+    const denied = await csrf.onRequest(
+      post({ authorization: 'Bearer abc123', cookie: 'csrf_token=t; session=victim' }),
+      undefined,
+      undefined,
+      {},
+    )
+    // No `x-csrf-token` to match the cookie, so the double-submit check still bites.
+    expect(denied?.status).toBe(403)
+  })
+
   it('still guards a browser request that only claims an origin', async () => {
     const csrf = createCsrf({ exempt: exemptBearer })
     // The loose "no Origin means not a browser" test would have let this

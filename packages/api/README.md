@@ -1660,13 +1660,25 @@ import { createCsrf, exemptBearer } from '@amritk/api'
 const csrf = createCsrf({ exempt: exemptBearer })
 ```
 
-It keys on the `authorization` header, and that is what makes it sound: a page on
-another origin cannot attach one without a preflight this server never grants, so
-a request carrying it is by construction not the cross-site attack the
-double-submit cookie defends against. The tempting alternative — exempting
-requests with no `Origin` header — looks equivalent and is not, since plenty of
-same-site form posts arrive without one, which hands the bypass to exactly the
-browser traffic the check was protecting.
+It exempts a request that carries a bearer token **and no cookies**, and the
+second half is the load-bearing one. CSRF is a browser problem: the attack exists
+because a browser spends its ambient cookies on a cross-site request without
+being asked. A client with no cookie jar has nothing ambient to spend, so there
+is nothing to forge — a bearer token only rides a request because code put it
+there, and an attacker who knows the token does not need a victim's browser at
+all.
+
+Keying on the header alone would be a bypass, which is why the cookie check is
+there. A cross-site page can bolt `Authorization: Bearer anything` onto a
+credentialed request; the header does not have to be *valid* to switch the check
+off, and the victim's cookie goes on authenticating the call underneath it. That
+needs permissive credentialed CORS to reach you — but the CSRF check is precisely
+the layer meant to survive that misconfiguration, so it must not be disarmed by a
+header any caller can set.
+
+The other tempting shortcut fails from the opposite direction: exempting requests
+with no `Origin` looks equivalent and is not, since plenty of same-site form posts
+arrive without one, handing the bypass to the browser traffic the check protects.
 
 This exempts bearer callers only — a client on the Expo cookie shape still
 arrives without an `x-csrf-token` and still takes the `403`. Either give it
@@ -1700,6 +1712,14 @@ const client = createClient(contracts, 'https://api.example.com', { fetch: sessi
 // after the magic-link deep link resolves: session.set(token)
 // on sign-out: session.clear()
 ```
+
+Two security notes on that wiring. The token is a **live session**, so keep it
+where the platform protects it — `expo-secure-store`, the iOS keychain,
+Android's `EncryptedSharedPreferences` — and not in `AsyncStorage` or
+`localStorage`, where any script or process that gets in walks off with the
+session. And point this fetch at **your API only**: it captures `set-auth-token`
+from whatever answers, so a fetch reused across arbitrary hosts lets any of them
+overwrite the stored session.
 
 **There is no refresh in this model — there is one token and you send it every
 time.** No refresh token, no renewal endpoint, no rotation. Better Auth's session

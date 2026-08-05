@@ -30,6 +30,14 @@ export type BearerSessionOptions = {
    * deliberately not defaulted: the right place is platform-specific, and a
    * silent fallback to in-memory storage would look like it worked until the
    * app relaunched and every user was signed out.
+   *
+   * **Choosing it is a security decision.** This token is a live session — hold
+   * it where the platform protects it (`expo-secure-store`, the iOS keychain,
+   * Android's `EncryptedSharedPreferences`). `localStorage` and
+   * `AsyncStorage` are readable by any script or process that gets in, which
+   * turns one XSS or one rooted device into a stolen session; if you are on the
+   * web, the cookie models are the safer choice precisely because `HttpOnly`
+   * keeps the credential out of reach of scripts.
    */
   readonly storage: BearerTokenStorage
   /**
@@ -42,6 +50,12 @@ export type BearerSessionOptions = {
    * persisted automatically. Defaults to `set-auth-token`, which is what Better
    * Auth's `bearer()` plugin sends; change it to match whatever your server
    * emits.
+   *
+   * Because this is captured from whatever replies, point the wrapped fetch at
+   * **your API only**. Reuse it for arbitrary hosts and any one of them can
+   * overwrite the stored session by answering with this header — the wrapper
+   * trusts the responses it is shown, so scope it the way you would scope a
+   * credential.
    */
   readonly tokenHeader?: string
   /**

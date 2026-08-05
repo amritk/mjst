@@ -150,9 +150,11 @@ Hook factories ship the standard middleware over `onRequest`/`onResponse`/`local
   cookie defaults `Path=/; SameSite=Lax; Secure`, not `HttpOnly` by design.
   Client half: **`createCsrfHeader()`** echoes the cookie into `x-csrf-token`.
   Cookie-less callers (native apps) cannot echo anything and would 403 on every
-  write — pass **`exemptBearer`** as `exempt`. Key that exemption on the
-  `authorization` header, never on a missing `Origin`: same-site form posts
-  routinely omit `Origin`, so the looser test is a bypass.
+  write — pass **`exemptBearer`** as `exempt`. It requires a bearer token **and
+  no cookie**, and the cookie half is load-bearing: a bearer header alone is
+  attacker-settable, so a cross-site page could bolt one on to switch the check
+  off while the victim's cookie still authenticates the request. Never key on a
+  missing `Origin` either — same-site form posts routinely omit it.
 - **`signCookie`/`unsignCookie`/`createSignedCookies`** — HMAC-SHA256, constant-time
   verify. **Integrity, not secrecy** — sign a session id, keep session server-side.
 - **`createTokenRefresh(opts)`** (bearer) — single-flighted, renews on the token
@@ -169,9 +171,13 @@ Hook factories ship the standard middleware over `onRequest`/`onResponse`/`local
   Auth's) has a **stable opaque token** whose expiry the server rolls forward in
   the database past `updateAge`, so sending it is the renewal — do not model this
   as token rotation. `storage` is required and undefaulted on purpose — an
-  in-memory fallback looks fine until relaunch signs everyone out. Do not reach
-  for `createRefreshFetch` here: it replays the original init, which still
-  carries the dead token.
+  in-memory fallback looks fine until relaunch signs everyone out — and picking
+  it is a security decision (keychain/`expo-secure-store`, not `AsyncStorage` or
+  `localStorage`, which hand a stolen session to any script that gets in). Scope
+  the wrapped fetch to your own API: it captures `set-auth-token` from any reply,
+  so a shared fetch lets any host overwrite the session. Do not reach for
+  `createRefreshFetch` here: it replays the original init, which still carries
+  the dead token.
 
 ## Subpath entry points
 
