@@ -46,7 +46,10 @@ for (const error of doc.errors) {
    `BAD_SCALAR_CONTENT` (a `: ` inside a plain scalar). A misplaced or malformed
    directive is an **error**; an unknown directive, a non-1.2 `%YAML` version,
    and `MULTIPLE_DOCUMENTS` are warnings. A document with errors still parses —
-   check `doc.errors` rather than assuming a throw.
+   check `doc.errors` rather than assuming a throw. Problems arrive in **source
+   order**. The one exception to "never throws" is `toJS()` / `parse()` on a
+   resource-exhaustion document — runaway alias expansion or nesting too deep to
+   project — which raises a catchable `Error`; wrap the call for untrusted input.
 6. **`node.tag` keeps a local tag's `!`.** `!!str` → `'str'`, `!custom` →
    `'!custom'`. Only the core/extended schema tags coerce a value; a local tag
    passes it through. `!<verbatim>` and `%TAG` handles resolve to the same form.
@@ -59,7 +62,14 @@ for (const error of doc.errors) {
    the parser and `lineCounter`.
 9. **Two aliases to one anchored collection project to two copies**, not one
    shared object (`b !== c` for `b: *x` / `c: *x`). Deliberate — `toJS()` is a
-   plain tree, not an object graph.
+   plain tree, not an object graph. `nodeAtPath` **follows an alias** on the way
+   down, so a path under `required: *ref` resolves to the node inside the
+   anchored value; a path that *ends* on the alias returns the alias node itself.
+   A duplicated key resolves to the pair that won (the **last**), matching
+   `toJS()`. Two paths return `undefined` even though the projection has a value
+   there: a key with **no value** (`paths:` → `null`, no value node exists) and a
+   key a `<<` **merge** brought in (not written at that path). Both fall back to
+   the holding map with `closest: true`.
 10. **An anchor or tag on a mapping key describes the KEY.** `&a a: b` anchors
    the scalar `a`, so `*a` is `'a'` — not the mapping. Properties on a line of
    their own above the mapping describe the mapping.
