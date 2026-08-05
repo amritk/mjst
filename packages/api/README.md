@@ -1701,21 +1701,28 @@ const client = createClient(contracts, 'https://api.example.com', { fetch: sessi
 // on sign-out: session.clear()
 ```
 
-**Sending the token is the refresh.** Better Auth's session token is opaque and
-stable for the life of the session: when a request arrives past `updateAge`
-(default 1 day) the server rolls the expiry forward to `now + expiresIn` (default
-7 days) **in the database** and hands back the same token. So an app in regular
-use never has to renew anything — each call it was making anyway pushes the
-window out. Go quiet for longer than `expiresIn` and the next call takes a `401`,
-which clears storage and fires `onExpired`; a magic-link session has no refresh
-token behind it, so signing in again is the only way back, and routing there is
-the correct handling rather than a gap.
+**There is no refresh in this model — there is one token and you send it every
+time.** No refresh token, no renewal endpoint, no rotation. Better Auth's session
+token is an opaque handle to a server-side row, and it does not change for the
+life of the session. What changes is that row's expiry: a request arriving past
+`updateAge` (default 1 day) rolls it forward to `now + expiresIn` (default 7
+days). So an app in regular use stays signed in without ever renewing anything,
+purely as a side effect of the calls it was already making.
 
-Capturing `set-auth-token` still matters — it is how the token lands in storage
-when sign-in runs through this fetch, and it costs nothing on every other reply.
-Just do not expect it per request. See
-[client-side auth refresh](#client-side-auth-refresh) for how this model differs
-from the other two.
+Go quiet for longer than `expiresIn` and the next call takes a `401`, which
+clears storage and fires `onExpired`. A magic-link session has nothing to renew
+*from*, so signing in again is the only way back — routing there is the correct
+handling, not a gap you should try to close with `refresh`.
+
+Which means, concretely: leave `refresh` unset. It exists for the other server
+shape, where renewal is a real request (the JWT plugin's short-lived
+`set-auth-jwt`, an OAuth provider, your own endpoint). Capturing `set-auth-token`
+is how the token lands in storage when sign-in runs through this fetch; on a
+plain magic-link setup it fires there and nowhere else. What the wrapper earns
+its keep on here is the unglamorous half — attaching the token without an await
+on the hot path, and clearing a dead session so a stale token cannot sit in the
+keychain. See [client-side auth refresh](#client-side-auth-refresh) for the two
+models that do renew.
 
 ### Observability: metrics and request logs
 
