@@ -85,6 +85,12 @@ for (const error of doc.errors) {
 
 `nodeAtPath(root, path, closest)` returns the node at a JSON path, or — with `closest: true` — the nearest existing ancestor, so a diagnostic can still point somewhere real when the exact path is missing.
 
+An `*alias` on the way down is followed to the collection it names, because `toJS()` expands it: `required: *ref` pointing at a sequence means `['…', 'required', 0]` addresses a real value, and it resolves to the node inside the anchored definition — which is where that value is written. A path that *ends* on the alias returns the alias node itself, so a diagnostic about the reference points at the `*ref` rather than at the distant anchor.
+
+A key written more than once resolves to the pair that **won** the projection — the last one, which is the value `toJS()` holds and the rule `JSON.parse` follows. (Duplicates are an error by default; this is what `uniqueKeys: false` gets you.)
+
+A key written with **no value** — `paths:` on its own line — projects to `null`, and there is no value node to return, so the lookup is `undefined` and `closest: true` falls back to the mapping that holds the key.
+
 ### Parse a multi-document stream
 
 ```ts
@@ -121,7 +127,7 @@ if (isMap(contents)) {
 | `parse(source, options?)` | Parse straight to a JavaScript value, like `JSON.parse`. |
 | `parseDocument(source, options?)` | Parse to `{ contents, errors, warnings, comments, toJS() }` where every node carries `start`/`end` source offsets. |
 | `parseAllDocuments(source, options?)` | Parse a multi-document (`---`-separated) stream to an array of documents, each with its own anchors, problems, and comments. |
-| `nodeAtPath(root, path, closest?)` | Resolve a JSON path to its node (carrying `start`/`end`), optionally falling back to the closest ancestor. |
+| `nodeAtPath(root, path, closest?)` | Resolve a JSON path to its node (carrying `start`/`end`), optionally falling back to the closest ancestor. Follows an `*alias` on the way down, so a path under an aliased collection resolves to the node inside the anchored value. |
 | `lineCounter(source)` | Build an `offset → { line, col }` mapper (1-based). |
 | `keyText(node)` | The string a mapping key projects to in `toJS()` output — the same string `nodeAtPath` matches a path segment against. Use it when you walk the tree yourself and need your paths to line up with the projected data. |
 | `isScalar` / `isMap` / `isSeq` / `isPair` / `isAlias` | Narrowing guards over the node union. |
@@ -227,7 +233,7 @@ schema** for scalar typing. The exact boundaries:
 
 **Tags**
 
-- Core scalar tags (the JSON-compatible set OpenAPI allows): `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`. A core tag **coerces** what it is written on rather than only confirming it: `!!int "7"` is `7`, `!!bool "FALSE"` is `false`, `!!float 1` is `1` (an integer form is a valid float), and `!!null x` is `null`. The tag is the author saying what the value is.
+- Core scalar tags (the JSON-compatible set OpenAPI allows): `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`. A core tag **coerces** what it is written on rather than only confirming it: `!!int "7"` is `7`, `!!bool "FALSE"` is `false`, `!!float 1` is `1` (an integer form is a valid float), and `!!null x` is `null`. The tag is the author saying what the value is. Quoting does not change what it means — `!!int "0x1F"` is `31` just as `!!int 0x1F` is, because the text goes through the core schema rather than through `parseInt` alone.
 - Extended tags, for general config files beyond the OpenAPI subset: `!!binary` → `Uint8Array`, `!!timestamp` → `Date`, `!!set` → `Set`, `!!omap` → `Map` (matching `yaml`). A conformant OpenAPI document won't use these. Note that three of the four do **not** survive `JSON.stringify` — a `Set` and a `Map` both serialize to `{}`, and a `Uint8Array` to an object keyed by index — so a document using them is no longer JSON-round-trippable, however faithfully it parsed. Only reach for them when you are consuming the values in JavaScript rather than re-serializing.
 - All three spellings resolve to the same tag: the shorthand `!!str`, the verbatim `!<tag:yaml.org,2002:str>`, and a shorthand through a handle a `%TAG` directive declared.
 - The non-specific `!` resolves a scalar as a string, per the failsafe schema.
@@ -247,7 +253,9 @@ schema** for scalar typing. The exact boundaries:
 
 **Diagnostics**
 
-Every node carries an exact `[start, end)` source span, and problems are collected on `doc.errors` / `doc.warnings` rather than thrown.
+Every node carries an exact `[start, end)` source span, and problems are collected on `doc.errors` / `doc.warnings` rather than thrown, in source order.
+
+The one thing that *does* throw is the guard against a document built to exhaust memory: runaway `*alias` expansion (a "billion laughs") or nesting deep enough to overflow the stack while projecting. Neither can produce a value at all, so `toJS()` — and therefore `parse()` — raises a catchable `Error` instead of hanging the process. Wrap the call if the YAML is untrusted; parse *problems* never throw.
 
 | code | |
 | --- | --- |
@@ -287,6 +295,12 @@ Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNK
 - **Flow collection indentation, at the closing delimiter.** A flow collection's *content* lines must clear the indentation of the block that holds them, and a line that does not is reported (`BAD_INDENT`). Its **closing** `]`/`}` is held only to the parent's own column, one short of what the spec asks: closing a multi-line flow collection at the parent's column is how Prettier and hand-written manifests both write it, and `yaml` and `js-yaml` both accept it. A closing delimiter *further out* than its parent is still reported.
 - **Shared alias identity.** An alias to a collection projects to a *copy*, not the same object: for `a: &x {p: 1}` / `b: *x` / `c: *x`, `b` and `c` are equal but `b !== c`, and mutating one does not change the other. The spec makes them one node. Copying keeps `toJS()` a plain tree — which is what a path-keyed position index, a JSON round-trip, and any consumer that edits the projection all assume — and the cost of re-expanding aliases is capped by an expansion budget, so a billion-laughs document throws a catchable error instead of hanging.
 - **Recursive anchors.** An alias inside the node its own anchor names — `&a [1, *a]` — is legal YAML, and `yaml` and `js-yaml` both build the circular structure it describes. Here it is reported as `RECURSIVE_ALIAS` and the cycle is not built. This is the same trade-off as shared alias identity, taken to its conclusion: a cyclic value cannot be a plain tree, cannot be serialized to JSON, and cannot appear in a valid OpenAPI document, so it is refused rather than half-built — with a diagnostic that says which of the two alias problems it is, since the anchor does exist.
+- **Locating a merged key by path.** `<<: *base` brings the base's keys into the
+  projection, but they are not written at that path in the source, so
+  `nodeAtPath(root, ['use', 'fromBase'])` is `undefined` — with `closest: true`
+  it returns the mapping that holds the `<<`, which is where a diagnostic about
+  the merge belongs anyway. Keys the document writes itself, and everything under
+  a plain `*alias`, resolve normally.
 - **Comments attached to nodes.** `keepComments` reports every comment with its exact span (see [Comments](#comments)), but as a flat list — there is no `node.comment`, and the parser does not decide which node a comment belongs to. That is a policy question with no single right answer (a comment on its own line above a key usually introduces it; the one trailing the line before usually does not), and a parser that guesses imposes its guess on every caller. Pair the spans against node offsets and apply whichever rule you want.
 
 If you need full YAML 1.2 conformance, use [`yaml`](https://www.npmjs.com/package/yaml). If you need a small, fast, position-aware parser for diagnostics, use this.

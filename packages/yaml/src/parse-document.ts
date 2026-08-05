@@ -1089,18 +1089,22 @@ const plainLineEnd = (src: string, from: number, len: number): number => {
  * strings. Without the check both fold into the value silently — the author
  * wrote a mapping and got the text of one.
  *
- * `indexOf` does the scanning, so a scalar with no `:` at all — nearly all of
- * them — costs one native pass that finds nothing, rather than a per-character
- * test in {@link plainLineEnd}'s loop. Only a scalar that really does hold a
- * colon (`http://…`, `12:30`) pays for the follow-up comparisons.
+ * The scan is bounded by `end` — the scalar's own text — rather than handed to
+ * `indexOf`, which cannot be told where to stop. `indexOf` reads better and is
+ * vectorized, but it searches to the end of the *document*: on a colon-free
+ * scalar it walked the entire remaining source to answer a question about one
+ * line, so a document with a large colon-free tail (a long list of plain
+ * scalars — hostnames, package names, an allow-list) cost O(n²) overall. A
+ * 1.4 MB list of 80,000 entries took 700 ms, and four times that at twice the
+ * size. Per character this loop is the comparison `indexOf` was doing anyway,
+ * and it never reads past the scalar.
  */
 const plainColonAt = (src: string, from: number, end: number): number => {
-  let i = src.indexOf(':', from)
-  while (i !== -1 && i < end) {
+  for (let i = from; i < end; i++) {
+    if (src.charCodeAt(i) !== COLON) continue
     // A `:` at the very end of the scalar's text is followed by the line break
     // `plainLineEnd` trimmed, so it separates just as much as `: ` does.
     if (i + 1 >= end || isSpace(src.charCodeAt(i + 1))) return i
-    i = src.indexOf(':', i + 1)
   }
   return -1
 }
@@ -2695,6 +2699,26 @@ const decodeBase64 = (text: string): Uint8Array | null => {
 }
 
 /**
+ * The number a `!!int` / `!!float` tag written on a *string* means, or `null`
+ * when the text does not name one and the tag has to be left unapplied.
+ *
+ * The text goes through the core schema first, because that is where every
+ * spelling of a number lives: `parseInt` alone reads `"0x1F"` as `0` (it stops
+ * at the `x` unless told base 16) and `parseFloat` reads `".inf"` as `NaN`, so
+ * `!!int "0x1F"` came back as `0` where the same value written unquoted —
+ * already a number by the time it gets here — came back as `31`. Quoting a
+ * value should not change what its tag means. `parse` stays as the fallback for
+ * the text the core schema does not recognize but a number still starts
+ * (`"42 items"`, `" 42 "`).
+ */
+const taggedNumber = (text: string, parse: (s: string) => number): number | null => {
+  const resolved = resolvePlainValue(text.trim())
+  if (typeof resolved === 'number') return resolved
+  const n = parse(text)
+  return Number.isNaN(n) ? null : n
+}
+
+/**
  * Coerces a scalar's value to honor a `!!`-style tag. Reached only when a scalar
  * actually carries a tag (rare), so the untagged hot path pays just one
  * `node.tag !== undefined` check. Beyond the core schema (`str`/`int`/`float`/
@@ -2745,13 +2769,13 @@ const applyScalarTag = (node: YamlScalar): unknown => {
     }
     case 'int': {
       if (typeof v === 'number') return Math.trunc(v)
-      const n = Number.parseInt(typeof v === 'string' ? v : node.source, 10)
-      return Number.isNaN(n) ? v : n
+      const n = taggedNumber(typeof v === 'string' ? v : node.source, Number.parseInt)
+      return n === null ? v : Math.trunc(n)
     }
     case 'float': {
       if (typeof v === 'number') return v
-      const n = Number.parseFloat(typeof v === 'string' ? v : node.source)
-      return Number.isNaN(n) ? v : n
+      const n = taggedNumber(typeof v === 'string' ? v : node.source, Number.parseFloat)
+      return n === null ? v : n
     }
     default:
       return v
@@ -2968,9 +2992,25 @@ const warnIfMoreDocuments = (state: State, markerPos: number): void => {
   )
 }
 
+/**
+ * Puts a problem list in source order. The parser reports as it goes, which is
+ * *almost* the same thing — but not quite: a mapping entry's duplicate-key
+ * report is raised after its value has been parsed, so it lands behind any
+ * problem found inside that value even though the key comes first in the source.
+ * A consumer showing "the first error" would name the wrong one, and a list of
+ * diagnostics that jumps backwards reads as a bug in the linter.
+ *
+ * `sort` is stable, so problems sharing a position keep the order they were
+ * found in, and the common document has an empty list to sort.
+ */
+const inSourceOrder = (problems: YamlError[]): YamlError[] =>
+  problems.length > 1 ? problems.sort((a, b) => a.start - b.start) : problems
+
 /** Builds a document from the current `state`, closing over its problems. */
 const finishDocument = (state: State, contents: YamlNode | null): YamlDocument => {
-  const { errors, warnings, comments, merge, len } = state
+  const { comments, merge, len } = state
+  const errors = inSourceOrder(state.errors)
+  const warnings = inSourceOrder(state.warnings)
   // Aliases carry their resolved target (captured at parse time), so projection
   // no longer needs the anchors map — anchor scope is settled by the time we get here.
   return { contents, errors, warnings, comments, toJS: () => toJsValue(contents, merge, newExpansionBudget(len), 0) }

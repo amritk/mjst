@@ -1375,3 +1375,51 @@ describe('duplicate node properties on one line', () => {
     expect(parseDocument('a:\n  &x\n  &y 1\n').errors.map((e) => e.code)).toEqual(['BAD_PROPERTY'])
   })
 })
+
+describe('numeric tags written on a quoted scalar', () => {
+  it('reads every core-schema number spelling, whether or not it was quoted', () => {
+    // `parseInt` alone stops at the `x` of `0x1F` and reads `0`, so quoting a
+    // value used to change what its tag meant.
+    expect(parseDocument('a: !!int "0x1F"\n').toJS()).toEqual({ a: 31 })
+    expect(parseDocument('a: !!int 0x1F\n').toJS()).toEqual({ a: 31 })
+    expect(parseDocument('a: !!int "0o17"\n').toJS()).toEqual({ a: 15 })
+    expect(parseDocument('a: !!float ".inf"\n').toJS()).toEqual({ a: Number.POSITIVE_INFINITY })
+    expect(parseDocument('a: !!float "-.inf"\n').toJS()).toEqual({ a: Number.NEGATIVE_INFINITY })
+    expect(parseDocument('a: !!float "1e3"\n').toJS()).toEqual({ a: 1000 })
+  })
+
+  it('still truncates a float to an int and leaves unparseable text alone', () => {
+    expect(parseDocument('a: !!int "1.5"\n').toJS()).toEqual({ a: 1 })
+    expect(parseDocument('a: !!int "42 items"\n').toJS()).toEqual({ a: 42 })
+    expect(parseDocument('a: !!int "abc"\n').toJS()).toEqual({ a: 'abc' })
+    expect(parseDocument('a: !!float "abc"\n').toJS()).toEqual({ a: 'abc' })
+  })
+})
+
+describe('problem ordering', () => {
+  it('reports problems in source order', () => {
+    // A duplicate key is only detected once its value has been parsed, so it is
+    // raised after any problem found inside that value even though the key comes
+    // first — a consumer showing "the first error" would otherwise name the wrong one.
+    const source = 'a: 1\nb: [1,,2]\na: 2\nc: "unterminated\n'
+    const { errors } = parseDocument(source)
+    expect(errors.map((e) => e.start)).toEqual([...errors.map((e) => e.start)].sort((x, y) => x - y))
+    expect(errors.map((e) => e.code)).toEqual(['UNEXPECTED_COMMA', 'DUPLICATE_KEY', 'UNTERMINATED_QUOTE'])
+  })
+})
+
+describe('scanning cost on colon-free documents', () => {
+  it('parses a large list of plain scalars in linear time', { timeout: 5_000 }, () => {
+    // Finding the `: ` a plain scalar may not contain used to be handed to
+    // `indexOf`, which cannot be told where to stop and so searched to the end of
+    // the *document* — making a large colon-free tail (a long list of hostnames,
+    // package names, an allow-list) cost O(n^2). This document has no colon at
+    // all, so every entry paid the full remaining length: it took over a minute,
+    // against well under a second linear. The size is what makes the guard
+    // meaningful — a quadratic scan cannot finish inside the timeout.
+    const entries = 300_000
+    const source = `${Array.from({ length: entries }, () => '- alpha beta gamma').join('\n')}\n`
+    const value = parseDocument(source).toJS()
+    expect(Array.isArray(value) && value.length).toBe(entries)
+  })
+})
