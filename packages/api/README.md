@@ -1561,6 +1561,94 @@ export const getProfileContract = defineContract({
 If only some routes need the session, make the context lazy (`session: () =>
 memoizedLookup()`) so public routes never pay for the cookie check.
 
+#### Native apps: magic link without a browser's cookie jar
+
+A magic-link sign-in from an iOS/Android/Expo app runs the same mount, but the
+session never arrives the way the example above assumes. Every step that leans
+on a browser holding cookies for you — the redirect target, the session lookup,
+the CSRF check, the client — needs one deliberate change.
+
+**The link opens the system browser, not your app.** Better Auth mints a
+single-use token (5 minutes by default), and `/api/auth/magic-link/verify`
+consumes it and `302`s to `callbackURL`. Point that at a deep link and add the
+scheme to Better Auth's `trustedOrigins` — an untrusted `callbackURL` is
+refused, which is the whole point of the list:
+
+```ts
+export const auth = betterAuth({
+  trustedOrigins: ['myapp://'], // 'exp://192.168.*.*:*/**' too, in Expo dev only
+  plugins: [magicLink({ sendMagicLink }), bearer()],
+})
+```
+
+The mount needs nothing: a `302` carrying `Set-Cookie` and a custom-scheme
+`Location` is proxied out untouched, exactly like [any other redirect](#multiple-set-cookie-headers).
+`createSecurityHeaders`/`createCors` still stamp that hop — it is a real browser
+response — and the mount's immutable headers are handled for you.
+
+**Then the app authenticates by header, not by cookie jar.** Either shape works;
+they differ only in which header the client sends:
+
+| Client | What it stores | What it sends |
+|:--|:--|:--|
+| Expo plugin | cookie string in `expo-secure-store` | `Cookie: <authClient.getCookie()>`, with `credentials: 'omit'` so the manual header isn't overwritten |
+| `bearer()` plugin | the `set-auth-token` response header | `Authorization: Bearer <token>` |
+
+The Expo shape is aimed at Better Auth's *own* endpoints. For your contracted
+routes prefer `bearer()`: it is the one that gives the session lookup and the
+CSRF exemption below a single header to key on.
+
+**So forward both headers into `getSession`.** The browser example forwards only
+`cookie`; a bearer client's session silently resolves to `null` against it —
+every guard denies with its declared 401 and the failure looks like a bad token
+rather than a dropped header:
+
+```ts
+export const createContext = async ({ request }: ContextFactoryInput) => ({
+  session: await auth.api.getSession({
+    headers: new Headers({
+      cookie: request.header('cookie') ?? '',
+      authorization: request.header('authorization') ?? '',
+    }),
+  }),
+})
+```
+
+**And exempt those requests from CSRF.** `createCsrf` rejects any unsafe-method
+request without a matching `csrf_token` cookie, so a native `POST` gets a `403`
+before the handler — there is no page script to read the cookie and echo it.
+Exempt on the bearer header rather than on a missing `Origin`:
+
+```ts
+const csrf = createCsrf({
+  // A cross-site page cannot set `authorization` without a preflight this
+  // server never grants, so its presence marks a caller the double-submit
+  // cookie was never defending. Widening this to "no Origin header" would
+  // instead hand every same-site form post a bypass.
+  exempt: (request) => request.headers.get('authorization')?.startsWith('Bearer ') === true,
+})
+```
+
+This exempts bearer callers only — a client on the Expo cookie shape still
+arrives without an `x-csrf-token` and still takes the `403`. Either give it
+`bearer()` for your API surface, or have it echo the `csrf_token` the decorator
+seeds; there is no third option that keeps the check honest.
+
+CORS needs no native-specific handling — a native client sends no `Origin`, so
+`createCors` has nothing to negotiate. Keep `trustedOrigins` (Better Auth's
+redirect allow-list, where the `myapp://` scheme goes) separate from
+`createCors`'s `origin` (browser origins for the SPA); they answer different
+questions and a custom scheme belongs only in the former.
+
+On the client, the token model is [`createTokenRefresh`](#client-side-auth-refresh),
+not `credentials: 'include'`:
+
+```ts
+const auth = createTokenRefresh({ refresh: () => readTokenFromSecureStore() })
+const client = createClient(contracts, 'https://api.example.com', { headers: auth.headers })
+// on sign-out: auth.invalidate()
+```
+
 ### Observability: metrics and request logs
 
 `observe` is called once per matched request — validation failures and

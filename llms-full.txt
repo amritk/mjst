@@ -141,7 +141,12 @@ Bun.serve({ fetch: handler })      // or: export default { fetch: handler } on W
    cannot set the `cookie` header). Undeclared response statuses **throw**
    (`isUnexpectedStatusError`) instead of entering the union — declare every
    status you handle. Browser auth uses `fetchOptions: { credentials:
-   'include' }`. Frontends import from the **`@amritk/api/client`** subpath —
+   'include' }`; native clients have no cookie jar and send the session in a
+   header instead (`Authorization: Bearer` via Better Auth's `bearer()`, or a
+   manual `Cookie` under Expo), so a Better Auth context factory must forward
+   **both** `cookie` and `authorization` into `getSession`, and `createCsrf`
+   must `exempt` bearer callers or every native `POST` 403s.
+   Frontends import from the **`@amritk/api/client`** subpath —
    same client surface, guaranteed free of server modules, no bundler
    `node:*` externalization warnings.
 6. **Guards authorize; attach them in the `guards` field.** Add `guards: [...]`
@@ -279,13 +284,27 @@ const findings = await lintDocument('version: 1\n', { ruleset, source: 'service.
    `rulesetBasePath` (or the ruleset file's own directory).
 5. **OpenAPI support is a separate subpath**, `@amritk/lint/rules/openapi`
    (`createOpenApiRuleset`, `oas`, `oasFixers`, …) — not the package root.
+6. **A ruleset is privileged; a document is not.** Linted documents cannot
+   execute anything, and `[?(...)]` filters in a `given` are parsed and
+   interpreted rather than evaluated as JavaScript. But `extends` follows any
+   path (absolute or `../`-escaping) and `require`s `.js` targets and custom
+   functions — that is code execution by design. Load rulesets from sources you
+   would trust to run a script, or pass `restrictTo: '<root>'` to confine
+   `extends`/`functions` resolution to one directory tree. See the README's
+   "Trust boundary" section.
+7. **`createRuleset` is memoized** per `(definition object, basePath,
+   restrictTo)`. Mutating a definition you already passed in will not rebuild the
+   ruleset — pass a fresh object instead.
 
 ## Exports
 
 - `lintDocument(input, options?)` → findings only.
 - `lintDocumentWithResult(input, options?)` → `{ diagnostics, output?, pluginData }`.
-- `fixDocument(input, options?)` → `{ output, fixed, applied, remaining }` (needs `fixers`).
-- `createRuleset(def?, basePath?)`, `resolveNamedRuleset(name, basePath?)`,
+- `fixDocument(input, options?)` → `{ output, fixed, applied, remaining, converged, passes }`
+  (needs `fixers`; `converged: false` means the 10-pass cap was hit with the
+  document still changing).
+- `createRuleset(def?, basePath?, { restrictTo }?)`,
+  `resolveNamedRuleset(name, basePath?, { restrictTo }?)`,
   `builtinFunctions` (`alphabetical`, `casing`, `truthy`, `pattern`, `schema`, …).
 
 ## Subpaths
@@ -332,6 +351,16 @@ const files = await buildSchema(schema, 'Document')
    (unless `typesOnly`) runtime helper files.
 4. **Default parsers COERCE invalid input to defaults** rather than throwing;
    pass `strict: true` (the 6th positional) to make them throw.
+5. **Strict mode enforces the whole Draft 2020-12 assertion vocabulary** —
+   including `unevaluatedProperties` / `unevaluatedItems`, `contains` bounds,
+   `propertyNames`, `dependent*`, `patternProperties`, tuple `prefixItems`, and a
+   `$ref`'s 2020-12 siblings — and is held against Ajv by differential fuzz. It
+   deliberately differs on three points (`format` is an annotation, `multipleOf`
+   uses a scaled tolerance, a type-less `properties` schema still requires an
+   object); see the README.
+6. **Strict generation FAILS LOUDLY on anything it cannot enforce** (e.g. a
+   recursive `$ref` it would have to inline when ref imports are off). Catch the
+   error and fall back to a coercing parser if that is not what you want.
 
 Only the `.` entry (`buildSchema`, `GeneratedFile`, `ImportExtension`).
 Install: `bun add @amritk/generate-parsers`.
@@ -377,8 +406,11 @@ const files = await buildValidatorSchema(schema, 'Document')
 5. **`format` emits no check.** It stays an annotation, like the interpreter's
    default — but *not* like the interpreter run with `{ formats: 'all' }`
    (`@amritk/lint`, `createApi({ formats })`), which rejects strings a generated
-   validator accepts. `unevaluatedProperties`/`unevaluatedItems` go the other
-   way: unimplemented, so generation **throws** instead of widening the verdict.
+   validator accepts. `unevaluatedProperties`/`unevaluatedItems` *are* generated;
+   four shapes still refuse (coverage through a `$dynamicRef`, an unresolvable or
+   cyclic `$ref` at the same instance location, a walk deeper than eight
+   applicators, a node under `additionalItems`), and generation **throws** for
+   those rather than widening the verdict.
 
 Only the `.` entry. Install: `bun add @amritk/generate-validators`.
 
@@ -410,13 +442,29 @@ const files = await buildExampleSchema(schema, 'User') // → user.ts, index.ts
 
 1. **Generated arbitrary files `import * as fc from 'fast-check'`** — `fast-check`
    (`>=3`) is an **optional peer dependency** consumers must install. The static
-   `fooExample` values have no runtime deps.
+   `fooExample` values have no runtime deps. A generated file whose schema uses
+   `if`/`then`/`else`, `not`, `oneOf`, `patternProperties`, `propertyNames`,
+   `dependentRequired`, `dependentSchemas`, `dependencies`, `minProperties`,
+   `maxProperties`, or `contains` **also** imports `@amritk/runtime-validators`
+   for its validating filter. That one is a `dependency` of this package, not a
+   peer — the generator imports it too — so it resolves for the generator but not
+   necessarily from the consumer's own tree, where the generated file lives.
+   Under pnpm-strict or Yarn PnP, install it directly. It cannot be declared a
+   peer as well: Bun rejects a workspace package listed as both, and
+   `--frozen-lockfile` then fails repo-wide.
 2. **`generateArbitrary` / `generateExampleConst` return source-code STRINGS**;
    **`deriveExample` returns an actual runtime VALUE.** Easy to confuse.
-3. **A static example constrained only by `pattern` may not match the pattern** —
-   use the arbitrary when pattern fidelity matters.
+3. **A static example is validated against its own schema before it is emitted.**
+   If it fails, it is written anyway (the module must compile) and the generator
+   `console.warn`s, naming the type. That happens when the schema has no instance
+   at all, or when the constraint is beyond the deriver (a `pattern` with
+   lookarounds/backreferences, an unrecognized `format`). Use `FooArbitrary`
+   there — it carries a runtime validating filter and stays correct.
 4. **Unsupported keywords degrade silently:** `fc.anything()` in arbitraries,
    `null` in static examples — no error thrown.
+5. **`deriveExample` memoizes each `$ref` per root document**, so the returned
+   value can share sub-objects with the value derived for a sibling schema.
+   Treat it as read-only.
 
 Exports: `buildExampleSchema`, `generateArbitrary`, `generateExampleConst`,
 `deriveExample`, `serializeValue`, `GeneratedFile`. Only the `.` entry.
@@ -593,17 +641,27 @@ const remote = await resolveRefsFromFile('https://api.example.com/schema.json', 
 2. **Errors are collected, never thrown.** A missing file, refused host, or bad
    URL lands on `result.errors` while the rest still resolves. Always check it.
 3. **Default-deny SSRF guard.** Remote refs to loopback / private / link-local /
-   `169.254.169.254` are refused unless `allowPrivateHosts: true` or an explicit
-   `allowedHosts` entry.
-4. **JSON-only by default** (`JSON.parse`). For YAML pass a custom
+   `169.254.169.254` / metadata hosts by name (`metadata.google.internal`,
+   `*.internal`) are refused unless `allowPrivateHosts: true` or an explicit
+   `allowedHosts` entry. Hostnames are also resolved and refused when they point
+   at a private address (`verifyDns: false` opts out).
+4. **Local `$ref`s are confined to the root document's directory.** A
+   `{"$ref": "../common/schemas.json"}` is refused by default — pass
+   `allowedRoots: ['./specs']` (or whatever contains both files) to allow it.
+   `localRefs: false` refuses cross-file reads entirely.
+5. **JSON-only by default** (`JSON.parse`). For YAML pass a custom
    `parse: (content, location) => …` (e.g. wrapping `@amritk/yaml`).
-5. **`origins` exists only with `trackOrigins: true`.** Cycles are preserved (the
+6. **`origins` exists only with `trackOrigins: true`.** Cycles are preserved (the
    cycle point stays a `$ref`), so output is not always fully flat. The remote
-   cache is process-wide — `clearRemoteCache()` or `cache: false` when a schema
-   may have changed.
+   cache is process-wide but credential-scoped and bounded (10 min TTL, 256
+   entries) — `clearRemoteCache()` / `clearRemoteCache(url)` or `cache: false`
+   when a schema may have changed.
+7. **A resolve is bounded** by `maxDocuments` (500), `totalTimeoutMs` (60s), and
+   `maxDepth` (512). Hitting one is an entry on `errors`, never a throw.
 
 Exports: `resolveRefs`, `resolveRefsFromFile`, `clearRemoteCache`,
-`getByPointer`, `pointerToPath`, `isPrivateHost` + types. Only the `.` entry.
+`getByPointer`, `pointerToPath`, `isPrivateHost`, `assertPublicHost` + types.
+Only the `.` entry.
 Install: `bun add @amritk/resolve-refs`.
 
 ---
@@ -642,24 +700,51 @@ for (const error of doc.errors) {
 2. **Nodes carry `start` / `end` inline** (not a `range` tuple). `end` is
    **exclusive**, and offsets are char offsets — convert with `lineCounter`
    (1-based line/col).
-3. **`parseDocument` reads only the FIRST document** of a `---` stream. Use
+3. **`parseDocument` reads only the FIRST document** of a `---` stream, and
+   pushes a `MULTIPLE_DOCUMENTS` **warning** when it leaves one behind. Use
    `parseAllDocuments` for multi-doc; each doc has its own anchor scope.
 4. **Values materialize lazily via `toJS()`** (resolves aliases + merge keys);
    `parse()` === `parseDocument().toJS()`. `pair.value` can be `null` (e.g.
    `paths:` with no value).
 5. **Errors are collected on `doc.errors` / `doc.warnings`, not thrown.** Codes
    include `DUPLICATE_KEY`, `UNRESOLVED_ALIAS`, `UNEXPECTED_CONTENT`,
-   `UNTERMINATED_FLOW`, `TAB_INDENT`; directive problems land in `warnings`.
+   `UNTERMINATED_FLOW`, `TAB_INDENT`, `UNEXPECTED_DIRECTIVE`, and the
+   syntax-level `BAD_COMMENT` / `BAD_ESCAPE` / `BAD_BLOCK_HEADER` /
+   `BAD_INDENT` / `BAD_IMPLICIT_KEY` / `BAD_PROPERTY` /
+   `BAD_SCALAR_CONTENT` (a `: ` inside a plain scalar). A misplaced or malformed
+   directive is an **error**; an unknown directive, a non-1.2 `%YAML` version,
+   and `MULTIPLE_DOCUMENTS` are warnings. A document with errors still parses —
+   check `doc.errors` rather than assuming a throw.
 6. **`node.tag` keeps a local tag's `!`.** `!!str` → `'str'`, `!custom` →
    `'!custom'`. Only the core/extended schema tags coerce a value; a local tag
    passes it through. `!<verbatim>` and `%TAG` handles resolve to the same form.
 7. **A collection mapping key projects to its flow rendering.** `[a, b]: v`
    becomes `{ '[ a, b ]': 'v' }`, and an empty key becomes `''` (not `'null'`),
-   because a JS object key can only be a string.
+   because a JS object key can only be a string. `keyText(node)` is exported so
+   you can compute that string yourself — `nodeAtPath` matches path segments
+   against it, so a path built any other way will not find the node.
+8. **All three YAML line breaks work**: `\n`, `\r\n`, and a lone `\r`, in both
+   the parser and `lineCounter`.
+9. **Two aliases to one anchored collection project to two copies**, not one
+   shared object (`b !== c` for `b: *x` / `c: *x`). Deliberate — `toJS()` is a
+   plain tree, not an object graph.
+10. **An anchor or tag on a mapping key describes the KEY.** `&a a: b` anchors
+   the scalar `a`, so `*a` is `'a'` — not the mapping. Properties on a line of
+   their own above the mapping describe the mapping.
+11. **JSON parses as JSON.** YAML 1.2 is a strict superset, and this parser
+   matches `JSON.parse` exactly — same value, zero diagnostics — for JSON in any
+   spelling (compact, pretty, **tab-indented**, CRLF). Pinned by
+   `src/json-superset.test.ts` over a generated corpus, so hand a `.json`
+   document straight to `parse` rather than branching on the extension.
+12. **A tab is only an error where indentation belongs.** `TAB_INDENT` fires on a
+   tab whose column falls inside the indentation a line owes its context — so
+   `\t[a]` at the root and `foo:` over `⟨space⟩⟨tab⟩bar` are fine, `\tb:` under
+   an `a:` is not. Don't assume a leading tab always reports.
 
 Exports: `parse`, `parseDocument`, `parseAllDocuments`, `nodeAtPath`,
-`lineCounter`, the guards `isScalar`/`isMap`/`isSeq`/`isPair`/`isAlias`, + node
-types. Only the `.` entry. Install: `bun add @amritk/yaml`.
+`lineCounter`, `keyText`, the guards
+`isScalar`/`isMap`/`isSeq`/`isPair`/`isAlias`, + node types. Only the `.` entry.
+Install: `bun add @amritk/yaml`.
 
 ---
 
@@ -692,14 +777,22 @@ if (node && isObjectSchema(node) && hasProperties(node)) {
 1. **No barrel — import per subpath.** `@amritk/helpers/resolve-ref`, NOT
    `@amritk/helpers`. The subpath is the exact kebab-case filename with no `.ts`.
 2. **`resolveRef(ref, rootSchema)`** takes the ref first, root second, handles
-   JSON-pointer `$ref`s only, and returns `undefined` on a miss (no throw) —
-   guard the result.
-3. **Two similar guards:** `isSchemaObject` narrows to a non-boolean schema;
+   JSON-pointer `$ref`s, plain `$anchor` names (`#named`), and URI keys in
+   `$defs`, and returns `undefined` on a miss (no throw) — guard the result.
+3. **`walkRefGraph` throws, it does not degrade.** An unresolvable `$ref`, a
+   `$dynamicRef` with no anchor, and two definitions that reduce to one filename
+   or one type name all fail generation. Each of those used to warn and carry on,
+   which shipped TypeScript that either did not compile or bound to the wrong
+   type. `$id` base-URI scoping is *resolved*, not refused — `normalizeRefScopes`
+   rewrites every ref to a document-root pointer first — and only the residue the
+   spec calls unresolvable (a fragment ref naming nothing in its own resource)
+   still throws, via `assertIdScopes`.
+4. **Two similar guards:** `isSchemaObject` narrows to a non-boolean schema;
    `isObjectSchema` narrows to a `type: object` schema. Don't confuse them.
-4. **Some modules are copied verbatim into generated output** (`is-object`,
+5. **Some modules are copied verbatim into generated output** (`is-object`,
    `safe-accessor`, `validate-array`, `validate-record`) — intentionally
    dependency-free and minimal, not general-purpose validators.
 
 Notable subpaths: `/resolve-ref`, `/extract-refs`, `/schema-guards`,
 `/ref-to-name`, `/ref-to-filename`, `/upgrade-draft07-schema`,
-`/generate-type-definition`, `/is-object`. Install: `bun add @amritk/helpers`.
+`/walk-ref-graph`, `/generate-type-definition`, `/is-object`. Install: `bun add @amritk/helpers`.

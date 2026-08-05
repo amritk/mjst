@@ -76,7 +76,12 @@ Bun.serve({ fetch: handler })      // or: export default { fetch: handler } on W
    cannot set the `cookie` header). Undeclared response statuses **throw**
    (`isUnexpectedStatusError`) instead of entering the union — declare every
    status you handle. Browser auth uses `fetchOptions: { credentials:
-   'include' }`. Frontends import from the **`@amritk/api/client`** subpath —
+   'include' }`; native clients have no cookie jar and send the session in a
+   header instead (`Authorization: Bearer` via Better Auth's `bearer()`, or a
+   manual `Cookie` under Expo), so a Better Auth context factory must forward
+   **both** `cookie` and `authorization` into `getSession`, and `createCsrf`
+   must `exempt` bearer callers or every native `POST` 403s.
+   Frontends import from the **`@amritk/api/client`** subpath —
    same client surface, guaranteed free of server modules, no bundler
    `node:*` externalization warnings.
 6. **Guards authorize; attach them in the `guards` field.** Add `guards: [...]`
