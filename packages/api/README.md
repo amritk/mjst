@@ -1837,6 +1837,16 @@ genuinely becomes your bottleneck, cache it briefly (single-digit seconds) and
 invalidate on sign-out — and treat the revocation delay as a number you picked
 rather than one you inherited.
 
+> **Check whether your platform is already caching it for you.** Cloudflare
+> Hyperdrive caches eligible read queries **by default** — `max_age` 60s plus
+> `stale_while_revalidate` 15s — and does not invalidate on write, so a session
+> lookup routed through a default config can keep authorizing a signed-out user
+> for over a minute. Cloudflare's own guidance names authentication, sessions,
+> and permissions as reads that need a **second, cache-disabled Hyperdrive
+> binding**; connection pooling and edge connection setup still apply, so you
+> keep the latency win and drop only the staleness. When an auth library owns the
+> SQL, give it its own client built on the cache-disabled binding.
+
 **Where the latency actually goes.** Worth knowing before optimizing the wrong
 layer, because the costs here differ by three orders of magnitude:
 
@@ -1855,6 +1865,17 @@ two, and **put the session store next to the compute** — a query to a database
 one region away costs more than every other row in this table combined, and no
 amount of hook tuning buys it back. Only after those does a cross-request cache
 become worth its revocation delay.
+
+On Workers specifically, adding a session lookup is what makes
+[Smart Placement](https://developers.cloudflare.com/workers/configuration/placement/)
+worth turning on. Cloudflare's numbers are 20–30 ms per query from a distant
+region against 1–3 ms when the Worker runs near the database — and placement does
+nothing for a request that makes a *single* query, since the round trip costs the
+same wherever it happens. A session lookup plus the handler's own query is two
+sequential round trips, which is exactly the case placement compounds in your
+favour. Hyperdrive already removes the seven round trips of connection setup (TCP
+1×, TLS 3×, auth 3×) by pooling warm connections near the database; placement
+addresses the query legs that remain.
 
 The native client is the cheaper of the two, for what it is worth: no preflight
 (nothing to negotiate without an `Origin`), no cookie header to parse, and the

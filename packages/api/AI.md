@@ -168,6 +168,13 @@ Hook factories ship the standard middleware over `onRequest`/`onResponse`/`local
   session still works, so keep any TTL to single-digit seconds and invalidate on
   sign-out. A dual-client API declares cookie and bearer as **two separate**
   `security` entries (either works), not one entry listing both (send both).
+  **Platform caches count**: Cloudflare Hyperdrive caches reads by default
+  (`max_age` 60s + 15s stale, no write invalidation), so a session lookup through
+  a default binding keeps a signed-out user authorized for over a minute — give
+  auth its own **cache-disabled** Hyperdrive binding (pooling and edge connection
+  setup still apply). On Workers, a session lookup plus the handler's query makes
+  two sequential round trips, which is when Smart Placement starts paying (20–30 ms
+  per query distant vs 1–3 ms placed; it does nothing for a single-query request).
   On latency: the hooks are microseconds and the **session lookup is 1–50 ms**,
   so tune the lookup (lazy, memoized per request, store colocated with compute),
   not the middleware. Never call `new URL()` in a gate — it benchmarks at ~⅕ of
