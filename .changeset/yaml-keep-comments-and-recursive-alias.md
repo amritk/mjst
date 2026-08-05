@@ -23,8 +23,12 @@ the one trailing the previous line usually does not), and a parser that guesses
 imposes its guess on every consumer. The spans pair against any node's
 `start`/`end`, so callers keep that decision.
 
-Off by default, so parsing to data does not pay for it — the cost when off is one
-boolean test per line, and an A/B of the parser showed no measurable change.
+Off by default, so parsing to data does not pay for it. The cost when off is one
+boolean test per line plus four fields on the parser's state object: CI's
+benchmark gate measures between -1.0% and -4.5% across the six yaml cases, all
+inside its ±5% noise band but consistently negative, so read it as a low
+single-digit cost rather than as free.
+
 Checked against `yaml`'s CST tokenizer across the vendored OpenAPI fixtures and
 ~9k fuzzed documents that both parsers accept, with no divergence.
 
