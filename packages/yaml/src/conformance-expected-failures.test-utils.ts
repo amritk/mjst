@@ -33,6 +33,13 @@ export const EXPECTED_FAILURES: Record<string, string> = {
   // ---------------------------------------------------------------------------
   '2JQS': 'rejects: two entries with an empty key, which `uniqueKeys` treats as duplicates',
 
+  // `{ &a [a, &b b]: *b, *a : [c, *b, d] }` keys the mapping twice by the same
+  // sequence — once written out, once through the alias that points at it — so
+  // both keys render `[ a, b ]` and the pairs collapse into one in any JavaScript
+  // object. That is the same "keys are unique" rule as `2JQS`, and the same
+  // answer: the report is what a linter wants, and `uniqueKeys: false` accepts it.
+  X38W: 'rejects: a sequence key and an alias to it render alike, which `uniqueKeys` treats as duplicates',
+
   // ---------------------------------------------------------------------------
   // output: extended tags project to richer JavaScript types
   //

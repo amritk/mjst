@@ -1161,3 +1161,110 @@ describe('tab-indented flow scalars', () => {
     expect(doc.toJS()).toEqual(JSON.parse(source))
   })
 })
+
+describe('sequence entries carrying only node properties', () => {
+  it('keeps the entries that follow a tag-only entry', () => {
+    // `- !!str` with nothing after it is an entry holding an empty (tagged)
+    // scalar. The `- a` below is its *sibling*, not its content: nested content
+    // would have to be indented past the dash. Adopting it as a nested sequence
+    // swallowed every remaining entry, so the list came back one item long.
+    const doc = parseDocument('- !!str\n- a\n- b\n')
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.toJS()).toEqual(['', 'a', 'b'])
+  })
+
+  it('keeps the entries that follow an anchor-only entry', () => {
+    const doc = parseDocument('- &x\n- a\n')
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.toJS()).toEqual([null, 'a'])
+  })
+
+  it('handles a run of property-only entries', () => {
+    expect(parseDocument('- &x\n- !!str\n- a\n').toJS()).toEqual([null, '', 'a'])
+  })
+
+  it('still nests content that really is indented past the dash', () => {
+    // The rule this fixes is about *sibling* dashes only — an indented block
+    // below a property-only entry is still that entry's content.
+    expect(parseDocument('- !!seq\n  - inner\n- a\n').toJS()).toEqual([['inner'], 'a'])
+    expect(parseDocument('- &x\n  k: 1\n- a\n').toJS()).toEqual([{ k: 1 }, 'a'])
+  })
+
+  it('leaves the mapping spelling alone, where the column really is shared', () => {
+    // A block sequence *may* sit at its mapping's own column, so `seq: &anchor`
+    // over a zero-indented list still adopts it. Only the sequence-entry case
+    // changed.
+    expect(parseDocument('seq: &anchor\n- a\n- b\n').toJS()).toEqual({ seq: ['a', 'b'] })
+  })
+})
+
+describe('flow collections used as block mapping keys', () => {
+  it('parses a flow mapping written as an explicit key', () => {
+    // The `: ` inside `{x: 1}` belongs to the flow mapping, not to the block
+    // entry — reading it as the entry's separator keyed the mapping by the
+    // plain scalar `{x` and left `1}` as the value.
+    const doc = parseDocument('? {x: 1}\n: a\n')
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.toJS()).toEqual({ '{ x: 1 }': 'a' })
+  })
+
+  it('parses a flow sequence holding a mapping as an explicit key', () => {
+    expect(parseDocument('? [a: 1]\n: v\n').toJS()).toEqual({ '[ { a: 1 } ]': 'v' })
+  })
+
+  it('parses a flow collection written as an explicit value', () => {
+    // The value side of an explicit entry goes through the same lookahead, so
+    // it corrupted the same way — silently, with no diagnostic to show for it.
+    const doc = parseDocument('? k\n: {x: 1}\n')
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.toJS()).toEqual({ k: { x: 1 } })
+  })
+
+  it('parses a flow key on an entry that is not the mapping’s first', () => {
+    // A flow key on the *first* entry has always been parsed properly (it goes
+    // through `parseNodeInner`); later entries took the plain-scalar path.
+    const doc = parseDocument('a: 1\n{x: 2}: v\n')
+    expect(doc.errors).toHaveLength(0)
+    expect(doc.toJS()).toEqual({ a: 1, '{ x: 2 }': 'v' })
+  })
+
+  it('keys by the parsed collection, not by its source text', () => {
+    // `[x, y]` sliced as text renders `[x, y]`; parsed as a sequence it renders
+    // `[ x, y ]`, which is what the identical key on a first entry produces.
+    expect(parseDocument('a: 1\n[x, y]: v\n').toJS()).toEqual({ a: 1, '[ x, y ]': 'v' })
+    expect(parseDocument('[x, y]: v\na: 1\n').toJS()).toEqual({ a: 1, '[ x, y ]': 'v' })
+  })
+
+  it('reports a block mapping opened on the "---" line by a flow key', () => {
+    const doc = parseDocument('--- {a: 1}: v\n')
+    expect(doc.errors.map((e) => e.code)).toContain('UNEXPECTED_CONTENT')
+  })
+
+  it('still accepts a bare flow collection on the "---" line', () => {
+    expect(parseDocument('--- {a: 1}\n').errors).toHaveLength(0)
+    expect(parseDocument('--- [a, b]\n').errors).toHaveLength(0)
+  })
+})
+
+describe('duplicate collection keys', () => {
+  it('reports two collection keys that render alike', () => {
+    // Both keys project to `[ a, b ]`, so the pairs collapse into one in the
+    // JavaScript output. Skipping collection keys meant that happened silently.
+    const doc = parseDocument('{ [a, b]: 1, [a, b]: 2 }\n')
+    expect(doc.errors.map((e) => e.code)).toEqual(['DUPLICATE_KEY'])
+  })
+
+  it('reports a collection key duplicated by an alias to it', () => {
+    const doc = parseDocument('{ &a [a, b]: 1, *a : 2 }\n')
+    expect(doc.errors.map((e) => e.code)).toEqual(['DUPLICATE_KEY'])
+  })
+
+  it('leaves collection keys that render differently alone', () => {
+    expect(parseDocument('{ [a, b]: 1, [a, c]: 2 }\n').errors).toHaveLength(0)
+    expect(parseDocument('? [a, b]\n: 1\n? {a: 1}\n: 2\n').errors).toHaveLength(0)
+  })
+
+  it('accepts them when uniqueKeys is off', () => {
+    expect(parseDocument('{ [a, b]: 1, [a, b]: 2 }\n', { uniqueKeys: false }).errors).toHaveLength(0)
+  })
+})
