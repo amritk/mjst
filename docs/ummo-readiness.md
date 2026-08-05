@@ -14,6 +14,11 @@ framework grow before agent-ummo's apps can move onto it?**
 > readiness set". The sequencing plan at the bottom is now unblocked from
 > step 1 through step 5.
 
+> **Auth and sessions moved to their own doc.** This one scopes *framework*
+> gaps. How agent-ummo should hold a session on top of the framework — the
+> token model, what a native app changes, and a live revocation hole in the
+> deployed Hyperdrive configuration — is in `ummo-auth-sessions.md`.
+
 ## What agent-ummo runs today
 
 Five Hono 4 servers, all deployable as Cloudflare Workers, three also run
