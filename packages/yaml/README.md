@@ -119,8 +119,8 @@ if (isMap(contents)) {
 | Export | What it does |
 | --- | --- |
 | `parse(source, options?)` | Parse straight to a JavaScript value, like `JSON.parse`. |
-| `parseDocument(source, options?)` | Parse to `{ contents, errors, warnings, toJS() }` where every node carries `start`/`end` source offsets. |
-| `parseAllDocuments(source, options?)` | Parse a multi-document (`---`-separated) stream to an array of documents, each with its own anchors and problems. |
+| `parseDocument(source, options?)` | Parse to `{ contents, errors, warnings, comments, toJS() }` where every node carries `start`/`end` source offsets. |
+| `parseAllDocuments(source, options?)` | Parse a multi-document (`---`-separated) stream to an array of documents, each with its own anchors, problems, and comments. |
 | `nodeAtPath(root, path, closest?)` | Resolve a JSON path to its node (carrying `start`/`end`), optionally falling back to the closest ancestor. |
 | `lineCounter(source)` | Build an `offset → { line, col }` mapper (1-based). |
 | `keyText(node)` | The string a mapping key projects to in `toJS()` output — the same string `nodeAtPath` matches a path segment against. Use it when you walk the tree yourself and need your paths to line up with the projected data. |
@@ -130,6 +130,33 @@ if (isMap(contents)) {
 
 - `uniqueKeys` (default `true`) — report duplicate mapping keys as errors. Set `false` to allow them (last value wins).
 - `merge` (default `true`) — honor the `<<` merge key. Set `false` to treat `<<` as an ordinary key.
+- `keepComments` (default `false`) — collect comments onto `doc.comments`. Off by default so parsing to data does not pay to build the list.
+
+### Comments
+
+Comments are skipped unless you ask for them. With `keepComments`, each one
+arrives on `doc.comments` in source order with its exact span:
+
+```ts
+const doc = parseDocument('# which API\nopenapi: 3.1.0 # version\n', { keepComments: true })
+doc.comments
+// → [ { text: ' which API', start: 0, end: 11 },
+//     { text: ' version',   start: 27, end: 36 } ]
+```
+
+`text` is everything after the `#`; `start` is the `#` itself and `end` is the
+line break, so `source.slice(start, end)` gives the comment back verbatim.
+
+The point of getting these from the parser rather than scanning for `#` yourself
+is that **only the parser knows which `#` are comments**. Inside a quoted scalar,
+a block scalar, or a plain scalar, a `#` is content — `a: "not # a comment"` and
+`a: foo#bar` hold none — and no amount of regex reliably tells the difference.
+
+It is a flat list rather than a `comment` field per node on purpose: which node a
+comment belongs to is a policy call (the line above a key usually introduces it;
+the one trailing the previous line usually does not), and a parser that guesses
+forces its guess on everyone. Pair the spans against any node's `start`/`end` and
+apply your own rule.
 
 ---
 
@@ -215,7 +242,7 @@ schema** for scalar typing. The exact boundaries:
 - Multi-document streams (`---` / `...`) via `parseAllDocuments`, each document with its own anchor scope, tag handles, and problem list.
 - A root node written on the `---` line itself — `--- foo`, `--- |`, `--- !!str`, or a quoted scalar spanning the lines below it. Its content is measured against column 0, not the column the marker pushed it to, so `--- >` may hold a block scalar starting at column 0.
 - `%TAG` directives (handles are resolved) and `%YAML` (the version is reported, not applied — resolution is always the 1.2 core schema).
-- Comments (full-line and inline), blank lines, and a leading byte-order mark.
+- Comments (full-line and inline), blank lines, and a leading byte-order mark. Comments are skipped by default and collected onto `doc.comments` when `keepComments` is set — including the ones on `---`/`...` marker and directive lines.
 - All three YAML line breaks — `\n`, `\r\n`, and a lone `\r` — count as one break each, in the parser and in `lineCounter`'s positions.
 
 **Diagnostics**
@@ -226,6 +253,7 @@ Every node carries an exact `[start, end)` source span, and problems are collect
 | --- | --- |
 | `DUPLICATE_KEY` | the same mapping key appears twice — compared on the string the key projects to, so an alias to an anchored key and two collection keys with the same flow rendering both count |
 | `UNRESOLVED_ALIAS` | `*name` with no matching anchor in scope |
+| `RECURSIVE_ALIAS` | `*name` inside the very node `&name` labels (`&a [1, *a]`) — the anchor exists, but the cycle it describes is not built |
 | `UNTERMINATED_FLOW` | a `[` or `{` that never closes |
 | `UNTERMINATED_QUOTE` | a quoted scalar that never closes |
 | `UNEXPECTED_CONTENT` | content after a node ends, a second root node with no `---`, a block sequence opened on the line of the key it belongs to (`key: - a`), or a block mapping opened on the `---` line (`--- a: 1`, `--- [a, b]: v`) |
@@ -258,8 +286,8 @@ Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNK
 - **The 1024-character implicit key limit in flow context.** A block mapping key whose `:` sits more than 1024 characters in *is* reported (`BAD_IMPLICIT_KEY`). The spec writes the same cap into the flow-context production, and there it is deliberately not enforced: a flow mapping is where JSON lives, `{"…1100 characters…": 1}` is valid JSON, and rejecting a valid JSON document is the worse of the two errors. `yaml` (eemeli) draws the line in the same place.
 - **Flow collection indentation, at the closing delimiter.** A flow collection's *content* lines must clear the indentation of the block that holds them, and a line that does not is reported (`BAD_INDENT`). Its **closing** `]`/`}` is held only to the parent's own column, one short of what the spec asks: closing a multi-line flow collection at the parent's column is how Prettier and hand-written manifests both write it, and `yaml` and `js-yaml` both accept it. A closing delimiter *further out* than its parent is still reported.
 - **Shared alias identity.** An alias to a collection projects to a *copy*, not the same object: for `a: &x {p: 1}` / `b: *x` / `c: *x`, `b` and `c` are equal but `b !== c`, and mutating one does not change the other. The spec makes them one node. Copying keeps `toJS()` a plain tree — which is what a path-keyed position index, a JSON round-trip, and any consumer that edits the projection all assume — and the cost of re-expanding aliases is capped by an expansion budget, so a billion-laughs document throws a catchable error instead of hanging.
-- **Recursive anchors.** An alias inside the node its own anchor names — `&a [1, *a]` — is legal YAML, and `yaml` and `js-yaml` both build the circular structure it describes. Here the anchor is registered once its node is complete, so the inner `*a` finds nothing and is reported as `UNRESOLVED_ALIAS`. This is the same trade-off as shared alias identity, taken to its conclusion: a cyclic value cannot be a plain tree, cannot be serialized to JSON, and cannot appear in a valid OpenAPI document, so the cycle is refused rather than half-built.
-- **Comments as tree nodes.** Comments are skipped, not attached: they end a line and are otherwise invisible, so there is no `node.comment` and no way to ask which comment introduces a key. Their *text* is still reachable through the source and the surrounding nodes' offsets, which is how `@amritk/lint` keeps comments attached to the sequence items they precede when it reorders one — but that is line arithmetic on the caller's side, not something the tree tells you. A rule that reads a comment, or an inline `# …-disable-next-line` suppression, needs more than this parser currently gives.
+- **Recursive anchors.** An alias inside the node its own anchor names — `&a [1, *a]` — is legal YAML, and `yaml` and `js-yaml` both build the circular structure it describes. Here it is reported as `RECURSIVE_ALIAS` and the cycle is not built. This is the same trade-off as shared alias identity, taken to its conclusion: a cyclic value cannot be a plain tree, cannot be serialized to JSON, and cannot appear in a valid OpenAPI document, so it is refused rather than half-built — with a diagnostic that says which of the two alias problems it is, since the anchor does exist.
+- **Comments attached to nodes.** `keepComments` reports every comment with its exact span (see [Comments](#comments)), but as a flat list — there is no `node.comment`, and the parser does not decide which node a comment belongs to. That is a policy question with no single right answer (a comment on its own line above a key usually introduces it; the one trailing the line before usually does not), and a parser that guesses imposes its guess on every caller. Pair the spans against node offsets and apply whichever rule you want.
 
 If you need full YAML 1.2 conformance, use [`yaml`](https://www.npmjs.com/package/yaml). If you need a small, fast, position-aware parser for diagnostics, use this.
 

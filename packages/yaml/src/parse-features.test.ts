@@ -1268,3 +1268,84 @@ describe('duplicate collection keys', () => {
     expect(parseDocument('{ [a, b]: 1, [a, b]: 2 }\n', { uniqueKeys: false }).errors).toHaveLength(0)
   })
 })
+
+describe('comment retention', () => {
+  it('collects nothing unless asked', () => {
+    // The common case is parsing to data, which has no use for comments and
+    // should not pay to build the list.
+    expect(parseDocument('# lead\na: 1 # trailing\n').comments).toEqual([])
+  })
+
+  it('records full-line and trailing comments with exact spans', () => {
+    const src = '# leading\na: 1 # inline\n'
+    const doc = parseDocument(src, { keepComments: true })
+    expect(doc.comments).toEqual([
+      { text: ' leading', start: 0, end: 9 },
+      { text: ' inline', start: 15, end: 23 },
+    ])
+    // The span is the comment itself, so slicing the source by it round-trips.
+    for (const c of doc.comments) expect(src.slice(c.start, c.end)).toBe(`#${c.text}`)
+  })
+
+  it('does not mistake a "#" inside a scalar for a comment', () => {
+    // This is the whole reason the parser reports comments rather than leaving
+    // callers to scan for `#`: only the parser knows which ones are content.
+    const keep = { keepComments: true }
+    expect(parseDocument('a: "not # a comment"\n', keep).comments).toEqual([])
+    expect(parseDocument("a: 'not # one'\n", keep).comments).toEqual([])
+    expect(parseDocument('a: foo#bar\n', keep).comments).toEqual([])
+    expect(parseDocument('a: |\n  body # not a comment\n', keep).comments).toEqual([])
+  })
+
+  it('does not collect a "#" glued to the token before it', () => {
+    // Already reported as BAD_COMMENT — the rest of the line is not a comment,
+    // so it must not be collected as one either.
+    const doc = parseDocument('a: "x"# nope\n', { keepComments: true })
+    expect(doc.errors.map((e) => e.code)).toContain('BAD_COMMENT')
+    expect(doc.comments).toEqual([])
+  })
+
+  it('records comments inside flow collections and on marker lines', () => {
+    const text = (src: string) => parseDocument(src, { keepComments: true }).comments.map((c) => c.text)
+    expect(text('a: [1, # one\n  2]\n')).toEqual([' one'])
+    expect(text('--- # on marker\na: 1\n')).toEqual([' on marker'])
+    expect(text('%YAML 1.2\n--- # after directive\na: 1\n')).toEqual([' after directive'])
+  })
+
+  it('records a comment with no trailing newline', () => {
+    expect(parseDocument('a: 1 # end', { keepComments: true }).comments).toEqual([{ text: ' end', start: 5, end: 10 }])
+  })
+
+  it('gives each document in a stream its own comments', () => {
+    const docs = parseAllDocuments('# one\na: 1\n---\n# two\nb: 2\n# tail\n', { keepComments: true })
+    expect(docs.map((d) => d.comments.map((c) => c.text))).toEqual([[' one'], [' two', ' tail']])
+  })
+
+  it('records each comment once, whatever the line breaks', () => {
+    for (const brk of ['\n', '\r\n', '\r']) {
+      const src = `# lead${brk}a: 1 # in${brk}`
+      expect(parseDocument(src, { keepComments: true }).comments.map((c) => c.text)).toEqual([' lead', ' in'])
+    }
+  })
+})
+
+describe('aliases that point into the node containing them', () => {
+  it('reports a recursive alias as such, not as a missing anchor', () => {
+    // `&a` is registered once its node is complete, so the inner `*a` misses —
+    // but saying it "has no matching anchor" would be false. The anchor exists;
+    // the structure it describes is a cycle this parser does not build.
+    for (const src of ['&a [1, *a]\n', '&a {k: *a}\n', 'a: &x\n  k: *x\n']) {
+      expect(parseDocument(src).errors.map((e) => e.code)).toEqual(['RECURSIVE_ALIAS'])
+    }
+  })
+
+  it('still reports a genuinely missing anchor as unresolved', () => {
+    expect(parseDocument('x: *missing\n').errors.map((e) => e.code)).toEqual(['UNRESOLVED_ALIAS'])
+  })
+
+  it('leaves an ordinary backward alias alone', () => {
+    const doc = parseDocument('a: &x 1\nb: *x\n')
+    expect(doc.errors).toEqual([])
+    expect(doc.toJS()).toEqual({ a: 1, b: 1 })
+  })
+})

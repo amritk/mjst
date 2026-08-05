@@ -2,6 +2,7 @@ import { resolveDoubleQuoted, resolvePlainValue, resolveSingleQuoted } from './r
 import type {
   ParseOptions,
   YamlAlias,
+  YamlComment,
   YamlDocument,
   YamlError,
   YamlMap,
@@ -110,6 +111,26 @@ type State = {
    * shared instance is safe and keeps large documents allocation-light.
    */
   line: LineInfo
+  /** Whether comments are being collected; see {@link ParseOptions.keepComments}. */
+  keepComments: boolean
+  /** Comments collected so far for the current document, in source order. */
+  comments: YamlComment[]
+  /**
+   * End offset of the last comment recorded, so a line that gets scanned twice
+   * cannot record its comment twice. `peekLine` is speculative — a child and then
+   * its parent may look at the same line — and while the cursor normally moves
+   * past a comment before anything re-reads it, that is an invariant spread
+   * across every caller rather than one this can rely on. Comments are found in
+   * increasing order, so one comparison settles it.
+   */
+  commentWatermark: number
+  /**
+   * Anchor names whose node is still being parsed, so an alias to one can say so.
+   * `null` until the document declares an anchor, which most do not. See
+   * {@link scanAlias} — a `*a` inside the node `&a` names is a recursive
+   * structure, not the missing anchor the generic report would claim.
+   */
+  pendingAnchors: Set<string> | null
 }
 
 type NodeProps = { anchor?: string; tag?: string }
@@ -219,6 +240,7 @@ const peekLine = (state: State, minIndent: number): LineInfo => {
     const c = src.charCodeAt(i)
     if (i >= len) break
     if (c === NL || c === CR || c === HASH) {
+      if (c === HASH && state.keepComments) recordComment(state, i)
       p = nextLineStart(src, i, len)
       continue
     }
@@ -232,6 +254,7 @@ const peekLine = (state: State, minIndent: number): LineInfo => {
       while (j < len && (src.charCodeAt(j) === TAB || src.charCodeAt(j) === SPACE)) j++
       const cj = src.charCodeAt(j)
       if (j >= len || cj === NL || cj === CR || cj === HASH) {
+        if (cj === HASH && state.keepComments) recordComment(state, j)
         p = nextLineStart(src, j, len)
         continue
       }
@@ -304,6 +327,60 @@ const reportCompactTab = (state: State, tabPos: number): void => {
   }
 }
 
+/**
+ * Records the comment opening at `hashPos`. Called only from the places that
+ * have already decided a `#` really is one, so it never has to re-derive that.
+ */
+const recordComment = (state: State, hashPos: number): void => {
+  if (hashPos < state.commentWatermark) return
+  const { src, len } = state
+  let end = hashPos + 1
+  while (end < len) {
+    const c = src.charCodeAt(end)
+    if (c === NL || c === CR) break
+    end++
+  }
+  state.commentWatermark = end
+  state.comments.push({ text: src.slice(hashPos + 1, end), start: hashPos, end })
+}
+
+/**
+ * Records a comment trailing the content on the current line (`a: 1 # why`),
+ * which is the one shape {@link recordComment}'s callers cannot spot for
+ * themselves: the cursor stops where the *node* ended, so the `#` is however
+ * many spaces further along.
+ *
+ * The whitespace rule is the same one {@link skipFlowWs} enforces — a `#` glued
+ * to the token before it is not a comment — so `"x"#y`, already reported as
+ * `BAD_COMMENT`, is not collected as one either.
+ */
+const recordTrailingComment = (state: State): void => {
+  const { src, len } = state
+  let i = state.pos
+  while (i < len && isSpace(src.charCodeAt(i))) i++
+  if (i >= len || src.charCodeAt(i) !== HASH) return
+  if (i > 0 && i === state.pos && !isSpace(src.charCodeAt(i - 1)) && !isBreak(src.charCodeAt(i - 1))) return
+  recordComment(state, i)
+}
+
+/**
+ * Records a comment anywhere in the rest of a *stream-level* line — a `---` or
+ * `...` marker, or a directive. Those lines cannot hold a quoted or block scalar,
+ * so unlike the node case a plain forward scan cannot mistake content for a
+ * comment, and the scan may start before the token rather than after it.
+ */
+const recordLineComment = (state: State, from: number): void => {
+  const { src, len } = state
+  for (let i = from; i < len; i++) {
+    const c = src.charCodeAt(i)
+    if (c === NL || c === CR) return
+    if (c === HASH && (i === 0 || isSpace(src.charCodeAt(i - 1)) || isBreak(src.charCodeAt(i - 1)))) {
+      recordComment(state, i)
+      return
+    }
+  }
+}
+
 /** True when the rest of the current line holds nothing but a comment. */
 const atLineEnd = (state: State): boolean => {
   const c = state.src.charCodeAt(state.pos)
@@ -312,6 +389,7 @@ const atLineEnd = (state: State): boolean => {
 
 /** Consumes a trailing comment and the line break, parking at the next line start. */
 const finishLine = (state: State): void => {
+  if (state.keepComments) recordTrailingComment(state)
   state.pos = nextLineStart(state.src, state.pos, state.len)
 }
 
@@ -687,7 +765,16 @@ const scanPropsSlow = (state: State, flow = false): NodeProps => {
   if (anchor === undefined && tag === undefined) return NO_PROPS
   // Build conditionally: `exactOptionalPropertyTypes` forbids explicit undefined.
   const props: NodeProps = {}
-  if (anchor !== undefined) props.anchor = anchor
+  if (anchor !== undefined) {
+    props.anchor = anchor
+    // The node this names has not been parsed yet, so `state.anchors` will not
+    // hold it until `attachProps` runs — which is exactly the window an alias
+    // *inside* that node falls into. Recording the name here is what lets
+    // `scanAlias` tell a recursive reference from a missing anchor.
+    const pending = state.pendingAnchors ?? new Set<string>()
+    pending.add(anchor)
+    state.pendingAnchors = pending
+  }
   if (tag !== undefined) props.tag = tag
   return props
 }
@@ -699,7 +786,10 @@ const attachProps = (node: YamlNode, props: NodeProps, state: State): YamlNode =
   // which made `&b *a` look like it had anchored something.
   if (node.kind === 'alias') {
     pushError(state, 'BAD_PROPERTY', 'An alias cannot carry an anchor or a tag', node.start, node.end)
-    if (props.anchor) state.anchors.set(props.anchor, node)
+    if (props.anchor) {
+      state.anchors.set(props.anchor, node)
+      state.pendingAnchors?.delete(props.anchor)
+    }
     return node
   }
   if (props.anchor) {
@@ -711,6 +801,7 @@ const attachProps = (node: YamlNode, props: NodeProps, state: State): YamlNode =
     }
     node.anchor = props.anchor
     state.anchors.set(props.anchor, node)
+    state.pendingAnchors?.delete(props.anchor)
   }
   if (props.tag) node.tag = props.tag
   return node
@@ -878,7 +969,22 @@ const scanAlias = (state: State): YamlNode => {
   // a real error rather than a forward reference to resolve later. Without the
   // report the alias silently projects to `undefined` and its mapping key
   // vanishes from the output — the worst way for a document to be wrong.
-  else pushError(state, 'UNRESOLVED_ALIAS', `Alias "*${name}" has no matching anchor`, start, i)
+  //
+  // A name that is *declared* but not yet registered is the one case where the
+  // generic wording would be a lie: `&a [1, *a]` does have a matching anchor, it
+  // is simply the node still being built around this alias. That is a recursive
+  // structure — legal YAML, which this parser deliberately does not build (a
+  // cyclic value is not the plain tree `toJS` promises) — so it gets a report
+  // that says which of the two problems it actually is.
+  else if (state.pendingAnchors?.has(name)) {
+    pushError(
+      state,
+      'RECURSIVE_ALIAS',
+      `Alias "*${name}" refers to the node that contains it; recursive structures are not supported`,
+      start,
+      i,
+    )
+  } else pushError(state, 'UNRESOLVED_ALIAS', `Alias "*${name}" has no matching anchor`, start, i)
   return alias
 }
 
@@ -1393,7 +1499,7 @@ const skipFlowWs = (state: State): void => {
       // it as one silently drops the rest of the line.
       if (p > 0 && !isSpace(src.charCodeAt(p - 1)) && !isBreak(src.charCodeAt(p - 1))) {
         pushError(state, 'BAD_COMMENT', 'A comment must be preceded by whitespace', p, plainLineEnd(src, p, len))
-      }
+      } else if (state.keepComments) recordComment(state, p)
       p = nextLineStart(src, p, len)
     } else break
   }
@@ -2487,6 +2593,7 @@ const docMarkerInlineNode = (state: State, p: number): number => {
   while (i < len && isSpace(src.charCodeAt(i))) i++
   const c = src.charCodeAt(i)
   if (i >= len || c === NL || c === CR || c === HASH) {
+    if (c === HASH && state.keepComments) recordComment(state, i)
     state.pos = nextLineStart(src, i, len)
     return -1
   }
@@ -2534,6 +2641,7 @@ const skipDocumentHead = (state: State): number => {
     const c = src.charCodeAt(line.contentPos)
     if (c === PERCENT) {
       readDirective(state, line.contentPos)
+      if (state.keepComments) recordLineComment(state, line.contentPos)
       state.pos = nextLineStart(src, line.contentPos, len)
       continue
     }
@@ -2787,6 +2895,10 @@ const newState = (source: string, options: ParseOptions): State => ({
   flowIndent: -1,
   flowIndentReported: false,
   line: { eof: false, indent: 0, contentPos: 0 },
+  keepComments: options.keepComments === true,
+  comments: [],
+  commentWatermark: 0,
+  pendingAnchors: null,
 })
 
 /**
@@ -2832,6 +2944,7 @@ const checkDocumentEnd = (state: State): void => {
  * `parseDocument` does with the cursor.
  */
 const warnIfMoreDocuments = (state: State, markerPos: number): void => {
+  if (state.keepComments) recordLineComment(state, markerPos + 3)
   state.pos = nextLineStart(state.src, markerPos + 3, state.len)
   if (peekLine(state, 0).eof) return
   pushWarning(
@@ -2845,10 +2958,10 @@ const warnIfMoreDocuments = (state: State, markerPos: number): void => {
 
 /** Builds a document from the current `state`, closing over its problems. */
 const finishDocument = (state: State, contents: YamlNode | null): YamlDocument => {
-  const { errors, warnings, merge, len } = state
+  const { errors, warnings, comments, merge, len } = state
   // Aliases carry their resolved target (captured at parse time), so projection
   // no longer needs the anchors map — anchor scope is settled by the time we get here.
-  return { contents, errors, warnings, toJS: () => toJsValue(contents, merge, newExpansionBudget(len), 0) }
+  return { contents, errors, warnings, comments, toJS: () => toJsValue(contents, merge, newExpansionBudget(len), 0) }
 }
 
 /**
@@ -2921,6 +3034,7 @@ const skipStreamHead = (state: State, closed: boolean): number => {
       }
       readDirective(state, p)
       sawDirective = true
+      if (state.keepComments) recordLineComment(state, p)
       state.pos = nextLineStart(src, p, len)
       continue
     }
@@ -2937,6 +3051,7 @@ const skipStreamHead = (state: State, closed: boolean): number => {
           plainLineEnd(src, after, len),
         )
       }
+      if (state.keepComments) recordLineComment(state, p + 3)
       state.pos = nextLineStart(src, p + 3, len)
       seen |= SAW_DOC_END
       continue
@@ -3002,6 +3117,7 @@ export const parseAllDocuments = (source: string, options: ParseOptions = {}): Y
           // the marker for the next iteration's `skipStreamHead` to consume.
         } else if (c === DOT && isDocMarker(src, p, len)) {
           // A `...` end marker terminates this (empty) document; consume it.
+          if (state.keepComments) recordLineComment(state, p + 3)
           state.pos = nextLineStart(src, p + 3, len)
           footer = true
         } else {
@@ -3040,6 +3156,7 @@ export const parseAllDocuments = (source: string, options: ParseOptions = {}): Y
     closed = footer
     state.errors = []
     state.warnings = []
+    state.comments = []
     state.anchors = new Map()
     state.tagHandles = null
     state.yamlDirective = false
@@ -3047,12 +3164,13 @@ export const parseAllDocuments = (source: string, options: ParseOptions = {}): Y
   // Diagnostics raised after the last document was finished — a malformed `...`
   // footer, a directive that no `---` ever followed — belong to the stream, not
   // to nothing. Without this they are reported into an array no caller holds.
-  if (state.errors.length > 0 || state.warnings.length > 0) {
+  if (state.errors.length > 0 || state.warnings.length > 0 || state.comments.length > 0) {
     const tail = docs[docs.length - 1]
     if (tail === undefined) docs.push(finishDocument(state, null))
     else {
       tail.errors.push(...state.errors)
       tail.warnings.push(...state.warnings)
+      tail.comments.push(...state.comments)
     }
   }
   return docs
