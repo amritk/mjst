@@ -168,6 +168,10 @@ Hook factories ship the standard middleware over `onRequest`/`onResponse`/`local
   session still works, so keep any TTL to single-digit seconds and invalidate on
   sign-out. A dual-client API declares cookie and bearer as **two separate**
   `security` entries (either works), not one entry listing both (send both).
+  On latency: the hooks are microseconds and the **session lookup is 1–50 ms**,
+  so tune the lookup (lazy, memoized per request, store colocated with compute),
+  not the middleware. Never call `new URL()` in a gate — it benchmarks at ~⅕ of
+  the adapter's per-request cost; slice the pathname out of `request.url`.
 - **`signCookie`/`unsignCookie`/`createSignedCookies`** — HMAC-SHA256, constant-time
   verify. **Integrity, not secrecy** — sign a session id, keep session server-side.
 - **`createTokenRefresh(opts)`** (bearer) — single-flighted, renews on the token

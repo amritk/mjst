@@ -1773,10 +1773,23 @@ const csrf = createCsrf({ exempt: exemptBearer })
 // Auth endpoints get their own, much tighter budget. `key` matters more than
 // `limit` here — see below.
 const authLimit = createRateLimit({ limit: 5, windowMs: 60_000, key: (request) => `auth:${verifiedIp(request)}` })
+
+const AUTH_PREFIX = '/api/auth'
+// Slice the pathname by hand rather than `new URL(request.url)`: a URL object
+// parses and normalizes the whole URL, which benchmarks at roughly a fifth of
+// the adapter's per-request cost — and this gate runs on every request, not just
+// the auth ones.
+const isAuthPath = (url: string): boolean => {
+  const schemeEnd = url.indexOf('://')
+  const pathStart = url.indexOf('/', schemeEnd === -1 ? 0 : schemeEnd + 3)
+  if (pathStart === -1 || !url.startsWith(AUTH_PREFIX, pathStart)) return false
+  // Boundary check, so `/api/authorize` is not swept in with the auth mount.
+  const next = url.charAt(pathStart + AUTH_PREFIX.length)
+  return next === '' || next === '/' || next === '?'
+}
+
 const limitAuthOnly: FetchOnRequest = (request, env, executionContext, locals) =>
-  new URL(request.url).pathname.startsWith('/api/auth')
-    ? authLimit.onRequest(request, env, executionContext, locals)
-    : undefined
+  isAuthPath(request.url) ? authLimit.onRequest(request, env, executionContext, locals) : undefined
 
 const handler = toFetchHandler(api, {
   mounts: { '/api/auth': (request, env) => makeAuth(env as Env).handler(request) },
@@ -1823,6 +1836,29 @@ trades away the exact property you chose a server-held session for. If the looku
 genuinely becomes your bottleneck, cache it briefly (single-digit seconds) and
 invalidate on sign-out — and treat the revocation delay as a number you picked
 rather than one you inherited.
+
+**Where the latency actually goes.** Worth knowing before optimizing the wrong
+layer, because the costs here differ by three orders of magnitude:
+
+| Per request | Cost |
+|:--|:--|
+| The gates and decorators above | single-digit **micro**seconds — a method check, a header set, a cookie split on unsafe methods |
+| `new URL()` in a hand-rolled gate | ~⅕ of the adapter's per-request cost, which is why the snippet above slices the path instead |
+| **The session lookup** | **1–50 ms**, depending on how far your database is |
+| Shared-store rate limiter | one store round-trip — scoped to `/api/auth/*` here, so ordinary traffic never pays it |
+| CORS preflight (browser only) | a whole extra round trip, on the first request of each shape |
+
+So the middleware is noise and the session lookup is the entire story. Three
+things move it, in order of effect: **keep it lazy** so public routes pay nothing,
+**memoize it per request** so a guard and a handler share one lookup instead of
+two, and **put the session store next to the compute** — a query to a database
+one region away costs more than every other row in this table combined, and no
+amount of hook tuning buys it back. Only after those does a cross-request cache
+become worth its revocation delay.
+
+The native client is the cheaper of the two, for what it is worth: no preflight
+(nothing to negotiate without an `Origin`), no cookie header to parse, and the
+CSRF gate exits immediately.
 
 **Then declare both client shapes**, so the OpenAPI document tells the truth about
 an API that now accepts two kinds of credential:
