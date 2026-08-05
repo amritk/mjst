@@ -1744,6 +1744,103 @@ on the hot path, and clearing a dead session so a stale token cannot sit in the
 keychain. See [client-side auth refresh](#client-side-auth-refresh) for the two
 models that do renew.
 
+### Sessions: a production setup
+
+Better Auth owns the session — issuing it, expiring it, revoking it. What this
+framework owns is everything wrapped around it, and the pieces have to agree with
+each other. Here they are in one place, for the case worth designing for: **one
+server, a browser SPA and a native app**.
+
+**Start from a server-held session.** The default — an opaque token pointing at a
+row Better Auth controls — is the right one, and the reason is revocation. Sign-out
+kills every copy of the credential on the next request; a self-contained token
+cannot be recalled once issued, so a stolen one stays good for its whole lifetime
+no matter what you do. Reach for the JWT plugin when a *second* service or an edge
+worker has to verify identity without calling you, and let it verify against
+`/jwks` for that hop only. Keep the client session as it is.
+
+The wiring, in the order it runs:
+
+```ts
+import type { FetchOnRequest } from '@amritk/api'
+import {
+  createCors, createCsrf, createRateLimit, createSecurityHeaders, exemptBearer, toFetchHandler,
+} from '@amritk/api'
+
+const cors = createCors({ origin: ['https://app.example.com'], credentials: true })
+const csrf = createCsrf({ exempt: exemptBearer })
+
+// Auth endpoints get their own, much tighter budget. `key` matters more than
+// `limit` here — see below.
+const authLimit = createRateLimit({ limit: 5, windowMs: 60_000, key: (request) => `auth:${verifiedIp(request)}` })
+const limitAuthOnly: FetchOnRequest = (request, env, executionContext, locals) =>
+  new URL(request.url).pathname.startsWith('/api/auth')
+    ? authLimit.onRequest(request, env, executionContext, locals)
+    : undefined
+
+const handler = toFetchHandler(api, {
+  mounts: { '/api/auth': (request, env) => makeAuth(env as Env).handler(request) },
+  onRequest: [cors.onRequest, limitAuthOnly, csrf.onRequest],
+  onResponse: [createSecurityHeaders(), cors.onResponse, csrf.onResponse],
+})
+```
+
+**Gates run before mounts and decorators run after**, which is the property this
+setup leans on: `/api/auth/*` is inside the rate limit, the CORS negotiation, and
+the security headers, rather than a hole punched through them. A mounted vendor
+router is still your traffic.
+
+**Rate-limit the auth mount.** This is the one most setups skip, and passwordless
+raises the stakes: an unthrottled magic-link endpoint is an email-bombing tool
+pointed at your users and a paid-for spam relay pointed at your bill, and the
+reply usually differs enough between a known and unknown address to enumerate
+accounts. The default rate-limit key is **a spoofable client IP header** — fine
+for protecting capacity, useless against an attacker who rotates it. For an auth
+throttle, key on a proxy-verified IP for your topology, and consider a second
+limiter keyed on the submitted email so one address cannot be targeted from many
+sources.
+
+**Keep the session lookup lazy, and think twice before caching it.**
+
+```ts
+export const createContext = async ({ request }: ContextFactoryInput) => ({
+  // Lazy, so public routes never pay for it; memoized, so guards and handlers
+  // in one request share a single lookup.
+  session: memoize(() =>
+    auth.api.getSession({
+      headers: new Headers({
+        cookie: request.header('cookie') ?? '',
+        authorization: request.header('authorization') ?? '',
+      }),
+    }),
+  ),
+})
+```
+
+Caching sessions *across* requests is where a setup quietly stops being modern:
+every second of TTL is a second a revoked session keeps working, so the cache
+trades away the exact property you chose a server-held session for. If the lookup
+genuinely becomes your bottleneck, cache it briefly (single-digit seconds) and
+invalidate on sign-out — and treat the revocation delay as a number you picked
+rather than one you inherited.
+
+**Then declare both client shapes**, so the OpenAPI document tells the truth about
+an API that now accepts two kinds of credential:
+
+```ts
+const securitySchemes = {
+  sessionCookie: { type: 'apiKey', in: 'cookie', name: '<your session cookie>', [securityGuard]: requireSession },
+  bearerAuth: { type: 'http', scheme: 'bearer', [securityGuard]: requireSession },
+} as const
+// Either satisfies the requirement: two single-scheme entries, not one entry with both.
+const security = [{ sessionCookie: [] }, { bearerAuth: [] }]
+```
+
+Two entries rather than one is the difference between "either credential works"
+and "send both", and only the first is true here. Wrap the routes with
+[`secureRoutes`](#deny-by-default-secureroutes) so the default is closed and you
+name the public ones.
+
 ### Observability: metrics and request logs
 
 `observe` is called once per matched request — validation failures and
