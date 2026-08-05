@@ -1,5 +1,15 @@
 # @amritk/mjst
 
+## 0.14.1
+
+### Patch Changes
+
+- Updated dependencies [7d2c805]
+- Updated dependencies [05d0b29]
+- Updated dependencies [a6bd637]
+  - @amritk/yaml@0.6.0
+  - @amritk/lint@0.4.5
+
 ## 0.14.0
 
 ### Minor Changes
