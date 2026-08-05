@@ -96,12 +96,37 @@ export type YamlError = {
   end: number
 }
 
+/**
+ * A comment, in source order. Collected only when `keepComments` is set —
+ * otherwise comments are skipped as they always were and this list stays empty.
+ *
+ * Deliberately a flat list rather than a `comment` field on each node. Which
+ * node a comment "belongs to" is a policy question with no single right answer
+ * (a comment on its own line above a key usually introduces it, but the one
+ * trailing the previous line usually does not), and a parser that guesses forces
+ * its guess on every consumer. What the parser knows and a caller cannot easily
+ * recover is *which `#` are comments at all* — the ones inside quoted scalars,
+ * block scalars, and plain scalars are not, and a scan of the raw text cannot
+ * tell the difference. So that is what this reports, and ownership stays with
+ * the caller, who can pair these offsets against any node's `start`/`end`.
+ */
+export type YamlComment = {
+  /** The text after the `#`, up to but not including the line break. */
+  text: string
+  /** Inclusive start offset — the `#` itself. */
+  start: number
+  /** Exclusive end offset — the line break, or end of input. */
+  end: number
+}
+
 /** A parsed document: the node tree, any problems, and a lazy `toJS` projection. */
 export type YamlDocument = {
   /** Root node, or `null` for an empty document. */
   contents: YamlNode | null
   errors: YamlError[]
   warnings: YamlError[]
+  /** Comments in source order; empty unless `keepComments` was set. */
+  comments: YamlComment[]
   /** Materializes the plain JavaScript value, resolving aliases and merge keys. */
   toJS: () => unknown
 }
@@ -117,4 +142,11 @@ export type ParseOptions = {
    * is treated as an ordinary key.
    */
   merge?: boolean
+  /**
+   * Collect comments onto `doc.comments`. Default `false`, because the common
+   * case — parsing to data — has no use for them and should not pay to build the
+   * list. Turn it on for a linter that needs to read comments or honor an inline
+   * suppression directive.
+   */
+  keepComments?: boolean
 }

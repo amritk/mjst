@@ -7,6 +7,7 @@ export type {
   ParseOptions,
   ScalarStyle,
   YamlAlias,
+  YamlComment,
   YamlDocument,
   YamlError,
   YamlErrorKind,
