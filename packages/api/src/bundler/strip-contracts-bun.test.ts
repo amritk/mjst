@@ -20,7 +20,7 @@ const loadCallbackOf = (plugin: ReturnType<typeof stripContractsBun>) => {
 
 /**
  * End-to-end size test for the whole story: a realistic JSON-only,
- * static-path widget (the agent-ummo shape — three contracts, fat schemas,
+ * static-path widget (a realistic embed shape — three contracts, fat schemas,
  * summaries, refine) is bundled with real `Bun.build`, with and without the
  * plugin. The plugin must cut the bundle substantially and no freight string
  * may survive into the stripped output. Runs in a spawned `bun` process
