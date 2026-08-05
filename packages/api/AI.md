@@ -149,6 +149,10 @@ Hook factories ship the standard middleware over `onRequest`/`onResponse`/`local
 - **`createCsrf(opts?)`** — double-submit cookie; rejects empty/missing tokens;
   cookie defaults `Path=/; SameSite=Lax; Secure`, not `HttpOnly` by design.
   Client half: **`createCsrfHeader()`** echoes the cookie into `x-csrf-token`.
+  Cookie-less callers (native apps) cannot echo anything and would 403 on every
+  write — pass **`exemptBearer`** as `exempt`. Key that exemption on the
+  `authorization` header, never on a missing `Origin`: same-site form posts
+  routinely omit `Origin`, so the looser test is a bypass.
 - **`signCookie`/`unsignCookie`/`createSignedCookies`** — HMAC-SHA256, constant-time
   verify. **Integrity, not secrecy** — sign a session id, keep session server-side.
 - **`createTokenRefresh(opts)`** (bearer) — single-flighted, renews on the token
@@ -156,6 +160,15 @@ Hook factories ship the standard middleware over `onRequest`/`onResponse`/`local
   Doesn't react to 401s; call `invalidate()` on logout (safe against an in-flight
   refresh). **`createRefreshFetch(opts)`** (HttpOnly cookie) — refresh + replay
   once on 401, single-flighted.
+- **`createBearerSession(opts)`** (stored session token — native apps) — wraps
+  `fetch`, not `headers`, because it must see responses: it attaches the stored
+  token, captures a rotated one off `set-auth-token` (Better Auth's session
+  extension, so rotation *is* the refresh), and on 401 either runs an optional
+  `refresh` and replays **under the new token**, or clears storage and fires
+  `onExpired`. `storage` is required and undefaulted on purpose — an in-memory
+  fallback looks fine until relaunch signs everyone out. Do not reach for
+  `createRefreshFetch` here: it replays the original init, which still carries
+  the dead token.
 
 ## Subpath entry points
 

@@ -856,7 +856,10 @@ check); the decorator seeds the cookie on any response that lacks one. The
 cookie defaults to `Path=/; SameSite=Lax; Secure` and is intentionally **not**
 `HttpOnly` — the pattern needs page scripts to read and echo it. Drop `Secure`
 via `cookieAttributes` only for a plain-HTTP dev origin. Use `exempt` to skip
-bearer-token API paths, where CSRF doesn't apply. On the client, pair it with
+bearer-token API paths, where CSRF doesn't apply — **`exemptBearer`** is that
+predicate written the safe way (see [native apps](#native-apps-magic-link-without-a-browsers-cookie-jar)
+for why keying on `authorization` is sound and keying on a missing `Origin` is a
+bypass). On the client, pair it with
 **`createCsrfHeader()`** — a `headers` provider for `createClient` that reads
 the `csrf_token` cookie and echoes it in `x-csrf-token`:
 
@@ -927,7 +930,7 @@ const handler = toFetchHandler(api, {
 
 ### Client-side auth refresh
 
-Two helpers cover the two token models, both plugging into
+Three helpers cover the three token models, all plugging into
 `createClient({ headers, fetch })`:
 
 **`createTokenRefresh(options)`** — the **bearer-token** model. It holds a
@@ -972,6 +975,36 @@ const client = createClient(contracts, 'https://api.example.com', {
   headers: createCsrfHeader(),
 })
 ```
+
+**`createBearerSession(options)`** — the **stored-session-token** model, for
+clients with no cookie jar at all: [native apps](#native-apps-magic-link-without-a-browsers-cookie-jar),
+where a magic-link sign-in hands back a token rather than a `Set-Cookie` the
+platform would keep and re-attach. It wraps a fetch and owns the round trip —
+attaches the stored token, captures a rotated one off any reply's
+`set-auth-token` (Better Auth's session extension, so the refresh costs no extra
+call), and on a `401` either runs an optional `refresh` or clears the token and
+fires `onExpired` so the app can route back to sign-in. `storage` is the one
+required option and is deliberately not defaulted: an in-memory fallback would
+look like it worked until the app relaunched and every user was signed out.
+
+```ts
+import { createBearerSession, createClient } from '@amritk/api/client'
+
+const session = createBearerSession({ storage, onExpired: () => router.replace('/sign-in') })
+const client = createClient(contracts, 'https://api.example.com', { fetch: session.fetch })
+```
+
+It is a fetch wrapper rather than a `headers` provider because both halves of the
+bearer model need to see responses — the rotated token arrives on one, and a
+replay after renewal has to go out under the **new** token. That is the trap it
+exists to close: `createRefreshFetch` can replay an untouched `RequestInit`
+because the browser re-attaches the freshly `Set-Cookie`'d session itself, and
+nothing does that for a bearer token.
+
+Picking between the three: `createTokenRefresh` when the credential has its own
+clock and a renewal endpoint (JWT access tokens), `createRefreshFetch` when the
+browser holds an HttpOnly cookie and only triggers renewal, `createBearerSession`
+when your client stores the session itself.
 
 ### Per-request state: `locals`
 
@@ -1617,17 +1650,21 @@ export const createContext = async ({ request }: ContextFactoryInput) => ({
 **And exempt those requests from CSRF.** `createCsrf` rejects any unsafe-method
 request without a matching `csrf_token` cookie, so a native `POST` gets a `403`
 before the handler — there is no page script to read the cookie and echo it.
-Exempt on the bearer header rather than on a missing `Origin`:
+`exemptBearer` is that exemption, written the safe way:
 
 ```ts
-const csrf = createCsrf({
-  // A cross-site page cannot set `authorization` without a preflight this
-  // server never grants, so its presence marks a caller the double-submit
-  // cookie was never defending. Widening this to "no Origin header" would
-  // instead hand every same-site form post a bypass.
-  exempt: (request) => request.headers.get('authorization')?.startsWith('Bearer ') === true,
-})
+import { createCsrf, exemptBearer } from '@amritk/api'
+
+const csrf = createCsrf({ exempt: exemptBearer })
 ```
+
+It keys on the `authorization` header, and that is what makes it sound: a page on
+another origin cannot attach one without a preflight this server never grants, so
+a request carrying it is by construction not the cross-site attack the
+double-submit cookie defends against. The tempting alternative — exempting
+requests with no `Origin` header — looks equivalent and is not, since plenty of
+same-site form posts arrive without one, which hands the bypass to exactly the
+browser traffic the check was protecting.
 
 This exempts bearer callers only — a client on the Expo cookie shape still
 arrives without an `x-csrf-token` and still takes the `403`. Either give it
@@ -1640,14 +1677,33 @@ redirect allow-list, where the `myapp://` scheme goes) separate from
 `createCors`'s `origin` (browser origins for the SPA); they answer different
 questions and a custom scheme belongs only in the former.
 
-On the client, the token model is [`createTokenRefresh`](#client-side-auth-refresh),
-not `credentials: 'include'`:
+On the client, `createBearerSession` covers the whole round trip — it attaches
+the stored token, persists any rotated one off the reply, and clears the session
+when the server stops accepting it:
 
 ```ts
-const auth = createTokenRefresh({ refresh: () => readTokenFromSecureStore() })
-const client = createClient(contracts, 'https://api.example.com', { headers: auth.headers })
-// on sign-out: auth.invalidate()
+import * as SecureStore from 'expo-secure-store'
+import { createBearerSession, createClient } from '@amritk/api/client'
+
+const session = createBearerSession({
+  storage: {
+    get: async () => (await SecureStore.getItemAsync('session')) ?? undefined,
+    set: (token) => SecureStore.setItemAsync('session', token),
+    clear: () => SecureStore.deleteItemAsync('session'),
+  },
+  onExpired: () => router.replace('/sign-in'),
+})
+
+const client = createClient(contracts, 'https://api.example.com', { fetch: session.fetch })
+// after the magic-link deep link resolves: session.set(token)
+// on sign-out: session.clear()
 ```
+
+Better Auth extends a session on its own `updateAge` and returns the new value in
+`set-auth-token`, so that rotation is the refresh — there is no endpoint to call
+and nothing further to wire. See
+[client-side auth refresh](#client-side-auth-refresh) for how this differs from
+the other two token models.
 
 ### Observability: metrics and request logs
 

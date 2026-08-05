@@ -62,6 +62,7 @@ describe('client', () => {
       'build-param-path.ts',
       'client-errors.ts',
       'client.ts',
+      'create-bearer-session.ts',
       'create-client.ts',
       'create-csrf-header.ts',
       'create-refresh-fetch.ts',
