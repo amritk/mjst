@@ -1349,3 +1349,29 @@ describe('aliases that point into the node containing them', () => {
     expect(doc.toJS()).toEqual({ a: 1, b: 1 })
   })
 })
+
+describe('duplicate node properties on one line', () => {
+  it('reports a second anchor written on the same line', () => {
+    // The property scanner reads whatever is written, so the second `&` used to
+    // overwrite the first and `&x` vanished with nothing reported. `yaml` and
+    // `js-yaml` both reject this outright.
+    const doc = parseDocument('a: &x &y 1\n')
+    expect(doc.errors.map((e) => e.code)).toEqual(['BAD_PROPERTY'])
+  })
+
+  it('reports a second tag written on the same line', () => {
+    expect(parseDocument('a: !!str !!int 1\n').errors.map((e) => e.code)).toEqual(['BAD_PROPERTY'])
+  })
+
+  it('still accepts one anchor and one tag together, in either order', () => {
+    expect(parseDocument('a: &x !!str 1\n').errors).toEqual([])
+    expect(parseDocument('a: !!str &x 1\n').errors).toEqual([])
+    expect(parseDocument('a: &x !!str 1\n').toJS()).toEqual({ a: '1' })
+  })
+
+  it('reports the multi-line spelling exactly once, as before', () => {
+    // `&x` on its own line above a `&y` value is caught in `attachProps`; the
+    // one-line rule must not make that report twice.
+    expect(parseDocument('a:\n  &x\n  &y 1\n').errors.map((e) => e.code)).toEqual(['BAD_PROPERTY'])
+  })
+})

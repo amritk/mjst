@@ -752,10 +752,22 @@ const scanPropsSlow = (state: State, flow = false): NodeProps => {
     const c = src.charCodeAt(state.pos)
     if (c === AMP) {
       const i = propTokenEnd(src, state.pos + 1, len, flow)
+      // A node may carry one anchor and one tag, not two of either. The loop
+      // reads whatever properties are written, so without this the second `&`
+      // simply overwrote the first and `&x &y 1` lost `&x` with nothing said —
+      // the `&x` spelling of a shape `yaml` and `js-yaml` both reject outright.
+      // The multi-line spelling (`&x` on its own line above a `&y` value) was
+      // already caught, in `attachProps`; this is the same rule for one line.
+      if (anchor !== undefined) {
+        pushError(state, 'BAD_PROPERTY', 'A node cannot carry more than one anchor', state.pos, i)
+      }
       anchor = src.slice(state.pos + 1, i)
       state.pos = i
     } else if (c === BANG) {
       const i = propTokenEnd(src, state.pos + 1, len, flow)
+      if (tag !== undefined) {
+        pushError(state, 'BAD_PROPERTY', 'A node cannot carry more than one tag', state.pos, i)
+      }
       tag = resolveTag(state, src.slice(state.pos, i), state.pos)
       state.pos = i
     } else {
