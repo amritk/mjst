@@ -227,13 +227,16 @@ Hook factories ship the standard middleware over `onRequest`/`onResponse`/`local
   once on 401, single-flighted.
 - **`createBearerSession(opts)`** (stored session token — native apps) — wraps
   `fetch`, not `headers`, because it must see responses: it attaches the stored
-  token, captures a rotated one off `set-auth-token` (Better Auth's session
-  extension, so rotation *is* the refresh), and on 401 either runs an optional
-  `refresh` and replays **under the new token**, or clears storage and fires
-  `onExpired`. `storage` is required and undefaulted on purpose — an in-memory
-  fallback looks fine until relaunch signs everyone out. Do not reach for
-  `createRefreshFetch` here: it replays the original init, which still carries
-  the dead token.
+  token, captures a newly issued one off `set-auth-token`, and on 401 either runs
+  an optional `refresh` and replays **under the new token**, or clears storage
+  and fires
+  `onExpired`. `refresh` is usually unnecessary: a server-held session (Better
+  Auth's) has a **stable opaque token** whose expiry the server rolls forward in
+  the database past `updateAge`, so sending it is the renewal — do not model this
+  as token rotation. `storage` is required and undefaulted on purpose — an
+  in-memory fallback looks fine until relaunch signs everyone out. Do not reach
+  for `createRefreshFetch` here: it replays the original init, which still
+  carries the dead token.
 
 ## Subpath entry points
 

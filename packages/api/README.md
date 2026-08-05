@@ -980,10 +980,12 @@ const client = createClient(contracts, 'https://api.example.com', {
 clients with no cookie jar at all: [native apps](#native-apps-magic-link-without-a-browsers-cookie-jar),
 where a magic-link sign-in hands back a token rather than a `Set-Cookie` the
 platform would keep and re-attach. It wraps a fetch and owns the round trip —
-attaches the stored token, captures a rotated one off any reply's
-`set-auth-token` (Better Auth's session extension, so the refresh costs no extra
-call), and on a `401` either runs an optional `refresh` or clears the token and
-fires `onExpired` so the app can route back to sign-in. `storage` is the one
+attaches the stored token, captures a newly issued one off any reply's
+`set-auth-token`, and on a `401` either runs an optional `refresh` or clears the
+token and fires `onExpired` so the app can route back to sign-in. Renewal is
+usually nothing at all here: a server-held session (Better Auth's, say) extends
+its own expiry when a request arrives and keeps the token stable, so sending it
+is what keeps it alive. `storage` is the one
 required option and is deliberately not defaulted: an in-memory fallback would
 look like it worked until the app relaunched and every user was signed out.
 
@@ -1699,11 +1701,21 @@ const client = createClient(contracts, 'https://api.example.com', { fetch: sessi
 // on sign-out: session.clear()
 ```
 
-Better Auth extends a session on its own `updateAge` and returns the new value in
-`set-auth-token`, so that rotation is the refresh — there is no endpoint to call
-and nothing further to wire. See
-[client-side auth refresh](#client-side-auth-refresh) for how this differs from
-the other two token models.
+**Sending the token is the refresh.** Better Auth's session token is opaque and
+stable for the life of the session: when a request arrives past `updateAge`
+(default 1 day) the server rolls the expiry forward to `now + expiresIn` (default
+7 days) **in the database** and hands back the same token. So an app in regular
+use never has to renew anything — each call it was making anyway pushes the
+window out. Go quiet for longer than `expiresIn` and the next call takes a `401`,
+which clears storage and fires `onExpired`; a magic-link session has no refresh
+token behind it, so signing in again is the only way back, and routing there is
+the correct handling rather than a gap.
+
+Capturing `set-auth-token` still matters — it is how the token lands in storage
+when sign-in runs through this fetch, and it costs nothing on every other reply.
+Just do not expect it per request. See
+[client-side auth refresh](#client-side-auth-refresh) for how this model differs
+from the other two.
 
 ### Observability: metrics and request logs
 

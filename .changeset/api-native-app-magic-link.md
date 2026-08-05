@@ -18,12 +18,13 @@ Two new exports, both for failures that present to a developer as "bad token":
   stored-session-token model, filling the gap between the two existing helpers.
   It wraps `fetch` rather than providing `headers`, because both halves of the
   bearer model need to see responses: it attaches the stored token, captures a
-  rotated one off `set-auth-token` (Better Auth extends a session on `updateAge`,
-  so rotation *is* the refresh and costs no extra round-trip), and on a `401`
-  either runs an optional single-flighted `refresh` and replays **under the new
-  token**, or clears storage and fires `onExpired`. `storage` is required and
-  undefaulted so an in-memory fallback cannot look correct until the app
-  relaunches and signs everyone out.
+  newly issued one off `set-auth-token`, and on a `401` either runs an optional
+  single-flighted `refresh` and replays **under the new token**, or clears
+  storage and fires `onExpired`. `refresh` is usually unnecessary — a server-held
+  session keeps a stable opaque token and rolls its expiry forward in the
+  database once a request arrives past `updateAge`, so sending the token is the
+  renewal. `storage` is required and undefaulted so an in-memory fallback cannot
+  look correct until the app relaunches and signs everyone out.
 
 That replay is the trap the helper exists to close: `createRefreshFetch` can
 replay an untouched `RequestInit` because the browser re-attaches the freshly

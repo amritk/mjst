@@ -58,10 +58,10 @@ export type BearerSessionOptions = {
   readonly isExpired?: (response: Response) => boolean
   /**
    * Renews the session explicitly, resolving to the new token. Optional,
-   * because the common case does not need it: a server that rotates the token
-   * on its own — Better Auth extends a session on `updateAge` and returns the
-   * new value in {@link BearerSessionOptions.tokenHeader} — is already handled
-   * by the automatic capture, with no endpoint to call.
+   * because a server-held session usually needs nothing here: Better Auth's
+   * token is opaque and stable, and a request arriving past `updateAge` rolls
+   * the expiry forward in the database rather than issuing a replacement. For
+   * that model, sending the token *is* the renewal.
    *
    * Supply this only when renewal is a real request. It is single-flighted
    * across concurrent callers, and the triggering request replays exactly once.
@@ -110,11 +110,15 @@ export type BearerSession = {
  *
  * It owns the whole round trip through one seam, `createClient({ fetch })`:
  *
- * - **Attach.** Every request goes out carrying the stored token.
- * - **Rotate.** Every reply is checked for
+ * - **Attach.** Every request goes out carrying the stored token. For a
+ *   server-held session this is also the whole of "refresh": Better Auth and
+ *   friends roll a session's expiry forward when a request arrives past
+ *   `updateAge`, keeping the same token, so traffic alone keeps it alive.
+ * - **Capture.** Every reply is checked for
  *   {@link BearerSessionOptions.tokenHeader}, and a token found there is
- *   persisted. This is the refresh path for a server that extends sessions on
- *   its own, and it costs no extra round-trip.
+ *   persisted. That is how a token lands in storage when sign-in runs through
+ *   this fetch, and it picks up a replacement from a server that does issue
+ *   one — but do not count on it arriving per request.
  * - **Renew or surrender.** A reply that {@link BearerSessionOptions.isExpired}
  *   flags either runs {@link BearerSessionOptions.refresh} and replays once, or
  *   — with no `refresh` configured — clears the token and calls
