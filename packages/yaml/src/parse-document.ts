@@ -536,6 +536,56 @@ const readDirective = (state: State, pos: number): void => {
 }
 
 /**
+ * Offset just past the flow collection that opens at `from`, or -1 when it does
+ * not close on that line.
+ *
+ * Only {@link findKeyColon} needs this, and only to answer "is this line a
+ * `key: value` entry?" for a line that opens on `[` or `{`. The `: ` separators
+ * *inside* a flow collection are its own, not the block entry's, so the scan has
+ * to step over the whole collection before it starts looking — without that,
+ * `{x: 1}: v` split at the inner colon and keyed the mapping by the plain scalar
+ * `{x`, leaving `1}: v` as the value.
+ *
+ * Stopping at a line break is deliberate rather than a shortcut: an implicit key
+ * has to fit on one line, so a collection that runs on is not one, and returning
+ * -1 ends the mapping exactly where it did before.
+ */
+const flowKeyEnd = (src: string, from: number, len: number): number => {
+  let depth = 0
+  let i = from
+  while (i < len) {
+    const c = src.charCodeAt(i)
+    if (c === NL || c === CR) return -1
+    if (c === SQUOTE) {
+      // `''` is an escaped quote rather than the close, so step over both.
+      i++
+      while (i < len) {
+        const q = src.charCodeAt(i)
+        if (q === NL || q === CR) return -1
+        if (q === SQUOTE) {
+          if (src.charCodeAt(i + 1) === SQUOTE) i += 2
+          else break
+        } else i++
+      }
+    } else if (c === DQUOTE) {
+      i++
+      while (i < len) {
+        const q = src.charCodeAt(i)
+        if (q === NL || q === CR) return -1
+        if (q === DQUOTE) break
+        i += q === 92 /* \ */ ? 2 : 1
+      }
+    } else if (c === LBRACKET || c === LBRACE) depth++
+    else if (c === RBRACKET || c === RBRACE) {
+      depth--
+      if (depth === 0) return i + 1
+    }
+    i++
+  }
+  return -1
+}
+
+/**
  * Finds the offset of the `key:` separator on the current line, or -1 if the
  * line is not a mapping entry. Honors quotes so a `:` inside a quoted key does
  * not count, and requires the YAML block rule that the colon be followed by
@@ -545,8 +595,12 @@ const findKeyColon = (src: string, from: number, len: number): number => {
   let i = from
   // A quote only delimits when it opens the key (`Let's` mid-word is literal), so
   // the quote-skip belongs before the scan loop — not as a per-character test.
+  // The same goes for a flow collection used as a key.
   const first = src.charCodeAt(from)
-  if (first === SQUOTE) {
+  if (first === LBRACKET || first === LBRACE) {
+    i = flowKeyEnd(src, from, len)
+    if (i < 0) return -1
+  } else if (first === SQUOTE) {
     i = from + 1
     while (i < len) {
       if (src.charCodeAt(i) === SQUOTE) {
@@ -1682,8 +1736,12 @@ const SET_THRESHOLD = 8
  * small enough to scan). Shared by the block and flow mapping parsers, which
  * track duplicates identically.
  *
- * Complex (map/seq) keys have no stable text form, so callers skip them rather
- * than collapse every one to the same bucket and falsely report a duplicate.
+ * Every key kind is tracked, collection keys included. They used to be skipped,
+ * on the grounds that they had no stable text form — true when the skip was
+ * written, but {@link keyText} renders them in flow style now, and `toJS` keys
+ * the projected object by exactly that string. So two collection keys that
+ * render alike really do collide, and skipping them meant the second value
+ * silently overwrote the first with nothing reported.
  */
 const trackKey = (state: State, items: YamlPair[], key: YamlNode, seen: Set<string> | null): Set<string> | null => {
   const text = keyText(key)
@@ -1691,7 +1749,7 @@ const trackKey = (state: State, items: YamlPair[], key: YamlNode, seen: Set<stri
     seen = new Set()
     for (let i = 0; i < items.length; i++) {
       const k = items[i]?.key
-      if (k !== undefined && (k.kind === 'scalar' || k.kind === 'alias')) seen.add(keyText(k))
+      if (k !== undefined) seen.add(keyText(k))
     }
   }
   if (seen !== null) {
@@ -1701,7 +1759,7 @@ const trackKey = (state: State, items: YamlPair[], key: YamlNode, seen: Set<stri
   }
   for (let i = 0; i < items.length; i++) {
     const k = items[i]?.key
-    if (k !== undefined && (k.kind === 'scalar' || k.kind === 'alias') && keyText(k) === text) {
+    if (k !== undefined && keyText(k) === text) {
       pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.start, key.end)
       break
     }
@@ -1737,7 +1795,7 @@ const parseFlowMap = (state: State): YamlMap => {
       const vc = state.src.charCodeAt(state.pos)
       if (vc !== COMMA && vc !== RBRACE) value = parseFlowNode(state)
     }
-    if (state.uniqueKeys && (key.kind === 'scalar' || key.kind === 'alias')) seen = trackKey(state, items, key, seen)
+    if (state.uniqueKeys) seen = trackKey(state, items, key, seen)
     items.push({ kind: 'pair', key, value, start: key.start, end: value ? value.end : key.end })
     skipFlowWs(state)
     const sep = state.src.charCodeAt(state.pos)
@@ -2027,7 +2085,7 @@ const parseBlockMap = (
     // add a test to every entry of every mapping to serve the first entry of a
     // rare one.
     const firstValue = parseValueOrChild(state, indent)
-    if (state.uniqueKeys && firstKey.kind === 'alias') seen = trackKey(state, items, firstKey, seen)
+    if (state.uniqueKeys) seen = trackKey(state, items, firstKey, seen)
     items.push({
       kind: 'pair',
       key: firstKey,
@@ -2133,6 +2191,15 @@ const parseBlockMap = (
         // be a real alias node — slicing it as text would key it by the literal
         // `*ref` and lose the reference.
         key = scanAlias(state)
+      } else if (kc === LBRACKET || kc === LBRACE) {
+        // `[a, b]: value` / `{x: 1}: value` — the key is a flow collection, and
+        // like an alias it has to be parsed rather than sliced. As text it came
+        // out as the plain scalar `[a, b]`, which loses every node inside it
+        // (and their source positions) and renders the key differently from the
+        // identical collection written as the mapping's *first* key, which has
+        // always gone through `parseNodeInner` and been parsed properly.
+        enterFlow(state, indent)
+        key = kc === LBRACKET ? parseFlowSeq(state) : parseFlowMap(state)
       } else {
         let end = colon
         while (end > lineContentPos && isSpace(src.charCodeAt(end - 1))) end--
@@ -2172,7 +2239,7 @@ const parseBlockMap = (
       }
     }
 
-    if (state.uniqueKeys && (key.kind === 'scalar' || key.kind === 'alias')) seen = trackKey(state, items, key, seen)
+    if (state.uniqueKeys) seen = trackKey(state, items, key, seen)
     items.push({ kind: 'pair', key, value, start: key.start, end: value ? value.end : key.end })
   }
 
@@ -2218,7 +2285,7 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
       const child = peekLine(state, indent + 1)
       if (!child.eof && child.indent > indent) {
         state.pos = child.contentPos
-        item = parseNode(state, child.indent, indent)
+        item = parseNode(state, child.indent, indent, false)
       } else {
         item = { kind: 'scalar', value: null, source: '', style: 'plain', start: dashPos + 1, end: dashPos + 1 }
       }
@@ -2230,7 +2297,7 @@ const parseBlockSeq = (state: State, indent: number): YamlSeq => {
       item =
         ic === PIPE || ic === GT
           ? scanBlockScalar(state, indent)
-          : parseNode(state, state.pos - contentPos + indent, indent)
+          : parseNode(state, state.pos - contentPos + indent, indent, false)
       finishLineIfMidLine(state)
     }
     items.push(item)
@@ -2262,8 +2329,15 @@ const MAX_PARSE_DEPTH = 1000
  * stopped at the first line that stepped back, and a block scalar measured its
  * indentation indicator from the wrong column. Callers that genuinely are the
  * parent (the document root) pass -1.
+ *
+ * `seqAtParentIndent` says whether a block sequence written back at
+ * `parentIndent` may be adopted as this node's content. That is the "a sequence
+ * may sit at its mapping's own column" allowance, and it holds only where the
+ * parent really is a *mapping*. A block sequence entry passes `false`: under a
+ * `-`, a dash back at the sequence's own column is the next sibling entry, and
+ * reading it as nested content swallowed every entry after it.
  */
-const parseNode = (state: State, indent: number, parentIndent: number): YamlNode => {
+const parseNode = (state: State, indent: number, parentIndent: number, seqAtParentIndent = true): YamlNode => {
   if (state.depth >= MAX_PARSE_DEPTH) {
     const pos = state.pos
     pushError(state, 'DEPTH_LIMIT', `Exceeded maximum nesting depth of ${MAX_PARSE_DEPTH}`, pos, pos)
@@ -2273,12 +2347,12 @@ const parseNode = (state: State, indent: number, parentIndent: number): YamlNode
     return { kind: 'scalar', value: null, source: '', style: 'plain', start: pos, end: pos }
   }
   state.depth++
-  const node = parseNodeInner(state, indent, parentIndent)
+  const node = parseNodeInner(state, indent, parentIndent, seqAtParentIndent)
   state.depth--
   return node
 }
 
-const parseNodeInner = (state: State, indent: number, parentIndent: number): YamlNode => {
+const parseNodeInner = (state: State, indent: number, parentIndent: number, seqAtParentIndent: boolean): YamlNode => {
   const { src, len } = state
   if (isSeqEntryDash(src, state.pos, len)) {
     return parseBlockSeq(state, indent)
@@ -2311,12 +2385,19 @@ const parseNodeInner = (state: State, indent: number, parentIndent: number): Yam
       // measuring against the anchor's column orphaned the whole sequence.
       if (!child.eof && child.indent > parentIndent) {
         state.pos = child.contentPos
-        return attachProps(parseNode(state, child.indent, parentIndent), props, state)
+        return attachProps(parseNode(state, child.indent, parentIndent, seqAtParentIndent), props, state)
       }
       // …and a block sequence may return to the parent's own column, which is
       // the only shape that reaches back this far. See `parsePropsOnlyValue`,
-      // which the sibling spelling (`seq: &anchor`) goes through.
-      if (!child.eof && child.indent === parentIndent && isSeqEntryDash(src, child.contentPos, len)) {
+      // which the sibling spelling (`seq: &anchor`) goes through. Only a
+      // *mapping* parent allows it — inside a sequence a dash at that column is
+      // the next entry, which `seqAtParentIndent` is here to keep us off.
+      if (
+        seqAtParentIndent &&
+        !child.eof &&
+        child.indent === parentIndent &&
+        isSeqEntryDash(src, child.contentPos, len)
+      ) {
         state.pos = child.contentPos
         return attachProps(parseBlockSeq(state, parentIndent), props, state)
       }
@@ -2422,9 +2503,11 @@ const parseDocMarkerNode = (state: State, contentPos: number): YamlNode => {
   const { src, len } = state
   // A *block* mapping is the one node kind that may not start here: its
   // following entries would have to align under a key at column 4 or beyond,
-  // which the spec does not allow a document's root mapping to do.
-  const c = src.charCodeAt(contentPos)
-  if (c !== LBRACKET && c !== LBRACE && findKeyColon(src, contentPos, len) >= 0) {
+  // which the spec does not allow a document's root mapping to do. A flow
+  // collection is fine on its own (`--- {a: 1}`), and `findKeyColon` now steps
+  // over one before looking for the separator — so it can tell `--- [a, b]`
+  // from the block mapping `--- [a, b]: v`, which this used to wave through.
+  if (findKeyColon(src, contentPos, len) >= 0) {
     pushError(
       state,
       'UNEXPECTED_CONTENT',

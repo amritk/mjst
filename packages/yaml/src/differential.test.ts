@@ -26,6 +26,15 @@ const VENDORED = loadOpenApiFixtures().filter((fixture) => fixture.format === 'y
  * `yaml`.
  */
 
+/**
+ * `yaml` defaults merge keys off; we default them on, so enable them here to
+ * line the two up on the `<<` cases. `logLevel: 'silent'` only quiets its
+ * logger — a mapping keyed by a collection draws a `console.warn` about
+ * stringifying the key, which is exactly what the collection-key cases below
+ * are here to check, and a dozen of those buried the real test output.
+ */
+const REFERENCE_OPTIONS = { merge: true, logLevel: 'silent' } as const
+
 const CASES: string[] = [
   // Scalars and core-schema typing.
   'n: 42\nf: 3.14\nneg: -5\nhex: 0x1F\nb1: true\nb2: false\nnil: null\ntilde: ~\n',
@@ -68,6 +77,23 @@ const CASES: string[] = [
   // Explicit `!!bool` tags must coerce quoted/plain scalars to booleans, the same
   // way `!!int` / `!!str` / `!!null` already do.
   'a: !!bool "true"\nb: !!bool false\nc: !!bool "FALSE"\n',
+  // A sequence entry holding nothing but a tag or an anchor is an empty node,
+  // and the dash below it is the next entry — not that node's content. Reading
+  // it as content nested the rest of the list inside the first entry, so the
+  // sequence came back a single item long with everything buried under it.
+  '- !!str\n- a\n- b\n',
+  '- &x\n- a\n',
+  '- a\n- !!str\n- b\n',
+  '- !!seq\n  - inner\n- a\n',
+  // A flow collection's own `: ` separators are not the block entry's. Scanning
+  // past them split `{x: 1}` into the key `{x` and the value `1}`, on the key
+  // side of an explicit entry, on its value side, and on any block-mapping entry
+  // after the first.
+  '? {x: 1}\n: a\n',
+  '? [a: 1]\n: v\n',
+  '? k\n: {x: 1}\n',
+  'a: 1\n{x: 2}: v\n',
+  'a: 1\n[x, y]: v\n',
   // Block scalars with chomping.
   'text: |\n  line one\n  line two\n',
   'text: |-\n  no trailing\n',
@@ -96,9 +122,7 @@ const label = (source: string): string =>
 describe('differential', () => {
   for (const [index, source] of CASES.entries()) {
     it(`matches yaml for case ${index}: ${label(source)}`, () => {
-      // `yaml` defaults merge keys off; we default them on, so enable them here
-      // to line the two up on the `<<` case.
-      expect(ours(source)).toEqual(eemeli(source, { merge: true }))
+      expect(ours(source)).toEqual(eemeli(source, REFERENCE_OPTIONS))
     })
   }
 
@@ -119,7 +143,7 @@ describe('differential', () => {
     for (const [index, source] of CASES.entries()) {
       const converted = source.replace(/\n/g, brk)
       it(`matches yaml with ${name} breaks for case ${index}: ${label(source)}`, { timeout: 30_000 }, () => {
-        expect(ours(converted)).toEqual(eemeli(source, { merge: true }))
+        expect(ours(converted)).toEqual(eemeli(source, REFERENCE_OPTIONS))
       })
     }
   }
@@ -133,7 +157,7 @@ describe('differential', () => {
   // budget the other real-world differential suites use.
   for (const { name, source } of VENDORED) {
     it(`matches yaml for vendored spec: ${name}`, { timeout: 30_000 }, () => {
-      expect(ours(source)).toEqual(eemeli(source, { merge: true }))
+      expect(ours(source)).toEqual(eemeli(source, REFERENCE_OPTIONS))
     })
   }
 })
