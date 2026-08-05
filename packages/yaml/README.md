@@ -21,8 +21,12 @@
 
 It is **zero-dependency** and tuned to be **small and fast**. Against the two parsers people reach for on the web:
 
-- **vs [`yaml`](https://www.npmjs.com/package/yaml) (eemeli)** — the only other parser here that also tracks source positions — building the source-mapped tree is **~25–30× faster**, and the bundle is **~4× smaller**.
-- **vs [`js-yaml`](https://www.npmjs.com/package/js-yaml)** — which has **no concept of source positions** — parsing straight to data is **~1.4–2× faster**, the bundle is **~1.6× smaller**, and we *also* hand you the positioned tree it cannot produce.
+- **vs [`yaml`](https://www.npmjs.com/package/yaml) (eemeli)** — the only other parser here that also tracks source positions — building the source-mapped tree is **~30–40× faster**, and the bundle is **~3.4× smaller**.
+- **vs [`js-yaml`](https://www.npmjs.com/package/js-yaml)** — which has **no concept of source positions** — parsing straight to data is **~1.6–1.9× faster**, the bundle is **~1.4× smaller**, and we *also* hand you the positioned tree it cannot produce.
+
+It passes **397 of the 402 cases** in the official YAML test suite, with every
+remaining case [written down and explained](#conformance-measured) rather than
+left to chance.
 
 It targets the YAML that real configuration and OpenAPI documents use: block and flow collections, all three quoting styles, literal/folded block scalars with chomping, comments, anchors, aliases, merge keys, explicit `? key` / `: value` entries, and multi-document (`---`-separated) streams. Scalars resolve via the YAML 1.2 **core schema** — so an OpenAPI `version: 1.0.0` stays the string `"1.0.0"` instead of turning into a number — and the core-schema `!!` tags (`!!str`, `!!int`, `!!float`, `!!bool`, `!!null`) coerce a value when written.
 
@@ -131,23 +135,25 @@ if (isMap(contents)) {
 
 ## Performance
 
-Run it yourself with `bun run bench`. Representative numbers (Bun, Linux):
+Run it yourself with `bun run bench`. Numbers below are a median of three runs
+on one Linux x64 machine under Bun — treat the ratios as the durable part and
+the absolute throughput as a property of that box.
 
 **Parse to a source-mapped tree** — the job this package exists for. `js-yaml` cannot produce positions, so it is not a candidate here.
 
 | fixture | @amritk/yaml | yaml (eemeli) | speedup |
 | --- | --- | --- | --- |
-| small (155 B) | 295k ops/s | 10.7k ops/s | **27.5×** |
-| medium (2 KB) | 34.8k ops/s | 853 ops/s | **40.8×** |
-| large (100 KB) | 687 ops/s | 21.3 ops/s | **32.3×** |
+| small (155 B) | 356k ops/s | 11.0k ops/s | **32.3×** |
+| medium (2 KB) | 36.0k ops/s | 932 ops/s | **38.6×** |
+| large (100 KB) | 690 ops/s | 21.0 ops/s | **32.9×** |
 
 **Parse to plain data** — all three can do this.
 
 | fixture | @amritk/yaml | yaml | js-yaml | vs yaml | vs js-yaml |
 | --- | --- | --- | --- | --- | --- |
-| small | 256k | 12.5k | 151k | 20.6× | 1.70× |
-| medium | 23.2k | 930 | 11.8k | 24.9× | 1.96× |
-| large | 427 | 23.0 | 212 | 18.6× | 2.01× |
+| small | 255k | 12.2k | 150k | 20.9× | 1.69× |
+| medium | 23.8k | 953 | 12.4k | 25.0× | 1.92× |
+| large | 410 | 21.7 | 256 | 18.9× | 1.60× |
 
 **Bundle size** (minified + gzipped) — what each parser adds to an application
 that imports it. The bench bundles a small consumer of each library rather than
@@ -179,7 +185,8 @@ schema** for scalar typing. The exact boundaries:
 - Block mappings (`key: value`) and block sequences (`- item`), nested arbitrarily.
 - Flow mappings `{ … }` and flow sequences `[ … ]`, including spanning multiple lines (split at token boundaries) and trailing commas.
 - Implicit single-pair entries inside a flow sequence (`[ key: value ]`).
-- Explicit `? key` / `: value` entries, including block and complex (map/seq) keys.
+- Explicit `? key` / `: value` entries, including block and complex (map/seq) keys. A flow collection on either side (`? {x: 1}`, `: [a, b]`) is parsed as the collection it is — its own `: ` separators are not mistaken for the entry's.
+- Empty nodes, wherever the grammar allows one: a `-` or `key:` with nothing after it, and an entry carrying only node properties (`- !!str`, `- &x`) — which is an empty *tagged or anchored* node, so the entries that follow it stay its siblings rather than becoming its content.
 
 **Scalars**
 
@@ -193,7 +200,7 @@ schema** for scalar typing. The exact boundaries:
 
 **Tags**
 
-- Core scalar tags (the JSON-compatible set OpenAPI allows): `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`.
+- Core scalar tags (the JSON-compatible set OpenAPI allows): `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`. A core tag **coerces** what it is written on rather than only confirming it: `!!int "7"` is `7`, `!!bool "FALSE"` is `false`, `!!float 1` is `1` (an integer form is a valid float), and `!!null x` is `null`. The tag is the author saying what the value is.
 - Extended tags, for general config files beyond the OpenAPI subset: `!!binary` → `Uint8Array`, `!!timestamp` → `Date`, `!!set` → `Set`, `!!omap` → `Map` (matching `yaml`). A conformant OpenAPI document won't use these.
 - All three spellings resolve to the same tag: the shorthand `!!str`, the verbatim `!<tag:yaml.org,2002:str>`, and a shorthand through a handle a `%TAG` directive declared.
 - The non-specific `!` resolves a scalar as a string, per the failsafe schema.
@@ -203,7 +210,7 @@ schema** for scalar typing. The exact boundaries:
 
 - Anchors (`&name`) and aliases (`*name`); `<<` merge keys (toggle with the `merge` option). Anchors and aliases work as mapping keys, and an alias key resolves to the anchored value.
 - Node properties written on a mapping key (`&a key: value`, `!!str 23: v`) apply to **the key**, so a later `*a` resolves to the key — not to the mapping it opens. Properties on a line of their own above the mapping describe the mapping itself.
-- Collections as mapping keys, both explicit (`? [a, b]` / `: value`) and implicit (`[a, b]: value`). A JavaScript object can only be keyed by a string, so a collection key projects to its flow rendering — `{ '[ a, b ]': 'value' }`.
+- Collections as mapping keys, both explicit (`? [a, b]` / `: value`) and implicit (`[a, b]: value`), in any entry position. A JavaScript object can only be keyed by a string, so a collection key projects to its flow rendering — `{ '[ a, b ]': 'value' }` — and two keys that render alike are reported as duplicates, because in the projection they are.
 - Compact block collections opened on an explicit entry's introducer line — `? a` / `: - one` is a sequence, `? earth: blue` a mapping — with their remaining entries aligned under that first one.
 - Multi-document streams (`---` / `...`) via `parseAllDocuments`, each document with its own anchor scope, tag handles, and problem list.
 - A root node written on the `---` line itself — `--- foo`, `--- |`, `--- !!str`, or a quoted scalar spanning the lines below it. Its content is measured against column 0, not the column the marker pushed it to, so `--- >` may hold a block scalar starting at column 0.
@@ -217,11 +224,11 @@ Every node carries an exact `[start, end)` source span, and problems are collect
 
 | code | |
 | --- | --- |
-| `DUPLICATE_KEY` | the same mapping key appears twice |
+| `DUPLICATE_KEY` | the same mapping key appears twice — compared on the string the key projects to, so an alias to an anchored key and two collection keys with the same flow rendering both count |
 | `UNRESOLVED_ALIAS` | `*name` with no matching anchor in scope |
 | `UNTERMINATED_FLOW` | a `[` or `{` that never closes |
 | `UNTERMINATED_QUOTE` | a quoted scalar that never closes |
-| `UNEXPECTED_CONTENT` | content after a node ends, a second root node with no `---`, or a block sequence opened on the line of the key it belongs to (`key: - a`) |
+| `UNEXPECTED_CONTENT` | content after a node ends, a second root node with no `---`, a block sequence opened on the line of the key it belongs to (`key: - a`), or a block mapping opened on the `---` line (`--- a: 1`, `--- [a, b]: v`) |
 | `UNEXPECTED_COMMA` | an empty flow entry (`[1, , 2]`) |
 | `TAB_INDENT` | a tab standing where indentation belongs — in a line's leading whitespace, in a block scalar's, or between an indicator and the compact collection it opens (`-\t- x`) |
 | `BAD_SCALAR_START` | a plain scalar starting with the reserved `@` or `` ` ``, or a `-` where a flow entry belongs (`[-]`) |
@@ -260,7 +267,7 @@ The boundary above is not a claim — it is checked. `src/conformance.test.ts` r
 official [YAML test suite](https://github.com/yaml/yaml-test-suite) (402 cases) on
 every build:
 
-**398 / 402 cases pass (99.0%).**
+**397 / 402 cases pass (98.8%).**
 
 Every case that does not is listed in `src/conformance-expected-failures.test-utils.ts`
 with the reason it does not, and the test fails if a case moves in *either*
@@ -268,16 +275,62 @@ direction — a regression breaks the build, and so does a case that starts pass
 without its entry being removed. The suite is a dev dependency; none of it reaches
 the published bundle.
 
-What is left is the irreducible part — no missing feature, just four cases where
+What is left is the irreducible part — no missing feature, just five cases where
 the right answer is not the suite's:
 
 - **`2JQS`** — `: a` / `: b`, two entries whose keys are both empty. The spec's own
   "keys are unique" rule makes that a duplicate; the suite only asks that the
   document compose, so it reads as valid there. `uniqueKeys` is on by default
   because a linter wants the report — `parse(src, { uniqueKeys: false })` accepts it.
+- **`X38W`** — the same rule, reached the other way: a mapping keyed once by a
+  sequence and once by an alias pointing at that sequence. Both keys render
+  `[ a, b ]`, so the two pairs collapse into one in any JavaScript object, and
+  reporting the collision beats dropping a value in silence. `uniqueKeys: false`
+  accepts it.
 - **`565N` / `2XXW` / `J7PZ`** — `!!binary` projects to a `Uint8Array`, `!!set` to a
   `Set`, `!!omap` to a `Map`, all three matching `yaml` (eemeli), where the suite
   expects the plain string or object those serialize to.
+
+### Where this differs from `yaml` and `js-yaml`
+
+The suite settles conformance; it does not settle the handful of documents where
+the three parsers simply answer differently. These are the ones that exist, found
+by fuzzing all three against each other over ~90k generated documents plus the
+full suite corpus. Everything not listed here agrees.
+
+| document | @amritk/yaml | `yaml` | `js-yaml` |
+| --- | --- | --- | --- |
+| `t: !!float 1` | `1` | `"1"` | `1` |
+| `t: !!null x` | `null` | `"x"` | throws |
+| `...` alone, or after a comment | no document | one `null` document | one `null` document |
+| `%YAML 1.2` with no document | `UNEXPECTED_DIRECTIVE` | accepted | throws |
+| `%YAML 1.2` twice | `DUPLICATE_DIRECTIVE` | accepted | throws |
+| `? [a, b]` / `: v` | key `[ a, b ]` | key `[ a, b ]` | key `a,b` |
+
+Reading them:
+
+- **`!!float 1`** — the core schema's float production accepts an integer form, so
+  `1` is a valid float and resolves to the number. `yaml` requires a decimal point
+  and falls back to the raw string; `js-yaml` agrees with us.
+- **`!!null x`** — a core tag coerces (see the Tags list under
+  [Supported](#supported)), so the tag wins and the value is `null`. The three
+  parsers pick three different answers here; ours is the one consistent with how
+  `!!int "7"` and `!!bool "FALSE"` behave.
+- **`...` with nothing before it** — the document-end marker ends a document; it
+  does not open one. The suite's own event stream for these cases (`HWV9`, `QT73`,
+  and the spec's Example 9.3, `M7A3`) is an empty stream, so the extra `null`
+  document the other two emit is theirs, not ours.
+- **The two `%YAML` cases** — the suite marks both as documents that *must* be
+  rejected, which is why we report rather than accept.
+- **Collection keys** — a JavaScript object needs a string key. We render the
+  collection in flow style, matching `yaml`; `js-yaml` joins sequence items with a
+  comma and renders a mapping key as `[object Object]`, which collapses distinct
+  keys into one.
+
+Two more differences are structural rather than per-document: problems are
+**collected on `doc.errors`, never thrown** — so where `js-yaml` throws, we return
+a document plus a diagnostic — and an alias to a collection projects to a **copy**
+rather than a shared node (see [Not supported](#not-supported)).
 
 ---
 
