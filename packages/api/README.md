@@ -256,11 +256,11 @@ lighter path for monorepo-internal frontends.
 At runtime the client reads only a sliver of each contract — `method`,
 `path`, `request.bodyType`, whether a `body` schema exists, and each response
 status's `contentType` marker. The request/response schemas, `refine`,
-`summary`/`description`, tags, and security requirements are server and
-OpenAPI freight, and they scale with route count. `@amritk/api/bundler`
-exports the transform that removes them from `defineContract` call sites in
-browser builds — types are compile-time, so nothing changes for the consumer,
-and dropped schema references become tree-shakeable:
+`summary`/`description`, and tags are server and OpenAPI freight, and they
+scale with route count. `@amritk/api/bundler` exports the transform that
+removes them from `defineContract` call sites in browser builds — types are
+compile-time, so nothing changes for the consumer, and dropped schema
+references become tree-shakeable:
 
 - `stripContractFields(source)` — source in, source out, unchanged when there
   was nothing to rewrite.
@@ -329,10 +329,60 @@ The strip is line-preserving — removed spans keep their newlines — so
 downstream sourcemaps stay line-accurate, and returning the source unchanged
 lets the bundler keep the original code and map.
 
+##### Or strip once, at publish time
+
+When contracts live in their own package that both the server and the
+frontend import, the strip can run in *that* package's build instead of in
+every app downstream — no bundler wiring at all for consumers, whatever they
+build with. Emit two artifacts from one source, and split them with
+`exports`:
+
+```ts
+// scripts/build-client.ts — run after tsc has written dist/
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { stripContractFields } from '@amritk/api/bundler'
+
+for (const file of await readdir('dist', { recursive: true })) {
+  if (!file.endsWith('.js')) continue
+  const out = join('dist-client', file)
+  await mkdir(dirname(out), { recursive: true })
+  await writeFile(out, stripContractFields(await readFile(join('dist', file), 'utf8')))
+}
+```
+
+```jsonc
+// package.json — the server gets the schemas, the browser gets the slim copy
+"exports": {
+  ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+  "./client": { "types": "./dist/index.d.ts", "default": "./dist-client/index.js" }
+}
+```
+
+Both entries point at the **same** `.d.ts`, which is the part worth
+understanding. Declarations are generated from the original source, so they
+carry the full types *and* the JSDoc you wrote above each contract — hover,
+autocomplete, and `ResponseBodyOf<…>` are identical on both entries, and only
+the shipped values differ. Editors and `tsc` never see the strip. That is the
+same trade the bundler hook makes; it just happens once, in the package that
+owns the contracts.
+
+Running over emitted JS rather than TypeScript sources is the more reliable
+order, too: `defineContract` survives compilation intact (it is an identity
+function, and tsc keeps the call), while the `as const` and `satisfies`
+suffixes that make the scanner bail on a source file are already gone by
+then.
+
 The transform is deliberately conservative: call sites it cannot parse with
 certainty (spreads, computed keys, explicit type arguments, aliased imports
 of `defineContract`) are left byte-for-byte untouched, and unknown contract
 fields are kept — the failure mode is a bigger bundle, never a broken one.
+
+Per-operation `security` is **not** stripped. `createClient` does not read it
+either, but an app plausibly does — attach a bearer token only where a scheme
+is declared, skip a call that will certainly 401, hide a control for a scope
+the session lacks — and a requirement is tens of bytes against the hundreds a
+request schema costs. Everything else on the list is inert in a browser.
 
 Three caveats. First, the strip assumes the browser only calls contracts
 through `createClient`. If your app itself reads contract schemas at runtime

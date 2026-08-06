@@ -31,6 +31,7 @@ export const getStatus = defineContract({
   description: 'A long paragraph nobody in the browser ever reads.',
   tags: ['widget'],
   operationId: 'getStatus',
+  security: [{ bearerAuth: ['read:status'] }],
   request: {
     query: { type: 'object', properties: { verbose: { type: 'boolean' } } },
     headers: { type: 'object', properties: { 'x-api-key': { type: 'string' } }, required: ['x-api-key'] },
@@ -64,6 +65,8 @@ describe('strip-contract-fields', () => {
     expect(contracts['getStatus']).toEqual({
       method: 'get',
       path: '/status',
+      // Kept, though `createClient` never reads it — an app may. See below.
+      security: [{ bearerAuth: ['read:status'] }],
       request: {},
       responses: { 200: { body: true }, 404: {} },
     })
@@ -88,6 +91,16 @@ describe('strip-contract-fields', () => {
     ]) {
       expect(stripped).not.toContain(freight)
     }
+  })
+
+  it('keeps per-operation security — the client may gate on it', () => {
+    // Not a size decision that could go either way: a requirement is tens of
+    // bytes, and an app reading it to attach a token, skip a call that will
+    // 401, or hide a control for a missing scope must not have it deleted
+    // underneath it. Everything else on the strip list is inert in a browser.
+    const stripped = stripContractFields(widget)
+    expect(stripped).toContain(`security: [{ bearerAuth: ['read:status'] }]`)
+    expect(evaluateContracts(stripped)['getStatus']?.security).toEqual([{ bearerAuth: ['read:status'] }])
   })
 
   it('drops references to imported schemas so they can tree-shake away', () => {
@@ -241,7 +254,7 @@ describe('strip-contract-fields', () => {
   })
 
   it('preserves the total line count of a multi-line call site', () => {
-    // The bundler plugins return `map: null`, so downstream sourcemaps only
+    // The documented wirings return `map: null`, so downstream sourcemaps only
     // stay aligned if the strip never changes which line anything sits on.
     const stripped = stripContractFields(widget)
     expect(stripped).not.toBe(widget)

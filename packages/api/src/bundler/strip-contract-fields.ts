@@ -2,8 +2,9 @@
  * The client runtime reads only a sliver of each contract: `method`, `path`,
  * `request.bodyType`, whether a request/response `body` schema exists, and
  * each response status's `contentType` marker. Everything else — request and
- * response schemas, `refine`, `summary`, `description`, tags, security — is
+ * response schemas, `refine`, `summary`, `description`, tags — is
  * server/OpenAPI freight that a browser bundle pays for without ever reading.
+ * `security` stays: see {@link STRIP_TOP_LEVEL}.
  *
  * This transform rewrites `defineContract({ ... })` call sites to just the
  * fields the client reads, replacing `body` schemas with a `true` marker (the
@@ -22,8 +23,18 @@
  * survive an older plugin.
  */
 
-/** The top-level contract fields the client never reads at runtime. */
-const STRIP_TOP_LEVEL = new Set(['summary', 'description', 'tags', 'operationId', 'deprecated', 'security', 'refine'])
+/**
+ * The top-level contract fields nothing in a browser can act on.
+ *
+ * `security` is deliberately **not** here. `createClient` does not read it
+ * either, but it is the one descriptive field an app plausibly reads for
+ * itself — attach a bearer token only where a scheme is declared, skip a call
+ * that will certainly 401, hide a control for a scope the session lacks — and
+ * it is cheap to keep: a requirement is a list of scheme names and scopes,
+ * tens of bytes against the hundreds a request schema costs. Deleting it to
+ * save that is a bad trade against silently breaking an app that reads it.
+ */
+const STRIP_TOP_LEVEL = new Set(['summary', 'description', 'tags', 'operationId', 'deprecated', 'refine'])
 
 /** Request slots the client only echoes values into — their schemas are server freight. */
 const STRIP_REQUEST = new Set(['params', 'query', 'headers', 'cookies'])
