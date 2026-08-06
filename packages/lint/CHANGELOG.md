@@ -1,5 +1,12 @@
 # @amritk/lint
 
+## 0.4.6
+
+### Patch Changes
+
+- Updated dependencies [eb4e216]
+  - @amritk/yaml@0.7.0
+
 ## 0.4.5
 
 ### Patch Changes
