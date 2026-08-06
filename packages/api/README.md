@@ -251,68 +251,114 @@ consumers who want a standalone generated SDK (`bunx @hey-api/openapi-ts -i
 http://localhost:3000/openapi.json -o src/client`); `createClient` is the
 lighter path for monorepo-internal frontends.
 
-#### Browser bundle size: the contract-slimming plugin
+#### Browser bundle size: the contract strip
 
 At runtime the client reads only a sliver of each contract — `method`,
 `path`, `request.bodyType`, whether a `body` schema exists, and each response
 status's `contentType` marker. The request/response schemas, `refine`,
 `summary`/`description`, tags, and security requirements are server and
-OpenAPI freight, and they scale with route count. The `@amritk/api/bundler`
-plugin (Vite and `Bun.build`) strips them from `defineContract` call sites in
-browser builds; types are compile-time, so nothing changes for the consumer,
+OpenAPI freight, and they scale with route count. `@amritk/api/bundler`
+exports the transform that removes them from `defineContract` call sites in
+browser builds — types are compile-time, so nothing changes for the consumer,
 and dropped schema references become tree-shakeable:
 
-```ts
-// vite.config.ts
-import { stripContractsVite } from '@amritk/api/bundler'
+- `stripContractFields(source)` — source in, source out, unchanged when there
+  was nothing to rewrite.
+- `isScannableId(id)` — the module-id filter to put in front of it (TS/JS
+  extensions, tolerating Vite's `?query` suffixes).
 
-export default defineConfig({ plugins: [stripContractsVite()] })
+Deliberately not a plugin per bundler: every bundler exposes a per-module
+text hook, the wiring against yours is a few lines, and those lines are
+yours to place — which build, which modules, which `exclude`. The subpath
+imports nothing, `node:*` included, so a config file in any runtime can load
+it.
+
+```ts
+// vite.config.ts — Rollup is the same, minus enforce/apply/ssr
+import { isScannableId, stripContractFields } from '@amritk/api/bundler'
+
+const stripContracts = {
+  name: 'strip-contracts',
+  enforce: 'pre', // see original sources, ahead of other transforms
+  apply: 'build', // dev-server modules stay untouched, for debuggability
+  transform(code: string, id: string, options?: { ssr?: boolean }) {
+    // SSR modules keep their freight — the server genuinely reads the schemas.
+    if (options?.ssr === true || !isScannableId(id) || !code.includes('defineContract')) return null
+    const stripped = stripContractFields(code)
+    return stripped === code ? null : { code: stripped, map: null }
+  },
+}
+
+export default defineConfig({ plugins: [stripContracts] })
 ```
 
-esbuild and Rollup builds use `stripContractsEsbuild()` / `stripContractsRollup()`
-from the same subpath, with identical `exclude` semantics. The strip is
-line-preserving — removed spans keep their newlines — so downstream
-sourcemaps stay line-accurate.
-
 ```ts
-// build.ts — Bun.build; add it to the browser build only
-import { stripContractsBun } from '@amritk/api/bundler'
+// build.ts — Bun.build (esbuild is the same shape; read the file with
+// node:fs/promises' readFile). Add it to the browser build only.
+import { stripContractFields } from '@amritk/api/bundler'
 
-await Bun.build({ entrypoints: ['./src/client.ts'], target: 'browser', plugins: [stripContractsBun()] })
+const stripContracts = {
+  name: 'strip-contracts',
+  setup(build: Bun.PluginBuilder) {
+    build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async ({ path }) => {
+      const source = await Bun.file(path).text()
+      if (!source.includes('defineContract')) return undefined
+      const stripped = stripContractFields(source)
+      return stripped === source ? undefined : { contents: stripped, loader: path.endsWith('x') ? 'tsx' : 'ts' }
+    })
+  },
+}
+
+await Bun.build({ entrypoints: ['./src/client.ts'], target: 'browser', plugins: [stripContracts] })
 ```
+
+```js
+// strip-contracts-loader.mjs — rspack and webpack; the package is ESM-only,
+// so the loader is too (both support ESM loaders).
+import { stripContractFields } from '@amritk/api/bundler'
+
+export default function stripContractsLoader(source) {
+  return source.includes('defineContract') ? stripContractFields(source) : source
+}
+
+// rspack.config.mjs — scope it to the contracts you want slimmed
+// module: { rules: [{ test: /\.[cm]?[jt]sx?$/, include: /contracts/, use: ['./strip-contracts-loader.mjs'] }] }
+```
+
+The strip is line-preserving — removed spans keep their newlines — so
+downstream sourcemaps stay line-accurate, and returning the source unchanged
+lets the bundler keep the original code and map.
 
 The transform is deliberately conservative: call sites it cannot parse with
 certainty (spreads, computed keys, explicit type arguments, aliased imports
-of `defineContract`) are left byte-for-byte untouched, unknown contract
-fields are kept, SSR modules and the Vite dev server are never touched — the
-failure mode is a bigger bundle, never a broken one. The Vite plugin runs
-`enforce: 'pre'`, `apply: 'build'`.
+of `defineContract`) are left byte-for-byte untouched, and unknown contract
+fields are kept — the failure mode is a bigger bundle, never a broken one.
 
-Two caveats. First, the strip assumes the browser only calls contracts
+Three caveats. First, the strip assumes the browser only calls contracts
 through `createClient`. If your app itself reads contract schemas at runtime
 — client-side form validation against `contract.request.body`, in-browser
-OpenAPI rendering — those modules must keep their freight: pass
-`{ exclude: /pattern/ }` (matched against the module id / file path) to
-either plugin, or leave the plugin off. Second, only direct
+OpenAPI rendering — those modules must keep their freight: filter them out in
+the hook, or leave the strip off. Second, only direct
 `defineContract({ ... })` identifier calls are rewritten; a renamed import
-or a wrapper function keeps its call sites intact (and its bytes).
-
-For other bundlers, the underlying source-to-source transform is exported as
-`stripContractFields(source)` — wire it into any pipeline that can run a
-per-module text transform (esbuild `onLoad`, a Rollup `transform` hook).
+or a wrapper function keeps its call sites intact (and its bytes). Third,
+this is a size optimization and nothing more — it is not the way to keep a
+`node:*` built-in out of a browser bundle, because bundlers resolve modules
+before they eliminate them. Import contracts from `@amritk/api/client`
+instead; that graph is guaranteed node-free.
 
 Measured on a realistic widget consumer — three JSON-only contracts with
 static paths, bundled with `Bun.build` (`target: 'browser'`, minified;
-enforced by `src/bundler/strip-contracts-bun.test.ts`):
+enforced by `src/bundler/strip-contract-fields.bundle.test.ts`, which bundles
+through the `Bun.build` wiring above):
 
 | Bundle                                | minified | gzip    |
 | ------------------------------------- | -------- | ------- |
 | 0.3.0 client (everything built in)    | 3.6 kB   | 1.7 kB  |
-| 0.4.0 client, no plugin               | 3.7 kB   | 1.7 kB  |
-| 0.4.0 client + strip plugin           | 2.7 kB   | 1.4 kB  |
+| 0.4.0 client, no strip                | 3.7 kB   | 1.7 kB  |
+| 0.4.0 client + strip                  | 2.7 kB   | 1.4 kB  |
 | contract data alone, before → after   | 1.3 kB → 0.31 kB | 0.57 kB → 0.19 kB |
 
-The contract-data row is the one that scales: the plugin removes ~75% of
+The contract-data row is the one that scales: the strip removes ~75% of
 every contract's bytes (~0.3 kB minified per route in this fixture), so the
 gap widens with route count. The client core itself is a fixed cost, and the
 opt-in serializer/path split keeps it flat: form, multipart, and `{param}`

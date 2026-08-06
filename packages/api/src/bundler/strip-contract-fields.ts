@@ -10,8 +10,9 @@
  * runtime only checks `body !== undefined`). Types are compile-time, so the
  * consumer's TypeScript never notices; dropping a schema property also drops
  * the bundler's reference to any imported schema value, letting tree-shaking
- * remove it. The Vite, Rollup, esbuild, and Bun plugins in this directory
- * apply it per module.
+ * remove it. Wire it into whatever per-module text hook your bundler exposes
+ * — a Vite/Rollup `transform`, an esbuild or `Bun.build` `onLoad`, an
+ * rspack/webpack loader (the README has each).
  *
  * The scanner is deliberately conservative: any call site it cannot parse
  * with certainty (spreads, computed keys, explicit type arguments, syntax it
@@ -348,9 +349,31 @@ const countNewlines = (text: string): number => {
 
 /**
  * Rewrites every parseable `defineContract({ ... })` call site in a module's
- * source down to the fields the client runtime reads. Pure text in, text out
- * — the Vite, Rollup, esbuild, and Bun plugins wire it into their load
- * pipelines.
+ * source down to the fields the client runtime reads. Pure text in, text out,
+ * so it drops into any bundler hook that hands over a module's source.
+ *
+ * Guard the call with `id`/path filtering and a `source.includes(
+ * 'defineContract')` check — the scan is cheap but not free, and a hook that
+ * returns the input unchanged lets the bundler keep the original code and
+ * sourcemap. `stripContractFields` returns the source unchanged when there was
+ * nothing to rewrite, so `stripped === source` is the test.
+ *
+ * @example
+ * ```typescript
+ * // vite.config.ts — build only, and never for SSR: the server reads schemas.
+ * import { isScannableId, stripContractFields } from '@amritk/api/bundler'
+ *
+ * const stripContracts = {
+ *   name: 'strip-contracts',
+ *   enforce: 'pre',
+ *   apply: 'build',
+ *   transform(code: string, id: string, options?: { ssr?: boolean }) {
+ *     if (options?.ssr === true || !isScannableId(id) || !code.includes('defineContract')) return null
+ *     const stripped = stripContractFields(code)
+ *     return stripped === code ? null : { code: stripped, map: null }
+ *   },
+ * }
+ * ```
  *
  * The rewrite is line-preserving: every newline the original call site
  * spanned is re-emitted as padding right after the rewritten literal, so code
