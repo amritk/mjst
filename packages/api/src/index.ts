@@ -18,6 +18,8 @@ export { coercePrimitive } from './coerce-primitive'
 export type { CompileModuleOptions } from './compile/compile-to-module'
 export { compileToModule } from './compile/compile-to-module'
 export { createApi } from './create-api'
+export type { BearerSession, BearerSessionOptions, BearerTokenStorage } from './create-bearer-session'
+export { createBearerSession } from './create-bearer-session'
 export type {
   ApiClient,
   BodySerializer,
@@ -78,6 +80,7 @@ export { decodeJwtExpiry } from './decode-jwt-expiry'
 export { decodeSegment } from './decode-segment'
 export { defineContract } from './define-contract'
 export { defineRoute } from './define-route'
+export { exemptBearer } from './exempt-bearer'
 export type { FetchLikeHandler, FetchNodeListener, FetchToNodeHandlerOptions } from './fetch-to-node-handler'
 export { fetchToNodeHandler } from './fetch-to-node-handler'
 export { formBodySerializer } from './form-body-serializer'

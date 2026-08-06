@@ -76,7 +76,12 @@ Bun.serve({ fetch: handler })      // or: export default { fetch: handler } on W
    cannot set the `cookie` header). Undeclared response statuses **throw**
    (`isUnexpectedStatusError`) instead of entering the union — declare every
    status you handle. Browser auth uses `fetchOptions: { credentials:
-   'include' }`. Frontends import from the **`@amritk/api/client`** subpath —
+   'include' }`; native clients have no cookie jar and send the session in a
+   header instead (`Authorization: Bearer` via Better Auth's `bearer()`, or a
+   manual `Cookie` under Expo), so a Better Auth context factory must forward
+   **both** `cookie` and `authorization` into `getSession`, and `createCsrf`
+   must `exempt` bearer callers or every native `POST` 403s.
+   Frontends import from the **`@amritk/api/client`** subpath —
    same client surface, guaranteed free of server modules, no bundler
    `node:*` externalization warnings.
 6. **Guards authorize; attach them in the `guards` field.** Add `guards: [...]`
@@ -141,9 +146,39 @@ Hook factories ship the standard middleware over `onRequest`/`onResponse`/`local
   is a spoofable client IP header** (`x-forwarded-for[0]` etc.); for auth
   throttling pass a `key` reading a proxy-verified IP or a `locals` user id.
   Default store is in-process/single-instance — pass a shared `store` for a fleet.
+  **Gates run before mounts and decorators after**, so a mounted auth router sits
+  inside your limits/headers rather than beside them — scope a tight limiter to
+  `/api/auth/*` by checking the path in the gate. Passwordless endpoints
+  especially: unthrottled, they are an email-bombing relay and an account
+  enumeration oracle.
 - **`createCsrf(opts?)`** — double-submit cookie; rejects empty/missing tokens;
   cookie defaults `Path=/; SameSite=Lax; Secure`, not `HttpOnly` by design.
   Client half: **`createCsrfHeader()`** echoes the cookie into `x-csrf-token`.
+  Cookie-less callers (native apps) cannot echo anything and would 403 on every
+  write — pass **`exemptBearer`** as `exempt`. It requires a bearer token **and
+  no cookie**, and the cookie half is load-bearing: a bearer header alone is
+  attacker-settable, so a cross-site page could bolt one on to switch the check
+  off while the victim's cookie still authenticates the request. Never key on a
+  missing `Origin` either — same-site form posts routinely omit it.
+- **Sessions.** Prefer a server-held (opaque) session token over a self-contained
+  one for client auth — it is revocable, which is the property sign-out depends
+  on; JWTs suit the service-to-service/edge hop, not the client session. Make the
+  context's session lookup **lazy + memoized per request**. Caching it *across*
+  requests trades away revocation: every second of TTL is a second a revoked
+  session still works, so keep any TTL to single-digit seconds and invalidate on
+  sign-out. A dual-client API declares cookie and bearer as **two separate**
+  `security` entries (either works), not one entry listing both (send both).
+  **Platform caches count**: Cloudflare Hyperdrive caches reads by default
+  (`max_age` 60s + 15s stale, no write invalidation), so a session lookup through
+  a default binding keeps a signed-out user authorized for over a minute — give
+  auth its own **cache-disabled** Hyperdrive binding (pooling and edge connection
+  setup still apply). On Workers, a session lookup plus the handler's query makes
+  two sequential round trips, which is when Smart Placement starts paying (20–30 ms
+  per query distant vs 1–3 ms placed; it does nothing for a single-query request).
+  On latency: the hooks are microseconds and the **session lookup is 1–50 ms**,
+  so tune the lookup (lazy, memoized per request, store colocated with compute),
+  not the middleware. Never call `new URL()` in a gate — it benchmarks at ~⅕ of
+  the adapter's per-request cost; slice the pathname out of `request.url`.
 - **`signCookie`/`unsignCookie`/`createSignedCookies`** — HMAC-SHA256, constant-time
   verify. **Integrity, not secrecy** — sign a session id, keep session server-side.
 - **`createTokenRefresh(opts)`** (bearer) — single-flighted, renews on the token
@@ -151,6 +186,22 @@ Hook factories ship the standard middleware over `onRequest`/`onResponse`/`local
   Doesn't react to 401s; call `invalidate()` on logout (safe against an in-flight
   refresh). **`createRefreshFetch(opts)`** (HttpOnly cookie) — refresh + replay
   once on 401, single-flighted.
+- **`createBearerSession(opts)`** (stored session token — native apps) — wraps
+  `fetch`, not `headers`, because it must see responses: it attaches the stored
+  token, captures a newly issued one off `set-auth-token`, and on 401 either runs
+  an optional `refresh` and replays **under the new token**, or clears storage
+  and fires
+  `onExpired`. `refresh` is usually unnecessary: a server-held session (Better
+  Auth's) has a **stable opaque token** whose expiry the server rolls forward in
+  the database past `updateAge`, so sending it is the renewal — do not model this
+  as token rotation. `storage` is required and undefaulted on purpose — an
+  in-memory fallback looks fine until relaunch signs everyone out — and picking
+  it is a security decision (keychain/`expo-secure-store`, not `AsyncStorage` or
+  `localStorage`, which hand a stolen session to any script that gets in). Scope
+  the wrapped fetch to your own API: it captures `set-auth-token` from any reply,
+  so a shared fetch lets any host overwrite the session. Do not reach for
+  `createRefreshFetch` here: it replays the original init, which still carries
+  the dead token.
 
 ## Subpath entry points
 

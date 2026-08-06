@@ -856,7 +856,10 @@ check); the decorator seeds the cookie on any response that lacks one. The
 cookie defaults to `Path=/; SameSite=Lax; Secure` and is intentionally **not**
 `HttpOnly` — the pattern needs page scripts to read and echo it. Drop `Secure`
 via `cookieAttributes` only for a plain-HTTP dev origin. Use `exempt` to skip
-bearer-token API paths, where CSRF doesn't apply. On the client, pair it with
+bearer-token API paths, where CSRF doesn't apply — **`exemptBearer`** is that
+predicate written the safe way (see [native apps](#native-apps-magic-link-without-a-browsers-cookie-jar)
+for why keying on `authorization` is sound and keying on a missing `Origin` is a
+bypass). On the client, pair it with
 **`createCsrfHeader()`** — a `headers` provider for `createClient` that reads
 the `csrf_token` cookie and echoes it in `x-csrf-token`:
 
@@ -927,7 +930,7 @@ const handler = toFetchHandler(api, {
 
 ### Client-side auth refresh
 
-Two helpers cover the two token models, both plugging into
+Three helpers cover the three token models, all plugging into
 `createClient({ headers, fetch })`:
 
 **`createTokenRefresh(options)`** — the **bearer-token** model. It holds a
@@ -972,6 +975,38 @@ const client = createClient(contracts, 'https://api.example.com', {
   headers: createCsrfHeader(),
 })
 ```
+
+**`createBearerSession(options)`** — the **stored-session-token** model, for
+clients with no cookie jar at all: [native apps](#native-apps-magic-link-without-a-browsers-cookie-jar),
+where a magic-link sign-in hands back a token rather than a `Set-Cookie` the
+platform would keep and re-attach. It wraps a fetch and owns the round trip —
+attaches the stored token, captures a newly issued one off any reply's
+`set-auth-token`, and on a `401` either runs an optional `refresh` or clears the
+token and fires `onExpired` so the app can route back to sign-in. Renewal is
+usually nothing at all here: a server-held session (Better Auth's, say) extends
+its own expiry when a request arrives and keeps the token stable, so sending it
+is what keeps it alive. `storage` is the one
+required option and is deliberately not defaulted: an in-memory fallback would
+look like it worked until the app relaunched and every user was signed out.
+
+```ts
+import { createBearerSession, createClient } from '@amritk/api/client'
+
+const session = createBearerSession({ storage, onExpired: () => router.replace('/sign-in') })
+const client = createClient(contracts, 'https://api.example.com', { fetch: session.fetch })
+```
+
+It is a fetch wrapper rather than a `headers` provider because both halves of the
+bearer model need to see responses — the rotated token arrives on one, and a
+replay after renewal has to go out under the **new** token. That is the trap it
+exists to close: `createRefreshFetch` can replay an untouched `RequestInit`
+because the browser re-attaches the freshly `Set-Cookie`'d session itself, and
+nothing does that for a bearer token.
+
+Picking between the three: `createTokenRefresh` when the credential has its own
+clock and a renewal endpoint (JWT access tokens), `createRefreshFetch` when the
+browser holds an HttpOnly cookie and only triggers renewal, `createBearerSession`
+when your client stores the session itself.
 
 ### Per-request state: `locals`
 
@@ -1560,6 +1595,308 @@ export const getProfileContract = defineContract({
 
 If only some routes need the session, make the context lazy (`session: () =>
 memoizedLookup()`) so public routes never pay for the cookie check.
+
+#### Native apps: magic link without a browser's cookie jar
+
+A magic-link sign-in from an iOS/Android/Expo app runs the same mount, but the
+session never arrives the way the example above assumes. Every step that leans
+on a browser holding cookies for you — the redirect target, the session lookup,
+the CSRF check, the client — needs one deliberate change.
+
+**The link opens the system browser, not your app.** Better Auth mints a
+single-use token (5 minutes by default), and `/api/auth/magic-link/verify`
+consumes it and `302`s to `callbackURL`. Point that at a deep link and add the
+scheme to Better Auth's `trustedOrigins` — an untrusted `callbackURL` is
+refused, which is the whole point of the list:
+
+```ts
+export const auth = betterAuth({
+  trustedOrigins: ['myapp://'], // 'exp://192.168.*.*:*/**' too, in Expo dev only
+  plugins: [magicLink({ sendMagicLink }), bearer()],
+})
+```
+
+The mount needs nothing: a `302` carrying `Set-Cookie` and a custom-scheme
+`Location` is proxied out untouched, exactly like [any other redirect](#multiple-set-cookie-headers).
+`createSecurityHeaders`/`createCors` still stamp that hop — it is a real browser
+response — and the mount's immutable headers are handled for you.
+
+**Then the app authenticates by header, not by cookie jar.** Either shape works;
+they differ only in which header the client sends:
+
+| Client | What it stores | What it sends |
+|:--|:--|:--|
+| Expo plugin | cookie string in `expo-secure-store` | `Cookie: <authClient.getCookie()>`, with `credentials: 'omit'` so the manual header isn't overwritten |
+| `bearer()` plugin | the `set-auth-token` response header | `Authorization: Bearer <token>` |
+
+The Expo shape is aimed at Better Auth's *own* endpoints. For your contracted
+routes prefer `bearer()`: it is the one that gives the session lookup and the
+CSRF exemption below a single header to key on.
+
+**So forward both headers into `getSession`.** The browser example forwards only
+`cookie`; a bearer client's session silently resolves to `null` against it —
+every guard denies with its declared 401 and the failure looks like a bad token
+rather than a dropped header:
+
+```ts
+export const createContext = async ({ request }: ContextFactoryInput) => ({
+  session: await auth.api.getSession({
+    headers: new Headers({
+      cookie: request.header('cookie') ?? '',
+      authorization: request.header('authorization') ?? '',
+    }),
+  }),
+})
+```
+
+**And exempt those requests from CSRF.** `createCsrf` rejects any unsafe-method
+request without a matching `csrf_token` cookie, so a native `POST` gets a `403`
+before the handler — there is no page script to read the cookie and echo it.
+`exemptBearer` is that exemption, written the safe way:
+
+```ts
+import { createCsrf, exemptBearer } from '@amritk/api'
+
+const csrf = createCsrf({ exempt: exemptBearer })
+```
+
+It exempts a request that carries a bearer token **and no cookies**, and the
+second half is the load-bearing one. CSRF is a browser problem: the attack exists
+because a browser spends its ambient cookies on a cross-site request without
+being asked. A client with no cookie jar has nothing ambient to spend, so there
+is nothing to forge — a bearer token only rides a request because code put it
+there, and an attacker who knows the token does not need a victim's browser at
+all.
+
+Keying on the header alone would be a bypass, which is why the cookie check is
+there. A cross-site page can bolt `Authorization: Bearer anything` onto a
+credentialed request; the header does not have to be *valid* to switch the check
+off, and the victim's cookie goes on authenticating the call underneath it. That
+needs permissive credentialed CORS to reach you — but the CSRF check is precisely
+the layer meant to survive that misconfiguration, so it must not be disarmed by a
+header any caller can set.
+
+The other tempting shortcut fails from the opposite direction: exempting requests
+with no `Origin` looks equivalent and is not, since plenty of same-site form posts
+arrive without one, handing the bypass to the browser traffic the check protects.
+
+This exempts bearer callers only — a client on the Expo cookie shape still
+arrives without an `x-csrf-token` and still takes the `403`. Either give it
+`bearer()` for your API surface, or have it echo the `csrf_token` the decorator
+seeds; there is no third option that keeps the check honest.
+
+CORS needs no native-specific handling — a native client sends no `Origin`, so
+`createCors` has nothing to negotiate. Keep `trustedOrigins` (Better Auth's
+redirect allow-list, where the `myapp://` scheme goes) separate from
+`createCors`'s `origin` (browser origins for the SPA); they answer different
+questions and a custom scheme belongs only in the former.
+
+On the client, `createBearerSession` covers the whole round trip — it attaches
+the stored token, persists any rotated one off the reply, and clears the session
+when the server stops accepting it:
+
+```ts
+import * as SecureStore from 'expo-secure-store'
+import { createBearerSession, createClient } from '@amritk/api/client'
+
+const session = createBearerSession({
+  storage: {
+    get: async () => (await SecureStore.getItemAsync('session')) ?? undefined,
+    set: (token) => SecureStore.setItemAsync('session', token),
+    clear: () => SecureStore.deleteItemAsync('session'),
+  },
+  onExpired: () => router.replace('/sign-in'),
+})
+
+const client = createClient(contracts, 'https://api.example.com', { fetch: session.fetch })
+// after the magic-link deep link resolves: session.set(token)
+// on sign-out: session.clear()
+```
+
+Two security notes on that wiring. The token is a **live session**, so keep it
+where the platform protects it — `expo-secure-store`, the iOS keychain,
+Android's `EncryptedSharedPreferences` — and not in `AsyncStorage` or
+`localStorage`, where any script or process that gets in walks off with the
+session. And point this fetch at **your API only**: it captures `set-auth-token`
+from whatever answers, so a fetch reused across arbitrary hosts lets any of them
+overwrite the stored session.
+
+**There is no refresh in this model — there is one token and you send it every
+time.** No refresh token, no renewal endpoint, no rotation. Better Auth's session
+token is an opaque handle to a server-side row, and it does not change for the
+life of the session. What changes is that row's expiry: a request arriving past
+`updateAge` (default 1 day) rolls it forward to `now + expiresIn` (default 7
+days). So an app in regular use stays signed in without ever renewing anything,
+purely as a side effect of the calls it was already making.
+
+Go quiet for longer than `expiresIn` and the next call takes a `401`, which
+clears storage and fires `onExpired`. A magic-link session has nothing to renew
+*from*, so signing in again is the only way back — routing there is the correct
+handling, not a gap you should try to close with `refresh`.
+
+Which means, concretely: leave `refresh` unset. It exists for the other server
+shape, where renewal is a real request (the JWT plugin's short-lived
+`set-auth-jwt`, an OAuth provider, your own endpoint). Capturing `set-auth-token`
+is how the token lands in storage when sign-in runs through this fetch; on a
+plain magic-link setup it fires there and nowhere else. What the wrapper earns
+its keep on here is the unglamorous half — attaching the token without an await
+on the hot path, and clearing a dead session so a stale token cannot sit in the
+keychain. See [client-side auth refresh](#client-side-auth-refresh) for the two
+models that do renew.
+
+### Sessions: a production setup
+
+Better Auth owns the session — issuing it, expiring it, revoking it. What this
+framework owns is everything wrapped around it, and the pieces have to agree with
+each other. Here they are in one place, for the case worth designing for: **one
+server, a browser SPA and a native app**.
+
+**Start from a server-held session.** The default — an opaque token pointing at a
+row Better Auth controls — is the right one, and the reason is revocation. Sign-out
+kills every copy of the credential on the next request; a self-contained token
+cannot be recalled once issued, so a stolen one stays good for its whole lifetime
+no matter what you do. Reach for the JWT plugin when a *second* service or an edge
+worker has to verify identity without calling you, and let it verify against
+`/jwks` for that hop only. Keep the client session as it is.
+
+The wiring, in the order it runs:
+
+```ts
+import type { FetchOnRequest } from '@amritk/api'
+import {
+  createCors, createCsrf, createRateLimit, createSecurityHeaders, exemptBearer, toFetchHandler,
+} from '@amritk/api'
+
+const cors = createCors({ origin: ['https://app.example.com'], credentials: true })
+const csrf = createCsrf({ exempt: exemptBearer })
+
+// Auth endpoints get their own, much tighter budget. `key` matters more than
+// `limit` here — see below.
+const authLimit = createRateLimit({ limit: 5, windowMs: 60_000, key: (request) => `auth:${verifiedIp(request)}` })
+
+const AUTH_PREFIX = '/api/auth'
+// Slice the pathname by hand rather than `new URL(request.url)`: a URL object
+// parses and normalizes the whole URL, which benchmarks at roughly a fifth of
+// the adapter's per-request cost — and this gate runs on every request, not just
+// the auth ones.
+const isAuthPath = (url: string): boolean => {
+  const schemeEnd = url.indexOf('://')
+  const pathStart = url.indexOf('/', schemeEnd === -1 ? 0 : schemeEnd + 3)
+  if (pathStart === -1 || !url.startsWith(AUTH_PREFIX, pathStart)) return false
+  // Boundary check, so `/api/authorize` is not swept in with the auth mount.
+  const next = url.charAt(pathStart + AUTH_PREFIX.length)
+  return next === '' || next === '/' || next === '?'
+}
+
+const limitAuthOnly: FetchOnRequest = (request, env, executionContext, locals) =>
+  isAuthPath(request.url) ? authLimit.onRequest(request, env, executionContext, locals) : undefined
+
+const handler = toFetchHandler(api, {
+  mounts: { '/api/auth': (request, env) => makeAuth(env as Env).handler(request) },
+  onRequest: [cors.onRequest, limitAuthOnly, csrf.onRequest],
+  onResponse: [createSecurityHeaders(), cors.onResponse, csrf.onResponse],
+})
+```
+
+**Gates run before mounts and decorators run after**, which is the property this
+setup leans on: `/api/auth/*` is inside the rate limit, the CORS negotiation, and
+the security headers, rather than a hole punched through them. A mounted vendor
+router is still your traffic.
+
+**Rate-limit the auth mount.** This is the one most setups skip, and passwordless
+raises the stakes: an unthrottled magic-link endpoint is an email-bombing tool
+pointed at your users and a paid-for spam relay pointed at your bill, and the
+reply usually differs enough between a known and unknown address to enumerate
+accounts. The default rate-limit key is **a spoofable client IP header** — fine
+for protecting capacity, useless against an attacker who rotates it. For an auth
+throttle, key on a proxy-verified IP for your topology, and consider a second
+limiter keyed on the submitted email so one address cannot be targeted from many
+sources.
+
+**Keep the session lookup lazy, and think twice before caching it.**
+
+```ts
+export const createContext = async ({ request }: ContextFactoryInput) => ({
+  // Lazy, so public routes never pay for it; memoized, so guards and handlers
+  // in one request share a single lookup.
+  session: memoize(() =>
+    auth.api.getSession({
+      headers: new Headers({
+        cookie: request.header('cookie') ?? '',
+        authorization: request.header('authorization') ?? '',
+      }),
+    }),
+  ),
+})
+```
+
+Caching sessions *across* requests is where a setup quietly stops being modern:
+every second of TTL is a second a revoked session keeps working, so the cache
+trades away the exact property you chose a server-held session for. If the lookup
+genuinely becomes your bottleneck, cache it briefly (single-digit seconds) and
+invalidate on sign-out — and treat the revocation delay as a number you picked
+rather than one you inherited.
+
+> **Check whether your platform is already caching it for you.** Cloudflare
+> Hyperdrive caches eligible read queries **by default** — `max_age` 60s plus
+> `stale_while_revalidate` 15s — and does not invalidate on write, so a session
+> lookup routed through a default config can keep authorizing a signed-out user
+> for over a minute. Cloudflare's own guidance names authentication, sessions,
+> and permissions as reads that need a **second, cache-disabled Hyperdrive
+> binding**; connection pooling and edge connection setup still apply, so you
+> keep the latency win and drop only the staleness. When an auth library owns the
+> SQL, give it its own client built on the cache-disabled binding.
+
+**Where the latency actually goes.** Worth knowing before optimizing the wrong
+layer, because the costs here differ by three orders of magnitude:
+
+| Per request | Cost |
+|:--|:--|
+| The gates and decorators above | single-digit **micro**seconds — a method check, a header set, a cookie split on unsafe methods |
+| `new URL()` in a hand-rolled gate | ~⅕ of the adapter's per-request cost, which is why the snippet above slices the path instead |
+| **The session lookup** | **1–50 ms**, depending on how far your database is |
+| Shared-store rate limiter | one store round-trip — scoped to `/api/auth/*` here, so ordinary traffic never pays it |
+| CORS preflight (browser only) | a whole extra round trip, on the first request of each shape |
+
+So the middleware is noise and the session lookup is the entire story. Three
+things move it, in order of effect: **keep it lazy** so public routes pay nothing,
+**memoize it per request** so a guard and a handler share one lookup instead of
+two, and **put the session store next to the compute** — a query to a database
+one region away costs more than every other row in this table combined, and no
+amount of hook tuning buys it back. Only after those does a cross-request cache
+become worth its revocation delay.
+
+On Workers specifically, adding a session lookup is what makes
+[Smart Placement](https://developers.cloudflare.com/workers/configuration/placement/)
+worth turning on. Cloudflare's numbers are 20–30 ms per query from a distant
+region against 1–3 ms when the Worker runs near the database — and placement does
+nothing for a request that makes a *single* query, since the round trip costs the
+same wherever it happens. A session lookup plus the handler's own query is two
+sequential round trips, which is exactly the case placement compounds in your
+favour. Hyperdrive already removes the seven round trips of connection setup (TCP
+1×, TLS 3×, auth 3×) by pooling warm connections near the database; placement
+addresses the query legs that remain.
+
+The native client is the cheaper of the two, for what it is worth: no preflight
+(nothing to negotiate without an `Origin`), no cookie header to parse, and the
+CSRF gate exits immediately.
+
+**Then declare both client shapes**, so the OpenAPI document tells the truth about
+an API that now accepts two kinds of credential:
+
+```ts
+const securitySchemes = {
+  sessionCookie: { type: 'apiKey', in: 'cookie', name: '<your session cookie>', [securityGuard]: requireSession },
+  bearerAuth: { type: 'http', scheme: 'bearer', [securityGuard]: requireSession },
+} as const
+// Either satisfies the requirement: two single-scheme entries, not one entry with both.
+const security = [{ sessionCookie: [] }, { bearerAuth: [] }]
+```
+
+Two entries rather than one is the difference between "either credential works"
+and "send both", and only the first is true here. Wrap the routes with
+[`secureRoutes`](#deny-by-default-secureroutes) so the default is closed and you
+name the public ones.
 
 ### Observability: metrics and request logs
 

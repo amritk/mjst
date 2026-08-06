@@ -16,6 +16,8 @@ export {
   malformedBodyError,
   unexpectedStatusError,
 } from './client-errors'
+export type { BearerSession, BearerSessionOptions, BearerTokenStorage } from './create-bearer-session'
+export { createBearerSession } from './create-bearer-session'
 export type {
   ApiClient,
   BodySerializer,

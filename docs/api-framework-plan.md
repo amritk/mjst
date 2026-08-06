@@ -230,10 +230,10 @@ the compile step cannot see); `mjst compile` becomes the opt-in ceiling. Same
 contract, three engines: interpreter → generated validators → fully compiled
 routes.
 
-## Shipped: the agent-ummo readiness set (2026-07)
+## Shipped: the production-adoption set (2026-07)
 
-The gaps identified in `docs/ummo-readiness.md` are closed, in both engines
-(every feature below is exercised by the differential test):
+The gaps an audit of real Workers/Hono deployments turned up are closed, in
+both engines (every feature below is exercised by the differential test):
 
 - **Raw request bodies + size cap.** `ApiRequest.readText` / `readBytes` read
   the body exactly as it arrived (webhook HMAC verification, CSV uploads);
