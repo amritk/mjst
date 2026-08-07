@@ -18,12 +18,19 @@ bun run --filter='@amritk/api' types:check
 
 - **ESM-only.** No CJS entry point. Keep it that way.
 - **Four entries, each one-way:** `.` (runtime/client/adapters/OpenAPI),
-  `./client` (the browser-safe subset of `.`), `./bundler` (build-time strip
-  plugins), and `./dev` (hot reloading). The dependency only ever points *into*
-  `.`: bundler and dev code may import the runtime, never the reverse. That is
-  what keeps `node:fs` watching and module re-importing out of the graph that
-  ships to Workers and browsers — do not add another entry without the same
-  justification.
+  `./client` (the browser-safe subset of `.`), `./bundler` (the build-time
+  contract strip), and `./dev` (hot reloading). The dependency only ever points
+  *into* `.`: bundler and dev code may import the runtime, never the reverse.
+  That is what keeps `node:fs` watching and module re-importing out of the
+  graph that ships to Workers and browsers — do not add another entry without
+  the same justification.
+- **`./bundler` ships the transform, not plugins.** `stripContractFields` and
+  `isScannableId`, wired into the consumer's own bundler hook (the README has
+  a snippet per bundler). The per-bundler plugin objects were removed because
+  a plugin matrix is permanently one entry behind the ecosystem — an rspack
+  request against a vite/rollup/esbuild/bun lineup is what proved it. Adding
+  `stripContractsX` back re-opens that. Keep this entry free of `node:*` imports too, so a config file in any
+  runtime can load it.
 - **`./client` must stay browser-safe.** `src/client.ts` re-exports only
   modules whose transitive imports touch no server code and no `node:*`
   built-in; `client.test.ts` walks the import graph and pins the exact

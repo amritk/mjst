@@ -4,27 +4,18 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-import { stripContractsBun } from './strip-contracts-bun'
-
-/** Captures the plugin's onLoad callback so tests can drive it directly. */
-const loadCallbackOf = (plugin: ReturnType<typeof stripContractsBun>) => {
-  let callback: ((args: { path: string }) => Promise<{ contents: string; loader: string } | undefined>) | undefined
-  plugin.setup({
-    onLoad: (_constraints, registered) => {
-      callback = registered
-    },
-  })
-  if (callback === undefined) throw new Error('plugin registered no onLoad callback')
-  return callback
-}
-
 /**
  * End-to-end size test for the whole story: a realistic JSON-only,
  * static-path widget (a realistic embed shape — three contracts, fat schemas,
  * summaries, refine) is bundled with real `Bun.build`, with and without the
- * plugin. The plugin must cut the bundle substantially and no freight string
- * may survive into the stripped output. Runs in a spawned `bun` process
- * because `Bun.build` does not exist under the Node-based vitest runtime.
+ * strip. It must cut the bundle substantially and no freight string may
+ * survive into the stripped output. Runs in a spawned `bun` process because
+ * `Bun.build` does not exist under the Node-based vitest runtime.
+ *
+ * The build script below wires `stripContractFields` into `Bun.build` exactly
+ * as the README tells consumers to — the package ships the transform, not a
+ * plugin per bundler, so the documented wiring is what has to keep working.
+ * Copy any change here into that snippet.
  */
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -94,7 +85,20 @@ import * as contracts from './contracts'
 export const client = createClient(contracts, 'https://api.example.com')
 `
 
-const buildScript = `import { stripContractsBun } from '${join(here, 'strip-contracts-bun')}'
+const buildScript = `import { stripContractFields } from '${join(here, 'strip-contract-fields')}'
+
+// The README's Bun.build wiring, verbatim.
+const stripContracts = {
+  name: 'strip-contracts',
+  setup(build) {
+    build.onLoad({ filter: /\\.[cm]?[jt]sx?$/ }, async ({ path }) => {
+      const source = await Bun.file(path).text()
+      if (!source.includes('defineContract')) return undefined
+      const stripped = stripContractFields(source)
+      return stripped === source ? undefined : { contents: stripped, loader: path.endsWith('x') ? 'tsx' : 'ts' }
+    })
+  },
+}
 
 const bundle = async (entry: string, strip: boolean) => {
   const result = await Bun.build({
@@ -102,7 +106,7 @@ const bundle = async (entry: string, strip: boolean) => {
     target: 'browser',
     minify: true,
     write: false,
-    plugins: strip ? [stripContractsBun()] : [],
+    plugins: strip ? [stripContracts] : [],
   })
   if (!result.success) throw new Error(result.logs.map(String).join('\\n'))
   const text = (await result.outputs[0]?.text()) as string
@@ -137,35 +141,7 @@ type SizeReport = {
   readonly appStrippedText: string
 }
 
-describe('strip-contracts-bun', () => {
-  it('strips loaded modules, defers untouched ones, and honors exclude', async () => {
-    const fixtureDir = join(here, '.fixtures-onload')
-    mkdirSync(fixtureDir, { recursive: true })
-    try {
-      const contractPath = join(fixtureDir, 'contracts.ts')
-      writeFileSync(
-        contractPath,
-        `export const c = defineContract({ method: 'get', path: '/x', summary: 's', responses: { 200: {} } })`,
-      )
-      const plainPath = join(fixtureDir, 'plain.ts')
-      writeFileSync(plainPath, 'export const x = 1')
-
-      const load = loadCallbackOf(stripContractsBun())
-      const stripped = await load({ path: contractPath })
-      expect(stripped?.loader).toBe('ts')
-      expect(stripped?.contents).not.toContain('summary')
-      // Modules without a call site defer to Bun's default loader.
-      expect(await load({ path: plainPath })).toBeUndefined()
-
-      // Excluded modules keep their freight — the escape hatch for apps that
-      // read contract schemas at runtime.
-      const excluding = loadCallbackOf(stripContractsBun({ exclude: /contracts\.ts$/ }))
-      expect(await excluding({ path: contractPath })).toBeUndefined()
-    } finally {
-      rmSync(fixtureDir, { recursive: true, force: true })
-    }
-  })
-
+describe('strip-contract-fields bundle', () => {
   it('shrinks a real browser bundle and strips every freight string', () => {
     const fixtureDir = join(here, '.fixtures')
     mkdirSync(fixtureDir, { recursive: true })

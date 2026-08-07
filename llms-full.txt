@@ -274,7 +274,7 @@ Hook factories ship the standard middleware over `onRequest`/`onResponse`/`local
 |---|---|
 | `@amritk/api` | runtime, client, adapters, OpenAPI, hook factories |
 | `@amritk/api/client` | browser-safe client surface (`createClient`, `defineContract`, opt-in serializers, error predicates, `…Of` type helpers, client-side auth helpers) — its import graph never touches a server module or `node:*` built-in, so frontends importing it get no bundler externalization warnings; use it for contracts files and anything that ships to a browser |
-| `@amritk/api/bundler` | build-time plugins (`stripContractsVite`/`Esbuild`/`Rollup`/`Bun`) that strip server/OpenAPI freight from `defineContract` sites in browser builds — build tooling only, never in runtime code |
+| `@amritk/api/bundler` | the build-time strip as a plain transform — `stripContractFields(source)` plus the `isScannableId(id)` filter — to wire into your bundler's per-module hook (Vite/Rollup `transform`, esbuild/`Bun.build` `onLoad`, an rspack/webpack loader; README has each). Removes server/OpenAPI freight from `defineContract` sites in browser builds. Build tooling only, never in runtime code, and a size optimization only — it is not how you keep `node:*` out of a browser bundle (import contracts from `@amritk/api/client` for that) |
 | `@amritk/api/dev` | hot reloading for the dev server (`createHotApi`, `watchPaths`, `importFresh`) — development only, never in deployed code |
 
 **Hot reload (dev server).** `createHotApi({ load, watch })` returns a normal

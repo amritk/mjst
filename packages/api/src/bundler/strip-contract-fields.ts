@@ -2,16 +2,18 @@
  * The client runtime reads only a sliver of each contract: `method`, `path`,
  * `request.bodyType`, whether a request/response `body` schema exists, and
  * each response status's `contentType` marker. Everything else — request and
- * response schemas, `refine`, `summary`, `description`, tags, security — is
+ * response schemas, `refine`, `summary`, `description`, tags — is
  * server/OpenAPI freight that a browser bundle pays for without ever reading.
+ * `security` stays: see {@link STRIP_TOP_LEVEL}.
  *
  * This transform rewrites `defineContract({ ... })` call sites to just the
  * fields the client reads, replacing `body` schemas with a `true` marker (the
  * runtime only checks `body !== undefined`). Types are compile-time, so the
  * consumer's TypeScript never notices; dropping a schema property also drops
  * the bundler's reference to any imported schema value, letting tree-shaking
- * remove it. The Vite, Rollup, esbuild, and Bun plugins in this directory
- * apply it per module.
+ * remove it. Wire it into whatever per-module text hook your bundler exposes
+ * — a Vite/Rollup `transform`, an esbuild or `Bun.build` `onLoad`, an
+ * rspack/webpack loader (the README has each).
  *
  * The scanner is deliberately conservative: any call site it cannot parse
  * with certainty (spreads, computed keys, explicit type arguments, syntax it
@@ -21,8 +23,18 @@
  * survive an older plugin.
  */
 
-/** The top-level contract fields the client never reads at runtime. */
-const STRIP_TOP_LEVEL = new Set(['summary', 'description', 'tags', 'operationId', 'deprecated', 'security', 'refine'])
+/**
+ * The top-level contract fields nothing in a browser can act on.
+ *
+ * `security` is deliberately **not** here. `createClient` does not read it
+ * either, but it is the one descriptive field an app plausibly reads for
+ * itself — attach a bearer token only where a scheme is declared, skip a call
+ * that will certainly 401, hide a control for a scope the session lacks — and
+ * it is cheap to keep: a requirement is a list of scheme names and scopes,
+ * tens of bytes against the hundreds a request schema costs. Deleting it to
+ * save that is a bad trade against silently breaking an app that reads it.
+ */
+const STRIP_TOP_LEVEL = new Set(['summary', 'description', 'tags', 'operationId', 'deprecated', 'refine'])
 
 /** Request slots the client only echoes values into — their schemas are server freight. */
 const STRIP_REQUEST = new Set(['params', 'query', 'headers', 'cookies'])
@@ -348,9 +360,31 @@ const countNewlines = (text: string): number => {
 
 /**
  * Rewrites every parseable `defineContract({ ... })` call site in a module's
- * source down to the fields the client runtime reads. Pure text in, text out
- * — the Vite, Rollup, esbuild, and Bun plugins wire it into their load
- * pipelines.
+ * source down to the fields the client runtime reads. Pure text in, text out,
+ * so it drops into any bundler hook that hands over a module's source.
+ *
+ * Guard the call with `id`/path filtering and a `source.includes(
+ * 'defineContract')` check — the scan is cheap but not free, and a hook that
+ * returns the input unchanged lets the bundler keep the original code and
+ * sourcemap. `stripContractFields` returns the source unchanged when there was
+ * nothing to rewrite, so `stripped === source` is the test.
+ *
+ * @example
+ * ```typescript
+ * // vite.config.ts — build only, and never for SSR: the server reads schemas.
+ * import { isScannableId, stripContractFields } from '@amritk/api/bundler'
+ *
+ * const stripContracts = {
+ *   name: 'strip-contracts',
+ *   enforce: 'pre',
+ *   apply: 'build',
+ *   transform(code: string, id: string, options?: { ssr?: boolean }) {
+ *     if (options?.ssr === true || !isScannableId(id) || !code.includes('defineContract')) return null
+ *     const stripped = stripContractFields(code)
+ *     return stripped === code ? null : { code: stripped, map: null }
+ *   },
+ * }
+ * ```
  *
  * The rewrite is line-preserving: every newline the original call site
  * spanned is re-emitted as padding right after the rewritten literal, so code
