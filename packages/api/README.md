@@ -341,13 +341,17 @@ build with. Emit two artifacts from one source, and split them with
 // scripts/build-client.ts — run after tsc has written dist/
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { transformSync } from 'esbuild'
 import { stripContractFields } from '@amritk/api/bundler'
 
 for (const file of await readdir('dist', { recursive: true })) {
   if (!file.endsWith('.js')) continue
+  const source = stripContractFields(await readFile(join('dist', file), 'utf8'))
+  // Reprint to drop the JSDoc tsc copied into the JS — see below.
+  const { code } = transformSync(source, { loader: 'js', format: 'esm' })
   const out = join('dist-client', file)
   await mkdir(dirname(out), { recursive: true })
-  await writeFile(out, stripContractFields(await readFile(join('dist', file), 'utf8')))
+  await writeFile(out, code)
 }
 ```
 
@@ -372,6 +376,16 @@ order, too: `defineContract` survives compilation intact (it is an identity
 function, and tsc keeps the call), while the `as const` and `satisfies`
 suffixes that make the scanner bail on a source file are already gone by
 then.
+
+That is also why the script reprints through esbuild. The strip rewrites
+contract literals and never touches comments, and tsc copies every JSDoc
+block into the `.js` it emits — so without that step the doc comment above
+each contract ships to the browser, where it is dead weight the docs in the
+`.d.ts` already cover. A consumer's production minifier would drop it, but
+there is no reason to put it in the package. **Do not reach for tsc's
+`removeComments` instead:** it strips JSDoc from the declaration files too,
+which is precisely the hover help this layout exists to keep. Comments out of
+the values, comments kept in the types.
 
 The transform is deliberately conservative: call sites it cannot parse with
 certainty (spreads, computed keys, explicit type arguments, aliased imports
