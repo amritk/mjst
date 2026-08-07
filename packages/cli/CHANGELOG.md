@@ -1,5 +1,12 @@
 # @amritk/mjst
 
+## 0.14.3
+
+### Patch Changes
+
+- Updated dependencies [ae367f8]
+  - @amritk/api@0.15.0
+
 ## 0.14.2
 
 ### Patch Changes
