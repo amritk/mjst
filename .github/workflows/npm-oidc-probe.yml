@@ -8,6 +8,12 @@ name: npm OIDC probe
 
 on:
   workflow_dispatch:
+  # Temporary, so the probe can run before it reaches main — `workflow_dispatch`
+  # only offers a Run button for workflows already on the default branch. Drop
+  # this trigger once the release failure is diagnosed.
+  push:
+    branches:
+      - claude/monorepo-package-publishing-3cucm6
 
 permissions:
   contents: read
