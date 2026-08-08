@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+      # Temporary, for the `probe` job below. npm matches an OIDC token against a
+      # package's trusted publisher by workflow *filename*, so the diagnostic only
+      # answers anything when it runs from this file. Drop this branch and the
+      # `probe` job once the release failure is diagnosed.
+      - claude/monorepo-package-publishing-3cucm6
   # Manual fallback. When GitHub drops the push event for a merge — it dropped
   # the one for 4b4b383, which produced no Release *or* CI run — main is left
   # carrying an unreleased changeset with no run to re-run, since none was ever
@@ -16,8 +21,27 @@ on:
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
 jobs:
+  # Temporary. Runs only off main, so a release can never fire from a branch.
+  probe:
+    name: Probe npm OIDC
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Exchange an OIDC token for every publishable package
+        run: node scripts/npm-oidc-probe.mjs
+
   release:
     name: Release
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
