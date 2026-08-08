@@ -1,5 +1,13 @@
 # @amritk/api
 
+## 0.15.1
+
+### Patch Changes
+
+- 4178e8d: Patch release across all packages.
+- Updated dependencies [4178e8d]
+  - @amritk/runtime-validators@0.10.1
+
 ## 0.15.0
 
 ### Minor Changes

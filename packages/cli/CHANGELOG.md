@@ -1,5 +1,21 @@
 # @amritk/mjst
 
+## 0.14.4
+
+### Patch Changes
+
+- 4178e8d: Patch release across all packages.
+- Updated dependencies [4178e8d]
+  - @amritk/adapters@0.4.1
+  - @amritk/api@0.15.1
+  - @amritk/generate-examples@0.6.1
+  - @amritk/generate-parsers@0.19.1
+  - @amritk/generate-validators@0.12.1
+  - @amritk/helpers@0.15.1
+  - @amritk/lint@0.4.7
+  - @amritk/resolve-refs@0.5.1
+  - @amritk/yaml@0.7.1
+
 ## 0.14.3
 
 ### Patch Changes

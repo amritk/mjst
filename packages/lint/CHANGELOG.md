@@ -1,5 +1,14 @@
 # @amritk/lint
 
+## 0.4.7
+
+### Patch Changes
+
+- 4178e8d: Patch release across all packages.
+- Updated dependencies [4178e8d]
+  - @amritk/runtime-validators@0.10.1
+  - @amritk/yaml@0.7.1
+
 ## 0.4.6
 
 ### Patch Changes
