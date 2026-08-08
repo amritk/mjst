@@ -4,11 +4,6 @@ on:
   push:
     branches:
       - main
-      # Temporary, for the `probe` job below. npm matches an OIDC token against a
-      # package's trusted publisher by workflow *filename*, so the diagnostic only
-      # answers anything when it runs from this file. Drop this branch and the
-      # `probe` job once the release failure is diagnosed.
-      - claude/monorepo-package-publishing-3cucm6
   # Manual fallback. When GitHub drops the push event for a merge — it dropped
   # the one for 4b4b383, which produced no Release *or* CI run — main is left
   # carrying an unreleased changeset with no run to re-run, since none was ever
@@ -21,7 +16,12 @@ on:
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
 jobs:
-  # Temporary. Runs only off main, so a release can never fire from a branch.
+  # Diagnostic, for when a release 403s on some packages but not others. npm
+  # matches an OIDC token against a package's trusted publisher by workflow
+  # *filename*, so this only answers anything from inside this file — run from a
+  # workflow of any other name it reports "package not found" for all twelve.
+  # Hence a job here rather than a workflow of its own: dispatch this workflow
+  # from any branch but main and it runs the probe alone. It publishes nothing.
   probe:
     name: Probe npm OIDC
     if: github.ref != 'refs/heads/main'
@@ -110,3 +110,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
+
+      # npm writes its debug log at silly level no matter what reaches stdout, so
+      # it holds the whole publish exchange: the OIDC token exchange, the PUT, and
+      # whatever the registry actually said. The job log gets none of that — a
+      # failed publish prints npm's canned 403 text ("forbidden by your security
+      # policy"), which is what it says when the registry sends no reason at all.
+      # Keeping the log means the next failure explains itself instead of needing
+      # a run reproduced to ask again.
+      - name: Keep npm's debug logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-debug-logs
+          path: ~/.npm/_logs/
+          if-no-files-found: ignore
