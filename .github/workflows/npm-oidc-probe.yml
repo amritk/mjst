@@ -1,0 +1,28 @@
+# Diagnostic. Dispatch this when a release 403s on some packages but not others.
+#
+# npm's OIDC handler swallows every trusted-publishing failure at `verbose` and lets
+# `npm publish` continue unauthenticated, so the release job reports a bare E403 with
+# no reason. This job runs the same per-package token exchange with the errors left
+# visible. It publishes nothing.
+name: npm OIDC probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    name: Probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Exchange an OIDC token for every publishable package
+        run: node scripts/npm-oidc-probe.mjs
