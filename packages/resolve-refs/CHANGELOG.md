@@ -1,5 +1,11 @@
 # @amritk/resolve-refs
 
+## 0.5.1
+
+### Patch Changes
+
+- 4178e8d: Patch release across all packages.
+
 ## 0.5.0
 
 ### Minor Changes

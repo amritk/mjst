@@ -1,5 +1,11 @@
 # @amritk/generate-markdown
 
+## 0.4.7
+
+### Patch Changes
+
+- 4178e8d: Patch release across all packages.
+
 ## 0.4.6
 
 ### Patch Changes

@@ -1,5 +1,13 @@
 # @amritk/adapters
 
+## 0.4.1
+
+### Patch Changes
+
+- 4178e8d: Patch release across all packages.
+- Updated dependencies [4178e8d]
+  - @amritk/helpers@0.15.1
+
 ## 0.4.0
 
 ### Minor Changes
