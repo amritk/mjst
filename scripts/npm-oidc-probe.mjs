@@ -89,15 +89,21 @@ const exchange = async (name, token) => {
   return { status: response.status, token: json.token, message: json.message ?? json.error ?? json.raw }
 }
 
-/** Whether the exchanged token actually carries authority for the package. */
+/**
+ * What the registry says about the package, asked with that package's own token.
+ *
+ * `visibility` and `access` are where a per-package publish policy shows up — the
+ * 2FA requirement behind npm's "Publishing access" radio lives in the latter. When
+ * every exchange succeeds, a difference here is the only thing left that can explain
+ * one package's PUT being refused while another's goes through.
+ */
 const probeToken = async (name, token) => {
-  const [who, visibility] = await Promise.all([
-    fetch(`${REGISTRY}/-/whoami`, { headers: { Authorization: `Bearer ${token}` } }).then(body),
-    fetch(`${REGISTRY}/-/package/${escapeName(name)}/visibility`, {
-      headers: { Authorization: `Bearer ${token}` },
-    }).then(body),
+  const at = { headers: { Authorization: `Bearer ${token}` } }
+  const [visibility, access] = await Promise.all([
+    fetch(`${REGISTRY}/-/package/${escapeName(name)}/visibility`, at).then(body),
+    fetch(`${REGISTRY}/-/package/${escapeName(name)}/access`, at).then(body),
   ])
-  return { whoami: who.username ?? who.message ?? who.error, visibility }
+  return { visibility, access }
 }
 
 const token = await idToken()
@@ -115,8 +121,10 @@ let failed = 0
 for (const name of publishablePackages()) {
   const result = await exchange(name, token)
   if (result.token) {
-    const { whoami, visibility } = await probeToken(name, result.token)
-    console.log(`✅ ${name}: exchange ${result.status}, whoami ${whoami}, visibility ${JSON.stringify(visibility)}`)
+    const { visibility, access } = await probeToken(name, result.token)
+    console.log(`✅ ${name}: exchange ${result.status}`)
+    console.log(`     visibility ${JSON.stringify(visibility)}`)
+    console.log(`     access     ${JSON.stringify(access)}`)
   } else {
     failed += 1
     console.log(`❌ ${name}: exchange ${result.status} — ${result.message ?? 'no message'}`)
