@@ -86,3 +86,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
+          # Every `npm publish` writes its own debug log and prunes the
+          # directory to the ten newest at startup. Twelve packages publish
+          # here, and a publish that fails finishes first — so the default
+          # ceiling drops exactly the logs worth reading. Keep all of them.
+          NPM_CONFIG_LOGS_MAX: "100"
+
+      # A publish that 403s prints npm's canned "forbidden by your security
+      # policy" line, which is what npm says when the registry sends no reason
+      # at all — so the job log carries no reason either, and the runner takes
+      # npm's own log with it when it goes away. This prints the failed runs'
+      # logs before that happens: the OIDC token exchange, the request, the
+      # status, and whatever the registry sent back with it.
+      - name: Show what the registry said about a failed publish
+        if: failure()
+        run: bun run scripts/read-npm-publish-errors.ts
