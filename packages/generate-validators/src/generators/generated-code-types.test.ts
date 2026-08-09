@@ -206,6 +206,37 @@ const CASES: ReadonlyArray<readonly [string, JSONSchema]> = [
   ['contradicted-type', { type: 'number', minLength: 2 }],
   ['contradicted-type-null', { type: 'null', maxItems: 1 }],
   ['always-matching-contains-unevaluated', { type: 'array', contains: {}, unevaluatedItems: { type: 'string' } }],
+  // A `$ref` sitting next to a branch the *validator* folds away. Each emitted
+  // import carries the type as well as the validator, and the type generator does
+  // not fold — it still unions every `anyOf` branch — so deciding the import list
+  // from the validator's view alone stranded the type name (`TS2304`). Same for
+  // the one array position the type reads and the validator does not: a tuple's
+  // rest comes from `additionalItems` whenever `items` is an array, even when
+  // `prefixItems` won the positions.
+  ['ref-beside-a-folded-anyof-branch', { anyOf: [{ $ref: '#/$defs/a' }, true], $defs: { a: { type: 'string' } } }],
+  [
+    'ref-beside-an-annotation-only-anyof-branch',
+    { anyOf: [{ $ref: '#/$defs/a' }, { description: 'anything' }], $defs: { a: { type: 'string' } } },
+  ],
+  [
+    'ref-in-a-dropped-if-arm',
+    {
+      if: false,
+      then: { $ref: '#/$defs/a' },
+      else: { $ref: '#/$defs/b' },
+      $defs: { a: { type: 'string' }, b: { type: 'number' } },
+    },
+  ],
+  [
+    'ref-in-a-type-only-additionalItems',
+    {
+      type: 'array',
+      prefixItems: [{ type: 'string' }],
+      items: [{ type: 'number' }],
+      additionalItems: { $ref: '#/$defs/b' },
+      $defs: { b: { type: 'number' } },
+    },
+  ],
   [
     'proto-property',
     JSON.parse(

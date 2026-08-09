@@ -72,23 +72,3 @@ export const declaresKeywordOutside = (schema: JSONSchema, owned: readonly strin
   }
   return false
 }
-
-/**
- * True when a subschema accepts every instance, so the emitter folds it away
- * rather than emitting a condition — a `true` schema, or one carrying nothing
- * but annotations.
- *
- * Deliberately *narrower* than the emitter's own test, which also folds a node
- * whose keywords happen to produce no checks. The two callers want opposite
- * safety margins: the emitter drops work, while `collectEmittedRefs` decides
- * whether a `$ref` inside the branch still becomes a call. Answering "yes" too
- * often there would leave an import missing and the output referencing a name
- * nothing defines; answering "no" too often only leaves an unused import. So
- * this errs towards "no", and every schema it does answer "yes" for is one the
- * emitter is certain to fold.
- */
-export const matchesEverything = (schema: unknown): boolean => {
-  if (schema === true) return true
-  if (!isSchemaObject(schema as JSONSchema)) return false
-  return !declaresKeywordOutside(schema as JSONSchema, [])
-}

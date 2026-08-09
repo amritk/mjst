@@ -1,6 +1,5 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
-import { matchesEverything } from './enforced-keywords'
 import { tupleShapeOf } from './tuple-shape'
 import { type UnevaluatedMatchFn, unevaluatedItemsExpr, unevaluatedPropertiesExpr } from './unevaluated-match'
 
@@ -84,15 +83,28 @@ export const collectEmittedRefs = (
   // the traversal order every emitted import list is built from is unchanged.
   if (tail !== undefined) collectEmittedRefs(tail, refs, rootSchema)
 
+  // One position the *type* reads and the validator does not.
+  // `generate-type-definition` takes a tuple's rest from `additionalItems`
+  // whenever `items` is an array — including when `prefixItems` won the positions
+  // and `tupleShapeOf` therefore ignored it. Each emitted import carries the type
+  // as well as the validator, so a `$ref` there is still referenced, and dropping
+  // it left `export type Root = [string?, ...B[]]` with no `B` in scope.
+  const additional = schema['additionalItems']
+  if (additional !== undefined && additional !== tail && Array.isArray(schema['items'])) {
+    collectEmittedRefs(additional, refs, rootSchema)
+  }
+
   for (const key of [
     'additionalProperties',
     'propertyNames',
     'contains',
     'if',
-    // `then` / `else` only apply when there is an `if` to branch on, and the
-    // emitter skips them entirely without one. A statically-known `if` picks one
-    // arm and drops the other, so only the surviving arm is walked.
-    ...ifArms(schema),
+    // `then` / `else` only apply when there is an `if` to branch on, and neither
+    // emitter reads them without one — so a `$ref` there is never referenced,
+    // and collecting it refused schemas whose ref happened to be unresolvable.
+    // Which *arm* a statically-known `if` takes is deliberately not second-guessed
+    // here; see the note above.
+    ...('if' in schema ? ['then', 'else'] : []),
     'not',
     // The `unevaluated*` subschemas are validated against the leftover keys /
     // indices, so a `$ref` inside one becomes a `validateX(...)` call like any
@@ -106,28 +118,12 @@ export const collectEmittedRefs = (
   for (const key of ['oneOf', 'anyOf', 'allOf']) {
     const list = schema[key]
     if (!Array.isArray(list)) continue
-    // An `anyOf` with an always-matching branch is vacuous, and the emitter drops
-    // the whole keyword — so none of its branches produces a call. `oneOf` and
-    // `allOf` are never folded that way.
-    if (key === 'anyOf' && list.some((sub) => matchesEverything(sub))) continue
     for (const sub of list) collectEmittedRefs(sub, refs, rootSchema)
   }
 
   if (tuple !== undefined) for (const sub of tuple) collectEmittedRefs(sub, refs, rootSchema)
 
   return refs
-}
-
-/**
- * The `if`/`then`/`else` arms whose subschemas the emitter actually reaches. A
- * statically-known `if` takes one arm and drops the other, so a `$ref` in the
- * dropped one is never called.
- */
-const ifArms = (schema: Record<string, unknown>): readonly string[] => {
-  if (!('if' in schema)) return []
-  if (schema['if'] === false) return ['else']
-  if (matchesEverything(schema['if'])) return ['then']
-  return ['then', 'else']
 }
 
 /**
