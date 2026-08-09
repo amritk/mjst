@@ -1,5 +1,5 @@
 import { regexFlagsFor, regexLiteral } from '@amritk/helpers/escape-regex-pattern'
-import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
+import { getMjstInstanceOf, getMjstPrimitive, MJST_EXTENSION_KEY } from '@amritk/helpers/mjst-extension'
 import { multipleOfFailExpr, multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
@@ -199,6 +199,40 @@ const schemaIsScalarOnly = (schema: unknown): boolean => {
 }
 
 /**
+ * How a schema spells its array positions, normalised across the two dialects
+ * the generator accepts.
+ *
+ * 2020-12 lists the fixed positions in `prefixItems` and types the rest with
+ * `items`. Draft-07 (and anything a converter left in that shape — see the note
+ * in `@amritk/adapters`' Valibot converter) puts the fixed positions in an
+ * *array* `items` and types the rest with `additionalItems`. Reading only the
+ * 2020-12 spelling is what let a draft-07 tuple emit no array validation at all
+ * while the type generator wrote out a real tuple type.
+ *
+ * - `tuple` — the fixed positions, or `undefined` when the array is not a tuple.
+ * - `tail` — the schema for every index past the tuple, or `undefined` when none
+ *   is declared. `false` means "there must be no such index".
+ * - `tailIsClosed` — whether a tuple's length is capped. A 2020-12 `prefixItems`
+ *   paired with a draft-07 `additionalItems: false` counts, since documents in
+ *   the wild do mix the two.
+ */
+const tupleShapeOf = (
+  schema: Record<string, unknown>,
+): { tuple: unknown[] | undefined; tail: unknown; tailIsClosed: boolean } => {
+  const items = schema['items']
+  if (Array.isArray(items)) {
+    return { tuple: items, tail: schema['additionalItems'], tailIsClosed: schema['additionalItems'] === false }
+  }
+  const prefix = schema['prefixItems']
+  const tuple = Array.isArray(prefix) ? prefix : undefined
+  return {
+    tuple,
+    tail: 'items' in schema ? items : undefined,
+    tailIsClosed: items === false || schema['additionalItems'] === false,
+  }
+}
+
+/**
  * True when an array's elements can only be JSON scalars, so a `uniqueItems`
  * check can dedupe by the cheap `JSON.stringify` projection. When items may be
  * objects or arrays this returns false, and the check must instead compare
@@ -207,16 +241,15 @@ const schemaIsScalarOnly = (schema: unknown): boolean => {
  * disagreeing with the interpreter's order-independent deep equality.
  */
 const arrayItemsAreScalarOnly = (schema: Record<string, unknown>): boolean => {
-  const prefix = schema['prefixItems']
-  if (Array.isArray(prefix)) {
-    if (!prefix.every((p) => schemaIsScalarOnly(p))) return false
-    // Tuple tail: a closed tuple (`items`/`additionalItems: false`) has no tail;
-    // otherwise the tail schema must itself be scalar-only.
-    const tail = 'items' in schema ? schema['items'] : schema['additionalItems']
-    if (tail === false) return true
+  const { tuple, tail, tailIsClosed } = tupleShapeOf(schema)
+  if (tuple !== undefined) {
+    if (!tuple.every((p) => schemaIsScalarOnly(p))) return false
+    // A closed tuple has no tail to describe; otherwise the tail schema must
+    // itself be scalar-only.
+    if (tailIsClosed) return true
     return schemaIsScalarOnly(tail)
   }
-  return schemaIsScalarOnly(schema['items'])
+  return schemaIsScalarOnly(tail)
 }
 
 /**
@@ -265,9 +298,93 @@ const wrongTypeCondition = (accessor: string, type: string): string => {
  */
 const declaresObjectType = (schema: JSONSchema): boolean => hasType(schema) && schema.type === 'object'
 
+/**
+ * True when a `type: "object"` node says nothing {@link generateObjectValidator}
+ * cannot emit. That emitter walks the object keywords and nothing else, so a
+ * `$ref`, a `const`/`enum` or an `x-mjst` hint sitting alongside them would be
+ * dropped on the floor — those nodes belong on the general path.
+ */
+const objectRootIsSelfContained = (schema: JSONSchema): boolean =>
+  !hasRef(schema) &&
+  !hasConst(schema) &&
+  !hasEnum(schema) &&
+  getMjstInstanceOf(schema) === undefined &&
+  getMjstPrimitive(schema) === undefined
+
 const getTypeArray = (schema: JSONSchema): string[] | null => {
   if (!isSchemaObject(schema) || !('type' in schema) || !Array.isArray(schema.type)) return null
   return schema.type as string[]
+}
+
+/**
+ * Every keyword this generator turns into a runtime check. Annotations
+ * (`title`, `description`, `default`, `$defs`, `format`, …) are deliberately
+ * absent: they change no verdict, so a node carrying only those is still "just"
+ * whatever its one validation keyword says.
+ */
+const ENFORCED_KEYWORDS = new Set([
+  '$ref',
+  'type',
+  'enum',
+  'const',
+  MJST_EXTENSION_KEY,
+  'pattern',
+  'minLength',
+  'maxLength',
+  'minimum',
+  'maximum',
+  'exclusiveMinimum',
+  'exclusiveMaximum',
+  'multipleOf',
+  'items',
+  'prefixItems',
+  'additionalItems',
+  'contains',
+  'minContains',
+  'maxContains',
+  'minItems',
+  'maxItems',
+  'uniqueItems',
+  'properties',
+  'patternProperties',
+  'additionalProperties',
+  'required',
+  'propertyNames',
+  'dependentRequired',
+  'dependentSchemas',
+  'dependencies',
+  'minProperties',
+  'maxProperties',
+  'allOf',
+  'anyOf',
+  'oneOf',
+  'not',
+  'if',
+  'then',
+  'else',
+  'unevaluatedProperties',
+  'unevaluatedItems',
+])
+
+/**
+ * True when a node declares an enforced keyword outside the set an emitter
+ * `owns`.
+ *
+ * The specialised emitters — the top-level `$ref` delegation, the `const` and
+ * `enum` roots, the flat boolean guards — each recognise one keyword and write
+ * out a shape built around it. That shape has nowhere to put a sibling, so every
+ * one of them used to drop the siblings silently: `{ $ref, minLength: 3 }`
+ * accepted `"q"`, `{ type: 'string', const: 1 }` accepted `1`. Asking this first
+ * lets each of them keep its tight output for the node it really does describe,
+ * and hand anything richer to the general path.
+ */
+const declaresKeywordOutside = (schema: JSONSchema, owned: readonly string[]): boolean => {
+  if (!isSchemaObject(schema)) return false
+  for (const keyword of Object.keys(schema as Record<string, unknown>)) {
+    if (owned.includes(keyword)) continue
+    if (ENFORCED_KEYWORDS.has(keyword)) return true
+  }
+  return false
 }
 
 /**
@@ -373,7 +490,7 @@ const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): strin
   return [
     `  for (const _key${d} in ${ctx.objVar}) {`,
     `    if (${check.isUnknown(`_key${d}`)}${patternGuard}) {`,
-    `      errors.push({ message: 'must NOT have additional properties', path: \`${ctx.pathPrefix}/\${_key${d}}\` })`,
+    `      errors.push({ message: 'must NOT have additional properties', path: \`${ctx.pathPrefix}/\${escapePointer(_key${d})}\` })`,
     `    }`,
     `  }`,
   ]
@@ -457,8 +574,161 @@ const generatePropertyChecks = (
 }
 
 /**
- * The per-property checks themselves. Handles $ref delegation, enum checks, type
- * checks, string/number constraints, and recursion into inline nested objects.
+ * Recognises a check block that is exactly one `if` statement, handing back its
+ * condition and body so a caller can fold it into the presence test in front of
+ * it — `} else { if (c) { … } }` written as the `} else if (c) { … }` it is
+ * equivalent to.
+ *
+ * This is cosmetic, and deliberately so: the one-keyword property is by far the
+ * common case, and folding keeps its generated output exactly what the old
+ * dispatch chain emitted, so the files that change shape are the ones whose
+ * sibling keywords used to be dropped. Returns `null` for anything else —
+ * including a condition spanning several physical lines (a combinator's match
+ * IIFE), which is not worth the parsing.
+ */
+const singleIfBlock = (lines: readonly string[]): { condition: string; body: string[] } | null => {
+  if (lines.length < 3) return null
+  const opener = /^ {2}if \((.*)\) \{$/.exec(lines[0] as string)
+  if (opener === null || lines[lines.length - 1] !== '  }') return null
+  // A line back at the base indent in between is a second top-level statement,
+  // and two statements cannot become one condition.
+  for (let i = 1; i < lines.length - 1; i++) {
+    if (!(lines[i] as string).startsWith('    ')) return null
+  }
+  return { condition: opener[1] as string, body: lines.slice(1, -1) }
+}
+
+/**
+ * Every check a schema node's keywords call for, against a value held in `raw`.
+ *
+ * This is a *sequence*, not a dispatch chain, and that is the whole point. Each
+ * keyword in a schema object is an independent assertion the instance has to
+ * satisfy, so `{ "type": "string", "const": 1 }` is a schema nothing matches —
+ * but the emitter used to be a chain of `if (keyword) { emit; return }`, where
+ * the first keyword it recognised swallowed every sibling. That is how a
+ * validator came to accept `1` for that schema, and how `{ $ref, minLength: 3 }`
+ * came to accept `"q"`. Anything that returns early from here re-opens the hole.
+ *
+ * `presence` is `''` when the value is known to be present (the caller has
+ * already gated on it), or the `x !== undefined && ` prefix each leaf check
+ * wears when it has not. Constraint checks carry their own runtime-type guards,
+ * so they never need it; combinators do, since an absent value would otherwise
+ * be run through `not` / `anyOf` as if it were there.
+ */
+const generateKeywordChecks = (
+  key: string,
+  raw: string,
+  path: string,
+  schema: JSONSchema,
+  suffix: string,
+  ctx: NestingContext,
+  presence: string,
+): string[] => {
+  if (!isSchemaObject(schema)) return []
+  const lines: string[] = []
+
+  // $ref — delegate to the imported validator. Per 2020-12 a `$ref`'s siblings
+  // apply to the same value, so the delegation is one check among the rest
+  // rather than the end of the story.
+  if (hasRef(schema)) {
+    const vName = validatorName(refToName(schema.$ref, suffix))
+    const delegate = [`  const _r = ${vName}(${raw}, ${path})`, `  if (_r !== true) errors.push(..._r.errors)`]
+    if (presence === '') lines.push(...delegate)
+    else lines.push(`  if (${raw} !== undefined) {`, ...delegate.map((line) => `  ${line}`), `  }`)
+  }
+
+  // x-mjst instanceOf (e.g. Date) — value must be an instance of the class.
+  const instanceOf = getMjstInstanceOf(schema)
+  if (instanceOf) {
+    lines.push(`  if (${presence}!(${raw} instanceof ${instanceOf})) {`)
+    lines.push(`    errors.push({ message: 'must be ${instanceOf}', path: ${path} })`)
+    lines.push(`  }`)
+  }
+
+  // x-mjst primitive (e.g. bigint) — value must satisfy a typeof check.
+  const primitive = getMjstPrimitive(schema)
+  if (primitive) {
+    lines.push(`  if (${presence}typeof ${raw} !== "${primitive}") {`)
+    lines.push(`    errors.push({ message: 'must be ${primitive}', path: ${path} })`)
+    lines.push(`  }`)
+  }
+
+  // const — value must equal the fixed value exactly.
+  if (hasConst(schema)) {
+    const mismatch = constMismatchCondition(raw, schema.const)
+    const msg = JSON.stringify(`must be ${JSON.stringify(schema.const)}`)
+    lines.push(`  if (${presence}${mismatch}) {`)
+    lines.push(`    errors.push({ message: ${msg}, path: ${path} })`)
+    lines.push(`  }`)
+  }
+
+  // enum — value must be one of the listed members.
+  if (hasEnum(schema)) {
+    const label = (schema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
+    lines.push(`  if (${presence}!${enumMembershipExpr(schema.enum as unknown[], raw)}) {`)
+    lines.push(`    errors.push({ message: ${JSON.stringify(`must be one of: ${label}`)}, path: ${path} })`)
+    lines.push(`  }`)
+  }
+
+  // An `x-mjst` runtime hint *replaces* the JSON type claim rather than joining
+  // it: the adapters emit `{ 'x-mjst': { instanceOf: 'Date' } }` with the `type`
+  // deleted, precisely because a `Date` is not a JSON string. So a hint
+  // suppresses the type check — and only the type check; `const`, the bounds and
+  // the combinators alongside it still mean what they say.
+  if (instanceOf === undefined && primitive === undefined) {
+    if (hasType(schema)) {
+      const t = schema.type as string
+      const wrongType = wrongTypeCondition(raw, t)
+      if (wrongType) {
+        lines.push(`  if (${presence === '' ? wrongType : `${presence}(${wrongType})`}) {`)
+        lines.push(`    errors.push({ message: 'must be ${typeofString(t)}', path: ${path} })`)
+        lines.push(`  }`)
+      }
+    }
+
+    // Multi-type / nullable (array `type`, e.g. `["string","null"]`). `hasType`
+    // only recognises a *string* `type`, so without this a multi-type node emits
+    // no check at all — and an empty check list is how
+    // {@link generateMatchesExpr} spells "matches everything", which made
+    // `{ not: { type: ["integer","boolean"] } }` reject every instance. The value
+    // is valid when it matches ANY listed type.
+    const typeArray = getTypeArray(schema)
+    if (typeArray) {
+      const allWrong = typeArray
+        .map((t) => wrongTypeCondition(raw, t))
+        .filter((c) => c !== '')
+        .map((c) => `(${c})`)
+        .join(' && ')
+      if (allWrong) {
+        const label = typeArray.map((t) => typeofString(t)).join(' or ')
+        lines.push(`  if (${presence === '' ? allWrong : `${presence}(${allWrong})`}) {`)
+        lines.push(`    errors.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${path} })`)
+        lines.push(`  }`)
+      }
+    }
+  }
+
+  lines.push(...generateConstraintChecks(key, raw, path, schema, suffix, ctx))
+
+  const combinators = generateCombinatorChecks(key, raw, path, schema, suffix, ctx)
+  if (combinators.length > 0) {
+    if (presence === '') lines.push(...combinators)
+    else lines.push(`  if (${raw} !== undefined) {`, ...combinators.map((line) => `  ${line}`), `  }`)
+  }
+
+  return lines
+}
+
+/**
+ * The per-property checks themselves: the presence test a `required` key needs,
+ * with every one of the property's own keyword checks composed beneath it.
+ *
+ * Hoisting presence out here is what lets the checks compose. Each branch of the
+ * old dispatch chain emitted its own "must have required property" test, so
+ * falling through them would have reported that error once per keyword — which
+ * is why the chain returned early, and why every sibling keyword was lost. The
+ * presence test is asked once now, and {@link generateKeywordChecks} answers
+ * everything else.
  */
 const generatePropertyCheckLines = (
   key: string,
@@ -467,244 +737,39 @@ const generatePropertyCheckLines = (
   suffix: string,
   ctx: NestingContext,
 ): string[] => {
+  // Missing-property errors report at the parent object's path. At the root
+  // that is the `_path` parameter itself; inside nested objects it is the
+  // parent's accumulated static path.
+  const parentPath = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
+  const missing = [
+    `  if (${missingCheck(ctx.objVar, key)}) {`,
+    `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+  ]
+
   if (!isSchemaObject(propSchema)) {
     // A boolean `true` (accept-anything) schema carries no shape checks, but a
     // required key must still be present. `false` never gets here —
     // {@link generatePropertyChecks} handles it before this point.
-    if (isRequired && propSchema === true) {
-      const parentPath = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
-      return [
-        `  if (${missingCheck(ctx.objVar, key)}) {`,
-        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
-        `  }`,
-      ]
-    }
+    if (isRequired && propSchema === true) return [...missing, `  }`]
     return []
   }
 
   const raw = PROTOTYPE_MEMBERS.has(key) ? protoLocalName(key, ctx.depth) : propertyRead(ctx.objVar, key)
   const path = `\`${ctx.pathPrefix}/${pointerSegment(key)}\``
-  // Missing-property errors report at the parent object's path. At the root
-  // that is the `_path` parameter itself; inside nested objects it is the
-  // parent's accumulated static path.
-  const parentPath = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
-  const lines: string[] = []
 
-  // $ref — delegate to the imported validator. Per 2020-12, sibling keywords
-  // alongside `$ref` still apply to the same value, so any constraint/combinator
-  // siblings (e.g. `{ $ref, minLength: 5 }`) run after the delegation. A bare
-  // `{ $ref }` produces no siblings, leaving the output unchanged.
-  if (hasRef(propSchema)) {
-    const ref = propSchema.$ref
-    const vName = validatorName(refToName(ref, suffix))
-    const siblings = [
-      ...generateConstraintChecks(key, raw, path, propSchema, suffix, ctx),
-      ...generateCombinatorChecks(key, raw, path, propSchema, suffix, ctx),
-    ]
-    const delegate = [
-      `    const _r = ${vName}(${raw}, ${path})`,
-      `    if (_r !== true) errors.push(..._r.errors)`,
-      ...siblings,
-    ]
-
-    if (isRequired) {
-      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
-      lines.push(
-        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
-      )
-      lines.push(`  } else {`)
-      lines.push(...delegate)
-      lines.push(`  }`)
-    } else {
-      lines.push(`  if (${raw} !== undefined) {`)
-      lines.push(...delegate)
-      lines.push(`  }`)
-    }
-    return lines
+  if (isRequired) {
+    // Inside the `else` the value is known to be present, so the checks need no
+    // presence prefix of their own.
+    const valueLines = generateKeywordChecks(key, raw, path, propSchema, suffix, ctx, '')
+    if (valueLines.length === 0) return [...missing, `  }`]
+    const single = singleIfBlock(valueLines)
+    if (single !== null) return [...missing, `  } else if (${single.condition}) {`, ...single.body, `  }`]
+    return [...missing, `  } else {`, ...valueLines.map((line) => `  ${line}`), `  }`]
   }
 
-  // x-mjst instanceOf (e.g. Date) — value must be an instance of the class
-  const instanceOf = getMjstInstanceOf(propSchema)
-  if (instanceOf) {
-    if (isRequired) {
-      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
-      lines.push(
-        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
-      )
-      lines.push(`  } else if (!(${raw} instanceof ${instanceOf})) {`)
-      lines.push(`    errors.push({ message: 'must be ${instanceOf}', path: ${path} })`)
-      lines.push(`  }`)
-    } else {
-      lines.push(`  if (${raw} !== undefined && !(${raw} instanceof ${instanceOf})) {`)
-      lines.push(`    errors.push({ message: 'must be ${instanceOf}', path: ${path} })`)
-      lines.push(`  }`)
-    }
-    return lines
-  }
-
-  // x-mjst primitive (e.g. bigint) — value must satisfy a typeof check
-  const primitive = getMjstPrimitive(propSchema)
-  if (primitive) {
-    if (isRequired) {
-      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
-      lines.push(
-        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
-      )
-      lines.push(`  } else if (typeof ${raw} !== "${primitive}") {`)
-      lines.push(`    errors.push({ message: 'must be ${primitive}', path: ${path} })`)
-      lines.push(`  }`)
-    } else {
-      lines.push(`  if (${raw} !== undefined && typeof ${raw} !== "${primitive}") {`)
-      lines.push(`    errors.push({ message: 'must be ${primitive}', path: ${path} })`)
-      lines.push(`  }`)
-    }
-    return lines
-  }
-
-  // const — value must equal the fixed value exactly
-  if (hasConst(propSchema)) {
-    const mismatch = constMismatchCondition(raw, propSchema.const)
-    const msg = JSON.stringify(`must be ${JSON.stringify(propSchema.const)}`)
-    if (isRequired) {
-      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
-      lines.push(
-        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
-      )
-      lines.push(`  } else if (${mismatch}) {`)
-      lines.push(`    errors.push({ message: ${msg}, path: ${path} })`)
-      lines.push(`  }`)
-    } else {
-      lines.push(`  if (${raw} !== undefined && ${mismatch}) {`)
-      lines.push(`    errors.push({ message: ${msg}, path: ${path} })`)
-      lines.push(`  }`)
-    }
-    return lines
-  }
-
-  // enum
-  if (hasEnum(propSchema)) {
-    const member = enumMembershipExpr(propSchema.enum as unknown[], raw)
-    const label = (propSchema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
-
-    if (isRequired) {
-      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
-      lines.push(
-        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
-      )
-      lines.push(`  } else if (!${member}) {`)
-      lines.push(`    errors.push({ message: ${JSON.stringify(`must be one of: ${label}`)}, path: ${path} })`)
-      lines.push(`  }`)
-    } else {
-      lines.push(`  if (${raw} !== undefined && !${member}) {`)
-      lines.push(`    errors.push({ message: ${JSON.stringify(`must be one of: ${label}`)}, path: ${path} })`)
-      lines.push(`  }`)
-    }
-    return lines
-  }
-
-  // Multi-type / nullable property (array `type`, e.g. `["string","null"]`).
-  // `hasType` is false for an array `type`, so without this the property emits no
-  // check at all. The value is valid when it matches ANY listed type, i.e. an
-  // error is reported only when it is the wrong type for EVERY listed type; the
-  // required-presence check is still emitted so a missing required prop fails.
-  const typeArray = getTypeArray(propSchema)
-  if (typeArray) {
-    const allWrong = typeArray
-      .map((t) => wrongTypeCondition(raw, t))
-      .filter((c) => c !== '')
-      .map((c) => `(${c})`)
-      .join(' && ')
-    const label = typeArray.map((t) => typeofString(t)).join(' or ')
-
-    if (isRequired) {
-      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
-      lines.push(
-        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
-      )
-      if (allWrong) {
-        lines.push(`  } else if (${allWrong}) {`)
-        lines.push(`    errors.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${path} })`)
-      }
-      lines.push(`  }`)
-    } else if (allWrong) {
-      lines.push(`  if (${raw} !== undefined && (${allWrong})) {`)
-      lines.push(`    errors.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${path} })`)
-      lines.push(`  }`)
-    }
-
-    // Any sibling value constraints (e.g. `minLength` on a `["string","null"]`)
-    // still apply — each carries its own runtime-type guard, so it is a no-op for
-    // the values it does not target.
-    lines.push(...generateConstraintChecks(key, raw, path, propSchema, suffix, ctx))
-    return lines
-  }
-
-  // typed property
-  if (hasType(propSchema)) {
-    const t = propSchema.type as string
-    const wrongType = wrongTypeCondition(raw, t)
-    const typLabel = typeofString(t)
-
-    if (isRequired) {
-      lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
-      lines.push(
-        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
-      )
-      if (wrongType) {
-        lines.push(`  } else if (${wrongType}) {`)
-        lines.push(`    errors.push({ message: 'must be ${typLabel}', path: ${path} })`)
-      }
-      lines.push(`  }`)
-    } else if (wrongType) {
-      lines.push(`  if (${raw} !== undefined && (${wrongType})) {`)
-      lines.push(`    errors.push({ message: 'must be ${typLabel}', path: ${path} })`)
-      lines.push(`  }`)
-    }
-
-    lines.push(...generateConstraintChecks(key, raw, path, propSchema, suffix, ctx))
-  }
-
-  // Keywords that can sit alongside or instead of `type`: combinators
-  // (`allOf`/`anyOf`/`oneOf`/`not`/`if`) for any schema, plus the constraint
-  // checks for a *type-less* schema (e.g. a bare `{ required: [...] }` or
-  // `{ minItems: 2 }` property). A typed schema already ran its constraints in
-  // the `hasType` branch above, so it only needs the combinators here.
-  const extraLines = hasType(propSchema)
-    ? generateCombinatorChecks(key, raw, path, propSchema, suffix, ctx)
-    : [
-        ...generateConstraintChecks(key, raw, path, propSchema, suffix, ctx),
-        ...generateCombinatorChecks(key, raw, path, propSchema, suffix, ctx),
-      ]
-
-  if (hasType(propSchema)) {
-    // Presence was already enforced in the `hasType` branch; only wrap the
-    // combinator siblings so they run when the value is present.
-    if (extraLines.length > 0) {
-      lines.push(`  if (${raw} !== undefined) {`)
-      lines.push(...extraLines)
-      lines.push(`  }`)
-    }
-  } else if (isRequired) {
-    // Type-less required property. Presence must be enforced even when the schema
-    // contributes no other checks (e.g. `{}` — an accept-anything schema), so a
-    // missing required key is still an error. Any extra checks run in the `else`.
-    lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
-    lines.push(
-      `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
-    )
-    if (extraLines.length > 0) {
-      lines.push(`  } else {`)
-      lines.push(...extraLines)
-    }
-    lines.push(`  }`)
-  } else if (extraLines.length > 0) {
-    // Type-less optional property: run any checks only when the value is present.
-    lines.push(`  if (${raw} !== undefined) {`)
-    lines.push(...extraLines)
-    lines.push(`  }`)
-  }
-
-  return lines
+  // An optional property is absent-or-valid, which each leaf check already says
+  // for itself, so no wrapping block is needed here.
+  return generateKeywordChecks(key, raw, path, propSchema, suffix, ctx, `${raw} !== undefined && `)
 }
 
 /**
@@ -823,13 +888,24 @@ const generateConstraintChecks = (
   // items: {type:'number'} }` demand a number at index 0 too, so `["a", 1, 2]` —
   // valid to Ajv, and accepted by the `[string?, ...number[]]` type this very
   // generator emits — was reported invalid by its own validator.
-  if (hasItems(propSchema)) {
-    const itemSchema = propSchema.items
-    const prefix = sp['prefixItems']
-    const firstTailIndex = Array.isArray(prefix) ? prefix.length : 0
+  //
+  // `items` has two shapes, and only one of them is the tail. In draft-07 an
+  // *array* `items` IS the tuple and `additionalItems` is the tail; 2020-12
+  // renamed those to `prefixItems` and `items`. {@link tupleShapeOf} normalises
+  // the pair so both dialects reach the same emitters — a draft-07 tuple used to
+  // fall through every branch here and emit nothing at all, while the type
+  // generator happily wrote out the tuple type, so the two disagreed.
+  const { tuple, tail, tailIsClosed } = tupleShapeOf(sp)
+
+  if (tail !== undefined) {
+    const itemSchema = tail as JSONSchema
+    const firstTailIndex = tuple !== undefined ? tuple.length : 0
     const iv = `_i${ctx.depth}`
     const itemPath = `\`${path.slice(1, -1)}/\${${iv}}\``
-    if (hasRef(itemSchema)) {
+    // A bare `$ref` tail keeps the tight delegation loop; one carrying siblings
+    // (`{ $ref, minLength: 3 }`) goes through the general value checks, which
+    // emit the delegation *and* the siblings instead of only the first of them.
+    if (hasRef(itemSchema) && !declaresKeywordOutside(itemSchema, ['$ref'])) {
       const vName = validatorName(refToName(itemSchema.$ref, suffix))
       lines.push(`  if (Array.isArray(${raw})) {`)
       lines.push(`    for (let ${iv} = ${firstTailIndex}; ${iv} < ${raw}.length; ${iv}++) {`)
@@ -861,13 +937,13 @@ const generateConstraintChecks = (
     hasMaxItems(propSchema) ||
     (hasUniqueItems(propSchema) && propSchema.uniqueItems === true) ||
     'contains' in sp ||
-    Array.isArray(sp['prefixItems']) ||
-    (sp['items'] === false && !Array.isArray(sp['prefixItems']))
+    tuple !== undefined ||
+    (tail === false && tuple === undefined)
   ) {
     // `items: false` with no `prefixItems` forbids every element, so the array
     // must be empty. (With `prefixItems`, the tuple block below caps the length
     // instead.) Without this the constraint was silently ignored.
-    if (sp['items'] === false && !Array.isArray(sp['prefixItems'])) {
+    if (tail === false && tuple === undefined) {
       lines.push(`  if (Array.isArray(${raw}) && ${raw}.length > 0) {`)
       lines.push(`    errors.push({ message: 'must NOT have more than 0 items', path: ${path} })`)
       lines.push(`  }`)
@@ -909,17 +985,16 @@ const generateConstraintChecks = (
       lines.push(`  }`)
     }
 
-    // Tuple `prefixItems` — each position validated against its own subschema; a
-    // sibling `items: false` (or draft `additionalItems: false`) caps the length.
-    const prefix = sp['prefixItems']
-    if (Array.isArray(prefix)) {
+    // Tuple positions — each validated against its own subschema; a closed tail
+    // (`items: false`, or draft-07 `additionalItems: false`) caps the length.
+    if (tuple !== undefined) {
       lines.push(`  if (Array.isArray(${raw})) {`)
-      for (let i = 0; i < prefix.length; i++) {
+      for (let i = 0; i < tuple.length; i++) {
         const itemChecks = generateValueChecks(
           '',
           `${raw}[${i}]`,
           `\`${path.slice(1, -1)}/${i}\``,
-          prefix[i] as JSONSchema,
+          tuple[i] as JSONSchema,
           suffix,
           ctx,
         )
@@ -929,9 +1004,9 @@ const generateConstraintChecks = (
           lines.push(`    }`)
         }
       }
-      if (sp['items'] === false || sp['additionalItems'] === false) {
-        lines.push(`    if (${raw}.length > ${prefix.length}) {`)
-        lines.push(`      errors.push({ message: 'must NOT have more than ${prefix.length} items', path: ${path} })`)
+      if (tailIsClosed) {
+        lines.push(`    if (${raw}.length > ${tuple.length}) {`)
+        lines.push(`      errors.push({ message: 'must NOT have more than ${tuple.length} items', path: ${path} })`)
         lines.push(`    }`)
       }
       lines.push(`  }`)
@@ -1006,89 +1081,6 @@ const generateValueCheckLines = (
   // `required` drops the guard.
   const presence = required ? '' : `${raw} !== undefined && `
 
-  if (hasRef(propSchema)) {
-    const vName = validatorName(refToName(propSchema.$ref, suffix))
-    if (required) {
-      lines.push(`  const _r = ${vName}(${raw}, ${path})`)
-      lines.push(`  if (_r !== true) errors.push(..._r.errors)`)
-    } else {
-      lines.push(`  if (${raw} !== undefined) {`)
-      lines.push(`    const _r = ${vName}(${raw}, ${path})`)
-      lines.push(`    if (_r !== true) errors.push(..._r.errors)`)
-      lines.push(`  }`)
-    }
-    return lines
-  }
-
-  const instanceOf = getMjstInstanceOf(propSchema)
-  if (instanceOf) {
-    lines.push(`  if (${presence}!(${raw} instanceof ${instanceOf})) {`)
-    lines.push(`    errors.push({ message: 'must be ${instanceOf}', path: ${path} })`)
-    lines.push(`  }`)
-    return lines
-  }
-
-  const primitive = getMjstPrimitive(propSchema)
-  if (primitive) {
-    lines.push(`  if (${presence}typeof ${raw} !== "${primitive}") {`)
-    lines.push(`    errors.push({ message: 'must be ${primitive}', path: ${path} })`)
-    lines.push(`  }`)
-    return lines
-  }
-
-  if (hasConst(propSchema)) {
-    const mismatch = constMismatchCondition(raw, propSchema.const)
-    const msg = JSON.stringify(`must be ${JSON.stringify(propSchema.const)}`)
-    lines.push(`  if (${presence}${mismatch}) {`)
-    lines.push(`    errors.push({ message: ${msg}, path: ${path} })`)
-    lines.push(`  }`)
-    return lines
-  }
-
-  if (hasEnum(propSchema)) {
-    const label = (propSchema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
-    lines.push(`  if (${presence}!${enumMembershipExpr(propSchema.enum as unknown[], raw)}) {`)
-    lines.push(`    errors.push({ message: ${JSON.stringify(`must be one of: ${label}`)}, path: ${path} })`)
-    lines.push(`  }`)
-    return lines
-  }
-
-  if (hasType(propSchema)) {
-    const t = propSchema.type as string
-    const wrongType = wrongTypeCondition(raw, t)
-    const typLabel = typeofString(t)
-    if (wrongType) {
-      lines.push(`  if (${presence}(${wrongType})) {`)
-      lines.push(`    errors.push({ message: 'must be ${typLabel}', path: ${path} })`)
-      lines.push(`  }`)
-    }
-  }
-
-  // Multi-type subschema (array `type`, e.g. `["integer","boolean"]`). `hasType`
-  // only recognises a *string* `type`, so this used to emit nothing — and an
-  // empty check list is how {@link generateMatchesExpr} spells "matches
-  // everything", which made `{ not: { type: ["integer","boolean"] } }` reject
-  // every instance. The value is valid when it matches ANY listed type.
-  const typeArray = getTypeArray(propSchema)
-  if (typeArray) {
-    const allWrong = typeArray
-      .map((t) => wrongTypeCondition(raw, t))
-      .filter((c) => c !== '')
-      .map((c) => `(${c})`)
-      .join(' && ')
-    if (allWrong) {
-      const label = typeArray.map((t) => typeofString(t)).join(' or ')
-      lines.push(`  if (${presence}(${allWrong})) {`)
-      lines.push(`    errors.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${path} })`)
-      lines.push(`  }`)
-    }
-  }
-
-  // Constraint and combinator checks run regardless of a declared `type`: they
-  // gate on keyword presence + a runtime-type guard, so a type-less subschema
-  // (a combinator branch like `{ required: [...] }` or `{ minItems: 2 }`) is
-  // still validated rather than collapsing to "matches everything".
-  //
   // This value lives at `path` (a template literal), so anchor the recursion's
   // context there and one nesting level deeper: any nested object/array it emits
   // then builds paths relative to THIS value and mints collision-free variable
@@ -1101,8 +1093,8 @@ const generateValueCheckLines = (
     hoisted: ctx.hoisted,
     rootSchema: ctx.rootSchema,
   }
-  lines.push(...generateConstraintChecks('', raw, path, propSchema, suffix, valueCtx))
-  lines.push(...generateCombinatorChecks('', raw, path, propSchema, suffix, valueCtx))
+
+  lines.push(...generateKeywordChecks('', raw, path, propSchema, suffix, valueCtx, presence))
 
   return lines
 }
@@ -1285,7 +1277,7 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
     const valueChecks = generateValueChecks(
       `\${${kv}}`,
       `${obj}[${kv}]`,
-      `\`${ctx.pathPrefix}/\${${kv}}\``,
+      `\`${ctx.pathPrefix}/\${escapePointer(${kv})}\``,
       sub,
       suffix,
       ctx,
@@ -1306,7 +1298,7 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
     const valueChecks = generateValueChecks(
       `\${${kv}}`,
       `${obj}[${kv}]`,
-      `\`${ctx.pathPrefix}/\${${kv}}\``,
+      `\`${ctx.pathPrefix}/\${escapePointer(${kv})}\``,
       additional,
       suffix,
       ctx,
@@ -1399,10 +1391,10 @@ const generateInlineObjectChecks = (
  * reject every key rather than emit nothing.
  */
 const generatePropertyNameChecks = (nameSchema: JSONSchema, suffix: string, ctx: NestingContext): string[] => {
-  const at = `\`${ctx.pathPrefix}/\${_name}\``
+  const at = `\`${ctx.pathPrefix}/\${escapePointer(_name)}\``
   const nameCtx: NestingContext = {
     objVar: ctx.objVar,
-    pathPrefix: `${ctx.pathPrefix}/\${_name}`,
+    pathPrefix: `${ctx.pathPrefix}/\${escapePointer(_name)}`,
     depth: ctx.depth + 1,
     hoisted: ctx.hoisted,
     rootSchema: ctx.rootSchema,
@@ -1906,6 +1898,11 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
     'if' in schema ||
     'contains' in schema ||
     'prefixItems' in schema ||
+    // A draft-07 tuple: the fixed positions live in an *array* `items` and the
+    // tail in `additionalItems`. Neither is expressible flat, and reading past
+    // them let the guard accept tuples `validateX` rejects.
+    Array.isArray((schema as Record<string, unknown>)['items']) ||
+    'additionalItems' in schema ||
     carriesUnevaluated(schema) ||
     getMjstInstanceOf(schema) !== undefined ||
     getMjstPrimitive(schema) !== undefined
@@ -1913,8 +1910,12 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
     return null
   }
 
-  // enum — same membership test the validator uses.
+  // enum — same membership test the validator uses, but only when membership is
+  // the whole story. `{ enum: [1], type: 'string' }` is unsatisfiable, and
+  // answering it with the bare membership test would have the guard accept `1`
+  // while `validateX` rejects it.
   if (hasEnum(schema)) {
+    if (declaresKeywordOutside(schema, ['enum'])) return null
     return enumMembershipExpr(schema.enum as unknown[], acc)
   }
 
@@ -2013,6 +2014,12 @@ const booleanArrayExpr = (schema: JSONSchema, acc: string): string | null => {
  */
 const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string): string[] | null => {
   if (!isObjectSchema(schema)) return null
+  // A `type: "object"` node can still carry a `$ref`, a `const`/`enum`, or an
+  // `x-mjst` hint alongside its object keywords. None of them is in the parts
+  // below, so mirroring only the object half would make the guard accept what
+  // the validator rejects.
+  if (hasRef(schema) || hasConst(schema) || hasEnum(schema)) return null
+  if (getMjstInstanceOf(schema) !== undefined || getMjstPrimitive(schema) !== undefined) return null
   // These need per-key loops or cross-references the flat form can't express.
   if (hasDependentRequired(schema) || hasPropertyNames(schema) || 'dependentSchemas' in schema) return null
   if (hasMinProperties(schema) || hasMaxProperties(schema) || 'dependencies' in schema) return null
@@ -2154,7 +2161,7 @@ export const generateBooleanGuard = (schema: JSONSchema, typeName: string, _suff
   // which the object parts do not model. Both would make the guard disagree with
   // the validator, and a guard that disagrees is worse than no guard, so those
   // fall back to calling `validateX`.
-  if (declaresObjectType(rewritten)) {
+  if (declaresObjectType(rewritten) && objectRootIsSelfContained(rewritten)) {
     const parts = booleanObjectParts(rewritten, 'input', 'obj')
     if (parts === null) return fallback
     return [
@@ -2200,8 +2207,17 @@ const generateScalarValidator = (
     )
   }
 
+  // Each specialised root shape below owns exactly one keyword and has nowhere
+  // to put a sibling, so a node that declares anything else goes to the general
+  // emitter instead. That is the whole of the top-level half of the sibling bug:
+  // `{ $ref: '#/$defs/s', minLength: 3 }` used to compile to a bare delegation
+  // and accept `"q"`, contradicting this file's own note that a `$ref`'s
+  // siblings still apply.
+  const generalRoot = (): string => generateGeneralRootValidator(schema, typeName, suffix, rootSchema)
+
   // Top-level $ref — delegate entirely
   if (hasRef(schema)) {
+    if (declaresKeywordOutside(schema, ['$ref'])) return generalRoot()
     const delegateName = validatorName(refToName(schema.$ref, suffix))
     return [
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
@@ -2210,9 +2226,12 @@ const generateScalarValidator = (
     ].join('\n')
   }
 
-  // Top-level x-mjst instanceOf (e.g. a schema that is itself a Date)
+  // Top-level x-mjst instanceOf (e.g. a schema that is itself a Date). The hint
+  // stands in for the `type`, so a `type` sibling is owned rather than dropped
+  // — see {@link generateKeywordChecks}.
   const instanceOf = getMjstInstanceOf(schema)
   if (instanceOf) {
+    if (declaresKeywordOutside(schema, [MJST_EXTENSION_KEY, 'type'])) return generalRoot()
     return [
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
       `  if (!(input instanceof ${instanceOf})) {`,
@@ -2226,6 +2245,7 @@ const generateScalarValidator = (
   // Top-level x-mjst primitive (e.g. a schema that is itself a bigint)
   const primitive = getMjstPrimitive(schema)
   if (primitive) {
+    if (declaresKeywordOutside(schema, [MJST_EXTENSION_KEY, 'type'])) return generalRoot()
     return [
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
       `  if (typeof input !== "${primitive}") {`,
@@ -2238,6 +2258,7 @@ const generateScalarValidator = (
 
   // Top-level const
   if (hasConst(schema)) {
+    if (declaresKeywordOutside(schema, ['const'])) return generalRoot()
     const mismatch = constMismatchCondition('input', schema.const)
     const msg = JSON.stringify(`must be ${JSON.stringify(schema.const)}`)
     return [
@@ -2252,6 +2273,7 @@ const generateScalarValidator = (
 
   // Top-level enum
   if (hasEnum(schema)) {
+    if (declaresKeywordOutside(schema, ['enum'])) return generalRoot()
     const label = (schema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
     return [
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
@@ -2448,19 +2470,20 @@ const generateScalarValidator = (
 }
 
 /**
- * Generates the validator for a root schema that carries `unevaluatedProperties`
- * / `unevaluatedItems` itself.
+ * The general-case root validator: every keyword the root declares, composed.
  *
- * Those keywords sit alongside whatever else the root declares — a `$ref`, a
- * `type`, a combinator — and the specialised root emitters each own one of those
- * shapes and return early, so none of them is the right place to hang a sibling
- * keyword that applies to all of them. {@link generateValueChecks} already
- * validates an arbitrary schema against an arbitrary accessor, which is exactly
- * the general case, so an unevaluated root is emitted through it. The only cost
- * is the object fast path, which such a schema could not have used anyway (the
- * flat guard cannot express a coverage sweep).
+ * The specialised root emitters each own one shape — a `$ref`, a `const`, a
+ * `type`, a combinator — and return early, so none of them is the right place to
+ * hang a sibling keyword that applies to all of them. {@link generateValueChecks}
+ * already validates an arbitrary schema against an arbitrary accessor, which is
+ * exactly the general case, so a root too rich for any specialised shape is
+ * emitted through it. The only cost is the object fast path, which such a schema
+ * would mostly not have qualified for anyway.
+ *
+ * A root carrying `unevaluatedProperties` / `unevaluatedItems` always lands here,
+ * since a coverage sweep is a sibling of whatever else the node says.
  */
-const generateUnevaluatedRootValidator = (
+const generateGeneralRootValidator = (
   schema: JSONSchema,
   typeName: string,
   suffix: string,
@@ -2608,10 +2631,15 @@ export const generateValidatorFunction = (
   assertUnevaluatedGeneratable(rewritten, typeName, document, unevaluatedMatcher(suffix, createRootContext(document)))
 
   if (carriesUnevaluated(rewritten)) {
-    return generateUnevaluatedRootValidator(rewritten, typeName, suffix, document)
+    return generateGeneralRootValidator(rewritten, typeName, suffix, document)
   }
 
-  if (declaresObjectType(rewritten)) {
+  // The object emitter walks `properties` and friends and knows nothing about a
+  // `$ref`, a `const`/`enum`, or an `x-mjst` hint the same node may declare, so a
+  // `type: "object"` root carrying one of those goes down the scalar path — where
+  // {@link declaresKeywordOutside} routes it on to the general emitter and every
+  // keyword composes.
+  if (declaresObjectType(rewritten) && objectRootIsSelfContained(rewritten)) {
     return generateObjectValidator(rewritten, typeName, suffix, document)
   }
 

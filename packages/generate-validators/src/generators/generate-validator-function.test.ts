@@ -1,22 +1,7 @@
-import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
+import { evaluateGenerated, evaluateValidator as evalValidator } from './evaluate-generated.test-utils'
 import { generateBooleanGuard, generateValidatorFunction } from './generate-validator-function'
-
-/**
- * Compiles a generated validator (TypeScript source) to JavaScript and returns
- * the exported function, so tests can run real inputs through the emitted code
- * instead of only asserting on its text.
- */
-const evalValidator = (code: string): ((input: unknown, path?: string) => unknown) => {
-  const js = ts.transpileModule(code, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText
-  const moduleExports: Record<string, unknown> = {}
-  new Function('exports', js)(moduleExports)
-  const name = Object.keys(moduleExports).find((exportName) => exportName.startsWith('validate'))
-  return moduleExports[name ?? ''] as (input: unknown, path?: string) => unknown
-}
 
 describe('generate-validator-function', () => {
   it('generates a validator for a required string property', () => {
@@ -1004,11 +989,7 @@ describe('generate-validator-function', () => {
       typeName: string,
     ): { validate: (input: unknown) => unknown; guard: (input: unknown) => boolean } => {
       const code = `${generateValidatorFunction(schema, typeName)}\n\n${generateBooleanGuard(schema, typeName)}`
-      const js = ts.transpileModule(code, {
-        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-      }).outputText
-      const moduleExports: Record<string, unknown> = {}
-      new Function('exports', js)(moduleExports)
+      const moduleExports = evaluateGenerated(code)
       return {
         validate: moduleExports[`validate${typeName}`] as (input: unknown) => unknown,
         guard: moduleExports[`is${typeName}`] as (input: unknown) => boolean,
@@ -1230,11 +1211,7 @@ describe('generate-validator-function', () => {
       typeName: string,
     ): { validate: (i: unknown) => unknown; guard: (i: unknown) => boolean } => {
       const code = `${generateValidatorFunction(schema, typeName)}\n\n${generateBooleanGuard(schema, typeName)}`
-      const js = ts.transpileModule(code, {
-        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-      }).outputText
-      const m: Record<string, unknown> = {}
-      new Function('exports', js)(m)
+      const m = evaluateGenerated(code)
       return {
         validate: m[`validate${typeName}`] as (i: unknown) => unknown,
         guard: m[`is${typeName}`] as (i: unknown) => boolean,

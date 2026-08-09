@@ -1,7 +1,7 @@
 import { validate } from '@amritk/runtime-validators'
-import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
+import { evaluateValidator } from './evaluate-generated.test-utils'
 import { generateValidatorFunction } from './generate-validator-function'
 
 /**
@@ -45,19 +45,9 @@ import { generateValidatorFunction } from './generate-validator-function'
  * `conformance.test.ts`, which links the whole generated set.
  */
 
-const evalValidator = (code: string): ((input: unknown) => unknown) => {
-  const js = ts.transpileModule(code, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText
-  const moduleExports: Record<string, unknown> = {}
-  new Function('exports', js)(moduleExports)
-  const name = Object.keys(moduleExports).find((n) => n.startsWith('validate'))
-  return moduleExports[name ?? ''] as (input: unknown) => unknown
-}
-
 /** Compiles both validators and asserts they agree on every value. */
 const assertParity = (schema: Record<string, unknown>, values: readonly unknown[]): void => {
-  const generated = evalValidator(generateValidatorFunction(schema as never, 'Root'))
+  const generated = evaluateValidator(generateValidatorFunction(schema as never, 'Root'))
   const interpreted = validate(schema as never)
   const divergences: string[] = []
   for (const value of values) {
@@ -511,7 +501,7 @@ describe('generator/interpreter fuzz parity', () => {
       const schema = randomSchema(rng)
       let generated: (v: unknown) => unknown
       try {
-        generated = evalValidator(generateValidatorFunction(schema as never, 'Root'))
+        generated = evaluateValidator(generateValidatorFunction(schema as never, 'Root'))
       } catch (e) {
         divergences.push(`compile threw: ${(e as Error).message}\n  schema: ${JSON.stringify(schema)}`)
         continue
@@ -548,7 +538,7 @@ describe('generator/interpreter fuzz parity', () => {
       const schema = randomUnevaluatedSchema(rng)
       let generated: (v: unknown) => unknown
       try {
-        generated = evalValidator(generateValidatorFunction(schema as never, 'Root'))
+        generated = evaluateValidator(generateValidatorFunction(schema as never, 'Root'))
       } catch (e) {
         // A refusal is a legitimate answer for a shape the flat form cannot see
         // through — but none of the shapes minted here is one, so it is a failure.

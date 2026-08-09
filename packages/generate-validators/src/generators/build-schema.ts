@@ -12,7 +12,12 @@ export type GeneratedFile = {
   content: string
 }
 
-const VALIDATION_RESULT_CONTENT = `/**
+/**
+ * The runtime contract every generated validator imports: the `ValidationResult`
+ * types plus the helpers emitted code calls as free identifiers. Exported so tests
+ * can evaluate the very source that ships instead of reimplementing it.
+ */
+export const VALIDATION_RESULT_CONTENT = `/**
  * A single validation error with a human-readable message and a JSON Pointer
  * path indicating where in the document the error occurred.
  */
@@ -85,6 +90,22 @@ export const allUnique = (arr: readonly unknown[]): boolean => {
   }
   return true
 }
+
+/**
+ * Escapes one JSON Pointer segment (RFC 6901): \`~\` → \`~0\`, \`/\` → \`~1\`, in that
+ * order. Generated error paths are built from *runtime* keys wherever the schema
+ * did not name them — a \`patternProperties\` match, an \`additionalProperties\`
+ * sweep, a \`propertyNames\` loop — and a key containing a \`/\` would otherwise read
+ * back as two segments, so an error on \`{"a/b": …}\` pointed at \`/a/b\`, which is
+ * the child \`b\` of a property \`a\`. Keys the schema *does* name are escaped at
+ * generation time instead, and \`@amritk/runtime-validators\` escapes the same way,
+ * so all three agree.
+ *
+ * The \`indexOf\` pre-test keeps the common key — no \`/\`, no \`~\` — off the replace
+ * path entirely, which is what the interpreter does for the same reason.
+ */
+export const escapePointer = (key: string): string =>
+  key.indexOf('/') !== -1 || key.indexOf('~') !== -1 ? key.replace(/~/g, '~0').replace(/\\//g, '~1') : key
 `
 
 /**
@@ -134,9 +155,22 @@ export const buildValidatorSchema = async (
   const files: GeneratedFile[] = []
 
   walkRefGraph(rootSchema, rootTypeName, { typeSuffix, ...(schemas !== undefined ? { schemas } : {}) }, (node) => {
-    // `validation-result` and `index` are reserved output filenames, so never
-    // let a definition of either name overwrite them.
-    if (node.filename === 'validation-result' || node.filename === 'index') return
+    // `validation-result` and `index` are reserved output filenames. Skipping a
+    // definition that wants one of them looked safe and was not: nothing stopped
+    // the *importers* from being generated, so a `$defs.index` produced a
+    // `root.ts` importing `validateIndex` from the barrel — a `TS2305` at build
+    // time and a `SyntaxError` at runtime. Refusing here is what
+    // `walkRefGraph` already does for two definitions that want one filename;
+    // renaming has to be the caller's call, since the name is what every emitted
+    // import is keyed on.
+    if (node.filename === 'validation-result' || node.filename === 'index') {
+      const owner = node.isRoot ? `the root type "${node.typeName}"` : `"${node.ref}"`
+      const purpose = node.filename === 'index' ? 'the generated barrel' : "the generated validators' runtime contract"
+      throw new Error(
+        `${owner} generates the file "${node.filename}.ts", which is reserved for ${purpose}. Rename the ` +
+          'definition (or pass a different root type name) so it gets a file of its own.',
+      )
+    }
 
     const content = generateValidatorFile(node.schema, node.typeName, {
       rootSchema: node.rootSchema,

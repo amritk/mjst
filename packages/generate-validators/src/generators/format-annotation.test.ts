@@ -1,7 +1,7 @@
 import { validate } from '@amritk/runtime-validators'
-import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
+import { evaluateValidator } from './evaluate-generated.test-utils'
 import { generateValidatorFunction } from './generate-validator-function'
 
 /**
@@ -16,16 +16,6 @@ import { generateValidatorFunction } from './generate-validator-function'
  * expectation, not work around it.
  */
 
-const evalValidator = (code: string): ((input: unknown) => unknown) => {
-  const js = ts.transpileModule(code, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText
-  const moduleExports: Record<string, unknown> = {}
-  new Function('exports', js)(moduleExports)
-  const name = Object.keys(moduleExports).find((n) => n.startsWith('validate'))
-  return moduleExports[name ?? ''] as (input: unknown) => unknown
-}
-
 const SCHEMA = {
   type: 'object',
   properties: { id: { type: 'string', format: 'uuid' } },
@@ -35,7 +25,7 @@ const SCHEMA = {
 describe('format is an annotation', () => {
   it('emits no check, matching the interpreter default and not formats: all', () => {
     const source = generateValidatorFunction(SCHEMA as never, 'Root')
-    const generated = evalValidator(source)
+    const generated = evaluateValidator(source)
     const badFormat = { id: 'not-a-uuid' }
 
     // Nothing in the emitted source references the keyword or its value.
@@ -56,7 +46,7 @@ describe('format is an annotation', () => {
     // reading of the spec, ignoring `unevaluatedProperties` is not. So the
     // generator either enforces it…
     const schema = { type: 'object', properties: { a: {} }, unevaluatedProperties: false }
-    const generated = evalValidator(generateValidatorFunction(schema as never, 'Root'))
+    const generated = evaluateValidator(generateValidatorFunction(schema as never, 'Root'))
     expect(generated({ a: 1 })).toBe(true)
     expect(generated({ b: 1 })).not.toBe(true)
     expect(validate(schema as never)({ b: 1 })).not.toBe(true)

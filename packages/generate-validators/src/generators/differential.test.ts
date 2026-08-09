@@ -1,7 +1,7 @@
 import Ajv2020 from 'ajv/dist/2020'
-import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
+import { evaluateValidator as evalValidator } from './evaluate-generated.test-utils'
 import { generateValidatorFunction } from './generate-validator-function'
 
 /**
@@ -20,63 +20,6 @@ import { generateValidatorFunction } from './generate-validator-function'
  * judgement call). The schema is rooted on an object so `patternProperties` /
  * `additionalProperties` are exercised heavily.
  */
-
-// Reference implementations of the runtime helpers the generated code imports
-// from `validation-result.js` (structural `const` → `valuesEqual`, structural
-// `uniqueItems` → `allUnique`). The generator emits them as free identifiers, so
-// the harness injects them into the eval scope. Mirrors build-schema.ts; any
-// drift surfaces as a divergence from Ajv, which is the whole point of this test.
-const valuesEqual = (a: unknown, b: unknown): boolean => {
-  if (a === b) return true
-  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
-  const aArray = Array.isArray(a)
-  const bArray = Array.isArray(b)
-  if (aArray !== bArray) return false
-  if (aArray) {
-    const aa = a as unknown[]
-    const bb = b as unknown[]
-    if (aa.length !== bb.length) return false
-    for (let i = 0; i < aa.length; i++) if (!valuesEqual(aa[i], bb[i])) return false
-    return true
-  }
-  const ao = a as Record<string, unknown>
-  const bo = b as Record<string, unknown>
-  const keys = Object.keys(ao)
-  if (keys.length !== Object.keys(bo).length) return false
-  for (const key of keys) {
-    if (!Object.hasOwn(bo, key) || !valuesEqual(ao[key], bo[key])) return false
-  }
-  return true
-}
-const allUnique = (arr: readonly unknown[]): boolean => {
-  const len = arr.length
-  if (len < 2) return true
-  let allPrimitive = true
-  for (let i = 0; i < len; i++) {
-    const v = arr[i]
-    if (v !== null && typeof v === 'object') {
-      allPrimitive = false
-      break
-    }
-  }
-  if (allPrimitive) return new Set(arr).size === len
-  for (let i = 0; i < len; i++) {
-    for (let j = i + 1; j < len; j++) {
-      if (valuesEqual(arr[i], arr[j])) return false
-    }
-  }
-  return true
-}
-
-const evalValidator = (code: string): ((input: unknown) => unknown) => {
-  const js = ts.transpileModule(code, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText
-  const moduleExports: Record<string, unknown> = {}
-  new Function('exports', 'valuesEqual', 'allUnique', js)(moduleExports, valuesEqual, allUnique)
-  const name = Object.keys(moduleExports).find((n) => n.startsWith('validate'))
-  return moduleExports[name ?? ''] as (input: unknown) => unknown
-}
 
 // Deterministic PRNG so a failure reproduces exactly. (mulberry32)
 const makeRng = (seed: number): (() => number) => {

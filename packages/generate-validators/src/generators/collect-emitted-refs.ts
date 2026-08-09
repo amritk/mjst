@@ -47,11 +47,13 @@ export const collectEmittedRefs = (
     collectCoverageRefs(schema as JSONSchema, refs, rootSchema)
   }
 
-  // A `$ref` is a leaf: the emitter delegates the whole value to the referenced
-  // validator, so record the ref and do not descend past it.
+  // A `$ref` is one check among the node's others, not the end of it: per
+  // 2020-12 the siblings apply to the same value, and the emitter runs them
+  // after the delegation. So record the ref and keep walking — a
+  // `{ $ref, allOf: [{ $ref }] }` emits two calls, and treating the node as a
+  // leaf collected only the first, leaving the second an undefined identifier.
   if (typeof schema['$ref'] === 'string') {
     refs.push(schema['$ref'])
-    return refs
   }
 
   // `properties` and `patternProperties` hold subschemas as object *values*; the
@@ -83,6 +85,10 @@ export const collectEmittedRefs = (
   ]) {
     if (key in schema) collectEmittedRefs(schema[key], refs, rootSchema)
   }
+
+  // `additionalItems` is the tail schema of a draft-07 tuple (`items: [...]`),
+  // which the emitter validates like any other tail.
+  if ('additionalItems' in schema) collectEmittedRefs(schema['additionalItems'], refs, rootSchema)
 
   for (const key of ['oneOf', 'anyOf', 'allOf', 'prefixItems']) {
     const list = schema[key]

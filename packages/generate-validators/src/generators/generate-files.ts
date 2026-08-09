@@ -74,11 +74,14 @@ export const generateValidatorFile = (
   let result = `import type { ValidationResult, ValidationError } from './validation-result.js'\n`
 
   // Structural `const` checks call the runtime `valuesEqual` helper; structural
-  // `uniqueItems` checks call `allUnique`. Both live in `validation-result.js`;
-  // import each only when the generated body (validator or boolean guard) uses
-  // it, so files that need neither carry no unused import.
+  // `uniqueItems` checks call `allUnique`; error paths built from a runtime key
+  // call `escapePointer`. All live in `validation-result.js`; import each only
+  // when the generated body (validator or boolean guard) uses it, so files that
+  // need none carry no unused import.
   const body = validatorFunction + booleanGuard
-  const runtimeHelpers = (['valuesEqual', 'allUnique'] as const).filter((name) => body.includes(`${name}(`))
+  const runtimeHelpers = (['valuesEqual', 'allUnique', 'escapePointer'] as const).filter((name) =>
+    body.includes(`${name}(`),
+  )
   if (runtimeHelpers.length > 0) {
     result += `import { ${runtimeHelpers.join(', ')} } from './validation-result.js'\n`
   }

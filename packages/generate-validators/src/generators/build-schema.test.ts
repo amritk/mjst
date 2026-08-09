@@ -90,22 +90,44 @@ describe('build-schema', () => {
     expect(indexFile?.content).toContain('validateDocument')
   })
 
-  it('does not generate a file named validation-result for a schema ref', async () => {
-    const schema: JSONSchema = {
-      type: 'object',
-      properties: {
-        result: { $ref: '#/$defs/validation-result' },
-      },
-      $defs: {
-        'validation-result': { type: 'object' },
-      },
-    }
+  // `validation-result.ts` and `index.ts` are mjst's own output files. A
+  // definition wanting one of those names used to be skipped silently, which
+  // only looked safe: the *importer* was still generated, so `document.ts` came
+  // out importing `validateValidationResult` from the runtime contract — a
+  // `TS2305` for anyone building the output, and a `SyntaxError` for anyone
+  // running it. Refusing at generation time is the same answer `walkRefGraph`
+  // gives two definitions that want one filename.
+  for (const reserved of ['validation-result', 'index'] as const) {
+    it(`refuses a $defs entry that would overwrite ${reserved}.ts`, async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { result: { $ref: `#/$defs/${reserved}` } },
+        $defs: { [reserved]: { type: 'object' } },
+      }
 
-    const files = await buildValidatorSchema(schema, 'Document')
-    // Should still have exactly one validation-result.ts (the runtime contract)
-    const vrFiles = files.filter((f) => f.filename === 'validation-result.ts')
-    expect(vrFiles).toHaveLength(1)
-    expect(vrFiles[0]?.content).toContain('export type ValidationResult')
+      await expect(buildValidatorSchema(schema, 'Document')).rejects.toThrow(
+        `"#/$defs/${reserved}" generates the file "${reserved}.ts", which is reserved`,
+      )
+    })
+  }
+
+  it('refuses a root type name that would overwrite index.ts', async () => {
+    // The root derives its filename from the type name, so `Index` collides just
+    // as a definition does — and used to leave the output with no root validator
+    // at all, only a barrel re-exporting nothing.
+    await expect(buildValidatorSchema({ type: 'string' }, 'Index')).rejects.toThrow(
+      'the root type "Index" generates the file "index.ts", which is reserved',
+    )
+  })
+
+  it('still emits exactly one validation-result.ts runtime contract', async () => {
+    const files = await buildValidatorSchema(
+      { type: 'object', properties: { result: { $ref: '#/$defs/result' } }, $defs: { result: { type: 'object' } } },
+      'Document',
+    )
+    const contracts = files.filter((file) => file.filename === 'validation-result.ts')
+    expect(contracts).toHaveLength(1)
+    expect(contracts[0]?.content).toContain('export type ValidationResult')
   })
 
   it('produces generated validators that agree with @scalar/openapi-parser on a valid document', async () => {
