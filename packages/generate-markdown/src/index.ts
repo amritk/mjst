@@ -196,6 +196,24 @@ const displayType = (prop: SchemaProperty): string => {
  */
 const collapseLineEndings = (value: string): string => value.replace(/[\r\n]+/g, ' ')
 
+/**
+ * Wraps text in a markdown code span that cannot be escaped from.
+ *
+ * A fixed single-backtick delimiter is not enough: a backtick *in the text*
+ * closes the span, and the remainder lands in ordinary inline context where raw
+ * HTML, links and emphasis are all live. CommonMark's rule is that a span is
+ * delimited by a backtick run longer than any run inside it, and that one
+ * leading and trailing space is stripped — so pad when the text would otherwise
+ * begin or end with a backtick, or when its own edge spaces need preserving.
+ */
+const codeSpan = (text: string): string => {
+  const longest = (text.match(/`+/g) ?? []).reduce((max, run) => Math.max(max, run.length), 0)
+  const fence = '`'.repeat(longest + 1)
+  const needsPad = text === '' || /^[`\s]|[`\s]$/.test(text)
+  const pad = needsPad ? ' ' : ''
+  return `${fence}${pad}${text}${pad}${fence}`
+}
+
 const escapeHtml = (value: string): string =>
   collapseLineEndings(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
@@ -238,7 +256,7 @@ const formatList = (values: readonly unknown[]): string =>
  */
 const renderDetailCell = (prop: SchemaProperty): string => {
   // First paragraph gives enough context without making the table unwieldy
-  const desc = escapeHtml(asText(prop.description).split(/\r?\n\r?\n/)[0] ?? '')
+  const desc = escapeHtml(asText(prop.description).split(/(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)/)[0] ?? '')
   const lines = [desc]
   if (asArray(prop.enum).length > 0) lines.push(`<strong>Allowed:</strong> ${formatList(prop.enum ?? [])}`)
   if (asArray(prop.examples).length > 0) lines.push(`<strong>Examples:</strong> ${formatList(prop.examples ?? [])}`)
@@ -458,7 +476,7 @@ const renderTables = (
   // schema-controlled text, and it is the one place a property name reaches the
   // output outside a `<td>`.
   const block = segments.length
-    ? `<a id="${anchors.get(anchorKey(segments)) ?? anchorId(path)}"></a>\n#### \`${collapseLineEndings(path)}\`\n\n${table}`
+    ? `<a id="${anchors.get(anchorKey(segments)) ?? anchorId(path)}"></a>\n#### ${codeSpan(collapseLineEndings(path))}\n\n${table}`
     : table
 
   const nested = entries.flatMap(([name, entry]) => {
@@ -519,8 +537,14 @@ export const generateMarkdown = async (): Promise<void> => {
   let existing: string | undefined
   try {
     existing = await readFile(readmePath, 'utf-8')
-  } catch {
-    // No README yet — safe to create one holding just the table.
+  } catch (error) {
+    // Only a missing README means "safe to create one". Swallowing every read
+    // error let an existing-but-unreadable README (EACCES, EISDIR) be replaced
+    // wholesale by the bootstrap path — the opposite of this module's documented
+    // refusal to overwrite hand-written content.
+    if ((error as NodeJS.ErrnoException)?.code !== undefined && (error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error
+    }
     existing = undefined
   }
 

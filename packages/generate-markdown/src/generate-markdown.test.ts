@@ -1308,16 +1308,60 @@ describe('generate-readme', () => {
       const heading = String(content)
         .split('\n')
         .find((line) => line.startsWith('#### '))
-      expect(heading).toBe('#### `a ``` # pwned <script>x</script>`')
+      // The delimiter is a backtick run longer than any run in the name, so the
+      // name cannot close it early and escape into inline context.
+      expect(heading).toBe('#### ````a ``` # pwned <script>x</script>````')
     })
 
-    it('truncates a CRLF-authored description to its first paragraph', async () => {
-      mockFs({ title: 'T', properties: { a: { type: 'string', description: 'First para.\r\n\r\nSECOND para.' } } })
+    it('keeps a name containing a backtick inside its code span', async () => {
+      // A single-backtick delimiter is closed by the name's own backtick, and
+      // the remainder lands in inline context where raw HTML is live.
+      mockFs({
+        title: 'T',
+        properties: { 'a`<b>OWNED</b>': { type: 'object', properties: { x: { type: 'string' } } } },
+      })
 
       await generateMarkdown()
 
       const [, content] = writeFileMock.mock.calls[0] ?? []
-      expect(content).not.toContain('SECOND para.')
+      const heading = String(content)
+        .split('\n')
+        .find((line) => line.startsWith('#### '))
+      expect(heading).toBe('#### ``a`<b>OWNED</b>``')
+    })
+
+    it('preserves a name that is only backticks, or that has edge spaces', async () => {
+      mockFs({
+        title: 'T',
+        properties: { '` a `': { type: 'object', properties: { x: { type: 'string' } } } },
+      })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      const heading = String(content)
+        .split('\n')
+        .find((line) => line.startsWith('#### '))
+      // Padded, because CommonMark strips one leading and trailing space — which
+      // is exactly what lets the name's own backticks and spaces survive.
+      expect(heading).toBe('#### `` ` a ` ``')
+    })
+
+    it('truncates a CRLF-authored description to its first paragraph', async () => {
+      // CommonMark ends a paragraph at any blank line: CRLF, CR-only, and a
+      // line holding only spaces or tabs.
+      for (const separator of ['\r\n\r\n', '\r\r', '\n   \n', '\r\n\r']) {
+        writeFileMock.mockReset()
+        mockFs({
+          title: 'T',
+          properties: { a: { type: 'string', description: `First para.${separator}SECOND para.` } },
+        })
+
+        await generateMarkdown()
+
+        const [, content] = writeFileMock.mock.calls[0] ?? []
+        expect(content).not.toContain('SECOND para.')
+      }
     })
 
     it('tolerates null members inside the guarded keywords', async () => {

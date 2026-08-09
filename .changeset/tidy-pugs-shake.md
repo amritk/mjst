@@ -47,4 +47,12 @@ the whole package:
 - The splice takes the start marker closest to the region rather than the
   document's first, so one quoted in a code fence above it no longer deletes
   everything in between.
+- The heading's code span uses a backtick run longer than any run in the name,
+  padding where needed. A fixed single-backtick delimiter was closed by a
+  backtick *in the name*, dropping the remainder into inline context where raw
+  HTML, links and emphasis are live.
+- The description paragraph split recognises CR-only and whitespace-only blank
+  lines, which CommonMark also treats as paragraph breaks.
+- A README that exists but cannot be read is no longer treated as absent and
+  overwritten; only `ENOENT` means "safe to create one".
 
