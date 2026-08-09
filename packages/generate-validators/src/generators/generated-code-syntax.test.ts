@@ -109,6 +109,60 @@ describe('generated-code-syntax', () => {
     expect(syntaxErrors(generateValidatorFunction(arraySchema, 'UnevalItems'))).toEqual([])
   })
 
+  /**
+   * The one wrong-code shape parsing cannot see.
+   *
+   * Every `errors.push(` is rewritten to `(errors ??= []).push(`, so any report
+   * emitted at statement position starts with `(`. If the line before it does not
+   * end in `{` or `}`, automatic semicolon insertion does not separate them and
+   * the two fuse into a *call* — valid syntax, and the parser is happy, but the
+   * report becomes an argument to whatever came before and is never made. That
+   * shipped once: `{ "$ref": "…", "not": {} }` compiled to
+   * `if (_r !== true) (errors ??= []).push(..._r.errors)(errors ??= []).push({…})`
+   * and accepted an instance the schema forbids.
+   *
+   * So this asserts the invariant directly rather than the one instance of it: no
+   * emitted statement begins with `(` unless the line above continues into it.
+   */
+  const CONTINUES = /(\{|\}|\(|,|&&|\|\||=>|\+|\?|:|=)$/
+
+  const fusedStatements = (code: string): string[] => {
+    const lines = code.split('\n')
+    const bad: string[] = []
+    for (let i = 1; i < lines.length; i++) {
+      const line = (lines[i] as string).trim()
+      if (!line.startsWith('(')) continue
+      let previous = ''
+      for (let j = i - 1; j >= 0 && previous === ''; j--) previous = (lines[j] as string).trim()
+      if (!CONTINUES.test(previous)) bad.push(`${previous}\n${line}`)
+    }
+    return bad
+  }
+
+  // Every shape that reaches a report at statement position: an always-matching
+  // `not` (which is where it bit), next to each kind of neighbour that can
+  // precede it.
+  const FUSION_RISKS: ReadonlyArray<readonly [string, JSONSchema]> = [
+    ['not after a $ref delegation', { $ref: '#/$defs/n', not: {}, $defs: { n: { type: 'number' } } }],
+    ['not after an item binding', { type: 'array', items: { not: {} } }],
+    ['not after the _root binding', { type: 'object', not: {} }],
+    ['not after a _dep binding', { type: 'object', dependentSchemas: { t: { not: {} } } }],
+    ['not in a tuple position', { type: 'array', prefixItems: [{ not: true }] }],
+    ['not under propertyNames', { type: 'object', propertyNames: { not: {} } }],
+    ['not under additionalProperties', { type: 'object', additionalProperties: { not: {} } }],
+    ['not inside allOf after a ref', { $ref: '#/$defs/n', allOf: [{ not: {} }], $defs: { n: { type: 'number' } } }],
+    ['then with an always-true if', { if: true, then: { not: {} } }],
+    ['nested not', { type: 'object', properties: { a: { not: {} } }, required: ['a'] }],
+  ]
+
+  for (const [label, schema] of FUSION_RISKS) {
+    it(`emits no statement that fuses onto the line above it — ${label}`, () => {
+      const code = `${generateValidatorFunction(schema, 'Root')}\n\n${generateBooleanGuard(schema, 'Root')}`
+      expect(syntaxErrors(code)).toEqual([])
+      expect(fusedStatements(code)).toEqual([])
+    })
+  }
+
   it('emits a parseable boolean guard for a mixed object schema', () => {
     const schema: JSONSchema = {
       type: 'object',
