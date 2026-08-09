@@ -593,4 +593,70 @@ describe('keyword-composition', () => {
     expect(result).not.toBe(true)
     expect(result.errors.map((error) => error.path)).toEqual(['/plain'])
   })
+
+  /**
+   * The emitter folds branches away; `collectEmittedRefs` decides which `$ref`s
+   * still become calls. Those two have to agree, and twice now they have not —
+   * once leaving a dead import, once (in the other direction) the risk of a name
+   * nothing defines. Reading them side by side is what missed it both times, so
+   * this builds schemas that deliberately mix foldable branches with `$ref`-
+   * carrying ones, links the whole emitted set, and runs it.
+   */
+  it('links and runs schemas whose folded branches carry $refs', { timeout: 60_000 }, async () => {
+    const rng = ((seed: number) => () => {
+      seed = (seed + 0x6d2b79f5) | 0
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    })(0xf01d)
+    const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rng() * xs.length)] as T
+
+    const defs = { a: { type: 'string' }, b: { type: 'number' }, c: { minLength: 2 } }
+    // Everything the emitter treats as "matches everything", so the branch — and
+    // in an `anyOf`, the whole keyword — disappears.
+    const foldable: readonly unknown[] = [true, {}, { title: 'x' }, { $comment: 'z' }, { default: 1 }]
+    const reffy = (): unknown => ({ $ref: `#/$defs/${pick(['a', 'b', 'c'])}` })
+    const real: readonly (() => unknown)[] = [
+      reffy,
+      () => ({ not: reffy() }),
+      () => ({ allOf: [reffy()] }),
+      () => false,
+    ]
+    const branch = (): unknown => (rng() < 0.45 ? pick(foldable) : pick(real)())
+
+    const shapes: readonly (() => Record<string, unknown>)[] = [
+      () => ({ anyOf: [branch(), branch()] }),
+      () => ({ oneOf: [branch(), branch()] }),
+      () => ({ allOf: [branch(), branch()] }),
+      () => ({ if: branch(), then: branch(), else: branch() }),
+      () => ({ if: branch(), then: branch() }),
+      () => ({ if: branch(), else: branch() }),
+      () => ({ type: 'object', properties: { p: { anyOf: [branch(), branch()] } } }),
+      () => ({ type: 'array', items: { if: branch(), then: branch(), else: branch() } }),
+    ]
+    const values: readonly unknown[] = ['a', 'abc', 1, true, null, [], [1], {}, { p: 'x' }]
+
+    const failures: string[] = []
+    for (let i = 0; i < 250 && failures.length < 5; i++) {
+      const schema = { ...pick(shapes)(), $defs: defs }
+      const files = await buildValidatorSchema(schema as never, 'Root')
+      // A missing import surfaces here, as a module that will not link or a name
+      // that is not defined when the validator runs.
+      const generated = linkGenerated<(input: unknown) => unknown>(files, 'index', 'validateRoot')
+      const interpret = validate(schema as never)
+      for (const value of values) {
+        let ours: boolean | string
+        try {
+          ours = generated(value) === true
+        } catch (error) {
+          ours = `threw:${(error as Error).message}`
+        }
+        const theirs = interpret(value) === true
+        if (ours !== theirs) {
+          failures.push(`${JSON.stringify(schema)} on ${JSON.stringify(value)} → ours=${ours} interpreter=${theirs}`)
+        }
+      }
+    }
+    expect(failures, failures.join('\n')).toEqual([])
+  })
 })
