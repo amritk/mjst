@@ -172,7 +172,7 @@ const displayType = (prop: SchemaProperty): string => {
   if (prop.const !== undefined) return jsonTypeOf(prop.const)
   for (const variants of [prop.anyOf, prop.oneOf, prop.allOf]) {
     if (asArray(variants).length > 0 && variants) {
-      const union = unionOf(variants.map(displayType).filter((type) => type !== 'null'))
+      const union = unionOf(variants.map((variant) => displayType(asSchema(variant))).filter((type) => type !== 'null'))
       if (union.length > 0) return union
     }
   }
@@ -185,15 +185,19 @@ const displayType = (prop: SchemaProperty): string => {
  * Escapes the HTML-significant characters so schema text (and CLI flags such as
  * `--schema <path>`) renders literally inside the HTML table cells.
  */
+/**
+ * Collapses line endings to a single space. CommonMark counts a bare CR as a
+ * line ending, so both are collapsed rather than just `\n`.
+ *
+ * Every piece of schema text needs this before it reaches the output, for two
+ * different reasons: inside the `<table>` a line ending ends the HTML block
+ * mid-row, and inside the `####` heading it escapes the code span and lets the
+ * rest of the name open a fence, a heading, a list, or a raw HTML block.
+ */
+const collapseLineEndings = (value: string): string => value.replace(/[\r\n]+/g, ' ')
+
 const escapeHtml = (value: string): string =>
-  value
-    // A line ending inside the <table> ends its HTML block mid-row, so every tag
-    // after it renders as literal text. CommonMark counts a bare CR as a line
-    // ending too, which is why both are collapsed rather than just `\n`.
-    .replace(/[\r\n]+/g, ' ')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+  collapseLineEndings(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
 /**
  * Formats a JSON value for inline display inside an HTML table cell. Strings get
@@ -234,7 +238,7 @@ const formatList = (values: readonly unknown[]): string =>
  */
 const renderDetailCell = (prop: SchemaProperty): string => {
   // First paragraph gives enough context without making the table unwieldy
-  const desc = escapeHtml(asText(prop.description).split('\n\n')[0] ?? '')
+  const desc = escapeHtml(asText(prop.description).split(/\r?\n\r?\n/)[0] ?? '')
   const lines = [desc]
   if (asArray(prop.enum).length > 0) lines.push(`<strong>Allowed:</strong> ${formatList(prop.enum ?? [])}`)
   if (asArray(prop.examples).length > 0) lines.push(`<strong>Examples:</strong> ${formatList(prop.examples ?? [])}`)
@@ -250,9 +254,10 @@ const anyProperty = (
   properties: Readonly<Record<string, SchemaProperty>> | undefined,
   predicate: (prop: SchemaProperty) => boolean,
 ): boolean =>
-  Object.values(properties ?? {}).some(
-    (prop) => predicate(prop) || (prop.properties ? anyProperty(prop.properties, predicate) : false),
-  )
+  Object.values(properties ?? {}).some((entry) => {
+    const prop = asSchema(entry)
+    return predicate(prop) || (prop.properties ? anyProperty(prop.properties, predicate) : false)
+  })
 
 /**
  * Reads an `x-` extension that is declared as a string. The schema is parsed
@@ -271,6 +276,13 @@ const stringExtension = (value: unknown): string | undefined =>
  */
 const asArray = <T>(value: readonly T[] | undefined): readonly T[] => (Array.isArray(value) ? value : [])
 
+/**
+ * A schema node, defensively. `asArray` guards the container but not its
+ * members, so `anyOf: [null]` and `properties: {a: null}` still reached a
+ * property read on `null`.
+ */
+const asSchema = (value: unknown): SchemaProperty => (isObject(value) ? (value as SchemaProperty) : {})
+
 /** The `description` keyword, defensively. See {@link asArray}. */
 const asText = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -279,12 +291,10 @@ const asText = (value: unknown): string => (typeof value === 'string' ? value : 
  * required. Required-ness lives on the parent's `required` array rather than on
  * the property itself, so this walks the `required`/`properties` pairs directly.
  */
-const anyRequired = (node: {
-  readonly required?: readonly string[]
-  readonly properties?: Readonly<Record<string, SchemaProperty>>
-}): boolean => {
+const anyRequired = (input: unknown): boolean => {
+  const node = asSchema(input)
   if (asArray(node.required).length > 0) return true
-  return node.properties ? Object.values(node.properties).some(anyRequired) : false
+  return isObject(node.properties) ? Object.values(node.properties).some(anyRequired) : false
 }
 
 /**
@@ -349,7 +359,8 @@ const objectPaths = (
   properties: Readonly<Record<string, SchemaProperty>> | undefined,
   segments: readonly string[],
 ): (readonly string[])[] =>
-  Object.entries(properties ?? {}).flatMap(([name, prop]) => {
+  Object.entries(properties ?? {}).flatMap(([name, entry]) => {
+    const prop = asSchema(entry)
     if (!isObjectWithProperties(prop) || !prop.properties) return []
     const child = [...segments, name]
     return [child, ...objectPaths(prop.properties, child)]
@@ -438,17 +449,20 @@ const renderTables = (
   anchors: ReadonlyMap<string, string>,
 ): readonly string[] => {
   const entries = Object.entries(properties ?? {})
-  const rows = entries.map(([name, prop]) => renderRow(name, prop, required, [...segments, name], columns, anchors))
+  const rows = entries.map(([name, prop]) =>
+    renderRow(name, asSchema(prop), required, [...segments, name], columns, anchors),
+  )
   const table = ['<table>', renderTableHead(columns), '<tbody>', ...rows, '</tbody>', '</table>'].join('\n')
   const path = segments.join('.')
   // The heading is escaped for the same reason the cells are: the path is
   // schema-controlled text, and it is the one place a property name reaches the
   // output outside a `<td>`.
   const block = segments.length
-    ? `<a id="${anchors.get(anchorKey(segments)) ?? anchorId(path)}"></a>\n#### \`${path}\`\n\n${table}`
+    ? `<a id="${anchors.get(anchorKey(segments)) ?? anchorId(path)}"></a>\n#### \`${collapseLineEndings(path)}\`\n\n${table}`
     : table
 
-  const nested = entries.flatMap(([name, prop]) => {
+  const nested = entries.flatMap(([name, entry]) => {
+    const prop = asSchema(entry)
     if (!isObjectWithProperties(prop) || !prop.properties) return []
     return renderTables(prop.properties, new Set(asArray(prop.required)), [...segments, name], columns, anchors)
   })
@@ -461,7 +475,9 @@ const renderTables = (
  * table for every nested object property. Descriptions use the first paragraph
  * from the schema so each table stays readable without losing context.
  */
-const renderConfigTable = (schema: ConfigSchema): string => {
+const renderConfigTable = (input: ConfigSchema): string => {
+  // A schema file holding `null` parses fine and reached `schema.required`.
+  const schema = (isObject(input) ? input : {}) as ConfigSchema
   const required = new Set(asArray(schema.required))
   const columns = resolveColumns(schema)
   const anchors = buildAnchorIds(schema.properties)
@@ -521,14 +537,22 @@ export const generateMarkdown = async (): Promise<void> => {
 
   let content: string
   if (existing === undefined) {
-    content = table
+    // With the markers, so a second run can splice instead of refusing.
+    content = `${START_MARKER}\n${table}\n${END_MARKER}\n`
   } else {
-    const startIdx = existing.indexOf(START_MARKER)
     // Search for the end marker *after* the start marker. Taking the document's
     // first one let prose above the region ("the table ends at <!-- … -->")
     // supply it, and the resulting backwards slice duplicated the span between
     // the two indices on every run instead of replacing it.
+    let startIdx = existing.indexOf(START_MARKER)
     const endIdx = startIdx === -1 ? -1 : existing.indexOf(END_MARKER, startIdx + START_MARKER.length)
+    // A start marker *between* the two — one quoted in a code fence documenting
+    // the markers, say — is the real opener. Taking the document's first one
+    // silently deleted everything from the decoy down to the real region.
+    if (startIdx !== -1 && endIdx !== -1) {
+      const lastStart = existing.lastIndexOf(START_MARKER, endIdx)
+      if (lastStart > startIdx) startIdx = lastStart
+    }
     // Both markers present: splice the table in and keep everything else. If a
     // marker is missing, overwriting would silently wipe the existing README, so
     // fail loudly and let the user add the markers where they want the table.

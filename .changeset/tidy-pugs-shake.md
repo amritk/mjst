@@ -34,4 +34,17 @@ the whole package:
 - Keywords whose value has the wrong type (`enum: "abc"`, `required: 5`,
   `description: 5`, `properties: null`) no longer throw a bare `TypeError`
   naming neither the property nor the file.
+- The `####` heading collapses line endings. It is the one place a property name
+  reaches the output neither escaped nor collapsed, so a newline ended the code
+  span and the rest of the name opened a fence, heading, list or raw HTML block
+  that swallowed the tables below it.
+- A CRLF-authored `description` is truncated to its first paragraph, as an
+  LF-authored one already was.
+- `null` members inside `anyOf`/`oneOf`/`allOf` and `properties`, and a schema
+  file holding `null`, no longer throw.
+- The bootstrap README is written with the markers, so a second run can splice
+  it instead of refusing to touch its own output.
+- The splice takes the start marker closest to the region rather than the
+  document's first, so one quoted in a code fence above it no longer deletes
+  everything in between.
 

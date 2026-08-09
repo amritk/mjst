@@ -1129,8 +1129,11 @@ describe('generate-readme', () => {
       await generateMarkdown()
 
       const [, content] = writeFileMock.mock.calls[0] ?? []
-      expect(content).not.toContain('<!-- config-table-start -->')
-      expect(content).toContain('&lt;!-- config-table-start --&gt;')
+      // The bootstrap README carries the markers itself, so check the table
+      // region rather than the whole document.
+      const table = String(content).slice(String(content).indexOf('<table>'))
+      expect(table).not.toContain('<!-- config-table-start -->')
+      expect(table).toContain('&lt;!-- config-table-start --&gt;')
     })
 
     it('refuses to write when a marker reaches the heading, which is not HTML', async () => {
@@ -1283,6 +1286,117 @@ describe('generate-readme', () => {
         mockFs(schema)
         await expect(generateMarkdown()).resolves.toBeUndefined()
       }
+    })
+  })
+
+  describe('round-3 hardening', () => {
+    it('collapses line endings in the heading path', async () => {
+      // The heading is the one place a property name reaches the output neither
+      // escaped nor collapsed. A newline ends the code span, and the rest of the
+      // name opens a fence, heading, list or raw HTML block that swallows the
+      // tables below it.
+      mockFs({
+        title: 'T',
+        properties: {
+          'a\n```\n# pwned\n<script>x</script>': { type: 'object', properties: { x: { type: 'string' } } },
+        },
+      })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      const heading = String(content)
+        .split('\n')
+        .find((line) => line.startsWith('#### '))
+      expect(heading).toBe('#### `a ``` # pwned <script>x</script>`')
+    })
+
+    it('truncates a CRLF-authored description to its first paragraph', async () => {
+      mockFs({ title: 'T', properties: { a: { type: 'string', description: 'First para.\r\n\r\nSECOND para.' } } })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).not.toContain('SECOND para.')
+    })
+
+    it('tolerates null members inside the guarded keywords', async () => {
+      // asArray guards the container; these reach a property read on the member.
+      const cases: unknown[] = [
+        { title: 'T', properties: { a: { anyOf: [null] } } },
+        { title: 'T', properties: { a: null } },
+        { title: 'T', properties: { a: { type: 'object', properties: { b: null } } } },
+        null,
+      ]
+
+      for (const schema of cases) {
+        writeFileMock.mockReset()
+        mockFs(schema)
+        await expect(generateMarkdown()).resolves.toBeUndefined()
+      }
+    })
+
+    it('writes a bootstrap README that a second run can splice', async () => {
+      mockFs(minimalSchema)
+      readFileMock.mockImplementation(async (path) => {
+        if (typeof path === 'string' && path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
+        throw new Error('ENOENT: no such file or directory')
+      })
+
+      await generateMarkdown()
+      const first = String(writeFileMock.mock.calls[0]?.[1] ?? '')
+
+      // Without the markers the tool refuses to touch its own output.
+      expect(first).toContain('<!-- config-table-start -->')
+      expect(first).toContain('<!-- config-table-end -->')
+
+      readFileMock.mockImplementation(async (path) => {
+        if (typeof path === 'string') {
+          if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
+          if (path.includes('README.md')) return first
+        }
+        throw new Error('Unexpected file path')
+      })
+      writeFileMock.mockReset()
+      writeFileMock.mockImplementation(async () => {})
+
+      await generateMarkdown()
+
+      expect(String(writeFileMock.mock.calls[0]?.[1] ?? '')).toBe(first)
+    })
+
+    it('takes the start marker closest to the region, not the first in the file', async () => {
+      // A marker quoted in a code fence above the region used to become the
+      // opener, silently deleting everything down to the real one.
+      const existing = [
+        '# T',
+        '',
+        '```',
+        '<!-- config-table-start -->',
+        '```',
+        '',
+        'KEEP ME',
+        '',
+        '<!-- config-table-start -->',
+        'OLD',
+        '<!-- config-table-end -->',
+        '',
+      ].join('\n')
+
+      readFileMock.mockImplementation(async (path) => {
+        if (typeof path === 'string') {
+          if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
+          if (path.includes('README.md')) return existing
+        }
+        throw new Error('Unexpected file path')
+      })
+      writeFileMock.mockImplementation(async () => {})
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).toContain('KEEP ME')
+      expect(content).toContain('```\n<!-- config-table-start -->\n```')
     })
   })
 })
