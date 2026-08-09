@@ -149,10 +149,51 @@ export const upgradeDraft07Schema = (schema: Record<string, unknown>): Record<st
     }
   }
 
+  // The rest of the document has to learn the new name too. Its `$ref`s were
+  // written against `#/definitions/...`, and that block no longer exists under
+  // that name — so `{ "properties": { "a": { "$ref": "#/definitions/thing" } } }`
+  // used to reach the generators unrewritten and stop the build with "Could not
+  // resolve $ref". Only refs written *inside* `definitions` were being rewritten,
+  // which is the same document and the same rename, so the split was an
+  // oversight rather than a decision.
   return {
-    ...rest,
+    ...(rewriteDefinitionsRefs(rest) as Record<string, unknown>),
     $defs: hoistedDefs,
   }
+}
+
+/**
+ * Rewrites `$ref: "#/definitions/X"` to `$ref: "#/$defs/X"` throughout a schema
+ * value, leaving every key untouched.
+ *
+ * Deliberately narrower than {@link renameNestedDefs}, which also renames the
+ * `definitions` *key*. Outside the root `definitions` block there is nothing to
+ * rename — a `definitions` sitting under `properties` is not hoisted and is not
+ * addressable as `#/$defs/...` — so renaming it would only move the target of a
+ * pointer that already worked.
+ *
+ * Like `renameNestedDefs`, this rewrites the leading segment only: a pointer that
+ * dives through a *nested* definitions block (`#/definitions/x/definitions/y`)
+ * keeps its inner segment and still will not resolve. That gap is unchanged, and
+ * the same in both places.
+ */
+const rewriteDefinitionsRefs = (obj: unknown, depth = 0): unknown => {
+  assertSchemaDepth(depth, 'upgradeDraft07Schema')
+  if (typeof obj !== 'object' || obj === null) return obj
+  if (Array.isArray(obj)) return obj.map((item) => rewriteDefinitionsRefs(item, depth + 1))
+
+  const record = obj as Record<string, unknown>
+  const result: Record<string, unknown> = {}
+
+  for (const [key, value] of Object.entries(record)) {
+    if (key === '$ref' && typeof value === 'string' && value.startsWith('#/definitions/')) {
+      result[key] = value.replace('#/definitions/', '#/$defs/')
+    } else {
+      result[key] = rewriteDefinitionsRefs(value, depth + 1)
+    }
+  }
+
+  return result
 }
 
 /**
