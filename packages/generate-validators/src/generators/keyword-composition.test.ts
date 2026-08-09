@@ -430,6 +430,50 @@ describe('keyword-composition', () => {
     }
   })
 
+  it('drops enum members the sibling type rules out', () => {
+    // Composing membership onto the guard's `&&` chain put it behind a `typeof`
+    // that narrows the accessor, so a member of another type became a comparison
+    // TypeScript rejects outright (`TS2367`) — in a file the consumer compiles.
+    // Such a member can never match anyway, so it is dropped.
+    const guard = generateBooleanGuard({ type: 'integer', enum: [1, 2, 'unlimited'] } as never, 'Root')
+    expect(guard).toContain('input === 1')
+    expect(guard).toContain('input === 2')
+    expect(guard).not.toContain('"unlimited"')
+
+    // The verdicts are what they always were, on both paths.
+    for (const [value, valid] of [
+      [1, true],
+      [2, true],
+      ['unlimited', false],
+      [3, false],
+      [1.5, false],
+    ] as const) {
+      expectAgreement({ type: 'integer', enum: [1, 2, 'unlimited'] }, value, valid)
+    }
+    const exports = evaluateGenerated(
+      `${generateValidatorFunction({ type: 'integer', enum: [1, 2, 'unlimited'] } as never, 'Root')}\n\n${guard}`,
+    )
+    const isRoot = exports['isRoot'] as (input: unknown) => boolean
+    const validateRoot = exports['validateRoot'] as (input: unknown) => unknown
+    for (const value of [1, 2, 3, 1.5, 'unlimited', null]) {
+      expect(isRoot(value), `isRoot(${JSON.stringify(value)})`).toBe(validateRoot(value) === true)
+    }
+  })
+
+  it('does not let additionalItems close a 2020-12 prefixItems tuple', () => {
+    // `additionalItems` is not a 2020-12 keyword. Ajv, the interpreter and the
+    // tuple type emitted beside the validator all ignore it next to
+    // `prefixItems`; capping the length there made the validator the odd one out.
+    // Its own dialect still honours it — see the draft-07 case below.
+    expectAgreement({ type: 'array', prefixItems: [{ type: 'string' }], additionalItems: false }, ['a', 1], true)
+    expectAgreement({ type: 'array', prefixItems: [{ type: 'string' }], additionalItems: false }, [1], false)
+    expectAgreement({ type: 'array', items: [{ type: 'string' }], additionalItems: false }, ['a', 1], false)
+    expectAgreement({ type: 'array', items: [{ type: 'string' }], additionalItems: false }, ['a'], true)
+    // A `prefixItems` tuple closed the 2020-12 way still caps.
+    expectAgreement({ type: 'array', prefixItems: [{ type: 'string' }], items: false }, ['a', 1], false)
+    expectAgreement({ type: 'array', prefixItems: [{ type: 'string' }], items: false }, ['a'], true)
+  })
+
   it('escapes a runtime key into its error path', () => {
     // Static keys already went through the generation-time escape; keys read at
     // runtime did not, so `{"a/b": 1}` reported `/a/b` — which reads back as the

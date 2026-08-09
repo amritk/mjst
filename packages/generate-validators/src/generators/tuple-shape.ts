@@ -12,9 +12,11 @@
  * - `tuple` — the fixed positions, or `undefined` when the array is not a tuple.
  * - `tail` — the schema for every index past the tuple, or `undefined` when none
  *   is declared. `false` means "there must be no such index".
- * - `tailIsClosed` — whether a tuple's length is capped. A 2020-12 `prefixItems`
- *   paired with a draft-07 `additionalItems: false` counts, since documents in
- *   the wild do mix the two.
+ * - `tailIsClosed` — whether a tuple's length is capped: `items: false` past a
+ *   `prefixItems`, or `additionalItems: false` past an array `items`. Each
+ *   dialect's own spelling only — `additionalItems` is not a 2020-12 keyword, and
+ *   honouring it next to `prefixItems` made the validator cap a length that Ajv,
+ *   the interpreter, and the tuple type emitted beside it all leave open.
  *
  * `prefixItems` wins when a node carries both, which is the order
  * `@amritk/helpers/generate-type-definition` and `@amritk/runtime-validators`
@@ -31,15 +33,11 @@ export const tupleShapeOf = (
     return {
       tuple: prefix,
       tail: 'items' in schema && !Array.isArray(items) ? items : undefined,
-      tailIsClosed: items === false || schema['additionalItems'] === false,
+      tailIsClosed: items === false,
     }
   }
   if (Array.isArray(items)) {
     return { tuple: items, tail: schema['additionalItems'], tailIsClosed: schema['additionalItems'] === false }
   }
-  return {
-    tuple: undefined,
-    tail: 'items' in schema ? items : undefined,
-    tailIsClosed: items === false || schema['additionalItems'] === false,
-  }
+  return { tuple: undefined, tail: 'items' in schema ? items : undefined, tailIsClosed: items === false }
 }

@@ -1917,6 +1917,34 @@ const generateObjectValidator = (
 const guardName = (typeName: string): string => `is${typeName}`
 
 /**
+ * Whether a literal value could be an instance of a declared JSON Schema `type`.
+ *
+ * Used to drop `enum` members the sibling `type` already rules out. Deliberately
+ * a *value* test rather than a schema one: an `enum` lists instances, so the
+ * question is simply which of them the type admits.
+ */
+const valueCanHaveType = (value: unknown, type: string): boolean => {
+  switch (type) {
+    case 'string':
+      return typeof value === 'string'
+    case 'number':
+      return typeof value === 'number'
+    case 'integer':
+      return typeof value === 'number' && Number.isInteger(value)
+    case 'boolean':
+      return typeof value === 'boolean'
+    case 'null':
+      return value === null
+    case 'array':
+      return Array.isArray(value)
+    case 'object':
+      return typeof value === 'object' && value !== null && !Array.isArray(value)
+    default:
+      return true
+  }
+}
+
+/**
  * Builds a boolean expression that is TRUE iff `acc` satisfies `schema`, with the
  * *exact same verdict* as the error-collecting validator — or `null` when the
  * schema carries something the flat form can't faithfully mirror ($ref, unions,
@@ -1972,15 +2000,28 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string, narrowable = true): st
   // test accepts `1`), but bailing outright would cost the flat guard on the
   // commonest shape in an OpenAPI document: a discriminator written
   // `{ type: 'string', enum: ['code_interpreter'] }`.
-  const membership = hasEnum(schema) ? enumMembershipExpr(schema.enum as unknown[], acc) : null
-
   if (!hasType(schema)) {
-    if (membership === null) return null
+    if (!hasEnum(schema)) return null
     // With no `type` there is no branch below to compose with, so membership has
     // to be the whole story — and it only is when nothing else constrains.
-    return declaresKeywordOutside(schema, ['enum']) ? null : membership
+    if (declaresKeywordOutside(schema, ['enum'])) return null
+    return enumMembershipExpr(schema.enum as unknown[], acc)
   }
   const t = schema.type as string
+
+  // Members of a *different* JSON type than the declared one can never match, so
+  // they are dropped before the membership test is built. Keeping them was only
+  // ever dead weight at runtime, and in the guard's single `&&` chain it was
+  // worse than that: the `typeof` in front narrows the accessor, so
+  // `{ "type": "integer", "enum": [1, 2, "unlimited"] }` emitted
+  // `typeof x === 'number' && … && x === "unlimited"` — a comparison TypeScript
+  // rejects outright (`TS2367`), in a file the consumer has to compile.
+  const membership = hasEnum(schema)
+    ? enumMembershipExpr(
+        (schema.enum as unknown[]).filter((member) => valueCanHaveType(member, t)),
+        acc,
+      )
+    : null
   const withMembership = (expr: string | null): string | null =>
     expr === null || membership === null ? expr : `${expr} && ${membership}`
 

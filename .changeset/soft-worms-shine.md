@@ -30,7 +30,10 @@ could accept documents the schema forbids.
   emitted validator disagreed about the same schema. Array-form `items` and its
   `additionalItems` tail are now read as the tuple they are — with `prefixItems`
   taking precedence when a node carries both, matching the type generator and the
-  runtime interpreter.
+  runtime interpreter. Each dialect's closing keyword now applies only within its
+  own dialect: `additionalItems: false` next to a 2020-12 `prefixItems` capped a
+  length that Ajv, the interpreter, and the tuple type emitted beside it all
+  leave open.
 - **Error paths built from a runtime key were not JSON-Pointer escaped.** A
   `patternProperties` match, an `additionalProperties` sweep or a `propertyNames`
   loop reported `{"a/b": …}` at `/a/b`, which reads back as the child `b` of a
@@ -72,6 +75,9 @@ TypeScript diagnostics. Both corpora now compile clean.
 - A guard member and an `unevaluated*` key both read through a cast, which no
   `typeof` in front can narrow, so a constrained check emitted `.length` on
   `unknown` (`TS2571`).
+- An `enum` member of a different JSON type than the sibling `type` sat behind
+  the `typeof` that narrows the accessor, so it compared two disjoint types
+  (`TS2367`). Such a member can never match, and is dropped.
 
 ### Generation that fails late instead of loudly
 

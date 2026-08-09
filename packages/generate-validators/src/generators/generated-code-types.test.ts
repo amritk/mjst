@@ -186,6 +186,15 @@ const CASES: ReadonlyArray<readonly [string, JSONSchema]> = [
     'unevaluated-items-constrained',
     { type: 'array', prefixItems: [{ type: 'string' }], unevaluatedItems: { type: 'number', minimum: 2 } },
   ],
+  // An `enum` whose members are not all of the declared `type`: the guard puts
+  // membership behind a `typeof` that narrows the accessor, so a member of
+  // another type is a comparison TypeScript rejects (`TS2367`).
+  ['mixed-type-enum', { type: 'integer', enum: [1, 2, 'unlimited'] }],
+  [
+    'mixed-type-enum-property',
+    { type: 'object', properties: { a: { type: 'number', enum: [1, 'x'] } }, required: ['a'] },
+  ],
+  ['mixed-type-enum-item', { type: 'array', items: { type: 'boolean', enum: [true, 'x'] } }],
   [
     'proto-property',
     JSON.parse(
