@@ -1364,6 +1364,22 @@ describe('generate-readme', () => {
       }
     })
 
+    it('keeps a CRLF-separated first paragraph whole', async () => {
+      // A negative assertion alone cannot catch an over-splitting regex: it
+      // passes trivially. CommonMark treats a lone CRLF as one line ending
+      // inside a paragraph, so both halves must survive.
+      mockFs({
+        title: 'T',
+        properties: { a: { type: 'string', description: 'One line.\r\nStill first.\r\n\r\nSECOND para.' } },
+      })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).toContain('One line. Still first.')
+      expect(content).not.toContain('SECOND para.')
+    })
+
     it('tolerates null members inside the guarded keywords', async () => {
       // asArray guards the container; these reach a property read on the member.
       const cases: unknown[] = [

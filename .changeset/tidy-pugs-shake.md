@@ -55,4 +55,8 @@ the whole package:
   lines, which CommonMark also treats as paragraph breaks.
 - A README that exists but cannot be read is no longer treated as absent and
   overwritten; only `ENOENT` means "safe to create one".
+- The description paragraph split normalises line endings before splitting. An
+  inline alternation let the regex backtrack so a *single* CRLF matched as a
+  blank line, dropping everything after the first line break in any
+  CRLF-authored description.
 

@@ -209,7 +209,9 @@ const collapseLineEndings = (value: string): string => value.replace(/[\r\n]+/g,
 const codeSpan = (text: string): string => {
   const longest = (text.match(/`+/g) ?? []).reduce((max, run) => Math.max(max, run.length), 0)
   const fence = '`'.repeat(longest + 1)
-  const needsPad = text === '' || /^[`\s]|[`\s]$/.test(text)
+  // The strip only fires when the content is not entirely spaces, so padding an
+  // all-spaces name just makes it two spaces wider.
+  const needsPad = text === '' || (/^[`\s]|[`\s]$/.test(text) && !/^ *$/.test(text))
   const pad = needsPad ? ' ' : ''
   return `${fence}${pad}${text}${pad}${fence}`
 }
@@ -256,7 +258,15 @@ const formatList = (values: readonly unknown[]): string =>
  */
 const renderDetailCell = (prop: SchemaProperty): string => {
   // First paragraph gives enough context without making the table unwieldy
-  const desc = escapeHtml(asText(prop.description).split(/(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)/)[0] ?? '')
+  const desc = escapeHtml(
+    asText(prop.description)
+      // Normalise first, then split. Spelling the alternation inline —
+      // `(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)` — lets the engine backtrack the
+      // first group to a bare `\r` and hand the `\n` to the second, so a single
+      // CRLF matched and everything after the first line break was dropped.
+      .replace(/\r\n?/g, '\n')
+      .split(/\n[ \t]*\n/)[0] ?? '',
+  )
   const lines = [desc]
   if (asArray(prop.enum).length > 0) lines.push(`<strong>Allowed:</strong> ${formatList(prop.enum ?? [])}`)
   if (asArray(prop.examples).length > 0) lines.push(`<strong>Examples:</strong> ${formatList(prop.examples ?? [])}`)
@@ -542,9 +552,11 @@ export const generateMarkdown = async (): Promise<void> => {
     // error let an existing-but-unreadable README (EACCES, EISDIR) be replaced
     // wholesale by the bootstrap path — the opposite of this module's documented
     // refusal to overwrite hand-written content.
-    if ((error as NodeJS.ErrnoException)?.code !== undefined && (error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw error
-    }
+    // Keyed on `code` being set: a filesystem failure that is not ENOENT must
+    // not be mistaken for "no README yet". An error without a `code` is left
+    // swallowed — no reachable `readFile` path produces one.
+    const code = (error as NodeJS.ErrnoException)?.code
+    if (code !== undefined && code !== 'ENOENT') throw error
     existing = undefined
   }
 
