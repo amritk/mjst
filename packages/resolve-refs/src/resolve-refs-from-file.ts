@@ -481,9 +481,14 @@ const escapeSegment = (segment: string): string => segment.replace(/~/g, '~0').r
 const detach = (node: unknown): unknown => {
   if (node === null || typeof node !== 'object') return node
   // Iterative, because the documents this guards against are exactly the deeply
-  // nested ones. A recursive copy would need a depth bound, and bounding it by
-  // `maxDepth` made the depth-limit call site — which is only reached when
-  // `depth > maxDepth` — a guaranteed no-op.
+  // nested ones — a recursive copy would need a depth bound, and bounding it by
+  // `maxDepth` made the depth-limit call site a guaranteed no-op.
+  //
+  // `seen` is what a recursive version got from its depth bound: a custom
+  // `parse` can return a cyclic document (a YAML recursive anchor does exactly
+  // that), and without it the walk never terminates. It also keeps shared
+  // subtrees shared, as they were in the source.
+  const seen = new Map<object, unknown>()
   const out: { value: unknown } = { value: undefined }
   const stack: { src: unknown; set: (value: unknown) => void }[] = [
     {
@@ -501,22 +506,35 @@ const detach = (node: unknown): unknown => {
       set(src)
       continue
     }
+    const already = seen.get(src)
+    if (already !== undefined) {
+      set(already)
+      continue
+    }
     if (Array.isArray(src)) {
       const copy: unknown[] = new Array(src.length)
+      seen.set(src, copy)
       set(copy)
-      src.forEach((item, index) => {
+      // Pushed in reverse so the LIFO stack pops them in source order.
+      for (let index = src.length - 1; index >= 0; index--) {
+        const at = index
         stack.push({
-          src: item,
+          src: src[at],
           set: (value) => {
-            copy[index] = value
+            copy[at] = value
           },
         })
-      })
+      }
       continue
     }
     const copy: Record<string, unknown> = {}
+    seen.set(src, copy)
     set(copy)
-    for (const key of Object.keys(src)) {
+    // Reverse for the same reason: popping in `Object.keys` order is what keeps
+    // the copy's key order identical to the source's.
+    const keys = Object.keys(src)
+    for (let index = keys.length - 1; index >= 0; index--) {
+      const key = keys[index] as string
       stack.push({
         src: (src as Record<string, unknown>)[key],
         set: (value) => assignKey(copy, key, value),
@@ -953,16 +971,22 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         // Scoped only to a loaded document on purpose. When the document itself
         // was refused or unreadable the loader has already recorded that, and
         // the ref inlining as `undefined` is the established, tested outcome.
-        // Reported only when the target document is present and loaded fine.
-        // A document that was refused or unreadable is cached as `{}` (hence
-        // `unloadable`), and one the prefetch never reached at all — because a
-        // `maxDocuments` / `totalTimeoutMs` budget ran out — is absent from
-        // `docCache`. Both already have an error of their own.
-        if (found === undefined && docCache.has(targetLocation) && !unloadable.has(targetLocation)) {
-          errors.push({
-            message: `Cannot resolve ${keyword} "${value}"`,
-            path: fragment === '' || fragment.startsWith('/') ? pointerToPath(fragment) : [],
-          })
+        if (found === undefined && !unloadable.has(targetLocation)) {
+          // Reported only when the target document is present and loaded fine.
+          // One the prefetch never reached — because a `maxDocuments` /
+          // `totalTimeoutMs` budget ran out — is absent from `docCache` and has
+          // already recorded an error of its own.
+          //
+          // The node is kept either way. Gating the *keep* on this condition too
+          // meant a budget-truncated resolve fell through to inlining
+          // `undefined`, so the referencing node vanished on serialization —
+          // trading a duplicate error for silent loss of every constraint on it.
+          if (docCache.has(targetLocation)) {
+            errors.push({
+              message: `Cannot resolve ${keyword} "${value}"`,
+              path: fragment === '' || fragment.startsWith('/') ? pointerToPath(fragment) : [],
+            })
+          }
           refCache.set(cacheKey, MISSING)
           return keepUnresolved()
         }

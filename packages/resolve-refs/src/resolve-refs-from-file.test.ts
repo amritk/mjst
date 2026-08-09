@@ -917,4 +917,56 @@ describe('resolve-refs-from-file', () => {
     expect(errors.filter((error) => /Cannot resolve/.test(error.message))).toEqual([])
     expect(errors[0]?.message).toMatch(/Refusing to load more than 2 documents/)
   })
+
+  it('keeps a node whose document a budget stopped it reaching', async () => {
+    // Gating the *keep* on the same condition as the error meant a
+    // budget-truncated resolve inlined `undefined`, so the referencing node
+    // vanished on serialization — trading a duplicate error for silent loss of
+    // every constraint on it.
+    writeFileSync(join(dir, 'b.json'), JSON.stringify({ $defs: { Y: { type: 'string' } } }))
+    writeFileSync(join(dir, 'c.json'), JSON.stringify({ $defs: { Y: { type: 'number' } } }))
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ properties: { a: { $ref: './b.json#/$defs/Y' }, b: { $ref: './c.json#/$defs/Y' } } }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { maxDocuments: 2 })
+
+    expect(resolved).toMatchObject({
+      properties: { a: { type: 'string' }, b: { $ref: './c.json#/$defs/Y' } },
+    })
+  })
+
+  it('preserves key order when copying a value-position subtree', async () => {
+    // The copy walks an explicit LIFO stack, so keys have to be pushed in
+    // reverse or the copy comes out with its object keys reversed at every
+    // level.
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ type: 'object', default: { alpha: 1, beta: 2, gamma: { z: 1, y: 2 } } }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'))
+    const value = (resolved as { default: Record<string, unknown> }).default
+
+    expect(Object.keys(value)).toStrictEqual(['alpha', 'beta', 'gamma'])
+    expect(Object.keys(value['gamma'] as object)).toStrictEqual(['z', 'y'])
+  })
+
+  it('terminates on a cyclic document from a custom parse', async () => {
+    // A recursive YAML anchor produces exactly this. The recursive copy was
+    // bounded by maxDepth; the iterative one needs its own cycle guard.
+    writeFileSync(join(dir, 'root.json'), '{}')
+    const cyclic: Record<string, unknown> = { name: 'n' }
+    cyclic['child'] = cyclic
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), {
+      parse: () => ({ type: 'object', default: cyclic }),
+    })
+    const value = (resolved as { default: Record<string, unknown> }).default
+
+    // Copied, not aliased — but still a cycle, as it was in the source.
+    expect(value).not.toBe(cyclic)
+    expect(value['child']).toBe(value)
+  })
 })

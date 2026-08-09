@@ -42,4 +42,8 @@ Fix six bugs found by an audit of the resolver, two of them security-relevant.
   guarantees, so it never ran. The copy is iterative now and needs no bound.
 - A ref whose document a `maxDocuments` / `totalTimeoutMs` budget stopped the
   resolver reaching is no longer reported twice.
+- The deep copy preserves key order and terminates on a cyclic document from a
+  custom `parse` (a recursive YAML anchor produces one).
+- A ref whose document a budget stopped the resolver reaching keeps its node,
+  rather than the referencing node vanishing on serialization.
 
