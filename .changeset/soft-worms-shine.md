@@ -2,7 +2,7 @@
 '@amritk/generate-validators': minor
 ---
 
-Fix eleven bugs found by an audit of the validator generator. The first three
+Fix twelve bugs found by an audit of the validator generator. The first three
 are one bug wearing three hats, and it is the headline: a generated validator
 could accept documents the schema forbids.
 
@@ -95,6 +95,15 @@ TypeScript diagnostics. Both corpora now compile clean.
   reads — a tuple's rest, when `prefixItems` took the positions out from under an
   array `items` — was not collected, and the emitted type named something no
   import brought in (`TS2304`, on `main` too).
+- **A definition named `…-or-reference` was imported from the wrong file.** The
+  import collector rewrote the ref to its base name first, so a schema with a
+  `#/$defs/parameter-or-reference` got `import { validateParameter } from
+  './parameter.js'` while the body called `validateParameterOrReference` — a
+  runtime `is not defined`, and with no base `parameter` definition, an import of
+  a module that was never written. `walkRefGraph` gives such a definition a file
+  of its own; it is now imported from it, under the name the emitter uses. The
+  OpenAPI 3.1 metaschema names definitions exactly this way, and
+  `@amritk/generate-parsers` dropped the same rewrite for the same reason.
 - **An `unevaluated*` under a draft-07 `additionalItems` was refused** on the
   grounds that the position is never enforced. That was true while
   `additionalItems` was read only as a length cap; now that the tail is
