@@ -89,9 +89,10 @@ TypeScript diagnostics. Both corpora now compile clean.
   filename already get. A root type name that collides is refused too, instead of
   producing no root validator.
 - A `$ref` in a position the emitter never reaches (`additionalItems` with no
-  array `items`, `then`/`else` with no `if`) was collected as though it were, so
-  the output carried a dead import — or generation refused a perfectly good
-  schema when the ref happened to be unresolvable.
+  array `items`; `then`/`else` with no `if`; a branch of an `anyOf` the emitter
+  folds away, or the arm a statically-known `if` drops) was collected as though
+  it were, so the output carried a dead import — or generation refused a
+  perfectly good schema when the ref happened to be unresolvable.
 
 Three JSON Schema Test Suite cases move from expected-failure to passing as a
 result (two `$id`-scope cases and one `$dynamicRef` case, all of which needed a

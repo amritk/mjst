@@ -104,4 +104,42 @@ describe('collect-validator-imports', () => {
       "import { type Onfalse, validateOnfalse } from './onfalse.js'",
     ])
   })
+
+  // A `$ref` in a branch the emitter folds away is a ref nothing ever calls. The
+  // opposite mistake is the dangerous one — a call with no import is a name
+  // nothing defines — so `matchesEverything` is deliberately narrower than the
+  // emitter's own fold test, and these pin both directions.
+  it('skips a $ref in a branch the emitter folds away', () => {
+    const rootSchema = { $defs: { a: { type: 'string' }, b: { type: 'number' } } }
+    const names = (schema: unknown): string[] =>
+      collectValidatorImports(schema as never, { rootSchema }).map((line) => /validate(\w+)/.exec(line)?.[1] ?? line)
+
+    // An always-matching `anyOf` branch makes the whole keyword vacuous.
+    expect(names({ anyOf: [{ $ref: '#/$defs/a' }, true] })).toEqual([])
+    expect(names({ anyOf: [{ $ref: '#/$defs/a' }, {}] })).toEqual([])
+    expect(names({ anyOf: [{ $ref: '#/$defs/a' }, { title: 'annotation only' }] })).toEqual([])
+    // A statically-known `if` takes one arm and drops the other.
+    expect(names({ if: {}, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual(['A'])
+    expect(names({ if: false, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual(['B'])
+  })
+
+  it('keeps every $ref the emitter still reaches', () => {
+    const rootSchema = { $defs: { a: { type: 'string' }, b: { type: 'number' } } }
+    const names = (schema: unknown): string[] =>
+      collectValidatorImports(schema as never, { rootSchema }).map((line) => /validate(\w+)/.exec(line)?.[1] ?? line)
+
+    // `oneOf` and `allOf` are never folded — a `true` branch changes their
+    // verdict rather than making them vacuous.
+    expect(names({ oneOf: [{ $ref: '#/$defs/a' }, true] })).toEqual(['A'])
+    expect(names({ allOf: [{ $ref: '#/$defs/a' }, true] })).toEqual(['A'])
+    expect(names({ anyOf: [{ $ref: '#/$defs/a' }, { $ref: '#/$defs/b' }] })).toEqual(['A', 'B'])
+    expect(names({ if: { type: 'string' }, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual([
+      'A',
+      'B',
+    ])
+    // A branch whose keywords merely happen to emit nothing is NOT treated as
+    // always-matching: over-collecting costs an unused import, under-collecting
+    // costs a name nothing defines.
+    expect(names({ anyOf: [{ $ref: '#/$defs/a' }, { minContains: 2 }] })).toEqual(['A'])
+  })
 })
