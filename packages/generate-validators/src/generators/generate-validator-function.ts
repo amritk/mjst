@@ -2063,6 +2063,18 @@ const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string): st
     parts.push(required.has(key) ? expr : `(${member} === undefined || (${expr}))`)
   }
 
+  // A `required` key with no `properties` entry has no type check to piggyback
+  // on, but it still has to be *present* — the validator enforces exactly that,
+  // with a bare presence test (see {@link generateMissingRequiredChecks}).
+  // Leaving it out is the unsound direction: `isX({})` answered `true` for
+  // `{ "type": "object", "required": ["a"] }` while `validateX({})` reported the
+  // missing property. `hasOwnCheck` is the same expression the validator negates,
+  // prototype-member names included, so the two cannot drift.
+  for (const key of required) {
+    if (Object.hasOwn(properties, key)) continue
+    parts.push(hasOwnCheck(objAcc, key))
+  }
+
   if (strict) {
     // `additionalProperties: false`: with every property required, an exact key
     // count proves no extras (the typeof checks above already proved presence);

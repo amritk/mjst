@@ -1370,6 +1370,101 @@ describe('generate-validator-function', () => {
       }
       expect(mismatches, `seed 0x${seed.toString(16)}`).toEqual([])
     })
+
+    it('requires a `required` key that has no properties entry', () => {
+      // `booleanObjectParts` hangs each condition off a declared property, so a
+      // required key with no `properties` entry contributed nothing and `isX`
+      // accepted an object missing it — while `validateX` reported it, since the
+      // validator enforces that presence separately. The validator's own hot-path
+      // guard already refused to answer this shape for the same reason.
+      const { validate, guard } = evalBoth({ type: 'object', required: ['a'] }, 'T')
+      expect(validate({})).not.toBe(true)
+      expect(guard({})).toBe(false)
+      expect(validate({ a: 1 })).toBe(true)
+      expect(guard({ a: 1 })).toBe(true)
+      // A prototype-member name asks the question with `Object.hasOwn`, so an
+      // inherited `toString` is not mistaken for the declared one.
+      const inherited = evalBoth({ type: 'object', required: ['toString'] }, 'T')
+      expect(inherited.validate({})).not.toBe(true)
+      expect(inherited.guard({})).toBe(false)
+      expect(inherited.guard({ toString: 1 })).toBe(true)
+    })
+
+    /**
+     * Randomised *schemas*, not just randomised values. The cases above pin a few
+     * hand-written shapes; this layers unrelated keywords onto one node so the
+     * guard's bail-outs are exercised against combinations nobody wrote down. The
+     * `required`-without-`properties` gap above is what it found.
+     */
+    const GUARD_KEYWORDS: readonly ((rng: () => number) => Record<string, unknown>)[] = [
+      (rng) => ({ type: pick(rng, ['string', 'number', 'integer', 'boolean', 'null', 'object', 'array']) }),
+      // `type: "object"` is listed twice on purpose: it is the only type that
+      // reaches the flat object guard, so an even spread would leave that path —
+      // the one with the most bail-outs to get wrong — barely sampled.
+      () => ({ type: 'object' }),
+      (rng) => ({ const: pick(rng, SCALARS) }),
+      (rng) => ({ enum: [pick(rng, SCALARS), pick(rng, SCALARS)] }),
+      (rng) => ({ minLength: Math.floor(rng() * 4) }),
+      (rng) => ({ maxLength: Math.floor(rng() * 4) }),
+      () => ({ pattern: '^a' }),
+      (rng) => ({ minimum: pick(rng, [0, 1]) }),
+      (rng) => ({ maximum: pick(rng, [1, 10]) }),
+      () => ({ multipleOf: 2 }),
+      (rng) => ({ items: { type: pick(rng, ['string', 'number']) } }),
+      () => ({ items: [{ type: 'string' }, { type: 'number' }] }),
+      (rng) => ({ additionalItems: pick(rng, [false, { type: 'number' }] as unknown[]) }),
+      () => ({ prefixItems: [{ type: 'string' }] }),
+      () => ({ contains: { type: 'number' } }),
+      (rng) => ({ minItems: Math.floor(rng() * 3) }),
+      (rng) => ({ maxItems: Math.floor(rng() * 3) }),
+      () => ({ uniqueItems: true }),
+      (rng) => ({ properties: { id: { type: pick(rng, ['string', 'number']) }, k: { const: 'x' } } }),
+      (rng) => ({ required: [pick(rng, ['id', 'k', 'absent'])] }),
+      (rng) => ({ additionalProperties: pick(rng, [false, true, { type: 'string' }] as unknown[]) }),
+      () => ({ patternProperties: { '^i': { type: 'number' } } }),
+      () => ({ propertyNames: { maxLength: 2 } }),
+      () => ({ minProperties: 1 }),
+      () => ({ maxProperties: 2 }),
+      () => ({ dependentRequired: { id: ['k'] } }),
+      () => ({ not: { type: 'string' } }),
+      () => ({ allOf: [{ type: 'string' }] }),
+      () => ({ anyOf: [{ type: 'string' }, { type: 'number' }] }),
+      () => ({ oneOf: [{ minLength: 2 }, { type: 'number' }] }),
+      () => ({ if: { type: 'string' }, then: { minLength: 2 } }),
+      () => ({ nullable: true }),
+      () => ({ unevaluatedProperties: false }),
+      () => ({ unevaluatedItems: false }),
+    ]
+
+    it('isX matches validateX across randomly combined keywords', { timeout: 60_000 }, () => {
+      const rng = mulberry32(0x4d2)
+      const mismatches: string[] = []
+
+      for (let s = 0; s < 1500 && mismatches.length < 5; s++) {
+        const schema: Record<string, unknown> = {}
+        const count = 1 + Math.floor(rng() * 3)
+        for (let i = 0; i < count; i++) Object.assign(schema, pick(rng, GUARD_KEYWORDS)(rng))
+
+        let pair: { validate: (i: unknown) => unknown; guard: (i: unknown) => boolean }
+        try {
+          pair = evalBoth(schema as Parameters<typeof generateValidatorFunction>[0], 'T')
+        } catch {
+          continue // generation refused this shape (e.g. unprovable `unevaluated*` coverage)
+        }
+
+        for (let t = 0; t < 30 && mismatches.length < 5; t++) {
+          const input = randomValue(rng, 0)
+          const accepted = pair.validate(input) === true
+          if (pair.guard(input) !== accepted) {
+            mismatches.push(
+              `${JSON.stringify(schema)} on ${JSON.stringify(input)} → validate=${accepted} guard=${!accepted}`,
+            )
+          }
+        }
+      }
+
+      expect(mismatches, mismatches.join('\n')).toEqual([])
+    })
   })
 
   describe('combinators, contains, and tuples', () => {
