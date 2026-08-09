@@ -67,4 +67,33 @@ describe('assert-unevaluated-generatable', () => {
   it('lets `unevaluated*: true` through, since it constrains nothing', () => {
     expect(() => assert({ $dynamicRef: '#node', unevaluatedProperties: true } as JSONSchema)).not.toThrow()
   })
+
+  // `additionalItems` used to be inert everywhere — the generator read it only as
+  // `false`, a length cap — so an `unevaluated*` under it could never run and the
+  // refusal was always right. Now that the draft-07 tail is validated, the same
+  // refusal turns down work the emitter can do.
+  it('accepts an unevaluated* under an additionalItems that is the live tail', () => {
+    expect(() =>
+      assert({
+        items: [{ type: 'string' }],
+        additionalItems: { properties: { p: true }, unevaluatedProperties: false },
+      }),
+    ).not.toThrow()
+  })
+
+  it('still refuses an unevaluated* under an additionalItems nothing reads', () => {
+    // Inert next to a schema-form `items` (2020-12 does not define
+    // `additionalItems` at all), and inert again once `prefixItems` has taken the
+    // positions — the tail then comes from `items`.
+    expect(() =>
+      assert({ items: { type: 'number' }, additionalItems: { properties: { p: true }, unevaluatedProperties: false } }),
+    ).toThrow(/"additionalItems"/)
+    expect(() =>
+      assert({
+        prefixItems: [{ type: 'string' }],
+        items: [{ type: 'number' }],
+        additionalItems: { properties: { p: true }, unevaluatedProperties: false },
+      }),
+    ).toThrow(/"additionalItems"/)
+  })
 })

@@ -88,11 +88,18 @@ TypeScript diagnostics. Both corpora now compile clean.
   names the definition, the same answer two definitions competing for one
   filename already get. A root type name that collides is refused too, instead of
   producing no root validator.
-- A `$ref` in a position the emitter never reaches (`additionalItems` with no
-  array `items`; `then`/`else` with no `if`; a branch of an `anyOf` the emitter
-  folds away, or the arm a statically-known `if` drops) was collected as though
-  it were, so the output carried a dead import — or generation refused a
-  perfectly good schema when the ref happened to be unresolvable.
+- A `$ref` in a position neither emitter reads (`additionalItems` with no array
+  `items`; `then`/`else` with no `if`) was collected as though it were, so
+  generation refused a perfectly good schema when that ref happened to be
+  unresolvable. Conversely, a `$ref` in a position only the *type* generator
+  reads — a tuple's rest, when `prefixItems` took the positions out from under an
+  array `items` — was not collected, and the emitted type named something no
+  import brought in (`TS2304`, on `main` too).
+- **An `unevaluated*` under a draft-07 `additionalItems` was refused** on the
+  grounds that the position is never enforced. That was true while
+  `additionalItems` was read only as a length cap; now that the tail is
+  validated, the draft-07 spelling of a schema whose 2020-12 spelling generates
+  is accepted, and the refusal is kept for the positions that really are inert.
 
 Three JSON Schema Test Suite cases move from expected-failure to passing as a
 result (two `$id`-scope cases and one `$dynamicRef` case, all of which needed a

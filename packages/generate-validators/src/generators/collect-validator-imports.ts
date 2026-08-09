@@ -64,7 +64,11 @@ export const collectValidatorImports = (schema: JSONSchema, options?: CollectVal
   const rootSchema = options?.rootSchema
   const typeSuffix = options?.typeSuffix ?? ''
 
-  const refs = collectEmittedRefs(schema, [], rootSchema)
+  // `includeTypeOnly`: the import brings in the type as well as the validator, so
+  // it has to cover the positions the *type* generator reads even where the
+  // emitter ignores them. `assertGeneratableRefs` asks a narrower question and
+  // deliberately does not pass it.
+  const refs = collectEmittedRefs(schema, [], rootSchema, true)
   const seen = new Set<string>()
   const imports: string[] = []
 

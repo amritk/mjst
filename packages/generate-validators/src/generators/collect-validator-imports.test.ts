@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { assertGeneratableRefs } from './assert-generatable-refs'
 import { collectValidatorImports } from './collect-validator-imports'
 
 describe('collect-validator-imports', () => {
@@ -133,6 +134,32 @@ describe('collect-validator-imports', () => {
         additionalItems: { $ref: '#/$defs/b' },
       }),
     ).toEqual(['B'])
+    // `getTuplePositions` requires a *non-empty* `prefixItems`, so at length 0 it
+    // falls back to the array `items` and names what is there — while
+    // `tupleShapeOf` had already taken the empty tuple.
+    expect(names({ type: 'array', prefixItems: [], items: [{ $ref: '#/$defs/a' }] })).toEqual(['A'])
+  })
+
+  it('does not refuse an unresolvable $ref in a position only the type reads', () => {
+    // `assertGeneratableRefs` reads the *emitted-call* set to ask whether the
+    // output would call a validator that was never generated. A type-only
+    // position never produces that call, and an unresolvable ref there types as
+    // `unknown` and names nothing — so refusing over it turns down a schema that
+    // generates fine. The call positions still refuse.
+    expect(() =>
+      assertGeneratableRefs(
+        {
+          type: 'array',
+          prefixItems: [{ type: 'string' }],
+          items: [{ type: 'number' }],
+          additionalItems: { $ref: 'int.json' },
+        } as never,
+        'Root',
+      ),
+    ).not.toThrow()
+    expect(() => assertGeneratableRefs({ type: 'array', items: { $ref: 'int.json' } } as never, 'Root')).toThrow(
+      /unresolvable \$ref "int\.json"/,
+    )
   })
 
   it('still skips a $ref in a position neither emitter reads', () => {

@@ -32,11 +32,12 @@ export const collectEmittedRefs = (
   value: unknown,
   refs: string[] = [],
   rootSchema?: Record<string, unknown>,
+  includeTypeOnly = false,
 ): string[] => {
   if (typeof value !== 'object' || value === null) return refs
 
   if (Array.isArray(value)) {
-    for (const item of value) collectEmittedRefs(item, refs, rootSchema)
+    for (const item of value) collectEmittedRefs(item, refs, rootSchema, includeTypeOnly)
     return refs
   }
 
@@ -65,7 +66,7 @@ export const collectEmittedRefs = (
   for (const mapKey of ['properties', 'patternProperties', 'dependentSchemas', 'dependencies']) {
     const map = schema[mapKey]
     if (typeof map === 'object' && map !== null && !Array.isArray(map)) {
-      for (const sub of Object.values(map)) collectEmittedRefs(sub, refs, rootSchema)
+      for (const sub of Object.values(map)) collectEmittedRefs(sub, refs, rootSchema, includeTypeOnly)
     }
   }
 
@@ -81,17 +82,28 @@ export const collectEmittedRefs = (
 
   // `tail` stands where `items` used to, and `tuple` where `prefixItems` did, so
   // the traversal order every emitted import list is built from is unchanged.
-  if (tail !== undefined) collectEmittedRefs(tail, refs, rootSchema)
+  if (tail !== undefined) collectEmittedRefs(tail, refs, rootSchema, includeTypeOnly)
 
-  // One position the *type* reads and the validator does not.
-  // `generate-type-definition` takes a tuple's rest from `additionalItems`
-  // whenever `items` is an array — including when `prefixItems` won the positions
-  // and `tupleShapeOf` therefore ignored it. Each emitted import carries the type
-  // as well as the validator, so a `$ref` there is still referenced, and dropping
-  // it left `export type Root = [string?, ...B[]]` with no `B` in scope.
-  const additional = schema['additionalItems']
-  if (additional !== undefined && additional !== tail && Array.isArray(schema['items'])) {
-    collectEmittedRefs(additional, refs, rootSchema)
+  // Positions the *type* reads and the validator does not. `getTuplePositions` in
+  // `generate-type-definition` prefers a non-empty `prefixItems` and otherwise
+  // falls back to an array `items`, then takes the rest from `additionalItems`
+  // whenever `items` is an array — so where `tupleShapeOf` and it disagree, the
+  // type still names a `$ref` nothing calls. Each emitted import carries the type
+  // as well as the validator, so those refs have to be in the list, or the output
+  // gets `export type Root = [string?, ...B[]]` with no `B` in scope.
+  //
+  // Only for the import list, though: `assertGeneratableRefs` reads this set to
+  // ask "would the emitter call a validator that was never generated", and the
+  // answer for a type-only position is no. An unresolvable ref there types as
+  // `unknown` and names nothing, so refusing over it turns down a schema that
+  // generates fine.
+  if (includeTypeOnly && Array.isArray(schema['items'])) {
+    const arrayItems = schema['items'] as unknown[]
+    if (arrayItems !== tuple) for (const sub of arrayItems) collectEmittedRefs(sub, refs, rootSchema, includeTypeOnly)
+    const additional = schema['additionalItems']
+    if (additional !== undefined && additional !== tail) {
+      collectEmittedRefs(additional, refs, rootSchema, includeTypeOnly)
+    }
   }
 
   for (const key of [
@@ -112,16 +124,16 @@ export const collectEmittedRefs = (
     'unevaluatedProperties',
     'unevaluatedItems',
   ]) {
-    if (key in schema) collectEmittedRefs(schema[key], refs, rootSchema)
+    if (key in schema) collectEmittedRefs(schema[key], refs, rootSchema, includeTypeOnly)
   }
 
   for (const key of ['oneOf', 'anyOf', 'allOf']) {
     const list = schema[key]
     if (!Array.isArray(list)) continue
-    for (const sub of list) collectEmittedRefs(sub, refs, rootSchema)
+    for (const sub of list) collectEmittedRefs(sub, refs, rootSchema, includeTypeOnly)
   }
 
-  if (tuple !== undefined) for (const sub of tuple) collectEmittedRefs(sub, refs, rootSchema)
+  if (tuple !== undefined) for (const sub of tuple) collectEmittedRefs(sub, refs, rootSchema, includeTypeOnly)
 
   return refs
 }
