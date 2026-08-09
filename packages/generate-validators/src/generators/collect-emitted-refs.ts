@@ -99,7 +99,12 @@ export const collectEmittedRefs = (
   // generates fine.
   if (includeTypeOnly && Array.isArray(schema['items'])) {
     const arrayItems = schema['items'] as unknown[]
-    if (arrayItems !== tuple) for (const sub of arrayItems) collectEmittedRefs(sub, refs, rootSchema, includeTypeOnly)
+    // `getTuplePositions` falls back to the array `items` only when `prefixItems`
+    // is absent or *empty*; a non-empty one wins there too, and then nothing reads
+    // the array `items` at all.
+    if (arrayItems !== tuple && tuple?.length === 0) {
+      for (const sub of arrayItems) collectEmittedRefs(sub, refs, rootSchema, includeTypeOnly)
+    }
     const additional = schema['additionalItems']
     if (additional !== undefined && additional !== tail) {
       collectEmittedRefs(additional, refs, rootSchema, includeTypeOnly)

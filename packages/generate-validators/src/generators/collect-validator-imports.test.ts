@@ -172,5 +172,41 @@ describe('collect-validator-imports', () => {
     // collecting them refused schemas whose ref happened to be unresolvable.
     expect(names({ $ref: '#/$defs/a', then: { $ref: '#/$defs/b' } })).toEqual(['A'])
     expect(names({ type: 'array', items: { type: 'number' }, additionalItems: { $ref: '#/$defs/b' } })).toEqual([])
+    // A *non-empty* `prefixItems` takes the tuple positions in `getTuplePositions`
+    // as well, so the array `items` beside it is read by neither emitter. Only the
+    // empty-`prefixItems` fallback above puts it back in play.
+    expect(names({ type: 'array', prefixItems: [{ type: 'string' }], items: [{ $ref: '#/$defs/a' }] })).toEqual([])
+    // The tail next to that same shape *is* read, so the walk has to stay on.
+    expect(
+      names({
+        type: 'array',
+        prefixItems: [{ type: 'string' }],
+        items: [{ $ref: '#/$defs/a' }],
+        additionalItems: { $ref: '#/$defs/b' },
+      }),
+    ).toEqual(['B'])
+  })
+
+  it('imports a `-or-reference` def from its own file, under its own names', () => {
+    // `walkRefGraph` writes a file per `$defs` entry, and both the emitter and the
+    // type generator name this one in full — so rewriting the ref to `parameter`
+    // here produced an import of the wrong module, under names the file never
+    // used, while the body went on calling `validateParameterOrReference`. The
+    // OpenAPI 3.1 metaschema names definitions exactly this way.
+    const rootSchema = {
+      $defs: {
+        'parameter-or-reference': { anyOf: [{ $ref: '#/$defs/parameter' }, { $ref: '#/$defs/reference' }] },
+        parameter: { type: 'object' },
+        reference: { type: 'object' },
+      },
+    }
+
+    expect(
+      collectValidatorImports({ properties: { param: { $ref: '#/$defs/parameter-or-reference' } } } as never, {
+        rootSchema,
+      }),
+    ).toEqual([
+      "import { type ParameterOrReference, validateParameterOrReference } from './parameter-or-reference.js'",
+    ])
   })
 })

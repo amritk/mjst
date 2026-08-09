@@ -40,15 +40,6 @@ const buildImport = (ref: string, suffix: string): string => {
 }
 
 /**
- * Resolves the canonical filename for a ref, stripping `-or-reference` suffixes
- * so that `#/$defs/parameter-or-reference` maps to `parameter`.
- */
-const canonicalFilename = (ref: string): string => {
-  const base = ref.endsWith('-or-reference') ? ref.replace('-or-reference', '') : ref
-  return refToFilename(base)
-}
-
-/**
  * Collects import statements for all $ref dependencies of a schema.
  * Each import brings in both the generated TypeScript type and validator function.
  *
@@ -73,7 +64,16 @@ export const collectValidatorImports = (schema: JSONSchema, options?: CollectVal
   const imports: string[] = []
 
   for (const ref of refs) {
-    const filename = canonicalFilename(ref)
+    // The ref's own filename, with no rewriting. A `-or-reference` suffix used to
+    // be stripped here on the theory that `parameter-or-reference` collapses onto
+    // `parameter` — but `walkRefGraph` gives it a file of its own, and the emitter
+    // and the type generator both name it in full. The import therefore pointed at
+    // the wrong module and brought in the wrong names, leaving `root.ts` calling a
+    // `validateParameterOrReference` nothing defined (and, when no base
+    // `parameter` def existed, importing a module that was never written). The
+    // OpenAPI 3.1 metaschema names definitions exactly this way.
+    // `@amritk/generate-parsers` dropped the same rewrite for the same reason.
+    const filename = refToFilename(ref)
 
     if (seen.has(filename)) continue
     if (selfFilename && filename === selfFilename) continue
@@ -85,10 +85,7 @@ export const collectValidatorImports = (schema: JSONSchema, options?: CollectVal
     }
 
     seen.add(filename)
-
-    // -or-reference unions import the base type's validator
-    const importRef = ref.endsWith('-or-reference') ? ref.replace('-or-reference', '') : ref
-    imports.push(buildImport(importRef, typeSuffix))
+    imports.push(buildImport(ref, typeSuffix))
   }
 
   return imports

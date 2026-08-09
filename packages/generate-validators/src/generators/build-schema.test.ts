@@ -3,6 +3,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'vitest'
 
 import { buildValidatorSchema } from './build-schema'
+import { linkGenerated } from './link-generated.test-utils'
 
 describe('build-schema', () => {
   it('generates a validator file for the root schema', async () => {
@@ -118,6 +119,39 @@ describe('build-schema', () => {
     await expect(buildValidatorSchema({ type: 'string' }, 'Index')).rejects.toThrow(
       'the root type "Index" generates the file "index.ts", which is reserved',
     )
+  })
+
+  it('links and runs a schema whose definition is named `-or-reference`', async () => {
+    // The import collector used to rewrite `#/$defs/parameter-or-reference` to
+    // `parameter`, on the theory that the union collapses onto its base. It does
+    // not: `walkRefGraph` writes `parameter-or-reference.ts`, and the caller emits
+    // `validateParameterOrReference(...)`. The output therefore imported the wrong
+    // module and threw `validateParameterOrReference is not defined` on the first
+    // call — and with no base `parameter` def, imported a module never written.
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { param: { $ref: '#/$defs/parameter-or-reference' } },
+      required: ['param'],
+      $defs: {
+        'parameter-or-reference': { anyOf: [{ $ref: '#/$defs/parameter' }, { $ref: '#/$defs/reference' }] },
+        parameter: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+        reference: { type: 'object', properties: { $ref: { type: 'string' } }, required: ['$ref'] },
+      },
+    }
+
+    const files = await buildValidatorSchema(schema, 'Root')
+
+    expect(files.map((file) => file.filename)).toContain('parameter-or-reference.ts')
+    expect(files.find((file) => file.filename === 'root.ts')?.content).toContain(
+      "import { type ParameterOrReference, validateParameterOrReference } from './parameter-or-reference.js'",
+    )
+
+    // The import agreeing with the call is the point, so link the whole set and
+    // call it: the union has to still discriminate, not merely resolve.
+    const validateRoot = linkGenerated<(input: unknown) => unknown>(files, 'index', 'validateRoot')
+    expect(validateRoot({ param: { name: 'limit' } })).toBe(true)
+    expect(validateRoot({ param: { $ref: '#/components/parameters/limit' } })).toBe(true)
+    expect(validateRoot({ param: { other: 1 } })).not.toBe(true)
   })
 
   it('still emits exactly one validation-result.ts runtime contract', async () => {
