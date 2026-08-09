@@ -1910,17 +1910,23 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
     return null
   }
 
-  // enum — same membership test the validator uses, but only when membership is
-  // the whole story. `{ enum: [1], type: 'string' }` is unsatisfiable, and
-  // answering it with the bare membership test would have the guard accept `1`
-  // while `validateX` rejects it.
-  if (hasEnum(schema)) {
-    if (declaresKeywordOutside(schema, ['enum'])) return null
-    return enumMembershipExpr(schema.enum as unknown[], acc)
-  }
+  // enum — the same membership test the validator uses, ANDed with whatever else
+  // the node says rather than standing in for it. Returning it alone was unsound
+  // (`{ enum: [1], type: 'string' }` is unsatisfiable, and the bare membership
+  // test accepts `1`), but bailing outright would cost the flat guard on the
+  // commonest shape in an OpenAPI document: a discriminator written
+  // `{ type: 'string', enum: ['code_interpreter'] }`.
+  const membership = hasEnum(schema) ? enumMembershipExpr(schema.enum as unknown[], acc) : null
 
-  if (!hasType(schema)) return null
+  if (!hasType(schema)) {
+    if (membership === null) return null
+    // With no `type` there is no branch below to compose with, so membership has
+    // to be the whole story — and it only is when nothing else constrains.
+    return declaresKeywordOutside(schema, ['enum']) ? null : membership
+  }
   const t = schema.type as string
+  const withMembership = (expr: string | null): string | null =>
+    expr === null || membership === null ? expr : `${expr} && ${membership}`
 
   switch (t) {
     // Each constraint is the exact negation of the validator's error condition,
@@ -1936,7 +1942,7 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
       // `string-length-check` emitter, so the guard counts code points too.
       if (hasMinLength(schema)) parts.push(minLengthPassExpr(acc, schema.minLength))
       if (hasMaxLength(schema)) parts.push(maxLengthPassExpr(acc, schema.maxLength))
-      return parts.join(' && ')
+      return withMembership(parts.join(' && '))
     }
     case 'number':
     case 'integer': {
@@ -1947,18 +1953,18 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
       if (hasExclusiveMinimum(schema)) parts.push(`${acc} > ${schema.exclusiveMinimum}`)
       if (hasExclusiveMaximum(schema)) parts.push(`${acc} < ${schema.exclusiveMaximum}`)
       if (hasMultipleOf(schema)) parts.push(multipleOfPassExpr(acc, schema.multipleOf))
-      return parts.join(' && ')
+      return withMembership(parts.join(' && '))
     }
     case 'boolean':
-      return `typeof ${acc} === 'boolean'`
+      return withMembership(`typeof ${acc} === 'boolean'`)
     case 'null':
-      return `${acc} === null`
+      return withMembership(`${acc} === null`)
     case 'object': {
       const parts = booleanObjectParts(schema, acc, `(${acc} as Record<string, unknown>)`)
-      return parts === null ? null : parts.join(' && ')
+      return parts === null ? null : withMembership(parts.join(' && '))
     }
     case 'array':
-      return booleanArrayExpr(schema, acc)
+      return withMembership(booleanArrayExpr(schema, acc))
     default:
       return null
   }

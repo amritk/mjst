@@ -224,6 +224,29 @@ describe('keyword-composition', () => {
     expect(isRoot(1)).toBe(false)
   })
 
+  it('keeps the flat guard for an enum with an expressible sibling', () => {
+    // `{ "type": "string", "enum": [...] }` is the commonest shape in an OpenAPI
+    // document — a discriminator — and both halves of it are expressible flat, so
+    // the guard has to compose them rather than fall back to calling `validateX`.
+    // Bailing here is correct but cost 394 of the 982 real-world corpus schemas
+    // their inline guard.
+    const guard = generateBooleanGuard({ type: 'string', enum: ['a', 'b'] } as never, 'Root')
+    expect(guard).not.toContain('validateRoot(input) === true')
+    expect(guard).toContain("typeof input === 'string'")
+    expect(guard).toContain('input === "a"')
+
+    const exports = evaluateGenerated(
+      `${generateValidatorFunction({ type: 'string', enum: ['a', 'b'] } as never, 'Root')}\n\n${guard}`,
+    )
+    const isRoot = exports['isRoot'] as (input: unknown) => boolean
+    const validateRoot = exports['validateRoot'] as (input: unknown) => unknown
+    for (const value of ['a', 'b', 'c', 1, null]) {
+      expect(isRoot(value), `isRoot(${JSON.stringify(value)})`).toBe(validateRoot(value) === true)
+    }
+    expect(isRoot('a')).toBe(true)
+    expect(isRoot('c')).toBe(false)
+  })
+
   it('applies a top-level $ref and its siblings to the same value', async () => {
     const schema = { $ref: '#/$defs/s', minLength: 3, $defs: { s: { type: 'string' } } }
     // The delegation alone accepted `"q"`; the sibling alone would accept `7`.
