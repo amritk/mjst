@@ -782,7 +782,11 @@ const generateConstraintChecks = (
     // contradict Ajv and the runtime interpreter. The emitted expression keeps
     // `.length` as its first, short-circuiting term, so the scan is only paid by
     // the strings whose answer it could change.
-    if (hasMinLength(propSchema)) {
+    // `minLength: 0` admits every string, and `string-length-check` spells that
+    // as the literal `false` — which lands as `if (typeof x === 'string' && false)`,
+    // a body TypeScript proves unreachable in output the repo compiles with
+    // `allowUnreachableCode: false`. Nothing to check, so nothing is emitted.
+    if (hasMinLength(propSchema) && propSchema.minLength > 0) {
       lines.push(`  if (typeof ${raw} === 'string' && ${minLengthFailExpr(raw, propSchema.minLength)}) {`)
       lines.push(`    errors.push({ message: 'must have at least ${propSchema.minLength} characters', path: ${path} })`)
       lines.push(`  }`)
@@ -957,6 +961,12 @@ const generateConstraintChecks = (
     if (tuple !== undefined) {
       lines.push(`  if (Array.isArray(${raw})) {`)
       for (let i = 0; i < tuple.length; i++) {
+        // `required` mode, like the tail loop: the position is inside the array
+        // (the length test in front of it says so), and a sparse hole there reads
+        // as `undefined` and has to FAIL its check rather than be skipped as an
+        // absent optional value. `booleanArrayExpr` already materialises with
+        // `Array.from` for exactly this, so leaving the tuple positions guarded
+        // put the two halves of the same package on opposite answers.
         const itemChecks = generateValueChecks(
           '',
           `${raw}[${i}]`,
@@ -964,6 +974,7 @@ const generateConstraintChecks = (
           tuple[i] as JSONSchema,
           suffix,
           ctx,
+          true,
         )
         if (itemChecks.length > 0) {
           lines.push(`    if (${raw}.length > ${i}) {`)
@@ -1215,15 +1226,18 @@ const generateCombinatorChecks = (
   const not = (schema as Record<string, unknown>)['not']
   if (not !== undefined && (isSchemaObject(not as JSONSchema) || typeof not === 'boolean')) {
     const cond = generateMatchesExpr(raw, not as JSONSchema, suffix, ctx)
-    const report = `errors.push({ message: 'must NOT match the schema in not', path: ${path} })`
-    // `not: false` matches nothing, so the instance always passes; `not: true`
-    // (or `{}`) matches everything, so it never does. Wrapping either in its own
-    // `if` left a branch TypeScript can prove dead.
-    if (cond === 'true') {
-      lines.push(`  ${report}`)
-    } else if (cond !== 'false') {
+    // `not: false` matches nothing, so the instance always passes and the check
+    // is dead code — `if (false) { … }`, which TypeScript reports. The
+    // always-matching case is NOT folded: `if (true) { … }` has a reachable body,
+    // so there was nothing to gain, and emitting the report unwrapped was a real
+    // hazard. Every `errors.push(` becomes `(errors ??= []).push(`, so a bare
+    // report starts with `(` — after a preceding line that ends in anything but
+    // `{` or `}`, ASI does not break them and the two fuse into a call. That read
+    // as `validateN(…)(errors ??= [])`, swallowing the `not` error entirely and
+    // accepting an instance the schema forbids.
+    if (cond !== 'false') {
       lines.push(`  if (${cond}) {`)
-      lines.push(`    ${report}`)
+      lines.push(`    errors.push({ message: 'must NOT match the schema in not', path: ${path} })`)
       lines.push(`  }`)
     }
   }
@@ -2535,8 +2549,14 @@ const generateScalarValidator = (
     // minimum:5}` or `{type:'array', minItems:2}` root accepted invalid input.
     // `raw` is `input`; `path` is the root `_path` (as a template so the shared
     // emitter's `path.slice(1,-1)` for array-item indices still works).
+    // Read through an `unknown` binding rather than `input`: the early `return`
+    // below narrows `input` to the declared type, and a constraint from another
+    // family then narrows to `never` — `{ "type": "number", "minLength": 2 }`
+    // emitted `typeof input === 'string' && input.length < 2`, which is `TS2339`
+    // on `never`. The check is inert at runtime either way (the type test in front
+    // of it can never pass), but the file has to compile.
     const rootCtx = createRootContext(rootSchema)
-    const constraintLines = generateConstraintChecks('', 'input', '`${_path}`', schema, suffix, rootCtx)
+    const constraintLines = generateConstraintChecks('', '_root', '`${_path}`', schema, suffix, rootCtx)
 
     if (!wrongType) {
       return [
@@ -2565,6 +2585,7 @@ const generateScalarValidator = (
       `  if (${wrongType}) {`,
       `    return { valid: false, errors: [{ message: 'must be ${typLabel}', path: _path }] }`,
       `  }`,
+      `  const _root: unknown = input`,
       `  let errors: ValidationError[] | undefined`,
       constraintLines.join('\n').replaceAll('errors.push(', '(errors ??= []).push('),
       `  return errors !== undefined ? { valid: false, errors } : true`,

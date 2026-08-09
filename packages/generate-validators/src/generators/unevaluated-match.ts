@@ -180,7 +180,14 @@ const ownItemCoverage = (
   // `minContains`/`maxContains` nothing is published, but the array is invalid
   // anyway, so the term does not have to say so.
   if ('contains' in schema) {
-    terms.push(match(itemVar, schema['contains'] as JSONSchema, ctx.depth))
+    const contained = match(itemVar, schema['contains'] as JSONSchema, ctx.depth)
+    // A `contains` that matches everything annotates every index, so there is
+    // nothing left for `unevaluatedItems` to police; one that matches nothing
+    // annotates none. Pushing either as a term inlined the constant into the
+    // sweep — `true || (…the whole match IIFE…)`, a body TypeScript proves
+    // unreachable, and needless work at runtime.
+    if (contained === 'true') return ALL
+    if (contained !== 'false') terms.push(contained)
   }
 
   return { all: false, terms }

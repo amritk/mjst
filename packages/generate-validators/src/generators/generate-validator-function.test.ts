@@ -335,11 +335,22 @@ describe('generate-validator-function', () => {
     // the first error) instead of returning early, so valid input allocates nothing.
     expect(code).toContain('let errors: ValidationError[] | undefined')
     expect(code).toContain('(errors ??= []).push({ message: "must match pattern')
+    // The constraints read `_root`, an `unknown` re-binding of `input`: the type
+    // check above them narrows `input`, and a constraint from another family then
+    // narrows to `never` and stops compiling.
+    expect(code).toContain('const _root: unknown = input')
     // The pattern body keeps its backslash (\d), so the emitted literal is a digit class.
-    expect(code).toContain('!/^\\d+$/u.test(input)')
+    expect(code).toContain('!/^\\d+$/u.test(_root)')
     expect(code).toContain("(errors ??= []).push({ message: 'must have at least 2 characters'")
     expect(code).toContain("(errors ??= []).push({ message: 'must have at most 4 characters'")
     expect(code).toContain('return errors !== undefined ? { valid: false, errors } : true')
+
+    // And it still reports all three, rather than stopping at the first.
+    const validateCode = evalValidator(code)
+    const result = validateCode('a') as { valid: false; errors: { message: string }[] }
+    expect(result).not.toBe(true)
+    expect(result.errors).toHaveLength(2) // pattern + minLength; maxLength passes
+    expect(validateCode('123')).toBe(true)
   })
 
   it('returns true for empty object schemas', () => {

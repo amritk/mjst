@@ -195,6 +195,17 @@ const CASES: ReadonlyArray<readonly [string, JSONSchema]> = [
     { type: 'object', properties: { a: { type: 'number', enum: [1, 'x'] } }, required: ['a'] },
   ],
   ['mixed-type-enum-item', { type: 'array', items: { type: 'boolean', enum: [true, 'x'] } }],
+  // Shapes whose emitted output used to fail to compile, each for its own reason:
+  // an always-matching `not` (a bare report ASI-fused onto the line above it), a
+  // `minLength: 0` (`&& false`), a `type` contradicted by an other-family sibling
+  // (`.length` on `never`), and an always-matching `contains` next to
+  // `unevaluatedItems` (`true || (…)`).
+  ['always-matching-not', { type: 'object', not: {} }],
+  ['always-matching-not-in-items', { type: 'array', items: { not: true } }],
+  ['min-length-zero', { type: 'string', minLength: 0 }],
+  ['contradicted-type', { type: 'number', minLength: 2 }],
+  ['contradicted-type-null', { type: 'null', maxItems: 1 }],
+  ['always-matching-contains-unevaluated', { type: 'array', contains: {}, unevaluatedItems: { type: 'string' } }],
   [
     'proto-property',
     JSON.parse(

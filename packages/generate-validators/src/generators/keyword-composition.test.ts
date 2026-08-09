@@ -490,6 +490,72 @@ describe('keyword-composition', () => {
     expectAgreement({ type: 'array', prefixItems: [{ type: 'string' }], items: false }, ['a'], true)
   })
 
+  it('keeps an always-matching `not` inside its own statement', async () => {
+    // Every `errors.push(` becomes `(errors ??= []).push(`, so a report emitted
+    // bare at statement position starts with `(` — and after a line that ends in
+    // anything but `{` or `}`, ASI fuses the two into a call. Folding
+    // `not: {}` / `not: true` to a bare report made
+    // `if (_r !== true) (errors ??= []).push(..._r.errors)` swallow the `not`
+    // error as an argument, so the schema accepted an instance it forbids.
+    const alwaysMatching = [{}, true, { title: 'annotation only' }]
+    for (const not of alwaysMatching) {
+      const code = generateValidatorFunction({ type: 'object', not } as never, 'Root')
+      expect(code).toContain('if (true) {')
+      const validateRoot = evaluateValidator(code)
+      expect(validateRoot({}), `not: ${JSON.stringify(not)}`).not.toBe(true)
+    }
+    // The positions where the fusion actually bit, end to end.
+    expect(await linkedVerdicts({ $ref: '#/$defs/n', not: {}, $defs: { n: { type: 'number' } } }, 1)).toEqual({
+      generated: false,
+      interpreted: false,
+    })
+    expectAgreement({ type: 'array', items: { not: {} } }, [0], false)
+    expectAgreement({ type: 'array', items: { not: {} } }, [], true)
+    expectAgreement({ type: 'object', not: {} }, {}, false)
+    // `not: false` matches nothing, so it is still dropped outright.
+    expect(generateValidatorFunction({ type: 'object', not: false } as never, 'Root')).not.toContain(
+      'must NOT match the schema in not',
+    )
+    expectAgreement({ type: 'object', not: false }, {}, true)
+  })
+
+  it('fails a tuple position that is a hole', () => {
+    // The tail loop reads a sparse hole as `undefined` and rejects it, and the
+    // flat guard materialises with `Array.from` for the same reason — but the
+    // tuple positions were checked in optional mode, so a hole slipped through.
+    const sparse: unknown[] = ['x']
+    delete sparse[0]
+    for (const schema of [
+      { type: 'array', prefixItems: [{ type: 'string' }] },
+      { type: 'array', items: [{ type: 'string' }] },
+      { type: 'array', prefixItems: [{ const: 'a' }] },
+      { type: 'array', prefixItems: [false] },
+    ]) {
+      expectAgreement(schema, sparse, false)
+      expectAgreement(schema, [undefined], false)
+    }
+    expectAgreement({ type: 'array', prefixItems: [{ type: 'string' }] }, ['a'], true)
+    expectAgreement({ type: 'array', items: [{ type: 'string' }] }, ['a'], true)
+  })
+
+  it('emits nothing for a `minLength: 0` that constrains nothing', () => {
+    // `string-length-check` spells "at least 0 characters" as the literal `false`,
+    // which lands as `if (typeof x === 'string' && false)` — a body TypeScript
+    // proves unreachable in output the repo compiles with `allowUnreachableCode`
+    // off.
+    const code = generateValidatorFunction({ type: 'string', minLength: 0 } as never, 'Root')
+    expect(code).not.toContain('&& false')
+    expect(code).not.toContain('at least 0 characters')
+    const validateRoot = evaluateValidator(code)
+    expect(validateRoot('')).toBe(true)
+    expect(validateRoot('a')).toBe(true)
+    expect(validateRoot(1)).not.toBe(true)
+    // A real bound is still emitted.
+    expect(generateValidatorFunction({ type: 'string', minLength: 1 } as never, 'Root')).toContain(
+      'at least 1 characters',
+    )
+  })
+
   it('escapes a runtime key into its error path', () => {
     // Static keys already went through the generation-time escape; keys read at
     // runtime did not, so `{"a/b": 1}` reported `/a/b` — which reads back as the
