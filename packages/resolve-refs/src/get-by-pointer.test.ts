@@ -51,4 +51,18 @@ describe('get-by-pointer', () => {
     expect(pointerToPath('/map/01')).toEqual(['map', '01'])
     expect(pointerToPath('/weird~1key/tilde~0key')).toEqual(['weird/key', 'tilde~key'])
   })
+
+  it('addresses only own properties', () => {
+    // A plain `[key]` read let a pointer walk the prototype chain: `#/constructor`
+    // resolved to `Object`'s constructor and inlined a function into the
+    // "dereferenced" document, and on a process where anything had polluted
+    // `Object.prototype` an arbitrary name resolved to the injected value
+    // instead of being reported as unresolvable.
+    expect(getByPointer({}, '/constructor')).toBeUndefined()
+    expect(getByPointer({}, '/toString')).toBeUndefined()
+    expect(getByPointer({}, '/__proto__')).toBeUndefined()
+    expect(getByPointer([1, 2], '/length')).toBeUndefined()
+    // An own property that shadows a prototype member still resolves.
+    expect(getByPointer(JSON.parse('{"constructor":"mine"}'), '/constructor')).toBe('mine')
+  })
 })

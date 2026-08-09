@@ -778,4 +778,195 @@ describe('resolve-refs-from-file', () => {
     expect(r2.resolved).toMatchObject({ x: { type: 'string' } })
     expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
+
+  it('does not serve a permissively-fetched document to a stricter later call', async () => {
+    // `assertPublicHost` runs at fetch time only, so leaving the host guards out
+    // of the cache scope meant a call made with `allowPrivateHosts` warmed the
+    // cache for a URL a default-options call would have refused — and the later
+    // call, hitting the cache, never reached the guard.
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ type: 'string' }), { status: 200 }))
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ a: { $ref: 'https://svc.internal/s.json' } }))
+
+    const warm = await resolveRefsFromFile(join(dir, 'api.json'), { allowPrivateHosts: true })
+    expect(warm.resolved).toMatchObject({ a: { type: 'string' } })
+
+    const strict = await resolveRefsFromFile(join(dir, 'api.json'))
+    expect(strict.errors[0]?.message).toMatch(/Refusing to resolve remote/)
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a fragment that does not resolve inside a document that loaded', async () => {
+    // This inlined literal `undefined`, so the key vanished on serialization and
+    // a required property silently lost every constraint it had — with nothing
+    // on `errors` to say so.
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({
+        properties: { a: { $ref: '#/$defs/typo' }, b: { $ref: '#/$defs/real' } },
+        $defs: { real: { type: 'string' } },
+      }),
+    )
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'))
+
+    expect(errors[0]?.message).toMatch(/Cannot resolve \$ref "#\/\$defs\/typo"/)
+    // The node is kept rather than dropped, matching `resolveRefs`.
+    expect(resolved).toMatchObject({ properties: { a: { $ref: '#/$defs/typo' }, b: { type: 'string' } } })
+  })
+
+  it('does not double-report a fragment whose document failed to load', async () => {
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: './missing.json#/$defs/x' } }))
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'root.json'))
+
+    expect(errors.filter((error) => /Cannot resolve/.test(error.message))).toEqual([])
+    expect(errors).toHaveLength(1)
+  })
+
+  it('hoists a cross-file cycle without overwriting an existing root $defs entry', async () => {
+    // `hoistName` derives the name from the ref's file basename, so `b.json`
+    // collided with a root definition already called `b` — and the hoist then
+    // overwrote it, silently re-pointing every kept `#/$defs/b` cycle ref at the
+    // wrong schema.
+    writeFileSync(
+      join(dir, 'b.json'),
+      JSON.stringify({ $defs: { Node: { type: 'object', properties: { next: { $ref: '#/$defs/Node' } } } } }),
+    )
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({
+        $defs: { b: { type: 'string', title: 'the root one' } },
+        q: { $ref: './b.json#/$defs/Node' },
+      }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'))
+    const defs = (resolved as { $defs: Record<string, { title?: string }> }).$defs
+
+    expect(defs['b']).toMatchObject({ type: 'string', title: 'the root one' })
+    expect(Object.keys(defs).length).toBeGreaterThan(1)
+  })
+
+  it('does not alias the session cache in its result', async () => {
+    // Value-position subtrees were handed back by reference, and for a remote
+    // document that lives in the process-wide cache — so a caller mutating its
+    // own result corrupted every later resolve in the process.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ properties: { k: { enum: ['a', 'b'] } } }), { status: 200 }),
+    )
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ x: { $ref: 'https://example.com/s.json' } }))
+
+    const first = await resolveRefsFromFile(join(dir, 'api.json'))
+    ;(first.resolved as { x: { properties: { k: { enum: string[] } } } }).x.properties.k.enum.push('INJECTED')
+
+    const second = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    expect(second.resolved).toMatchObject({ x: { properties: { k: { enum: ['a', 'b'] } } } })
+  })
+
+  it('gives each ref to the same missing target its own kept node', async () => {
+    // Caching the kept node as an ordinary resolved value handed the second ref
+    // the first one's node, siblings and all.
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({
+        $defs: { real: { type: 'string' } },
+        first: { $ref: '#/nope', type: 'string' },
+        second: { $ref: '#/nope', minLength: 2, properties: { b: { $ref: '#/$defs/real' } } },
+      }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'))
+    const doc = resolved as { first: Record<string, unknown>; second: Record<string, unknown> }
+
+    expect(doc.second['type']).toBeUndefined()
+    expect(doc.first).not.toBe(doc.second)
+    // Siblings still resolve, the way every other kept-node branch behaves.
+    expect(doc.second['properties']).toStrictEqual({ b: { type: 'string' } })
+  })
+
+  it('copies a subtree handed back past maxDepth', async () => {
+    // `detach` was bounded by `maxDepth`, which is precisely the condition this
+    // call site guarantees — so the copy never happened and the result aliased
+    // the process-wide cache.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ deep: { deeper: { leaf: 'ORIGINAL' } } }), { status: 200 }),
+    )
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ x: { $ref: 'https://example.com/s.json' } }))
+
+    const first = await resolveRefsFromFile(join(dir, 'api.json'), { maxDepth: 2 })
+    ;(first.resolved as { x: { deep: { deeper: { leaf: string } } } }).x.deep.deeper.leaf = 'INJECTED'
+
+    const second = await resolveRefsFromFile(join(dir, 'api.json'), { maxDepth: 2 })
+
+    expect(second.resolved).toMatchObject({ x: { deep: { deeper: { leaf: 'ORIGINAL' } } } })
+  })
+
+  it('does not report a fragment whose document a budget stopped it reaching', async () => {
+    writeFileSync(join(dir, 'b.json'), JSON.stringify({ $defs: { Y: { type: 'string' } } }))
+    writeFileSync(join(dir, 'c.json'), JSON.stringify({ $defs: { Y: { type: 'number' } } }))
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ a: { $ref: './b.json#/$defs/Y' }, b: { $ref: './c.json#/$defs/Y' } }),
+    )
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'root.json'), { maxDocuments: 2 })
+
+    expect(errors.filter((error) => /Cannot resolve/.test(error.message))).toEqual([])
+    expect(errors[0]?.message).toMatch(/Refusing to load more than 2 documents/)
+  })
+
+  it('keeps a node whose document a budget stopped it reaching', async () => {
+    // Gating the *keep* on the same condition as the error meant a
+    // budget-truncated resolve inlined `undefined`, so the referencing node
+    // vanished on serialization — trading a duplicate error for silent loss of
+    // every constraint on it.
+    writeFileSync(join(dir, 'b.json'), JSON.stringify({ $defs: { Y: { type: 'string' } } }))
+    writeFileSync(join(dir, 'c.json'), JSON.stringify({ $defs: { Y: { type: 'number' } } }))
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ properties: { a: { $ref: './b.json#/$defs/Y' }, b: { $ref: './c.json#/$defs/Y' } } }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { maxDocuments: 2 })
+
+    expect(resolved).toMatchObject({
+      properties: { a: { type: 'string' }, b: { $ref: './c.json#/$defs/Y' } },
+    })
+  })
+
+  it('preserves key order when copying a value-position subtree', async () => {
+    // The copy walks an explicit LIFO stack, so keys have to be pushed in
+    // reverse or the copy comes out with its object keys reversed at every
+    // level.
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ type: 'object', default: { alpha: 1, beta: 2, gamma: { z: 1, y: 2 } } }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'))
+    const value = (resolved as { default: Record<string, unknown> }).default
+
+    expect(Object.keys(value)).toStrictEqual(['alpha', 'beta', 'gamma'])
+    expect(Object.keys(value['gamma'] as object)).toStrictEqual(['z', 'y'])
+  })
+
+  it('terminates on a cyclic document from a custom parse', async () => {
+    // A recursive YAML anchor produces exactly this. The recursive copy was
+    // bounded by maxDepth; the iterative one needs its own cycle guard.
+    writeFileSync(join(dir, 'root.json'), '{}')
+    const cyclic: Record<string, unknown> = { name: 'n' }
+    cyclic['child'] = cyclic
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), {
+      parse: () => ({ type: 'object', default: cyclic }),
+    })
+    const value = (resolved as { default: Record<string, unknown> }).default
+
+    // Copied, not aliased — but still a cycle, as it was in the source.
+    expect(value).not.toBe(cyclic)
+    expect(value['child']).toBe(value)
+  })
 })
