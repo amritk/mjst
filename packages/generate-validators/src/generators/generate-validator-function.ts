@@ -1067,6 +1067,14 @@ const generateValueCheckLines = (
 }
 
 /**
+ * An accessor TypeScript will narrow: a plain identifier, a dotted member chain,
+ * or an index by a numeric literal or a `const` variable. Anything else — an
+ * accessor reading through a cast, above all — has to be bound to a local before
+ * a `typeof` test in front of it means anything to the compiler.
+ */
+const NARROWABLE_REFERENCE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\[[A-Za-z_$][\w$]*\]|\[\d+\])*$/
+
+/**
  * A boolean expression that is `true` when `raw` matches `sub`. Reuses the value
  * checks but collects their errors into a throwaway local buffer, so the same
  * logic that produces error messages also answers the yes/no question the
@@ -1076,13 +1084,21 @@ const generateMatchesExpr = (raw: string, sub: JSONSchema, suffix: string, ctx: 
   if (sub === true) return 'true'
   if (sub === false) return 'false'
   if (!isSchemaObject(sub)) return 'true'
-  const checks = generateValueChecks('', raw, '`${_path}`', sub, suffix, ctx)
+  // A `typeof` test narrows a stable *reference*, and almost every call site
+  // passes one — `obj.a`, `_item0`, a `for…in` key index. The `unevaluated*`
+  // coverage sweep does not: it reads through a cast, `(input as Record<…>)[k]`,
+  // and TypeScript will not carry a narrowing across two spellings of that, so a
+  // constrained check behind it emitted `.length` on `unknown` and the generated
+  // file did not compile. The IIFE is somewhere to put a local, so bind it there.
+  const value = NARROWABLE_REFERENCE.test(raw) ? raw : `_mv${ctx.depth}`
+  const checks = generateValueChecks('', value, '`${_path}`', sub, suffix, ctx)
   if (checks.length === 0) return 'true'
   // The checks push to `errors`; redirect them to the IIFE-local `_m`. The outer
   // validator's `errors.push` → `(errors ??= [])` rewrite never sees these (they
   // are already `_m.push`), and nested match IIFEs each shadow their own `_m`.
   const body = checks.join('\n').replaceAll('errors.push(', '_m.push(')
-  return `((): boolean => { const _m: ValidationError[] = []\n${body}\n    return _m.length === 0 })()`
+  const binding = value === raw ? '' : `const ${value}: unknown = ${raw}\n`
+  return `((): boolean => { const _m: ValidationError[] = []\n${binding}${body}\n    return _m.length === 0 })()`
 }
 
 /**
@@ -1177,9 +1193,16 @@ const generateCombinatorChecks = (
 
   if (hasAnyOf(schema) && schema.anyOf.length > 0) {
     const conds = schema.anyOf.map((b) => generateMatchesExpr(raw, b, suffix, ctx))
-    lines.push(`  if (!(${conds.join(' || ')})) {`)
-    lines.push(`    errors.push({ message: 'must match a schema in anyOf', path: ${path} })`)
-    lines.push(`  }`)
+    // A branch that matches everything (`true`, `{}`, an annotation-only schema)
+    // makes the whole `anyOf` vacuous. Emitting it anyway produced
+    // `if (!(… || true))`, whose body TypeScript knows is unreachable — 58
+    // `TS7027`s across the two corpora, in output the repo compiles with
+    // `allowUnreachableCode: false`.
+    if (!conds.includes('true')) {
+      lines.push(`  if (!(${conds.join(' || ')})) {`)
+      lines.push(`    errors.push({ message: 'must match a schema in anyOf', path: ${path} })`)
+      lines.push(`  }`)
+    }
   }
 
   if (hasOneOf(schema) && schema.oneOf.length > 0) {
@@ -1192,9 +1215,17 @@ const generateCombinatorChecks = (
   const not = (schema as Record<string, unknown>)['not']
   if (not !== undefined && (isSchemaObject(not as JSONSchema) || typeof not === 'boolean')) {
     const cond = generateMatchesExpr(raw, not as JSONSchema, suffix, ctx)
-    lines.push(`  if (${cond}) {`)
-    lines.push(`    errors.push({ message: 'must NOT match the schema in not', path: ${path} })`)
-    lines.push(`  }`)
+    const report = `errors.push({ message: 'must NOT match the schema in not', path: ${path} })`
+    // `not: false` matches nothing, so the instance always passes; `not: true`
+    // (or `{}`) matches everything, so it never does. Wrapping either in its own
+    // `if` left a branch TypeScript can prove dead.
+    if (cond === 'true') {
+      lines.push(`  ${report}`)
+    } else if (cond !== 'false') {
+      lines.push(`  if (${cond}) {`)
+      lines.push(`    ${report}`)
+      lines.push(`  }`)
+    }
   }
 
   const ifSchema = (schema as Record<string, unknown>)['if']
@@ -1206,11 +1237,21 @@ const generateCombinatorChecks = (
     const elseLines =
       elseSchema !== undefined ? generateValueChecks(key, raw, path, elseSchema as JSONSchema, suffix, ctx) : []
     if (thenLines.length > 0 || elseLines.length > 0) {
-      lines.push(`  if (${generateMatchesExpr(raw, ifSchema as JSONSchema, suffix, ctx)}) {`)
-      lines.push(...thenLines)
-      lines.push(`  } else {`)
-      lines.push(...elseLines)
-      lines.push(`  }`)
+      // A statically-known `if` picks one arm, and emitting the other left it
+      // provably unreachable. `if: true` / `if: {}` always takes `then`;
+      // `if: false` always takes `else`.
+      const cond = generateMatchesExpr(raw, ifSchema as JSONSchema, suffix, ctx)
+      if (cond === 'true') {
+        lines.push(...thenLines)
+      } else if (cond === 'false') {
+        lines.push(...elseLines)
+      } else {
+        lines.push(`  if (${cond}) {`)
+        lines.push(...thenLines)
+        lines.push(`  } else {`)
+        lines.push(...elseLines)
+        lines.push(`  }`)
+      }
     }
   }
 
@@ -1785,8 +1826,21 @@ const generateObjectValidator = (
   }
 
   // Combinators declared alongside the object's properties (e.g. an object with
-  // `allOf` refining it further) are validated against the object value itself.
-  propertyLines.push(...generateCombinatorChecks('', 'obj', '`${_path}`', schema, suffix, ctx))
+  // `allOf` refining it further) are validated against the object value itself —
+  // read through `input`, the `unknown` parameter, rather than the narrowed `obj`.
+  // A branch from another type family compares the value against a string or a
+  // number (`{ type: 'object', oneOf: [{ enum: ['auto'] }, …] }` is a real
+  // OpenAPI shape), and against a `Record<string, unknown>` that is a `TS2367`
+  // followed by a cascade on `never`.
+  // `input` itself will not do: the shape check at the top of the function has
+  // already narrowed it to `object`, so a branch comparing the value against a
+  // string is `TS2367` all over again. Re-widening it to `unknown` costs nothing
+  // at runtime and is the same trick `dependentSelfBinding` plays.
+  const objectCombinators = generateCombinatorChecks('', '_root', '`${_path}`', schema, suffix, ctx)
+  if (objectCombinators.length > 0) {
+    propertyLines.push(`  const _root: unknown = input`)
+    propertyLines.push(...objectCombinators)
+  }
 
   // Lazily allocate the errors array so a valid input never builds one — the same
   // allocation-free happy path the runtime interpreter uses. Each emitted

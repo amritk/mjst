@@ -405,6 +405,31 @@ describe('keyword-composition', () => {
     }
   })
 
+  it('folds a combinator branch TypeScript can decide, without moving the verdict', () => {
+    // A vacuous `anyOf` branch, or an `if` / `not` whose subschema is `true` or
+    // `false`, used to be emitted as a live condition — leaving a body the
+    // compiler proves unreachable in output this repo builds with
+    // `allowUnreachableCode: false`. Folding is only safe if the verdict does not
+    // move, which is what these assert.
+    const cases: readonly { schema: unknown; values: readonly [unknown, boolean][] }[] = [
+      { schema: { anyOf: [{ type: 'string' }, true] }, values: [[1, true] as const, ['a', true] as const] },
+      { schema: { anyOf: [{ type: 'string' }, {}] }, values: [[1, true] as const, ['a', true] as const] },
+      {
+        schema: { if: true, then: { type: 'string' }, else: { type: 'number' } },
+        values: [['a', true] as const, [1, false] as const],
+      },
+      {
+        schema: { if: false, then: { type: 'string' }, else: { type: 'number' } },
+        values: [['a', false] as const, [1, true] as const],
+      },
+      { schema: { not: false }, values: [['a', true] as const, [1, true] as const] },
+      { schema: { type: 'string', not: true }, values: [['a', false] as const, [1, false] as const] },
+    ]
+    for (const { schema, values } of cases) {
+      for (const [value, valid] of values) expectAgreement(schema, value, valid)
+    }
+  })
+
   it('escapes a runtime key into its error path', () => {
     // Static keys already went through the generation-time escape; keys read at
     // runtime did not, so `{"a/b": 1}` reported `/a/b` — which reads back as the

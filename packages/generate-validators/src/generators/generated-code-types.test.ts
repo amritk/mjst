@@ -148,6 +148,44 @@ const CASES: ReadonlyArray<readonly [string, JSONSchema]> = [
   ['draft07-tuple', { type: 'array', items: [{ type: 'string' }, { type: 'number' }], additionalItems: false }],
   ['draft07-tuple-tail', { type: 'array', items: [{ type: 'string' }], additionalItems: { type: 'number' } }],
   ['empty-array', { type: 'array', items: false }],
+  // Combinator branches TypeScript can decide statically. Emitting the branch
+  // anyway left code it proves unreachable (`TS7027`, and the repo compiles this
+  // output with `allowUnreachableCode: false`) — 58 of them across the two
+  // vendored corpora.
+  ['anyof-with-always-matching-branch', { anyOf: [{ type: 'string' }, true] }],
+  ['anyof-with-empty-branch', { anyOf: [{ type: 'string' }, {}] }],
+  ['if-true', { if: true, then: { type: 'string' }, else: { type: 'number' } }],
+  ['if-false', { if: false, then: { type: 'string' }, else: { type: 'number' } }],
+  ['not-false', { not: false }],
+  ['not-true', { type: 'string', not: true }],
+  // A `type: "object"` root whose combinator branches belong to another family.
+  // The object validator read them against the narrowed `Record<string, unknown>`
+  // (later `object`), so `x === "auto"` was `TS2367` plus a cascade on `never`.
+  [
+    'object-root-with-cross-family-oneof',
+    {
+      type: 'object',
+      oneOf: [
+        { type: 'string', enum: ['auto'] },
+        { type: 'object', required: ['x'] },
+      ],
+    },
+  ],
+  // `unevaluatedProperties` reads each leftover key through a cast, which no
+  // `typeof` in front of it can narrow — so a *constrained* subschema emitted
+  // `.length` on `unknown`.
+  [
+    'unevaluated-properties-constrained',
+    {
+      type: 'object',
+      properties: { foo: { type: 'string' } },
+      unevaluatedProperties: { type: 'string', maxLength: 2 },
+    },
+  ],
+  [
+    'unevaluated-items-constrained',
+    { type: 'array', prefixItems: [{ type: 'string' }], unevaluatedItems: { type: 'number', minimum: 2 } },
+  ],
   [
     'proto-property',
     JSON.parse(
