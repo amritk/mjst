@@ -1121,24 +1121,31 @@ describe('generate-readme', () => {
       expect(content).toContain('<table>')
     })
 
-    it('never emits a splice marker that came from the schema', async () => {
-      // An end marker reaching the output would make the next run splice against
-      // this run's table, duplicating the region on every invocation. Escaping is
-      // what prevents it — including on the anchor path, the one place a property
-      // name reaches the output outside a <td>.
-      mockFs({
-        title: 'T',
-        properties: {
-          'evil <!-- config-table-end --> name': { type: 'object', properties: { x: { type: 'string' } } },
-          b: { type: 'string', 'x-cli-flag': '<!-- config-table-start -->' },
-        },
-      })
+    it('escapes a splice marker that reaches an HTML cell', async () => {
+      // Left in, it would make the next run splice against this run's table and
+      // duplicate the region on every invocation.
+      mockFs({ title: 'T', properties: { b: { type: 'string', 'x-cli-flag': '<!-- config-table-start -->' } } })
 
       await generateMarkdown()
 
       const [, content] = writeFileMock.mock.calls[0] ?? []
-      expect(content).not.toContain('<!-- config-table-end -->')
       expect(content).not.toContain('<!-- config-table-start -->')
+      expect(content).toContain('&lt;!-- config-table-start --&gt;')
+    })
+
+    it('refuses to write when a marker reaches the heading, which is not HTML', async () => {
+      // The `####` heading is a markdown code span, so its content is literal —
+      // escaping it there would double-escape and display the wrong name. The
+      // marker guard is what covers this path instead, and it fails loudly.
+      mockFs({
+        title: 'T',
+        properties: {
+          'evil <!-- config-table-end --> name': { type: 'object', properties: { x: { type: 'string' } } },
+        },
+      })
+
+      await expect(generateMarkdown()).rejects.toThrow(/would corrupt README\.md/)
+      expect(writeFileMock).not.toHaveBeenCalled()
     })
   })
 
@@ -1202,6 +1209,80 @@ describe('generate-readme', () => {
 
       expect(new Set(sizes).size).toBe(1)
       expect(readme).toContain('Ends at <!-- config-table-end -->.')
+    })
+  })
+
+  describe('round-2 hardening', () => {
+    it('collapses line endings in every cell, not just formatted values', async () => {
+      // A blank line inside the <table> ends its HTML block mid-row. CommonMark
+      // counts a bare CR as a line ending too.
+      mockFs({
+        title: 'T',
+        properties: {
+          'a\n\nb': { type: 'string', 'x-cli-flag': '--a\n\n--b', 'x-icon': 'i\n\nj', description: 'one\r\rtwo' },
+        },
+      })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      const table = String(content).slice(String(content).indexOf('<table>'), String(content).indexOf('</table>'))
+      expect(table).not.toMatch(/\n[ \t]*\n/)
+      expect(table).not.toMatch(/\r/)
+    })
+
+    it('does not escape the heading, which is a markdown code span', async () => {
+      // Code-span content is literal, so the renderer escapes it — escaping here
+      // too displayed `a&amp;b` while the linking cell showed `a&b`.
+      mockFs({ title: 'T', properties: { 'a&b': { type: 'object', properties: { x: { type: 'string' } } } } })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).toContain('#### `a&b`')
+    })
+
+    it('documents a property named __proto__', async () => {
+      // Plain assignment sets the prototype, so the property vanished silently.
+      // Only JSON.parse can produce this key, never a JS object literal.
+      mockFs(JSON.parse('{"title":"T","properties":{"__proto__":{"type":"string"},"normal":{"type":"number"}}}'))
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).toContain('<code>__proto__</code>')
+      expect(content).toContain('<code>normal</code>')
+    })
+
+    it('renders a non-finite default the way a nested one renders', async () => {
+      // Via JSON.parse, the way an overflowing literal actually reaches the
+      // renderer — the number is already `Infinity` by the time it is read.
+      mockFs(JSON.parse('{"title":"T","properties":{"a":{"type":"number","default":1e400}}}'))
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      // `Infinity` is not JSON — documenting it tells the reader to type
+      // something their parser rejects.
+      expect(content).not.toContain('Infinity')
+    })
+
+    it('tolerates keywords whose value has the wrong type', async () => {
+      // The schema is parsed, never validated, so every declared type is a hope.
+      const cases: unknown[] = [
+        { title: 'T', properties: { a: { type: 'object', properties: null } } },
+        { title: 'T', properties: { a: { type: 'string', enum: 'abc' } } },
+        { title: 'T', properties: { a: { type: 'string', examples: 'abc' } } },
+        { title: 'T', properties: { a: { type: 'string', description: 5 } } },
+        { title: 'T', required: 5, properties: { a: { type: 'string' } } },
+        { title: 'T', properties: { a: { type: 'object', required: {}, properties: { b: { type: 'string' } } } } },
+      ]
+
+      for (const schema of cases) {
+        writeFileMock.mockReset()
+        mockFs(schema)
+        await expect(generateMarkdown()).resolves.toBeUndefined()
+      }
     })
   })
 })

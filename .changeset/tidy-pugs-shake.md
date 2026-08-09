@@ -24,3 +24,14 @@ the whole package:
 - A non-string `x-cli-flag`/`x-icon` no longer throws a bare `TypeError`, an
   empty `x-cli-flag` no longer adds an always-blank column, and a schema with no
   `properties` renders instead of crashing.
+- Line endings are collapsed in *every* cell, not just formatted values — a
+  newline in a property name, `x-cli-flag`, `x-icon` or type ended the table's
+  HTML block the same way.
+- A property named `__proto__` is documented instead of silently vanishing
+  (plain assignment set the prototype).
+- A non-finite `default` renders the way a nested one already did, rather than
+  documenting `Infinity` — which is not JSON.
+- Keywords whose value has the wrong type (`enum: "abc"`, `required: 5`,
+  `description: 5`, `properties: null`) no longer throw a bare `TypeError`
+  naming neither the property nor the file.
+

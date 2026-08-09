@@ -79,6 +79,15 @@ const resolvePointer = (root: Record<string, unknown>, ref: string): unknown => 
 }
 
 /**
+ * Assigns an own property. Plain assignment sets the prototype for a key named
+ * `__proto__`, so a property with that name silently vanished from the README —
+ * `JSON.parse` can produce it even though a JS object literal cannot.
+ */
+const defineOwn = (target: Record<string, unknown>, key: string, value: unknown): void => {
+  Object.defineProperty(target, key, { value, enumerable: true, writable: true, configurable: true })
+}
+
+/**
  * Keywords whose value is *data* rather than a subschema. A `{"$ref": …}` sitting
  * in one of these is a documented config value that happens to be `$ref`-shaped,
  * not a reference to follow — inlining it would replace the value the reader is
@@ -132,9 +141,9 @@ const dereference = (node: unknown, root: Record<string, unknown>, seen: Readonl
     if (DATA_KEYWORDS.has(key)) resolved[key] = value
     else if (SCHEMA_MAP_KEYWORDS.has(key) && isObject(value)) {
       const entries: Record<string, unknown> = {}
-      for (const [name, child] of Object.entries(value)) entries[name] = dereference(child, root, seen)
+      for (const [name, child] of Object.entries(value)) defineOwn(entries, name, dereference(child, root, seen))
       resolved[key] = entries
-    } else resolved[key] = dereference(value, root, seen)
+    } else defineOwn(resolved, key, dereference(value, root, seen))
   }
   return resolved
 }
@@ -159,10 +168,10 @@ const unionOf = (parts: readonly string[]): string => [...new Set(parts.filter((
 const displayType = (prop: SchemaProperty): string => {
   if (typeof prop.type === 'string') return prop.type
   if (Array.isArray(prop.type)) return unionOf(prop.type.filter((entry): entry is string => typeof entry === 'string'))
-  if (prop.enum && prop.enum.length > 0) return unionOf(prop.enum.map(jsonTypeOf))
+  if (asArray(prop.enum).length > 0) return unionOf(asArray(prop.enum).map(jsonTypeOf))
   if (prop.const !== undefined) return jsonTypeOf(prop.const)
   for (const variants of [prop.anyOf, prop.oneOf, prop.allOf]) {
-    if (variants && variants.length > 0) {
+    if (asArray(variants).length > 0 && variants) {
       const union = unionOf(variants.map(displayType).filter((type) => type !== 'null'))
       if (union.length > 0) return union
     }
@@ -176,7 +185,15 @@ const displayType = (prop: SchemaProperty): string => {
  * Escapes the HTML-significant characters so schema text (and CLI flags such as
  * `--schema <path>`) renders literally inside the HTML table cells.
  */
-const escapeHtml = (value: string): string => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+const escapeHtml = (value: string): string =>
+  value
+    // A line ending inside the <table> ends its HTML block mid-row, so every tag
+    // after it renders as literal text. CommonMark counts a bare CR as a line
+    // ending too, which is why both are collapsed rather than just `\n`.
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
 
 /**
  * Formats a JSON value for inline display inside an HTML table cell. Strings get
@@ -188,7 +205,12 @@ const escapeHtml = (value: string): string => value.replace(/&/g, '&amp;').repla
  */
 const formatValue = (value: unknown): string => {
   if (value === undefined || value === null) return ''
-  if (typeof value === 'boolean' || typeof value === 'number') return `<code>${value}</code>`
+  // `Number.isFinite` guards the one case where interpolation and
+  // `JSON.stringify` disagree: 1e400 would be documented as `Infinity`, telling
+  // the reader to type something their JSON parser rejects.
+  if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) {
+    return `<code>${value}</code>`
+  }
   return `<code>${escapeHtml(JSON.stringify(value))}</code>`
 }
 
@@ -200,7 +222,9 @@ const formatValue = (value: unknown): string => {
  * both contradict the Type column and leave a dangling separator.
  */
 const formatList = (values: readonly unknown[]): string =>
-  values.map((value) => (value === null ? '<code>null</code>' : formatValue(value))).join(', ')
+  asArray(values)
+    .map((value) => (value === null ? '<code>null</code>' : formatValue(value)))
+    .join(', ')
 
 /**
  * Builds the content of the full-width row beneath a property's metadata. It
@@ -210,10 +234,10 @@ const formatList = (values: readonly unknown[]): string =>
  */
 const renderDetailCell = (prop: SchemaProperty): string => {
   // First paragraph gives enough context without making the table unwieldy
-  const desc = escapeHtml(prop.description?.split('\n\n')[0]?.replace(/\n/g, ' ') ?? '')
+  const desc = escapeHtml(asText(prop.description).split('\n\n')[0] ?? '')
   const lines = [desc]
-  if (prop.enum && prop.enum.length > 0) lines.push(`<strong>Allowed:</strong> ${formatList(prop.enum)}`)
-  if (prop.examples && prop.examples.length > 0) lines.push(`<strong>Examples:</strong> ${formatList(prop.examples)}`)
+  if (asArray(prop.enum).length > 0) lines.push(`<strong>Allowed:</strong> ${formatList(prop.enum ?? [])}`)
+  if (asArray(prop.examples).length > 0) lines.push(`<strong>Examples:</strong> ${formatList(prop.examples ?? [])}`)
   return lines.filter((line) => line.length > 0).join('<br>')
 }
 
@@ -240,6 +264,17 @@ const stringExtension = (value: unknown): string | undefined =>
   typeof value === 'string' && value.length > 0 ? value : undefined
 
 /**
+ * The array-valued keywords, defensively. Same rationale as
+ * {@link stringExtension}: the schema is parsed, never validated, so `enum: "abc"`
+ * or `required: 5` would otherwise reach `.map` / `new Set` and throw a bare
+ * `TypeError` naming neither the property nor the file.
+ */
+const asArray = <T>(value: readonly T[] | undefined): readonly T[] => (Array.isArray(value) ? value : [])
+
+/** The `description` keyword, defensively. See {@link asArray}. */
+const asText = (value: unknown): string => (typeof value === 'string' ? value : '')
+
+/**
  * True when the schema (or any nested object) marks at least one property as
  * required. Required-ness lives on the parent's `required` array rather than on
  * the property itself, so this walks the `required`/`properties` pairs directly.
@@ -248,7 +283,7 @@ const anyRequired = (node: {
   readonly required?: readonly string[]
   readonly properties?: Readonly<Record<string, SchemaProperty>>
 }): boolean => {
-  if (node.required && node.required.length > 0) return true
+  if (asArray(node.required).length > 0) return true
   return node.properties ? Object.values(node.properties).some(anyRequired) : false
 }
 
@@ -299,7 +334,7 @@ const renderTableHead = (columns: Columns): string => {
 const anchorId = (path: string): string => `config-${path.replace(/[^A-Za-z0-9_-]/g, '-')}`
 
 const isObjectWithProperties = (prop: SchemaProperty): boolean =>
-  prop.properties !== undefined && Object.keys(prop.properties).length > 0
+  isObject(prop.properties) && Object.keys(prop.properties).length > 0
 
 /**
  * Identifies a node by its path *segments* rather than the dotted path they
@@ -410,12 +445,12 @@ const renderTables = (
   // schema-controlled text, and it is the one place a property name reaches the
   // output outside a `<td>`.
   const block = segments.length
-    ? `<a id="${anchors.get(anchorKey(segments)) ?? anchorId(path)}"></a>\n#### \`${escapeHtml(path)}\`\n\n${table}`
+    ? `<a id="${anchors.get(anchorKey(segments)) ?? anchorId(path)}"></a>\n#### \`${path}\`\n\n${table}`
     : table
 
   const nested = entries.flatMap(([name, prop]) => {
     if (!isObjectWithProperties(prop) || !prop.properties) return []
-    return renderTables(prop.properties, new Set(prop.required ?? []), [...segments, name], columns, anchors)
+    return renderTables(prop.properties, new Set(asArray(prop.required)), [...segments, name], columns, anchors)
   })
 
   return [block, ...nested]
@@ -427,7 +462,7 @@ const renderTables = (
  * from the schema so each table stays readable without losing context.
  */
 const renderConfigTable = (schema: ConfigSchema): string => {
-  const required = new Set(schema.required ?? [])
+  const required = new Set(asArray(schema.required))
   const columns = resolveColumns(schema)
   const anchors = buildAnchorIds(schema.properties)
   return renderTables(schema.properties, required, [], columns, anchors).join('\n\n')
