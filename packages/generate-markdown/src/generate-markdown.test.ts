@@ -1347,6 +1347,21 @@ describe('generate-readme', () => {
       expect(heading).toBe('#### `` ` a ` ``')
     })
 
+    it('does not pad an all-spaces name in the heading', async () => {
+      // CommonMark strips one leading and trailing space only when the content
+      // is not entirely spaces, so padding here just widens the name. Tabs and
+      // NBSP *are* stripped, so those must stay padded.
+      mockFs({ title: 'T', properties: { '   ': { type: 'object', properties: { x: { type: 'string' } } } } })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      const heading = String(content)
+        .split('\n')
+        .find((line) => line.startsWith('#### '))
+      expect(heading).toBe('#### `   `')
+    })
+
     it('truncates a CRLF-authored description to its first paragraph', async () => {
       // CommonMark ends a paragraph at any blank line: CRLF, CR-only, and a
       // line holding only spaces or tabs.
