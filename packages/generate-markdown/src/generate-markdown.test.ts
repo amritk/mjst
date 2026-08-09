@@ -1038,4 +1038,170 @@ describe('generate-readme', () => {
       expect(content).toContain('testProp')
     })
   })
+
+  describe('hostile schema input', () => {
+    it('escapes control characters in string values so the table survives', async () => {
+      // A raw newline inside the <table> ends the HTML block: every tag after it
+      // renders as literal text and the row structure is lost.
+      mockFs({ title: 'T', properties: { banner: { type: 'string', default: 'line one\n\nline two' } } })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).toContain('line one\\n\\nline two')
+      const table = String(content).slice(0, String(content).indexOf('</table>'))
+      expect(table).not.toContain('\n\n')
+    })
+
+    it('renders null members of enum and examples instead of dropping them', async () => {
+      mockFs({
+        title: 'T',
+        properties: { mode: { type: ['string', 'null'], enum: ['auto', null], examples: [null] } },
+      })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      // Blank would both contradict the Type column and leave a dangling `, `.
+      expect(content).toContain('<code>"auto"</code>, <code>null</code>')
+      expect(content).toContain('<strong>Examples:</strong> <code>null</code>')
+    })
+
+    it('keeps anchor ids free of characters that would end the attribute', async () => {
+      mockFs({ title: 'T', properties: { 'a"b': { type: 'object', properties: { x: { type: 'string' } } } } })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).toContain('<a id="config-a-b"></a>')
+      expect(content).not.toContain('config-a"b')
+    })
+
+    it('gives colliding paths distinct anchor ids', async () => {
+      // `a.b` the property name and `b` nested under `a` both display as `a.b`,
+      // so the id has to disambiguate or one table becomes unreachable.
+      mockFs({
+        title: 'T',
+        properties: {
+          'a.b': { type: 'object', properties: { z: { type: 'string' } } },
+          a: { type: 'object', properties: { b: { type: 'object', properties: { y: { type: 'string' } } } } },
+        },
+      })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      const ids = [...String(content).matchAll(/<a id="([^"]+)"/g)].map(([, id]) => id)
+      expect(ids).toStrictEqual(['config-a-b', 'config-a', 'config-a-b-2'])
+    })
+
+    it('tolerates non-string x-cli-flag and x-icon values', async () => {
+      // The schema is parsed, never validated, so the declared type is a hope.
+      mockFs({ title: 'T', properties: { a: { type: 'string', 'x-cli-flag': 42, 'x-icon': 7 } } })
+
+      await expect(generateMarkdown()).resolves.toBeUndefined()
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).not.toContain('CLI Flag')
+    })
+
+    it('omits the CLI Flag column when every flag is an empty string', async () => {
+      mockFs({ title: 'T', properties: { a: { type: 'string', 'x-cli-flag': '' }, b: { type: 'string' } } })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).not.toContain('<th>CLI Flag</th>')
+    })
+
+    it('renders a schema that declares no properties', async () => {
+      mockFs({ title: 'T', type: 'object', description: 'nothing' })
+
+      await expect(generateMarkdown()).resolves.toBeUndefined()
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).toContain('<table>')
+    })
+
+    it('never emits a splice marker that came from the schema', async () => {
+      // An end marker reaching the output would make the next run splice against
+      // this run's table, duplicating the region on every invocation. Escaping is
+      // what prevents it — including on the anchor path, the one place a property
+      // name reaches the output outside a <td>.
+      mockFs({
+        title: 'T',
+        properties: {
+          'evil <!-- config-table-end --> name': { type: 'object', properties: { x: { type: 'string' } } },
+          b: { type: 'string', 'x-cli-flag': '<!-- config-table-start -->' },
+        },
+      })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).not.toContain('<!-- config-table-end -->')
+      expect(content).not.toContain('<!-- config-table-start -->')
+    })
+  })
+
+  describe('$ref inlining', () => {
+    it('leaves $ref-shaped values inside default and examples untouched', async () => {
+      mockFs({
+        title: 'T',
+        $defs: { secret: { type: 'string', description: 'SHOULD NOT APPEAR' } },
+        properties: {
+          tpl: { type: 'object', default: { $ref: '#/$defs/secret' }, examples: [{ $ref: '#/$defs/secret' }] },
+        },
+      })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      // A documented config value that happens to be $ref-shaped is data, not a
+      // reference — inlining it replaces the value the reader is meant to copy.
+      expect(content).not.toContain('SHOULD NOT APPEAR')
+      expect(content).toContain('#/$defs/secret')
+    })
+
+    it('still inlines a property whose name is a data keyword', async () => {
+      mockFs({
+        title: 'T',
+        $defs: { thing: { type: 'string', description: 'REAL DEF' } },
+        properties: { default: { $ref: '#/$defs/thing' } },
+      })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).toContain('REAL DEF')
+    })
+  })
+
+  describe('README splicing', () => {
+    it('is idempotent when the end marker also appears above the region', async () => {
+      const schema = { title: 'T', properties: { a: { type: 'string' } } }
+      let readme = 'Ends at <!-- config-table-end -->.\n\n<!-- config-table-start -->\nold\n<!-- config-table-end -->\n'
+
+      // Taking the document's *first* end marker sliced backwards, duplicating
+      // the span between the two indices on every run.
+      const sizes: number[] = []
+      for (let run = 0; run < 3; run++) {
+        readFileMock.mockImplementation(async (path) => {
+          if (typeof path === 'string') {
+            if (path.includes('config.schema.json')) return JSON.stringify(schema)
+            if (path.includes('README.md')) return readme
+          }
+          throw new Error('Unexpected file path')
+        })
+        writeFileMock.mockReset()
+        writeFileMock.mockImplementation(async () => {})
+
+        await generateMarkdown()
+
+        readme = String(writeFileMock.mock.calls[0]?.[1] ?? '')
+        sizes.push(readme.length)
+      }
+
+      expect(new Set(sizes).size).toBe(1)
+      expect(readme).toContain('Ends at <!-- config-table-end -->.')
+    })
+  })
 })
