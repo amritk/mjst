@@ -778,4 +778,91 @@ describe('resolve-refs-from-file', () => {
     expect(r2.resolved).toMatchObject({ x: { type: 'string' } })
     expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
+
+  it('does not serve a permissively-fetched document to a stricter later call', async () => {
+    // `assertPublicHost` runs at fetch time only, so leaving the host guards out
+    // of the cache scope meant a call made with `allowPrivateHosts` warmed the
+    // cache for a URL a default-options call would have refused — and the later
+    // call, hitting the cache, never reached the guard.
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ type: 'string' }), { status: 200 }))
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ a: { $ref: 'https://svc.internal/s.json' } }))
+
+    const warm = await resolveRefsFromFile(join(dir, 'api.json'), { allowPrivateHosts: true })
+    expect(warm.resolved).toMatchObject({ a: { type: 'string' } })
+
+    const strict = await resolveRefsFromFile(join(dir, 'api.json'))
+    expect(strict.errors[0]?.message).toMatch(/Refusing to resolve remote/)
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a fragment that does not resolve inside a document that loaded', async () => {
+    // This inlined literal `undefined`, so the key vanished on serialization and
+    // a required property silently lost every constraint it had — with nothing
+    // on `errors` to say so.
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({
+        properties: { a: { $ref: '#/$defs/typo' }, b: { $ref: '#/$defs/real' } },
+        $defs: { real: { type: 'string' } },
+      }),
+    )
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'))
+
+    expect(errors[0]?.message).toMatch(/Cannot resolve \$ref "#\/\$defs\/typo"/)
+    // The node is kept rather than dropped, matching `resolveRefs`.
+    expect(resolved).toMatchObject({ properties: { a: { $ref: '#/$defs/typo' }, b: { type: 'string' } } })
+  })
+
+  it('does not double-report a fragment whose document failed to load', async () => {
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: './missing.json#/$defs/x' } }))
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'root.json'))
+
+    expect(errors.filter((error) => /Cannot resolve/.test(error.message))).toEqual([])
+    expect(errors).toHaveLength(1)
+  })
+
+  it('hoists a cross-file cycle without overwriting an existing root $defs entry', async () => {
+    // `hoistName` derives the name from the ref's file basename, so `b.json`
+    // collided with a root definition already called `b` — and the hoist then
+    // overwrote it, silently re-pointing every kept `#/$defs/b` cycle ref at the
+    // wrong schema.
+    writeFileSync(
+      join(dir, 'b.json'),
+      JSON.stringify({ $defs: { Node: { type: 'object', properties: { next: { $ref: '#/$defs/Node' } } } } }),
+    )
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({
+        $defs: { b: { type: 'string', title: 'the root one' } },
+        q: { $ref: './b.json#/$defs/Node' },
+      }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'))
+    const defs = (resolved as { $defs: Record<string, { title?: string }> }).$defs
+
+    expect(defs['b']).toMatchObject({ type: 'string', title: 'the root one' })
+    expect(Object.keys(defs).length).toBeGreaterThan(1)
+  })
+
+  it('does not alias the session cache in its result', async () => {
+    // Value-position subtrees were handed back by reference, and for a remote
+    // document that lives in the process-wide cache — so a caller mutating its
+    // own result corrupted every later resolve in the process.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ properties: { k: { enum: ['a', 'b'] } } }), { status: 200 }),
+    )
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ x: { $ref: 'https://example.com/s.json' } }))
+
+    const first = await resolveRefsFromFile(join(dir, 'api.json'))
+    ;(first.resolved as { x: { properties: { k: { enum: string[] } } } }).x.properties.k.enum.push('INJECTED')
+
+    const second = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    expect(second.resolved).toMatchObject({ x: { properties: { k: { enum: ['a', 'b'] } } } })
+  })
 })

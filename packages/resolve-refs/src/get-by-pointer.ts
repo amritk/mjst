@@ -39,6 +39,12 @@ export const pointerToPath = (pointer: string): JsonPath => {
  * `root`. A bare `''` or `'/'` returns the root document. Segment escapes are
  * decoded (`~1` → `/`, `~0` → `~`). Returns `undefined` when any segment along
  * the path is missing or traverses a non-object.
+ *
+ * Only *own* properties are addressable. A plain `[key]` read let `#/constructor`
+ * resolve to `Object`'s constructor and inline a JS function into the
+ * "dereferenced" document — and, on a process where anything had polluted
+ * `Object.prototype`, let an arbitrary `#/<name>` resolve to the injected value
+ * instead of being reported as unresolvable.
  */
 export const getByPointer = (root: unknown, pointer: string): unknown => {
   if (pointer === '' || pointer === '/') return root
@@ -49,6 +55,7 @@ export const getByPointer = (root: unknown, pointer: string): unknown => {
   for (const segment of segments) {
     if (current === null || typeof current !== 'object') return undefined
     const key = Array.isArray(current) ? Number(segment) : segment
+    if (!Object.hasOwn(current, key)) return undefined
     current = (current as Record<string, unknown>)[key]
   }
   return current
