@@ -16,7 +16,9 @@ Fix six bugs found by an audit of the resolver, two of them security-relevant.
   default-options call would have refused — and the later call, hitting the
   cache, never reached the guard. `allowPrivateHosts` and `allowedHosts` are now
   part of the cache key, alongside the credentials and limits already there.
-- **Cross-file cycle hoisting could overwrite a root `$defs` entry.** The hoisted
+- **Cross-file cycle hoisting could overwrite a root `$defs` entry** (when the
+  root declares `$defs` directly; a root whose `$defs` arrives through a `$ref`
+  is not yet covered). The hoisted
   name is derived from the ref's file basename, so `b.json` collided with a root
   definition already called `b` and silently re-pointed every kept `#/$defs/b`
   cycle ref at the wrong schema.
@@ -32,3 +34,12 @@ Fix six bugs found by an audit of the resolver, two of them security-relevant.
 - **`pathToRef` did not percent-encode.** A `$defs` key containing `%` produced a
   kept cycle `$ref` that read back as a different key, so it resolved to nothing
   in the output document.
+- A second `$ref` to the same missing target was handed the *first* ref's node,
+  inheriting its sibling keywords. The kept node now resolves its own siblings
+  and no longer aliases the parsed document.
+- A subtree handed back past `maxDepth` still aliased the session cache: the
+  copy was bounded by `maxDepth`, which is exactly the condition that call site
+  guarantees, so it never ran. The copy is iterative now and needs no bound.
+- A ref whose document a `maxDocuments` / `totalTimeoutMs` budget stopped the
+  resolver reaching is no longer reported twice.
+

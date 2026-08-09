@@ -865,4 +865,56 @@ describe('resolve-refs-from-file', () => {
 
     expect(second.resolved).toMatchObject({ x: { properties: { k: { enum: ['a', 'b'] } } } })
   })
+
+  it('gives each ref to the same missing target its own kept node', async () => {
+    // Caching the kept node as an ordinary resolved value handed the second ref
+    // the first one's node, siblings and all.
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({
+        $defs: { real: { type: 'string' } },
+        first: { $ref: '#/nope', type: 'string' },
+        second: { $ref: '#/nope', minLength: 2, properties: { b: { $ref: '#/$defs/real' } } },
+      }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'))
+    const doc = resolved as { first: Record<string, unknown>; second: Record<string, unknown> }
+
+    expect(doc.second['type']).toBeUndefined()
+    expect(doc.first).not.toBe(doc.second)
+    // Siblings still resolve, the way every other kept-node branch behaves.
+    expect(doc.second['properties']).toStrictEqual({ b: { type: 'string' } })
+  })
+
+  it('copies a subtree handed back past maxDepth', async () => {
+    // `detach` was bounded by `maxDepth`, which is precisely the condition this
+    // call site guarantees — so the copy never happened and the result aliased
+    // the process-wide cache.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ deep: { deeper: { leaf: 'ORIGINAL' } } }), { status: 200 }),
+    )
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ x: { $ref: 'https://example.com/s.json' } }))
+
+    const first = await resolveRefsFromFile(join(dir, 'api.json'), { maxDepth: 2 })
+    ;(first.resolved as { x: { deep: { deeper: { leaf: string } } } }).x.deep.deeper.leaf = 'INJECTED'
+
+    const second = await resolveRefsFromFile(join(dir, 'api.json'), { maxDepth: 2 })
+
+    expect(second.resolved).toMatchObject({ x: { deep: { deeper: { leaf: 'ORIGINAL' } } } })
+  })
+
+  it('does not report a fragment whose document a budget stopped it reaching', async () => {
+    writeFileSync(join(dir, 'b.json'), JSON.stringify({ $defs: { Y: { type: 'string' } } }))
+    writeFileSync(join(dir, 'c.json'), JSON.stringify({ $defs: { Y: { type: 'number' } } }))
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ a: { $ref: './b.json#/$defs/Y' }, b: { $ref: './c.json#/$defs/Y' } }),
+    )
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'root.json'), { maxDocuments: 2 })
+
+    expect(errors.filter((error) => /Cannot resolve/.test(error.message))).toEqual([])
+    expect(errors[0]?.message).toMatch(/Refusing to load more than 2 documents/)
+  })
 })

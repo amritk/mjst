@@ -33,9 +33,13 @@ import type { JsonPath, OriginMap, ResolveError, ResolveOptions, ResolveResult }
 // hoisting the target into `$defs` when it lives in another file) instead of
 // recursing forever.
 const CYCLE = Symbol('cycle')
+// A ref whose target does not exist. Distinct from a resolved entry so a second
+// ref to the same missing target builds its own kept node instead of being
+// handed the first one — siblings and all.
+const MISSING = Symbol('missing')
 // The inlined value, the in-document path it came from (for `origins`), and the
 // `$id` base it was defined under (for the scope check in `resolveAt`).
-type CacheValue = { value: unknown; pointer: JsonPath; base: string } | typeof CYCLE
+type CacheValue = { value: unknown; pointer: JsonPath; base: string } | typeof CYCLE | typeof MISSING
 
 /** See {@link ANNOTATION_ONLY_SIBLINGS} in resolve-refs.ts — same rule here. */
 const ANNOTATION_ONLY_SIBLINGS = new Set(['summary', 'description'])
@@ -474,18 +478,52 @@ const escapeSegment = (segment: string): string => segment.replace(/~/g, '~0').r
  * back by reference: those nodes belong to a document in the process-wide
  * session cache, and the resolved tree is the caller's to mutate.
  */
-const detach = (node: unknown, depth: number, maxDepth: number): unknown => {
-  // Bounded by the resolver's own depth limit, which exists so a pathologically
-  // nested document unwinds gracefully instead of raising a RangeError. A copy
-  // that recursed past it would reintroduce exactly that stack overflow.
-  if (depth > maxDepth) return node
-  if (Array.isArray(node)) return node.map((item) => detach(item, depth + 1, maxDepth))
+const detach = (node: unknown): unknown => {
   if (node === null || typeof node !== 'object') return node
-  const copy: Record<string, unknown> = {}
-  for (const key of Object.keys(node)) {
-    assignKey(copy, key, detach((node as Record<string, unknown>)[key], depth + 1, maxDepth))
+  // Iterative, because the documents this guards against are exactly the deeply
+  // nested ones. A recursive copy would need a depth bound, and bounding it by
+  // `maxDepth` made the depth-limit call site — which is only reached when
+  // `depth > maxDepth` — a guaranteed no-op.
+  const out: { value: unknown } = { value: undefined }
+  const stack: { src: unknown; set: (value: unknown) => void }[] = [
+    {
+      src: node,
+      set: (value) => {
+        out.value = value
+      },
+    },
+  ]
+  while (stack.length > 0) {
+    const frame = stack.pop()
+    if (frame === undefined) break
+    const { src, set } = frame
+    if (src === null || typeof src !== 'object') {
+      set(src)
+      continue
+    }
+    if (Array.isArray(src)) {
+      const copy: unknown[] = new Array(src.length)
+      set(copy)
+      src.forEach((item, index) => {
+        stack.push({
+          src: item,
+          set: (value) => {
+            copy[index] = value
+          },
+        })
+      })
+      continue
+    }
+    const copy: Record<string, unknown> = {}
+    set(copy)
+    for (const key of Object.keys(src)) {
+      stack.push({
+        src: (src as Record<string, unknown>)[key],
+        set: (value) => assignKey(copy, key, value),
+      })
+    }
   }
-  return copy
+  return out.value
 }
 
 /** Renders a {@link JsonPath} as a `#/...` ref string. */
@@ -756,13 +794,13 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     // remote document that lives in the process-wide session cache, so a caller
     // mutating its own result (pushing onto a resolved `enum`) corrupted the
     // cached copy every later resolve in the process would be handed.
-    if (role === 'value') return detach(node, depth, maxDepth)
+    if (role === 'value') return detach(node)
     if (depth > maxDepth) {
       // Past the limit we hand the subtree back untouched instead of unwinding
       // the stack with a RangeError. Nothing is lost — the branch simply keeps
       // its `$ref`s — and the failure is on `errors` where callers look.
       reportDepthLimit()
-      return detach(node, depth, maxDepth)
+      return detach(node)
     }
     if (Array.isArray(node)) {
       const items = node.map((item, index) => resolveAt(item, baseLocation, base, depth + 1, childRole(role, index)))
@@ -862,6 +900,19 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         assignKey(kept, '$ref', keptRef)
         return kept
       }
+      // Keeps the reference, with siblings resolved — the shape every other
+      // kept-node branch produces. Returning the raw parsed node instead left
+      // resolvable sibling refs unresolved and aliased the session cache.
+      const keepUnresolved = (): unknown => {
+        const kept: Record<string, unknown> = {}
+        for (const key of Object.keys(obj)) {
+          if (key === keyword) continue
+          assignKey(kept, key, resolveAt(obj[key], baseLocation, nodeBase, depth + 1, childRole(role, key)))
+        }
+        assignKey(kept, keyword, value)
+        return kept
+      }
+      if (cached === MISSING) return keepUnresolved()
       if (cached !== undefined) {
         resolved = cached.value
         pointer = cached.pointer
@@ -902,13 +953,18 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         // Scoped only to a loaded document on purpose. When the document itself
         // was refused or unreadable the loader has already recorded that, and
         // the ref inlining as `undefined` is the established, tested outcome.
-        if (found === undefined && !unloadable.has(targetLocation)) {
+        // Reported only when the target document is present and loaded fine.
+        // A document that was refused or unreadable is cached as `{}` (hence
+        // `unloadable`), and one the prefetch never reached at all — because a
+        // `maxDocuments` / `totalTimeoutMs` budget ran out — is absent from
+        // `docCache`. Both already have an error of their own.
+        if (found === undefined && docCache.has(targetLocation) && !unloadable.has(targetLocation)) {
           errors.push({
             message: `Cannot resolve ${keyword} "${value}"`,
             path: fragment === '' || fragment.startsWith('/') ? pointerToPath(fragment) : [],
           })
-          refCache.set(cacheKey, { value: obj, pointer: [], base: targetBase })
-          return obj
+          refCache.set(cacheKey, MISSING)
+          return keepUnresolved()
         }
         pointer = found?.pointer ?? []
         // The target is walked with the role it has where it is *defined*, so a
@@ -1016,7 +1072,8 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
           : {}
       for (const [cacheKey, name] of hoists) {
         const cached = refCache.get(cacheKey)
-        assignKey(defs, name, cached !== undefined && cached !== CYCLE ? (cached.value ?? {}) : {})
+        const attachable = cached !== undefined && cached !== CYCLE && cached !== MISSING
+        assignKey(defs, name, attachable ? (cached.value ?? {}) : {})
       }
       assignKey(container, '$defs', defs)
     } else {
