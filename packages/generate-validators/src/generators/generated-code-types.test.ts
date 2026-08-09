@@ -311,12 +311,84 @@ const typeErrors = (sources: ReadonlyMap<string, string>): string[] => {
     )
 }
 
+/**
+ * A `$ref` in every position the schema language offers, swept rather than
+ * hand-picked.
+ *
+ * Each emitted import is combined — `import { type A, validateA }` — so the
+ * import list has to cover what the *type* names as well as what the validator
+ * calls, and the two generators fold differently. Deciding that list from the
+ * validator's side alone stranded a type name in 150 of 150 shapes, and the
+ * hand-picked cases above had no example of it. This sweep does: a missed ref is
+ * a `TS2304`, and the position it came from is in the case name.
+ */
+const REF = { $ref: '#/$defs/target' } as const
+const REF_DEFS = { $defs: { target: { type: 'string' } } } as const
+
+const REF_POSITIONS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+  ['root', { ...REF }],
+  ['root-with-sibling', { ...REF, minLength: 2 }],
+  ['properties', { type: 'object', properties: { p: REF } }],
+  ['properties-required', { type: 'object', properties: { p: REF }, required: ['p'] }],
+  ['pattern-properties', { type: 'object', patternProperties: { '^p': REF } }],
+  ['additional-properties', { type: 'object', additionalProperties: REF }],
+  ['property-names', { type: 'object', propertyNames: REF }],
+  ['dependent-schemas', { type: 'object', dependentSchemas: { t: REF } }],
+  ['dependencies', { type: 'object', dependencies: { t: REF } }],
+  ['items', { type: 'array', items: REF }],
+  ['prefix-items', { type: 'array', prefixItems: [REF] }],
+  ['array-items-draft07', { type: 'array', items: [REF] }],
+  ['additional-items', { type: 'array', items: [{ type: 'number' }], additionalItems: REF }],
+  [
+    'prefix-items-plus-array-items-plus-additional-items',
+    { type: 'array', prefixItems: [{ type: 'number' }], items: [{ type: 'number' }], additionalItems: REF },
+  ],
+  ['contains', { type: 'array', contains: REF }],
+  ['all-of', { allOf: [REF] }],
+  ['all-of-with-true', { allOf: [REF, true] }],
+  ['any-of', { anyOf: [REF] }],
+  ['any-of-with-true', { anyOf: [REF, true] }],
+  ['any-of-with-empty', { anyOf: [REF, {}] }],
+  ['any-of-with-annotation', { anyOf: [REF, { description: 'x' }] }],
+  ['any-of-with-nullable', { anyOf: [REF, { nullable: true }] }],
+  ['one-of', { oneOf: [REF, { type: 'number' }] }],
+  ['one-of-with-true', { oneOf: [REF, true] }],
+  ['not', { not: REF }],
+  ['if', { if: REF, then: { type: 'string' } }],
+  ['then', { if: { type: 'string' }, then: REF }],
+  ['else', { if: { type: 'string' }, else: REF }],
+  ['then-if-empty', { if: {}, then: REF }],
+  ['else-if-empty', { if: {}, else: REF }],
+  ['then-if-false', { if: false, then: REF }],
+  ['else-if-false', { if: false, else: REF }],
+  ['then-if-true', { if: true, then: REF }],
+  ['else-if-true', { if: true, else: REF }],
+  ['unevaluated-properties', { type: 'object', properties: { a: {} }, unevaluatedProperties: REF }],
+  ['unevaluated-items', { type: 'array', prefixItems: [{}], unevaluatedItems: REF }],
+  ['nested-in-properties', { type: 'object', properties: { a: { type: 'object', properties: { b: REF } } } }],
+  ['nested-in-items', { type: 'array', items: { type: 'array', items: REF } }],
+  ['inside-a-folded-any-of-branch', { anyOf: [{ type: 'object', properties: { p: REF } }, true] }],
+  ['inside-a-dropped-if-arm', { if: false, then: { type: 'object', properties: { p: REF } } }],
+  ['nullable-beside-a-ref', { ...REF, nullable: true }],
+  ['ref-beside-properties', { ...REF, properties: { p: { type: 'string' } } }],
+]
+
 describe('generated-code-types', () => {
   it('emits type-correct validator files under the repo strict flags', { timeout: 120_000 }, async () => {
     const sources = new Map<string, string>()
     for (const [name, schema] of CASES) {
       const files = await buildValidatorSchema(schema, 'Doc')
       for (const file of files) sources.set(`/${name}/${file.filename}`, file.content)
+    }
+
+    expect(typeErrors(sources)).toEqual([])
+  })
+
+  it('imports every $ref the emitted file names, from any position', { timeout: 120_000 }, async () => {
+    const sources = new Map<string, string>()
+    for (const [name, shape] of REF_POSITIONS) {
+      const files = await buildValidatorSchema({ ...shape, ...REF_DEFS } as JSONSchema, 'Doc')
+      for (const file of files) sources.set(`/ref-${name}/${file.filename}`, file.content)
     }
 
     expect(typeErrors(sources)).toEqual([])
