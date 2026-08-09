@@ -116,6 +116,38 @@ const CASES: ReadonlyArray<readonly [string, JSONSchema]> = [
       $defs: { base: { properties: { inherited: { type: 'string' } } } },
     },
   ],
+  // A nested object with a *constrained* leaf: the guard's member access reads
+  // through a cast (`(obj.a as Record<string, unknown>).b`), and TypeScript will
+  // not carry a `typeof` narrowing across two spellings of the same cast — so
+  // `…b.length >= 2` came out as `Object is of type 'unknown'` and the emitted
+  // file did not compile. Every earlier nested case had a bare-typed leaf, which
+  // needs no narrowing, so nothing here noticed.
+  [
+    'nested-object-constrained-leaf',
+    {
+      type: 'object',
+      properties: {
+        s: { type: 'object', properties: { b: { type: 'string', minLength: 2, pattern: '^a' } }, required: ['b'] },
+        n: { type: 'object', properties: { b: { type: 'number', minimum: 1, multipleOf: 2 } }, required: ['b'] },
+        a: { type: 'object', properties: { b: { type: 'array', items: { type: 'string' }, minItems: 1 } } },
+      },
+      required: ['s', 'n'],
+    },
+  ],
+  // A `dependentSchemas` / `dependencies` subschema applies to the *object*, and
+  // the object variable is typed `Record<string, unknown>` — so a string or
+  // number keyword in one compiled to `typeof obj === 'string'`, which narrows to
+  // `never` and takes the check behind it down with it (`TS2367` + `TS2339`).
+  [
+    'dependent-schemas-cross-family',
+    { type: 'object', dependentSchemas: { t: { minLength: 2, minimum: 1, minItems: 1 } } },
+  ],
+  ['dependencies-cross-family', { type: 'object', dependencies: { t: { const: 'x', maxLength: 2 } } }],
+  // Draft-07 spellings: an array `items` is the tuple and `additionalItems` its
+  // tail. Both used to emit nothing at all.
+  ['draft07-tuple', { type: 'array', items: [{ type: 'string' }, { type: 'number' }], additionalItems: false }],
+  ['draft07-tuple-tail', { type: 'array', items: [{ type: 'string' }], additionalItems: { type: 'number' } }],
+  ['empty-array', { type: 'array', items: false }],
   [
     'proto-property',
     JSON.parse(

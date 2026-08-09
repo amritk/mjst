@@ -1,5 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { tupleShapeOf } from './tuple-shape'
 import { type UnevaluatedMatchFn, unevaluatedItemsExpr, unevaluatedPropertiesExpr } from './unevaluated-match'
 
 /**
@@ -68,14 +69,28 @@ export const collectEmittedRefs = (
     }
   }
 
+  // The array positions come from the same normalisation the emitter reads, so
+  // the two cannot disagree about which of `prefixItems` / `items` /
+  // `additionalItems` is live. A node carrying both `prefixItems` and an array
+  // `items` ignores the latter outright, and `additionalItems` means nothing
+  // without an array `items` — a `$ref` inside an ignored keyword is a ref
+  // nothing ever calls, which lands as a dead import (`TS6192` under this repo's
+  // `noUnusedLocals`) or, when the walker cannot resolve it, as a refusal to
+  // generate a schema that is perfectly fine.
+  const { tuple, tail } = tupleShapeOf(schema)
+
+  // `tail` stands where `items` used to, and `tuple` where `prefixItems` did, so
+  // the traversal order every emitted import list is built from is unchanged.
+  if (tail !== undefined) collectEmittedRefs(tail, refs, rootSchema)
+
   for (const key of [
-    'items',
     'additionalProperties',
     'propertyNames',
     'contains',
     'if',
-    'then',
-    'else',
+    // `then` / `else` only apply when there is an `if` to branch on, and the
+    // emitter skips them entirely without one.
+    ...('if' in schema ? ['then', 'else'] : []),
     'not',
     // The `unevaluated*` subschemas are validated against the leftover keys /
     // indices, so a `$ref` inside one becomes a `validateX(...)` call like any
@@ -86,16 +101,14 @@ export const collectEmittedRefs = (
     if (key in schema) collectEmittedRefs(schema[key], refs, rootSchema)
   }
 
-  // `additionalItems` is the tail schema of a draft-07 tuple (`items: [...]`),
-  // which the emitter validates like any other tail.
-  if ('additionalItems' in schema) collectEmittedRefs(schema['additionalItems'], refs, rootSchema)
-
-  for (const key of ['oneOf', 'anyOf', 'allOf', 'prefixItems']) {
+  for (const key of ['oneOf', 'anyOf', 'allOf']) {
     const list = schema[key]
     if (Array.isArray(list)) {
       for (const sub of list) collectEmittedRefs(sub, refs, rootSchema)
     }
   }
+
+  if (tuple !== undefined) for (const sub of tuple) collectEmittedRefs(sub, refs, rootSchema)
 
   return refs
 }

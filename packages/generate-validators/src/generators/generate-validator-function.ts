@@ -46,6 +46,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { assertGeneratableRefs } from './assert-generatable-refs'
 import { assertUnevaluatedGeneratable, UNPROVABLE_COVERAGE_MESSAGE } from './assert-unevaluated-generatable'
+import { tupleShapeOf } from './tuple-shape'
 import { type UnevaluatedMatchFn, unevaluatedItemsExpr, unevaluatedPropertiesExpr } from './unevaluated-match'
 
 /**
@@ -196,40 +197,6 @@ const schemaIsScalarOnly = (schema: unknown): boolean => {
   if (t === undefined) return false
   const types = Array.isArray(t) ? t : [t]
   return types.length > 0 && types.every((x) => typeof x === 'string' && SCALAR_ITEM_TYPES.has(x))
-}
-
-/**
- * How a schema spells its array positions, normalised across the two dialects
- * the generator accepts.
- *
- * 2020-12 lists the fixed positions in `prefixItems` and types the rest with
- * `items`. Draft-07 (and anything a converter left in that shape — see the note
- * in `@amritk/adapters`' Valibot converter) puts the fixed positions in an
- * *array* `items` and types the rest with `additionalItems`. Reading only the
- * 2020-12 spelling is what let a draft-07 tuple emit no array validation at all
- * while the type generator wrote out a real tuple type.
- *
- * - `tuple` — the fixed positions, or `undefined` when the array is not a tuple.
- * - `tail` — the schema for every index past the tuple, or `undefined` when none
- *   is declared. `false` means "there must be no such index".
- * - `tailIsClosed` — whether a tuple's length is capped. A 2020-12 `prefixItems`
- *   paired with a draft-07 `additionalItems: false` counts, since documents in
- *   the wild do mix the two.
- */
-const tupleShapeOf = (
-  schema: Record<string, unknown>,
-): { tuple: unknown[] | undefined; tail: unknown; tailIsClosed: boolean } => {
-  const items = schema['items']
-  if (Array.isArray(items)) {
-    return { tuple: items, tail: schema['additionalItems'], tailIsClosed: schema['additionalItems'] === false }
-  }
-  const prefix = schema['prefixItems']
-  const tuple = Array.isArray(prefix) ? prefix : undefined
-  return {
-    tuple,
-    tail: 'items' in schema ? items : undefined,
-    tailIsClosed: items === false || schema['additionalItems'] === false,
-  }
 }
 
 /**
@@ -1427,6 +1394,22 @@ const generateDependentRequiredChecks = (schema: JSONSchema, ctx: NestingContext
 }
 
 /**
+ * The local a `dependentSchemas` / `dependencies` subschema is applied through.
+ *
+ * Those subschemas apply to the *object itself*, and the object variable is
+ * declared `Record<string, unknown>` — so a subschema carrying, say, `minLength`
+ * emitted `typeof obj === 'string'`, which TypeScript narrows to `never` and then
+ * rejects the `.length` behind it (`TS2367` + `TS2339`). The check is inert at
+ * runtime either way, since the value really is an object; re-binding it as
+ * `unknown` first is what makes the emitted file compile. Depth-scoped, and each
+ * binding sits inside its own trigger block, so triggers cannot collide.
+ */
+const dependentSelfBinding = (objVar: string, depth: number): { name: string; declaration: string } => {
+  const name = `_dep${depth}`
+  return { name, declaration: `  const ${name}: unknown = ${objVar}` }
+}
+
+/**
  * Emits `dependentSchemas` checks (2020-12): when a trigger property is present,
  * the *whole object* must also match the associated subschema. Mirrors the
  * interpreter, which applies the subschema in place against the object. A `true`
@@ -1455,9 +1438,11 @@ const generateDependentSchemasChecks = (schema: JSONSchema, suffix: string, ctx:
     if (!isSchemaObject(sub as JSONSchema)) continue
     // The subschema applies to the object itself, so validate the current object
     // variable against it and gate the whole block on the trigger's presence.
-    const checks = generateValueChecks('', obj, objPath, sub as JSONSchema, suffix, ctx)
+    const self = dependentSelfBinding(obj, ctx.depth)
+    const checks = generateValueChecks('', self.name, objPath, sub as JSONSchema, suffix, ctx)
     if (checks.length === 0) continue
     lines.push(`  if (${hasOwnCheck(obj, trigger)}) {`)
+    lines.push(`  ${self.declaration}`)
     lines.push(...checks.map((line) => `  ${line}`))
     lines.push(`  }`)
   }
@@ -1504,9 +1489,11 @@ const generateDependenciesChecks = (schema: JSONSchema, suffix: string, ctx: Nes
       continue
     }
     if (!isSchemaObject(value as JSONSchema)) continue
-    const checks = generateValueChecks('', obj, objPath, value as JSONSchema, suffix, ctx)
+    const self = dependentSelfBinding(obj, ctx.depth)
+    const checks = generateValueChecks('', self.name, objPath, value as JSONSchema, suffix, ctx)
     if (checks.length === 0) continue
     lines.push(`  if (${hasOwnCheck(obj, trigger)}) {`)
+    lines.push(`  ${self.declaration}`)
     lines.push(...checks.map((line) => `  ${line}`))
     lines.push(`  }`)
   }
@@ -1883,8 +1870,23 @@ const guardName = (typeName: string): string => `is${typeName}`
  * validator. Used for a property value or an array item; `acc` is the expression
  * yielding the value.
  */
-const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
+const booleanLeafExpr = (schema: JSONSchema, acc: string, narrowable = true): string | null => {
   if (!isSchemaObject(schema)) return null
+
+  /**
+   * `acc`, spelled so a constrained check compiles.
+   *
+   * The guard is one `&&` chain and TypeScript narrows it by the `typeof` test in
+   * front, but narrowing needs a stable *reference*. A nested member reads
+   * through a cast — `(obj.a as Record<string, unknown>).b` — and TypeScript will
+   * not carry a narrowing across two spellings of the same cast expression, so
+   * `…b.length >= 2` came out as `Object is of type 'unknown'` and the generated
+   * file did not compile for a schema as ordinary as a nested object with a
+   * `minLength`. Where the reference cannot be narrowed the check says the type
+   * itself, which is sound: the `typeof` that proves it is already ahead of it in
+   * the same chain.
+   */
+  const typed = (type: string): string => (narrowable ? acc : `(${acc} as ${type})`)
 
   // Anything whose verdict the flat form can't mirror exactly: defer to the
   // validator (the caller turns a single `null` into a full fallback guard).
@@ -1936,23 +1938,25 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
     // condition is its negation; the length checks come from the same
     // `string-length-check` emitter the validator uses, for the same reason.
     case 'string': {
+      const str = typed('string')
       const parts = [`typeof ${acc} === 'string'`]
-      if (hasPattern(schema)) parts.push(`${regexLiteral(schema.pattern)}.test(${acc})`)
+      if (hasPattern(schema)) parts.push(`${regexLiteral(schema.pattern)}.test(${str})`)
       // The exact negations of the validator's length conditions, from the same
       // `string-length-check` emitter, so the guard counts code points too.
-      if (hasMinLength(schema)) parts.push(minLengthPassExpr(acc, schema.minLength))
-      if (hasMaxLength(schema)) parts.push(maxLengthPassExpr(acc, schema.maxLength))
+      if (hasMinLength(schema)) parts.push(minLengthPassExpr(str, schema.minLength))
+      if (hasMaxLength(schema)) parts.push(maxLengthPassExpr(str, schema.maxLength))
       return withMembership(parts.join(' && '))
     }
     case 'number':
     case 'integer': {
+      const num = typed('number')
       const parts = [`typeof ${acc} === 'number'`]
       if (t === 'integer') parts.push(`Number.isInteger(${acc})`)
-      if (hasMinimum(schema)) parts.push(`${acc} ${hasStrictExclusiveMinimum(schema) ? '>' : '>='} ${schema.minimum}`)
-      if (hasMaximum(schema)) parts.push(`${acc} ${hasStrictExclusiveMaximum(schema) ? '<' : '<='} ${schema.maximum}`)
-      if (hasExclusiveMinimum(schema)) parts.push(`${acc} > ${schema.exclusiveMinimum}`)
-      if (hasExclusiveMaximum(schema)) parts.push(`${acc} < ${schema.exclusiveMaximum}`)
-      if (hasMultipleOf(schema)) parts.push(multipleOfPassExpr(acc, schema.multipleOf))
+      if (hasMinimum(schema)) parts.push(`${num} ${hasStrictExclusiveMinimum(schema) ? '>' : '>='} ${schema.minimum}`)
+      if (hasMaximum(schema)) parts.push(`${num} ${hasStrictExclusiveMaximum(schema) ? '<' : '<='} ${schema.maximum}`)
+      if (hasExclusiveMinimum(schema)) parts.push(`${num} > ${schema.exclusiveMinimum}`)
+      if (hasExclusiveMaximum(schema)) parts.push(`${num} < ${schema.exclusiveMaximum}`)
+      if (hasMultipleOf(schema)) parts.push(multipleOfPassExpr(num, schema.multipleOf))
       return withMembership(parts.join(' && '))
     }
     case 'boolean':
@@ -1960,11 +1964,13 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
     case 'null':
       return withMembership(`${acc} === null`)
     case 'object': {
-      const parts = booleanObjectParts(schema, acc, `(${acc} as Record<string, unknown>)`)
+      // Members below this point read through the cast, so nothing under it can
+      // be narrowed by the chain.
+      const parts = booleanObjectParts(schema, acc, `(${acc} as Record<string, unknown>)`, false)
       return parts === null ? null : withMembership(parts.join(' && '))
     }
     case 'array':
-      return withMembership(booleanArrayExpr(schema, acc))
+      return withMembership(booleanArrayExpr(schema, acc, narrowable))
     default:
       return null
   }
@@ -1982,23 +1988,35 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string): string | null => {
  * Materialising the array first makes the guard's verdict match the slow path's
  * on sparse input — the guard must never accept what the slow path would reject.
  */
-const booleanArrayExpr = (schema: JSONSchema, acc: string): string | null => {
+const booleanArrayExpr = (schema: JSONSchema, acc: string, narrowable = true): string | null => {
+  // `Array.isArray` narrows a reference but not a cast expression — see the note
+  // on `typed` in {@link booleanLeafExpr}.
+  const arr = narrowable ? acc : `(${acc} as unknown[])`
   const parts = [`Array.isArray(${acc})`]
   // Length / uniqueness, mirroring the validator's checks exactly so the guard's
   // verdict matches the slow path's.
-  if (hasMinItems(schema)) parts.push(`${acc}.length >= ${schema.minItems}`)
-  if (hasMaxItems(schema)) parts.push(`${acc}.length <= ${schema.maxItems}`)
+  if (hasMinItems(schema)) parts.push(`${arr}.length >= ${schema.minItems}`)
+  if (hasMaxItems(schema)) parts.push(`${arr}.length <= ${schema.maxItems}`)
   if (hasUniqueItems(schema) && schema.uniqueItems === true) {
     // Same scalar-vs-structural split as the validator, so the guard's verdict
     // matches the slow path's for object items in a reordered key order.
     parts.push(
       arrayItemsAreScalarOnly(schema as Record<string, unknown>)
-        ? `new Set((${acc} as unknown[]).map((_u) => JSON.stringify(_u))).size === ${acc}.length`
+        ? `new Set((${acc} as unknown[]).map((_u) => JSON.stringify(_u))).size === ${arr}.length`
         : `allUnique(${acc} as unknown[])`,
     )
   }
   const base = parts.join(' && ')
 
+  // `items: false` forbids every element, so the array has to be empty — which is
+  // what the validator says with `must NOT have more than 0 items`. This is read
+  // before `hasItems`, which is false for a boolean `items` and so used to send
+  // the constraint straight past: `isX` accepted `[1]` for
+  // `{ "type": "array", "items": false }` while `validateX` rejected it. (A tuple
+  // never reaches here — `prefixItems` and an array `items` both bail in
+  // {@link booleanLeafExpr}.)
+  if ((schema as Record<string, unknown>)['items'] === false) return `${base} && ${arr}.length === 0`
+  // `items: true`, and an absent `items`, constrain nothing.
   if (!hasItems(schema)) return base
   const items = schema.items
   if (!isSchemaObject(items)) return base
@@ -2018,7 +2036,7 @@ const booleanArrayExpr = (schema: JSONSchema, acc: string): string | null => {
  * keyword can't be mirrored flat. `raw` yields the value (for the shape check);
  * `objAcc` is the same value narrowed to a record (for member access).
  */
-const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string): string[] | null => {
+const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string, narrowable = true): string[] | null => {
   if (!isObjectSchema(schema)) return null
   // A `type: "object"` node can still carry a `$ref`, a `const`/`enum`, or an
   // `x-mjst` hint alongside its object keywords. None of them is in the parts
@@ -2064,7 +2082,7 @@ const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string): st
     // pathological anyway, so losing the flat guard for it costs nothing real.
     if (PROTOTYPE_MEMBERS.has(key)) return null
     const member = safeAccessor(objAcc, key)
-    const expr = booleanLeafExpr(propSchema, member)
+    const expr = booleanLeafExpr(propSchema, member, narrowable)
     if (expr === null) return null
     parts.push(required.has(key) ? expr : `(${member} === undefined || (${expr}))`)
   }

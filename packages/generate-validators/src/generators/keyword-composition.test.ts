@@ -1,7 +1,9 @@
+import { generateTypeDefinition } from '@amritk/helpers/generate-type-definition'
 import { validate } from '@amritk/runtime-validators'
 import { describe, expect, it } from 'vitest'
 
 import { buildValidatorSchema } from './build-schema'
+import { collectValidatorImports } from './collect-validator-imports'
 import { evaluateGenerated, evaluateValidator } from './evaluate-generated.test-utils'
 import { generateBooleanGuard, generateValidatorFunction } from './generate-validator-function'
 import { linkGenerated } from './link-generated.test-utils'
@@ -337,6 +339,70 @@ describe('keyword-composition', () => {
     }
     expect(isRoot(['a', 1])).toBe(true)
     expect(isRoot([1, 'a'])).toBe(false)
+  })
+
+  it('reads prefixItems before an array `items` when a node carries both', () => {
+    // The type generator and the interpreter both read `prefixItems` first, so
+    // reading the draft-07 array `items` first made the validator enforce one
+    // tuple while the type emitted beside it described the other — the very
+    // type/validator split the draft-07 support exists to close.
+    const schema = { type: 'array', items: [{ type: 'string' }], prefixItems: [{ type: 'number' }] }
+    expect(generateTypeDefinition(schema as never, 'Root')).toContain('[number?, ...unknown[]]')
+    expectAgreement(schema, [1], true)
+    expectAgreement(schema, ['a'], false)
+  })
+
+  it('collects no import for a $ref in a position the emitter ignores', () => {
+    // `additionalItems` is the tail of a *draft-07* tuple, so it means nothing
+    // next to a schema-form `items`; `then` means nothing without an `if`. A ref
+    // collected from either is a ref no call is emitted for — a dead import under
+    // `noUnusedLocals`, or an outright refusal when the walker cannot resolve it.
+    const rootSchema = { $defs: { A: {}, S: { type: 'string' } } }
+    expect(
+      collectValidatorImports(
+        { type: 'array', items: { type: 'number' }, additionalItems: { $ref: '#/$defs/S' } } as never,
+        {
+          rootSchema,
+        },
+      ),
+    ).toEqual([])
+    expect(
+      collectValidatorImports({ $ref: '#/$defs/A', then: { $ref: '#/$defs/S' } } as never, { rootSchema }),
+    ).toEqual(["import { type A, validateA } from './a.js'"])
+    // The same refs ARE collected once the emitter really reaches them.
+    expect(
+      collectValidatorImports(
+        { type: 'array', items: [{ type: 'number' }], additionalItems: { $ref: '#/$defs/S' } } as never,
+        {
+          rootSchema,
+        },
+      ),
+    ).toEqual(["import { type S, validateS } from './s.js'"])
+    expect(
+      collectValidatorImports({ if: { type: 'string' }, then: { $ref: '#/$defs/S' } } as never, { rootSchema }),
+    ).toEqual(["import { type S, validateS } from './s.js'"])
+  })
+
+  it('keeps the boolean guard in step with `items: false`', () => {
+    // `hasItems` is false for a boolean `items`, so the emptiness rule sailed past
+    // the guard while the validator enforced it — `isX([1])` answered `true` for
+    // an array schema that admits no elements at all.
+    for (const schema of [
+      { type: 'array' as const, items: false },
+      { type: 'object' as const, properties: { a: { type: 'array' as const, items: false } }, required: ['a'] },
+    ]) {
+      const exports = evaluateGenerated(
+        `${generateValidatorFunction(schema as never, 'Root')}\n\n${generateBooleanGuard(schema as never, 'Root')}`,
+      )
+      const validateRoot = exports['validateRoot'] as (input: unknown) => unknown
+      const isRoot = exports['isRoot'] as (input: unknown) => boolean
+      const bad = 'properties' in schema ? { a: [1] } : [1]
+      const good = 'properties' in schema ? { a: [] } : []
+      expect(validateRoot(bad)).not.toBe(true)
+      expect(isRoot(bad)).toBe(false)
+      expect(validateRoot(good)).toBe(true)
+      expect(isRoot(good)).toBe(true)
+    }
   })
 
   it('escapes a runtime key into its error path', () => {
