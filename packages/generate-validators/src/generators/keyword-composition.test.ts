@@ -302,6 +302,22 @@ describe('keyword-composition', () => {
     expect(await linkedVerdicts(schema, 'qqq')).toEqual({ generated: true, interpreted: true })
   })
 
+  it('composes siblings on a $ref that recurses', async () => {
+    // A recursive `$ref` produces genuinely cyclic modules, and the sibling
+    // checks are emitted next to the delegation inside that cycle. Worth pinning
+    // separately: everything else here delegates exactly once.
+    const tree = {
+      type: 'object',
+      properties: { children: { type: 'array', items: { $ref: '#/$defs/node', minProperties: 1 } } },
+      $defs: { node: { type: 'object', properties: { children: { type: 'array', items: { $ref: '#/$defs/node' } } } } },
+    }
+    // The `minProperties: 1` sibling is the whole point: an empty child object
+    // satisfies the ref and fails the sibling.
+    expect(await linkedVerdicts(tree, { children: [{}] })).toEqual({ generated: false, interpreted: false })
+    expect(await linkedVerdicts(tree, { children: [{ children: [] }] })).toEqual({ generated: true, interpreted: true })
+    expect(await linkedVerdicts(tree, { children: [] })).toEqual({ generated: true, interpreted: true })
+  })
+
   it('validates a draft-07 tuple written as an array `items`', () => {
     // `items: [...]` is the tuple itself in draft-07 (2020-12 spells it
     // `prefixItems`). The generator read only the 2020-12 spelling, so this
