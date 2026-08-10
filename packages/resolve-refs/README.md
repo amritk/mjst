@@ -26,7 +26,7 @@ refs, and remote (http/https) documents — into a single dereferenced document.
   you opt in. Hostnames are additionally resolved and refused when any address
   they point at is non-public, so `127.0.0.1.nip.io` does not slip through.
 - **Default-deny local reads.** A local `$ref` may only resolve **under the root
-  document's directory**. `{"$ref": "../../../etc/passwd"}` is refused; widen it
+  document's directory**. `{"$ref": "../../../secrets.env"}` is refused; widen it
   with `allowedRoots` when your spec legitimately spans folders.
 - **OpenAPI Reference Objects.** A `$ref` whose only siblings are `summary` /
   `description` inlines the target with those annotations overriding — matching
