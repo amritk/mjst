@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 
+import type { RefineInput, RefineIssue } from './client'
 import * as client from './client'
 
 /**
@@ -48,6 +49,43 @@ describe('client', () => {
     expect(client.decodeJwtExpiry).toBeTypeOf('function')
     expect(client.formBodySerializer.bodyType).toBe('form')
     expect(client.multipartBodySerializer.bodyType).toBe('multipart')
+  })
+
+  /**
+   * `refine` is a field of the browser-safe `Contract`, and the bundler strip
+   * only removes its body from browser builds — so a shared contracts file
+   * that lifts the hook out into a named function has to be able to name its
+   * input and issue types from this entry, not only from the root barrel. The
+   * type-only imports above are the real guard: dropping either export turns
+   * this file into a `types:check` failure.
+   */
+  it('exports the refine hook types a shared contracts file needs', () => {
+    const bodySchema = {
+      type: 'object',
+      properties: { start: { type: 'integer' }, end: { type: 'integer' } },
+      required: ['start', 'end'],
+    } as const
+    const startsBeforeEnd = (
+      input: RefineInput<undefined, undefined, typeof bodySchema, undefined, undefined>,
+    ): readonly RefineIssue[] | undefined => {
+      expectTypeOf(input.body.start).toEqualTypeOf<number>()
+      return input.body.start < input.body.end ? undefined : [{ path: '/start', message: 'start must precede end' }]
+    }
+    const contract = client.defineContract({
+      method: 'post',
+      path: '/ranges',
+      request: { body: bodySchema },
+      refine: startsBeforeEnd,
+      responses: { 204: {} },
+    })
+    const slots = {
+      params: undefined,
+      query: undefined,
+      body: { start: 2, end: 1 },
+      headers: undefined,
+      cookies: undefined,
+    }
+    expect(contract.refine?.(slots)).toEqual([{ path: '/start', message: 'start must precede end' }])
   })
 
   it('keeps the transitive import graph free of node built-ins and server modules', () => {
