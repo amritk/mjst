@@ -185,7 +185,7 @@
       "items": { "type": "string" },
       "x-cli-flag": "--allowed-roots <dirs>",
       "x-icon": "📂",
-      "description": "Extra directories a local (cross-file) $ref may resolve into. By default a local $ref is confined to the schema's own directory, so '{\"$ref\": \"../../../etc/passwd\"}' (or an absolute path) reads nothing. List a root here for the ordinary split-spec layout where v1/api.json refers to a shared common/user.json one level up. The schema's own directory is always allowed, so these roots widen the default rather than replacing it, and a $ref that still lands outside every root is refused. Accepts a comma-separated list or the flag repeated; relative entries resolve against the current working directory, from a config file as well as from the flag.",
+      "description": "Extra directories a local (cross-file) $ref may resolve into. By default a local $ref is confined to the schema's own directory, so '{\"$ref\": \"../../../secrets.env\"}' (or an absolute path) reads nothing. List a root here for the ordinary split-spec layout where v1/api.json refers to a shared common/user.json one level up. The schema's own directory is always allowed, so these roots widen the default rather than replacing it, and a $ref that still lands outside every root is refused. Accepts a comma-separated list or the flag repeated; relative entries resolve against the current working directory, from a config file as well as from the flag.",
       "examples": [["./specs"]]
     },
     "config": {

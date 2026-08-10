@@ -176,7 +176,7 @@ export type CliConfig = {
   /**
    * Extra directories a local (cross-file) `$ref` may resolve into. A local
    * `$ref` is confined to the schema's own directory by default, so a
-   * `{"$ref": "../../../etc/passwd"}` reads nothing; this is the escape hatch for
+   * `{"$ref": "../../../secrets.env"}` reads nothing; this is the escape hatch for
    * the ordinary split-spec layout where `v1/api.json` refers to a shared
    * `common/user.json` one level up.
    *

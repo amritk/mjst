@@ -146,7 +146,7 @@ Same-document refs (`#/$defs/...`) are left untouched — the generator resolves
 itself into named type files, so nothing changes for schemas that only reference
 themselves. Local cross-file refs resolve from disk with no extra flags, as long as
 they stay **inside the schema's own directory** — a `$ref` cannot walk out of the tree
-it belongs to (`../../../etc/passwd`, or an absolute path) unless you name the extra
+it belongs to (`../../../secrets.env`, or an absolute path) unless you name the extra
 directory with `--allowed-roots`. Remote (`http(s)`) refs stay **offline by default**:
 a schema with a remote `$ref` fails rather than making a network call unless you opt in.
 
@@ -493,7 +493,7 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
 <td align="center"></td>
 </tr>
 <tr>
-<td colspan="4">Extra directories a local (cross-file) $ref may resolve into. By default a local $ref is confined to the schema's own directory, so '{"$ref": "../../../etc/passwd"}' (or an absolute path) reads nothing. List a root here for the ordinary split-spec layout where v1/api.json refers to a shared common/user.json one level up. The schema's own directory is always allowed, so these roots widen the default rather than replacing it, and a $ref that still lands outside every root is refused. Accepts a comma-separated list or the flag repeated; relative entries resolve against the current working directory, from a config file as well as from the flag.<br><strong>Examples:</strong> <code>["./specs"]</code></td>
+<td colspan="4">Extra directories a local (cross-file) $ref may resolve into. By default a local $ref is confined to the schema's own directory, so '{"$ref": "../../../secrets.env"}' (or an absolute path) reads nothing. List a root here for the ordinary split-spec layout where v1/api.json refers to a shared common/user.json one level up. The schema's own directory is always allowed, so these roots widen the default rather than replacing it, and a $ref that still lands outside every root is refused. Accepts a comma-separated list or the flag repeated; relative entries resolve against the current working directory, from a config file as well as from the flag.<br><strong>Examples:</strong> <code>["./specs"]</code></td>
 </tr>
 <tr>
 <td>⚙️ <code>config</code></td>
