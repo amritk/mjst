@@ -19,6 +19,7 @@
  * Only applied when the schema declares `$schema: http://json-schema.org/draft-07/schema`.
  */
 
+import { DATA_KEYWORDS } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { refToFilename, toKebabCase } from './ref-to-filename'
 
@@ -172,6 +173,20 @@ export const upgradeDraft07Schema = (schema: Record<string, unknown>): Record<st
  * addressable as `#/$defs/...` — so renaming it would only move the target of a
  * pointer that already worked.
  *
+ * Three things it must not touch, each of which is a document it would otherwise
+ * break rather than fix:
+ *
+ * - An embedded `$id` starts a new resource, and a `#/definitions/...` inside it
+ *   addresses *that* resource's block — which is not renamed, since only the root
+ *   document's `definitions` is hoisted. Rewriting there points the pointer at
+ *   nothing, and `assertIdScopes` turns that into a hard failure for a document
+ *   that generated fine before.
+ * - `enum` / `const` / `default` / `examples` hold instance *data*. An object
+ *   spelled `{"$ref": "…"}` there is a literal value, not a reference, and the
+ *   rest of this package already skips these keys for exactly that reason.
+ * - A key named `__proto__` assigned with `result[key] = …` runs the prototype
+ *   setter instead of creating a property, silently dropping it from the output.
+ *
  * Like `renameNestedDefs`, this rewrites the leading segment only: a pointer that
  * dives through a *nested* definitions block (`#/definitions/x/definitions/y`)
  * keeps its inner segment and still will not resolve. That gap is unchanged, and
@@ -186,15 +201,29 @@ const rewriteDefinitionsRefs = (obj: unknown, depth = 0): unknown => {
   const result: Record<string, unknown> = {}
 
   for (const [key, value] of Object.entries(record)) {
-    if (key === '$ref' && typeof value === 'string' && value.startsWith('#/definitions/')) {
-      result[key] = value.replace('#/definitions/', '#/$defs/')
+    const rewritten =
+      key === '$ref' && typeof value === 'string' && value.startsWith('#/definitions/')
+        ? value.replace('#/definitions/', '#/$defs/')
+        : DATA_KEYWORDS.has(key) || startsNewResource(value)
+          ? value
+          : rewriteDefinitionsRefs(value, depth + 1)
+
+    if (key === '__proto__') {
+      Object.defineProperty(result, key, { value: rewritten, writable: true, enumerable: true, configurable: true })
     } else {
-      result[key] = rewriteDefinitionsRefs(value, depth + 1)
+      result[key] = rewritten
     }
   }
 
   return result
 }
+
+/** Whether a subschema declares its own `$id`, making it a separate resource. */
+const startsNewResource = (value: unknown): boolean =>
+  typeof value === 'object' &&
+  value !== null &&
+  !Array.isArray(value) &&
+  typeof (value as Record<string, unknown>)['$id'] === 'string'
 
 /**
  * Recursively renames `definitions` → `$defs` within a schema value and

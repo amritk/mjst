@@ -118,6 +118,85 @@ describe('upgrade-draft07-schema', () => {
     expect((defs['parent'] as Record<string, unknown>)['properties']).toEqual({ c: { $ref: '#/$defs/parent-child' } })
   })
 
+  it('leaves a ref inside an embedded $id resource alone', () => {
+    // An `$id` starts a new resource, and `#/definitions/b` inside it addresses
+    // that resource's own block — which is not hoisted and not renamed, because
+    // only the root document's `definitions` is. Rewriting the pointer there aims
+    // it at nothing, and `assertIdScopes` turns that into a hard failure for a
+    // document that upgraded fine before. The root's own refs still rewrite.
+    const upgraded = upgradeDraft07Schema(
+      draft07({
+        properties: {
+          outer: { $ref: '#/definitions/a' },
+          inner: {
+            $id: 'https://example.test/inner',
+            properties: { x: { $ref: '#/definitions/b' } },
+            definitions: { b: { type: 'string' } },
+          },
+        },
+        definitions: { a: { type: 'number' } },
+      }),
+    )
+
+    const properties = upgraded['properties'] as Record<string, Record<string, unknown>>
+    expect(properties['outer']).toEqual({ $ref: '#/$defs/a' })
+    expect((properties['inner'] as Record<string, Record<string, unknown>>)['properties']).toEqual({
+      x: { $ref: '#/definitions/b' },
+    })
+    expect(upgraded['$defs']).toEqual({ a: { type: 'number' } })
+  })
+
+  it('leaves a ref-shaped literal inside a data keyword alone', () => {
+    // `enum` / `const` / `default` / `examples` hold instance data. An object
+    // spelled `{"$ref": …}` there is a value the document declares, not a
+    // reference to follow, and rewriting it silently changes the declared value.
+    const upgraded = upgradeDraft07Schema(
+      draft07({
+        properties: {
+          a: {
+            $ref: '#/definitions/a',
+            default: { $ref: '#/definitions/a' },
+            const: { $ref: '#/definitions/a' },
+            enum: [{ $ref: '#/definitions/a' }],
+            examples: [{ $ref: '#/definitions/a' }],
+          },
+        },
+        definitions: { a: { type: 'string' } },
+      }),
+    )
+
+    const a = (upgraded['properties'] as Record<string, Record<string, unknown>>)['a'] as Record<string, unknown>
+    // The real reference still rewrites; the four literals beside it do not.
+    expect(a['$ref']).toBe('#/$defs/a')
+    expect(a['default']).toEqual({ $ref: '#/definitions/a' })
+    expect(a['const']).toEqual({ $ref: '#/definitions/a' })
+    expect(a['enum']).toEqual([{ $ref: '#/definitions/a' }])
+    expect(a['examples']).toEqual([{ $ref: '#/definitions/a' }])
+  })
+
+  it('keeps a property named __proto__ as an own property', () => {
+    // Assigning `__proto__` with `result[key] =` runs the prototype setter rather
+    // than creating a property, so the key vanishes from the output.
+    // Built from JSON text: an object *literal* with a `__proto__` key sets the
+    // prototype instead of creating the property, so a fixture written that way
+    // would not exercise this at all. `JSON.parse` makes it an own property,
+    // which is exactly what reading a schema off disk does.
+    const schema = JSON.parse(
+      `{"$schema":"http://json-schema.org/draft-07/schema#","type":"object",` +
+        `"properties":{"__proto__":{"$ref":"#/definitions/a"},"ok":{"type":"string"}},` +
+        `"definitions":{"a":{"type":"string"}}}`,
+    )
+
+    const upgraded = upgradeDraft07Schema(schema)
+    const properties = upgraded['properties'] as Record<string, unknown>
+
+    expect(Object.hasOwn(properties, '__proto__')).toBe(true)
+    expect(Object.getPrototypeOf(properties)).toBe(Object.prototype)
+    // And it is still upgraded like any other property.
+    expect(Object.getOwnPropertyDescriptor(properties, '__proto__')?.value).toEqual({ $ref: '#/$defs/a' })
+    expect(properties['ok']).toEqual({ type: 'string' })
+  })
+
   it('drops the draft-07 $schema declaration', () => {
     expect(upgradeDraft07Schema(draft07({ type: 'string' }))).toEqual({ type: 'string', $defs: {} })
   })
