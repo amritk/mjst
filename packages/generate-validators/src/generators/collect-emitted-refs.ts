@@ -1,3 +1,4 @@
+import { isSchemaObject } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { foldsToConstant } from './folds-to-constant'
@@ -19,7 +20,12 @@ import { type UnevaluatedMatchFn, unevaluatedItemsExpr, unevaluatedPropertiesExp
  */
 const armsOf = (schema: Record<string, unknown>): string[] => {
   if (!('if' in schema)) return []
-  const decided = foldsToConstant(schema['if'])
+  const condition = schema['if']
+  // The emitter reads an `if` only when it is a schema object or a boolean.
+  // Anything else — `if: 5`, `if: null` — and the whole keyword is skipped, both
+  // arms with it, so neither is referenced by anything.
+  if (!isSchemaObject(condition as JSONSchema) && typeof condition !== 'boolean') return []
+  const decided = foldsToConstant(condition)
   if (decided === true) return ['then']
   if (decided === false) return ['else']
   return ['then', 'else']

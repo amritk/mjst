@@ -968,6 +968,14 @@ const generateConstraintChecks = (
         // absent optional value. `booleanArrayExpr` already materialises with
         // `Array.from` for exactly this, so leaving the tuple positions guarded
         // put the two halves of the same package on opposite answers.
+        //
+        // This reaches the position's own leaf checks only. A combinator beneath
+        // it re-adds the guard, because {@link generateCombinatorChecks} does not
+        // thread `required` into its branches — so `prefixItems: [{ allOf: [...] }]`
+        // still passes a hole. Threading it is a wider change than the gap earns:
+        // `JSON.parse` cannot produce a hole or an explicit `undefined`, and the
+        // combinators are the part of the emitter most sensitive to a change in
+        // presence semantics.
         const itemChecks = generateValueChecks(
           '',
           `${raw}[${i}]`,
@@ -1009,7 +1017,8 @@ const generateConstraintChecks = (
  * checks read a runtime location. By default the leaf checks are
  * `!== undefined`-guarded (an absent optional value is valid); pass
  * `required = true` for values that must be present (array items — a sparse hole
- * reads as `undefined` and must fail), which drops that guard. `_key` is unused
+ * reads as `undefined` and must fail), which drops that guard for the leaf checks
+ * — a combinator branch beneath re-adds it, a documented gap. `_key` is unused
  * (the location is fully encoded by `path`) but kept for positional-call parity
  * with the combinator generators.
  */

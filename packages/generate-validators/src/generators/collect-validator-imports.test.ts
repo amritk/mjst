@@ -160,6 +160,14 @@ describe('collect-validator-imports', () => {
         assertGeneratableRefs({ if: branch, then: { type: 'string' }, else: { $ref: 'int.json' } } as never, 'Root'),
       ).not.toThrow()
     }
+    // An `if` that is not a schema at all takes the keyword out entirely — the
+    // emitter reads only a schema object or a boolean — so neither arm is
+    // referenced and neither can refuse.
+    for (const branch of [5, null, 'x']) {
+      expect(() =>
+        assertGeneratableRefs({ if: branch, then: { $ref: 'int.json' }, else: { $ref: 'int.json' } } as never, 'Root'),
+      ).not.toThrow()
+    }
     // The arm it *does* take still refuses, and so does an `if` it cannot decide.
     expect(() =>
       assertGeneratableRefs({ if: false, then: { type: 'string' }, else: { $ref: 'int.json' } } as never, 'Root'),

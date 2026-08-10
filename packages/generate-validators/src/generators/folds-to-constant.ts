@@ -6,27 +6,46 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
  * carrying only these accepts everything, so the emitter's match expression for
  * it collapses to `true`.
  *
- * `format` belongs here because this generator treats it as an annotation, the
- * 2020-12 default and the interpreter's behaviour — pinned by
- * `format-annotation.test.ts`. `$defs` / `definitions` hold subschemas that are
- * split into their own files rather than applied here, and `$id` / `$schema`
- * identify the document. Anything absent from this set is assumed to constrain
- * something, which is the safe direction: it keeps a branch alive.
+ * Membership is decided by what this emitter does, not by which vocabulary a
+ * keyword belongs to. `format` and the `content*` family are annotations here —
+ * the 2020-12 default, and what the interpreter does; `format` is pinned by
+ * `format-annotation.test.ts`. `$defs` / `definitions` hold subschemas split
+ * into their own files rather than applied here. `$id` / `$schema` / `$anchor` /
+ * `$dynamicAnchor` / `$vocabulary` identify and scope, none of which this
+ * generator acts on. `nullable`, `example`, `discriminator`, `xml` and
+ * `externalDocs` are OpenAPI's, and only `nullable` has any effect — as a
+ * rewrite into `anyOf` that, with no sibling type to widen, constrains nothing.
+ *
+ * The set is checked against the emitter by `folds-to-constant.test.ts`, which
+ * is the only way it stays honest: adding a keyword the emitter *does* act on
+ * would drop a branch that really is emitted, and that is the direction that
+ * ends in an undefined identifier. Leaving one out merely keeps a branch alive.
  */
 const ANNOTATION_KEYWORDS: ReadonlySet<string> = new Set([
+  '$anchor',
   '$comment',
   '$defs',
+  '$dynamicAnchor',
   '$id',
   '$schema',
+  '$vocabulary',
+  'contentEncoding',
+  'contentMediaType',
+  'contentSchema',
   'default',
   'definitions',
   'deprecated',
   'description',
+  'discriminator',
+  'example',
   'examples',
+  'externalDocs',
   'format',
+  'nullable',
   'readOnly',
   'title',
   'writeOnly',
+  'xml',
 ])
 
 /**
@@ -46,8 +65,9 @@ const ANNOTATION_KEYWORDS: ReadonlySet<string> = new Set([
 export const foldsToConstant = (schema: unknown): boolean | undefined => {
   if (schema === true) return true
   if (schema === false) return false
-  // A non-schema (a number, a string, a null) is not an applicator; the emitter
-  // reads it as no constraint at all.
-  if (!isSchemaObject(schema as JSONSchema)) return true
+  // A number, a string, a null: not a schema, so there is no verdict to give.
+  // What the emitter does with one is a separate question, and the caller's —
+  // it skips the keyword outright rather than folding it either way.
+  if (!isSchemaObject(schema as JSONSchema)) return undefined
   return Object.keys(schema as Record<string, unknown>).every((key) => ANNOTATION_KEYWORDS.has(key)) ? true : undefined
 }
