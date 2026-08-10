@@ -302,8 +302,9 @@ const resolveVirtualPath = (fromFile: string, specifier: string): string => {
   return `/${segments.join('/')}`
 }
 
-const typeErrors = (sources: ReadonlyMap<string, string>): string[] => {
-  const host = ts.createCompilerHost(OPTIONS)
+const typeErrors = (sources: ReadonlyMap<string, string>, extra: ts.CompilerOptions = {}): string[] => {
+  const options = { ...OPTIONS, ...extra }
+  const host = ts.createCompilerHost(options)
   const readFile = host.readFile.bind(host)
   const fileExists = host.fileExists.bind(host)
   const getSourceFile = host.getSourceFile.bind(host)
@@ -326,7 +327,7 @@ const typeErrors = (sources: ReadonlyMap<string, string>): string[] => {
         : { resolvedModule: undefined }
     })
 
-  const program = ts.createProgram([...sources.keys()], OPTIONS, host)
+  const program = ts.createProgram([...sources.keys()], options, host)
   return ts
     .getPreEmitDiagnostics(program)
     .filter((diagnostic) => diagnostic.file !== undefined)
@@ -406,6 +407,65 @@ describe('generated-code-types', () => {
     }
 
     expect(typeErrors(sources)).toEqual([])
+  })
+
+  // `noUnusedLocals` / `noUnusedParameters` are on in the repo's own
+  // `tsconfig.json`, and a consumer inherits them. They are off in `OPTIONS`
+  // above because the output still carries known unused symbols — the type half
+  // of an `if`-arm import, an unread `const obj` on an `if`/`then` root — so
+  // turning them on for every case would pin gaps rather than guard anything.
+  //
+  // They are exactly the flags the hoist pruning exists to satisfy, though, and
+  // the corpora are no help: 3 of their 4,242 generated files hoist anything at
+  // all, so "both corpora byte-identical" says almost nothing about a change
+  // here. These shapes hoist, and they are checked under the real flags.
+  it('emits no unused local for a shape that hoists a declaration', { timeout: 120_000 }, async () => {
+    const wide = Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`w${i}`, { type: 'string' as const }]))
+    const strictPatterns: JSONSchema = {
+      type: 'object',
+      additionalProperties: false,
+      patternProperties: { '^x-': { type: 'string' } },
+      properties: { b: { type: 'string' } },
+    }
+    const strictWide: JSONSchema = { type: 'object', additionalProperties: false, properties: wide }
+
+    const hoisting: ReadonlyArray<readonly [string, JSONSchema]> = [
+      // Live: the declaration is read, so it has to be emitted.
+      ['live-patterns', strictPatterns],
+      ['live-known-keys', strictWide],
+      ['live-both', { ...strictWide, patternProperties: { '^x-': { type: 'string' } } }],
+      ['live-nested', { type: 'object', properties: { inner: strictPatterns } }],
+      // Dead: the branch that hoisted it is folded away, so it must not be.
+      ['folded-patterns', { anyOf: [strictPatterns, true] }],
+      ['folded-known-keys', { anyOf: [strictWide, true] }],
+      // Dead, with the schema's own text imitating a read of the hoisted name.
+      [
+        'folded-patterns-forged',
+        {
+          type: 'object',
+          additionalProperties: false,
+          properties: { _patterns0: { type: 'string', minLength: 2 } },
+          anyOf: [strictPatterns, true],
+        },
+      ],
+      [
+        'folded-known-keys-forged',
+        {
+          type: 'object',
+          additionalProperties: false,
+          properties: { _knownKeys0: { type: 'string', minLength: 2 } },
+          anyOf: [strictWide, true],
+        },
+      ],
+    ]
+
+    const sources = new Map<string, string>()
+    for (const [name, schema] of hoisting) {
+      const files = await buildValidatorSchema(schema, 'Doc')
+      for (const file of files) sources.set(`/hoist-${name}/${file.filename}`, file.content)
+    }
+
+    expect(typeErrors(sources, { noUnusedLocals: true, noUnusedParameters: true })).toEqual([])
   })
 
   it('imports every $ref the emitted file names, from any position', { timeout: 120_000 }, async () => {

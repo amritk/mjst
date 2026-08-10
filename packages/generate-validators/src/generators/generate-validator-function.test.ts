@@ -1807,6 +1807,28 @@ describe('generate-validator-function', () => {
       expect(validate({ nope: 1 })).not.toBe(true)
     })
 
+    it('drops a folded known-keys set despite an accessor of the same name', () => {
+      // The `Set` form's reference has a different shape from the pattern table's
+      // (`!_knownKeys0.has(_key0)`, no leading space), so it needs its own case —
+      // the rows above would all pass for a scheme that only got `_patterns` right.
+      const wide = Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`w${i}`, { type: 'string' as const }]))
+      const code = generateValidatorFunction(
+        {
+          type: 'object' as const,
+          additionalProperties: false,
+          properties: { _knownKeys0: { type: 'string' as const, minLength: 2 } },
+          anyOf: [{ type: 'object' as const, additionalProperties: false, properties: wide }, true],
+        },
+        'Root',
+      )
+
+      expect(code).not.toContain('const _knownKeys0 =')
+      expect(code).toContain('obj._knownKeys0')
+      const validate = evalValidator(code)
+      expect(validate({ _knownKeys0: 'ok' })).toBe(true)
+      expect(validate({ nope: 1 })).not.toBe(true)
+    })
+
     // The pruning question is "did the emitter write a use of this?", and the
     // first attempt answered it by searching the emitted text for the name. That
     // text is not all code: a `pattern` becomes a regex *literal*, and its source

@@ -370,13 +370,18 @@ const patternPropertySources = (schema: JSONSchema): string[] => {
  * `_patterns0.` as well.
  *
  * `reference` is therefore the *whole* expression the emitter wrote when it used
- * the declaration, not the name. Two properties follow. The one that matters:
- * the fragment is present whenever the use was emitted, so a live declaration is
- * never pruned — that direction ends in a name nothing declares, a `TS2304` and
- * a `ReferenceError`. The other is weaker but sufficient: forging the fragment
- * takes a schema string equal to a whole generated expression, and the cost of
- * succeeding is a declaration kept when it could have gone, which is a lint
- * warning and exactly what this package emitted before the pruning existed.
+ * the declaration, not the name. Two properties follow, and only the first is
+ * exact: the fragment is present whenever the use was emitted, so a live
+ * declaration is never pruned — that direction ends in a name nothing declares,
+ * a `TS2304` and a `ReferenceError`.
+ *
+ * The second is a matter of degree. A schema string equal to a whole generated
+ * expression — including the `_key<depth>` of the loop it would have sat in —
+ * still forges a read, and the declaration is then kept when it could have gone.
+ * That is a `TS6133` in the generated file wherever `noUnusedLocals` is on, not
+ * merely a warning; it is also exactly what this package emitted for every
+ * folded branch before the pruning existed, so a forgery costs the tidy-up
+ * rather than anything that was working.
  */
 type Hoisted = {
   /** The `const …` line, emitted above the function when it is read. */
