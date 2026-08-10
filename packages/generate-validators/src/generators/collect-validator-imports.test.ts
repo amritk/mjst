@@ -145,10 +145,12 @@ describe('collect-validator-imports', () => {
         additionalItems: { $ref: '#/$defs/b' },
       }),
     ).toEqual(['B'])
-    // `getTuplePositions` requires a *non-empty* `prefixItems`, so at length 0 it
-    // falls back to the array `items` and names what is there — while
-    // `tupleShapeOf` had already taken the empty tuple.
-    expect(names({ type: 'array', prefixItems: [], items: [{ $ref: '#/$defs/a' }] })).toEqual(['A'])
+    // An *empty* `prefixItems` still takes the positions, in the type generator as
+    // in `tupleShapeOf` and the interpreter, so the array `items` behind it is
+    // read by nobody and its ref is not collected. `getTuplePositions` used to
+    // fall back to it at length 0 and name what was there, which made the type
+    // claim a tuple neither validator enforced.
+    expect(names({ type: 'array', prefixItems: [], items: [{ $ref: '#/$defs/a' }] })).toEqual([])
   })
 
   it('does not refuse an unresolvable $ref in an `if` arm the emitter never takes', () => {
@@ -212,9 +214,8 @@ describe('collect-validator-imports', () => {
     // collecting them refused schemas whose ref happened to be unresolvable.
     expect(names({ $ref: '#/$defs/a', then: { $ref: '#/$defs/b' } })).toEqual(['A'])
     expect(names({ type: 'array', items: { type: 'number' }, additionalItems: { $ref: '#/$defs/b' } })).toEqual([])
-    // A *non-empty* `prefixItems` takes the tuple positions in `getTuplePositions`
-    // as well, so the array `items` beside it is read by neither emitter. Only the
-    // empty-`prefixItems` fallback above puts it back in play.
+    // `prefixItems` takes the tuple positions in `getTuplePositions` as well, so
+    // the array `items` beside it is read by neither emitter.
     expect(names({ type: 'array', prefixItems: [{ type: 'string' }], items: [{ $ref: '#/$defs/a' }] })).toEqual([])
     // The tail next to that same shape *is* read, so the walk has to stay on.
     expect(

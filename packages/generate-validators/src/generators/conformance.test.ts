@@ -107,8 +107,20 @@ describe('JSON Schema Test Suite conformance', () => {
     expect(stale).toEqual([])
   })
 
-  it('reports the conformance rate', () => {
+  it('reports the conformance rate, at the number the docs quote', () => {
     console.log(`JSON Schema draft 2020-12 suite (generate-validators): ${conformanceRate(RESULTS)}`)
-    expect([...RESULTS.values()].filter((reason) => reason === null).length).toBeGreaterThan(0)
+    const failing = [...RESULTS.keys()].filter((key) => RESULTS.get(key) !== null)
+    expect(failing.length).toBeGreaterThan(0)
+
+    // The two assertions above keep the expected-failure *list* exact. This keeps
+    // the *count* exact, which is a separate thing: the count is quoted in
+    // `README.md` ("1274 / 1281 cases pass", and the sentence enumerating the
+    // seven), and in the header of `conformance-expected-failures.test-utils.ts`
+    // — prose nothing else reads. Closing a gap and removing its entry leaves
+    // both assertions green while the package advertises a worse number than it
+    // delivers, which is how the README came to claim 1271/1281 after three
+    // cases started passing. Update these two numbers and that prose together.
+    expect(RESULTS.size, 'the suite grew or shrank; update the totals in README.md').toBe(1281)
+    expect(failing.length, `update README.md and the expected-failure header:\n${failing.join('\n')}`).toBe(7)
   })
 })

@@ -160,7 +160,10 @@ conjunct of a validator that also asserts them — while conditional applicators
 condition, hoisted out of the per-key loop. Four shapes still refuse, each named as
 a shape rather than as a keyword: coverage running through a `$dynamicRef`, an
 unresolvable or cyclic `$ref` at the same instance location, a walk deeper than
-eight applicators, and a node under `additionalItems`.
+eight applicators, and a node under an *inert* `additionalItems` — one with no
+array `items` to be the tail of, or with a `prefixItems` that took the positions
+out from under it. The draft-07 tail itself is validated, so the draft-07
+spelling of a schema whose 2020-12 spelling generates is accepted too.
 
 One edge worth calling out: **`NaN` fails a constrained number but satisfies an
 unconstrained one.** Every bound is emitted as the negated *pass* condition
@@ -180,7 +183,7 @@ official [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema
 (the required Draft 2020-12 tests — 1281 cases), compiles and links the emitted
 files in memory, and runs the suite's instances through the real generated code:
 
-**1271 / 1281 cases pass (99.2%).**
+**1274 / 1281 cases pass (99.5%).**
 
 The suite's `remotes/` documents and the 2020-12 dialect metaschema are supplied
 through the `schemas` option, which is how the suite intends a validator that does
@@ -188,12 +191,11 @@ no I/O to answer the retrieval step. Everything else — applying the base URIs,
 walking anchors across documents, naming and emitting a file per definition — the
 generator still has to do.
 
-Of the 10 that do not pass: five `$dynamicRef`s whose binding depends on the
+Of the 7 that do not pass: four `$dynamicRef`s whose binding depends on the
 evaluation path (a generator emits one function per definition, shared by every
 path that reaches it, so it cannot bind per path), two definitions in different
-embedded resources that reduce to one filename, two `$id`-scoped in-document
-pointers, and `$vocabulary`. Nothing on the list is a keyword that silently
-returns the wrong answer.
+embedded resources that reduce to one filename, and `$vocabulary`. Nothing on the
+list is a keyword that silently returns the wrong answer.
 
 Every case is named in
 `src/generators/conformance-expected-failures.test-utils.ts` with its reason, and

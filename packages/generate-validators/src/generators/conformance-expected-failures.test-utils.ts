@@ -6,7 +6,7 @@ import type { ExpectedFailures } from '../../../../fixtures/json-schema-test-sui
  *
  * The generator is a build-time subset by design — it trades keyword coverage for
  * flat, readable, dependency-free output — but the subset is no longer where the
- * gap is: 10 of 1281 cases are left. What used to dominate this list was the
+ * gap is: 7 of 1281 cases are left. What used to dominate this list was the
  * cross-document `$ref`, and that is gone: documents handed to the generator
  * through its `schemas` registry are folded into the one being generated, so a
  * ref into `integer.json`, `tree.json` or the 2020-12 metaschema resolves, gets a

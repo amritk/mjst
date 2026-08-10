@@ -404,6 +404,19 @@ type Hoisted = {
  * is the generator's own convention for a parameter it does not use, applied on
  * every other `return true` path already.
  */
+/**
+ * Whether emitted code reads the `obj` narrowing, so the `const obj = input as
+ * Record<string, unknown>` in front of it has to be declared.
+ *
+ * `obj` can only be read as the bare identifier — every accessor the emitters
+ * build starts with it — so its absence is conclusive. The other direction is
+ * inexact and deliberately so: a schema naming a property `obj` puts the word in
+ * the text as data, and the declaration is then kept when it could have gone.
+ * That is a `TS6133` where a wrong answer is a `TS2304` and a `ReferenceError`,
+ * and it is also exactly what was emitted before the test existed.
+ */
+const readsObjBinding = (text: string): boolean => /\bobj\b/.test(text)
+
 const withHoisted = (hoisted: readonly Hoisted[], text: string): string => {
   // Only the function body is searched. Growing the search to include the kept
   // declarations — on the theory that one might read another — let a hoisted
@@ -1893,10 +1906,8 @@ const generateObjectValidator = (
   // instead (they apply to the value, not to its properties, and a branch from
   // another type family must not be compared against a `Record`). Nothing then
   // reads `obj`, and the declaration is a `TS6133` for any consumer with
-  // `noUnusedLocals`. `obj` can only be read as the bare identifier, so its
-  // absence from the body is conclusive; schema text mentioning it merely keeps
-  // the declaration, which is what was emitted before.
-  const objBinding = /\bobj\b/.test(body) ? [`  const obj = input as Record<string, unknown>`] : []
+  // `noUnusedLocals` — see {@link readsObjBinding}.
+  const objBinding = readsObjBinding(body) ? [`  const obj = input as Record<string, unknown>`] : []
 
   const collectBody = (name: string, exported: boolean): string =>
     [
@@ -1924,6 +1935,11 @@ const generateObjectValidator = (
   // tail call) so V8 optimises it well, without the giant error body bloating
   // the hot path. The exported `(input, _path?) => ValidationResult` contract
   // is unchanged.
+  // The guard reads `obj` for every member access it makes — but a schema with no
+  // property to check (`{ "type": "object", "properties": {} }`, which the OpenAPI
+  // corpus really does carry) guards on the shape alone, and then the binding is
+  // an unused local in the *exported* function.
+  const guardText = guard.join('\n')
   const collectName = `${vName}Errors`
   return withHoisted(
     ctx.hoisted,
@@ -1931,7 +1947,7 @@ const generateObjectValidator = (
       collectBody(collectName, false),
       ``,
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
-      `  const obj = input as Record<string, unknown>`,
+      ...(readsObjBinding(guardText) ? [`  const obj = input as Record<string, unknown>`] : []),
       `  if (`,
       guard.map((condition) => `    ${condition}`).join(' &&\n'),
       `  ) {`,
@@ -2330,7 +2346,9 @@ export const generateBooleanGuard = (schema: JSONSchema, typeName: string, _suff
     if (parts === null) return fallback
     return [
       `export const ${name} = (input: unknown): ${returns} => {`,
-      `  const obj = input as Record<string, unknown>`,
+      // Same unused-local as the validator's hot guard: a node with no property
+      // to read guards on the shape alone and never touches the narrowing.
+      ...(readsObjBinding(parts.join('\n')) ? [`  const obj = input as Record<string, unknown>`] : []),
       `  return (`,
       parts.map((part) => `    ${part}`).join(' &&\n'),
       `  )`,

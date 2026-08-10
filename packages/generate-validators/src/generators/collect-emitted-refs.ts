@@ -71,8 +71,9 @@ export const collectEmittedRefs = (
 
   const schema = value as Record<string, unknown>
 
-  // Run before the `$ref` short-circuit below: `{ $ref, unevaluatedProperties }`
-  // is a real shape, and its coverage reaches past the ref the emitter delegates to.
+  // `{ $ref, unevaluatedProperties }` is a real shape, and its coverage reaches
+  // past the ref the emitter delegates to, so the sweep is its own visit rather
+  // than something the walk below arrives at.
   if (rootSchema !== undefined && ('unevaluatedProperties' in schema || 'unevaluatedItems' in schema)) {
     collectCoverageRefs(schema as JSONSchema, refs, rootSchema)
   }
@@ -112,27 +113,25 @@ export const collectEmittedRefs = (
   // the traversal order every emitted import list is built from is unchanged.
   if (tail !== undefined) collectEmittedRefs(tail, refs, rootSchema, includeTypeOnly)
 
-  // Positions the *type* reads and the validator does not. `getTuplePositions` in
-  // `generate-type-definition` prefers a non-empty `prefixItems` and otherwise
-  // falls back to an array `items`, then takes the rest from `additionalItems`
-  // whenever `items` is an array — so where `tupleShapeOf` and it disagree, the
-  // type still names a `$ref` nothing calls. Each emitted import carries the type
-  // as well as the validator, so those refs have to be in the list, or the output
-  // gets `export type Root = [string?, ...B[]]` with no `B` in scope.
+  // The one position the *type* reads and the validator does not: a tuple's rest.
+  // `renderTuple` in `generate-type-definition` takes it from `additionalItems`
+  // whenever `items` is an array — including when `prefixItems` won the positions
+  // out from under it, which is where `tupleShapeOf` reports no tail at all. Each
+  // emitted import carries the type as well as the validator, so that ref has to
+  // be in the list, or the output gets `export type Root = [string?, ...B[]]` with
+  // no `B` in scope.
   //
   // Only for the import list, though: `assertGeneratableRefs` reads this set to
   // ask "would the emitter call a validator that was never generated", and the
   // answer for a type-only position is no. An unresolvable ref there types as
   // `unknown` and names nothing, so refusing over it turns down a schema that
   // generates fine.
+  //
+  // The array `items` itself needs no such clause. `getTuplePositions` takes the
+  // positions from a `prefixItems` that is merely *present*, empty included — the
+  // same reading `tupleShapeOf` and the interpreter make — so wherever the type
+  // names those positions, `tuple` below already walks them.
   if (includeTypeOnly && Array.isArray(schema['items'])) {
-    const arrayItems = schema['items'] as unknown[]
-    // `getTuplePositions` falls back to the array `items` only when `prefixItems`
-    // is absent or *empty*; a non-empty one wins there too, and then nothing reads
-    // the array `items` at all.
-    if (arrayItems !== tuple && tuple?.length === 0) {
-      for (const sub of arrayItems) collectEmittedRefs(sub, refs, rootSchema, includeTypeOnly)
-    }
     const additional = schema['additionalItems']
     if (additional !== undefined && additional !== tail) {
       collectEmittedRefs(additional, refs, rootSchema, includeTypeOnly)

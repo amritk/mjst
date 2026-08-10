@@ -411,9 +411,9 @@ describe('generated-code-types', () => {
 
   // `noUnusedLocals` / `noUnusedParameters` are on in the repo's own
   // `tsconfig.json`, and a consumer inherits them. They are off in `OPTIONS`
-  // above because the output still carries known unused symbols — the type half
-  // of an `if`-arm import, an unread `const obj` on an `if`/`then` root — so
-  // turning them on for every case would pin gaps rather than guard anything.
+  // above because the output still carries one known unused symbol — the type
+  // half of an `if`-arm import — so turning them on for every case would pin a
+  // gap rather than guard anything.
   //
   // They are exactly the flags the hoist pruning exists to satisfy, though, and
   // the corpora are no help: 3 of their 4,242 generated files hoist anything at
@@ -463,6 +463,42 @@ describe('generated-code-types', () => {
     for (const [name, schema] of hoisting) {
       const files = await buildValidatorSchema(schema, 'Doc')
       for (const file of files) sources.set(`/hoist-${name}/${file.filename}`, file.content)
+    }
+
+    expect(typeErrors(sources, { noUnusedLocals: true, noUnusedParameters: true })).toEqual([])
+  })
+
+  // The other two symbols a file can declare and not read, both found by
+  // compiling the vendored OpenAPI corpus under the real flags rather than
+  // reasoned about: `ValidationError`, which only a body that *accumulates*
+  // errors names — a scalar root answers with one inline `return { valid: false,
+  // errors: [ … ] }` and never declares the array — and the `const obj`
+  // narrowing, which a node with no property to read never touches. Both are as
+  // ordinary as a schema gets: `{ "type": "string" }` is the commonest shape in
+  // an OpenAPI document, and `{ "type": "object", "properties": {} }` is in
+  // `openai.yaml` today.
+  it('emits no unused local for a shape that reads neither errors nor obj', { timeout: 120_000 }, async () => {
+    const unused: ReadonlyArray<readonly [string, JSONSchema]> = [
+      ['scalar-root', { type: 'string' }],
+      ['boolean-root', { type: 'boolean' }],
+      ['scalar-root-annotated', { type: 'string', title: 'Text', description: 'A text input.' }],
+      ['delegating-ref-root', { $ref: '#/$defs/a', $defs: { a: { type: 'string' } } }],
+      ['const-root', { const: 'x' }],
+      ['enum-root', { enum: ['a', 'b'] }],
+      ['true-root', true],
+      ['false-root', false],
+      // No property to read, so neither guard touches the narrowing — while the
+      // cold body, which does declare `errors`, keeps `ValidationError`.
+      ['empty-object-root', { type: 'object', properties: {}, required: [] }],
+      ['bare-object-root', { type: 'object' }],
+      // The other direction: both symbols are read, so both have to survive.
+      ['reads-both', { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] }],
+    ]
+
+    const sources = new Map<string, string>()
+    for (const [name, schema] of unused) {
+      const files = await buildValidatorSchema(schema, 'Doc')
+      for (const file of files) sources.set(`/unused-${name}/${file.filename}`, file.content)
     }
 
     expect(typeErrors(sources, { noUnusedLocals: true, noUnusedParameters: true })).toEqual([])

@@ -455,8 +455,9 @@ const files = await buildValidatorSchema(schema, 'Document')
    validator accepts. `unevaluatedProperties`/`unevaluatedItems` *are* generated;
    four shapes still refuse (coverage through a `$dynamicRef`, an unresolvable or
    cyclic `$ref` at the same instance location, a walk deeper than eight
-   applicators, a node under `additionalItems`), and generation **throws** for
-   those rather than widening the verdict.
+   applicators, a node under an *inert* `additionalItems` — one with no array
+   `items`, or with `prefixItems` alongside), and generation **throws** for those
+   rather than widening the verdict.
 
 Only the `.` entry. Install: `bun add @amritk/generate-validators`.
 
