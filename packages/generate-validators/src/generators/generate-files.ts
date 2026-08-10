@@ -70,15 +70,28 @@ export const generateValidatorFile = (
   const validatorFunction = generateValidatorFunction(schema, typeName, typeSuffix, options?.rootSchema)
   const booleanGuard = generateBooleanGuard(schema, typeName, typeSuffix)
 
+  const body = validatorFunction + booleanGuard
+
+  // `ValidationResult` is every validator's return type, so it is always read.
+  // `ValidationError` is only named by a body that *accumulates* errors — a
+  // validator whose whole answer is one early `return { valid: false, errors: [
+  // … ] }` never declares the array, and a plain scalar root is exactly that
+  // shape. Importing it regardless left `TS6196` in the emitted file for any
+  // consumer with `noUnusedLocals`, which is most of the corpus: `{ "type":
+  // "string" }` is the commonest schema an OpenAPI document has. The name can
+  // only appear as a type annotation, so its absence from the body is
+  // conclusive; schema text mentioning it merely keeps the import, which is what
+  // was emitted before.
+  const resultTypes = ['ValidationResult', ...(/\bValidationError\b/.test(body) ? ['ValidationError'] : [])]
+
   // `.js` extension so the relative import resolves under Node ESM, not only Bun.
-  let result = `import type { ValidationResult, ValidationError } from './validation-result.js'\n`
+  let result = `import type { ${resultTypes.join(', ')} } from './validation-result.js'\n`
 
   // Structural `const` checks call the runtime `valuesEqual` helper; structural
   // `uniqueItems` checks call `allUnique`; error paths built from a runtime key
   // call `escapePointer`. All live in `validation-result.js`; import each only
   // when the generated body (validator or boolean guard) uses it, so files that
   // need none carry no unused import.
-  const body = validatorFunction + booleanGuard
   const runtimeHelpers = (['valuesEqual', 'allUnique', 'escapePointer'] as const).filter((name) =>
     body.includes(`${name}(`),
   )

@@ -284,11 +284,25 @@ const patternPropertiesRecordType = (
 /**
  * The tuple positions a schema declares: 2020-12 `prefixItems`, or the draft-07
  * array form of `items`. Returns undefined for a plain (homogeneous) array.
+ *
+ * A `prefixItems` that is *present* takes the positions, empty or not. Requiring
+ * a non-empty one let an empty `prefixItems` fall through to the array `items`
+ * behind it, so `{ "prefixItems": [], "items": [{"type":"string"}] }` typed as
+ * `[string?, ...unknown[]]` while `@amritk/runtime-validators` and
+ * `@amritk/generate-validators` both read the `prefixItems` and enforced nothing
+ * — the type claimed a shape neither validator would hold anyone to. 2020-12
+ * has no array `items` at all, so once `prefixItems` is on the node the draft-07
+ * spelling beside it is not a tuple this schema declares.
+ *
+ * An empty *array* `items` still falls through, and that is not the same case:
+ * with no `prefixItems` it is a draft-07 tuple of no positions, whose every
+ * index answers to `additionalItems` — `unknown[]` here, which is a widening
+ * rather than a claim.
  */
 const getTuplePositions = (schema: SchemaNode): readonly JSONSchema[] | undefined => {
   const record = schema as Record<string, unknown>
   const prefixItems = record['prefixItems']
-  if (Array.isArray(prefixItems) && prefixItems.length > 0) return prefixItems as JSONSchema[]
+  if (Array.isArray(prefixItems)) return prefixItems.length > 0 ? (prefixItems as JSONSchema[]) : undefined
   if (Array.isArray(schema.items) && schema.items.length > 0) return schema.items as JSONSchema[]
   return undefined
 }

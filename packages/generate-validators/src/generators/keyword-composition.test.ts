@@ -368,6 +368,34 @@ describe('keyword-composition', () => {
     expectAgreement(schema, ['a'], false)
   })
 
+  it('lets an empty prefixItems win the positions, and types it that way', () => {
+    // The same precedence as the test above, at length 0 — where the *type* used
+    // to break it. `prefixItems` being present is what takes the positions, for
+    // `tupleShapeOf` and for the interpreter, so an array `items` beside it is
+    // read by nobody and the node constrains nothing. `getTuplePositions`
+    // required a *non-empty* `prefixItems` and so fell back to that array,
+    // emitting `[string?, number?, ...unknown[]]` next to a validator that
+    // enforced none of it — a type claiming a shape neither validator holds
+    // anyone to, which is the harmful direction for a predicate library.
+    const schema = { type: 'array', prefixItems: [], items: [{ type: 'string' }, { type: 'number' }] }
+    expect(generateTypeDefinition(schema as never, 'Root')).toContain('unknown[]')
+    expect(generateTypeDefinition(schema as never, 'Root')).not.toContain('[string?')
+    expectAgreement(schema, ['a', 1], true)
+    expectAgreement(schema, [1, 'a'], true)
+
+    // The spellings around it keep their meaning. An empty `prefixItems` beside a
+    // schema-form `items` still types every index from 0, and beside `items:
+    // false` still forbids every index — and an empty *array* `items`, with no
+    // `prefixItems` to displace it, is a draft-07 tuple of no positions, so
+    // `additionalItems` is its tail from 0.
+    expectAgreement({ type: 'array', prefixItems: [], items: { type: 'string' } }, ['a', 'b'], true)
+    expectAgreement({ type: 'array', prefixItems: [], items: { type: 'string' } }, ['a', 1], false)
+    expectAgreement({ type: 'array', prefixItems: [], items: false }, [], true)
+    expectAgreement({ type: 'array', prefixItems: [], items: false }, [1], false)
+    expectAgreement({ type: 'array', items: [], additionalItems: { type: 'string' } }, ['a'], true)
+    expectAgreement({ type: 'array', items: [], additionalItems: { type: 'string' } }, [1], false)
+  })
+
   it('collects no import for a $ref in a position the emitter ignores', () => {
     // `additionalItems` is the tail of a *draft-07* tuple, so it means nothing
     // next to a schema-form `items`; `then` means nothing without an `if`. A ref
