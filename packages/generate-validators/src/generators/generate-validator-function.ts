@@ -302,7 +302,7 @@ type NestingContext = {
    * every nesting level of one validator so per-call work (like building a
    * known-keys Set) is paid once at module load instead of on every call.
    */
-  hoisted: string[]
+  hoisted: Hoisted[]
   /**
    * The whole document this schema came from, when the caller knows it. Only the
    * `unevaluated*` emitters need it: working out what a node's `$ref` evaluated
@@ -361,67 +361,20 @@ const patternPropertySources = (schema: JSONSchema): string[] => {
  * known key or matches any pattern.
  */
 /**
- * The emitted text with the *literal* content of every string blanked out, so
- * that asking whether a name appears asks about a reference to it rather than a
- * mention of it.
+ * A module-level declaration the emitted function may or may not end up reading.
  *
- * Emitted code carries the schema's own property names as data — quoted in a
- * key comparison, and unquoted inside the template that builds an error path —
- * and a schema is free to name a property `_patterns0`. A template's `${…}`
- * holds real code, so its contents survive; only the literal runs around them
- * are blanked. This is a read-only view for the liveness test; the emitted text
- * itself is untouched.
+ * Whether it does is not a question to answer by searching the emitted text for
+ * the name: that text carries the schema's own strings — property names, regex
+ * sources — and a schema is free to put anything in them. Asking instead for a
+ * fragment the *emitter* wrote keeps the question about code. `reference` is
+ * that fragment: the declared name followed by the `.` of the member access
+ * every use of one of these goes through.
  */
-const codeOnly = (text: string): string => {
-  let out = ''
-  let quote: '"' | "'" | '`' | null = null
-  // How deep inside `${ … }` we are within the current template literal. Only
-  // depth 0 is literal text; anything further in is code again.
-  let interpolation = 0
-
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i] as string
-
-    if (quote === null) {
-      if (char === '"' || char === "'" || char === '`') quote = char
-      out += char
-      continue
-    }
-
-    if (char === '\\') {
-      // Keep the length stable so nothing downstream depends on the offsets
-      // shifting; the escaped character is literal either way.
-      out += '  '
-      i++
-      continue
-    }
-
-    if (quote === '`' && interpolation === 0 && char === '$' && text[i + 1] === '{') {
-      interpolation = 1
-      out += '${'
-      i++
-      continue
-    }
-
-    if (interpolation > 0) {
-      if (char === '{') interpolation++
-      if (char === '}') interpolation--
-      out += char
-      continue
-    }
-
-    if (char === quote) {
-      quote = null
-      out += char
-      continue
-    }
-
-    // Literal text. Newlines are kept so a multi-line template does not collapse
-    // the lines around it into one.
-    out += char === '\n' ? '\n' : ' '
-  }
-
-  return out
+type Hoisted = {
+  /** The `const …` line, emitted above the function when it is read. */
+  readonly declaration: string
+  /** A substring present in the function body exactly when the declaration is read. */
+  readonly reference: string
 }
 
 /**
@@ -438,29 +391,29 @@ const codeOnly = (text: string): string => {
  * is the generator's own convention for a parameter it does not use, applied on
  * every other `return true` path already.
  */
-const withHoisted = (hoisted: readonly string[], text: string): string => {
-  const declared = hoisted.map((declaration) => ({ declaration, name: /^const (\w+)/.exec(declaration)?.[1] }))
+const withHoisted = (hoisted: readonly Hoisted[], text: string): string => {
   // A declaration kept for the body may itself read another, so grow the live set
   // to a fixed point rather than testing each one against the body alone.
-  const live = new Set<string>()
+  const live = new Set<Hoisted>()
   let scope = text
   for (let grew = true; grew; ) {
     grew = false
-    for (const { declaration, name } of declared) {
-      if (live.has(declaration)) continue
-      if (name !== undefined && !new RegExp(`(?<![.\\w])${name}\\b`).test(codeOnly(scope))) continue
-      live.add(declaration)
-      scope += `\n${declaration}`
+    for (const entry of hoisted) {
+      if (live.has(entry) || !scope.includes(entry.reference)) continue
+      live.add(entry)
+      scope += `\n${entry.declaration}`
       grew = true
     }
   }
 
   // The parameter list is where `input` is *declared*; only a mention outside it
-  // counts as a read.
+  // counts as a read. A schema string that happens to contain the word keeps the
+  // parameter as it is, which is the harmless direction — the rename is a tidy-up,
+  // and a missed one costs a lint warning where a wrong one breaks the file.
   const reads = text.replaceAll('(input: unknown', '(')
   const body = /\binput\b/.test(reads) ? text : text.replaceAll('(input: unknown', '(_input: unknown')
 
-  const kept = hoisted.filter((declaration) => live.has(declaration))
+  const kept = hoisted.filter((entry) => live.has(entry)).map((entry) => entry.declaration)
   return kept.length > 0 ? `${kept.join('\n')}\n\n${body}` : body
 }
 
@@ -471,8 +424,11 @@ const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): strin
   const known = Object.keys(hasProperties(schema) ? schema.properties : {})
   const d = ctx.depth
 
-  const check = unknownKeyCheck(known, `_knownKeys${ctx.hoisted.length}`)
-  ctx.hoisted.push(...check.declarations)
+  const knownKeysName = `_knownKeys${ctx.hoisted.length}`
+  const check = unknownKeyCheck(known, knownKeysName)
+  for (const declaration of check.declarations) {
+    ctx.hoisted.push({ declaration, reference: `${knownKeysName}.` })
+  }
 
   // A key that matches any `patternProperties` regex is allowed, so only keys
   // outside both the known keys and every pattern count as additional.
@@ -484,7 +440,10 @@ const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): strin
     // known as strings here; the flags still come from `regexFlagsFor`, so these
     // read `pattern` the same way every emitted literal does.
     const compiled = patterns.map((p) => `new RegExp(${JSON.stringify(p)}, ${JSON.stringify(regexFlagsFor(p))})`)
-    ctx.hoisted.push(`const ${patternsName} = [${compiled.join(', ')}]`)
+    ctx.hoisted.push({
+      declaration: `const ${patternsName} = [${compiled.join(', ')}]`,
+      reference: `${patternsName}.`,
+    })
     patternGuard = ` && !${patternsName}.some((re) => re.test(_key${d}))`
   }
 

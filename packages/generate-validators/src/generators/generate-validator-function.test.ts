@@ -1766,6 +1766,62 @@ describe('generate-validator-function', () => {
       expect(code).toContain('${_path}/_patterns0')
     })
 
+    // The pruning question is "did the emitter write a use of this?", and the
+    // first attempt answered it by searching the emitted text for the name. That
+    // text is not all code: a `pattern` becomes a regex *literal*, and its source
+    // is the schema author's. An apostrophe in an ordinary name pattern opened a
+    // string that swallowed the `_patterns0.some(` following it, the declaration
+    // was pruned as dead, and the validator threw `_patterns0 is not defined` on
+    // the first object with an extra key. Every case here asserts the declaration
+    // SURVIVES and the validator runs — the direction a blanket "prune it" also
+    // satisfies, which is why the case above could not catch this.
+    it.each([
+      ['an apostrophe', "^[A-Za-z' -]+$", "O'Brien"],
+      ['a double quote', '^[^"]+$', 'plain'],
+      ['a backtick', '^[^`]+$', 'plain'],
+      ['a backslash escape', '^\\d+$', '42'],
+      ['a dollar-brace', '^\\$\\{.*\\}$', '${x}'],
+    ])('keeps the pattern table when the regex literal contains %s', (_label, pattern, name) => {
+      const schema = {
+        type: 'object' as const,
+        additionalProperties: false,
+        patternProperties: { '^x-': { type: 'string' as const } },
+        properties: { name: { type: 'string' as const, pattern } },
+      }
+      const code = generateValidatorFunction(schema, 'Root')
+
+      expect(code).toContain('_patterns0.some(')
+      expect(code).toContain('const _patterns0 =')
+
+      // The declaration being present is not enough — it has to be present *and*
+      // the validator has to reach the sweep, which is where the throw happened.
+      const validate = evalValidator(code)
+      expect(validate({ name, 'x-ext': 'v' })).toBe(true)
+      expect(validate({ name, z: 1 })).not.toBe(true)
+    })
+
+    it('keeps a known-keys set the sweep reads past a quote-bearing pattern', () => {
+      // The `Set` form of the same check, hoisted only once the key list is long.
+      const properties = Object.fromEntries(
+        Array.from({ length: 20 }, (_, i) => [`k${i}`, { type: 'string' as const }]),
+      )
+      const code = generateValidatorFunction(
+        {
+          type: 'object' as const,
+          additionalProperties: false,
+          properties: { ...properties, name: { type: 'string' as const, pattern: "^'$" } },
+        },
+        'Root',
+      )
+
+      expect(code).toContain('const _knownKeys0 = new Set(')
+      expect(code).toContain('_knownKeys0.has(')
+
+      const validate = evalValidator(code)
+      expect(validate({ k0: 'a' })).toBe(true)
+      expect(validate({ k0: 'a', nope: 1 })).not.toBe(true)
+    })
+
     it('renames an `input` no surviving check reads, and leaves a read one alone', () => {
       expect(generateValidatorFunction({ anyOf: [strictWithPatterns, true] }, 'Root')).toContain(
         'validateRoot = (_input: unknown',

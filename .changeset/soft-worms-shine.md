@@ -96,9 +96,10 @@ TypeScript diagnostics. Both corpora now compile clean.
   `assertGeneratableRefs` reads the same set, a refusal to generate at all when
   that arm's `$ref` happened to be unresolvable. The spellings that fold are the
   emitter's own: `{}` and an annotation-only schema, not just a literal boolean.
-- A hoisted declaration was kept alive by a *mention* of its name rather than a
-  read of it. Emitted code carries the schema's own property names as data, so a
-  schema naming a property `_patterns0` kept a dead `const _patterns0`.
+- Whether a hoisted declaration is still read is decided by a fragment the
+  emitter wrote, not by searching the emitted text for the name. That text is not
+  all code — a property name reaches it as data and a `pattern` as a regex
+  literal — so the name alone answered the wrong question in both directions.
 
 ### Generation that fails late instead of loudly
 
