@@ -1,5 +1,201 @@
 # @amritk/generate-validators
 
+## 0.13.0
+
+### Minor Changes
+
+- 823ea4e: Fix twelve bugs found by an audit of the validator generator. The first three
+  are one bug wearing three hats, and it is the headline: a generated validator
+  could accept documents the schema forbids.
+
+  ### Wrong verdicts
+
+  - **A `const` or `enum` silently dropped every sibling keyword.** The emitter was
+    a chain of `if (keyword) { emit; return }`, so the first keyword it recognised
+    swallowed the rest: `{"type": "string", "const": 1}` compiled to an equality
+    check and nothing else, and the generated validator accepted `1`. It reproduced
+    under `properties`, `items`, `prefixItems`, `contains`, `additionalProperties`,
+    `patternProperties`, `propertyNames`, `dependentSchemas`, `not`,
+    `if`/`then`/`else` and `allOf`, and at the document root. The keyword emitters
+    now compose instead of dispatching, with the presence check for a `required`
+    property hoisted so it is still reported once.
+  - **A top-level `$ref` dropped its siblings too.** `{"$ref": "#/$defs/s",
+"minLength": 3}` compiled to a bare delegation and accepted `"q"` —
+    contradicting 2020-12, and contradicting the generator's own handling of the
+    same shape under `properties`.
+  - **`$ref` siblings were dropped everywhere except `properties`,** where
+    `type` / `const` / `enum` siblings were dropped instead. Wrong in both
+    directions: `{"not": {"$ref": "#/$defs/s", "minLength": 3}}` made the inner
+    schema broader than written, so it wrongly _rejected_ `"a"`.
+  - **A draft-07 tuple (`"items": [...]`) produced no array validation at all**
+    while the type generator emitted a real tuple type, so the emitted type and the
+    emitted validator disagreed about the same schema. Array-form `items` and its
+    `additionalItems` tail are now read as the tuple they are — with `prefixItems`
+    taking precedence when a node carries both, matching the type generator and the
+    runtime interpreter. Each dialect's closing keyword now applies only within its
+    own dialect: `additionalItems: false` next to a 2020-12 `prefixItems` capped a
+    length that Ajv, the interpreter, and the tuple type emitted beside it all
+    leave open.
+  - **Error paths built from a runtime key were not JSON-Pointer escaped.** A
+    `patternProperties` match, an `additionalProperties` sweep or a `propertyNames`
+    loop reported `{"a/b": …}` at `/a/b`, which reads back as the child `b` of a
+    property `a`. Keys the schema names statically were always escaped, and
+    `@amritk/runtime-validators` escapes the same way; the runtime ones now do too,
+    via an `escapePointer` helper in the emitted `validation-result.ts`.
+
+  ### Unsound `isX` guards
+
+  The flat boolean guard must never accept what `validateX` rejects. Three ways it
+  did:
+
+  - A `required` key with no `properties` entry contributed no condition at all, so
+    `isX({})` answered `true` for `{"type": "object", "required": ["a"]}`.
+  - `items: false` was ignored (`hasItems` is false for a boolean `items`), so
+    `isX([1])` answered `true` for an array schema admitting no elements.
+  - A draft-07 tuple was read as a tail schema and produced no per-item test.
+
+  An `enum` carrying a constraining sibling is now composed with it rather than
+  answered by membership alone — which was the unsound reading — while keeping the
+  inline guard for `{"type": "string", "enum": [...]}`, the commonest shape in an
+  OpenAPI document.
+
+  ### Generated output that does not compile
+
+  Compiling every generated file set in the two vendored corpora (1,361 schemas,
+  under the flags `generated-code-types.test.ts` already declares) found 61
+  TypeScript diagnostics. Both corpora now compile clean.
+
+  - A combinator branch the compiler can decide statically was still emitted as a
+    live condition, leaving provably unreachable code (58× `TS7027`): an `anyOf`
+    with a `true`/`{}` branch, and a boolean `if` or `not`. These fold now, with no
+    change of verdict.
+  - A `type: "object"` root read its combinator branches against the narrowed
+    `Record<string, unknown>`, so a branch from another family compared an object
+    against a string (`TS2367`, plus a cascade on `never`). The same applied to a
+    `dependentSchemas` / `dependencies` subschema, which is applied to the object
+    itself.
+  - A guard member and an `unevaluated*` key both read through a cast, which no
+    `typeof` in front can narrow, so a constrained check emitted `.length` on
+    `unknown` (`TS2571`).
+  - The `unevaluated*` coverage sweep reads its leftover value _inside_ a `.every`
+    callback, and TypeScript keeps a narrowing across that boundary only for a
+    plain binding — never for a property read. One instance location down,
+    `Array.isArray(obj.a)` in front of the sweep said nothing inside it, so a
+    constrained `unevaluatedProperties` at any array position emitted `TS18046` /
+    `TS2571`. The object is bound to a local before the callback now.
+  - An `enum` member of a different JSON type than the sibling `type` sat behind
+    the `typeof` that narrows the accessor, so it compared two disjoint types
+    (`TS2367`). Such a member can never match, and is dropped.
+  - Folding a branch away can strand what building it left behind: the compiled
+    pattern table it hoisted, and — when it was the only reader — the `input`
+    parameter itself (`TS6133` under `noUnusedLocals` / `noUnusedParameters`). A
+    validator now carries only the hoisted declarations its body reads, and an
+    unread parameter takes the `_` prefix the generator uses everywhere else.
+  - An `if` the emitter can decide picks one arm, and the arm it drops is read by
+    nobody: unlike an `anyOf` branch, which the type generator still unions,
+    neither arm of an `if` is read by the type at all. Its `$ref` is no longer
+    collected, where before it was a wholly unused import (`TS6192`) — and, since
+    `assertGeneratableRefs` reads the same set, a refusal to generate at all when
+    that arm's `$ref` happened to be unresolvable. The spellings that fold are the
+    emitter's own: `{}` and an annotation-only schema, not just a literal boolean.
+  - Whether a hoisted declaration is still read is decided by a fragment the
+    emitter wrote, not by searching the emitted text for the name. That text is not
+    all code — a property name reaches it as data and a `pattern` as a regex
+    literal — so the name alone answered the wrong question in both directions.
+
+  ### Generation that fails late instead of loudly
+
+  - **A `$defs` entry named `index` or `validation-result` was skipped silently.**
+    Its importers were still generated, so the output carried an
+    `import { validateIndex } from './index.js'` that nothing satisfies — a
+    `TS2305` when built and a `SyntaxError` when run. Generation now refuses and
+    names the definition, the same answer two definitions competing for one
+    filename already get. A root type name that collides is refused too, instead of
+    producing no root validator.
+  - A `$ref` in a position neither emitter reads (`additionalItems` with no array
+    `items`; `then`/`else` with no `if`) was collected as though it were, so
+    generation refused a perfectly good schema when that ref happened to be
+    unresolvable. Conversely, a `$ref` in a position only the _type_ generator
+    reads — a tuple's rest, when `prefixItems` took the positions out from under an
+    array `items` — was not collected, and the emitted type named something no
+    import brought in (`TS2304`, on `main` too).
+  - **A definition named `…-or-reference` was imported from the wrong file.** The
+    import collector rewrote the ref to its base name first, so a schema with a
+    `#/$defs/parameter-or-reference` got `import { validateParameter } from
+'./parameter.js'` while the body called `validateParameterOrReference` — a
+    runtime `is not defined`, and with no base `parameter` definition, an import of
+    a module that was never written. `walkRefGraph` gives such a definition a file
+    of its own; it is now imported from it, under the name the emitter uses. The
+    OpenAPI 3.1 metaschema names definitions exactly this way, and
+    `@amritk/generate-parsers` dropped the same rewrite for the same reason.
+  - **An `unevaluated*` under a draft-07 `additionalItems` was refused** on the
+    grounds that the position is never enforced. That was true while
+    `additionalItems` was read only as a length cap; now that the tail is
+    validated, the draft-07 spelling of a schema whose 2020-12 spelling generates
+    is accepted, and the refusal is kept for the positions that really are inert.
+
+  Three JSON Schema Test Suite cases move from expected-failure to passing as a
+  result (two `$id`-scope cases and one `$dynamicRef` case, all of which needed a
+  root `$ref`'s siblings to be enforced), leaving 7 documented gaps.
+
+### Patch Changes
+
+- 36f03a2: Review follow-ups to the sibling-composition fix: three symbols the generated
+  output declared without reading, and a tuple type no validator would have held
+  anyone to.
+
+  ### Unused symbols in the emitted files
+
+  All three are `noUnusedLocals` / `noUnusedParameters` errors in a consumer's
+  build — flags this repo holds itself to and any consumer inherits — and all three
+  were found by compiling the vendored OpenAPI corpus under them rather than
+  reasoned about. Each is an ordinary shape, not a corner:
+
+  - **`ValidationError` was imported by every generated file.** Only a body that
+    _accumulates_ errors names the type; a validator whose whole answer is one
+    inline `return { valid: false, errors: [ … ] }` never declares the array. That
+    is every scalar root — `{ "type": "string" }`, the commonest schema an OpenAPI
+    document has — plus a delegating `$ref`, a `const`, an `enum` and a boolean
+    root. The import is now conditional, the same way the runtime helpers beside it
+    already were.
+  - **`const obj = input as Record<string, unknown>` was emitted by both flat
+    guards regardless.** A node with no property to read guards on the shape alone
+    and never touches the narrowing, so `{ "type": "object", "properties": {} }` —
+    in `openai.yaml` today — declared it twice and read it neither time. The cold
+    error-collecting body already had this liveness test; the exported validator's
+    hot guard and `isX` now share it.
+
+  ### A tuple type nothing enforced
+
+  `getTuplePositions` took the positions from a _non-empty_ `prefixItems` and
+  otherwise fell back to the draft-07 array `items`, so an empty `prefixItems`
+  fell through to the array behind it: `{ "prefixItems": [], "items": [{"type":
+"string"}] }` typed as `[string?, ...unknown[]]` while
+  `@amritk/runtime-validators` and the generated validator both read the
+  `prefixItems`, found no positions, and enforced nothing. A `prefixItems` that is
+  merely present now takes the positions there too, which is what both runtimes
+  already do, so the type says `unknown[]` — a widening rather than a claim. An
+  empty _array_ `items` is unaffected: with no `prefixItems` to displace it, it is
+  a draft-07 tuple of no positions whose every index answers to `additionalItems`,
+  and the emitter validates it as such.
+
+  ### Docs the audit invalidated
+
+  The audit moved three JSON Schema Test Suite cases to passing, but the numbers
+  quoted in prose did not move with them: the README still advertised **1271 /
+  1281 (99.2%)** and enumerated ten failures including two `$id`-scoping cases that
+  now pass. It is 1274 / 1281 (99.5%) and seven. `conformance.test.ts` now pins
+  both totals, so the next gap that closes fails the build instead of leaving the
+  package advertising a worse number than it delivers.
+
+  The README and `AI.md` also still listed "a node under `additionalItems`" among
+  the shapes where an `unevaluated*` refuses. That refusal is now limited to an
+  _inert_ `additionalItems` — one with no array `items` to be the tail of, or with
+  a `prefixItems` that took the positions out from under it.
+
+- Updated dependencies [36f03a2]
+  - @amritk/helpers@0.15.3
+
 ## 0.12.2
 
 ### Patch Changes

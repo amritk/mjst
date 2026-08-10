@@ -1,5 +1,17 @@
 # @amritk/mjst
 
+## 0.14.8
+
+### Patch Changes
+
+- Updated dependencies [36f03a2]
+- Updated dependencies [823ea4e]
+  - @amritk/generate-validators@0.13.0
+  - @amritk/helpers@0.15.3
+  - @amritk/adapters@0.4.3
+  - @amritk/generate-examples@0.6.3
+  - @amritk/generate-parsers@0.19.3
+
 ## 0.14.7
 
 ### Patch Changes
