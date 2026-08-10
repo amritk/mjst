@@ -19,6 +19,7 @@
  * Only applied when the schema declares `$schema: http://json-schema.org/draft-07/schema`.
  */
 
+import { DATA_KEYWORDS } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { refToFilename, toKebabCase } from './ref-to-filename'
 
@@ -149,11 +150,80 @@ export const upgradeDraft07Schema = (schema: Record<string, unknown>): Record<st
     }
   }
 
+  // The rest of the document has to learn the new name too. Its `$ref`s were
+  // written against `#/definitions/...`, and that block no longer exists under
+  // that name — so `{ "properties": { "a": { "$ref": "#/definitions/thing" } } }`
+  // used to reach the generators unrewritten and stop the build with "Could not
+  // resolve $ref". Only refs written *inside* `definitions` were being rewritten,
+  // which is the same document and the same rename, so the split was an
+  // oversight rather than a decision.
   return {
-    ...rest,
+    ...(rewriteDefinitionsRefs(rest) as Record<string, unknown>),
     $defs: hoistedDefs,
   }
 }
+
+/**
+ * Rewrites `$ref: "#/definitions/X"` to `$ref: "#/$defs/X"` throughout a schema
+ * value, leaving every key untouched.
+ *
+ * Deliberately narrower than {@link renameNestedDefs}, which also renames the
+ * `definitions` *key*. Outside the root `definitions` block there is nothing to
+ * rename — a `definitions` sitting under `properties` is not hoisted and is not
+ * addressable as `#/$defs/...` — so renaming it would only move the target of a
+ * pointer that already worked.
+ *
+ * Three things it must not touch, each of which is a document it would otherwise
+ * break rather than fix:
+ *
+ * - An embedded `$id` starts a new resource, and a `#/definitions/...` inside it
+ *   addresses *that* resource's block — which is not renamed, since only the root
+ *   document's `definitions` is hoisted. Rewriting there points the pointer at
+ *   nothing, and `assertIdScopes` turns that into a hard failure for a document
+ *   that generated fine before.
+ * - `enum` / `const` / `default` / `examples` hold instance *data*. An object
+ *   spelled `{"$ref": "…"}` there is a literal value, not a reference, and the
+ *   rest of this package already skips these keys for exactly that reason.
+ * - A key named `__proto__` assigned with `result[key] = …` runs the prototype
+ *   setter instead of creating a property, silently dropping it from the output.
+ *
+ * Like `renameNestedDefs`, this rewrites the leading segment only: a pointer that
+ * dives through a *nested* definitions block (`#/definitions/x/definitions/y`)
+ * keeps its inner segment and still will not resolve. That gap is unchanged, and
+ * the same in both places.
+ */
+const rewriteDefinitionsRefs = (obj: unknown, depth = 0): unknown => {
+  assertSchemaDepth(depth, 'upgradeDraft07Schema')
+  if (typeof obj !== 'object' || obj === null) return obj
+  if (Array.isArray(obj)) return obj.map((item) => rewriteDefinitionsRefs(item, depth + 1))
+
+  const record = obj as Record<string, unknown>
+  const result: Record<string, unknown> = {}
+
+  for (const [key, value] of Object.entries(record)) {
+    const rewritten =
+      key === '$ref' && typeof value === 'string' && value.startsWith('#/definitions/')
+        ? value.replace('#/definitions/', '#/$defs/')
+        : DATA_KEYWORDS.has(key) || startsNewResource(value)
+          ? value
+          : rewriteDefinitionsRefs(value, depth + 1)
+
+    if (key === '__proto__') {
+      Object.defineProperty(result, key, { value: rewritten, writable: true, enumerable: true, configurable: true })
+    } else {
+      result[key] = rewritten
+    }
+  }
+
+  return result
+}
+
+/** Whether a subschema declares its own `$id`, making it a separate resource. */
+const startsNewResource = (value: unknown): boolean =>
+  typeof value === 'object' &&
+  value !== null &&
+  !Array.isArray(value) &&
+  typeof (value as Record<string, unknown>)['$id'] === 'string'
 
 /**
  * Recursively renames `definitions` → `$defs` within a schema value and
