@@ -364,16 +364,24 @@ const patternPropertySources = (schema: JSONSchema): string[] => {
  * A module-level declaration the emitted function may or may not end up reading.
  *
  * Whether it does is not a question to answer by searching the emitted text for
- * the name: that text carries the schema's own strings — property names, regex
- * sources — and a schema is free to put anything in them. Asking instead for a
- * fragment the *emitter* wrote keeps the question about code. `reference` is
- * that fragment: the declared name followed by the `.` of the member access
- * every use of one of these goes through.
+ * the name. That text carries the schema's own strings — property names, regex
+ * sources, `enum` values — and a schema is free to put anything in them,
+ * including `_patterns0` and, since the generator emits property accessors,
+ * `_patterns0.` as well.
+ *
+ * `reference` is therefore the *whole* expression the emitter wrote when it used
+ * the declaration, not the name. Two properties follow. The one that matters:
+ * the fragment is present whenever the use was emitted, so a live declaration is
+ * never pruned — that direction ends in a name nothing declares, a `TS2304` and
+ * a `ReferenceError`. The other is weaker but sufficient: forging the fragment
+ * takes a schema string equal to a whole generated expression, and the cost of
+ * succeeding is a declaration kept when it could have gone, which is a lint
+ * warning and exactly what this package emitted before the pruning existed.
  */
 type Hoisted = {
   /** The `const …` line, emitted above the function when it is read. */
   readonly declaration: string
-  /** A substring present in the function body exactly when the declaration is read. */
+  /** The emitted expression that reads it; present in the body iff the use survived. */
   readonly reference: string
 }
 
@@ -392,19 +400,13 @@ type Hoisted = {
  * every other `return true` path already.
  */
 const withHoisted = (hoisted: readonly Hoisted[], text: string): string => {
-  // A declaration kept for the body may itself read another, so grow the live set
-  // to a fixed point rather than testing each one against the body alone.
-  const live = new Set<Hoisted>()
-  let scope = text
-  for (let grew = true; grew; ) {
-    grew = false
-    for (const entry of hoisted) {
-      if (live.has(entry) || !scope.includes(entry.reference)) continue
-      live.add(entry)
-      scope += `\n${entry.declaration}`
-      grew = true
-    }
-  }
+  // Only the function body is searched. Growing the search to include the kept
+  // declarations — on the theory that one might read another — let a hoisted
+  // `new RegExp("…")` whose source is schema-authored resurrect an unrelated
+  // entry. Neither of the two hoisted forms reads the other, so there was nothing
+  // to gain; a form that did would have to say so here rather than be discovered
+  // by a substring.
+  const kept = hoisted.filter((entry) => text.includes(entry.reference)).map((entry) => entry.declaration)
 
   // The parameter list is where `input` is *declared*; only a mention outside it
   // counts as a read. A schema string that happens to contain the word keeps the
@@ -413,7 +415,6 @@ const withHoisted = (hoisted: readonly Hoisted[], text: string): string => {
   const reads = text.replaceAll('(input: unknown', '(')
   const body = /\binput\b/.test(reads) ? text : text.replaceAll('(input: unknown', '(_input: unknown')
 
-  const kept = hoisted.filter((entry) => live.has(entry)).map((entry) => entry.declaration)
   return kept.length > 0 ? `${kept.join('\n')}\n\n${body}` : body
 }
 
@@ -426,8 +427,10 @@ const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): strin
 
   const knownKeysName = `_knownKeys${ctx.hoisted.length}`
   const check = unknownKeyCheck(known, knownKeysName)
+  // The reference is the emitted test itself, not the name: see {@link Hoisted}.
+  const unknownTest = check.isUnknown(`_key${d}`)
   for (const declaration of check.declarations) {
-    ctx.hoisted.push({ declaration, reference: `${knownKeysName}.` })
+    ctx.hoisted.push({ declaration, reference: unknownTest })
   }
 
   // A key that matches any `patternProperties` regex is allowed, so only keys
@@ -440,16 +443,16 @@ const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): strin
     // known as strings here; the flags still come from `regexFlagsFor`, so these
     // read `pattern` the same way every emitted literal does.
     const compiled = patterns.map((p) => `new RegExp(${JSON.stringify(p)}, ${JSON.stringify(regexFlagsFor(p))})`)
+    patternGuard = ` && !${patternsName}.some((re) => re.test(_key${d}))`
     ctx.hoisted.push({
       declaration: `const ${patternsName} = [${compiled.join(', ')}]`,
-      reference: `${patternsName}.`,
+      reference: patternGuard,
     })
-    patternGuard = ` && !${patternsName}.some((re) => re.test(_key${d}))`
   }
 
   return [
     `  for (const _key${d} in ${ctx.objVar}) {`,
-    `    if (${check.isUnknown(`_key${d}`)}${patternGuard}) {`,
+    `    if (${unknownTest}${patternGuard}) {`,
     `      errors.push({ message: 'must NOT have additional properties', path: \`${ctx.pathPrefix}/\${escapePointer(_key${d})}\` })`,
     `    }`,
     `  }`,

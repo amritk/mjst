@@ -1766,6 +1766,47 @@ describe('generate-validator-function', () => {
       expect(code).toContain('${_path}/_patterns0')
     })
 
+    // The same question with the schema text pushed harder. Matching on the name
+    // — even the name plus the `.` of a member access — reads the generator's own
+    // accessors and the schema's own strings as though they were uses: a property
+    // `_patterns0` carrying any constrained check emits `obj._patterns0.length`,
+    // and a hoisted `new RegExp("…")` puts an author's text next to the
+    // declarations themselves. Each of these kept a dead `const` alive.
+    it.each([
+      [
+        'an accessor on a property of the same name',
+        {
+          type: 'object' as const,
+          additionalProperties: false,
+          properties: { _patterns0: { type: 'string' as const, minLength: 2 } },
+        },
+        '_patterns0',
+      ],
+      [
+        'a property named with the trailing dot',
+        {
+          type: 'object' as const,
+          additionalProperties: false,
+          properties: { '_patterns0.': { type: 'string' as const } },
+        },
+        '_patterns0',
+      ],
+      [
+        'an enum value carrying the name',
+        { type: 'object' as const, additionalProperties: false, properties: { a: { enum: ['_patterns0.x'] } } },
+        '_patterns0',
+      ],
+    ])('drops a folded table despite %s', (_label, outer, name) => {
+      const code = generateValidatorFunction(
+        { ...outer, anyOf: [strictWithPatterns, true] } as Parameters<typeof generateValidatorFunction>[0],
+        'Root',
+      )
+      expect(code).not.toContain(`const ${name} =`)
+      // The outer object's own strict sweep must still be emitted and still work.
+      const validate = evalValidator(code)
+      expect(validate({ nope: 1 })).not.toBe(true)
+    })
+
     // The pruning question is "did the emitter write a use of this?", and the
     // first attempt answered it by searching the emitted text for the name. That
     // text is not all code: a `pattern` becomes a regex *literal*, and its source
