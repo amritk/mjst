@@ -120,13 +120,17 @@ describe('collect-validator-imports', () => {
     // The emitter drops a vacuous `anyOf`; the type still says `A | unknown`.
     expect(names({ anyOf: [{ $ref: '#/$defs/a' }, true] })).toEqual(['A'])
     expect(names({ anyOf: [{ $ref: '#/$defs/a' }, { description: 'anything' }] })).toEqual(['A'])
-    // A literal boolean `if` picks its arm as surely here as in the emitter, and
-    // unlike `anyOf` the type generator reads *neither* arm — it types the whole
-    // node `unknown` — so the dropped arm's import would be read by nobody.
-    // Anything less than a literal keeps both, rather than re-deriving the fold.
+    // An `if` the emitter can decide picks its arm here too, and unlike `anyOf`
+    // the type generator reads *neither* arm — it types the whole node `unknown`
+    // — so the dropped arm is read by nobody. The set of spellings has to be the
+    // emitter's: it folds on whether the `if`'s match came out constant, which
+    // `{}` and an annotation-only schema do as surely as a literal `true`.
+    // Deciding only the literals left an `if: {}` collecting an `else` nothing
+    // emits. An `if` that depends on the value still keeps both arms.
     expect(names({ if: false, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual(['B'])
     expect(names({ if: true, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual(['A'])
-    expect(names({ if: {}, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual(['A', 'B'])
+    expect(names({ if: {}, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual(['A'])
+    expect(names({ if: { description: 'x' }, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual(['A'])
     expect(names({ if: { type: 'string' }, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual([
       'A',
       'B',
@@ -145,6 +149,27 @@ describe('collect-validator-imports', () => {
     // falls back to the array `items` and names what is there — while
     // `tupleShapeOf` had already taken the empty tuple.
     expect(names({ type: 'array', prefixItems: [], items: [{ $ref: '#/$defs/a' }] })).toEqual(['A'])
+  })
+
+  it('does not refuse an unresolvable $ref in an `if` arm the emitter never takes', () => {
+    // `assertGeneratableRefs` reads the same set, so an over-collected arm is not
+    // merely an unused import — it is a refusal to generate a schema that
+    // generates fine. All three spellings the emitter folds have to agree.
+    for (const branch of [{}, true, { description: 'x' }]) {
+      expect(() =>
+        assertGeneratableRefs({ if: branch, then: { type: 'string' }, else: { $ref: 'int.json' } } as never, 'Root'),
+      ).not.toThrow()
+    }
+    // The arm it *does* take still refuses, and so does an `if` it cannot decide.
+    expect(() =>
+      assertGeneratableRefs({ if: false, then: { type: 'string' }, else: { $ref: 'int.json' } } as never, 'Root'),
+    ).toThrow(/unresolvable \$ref "int\.json"/)
+    expect(() =>
+      assertGeneratableRefs(
+        { if: { type: 'string' }, then: { type: 'string' }, else: { $ref: 'int.json' } } as never,
+        'Root',
+      ),
+    ).toThrow(/unresolvable \$ref "int\.json"/)
   })
 
   it('does not refuse an unresolvable $ref in a position only the type reads', () => {

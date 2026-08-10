@@ -1723,6 +1723,57 @@ describe('generate-validator-function', () => {
     })
   })
 
+  describe('hoisted declarations', () => {
+    const strictWithPatterns = {
+      type: 'object' as const,
+      additionalProperties: false,
+      patternProperties: { '^x-': { type: 'string' as const } },
+      properties: { b: { type: 'string' as const } },
+    }
+
+    it('keeps the pattern table the strict-key sweep reads', () => {
+      // The half that must survive: when the sweep is emitted, its table has to
+      // come with it, or the file references a name nothing declares.
+      const code = generateValidatorFunction(strictWithPatterns, 'Root')
+      expect(code).toContain('const _patterns0 = [new RegExp("^x-", "u")]')
+      expect(code).toContain('_patterns0.some(')
+    })
+
+    it('drops a table whose only reader was a folded branch', () => {
+      // A vacuous `anyOf` is folded away *after* its checks were built, and
+      // building them hoisted the table. Nothing reads it then.
+      const code = generateValidatorFunction({ anyOf: [strictWithPatterns, true] }, 'Root')
+      expect(code).not.toContain('_patterns0')
+      expect(code).toContain('return errors !== undefined')
+    })
+
+    it('does not count the schema’s own property named like a hoisted local as a read', () => {
+      // Emitted code carries property names as data — quoted in the key sweep and
+      // unquoted inside the template that builds an error path — so a schema free
+      // to name a property `_patterns0` kept a dead declaration alive. The
+      // property's own checks must still be emitted.
+      const code = generateValidatorFunction(
+        {
+          type: 'object' as const,
+          additionalProperties: false,
+          properties: { _patterns0: { type: 'string' as const }, a: { type: 'string' as const } },
+          anyOf: [strictWithPatterns, true],
+        },
+        'Root',
+      )
+      expect(code).not.toContain('const _patterns0 =')
+      expect(code).toContain('obj._patterns0')
+      expect(code).toContain('${_path}/_patterns0')
+    })
+
+    it('renames an `input` no surviving check reads, and leaves a read one alone', () => {
+      expect(generateValidatorFunction({ anyOf: [strictWithPatterns, true] }, 'Root')).toContain(
+        'validateRoot = (_input: unknown',
+      )
+      expect(generateValidatorFunction(strictWithPatterns, 'Root')).toContain('validateRoot = (input: unknown')
+    })
+  })
+
   describe('dependentSchemas', () => {
     it('applies the subschema to the whole object when the trigger is present', () => {
       const validate = evalValidator(

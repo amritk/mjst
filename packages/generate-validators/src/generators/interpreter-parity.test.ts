@@ -445,9 +445,10 @@ describe('generator/interpreter verdict parity', () => {
   it('agrees on a constrained unevaluatedProperties reached through an array position', () => {
     // Each of these reaches the object through an accessor the emitter has to
     // bind before the coverage callback can read it, in all three array
-    // spellings and under a dynamic key. The values are chosen so a validator
-    // that stopped checking would answer `true` throughout, which is what the
-    // second value in every group rules out.
+    // spellings and under a dynamic key. `{ a: [{ p: 1, q: 2 }] }` is the
+    // load-bearing one: a validator that quietly stopped checking the leftover
+    // key would accept it, and the valid neighbour beside it rules out the
+    // opposite failure of rejecting everything.
     const inner = { properties: { p: true }, unevaluatedProperties: { type: 'string' } }
     const objects = [{ a: [{ p: 1 }] }, { a: [{ p: 1, q: 'ok' }] }, { a: [{ p: 1, q: 2 }] }, { a: [] }, { a: 1 }, {}]
 

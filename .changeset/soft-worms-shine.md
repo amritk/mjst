@@ -89,10 +89,16 @@ TypeScript diagnostics. Both corpora now compile clean.
   parameter itself (`TS6133` under `noUnusedLocals` / `noUnusedParameters`). A
   validator now carries only the hoisted declarations its body reads, and an
   unread parameter takes the `_` prefix the generator uses everywhere else.
-- A literal boolean `if` picks one arm, and the arm it drops is read by nobody:
-  unlike an `anyOf` branch, which the type generator still unions, neither arm of
-  an `if` is read by the type at all. Its `$ref` is no longer imported, which was
-  a wholly unused import (`TS6192`).
+- An `if` the emitter can decide picks one arm, and the arm it drops is read by
+  nobody: unlike an `anyOf` branch, which the type generator still unions,
+  neither arm of an `if` is read by the type at all. Its `$ref` is no longer
+  collected, where before it was a wholly unused import (`TS6192`) — and, since
+  `assertGeneratableRefs` reads the same set, a refusal to generate at all when
+  that arm's `$ref` happened to be unresolvable. The spellings that fold are the
+  emitter's own: `{}` and an annotation-only schema, not just a literal boolean.
+- A hoisted declaration was kept alive by a *mention* of its name rather than a
+  read of it. Emitted code carries the schema's own property names as data, so a
+  schema naming a property `_patterns0` kept a dead `const _patterns0`.
 
 ### Generation that fails late instead of loudly
 

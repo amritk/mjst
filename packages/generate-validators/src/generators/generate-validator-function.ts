@@ -361,6 +361,70 @@ const patternPropertySources = (schema: JSONSchema): string[] => {
  * known key or matches any pattern.
  */
 /**
+ * The emitted text with the *literal* content of every string blanked out, so
+ * that asking whether a name appears asks about a reference to it rather than a
+ * mention of it.
+ *
+ * Emitted code carries the schema's own property names as data — quoted in a
+ * key comparison, and unquoted inside the template that builds an error path —
+ * and a schema is free to name a property `_patterns0`. A template's `${…}`
+ * holds real code, so its contents survive; only the literal runs around them
+ * are blanked. This is a read-only view for the liveness test; the emitted text
+ * itself is untouched.
+ */
+const codeOnly = (text: string): string => {
+  let out = ''
+  let quote: '"' | "'" | '`' | null = null
+  // How deep inside `${ … }` we are within the current template literal. Only
+  // depth 0 is literal text; anything further in is code again.
+  let interpolation = 0
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i] as string
+
+    if (quote === null) {
+      if (char === '"' || char === "'" || char === '`') quote = char
+      out += char
+      continue
+    }
+
+    if (char === '\\') {
+      // Keep the length stable so nothing downstream depends on the offsets
+      // shifting; the escaped character is literal either way.
+      out += '  '
+      i++
+      continue
+    }
+
+    if (quote === '`' && interpolation === 0 && char === '$' && text[i + 1] === '{') {
+      interpolation = 1
+      out += '${'
+      i++
+      continue
+    }
+
+    if (interpolation > 0) {
+      if (char === '{') interpolation++
+      if (char === '}') interpolation--
+      out += char
+      continue
+    }
+
+    if (char === quote) {
+      quote = null
+      out += char
+      continue
+    }
+
+    // Literal text. Newlines are kept so a multi-line template does not collapse
+    // the lines around it into one.
+    out += char === '\n' ? '\n' : ' '
+  }
+
+  return out
+}
+
+/**
  * Assembles a validator: the hoisted declarations the function body actually
  * reads, then the function — with an unread `input` parameter renamed to
  * `_input`.
@@ -384,7 +448,7 @@ const withHoisted = (hoisted: readonly string[], text: string): string => {
     grew = false
     for (const { declaration, name } of declared) {
       if (live.has(declaration)) continue
-      if (name !== undefined && !new RegExp(`\\b${name}\\b`).test(scope)) continue
+      if (name !== undefined && !new RegExp(`(?<![.\\w])${name}\\b`).test(codeOnly(scope))) continue
       live.add(declaration)
       scope += `\n${declaration}`
       grew = true

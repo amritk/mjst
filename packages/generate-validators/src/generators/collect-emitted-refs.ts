@@ -1,16 +1,27 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { foldsToConstant } from './folds-to-constant'
 import { tupleShapeOf } from './tuple-shape'
 import { type UnevaluatedMatchFn, unevaluatedItemsExpr, unevaluatedPropertiesExpr } from './unevaluated-match'
 
 /**
- * Which `if` arms are live. Without an `if` neither arm applies at all; with a
- * literal boolean one, only the arm it selects does. Anything else keeps both.
+ * Which `if` arms are live. Without an `if` neither arm applies at all; with one
+ * whose verdict is decidable from the node alone, only the arm it selects does.
+ * Anything else keeps both.
+ *
+ * The question has to be the one the *emitter* asks — it folds on whether the
+ * `if`'s match expression came out constant, which `{}` and an annotation-only
+ * schema do as surely as a literal `true`. Deciding only the literals left the
+ * two out of step: the `else` arm of an `if: {}` was collected although nothing
+ * emits it, which is a wholly unused import — and, because
+ * `assertGeneratableRefs` reads this same set, a hard refusal to generate when
+ * that arm's `$ref` happened to be unresolvable.
  */
 const armsOf = (schema: Record<string, unknown>): string[] => {
   if (!('if' in schema)) return []
-  if (schema['if'] === true) return ['then']
-  if (schema['if'] === false) return ['else']
+  const decided = foldsToConstant(schema['if'])
+  if (decided === true) return ['then']
+  if (decided === false) return ['else']
   return ['then', 'else']
 }
 
@@ -131,12 +142,9 @@ export const collectEmittedRefs = (
     // emitter reads them without one — so a `$ref` there is never referenced,
     // and collecting it refused schemas whose ref happened to be unresolvable.
     //
-    // A *literal boolean* `if` picks its arm here as surely as the emitter does,
-    // and unlike `anyOf` the type generator reads neither arm — it types the whole
-    // node `unknown` — so the arm that is dropped is referenced by nobody and its
-    // import is wholly unused. Only the two literal spellings are decided; an
-    // `if: {}` still collects both arms rather than re-deriving the emitter's fold
-    // here, which is the direction that merely costs an unused import.
+    // An `if` the emitter can decide picks its arm here too, and unlike `anyOf`
+    // the type generator reads neither arm — it types the whole node `unknown` —
+    // so the dropped arm is referenced by nobody. See {@link armsOf}.
     ...armsOf(schema),
     'not',
     // The `unevaluated*` subschemas are validated against the leftover keys /
