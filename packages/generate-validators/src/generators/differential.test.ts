@@ -1,7 +1,7 @@
 import Ajv2020 from 'ajv/dist/2020'
-import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
+import { evaluateValidator as evalValidator } from './evaluate-generated.test-utils'
 import { generateValidatorFunction } from './generate-validator-function'
 
 /**
@@ -20,63 +20,6 @@ import { generateValidatorFunction } from './generate-validator-function'
  * judgement call). The schema is rooted on an object so `patternProperties` /
  * `additionalProperties` are exercised heavily.
  */
-
-// Reference implementations of the runtime helpers the generated code imports
-// from `validation-result.js` (structural `const` → `valuesEqual`, structural
-// `uniqueItems` → `allUnique`). The generator emits them as free identifiers, so
-// the harness injects them into the eval scope. Mirrors build-schema.ts; any
-// drift surfaces as a divergence from Ajv, which is the whole point of this test.
-const valuesEqual = (a: unknown, b: unknown): boolean => {
-  if (a === b) return true
-  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
-  const aArray = Array.isArray(a)
-  const bArray = Array.isArray(b)
-  if (aArray !== bArray) return false
-  if (aArray) {
-    const aa = a as unknown[]
-    const bb = b as unknown[]
-    if (aa.length !== bb.length) return false
-    for (let i = 0; i < aa.length; i++) if (!valuesEqual(aa[i], bb[i])) return false
-    return true
-  }
-  const ao = a as Record<string, unknown>
-  const bo = b as Record<string, unknown>
-  const keys = Object.keys(ao)
-  if (keys.length !== Object.keys(bo).length) return false
-  for (const key of keys) {
-    if (!Object.hasOwn(bo, key) || !valuesEqual(ao[key], bo[key])) return false
-  }
-  return true
-}
-const allUnique = (arr: readonly unknown[]): boolean => {
-  const len = arr.length
-  if (len < 2) return true
-  let allPrimitive = true
-  for (let i = 0; i < len; i++) {
-    const v = arr[i]
-    if (v !== null && typeof v === 'object') {
-      allPrimitive = false
-      break
-    }
-  }
-  if (allPrimitive) return new Set(arr).size === len
-  for (let i = 0; i < len; i++) {
-    for (let j = i + 1; j < len; j++) {
-      if (valuesEqual(arr[i], arr[j])) return false
-    }
-  }
-  return true
-}
-
-const evalValidator = (code: string): ((input: unknown) => unknown) => {
-  const js = ts.transpileModule(code, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText
-  const moduleExports: Record<string, unknown> = {}
-  new Function('exports', 'valuesEqual', 'allUnique', js)(moduleExports, valuesEqual, allUnique)
-  const name = Object.keys(moduleExports).find((n) => n.startsWith('validate'))
-  return moduleExports[name ?? ''] as (input: unknown) => unknown
-}
 
 // Deterministic PRNG so a failure reproduces exactly. (mulberry32)
 const makeRng = (seed: number): (() => number) => {
@@ -206,6 +149,109 @@ const randomObjectSchema = (rng: () => number, depth: number): Record<string, un
   return s
 }
 
+/**
+ * A node built to *pair* keywords — the one thing the fuzzer above never does.
+ *
+ * Its `randomTyped` picks one shape per node, so an `enum`/`const` never gets a
+ * sibling and a `type` never gets a combinator on the same object. That is
+ * exactly the hole the emitter's old dispatch chain hid in: it recognised the
+ * first keyword and returned, so `{ "type": "string", "const": 1 }` accepted `1`
+ * while every fuzz seed and all 1281 conformance cases stayed green. This
+ * generator starts from an "anchor" keyword the chain would have returned on and
+ * layers unrelated siblings on top.
+ */
+const SIBLING_LITERALS: readonly unknown[] = [1, 2, 'a', 'abc', 'ab', true, false, null, [], [1], {}, { a: 1 }]
+
+const ANCHOR_KEYWORDS: readonly ((rng: () => number) => Record<string, unknown>)[] = [
+  (rng) => ({ const: pick(rng, SIBLING_LITERALS) }),
+  (rng) => ({ enum: [pick(rng, SIBLING_LITERALS), pick(rng, SIBLING_LITERALS)] }),
+  (rng) => ({ type: pick(rng, ['string', 'number', 'array', 'object']) }),
+  () => ({}),
+]
+
+const SIBLING_KEYWORDS: readonly ((rng: () => number) => Record<string, unknown>)[] = [
+  (rng) => ({ type: pick(rng, ['string', 'number', 'integer', 'boolean', 'null', 'object', 'array']) }),
+  (rng) => ({ type: [pick(rng, ['string', 'number', 'null']), pick(rng, ['boolean', 'array', 'object'])] }),
+  (rng) => ({ minLength: Math.floor(rng() * 4) }),
+  (rng) => ({ maxLength: Math.floor(rng() * 4) }),
+  (rng) => ({ pattern: pick(rng, ['^a', 'b$', '^[a-z]+$']) }),
+  (rng) => ({ minimum: pick(rng, [0, 1, 2]) }),
+  (rng) => ({ maximum: pick(rng, [1, 2, 10]) }),
+  (rng) => ({ multipleOf: pick(rng, [1, 2]) }),
+  (rng) => ({ minItems: Math.floor(rng() * 3) }),
+  (rng) => ({ maxItems: Math.floor(rng() * 3) }),
+  () => ({ uniqueItems: true }),
+  (rng) => ({ items: { type: pick(rng, ['string', 'number']) } }),
+  (rng) => ({ required: [pick(rng, ['a', 'b'])] }),
+  (rng) => ({ minProperties: Math.floor(rng() * 3) }),
+  (rng) => ({ maxProperties: Math.floor(rng() * 3) }),
+  (rng) => ({ properties: { a: { type: pick(rng, ['string', 'number']) } } }),
+  () => ({ additionalProperties: false }),
+  () => ({ patternProperties: { '^a': { type: 'number' } } }),
+  () => ({ propertyNames: { maxLength: 2 } }),
+  () => ({ dependentRequired: { a: ['b'] } }),
+  (rng) => ({ not: { type: pick(rng, ['string', 'number']) } }),
+  () => ({ allOf: [{ type: 'string' }] }),
+  () => ({ anyOf: [{ type: 'string' }, { type: 'number' }] }),
+  () => ({ oneOf: [{ minLength: 2 }, { type: 'number' }] }),
+  () => ({ if: { type: 'string' }, then: { minLength: 2 } }),
+  // `prefixItems` is paired with `contains` nowhere here: Ajv wrongly accepts
+  // `[]` for that combination (the quirk the tuple test above already names), so
+  // the pair would report Ajv's bug as ours.
+  () => ({ prefixItems: [{ type: 'string' }, { type: 'number' }] }),
+  () => ({ contains: { type: 'number' } }),
+]
+
+/** Every position the emitter has a separate code path for. */
+const SIBLING_POSITIONS: readonly ((node: Record<string, unknown>) => Record<string, unknown>)[] = [
+  (node) => node,
+  (node) => ({ type: 'object', properties: { a: node } }),
+  (node) => ({ type: 'object', properties: { a: node }, required: ['a'] }),
+  (node) => ({ type: 'object', additionalProperties: node }),
+  (node) => ({ type: 'object', patternProperties: { '^a': node } }),
+  (node) => ({ type: 'object', propertyNames: node }),
+  (node) => ({ type: 'object', dependentSchemas: { a: node } }),
+  (node) => ({ type: 'array', items: node }),
+  (node) => ({ type: 'array', prefixItems: [node] }),
+  (node) => ({ not: node }),
+  (node) => ({ allOf: [node] }),
+  (node) => ({ anyOf: [node, { type: 'boolean' }] }),
+  (node) => ({ if: { type: 'string' }, then: node }),
+  (node) => ({ if: { type: 'string' }, else: node }),
+]
+
+const siblingSchema = (rng: () => number): Record<string, unknown> => {
+  const node: Record<string, unknown> = { ...pick(rng, ANCHOR_KEYWORDS)(rng) }
+  const count = 1 + Math.floor(rng() * 3)
+  for (let i = 0; i < count; i++) Object.assign(node, pick(rng, SIBLING_KEYWORDS)(rng))
+  // Drop the one pair whose oracle is unreliable rather than skipping the schema,
+  // so both keywords still get fuzzed on their own.
+  if ('prefixItems' in node && 'contains' in node) delete node['contains']
+  return pick(rng, SIBLING_POSITIONS)(node)
+}
+
+const SIBLING_VALUES: readonly unknown[] = [
+  ...SIBLING_LITERALS,
+  [1, 1],
+  { a: 1, b: 2 },
+  { a: 'x' },
+  { ab: 1 },
+  'abcd',
+  0,
+  -1,
+  2.5,
+]
+
+const siblingValue = (rng: () => number, depth: number): unknown => {
+  const p = rng()
+  if (depth <= 0 || p < 0.55) return pick(rng, SIBLING_VALUES)
+  if (p < 0.75) return Array.from({ length: Math.floor(rng() * 3) }, () => siblingValue(rng, depth - 1))
+  const out: Record<string, unknown> = {}
+  const n = Math.floor(rng() * 3)
+  for (let i = 0; i < n; i++) out[pick(rng, ['a', 'b', 'ab', 'z'])] = siblingValue(rng, depth - 1)
+  return out
+}
+
 describe('differential fuzz vs ajv', () => {
   it('object schemas agree with ajv across random values', { timeout: 60_000 }, () => {
     const ajv = new Ajv2020({ allErrors: false, strict: false })
@@ -273,6 +319,49 @@ describe('differential fuzz vs ajv', () => {
         const value = randomValue(rng, 3)
         if ((ours(value) === true) !== (ajvValidate(value) === true)) {
           divergences.push(`schema: ${JSON.stringify(schema)}\n  value: ${JSON.stringify(value)}`)
+        }
+      }
+    }
+
+    expect(divergences, divergences.join('\n\n')).toEqual([])
+  })
+
+  it('schemas that pair keywords on one node agree with ajv', { timeout: 60_000 }, () => {
+    const ajv = new Ajv2020({ allErrors: false, strict: false })
+    const rng = makeRng(0x9e37)
+    const divergences: string[] = []
+
+    for (let si = 0; si < 2000 && divergences.length < 10; si++) {
+      const schema = siblingSchema(rng)
+      let ajvValidate: (v: unknown) => boolean
+      let ours: (v: unknown) => unknown
+      try {
+        ajvValidate = ajv.compile(schema)
+      } catch {
+        continue // Ajv rejected the schema; not a value-level divergence.
+      }
+      try {
+        ours = evalValidator(generateValidatorFunction(schema as never, 'Root'))
+      } catch (e) {
+        divergences.push(`compile threw: ${(e as Error).message}\n  schema: ${JSON.stringify(schema)}`)
+        continue
+      }
+
+      for (let t = 0; t < 25 && divergences.length < 10; t++) {
+        const value = siblingValue(rng, 2)
+        let oursValid: boolean
+        try {
+          oursValid = ours(value) === true
+        } catch (e) {
+          divergences.push(
+            `threw: ${(e as Error).message}\n  schema: ${JSON.stringify(schema)}\n  value: ${JSON.stringify(value)}`,
+          )
+          break
+        }
+        if (oursValid !== ajvValidate(value)) {
+          divergences.push(
+            `schema: ${JSON.stringify(schema)}\n  value: ${JSON.stringify(value)}\n  ours=${oursValid} ajv=${!oursValid}`,
+          )
         }
       }
     }

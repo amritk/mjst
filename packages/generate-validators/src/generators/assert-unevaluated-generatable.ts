@@ -31,12 +31,24 @@ const SUBSCHEMA_LIST_KEYS = ['allOf', 'anyOf', 'oneOf', 'prefixItems'] as const
 const SUBSCHEMA_MAP_KEYS = ['properties', 'patternProperties', 'dependentSchemas', 'dependencies'] as const
 
 /**
- * The one subschema position the emitter reaches but never enforces: draft-07's
- * `additionalItems`, which this generator only reads as `false` (a length cap).
- * A constraining keyword written under it is silently ignored, so an
- * `unevaluated*` there has to refuse rather than be dropped.
+ * Whether `additionalItems` is the live tail of this node, and so a position the
+ * emitter really does enforce.
+ *
+ * It is exactly when `items` holds the tuple — the draft-07 spelling — and
+ * `prefixItems` has not taken the positions out from under it. Everywhere else
+ * `additionalItems` is inert (2020-12 does not define it, and `tuple-shape.ts`
+ * reads the tail from `items` instead), so a constraining keyword written there
+ * is silently ignored and an `unevaluated*` under it has to refuse rather than
+ * be dropped.
+ *
+ * The generator used to read `additionalItems` only as `false`, a length cap,
+ * which made the whole position unenforced and this refusal always right. Now
+ * that the draft-07 tail is validated, refusing a schema written in that
+ * spelling would be turning down work the emitter can do — and the 2020-12
+ * spelling of the very same schema generates.
  */
-const UNENFORCED_SUBSCHEMA_KEYS = ['additionalItems'] as const
+const additionalItemsIsEnforced = (node: Record<string, unknown>): boolean =>
+  Array.isArray(node['items']) && !Array.isArray(node['prefixItems'])
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -121,9 +133,7 @@ export const assertUnevaluatedGeneratable = (
       // The array form of draft-07 `dependencies` lists required keys, not schemas.
       for (const entry of Object.values(map)) if (!Array.isArray(entry)) visit(entry, enforced)
     }
-    for (const key of UNENFORCED_SUBSCHEMA_KEYS) {
-      if (key in node) visit(node[key], false)
-    }
+    if ('additionalItems' in node) visit(node['additionalItems'], enforced && additionalItemsIsEnforced(node))
   }
 
   visit(schema, true)

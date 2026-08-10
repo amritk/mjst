@@ -1,22 +1,7 @@
-import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
+import { evaluateGenerated, evaluateValidator as evalValidator } from './evaluate-generated.test-utils'
 import { generateBooleanGuard, generateValidatorFunction } from './generate-validator-function'
-
-/**
- * Compiles a generated validator (TypeScript source) to JavaScript and returns
- * the exported function, so tests can run real inputs through the emitted code
- * instead of only asserting on its text.
- */
-const evalValidator = (code: string): ((input: unknown, path?: string) => unknown) => {
-  const js = ts.transpileModule(code, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText
-  const moduleExports: Record<string, unknown> = {}
-  new Function('exports', js)(moduleExports)
-  const name = Object.keys(moduleExports).find((exportName) => exportName.startsWith('validate'))
-  return moduleExports[name ?? ''] as (input: unknown, path?: string) => unknown
-}
 
 describe('generate-validator-function', () => {
   it('generates a validator for a required string property', () => {
@@ -350,11 +335,22 @@ describe('generate-validator-function', () => {
     // the first error) instead of returning early, so valid input allocates nothing.
     expect(code).toContain('let errors: ValidationError[] | undefined')
     expect(code).toContain('(errors ??= []).push({ message: "must match pattern')
+    // The constraints read `_root`, an `unknown` re-binding of `input`: the type
+    // check above them narrows `input`, and a constraint from another family then
+    // narrows to `never` and stops compiling.
+    expect(code).toContain('const _root: unknown = input')
     // The pattern body keeps its backslash (\d), so the emitted literal is a digit class.
-    expect(code).toContain('!/^\\d+$/u.test(input)')
+    expect(code).toContain('!/^\\d+$/u.test(_root)')
     expect(code).toContain("(errors ??= []).push({ message: 'must have at least 2 characters'")
     expect(code).toContain("(errors ??= []).push({ message: 'must have at most 4 characters'")
     expect(code).toContain('return errors !== undefined ? { valid: false, errors } : true')
+
+    // And it still reports all three, rather than stopping at the first.
+    const validateCode = evalValidator(code)
+    const result = validateCode('a') as { valid: false; errors: { message: string }[] }
+    expect(result).not.toBe(true)
+    expect(result.errors).toHaveLength(2) // pattern + minLength; maxLength passes
+    expect(validateCode('123')).toBe(true)
   })
 
   it('returns true for empty object schemas', () => {
@@ -1004,11 +1000,7 @@ describe('generate-validator-function', () => {
       typeName: string,
     ): { validate: (input: unknown) => unknown; guard: (input: unknown) => boolean } => {
       const code = `${generateValidatorFunction(schema, typeName)}\n\n${generateBooleanGuard(schema, typeName)}`
-      const js = ts.transpileModule(code, {
-        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-      }).outputText
-      const moduleExports: Record<string, unknown> = {}
-      new Function('exports', js)(moduleExports)
+      const moduleExports = evaluateGenerated(code)
       return {
         validate: moduleExports[`validate${typeName}`] as (input: unknown) => unknown,
         guard: moduleExports[`is${typeName}`] as (input: unknown) => boolean,
@@ -1230,11 +1222,7 @@ describe('generate-validator-function', () => {
       typeName: string,
     ): { validate: (i: unknown) => unknown; guard: (i: unknown) => boolean } => {
       const code = `${generateValidatorFunction(schema, typeName)}\n\n${generateBooleanGuard(schema, typeName)}`
-      const js = ts.transpileModule(code, {
-        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-      }).outputText
-      const m: Record<string, unknown> = {}
-      new Function('exports', js)(m)
+      const m = evaluateGenerated(code)
       return {
         validate: m[`validate${typeName}`] as (i: unknown) => unknown,
         guard: m[`is${typeName}`] as (i: unknown) => boolean,
@@ -1392,6 +1380,101 @@ describe('generate-validator-function', () => {
         }
       }
       expect(mismatches, `seed 0x${seed.toString(16)}`).toEqual([])
+    })
+
+    it('requires a `required` key that has no properties entry', () => {
+      // `booleanObjectParts` hangs each condition off a declared property, so a
+      // required key with no `properties` entry contributed nothing and `isX`
+      // accepted an object missing it — while `validateX` reported it, since the
+      // validator enforces that presence separately. The validator's own hot-path
+      // guard already refused to answer this shape for the same reason.
+      const { validate, guard } = evalBoth({ type: 'object', required: ['a'] }, 'T')
+      expect(validate({})).not.toBe(true)
+      expect(guard({})).toBe(false)
+      expect(validate({ a: 1 })).toBe(true)
+      expect(guard({ a: 1 })).toBe(true)
+      // A prototype-member name asks the question with `Object.hasOwn`, so an
+      // inherited `toString` is not mistaken for the declared one.
+      const inherited = evalBoth({ type: 'object', required: ['toString'] }, 'T')
+      expect(inherited.validate({})).not.toBe(true)
+      expect(inherited.guard({})).toBe(false)
+      expect(inherited.guard({ toString: 1 })).toBe(true)
+    })
+
+    /**
+     * Randomised *schemas*, not just randomised values. The cases above pin a few
+     * hand-written shapes; this layers unrelated keywords onto one node so the
+     * guard's bail-outs are exercised against combinations nobody wrote down. The
+     * `required`-without-`properties` gap above is what it found.
+     */
+    const GUARD_KEYWORDS: readonly ((rng: () => number) => Record<string, unknown>)[] = [
+      (rng) => ({ type: pick(rng, ['string', 'number', 'integer', 'boolean', 'null', 'object', 'array']) }),
+      // `type: "object"` is listed twice on purpose: it is the only type that
+      // reaches the flat object guard, so an even spread would leave that path —
+      // the one with the most bail-outs to get wrong — barely sampled.
+      () => ({ type: 'object' }),
+      (rng) => ({ const: pick(rng, SCALARS) }),
+      (rng) => ({ enum: [pick(rng, SCALARS), pick(rng, SCALARS)] }),
+      (rng) => ({ minLength: Math.floor(rng() * 4) }),
+      (rng) => ({ maxLength: Math.floor(rng() * 4) }),
+      () => ({ pattern: '^a' }),
+      (rng) => ({ minimum: pick(rng, [0, 1]) }),
+      (rng) => ({ maximum: pick(rng, [1, 10]) }),
+      () => ({ multipleOf: 2 }),
+      (rng) => ({ items: { type: pick(rng, ['string', 'number']) } }),
+      () => ({ items: [{ type: 'string' }, { type: 'number' }] }),
+      (rng) => ({ additionalItems: pick(rng, [false, { type: 'number' }] as unknown[]) }),
+      () => ({ prefixItems: [{ type: 'string' }] }),
+      () => ({ contains: { type: 'number' } }),
+      (rng) => ({ minItems: Math.floor(rng() * 3) }),
+      (rng) => ({ maxItems: Math.floor(rng() * 3) }),
+      () => ({ uniqueItems: true }),
+      (rng) => ({ properties: { id: { type: pick(rng, ['string', 'number']) }, k: { const: 'x' } } }),
+      (rng) => ({ required: [pick(rng, ['id', 'k', 'absent'])] }),
+      (rng) => ({ additionalProperties: pick(rng, [false, true, { type: 'string' }] as unknown[]) }),
+      () => ({ patternProperties: { '^i': { type: 'number' } } }),
+      () => ({ propertyNames: { maxLength: 2 } }),
+      () => ({ minProperties: 1 }),
+      () => ({ maxProperties: 2 }),
+      () => ({ dependentRequired: { id: ['k'] } }),
+      () => ({ not: { type: 'string' } }),
+      () => ({ allOf: [{ type: 'string' }] }),
+      () => ({ anyOf: [{ type: 'string' }, { type: 'number' }] }),
+      () => ({ oneOf: [{ minLength: 2 }, { type: 'number' }] }),
+      () => ({ if: { type: 'string' }, then: { minLength: 2 } }),
+      () => ({ nullable: true }),
+      () => ({ unevaluatedProperties: false }),
+      () => ({ unevaluatedItems: false }),
+    ]
+
+    it('isX matches validateX across randomly combined keywords', { timeout: 60_000 }, () => {
+      const rng = mulberry32(0x4d2)
+      const mismatches: string[] = []
+
+      for (let s = 0; s < 1500 && mismatches.length < 5; s++) {
+        const schema: Record<string, unknown> = {}
+        const count = 1 + Math.floor(rng() * 3)
+        for (let i = 0; i < count; i++) Object.assign(schema, pick(rng, GUARD_KEYWORDS)(rng))
+
+        let pair: { validate: (i: unknown) => unknown; guard: (i: unknown) => boolean }
+        try {
+          pair = evalBoth(schema as Parameters<typeof generateValidatorFunction>[0], 'T')
+        } catch {
+          continue // generation refused this shape (e.g. unprovable `unevaluated*` coverage)
+        }
+
+        for (let t = 0; t < 30 && mismatches.length < 5; t++) {
+          const input = randomValue(rng, 0)
+          const accepted = pair.validate(input) === true
+          if (pair.guard(input) !== accepted) {
+            mismatches.push(
+              `${JSON.stringify(schema)} on ${JSON.stringify(input)} → validate=${accepted} guard=${!accepted}`,
+            )
+          }
+        }
+      }
+
+      expect(mismatches, mismatches.join('\n')).toEqual([])
     })
   })
 
@@ -1637,6 +1720,205 @@ describe('generate-validator-function', () => {
       expect(validate([{ sku: 1 }])).not.toBe(true) // wrong field type
       expect(validate([{}])).not.toBe(true) // missing required
       expect(validate([{ sku: 'a', extra: 1 }])).not.toBe(true) // extra key
+    })
+  })
+
+  describe('the narrowed object binding', () => {
+    it('is emitted when a property check reads it', () => {
+      const code = generateValidatorFunction(
+        { type: 'object' as const, properties: { a: { type: 'string' as const } }, required: ['a'] },
+        'Root',
+      )
+      expect(code).toContain('const obj = input as Record<string, unknown>')
+      const validate = evalValidator(code)
+      expect(validate({ a: 'x' })).toBe(true)
+      expect(validate({})).not.toBe(true)
+    })
+
+    it('is dropped when the body routes everything through _root', () => {
+      // Object-level combinators apply to the value, not to its properties, and
+      // read `_root` so a branch from another type family is not compared against
+      // a `Record`. That leaves nothing reading `obj`, and an unused local is a
+      // `TS6133` for any consumer with `noUnusedLocals`. The checks themselves
+      // must still be emitted and must still work.
+      const code = generateValidatorFunction({ type: 'object' as const, allOf: [{ required: ['a'] }] }, 'Root')
+
+      expect(code).not.toContain('const obj = input as Record<string, unknown>')
+      expect(code).toContain('const _root: unknown = input')
+      const validate = evalValidator(code)
+      expect(validate({ a: 1 })).toBe(true)
+      expect(validate({})).not.toBe(true)
+      expect(validate('nope')).not.toBe(true)
+    })
+  })
+
+  describe('hoisted declarations', () => {
+    const strictWithPatterns = {
+      type: 'object' as const,
+      additionalProperties: false,
+      patternProperties: { '^x-': { type: 'string' as const } },
+      properties: { b: { type: 'string' as const } },
+    }
+
+    it('keeps the pattern table the strict-key sweep reads', () => {
+      // The half that must survive: when the sweep is emitted, its table has to
+      // come with it, or the file references a name nothing declares.
+      const code = generateValidatorFunction(strictWithPatterns, 'Root')
+      expect(code).toContain('const _patterns0 = [new RegExp("^x-", "u")]')
+      expect(code).toContain('_patterns0.some(')
+    })
+
+    it('drops a table whose only reader was a folded branch', () => {
+      // A vacuous `anyOf` is folded away *after* its checks were built, and
+      // building them hoisted the table. Nothing reads it then.
+      const code = generateValidatorFunction({ anyOf: [strictWithPatterns, true] }, 'Root')
+      expect(code).not.toContain('_patterns0')
+      expect(code).toContain('return errors !== undefined')
+    })
+
+    it('does not count the schema’s own property named like a hoisted local as a read', () => {
+      // Emitted code carries property names as data — quoted in the key sweep and
+      // unquoted inside the template that builds an error path — so a schema free
+      // to name a property `_patterns0` kept a dead declaration alive. The
+      // property's own checks must still be emitted.
+      const code = generateValidatorFunction(
+        {
+          type: 'object' as const,
+          additionalProperties: false,
+          properties: { _patterns0: { type: 'string' as const }, a: { type: 'string' as const } },
+          anyOf: [strictWithPatterns, true],
+        },
+        'Root',
+      )
+      expect(code).not.toContain('const _patterns0 =')
+      expect(code).toContain('obj._patterns0')
+      expect(code).toContain('${_path}/_patterns0')
+    })
+
+    // The same question with the schema text pushed harder. Matching on the name
+    // — even the name plus the `.` of a member access — reads the generator's own
+    // accessors and the schema's own strings as though they were uses: a property
+    // `_patterns0` carrying any constrained check emits `obj._patterns0.length`,
+    // and a hoisted `new RegExp("…")` puts an author's text next to the
+    // declarations themselves. Each of these kept a dead `const` alive.
+    it.each([
+      [
+        'an accessor on a property of the same name',
+        {
+          type: 'object' as const,
+          additionalProperties: false,
+          properties: { _patterns0: { type: 'string' as const, minLength: 2 } },
+        },
+        '_patterns0',
+      ],
+      [
+        'a property named with the trailing dot',
+        {
+          type: 'object' as const,
+          additionalProperties: false,
+          properties: { '_patterns0.': { type: 'string' as const } },
+        },
+        '_patterns0',
+      ],
+      [
+        'an enum value carrying the name',
+        { type: 'object' as const, additionalProperties: false, properties: { a: { enum: ['_patterns0.x'] } } },
+        '_patterns0',
+      ],
+    ])('drops a folded table despite %s', (_label, outer, name) => {
+      const code = generateValidatorFunction(
+        { ...outer, anyOf: [strictWithPatterns, true] } as Parameters<typeof generateValidatorFunction>[0],
+        'Root',
+      )
+      expect(code).not.toContain(`const ${name} =`)
+      // The outer object's own strict sweep must still be emitted and still work.
+      const validate = evalValidator(code)
+      expect(validate({ nope: 1 })).not.toBe(true)
+    })
+
+    it('drops a folded known-keys set despite an accessor of the same name', () => {
+      // The `Set` form's reference has a different shape from the pattern table's
+      // (`!_knownKeys0.has(_key0)`, no leading space), so it needs its own case —
+      // the rows above would all pass for a scheme that only got `_patterns` right.
+      const wide = Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`w${i}`, { type: 'string' as const }]))
+      const code = generateValidatorFunction(
+        {
+          type: 'object' as const,
+          additionalProperties: false,
+          properties: { _knownKeys0: { type: 'string' as const, minLength: 2 } },
+          anyOf: [{ type: 'object' as const, additionalProperties: false, properties: wide }, true],
+        },
+        'Root',
+      )
+
+      expect(code).not.toContain('const _knownKeys0 =')
+      expect(code).toContain('obj._knownKeys0')
+      const validate = evalValidator(code)
+      expect(validate({ _knownKeys0: 'ok' })).toBe(true)
+      expect(validate({ nope: 1 })).not.toBe(true)
+    })
+
+    // The pruning question is "did the emitter write a use of this?", and the
+    // first attempt answered it by searching the emitted text for the name. That
+    // text is not all code: a `pattern` becomes a regex *literal*, and its source
+    // is the schema author's. An apostrophe in an ordinary name pattern opened a
+    // string that swallowed the `_patterns0.some(` following it, the declaration
+    // was pruned as dead, and the validator threw `_patterns0 is not defined` on
+    // the first object with an extra key. Every case here asserts the declaration
+    // SURVIVES and the validator runs — the direction a blanket "prune it" also
+    // satisfies, which is why the case above could not catch this.
+    it.each([
+      ['an apostrophe', "^[A-Za-z' -]+$", "O'Brien"],
+      ['a double quote', '^[^"]+$', 'plain'],
+      ['a backtick', '^[^`]+$', 'plain'],
+      ['a backslash escape', '^\\d+$', '42'],
+      ['a dollar-brace', '^\\$\\{.*\\}$', '${x}'],
+    ])('keeps the pattern table when the regex literal contains %s', (_label, pattern, name) => {
+      const schema = {
+        type: 'object' as const,
+        additionalProperties: false,
+        patternProperties: { '^x-': { type: 'string' as const } },
+        properties: { name: { type: 'string' as const, pattern } },
+      }
+      const code = generateValidatorFunction(schema, 'Root')
+
+      expect(code).toContain('_patterns0.some(')
+      expect(code).toContain('const _patterns0 =')
+
+      // The declaration being present is not enough — it has to be present *and*
+      // the validator has to reach the sweep, which is where the throw happened.
+      const validate = evalValidator(code)
+      expect(validate({ name, 'x-ext': 'v' })).toBe(true)
+      expect(validate({ name, z: 1 })).not.toBe(true)
+    })
+
+    it('keeps a known-keys set the sweep reads past a quote-bearing pattern', () => {
+      // The `Set` form of the same check, hoisted only once the key list is long.
+      const properties = Object.fromEntries(
+        Array.from({ length: 20 }, (_, i) => [`k${i}`, { type: 'string' as const }]),
+      )
+      const code = generateValidatorFunction(
+        {
+          type: 'object' as const,
+          additionalProperties: false,
+          properties: { ...properties, name: { type: 'string' as const, pattern: "^'$" } },
+        },
+        'Root',
+      )
+
+      expect(code).toContain('const _knownKeys0 = new Set(')
+      expect(code).toContain('_knownKeys0.has(')
+
+      const validate = evalValidator(code)
+      expect(validate({ k0: 'a' })).toBe(true)
+      expect(validate({ k0: 'a', nope: 1 })).not.toBe(true)
+    })
+
+    it('renames an `input` no surviving check reads, and leaves a read one alone', () => {
+      expect(generateValidatorFunction({ anyOf: [strictWithPatterns, true] }, 'Root')).toContain(
+        'validateRoot = (_input: unknown',
+      )
+      expect(generateValidatorFunction(strictWithPatterns, 'Root')).toContain('validateRoot = (input: unknown')
     })
   })
 

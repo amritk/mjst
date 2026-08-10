@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { assertGeneratableRefs } from './assert-generatable-refs'
 import { collectValidatorImports } from './collect-validator-imports'
 
 describe('collect-validator-imports', () => {
@@ -103,5 +104,147 @@ describe('collect-validator-imports', () => {
       "import { type Ontrue, validateOntrue } from './ontrue.js'",
       "import { type Onfalse, validateOnfalse } from './onfalse.js'",
     ])
+  })
+
+  // Which `$ref`s the import list has to carry is decided by what the emitted
+  // *file* references — and that is the type as well as the validator. The type
+  // generator folds nothing: it unions every `anyOf` branch and reads a tuple's
+  // rest from `additionalItems` whenever `items` is an array. Trimming the list to
+  // what the validator still calls stranded those type names (`TS2304`), which is
+  // worse than the unused import it saved.
+  it('keeps a $ref the type references even when the validator folds its branch', () => {
+    const rootSchema = { $defs: { a: { type: 'string' }, b: { type: 'number' } } }
+    const names = (schema: unknown): string[] =>
+      collectValidatorImports(schema as never, { rootSchema }).map((line) => /validate(\w+)/.exec(line)?.[1] ?? line)
+
+    // The emitter drops a vacuous `anyOf`; the type still says `A | unknown`.
+    expect(names({ anyOf: [{ $ref: '#/$defs/a' }, true] })).toEqual(['A'])
+    expect(names({ anyOf: [{ $ref: '#/$defs/a' }, { description: 'anything' }] })).toEqual(['A'])
+    // An `if` the emitter can decide picks its arm here too, and unlike `anyOf`
+    // the type generator reads *neither* arm — it types the whole node `unknown`
+    // — so the dropped arm is read by nobody. The set of spellings has to be the
+    // emitter's: it folds on whether the `if`'s match came out constant, which
+    // `{}` and an annotation-only schema do as surely as a literal `true`.
+    // Deciding only the literals left an `if: {}` collecting an `else` nothing
+    // emits. An `if` that depends on the value still keeps both arms.
+    expect(names({ if: false, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual(['B'])
+    expect(names({ if: true, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual(['A'])
+    expect(names({ if: {}, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual(['A'])
+    expect(names({ if: { description: 'x' }, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual(['A'])
+    expect(names({ if: { type: 'string' }, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual([
+      'A',
+      'B',
+    ])
+    // `prefixItems` wins the positions, so the validator ignores the array
+    // `items` and its `additionalItems` tail — but the type reads that tail.
+    expect(
+      names({
+        type: 'array',
+        prefixItems: [{ type: 'string' }],
+        items: [{ type: 'number' }],
+        additionalItems: { $ref: '#/$defs/b' },
+      }),
+    ).toEqual(['B'])
+    // `getTuplePositions` requires a *non-empty* `prefixItems`, so at length 0 it
+    // falls back to the array `items` and names what is there — while
+    // `tupleShapeOf` had already taken the empty tuple.
+    expect(names({ type: 'array', prefixItems: [], items: [{ $ref: '#/$defs/a' }] })).toEqual(['A'])
+  })
+
+  it('does not refuse an unresolvable $ref in an `if` arm the emitter never takes', () => {
+    // `assertGeneratableRefs` reads the same set, so an over-collected arm is not
+    // merely an unused import — it is a refusal to generate a schema that
+    // generates fine. All three spellings the emitter folds have to agree.
+    for (const branch of [{}, true, { description: 'x' }]) {
+      expect(() =>
+        assertGeneratableRefs({ if: branch, then: { type: 'string' }, else: { $ref: 'int.json' } } as never, 'Root'),
+      ).not.toThrow()
+    }
+    // An `if` that is not a schema at all takes the keyword out entirely — the
+    // emitter reads only a schema object or a boolean — so neither arm is
+    // referenced and neither can refuse.
+    for (const branch of [5, null, 'x']) {
+      expect(() =>
+        assertGeneratableRefs({ if: branch, then: { $ref: 'int.json' }, else: { $ref: 'int.json' } } as never, 'Root'),
+      ).not.toThrow()
+    }
+    // The arm it *does* take still refuses, and so does an `if` it cannot decide.
+    expect(() =>
+      assertGeneratableRefs({ if: false, then: { type: 'string' }, else: { $ref: 'int.json' } } as never, 'Root'),
+    ).toThrow(/unresolvable \$ref "int\.json"/)
+    expect(() =>
+      assertGeneratableRefs(
+        { if: { type: 'string' }, then: { type: 'string' }, else: { $ref: 'int.json' } } as never,
+        'Root',
+      ),
+    ).toThrow(/unresolvable \$ref "int\.json"/)
+  })
+
+  it('does not refuse an unresolvable $ref in a position only the type reads', () => {
+    // `assertGeneratableRefs` reads the *emitted-call* set to ask whether the
+    // output would call a validator that was never generated. A type-only
+    // position never produces that call, and an unresolvable ref there types as
+    // `unknown` and names nothing — so refusing over it turns down a schema that
+    // generates fine. The call positions still refuse.
+    expect(() =>
+      assertGeneratableRefs(
+        {
+          type: 'array',
+          prefixItems: [{ type: 'string' }],
+          items: [{ type: 'number' }],
+          additionalItems: { $ref: 'int.json' },
+        } as never,
+        'Root',
+      ),
+    ).not.toThrow()
+    expect(() => assertGeneratableRefs({ type: 'array', items: { $ref: 'int.json' } } as never, 'Root')).toThrow(
+      /unresolvable \$ref "int\.json"/,
+    )
+  })
+
+  it('still skips a $ref in a position neither emitter reads', () => {
+    const rootSchema = { $defs: { a: { type: 'string' }, b: { type: 'number' } } }
+    const names = (schema: unknown): string[] =>
+      collectValidatorImports(schema as never, { rootSchema }).map((line) => /validate(\w+)/.exec(line)?.[1] ?? line)
+
+    // `then` means nothing without an `if`, and `additionalItems` means nothing
+    // without an array `items` — neither the validator nor the type reads them, so
+    // collecting them refused schemas whose ref happened to be unresolvable.
+    expect(names({ $ref: '#/$defs/a', then: { $ref: '#/$defs/b' } })).toEqual(['A'])
+    expect(names({ type: 'array', items: { type: 'number' }, additionalItems: { $ref: '#/$defs/b' } })).toEqual([])
+    // A *non-empty* `prefixItems` takes the tuple positions in `getTuplePositions`
+    // as well, so the array `items` beside it is read by neither emitter. Only the
+    // empty-`prefixItems` fallback above puts it back in play.
+    expect(names({ type: 'array', prefixItems: [{ type: 'string' }], items: [{ $ref: '#/$defs/a' }] })).toEqual([])
+    // The tail next to that same shape *is* read, so the walk has to stay on.
+    expect(
+      names({
+        type: 'array',
+        prefixItems: [{ type: 'string' }],
+        items: [{ $ref: '#/$defs/a' }],
+        additionalItems: { $ref: '#/$defs/b' },
+      }),
+    ).toEqual(['B'])
+  })
+
+  it('imports a `-or-reference` def from its own file, under its own names', () => {
+    // `walkRefGraph` writes a file per `$defs` entry, and both the emitter and the
+    // type generator name this one in full — so rewriting the ref to `parameter`
+    // here produced an import of the wrong module, under names the file never
+    // used, while the body went on calling `validateParameterOrReference`. The
+    // OpenAPI 3.1 metaschema names definitions exactly this way.
+    const rootSchema = {
+      $defs: {
+        'parameter-or-reference': { anyOf: [{ $ref: '#/$defs/parameter' }, { $ref: '#/$defs/reference' }] },
+        parameter: { type: 'object' },
+        reference: { type: 'object' },
+      },
+    }
+
+    expect(
+      collectValidatorImports({ properties: { param: { $ref: '#/$defs/parameter-or-reference' } } } as never, {
+        rootSchema,
+      }),
+    ).toEqual(["import { type ParameterOrReference, validateParameterOrReference } from './parameter-or-reference.js'"])
   })
 })

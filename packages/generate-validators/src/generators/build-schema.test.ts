@@ -3,6 +3,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'vitest'
 
 import { buildValidatorSchema } from './build-schema'
+import { linkGenerated } from './link-generated.test-utils'
 
 describe('build-schema', () => {
   it('generates a validator file for the root schema', async () => {
@@ -90,22 +91,77 @@ describe('build-schema', () => {
     expect(indexFile?.content).toContain('validateDocument')
   })
 
-  it('does not generate a file named validation-result for a schema ref', async () => {
+  // `validation-result.ts` and `index.ts` are mjst's own output files. A
+  // definition wanting one of those names used to be skipped silently, which
+  // only looked safe: the *importer* was still generated, so `document.ts` came
+  // out importing `validateValidationResult` from the runtime contract — a
+  // `TS2305` for anyone building the output, and a `SyntaxError` for anyone
+  // running it. Refusing at generation time is the same answer `walkRefGraph`
+  // gives two definitions that want one filename.
+  for (const reserved of ['validation-result', 'index'] as const) {
+    it(`refuses a $defs entry that would overwrite ${reserved}.ts`, async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { result: { $ref: `#/$defs/${reserved}` } },
+        $defs: { [reserved]: { type: 'object' } },
+      }
+
+      await expect(buildValidatorSchema(schema, 'Document')).rejects.toThrow(
+        `"#/$defs/${reserved}" generates the file "${reserved}.ts", which is reserved`,
+      )
+    })
+  }
+
+  it('refuses a root type name that would overwrite index.ts', async () => {
+    // The root derives its filename from the type name, so `Index` collides just
+    // as a definition does — and used to leave the output with no root validator
+    // at all, only a barrel re-exporting nothing.
+    await expect(buildValidatorSchema({ type: 'string' }, 'Index')).rejects.toThrow(
+      'the root type "Index" generates the file "index.ts", which is reserved',
+    )
+  })
+
+  it('links and runs a schema whose definition is named `-or-reference`', async () => {
+    // The import collector used to rewrite `#/$defs/parameter-or-reference` to
+    // `parameter`, on the theory that the union collapses onto its base. It does
+    // not: `walkRefGraph` writes `parameter-or-reference.ts`, and the caller emits
+    // `validateParameterOrReference(...)`. The output therefore imported the wrong
+    // module and threw `validateParameterOrReference is not defined` on the first
+    // call — and with no base `parameter` def, imported a module never written.
     const schema: JSONSchema = {
       type: 'object',
-      properties: {
-        result: { $ref: '#/$defs/validation-result' },
-      },
+      properties: { param: { $ref: '#/$defs/parameter-or-reference' } },
+      required: ['param'],
       $defs: {
-        'validation-result': { type: 'object' },
+        'parameter-or-reference': { anyOf: [{ $ref: '#/$defs/parameter' }, { $ref: '#/$defs/reference' }] },
+        parameter: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+        reference: { type: 'object', properties: { $ref: { type: 'string' } }, required: ['$ref'] },
       },
     }
 
-    const files = await buildValidatorSchema(schema, 'Document')
-    // Should still have exactly one validation-result.ts (the runtime contract)
-    const vrFiles = files.filter((f) => f.filename === 'validation-result.ts')
-    expect(vrFiles).toHaveLength(1)
-    expect(vrFiles[0]?.content).toContain('export type ValidationResult')
+    const files = await buildValidatorSchema(schema, 'Root')
+
+    expect(files.map((file) => file.filename)).toContain('parameter-or-reference.ts')
+    expect(files.find((file) => file.filename === 'root.ts')?.content).toContain(
+      "import { type ParameterOrReference, validateParameterOrReference } from './parameter-or-reference.js'",
+    )
+
+    // The import agreeing with the call is the point, so link the whole set and
+    // call it: the union has to still discriminate, not merely resolve.
+    const validateRoot = linkGenerated<(input: unknown) => unknown>(files, 'index', 'validateRoot')
+    expect(validateRoot({ param: { name: 'limit' } })).toBe(true)
+    expect(validateRoot({ param: { $ref: '#/components/parameters/limit' } })).toBe(true)
+    expect(validateRoot({ param: { other: 1 } })).not.toBe(true)
+  })
+
+  it('still emits exactly one validation-result.ts runtime contract', async () => {
+    const files = await buildValidatorSchema(
+      { type: 'object', properties: { result: { $ref: '#/$defs/result' } }, $defs: { result: { type: 'object' } } },
+      'Document',
+    )
+    const contracts = files.filter((file) => file.filename === 'validation-result.ts')
+    expect(contracts).toHaveLength(1)
+    expect(contracts[0]?.content).toContain('export type ValidationResult')
   })
 
   it('produces generated validators that agree with @scalar/openapi-parser on a valid document', async () => {

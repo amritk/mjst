@@ -1,7 +1,7 @@
 import { validate } from '@amritk/runtime-validators'
-import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
+import { evaluateGenerated } from './evaluate-generated.test-utils'
 import { generateBooleanGuard, generateValidatorFunction } from './generate-validator-function'
 
 /**
@@ -28,21 +28,12 @@ import { generateBooleanGuard, generateValidatorFunction } from './generate-vali
  * would set the prototype rather than create a `__proto__` key, which is exactly
  * the hazard under test and not how a `.json` file reaches the generator.
  */
-const evalModule = (code: string): Record<string, unknown> => {
-  const js = ts.transpileModule(code, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText
-  const moduleExports: Record<string, unknown> = {}
-  new Function('exports', js)(moduleExports)
-  return moduleExports
-}
-
 /** Generates `validateDoc` + `isDoc` and returns both, ready to run. */
 const build = (schema: unknown) => {
   const code =
     // biome-ignore lint/suspicious/noExplicitAny: the fixtures come from JSON.parse
     `${generateValidatorFunction(schema as any, 'Doc')}\n\n${generateBooleanGuard(schema as any, 'Doc')}`
-  const exports = evalModule(code)
+  const exports = evaluateGenerated(code)
   return {
     code,
     validate: exports['validateDoc'] as (input: unknown) => unknown,

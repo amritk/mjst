@@ -22,7 +22,7 @@ import type { ExpectedFailures } from '../../../../fixtures/json-schema-test-sui
  *
  * What is left is `$dynamicRef` resolved through the dynamic scope (which a
  * generator that emits one function per definition cannot follow), one filename
- * collision, one `$id`-scoping residue, and `$vocabulary`.
+ * collision, and `$vocabulary`.
  *
  * Keys are case ids — `<file>/<group description>/<test description>` — or a
  * `/`-bounded prefix of one when a whole group or file falls to a single cause.
@@ -45,8 +45,6 @@ export const EXPECTED_FAILURES: ExpectedFailures = {
   // one. `@amritk/runtime-validators` carries the scope through its walk and does
   // handle these.
   // ---------------------------------------------------------------------------
-  'dynamicRef.json/A $dynamicRef that initially resolves to a schema with a matching $dynamicAnchor resolves to the first $dynamicAnchor in the dynamic scope/The recursive part is not valid against the root':
-    '`$dynamicRef`: the recursive position re-binds "#meta" from an outer scope, which a statically resolved ref cannot follow',
   'dynamicRef.json/multiple dynamic paths to the $dynamicRef keyword/number list with string values':
     '`$dynamicRef`: the anchor binds differently down each path, and generation picks one of them',
   'dynamicRef.json/multiple dynamic paths to the $dynamicRef keyword/string list with number values':
@@ -80,18 +78,4 @@ export const EXPECTED_FAILURES: ExpectedFailures = {
   // ---------------------------------------------------------------------------
   'vocabulary.json/schema that uses custom metaschema with with no validation vocabulary/no validation: invalid number, but it still validates':
     'vocabulary: a registered metaschema is generated, but `$vocabulary` does not switch validation off',
-
-  // ---------------------------------------------------------------------------
-  // `$id` scope on an in-document pointer
-  //
-  // A nested `$id` re-bases the `#/$defs/...` pointers written inside it, so the
-  // same pointer text names a different definition depending on which resource it
-  // sits in. The generator resolves the pointer against the document, which is
-  // right for the outer field and wrong for the inner one — the only place in the
-  // suite where that distinction changes a verdict.
-  // ---------------------------------------------------------------------------
-  'ref.json/refs with relative uris and defs/invalid on inner field':
-    '`$id` scope: the inner `#/$defs/...` pointer is re-based by a nested `$id`, so it resolves to the outer definition',
-  'ref.json/relative refs with absolute uris and defs/invalid on inner field':
-    '`$id` scope: the inner `#/$defs/...` pointer is re-based by a nested `$id`, so it resolves to the outer definition',
 }
