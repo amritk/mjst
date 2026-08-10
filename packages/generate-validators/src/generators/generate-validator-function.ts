@@ -1888,10 +1888,20 @@ const generateObjectValidator = (
   // The cold, error-collecting body. When there's a guard this is a separate
   // (unexported) function reached only on failure; the hot path never enters it
   // unless input is actually invalid, so its size never costs the happy path.
+  // `obj` is the narrowed view every property check reads through — but a node
+  // whose only body is object-level combinators routes them through `_root`
+  // instead (they apply to the value, not to its properties, and a branch from
+  // another type family must not be compared against a `Record`). Nothing then
+  // reads `obj`, and the declaration is a `TS6133` for any consumer with
+  // `noUnusedLocals`. `obj` can only be read as the bare identifier, so its
+  // absence from the body is conclusive; schema text mentioning it merely keeps
+  // the declaration, which is what was emitted before.
+  const objBinding = /\bobj\b/.test(body) ? [`  const obj = input as Record<string, unknown>`] : []
+
   const collectBody = (name: string, exported: boolean): string =>
     [
       `${exported ? 'export ' : ''}const ${name} = (input: unknown, _path = ''): ValidationResult => {`,
-      `  const obj = input as Record<string, unknown>`,
+      ...objBinding,
       `  if (typeof input !== 'object' || input === null || Array.isArray(input)) {`,
       `    return { valid: false, errors: [{ message: 'must be object', path: _path }] }`,
       `  }`,

@@ -1723,6 +1723,35 @@ describe('generate-validator-function', () => {
     })
   })
 
+  describe('the narrowed object binding', () => {
+    it('is emitted when a property check reads it', () => {
+      const code = generateValidatorFunction(
+        { type: 'object' as const, properties: { a: { type: 'string' as const } }, required: ['a'] },
+        'Root',
+      )
+      expect(code).toContain('const obj = input as Record<string, unknown>')
+      const validate = evalValidator(code)
+      expect(validate({ a: 'x' })).toBe(true)
+      expect(validate({})).not.toBe(true)
+    })
+
+    it('is dropped when the body routes everything through _root', () => {
+      // Object-level combinators apply to the value, not to its properties, and
+      // read `_root` so a branch from another type family is not compared against
+      // a `Record`. That leaves nothing reading `obj`, and an unused local is a
+      // `TS6133` for any consumer with `noUnusedLocals`. The checks themselves
+      // must still be emitted and must still work.
+      const code = generateValidatorFunction({ type: 'object' as const, allOf: [{ required: ['a'] }] }, 'Root')
+
+      expect(code).not.toContain('const obj = input as Record<string, unknown>')
+      expect(code).toContain('const _root: unknown = input')
+      const validate = evalValidator(code)
+      expect(validate({ a: 1 })).toBe(true)
+      expect(validate({})).not.toBe(true)
+      expect(validate('nope')).not.toBe(true)
+    })
+  })
+
   describe('hoisted declarations', () => {
     const strictWithPatterns = {
       type: 'object' as const,
