@@ -360,6 +360,46 @@ const patternPropertySources = (schema: JSONSchema): string[] => {
  * regex-caching the interpreter does) and a key survives the sweep if it is a
  * known key or matches any pattern.
  */
+/**
+ * Assembles a validator: the hoisted declarations the function body actually
+ * reads, then the function — with an unread `input` parameter renamed to
+ * `_input`.
+ *
+ * A statically-decidable combinator branch is dropped *after* its checks have
+ * been built, and building them may already have hoisted a known-keys set or a
+ * compiled pattern table; the dropped branch may equally have been the only
+ * reader of `input`. Either way the file declares a symbol it never reads, which
+ * is `TS6133` wherever `noUnusedLocals` / `noUnusedParameters` are on — as they
+ * are in this repo, and in any consumer that inherits its flags. The `_` prefix
+ * is the generator's own convention for a parameter it does not use, applied on
+ * every other `return true` path already.
+ */
+const withHoisted = (hoisted: readonly string[], text: string): string => {
+  const declared = hoisted.map((declaration) => ({ declaration, name: /^const (\w+)/.exec(declaration)?.[1] }))
+  // A declaration kept for the body may itself read another, so grow the live set
+  // to a fixed point rather than testing each one against the body alone.
+  const live = new Set<string>()
+  let scope = text
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const { declaration, name } of declared) {
+      if (live.has(declaration)) continue
+      if (name !== undefined && !new RegExp(`\\b${name}\\b`).test(scope)) continue
+      live.add(declaration)
+      scope += `\n${declaration}`
+      grew = true
+    }
+  }
+
+  // The parameter list is where `input` is *declared*; only a mention outside it
+  // counts as a read.
+  const reads = text.replaceAll('(input: unknown', '(')
+  const body = /\binput\b/.test(reads) ? text : text.replaceAll('(input: unknown', '(_input: unknown')
+
+  const kept = hoisted.filter((declaration) => live.has(declaration))
+  return kept.length > 0 ? `${kept.join('\n')}\n\n${body}` : body
+}
+
 const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): string[] => {
   if (!isSchemaObject(schema)) return []
   if (!hasAdditionalProperties(schema) || schema.additionalProperties !== false) return []
@@ -1796,10 +1836,6 @@ const generateObjectValidator = (
     '(errors ??= []).push(',
   )
 
-  // Hoisted statements (e.g. known-keys Sets) come first so every call of the
-  // validator reuses them instead of rebuilding them.
-  const hoistedBlock = ctx.hoisted.length > 0 ? `${ctx.hoisted.join('\n')}\n\n` : ''
-
   // A pure boolean guard for the happy path: when every property is present and
   // well-typed (and, for strict objects, there are no extras) it returns true
   // without allocating an `errors` array or touching the slow path. It returns
@@ -1828,7 +1864,7 @@ const generateObjectValidator = (
 
   // No guard: the exported validator is the error-collecting function itself.
   if (!guard) {
-    return `${hoistedBlock}${collectBody(vName, true)}`
+    return withHoisted(ctx.hoisted, collectBody(vName, true))
   }
 
   // With a guard, keep the happy path inside the exported function — the guard
@@ -1839,19 +1875,22 @@ const generateObjectValidator = (
   // the hot path. The exported `(input, _path?) => ValidationResult` contract
   // is unchanged.
   const collectName = `${vName}Errors`
-  return [
-    `${hoistedBlock}${collectBody(collectName, false)}`,
-    ``,
-    `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
-    `  const obj = input as Record<string, unknown>`,
-    `  if (`,
-    guard.map((condition) => `    ${condition}`).join(' &&\n'),
-    `  ) {`,
-    `    return true`,
-    `  }`,
-    `  return ${collectName}(input, _path)`,
-    `}`,
-  ].join('\n')
+  return withHoisted(
+    ctx.hoisted,
+    [
+      collectBody(collectName, false),
+      ``,
+      `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+      `  const obj = input as Record<string, unknown>`,
+      `  if (`,
+      guard.map((condition) => `    ${condition}`).join(' &&\n'),
+      `  ) {`,
+      `    return true`,
+      `  }`,
+      `  return ${collectName}(input, _path)`,
+      `}`,
+    ].join('\n'),
+  )
 }
 
 /**
@@ -2407,14 +2446,16 @@ const generateScalarValidator = (
     checks.push(...generateConstraintChecks('', 'input', rootPath, schema, suffix, ctx))
     checks.push(...generateCombinatorChecks('', 'input', rootPath, schema, suffix, ctx))
     const body = checks.join('\n').replaceAll('errors.push(', '(errors ??= []).push(')
-    const hoistedBlock = ctx.hoisted.length > 0 ? `${ctx.hoisted.join('\n')}\n\n` : ''
-    return [
-      `${hoistedBlock}export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
-      `  let errors: ValidationError[] | undefined`,
-      body,
-      `  return errors !== undefined ? { valid: false, errors } : true`,
-      `}`,
-    ].join('\n')
+    return withHoisted(
+      ctx.hoisted,
+      [
+        `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+        `  let errors: ValidationError[] | undefined`,
+        body,
+        `  return errors !== undefined ? { valid: false, errors } : true`,
+        `}`,
+      ].join('\n'),
+    )
   }
 
   // Top-level multi-type / nullable schema (array `type`, e.g. `["string","null"]`).
@@ -2456,14 +2497,16 @@ const generateScalarValidator = (
     }
 
     const body = checks.join('\n').replaceAll('errors.push(', '(errors ??= []).push(')
-    const hoistedBlock = ctx.hoisted.length > 0 ? `${ctx.hoisted.join('\n')}\n\n` : ''
-    return [
-      `${hoistedBlock}export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
-      `  let errors: ValidationError[] | undefined`,
-      body,
-      `  return errors !== undefined ? { valid: false, errors } : true`,
-      `}`,
-    ].join('\n')
+    return withHoisted(
+      ctx.hoisted,
+      [
+        `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+        `  let errors: ValidationError[] | undefined`,
+        body,
+        `  return errors !== undefined ? { valid: false, errors } : true`,
+        `}`,
+      ].join('\n'),
+    )
   }
 
   // Top-level typed schema (string, number, boolean, array)
@@ -2509,18 +2552,20 @@ const generateScalarValidator = (
 
     // Array-item / nested constraints can hoist module-level declarations (e.g. a
     // compiled known-keys set); emit them before the function so it references them.
-    const hoistedBlock = rootCtx.hoisted.length > 0 ? `${rootCtx.hoisted.join('\n')}\n\n` : ''
-    return [
-      `${hoistedBlock}export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
-      `  if (${wrongType}) {`,
-      `    return { valid: false, errors: [{ message: 'must be ${typLabel}', path: _path }] }`,
-      `  }`,
-      `  const _root: unknown = input`,
-      `  let errors: ValidationError[] | undefined`,
-      constraintLines.join('\n').replaceAll('errors.push(', '(errors ??= []).push('),
-      `  return errors !== undefined ? { valid: false, errors } : true`,
-      `}`,
-    ].join('\n')
+    return withHoisted(
+      rootCtx.hoisted,
+      [
+        `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+        `  if (${wrongType}) {`,
+        `    return { valid: false, errors: [{ message: 'must be ${typLabel}', path: _path }] }`,
+        `  }`,
+        `  const _root: unknown = input`,
+        `  let errors: ValidationError[] | undefined`,
+        constraintLines.join('\n').replaceAll('errors.push(', '(errors ??= []).push('),
+        `  return errors !== undefined ? { valid: false, errors } : true`,
+        `}`,
+      ].join('\n'),
+    )
   }
 
   // A schema with no `type` at all. It still constrains things: in JSON Schema a
@@ -2541,14 +2586,16 @@ const generateScalarValidator = (
     )
   }
 
-  const typelessHoisted = typelessCtx.hoisted.length > 0 ? `${typelessCtx.hoisted.join('\n')}\n\n` : ''
-  return [
-    `${typelessHoisted}export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
-    `  let errors: ValidationError[] | undefined`,
-    typelessChecks.join('\n').replaceAll('errors.push(', '(errors ??= []).push('),
-    `  return errors !== undefined ? { valid: false, errors } : true`,
-    `}`,
-  ].join('\n')
+  return withHoisted(
+    typelessCtx.hoisted,
+    [
+      `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
+      `  let errors: ValidationError[] | undefined`,
+      typelessChecks.join('\n').replaceAll('errors.push(', '(errors ??= []).push('),
+      `  return errors !== undefined ? { valid: false, errors } : true`,
+      `}`,
+    ].join('\n'),
+  )
 }
 
 /**
@@ -2574,14 +2621,16 @@ const generateGeneralRootValidator = (
   const ctx = createRootContext(rootSchema)
   const checks = generateValueChecks('', 'input', '`${_path}`', schema, suffix, ctx, true)
   const body = checks.join('\n').replaceAll('errors.push(', '(errors ??= []).push(')
-  const hoistedBlock = ctx.hoisted.length > 0 ? `${ctx.hoisted.join('\n')}\n\n` : ''
-  return [
-    `${hoistedBlock}export const ${validatorName(typeName)} = (input: unknown, _path = ''): ValidationResult => {`,
-    `  let errors: ValidationError[] | undefined`,
-    body,
-    `  return errors !== undefined ? { valid: false, errors } : true`,
-    `}`,
-  ].join('\n')
+  return withHoisted(
+    ctx.hoisted,
+    [
+      `export const ${validatorName(typeName)} = (input: unknown, _path = ''): ValidationResult => {`,
+      `  let errors: ValidationError[] | undefined`,
+      body,
+      `  return errors !== undefined ? { valid: false, errors } : true`,
+      `}`,
+    ].join('\n'),
+  )
 }
 
 /** Keywords whose value is a single subschema (or a boolean schema). */

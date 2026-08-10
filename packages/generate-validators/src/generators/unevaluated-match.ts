@@ -78,6 +78,14 @@ export type UnevaluatedExpression = {
   readonly expr: string
 }
 
+/**
+ * A binding TypeScript keeps narrowed inside a closure. Narrowing survives into
+ * a function expression for a `const` or a never-reassigned parameter, but not
+ * for a property read — `obj.a` is `unknown` again inside a callback however it
+ * was tested outside.
+ */
+const PLAIN_IDENTIFIER = /^[A-Za-z_$][\w$]*$/
+
 const orJoin = (terms: readonly string[]): string =>
   terms.length === 1 ? (terms[0] as string) : `(${terms.join(' || ')})`
 
@@ -357,12 +365,25 @@ export const unevaluatedPropertiesExpr = (
     return { setup: sink.setup, expr }
   }
 
-  const valueMatch = match(`${record}[${keyVar}]`, unevaluated as JSONSchema, depth)
+  // The value read happens *inside* the `.every` callback, and a narrowing
+  // established outside a function expression does not survive into one unless
+  // what was narrowed is a plain binding: `Array.isArray(obj.a)` in front says
+  // nothing about `obj.a` within the callback, so `(obj.a[0] as Record<…>)[k]`
+  // there reads `obj.a` back as `unknown`. Binding the object to a local first
+  // — in `setup`, which is emitted inside the type guard and before the test —
+  // gives the callback a `const` to read instead. The coverage terms and the
+  // `false` form never read the object inside the callback, so they keep the
+  // accessor as it is and the common shapes stay untouched.
+  const bound = PLAIN_IDENTIFIER.test(acc) ? null : `_uo${depth}`
+  if (bound !== null) sink.setup.push(`const ${bound} = ${acc} as Record<string, unknown>`)
+  const source = bound ?? record
+
+  const valueMatch = match(`${source}[${keyVar}]`, unevaluated as JSONSchema, depth)
   if (valueMatch === 'true') return undefined
   const expr =
     covered === null
-      ? `Object.keys(${record}).every((${keyVar}) => ${valueMatch})`
-      : `Object.keys(${record}).every((${keyVar}) => ${covered} || ${valueMatch})`
+      ? `Object.keys(${source}).every((${keyVar}) => ${valueMatch})`
+      : `Object.keys(${source}).every((${keyVar}) => ${covered} || ${valueMatch})`
   return { setup: sink.setup, expr }
 }
 

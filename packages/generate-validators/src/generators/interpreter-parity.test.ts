@@ -441,6 +441,22 @@ describe('generator/interpreter verdict parity', () => {
       [['a', 'b', 'c']],
     ])
   })
+
+  it('agrees on a constrained unevaluatedProperties reached through an array position', () => {
+    // Each of these reaches the object through an accessor the emitter has to
+    // bind before the coverage callback can read it, in all three array
+    // spellings and under a dynamic key. The values are chosen so a validator
+    // that stopped checking would answer `true` throughout, which is what the
+    // second value in every group rules out.
+    const inner = { properties: { p: true }, unevaluatedProperties: { type: 'string' } }
+    const objects = [{ a: [{ p: 1 }] }, { a: [{ p: 1, q: 'ok' }] }, { a: [{ p: 1, q: 2 }] }, { a: [] }, { a: 1 }, {}]
+
+    assertParity({ type: 'object', properties: { a: { type: 'array', prefixItems: [inner] } } }, objects)
+    assertParity({ type: 'object', properties: { a: { type: 'array', items: [inner] } } }, objects)
+    assertParity({ type: 'object', properties: { a: { type: 'array', items: inner } } }, objects)
+    assertParity({ type: 'object', patternProperties: { '^a': { type: 'array', items: [inner] } } }, objects)
+    assertParity({ type: 'object', additionalProperties: { type: 'array', prefixItems: [inner] } }, objects)
+  })
 })
 
 // Deterministic PRNG so a failure reproduces exactly. (mulberry32)

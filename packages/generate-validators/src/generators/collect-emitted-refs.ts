@@ -4,6 +4,17 @@ import { tupleShapeOf } from './tuple-shape'
 import { type UnevaluatedMatchFn, unevaluatedItemsExpr, unevaluatedPropertiesExpr } from './unevaluated-match'
 
 /**
+ * Which `if` arms are live. Without an `if` neither arm applies at all; with a
+ * literal boolean one, only the arm it selects does. Anything else keeps both.
+ */
+const armsOf = (schema: Record<string, unknown>): string[] => {
+  if (!('if' in schema)) return []
+  if (schema['if'] === true) return ['then']
+  if (schema['if'] === false) return ['else']
+  return ['then', 'else']
+}
+
+/**
  * Recursively walks a schema and yields every `$ref` the validator emitter turns
  * into a `validateX(...)` call, in traversal order (duplicates included — the
  * callers dedupe on what they key by).
@@ -119,9 +130,14 @@ export const collectEmittedRefs = (
     // `then` / `else` only apply when there is an `if` to branch on, and neither
     // emitter reads them without one — so a `$ref` there is never referenced,
     // and collecting it refused schemas whose ref happened to be unresolvable.
-    // Which *arm* a statically-known `if` takes is deliberately not second-guessed
-    // here; see the note above.
-    ...('if' in schema ? ['then', 'else'] : []),
+    //
+    // A *literal boolean* `if` picks its arm here as surely as the emitter does,
+    // and unlike `anyOf` the type generator reads neither arm — it types the whole
+    // node `unknown` — so the arm that is dropped is referenced by nobody and its
+    // import is wholly unused. Only the two literal spellings are decided; an
+    // `if: {}` still collects both arms rather than re-deriving the emitter's fold
+    // here, which is the direction that merely costs an unused import.
+    ...armsOf(schema),
     'not',
     // The `unevaluated*` subschemas are validated against the leftover keys /
     // indices, so a `$ref` inside one becomes a `validateX(...)` call like any

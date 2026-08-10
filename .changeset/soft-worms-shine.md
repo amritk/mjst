@@ -75,9 +75,24 @@ TypeScript diagnostics. Both corpora now compile clean.
 - A guard member and an `unevaluated*` key both read through a cast, which no
   `typeof` in front can narrow, so a constrained check emitted `.length` on
   `unknown` (`TS2571`).
+- The `unevaluated*` coverage sweep reads its leftover value *inside* a `.every`
+  callback, and TypeScript keeps a narrowing across that boundary only for a
+  plain binding — never for a property read. One instance location down,
+  `Array.isArray(obj.a)` in front of the sweep said nothing inside it, so a
+  constrained `unevaluatedProperties` at any array position emitted `TS18046` /
+  `TS2571`. The object is bound to a local before the callback now.
 - An `enum` member of a different JSON type than the sibling `type` sat behind
   the `typeof` that narrows the accessor, so it compared two disjoint types
   (`TS2367`). Such a member can never match, and is dropped.
+- Folding a branch away can strand what building it left behind: the compiled
+  pattern table it hoisted, and — when it was the only reader — the `input`
+  parameter itself (`TS6133` under `noUnusedLocals` / `noUnusedParameters`). A
+  validator now carries only the hoisted declarations its body reads, and an
+  unread parameter takes the `_` prefix the generator uses everywhere else.
+- A literal boolean `if` picks one arm, and the arm it drops is read by nobody:
+  unlike an `anyOf` branch, which the type generator still unions, neither arm of
+  an `if` is read by the type at all. Its `$ref` is no longer imported, which was
+  a wholly unused import (`TS6192`).
 
 ### Generation that fails late instead of loudly
 

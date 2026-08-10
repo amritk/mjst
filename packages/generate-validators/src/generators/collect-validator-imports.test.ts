@@ -120,10 +120,17 @@ describe('collect-validator-imports', () => {
     // The emitter drops a vacuous `anyOf`; the type still says `A | unknown`.
     expect(names({ anyOf: [{ $ref: '#/$defs/a' }, true] })).toEqual(['A'])
     expect(names({ anyOf: [{ $ref: '#/$defs/a' }, { description: 'anything' }] })).toEqual(['A'])
-    // The emitter takes one arm of a statically-known `if`; the arm it drops is
-    // still collected, because which arm the type generator reads is not this
-    // module's business to predict.
-    expect(names({ if: false, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual(['A', 'B'])
+    // A literal boolean `if` picks its arm as surely here as in the emitter, and
+    // unlike `anyOf` the type generator reads *neither* arm — it types the whole
+    // node `unknown` — so the dropped arm's import would be read by nobody.
+    // Anything less than a literal keeps both, rather than re-deriving the fold.
+    expect(names({ if: false, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual(['B'])
+    expect(names({ if: true, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual(['A'])
+    expect(names({ if: {}, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual(['A', 'B'])
+    expect(names({ if: { type: 'string' }, then: { $ref: '#/$defs/a' }, else: { $ref: '#/$defs/b' } })).toEqual([
+      'A',
+      'B',
+    ])
     // `prefixItems` wins the positions, so the validator ignores the array
     // `items` and its `additionalItems` tail — but the type reads that tail.
     expect(
@@ -205,8 +212,6 @@ describe('collect-validator-imports', () => {
       collectValidatorImports({ properties: { param: { $ref: '#/$defs/parameter-or-reference' } } } as never, {
         rootSchema,
       }),
-    ).toEqual([
-      "import { type ParameterOrReference, validateParameterOrReference } from './parameter-or-reference.js'",
-    ])
+    ).toEqual(["import { type ParameterOrReference, validateParameterOrReference } from './parameter-or-reference.js'"])
   })
 })

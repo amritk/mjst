@@ -186,6 +186,30 @@ const CASES: ReadonlyArray<readonly [string, JSONSchema]> = [
     'unevaluated-items-constrained',
     { type: 'array', prefixItems: [{ type: 'string' }], unevaluatedItems: { type: 'number', minimum: 2 } },
   ],
+  // The leftover key is read inside the `.every` callback, and a narrowing only
+  // survives into a function expression when what was narrowed is a plain
+  // binding. At the root the accessor is the `input` parameter and it does; one
+  // level down it is `obj.a`, a property read, and `Array.isArray(obj.a)` in
+  // front of the callback says nothing inside it. Every array position below
+  // reaches its element through such an accessor.
+  [
+    'unevaluated-properties-constrained-in-tuple',
+    {
+      type: 'object',
+      properties: { a: { type: 'array', prefixItems: [{ unevaluatedProperties: { type: 'string' } }] } },
+    },
+  ],
+  [
+    'unevaluated-properties-constrained-in-draft07-tuple',
+    { type: 'object', properties: { a: { type: 'array', items: [{ unevaluatedProperties: { type: 'string' } }] } } },
+  ],
+  [
+    'unevaluated-properties-constrained-under-dynamic-key',
+    {
+      type: 'object',
+      patternProperties: { '^a': { type: 'array', items: [{ unevaluatedProperties: { type: 'string' } }] } },
+    },
+  ],
   // An `enum` whose members are not all of the declared `type`: the guard puts
   // membership behind a `typeof` that narrows the accessor, so a member of
   // another type is a comparison TypeScript rejects (`TS2367`).

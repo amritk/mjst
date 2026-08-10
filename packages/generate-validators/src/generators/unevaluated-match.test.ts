@@ -81,6 +81,53 @@ describe('unevaluated-match', () => {
     )
   })
 
+  it('binds a property-read accessor to a local before the callback reads it', () => {
+    // The leftover value is read *inside* the `.every` callback, and TypeScript
+    // keeps a narrowing across that boundary only for a plain binding — never for
+    // a property read. `obj.a[0]` there is `unknown` again however it was tested
+    // outside, so a constrained subschema behind it emitted a check the generated
+    // file could not compile. The `Object.keys` call is outside the callback and
+    // was always fine; what matters is that the *value* read is the local.
+    const expression = unevaluatedPropertiesExpr(
+      'obj.a[0]',
+      { properties: { a: true }, unevaluatedProperties: { type: 'string' } },
+      undefined,
+      0,
+      match,
+    )
+    expect(expression?.setup).toEqual(['const _uo0 = obj.a[0] as Record<string, unknown>'])
+    expect(expression?.expr).toBe(
+      'Object.keys(_uo0).every((_uk0) => ["a"].includes(_uk0) || matches(_uo0[_uk0], {"type":"string"}))',
+    )
+  })
+
+  it('leaves a plain accessor alone, and binds nothing the callback never reads', () => {
+    // A parameter or a `const` keeps its narrowing inside a closure, so the
+    // common shapes must not grow a binding. Nor must the `false` form, whose
+    // callback reads only the key.
+    expect(
+      unevaluatedPropertiesExpr(
+        'input',
+        { properties: { a: true }, unevaluatedProperties: { type: 'string' } },
+        undefined,
+        0,
+        match,
+      )?.setup,
+    ).toEqual([])
+    expect(properties({ properties: { a: true }, unevaluatedProperties: { type: 'string' } })?.expr).toContain(
+      'matches((value as Record<string, unknown>)[_uk0]',
+    )
+    expect(
+      unevaluatedPropertiesExpr(
+        'obj.a[0]',
+        { properties: { a: true }, unevaluatedProperties: false },
+        undefined,
+        0,
+        match,
+      )?.setup,
+    ).toEqual([])
+  })
+
   it('reads coverage through a resolvable $ref', () => {
     const root = { $defs: { bar: { properties: { b: true } } } }
     const schema = { $ref: '#/$defs/bar', properties: { a: true }, unevaluatedProperties: false } as JSONSchema
