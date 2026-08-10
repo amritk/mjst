@@ -1,5 +1,78 @@
 # @amritk/resolve-refs
 
+## 0.6.0
+
+### Minor Changes
+
+- 3e9869b: Fix six bugs found by an audit of the resolver, two of them security-relevant.
+
+  - **JSON Pointer lookup walked the prototype chain.** `{"$ref": "#/constructor"}`
+    resolved to `Object`'s constructor and inlined a JS function into the
+    dereferenced document; on a process where anything had polluted
+    `Object.prototype`, an arbitrary `#/<name>` resolved to the injected value
+    instead of being reported as unresolvable. Only own properties are addressable
+    now.
+  - **The remote-document cache scope ignored the host guards.** `assertPublicHost`
+    runs at fetch time only, so a call made with `allowPrivateHosts` (or an
+    `allowedHosts` entry) warmed the session cache for a URL that a
+    default-options call would have refused — and the later call, hitting the
+    cache, never reached the guard. `allowPrivateHosts` and `allowedHosts` are now
+    part of the cache key, alongside the credentials and limits already there.
+  - **Cross-file cycle hoisting could overwrite a root `$defs` entry** (when the
+    root declares `$defs` directly; a root whose `$defs` arrives through a `$ref`
+    is not yet covered). The hoisted
+    name is derived from the ref's file basename, so `b.json` collided with a root
+    definition already called `b` and silently re-pointed every kept `#/$defs/b`
+    cycle ref at the wrong schema.
+  - **A fragment that resolved to nothing inside a document that loaded fine
+    inlined as `undefined` with nothing on `errors`** — the key vanished on
+    serialization, so a required property silently lost every constraint it had.
+    It is now reported and the node kept, matching `resolveRefs`. A ref into a
+    document that failed to load is unchanged (the loader already reports that).
+  - **Results aliased the session cache.** Value-position subtrees (`enum`,
+    `const`, `default`, `examples`) and subtrees past `maxDepth` were handed back
+    by reference from the process-wide remote cache, so a caller mutating its own
+    result corrupted every later resolve in the process.
+  - **`pathToRef` did not percent-encode.** A `$defs` key containing `%` produced a
+    kept cycle `$ref` that read back as a different key, so it resolved to nothing
+    in the output document.
+  - A second `$ref` to the same missing target was handed the _first_ ref's node,
+    inheriting its sibling keywords. The kept node now resolves its own siblings
+    and no longer aliases the parsed document.
+  - A subtree handed back past `maxDepth` still aliased the session cache: the
+    copy was bounded by `maxDepth`, which is exactly the condition that call site
+    guarantees, so it never ran. The copy is iterative now and needs no bound.
+  - A ref whose document a `maxDocuments` / `totalTimeoutMs` budget stopped the
+    resolver reaching is no longer reported twice.
+  - The deep copy preserves key order and terminates on a cyclic document from a
+    custom `parse` (a recursive YAML anchor produces one).
+  - A ref whose document a budget stopped the resolver reaching keeps its node,
+    rather than the referencing node vanishing on serialization.
+
+### Patch Changes
+
+- d646199: Stop the README from tripping a WAF rule in front of the registry, which is what
+  has refused every publish of these two packages since 2026-08-04.
+
+  The 403 was never npm's. `npm publish` embeds the README as plain text in the
+  publish document, and both READMEs used `../../../etc/passwd` as the example of a
+  `$ref` that walks out of the schema's directory — the line documenting the
+  traversal guard. Cloudflare, in front of `registry.npmjs.org`, read that as a
+  path-traversal attempt and rejected the PUT with its own HTML interstitial. npm
+  discards the response body, so all that reached the job log was its canned
+  "forbidden by your security policy" line with no reason attached, and the failure
+  looked like a registry block on the two package names.
+
+  It explains the shape of the outage exactly: these were the only two packages
+  carrying the string, which is why the other ten published from the same run.
+  `@amritk/runtime-validators` documents `file:///etc/passwd` and publishes fine —
+  the rule wants the traversal _and_ the `/etc/` path together, and either alone
+  passes.
+
+  The example is now `../../../secrets.env`, which documents the same thing: a path
+  outside the document tree. No behaviour changes — the guard itself, and the paths
+  it refuses, are untouched.
+
 ## 0.5.3
 
 ### Patch Changes
