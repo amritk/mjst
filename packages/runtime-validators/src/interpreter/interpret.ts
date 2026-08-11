@@ -723,8 +723,8 @@ const interpretObject = (
   const { properties, knownKeys, escapedKeys, requiredSet, safeKeys } = meta
   // See the presence check below: the schema half of that question is
   // `safeKeys`, the instance half is whether this object inherits anything.
-  const fastPresence =
-    safeKeys && (Object.getPrototypeOf(obj) === Object.prototype || Object.getPrototypeOf(obj) === null)
+  const prototype: unknown = Object.getPrototypeOf(obj)
+  const fastPresence = safeKeys && (prototype === Object.prototype || prototype === null)
   const emitErrors = ctx.emitErrors
   // `required`, `dependentRequired` and the property-count bounds are
   // validation-vocabulary; `properties`, `patternProperties`,

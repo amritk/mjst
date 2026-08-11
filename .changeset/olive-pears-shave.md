@@ -1,6 +1,13 @@
 ---
-'@amritk/resolve-refs': patch
+'@amritk/resolve-refs': minor
 ---
+
+**Behavior change:** a `$ref` whose target could not be read is now *kept* in
+the resolved output instead of being inlined. Code that fed a resolved document
+straight into a generator and relied on a refused ref becoming `{}` (or
+vanishing) will now see an unresolved `$ref` there — which is the point: the
+old shapes silently dropped every constraint on the referencing node, or
+replaced it with a schema that accepts anything. `errors` is unchanged.
 
 Fix four ways a resolve could hand back a document that is wrong rather than
 incomplete.

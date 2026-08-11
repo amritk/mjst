@@ -1,5 +1,5 @@
 ---
-'@amritk/resolve-refs': patch
+'@amritk/resolve-refs': minor
 ---
 
 Close two gaps in the previous round's keep-the-node fix.

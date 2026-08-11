@@ -60,13 +60,31 @@ export const SYNTHETIC_BASE = 'https://runtime-validators.invalid/schema'
  * Keywords whose value is arbitrary *data* rather than a subschema. An `$id` or
  * `$anchor` sitting inside an `enum` member is part of an instance the schema
  * describes, not a declaration, so the walk stops at these.
-//
-// Kept in step by hand with `@amritk/helpers`' `DATA_KEYWORDS`: this package
-// takes no `@amritk/*` dependency by design, so the set is restated rather
-// than imported. `example` is OpenAPI 3.0's singular spelling and belongs
-// with `examples`.
+ *
+ * Kept in step by hand with `@amritk/helpers`' `DATA_KEYWORDS`: this package
+ * takes no `@amritk/*` dependency by design, so the set is restated rather than
+ * imported. `example` is OpenAPI 3.0's singular spelling and belongs with
+ * `examples`.
  */
 const DATA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples', 'example'])
+
+/**
+ * Keywords whose value is a map of author-chosen names to schemas.
+ *
+ * Inside one of these the keys are *names*, so {@link DATA_KEYWORDS} carry no
+ * keyword meaning there — a property or definition genuinely called `example`
+ * or `default` is ordinary, and skipping its subtree would leave an `$id` or
+ * `$anchor` declared inside it unregistered, turning a `$ref` to it into a
+ * hard "cannot resolve" throw. Restated here for the same reason as above.
+ */
+const SCHEMA_MAPS = new Set([
+  'properties',
+  'patternProperties',
+  '$defs',
+  'definitions',
+  'dependentSchemas',
+  'dependencies',
+])
 
 /** `new URL(ref, base).href`, or `undefined` when the pair does not parse. */
 export const resolveUri = (ref: string, base: string): string | undefined => {
@@ -147,10 +165,15 @@ const walkResource = (root: object, rootBase: string, tables: RegistryTables): b
   // `{ node, base }` pairs, so the walk allocates nothing per node.
   const nodes: object[] = [root]
   const bases: string[] = [rootBase]
+  // Whether each queued node is a name-to-schema map rather than a schema —
+  // the distinction that keeps a definition named `example` from being read as
+  // the keyword. See SCHEMA_MAPS.
+  const inMaps: boolean[] = [false]
 
   while (nodes.length > 0) {
     const node = nodes.pop() as object
     const enclosing = bases.pop() as string
+    const inMap = inMaps.pop() as boolean
     if (seen.has(node)) continue
     seen.add(node)
 
@@ -162,6 +185,7 @@ const walkResource = (root: object, rootBase: string, tables: RegistryTables): b
         if (item !== null && typeof item === 'object') {
           nodes.push(item)
           bases.push(enclosing)
+          inMaps.push(inMap)
         }
       }
       continue
@@ -192,11 +216,12 @@ const walkResource = (root: object, rootBase: string, tables: RegistryTables): b
     const keys = Object.keys(record)
     for (let i = keys.length - 1; i >= 0; i--) {
       const key = keys[i] as string
-      if (DATA_KEYWORDS.has(key)) continue
+      if (!inMap && DATA_KEYWORDS.has(key)) continue
       const child = record[key]
       if (child === null || typeof child !== 'object') continue
       nodes.push(child)
       bases.push(base)
+      inMaps.push(!inMap && SCHEMA_MAPS.has(key))
     }
   }
 

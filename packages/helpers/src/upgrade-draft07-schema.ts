@@ -20,7 +20,7 @@
  */
 
 import { assignKey } from './assign-key'
-import { DATA_KEYWORDS } from './build-resource-registry'
+import { schemaChildren } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { refToFilename, toKebabCase } from './ref-to-filename'
 
@@ -200,21 +200,28 @@ export const upgradeDraft07Schema = (schema: Record<string, unknown>): Record<st
  * keeps its inner segment and still will not resolve. That gap is unchanged, and
  * the same in both places.
  */
-const rewriteDefinitionsRefs = (obj: unknown, depth = 0): unknown => {
+const rewriteDefinitionsRefs = (obj: unknown, depth = 0, inSchemaMap = false): unknown => {
   assertSchemaDepth(depth, 'upgradeDraft07Schema')
   if (typeof obj !== 'object' || obj === null) return obj
-  if (Array.isArray(obj)) return obj.map((item) => rewriteDefinitionsRefs(item, depth + 1))
+  if (Array.isArray(obj)) return obj.map((item) => rewriteDefinitionsRefs(item, depth + 1, inSchemaMap))
 
   const record = obj as Record<string, unknown>
   const result: Record<string, unknown> = {}
 
-  for (const [key, value] of Object.entries(record)) {
+  // Everything is copied through, then `schemaChildren` says which children are
+  // schemas to descend into. Testing the data keywords by key name alone would
+  // skip a property genuinely *named* `example` or `default` — leaving its
+  // `#/definitions/...` unrewritten while the block it names is renamed to
+  // `$defs`, so the ref dangles and the generators stop the build.
+  for (const [key, value] of Object.entries(record)) assignKey(result, key, value)
+  for (const child of schemaChildren(record, inSchemaMap)) {
+    const { key, value } = child
     const rewritten =
-      key === '$ref' && typeof value === 'string' && value.startsWith('#/definitions/')
+      !inSchemaMap && key === '$ref' && typeof value === 'string' && value.startsWith('#/definitions/')
         ? value.replace('#/definitions/', '#/$defs/')
-        : DATA_KEYWORDS.has(key) || startsNewResource(value)
+        : startsNewResource(value)
           ? value
-          : rewriteDefinitionsRefs(value, depth + 1)
+          : rewriteDefinitionsRefs(value, depth + 1, child.inSchemaMap)
 
     assignKey(result, key, rewritten)
   }

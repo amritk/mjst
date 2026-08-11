@@ -46,7 +46,7 @@ const parseSeverity = (
 ): { severity: DiagnosticSeverity; enabled: boolean } => {
   if (value === undefined) return { severity: DiagnosticSeverity.Warning, enabled: true }
   if (typeof value === 'number') return { severity: value, enabled: true }
-  // `ownOr`, not a bare index: `severity` is ruleset input, and
+  // `ownKey`, not a bare index: `severity` is ruleset input, and
   // `severity: 'constructor'` otherwise resolved to `Object.prototype.constructor`
   // — neither `'off'` nor `undefined`, so both fallbacks below were skipped and
   // the rule was built carrying a Function where a `DiagnosticSeverity` number

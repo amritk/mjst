@@ -32,11 +32,11 @@ export type NodeRole =
  * Keywords whose values are instances rather than schemas. These are the only
  * standard keywords that can hold an arbitrary object, so they are the only
  * places a `$ref`-shaped object can show up as data.
-//
-// Kept in step by hand with `@amritk/helpers`' `DATA_KEYWORDS`: this package
-// takes no `@amritk/*` dependency by design, so the set is restated rather
-// than imported. `example` is OpenAPI 3.0's singular spelling and belongs
-// with `examples`.
+ *
+ * Kept in step by hand with `@amritk/helpers`' `DATA_KEYWORDS`: this package
+ * takes no `@amritk/*` dependency by design, so the set is restated rather
+ * than imported. `example` is OpenAPI 3.0's singular spelling and belongs with
+ * `examples`.
  */
 const VALUE_KEYWORDS = new Set(['enum', 'const', 'default', 'examples', 'example'])
 

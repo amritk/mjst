@@ -83,12 +83,15 @@ const referencedFrom = (
     }
 
     const record = value as Record<string, unknown>
-    const ref = record['$ref']
+    // `Object.hasOwn`, not a bare index: with `Object.prototype.$ref` set by
+    // any dependency, every object walked here would report a ref — so
+    // everything registered read as reached and nothing was ever pruned.
+    const ref = Object.hasOwn(record, '$ref') ? record['$ref'] : undefined
     if (typeof ref === 'string') {
       const name = externalTarget(ref, external)
       if (name !== undefined) into.add(name)
     }
-    const dynamicRef = record['$dynamicRef']
+    const dynamicRef = Object.hasOwn(record, '$dynamicRef') ? record['$dynamicRef'] : undefined
     if (typeof dynamicRef === 'string') {
       // An anchor-form `$dynamicRef` binds through the map; a pointer-form one
       // already says where it goes.
@@ -97,7 +100,9 @@ const referencedFrom = (
       if (name !== undefined) into.add(name)
     }
 
-    for (const key in record) walk(record[key], depth + 1)
+    // `Object.values`, not `for…in`: the walk would otherwise descend into
+    // inherited enumerable values.
+    for (const value of Object.values(record)) walk(value, depth + 1)
   }
 
   walk(node, 0)
