@@ -112,10 +112,29 @@ describe('a polluted Object.prototype', () => {
     for (const keyword of KEYWORDS) delete proto[keyword]
   })
 
+  it('does not let an inherited $anchor make an unresolvable ref resolve', () => {
+    // The verdict cases below all use refs that resolve, so a phantom anchor
+    // has nothing to change in them. This is the shape that exposes one: a ref
+    // naming something the document never declared has to keep failing.
+    proto['$anchor'] = 'ghost'
+    expect(() => validate({ type: 'object', properties: { a: { $ref: '#ghost' } } } as never)({ a: 1 })).toThrow(
+      /Cannot resolve \$ref/,
+    )
+  })
+
+  it('does not let an inherited $dynamicAnchor make an unresolvable $dynamicRef resolve', () => {
+    proto['$dynamicAnchor'] = 'ghost'
+    expect(() => validate({ type: 'object', properties: { a: { $dynamicRef: '#ghost' } } } as never)({ a: 1 })).toThrow(
+      /Cannot resolve \$dynamicRef/,
+    )
+  })
+
   for (const keyword of KEYWORDS) {
     it(`does not let an inherited "${keyword}" change any verdict`, () => {
-      // Three shapes that between them exercise the object, array and string
-      // paths, each with a schema that plainly accepts the value.
+      // Shapes that between them exercise the object, array and string paths,
+      // plus the `$defs`/`$ref`/anchor machinery — without which an inherited
+      // `$anchor` or `$dynamicAnchor` has nothing to bind to and the case
+      // passes for the wrong reason, which is how two of these were missed.
       const cases: ReadonlyArray<[object, unknown]> = [
         [
           { type: 'object', properties: { a: { type: 'string' } } },
@@ -123,6 +142,16 @@ describe('a polluted Object.prototype', () => {
         ],
         [{ type: 'array' }, ['x', 'y']],
         [{ type: 'string' }, 'hello'],
+        [{ $defs: { S: { type: 'string' } }, type: 'object', properties: { a: { $ref: '#/$defs/S' } } }, { a: 'x' }],
+        [
+          {
+            $id: 'https://real.example/root',
+            $defs: { S: { $anchor: 'real', type: 'string' } },
+            type: 'object',
+            properties: { a: { $ref: '#real' } },
+          },
+          { a: 'x' },
+        ],
       ]
 
       proto[keyword] = POLLUTANT[keyword]

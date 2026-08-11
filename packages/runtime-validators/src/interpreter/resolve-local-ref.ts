@@ -116,7 +116,14 @@ export const findAnchor = (node: unknown, name: unknown, keywords: readonly stri
 
     const record = current as Record<string, unknown>
     if (!Array.isArray(current)) {
-      for (const keyword of keywords) if (record[keyword] === name) return current
+      // `Object.hasOwn` first: schemas arrive at runtime, and a bare
+      // `record[keyword]` answers from `Object.prototype`. With
+      // `Object.prototype.$anchor = 'ghost'` set by any dependency, the first
+      // node visited "declared" that anchor — so `$ref: '#ghost'`, which names
+      // nothing, silently bound to the root schema instead of failing.
+      for (const keyword of keywords) {
+        if (Object.hasOwn(record, keyword) && record[keyword] === name) return current
+      }
     }
 
     const keys = Object.keys(record)

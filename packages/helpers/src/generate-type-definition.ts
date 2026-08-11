@@ -301,7 +301,7 @@ const patternPropertiesRecordType = (
  */
 const getTuplePositions = (schema: SchemaNode): readonly JSONSchema[] | undefined => {
   const record = schema as Record<string, unknown>
-  const prefixItems = record['prefixItems']
+  const prefixItems = Object.hasOwn(record, 'prefixItems') ? record['prefixItems'] : undefined
   if (Array.isArray(prefixItems)) return prefixItems.length > 0 ? (prefixItems as JSONSchema[]) : undefined
   if (Array.isArray(schema.items) && schema.items.length > 0) return schema.items as JSONSchema[]
   return undefined
@@ -319,7 +319,13 @@ const tupleTypeToTs = (schema: SchemaNode, positions: readonly JSONSchema[], opt
   const record = schema as Record<string, unknown>
   // With the draft-07 spelling `items` *is* the tuple, so the rest schema is
   // `additionalItems`; with `prefixItems` it is the sibling `items`.
-  const rest = Array.isArray(schema.items) ? record['additionalItems'] : record['items']
+  const rest = Array.isArray(schema.items)
+    ? Object.hasOwn(record, 'additionalItems')
+      ? record['additionalItems']
+      : undefined
+    : Object.hasOwn(record, 'items')
+      ? record['items']
+      : undefined
   const minItems = typeof schema.minItems === 'number' ? schema.minItems : 0
 
   const parts: string[] = []

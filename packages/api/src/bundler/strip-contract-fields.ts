@@ -406,14 +406,22 @@ const spansName = (source: string, from: number, to: number): boolean => {
  * the end of its line, say) is not fatal — the character is treated as ordinary
  * and the walk continues, which is exactly where `indexOf` already left things.
  *
- * The one case with no answer here is JSX text that *does* close: a `<p>don't
- * stop</p>` sharing a line with a call site scans from the apostrophe to the
- * next quote and steps over it. Telling that from a genuine string holding a
- * code sample needs a real parser — the two are the same shape, and the two
- * requirements are opposite. The result is the module's documented failure
- * mode, a bigger bundle rather than a broken one, and it is why the wiring in
- * the example below tests `stripped === source`. Put a call site on its own
- * line and it is never in question.
+ * Two cases have no answer here, and both fail the same safe way — the call
+ * site is left alone, so the bundle is bigger rather than broken, which is why
+ * the wiring in the example below tests `stripped === source`.
+ *
+ * The first is JSX text that *does* close: a `<p>don't stop</p>` sharing a line
+ * with a call site scans from the apostrophe to the next quote and steps over
+ * it. Telling that from a genuine string holding a code sample needs a real
+ * parser — the two are the same shape, and the two requirements are opposite.
+ * Put a call site on its own line and it is never in question.
+ *
+ * The second is a call site inside a template *substitution* — `` `${defineContract({…})}` ``
+ * — which is executing code the surrounding quotes do not make data. The scan
+ * skips whole templates, because the case it must not break is the far more
+ * common one of a template holding a code sample. Distinguishing them means
+ * scanning into substitutions while skipping the literal text around them;
+ * worth doing if the construct ever shows up in practice.
  */
 const nextCallSite = (source: string, from: number): number => {
   let index = from

@@ -53,6 +53,11 @@ const COPIES: ReadonlyArray<{ file: string; data: string; maps?: string }> = [
   },
 ]
 
+/** Copies that restate only `SCHEMA_MAPS`, their data set being a superset. */
+const MAP_ONLY: ReadonlyArray<{ file: string; name: string }> = [
+  { file: '../../generate-examples/src/generators/schema-validation.ts', name: 'SCHEMA_MAPS' },
+]
+
 /**
  * The string members of a `const <name> = new Set([...])` declaration.
  *
@@ -97,6 +102,12 @@ describe('keyword-set parity', () => {
     it(`${superset.file} contains every data keyword`, () => {
       const members = readSet(readFileSync(join(here, superset.file), 'utf8'), superset.name)
       expect(members).toEqual(expect.arrayContaining([...DATA_KEYWORDS]))
+    })
+  }
+
+  for (const copy of MAP_ONLY) {
+    it(`${copy.file} restates SCHEMA_MAPS exactly`, () => {
+      expect(readSet(readFileSync(join(here, copy.file), 'utf8'), copy.name)).toEqual([...SCHEMA_MAPS].sort())
     })
   }
 })

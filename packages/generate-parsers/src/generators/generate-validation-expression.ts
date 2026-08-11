@@ -142,7 +142,10 @@ export const everyTailItem = (accessor: string, itemCheck: string, schema: JSONS
 export const prefixItemsCapsLength = (schema: JSONSchema): boolean => {
   if (!isSchemaObject(schema)) return false
   const s = schema as Record<string, unknown>
-  return s['items'] === false || s['additionalItems'] === false
+  return (
+    (Object.hasOwn(s, 'items') ? s['items'] : undefined) === false ||
+    (Object.hasOwn(s, 'additionalItems') ? s['additionalItems'] : undefined) === false
+  )
 }
 
 /**

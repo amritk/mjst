@@ -102,13 +102,26 @@ export const withoutFragment = (uri: string): string => {
 }
 
 /**
+ * A schema keyword's value, treating an inherited name as absent.
+ *
+ * Schemas arrive at runtime, so a bare `node['$anchor']` answers from
+ * `Object.prototype` when a dependency has polluted it — registering a phantom
+ * anchor at the root, so a `$ref` naming nothing silently bound to the root
+ * schema instead of failing to resolve. Spelled out rather than importing
+ * `@amritk/helpers`' `readKey`: this package takes no `@amritk/*` dependency
+ * by design.
+ */
+const own = (schema: Record<string, unknown>, keyword: string): unknown =>
+  Object.hasOwn(schema, keyword) ? schema[keyword] : undefined
+
+/**
  * The base URI a subschema establishes through its `$id`, or the enclosing base
  * when it declares none. A draft-07-style `$id: "#name"` resolves to a bare
  * fragment and therefore establishes nothing, which the empty-string check
  * catches.
  */
 const baseAfterId = (node: Record<string, unknown>, enclosing: string): string => {
-  const id = node['$id']
+  const id = own(node, '$id')
   if (typeof id !== 'string' || id === '') return enclosing
   const resolved = resolveUri(id, enclosing)
   if (resolved === undefined) return enclosing
@@ -199,12 +212,12 @@ const walkResource = (root: object, rootBase: string, tables: RegistryTables): b
       if (!resources.has(base)) resources.set(base, node)
     }
 
-    const anchor = record['$anchor']
+    const anchor = inMap ? undefined : own(record, '$anchor')
     if (typeof anchor === 'string') {
       const key = `${base}#${anchor}`
       if (!anchors.has(key)) anchors.set(key, node)
     }
-    const dynamicAnchor = record['$dynamicAnchor']
+    const dynamicAnchor = inMap ? undefined : own(record, '$dynamicAnchor')
     if (typeof dynamicAnchor === 'string') {
       const key = `${base}#${dynamicAnchor}`
       // Per 2020-12 a `$dynamicAnchor` also creates an ordinary anchor, so a

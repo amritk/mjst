@@ -647,4 +647,23 @@ describe('collect-imports', () => {
       })
     }
   })
+
+  it('imports a $ref used as a draft-07 tuple rest element', () => {
+    // The type emitter renders `additionalItems` as `...Contact[]`, so a `$ref`
+    // there needs its import exactly as a fixed position does — and the tuple
+    // walk collected the positions but not the rest element.
+    const schema = {
+      type: 'array' as const,
+      items: [{ type: 'string' as const }],
+      additionalItems: { $ref: '#/$defs/Contact' },
+    }
+    expect(collectImports(schema)).toEqual(["import type { Contact } from './contact.js';"])
+  })
+
+  it('tolerates a malformed properties rather than throwing', () => {
+    // `properties: null` is malformed, and was ignored before — `Object.values`
+    // throws on it, which turned a bad schema into a crash out of the generator.
+    expect(collectImports({ type: 'object' as const, properties: null } as never)).toEqual([])
+    expect(collectImports({ type: 'object' as const, patternProperties: null } as never)).toEqual([])
+  })
 })

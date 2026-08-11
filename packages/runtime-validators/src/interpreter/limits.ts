@@ -423,9 +423,11 @@ const walkSchema = (schema: unknown, visit: ((source: string) => void) | null): 
     }
 
     // One pass over the node's own keys, pushing only the children worth
-    // descending into. A whole OpenAPI document goes through here on every cold
-    // build, so this stays free of per-node `Object.keys` arrays and of stack
-    // entries for the strings and numbers that make up most of a schema.
+    // descending into — no stack entries for the strings and numbers that make
+    // up most of a schema. `Object.keys` rather than a `for…in`: the walk has
+    // to see own keys only (a polluted `Object.prototype.pattern` made every
+    // schema fail screening), and `interpret.ts`'s benchmark measures the key
+    // array as cheaper than a `for…in` with a per-key `Object.hasOwn` guard.
     const record = node as Record<string, unknown>
     for (const key of Object.keys(record)) {
       const child = record[key]

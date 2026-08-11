@@ -932,14 +932,18 @@ const interpretArray = (
 
   let tuple: unknown[] | undefined
   let rest: unknown
-  if (Array.isArray(own(s, 'prefixItems'))) {
-    tuple = own(s, 'prefixItems') as unknown[]
-    rest = own(s, 'items')
-  } else if (Array.isArray(own(s, 'items'))) {
-    tuple = own(s, 'items') as unknown[]
+  // Each keyword read once — `own` is a call plus an `Object.hasOwn` call, and
+  // this runs per array validated.
+  const prefixItems = own(s, 'prefixItems')
+  const items = own(s, 'items')
+  if (Array.isArray(prefixItems)) {
+    tuple = prefixItems
+    rest = items
+  } else if (Array.isArray(items)) {
+    tuple = items
     rest = own(s, 'additionalItems')
   } else {
-    rest = own(s, 'items')
+    rest = items
   }
   const start = tuple ? tuple.length : 0
 
@@ -1336,8 +1340,9 @@ export const interpret = (
     if (ctx.failed) return
   }
 
-  if (asserts && Array.isArray(own(s, 'enum'))) {
-    const values = own(s, 'enum') as unknown[]
+  const enumValues = own(s, 'enum')
+  if (asserts && Array.isArray(enumValues)) {
+    const values = enumValues
     // Membership is memoized per schema node: an all-primitive enum resolves to a
     // `Set` for O(1) lookup instead of re-scanning `every(isPrimitiveEnumValue)`
     // and doing a linear `includes` on every validation (a 100-value enum on a hot

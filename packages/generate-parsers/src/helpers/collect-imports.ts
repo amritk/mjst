@@ -200,6 +200,9 @@ const collectImportTargets = (
       for (const item of positions) {
         collectRefsFromValue(item)
       }
+      // Draft-07's rest element. The type emitter renders it as `...Contact[]`,
+      // so a `$ref` there needs its import exactly as a fixed position does.
+      if (Object.hasOwn(record, 'additionalItems')) collectRefsFromValue(record['additionalItems'])
       typeOnlyDepth--
     }
 
@@ -303,7 +306,16 @@ const collectImportTargets = (
   }
 
   // Collect refs from properties
-  if (typeof schema === 'object' && schema !== null && Object.hasOwn(schema, 'properties')) {
+  if (
+    typeof schema === 'object' &&
+    schema !== null &&
+    Object.hasOwn(schema, 'properties') &&
+    typeof schema.properties === 'object' &&
+    schema.properties !== null
+  ) {
+    // The null check the nested branch carries: `properties: null` is malformed
+    // but was tolerated (a `for…in` over null is a no-op), and `Object.values`
+    // throws on it — turning a bad schema into a crash out of the generator.
     for (const value of Object.values(schema.properties as Record<string, unknown>)) {
       collectRefsFromValue(value)
     }
@@ -315,7 +327,13 @@ const collectImportTargets = (
   }
 
   // Collect refs from root-level patternProperties
-  if (typeof schema === 'object' && schema !== null && Object.hasOwn(schema, 'patternProperties')) {
+  if (
+    typeof schema === 'object' &&
+    schema !== null &&
+    Object.hasOwn(schema, 'patternProperties') &&
+    typeof schema.patternProperties === 'object' &&
+    schema.patternProperties !== null
+  ) {
     for (const value of Object.values(schema.patternProperties as Record<string, unknown>)) {
       collectRefsFromValue(value)
     }
@@ -337,6 +355,7 @@ const collectImportTargets = (
       if (!Array.isArray(positions)) continue
       typeOnlyDepth++
       for (const item of positions) collectRefsFromValue(item)
+      if (Object.hasOwn(record, 'additionalItems')) collectRefsFromValue(record['additionalItems'])
       typeOnlyDepth--
     }
   }

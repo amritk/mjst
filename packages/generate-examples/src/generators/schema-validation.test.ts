@@ -1,7 +1,7 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it, vi } from 'vitest'
 
-import { makeInstanceCheck, withResolvableDefs } from './schema-validation'
+import { makeInstanceCheck, needsValidationFilter, withResolvableDefs } from './schema-validation'
 
 /**
  * Two ways the validity filter can stop filtering without anyone noticing, both
@@ -139,5 +139,19 @@ describe('schema-validation', () => {
 
     expect(result).toBe(false)
     expect(warnings).toEqual([])
+  })
+
+  it('sees a hard keyword under a property named after a data keyword', () => {
+    // `example` and `default` are ordinary property names. Classifying by name
+    // alone reported "no filter needed", so the generator shipped a derived
+    // example the schema rejects.
+    for (const name of ['example', 'default', 'examples'] as const) {
+      expect(
+        needsValidationFilter({
+          type: 'object',
+          properties: { [name]: { type: 'string', not: { const: 'x' } } },
+        } as JSONSchema),
+      ).toBe(true)
+    }
   })
 })

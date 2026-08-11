@@ -30,3 +30,9 @@ which still emits the cheap scalar form where the item type allows it.
 Every key probe and keyword read in the walk is an own-property one, so a
 polluted `Object.prototype` cannot make it register an import for a definition
 the document never declared — which would name a module that was never emitted.
+
+A `$ref` used as a draft-07 tuple's rest element (`additionalItems`) is
+imported too — the type emitter renders it as `...Contact[]`, so it needs the
+import exactly as a fixed position does. And a malformed `properties: null` is
+tolerated again rather than throwing out of the generator: the switch to
+`Object.values` lost the null check that a `for…in` gave for free.
