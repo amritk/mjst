@@ -324,6 +324,12 @@ in both engines, pinned by the differential corpus:
 
 ## Roadmap / open questions
 
+- **Contract-declared caching.** Read routes declare the tags their response
+  is made of, write routes declare the tags they invalidate, and the framework
+  derives the `Cache-Tag`/`Cache-Control` headers, the Cloudflare
+  `cache.purge()` call, an OpenAPI extension, and a build-time check that the
+  invalidation graph is closed. Strategy, prior art, and the freshness tiers:
+  `docs/api-caching-plan.md`.
 - **Generated-validator integration sugar.** `mjst compile-api` now wraps
   `compileToModule`; the remaining sugar is a mode that also emits a
   ready-made `compile` function (schema-identity → generated validator),
