@@ -244,14 +244,110 @@ every post is one operation; enumerating them is five hundred.
    rule is *high fan-in, coarsen*: tag large collections with the type tag
    rather than enumerating members.
 
-#### Why not declare the entity graph
+### The dependency graph: observed, not declared
 
-`defineEntityGraph({ post: { parents: ['author'] } })` is appealing, but the
-framework cannot expand `post:123` into `author:9` without reading data it has
-no access to. The graph is worth having as a lint (does every emitted tag have
-a purger, and vice versa — a write tag no read ever emits is a silent no-op
-that still costs rate limit) and as a generated report. It is not a runtime
-mechanism. Same conclusion as the cache manifest: an output, not an input.
+The tag set on a response *is* a dependency edge list, and Cloudflare
+maintains the inverted index from tag to cache entry. So the graph already
+exists; the only question is where its edges come from. There are two
+candidates, and they are not interchangeable:
+
+- **The type graph** (static) — `post → author → org`. Which *kinds* of entity
+  depend on which. Declarable at build time.
+- **The instance graph** (dynamic) — `post:123 → author:9 → org:4`. Which
+  *specific* entities depend on which. Knowable only from data.
+
+A declared type graph cannot expand `post:123` into `author:9`; the framework
+has no data access. But that is an argument against *declaration*, not against
+a runtime graph — and the runtime option is the stronger of the two.
+
+#### Why declaration is the wrong source
+
+Rank how a cache actually goes bad:
+
+| failure | caught by a declared graph? |
+|:--|:--|
+| **Missing tag** — the response read entity X and never tagged X | **no** |
+| Missing purger — a tag is emitted that no write route purges | yes (closure check) |
+| Drift — read emits `post:123`, write purges `posts:123` | yes |
+| Stale set, propagation lag, purge failure | n/a — covered above |
+| Re-parenting — the old parent is never purged | partly |
+
+The first row is the one that produces permanent staleness in the field, and
+declaration is powerless against it. Declaring that a post depends on an
+author does nothing if the handler never emits `author:9`. Declarations record
+intent; bad caches live in the gap between intent and what the code actually
+read.
+
+#### Derive tags from data access
+
+```typescript
+const api = createApi({
+  routes,
+  context: ({ executionContext }) => ({
+    db: trackDependencies(db, executionContext),
+  }),
+})
+```
+
+Every `db.post(123)` records `post:123`, every `db.author(9)` records
+`author:9`, and the framework emits the union as `Cache-Tag` when the response
+is built. The handler is never asked to remember its dependencies, so it
+cannot forget them — missing tags become structurally impossible for anything
+that flows through the tracked accessor.
+
+This is where the mature systems converge: Next.js attaches `cacheTag()`
+during render, normalized client caches record the ids a query touched, TAO
+records the association on read, and Rails' nested `cache` block *is* the
+dependency record. None of them ask the author to restate it.
+
+Two consequences worth naming:
+
+- **Re-parenting resolves itself** when the write handler reads before it
+  updates — the accessor captures the old parent on the way past.
+- **Negative caching needs misses recorded too.** A 404 for `post:999` depends
+  on post 999 *not* existing, so the accessor must record the key it looked
+  for even when it finds nothing, or creating that post will never bust the
+  404.
+
+The declared type graph keeps a role, demoted to **verifier**: assert in
+development and tests that the observed tag set matches the declared shape.
+Declaration checks observation; observation produces the tags. It also still
+drives the closure lint (every emitted tag has a purger; every purged tag has
+an emitter — a write tag no read ever emits is a silent no-op that still
+spends rate limit) and the generated cache-graph report.
+
+#### Where "never bad" actually ends
+
+Tracking makes entity-keyed reads safe. It does not make everything safe, and
+the honest design refuses to cache the rest rather than pretending:
+
+- **Aggregates.** "47 posts this week" depends on a query, not an entity —
+  there is no id to tag. Coarsen to the type tag and purge on any write of
+  that type, or leave it uncached.
+- **Time windows.** "The last hour" depends on the clock. No tag can express
+  it; only a TTL bounds it.
+- **List membership.** `/posts?page=1` depends on which posts exist and in
+  what order. Member tags do not cover *the set* — that needs the collection
+  tag.
+- **Untracked reads.** Raw SQL, a `fetch()` to another service, a handler's
+  own memo. Invisible to the tracker, and therefore invisible to invalidation.
+
+The last one has a type-level answer that fits this package's grain: a
+cacheable route's context exposes **only** the tracked handle, so reaching for
+the raw client is a type error rather than a code-review note.
+
+#### Prove it: shadow auditing
+
+Design buys correctness for the failure modes we modelled. Nothing buys
+unknown-unknowns except measurement. Sample a small fraction of cache hits,
+re-run the handler under `waitUntil`, and diff the result against what was
+served; on a mismatch, log loudly, purge the entry, and alert.
+
+That turns "never stale" from a claim into a measured error rate with a
+dashboard behind it, and it is the only mechanism here that catches a
+dependency nobody thought to model. It costs a few percent of origin traffic.
+Given that the whole document is built around a guarantee, it should be
+treated as part of the feature rather than an operational extra.
 
 ### Default deny
 
