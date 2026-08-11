@@ -1,5 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { DATA_KEYWORDS, entersSchemaMap, isDataPosition } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { readKey } from './read-key'
 
@@ -39,20 +40,20 @@ export const resolveDynamicRefs = (schema: JSONSchema, dynamicRefMap: Record<str
 
   const clone = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>
 
-  const walk = (obj: unknown, depth: number): void => {
+  const walk = (obj: unknown, depth: number, inSchemaMap = false): void => {
     assertSchemaDepth(depth, 'resolveDynamicRefs')
     if (typeof obj !== 'object' || obj === null) {
       return
     }
 
     if (Array.isArray(obj)) {
-      for (const item of obj) walk(item, depth + 1)
+      for (const item of obj) walk(item, depth + 1, inSchemaMap)
       return
     }
 
     const record = obj as Record<string, unknown>
 
-    const dynamicRef = readKey(record, '$dynamicRef')
+    const dynamicRef = inSchemaMap ? undefined : readKey(record, '$dynamicRef')
     if (typeof dynamicRef === 'string') {
       // `readKey`, not a bare index: the map is keyed by author-chosen anchor
       // names, so `$dynamicRef: "toString"` otherwise resolved to a `Function`
@@ -68,8 +69,12 @@ export const resolveDynamicRefs = (schema: JSONSchema, dynamicRefMap: Record<str
       delete record['$dynamicRef']
     }
 
+    // A `$dynamicRef` inside a `default`/`enum`/`example(s)` value is part of
+    // that value: rewriting it changed the literal the author wrote (key
+    // deleted, `$ref` added), and an unmatched one failed the build outright.
     for (const key of Object.keys(record)) {
-      walk(record[key], depth + 1)
+      if (isDataPosition(key, inSchemaMap)) continue
+      walk(record[key], depth + 1, entersSchemaMap(key, inSchemaMap))
     }
   }
 
@@ -87,6 +92,9 @@ const containsDynamicRef = (value: unknown, depth: number): boolean => {
   }
   const record = value as Record<string, unknown>
   if (typeof readKey(record, '$dynamicRef') === 'string') return true
-  for (const key of Object.keys(record)) if (containsDynamicRef(record[key], depth + 1)) return true
+  for (const key of Object.keys(record)) {
+    if (DATA_KEYWORDS.has(key)) continue
+    if (containsDynamicRef(record[key], depth + 1)) return true
+  }
   return false
 }

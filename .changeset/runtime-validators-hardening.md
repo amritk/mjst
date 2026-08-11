@@ -1,6 +1,14 @@
 ---
-'@amritk/runtime-validators': patch
+'@amritk/runtime-validators': minor
 ---
+
+**Behavior change:** an inherited property no longer counts as present. A value
+built over a prototype — `Object.create(defaults)`, or a class instance —
+previously satisfied `required` and had its inherited keys validated against
+`properties`; it no longer does, which is what the own-key sweeps
+(`minProperties`, `additionalProperties`, `unevaluatedProperties`) always
+believed. JSON-derived values, which is what a JSON Schema validator normally
+sees, are unaffected.
 
 Answer "does the instance have this property?" one way, and stop reading
 schemas off the prototype chain.

@@ -1,5 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { entersSchemaMap, isDataPosition } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { readKey } from './read-key'
 
@@ -47,7 +48,7 @@ const isResolvableRef = (ref: string): boolean => {
 export const extractRefs = (schema: JSONSchema): Set<string> => {
   const refs = new Set<string>()
 
-  const traverse = (obj: unknown, depth: number): void => {
+  const traverse = (obj: unknown, depth: number, inSchemaMap = false): void => {
     assertSchemaDepth(depth, 'extractRefs')
     if (typeof obj !== 'object' || obj === null) {
       return
@@ -55,20 +56,24 @@ export const extractRefs = (schema: JSONSchema): Set<string> => {
 
     if (Array.isArray(obj)) {
       for (const item of obj) {
-        traverse(item, depth + 1)
+        traverse(item, depth + 1, inSchemaMap)
       }
       return
     }
 
     const record = obj as Record<string, unknown>
 
-    if (typeof readKey(record, '$ref') === 'string' && isResolvableRef(record['$ref'] as string)) {
+    if (!inSchemaMap && typeof readKey(record, '$ref') === 'string' && isResolvableRef(record['$ref'] as string)) {
       refs.add(record['$ref'] as string)
     }
 
-    // Recursively traverse all properties using for...in to avoid intermediate array allocation
+    // A `$ref` inside a `default`/`enum`/`const`/`example(s)` value belongs to
+    // the value, not the schema — collecting it marked a definition reachable
+    // that nothing references, and made `walkRefGraph` fail the build outright
+    // when the ref-shaped literal named nothing.
     for (const key of Object.keys(record)) {
-      traverse(record[key], depth + 1)
+      if (isDataPosition(key, inSchemaMap)) continue
+      traverse(record[key], depth + 1, entersSchemaMap(key, inSchemaMap))
     }
   }
 

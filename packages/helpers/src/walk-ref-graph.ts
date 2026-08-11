@@ -278,13 +278,21 @@ const getRootCache = (rootSchema: JSONSchema, schemas: Readonly<Record<string, u
 }
 
 /** True when the document points at its own root — `$ref: "#"` (or `"#/"`) anywhere inside it. */
-const referencesRoot = (value: unknown): boolean => {
+const referencesRoot = (value: unknown, inSchemaMap = false): boolean => {
   if (typeof value !== 'object' || value === null) return false
-  if (Array.isArray(value)) return value.some(referencesRoot)
+  if (Array.isArray(value)) return value.some((item) => referencesRoot(item, inSchemaMap))
   const record = value as Record<string, unknown>
-  const ref = readKey(record, '$ref')
-  if (ref === ROOT_POINTER || ref === '#/') return true
-  for (const key of Object.keys(record)) if (referencesRoot(record[key])) return true
+  // Instance data is skipped: a `default: { "$ref": "#" }` is a documented
+  // config value, and counting it grafted a full self-copy of the root
+  // document into `$defs` — doubling every artifact generated from it.
+  if (!inSchemaMap) {
+    const ref = readKey(record, '$ref')
+    if (ref === ROOT_POINTER || ref === '#/') return true
+  }
+  for (const key of Object.keys(record)) {
+    if (isDataPosition(key, inSchemaMap)) continue
+    if (referencesRoot(record[key], entersSchemaMap(key, inSchemaMap))) return true
+  }
   return false
 }
 

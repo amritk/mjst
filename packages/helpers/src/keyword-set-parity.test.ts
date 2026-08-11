@@ -47,6 +47,11 @@ const COPIES: ReadonlyArray<{ file: string; data: string; maps?: string }> = [
     maps: 'SCHEMA_MAPS',
   },
   {
+    file: '../../runtime-validators/src/interpreter/resolve-local-ref.ts',
+    data: 'DATA_KEYWORDS',
+    maps: 'SCHEMA_MAPS',
+  },
+  {
     file: '../../generate-markdown/src/index.ts',
     data: 'DATA_KEYWORDS',
     maps: 'SCHEMA_MAP_KEYWORDS',

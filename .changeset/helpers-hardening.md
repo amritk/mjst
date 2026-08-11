@@ -45,6 +45,17 @@ resolved to the root schema instead of failing; with `Object.prototype.$ref`,
 is copied into generated output and runs on untrusted input — swept with
 `for…in`, so a parsed record came back carrying properties the input never had.
 
+**A ref-shaped value inside a data keyword stays a value.** `extractRefs`
+collected `$ref`s out of `default`/`enum`/`example(s)`, so `walkRefGraph`
+failed the build when the literal named nothing and emitted a spurious file
+when it did; `resolveDynamicRefs` rewrote such a literal (key deleted, `$ref`
+added) or threw on an unmatched one; `rewriteRefs` rewrote it during the
+draft-07 upgrade, which for an `enum` member means an instance equal to a
+declared member is then rejected; and `referencesRoot` counted a
+`default: { "$ref": "#" }` as a real root reference, grafting a full self-copy
+of the document into `$defs`. `data-position.test.ts` now runs every walker
+against every data keyword.
+
 **Lookups no longer resolve against `Object.prototype`.** `resolveRef` returned
 `Object.prototype` for `__proto__` as though the document had declared it (and
 `walkRefGraph` emitted a file for it); `$dynamicRef: "toString"` resolved to a

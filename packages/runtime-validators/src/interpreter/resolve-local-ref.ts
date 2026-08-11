@@ -88,6 +88,25 @@ export const walkJsonPointer = (start: unknown, pointer: string, visit?: (node: 
   return current
 }
 
+/**
+ * Keywords whose value is instance data, and keywords whose value is a map of
+ * author-chosen names to schemas.
+ *
+ * Kept in step by hand with `@amritk/helpers`' `DATA_KEYWORDS`/`SCHEMA_MAPS`:
+ * this package takes no `@amritk/*` dependency by design. The parity test in
+ * that package reads these declarations, so a drift fails a test.
+ */
+const DATA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples', 'example'])
+
+const SCHEMA_MAPS = new Set([
+  'properties',
+  'patternProperties',
+  '$defs',
+  'definitions',
+  'dependentSchemas',
+  'dependencies',
+])
+
 /** Anchor keywords a plain `#name` fragment may bind to (see {@link resolveLocalRef}). */
 const ANCHOR_KEYWORDS = ['$anchor', '$dynamicAnchor'] as const
 
@@ -108,14 +127,27 @@ const ANCHOR_KEYWORDS = ['$anchor', '$dynamicAnchor'] as const
  */
 export const findAnchor = (node: unknown, name: unknown, keywords: readonly string[], seen: Set<object>): unknown => {
   const stack: unknown[] = [node]
+  // Whether each queued node is a name-to-schema map rather than a schema. Both
+  // stacks pop together, before any early `continue`, since they index one
+  // another.
+  const inMaps: boolean[] = [false]
 
   while (stack.length > 0) {
     const current = stack.pop()
+    const inMap = inMaps.pop() as boolean
     if (current === null || typeof current !== 'object' || seen.has(current)) continue
     seen.add(current)
 
     const record = current as Record<string, unknown>
-    if (!Array.isArray(current)) {
+    if (Array.isArray(current)) {
+      // An element inherits its array's position.
+      for (let i = current.length - 1; i >= 0; i--) {
+        stack.push(current[i])
+        inMaps.push(inMap)
+      }
+      continue
+    }
+    if (!inMap) {
       // `Object.hasOwn` first: schemas arrive at runtime, and a bare
       // `record[keyword]` answers from `Object.prototype`. With
       // `Object.prototype.$anchor = 'ghost'` set by any dependency, the first
@@ -126,8 +158,18 @@ export const findAnchor = (node: unknown, name: unknown, keywords: readonly stri
       }
     }
 
+    // An `$anchor` inside a `default`/`enum`/`const`/`example(s)` value is part
+    // of a value the schema describes, not a declaration — so a `#name` ref
+    // bound to it and validated against an accept-anything object. The keys of
+    // a `properties`-style map are names, where the same words are not
+    // keywords, so the walk stays inside those.
     const keys = Object.keys(record)
-    for (let i = keys.length - 1; i >= 0; i--) stack.push(record[keys[i] as string])
+    for (let i = keys.length - 1; i >= 0; i--) {
+      const key = keys[i] as string
+      if (!inMap && DATA_KEYWORDS.has(key)) continue
+      stack.push(record[key])
+      inMaps.push(!inMap && SCHEMA_MAPS.has(key))
+    }
   }
 
   return undefined

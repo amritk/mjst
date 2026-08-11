@@ -34,16 +34,28 @@ export const isDraft07Schema = (schema: Record<string, unknown>): boolean =>
  * Rewrites `$ref` values in a schema tree using an explicit string→string map.
  * Also rewrites bare `$ref: "#"` to the given `selfRef` path when provided.
  */
-const rewriteRefs = (obj: unknown, refMap: ReadonlyMap<string, string>, selfRef?: string, depth = 0): unknown => {
+const rewriteRefs = (
+  obj: unknown,
+  refMap: ReadonlyMap<string, string>,
+  selfRef?: string,
+  depth = 0,
+  inSchemaMap = false,
+): unknown => {
   assertSchemaDepth(depth, 'upgradeDraft07Schema')
   if (typeof obj !== 'object' || obj === null) return obj
-  if (Array.isArray(obj)) return obj.map((item) => rewriteRefs(item, refMap, selfRef, depth + 1))
+  if (Array.isArray(obj)) return obj.map((item) => rewriteRefs(item, refMap, selfRef, depth + 1, inSchemaMap))
 
   const record = obj as Record<string, unknown>
   const result: Record<string, unknown> = {}
 
+  // Instance data is copied verbatim. Rewriting a `$ref` inside a `default`,
+  // `enum` or `example(s)` changed the literal the author wrote — and for an
+  // `enum` member that means an instance equal to a declared member is now
+  // rejected, because the member itself moved.
   for (const [key, value] of Object.entries(record)) {
-    if (key === '$ref' && typeof value === 'string') {
+    if (isDataPosition(key, inSchemaMap)) {
+      assignKey(result, key, value)
+    } else if (!inSchemaMap && key === '$ref' && typeof value === 'string') {
       if (refMap.has(value)) {
         assignKey(result, key, refMap.get(value))
       } else if (value === '#' && selfRef) {
@@ -52,7 +64,7 @@ const rewriteRefs = (obj: unknown, refMap: ReadonlyMap<string, string>, selfRef?
         assignKey(result, key, value)
       }
     } else {
-      assignKey(result, key, rewriteRefs(value, refMap, selfRef, depth + 1))
+      assignKey(result, key, rewriteRefs(value, refMap, selfRef, depth + 1, entersSchemaMap(key, inSchemaMap)))
     }
   }
 
