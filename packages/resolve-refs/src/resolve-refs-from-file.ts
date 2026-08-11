@@ -643,10 +643,20 @@ const rebaseKeptRefs = (node: unknown, from: string, root: string, role: NodeRol
       }
       continue
     }
+    // `detach` hands a non-plain-prototype object back by reference (there is
+    // no general clone for one), and that object may live in the process-wide
+    // remote-document cache. Writing a rebased `$ref` into it would rewrite the
+    // cached document for every later resolve in the process — which would then
+    // rebase it a second time, against a different root. A class instance is
+    // not a schema node anyway, so the walk stops at one.
+    const prototype: unknown = Object.getPrototypeOf(current_)
+    if (prototype !== Object.prototype && prototype !== null) continue
     const obj = current_ as Record<string, unknown>
     const isSchema = currentRole !== 'schemaMap'
     for (const [key, value] of Object.entries(obj)) {
-      if (isSchema && (key === '$ref' || key === '$dynamicRef') && typeof value === 'string') {
+      // `$ref` only: see the `keepUnresolved` path for why an anchor-form
+      // `$dynamicRef` must not be qualified with a document.
+      if (isSchema && key === '$ref' && typeof value === 'string') {
         assignKey(obj, key, rebaseKeptRef(value, from, root))
       } else {
         stack.push({ value, role: childRole(currentRole, key) })
@@ -1056,7 +1066,11 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
           if (key === keyword) continue
           assignKey(kept, key, resolveAt(obj[key], baseLocation, nodeBase, depth + 1, childRole(role, key)))
         }
-        assignKey(kept, keyword, rebaseKeptRef(value, baseLocation, rootLocation))
+        // Only `$ref` is rebased. `$dynamicRef` and `$recursiveRef` are anchor
+        // names, not locations — `#meta` is the whole legal spelling — so
+        // qualifying one with a document turns a soft kept reference into a
+        // value no consumer can resolve (`@amritk/helpers` throws outright).
+        assignKey(kept, keyword, keyword === '$ref' ? rebaseKeptRef(value, baseLocation, rootLocation) : value)
         return kept
       }
       if (cached === MISSING) return keepUnresolved()

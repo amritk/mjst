@@ -1320,6 +1320,46 @@ describe('validate', () => {
     })
   })
 
+  describe('presence is own-property membership, everywhere that asks', () => {
+    // Every keyword that asks "does the instance have this key?" has to answer
+    // the same way as `minProperties` / `additionalProperties` /
+    // `unevaluatedProperties`, which sweep the instance's own keys. An
+    // inherited value used to say yes, so an object serializing to `{}`
+    // satisfied `required` while every sweep agreed it had no properties.
+    const inherited = (): Record<string, unknown> => Object.create({ token: 'x' }) as Record<string, unknown>
+
+    it('required with a properties entry', () => {
+      const validator = validate({ type: 'object', properties: { token: {} }, required: ['token'] })
+      expect(validator(inherited())).not.toBe(true)
+    })
+
+    it('required with no properties entry', () => {
+      expect(validate({ type: 'object', required: ['token'] })(inherited())).not.toBe(true)
+    })
+
+    it('dependentRequired does not fire on an inherited trigger', () => {
+      const validator = validate({ type: 'object', dependentRequired: { token: ['billing'] } })
+      expect(validator(inherited())).toBe(true)
+    })
+
+    it('dependentSchemas does not apply on an inherited trigger', () => {
+      const validator = validate({ type: 'object', dependentSchemas: { token: { required: ['billing'] } } })
+      expect(validator(inherited())).toBe(true)
+    })
+
+    it('properties does not validate an inherited value', () => {
+      const validator = validate({ type: 'object', properties: { token: { type: 'number' } } })
+      expect(validator(inherited())).toBe(true)
+    })
+
+    it('agrees with the own-key sweeps about an empty object', () => {
+      const value = inherited()
+      expect(Object.keys(value)).toEqual([])
+      expect(validate({ type: 'object', maxProperties: 0 })(value)).toBe(true)
+      expect(validate({ type: 'object', additionalProperties: false })(value)).toBe(true)
+    })
+  })
+
   describe('a format naming a prototype member', () => {
     // The spec says an unrecognized format is ignored. Reading it straight off
     // the checks table found `Function.prototype.toString` instead — truthy,

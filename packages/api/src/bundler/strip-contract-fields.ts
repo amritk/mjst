@@ -377,6 +377,22 @@ const NAME = 'defineContract'
 const REGEX_START = new Set([...REGEX_PRECEDING].filter((char) => char !== '<'))
 
 /**
+ * Whether `[from, to)` contains `defineContract`.
+ *
+ * Bounded on purpose. `slice(...).includes(...)` copies the candidate body, and
+ * a plain `indexOf` runs to the end of the module when there is no later match
+ * — both paid on every `/` the scanner guesses at, in a transform documented as
+ * running over every module in a bundle. This scans the candidate and nothing
+ * beyond it.
+ */
+const spansName = (source: string, from: number, to: number): boolean => {
+  for (let index = from; index <= to - NAME.length; index++) {
+    if (source.startsWith(NAME, index)) return true
+  }
+  return false
+}
+
+/**
  * Finds the next `defineContract` sitting in code position, starting from an
  * index that is itself in code position. Returns its start index, or -1.
  *
@@ -423,11 +439,7 @@ const nextCallSite = (source: string, from: number): number => {
       // string or template must be skipped, which is the opposite rule, and no
       // single test tells the two apart (see the note above).
       const end = scanRegex(source, index)
-      // `indexOf` against the end, not `slice(...).includes(...)`: the slice
-      // copies the whole candidate body on every `/` the scanner guesses at,
-      // in a transform that runs over every module in a bundle.
-      const at = end === null ? -1 : source.indexOf(NAME, index)
-      index = end === null || (at !== -1 && at < end) ? index + 1 : end
+      index = end === null || spansName(source, index, end) ? index + 1 : end
       previous = '0'
     } else if (char === 'd' && source.startsWith(NAME, index)) {
       return index

@@ -7,7 +7,7 @@ the resolved output instead of being inlined. Code that fed a resolved document
 straight into a generator and relied on a refused ref becoming `{}` (or
 vanishing) will now see an unresolved `$ref` there — which is the point: the
 old shapes silently dropped every constraint on the referencing node, or
-replaced it with a schema that accepts anything. `errors` is unchanged.
+replaced it with a schema that accepts anything. `errors` is unchanged. Note that a ref the SSRF or `allowedRoots` guard refused stays in the output too — the guard is this resolver's, so handing the result to a second, unguarded resolver reopens the question it answered.
 
 Fix four ways a resolve could hand back a document that is wrong rather than
 incomplete.

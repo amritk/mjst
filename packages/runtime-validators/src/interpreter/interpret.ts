@@ -591,48 +591,30 @@ type ObjectMeta = {
   dependentSchemasEntries: [string, unknown][] | null
   /** Draft-07 `dependencies` as entries — see {@link ObjectMeta.dependentRequiredEntries}. */
   dependenciesEntries: [string, unknown][] | null
-  /**
-   * True when none of this node's declared/required keys is a name inherited from
-   * `Object.prototype` (`constructor`, `toString`, `__proto__`, …). For such keys
-   * presence can be tested with the cheap `obj[key] !== undefined` — a JSON object
-   * never inherits them — instead of the slower `Object.hasOwn`. Only a schema
-   * that actually declares a prototype-member key pays the `hasOwn` cost.
-   */
-  safeKeys: boolean
 }
 
 /**
- * Names reachable on a plain object via its prototype chain, for which a bare
- * `obj[key]` read could return an inherited value and wrongly report presence.
- */
-const PROTO_MEMBER_NAMES = new Set<string>([
-  '__proto__',
-  'constructor',
-  'prototype',
-  'toString',
-  'toLocaleString',
-  'valueOf',
-  'hasOwnProperty',
-  'isPrototypeOf',
-  'propertyIsEnumerable',
-  '__defineGetter__',
-  '__defineSetter__',
-  '__lookupGetter__',
-  '__lookupSetter__',
-])
-
-/**
- * Uniform property-presence test, matching how `required`/`properties` decide a
- * key is present (Ajv's default `!== undefined`, so `{ a: undefined }` counts as
- * absent). A prototype-member name is checked with `Object.hasOwn` so an inherited
- * `toString`/`constructor` is never mistaken for a real property. Used by the
- * presence-gated dependency keywords (`dependentRequired`, `dependentSchemas`,
- * `dependencies`) so they agree with `required`/`properties` instead of splitting
- * between `!== undefined` and `hasOwn`. (`required` itself keeps its precomputed
- * `safeKeys` fast path, which is equivalent to this for its declared keys.)
+ * The property-presence test, used by every keyword that asks the question:
+ * `required`, `properties`, and the presence-gated dependency keywords
+ * (`dependentRequired`, `dependentSchemas`, `dependencies`). Presence is
+ * own-property membership *and* a defined value — Ajv's rule, so
+ * `{ a: undefined }` counts as absent.
+ *
+ * This was a `!== undefined` read with a precomputed exemption for the standard
+ * `Object.prototype` names, and it kept being wrong in a new way: an inherited
+ * value from `Object.create({ token: 'x' })`, then a polluted `Object.prototype`
+ * carrying a name the exemption list does not know, then the two call sites the
+ * narrowing fixes missed. Each round it disagreed with `minProperties`,
+ * `additionalProperties` and `unevaluatedProperties`, which sweep the
+ * instance's own keys — so an object serializing to `{}` satisfied
+ * `required: ['token']` while every other keyword agreed it had no properties.
+ *
+ * `Object.hasOwn` answers it outright. It costs a call per *declared* key —
+ * the schema's, not the instance's, so a handful — against a class of bug that
+ * has now recurred three times. One rule, no exemption list to keep correct.
  */
 const hasProperty = (obj: Record<string, unknown>, key: string): boolean =>
-  PROTO_MEMBER_NAMES.has(key) ? Object.hasOwn(obj, key) : obj[key] !== undefined
+  Object.hasOwn(obj, key) && obj[key] !== undefined
 
 /**
  * Memoized enum membership. An all-primitive enum resolves to a `Set` (SameValueZero,
@@ -697,9 +679,6 @@ const getObjectMeta = (s: Record<string, unknown>): ObjectMeta => {
         : null,
       dependentSchemasEntries: dependentSchemas ? Object.entries(dependentSchemas) : null,
       dependenciesEntries: dependencies ? Object.entries(dependencies) : null,
-      safeKeys:
-        (knownKeys === undefined || knownKeys.every((k) => !PROTO_MEMBER_NAMES.has(k))) &&
-        required.every((k) => !PROTO_MEMBER_NAMES.has(k)),
     }
     objectMetaCache.set(s, meta)
   }
@@ -720,11 +699,7 @@ const interpretObject = (
   const obj = value as Record<string, unknown>
 
   const meta = getObjectMeta(s)
-  const { properties, knownKeys, escapedKeys, requiredSet, safeKeys } = meta
-  // See the presence check below: the schema half of that question is
-  // `safeKeys`, the instance half is whether this object inherits anything.
-  const prototype: unknown = Object.getPrototypeOf(obj)
-  const fastPresence = safeKeys && (prototype === Object.prototype || prototype === null)
+  const { properties, knownKeys, escapedKeys, requiredSet } = meta
   const emitErrors = ctx.emitErrors
   // `required`, `dependentRequired` and the property-count bounds are
   // validation-vocabulary; `properties`, `patternProperties`,
@@ -740,21 +715,10 @@ const interpretObject = (
   if (properties && knownKeys && escapedKeys) {
     for (let i = 0; i < knownKeys.length; i++) {
       const key = knownKeys[i] as string
-      // Read the value once and reuse it. Presence is own-property membership:
-      // `Object.hasOwn` is authoritative but has call overhead, so the cheap
-      // `pv !== undefined` is used wherever it is equivalent.
-      //
-      // It is equivalent on exactly two conditions, both settled before the
-      // loop: no declared key is a prototype member (`safeKeys`, per schema),
-      // and the instance inherits nothing (`plain`, one prototype read per
-      // object). Without the second, `Object.create({ token: 'x' })` reported
-      // `token` present — so a value that serializes to `{}` satisfied
-      // `required: ['token']` while `maxProperties: 0` and
-      // `additionalProperties: false`, which sweep the instance's own keys,
-      // both agreed it had none. One read per object rather than one `hasOwn`
-      // per key keeps the fast path cheap for the shape that has it.
+      // Read the value once and reuse it; `hasProperty` is the single rule
+      // every presence-asking keyword in this file shares.
       const pv = obj[key]
-      const present = fastPresence ? pv !== undefined : Object.hasOwn(obj, key)
+      const present = hasProperty(obj, key)
       if (requiredSet.has(key)) {
         if (!present) {
           if (asserts) fail(ctx, `must have required property '${key}'`, path)
@@ -775,7 +739,7 @@ const interpretObject = (
   // Required keys with no `properties` entry still need a presence check.
   if (asserts) {
     for (const key of meta.requiredNotInProps) {
-      if (safeKeys ? obj[key] === undefined : !Object.hasOwn(obj, key)) {
+      if (!hasProperty(obj, key)) {
         fail(ctx, `must have required property '${key}'`, path)
         if (ctx.failed) return
       }

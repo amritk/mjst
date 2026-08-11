@@ -1467,7 +1467,12 @@ const emitDispatch = (
   // synchronous throw into a rejection on its own); unhooked ones export a
   // thin wrapper below that does the same by hand, so the dispatch itself is
   // private in both shapes.
-  const dispatchName = hooked ? 'handleFetch' : 'dispatchFetch'
+  //
+  // The names are prefixed because the emitted module imports the app's own
+  // exports unaliased: an app exporting `dispatchFetch` and wiring it as a
+  // mount or hook would otherwise produce a module declaring that name twice,
+  // failing to load with a `SyntaxError` that points at nothing.
+  const dispatchName = hooked ? 'mjstHandleFetch' : 'mjstDispatchFetch'
   // With an observer, every route invocation flows through `observed`, which
   // times the route function (validation + handler + serialization — the
   // same span the runtime engine measures) and reports the outcome status.
@@ -1762,7 +1767,7 @@ const emitDispatch = (
     }
   }
   lines.push(
-    `  return ${finish(`await handleFetch(request, locals${emitContext.needsPlatform ? ', env, executionContext' : ''})`)}`,
+    `  return ${finish(`await mjstHandleFetch(request, locals${emitContext.needsPlatform ? ', env, executionContext' : ''})`)}`,
     '}',
   )
   return lines

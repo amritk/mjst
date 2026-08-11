@@ -1214,4 +1214,17 @@ describe('resolve-refs-from-file', () => {
 
     expect(JSON.stringify(resolved)).toContain('./sub/b.json#/$defs/Thing')
   })
+
+  it('leaves a kept $dynamicRef as the anchor name it is', async () => {
+    // `#meta` is the whole legal spelling of an anchor-form `$dynamicRef`.
+    // Qualifying it with a document — as a `$ref` correctly gets — produces a
+    // value no consumer can resolve: `@amritk/helpers` throws on it outright.
+    mkdirSync(join(dir, 'sub'))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: './sub/b.json' } }))
+    writeFileSync(join(dir, 'sub', 'b.json'), JSON.stringify({ x: { $dynamicRef: '#meta' } }))
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'))
+
+    expect(resolved).toEqual({ a: { x: { $dynamicRef: '#meta' } } })
+  })
 })

@@ -37,7 +37,10 @@ export const normalizeDraftTuples = (node: unknown): void => {
   walkSchema(node, (obj) => {
     if (!Array.isArray(obj['items'])) return
     obj['prefixItems'] = obj['items']
-    if ('additionalItems' in obj) {
+    // `Object.hasOwn`, not `in`: with `Object.prototype.additionalItems` set by
+    // any dependency, a closed draft-07 tuple would take the rest-element
+    // branch and come out open.
+    if (Object.hasOwn(obj, 'additionalItems')) {
       // A rest element — its schema (or `false`) becomes `items`.
       obj['items'] = obj['additionalItems']
       delete obj['additionalItems']
@@ -66,6 +69,9 @@ export const enforceTupleLength = (node: unknown): void => {
     if (typeof obj['minItems'] !== 'number') obj['minItems'] = obj['prefixItems'].length
     // No `items` keyword means no rest element: the array may not exceed the
     // fixed tuple, so forbid additional items.
-    if (!('items' in obj)) obj['items'] = false
+    // Likewise: a polluted `items` would make every tuple look like it had a
+    // rest element, so `items: false` was never written and extras slipped
+    // through — the exact under-validation this function closes.
+    if (!Object.hasOwn(obj, 'items')) obj['items'] = false
   })
 }
