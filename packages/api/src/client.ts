@@ -59,6 +59,8 @@ export type {
   BodyType,
   Contract,
   HttpMethod,
+  RefineInput,
+  RefineIssue,
   ResponseContract,
   ResponseContracts,
 } from './types'
