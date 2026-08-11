@@ -284,4 +284,50 @@ describe('strip-contract-fields', () => {
     const contracts = evaluateContracts(`exports.c = ${stripContractFields(source).slice('const c = '.length)}`)
     expect(contracts['c']).toEqual({ method: 'get', path: '/x', responses: { 200: {} } })
   })
+
+  it('leaves a call site quoted inside a string or template alone', () => {
+    // A docs page holding a usage sample as data. Rewriting it would edit the
+    // string's value — the sample would render missing the very fields it
+    // exists to show — with nothing anywhere to trace the change back to.
+    const source = [
+      'export const sample = `',
+      "defineContract({ method: 'get', path: '/x', responses: { 200: {} }, summary: 'shown' })",
+      '`',
+      "export const inline = \"defineContract({ method: 'get', path: '/y', summary: 'shown' })\"",
+    ].join('\n')
+    expect(stripContractFields(source)).toBe(source)
+  })
+
+  it('leaves a call site shown in a comment alone', () => {
+    const source = [
+      "// defineContract({ method: 'get', path: '/y', responses: { 200: {} }, summary: 'shown' })",
+      '/*',
+      " * defineContract({ method: 'get', path: '/z', responses: { 200: {} }, summary: 'shown' })",
+      ' */',
+    ].join('\n')
+    expect(stripContractFields(source)).toBe(source)
+  })
+
+  it('still strips a real call site that follows a quoted one', () => {
+    // The scan has to resume in code position after skipping the literal, or
+    // guarding against strings would quietly disable the transform.
+    const source = [
+      "export const sample = `defineContract({ summary: 'kept' })`",
+      "export const real = defineContract({ method: 'get', path: '/x', responses: { 200: {} }, summary: 'gone' })",
+    ].join('\n')
+    const stripped = stripContractFields(source)
+    expect(stripped).toContain("summary: 'kept'")
+    expect(stripped).not.toContain("summary: 'gone'")
+    expect(evaluateContracts(stripped)['real']).toEqual({ method: 'get', path: '/x', responses: { 200: {} } })
+  })
+
+  it('keeps scanning past an apostrophe in JSX text', () => {
+    // `.tsx` is a scannable id, and JSX text is not a string literal — a bare
+    // apostrophe there must not strand the rest of the module unstripped.
+    const source = [
+      "const label = <p>don't stop</p>",
+      "export const real = defineContract({ method: 'get', path: '/x', responses: { 200: {} }, summary: 'gone' })",
+    ].join('\n')
+    expect(stripContractFields(source)).not.toContain("summary: 'gone'")
+  })
 })

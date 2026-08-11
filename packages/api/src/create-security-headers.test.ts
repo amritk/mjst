@@ -3,8 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { createSecurityHeaders } from './create-security-headers'
 
 const decorate = (decorator: ReturnType<typeof createSecurityHeaders>, response = new Response(null)): Response => {
-  decorator(response, new Request('http://localhost/'), {})
-  return response
+  // The decorator hands back the response to stamp — the same one when its
+  // headers were already writable, a clone when they were not — so the
+  // assertions have to read whichever came back, not the input.
+  const stamped = decorator(response, new Request('http://localhost/'), {})
+  return (stamped as Response | undefined) ?? response
 }
 
 describe('create-security-headers', () => {
@@ -41,5 +44,35 @@ describe('create-security-headers', () => {
     const response = new Response(null, { headers: { 'x-frame-options': 'DENY' } })
     decorate(createSecurityHeaders(), response)
     expect(response.headers.get('x-frame-options')).toBe('DENY')
+  })
+
+  it('stamps a response whose headers are immutable', () => {
+    // What a proxying mount returns. Setting a header on it directly throws,
+    // and a throwing decorator collapses the whole reply to a 500 — so a
+    // `createSecurityHeaders` + `mounts` app would 500 on every proxied route.
+    const proxied = Response.redirect('https://example.com/next', 302)
+    const stamped = decorate(createSecurityHeaders(), proxied)
+    expect(stamped).not.toBe(proxied)
+    expect(stamped.status).toBe(302)
+    expect(stamped.headers.get('location')).toBe('https://example.com/next')
+    expect(stamped.headers.get('x-content-type-options')).toBe('nosniff')
+  })
+
+  it('leaves an immutable response alone when every header is opted out', () => {
+    // Nothing to stamp means nothing to clone: the probe never runs.
+    const proxied = Response.redirect('https://example.com/next', 302)
+    const stamped = decorate(
+      createSecurityHeaders({
+        contentTypeOptions: false,
+        frameOptions: false,
+        referrerPolicy: false,
+        crossOriginOpenerPolicy: false,
+        crossOriginResourcePolicy: false,
+        originAgentCluster: false,
+        dnsPrefetchControl: false,
+      }),
+      proxied,
+    )
+    expect(stamped).toBe(proxied)
   })
 })

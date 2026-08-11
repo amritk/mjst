@@ -145,6 +145,44 @@ describe('to-fetch-handler', () => {
     expect(seen[0]?.ctx).toBe(ctx)
   })
 
+  it('rejects rather than throws when a mount fails synchronously', async () => {
+    // A mount may return a plain `Response`, so failing synchronously is on
+    // its normal path — and the unhooked handler is deliberately not `async`.
+    // The failure has to arrive as a rejection: a caller holding only
+    // `.catch(...)` (or handing the promise to `waitUntil`) never sees a throw.
+    const mounted = toFetchHandler(createApi({ routes: [empty] }), {
+      mounts: {
+        '/api/auth': () => {
+          throw new Error('mount exploded')
+        },
+      },
+    })
+    let promise: Promise<Response> | undefined
+    expect(() => {
+      promise = mounted(new Request('http://localhost/api/auth/session'))
+    }).not.toThrow()
+    await expect(promise).rejects.toThrow('mount exploded')
+  })
+
+  it('rejects rather than throws when an error formatter fails', async () => {
+    // `notFound` runs before any promise exists, so it escapes the same way.
+    const handler = toFetchHandler(
+      createApi({
+        routes: [empty],
+        errors: {
+          notFound: () => {
+            throw new Error('formatter exploded')
+          },
+        },
+      }),
+    )
+    let promise: Promise<Response> | undefined
+    expect(() => {
+      promise = handler(new Request('http://localhost/nothing-here'))
+    }).not.toThrow()
+    await expect(promise).rejects.toThrow('formatter exploded')
+  })
+
   it('rejects mount prefixes without a leading slash at construction', () => {
     expect(() =>
       toFetchHandler(createApi({ routes: [empty] }), { mounts: { 'api/auth': () => new Response(null) } }),

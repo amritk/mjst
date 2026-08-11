@@ -255,6 +255,29 @@ export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandl
   }
 }
 
+/**
+ * The body an upstream parser already consumed, recovered from the `body`
+ * property Express/Connect middleware conventionally leaves behind.
+ * `express.raw` leaves a Buffer and `express.text` a string — both go out
+ * byte for byte. `express.json` / `express.urlencoded` leave the decoded
+ * value, re-serialized here so `readBody` still sees what the client sent.
+ * Anything else (including no `body` at all) reads as an empty body, which is
+ * what the drained stream would have produced on its own.
+ */
+const consumedBody = (incoming: IncomingMessage): Buffer => {
+  const { body } = incoming as IncomingMessage & { body?: unknown }
+  if (Buffer.isBuffer(body)) return body
+  if (typeof body === 'string') return Buffer.from(body, 'utf8')
+  if (body === undefined || body === null) return Buffer.alloc(0)
+  try {
+    return Buffer.from(JSON.stringify(body) ?? '', 'utf8')
+  } catch {
+    // A circular parsed body cannot be re-serialized; an empty body is the
+    // honest fallback, and the route's own validation reports it.
+    return Buffer.alloc(0)
+  }
+}
+
 // An Infinity limit disables the cap arithmetically: no finite declared
 // length or running total ever exceeds it, so no special-casing is needed.
 const readBytes = (incoming: IncomingMessage, limit: number): Promise<Buffer> =>
@@ -262,6 +285,18 @@ const readBytes = (incoming: IncomingMessage, limit: number): Promise<Buffer> =>
     const declared = Number(incoming.headers['content-length'])
     if (Number.isFinite(declared) && declared > limit) {
       reject(payloadTooLargeError(limit))
+      return
+    }
+    // A body parser upstream — `app.use(express.json())` ahead of
+    // `app.use(toNodeHandler(api))`, the wiring this adapter documents — has
+    // already read the stream to its end. Subscribing to 'data'/'end' now
+    // waits on events that will never fire again: the promise never settles,
+    // the handler never replies, and the socket is held until the client
+    // gives up. Read what the parser left instead.
+    if (incoming.readableEnded) {
+      const recovered = consumedBody(incoming)
+      if (recovered.byteLength > limit) reject(payloadTooLargeError(limit))
+      else resolve(recovered)
       return
     }
     const chunks: Buffer[] = []
@@ -279,4 +314,11 @@ const readBytes = (incoming: IncomingMessage, limit: number): Promise<Buffer> =>
     })
     incoming.on('end', () => resolve(Buffer.concat(chunks)))
     incoming.on('error', reject)
+    // A socket torn down mid-upload emits 'close' without 'end', which would
+    // otherwise leave this promise pending for the life of the process. The
+    // `readableEnded` check keeps the ordinary 'end'-then-'close' sequence
+    // from racing a rejection against the resolve that already won.
+    incoming.on('close', () => {
+      if (!incoming.readableEnded) reject(new Error('Request closed before the body finished'))
+    })
   })

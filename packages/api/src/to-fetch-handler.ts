@@ -251,7 +251,7 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     return current
   }
 
-  const handler = (
+  const dispatch = (
     request: Request,
     env?: unknown,
     executionContext?: unknown,
@@ -328,6 +328,33 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
     // shape every fetch runtime expects.
     const handled = api.handle(apiRequest, env, executionContext)
     return isThenable(handled) ? handled.then(settle) : Promise.resolve(settle(handled))
+  }
+
+  /**
+   * `dispatch` is deliberately not `async` — the sync-reply fast path above
+   * skips the promise and the microtask turn — which means a synchronous throw
+   * inside it leaves a function declared `Promise<Response>` by throwing, not
+   * by rejecting. A caller holding only `.catch(...)` (or `waitUntil`) never
+   * sees it, and the platform reports an error with no request attached.
+   *
+   * Two callees can throw that way, both app code: a mount, whose type admits
+   * a plain `Response` and so fails synchronously, and `api.handle`, whose
+   * 404/405 `ErrorFormatters` callbacks run before any promise exists.
+   * Re-shaping the throw as a rejection keeps the error visible exactly as a
+   * rejecting mount's already is — burying app code's failure under a bare 500
+   * is the trade `hookError` argues against — while honoring the signature.
+   */
+  const handler = (
+    request: Request,
+    env?: unknown,
+    executionContext?: unknown,
+    sharedLocals?: RequestLocals,
+  ): Promise<Response> => {
+    try {
+      return dispatch(request, env, executionContext, sharedLocals)
+    } catch (error) {
+      return Promise.reject(error)
+    }
   }
 
   if (onRequest.length === 0 && onResponse.length === 0) return handler

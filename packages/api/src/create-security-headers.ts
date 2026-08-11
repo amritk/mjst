@@ -1,4 +1,5 @@
 import type { FetchOnResponse } from './to-fetch-handler'
+import { writableResponse } from './writable-response'
 
 /**
  * Options for {@link createSecurityHeaders}. Every field is opt-out: the
@@ -80,9 +81,16 @@ export const createSecurityHeaders = (options?: SecurityHeadersOptions): FetchOn
     entries.push(['content-security-policy', options.contentSecurityPolicy])
 
   return (response) => {
+    // A response proxied out of a mount carries an immutable header guard, so
+    // setting a header on it throws and a throwing decorator costs the whole
+    // reply. The probe runs before the first write, as in every sibling
+    // decorator. It is skipped when there is nothing to stamp, so a fully
+    // opted-out set never clones.
+    if (entries.length === 0) return undefined
+    const target = writableResponse(response)
     for (const [name, value] of entries) {
-      if (!response.headers.has(name)) response.headers.set(name, value)
+      if (!target.headers.has(name)) target.headers.set(name, value)
     }
-    return undefined
+    return target
   }
 }

@@ -358,6 +358,51 @@ const countNewlines = (text: string): number => {
   return count
 }
 
+const NAME = 'defineContract'
+
+/**
+ * Finds the next `defineContract` sitting in code position, starting from an
+ * index that is itself in code position. Returns its start index, or -1.
+ *
+ * A plain `indexOf` would also find the name inside a string, a template, or
+ * a comment — and the rewrite that followed would edit text the module merely
+ * quotes. A docs page holding a usage sample in a template literal is the case
+ * that bites: its rendered output silently loses the very fields the sample
+ * exists to show, with no error anywhere to trace it back to.
+ *
+ * A literal the scanners cannot follow (an apostrophe in JSX text, say) is not
+ * fatal — the character is treated as ordinary and the walk continues, which
+ * is exactly where `indexOf` already left things.
+ */
+const nextCallSite = (source: string, from: number): number => {
+  let index = from
+  let previous = ''
+  while (index < source.length) {
+    const char = source[index]
+    if (char === undefined) return -1
+    if (char === ' ' || char === '\t' || char === '\n' || char === '\r') {
+      index += 1
+    } else if (char === '/' && (source[index + 1] === '/' || source[index + 1] === '*')) {
+      index = skipTrivia(source, index)
+    } else if (char === "'" || char === '"') {
+      index = scanString(source, index) ?? index + 1
+      previous = char
+    } else if (char === '`') {
+      index = scanTemplate(source, index) ?? index + 1
+      previous = char
+    } else if (char === '/' && (previous === '' || REGEX_PRECEDING.has(previous))) {
+      index = scanRegex(source, index) ?? index + 1
+      previous = '0'
+    } else if (char === 'd' && source.startsWith(NAME, index)) {
+      return index
+    } else {
+      index += 1
+      previous = char
+    }
+  }
+  return -1
+}
+
 /**
  * Rewrites every parseable `defineContract({ ... })` call site in a module's
  * source down to the fields the client runtime reads. Pure text in, text out,
@@ -399,9 +444,9 @@ export const stripContractFields = (source: string): string => {
   let copiedTo = 0
   let searchFrom = 0
   while (true) {
-    const found = source.indexOf('defineContract', searchFrom)
+    const found = nextCallSite(source, searchFrom)
     if (found === -1) break
-    const afterName = found + 'defineContract'.length
+    const afterName = found + NAME.length
     const before = source[found - 1]
     const after = source[afterName]
     // Only a real call of the plain identifier counts — not `x.defineContract`

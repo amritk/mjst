@@ -595,6 +595,57 @@ describe('compile-to-module', () => {
     }
   }, 20_000)
 
+  it('rejects rather than throws when app code fails synchronously, identically to the runtime', async () => {
+    // Without hooks the emitted dispatch is not `async` — that is the whole
+    // point of the unhooked shape — so a synchronous throw from app code
+    // would leave a function every fetch runtime awaits by throwing instead
+    // of rejecting. Two callees can do it: a mount (its type admits a plain
+    // `Response`) and a `notFound` formatter (it runs before any promise
+    // exists). Both engines have to escape in the same shape.
+    const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), '.fixtures-sync-throw')
+    mkdirSync(fixtureDir, { recursive: true })
+    try {
+      const syncRoutes = { health: corpus.health }
+      const source = compileToModule({
+        routesImport: '../compile-to-module.test-utils',
+        runtimeImport: '../../index',
+        validatorsImport: '@amritk/runtime-validators',
+        routes: syncRoutes,
+        info,
+        mounts: { '/mounted': 'mountBoom' },
+        errorsExport: 'throwingErrors',
+      })
+      const fixturePath = join(fixtureDir, 'generated-sync-throw.ts')
+      writeFileSync(fixturePath, source)
+      const compiledModule = (await import(fixturePath)) as {
+        fetch: (request: Request, env?: unknown) => Response | Promise<Response>
+      }
+      const runtime = toFetchHandler(
+        createApi({ routes: Object.values(syncRoutes), info, errors: corpus.throwingErrors }),
+        { mounts: { '/mounted': corpus.mountBoom } },
+      )
+
+      const cases = [
+        { name: 'mount', url: 'http://localhost/mounted/thing', message: 'mount exploded' },
+        { name: 'notFound', url: 'http://localhost/nothing-here', message: 'formatter exploded' },
+      ]
+      for (const { name, url, message } of cases) {
+        let fromCompiled: unknown
+        let fromRuntime: unknown
+        expect(() => {
+          fromCompiled = compiledModule.fetch(new Request(url), ENV)
+        }, name).not.toThrow()
+        expect(() => {
+          fromRuntime = runtime(new Request(url), ENV)
+        }, name).not.toThrow()
+        await expect(fromCompiled, name).rejects.toThrow(message)
+        await expect(fromRuntime, name).rejects.toThrow(message)
+      }
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  }, 20_000)
+
   it('applies the default 1 MiB body cap, and Infinity restores unbounded reads, identically to the runtime', async () => {
     const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), '.fixtures-body-cap')
     mkdirSync(fixtureDir, { recursive: true })

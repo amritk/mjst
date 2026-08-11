@@ -1463,7 +1463,11 @@ const emitDispatch = (
 ): string[] => {
   const hooked = onRequestExports.length > 0 || onResponseExports.length > 0
   const extraArguments = emitContext.needsPlatform ? ', env, executionContext' : ''
-  const dispatchName = hooked ? 'handleFetch' : 'fetch'
+  // Hooked builds already wrap this in an `async` fetch (which turns a
+  // synchronous throw into a rejection on its own); unhooked ones export a
+  // thin wrapper below that does the same by hand, so the dispatch itself is
+  // private in both shapes.
+  const dispatchName = hooked ? 'handleFetch' : 'dispatchFetch'
   // With an observer, every route invocation flows through `observed`, which
   // times the route function (validation + handler + serialization — the
   // same span the runtime engine measures) and reports the outcome status.
@@ -1504,7 +1508,7 @@ const emitDispatch = (
     )
   }
   lines.push(
-    `${hooked ? 'const' : 'export const'} ${dispatchName} = (request${hooked ? ', locals' : ''}${extraArguments}) => {`,
+    `const ${dispatchName} = (request${hooked ? ', locals' : ''}${extraArguments}) => {`,
     // One locals bag per request — hooked builds it in the wrapper (gates run
     // first), unhooked here — so every consumer (context factory, handler,
     // error formatters, observers) shares one object, like the runtime's
@@ -1658,6 +1662,25 @@ const emitDispatch = (
     "  return method === 'HEAD' ? stripHeadBody(missing) : missing",
     '}',
   )
+  if (!hooked) {
+    // The dispatch is deliberately not `async` — the sync-reply fast path
+    // skips the promise and the microtask turn — so a synchronous throw
+    // inside it would leave a function every fetch runtime treats as
+    // `Promise<Response>` by throwing rather than rejecting. A mount can do
+    // that (its contract admits a plain `Response`), and so can a `notFound` /
+    // `methodNotAllowed` formatter, which runs before any promise exists.
+    // The runtime engine wraps `dispatch` the same way, so both engines hand
+    // such a failure to the platform in the identical shape.
+    lines.push(
+      `export const fetch = (request${extraArguments}) => {`,
+      '  try {',
+      `    return ${dispatchName}(request${extraArguments})`,
+      '  } catch (error) {',
+      '    return Promise.reject(error)',
+      '  }',
+      '}',
+    )
+  }
 
   if (!hooked) return lines
 
