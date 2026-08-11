@@ -187,6 +187,78 @@ eventually serve someone's account balance to someone else. Opting *in* to
 caching is a one-line declaration; opting out has to be the thing you get for
 free.
 
+### The second axis: who the response varies by
+
+Tags answer *when a response stops being true*. They say nothing about *who is
+allowed to see it*, and a caching design that models only the first axis is
+not merely incomplete — it leaks.
+
+Cloudflare's cache key is `entrypoint + path + query + Worker version +
+ctx.props`. **No request header and no cookie is part of it.** There are two
+automatic bypasses: requests carrying `Authorization`, and responses carrying
+`Set-Cookie`. Bearer-token APIs are therefore safe by accident. Cookie
+sessions — which this package supports directly (`signCookie`,
+`buildCookiesObject`, `createCsrf`) — are not:
+
+```
+Alice → GET /me  (Cookie: session=alice)  → Worker runs, returns Alice's profile
+                                          → no Set-Cookie, so it caches under "/me"
+Bob   → GET /me  (Cookie: session=bob)    → cache HIT → Bob receives Alice's profile
+```
+
+`Cookie` is not in the key and does not trigger the bypass; only `Set-Cookie`
+on the way out does. So the safety net holds only while every response happens
+to set a cookie. A session layer that refreshes a rolling cookie *only near
+expiry* flips the same route from bypassed to cached with no code change.
+Safety contingent on a header being intermittently present is not safety.
+
+#### Scopes
+
+- **`public`** — shared edge cache. Legal only when the contract declares no
+  identity input.
+- **`private`** — `Cache-Control: private`. Browser cache only, never the
+  shared edge. Correct for `/me`; still wins on back/forward and repeat
+  navigation, and costs nothing.
+- **`none`** (default) — `no-store`.
+
+#### The scope is derived, not trusted
+
+Default deny does not cover this, because the hazard is someone opting *in* on
+a route that turns out to be per-user. But the contract already knows the
+answer: a route that declares `security`, carries `securityGuards`, or reads
+an auth-bearing entry in `request.headers` / `request.cookies` has *declared*
+that its response depends on the caller.
+
+So **`scope: 'public'` is a build error on any such route** — the same
+structural move as the tag-closure check, aimed at the leak instead of the
+staleness. The developer cannot assert their way past it; they either drop to
+`private` or split the route.
+
+#### Splitting is the real technique
+
+Most routes in a real API are neither wholly public nor wholly personal —
+they are a large shared core with a thin per-user decoration (`/posts/{id}`
+carrying a `viewerHasLiked`). The answer is to split: `GET /posts/{id}` public
+and cached, `GET /posts/{id}/viewer` private and uncached, composed by the
+caller. The typed client makes two calls cheap, and this is where nearly all
+of the achievable edge-cache win on an authenticated API actually lives.
+
+#### Not `Vary: Cookie`
+
+It looks like the correct fix and is a trap. Every distinct cookie value
+becomes a distinct cache entry, so the hit rate collapses to approximately
+zero, and it relocates per-user data into a shared cache where a single
+`Vary` misconfiguration becomes a breach. `Vary` is for content negotiation
+(`Accept`, `Accept-Encoding`), not for identity.
+
+#### Honest sizing
+
+If an API is predominantly authenticated and nothing splits cleanly into a
+shared core, this feature buys very little at the edge and the effort belongs
+in an origin-side cache instead. Whether it is worth building is a question
+about the actual route table, and should be answered by counting genuinely
+public routes before any of this ships.
+
 ### The freshness tiers
 
 **Tier 0 — uncached (default).** `no-store`. Never stale because never
@@ -332,10 +404,13 @@ the same split the runtime and compiled engines already live under.
    but it is worth measuring how much hit rate a deploy actually costs on a
    real workload, since that number is what a future argument for something
    narrower would have to beat.
-3. **`Vary` and authenticated reads.** `Authorization` bypasses the edge
-   cache entirely, so per-user data is a browser-cache (`scope: 'private'`)
-   or `ctx.props`-partitioned story. Probably out of scope for v1; say so
-   explicitly rather than leaving it ambiguous.
+3. **Per-user edge caching via `ctx.props`.** `ctx.props` *is* part of the
+   cache key, so a genuinely per-user shared-cache partition is possible — but
+   only for Workers invoked over a service binding or RPC, not a plain
+   `fetch`. Worth scoping once the public-route case works; the `private`
+   scope covers the need until then. (The safety rules for per-user responses
+   are settled — see "The second axis" — this is only about whether we also
+   offer edge caching for them.)
 4. **Static check severity.** A read tag that no write route invalidates is a
    permanently stale resource — almost certainly a build error rather than a
    warning, but it needs an explicit `unchecked` escape hatch for tags
