@@ -119,4 +119,16 @@ describe('generateExampleConst', () => {
     const schema = { type: 'object' as const, properties: { name: { type: 'string' as const } } }
     expect(generateExampleConst(schema, 'Info')).toBe('export const infoExample: Info = { "name": "string" }')
   })
+
+  it('falls back instead of throwing on a pattern that will not compile', () => {
+    // A schema may carry a `pattern` that is not a valid JavaScript regex. The
+    // compile threw a bare SyntaxError out of the generator and ended the run,
+    // while the `patternProperties` compile in the same file already tolerated
+    // it. Emitting the fallback string leaves the invalid schema to be reported
+    // where invalid schemas are reported.
+    for (const pattern of ['*bad', 'a{2,1}', '(?<dup>x)(?<dup>y)']) {
+      expect(() => deriveExample({ type: 'string', pattern } as never)).not.toThrow()
+      expect(typeof deriveExample({ type: 'string', pattern } as never)).toBe('string')
+    }
+  })
 })

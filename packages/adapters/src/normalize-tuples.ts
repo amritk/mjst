@@ -3,8 +3,18 @@
  * JSON Schema in a shape the mjst pipeline does not key tuple validation off of.
  * The pipeline recognizes a tuple only by 2020-12 `prefixItems`; a draft-07
  * `items: [...]` array is treated as a plain array, so element types and length
- * go unvalidated downstream. Both functions walk the whole tree.
+ * go unvalidated downstream. Both functions walk the whole tree of *schemas*.
  */
+
+/**
+ * Keywords whose values are instance data, not subschemas. Their contents are
+ * values the schema describes, so an object sitting under one is not a schema
+ * node and must not be rewritten: a Zod `.default({ items: ['a', 'b'] })` is a
+ * default *value* with a property called `items`, and rewriting it produced the
+ * default `{ prefixItems: ['a','b'], minItems: 2, items: false }` — a different
+ * value than the author wrote, handed to consumers as theirs.
+ */
+const DATA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples'])
 
 /**
  * Rewrites draft-07 tuples (`items` as an array, with an optional
@@ -30,7 +40,10 @@ export const normalizeDraftTuples = (node: unknown): void => {
       delete obj['items']
     }
   }
-  for (const value of Object.values(obj)) normalizeDraftTuples(value)
+  for (const [key, value] of Object.entries(obj)) {
+    if (DATA_KEYWORDS.has(key)) continue
+    normalizeDraftTuples(value)
+  }
 }
 
 /**
@@ -38,8 +51,12 @@ export const normalizeDraftTuples = (node: unknown): void => {
  * a too-short array (trailing positions unconstrained) and a too-long one
  * (nothing forbids extras). Restore the length: `minItems` forces the fixed
  * elements present, and — when the tuple has no rest element (no `items`) —
- * `items: false` forbids extras. Applied to every `prefixItems` node; existing
- * tighter bounds are never loosened.
+ * `items: false` forbids extras.
+ *
+ * Only a *missing* `minItems` is filled in. An explicit one is the author
+ * saying which trailing positions are optional — Effect's `optionalElement`
+ * emits exactly that — and raising it to the tuple's length made those
+ * positions required, rejecting arrays the source schema accepts.
  */
 export const enforceTupleLength = (node: unknown): void => {
   if (node === null || typeof node !== 'object') return
@@ -49,12 +66,13 @@ export const enforceTupleLength = (node: unknown): void => {
   }
   const obj = node as Record<string, unknown>
   if (Array.isArray(obj['prefixItems'])) {
-    const fixed = obj['prefixItems'].length
-    const min = typeof obj['minItems'] === 'number' ? obj['minItems'] : 0
-    if (min < fixed) obj['minItems'] = fixed
+    if (typeof obj['minItems'] !== 'number') obj['minItems'] = obj['prefixItems'].length
     // No `items` keyword means no rest element: the array may not exceed the
     // fixed tuple, so forbid additional items.
     if (!('items' in obj)) obj['items'] = false
   }
-  for (const value of Object.values(obj)) enforceTupleLength(value)
+  for (const [key, value] of Object.entries(obj)) {
+    if (DATA_KEYWORDS.has(key)) continue
+    enforceTupleLength(value)
+  }
 }

@@ -115,6 +115,23 @@ const topLevelAlternatives = (s: string): string[] => {
  * against the real regex and only uses it on a match, so a partial sampler never
  * makes the example worse — it just upgrades the cases it understands.
  */
+/**
+ * Whether `value` satisfies `pattern`, treating an uncompilable pattern as
+ * unsatisfied rather than fatal. A schema may carry a `pattern` that is not a
+ * valid JavaScript regex, and the sampler can still return a candidate for one
+ * — so compiling it here threw a bare `SyntaxError` out of the generator and
+ * ended the run. Falling through instead emits the plain fallback string, and
+ * the invalid pattern surfaces where invalid schemas are reported. The
+ * `patternProperties` compile in `deriveObject` already made this choice.
+ */
+const matchesPattern = (pattern: string, value: string): boolean => {
+  try {
+    return new RegExp(pattern).test(value)
+  } catch {
+    return false
+  }
+}
+
 const sampleFromPattern = (pattern: string, minLength: number): string | undefined => {
   let body = pattern
   if (body.startsWith('^')) body = body.slice(1)
@@ -246,7 +263,7 @@ const exampleString = (schema: JSONSchema): string => {
     // but never on the way out, so `{ pattern: '^ab$', minLength: 5 }` happily
     // returned `"ab"`. Falling through instead lets the caller notice that
     // nothing satisfies the schema rather than emitting a value that does not.
-    if (sampled !== undefined && sampled.length >= minLength && new RegExp(schema.pattern).test(sampled)) {
+    if (sampled !== undefined && sampled.length >= minLength && matchesPattern(schema.pattern, sampled)) {
       if (!(hasMaxLength(schema) && sampled.length > schema.maxLength)) return sampled
     }
   }

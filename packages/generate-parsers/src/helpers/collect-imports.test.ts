@@ -1,7 +1,7 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'vitest'
 
-import { collectImports } from './collect-imports'
+import { collectImports, collectImportTypeNames } from './collect-imports'
 
 describe('collect-imports', () => {
   it('collects imports from properties with $ref', () => {
@@ -563,5 +563,18 @@ describe('collect-imports', () => {
     expect(collectImports(schema, { typesOnly: true, importExt: 'ts' })).toEqual([
       "import type { Contact } from './contact.ts';",
     ])
+  })
+
+  it('imports a $ref used in a tuple position', () => {
+    // The type emitter renders a `prefixItems` `$ref` as the referenced type
+    // name, so skipping tuple positions here produced a file that names
+    // `Contact` with no import for it — output that does not compile.
+    const schema = {
+      type: 'object' as const,
+      properties: {
+        pair: { type: 'array' as const, prefixItems: [{ $ref: '#/$defs/Contact' }, { type: 'string' as const }] },
+      },
+    }
+    expect(collectImportTypeNames(schema)).toContain('Contact')
   })
 })

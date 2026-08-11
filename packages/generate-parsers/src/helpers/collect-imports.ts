@@ -221,6 +221,15 @@ const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOption
       }
     }
 
+    // Traverse tuple positions. The type emitter renders a `prefixItems` `$ref`
+    // as the referenced type name, so skipping it here produced a file naming
+    // `Contact` with no import for it — output that does not compile (TS2304).
+    if (Array.isArray(record['prefixItems'])) {
+      for (const item of record['prefixItems']) {
+        collectRefsFromValue(item)
+      }
+    }
+
     // Traverse into if/then/else branches
     if ('then' in record) {
       collectRefsFromValue(record.then)
