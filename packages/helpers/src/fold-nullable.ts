@@ -1,4 +1,5 @@
 import { assignKey } from './assign-key'
+import { DATA_KEYWORDS } from './build-resource-registry'
 
 /**
  * Rewrites OpenAPI 3.0's `nullable: true` into the JSON Schema form the
@@ -42,7 +43,17 @@ const fold = (node: unknown): unknown => {
 
   // Own keys, and a guarded write: a bare `for…in` walks the prototype chain,
   // and `next[key] = …` on a `__proto__` property drops it from the output.
+  //
+  // `enum`/`const`/`default`/`examples` hold instance data, so an object under
+  // one is a value the schema describes rather than a schema. Folding into it
+  // rewrote the value itself — a schema-shaped `default` came back with its
+  // `type` changed — handing consumers something other than what the author
+  // wrote, with nothing to say it changed.
   for (const [key, value] of Object.entries(record)) {
+    if (DATA_KEYWORDS.has(key)) {
+      assignKey(next, key, value)
+      continue
+    }
     const folded = fold(value)
     if (folded !== value) changed = true
     assignKey(next, key, folded)

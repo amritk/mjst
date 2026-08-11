@@ -77,4 +77,29 @@ describe('normalize-tuples', () => {
     enforceTupleLength(schema)
     expect(schema.minItems).toBe(1)
   })
+
+  it('normalizes a tuple under a property that is named after a data keyword', () => {
+    // `default` and `examples` are ordinary property names. Skipping data
+    // keywords by name alone skipped the whole subtree of a property called
+    // one, leaving a real tuple inside it unnormalized — the exact harm this
+    // module exists to prevent.
+    const schema = {
+      type: 'object',
+      properties: { default: { type: 'array', items: [{ type: 'string' }, { type: 'number' }] } },
+    }
+    normalizeDraftTuples(schema)
+    enforceTupleLength(schema)
+    expect(schema.properties.default).toEqual({
+      type: 'array',
+      prefixItems: [{ type: 'string' }, { type: 'number' }],
+      minItems: 2,
+      items: false,
+    })
+  })
+
+  it('normalizes a tuple inside a $defs entry named after a data keyword', () => {
+    const schema = { $defs: { examples: { type: 'array', items: [{ type: 'string' }] } } }
+    normalizeDraftTuples(schema)
+    expect(schema.$defs.examples).toEqual({ type: 'array', prefixItems: [{ type: 'string' }] })
+  })
 })

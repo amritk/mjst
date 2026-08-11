@@ -107,15 +107,6 @@ const topLevelAlternatives = (s: string): string[] => {
 }
 
 /**
- * Best-effort generator of a string matching a `pattern`, via recursive descent:
- * anchors, literals, `.`, escapes (`\d`/`\w`/`\s`), character classes, groups
- * (capturing / non-capturing / named), alternation (`a|b` — picks the first
- * usable branch), and the `+`/`*`/`?`/`{n}`/`{n,m}` quantifiers. Lookarounds and
- * backreferences fall through to `undefined`. The caller verifies the result
- * against the real regex and only uses it on a match, so a partial sampler never
- * makes the example worse — it just upgrades the cases it understands.
- */
-/**
  * Whether `value` satisfies `pattern`, treating an uncompilable pattern as
  * unsatisfied rather than fatal. A schema may carry a `pattern` that is not a
  * valid JavaScript regex, and the sampler can still return a candidate for one
@@ -132,6 +123,15 @@ const matchesPattern = (pattern: string, value: string): boolean => {
   }
 }
 
+/**
+ * Best-effort generator of a string matching a `pattern`, via recursive descent:
+ * anchors, literals, `.`, escapes (`\d`/`\w`/`\s`), character classes, groups
+ * (capturing / non-capturing / named), alternation (`a|b` — picks the first
+ * usable branch), and the `+`/`*`/`?`/`{n}`/`{n,m}` quantifiers. Lookarounds and
+ * backreferences fall through to `undefined`. The caller verifies the result
+ * against the real regex and only uses it on a match, so a partial sampler never
+ * makes the example worse — it just upgrades the cases it understands.
+ */
 const sampleFromPattern = (pattern: string, minLength: number): string | undefined => {
   let body = pattern
   if (body.startsWith('^')) body = body.slice(1)

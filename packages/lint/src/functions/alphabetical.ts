@@ -28,6 +28,13 @@ const isNumeric = (value: unknown): boolean =>
  * the rule judges with. A second comparator that merely looked equivalent
  * drifted: it missed the numeric-string cases below, so `["10", "2"]` was
  * flagged by the rule and left untouched by the fixer, forever.
+ *
+ * Deliberately **not** a total order. Numeric-vs-textual is decided per pair,
+ * which is what keeps both `["2", "10"]` and `["0x10", "9"]` reading as
+ * ordered — two requirements no single total order can satisfy, since
+ * lexicographically `"1e2"` falls between `"10"` and `"2"` while numerically
+ * `"2"` precedes `"10"`. A caller that feeds this to `Array.prototype.sort`
+ * therefore has to check the result rather than trust it; see the tags fixer.
  */
 export const compareAlphabetically = (a: unknown, b: unknown): number => {
   // Deliberate deviation from Spectral, which relies on source order and falls

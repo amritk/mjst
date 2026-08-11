@@ -111,6 +111,17 @@ const tagsAlphabetical: Fixer = {
       .map((_, index) => index)
       .sort((a, b) => compareAlphabetically(nameOf(array[a]), nameOf(array[b])))
     if (order.every((value, index) => value === index)) return undefined
+    // `compareAlphabetically` is deliberately not a total order — it decides
+    // numeric-vs-textual per pair — so `sort` can return a sequence the rule
+    // still rejects. Emitting it anyway would rewrite the document on every
+    // pass without ever clearing the finding, and the fix loop would run out
+    // of passes and report `converged: false`. Checking the result costs one
+    // linear scan and turns that into "left alone for a human", which is the
+    // honest answer when no order satisfies the rule.
+    const sorted = order.map((index) => nameOf(array[index]))
+    for (let i = 0; i < sorted.length - 1; i++) {
+      if (compareAlphabetically(sorted[i], sorted[i + 1]) > 0) return undefined
+    }
     return { op: 'reorderArray', path: arrayPath, order }
   },
 }

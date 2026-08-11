@@ -530,14 +530,22 @@ const detach = (node: unknown): unknown => {
     // A custom `parse` can put a class instance in value position — js-yaml
     // yields a `Date` for a YAML timestamp — and rebuilding one as a plain
     // object empties it: `default: 2020-01-01` serialized as `default: {}`,
-    // silently, with the constraint gone. A `Date` copies cleanly; anything
-    // else has no general clone, so it is handed back by reference and keeps
-    // the aliasing this copy otherwise removes. `JSON.parse` output, the
-    // default and the only shape that aliasing can actually bite, is
-    // unaffected — it has no instances to hit this at all.
+    // silently, with the constraint gone.
+    //
+    // A `Date` copies cleanly. Anything else has no general clone, so it is
+    // handed back by reference: it stays aliased to the session cache, which
+    // is the lesser of the two harms — a caller would have to mutate the
+    // instance in place to be bitten, where emptying it corrupts the value for
+    // everyone, always. `JSON.parse` output, the default and the only shape
+    // that aliasing can actually bite, has no instances and never gets here.
+    //
+    // Either way the result goes into `seen`, so an instance reached twice
+    // still comes back as one object, as it was in the source.
     const prototype = Object.getPrototypeOf(src) as object | null
     if (prototype !== Object.prototype && prototype !== null) {
-      set(src instanceof Date ? new Date(src.getTime()) : src)
+      const kept = src instanceof Date ? new Date(src.getTime()) : src
+      seen.set(src, kept)
+      set(kept)
       continue
     }
     const copy: Record<string, unknown> = {}
@@ -843,7 +851,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
   // the object actually written to, which means a name can still change after
   // it has been emitted; these sites are how it gets rewritten instead of
   // stranding a ref that points at nothing.
-  const hoistRefSites: { node: Record<string, unknown>; cacheKey: string }[] = []
+  const hoistRefSites = new Map<Record<string, unknown>, string>()
 
   /**
    * Single-pass resolver that inlines internal and external (`$ref` to other
@@ -972,7 +980,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         // Always rewritten to a static `$ref`: the dynamic binding was already
         // decided when the cycle was entered.
         assignKey(kept, '$ref', keptRef)
-        if (hoisted) hoistRefSites.push({ node: kept, cacheKey })
+        if (hoisted) hoistRefSites.set(kept, cacheKey)
         return kept
       }
       // Keeps the reference, with siblings resolved — the shape every other
@@ -1123,6 +1131,13 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
             assignKey(overridden, key, (resolved as Record<string, unknown>)[key])
           }
           for (const key of Object.keys(siblings)) assignKey(overridden, key, siblings[key])
+          // This is the one path that *copies* a resolved node rather than
+          // placing it. When the original was a CYCLE-kept node carrying a
+          // provisional `#/$defs/<name>`, the copy inherits that string but not
+          // its registration — so a later rename fixed the original and left
+          // this one pointing at whatever else ended up under the old name.
+          const hoistOf = hoistRefSites.get(resolved as Record<string, unknown>)
+          if (hoistOf !== undefined) hoistRefSites.set(overridden, hoistOf)
           if (origins && !origins.has(overridden)) origins.set(overridden, { location: targetLocation, pointer })
           if (inlineIsSensitive) sensitive.add(overridden)
           return overridden
@@ -1180,7 +1195,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         taken.add(unique)
         finalNames.set(cacheKey, unique)
       }
-      for (const { node, cacheKey } of hoistRefSites) {
+      for (const [node, cacheKey] of hoistRefSites) {
         const name = finalNames.get(cacheKey)
         if (name !== undefined) assignKey(node, '$ref', `#/$defs/${name}`)
       }

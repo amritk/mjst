@@ -978,35 +978,38 @@ describe('resolve-refs-from-file', () => {
 
   it('does not let a hoisted cycle target overwrite a definition the output root already had', async () => {
     // The root is a bare `$ref`, so the resolved output *is* b.json — and the
-    // hoist names were picked against the root's `$defs`, which is not the one
-    // being written to. `b.json` already has a `c`, and the hoist derived from
-    // `c.json` wants that same name.
+    // hoist names are picked against the source root's `$defs`, which is not
+    // the map being written to. b.json already has a `Node`, and the hoist
+    // derived from `c.json#/$defs/Node` wants that same name.
+    //
+    // The `description` matters: an annotation-only sibling is the one path
+    // that copies the kept cycle node instead of placing it, so it is where a
+    // rename that only fixed the original would strand this ref on b.json's
+    // own `Node` — a definition that exists, resolves, and is the wrong one.
     writeFileSync(join(dir, 'root.json'), JSON.stringify({ $ref: './b.json' }))
     writeFileSync(
       join(dir, 'b.json'),
       JSON.stringify({
-        $defs: { c: { const: 'B_OWN_C' } },
-        properties: { loop: { $ref: './c.json#/$defs/Node' } },
+        $defs: { Node: { const: 'B_OWN_NODE' } },
+        properties: { loop: { $ref: './c.json#/$defs/Node', description: 'd' } },
       }),
     )
-    writeFileSync(
-      join(dir, 'c.json'),
-      JSON.stringify({ $defs: { Node: { type: 'object', properties: { next: { $ref: '#/$defs/Node' } } } } }),
-    )
+    writeFileSync(join(dir, 'c.json'), JSON.stringify({ $defs: { Node: { $ref: './c.json#/$defs/Node' } } }))
 
     const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'))
     const defs = (resolved as { $defs: Record<string, unknown> }).$defs
+    const loop = (resolved as { properties: { loop: Record<string, unknown> } }).properties.loop
 
     // b.json's own definition survives, and the hoist took a free name.
-    expect(defs['c']).toEqual({ const: 'B_OWN_C' })
-    const hoistName = Object.keys(defs).find((key) => key !== 'c')
-    expect(hoistName).toBeDefined()
-    // Every kept cycle ref points at the hoist's final name, not the one it was
-    // first emitted with — a rename that missed a ref site would strand it.
+    expect(defs['Node']).toEqual({ const: 'B_OWN_NODE' })
+    const hoisted = Object.keys(defs).find((key) => key !== 'Node')
+    expect(hoisted).toBeDefined()
+    // Every kept cycle ref names the hoist's *final* name, including the one
+    // on the copied node.
+    expect(loop['$ref']).toBe(`#/$defs/${hoisted}`)
+    expect(loop['description']).toBe('d')
     const refs = [...JSON.stringify(resolved).matchAll(/"\$ref":"([^"]+)"/g)].map((match) => match[1])
-    expect(refs.length).toBeGreaterThan(0)
-    expect(new Set(refs)).toEqual(new Set([`#/$defs/${hoistName}`]))
-    expect(defs[hoistName as string]).toMatchObject({ type: 'object' })
+    expect(new Set(refs)).toEqual(new Set([`#/$defs/${hoisted}`]))
   })
 
   it('rebases a kept relative ref so it still names the document it was written against', async () => {

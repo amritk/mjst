@@ -214,4 +214,24 @@ describe('fixers', () => {
     const remaining = await lintWithResult(JSON.stringify(fixed, null, 2), { ruleset: built })
     expect(remaining.diagnostics.filter((d) => d.code === 'openapi-tags-alphabetical')).toEqual([])
   })
+
+  it('leaves tags alone rather than emitting an order the rule still rejects', async () => {
+    // `compareAlphabetically` decides numeric-vs-textual per pair, so it is not
+    // a total order and `sort` has no defined result on this input. Emitting
+    // whatever came back would rewrite the document every pass without ever
+    // clearing the finding, until the loop ran out of passes.
+    const doc = {
+      openapi: '3.0.0',
+      info: { title: 'T', version: '1.0.0', contact: { name: 'x' }, description: 'd' },
+      servers: [{ url: 'https://api.example.test' }],
+      tags: [
+        { name: '2', description: 'a' },
+        { name: '10', description: 'b' },
+        { name: '1e2', description: 'c' },
+      ],
+      paths: {},
+    }
+    const before = JSON.stringify(doc, null, 2)
+    expect(await runFix(doc)).toBe(before)
+  })
 })

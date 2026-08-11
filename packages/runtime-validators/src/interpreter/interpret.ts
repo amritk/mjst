@@ -831,7 +831,10 @@ const interpretObject = (
     // `for…in` walks the prototype chain, so an inherited key was validated as
     // though the instance carried it — and a polluted `Object.prototype` made
     // `additionalProperties: false` reject every object in the process.
-    for (const k of Object.keys(obj)) {
+    // Guarded rather than `Object.keys`, which would allocate a key array per
+    // object on the hottest loop in the interpreter.
+    for (const k in obj) {
+      if (!Object.hasOwn(obj, k)) continue
       // `patternProperties` applies to every matching key independently of
       // `properties` — a key declared in both must satisfy both — so it runs even
       // when `k` is also a known property. Only `additionalProperties` is the
@@ -893,7 +896,8 @@ const interpretObject = (
     // inner walk never reaches another `propertyNames` at this instance location.
     let probe: InterpreterContext | null = null
     // Own keys only — same reason as the sweep above and `minProperties` below.
-    for (const k of Object.keys(obj)) {
+    for (const k in obj) {
+      if (!Object.hasOwn(obj, k)) continue
       if (probe === null) probe = newBranchContext(ctx)
       else probe.failed = false
       interpret(probe, nameSchema, k, '', null, depth + 1, scope)
@@ -1475,7 +1479,8 @@ const interpretUnevaluated = (
     if (!evalScope.allProps) {
       const obj = value as Record<string, unknown>
       // Own keys only, matching every other property sweep in this file.
-      for (const k of Object.keys(obj)) {
+      for (const k in obj) {
+        if (!Object.hasOwn(obj, k)) continue
         if (evalScope.props.has(k)) continue
         if (up === false) {
           fail(ctx, 'must NOT have unevaluated properties', childPath(ctx, path, k))

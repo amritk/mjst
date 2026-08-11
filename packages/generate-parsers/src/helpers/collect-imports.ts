@@ -160,6 +160,17 @@ const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOption
       return // Don't traverse further into a $ref
     }
 
+    // Tuple positions, walked before the `additionalProperties`/`items` branches
+    // below because those `return` early: a tuple with a `$ref` rest element
+    // would otherwise never reach this. The type emitter renders a
+    // `prefixItems` `$ref` as the referenced type name, so missing it produced
+    // a file naming `Contact` with no import — output that does not compile.
+    if (Array.isArray(record['prefixItems'])) {
+      for (const item of record['prefixItems']) {
+        collectRefsFromValue(item)
+      }
+    }
+
     // Check if this is an object type with additionalProperties that has a $ref
     // This pattern requires validateRecord
     if (hasAdditionalProperties(record) && hasRef(record.additionalProperties)) {
@@ -218,15 +229,6 @@ const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOption
       const patternProps = record.patternProperties as Record<string, unknown>
       for (const key in patternProps) {
         collectRefsFromValue(patternProps[key])
-      }
-    }
-
-    // Traverse tuple positions. The type emitter renders a `prefixItems` `$ref`
-    // as the referenced type name, so skipping it here produced a file naming
-    // `Contact` with no import for it — output that does not compile (TS2304).
-    if (Array.isArray(record['prefixItems'])) {
-      for (const item of record['prefixItems']) {
-        collectRefsFromValue(item)
       }
     }
 
