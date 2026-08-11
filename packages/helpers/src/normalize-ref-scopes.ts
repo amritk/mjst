@@ -1,17 +1,8 @@
 import { assignKey } from './assign-key'
-import {
-  buildResourceRegistry,
-  DATA_KEYWORDS,
-  escapePointerSegment,
-  resolveUri,
-  SCHEMA_MAPS,
-} from './build-resource-registry'
+import { buildResourceRegistry, escapePointerSegment, resolveUri, schemaChildren } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { resolveRef } from './resolve-ref'
 import { resolveScopedRef } from './resolve-scoped-ref'
-
-/** Stand-in for the keyword sets inside a name-to-schema map, where no key is a keyword. */
-const EMPTY: ReadonlySet<string> = new Set()
 
 /**
  * Rewrites every `$ref` and `$dynamicRef` in a document to a plain JSON Pointer
@@ -83,10 +74,6 @@ export const normalizeRefScopes = (root: Record<string, unknown>): Record<string
   }
 
   const rewrite = (node: unknown, pointer: string, enclosing: string, depth: number, inSchemaMap = false): unknown => {
-    // At a schema node the data keywords hold values, not schemas; inside a
-    // `properties`-style map the same words are just author-chosen names.
-    const dataKeys = inSchemaMap ? EMPTY : DATA_KEYWORDS
-    const mapKeys = inSchemaMap ? EMPTY : SCHEMA_MAPS
     assertSchemaDepth(depth, 'normalizeRefScopes')
     if (node === null || typeof node !== 'object') return node
 
@@ -102,15 +89,20 @@ export const normalizeRefScopes = (root: Record<string, unknown>): Record<string
 
     let changed = false
     const result: Record<string, unknown> = {}
-    for (const [key, value] of Object.entries(record)) {
+    // Copy everything, then let `schemaChildren` say which children are
+    // schemas — the same rule the sibling walkers use, sourced once. A key it
+    // does not yield holds instance data and keeps its value verbatim; the
+    // `$ref` rewrites only apply at a schema node, where those keys are
+    // keywords rather than author-chosen names.
+    for (const [key, value] of Object.entries(record)) assignKey(result, key, value)
+    for (const child of schemaChildren(record, inSchemaMap)) {
+      const { key, value } = child
       const next =
-        key === '$ref' && typeof value === 'string'
+        !inSchemaMap && key === '$ref' && typeof value === 'string'
           ? (normalizedRef(value, base) ?? value)
-          : key === '$dynamicRef' && typeof value === 'string'
+          : !inSchemaMap && key === '$dynamicRef' && typeof value === 'string'
             ? (normalizedDynamicRef(value, base) ?? value)
-            : dataKeys.has(key)
-              ? value
-              : rewrite(value, `${pointer}/${escapePointerSegment(key)}`, base, depth + 1, mapKeys.has(key))
+            : rewrite(value, `${pointer}/${escapePointerSegment(key)}`, base, depth + 1, child.inSchemaMap)
       if (next !== value) changed = true
       assignKey(result, key, next)
     }

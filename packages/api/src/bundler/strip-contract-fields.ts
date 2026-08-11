@@ -423,7 +423,11 @@ const nextCallSite = (source: string, from: number): number => {
       // string or template must be skipped, which is the opposite rule, and no
       // single test tells the two apart (see the note above).
       const end = scanRegex(source, index)
-      index = end === null || source.slice(index, end).includes(NAME) ? index + 1 : end
+      // `indexOf` against the end, not `slice(...).includes(...)`: the slice
+      // copies the whole candidate body on every `/` the scanner guesses at,
+      // in a transform that runs over every module in a bundle.
+      const at = end === null ? -1 : source.indexOf(NAME, index)
+      index = end === null || (at !== -1 && at < end) ? index + 1 : end
       previous = '0'
     } else if (char === 'd' && source.startsWith(NAME, index)) {
       return index

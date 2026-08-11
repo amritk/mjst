@@ -721,6 +721,10 @@ const interpretObject = (
 
   const meta = getObjectMeta(s)
   const { properties, knownKeys, escapedKeys, requiredSet, safeKeys } = meta
+  // See the presence check below: the schema half of that question is
+  // `safeKeys`, the instance half is whether this object inherits anything.
+  const fastPresence =
+    safeKeys && (Object.getPrototypeOf(obj) === Object.prototype || Object.getPrototypeOf(obj) === null)
   const emitErrors = ctx.emitErrors
   // `required`, `dependentRequired` and the property-count bounds are
   // validation-vocabulary; `properties`, `patternProperties`,
@@ -737,19 +741,20 @@ const interpretObject = (
     for (let i = 0; i < knownKeys.length; i++) {
       const key = knownKeys[i] as string
       // Read the value once and reuse it. Presence is own-property membership:
-      // `Object.hasOwn` is authoritative but has call overhead, so when no declared
-      // key is a prototype member (the common case, precomputed as `safeKeys`) the
-      // cheap `pv !== undefined` is equivalent — a JSON object can't inherit a
-      // non-prototype-member name.
+      // `Object.hasOwn` is authoritative but has call overhead, so the cheap
+      // `pv !== undefined` is used wherever it is equivalent.
       //
-      // Deliberately not extended to cover a *polluted* `Object.prototype`
-      // carrying an arbitrary name. Unlike the sweeps below, this loop walks
-      // the schema's declared keys rather than the instance's, so pollution
-      // only bites when a polluted name happens to equal a declared property —
-      // and paying for `Object.hasOwn` on every declared key of every object
-      // to cover that is the wrong trade on the hottest loop here.
+      // It is equivalent on exactly two conditions, both settled before the
+      // loop: no declared key is a prototype member (`safeKeys`, per schema),
+      // and the instance inherits nothing (`plain`, one prototype read per
+      // object). Without the second, `Object.create({ token: 'x' })` reported
+      // `token` present — so a value that serializes to `{}` satisfied
+      // `required: ['token']` while `maxProperties: 0` and
+      // `additionalProperties: false`, which sweep the instance's own keys,
+      // both agreed it had none. One read per object rather than one `hasOwn`
+      // per key keeps the fast path cheap for the shape that has it.
       const pv = obj[key]
-      const present = safeKeys ? pv !== undefined : Object.hasOwn(obj, key)
+      const present = fastPresence ? pv !== undefined : Object.hasOwn(obj, key)
       if (requiredSet.has(key)) {
         if (!present) {
           if (asserts) fail(ctx, `must have required property '${key}'`, path)

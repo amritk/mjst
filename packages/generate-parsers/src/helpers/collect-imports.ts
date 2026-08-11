@@ -266,7 +266,12 @@ const collectImportTargets = (
       }
     }
 
-    // Traverse into if/then/else branches
+    // Traverse into if/then/else branches. `if` belongs here as much as the
+    // other two — the root walk already lists it, and the two lists disagreeing
+    // is what let a tuple position go unimported.
+    if ('if' in record) {
+      collectRefsFromValue(record.if)
+    }
     if ('then' in record) {
       collectRefsFromValue(record.then)
     }

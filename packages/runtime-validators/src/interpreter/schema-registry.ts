@@ -60,8 +60,13 @@ export const SYNTHETIC_BASE = 'https://runtime-validators.invalid/schema'
  * Keywords whose value is arbitrary *data* rather than a subschema. An `$id` or
  * `$anchor` sitting inside an `enum` member is part of an instance the schema
  * describes, not a declaration, so the walk stops at these.
+//
+// Kept in step by hand with `@amritk/helpers`' `DATA_KEYWORDS`: this package
+// takes no `@amritk/*` dependency by design, so the set is restated rather
+// than imported. `example` is OpenAPI 3.0's singular spelling and belongs
+// with `examples`.
  */
-const DATA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples'])
+const DATA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples', 'example'])
 
 /** `new URL(ref, base).href`, or `undefined` when the pair does not parse. */
 export const resolveUri = (ref: string, base: string): string | undefined => {

@@ -1,5 +1,5 @@
 import { assignKey } from './assign-key'
-import { DATA_KEYWORDS, SCHEMA_MAPS } from './build-resource-registry'
+import { schemaChildren } from './build-resource-registry'
 
 /**
  * Rewrites OpenAPI 3.0's `nullable: true` into the JSON Schema form the
@@ -24,11 +24,11 @@ export const foldNullable = <T>(schema: T): T => {
   return folded as T
 }
 
-const fold = (node: unknown): unknown => {
+const fold = (node: unknown, inSchemaMap = false): unknown => {
   if (Array.isArray(node)) {
     let changed = false
     const next = node.map((item) => {
-      const folded = fold(item)
+      const folded = fold(item, inSchemaMap)
       if (folded !== item) changed = true
       return folded
     })
@@ -50,18 +50,21 @@ const fold = (node: unknown): unknown => {
   // a schema-shaped `default` came back with its `type` changed, handed to
   // consumers as the author's own. Inside a `properties`-style map the keys are
   // names instead, so the same word carries no keyword meaning there.
-  for (const [key, value] of Object.entries(record)) {
-    if (DATA_KEYWORDS.has(key)) {
-      assignKey(next, key, value)
-      continue
-    }
-    const folded = SCHEMA_MAPS.has(key) ? foldSchemaMap(value) : fold(value)
-    if (folded !== value) changed = true
-    assignKey(next, key, folded)
+  // Everything is copied through first, then `schemaChildren` decides which
+  // children are schemas to fold into. Keys it does not yield are instance
+  // data, which keeps their values exactly as the author wrote them — and
+  // sourcing that rule from the shared generator is what stops this walker
+  // drifting from its five siblings.
+  for (const [key, value] of Object.entries(record)) assignKey(next, key, value)
+  for (const child of schemaChildren(record, inSchemaMap)) {
+    const folded = fold(child.value, child.inSchemaMap)
+    if (folded !== child.value) changed = true
+    assignKey(next, child.key, folded)
   }
 
   const type = record['type']
-  if (record['nullable'] === true) {
+  // Only at a schema node: inside a name-to-schema map, `nullable` is a name.
+  if (!inSchemaMap && record['nullable'] === true) {
     if (typeof type === 'string' && type !== 'null') {
       next['type'] = [type, 'null']
       changed = true
@@ -71,19 +74,5 @@ const fold = (node: unknown): unknown => {
     }
   }
 
-  return changed ? next : node
-}
-
-/** Folds every value of a name-to-schema map; no key in one is a keyword. */
-const foldSchemaMap = (node: unknown): unknown => {
-  if (typeof node !== 'object' || node === null || Array.isArray(node)) return node
-  const record = node as Record<string, unknown>
-  let changed = false
-  const next: Record<string, unknown> = {}
-  for (const [name, value] of Object.entries(record)) {
-    const folded = fold(value)
-    if (folded !== value) changed = true
-    assignKey(next, name, folded)
-  }
   return changed ? next : node
 }

@@ -347,11 +347,13 @@ describe('strip-contract-fields', () => {
   })
 
   it('does not let a regex guess swallow a call site', () => {
-    // Even where a regex really could start, one that spans a `defineContract`
-    // is a wrong guess by construction — the scan backs off rather than
-    // silently skipping the call.
+    // The `/` has to follow a character the heuristic accepts, or the regex
+    // branch is never entered and the test proves nothing. After `*` it is
+    // entered, and the scan would run to the `/` inside `path: '/y'` — spanning
+    // the call. A regex that swallows a call site is a wrong guess by
+    // construction, so the scan backs off and reads the `/` as ordinary.
     const source =
-      "const ratio = a / b; export const real = defineContract({ method: 'get', path: '/x', responses: { 200: {} }, summary: 'gone' })"
+      "const u = 2 * / x; export const real = defineContract({ method: 'get', path: '/y', responses: { 200: {} }, summary: 'gone' })"
     expect(stripContractFields(source)).not.toContain("summary: 'gone'")
   })
 })

@@ -585,7 +585,7 @@ const rebaseKeptRef = (value: string, from: string, root: string): string => {
   // `$defs` — a different definition, which may well exist and resolve cleanly.
   // The document is still identified, though, so pointing the ref back at it
   // keeps the reference meaning what it meant.
-  if (filePart === '') return `${relativeLocation(from, root)}${value}`
+  if (filePart === '') return `${renderLocation(from, root)}${value}`
   // A ref carrying a scheme is absolute: it names the same thing from any
   // document, so there is nothing to rebase — and `joinLocation` would resolve
   // a non-http one like `urn:example:common` as a relative path, producing the
@@ -606,9 +606,6 @@ const renderLocation = (target: string, root: string): string => {
   const relative = relativePath(dirname(root), target).split(sep).join('/')
   return relative.startsWith('.') ? relative : `./${relative}`
 }
-
-/** {@link renderLocation} for a document referring to itself by bare fragment. */
-const relativeLocation = (from: string, root: string): string => renderLocation(from, root)
 
 /**
  * Rewrites every `$ref` in an already-detached subtree so it still names the
