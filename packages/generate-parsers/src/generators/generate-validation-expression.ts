@@ -38,6 +38,7 @@ import { generateDiscriminatedUnionValidation } from './generate-discriminated-u
 import { generateEnumCaseInsensitiveCoercion, generateEnumCheck } from './generate-enum-check'
 import { generateNonDiscriminatedUnionValidation } from './generate-non-discriminated-union-validation'
 import { generateSchemaChecks } from './generate-schema-checks'
+import { generateUniqueItemsCheck } from './generate-unique-items-check'
 
 /**
  * Coercion expression for an `x-mjst` instanceOf value, when one is known.
@@ -141,7 +142,10 @@ export const everyTailItem = (accessor: string, itemCheck: string, schema: JSONS
 export const prefixItemsCapsLength = (schema: JSONSchema): boolean => {
   if (!isSchemaObject(schema)) return false
   const s = schema as Record<string, unknown>
-  return s['items'] === false || s['additionalItems'] === false
+  return (
+    (Object.hasOwn(s, 'items') ? s['items'] : undefined) === false ||
+    (Object.hasOwn(s, 'additionalItems') ? s['additionalItems'] : undefined) === false
+  )
 }
 
 /**
@@ -478,7 +482,11 @@ export const generateValidationExpression = (
           checks.push(`${accessor}.length <= ${schema.maxItems}`)
         }
         if (hasUniqueItems(schema) && schema.uniqueItems === true) {
-          checks.push(`new Set(${accessor}).size === ${accessor}.length`)
+          // The shared check, not a bare `new Set(...)`: reference equality
+          // calls `[{a:1},{a:1}]` unique, so this path accepted duplicates that
+          // every other emitter rejects. `generateUniqueItemsCheck` keeps the
+          // cheap scalar form where the item type allows it.
+          checks.push(generateUniqueItemsCheck(accessor, schema))
         }
         break
       }

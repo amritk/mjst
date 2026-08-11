@@ -358,6 +358,107 @@ const countNewlines = (text: string): number => {
   return count
 }
 
+const NAME = 'defineContract'
+
+/**
+ * {@link REGEX_PRECEDING} minus `<`.
+ *
+ * Inside a contract literal a `<` really does precede a regex more often than a
+ * comparison. At module scope in a `.tsx` file — which `isScannableId` accepts
+ * — it is overwhelmingly JSX, and reading the `/` of a `</p>` as a regex opener
+ * let the scan run to the next `/` in the file and step straight over a real
+ * call site.
+ *
+ * `>` stays: it is the second half of `=>`, and `=> /re/.test(x)` is ordinary
+ * code. Dropping it read that `/` as division, and a quote inside the regex
+ * body then opened a string scan that ran past the next call site — trading the
+ * JSX bug for an arrow-function one.
+ */
+const REGEX_START = new Set([...REGEX_PRECEDING].filter((char) => char !== '<'))
+
+/**
+ * Whether `[from, to)` contains `defineContract`.
+ *
+ * Bounded on purpose. `slice(...).includes(...)` copies the candidate body, and
+ * a plain `indexOf` runs to the end of the module when there is no later match
+ * — both paid on every `/` the scanner guesses at, in a transform documented as
+ * running over every module in a bundle. This scans the candidate and nothing
+ * beyond it.
+ */
+const spansName = (source: string, from: number, to: number): boolean => {
+  for (let index = from; index <= to - NAME.length; index++) {
+    if (source.startsWith(NAME, index)) return true
+  }
+  return false
+}
+
+/**
+ * Finds the next `defineContract` sitting in code position, starting from an
+ * index that is itself in code position. Returns its start index, or -1.
+ *
+ * A plain `indexOf` would also find the name inside a string, a template, or
+ * a comment — and the rewrite that followed would edit text the module merely
+ * quotes. A docs page holding a usage sample in a template literal is the case
+ * that bites: its rendered output silently loses the very fields the sample
+ * exists to show, with no error anywhere to trace it back to.
+ *
+ * A literal the scanners cannot follow (an apostrophe in JSX text that runs to
+ * the end of its line, say) is not fatal — the character is treated as ordinary
+ * and the walk continues, which is exactly where `indexOf` already left things.
+ *
+ * Two cases have no answer here, and both fail the same safe way — the call
+ * site is left alone, so the bundle is bigger rather than broken, which is why
+ * the wiring in the example below tests `stripped === source`.
+ *
+ * The first is JSX text that *does* close: a `<p>don't stop</p>` sharing a line
+ * with a call site scans from the apostrophe to the next quote and steps over
+ * it. Telling that from a genuine string holding a code sample needs a real
+ * parser — the two are the same shape, and the two requirements are opposite.
+ * Put a call site on its own line and it is never in question.
+ *
+ * The second is a call site inside a template *substitution* — `` `${defineContract({…})}` ``
+ * — which is executing code the surrounding quotes do not make data. The scan
+ * skips whole templates, because the case it must not break is the far more
+ * common one of a template holding a code sample. Distinguishing them means
+ * scanning into substitutions while skipping the literal text around them;
+ * worth doing if the construct ever shows up in practice.
+ */
+const nextCallSite = (source: string, from: number): number => {
+  let index = from
+  let previous = ''
+  while (index < source.length) {
+    const char = source[index]
+    if (char === undefined) return -1
+    if (char === ' ' || char === '\t' || char === '\n' || char === '\r') {
+      index += 1
+    } else if (char === '/' && (source[index + 1] === '/' || source[index + 1] === '*')) {
+      index = skipTrivia(source, index)
+    } else if (char === "'" || char === '"') {
+      index = scanString(source, index) ?? index + 1
+      previous = char
+    } else if (char === '`') {
+      index = scanTemplate(source, index) ?? index + 1
+      previous = char
+    } else if (char === '/' && (previous === '' || REGEX_START.has(previous))) {
+      // Unlike a quote or a backtick, a `/` here is a *guess* — nothing else
+      // in the language wants this character skipped — so a "regex" that spans
+      // a call site is simply a wrong guess, and the `/` is read as ordinary
+      // instead. Quotes get no such check: a call site quoted inside a real
+      // string or template must be skipped, which is the opposite rule, and no
+      // single test tells the two apart (see the note above).
+      const end = scanRegex(source, index)
+      index = end === null || spansName(source, index, end) ? index + 1 : end
+      previous = '0'
+    } else if (char === 'd' && source.startsWith(NAME, index)) {
+      return index
+    } else {
+      index += 1
+      previous = char
+    }
+  }
+  return -1
+}
+
 /**
  * Rewrites every parseable `defineContract({ ... })` call site in a module's
  * source down to the fields the client runtime reads. Pure text in, text out,
@@ -399,9 +500,9 @@ export const stripContractFields = (source: string): string => {
   let copiedTo = 0
   let searchFrom = 0
   while (true) {
-    const found = source.indexOf('defineContract', searchFrom)
+    const found = nextCallSite(source, searchFrom)
     if (found === -1) break
-    const afterName = found + 'defineContract'.length
+    const afterName = found + NAME.length
     const before = source[found - 1]
     const after = source[afterName]
     // Only a real call of the plain identifier counts — not `x.defineContract`

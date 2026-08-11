@@ -2,6 +2,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { buildDynamicRefMap } from './build-dynamic-ref-map'
 import { assertSchemaDepth } from './max-schema-depth'
+import { readKey } from './read-key'
 
 /**
  * Drops the registered documents nothing in the schema actually references.
@@ -32,9 +33,21 @@ import { assertSchemaDepth } from './max-schema-depth'
 /** The `$defs` prefix an in-document pointer to a registered document starts with. */
 const DEFS_PREFIX = '#/$defs/'
 
-/** Reverses RFC 6901's escapes, so a definition named `a/b` is matched by its real name. */
+/**
+ * Reverses `escapePointerSegment`, so a definition named `a/b` is matched by
+ * its real name.
+ *
+ * That includes the `%` escape, not only RFC 6901's `~0`/`~1`: the pointers
+ * read here are built by `escapePointerSegment`, which escapes `%` because the
+ * result travels as a URI fragment. Reversing only the tilde forms left a
+ * registered name like `https://example.com/a%20b.json` reading back as
+ * `…a%2520b.json`, which matched no external document — so the companion
+ * schema a `$dynamicRef` still bound to was pruned away.
+ */
 const unescapeSegment = (segment: string): string =>
-  segment.indexOf('~') === -1 ? segment : segment.replace(/~1/g, '/').replace(/~0/g, '~')
+  segment.indexOf('~') === -1 && segment.indexOf('%25') === -1
+    ? segment
+    : segment.replace(/~1/g, '/').replace(/~0/g, '~').replace(/%25/g, '%')
 
 /**
  * The registered document a pointer leads into, or `undefined` when it names
@@ -70,21 +83,26 @@ const referencedFrom = (
     }
 
     const record = value as Record<string, unknown>
-    const ref = record['$ref']
+    // `Object.hasOwn`, not a bare index: with `Object.prototype.$ref` set by
+    // any dependency, every object walked here would report a ref — so
+    // everything registered read as reached and nothing was ever pruned.
+    const ref = Object.hasOwn(record, '$ref') ? record['$ref'] : undefined
     if (typeof ref === 'string') {
       const name = externalTarget(ref, external)
       if (name !== undefined) into.add(name)
     }
-    const dynamicRef = record['$dynamicRef']
+    const dynamicRef = Object.hasOwn(record, '$dynamicRef') ? record['$dynamicRef'] : undefined
     if (typeof dynamicRef === 'string') {
       // An anchor-form `$dynamicRef` binds through the map; a pointer-form one
       // already says where it goes.
-      const target = dynamicRef.startsWith('#/') ? dynamicRef : dynamicMap[dynamicRef]
+      const target = dynamicRef.startsWith('#/') ? dynamicRef : readKey(dynamicMap, dynamicRef)
       const name = target === undefined ? undefined : externalTarget(target, external)
       if (name !== undefined) into.add(name)
     }
 
-    for (const key in record) walk(record[key], depth + 1)
+    // `Object.values`, not `for…in`: the walk would otherwise descend into
+    // inherited enumerable values.
+    for (const value of Object.values(record)) walk(value, depth + 1)
   }
 
   walk(node, 0)

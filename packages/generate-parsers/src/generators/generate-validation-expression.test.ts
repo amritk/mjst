@@ -143,11 +143,15 @@ describe('generate-validation-expression', () => {
   })
 
   it('generates array validation with uniqueItems', () => {
+    // Items of unknown type may be objects, and reference equality calls
+    // `[{a:1},{a:1}]` unique — so this path has to use the same structural
+    // comparison every other emitter uses, not a bare `new Set`.
     const schema = { type: 'array' as const, uniqueItems: true }
     const result = generateValidationExpression('tags', schema, '[]', true)
 
     expect(result).toContain('Array.isArray(input?.tags)')
-    expect(result).toContain('new Set(input?.tags).size === input?.tags.length')
+    expect(result).toContain('JSON.stringify(_u')
+    expect(result).toContain(').size === input?.tags.length')
   })
 
   it('generates object type validation', () => {
@@ -536,7 +540,7 @@ describe('generate-validation-expression', () => {
     expect(result).toContain('Array.isArray(input?.tags)')
     expect(result).toContain('input?.tags.length >= 1')
     expect(result).toContain('input?.tags.length <= 10')
-    expect(result).toContain('new Set(input?.tags).size === input?.tags.length')
+    expect(result).toContain(').size === input?.tags.length')
   })
 
   it('combines multiple object constraints', () => {

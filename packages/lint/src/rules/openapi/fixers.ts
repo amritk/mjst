@@ -1,5 +1,9 @@
 import type { JsonPath } from '../../core/types'
 import type { EditOp, Fixer, FixerRegistry } from '../../fix'
+// The rule's own comparator, imported rather than restated: a local copy
+// drifted from it, and a fixer that sorts by a different order than the rule
+// judges by either never converges or never fires at all.
+import { compareAlphabetically } from '../../functions/alphabetical'
 
 /** Reads the value at `path` in the parsed document, or `undefined` if absent. */
 const getAtPath = (data: unknown, path: JsonPath): unknown => {
@@ -93,14 +97,6 @@ const duplicatedEnum: Fixer = {
   },
 }
 
-// Mirror the `alphabetical` built-in's comparator exactly so that sorting here
-// produces an order the rule considers sorted — otherwise `--fix` could reorder
-// into a sequence the rule still flags and never converge.
-const compareAlphabetical = (a: unknown, b: unknown): number => {
-  if (typeof a === 'number' && typeof b === 'number') return a - b
-  return String(a).localeCompare(String(b))
-}
-
 /** `openapi-tags-alphabetical`: reorder the top-level `tags` array by `name`. */
 const tagsAlphabetical: Fixer = {
   safe: true,
@@ -111,8 +107,21 @@ const tagsAlphabetical: Fixer = {
     if (!Array.isArray(array)) return undefined
     const nameOf = (item: unknown): unknown =>
       item != null && typeof item === 'object' ? (item as Record<string, unknown>)['name'] : item
-    const order = array.map((_, index) => index).sort((a, b) => compareAlphabetical(nameOf(array[a]), nameOf(array[b])))
+    const order = array
+      .map((_, index) => index)
+      .sort((a, b) => compareAlphabetically(nameOf(array[a]), nameOf(array[b])))
     if (order.every((value, index) => value === index)) return undefined
+    // `compareAlphabetically` is deliberately not a total order — it decides
+    // numeric-vs-textual per pair — so `sort` can return a sequence the rule
+    // still rejects. Emitting it anyway would rewrite the document on every
+    // pass without ever clearing the finding, and the fix loop would run out
+    // of passes and report `converged: false`. Checking the result costs one
+    // linear scan and turns that into "left alone for a human", which is the
+    // honest answer when no order satisfies the rule.
+    const sorted = order.map((index) => nameOf(array[index]))
+    for (let i = 0; i < sorted.length - 1; i++) {
+      if (compareAlphabetically(sorted[i], sorted[i + 1]) > 0) return undefined
+    }
     return { op: 'reorderArray', path: arrayPath, order }
   },
 }

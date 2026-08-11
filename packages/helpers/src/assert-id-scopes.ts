@@ -1,15 +1,16 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
-import { buildResourceRegistry, DATA_KEYWORDS, escapePointerSegment } from './build-resource-registry'
+import { buildResourceRegistry, entersSchemaMap, escapePointerSegment, isDataPosition } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
+import { readKey } from './read-key'
 import { resolveRef } from './resolve-ref'
 import { resolveScopedRef } from './resolve-scoped-ref'
 
 /** True when a subschema declares targets a fragment ref could legitimately mean. */
 const declaresLocalTargets = (record: Record<string, unknown>): boolean =>
-  typeof record['$defs'] === 'object' ||
-  typeof record['definitions'] === 'object' ||
-  typeof record['$anchor'] === 'string'
+  typeof readKey(record, '$defs') === 'object' ||
+  typeof readKey(record, 'definitions') === 'object' ||
+  typeof readKey(record, '$anchor') === 'string'
 
 /**
  * Fails a document whose `$id` scoping this package cannot honour.
@@ -44,12 +45,13 @@ export const assertIdScopes = (rootSchema: JSONSchema): void => {
     enclosing: string,
     resource: Record<string, unknown> | null,
     depth: number,
+    inSchemaMap: boolean,
   ): void => {
     assertSchemaDepth(depth, 'assertIdScopes')
     if (node === null || typeof node !== 'object') return
     if (Array.isArray(node)) {
       for (let index = 0; index < node.length; index++) {
-        walk(node[index], `${pointer}/${index}`, enclosing, resource, depth + 1)
+        walk(node[index], `${pointer}/${index}`, enclosing, resource, depth + 1, inSchemaMap)
       }
       return
     }
@@ -60,7 +62,7 @@ export const assertIdScopes = (rootSchema: JSONSchema): void => {
     const scope = declared !== undefined && pointer !== '' ? record : resource
 
     for (const key of ['$ref', '$dynamicRef'] as const) {
-      const ref = record[key]
+      const ref = readKey(record, key)
       if (typeof ref !== 'string' || !ref.startsWith('#') || ref === '#') continue
       if (scope === null || !declaresLocalTargets(scope)) continue
       const target = resolveScopedRef(registry, ref, base)
@@ -74,10 +76,17 @@ export const assertIdScopes = (rootSchema: JSONSchema): void => {
     }
 
     for (const key of Object.keys(record)) {
-      if (DATA_KEYWORDS.has(key)) continue
-      walk(record[key], `${pointer}/${escapePointerSegment(key)}`, base, scope, depth + 1)
+      if (isDataPosition(key, inSchemaMap)) continue
+      walk(
+        record[key],
+        `${pointer}/${escapePointerSegment(key)}`,
+        base,
+        scope,
+        depth + 1,
+        entersSchemaMap(key, inSchemaMap),
+      )
     }
   }
 
-  walk(rootSchema, '', registry.rootBase, null, 0)
+  walk(rootSchema, '', registry.rootBase, null, 0, false)
 }

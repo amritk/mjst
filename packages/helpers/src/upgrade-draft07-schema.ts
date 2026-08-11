@@ -19,7 +19,8 @@
  * Only applied when the schema declares `$schema: http://json-schema.org/draft-07/schema`.
  */
 
-import { DATA_KEYWORDS } from './build-resource-registry'
+import { assignKey } from './assign-key'
+import { entersSchemaMap, isDataPosition } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { refToFilename, toKebabCase } from './ref-to-filename'
 
@@ -33,25 +34,37 @@ export const isDraft07Schema = (schema: Record<string, unknown>): boolean =>
  * Rewrites `$ref` values in a schema tree using an explicit string→string map.
  * Also rewrites bare `$ref: "#"` to the given `selfRef` path when provided.
  */
-const rewriteRefs = (obj: unknown, refMap: ReadonlyMap<string, string>, selfRef?: string, depth = 0): unknown => {
+const rewriteRefs = (
+  obj: unknown,
+  refMap: ReadonlyMap<string, string>,
+  selfRef?: string,
+  depth = 0,
+  inSchemaMap = false,
+): unknown => {
   assertSchemaDepth(depth, 'upgradeDraft07Schema')
   if (typeof obj !== 'object' || obj === null) return obj
-  if (Array.isArray(obj)) return obj.map((item) => rewriteRefs(item, refMap, selfRef, depth + 1))
+  if (Array.isArray(obj)) return obj.map((item) => rewriteRefs(item, refMap, selfRef, depth + 1, inSchemaMap))
 
   const record = obj as Record<string, unknown>
   const result: Record<string, unknown> = {}
 
+  // Instance data is copied verbatim. Rewriting a `$ref` inside a `default`,
+  // `enum` or `example(s)` changed the literal the author wrote — and for an
+  // `enum` member that means an instance equal to a declared member is now
+  // rejected, because the member itself moved.
   for (const [key, value] of Object.entries(record)) {
-    if (key === '$ref' && typeof value === 'string') {
+    if (isDataPosition(key, inSchemaMap)) {
+      assignKey(result, key, value)
+    } else if (!inSchemaMap && key === '$ref' && typeof value === 'string') {
       if (refMap.has(value)) {
-        result[key] = refMap.get(value)
+        assignKey(result, key, refMap.get(value))
       } else if (value === '#' && selfRef) {
-        result[key] = selfRef
+        assignKey(result, key, selfRef)
       } else {
-        result[key] = value
+        assignKey(result, key, value)
       }
     } else {
-      result[key] = rewriteRefs(value, refMap, selfRef, depth + 1)
+      assignKey(result, key, rewriteRefs(value, refMap, selfRef, depth + 1, entersSchemaMap(key, inSchemaMap)))
     }
   }
 
@@ -72,7 +85,7 @@ const hoistNestedDefs = (defs: Record<string, unknown>): Record<string, unknown>
 
   for (const [parentName, parentSchema] of Object.entries(defs)) {
     if (typeof parentSchema !== 'object' || parentSchema === null) {
-      hoisted[parentName] = parentSchema
+      assignKey(hoisted, parentName, parentSchema)
       continue
     }
 
@@ -80,7 +93,7 @@ const hoistNestedDefs = (defs: Record<string, unknown>): Record<string, unknown>
     const nestedDefs = parentObj['$defs'] as Record<string, unknown> | undefined
 
     if (!nestedDefs || typeof nestedDefs !== 'object') {
-      hoisted[parentName] = parentSchema
+      assignKey(hoisted, parentName, parentSchema)
       continue
     }
 
@@ -101,12 +114,12 @@ const hoistNestedDefs = (defs: Record<string, unknown>): Record<string, unknown>
     // URI-with-fragment refs (e.g. "http://foo.json#/$defs/queue") can still
     // navigate into the parent's nested defs after resolution.
     const rewrittenParent = rewriteRefs(parentObj, localToHoisted, selfRef) as Record<string, unknown>
-    hoisted[parentName] = rewrittenParent
+    assignKey(hoisted, parentName, rewrittenParent)
 
     // Hoist each nested def, rewriting its internal refs too
     for (const [localName, localSchema] of Object.entries(nestedDefs)) {
       const hoistedName = `${parentPrefix}-${toKebabCase(localName)}`
-      hoisted[hoistedName] = rewriteRefs(localSchema, localToHoisted, selfRef)
+      assignKey(hoisted, hoistedName, rewriteRefs(localSchema, localToHoisted, selfRef))
     }
   }
 
@@ -132,7 +145,11 @@ export const upgradeDraft07Schema = (schema: Record<string, unknown>): Record<st
   // so nested defs are accessible before hoisting
   const renamedDefs: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(rawDefs)) {
-    renamedDefs[key] = renameNestedDefs(value)
+    // A definition may legitimately be named `__proto__`; a plain assignment
+    // on that key sets the map's prototype and the definition disappears —
+    // while the `$ref` to it is still rewritten, so the generators then fail
+    // to resolve a definition the document declares right there.
+    assignKey(renamedDefs, key, renameNestedDefs(value))
   }
 
   // Hoist nested $defs up to root so the pipeline can resolve all refs flatly
@@ -144,8 +161,11 @@ export const upgradeDraft07Schema = (schema: Record<string, unknown>): Record<st
   for (const key of Object.keys(hoistedDefs)) {
     if (key.startsWith('http://') || key.startsWith('https://')) {
       const shortName = refToFilename(key)
-      if (shortName && !(shortName in hoistedDefs)) {
-        hoistedDefs[shortName] = hoistedDefs[key]
+      // `Object.hasOwn`, not `in`: a short name of `constructor` or
+      // `toString` matches `Object.prototype` and the alias is silently
+      // skipped, leaving the internal refs that expect it unresolvable.
+      if (shortName && !Object.hasOwn(hoistedDefs, shortName)) {
+        assignKey(hoistedDefs, shortName, hoistedDefs[key])
       }
     }
   }
@@ -192,27 +212,31 @@ export const upgradeDraft07Schema = (schema: Record<string, unknown>): Record<st
  * keeps its inner segment and still will not resolve. That gap is unchanged, and
  * the same in both places.
  */
-const rewriteDefinitionsRefs = (obj: unknown, depth = 0): unknown => {
+const rewriteDefinitionsRefs = (obj: unknown, depth = 0, inSchemaMap = false): unknown => {
   assertSchemaDepth(depth, 'upgradeDraft07Schema')
   if (typeof obj !== 'object' || obj === null) return obj
-  if (Array.isArray(obj)) return obj.map((item) => rewriteDefinitionsRefs(item, depth + 1))
+  if (Array.isArray(obj)) return obj.map((item) => rewriteDefinitionsRefs(item, depth + 1, inSchemaMap))
 
   const record = obj as Record<string, unknown>
   const result: Record<string, unknown> = {}
 
-  for (const [key, value] of Object.entries(record)) {
+  // Everything is copied through, then the shared position rule says which children are
+  // schemas to descend into. Testing the data keywords by key name alone would
+  // skip a property genuinely *named* `example` or `default` — leaving its
+  // `#/definitions/...` unrewritten while the block it names is renamed to
+  // `$defs`, so the ref dangles and the generators stop the build.
+  for (const [key, value] of Object.entries(record)) assignKey(result, key, value)
+  for (const key of Object.keys(record)) {
+    if (isDataPosition(key, inSchemaMap)) continue
+    const value = record[key]
     const rewritten =
-      key === '$ref' && typeof value === 'string' && value.startsWith('#/definitions/')
+      !inSchemaMap && key === '$ref' && typeof value === 'string' && value.startsWith('#/definitions/')
         ? value.replace('#/definitions/', '#/$defs/')
-        : DATA_KEYWORDS.has(key) || startsNewResource(value)
+        : startsNewResource(value)
           ? value
-          : rewriteDefinitionsRefs(value, depth + 1)
+          : rewriteDefinitionsRefs(value, depth + 1, entersSchemaMap(key, inSchemaMap))
 
-    if (key === '__proto__') {
-      Object.defineProperty(result, key, { value: rewritten, writable: true, enumerable: true, configurable: true })
-    } else {
-      result[key] = rewritten
-    }
+    assignKey(result, key, rewritten)
   }
 
   return result
@@ -231,21 +255,32 @@ const startsNewResource = (value: unknown): boolean =>
  * `hoistNestedDefs` can map them to their hoisted root-level equivalents.
  * Does NOT hoist — hoisting is done separately at the root level.
  */
-const renameNestedDefs = (obj: unknown, depth = 0): unknown => {
+const renameNestedDefs = (obj: unknown, depth = 0, inSchemaMap = false): unknown => {
   assertSchemaDepth(depth, 'upgradeDraft07Schema')
   if (typeof obj !== 'object' || obj === null) return obj
-  if (Array.isArray(obj)) return obj.map((item) => renameNestedDefs(item, depth + 1))
+  if (Array.isArray(obj)) return obj.map((item) => renameNestedDefs(item, depth + 1, inSchemaMap))
 
   const record = obj as Record<string, unknown>
   const result: Record<string, unknown> = {}
 
-  for (const [key, value] of Object.entries(record)) {
-    if (key === '$ref' && typeof value === 'string' && value.startsWith('#/definitions/')) {
-      result[key] = value.replace('#/definitions/', '#/$defs/')
-    } else {
-      const outKey = key === 'definitions' ? '$defs' : key
-      result[outKey] = renameNestedDefs(value, depth + 1)
+  // Copy first, then rewrite only the children the shared position rule calls schemas —
+  // the same guard `rewriteDefinitionsRefs` carries. Without it this rewrote
+  // `$ref`s inside `default`/`enum`/`example` values (changing the literal the
+  // author wrote) and renamed a *property* genuinely called `definitions` to
+  // `$defs`, so the declared property vanished from the emitted type and a
+  // property the schema never had appeared beside it.
+  for (const [key, value] of Object.entries(record)) assignKey(result, key, value)
+  for (const key of Object.keys(record)) {
+    if (isDataPosition(key, inSchemaMap)) continue
+    const value = record[key]
+    if (!inSchemaMap && key === '$ref' && typeof value === 'string' && value.startsWith('#/definitions/')) {
+      assignKey(result, key, value.replace('#/definitions/', '#/$defs/'))
+      continue
     }
+    // Only a `definitions` *keyword* is renamed; inside a name map it is a name.
+    const outKey = !inSchemaMap && key === 'definitions' ? '$defs' : key
+    if (outKey !== key) delete result[key]
+    assignKey(result, outKey, renameNestedDefs(value, depth + 1, entersSchemaMap(key, inSchemaMap)))
   }
 
   return result

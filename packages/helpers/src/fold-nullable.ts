@@ -1,3 +1,6 @@
+import { assignKey } from './assign-key'
+import { entersSchemaMap, isDataPosition } from './build-resource-registry'
+
 /**
  * Rewrites OpenAPI 3.0's `nullable: true` into the JSON Schema form the
  * generators already enforce: a `null` member of the node's `type`.
@@ -21,11 +24,11 @@ export const foldNullable = <T>(schema: T): T => {
   return folded as T
 }
 
-const fold = (node: unknown): unknown => {
+const fold = (node: unknown, inSchemaMap = false): unknown => {
   if (Array.isArray(node)) {
     let changed = false
     const next = node.map((item) => {
-      const folded = fold(item)
+      const folded = fold(item, inSchemaMap)
       if (folded !== item) changed = true
       return folded
     })
@@ -38,15 +41,34 @@ const fold = (node: unknown): unknown => {
   let changed = false
   const next: Record<string, unknown> = {}
 
-  for (const key in record) {
-    const value = record[key]
-    const folded = fold(value)
-    if (folded !== value) changed = true
-    next[key] = folded
+  // Own keys, and a guarded write: a bare `for…in` walks the prototype chain,
+  // and `next[key] = …` on a `__proto__` property drops it from the output.
+  //
+  // At a schema node the keys are keywords, so `enum`/`const`/`default`/
+  // `examples` mark instance data: an object under one is a value the schema
+  // describes rather than a schema, and folding into it rewrote the value —
+  // a schema-shaped `default` came back with its `type` changed, handed to
+  // consumers as the author's own. Inside a `properties`-style map the keys are
+  // names instead, so the same word carries no keyword meaning there.
+  // Everything is copied through first, then the shared position rule decides which
+  // children are schemas to fold into. Keys it does not yield are instance
+  // data, which keeps their values exactly as the author wrote them — and
+  // sourcing that rule from the shared generator is what stops this walker
+  // drifting from its five siblings.
+  for (const [key, value] of Object.entries(record)) assignKey(next, key, value)
+  for (const key of Object.keys(record)) {
+    if (isDataPosition(key, inSchemaMap)) continue
+    const folded = fold(record[key], entersSchemaMap(key, inSchemaMap))
+    if (folded !== record[key]) changed = true
+    assignKey(next, key, folded)
   }
 
-  const type = record['type']
-  if (record['nullable'] === true) {
+  const type = Object.hasOwn(record, 'type') ? record['type'] : undefined
+  // Own keys only, and only at a schema node: inside a name-to-schema map,
+  // `nullable` is a name. A polluted `Object.prototype.nullable` would
+  // otherwise fold every node in the document, so every generated parser
+  // accepted `null` where the schema forbids it.
+  if (!inSchemaMap && Object.hasOwn(record, 'nullable') && record['nullable'] === true) {
     if (typeof type === 'string' && type !== 'null') {
       next['type'] = [type, 'null']
       changed = true

@@ -92,8 +92,13 @@ const defineOwn = (target: Record<string, unknown>, key: string, value: unknown)
  * in one of these is a documented config value that happens to be `$ref`-shaped,
  * not a reference to follow — inlining it would replace the value the reader is
  * supposed to copy with the definition it collided with.
+ *
+ * Kept in step by hand with `@amritk/helpers`' `DATA_KEYWORDS`: this package
+ * takes no `@amritk/*` dependency by design, so the set is restated rather
+ * than imported. `example` is OpenAPI 3.0's singular spelling and belongs with
+ * `examples`.
  */
-const DATA_KEYWORDS: ReadonlySet<string> = new Set(['default', 'const', 'enum', 'examples'])
+const DATA_KEYWORDS: ReadonlySet<string> = new Set(['default', 'const', 'enum', 'examples', 'example'])
 
 /**
  * Keywords holding a *map of name → subschema*. Their keys are author-chosen
@@ -107,6 +112,7 @@ const SCHEMA_MAP_KEYWORDS: ReadonlySet<string> = new Set([
   'dependentSchemas',
   '$defs',
   'definitions',
+  'dependencies',
 ])
 
 /**

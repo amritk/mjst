@@ -1,0 +1,118 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+
+import { DATA_KEYWORDS, SCHEMA_MAPS } from './build-resource-registry'
+
+/**
+ * The two sets that decide, at every schema walk in the monorepo, which keys
+ * are keywords and which are author-chosen names.
+ *
+ * `@amritk/resolve-refs`, `@amritk/runtime-validators` and
+ * `@amritk/generate-markdown` take no `@amritk/*` dependency by design, so each
+ * restates them — and each restatement has drifted at least once, every time
+ * producing the same class of bug: a definition or property named `default`,
+ * `examples` or `example` silently skipped, so an `$anchor` under it never
+ * registered, a `pattern` under it was never screened, or a tuple inside it was
+ * never normalized. Three rounds of review found three of these one at a time.
+ *
+ * Parsing the sources is deliberate. Importing them is impossible across the
+ * dependency boundary that makes the copies necessary in the first place, and a
+ * hand-written expected list would be a sixth copy to keep in step.
+ */
+
+/**
+ * Copies that legitimately hold *more* than {@link DATA_KEYWORDS} — a walker
+ * that skips the data keywords plus some of its own. Every data keyword still
+ * has to be in there, which is the half that drifts.
+ */
+const SUPERSETS: ReadonlyArray<{ file: string; name: string }> = [
+  { file: '../../generate-examples/src/generators/schema-validation.ts', name: 'SKIP_RECURSE' },
+]
+
+const COPIES: ReadonlyArray<{ file: string; data: string; maps?: string }> = [
+  {
+    file: '../../resolve-refs/src/child-role.ts',
+    data: 'VALUE_KEYWORDS',
+    maps: 'SCHEMA_MAP_KEYWORDS',
+  },
+  {
+    file: '../../runtime-validators/src/interpreter/schema-registry.ts',
+    data: 'DATA_KEYWORDS',
+    maps: 'SCHEMA_MAPS',
+  },
+  {
+    file: '../../runtime-validators/src/interpreter/limits.ts',
+    data: 'DATA_KEYWORDS',
+    maps: 'SCHEMA_MAPS',
+  },
+  {
+    file: '../../runtime-validators/src/interpreter/resolve-local-ref.ts',
+    data: 'DATA_KEYWORDS',
+    maps: 'SCHEMA_MAPS',
+  },
+  {
+    file: '../../generate-markdown/src/index.ts',
+    data: 'DATA_KEYWORDS',
+    maps: 'SCHEMA_MAP_KEYWORDS',
+  },
+]
+
+/** Copies that restate only `SCHEMA_MAPS`, their data set being a superset. */
+const MAP_ONLY: ReadonlyArray<{ file: string; name: string }> = [
+  { file: '../../generate-examples/src/generators/schema-validation.ts', name: 'SCHEMA_MAPS' },
+]
+
+/**
+ * The string members of a `const <name> = new Set([...])` declaration.
+ *
+ * Comments are stripped before the members are read. These declarations carry
+ * explanatory comments — this codebase puts one on nearly everything — and an
+ * apostrophe in one (`` `@amritk/helpers`' ``, `3.0's`) shifts every following
+ * quote pair, so a naive scan silently returned comment fragments and dropped
+ * real members. A test that mis-parses the thing it guards is worse than no
+ * test: it passed while reading nonsense.
+ */
+const readSet = (source: string, name: string): string[] => {
+  const start = source.search(new RegExp(`const ${name}\\b`))
+  if (start === -1) throw new Error(`${name} not found`)
+  const open = source.indexOf('[', start)
+  const close = source.indexOf('])', open)
+  if (open === -1 || close === -1) throw new Error(`${name} is not a Set literal`)
+  const body = source
+    .slice(open + 1, close)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n]*/g, '')
+  return [...body.matchAll(/'([^']*)'/g)].map((entry) => entry[1] as string).sort()
+}
+
+describe('keyword-set parity', () => {
+  const here = new URL('.', import.meta.url).pathname
+
+  for (const copy of COPIES) {
+    const source = readFileSync(join(here, copy.file), 'utf8')
+
+    it(`${copy.file} restates DATA_KEYWORDS exactly`, () => {
+      expect(readSet(source, copy.data)).toEqual([...DATA_KEYWORDS].sort())
+    })
+
+    if (copy.maps !== undefined) {
+      it(`${copy.file} restates SCHEMA_MAPS exactly`, () => {
+        expect(readSet(source, copy.maps as string)).toEqual([...SCHEMA_MAPS].sort())
+      })
+    }
+  }
+
+  for (const superset of SUPERSETS) {
+    it(`${superset.file} contains every data keyword`, () => {
+      const members = readSet(readFileSync(join(here, superset.file), 'utf8'), superset.name)
+      expect(members).toEqual(expect.arrayContaining([...DATA_KEYWORDS]))
+    })
+  }
+
+  for (const copy of MAP_ONLY) {
+    it(`${copy.file} restates SCHEMA_MAPS exactly`, () => {
+      expect(readSet(readFileSync(join(here, copy.file), 'utf8'), copy.name)).toEqual([...SCHEMA_MAPS].sort())
+    })
+  }
+})

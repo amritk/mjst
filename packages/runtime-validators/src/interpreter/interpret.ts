@@ -7,6 +7,19 @@ import type { SchemaRegistry } from '@/interpreter/schema-registry'
 import type { ValidationError } from '@/types'
 
 /**
+ * A schema keyword's value, treating an inherited name as absent.
+ *
+ * Schemas arrive at runtime, so a bare `s['additionalProperties']` answers from
+ * `Object.prototype` when a dependency has polluted it — turning a keyword on
+ * for every schema in the process, so `additionalProperties: false` rejected
+ * every object and `propertyNames` rejected every key. Each keyword was found
+ * and fixed one at a time across several reviews; `prototype-pollution.test.ts`
+ * now enumerates the whole surface, and this is the single read it relies on.
+ */
+const own = (schema: Record<string, unknown>, keyword: string): unknown =>
+  Object.hasOwn(schema, keyword) ? schema[keyword] : undefined
+
+/**
  * The genuinely reusable artifacts of a validation — compiled `RegExp`s and
  * resolved `$ref` targets — held in one place and shared across a run and its
  * nested branch contexts. Each map is allocated lazily on first use, so the
@@ -591,48 +604,30 @@ type ObjectMeta = {
   dependentSchemasEntries: [string, unknown][] | null
   /** Draft-07 `dependencies` as entries — see {@link ObjectMeta.dependentRequiredEntries}. */
   dependenciesEntries: [string, unknown][] | null
-  /**
-   * True when none of this node's declared/required keys is a name inherited from
-   * `Object.prototype` (`constructor`, `toString`, `__proto__`, …). For such keys
-   * presence can be tested with the cheap `obj[key] !== undefined` — a JSON object
-   * never inherits them — instead of the slower `Object.hasOwn`. Only a schema
-   * that actually declares a prototype-member key pays the `hasOwn` cost.
-   */
-  safeKeys: boolean
 }
 
 /**
- * Names reachable on a plain object via its prototype chain, for which a bare
- * `obj[key]` read could return an inherited value and wrongly report presence.
- */
-const PROTO_MEMBER_NAMES = new Set<string>([
-  '__proto__',
-  'constructor',
-  'prototype',
-  'toString',
-  'toLocaleString',
-  'valueOf',
-  'hasOwnProperty',
-  'isPrototypeOf',
-  'propertyIsEnumerable',
-  '__defineGetter__',
-  '__defineSetter__',
-  '__lookupGetter__',
-  '__lookupSetter__',
-])
-
-/**
- * Uniform property-presence test, matching how `required`/`properties` decide a
- * key is present (Ajv's default `!== undefined`, so `{ a: undefined }` counts as
- * absent). A prototype-member name is checked with `Object.hasOwn` so an inherited
- * `toString`/`constructor` is never mistaken for a real property. Used by the
- * presence-gated dependency keywords (`dependentRequired`, `dependentSchemas`,
- * `dependencies`) so they agree with `required`/`properties` instead of splitting
- * between `!== undefined` and `hasOwn`. (`required` itself keeps its precomputed
- * `safeKeys` fast path, which is equivalent to this for its declared keys.)
+ * The property-presence test, used by every keyword that asks the question:
+ * `required`, `properties`, and the presence-gated dependency keywords
+ * (`dependentRequired`, `dependentSchemas`, `dependencies`). Presence is
+ * own-property membership *and* a defined value — Ajv's rule, so
+ * `{ a: undefined }` counts as absent.
+ *
+ * This was a `!== undefined` read with a precomputed exemption for the standard
+ * `Object.prototype` names, and it kept being wrong in a new way: an inherited
+ * value from `Object.create({ token: 'x' })`, then a polluted `Object.prototype`
+ * carrying a name the exemption list does not know, then the two call sites the
+ * narrowing fixes missed. Each round it disagreed with `minProperties`,
+ * `additionalProperties` and `unevaluatedProperties`, which sweep the
+ * instance's own keys — so an object serializing to `{}` satisfied
+ * `required: ['token']` while every other keyword agreed it had no properties.
+ *
+ * `Object.hasOwn` answers it outright. It costs a call per *declared* key —
+ * the schema's, not the instance's, so a handful — against a class of bug that
+ * has now recurred three times. One rule, no exemption list to keep correct.
  */
 const hasProperty = (obj: Record<string, unknown>, key: string): boolean =>
-  PROTO_MEMBER_NAMES.has(key) ? Object.hasOwn(obj, key) : obj[key] !== undefined
+  Object.hasOwn(obj, key) && obj[key] !== undefined
 
 /**
  * Memoized enum membership. An all-primitive enum resolves to a `Set` (SameValueZero,
@@ -666,13 +661,18 @@ const objectMetaCache = new WeakMap<object, ObjectMeta>()
 const getObjectMeta = (s: Record<string, unknown>): ObjectMeta => {
   let meta = objectMetaCache.get(s)
   if (meta === undefined) {
-    const properties = isPlainObject(s['properties']) ? s['properties'] : undefined
-    const patternProperties = isPlainObject(s['patternProperties']) ? s['patternProperties'] : undefined
-    const required = Array.isArray(s['required']) ? (s['required'] as string[]) : []
+    const rawProperties = own(s, 'properties')
+    const properties = isPlainObject(rawProperties) ? rawProperties : undefined
+    const rawPatternProperties = own(s, 'patternProperties')
+    const patternProperties = isPlainObject(rawPatternProperties) ? rawPatternProperties : undefined
+    const required = Array.isArray(own(s, 'required')) ? (own(s, 'required') as string[]) : []
     const knownKeys = properties ? Object.keys(properties) : undefined
-    const dependentRequired = isPlainObject(s['dependentRequired']) ? s['dependentRequired'] : undefined
-    const dependentSchemas = isPlainObject(s['dependentSchemas']) ? s['dependentSchemas'] : undefined
-    const dependencies = isPlainObject(s['dependencies']) ? s['dependencies'] : undefined
+    const rawDependentRequired = own(s, 'dependentRequired')
+    const dependentRequired = isPlainObject(rawDependentRequired) ? rawDependentRequired : undefined
+    const rawDependentSchemas = own(s, 'dependentSchemas')
+    const dependentSchemas = isPlainObject(rawDependentSchemas) ? rawDependentSchemas : undefined
+    const rawDependencies = own(s, 'dependencies')
+    const dependencies = isPlainObject(rawDependencies) ? rawDependencies : undefined
     meta = {
       properties,
       knownKeys,
@@ -697,9 +697,6 @@ const getObjectMeta = (s: Record<string, unknown>): ObjectMeta => {
         : null,
       dependentSchemasEntries: dependentSchemas ? Object.entries(dependentSchemas) : null,
       dependenciesEntries: dependencies ? Object.entries(dependencies) : null,
-      safeKeys:
-        (knownKeys === undefined || knownKeys.every((k) => !PROTO_MEMBER_NAMES.has(k))) &&
-        required.every((k) => !PROTO_MEMBER_NAMES.has(k)),
     }
     objectMetaCache.set(s, meta)
   }
@@ -720,7 +717,7 @@ const interpretObject = (
   const obj = value as Record<string, unknown>
 
   const meta = getObjectMeta(s)
-  const { properties, knownKeys, escapedKeys, requiredSet, safeKeys } = meta
+  const { properties, knownKeys, escapedKeys, requiredSet } = meta
   const emitErrors = ctx.emitErrors
   // `required`, `dependentRequired` and the property-count bounds are
   // validation-vocabulary; `properties`, `patternProperties`,
@@ -728,21 +725,21 @@ const interpretObject = (
   // applicators and always apply.
   const asserts = ctx.assertsValidation
 
-  const hasAdditional = 'additionalProperties' in s
-  const additional = s['additionalProperties']
-  const minProps = asserts && typeof s['minProperties'] === 'number' ? s['minProperties'] : undefined
-  const maxProps = asserts && typeof s['maxProperties'] === 'number' ? s['maxProperties'] : undefined
+  const hasAdditional = Object.hasOwn(s, 'additionalProperties')
+  const additional = own(s, 'additionalProperties')
+  const rawMinProps = own(s, 'minProperties')
+  const minProps = asserts && typeof rawMinProps === 'number' ? rawMinProps : undefined
+  const rawMaxProps = own(s, 'maxProperties')
+  const maxProps = asserts && typeof rawMaxProps === 'number' ? rawMaxProps : undefined
 
   if (properties && knownKeys && escapedKeys) {
     for (let i = 0; i < knownKeys.length; i++) {
       const key = knownKeys[i] as string
-      // Read the value once and reuse it. Presence is own-property membership:
-      // `Object.hasOwn` is authoritative but has call overhead, so when no declared
-      // key is a prototype member (the common case, precomputed as `safeKeys`) the
-      // cheap `pv !== undefined` is equivalent — a JSON object can't inherit a
-      // non-prototype-member name.
+      // One read, reused. `hasProperty` spells the same rule for callers that
+      // do not already hold the value; here the `!== undefined` half is free
+      // off `pv`, so only the `hasOwn` half is left to ask.
       const pv = obj[key]
-      const present = safeKeys ? pv !== undefined : Object.hasOwn(obj, key)
+      const present = pv !== undefined && Object.hasOwn(obj, key)
       if (requiredSet.has(key)) {
         if (!present) {
           if (asserts) fail(ctx, `must have required property '${key}'`, path)
@@ -763,7 +760,7 @@ const interpretObject = (
   // Required keys with no `properties` entry still need a presence check.
   if (asserts) {
     for (const key of meta.requiredNotInProps) {
-      if (safeKeys ? obj[key] === undefined : !Object.hasOwn(obj, key)) {
+      if (!hasProperty(obj, key)) {
         fail(ctx, `must have required property '${key}'`, path)
         if (ctx.failed) return
       }
@@ -827,7 +824,16 @@ const interpretObject = (
   const patternEntries = meta.patternEntries
   const needsLoop = patternEntries !== null || (hasAdditional && additional !== true)
   if (needsLoop) {
-    for (const k in obj) {
+    // Own keys only, for the reason `minProperties` spells out below: a bare
+    // `for…in` walks the prototype chain, so an inherited key was validated as
+    // though the instance carried it — and a polluted `Object.prototype` made
+    // `additionalProperties: false` reject every object in the process.
+    // `Object.keys`, not a guarded `for…in`: the benchmark recorded with
+    // `minProperties` below measures the three forms on a 20-key object at 92M
+    // ops/s for `Object.keys`, 19M for an unguarded `for…in` and 9.5M for a
+    // guarded one — the key array costs less than a `hasOwn` call per key on
+    // top of a prototype-chain enumeration.
+    for (const k of Object.keys(obj)) {
       // `patternProperties` applies to every matching key independently of
       // `properties` — a key declared in both must satisfy both — so it runs even
       // when `k` is also a known property. Only `additionalProperties` is the
@@ -859,7 +865,8 @@ const interpretObject = (
   }
 
   if (minProps !== undefined || maxProps !== undefined) {
-    // Own properties only, as the spec requires. A bare `for…in` also walks the
+    // Own properties only, as the spec requires — and the measurement the
+    // sweeps above cite. A bare `for…in` also walks the
     // prototype chain, so `Object.create({ inherited: 1 })` with one own key
     // counted as two and passed `minProperties: 2`. `Object.keys().length` looks
     // like the allocating option, but it measured the fastest of the three by a
@@ -878,8 +885,8 @@ const interpretObject = (
   }
 
   // `propertyNames` — every property *key* (as a string) must match the schema.
-  if ('propertyNames' in s) {
-    const nameSchema = s['propertyNames']
+  if (Object.hasOwn(s, 'propertyNames')) {
+    const nameSchema = own(s, 'propertyNames')
     // One scratch context for the whole key loop instead of the fresh nine-field
     // one `matchesSchema` builds per call — on a 20-key object that was 20
     // context allocations for what is usually a one-keyword string check.
@@ -888,7 +895,8 @@ const interpretObject = (
     // in boolean mode, and these probes cannot nest — the key is a string, so the
     // inner walk never reaches another `propertyNames` at this instance location.
     let probe: InterpreterContext | null = null
-    for (const k in obj) {
+    // Own keys only — same reason, and the same form, as the sweep above.
+    for (const k of Object.keys(obj)) {
       if (probe === null) probe = newBranchContext(ctx)
       else probe.failed = false
       interpret(probe, nameSchema, k, '', null, depth + 1, scope)
@@ -916,20 +924,26 @@ const interpretArray = (
   // The count bounds and `uniqueItems` are validation-vocabulary; `prefixItems`,
   // `items` and `contains` are applicators and always apply.
   const asserts = ctx.assertsValidation
-  const minItems = asserts && typeof s['minItems'] === 'number' ? s['minItems'] : undefined
-  const maxItems = asserts && typeof s['maxItems'] === 'number' ? s['maxItems'] : undefined
-  const uniqueRequired = asserts && s['uniqueItems'] === true
+  const rawMinItems = own(s, 'minItems')
+  const minItems = asserts && typeof rawMinItems === 'number' ? rawMinItems : undefined
+  const rawMaxItems = own(s, 'maxItems')
+  const maxItems = asserts && typeof rawMaxItems === 'number' ? rawMaxItems : undefined
+  const uniqueRequired = asserts && own(s, 'uniqueItems') === true
 
   let tuple: unknown[] | undefined
   let rest: unknown
-  if (Array.isArray(s['prefixItems'])) {
-    tuple = s['prefixItems'] as unknown[]
-    rest = s['items']
-  } else if (Array.isArray(s['items'])) {
-    tuple = s['items'] as unknown[]
-    rest = s['additionalItems']
+  // Each keyword read once — `own` is a call plus an `Object.hasOwn` call, and
+  // this runs per array validated.
+  const prefixItems = own(s, 'prefixItems')
+  const items = own(s, 'items')
+  if (Array.isArray(prefixItems)) {
+    tuple = prefixItems
+    rest = items
+  } else if (Array.isArray(items)) {
+    tuple = items
+    rest = own(s, 'additionalItems')
   } else {
-    rest = s['items']
+    rest = items
   }
   const start = tuple ? tuple.length : 0
 
@@ -978,12 +992,14 @@ const interpretArray = (
   // items must match the subschema. `minContains: 0` makes the lower bound
   // trivially satisfied (even for an empty array) while any `maxContains` still
   // applies. Branch matches are evaluated as booleans so they never leak errors.
-  if ('contains' in s) {
-    const containsSchema = s['contains']
+  if (Object.hasOwn(s, 'contains')) {
+    const containsSchema = own(s, 'contains')
     // `minContains`/`maxContains` are validation-vocabulary; `contains` itself is
     // an applicator, and its own "at least one match" assertion stands either way.
-    const min = asserts && typeof s['minContains'] === 'number' ? s['minContains'] : 1
-    const max = asserts && typeof s['maxContains'] === 'number' ? s['maxContains'] : undefined
+    const rawMin = own(s, 'minContains')
+    const min = asserts && typeof rawMin === 'number' ? rawMin : 1
+    const rawMax = own(s, 'maxContains')
+    const max = asserts && typeof rawMax === 'number' ? rawMax : undefined
     // `maxContains` needs the exact total (it is an upper bound), and an active
     // annotation scope needs every match (not just the first `min`) — so only
     // when neither is in play can we stop early. Without this a 1000-element
@@ -1030,7 +1046,7 @@ const interpretString = (ctx: InterpreterContext, s: Record<string, unknown>, va
     // pair. So the cheap unit count is authoritative except in a narrow band near
     // each bound, and the exact `codePointLength` scan is only paid there. This
     // keeps the common ASCII / short-string path allocation- and scan-free.
-    const minLength = s['minLength']
+    const minLength = own(s, 'minLength')
     if (typeof minLength === 'number') {
       const units = value.length
       // units < min ⇒ code points < min (fail). units >= 2·min ⇒ code points >= min
@@ -1040,7 +1056,7 @@ const interpretString = (ctx: InterpreterContext, s: Record<string, unknown>, va
         if (ctx.failed) return
       }
     }
-    const maxLength = s['maxLength']
+    const maxLength = own(s, 'maxLength')
     if (typeof maxLength === 'number') {
       // units <= max ⇒ code points <= max (pass); only an over-long unit count needs
       // the exact scan, where surrogate pairs may still bring it within bounds.
@@ -1049,14 +1065,14 @@ const interpretString = (ctx: InterpreterContext, s: Record<string, unknown>, va
         if (ctx.failed) return
       }
     }
-    const pattern = s['pattern']
+    const pattern = own(s, 'pattern')
     if (typeof pattern === 'string' && !getRegex(ctx, pattern).test(value)) {
       fail(ctx, `must match pattern ${pattern}`, path)
       if (ctx.failed) return
     }
   }
 
-  const format = s['format']
+  const format = own(s, 'format')
   if (typeof format === 'string') {
     const enabled = ctx.formats === 'all' || ctx.formats.has(format)
     if (enabled) {
@@ -1064,7 +1080,15 @@ const interpretString = (ctx: InterpreterContext, s: Record<string, unknown>, va
       if (format === 'regex') {
         if (!isValidRegex(value)) fail(ctx, `must match format "${format}"`, path)
       } else {
-        const re = FORMAT_CHECKS[format]
+        // `Object.hasOwn`, not a bare index: the schema is runtime input, and
+        // `format: "toString"` otherwise read `Function.prototype.toString` off
+        // the prototype chain — truthy, with no `.test` — so an unknown format
+        // that the spec says to ignore crashed the validator instead.
+        //
+        // Spelled out rather than calling `@amritk/helpers`' `readKey`: this
+        // package takes no `@amritk/*` dependency by design, so the runtime
+        // stays slim.
+        const re = Object.hasOwn(FORMAT_CHECKS, format) ? FORMAT_CHECKS[format] : undefined
         if (re && !re.test(value)) fail(ctx, `must match format "${format}"`, path)
       }
     }
@@ -1081,36 +1105,36 @@ const interpretNumber = (ctx: InterpreterContext, s: Record<string, unknown>, va
   // still accepts non-finite numbers, as Ajv does; only a bound (or `multipleOf`)
   // rejects them. `±Infinity` follows the ordinary comparison (e.g. `Infinity`
   // passes `minimum: 0` but fails `maximum: 10`), again matching Ajv.
-  const minimum = s['minimum']
+  const minimum = own(s, 'minimum')
   if (typeof minimum === 'number') {
     // Draft-04 used a boolean `exclusiveMinimum: true` alongside `minimum` to
     // make the bound strict; draft-06+ replaced it with a standalone numeric
     // keyword (handled below). Honour both forms.
-    const strict = s['exclusiveMinimum'] === true
+    const strict = own(s, 'exclusiveMinimum') === true
     if (!(strict ? value > minimum : value >= minimum)) {
       fail(ctx, strict ? `must be > ${minimum}` : `must be >= ${minimum}`, path)
       if (ctx.failed) return
     }
   }
-  const maximum = s['maximum']
+  const maximum = own(s, 'maximum')
   if (typeof maximum === 'number') {
-    const strict = s['exclusiveMaximum'] === true
+    const strict = own(s, 'exclusiveMaximum') === true
     if (!(strict ? value < maximum : value <= maximum)) {
       fail(ctx, strict ? `must be < ${maximum}` : `must be <= ${maximum}`, path)
       if (ctx.failed) return
     }
   }
-  const exclusiveMinimum = s['exclusiveMinimum']
+  const exclusiveMinimum = own(s, 'exclusiveMinimum')
   if (typeof exclusiveMinimum === 'number' && !(value > exclusiveMinimum)) {
     fail(ctx, `must be > ${exclusiveMinimum}`, path)
     if (ctx.failed) return
   }
-  const exclusiveMaximum = s['exclusiveMaximum']
+  const exclusiveMaximum = own(s, 'exclusiveMaximum')
   if (typeof exclusiveMaximum === 'number' && !(value < exclusiveMaximum)) {
     fail(ctx, `must be < ${exclusiveMaximum}`, path)
     if (ctx.failed) return
   }
-  const multipleOf = s['multipleOf']
+  const multipleOf = own(s, 'multipleOf')
   if (typeof multipleOf === 'number' && multipleOf > 0) {
     let ok: boolean
     if (Number.isInteger(multipleOf)) {
@@ -1246,7 +1270,7 @@ export const interpret = (
   // OpenAPI 3.0 `nullable: true` — a `null` value is accepted regardless of the
   // declared `type` (and short-circuits every other keyword), matching how Ajv
   // is configured for OpenAPI schemas.
-  if (s['nullable'] === true && value === null) return
+  if (own(s, 'nullable') === true && value === null) return
 
   // An `$id` here opens a new schema resource: refs written below resolve
   // against its URI, and it joins the dynamic scope a `$dynamicRef` searches.
@@ -1259,13 +1283,13 @@ export const interpret = (
   // to this same instance. Inherit the ancestor's tracker when one is in scope;
   // otherwise start one only if this node carries an `unevaluated*` keyword, so
   // schemas that never use them allocate nothing.
-  const nodeUnevaluated = 'unevaluatedProperties' in s || 'unevaluatedItems' in s
+  const nodeUnevaluated = Object.hasOwn(s, 'unevaluatedProperties') || Object.hasOwn(s, 'unevaluatedItems')
   const evalScope: Evaluation | null = evaluation ?? (nodeUnevaluated ? newEvaluation() : null)
 
   // $ref — validate against the resolved target. {@link interpretRef} breaks
   // reference cycles so a self- or mutually-recursive `$ref` cannot recurse
   // forever. Sibling keywords still apply per 2020-12, so we do not stop here.
-  const ref = s['$ref']
+  const ref = own(s, '$ref')
   if (typeof ref === 'string') {
     const base = registry === null ? undefined : scope[scope.length - 1]
     if (registry === null || base === undefined) {
@@ -1279,7 +1303,7 @@ export const interpret = (
 
   // `$dynamicRef` (2020-12) — late-binds to a matching `$dynamicAnchor`. Like
   // `$ref`, sibling keywords still apply, so we do not stop here.
-  const dynRef = s['$dynamicRef']
+  const dynRef = own(s, '$dynamicRef')
   if (typeof dynRef === 'string') {
     const base = registry === null ? undefined : scope[scope.length - 1]
     if (registry === null || base === undefined) {
@@ -1294,7 +1318,7 @@ export const interpret = (
   // `$recursiveRef` (2019-09) — the predecessor of `$dynamicRef`. Its only legal
   // value is `"#"`: late-binds to the `$recursiveAnchor: true` subschema,
   // falling back to the document root.
-  if (typeof s['$recursiveRef'] === 'string') {
+  if (typeof own(s, '$recursiveRef') === 'string') {
     interpretRef(ctx, resolveRec(ctx), value, path, evalScope, depth, scope)
     if (ctx.failed) return
   }
@@ -1306,8 +1330,8 @@ export const interpret = (
   // `true` for every ordinary schema, so this costs one boolean read.
   const asserts = ctx.assertsValidation
 
-  if (asserts && 'const' in s) {
-    const c = s['const']
+  if (asserts && Object.hasOwn(s, 'const')) {
+    const c = own(s, 'const')
     if (isPrimitiveEnumValue(c)) {
       if (value !== c) fail(ctx, `must be equal to ${JSON.stringify(c)}`, path)
     } else if (!deepEqual(value, c)) {
@@ -1316,8 +1340,9 @@ export const interpret = (
     if (ctx.failed) return
   }
 
-  if (asserts && Array.isArray(s['enum'])) {
-    const values = s['enum'] as unknown[]
+  const enumValues = own(s, 'enum')
+  if (asserts && Array.isArray(enumValues)) {
+    const values = enumValues
     // Membership is memoized per schema node: an all-primitive enum resolves to a
     // `Set` for O(1) lookup instead of re-scanning `every(isPrimitiveEnumValue)`
     // and doing a linear `includes` on every validation (a 100-value enum on a hot
@@ -1349,7 +1374,7 @@ export const interpret = (
     }
   }
 
-  const rawType = asserts ? s['type'] : undefined
+  const rawType = asserts ? own(s, 'type') : undefined
   if (typeof rawType === 'string') {
     // The common single-type case: check it directly without wrapping it in a
     // throwaway one-element array (which this hot path would otherwise allocate
@@ -1390,16 +1415,18 @@ export const interpret = (
     if (ctx.failed) return
   }
 
-  if (Array.isArray(s['allOf'])) {
-    for (const sub of s['allOf']) {
+  const allOf = own(s, 'allOf')
+  if (Array.isArray(allOf)) {
+    for (const sub of allOf) {
       interpretInPlace(ctx, sub, value, path, evalScope, depth, scope)
       if (ctx.failed) return
     }
   }
 
-  if (Array.isArray(s['anyOf']) && s['anyOf'].length > 0) {
+  const anyOf = own(s, 'anyOf')
+  if (Array.isArray(anyOf) && anyOf.length > 0) {
     let ok = false
-    for (const sub of s['anyOf']) {
+    for (const sub of anyOf) {
       // When tracking annotations, evaluate every branch (each match contributes
       // its evaluated keys); otherwise short-circuit on the first match.
       if (matchesSchema(ctx, sub, value, depth, scope, evalScope)) {
@@ -1413,9 +1440,10 @@ export const interpret = (
     }
   }
 
-  if (Array.isArray(s['oneOf']) && s['oneOf'].length > 0) {
+  const oneOf = own(s, 'oneOf')
+  if (Array.isArray(oneOf) && oneOf.length > 0) {
     let count = 0
-    for (const sub of s['oneOf']) {
+    for (const sub of oneOf) {
       if (matchesSchema(ctx, sub, value, depth, scope, evalScope)) count++
     }
     if (count !== 1) {
@@ -1424,19 +1452,19 @@ export const interpret = (
     }
   }
 
-  if ('not' in s) {
+  if (Object.hasOwn(s, 'not')) {
     // `not` produces no annotations — a passing inner schema means failure.
-    if (matchesSchema(ctx, s['not'], value, depth, scope)) {
+    if (matchesSchema(ctx, own(s, 'not'), value, depth, scope)) {
       fail(ctx, 'must not match schema', path)
       if (ctx.failed) return
     }
   }
 
-  if ('if' in s) {
-    if (matchesSchema(ctx, s['if'], value, depth, scope, evalScope)) {
-      if ('then' in s) interpretInPlace(ctx, s['then'], value, path, evalScope, depth, scope)
-    } else if ('else' in s) {
-      interpretInPlace(ctx, s['else'], value, path, evalScope, depth, scope)
+  if (Object.hasOwn(s, 'if')) {
+    if (matchesSchema(ctx, own(s, 'if'), value, depth, scope, evalScope)) {
+      if (Object.hasOwn(s, 'then')) interpretInPlace(ctx, own(s, 'then'), value, path, evalScope, depth, scope)
+    } else if (Object.hasOwn(s, 'else')) {
+      interpretInPlace(ctx, own(s, 'else'), value, path, evalScope, depth, scope)
     }
   }
 
@@ -1461,11 +1489,17 @@ const interpretUnevaluated = (
   depth: number,
   scope: DynamicScope,
 ): void => {
-  if ('unevaluatedProperties' in s && typeof value === 'object' && value !== null && !Array.isArray(value)) {
-    const up = s['unevaluatedProperties']
+  if (
+    Object.hasOwn(s, 'unevaluatedProperties') &&
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value)
+  ) {
+    const up = own(s, 'unevaluatedProperties')
     if (!evalScope.allProps) {
       const obj = value as Record<string, unknown>
-      for (const k in obj) {
+      // Own keys only, matching every other property sweep in this file.
+      for (const k of Object.keys(obj)) {
         if (evalScope.props.has(k)) continue
         if (up === false) {
           fail(ctx, 'must NOT have unevaluated properties', childPath(ctx, path, k))
@@ -1479,8 +1513,8 @@ const interpretUnevaluated = (
     }
   }
 
-  if ('unevaluatedItems' in s && Array.isArray(value)) {
-    const ui = s['unevaluatedItems']
+  if (Object.hasOwn(s, 'unevaluatedItems') && Array.isArray(value)) {
+    const ui = own(s, 'unevaluatedItems')
     if (!evalScope.allItems) {
       const arr = value as unknown[]
       for (let i = 0; i < arr.length; i++) {

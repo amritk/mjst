@@ -241,4 +241,27 @@ describe('string extends via a resolver', () => {
       { name: './base', basePath: '/rulesets' },
     ])
   })
+
+  it('does not resolve a then.function that names a prototype member', () => {
+    // `then.function` is ruleset input. Reading it straight off the function
+    // registry found `Function.prototype.toString`, which then ran as a rule
+    // function — and its string return value was iterated one character at a
+    // time into a diagnostic apiece.
+    const ruleset = createRuleset({
+      rules: { probe: { given: '$.info', then: { function: 'toString' } } },
+    })
+    expect(ruleset.getFunction('toString')).toBeUndefined()
+    expect(ruleset.getFunction('constructor')).toBeUndefined()
+  })
+
+  it('rejects an alias that names a prototype member instead of registering it', () => {
+    // The alias grammar accepts `#constructor`. Reading the definition off
+    // `Object.prototype` made the "undefined alias" throw look satisfied, and
+    // the prototype member was then written into the table as a real own key —
+    // which the lookup guard could no longer catch, so the missing `.targets`
+    // threw out of the whole lint run.
+    expect(() =>
+      createRuleset({ rules: { probe: { given: ['#constructor'], then: { function: 'truthy' } } } }),
+    ).toThrow(/references undefined alias "#constructor"/)
+  })
 })

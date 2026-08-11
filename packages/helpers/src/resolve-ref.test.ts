@@ -257,4 +257,12 @@ describe('resolveRef', () => {
     expect(resolveRef('#/constructor/prototype', schema)).toBeUndefined()
     expect(resolveRef('#/$defs/a/toString', schema)).toBeUndefined()
   })
+
+  it('does not resolve a URI-form ref that names a prototype member of $defs', () => {
+    // A bare index handed back `Object.prototype` as though the document had
+    // declared it, and the generators then emitted a file for that definition.
+    const root = { $defs: { Real: { type: 'string' } } }
+    expect(resolveRef('__proto__', root as never)).toBeUndefined()
+    expect(resolveRef('constructor', root as never)).toBeUndefined()
+  })
 })

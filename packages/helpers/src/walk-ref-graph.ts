@@ -1,11 +1,14 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { assertIdScopes } from './assert-id-scopes'
+import { assignKey } from './assign-key'
 import { buildDynamicRefMap } from './build-dynamic-ref-map'
+import { entersSchemaMap, isDataPosition } from './build-resource-registry'
 import { extractRefs } from './extract-refs'
 import { graftExternalSchemas } from './graft-external-schemas'
 import { normalizeRefScopes } from './normalize-ref-scopes'
 import { pruneExternalSchemas } from './prune-external-schemas'
+import { readKey } from './read-key'
 import { refToFilename } from './ref-to-filename'
 import { refToName } from './ref-to-name'
 import { resolveDynamicRefs } from './resolve-dynamic-refs'
@@ -160,8 +163,9 @@ const SHAPE_KEYWORDS = [
 const getAliasRootRef = (schema: JSONSchema): string | null => {
   if (typeof schema !== 'object' || schema === null) return null
   const record = schema as Record<string, unknown>
-  if (typeof record['$ref'] !== 'string') return null
-  return SHAPE_KEYWORDS.some((key) => key in record) ? null : record['$ref']
+  const ref = readKey(record, '$ref')
+  if (typeof ref !== 'string') return null
+  return SHAPE_KEYWORDS.some((key) => Object.hasOwn(record, key)) ? null : ref
 }
 
 /** The keys whose value is a map of named definitions — the things a `$ref` can name. */
@@ -179,22 +183,30 @@ const DEFINITION_MAP_KEYS = ['$defs', 'definitions'] as const
  * `additionalProperties: true` and `additionalProperties: {}` mean the same thing
  * to a validator but generate different *types*, so those are left alone.
  */
-const expandBooleanDefinitions = (value: unknown): unknown => {
+const expandBooleanDefinitions = (value: unknown, inSchemaMap = false): unknown => {
   if (typeof value !== 'object' || value === null) return value
   if (Array.isArray(value)) {
-    const mapped = value.map(expandBooleanDefinitions)
+    const mapped = value.map((item) => expandBooleanDefinitions(item, inSchemaMap))
     return mapped.some((item, index) => item !== value[index]) ? mapped : value
   }
 
   const record = value as Record<string, unknown>
   let changed = false
   const result: Record<string, unknown> = {}
-  for (const [key, sub] of Object.entries(record)) {
-    const next = (DEFINITION_MAP_KEYS as readonly string[]).includes(key)
-      ? expandDefinitionMap(sub)
-      : expandBooleanDefinitions(sub)
-    if (next !== sub) changed = true
-    result[key] = next
+  // `isDataPosition` decides which keys are keywords. Classifying by name
+  // alone expanded a `$defs` sitting inside a `default`/`enum` value — turning
+  // the author's literal `true` into `{}` — and treated a property genuinely
+  // named `$defs` as a definition map, which the doc above says must not
+  // happen because `true` and `{}` generate different TypeScript.
+  for (const [key, sub] of Object.entries(record)) assignKey(result, key, sub)
+  for (const key of Object.keys(record)) {
+    if (isDataPosition(key, inSchemaMap)) continue
+    const next =
+      !inSchemaMap && (DEFINITION_MAP_KEYS as readonly string[]).includes(key)
+        ? expandDefinitionMap(record[key])
+        : expandBooleanDefinitions(record[key], entersSchemaMap(key, inSchemaMap))
+    if (next !== record[key]) changed = true
+    assignKey(result, key, next)
   }
   return changed ? result : value
 }
@@ -208,7 +220,7 @@ const expandDefinitionMap = (definitions: unknown): unknown => {
   for (const [name, definition] of Object.entries(record)) {
     const next = definition === true ? {} : definition === false ? { not: {} } : expandBooleanDefinitions(definition)
     if (next !== definition) changed = true
-    result[name] = next
+    assignKey(result, name, next)
   }
   return changed ? result : definitions
 }
@@ -266,23 +278,61 @@ const getRootCache = (rootSchema: JSONSchema, schemas: Readonly<Record<string, u
 }
 
 /** True when the document points at its own root — `$ref: "#"` (or `"#/"`) anywhere inside it. */
-const referencesRoot = (value: unknown): boolean => {
+const referencesRoot = (value: unknown, inSchemaMap = false): boolean => {
   if (typeof value !== 'object' || value === null) return false
-  if (Array.isArray(value)) return value.some(referencesRoot)
+  if (Array.isArray(value)) return value.some((item) => referencesRoot(item, inSchemaMap))
   const record = value as Record<string, unknown>
-  if (record['$ref'] === ROOT_POINTER || record['$ref'] === '#/') return true
-  for (const key in record) if (referencesRoot(record[key])) return true
+  // Instance data is skipped: a `default: { "$ref": "#" }` is a documented
+  // config value, and counting it grafted a full self-copy of the root
+  // document into `$defs` — doubling every artifact generated from it.
+  if (!inSchemaMap) {
+    const ref = readKey(record, '$ref')
+    if (ref === ROOT_POINTER || ref === '#/') return true
+  }
+  for (const key of Object.keys(record)) {
+    if (isDataPosition(key, inSchemaMap)) continue
+    if (referencesRoot(record[key], entersSchemaMap(key, inSchemaMap))) return true
+  }
   return false
 }
 
-/** Rewrites every root-pointer `$ref` to the root's `$defs` alias, deep-copying as it goes. */
-const rewriteRootRefs = (value: unknown, rootSelfRef: string): unknown => {
+/** A structural deep copy, for the subtrees `rewriteRootRefs` must not rewrite. */
+const copyValue = (value: unknown): unknown => {
   if (typeof value !== 'object' || value === null) return value
-  if (Array.isArray(value)) return value.map((item) => rewriteRootRefs(item, rootSelfRef))
+  if (Array.isArray(value)) return value.map(copyValue)
   const out: Record<string, unknown> = {}
-  for (const [key, sub] of Object.entries(value as Record<string, unknown>)) {
-    out[key] =
-      key === '$ref' && (sub === ROOT_POINTER || sub === '#/') ? rootSelfRef : rewriteRootRefs(sub, rootSelfRef)
+  for (const [key, sub] of Object.entries(value as Record<string, unknown>)) assignKey(out, key, copyValue(sub))
+  return out
+}
+
+/** Rewrites every root-pointer `$ref` to the root's `$defs` alias, deep-copying as it goes. */
+const rewriteRootRefs = (value: unknown, rootSelfRef: string, inSchemaMap = false): unknown => {
+  if (typeof value !== 'object' || value === null) return value
+  if (Array.isArray(value)) return value.map((item) => rewriteRootRefs(item, rootSelfRef, inSchemaMap))
+  const out: Record<string, unknown> = {}
+  const record = value as Record<string, unknown>
+  // One pass, in the input's key order — the siblings fixed alongside this one
+  // all copy through and overwrite in place, and emitting the data keys first
+  // and the schema keys after reordered the output.
+  //
+  // Instance data is copied, not rewritten: a `default: { "$ref": "#" }` is a
+  // documented config value that happens to be ref-shaped, and rewriting its
+  // literal hands consumers a pointer the author never wrote. Copied rather
+  // than aliased, because this function's contract is a fresh tree — placing
+  // the caller's own object here would let a later stage mutating a `default`
+  // write through to the input document and to every other emitted node.
+  for (const key of Object.keys(record)) {
+    if (isDataPosition(key, inSchemaMap)) {
+      assignKey(out, key, copyValue(record[key]))
+      continue
+    }
+    assignKey(
+      out,
+      key,
+      !inSchemaMap && key === '$ref' && (record[key] === ROOT_POINTER || record[key] === '#/')
+        ? rootSelfRef
+        : rewriteRootRefs(record[key], rootSelfRef, entersSchemaMap(key, inSchemaMap)),
+    )
   }
   return out
 }
@@ -352,9 +402,9 @@ const dynamicPointerRefs = (value: unknown, into: Set<string> = new Set()): Set<
     return into
   }
   const record = value as Record<string, unknown>
-  const ref = record['$dynamicRef']
+  const ref = readKey(record, '$dynamicRef')
   if (typeof ref === 'string' && ref.startsWith('#/')) into.add(ref)
-  for (const key in record) dynamicPointerRefs(record[key], into)
+  for (const key of Object.keys(record)) dynamicPointerRefs(record[key], into)
   return into
 }
 

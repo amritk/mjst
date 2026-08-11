@@ -1,7 +1,7 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
-import { collectImports } from './collect-imports'
+import { collectImports, collectImportTypeNames } from './collect-imports'
 
 describe('collect-imports', () => {
   it('collects imports from properties with $ref', () => {
@@ -563,5 +563,107 @@ describe('collect-imports', () => {
     expect(collectImports(schema, { typesOnly: true, importExt: 'ts' })).toEqual([
       "import type { Contact } from './contact.ts';",
     ])
+  })
+
+  it('imports a $ref used in a tuple position', () => {
+    // The type emitter renders a `prefixItems` `$ref` as the referenced type
+    // name, so skipping tuple positions here produced a file that names
+    // `Contact` with no import for it — output that does not compile.
+    const schema = {
+      type: 'object' as const,
+      properties: {
+        pair: { type: 'array' as const, prefixItems: [{ $ref: '#/$defs/Contact' }, { type: 'string' as const }] },
+      },
+    }
+    expect(collectImportTypeNames(schema)).toContain('Contact')
+  })
+
+  it('imports a tuple-only $ref as a type, and a mixed one as a value', () => {
+    // The parser emitter passes a tuple element through untouched, so importing
+    // `parseContact`/`validateContactShape` beside the type leaves two bindings
+    // nothing calls — a `noUnusedLocals` error in the consumer's build. A ref
+    // used anywhere else still needs the value import.
+    const tupleOnly = {
+      type: 'object' as const,
+      properties: { pair: { type: 'array' as const, prefixItems: [{ $ref: '#/$defs/Contact' }] } },
+    }
+    expect(collectImports(tupleOnly)).toEqual(["import type { Contact } from './contact.js';"])
+
+    const mixed = {
+      type: 'object' as const,
+      properties: {
+        pair: { type: 'array' as const, prefixItems: [{ $ref: '#/$defs/Contact' }] },
+        direct: { $ref: '#/$defs/Contact' },
+      },
+    }
+    expect(collectImports(mixed)).toEqual([
+      "import { type Contact, parseContact, validateContactShape } from './contact.js';",
+    ])
+  })
+
+  it('imports a $ref from a root-level tuple, in either spelling', () => {
+    // The root enumerates its keywords by hand, so one missing from that list
+    // is never walked at all: a schema that *is* a tuple emitted a type naming
+    // `Contact` with no import for it.
+    for (const keyword of ['prefixItems', 'items'] as const) {
+      const schema = { type: 'array' as const, [keyword]: [{ $ref: '#/$defs/Contact' }, { type: 'string' }] }
+      expect(collectImports(schema)).toEqual(["import type { Contact } from './contact.js';"])
+    }
+  })
+
+  it('treats a draft-07 array-valued items tuple as type-only too', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { pair: { type: 'array' as const, items: [{ $ref: '#/$defs/Contact' }] } },
+    }
+    expect(collectImports(schema)).toEqual(["import type { Contact } from './contact.js';"])
+  })
+
+  it('keeps the value import for a single-schema items', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { list: { type: 'array' as const, items: { $ref: '#/$defs/Contact' } } },
+    }
+    expect(collectImports(schema)).toEqual([
+      "import { type Contact, parseContact, validateContactShape } from './contact.js';",
+    ])
+  })
+
+  describe('a polluted Object.prototype', () => {
+    // The walk probes and reads keys off documents the caller supplied, so an
+    // inherited one used to read as declared — and the import that followed
+    // named a module that was never emitted, so the generated output did not
+    // compile.
+    const proto = Object.prototype as unknown as Record<string, unknown>
+    afterEach(() => {
+      for (const key of ['properties', 'prefixItems', 'items', 'if']) delete proto[key]
+    })
+
+    for (const key of ['properties', 'prefixItems', 'items', 'if'] as const) {
+      it(`conjures no import from an inherited ${key}`, () => {
+        proto[key] =
+          key === 'prefixItems' || key === 'items' ? [{ $ref: '#/$defs/Ghost' }] : { g: { $ref: '#/$defs/Ghost' } }
+        expect(collectImports({ type: 'string' })).toEqual([])
+      })
+    }
+  })
+
+  it('imports a $ref used as a draft-07 tuple rest element', () => {
+    // The type emitter renders `additionalItems` as `...Contact[]`, so a `$ref`
+    // there needs its import exactly as a fixed position does — and the tuple
+    // walk collected the positions but not the rest element.
+    const schema = {
+      type: 'array' as const,
+      items: [{ type: 'string' as const }],
+      additionalItems: { $ref: '#/$defs/Contact' },
+    }
+    expect(collectImports(schema)).toEqual(["import type { Contact } from './contact.js';"])
+  })
+
+  it('tolerates a malformed properties rather than throwing', () => {
+    // `properties: null` is malformed, and was ignored before — `Object.values`
+    // throws on it, which turned a bad schema into a crash out of the generator.
+    expect(collectImports({ type: 'object' as const, properties: null } as never)).toEqual([])
+    expect(collectImports({ type: 'object' as const, patternProperties: null } as never)).toEqual([])
   })
 })

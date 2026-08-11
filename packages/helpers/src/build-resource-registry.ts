@@ -1,4 +1,5 @@
 import { assertSchemaDepth } from './max-schema-depth'
+import { readKey } from './read-key'
 
 /**
  * The `$id` base-URI machinery JSON Schema 2020-12 defines, read off a document
@@ -58,7 +59,36 @@ export const SYNTHETIC_BASE = 'https://helpers.mjst.invalid/schema'
  * describes, not a declaration, so every walk over the `$id` graph stops at
  * these.
  */
-export const DATA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples'])
+export const DATA_KEYWORDS = new Set([
+  'enum',
+  'const',
+  'default',
+  'examples',
+  // OpenAPI 3.0's singular spelling. `foldNullable` runs specifically on 3.0
+  // documents, and the adapters take TypeBox/OpenAPI-derived input, so an
+  // `example` value was being walked as though it were a schema.
+  'example',
+])
+
+/**
+ * Keywords whose value is a map of author-chosen names to schemas.
+ *
+ * The distinction {@link DATA_KEYWORDS} needs to be useful: at a schema node
+ * those four are keywords, but inside one of these maps the keys are *names*,
+ * so a property genuinely called `default` or `examples` carries no keyword
+ * meaning. A walker that skips by key name alone skips that property's whole
+ * subtree, which is how a real tuple went unnormalized and a `nullable`
+ * property went unfolded.
+ */
+export const SCHEMA_MAPS = new Set([
+  'properties',
+  'patternProperties',
+  '$defs',
+  'definitions',
+  'dependentSchemas',
+  // Draft-07's `dependencies`: its keys are trigger property names too.
+  'dependencies',
+])
 
 /** `new URL(ref, base).href`, or `undefined` when the pair does not parse. */
 export const resolveUri = (ref: string, base: string): string | undefined => {
@@ -83,13 +113,58 @@ export const escapePointerSegment = (segment: string): string =>
     : segment.replace(/~/g, '~0').replace(/\//g, '~1').replace(/%/g, '%25')
 
 /**
+ * Whether `key` holds instance data rather than a schema, at a node whose own
+ * position is `inSchemaMap`.
+ *
+ * A schema walk has two kinds of object. At a **schema node** the keys are
+ * keywords, so {@link DATA_KEYWORDS} mark subtrees holding values the schema
+ * describes, which must not be read as schemas. Inside a {@link SCHEMA_MAPS}
+ * entry the keys are author-chosen **names**, where those same words carry no
+ * keyword meaning — a definition or property genuinely called `default` is
+ * ordinary.
+ *
+ * Every walker here used to test the key name alone, which conflated the two:
+ * a `$defs.default` had its whole subtree skipped, so an `$anchor` inside it
+ * never registered and the `$ref` naming it failed to resolve. Threading one
+ * boolean through the recursion is what tells them apart, and asking these two
+ * functions is what keeps the walkers agreeing about it.
+ *
+ * Two predicates rather than a generator over `{key, value, inSchemaMap}`
+ * objects: these are the inner loop of ten whole-document walkers, several of
+ * which document that they allocate nothing per node.
+ *
+ * Arrays are the caller's to handle, and the rule there is that **an element
+ * inherits its array's position**, the same one `resolve-refs`' `childRole`
+ * applies.
+ *
+ * @example
+ * ```typescript
+ * const walk = (node: unknown, inSchemaMap: boolean): void => {
+ *   if (Array.isArray(node)) {
+ *     for (const item of node) walk(item, inSchemaMap)
+ *     return
+ *   }
+ *   if (!isObject(node)) return
+ *   for (const key of Object.keys(node)) {
+ *     if (isDataPosition(key, inSchemaMap)) continue
+ *     walk(node[key], entersSchemaMap(key, inSchemaMap))
+ *   }
+ * }
+ * ```
+ */
+export const isDataPosition = (key: string, inSchemaMap: boolean): boolean => !inSchemaMap && DATA_KEYWORDS.has(key)
+
+/** Whether the child at `key` is a map of author-chosen names. See {@link isDataPosition}. */
+export const entersSchemaMap = (key: string, inSchemaMap: boolean): boolean => !inSchemaMap && SCHEMA_MAPS.has(key)
+
+/**
  * The base URI a subschema establishes through its `$id`, or the enclosing base
  * when it declares none. A draft-07-style `$id: "#name"` resolves to a bare
  * fragment and therefore establishes nothing, which the empty-string check
  * catches.
  */
 export const baseAfterId = (node: Record<string, unknown>, enclosing: string): string => {
-  const id = node['$id']
+  const id = readKey(node, '$id')
   if (typeof id !== 'string' || id === '') return enclosing
   const resolved = resolveUri(id, enclosing)
   if (resolved === undefined) return enclosing
@@ -131,11 +206,12 @@ export const buildResourceRegistry = (root: unknown): ResourceRegistry | null =>
   const baseAt = new Map<string, string>()
   let sawId = false
 
-  const walk = (node: unknown, pointer: string, enclosing: string, depth: number): void => {
+  const walk = (node: unknown, pointer: string, enclosing: string, depth: number, inSchemaMap: boolean): void => {
     assertSchemaDepth(depth, 'buildResourceRegistry')
     if (node === null || typeof node !== 'object') return
     if (Array.isArray(node)) {
-      for (let index = 0; index < node.length; index++) walk(node[index], `${pointer}/${index}`, enclosing, depth + 1)
+      for (let index = 0; index < node.length; index++)
+        walk(node[index], `${pointer}/${index}`, enclosing, depth + 1, inSchemaMap)
       return
     }
 
@@ -147,10 +223,10 @@ export const buildResourceRegistry = (root: unknown): ResourceRegistry | null =>
       if (!resources.has(base)) resources.set(base, pointer)
     }
 
-    const anchor = record['$anchor']
+    const anchor = readKey(record, '$anchor')
     if (typeof anchor === 'string' && !anchors.has(`${base}#${anchor}`)) anchors.set(`${base}#${anchor}`, pointer)
 
-    const dynamicAnchor = record['$dynamicAnchor']
+    const dynamicAnchor = readKey(record, '$dynamicAnchor')
     if (typeof dynamicAnchor === 'string') {
       const key = `${base}#${dynamicAnchor}`
       if (!dynamicAnchors.has(key)) dynamicAnchors.set(key, pointer)
@@ -160,12 +236,12 @@ export const buildResourceRegistry = (root: unknown): ResourceRegistry | null =>
     }
 
     for (const key of Object.keys(record)) {
-      if (DATA_KEYWORDS.has(key)) continue
-      walk(record[key], `${pointer}/${escapePointerSegment(key)}`, base, depth + 1)
+      if (isDataPosition(key, inSchemaMap)) continue
+      walk(record[key], `${pointer}/${escapePointerSegment(key)}`, base, depth + 1, entersSchemaMap(key, inSchemaMap))
     }
   }
 
-  walk(root, '', SYNTHETIC_BASE, 0)
+  walk(root, '', SYNTHETIC_BASE, 0, false)
   if (!sawId) {
     registries.set(root, null)
     return null

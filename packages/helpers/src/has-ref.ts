@@ -4,7 +4,7 @@ export const hasRef = (value: unknown): value is { $ref: string } & Record<strin
     typeof value === 'object' &&
     value !== null &&
     !Array.isArray(value) &&
-    '$ref' in value &&
+    Object.hasOwn(value, '$ref') &&
     typeof (value as { $ref: unknown }).$ref === 'string'
   )
 }

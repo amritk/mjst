@@ -23,7 +23,20 @@ const DECIMAL_NUMBER = /^-?\d+(?:\.\d+)?$/
 const isNumeric = (value: unknown): boolean =>
   typeof value === 'number' || (typeof value === 'string' && DECIMAL_NUMBER.test(value))
 
-const compare = (a: unknown, b: unknown): number => {
+/**
+ * Exported so the `openapi-tags-alphabetical` fixer sorts by the very function
+ * the rule judges with. A second comparator that merely looked equivalent
+ * drifted: it missed the numeric-string cases below, so `["10", "2"]` was
+ * flagged by the rule and left untouched by the fixer, forever.
+ *
+ * Deliberately **not** a total order. Numeric-vs-textual is decided per pair,
+ * which is what keeps both `["2", "10"]` and `["0x10", "9"]` reading as
+ * ordered — two requirements no single total order can satisfy, since
+ * lexicographically `"1e2"` falls between `"10"` and `"2"` while numerically
+ * `"2"` precedes `"10"`. A caller that feeds this to `Array.prototype.sort`
+ * therefore has to check the result rather than trust it; see the tags fixer.
+ */
+export const compareAlphabetically = (a: unknown, b: unknown): number => {
   // Deliberate deviation from Spectral, which relies on source order and falls
   // back to `localeCompare`: JavaScript enumerates integer-like object keys in
   // ascending numeric order ({ "2": …, "10": … }), yet `localeCompare` sorts
@@ -66,7 +79,7 @@ export const alphabetical: RulesetFunction<unknown, IAlphabeticalOptions> = (inp
 
   const results: IFunctionResult[] = []
   for (let i = 0; i < items.length - 1; i++) {
-    if (compare(items[i], items[i + 1]) > 0) {
+    if (compareAlphabetically(items[i], items[i + 1]) > 0) {
       const path = isArray ? [...context.path, i + 1] : [...context.path, rawItems[i + 1] as string]
       results.push({ message: 'The items must be in alphabetical order', path })
     }

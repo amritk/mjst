@@ -1,6 +1,8 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { DATA_KEYWORDS, entersSchemaMap, isDataPosition } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
+import { readKey } from './read-key'
 
 /**
  * Replaces $dynamicRef with $ref in a schema using the provided anchor-to-path map.
@@ -38,22 +40,25 @@ export const resolveDynamicRefs = (schema: JSONSchema, dynamicRefMap: Record<str
 
   const clone = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>
 
-  const walk = (obj: unknown, depth: number): void => {
+  const walk = (obj: unknown, depth: number, inSchemaMap = false): void => {
     assertSchemaDepth(depth, 'resolveDynamicRefs')
     if (typeof obj !== 'object' || obj === null) {
       return
     }
 
     if (Array.isArray(obj)) {
-      for (const item of obj) walk(item, depth + 1)
+      for (const item of obj) walk(item, depth + 1, inSchemaMap)
       return
     }
 
     const record = obj as Record<string, unknown>
 
-    const dynamicRef = record['$dynamicRef']
+    const dynamicRef = inSchemaMap ? undefined : readKey(record, '$dynamicRef')
     if (typeof dynamicRef === 'string') {
-      const resolved = dynamicRefMap[dynamicRef] ?? (dynamicRef.startsWith('#/') ? dynamicRef : undefined)
+      // `readKey`, not a bare index: the map is keyed by author-chosen anchor
+      // names, so `$dynamicRef: "toString"` otherwise resolved to a `Function`
+      // and was written into `$ref` in place of the "unresolvable" error.
+      const resolved = readKey(dynamicRefMap, dynamicRef) ?? (dynamicRef.startsWith('#/') ? dynamicRef : undefined)
       if (resolved === undefined) {
         throw new Error(
           `Unresolvable $dynamicRef "${dynamicRef}": no $dynamicAnchor named "${dynamicRef.replace(/^#/, '')}" is ` +
@@ -64,8 +69,12 @@ export const resolveDynamicRefs = (schema: JSONSchema, dynamicRefMap: Record<str
       delete record['$dynamicRef']
     }
 
-    for (const key in record) {
-      walk(record[key], depth + 1)
+    // A `$dynamicRef` inside a `default`/`enum`/`example(s)` value is part of
+    // that value: rewriting it changed the literal the author wrote (key
+    // deleted, `$ref` added), and an unmatched one failed the build outright.
+    for (const key of Object.keys(record)) {
+      if (isDataPosition(key, inSchemaMap)) continue
+      walk(record[key], depth + 1, entersSchemaMap(key, inSchemaMap))
     }
   }
 
@@ -82,7 +91,10 @@ const containsDynamicRef = (value: unknown, depth: number): boolean => {
     return false
   }
   const record = value as Record<string, unknown>
-  if (typeof record['$dynamicRef'] === 'string') return true
-  for (const key in record) if (containsDynamicRef(record[key], depth + 1)) return true
+  if (typeof readKey(record, '$dynamicRef') === 'string') return true
+  for (const key of Object.keys(record)) {
+    if (DATA_KEYWORDS.has(key)) continue
+    if (containsDynamicRef(record[key], depth + 1)) return true
+  }
   return false
 }

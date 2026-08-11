@@ -450,4 +450,18 @@ describe('walk-ref-graph', () => {
       expect(names).toEqual(['doc', 'a'])
     })
   })
+
+  it('does not expand a boolean sitting inside instance data', () => {
+    // A `$defs` key inside a `default` value is part of the value, not a
+    // definition map — expanding it turned the author's literal `true` into
+    // `{}`, so the generated docs, examples and defaults carried a value the
+    // schema never declared.
+    const schema = JSON.parse(
+      '{"type":"object","$defs":{"Real":{"type":"string"}},"default":{"$defs":{"a":true},"b":false}}',
+    )
+
+    const root = collect(schema, 'Doc')[0]
+
+    expect((root?.schema as Record<string, unknown>)['default']).toEqual({ $defs: { a: true }, b: false })
+  })
 })

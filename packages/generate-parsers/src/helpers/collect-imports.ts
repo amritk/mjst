@@ -101,12 +101,16 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
   const importExt = options?.importExt ?? 'js'
   const importMap = new Map<string, string>()
 
-  for (const [filename, typeName] of collectImportTargets(schema, options)) {
+  for (const [filename, { typeName, typeOnly }] of collectImportTargets(schema, options)) {
     const importPath = getImportPathForFilename(filename, importExt)
-    // In types-only mode, omit the parser function import since there is no parser to call
-    const importStatement = typesOnly
-      ? `import type { ${typeName} } from '${importPath}';`
-      : `import { type ${typeName}, parse${typeName}, validate${typeName}Shape } from '${importPath}';`
+    // In types-only mode there is no parser to call. `typeOnly` is the same
+    // conclusion reached per ref: the emitters only ever named the type, so
+    // importing `parse`/`validate…Shape` beside it would leave two bindings
+    // nothing calls — a `noUnusedLocals` error in the consumer's build.
+    const importStatement =
+      typesOnly || typeOnly
+        ? `import type { ${typeName} } from '${importPath}';`
+        : `import { type ${typeName}, parse${typeName}, validate${typeName}Shape } from '${importPath}';`
     importMap.set(filename, importStatement)
   }
 
@@ -121,16 +125,33 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
  */
 export const collectImportTypeNames = (schema: JSONSchema, options?: CollectImportsOptions): Set<string> => {
   const names = new Set<string>()
-  for (const [, typeName] of collectImportTargets(schema, options)) names.add(typeName)
+  for (const [, target] of collectImportTargets(schema, options)) names.add(target.typeName)
   return names
 }
 
-/** Shared `$ref` walk: filename → derived type name for every import target. */
-const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOptions): Map<string, string> => {
+/**
+ * Shared `$ref` walk: filename → its derived type name and whether the ref was
+ * only ever reached from a position the emitters use the *type* of.
+ *
+ * A tuple position is the only such place today: the type emitter renders it as
+ * the referenced type name, but the parser emitter passes the element through
+ * untouched, so `parseX`/`validateXShape` would be imported and never called —
+ * an unused binding, which `noUnusedLocals` makes a compile error in the
+ * consumer's build. A ref reached from anywhere else wins: the flag is cleared
+ * the first time one is.
+ */
+const collectImportTargets = (
+  schema: JSONSchema,
+  options?: CollectImportsOptions,
+): Map<string, { typeName: string; typeOnly: boolean }> => {
   const selfFilename = options?.selfFilename ?? (options?.selfRef ? refToFilename(options.selfRef) : undefined)
   const rootSchema = options?.rootSchema
   const typeSuffix = options?.typeSuffix
   const refs = new Set<string>()
+  // Refs reached from a position whose emitted code uses the value, not just
+  // the type. A ref in both kinds of position belongs here.
+  const valueRefs = new Set<string>()
+  let typeOnlyDepth = 0
 
   const collectRefsFromValue = (value: unknown): void => {
     if (typeof value !== 'object' || value === null) {
@@ -156,8 +177,33 @@ const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOption
       const isPropertyFragment = isUri && ref.includes('#/properties/')
       if (isInternal || (isUri && !isPropertyFragment)) {
         refs.add(ref)
+        if (typeOnlyDepth === 0) valueRefs.add(ref)
       }
       return // Don't traverse further into a $ref
+    }
+
+    // Tuple positions, walked before the `additionalProperties`/`items` branches
+    // below because those `return` early: a tuple with a `$ref` rest element
+    // would otherwise never reach this. The type emitter renders a
+    // `prefixItems` `$ref` as the referenced type name, so missing it produced
+    // a file naming `Contact` with no import — output that does not compile.
+    // Both tuple spellings: 2020-12 `prefixItems` and draft-07's array-valued
+    // `items`. The type emitter renders each position as the referenced type
+    // name while the parser emitter passes the element through untouched, so
+    // these are type-only positions (see `typeOnlyDepth`).
+    for (const keyword of ['prefixItems', 'items'] as const) {
+      // Own key only — a polluted `Object.prototype.prefixItems` would
+      // otherwise make every node look like a tuple.
+      const positions = Object.hasOwn(record, keyword) ? record[keyword] : undefined
+      if (!Array.isArray(positions)) continue
+      typeOnlyDepth++
+      for (const item of positions) {
+        collectRefsFromValue(item)
+      }
+      // Draft-07's rest element. The type emitter renders it as `...Contact[]`,
+      // so a `$ref` there needs its import exactly as a fixed position does.
+      if (Object.hasOwn(record, 'additionalItems')) collectRefsFromValue(record['additionalItems'])
+      typeOnlyDepth--
     }
 
     // Check if this is an object type with additionalProperties that has a $ref
@@ -168,17 +214,24 @@ const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOption
     }
 
     // Check if this is an array type with items that has a $ref
-    // This pattern requires validateArray
-    if (record.type === 'array' && hasItems(record) && hasRef(record.items)) {
+    // This pattern requires validateArray. An array-valued `items` is the
+    // draft-07 tuple spelling, handled with `prefixItems` above, not here.
+    if (record.type === 'array' && hasItems(record) && !Array.isArray(record.items) && hasRef(record.items)) {
       collectRefsFromValue(record.items)
       return
     }
 
     // Traverse nested properties regardless of whether `type` is explicitly set.
-    if ('properties' in record && typeof record.properties === 'object' && record.properties !== null) {
-      const props = record.properties as Record<string, unknown>
-      for (const key in props) {
-        collectRefsFromValue(props[key])
+    // `Object.hasOwn`, not `in`: `in` walks the prototype chain, so a polluted
+    // `Object.prototype.properties` had every node read as if the document
+    // declared it — and the import that followed named a module never emitted.
+    if (Object.hasOwn(record, 'properties') && typeof record.properties === 'object' && record.properties !== null) {
+      // `Object.values`, not `for…in`: these are author-chosen names, and a
+      // bare `for…in` walks the prototype chain — so a polluted
+      // `Object.prototype` had this collecting a ref for a definition the
+      // document never declared.
+      for (const value of Object.values(record.properties as Record<string, unknown>)) {
+        collectRefsFromValue(value)
       }
     }
 
@@ -199,8 +252,9 @@ const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOption
       }
     }
 
-    // Traverse into array items
-    if (hasItems(record)) {
+    // Traverse into array items — the single-schema form only; the array form
+    // is a tuple and was walked above.
+    if (hasItems(record) && !Array.isArray(record.items)) {
       collectRefsFromValue(record.items)
     }
 
@@ -211,21 +265,28 @@ const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOption
 
     // Traverse all patternProperties
     if (
-      'patternProperties' in record &&
+      Object.hasOwn(record, 'patternProperties') &&
       typeof record.patternProperties === 'object' &&
       record.patternProperties !== null
     ) {
-      const patternProps = record.patternProperties as Record<string, unknown>
-      for (const key in patternProps) {
-        collectRefsFromValue(patternProps[key])
+      for (const value of Object.values(record.patternProperties as Record<string, unknown>)) {
+        collectRefsFromValue(value)
       }
     }
 
-    // Traverse into if/then/else branches
-    if ('then' in record) {
+    // Traverse into if/then/else branches. `if` belongs here as much as the
+    // other two — the root walk already lists it, and the two lists disagreeing
+    // is what let a tuple position go unimported.
+    // `Object.hasOwn`, not `in`, for the reason the `Object.values` switch above
+    // gives: `in` walks the prototype chain, so a polluted `Object.prototype.if`
+    // would have this descend into an inherited value.
+    if (Object.hasOwn(record, 'if')) {
+      collectRefsFromValue(record.if)
+    }
+    if (Object.hasOwn(record, 'then')) {
       collectRefsFromValue(record.then)
     }
-    if ('else' in record) {
+    if (Object.hasOwn(record, 'else')) {
       collectRefsFromValue(record.else)
     }
   }
@@ -238,33 +299,65 @@ const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOption
     const isPropertyFragment = isUri && ref.includes('#/properties/')
     if (isInternal || (isUri && !isPropertyFragment)) {
       refs.add(ref)
+      // The root's own `$ref` is emitted as a value, like every position other
+      // than a tuple element.
+      valueRefs.add(ref)
     }
   }
 
   // Collect refs from properties
-  if (typeof schema === 'object' && schema !== null && 'properties' in schema) {
-    const properties = schema.properties as Record<string, unknown>
-    for (const key in properties) {
-      collectRefsFromValue(properties[key])
+  if (
+    typeof schema === 'object' &&
+    schema !== null &&
+    Object.hasOwn(schema, 'properties') &&
+    typeof schema.properties === 'object' &&
+    schema.properties !== null
+  ) {
+    // The null check the nested branch carries: `properties: null` is malformed
+    // but was tolerated (a `for…in` over null is a no-op), and `Object.values`
+    // throws on it — turning a bad schema into a crash out of the generator.
+    for (const value of Object.values(schema.properties as Record<string, unknown>)) {
+      collectRefsFromValue(value)
     }
   }
 
   // Collect refs from root-level additionalProperties
-  if (typeof schema === 'object' && schema !== null && 'additionalProperties' in schema) {
+  if (typeof schema === 'object' && schema !== null && Object.hasOwn(schema, 'additionalProperties')) {
     collectRefsFromValue(schema.additionalProperties)
   }
 
   // Collect refs from root-level patternProperties
-  if (typeof schema === 'object' && schema !== null && 'patternProperties' in schema) {
-    const patternProps = schema.patternProperties as Record<string, unknown>
-    for (const key in patternProps) {
-      collectRefsFromValue(patternProps[key])
+  if (
+    typeof schema === 'object' &&
+    schema !== null &&
+    Object.hasOwn(schema, 'patternProperties') &&
+    typeof schema.patternProperties === 'object' &&
+    schema.patternProperties !== null
+  ) {
+    for (const value of Object.values(schema.patternProperties as Record<string, unknown>)) {
+      collectRefsFromValue(value)
     }
   }
 
   // Collect refs from root-level items (when the schema itself is an array type)
-  if (typeof schema === 'object' && schema !== null && hasItems(schema)) {
+  if (typeof schema === 'object' && schema !== null && hasItems(schema) && !Array.isArray(schema.items)) {
     collectRefsFromValue(schema.items)
+  }
+
+  // …and from a root-level tuple, in either spelling. The root enumerates its
+  // keys by hand rather than going through `collectRefsFromValue`, so a
+  // keyword missing from this list is simply never walked: a schema that *is*
+  // a tuple emitted a type naming `Contact` with no import for it at all.
+  if (typeof schema === 'object' && schema !== null) {
+    const record = schema as Record<string, unknown>
+    for (const keyword of ['prefixItems', 'items'] as const) {
+      const positions = Object.hasOwn(record, keyword) ? record[keyword] : undefined
+      if (!Array.isArray(positions)) continue
+      typeOnlyDepth++
+      for (const item of positions) collectRefsFromValue(item)
+      if (Object.hasOwn(record, 'additionalItems')) collectRefsFromValue(record['additionalItems'])
+      typeOnlyDepth--
+    }
   }
 
   // Collect refs from root-level composition keywords.
@@ -285,18 +378,18 @@ const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOption
   }
 
   // Collect refs from root-level conditional branches.
-  if (typeof schema === 'object' && schema !== null && 'if' in schema) {
+  if (typeof schema === 'object' && schema !== null && Object.hasOwn(schema, 'if')) {
     collectRefsFromValue(schema.if)
   }
-  if (typeof schema === 'object' && schema !== null && 'then' in schema) {
+  if (typeof schema === 'object' && schema !== null && Object.hasOwn(schema, 'then')) {
     collectRefsFromValue(schema.then)
   }
-  if (typeof schema === 'object' && schema !== null && 'else' in schema) {
+  if (typeof schema === 'object' && schema !== null && Object.hasOwn(schema, 'else')) {
     collectRefsFromValue(schema.else)
   }
 
   // Convert refs to import targets, deduplicating by filename.
-  const targets = new Map<string, string>()
+  const targets = new Map<string, { typeName: string; typeOnly: boolean }>()
 
   for (const ref of refs) {
     // For URI refs, skip if the base URI is not resolvable in the root schema.
@@ -313,7 +406,10 @@ const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOption
       continue
     }
 
-    targets.set(filename, typeName)
+    // Two refs can share a filename (`#/$defs/x` and a URI spelling of it); the
+    // import is a value import if any of them needs the value.
+    const typeOnly = !valueRefs.has(ref) && (targets.get(filename)?.typeOnly ?? true)
+    targets.set(filename, { typeName, typeOnly })
   }
 
   return targets

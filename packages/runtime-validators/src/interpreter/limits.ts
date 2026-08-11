@@ -339,6 +339,25 @@ export const hasUnsafeRegex = (source: string): boolean => {
 const DATA_KEYWORDS = new Set(['const', 'enum', 'default', 'examples', 'example'])
 
 /**
+ * Keywords whose value is a map of author-chosen names to schemas.
+ *
+ * Inside one the keys are names, so {@link DATA_KEYWORDS} carry no keyword
+ * meaning there. Without the distinction a definition named `default` was
+ * skipped outright — its `$id` never registered, and its `pattern` was never
+ * screened, so a catastrophic-backtracking regex compiled with no opt-in.
+ * Kept in step by hand with `@amritk/helpers`' `SCHEMA_MAPS`: this package
+ * takes no `@amritk/*` dependency by design.
+ */
+const SCHEMA_MAPS = new Set([
+  'properties',
+  'patternProperties',
+  '$defs',
+  'definitions',
+  'dependentSchemas',
+  'dependencies',
+])
+
+/**
  * What one build-time walk of the schema tells {@link screenSchema}'s caller
  * beyond "the patterns are safe".
  */
@@ -382,33 +401,53 @@ const walkSchema = (schema: unknown, visit: ((source: string) => void) | null): 
   if (schema === null || typeof schema !== 'object') return { declaresId: false }
   const seen = new Set<object>()
   const stack: object[] = [schema]
+  const inMaps: boolean[] = [false]
   let declaresId = false
 
   while (stack.length > 0) {
+    // Both stacks pop together, before any early `continue` — they index each
+    // other, so a branch that skipped one would shift every later position.
     const node = stack.pop() as object
+    const inMap = inMaps.pop() as boolean
     if (seen.has(node)) continue
     seen.add(node)
 
     if (Array.isArray(node)) {
-      for (const item of node) if (item !== null && typeof item === 'object') stack.push(item)
+      // An array element inherits its array's position, as everywhere else.
+      for (const item of node)
+        if (item !== null && typeof item === 'object') {
+          stack.push(item)
+          inMaps.push(inMap)
+        }
       continue
     }
 
     // One pass over the node's own keys, pushing only the children worth
-    // descending into. A whole OpenAPI document goes through here on every cold
-    // build, so this stays free of per-node `Object.keys` arrays and of stack
-    // entries for the strings and numbers that make up most of a schema.
+    // descending into — no stack entries for the strings and numbers that make
+    // up most of a schema. `Object.keys` rather than a `for…in`: the walk has
+    // to see own keys only (a polluted `Object.prototype.pattern` made every
+    // schema fail screening), and `interpret.ts`'s benchmark measures the key
+    // array as cheaper than a `for…in` with a per-key `Object.hasOwn` guard.
     const record = node as Record<string, unknown>
-    for (const key in record) {
+    for (const key of Object.keys(record)) {
       const child = record[key]
       if (typeof child === 'string') {
-        if (key === 'pattern') visit?.(child)
-        else if (key === '$id' && child !== '') declaresId = true
+        // Only at a schema node: inside a name map these are property names.
+        if (!inMap && key === 'pattern') visit?.(child)
+        else if (!inMap && key === '$id' && child !== '') declaresId = true
         continue
       }
       if (child === null || typeof child !== 'object') continue
-      if (visit && key === 'patternProperties' && !Array.isArray(child)) for (const source in child) visit(source)
-      if (!DATA_KEYWORDS.has(key)) stack.push(child)
+      if (visit && !inMap && key === 'patternProperties' && !Array.isArray(child))
+        for (const source of Object.keys(child)) visit(source)
+      // Skipping the data keywords by name alone also skipped a definition or
+      // property *named* one, so an `$id` declared under `$defs.default` never
+      // registered — and a `pattern` under it was never screened, so a
+      // catastrophic-backtracking regex compiled with no opt-in.
+      if (inMap || !DATA_KEYWORDS.has(key)) {
+        stack.push(child)
+        inMaps.push(!inMap && SCHEMA_MAPS.has(key))
+      }
     }
   }
 

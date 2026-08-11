@@ -1278,4 +1278,98 @@ describe('validate', () => {
       expect(validator(1)).not.toBe(true)
     })
   })
+
+  describe('keys the instance does not own', () => {
+    // Schemas and values both arrive at runtime, so neither the prototype chain
+    // nor a polluted `Object.prototype` can be assumed away.
+    const withInherited = (): Record<string, unknown> => {
+      const value = Object.create({ inherited: 'not mine' }) as Record<string, unknown>
+      value['own'] = 1
+      return value
+    }
+
+    it('does not validate an inherited key as additionalProperties', () => {
+      const validator = validate({ type: 'object', additionalProperties: { type: 'number' } })
+      expect(validator(withInherited())).toBe(true)
+    })
+
+    it('does not reject an inherited key under additionalProperties: false', () => {
+      // The shape a polluted `Object.prototype` gives every object in the
+      // process — this rejected valid input everywhere at once.
+      const validator = validate({ type: 'object', properties: { own: {} }, additionalProperties: false })
+      expect(validator(withInherited())).toBe(true)
+    })
+
+    it('does not run propertyNames over an inherited key', () => {
+      const validator = validate({ type: 'object', propertyNames: { pattern: '^own$' } })
+      expect(validator(withInherited())).toBe(true)
+    })
+
+    it('does not run unevaluatedProperties over an inherited key', () => {
+      const validator = validate({
+        type: 'object',
+        properties: { own: { type: 'number' } },
+        unevaluatedProperties: false,
+      })
+      expect(validator(withInherited())).toBe(true)
+    })
+
+    it('agrees with minProperties about how many properties there are', () => {
+      // The count says one; every sweep above has to see the same one.
+      expect(validate({ type: 'object', maxProperties: 1 })(withInherited())).toBe(true)
+    })
+  })
+
+  describe('presence is own-property membership, everywhere that asks', () => {
+    // Every keyword that asks "does the instance have this key?" has to answer
+    // the same way as `minProperties` / `additionalProperties` /
+    // `unevaluatedProperties`, which sweep the instance's own keys. An
+    // inherited value used to say yes, so an object serializing to `{}`
+    // satisfied `required` while every sweep agreed it had no properties.
+    const inherited = (): Record<string, unknown> => Object.create({ token: 'x' }) as Record<string, unknown>
+
+    it('required with a properties entry', () => {
+      const validator = validate({ type: 'object', properties: { token: {} }, required: ['token'] })
+      expect(validator(inherited())).not.toBe(true)
+    })
+
+    it('required with no properties entry', () => {
+      expect(validate({ type: 'object', required: ['token'] })(inherited())).not.toBe(true)
+    })
+
+    it('dependentRequired does not fire on an inherited trigger', () => {
+      const validator = validate({ type: 'object', dependentRequired: { token: ['billing'] } })
+      expect(validator(inherited())).toBe(true)
+    })
+
+    it('dependentSchemas does not apply on an inherited trigger', () => {
+      const validator = validate({ type: 'object', dependentSchemas: { token: { required: ['billing'] } } })
+      expect(validator(inherited())).toBe(true)
+    })
+
+    it('properties does not validate an inherited value', () => {
+      const validator = validate({ type: 'object', properties: { token: { type: 'number' } } })
+      expect(validator(inherited())).toBe(true)
+    })
+
+    it('agrees with the own-key sweeps about an empty object', () => {
+      const value = inherited()
+      expect(Object.keys(value)).toEqual([])
+      expect(validate({ type: 'object', maxProperties: 0 })(value)).toBe(true)
+      expect(validate({ type: 'object', additionalProperties: false })(value)).toBe(true)
+    })
+  })
+
+  describe('a format naming a prototype member', () => {
+    // The spec says an unrecognized format is ignored. Reading it straight off
+    // the checks table found `Function.prototype.toString` instead — truthy,
+    // and with no `.test`, so the validator threw on a schema it should have
+    // accepted.
+    for (const format of ['toString', 'constructor', 'valueOf', 'hasOwnProperty']) {
+      it(`ignores format "${format}" rather than throwing`, () => {
+        const validator = validate({ type: 'string', format }, { formats: 'all' })
+        expect(validator('anything')).toBe(true)
+      })
+    }
+  })
 })

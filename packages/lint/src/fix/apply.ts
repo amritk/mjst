@@ -1,3 +1,4 @@
+import { ownKey } from '../core/own-key'
 import type { IDiagnostic, JsonPath } from '../core/types'
 import { applyEditOpsWithChanges, type EditOp, type ParserFormat } from '../parsers'
 import type { AppliedFix, FixerRegistry, FixResult } from './types'
@@ -62,7 +63,12 @@ export const applyFixes = (
   // across the whole batch before lowering anything to text.
   const candidates: { fix: AppliedFix; ops: EditOp[] }[] = []
   for (const diagnostic of diagnostics) {
-    const fixer = fixers[String(diagnostic.code)]
+    // `Object.hasOwn`, not a bare index: rule codes come from the ruleset, so a
+    // rule named `toString` otherwise read `Function.prototype.toString` off the
+    // registry — truthy, with no `.fix` — and the unguarded call below threw out
+    // of `applyFixes`, abandoning every other fix in the batch.
+    const code = String(diagnostic.code)
+    const fixer = ownKey(fixers, code)
     if (!fixer) continue
     if (safeOnly && fixer.safe === false) continue
 

@@ -1,4 +1,5 @@
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
+import { readKey } from '@amritk/helpers/read-key'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import {
   hasAdditionalProperties,
@@ -104,6 +105,23 @@ const topLevelAlternatives = (s: string): string[] => {
   }
   parts.push(cur)
   return parts
+}
+
+/**
+ * Whether `value` satisfies `pattern`, treating an uncompilable pattern as
+ * unsatisfied rather than fatal. A schema may carry a `pattern` that is not a
+ * valid JavaScript regex, and the sampler can still return a candidate for one
+ * — so compiling it here threw a bare `SyntaxError` out of the generator and
+ * ended the run. Falling through instead emits the plain fallback string, and
+ * the invalid pattern surfaces where invalid schemas are reported. The
+ * `patternProperties` compile in `deriveObject` already made this choice.
+ */
+const matchesPattern = (pattern: string, value: string): boolean => {
+  try {
+    return new RegExp(pattern).test(value)
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -234,7 +252,11 @@ const FORMAT_EXAMPLES: Readonly<Record<string, string>> = {
 /** Returns a representative string honouring `format`, `pattern`, and length. */
 const exampleString = (schema: JSONSchema): string => {
   if (hasFormat(schema)) {
-    const formatted = FORMAT_EXAMPLES[schema.format]
+    // `Object.hasOwn`, not a bare index: `format` is schema input, and a
+    // format naming an `Object.prototype` member resolved to a `Function` —
+    // which is not a string, so the emitted `fooExample` carried `undefined`
+    // for that property and the generated file failed to type-check.
+    const formatted = readKey(FORMAT_EXAMPLES, schema.format)
     if (formatted !== undefined) return formatted
   }
 
@@ -246,7 +268,7 @@ const exampleString = (schema: JSONSchema): string => {
     // but never on the way out, so `{ pattern: '^ab$', minLength: 5 }` happily
     // returned `"ab"`. Falling through instead lets the caller notice that
     // nothing satisfies the schema rather than emitting a value that does not.
-    if (sampled !== undefined && sampled.length >= minLength && new RegExp(schema.pattern).test(sampled)) {
+    if (sampled !== undefined && sampled.length >= minLength && matchesPattern(schema.pattern, sampled)) {
       if (!(hasMaxLength(schema) && sampled.length > schema.maxLength)) return sampled
     }
   }

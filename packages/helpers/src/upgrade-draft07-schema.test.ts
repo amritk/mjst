@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { resolveRef } from './resolve-ref'
 import { isDraft07Schema, upgradeDraft07Schema } from './upgrade-draft07-schema'
 
 describe('upgrade-draft07-schema', () => {
@@ -199,5 +200,74 @@ describe('upgrade-draft07-schema', () => {
 
   it('drops the draft-07 $schema declaration', () => {
     expect(upgradeDraft07Schema(draft07({ type: 'string' }))).toEqual({ type: 'string', $defs: {} })
+  })
+
+  it('keeps a property named __proto__ instead of setting the prototype', () => {
+    // A schema may describe a property called `__proto__`. Rebuilding the node
+    // with `result[key] = …` ran the prototype setter instead of adding a key:
+    // the property vanished from the output — every constraint on it with it —
+    // and the rebuilt object silently inherited the subschema. The input is
+    // parsed rather than written as a literal, because an object literal's
+    // `__proto__:` is the same setter and would never create the key at all.
+    const schema = JSON.parse(`{
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "definitions": {
+        "X": { "type": "object", "properties": { "__proto__": { "type": "string" }, "ok": { "type": "string" } } }
+      },
+      "properties": { "a": { "$ref": "#/definitions/X" } }
+    }`) as Record<string, unknown>
+
+    const upgraded = upgradeDraft07Schema(schema) as Record<string, Record<string, Record<string, unknown>>>
+    const properties = upgraded['$defs']?.['X']?.['properties'] as object
+
+    expect(Object.getOwnPropertyNames(properties).sort()).toEqual(['__proto__', 'ok'])
+    expect(Object.getOwnPropertyDescriptor(properties, '__proto__')?.value).toEqual({ type: 'string' })
+    // The subschema must not have become the map's prototype.
+    expect(Object.getPrototypeOf(properties)).toBe(Object.prototype)
+  })
+
+  it('keeps a definition named __proto__ and the ref that points at it', () => {
+    // The root `definitions` map was rebuilt with a plain assignment, so the
+    // definition set the map's prototype and vanished — while the `$ref` to it
+    // was still rewritten to `#/$defs/__proto__`, which now resolves to
+    // nothing, failing the build on a document that declares it right there.
+    const schema = JSON.parse(`{
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": { "__proto__": { "type": "string" }, "ok": { "type": "number" } },
+      "properties": { "a": { "$ref": "#/definitions/__proto__" } }
+    }`) as Record<string, unknown>
+
+    const upgraded = upgradeDraft07Schema(schema) as Record<string, Record<string, unknown>>
+    const defs = upgraded['$defs'] as object
+
+    expect(Object.getOwnPropertyNames(defs).sort()).toEqual(['__proto__', 'ok'])
+    expect(Object.getOwnPropertyDescriptor(defs, '__proto__')?.value).toEqual({ type: 'string' })
+    expect(resolveRef('#/$defs/__proto__', upgraded as never)).toEqual({ type: 'string' })
+  })
+
+  it('leaves a definitions-shaped value and a property named definitions alone', () => {
+    // `renameNestedDefs` renamed every `definitions` key at any depth and
+    // rewrote every `#/definitions/` ref, so it rewrote the author's `default`
+    // value and renamed a declared *property* called `definitions` out of
+    // existence — the same three exemptions its sibling already honoured.
+    const schema = JSON.parse(`{
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "X": {
+          "default": { "$ref": "#/definitions/Y", "definitions": "literal value" },
+          "properties": { "definitions": { "type": "string" } }
+        },
+        "Y": { "type": "string" }
+      }
+    }`) as Record<string, unknown>
+
+    const upgraded = upgradeDraft07Schema(schema) as Record<string, Record<string, Record<string, unknown>>>
+    const x = upgraded['$defs']?.['X'] as Record<string, unknown>
+
+    // The default is a value: untouched, ref spelling and all.
+    expect(x['default']).toEqual({ $ref: '#/definitions/Y', definitions: 'literal value' })
+    // The declared property keeps its name.
+    expect(Object.keys(x['properties'] as object)).toEqual(['definitions'])
   })
 })

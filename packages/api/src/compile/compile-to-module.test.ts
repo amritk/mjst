@@ -595,6 +595,100 @@ describe('compile-to-module', () => {
     }
   }, 20_000)
 
+  it('refuses to emit a module whose internals collide with an app export', () => {
+    // The generated module imports the app's exports unaliased and declares
+    // ~20 internals of its own, every one a plausible route name. A collision
+    // used to surface as a `SyntaxError` at load, naming an identifier the
+    // author never wrote, in a file they did not author.
+    expect(() =>
+      compileToModule({
+        routesImport: '../compile-to-module.test-utils',
+        runtimeImport: '../../index',
+        validatorsImport: '@amritk/runtime-validators',
+        routes: { notFound: corpus.health },
+        info,
+      }),
+    ).toThrow(/'notFound' is also declared by the generated module/)
+  })
+
+  it('catches a collision with the runtime and validator imports too', () => {
+    // Those import lines are not declarations, so a check that only read
+    // `const`/`function` would pass and the module would fail to load with the
+    // SyntaxError this exists to replace.
+    expect(() =>
+      compileToModule({
+        routesImport: '../compile-to-module.test-utils',
+        runtimeImport: '../../index',
+        validatorsImport: '@amritk/runtime-validators',
+        routes: { readBodyCapped: corpus.health },
+        info,
+      }),
+    ).toThrow(/'readBodyCapped' is also declared by the generated module/)
+  })
+
+  it('still emits for an app export that does not collide', () => {
+    expect(() =>
+      compileToModule({
+        routesImport: '../compile-to-module.test-utils',
+        runtimeImport: '../../index',
+        validatorsImport: '@amritk/runtime-validators',
+        routes: { health: corpus.health },
+        info,
+      }),
+    ).not.toThrow()
+  })
+
+  it('rejects rather than throws when app code fails synchronously, identically to the runtime', async () => {
+    // Without hooks the emitted dispatch is not `async` — that is the whole
+    // point of the unhooked shape — so a synchronous throw from app code
+    // would leave a function every fetch runtime awaits by throwing instead
+    // of rejecting. Two callees can do it: a mount (its type admits a plain
+    // `Response`) and a `notFound` formatter (it runs before any promise
+    // exists). Both engines have to escape in the same shape.
+    const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), '.fixtures-sync-throw')
+    mkdirSync(fixtureDir, { recursive: true })
+    try {
+      const syncRoutes = { health: corpus.health }
+      const source = compileToModule({
+        routesImport: '../compile-to-module.test-utils',
+        runtimeImport: '../../index',
+        validatorsImport: '@amritk/runtime-validators',
+        routes: syncRoutes,
+        info,
+        mounts: { '/mounted': 'mountBoom' },
+        errorsExport: 'throwingErrors',
+      })
+      const fixturePath = join(fixtureDir, 'generated-sync-throw.ts')
+      writeFileSync(fixturePath, source)
+      const compiledModule = (await import(fixturePath)) as {
+        fetch: (request: Request, env?: unknown) => Response | Promise<Response>
+      }
+      const runtime = toFetchHandler(
+        createApi({ routes: Object.values(syncRoutes), info, errors: corpus.throwingErrors }),
+        { mounts: { '/mounted': corpus.mountBoom } },
+      )
+
+      const cases = [
+        { name: 'mount', url: 'http://localhost/mounted/thing', message: 'mount exploded' },
+        { name: 'notFound', url: 'http://localhost/nothing-here', message: 'formatter exploded' },
+      ]
+      for (const { name, url, message } of cases) {
+        let fromCompiled: unknown
+        let fromRuntime: unknown
+        expect(() => {
+          fromCompiled = compiledModule.fetch(new Request(url), ENV)
+        }, name).not.toThrow()
+        expect(() => {
+          fromRuntime = runtime(new Request(url), ENV)
+        }, name).not.toThrow()
+        await expect(fromCompiled, name).rejects.toThrow(message)
+        await expect(fromRuntime, name).rejects.toThrow(message)
+      }
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  }, 20_000)
+
   it('applies the default 1 MiB body cap, and Infinity restores unbounded reads, identically to the runtime', async () => {
     const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), '.fixtures-body-cap')
     mkdirSync(fixtureDir, { recursive: true })

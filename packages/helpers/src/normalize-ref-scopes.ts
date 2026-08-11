@@ -1,4 +1,11 @@
-import { buildResourceRegistry, DATA_KEYWORDS, escapePointerSegment, resolveUri } from './build-resource-registry'
+import { assignKey } from './assign-key'
+import {
+  buildResourceRegistry,
+  entersSchemaMap,
+  escapePointerSegment,
+  isDataPosition,
+  resolveUri,
+} from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { resolveRef } from './resolve-ref'
 import { resolveScopedRef } from './resolve-scoped-ref'
@@ -72,12 +79,12 @@ export const normalizeRefScopes = (root: Record<string, unknown>): Record<string
     return normalizedRef(ref, base)
   }
 
-  const rewrite = (node: unknown, pointer: string, enclosing: string, depth: number): unknown => {
+  const rewrite = (node: unknown, pointer: string, enclosing: string, depth: number, inSchemaMap = false): unknown => {
     assertSchemaDepth(depth, 'normalizeRefScopes')
     if (node === null || typeof node !== 'object') return node
 
     if (Array.isArray(node)) {
-      const mapped = node.map((item, index) => rewrite(item, `${pointer}/${index}`, enclosing, depth + 1))
+      const mapped = node.map((item, index) => rewrite(item, `${pointer}/${index}`, enclosing, depth + 1, inSchemaMap))
       return mapped.some((item, index) => item !== node[index]) ? mapped : node
     }
 
@@ -88,17 +95,29 @@ export const normalizeRefScopes = (root: Record<string, unknown>): Record<string
 
     let changed = false
     const result: Record<string, unknown> = {}
-    for (const [key, value] of Object.entries(record)) {
+    // Copy everything, then rewrite only the children the shared position
+    // rule calls schemas. A key it skips holds instance data and keeps its
+    // value verbatim; the
+    // `$ref` rewrites only apply at a schema node, where those keys are
+    // keywords rather than author-chosen names.
+    for (const [key, value] of Object.entries(record)) assignKey(result, key, value)
+    for (const key of Object.keys(record)) {
+      if (isDataPosition(key, inSchemaMap)) continue
+      const value = record[key]
       const next =
-        key === '$ref' && typeof value === 'string'
+        !inSchemaMap && key === '$ref' && typeof value === 'string'
           ? (normalizedRef(value, base) ?? value)
-          : key === '$dynamicRef' && typeof value === 'string'
+          : !inSchemaMap && key === '$dynamicRef' && typeof value === 'string'
             ? (normalizedDynamicRef(value, base) ?? value)
-            : DATA_KEYWORDS.has(key)
-              ? value
-              : rewrite(value, `${pointer}/${escapePointerSegment(key)}`, base, depth + 1)
+            : rewrite(
+                value,
+                `${pointer}/${escapePointerSegment(key)}`,
+                base,
+                depth + 1,
+                entersSchemaMap(key, inSchemaMap),
+              )
       if (next !== value) changed = true
-      result[key] = next
+      assignKey(result, key, next)
     }
     return changed ? result : record
   }

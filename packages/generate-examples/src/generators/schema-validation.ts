@@ -31,7 +31,36 @@ const FILTER_KEYWORDS = new Set([
  * `$defs`/`definitions` hold *unapplied* definitions — a hard keyword there only
  * matters once referenced, and each referenced def gets its own generated file.
  */
-const SKIP_RECURSE = new Set(['enum', 'const', 'examples', 'default', '$ref', 'required', '$defs', 'definitions'])
+/**
+ * Keywords whose value is a map of author-chosen names to schemas. Inside one
+ * the keys are names, so {@link SKIP_RECURSE} and `FILTER_KEYWORDS` carry no
+ * keyword meaning there. Kept in step by hand with `@amritk/helpers`'
+ * `SCHEMA_MAPS`, as `SKIP_RECURSE` is with `DATA_KEYWORDS`.
+ */
+const SCHEMA_MAPS = new Set([
+  'properties',
+  'patternProperties',
+  '$defs',
+  'definitions',
+  'dependentSchemas',
+  'dependencies',
+])
+
+const SKIP_RECURSE = new Set([
+  // The data keywords, matching `@amritk/helpers`' `DATA_KEYWORDS` —
+  // `example` is OpenAPI 3.0's singular spelling and belongs with `examples`.
+  'enum',
+  'const',
+  'examples',
+  'example',
+  'default',
+  // Plus this walker's own additions, which are not data but are equally not
+  // applied here.
+  '$ref',
+  'required',
+  '$defs',
+  'definitions',
+])
 
 /**
  * Memoized per schema object. The answer is a property of the (immutable) schema
@@ -47,16 +76,24 @@ const filterAnswers = new WeakMap<object, boolean>()
  * as its own self-validating file.
  */
 export const needsValidationFilter = (schema: JSONSchema): boolean => {
-  const walk = (node: unknown): boolean => {
-    if (Array.isArray(node)) return node.some(walk)
+  const walk = (node: unknown, inSchemaMap = false): boolean => {
+    if (Array.isArray(node)) return node.some((item) => walk(item, inSchemaMap))
     if (node === null || typeof node !== 'object') return false
     const obj = node as Record<string, unknown>
-    for (const key of Object.keys(obj)) {
-      if (FILTER_KEYWORDS.has(key)) return true
+    // Only at a schema node are these keys keywords. Inside a `properties` or
+    // `$defs` map they are author-chosen names, so a schema whose hard keyword
+    // sits under a property called `example` or `default` was reported as
+    // needing no filter — and the generator shipped a derived example the
+    // schema rejects. Same distinction the eight walkers in `@amritk/helpers`
+    // thread through; restated because this package holds no walker of its own.
+    if (!inSchemaMap) {
+      for (const key of Object.keys(obj)) {
+        if (FILTER_KEYWORDS.has(key)) return true
+      }
     }
-    for (const [key, value] of Object.entries(obj)) {
-      if (SKIP_RECURSE.has(key)) continue
-      if (walk(value)) return true
+    for (const key of Object.keys(obj)) {
+      if (!inSchemaMap && SKIP_RECURSE.has(key)) continue
+      if (walk(obj[key], !inSchemaMap && SCHEMA_MAPS.has(key))) return true
     }
     return false
   }

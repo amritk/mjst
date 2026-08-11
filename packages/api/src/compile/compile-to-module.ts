@@ -507,7 +507,57 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     ),
   )
   lines.push('', 'export default { fetch }', '')
-  return lines.join('\n')
+  const source = lines.join('\n')
+  assertNoImportCollision(source, [...new Set(routeModuleImports)])
+  return source
+}
+
+/**
+ * Fails the compile when an app export shares a name with one of the module's
+ * own top-level bindings.
+ *
+ * The emitted module imports the app's exports unaliased and declares roughly
+ * twenty internals of its own — `notFound`, `toResponse`, `observed`,
+ * `stripHeadBody`, `internalError`, … — every one a plausible name for a route,
+ * mount, or hook. A collision produces a module that declares the name twice,
+ * so it fails to load with a `SyntaxError` naming an identifier the author
+ * never wrote, from a file they did not author. Saying it here instead names
+ * the export and the fix.
+ *
+ * The internal names are read back out of the emitted source rather than
+ * listed, so the check cannot drift as the emitter grows — which a hand-kept
+ * list of twenty names certainly would. That includes the *other* import
+ * lines: the module also imports unaliased from the runtime and the validators,
+ * so an app exporting `validate`, `toResponse` or `readBodyCapped` collides
+ * there rather than with a declaration, and a check that only read
+ * declarations would miss exactly those.
+ */
+const assertNoImportCollision = (source: string, imported: readonly string[]): void => {
+  const declared = new Set<string>()
+  for (const match of source.matchAll(/^(?:export )?(?:const|let|function|class)\s+([A-Za-z_$][A-Za-z0-9_$]*)/gm)) {
+    declared.add(match[1] as string)
+  }
+  // Every *other* import line's bindings. The first is the routes module —
+  // the names being checked — so it is skipped rather than reported against
+  // itself.
+  const importLines = [...source.matchAll(/^import \{ ([^}]*) \} from /gm)].slice(1)
+  for (const line of importLines) {
+    for (const binding of (line[1] as string).split(',')) {
+      const name = binding
+        .trim()
+        .split(/\s+as\s+/)
+        .pop()
+      if (name !== undefined && name !== '') declared.add(name)
+    }
+  }
+  const clashes = imported.filter((name) => declared.has(name))
+  if (clashes.length === 0) return
+  throw new Error(
+    `compileToModule: ${clashes.map((name) => `'${name}'`).join(', ')} ` +
+      `${clashes.length === 1 ? 'is' : 'are'} also declared by the generated module. ` +
+      'Rename the export in the routes module (the generated file imports it unaliased, ' +
+      'so the two names would collide and the module would not load).',
+  )
 }
 
 const assertIdentifier = (name: string | undefined, label: string): void => {
@@ -1463,7 +1513,16 @@ const emitDispatch = (
 ): string[] => {
   const hooked = onRequestExports.length > 0 || onResponseExports.length > 0
   const extraArguments = emitContext.needsPlatform ? ', env, executionContext' : ''
-  const dispatchName = hooked ? 'handleFetch' : 'fetch'
+  // Hooked builds already wrap this in an `async` fetch (which turns a
+  // synchronous throw into a rejection on its own); unhooked ones export a
+  // thin wrapper below that does the same by hand, so the dispatch itself is
+  // private in both shapes.
+  //
+  // The names are prefixed because the emitted module imports the app's own
+  // exports unaliased: an app exporting `dispatchFetch` and wiring it as a
+  // mount or hook would otherwise produce a module declaring that name twice,
+  // failing to load with a `SyntaxError` that points at nothing.
+  const dispatchName = hooked ? 'mjstHandleFetch' : 'mjstDispatchFetch'
   // With an observer, every route invocation flows through `observed`, which
   // times the route function (validation + handler + serialization — the
   // same span the runtime engine measures) and reports the outcome status.
@@ -1504,7 +1563,7 @@ const emitDispatch = (
     )
   }
   lines.push(
-    `${hooked ? 'const' : 'export const'} ${dispatchName} = (request${hooked ? ', locals' : ''}${extraArguments}) => {`,
+    `const ${dispatchName} = (request${hooked ? ', locals' : ''}${extraArguments}) => {`,
     // One locals bag per request — hooked builds it in the wrapper (gates run
     // first), unhooked here — so every consumer (context factory, handler,
     // error formatters, observers) shares one object, like the runtime's
@@ -1658,6 +1717,25 @@ const emitDispatch = (
     "  return method === 'HEAD' ? stripHeadBody(missing) : missing",
     '}',
   )
+  if (!hooked) {
+    // The dispatch is deliberately not `async` — the sync-reply fast path
+    // skips the promise and the microtask turn — so a synchronous throw
+    // inside it would leave a function every fetch runtime treats as
+    // `Promise<Response>` by throwing rather than rejecting. A mount can do
+    // that (its contract admits a plain `Response`), and so can a `notFound` /
+    // `methodNotAllowed` formatter, which runs before any promise exists.
+    // The runtime engine wraps `dispatch` the same way, so both engines hand
+    // such a failure to the platform in the identical shape.
+    lines.push(
+      `export const fetch = (request${extraArguments}) => {`,
+      '  try {',
+      `    return ${dispatchName}(request${extraArguments})`,
+      '  } catch (error) {',
+      '    return Promise.reject(error)',
+      '  }',
+      '}',
+    )
+  }
 
   if (!hooked) return lines
 
@@ -1739,7 +1817,7 @@ const emitDispatch = (
     }
   }
   lines.push(
-    `  return ${finish(`await handleFetch(request, locals${emitContext.needsPlatform ? ', env, executionContext' : ''})`)}`,
+    `  return ${finish(`await mjstHandleFetch(request, locals${emitContext.needsPlatform ? ', env, executionContext' : ''})`)}`,
     '}',
   )
   return lines

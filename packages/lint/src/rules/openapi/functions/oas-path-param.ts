@@ -1,3 +1,4 @@
+import { setOwnKey } from '../../../core/own-key'
 import type { IFunctionResult, JsonPath, RulesetFunction } from '../../../core/types'
 import { isObject, OPERATION_METHODS } from './helpers'
 
@@ -31,7 +32,10 @@ const recordPathParam = (
       path: definitionPath,
     })
   }
-  if (name in seen) {
+  // `Object.hasOwn`, not `in`: parameter names come from the document, so a
+  // path parameter legitimately named `constructor` matched `Object.prototype`
+  // and was reported as a duplicate of itself.
+  if (Object.hasOwn(seen, name)) {
     results.push({ message: `Path parameter "${name}" must not be defined multiple times`, path: definitionPath })
     return undefined
   }
@@ -76,7 +80,7 @@ export const oasPathParam: RulesetFunction = (paths, _options, context) => {
         if (!isObject(param)) return
         const definitionPath = [...context.path, path, 'parameters', index]
         const name = recordPathParam(param, definitionPath, topParams, results)
-        if (name !== undefined) topParams[name] = definitionPath
+        if (name !== undefined) setOwnKey(topParams, name, definitionPath)
       })
     }
 
@@ -91,10 +95,12 @@ export const oasPathParam: RulesetFunction = (paths, _options, context) => {
           if (!isObject(param)) return
           const definitionPath = [...operationPath, 'parameters', index]
           const name = recordPathParam(param, definitionPath, operationParams, results)
-          if (name !== undefined) operationParams[name] = definitionPath
+          if (name !== undefined) setOwnKey(operationParams, name, definitionPath)
         })
       }
 
+      // Spread copies own keys as own keys, `__proto__` included, so the
+      // guarded writes above survive the merge.
       const defined: DefinedParams = { ...topParams, ...operationParams }
       // (b) Every defined `in: path` parameter must appear in the path template.
       for (const [name, definitionPath] of Object.entries(defined)) {
@@ -104,7 +110,10 @@ export const oasPathParam: RulesetFunction = (paths, _options, context) => {
       }
       // (a) Every `{template}` must have a matching definition on the operation.
       for (const name of templates) {
-        if (!(name in defined)) {
+        // `Object.hasOwn`, as at the duplicate check above: `in` walks the
+        // prototype chain, so a `{constructor}` or `{toString}` template read
+        // as already defined and its missing parameter went unreported.
+        if (!Object.hasOwn(defined, name)) {
           results.push({
             message: `Operation must define path parameter "{${name}}" as expected by path "${path}"`,
             path: operationPath,

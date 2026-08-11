@@ -192,10 +192,11 @@ describe('resolve-refs-from-file', () => {
 
     const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'))
 
-    // The missing document degrades to {}, so the pointer into it misses and the
-    // ref resolves to undefined — the important part is that we recorded the
-    // failure instead of throwing.
-    expect((resolved as { x: unknown }).x).toBeUndefined()
+    // The document never loaded, so there is nothing to inline. The node keeps
+    // its `$ref` rather than becoming `undefined`: an inlined `undefined`
+    // vanishes on serialization (and becomes `null` inside an array, which is
+    // not a schema at all), taking every constraint on the node with it.
+    expect((resolved as { x: unknown }).x).toEqual({ $ref: './missing.json#/Nope' })
     expect(errors.length).toBeGreaterThan(0)
   })
 
@@ -208,8 +209,9 @@ describe('resolve-refs-from-file', () => {
 
     const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'))
 
-    // The refused document degrades to {}, so the pointer into it misses.
-    expect((resolved as { x: unknown }).x).toBeUndefined()
+    // Refused, so nothing is inlined — the node keeps its `$ref` and the
+    // refusal is on `errors`.
+    expect((resolved as { x: unknown }).x).toEqual({ $ref: 'http://169.254.169.254/latest/meta-data#/foo' })
     expect(errors[0]?.message).toMatch(/Refusing to resolve remote \$ref/)
     // The guard is syntactic — we never even attempt the request.
     expect(fetchSpy).not.toHaveBeenCalled()
@@ -278,7 +280,7 @@ describe('resolve-refs-from-file', () => {
       allowedHosts: ['api.example.com'],
     })
 
-    expect((resolved as { x: unknown }).x).toBeUndefined()
+    expect((resolved as { x: unknown }).x).toEqual({ $ref: 'https://api.example.com/s.json#/Foo' })
     expect(errors[0]?.message).toMatch(/refusing to follow redirect/i)
     // The initial host was allowed, so the first request happened — but the
     // redirect target was re-checked and refused before any second request.
@@ -299,7 +301,7 @@ describe('resolve-refs-from-file', () => {
       allowedHosts: ['api.example.com'],
     })
 
-    expect((resolved as { x: unknown }).x).toBeUndefined()
+    expect((resolved as { x: unknown }).x).toEqual({ $ref: 'https://api.example.com/s.json#/Foo' })
     expect(errors[0]?.message).toMatch(/unsupported URL protocol/i)
     // Only the initial https request happened; the file:// target was refused.
     expect(fetchSpy).toHaveBeenCalledTimes(1)
@@ -339,7 +341,7 @@ describe('resolve-refs-from-file', () => {
     // A later strict call for the same URL must NOT be served from the session
     // cache — the default private-host guard has to refuse it.
     const strict = await resolveRefsFromFile(join(dir, 'api.json'))
-    expect((strict.resolved as { x: unknown }).x).toBeUndefined()
+    expect((strict.resolved as { x: unknown }).x).toEqual({ $ref: `${url}#/Foo` })
     expect(strict.errors[0]?.message).toMatch(/Refusing to resolve remote \$ref/)
     // No additional fetch was made for the refused call.
     expect(fetchSpy).toHaveBeenCalledTimes(1)
@@ -515,8 +517,11 @@ describe('resolve-refs-from-file', () => {
 
     const { resolved, errors } = await resolveRefsFromFile(join(sub, 'spec.json'))
 
-    // The refused document degrades to {}, so the secret never reaches the output.
-    expect(resolved).toEqual({ leak: {} })
+    // The secret never reaches the output. The node keeps its `$ref` rather
+    // than degrading to `{}` — an empty schema accepts anything, so inlining
+    // one turns a refused constraint into a hole that validates everything.
+    expect(resolved).toEqual({ leak: { $ref: '../secret.json' } })
+    expect(JSON.stringify(resolved)).not.toContain('SUPER-SECRET-VALUE')
     expect(errors[0]?.message).toMatch(/Refusing to read local \$ref/)
     // The error names the escape hatch so the fix is obvious from the message.
     expect(errors[0]?.message).toMatch(/allowedRoots/)
@@ -574,7 +579,8 @@ describe('resolve-refs-from-file', () => {
 
     const { resolved, errors } = await resolveRefsFromFile(join(sub, 'spec.json'))
 
-    expect(resolved).toEqual({ leak: {} })
+    expect(resolved).toEqual({ leak: { $ref: './link.json' } })
+    expect(JSON.stringify(resolved)).not.toContain('SUPER-SECRET-VALUE')
     expect(errors[0]?.message).toMatch(/Refusing to read local \$ref/)
   })
 
@@ -738,7 +744,7 @@ describe('resolve-refs-from-file', () => {
     // The URL omits the port, which counts as the https default of 443…
     expect(resolved).toMatchObject({ ok: { type: 'string' } })
     // …while a different port on the same host is not covered by that entry.
-    expect((resolved as { bad: unknown }).bad).toBeUndefined()
+    expect((resolved as { bad: unknown }).bad).toEqual({ $ref: 'https://example.com:8443/s.json#/Foo' })
     expect(errors[0]?.message).toMatch(/host is not in the allow-list/)
   })
 
@@ -968,5 +974,257 @@ describe('resolve-refs-from-file', () => {
     // Copied, not aliased — but still a cycle, as it was in the source.
     expect(value).not.toBe(cyclic)
     expect(value['child']).toBe(value)
+  })
+
+  it('does not let a hoisted cycle target overwrite a definition the output root already had', async () => {
+    // The root is a bare `$ref`, so the resolved output *is* b.json — and the
+    // hoist names are picked against the source root's `$defs`, which is not
+    // the map being written to. b.json already has a `Node`, and the hoist
+    // derived from `c.json#/$defs/Node` wants that same name.
+    //
+    // The `description` matters: an annotation-only sibling is the one path
+    // that copies the kept cycle node instead of placing it, so it is where a
+    // rename that only fixed the original would strand this ref on b.json's
+    // own `Node` — a definition that exists, resolves, and is the wrong one.
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ $ref: './b.json' }))
+    writeFileSync(
+      join(dir, 'b.json'),
+      JSON.stringify({
+        $defs: { Node: { const: 'B_OWN_NODE' } },
+        properties: { loop: { $ref: './c.json#/$defs/Node', description: 'd' } },
+      }),
+    )
+    writeFileSync(join(dir, 'c.json'), JSON.stringify({ $defs: { Node: { $ref: './c.json#/$defs/Node' } } }))
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'))
+    const defs = (resolved as { $defs: Record<string, unknown> }).$defs
+    const loop = (resolved as { properties: { loop: Record<string, unknown> } }).properties.loop
+
+    // b.json's own definition survives, and the hoist took a free name.
+    expect(defs['Node']).toEqual({ const: 'B_OWN_NODE' })
+    const hoisted = Object.keys(defs).find((key) => key !== 'Node')
+    expect(hoisted).toBeDefined()
+    // Every kept cycle ref names the hoist's *final* name, including the one
+    // on the copied node.
+    expect(loop['$ref']).toBe(`#/$defs/${hoisted}`)
+    expect(loop['description']).toBe('d')
+    const refs = [...JSON.stringify(resolved).matchAll(/"\$ref":"([^"]+)"/g)].map((match) => match[1])
+    expect(new Set(refs)).toEqual(new Set([`#/$defs/${hoisted}`]))
+  })
+
+  it('rebases a kept relative ref so it still names the document it was written against', async () => {
+    // `sub/b.json` refers to its own sibling `c.json`. The fragment is a typo,
+    // so the ref is kept — and the output is read relative to the *root*, where
+    // a different `c.json` sits. Re-emitting the ref verbatim silently bound it
+    // to that other file, which resolves cleanly and is simply the wrong answer.
+    mkdirSync(join(dir, 'sub'))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: './sub/b.json' } }))
+    writeFileSync(join(dir, 'sub', 'b.json'), JSON.stringify({ x: { $ref: './c.json#/$defs/typo' } }))
+    writeFileSync(join(dir, 'sub', 'c.json'), JSON.stringify({ $defs: { real: { const: 'SUB_C' } } }))
+    writeFileSync(join(dir, 'c.json'), JSON.stringify({ $defs: { typo: { const: 'ROOT_C_WRONG' } } }))
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'))
+
+    expect(resolved).toEqual({ a: { x: { $ref: './sub/c.json#/$defs/typo' } } })
+  })
+
+  it('keeps a node whose document was refused rather than inlining undefined', async () => {
+    // Inside an array `undefined` serializes to `null`, so an `allOf` branch
+    // pointing at a refused document produced `allOf: [null]` — not a schema.
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ type: 'object', allOf: [{ $ref: '../outside.json#/$defs/X' }] }),
+    )
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'))
+
+    expect(resolved).toEqual({ type: 'object', allOf: [{ $ref: '../outside.json#/$defs/X' }] })
+    expect(JSON.parse(JSON.stringify(resolved))).toEqual(resolved)
+    // The loader already said why; the keep must not add a second, vaguer one.
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.message).toMatch(/Refusing to read local \$ref/)
+  })
+
+  it('preserves a class instance a custom parse put in value position', async () => {
+    // js-yaml yields a `Date` for a YAML timestamp. Copying value-position
+    // subtrees as plain objects emptied it — `default: 2020-01-01` became
+    // `default: {}` — with nothing to say the constraint had been dropped.
+    writeFileSync(join(dir, 'root.json'), 'parsed by the callback')
+    const stamp = new Date('2020-01-01T00:00:00.000Z')
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), {
+      parse: () => ({ type: 'string', default: stamp }),
+    })
+    const value = (resolved as { default: Date }).default
+
+    expect(value).toBeInstanceOf(Date)
+    expect(value.getTime()).toBe(stamp.getTime())
+    // Copied, not aliased — the session cache must stay unreachable from the
+    // caller's result, which is why value positions are detached at all.
+    expect(value).not.toBe(stamp)
+  })
+
+  it('keeps a fragment-less ref into a document that never loaded', async () => {
+    // A document that was refused sits in the cache as a `{}` placeholder, so a
+    // ref with no fragment *does* resolve — to an empty schema, which accepts
+    // anything. That turns a refused constraint into a hole rather than an
+    // error, which is worse than the `undefined` the fragment case stopped
+    // inlining.
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ type: 'object', allOf: [{ $ref: '../outside.json' }] }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'))
+
+    expect(resolved).toEqual({ type: 'object', allOf: [{ $ref: '../outside.json' }] })
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.message).toMatch(/Refusing to read local \$ref/)
+  })
+
+  it('keeps a fragment-less ref to a host the SSRF guard refused', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ x: { $ref: 'http://169.254.169.254/meta' } }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'))
+
+    expect(resolved).toEqual({ x: { $ref: 'http://169.254.169.254/meta' } })
+    expect(errors[0]?.message).toMatch(/Refusing to resolve remote \$ref/)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('leaves a kept ref with a non-http scheme alone instead of rebasing it', async () => {
+    // `urn:example:common` names the same thing from any document, so there is
+    // nothing to rebase — and treating it as a relative path produced the
+    // nonsense `./sub/urn:example:common`.
+    mkdirSync(join(dir, 'sub'))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: './sub/b.json' } }))
+    writeFileSync(join(dir, 'sub', 'b.json'), JSON.stringify({ x: { $ref: 'urn:example:common#/$defs/Q' } }))
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'))
+
+    expect(resolved).toEqual({ a: { x: { $ref: 'urn:example:common#/$defs/Q' } } })
+  })
+
+  it('rebases the refs inside a subtree the depth limit handed back whole', async () => {
+    // Past `maxDepth` the subtree is returned as-is rather than unwinding the
+    // stack — but it is still being lifted into a root-based output, so its
+    // relative refs need the same rebasing a resolved one gets. Left verbatim,
+    // `./c.json` came to name the root's own c.json: a different file that
+    // exists and resolves cleanly.
+    mkdirSync(join(dir, 'sub'))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: './sub/b.json' } }))
+    writeFileSync(
+      join(dir, 'sub', 'b.json'),
+      JSON.stringify({ d1: { d2: { d3: { x: { $ref: './c.json#/$defs/real' } } } } }),
+    )
+    writeFileSync(join(dir, 'sub', 'c.json'), JSON.stringify({ $defs: { real: { const: 'SUB_C' } } }))
+    writeFileSync(join(dir, 'c.json'), JSON.stringify({ $defs: { real: { const: 'ROOT_C_WRONG' } } }))
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { maxDepth: 4 })
+
+    expect(JSON.stringify(resolved)).toContain('./sub/c.json#/$defs/real')
+    expect(JSON.stringify(resolved)).not.toContain('"./c.json#/$defs/real"')
+  })
+
+  it('does not rebase a $ref that is instance data inside a truncated subtree', async () => {
+    // An `enum` member is a value that happens to have a `$ref` key — the case
+    // the official suite files under "naive replacement of $ref with its
+    // destination is not correct". A structural walk rewrote the literal the
+    // schema declares. The nesting goes through `allOf` so the walk stays
+    // inside the vocabulary: under an unrecognized keyword the resolver itself
+    // keeps finding references, and the rebase matches it.
+    mkdirSync(join(dir, 'sub'))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: './sub/b.json' } }))
+    writeFileSync(
+      join(dir, 'sub', 'b.json'),
+      JSON.stringify({
+        allOf: [
+          { allOf: [{ enum: [{ $ref: './c.json' }], default: { $ref: './c.json' }, not: { $ref: './c.json' } }] },
+        ],
+      }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { maxDepth: 4 })
+    const serialized = JSON.stringify(resolved)
+
+    // The two data positions keep the author's literal…
+    expect(serialized).toContain('"enum":[{"$ref":"./c.json"}]')
+    expect(serialized).toContain('"default":{"$ref":"./c.json"}')
+    // …while the real reference beside them is rebased.
+    expect(serialized).toContain('"not":{"$ref":"./sub/c.json"}')
+  })
+
+  it('terminates on a cyclic subtree the depth limit hands back', async () => {
+    // `detach` preserves cycles on purpose, so the rebase walk needs its own
+    // visited set — and a cyclic document always trips the depth limit, which
+    // is the only way into that walk. Without the guard this never returns.
+    mkdirSync(join(dir, 'sub'))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: './sub/b.json' } }))
+    writeFileSync(join(dir, 'sub', 'b.json'), 'parsed by the callback')
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), {
+      maxDepth: 4,
+      parse: (content, location) => {
+        if (!location.endsWith('sub/b.json')) return JSON.parse(content) as unknown
+        // A YAML recursive anchor, in the shape a custom parser hands back.
+        const cyclic: Record<string, unknown> = { allOf: [{ not: { $ref: './c.json' } }] }
+        cyclic['self'] = cyclic
+        return { allOf: [{ allOf: [cyclic] }] }
+      },
+    })
+
+    expect(resolved).toBeDefined()
+  }, 5000)
+
+  it('rebases a shared subtree once, not once per parent', async () => {
+    mkdirSync(join(dir, 'sub'))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: './sub/b.json' } }))
+    writeFileSync(join(dir, 'sub', 'b.json'), 'parsed by the callback')
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), {
+      maxDepth: 4,
+      parse: (content, location) => {
+        if (!location.endsWith('sub/b.json')) return JSON.parse(content) as unknown
+        const shared = { not: { $ref: './c.json#/$defs/real' } }
+        return { allOf: [{ allOf: [{ allOf: [shared, shared] }] }] }
+      },
+    })
+
+    const serialized = JSON.stringify(resolved)
+    expect(serialized).toContain('./sub/c.json#/$defs/real')
+    expect(serialized).not.toContain('./sub/sub/')
+  })
+
+  it('points a kept bare-fragment ref back at the document that wrote it', async () => {
+    // `#/$defs/Thing` names a place inside its own document. Lifted into the
+    // root output it reads against the *root's* `$defs` — a different schema
+    // that exists and resolves cleanly.
+    mkdirSync(join(dir, 'sub'))
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ $defs: { Thing: { const: 'ROOT_THING_WRONG' } }, a: { $ref: './sub/b.json' } }),
+    )
+    writeFileSync(
+      join(dir, 'sub', 'b.json'),
+      JSON.stringify({
+        $defs: { Thing: { const: 'SUB_THING' } },
+        allOf: [{ allOf: [{ allOf: [{ not: { $ref: '#/$defs/Thing' } }] }] }],
+      }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { maxDepth: 4 })
+
+    expect(JSON.stringify(resolved)).toContain('./sub/b.json#/$defs/Thing')
+  })
+
+  it('leaves a kept $dynamicRef as the anchor name it is', async () => {
+    // `#meta` is the whole legal spelling of an anchor-form `$dynamicRef`.
+    // Qualifying it with a document — as a `$ref` correctly gets — produces a
+    // value no consumer can resolve: `@amritk/helpers` throws on it outright.
+    mkdirSync(join(dir, 'sub'))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: './sub/b.json' } }))
+    writeFileSync(join(dir, 'sub', 'b.json'), JSON.stringify({ x: { $dynamicRef: '#meta' } }))
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'))
+
+    expect(resolved).toEqual({ a: { x: { $dynamicRef: '#meta' } } })
   })
 })

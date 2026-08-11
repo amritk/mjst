@@ -255,6 +255,39 @@ export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandl
   }
 }
 
+/**
+ * The body an upstream parser already consumed, recovered from the `body`
+ * property Express/Connect middleware conventionally leaves behind.
+ *
+ * `express.raw` leaves a Buffer and `express.text` a string — both go out byte
+ * for byte. `express.json` / `express.urlencoded` leave the *decoded* value,
+ * which is re-serialized as JSON here. That makes `readBody` correct (it
+ * parses JSON either way), but it is a reconstruction, not the original
+ * request: `readText` and `readBytes` then see JSON with this process's
+ * whitespace and key order, and for `urlencoded` they see JSON where the
+ * content type says form encoding.
+ *
+ * So a route that needs the bytes the client actually sent — verifying an HMAC
+ * signature over a webhook body is the case that matters — must not have a
+ * body parser mounted in front of it. Scope the parser to the routes that need
+ * it (`app.use('/api', express.json())`) and the adapter reads the live stream
+ * as before. Anything unrecognized (including no `body` at all) reads as an
+ * empty body, which is what the drained stream would have produced on its own.
+ */
+const consumedBody = (incoming: IncomingMessage): Buffer => {
+  const { body } = incoming as IncomingMessage & { body?: unknown }
+  if (Buffer.isBuffer(body)) return body
+  if (typeof body === 'string') return Buffer.from(body, 'utf8')
+  if (body === undefined || body === null) return Buffer.alloc(0)
+  try {
+    return Buffer.from(JSON.stringify(body) ?? '', 'utf8')
+  } catch {
+    // A circular parsed body cannot be re-serialized; an empty body is the
+    // honest fallback, and the route's own validation reports it.
+    return Buffer.alloc(0)
+  }
+}
+
 // An Infinity limit disables the cap arithmetically: no finite declared
 // length or running total ever exceeds it, so no special-casing is needed.
 const readBytes = (incoming: IncomingMessage, limit: number): Promise<Buffer> =>
@@ -262,6 +295,28 @@ const readBytes = (incoming: IncomingMessage, limit: number): Promise<Buffer> =>
     const declared = Number(incoming.headers['content-length'])
     if (Number.isFinite(declared) && declared > limit) {
       reject(payloadTooLargeError(limit))
+      return
+    }
+    // A body parser upstream — `app.use(express.json())` ahead of
+    // `app.use(toNodeHandler(api))`, the wiring this adapter documents — has
+    // already read the stream to its end. Subscribing to 'data'/'end' now
+    // waits on events that will never fire again: the promise never settles,
+    // the handler never replies, and the socket is held until the client
+    // gives up. Read what the parser left instead.
+    if (incoming.readableEnded) {
+      const recovered = consumedBody(incoming)
+      if (recovered.byteLength > limit) reject(payloadTooLargeError(limit))
+      else resolve(recovered)
+      return
+    }
+    // A stream torn down before this ran has already emitted its last event, so
+    // the listeners below would wait on events that can never come. The body is
+    // read lazily — only when a route asks — so a handler that awaits anything
+    // first leaves a window for the client to abort, and `readableEnded` is
+    // false for an aborted stream, which is why the check above does not cover
+    // it. The 'close' listener only helps while 'close' is still ahead of us.
+    if (incoming.destroyed || incoming.readableAborted) {
+      reject(new Error('Request closed before the body finished'))
       return
     }
     const chunks: Buffer[] = []
@@ -279,4 +334,11 @@ const readBytes = (incoming: IncomingMessage, limit: number): Promise<Buffer> =>
     })
     incoming.on('end', () => resolve(Buffer.concat(chunks)))
     incoming.on('error', reject)
+    // A socket torn down mid-upload emits 'close' without 'end', which would
+    // otherwise leave this promise pending for the life of the process. The
+    // `readableEnded` check keeps the ordinary 'end'-then-'close' sequence
+    // from racing a rejection against the resolve that already won.
+    incoming.on('close', () => {
+      if (!incoming.readableEnded) reject(new Error('Request closed before the body finished'))
+    })
   })

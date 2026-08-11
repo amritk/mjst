@@ -72,12 +72,18 @@ const arrayFallback = (schema: JSONSchema): string => {
   const record = schema as Record<string, unknown>
   // 2020-12 spells tuple positions `prefixItems`; draft-07 used an array-valued
   // `items` with the tail in `additionalItems`.
-  const positions = Array.isArray(record['prefixItems'])
-    ? (record['prefixItems'] as JSONSchema[])
-    : Array.isArray(record['items'])
-      ? (record['items'] as JSONSchema[])
+  const positions = Array.isArray(Object.hasOwn(record, 'prefixItems') ? record['prefixItems'] : undefined)
+    ? ((Object.hasOwn(record, 'prefixItems') ? record['prefixItems'] : undefined) as JSONSchema[])
+    : Array.isArray(Object.hasOwn(record, 'items') ? record['items'] : undefined)
+      ? ((Object.hasOwn(record, 'items') ? record['items'] : undefined) as JSONSchema[])
       : []
-  const tail = Array.isArray(record['items']) ? record['additionalItems'] : record['items']
+  const tail = Array.isArray(Object.hasOwn(record, 'items') ? record['items'] : undefined)
+    ? Object.hasOwn(record, 'additionalItems')
+      ? record['additionalItems']
+      : undefined
+    : Object.hasOwn(record, 'items')
+      ? record['items']
+      : undefined
   const minItems = typeof record['minItems'] === 'number' ? (record['minItems'] as number) : 0
 
   // Past the cap, fall back to what the emitted tuple type requires — positions

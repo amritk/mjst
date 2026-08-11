@@ -284,4 +284,76 @@ describe('strip-contract-fields', () => {
     const contracts = evaluateContracts(`exports.c = ${stripContractFields(source).slice('const c = '.length)}`)
     expect(contracts['c']).toEqual({ method: 'get', path: '/x', responses: { 200: {} } })
   })
+
+  it('leaves a call site quoted inside a string or template alone', () => {
+    // A docs page holding a usage sample as data. Rewriting it would edit the
+    // string's value — the sample would render missing the very fields it
+    // exists to show — with nothing anywhere to trace the change back to.
+    const source = [
+      'export const sample = `',
+      "defineContract({ method: 'get', path: '/x', responses: { 200: {} }, summary: 'shown' })",
+      '`',
+      "export const inline = \"defineContract({ method: 'get', path: '/y', summary: 'shown' })\"",
+    ].join('\n')
+    expect(stripContractFields(source)).toBe(source)
+  })
+
+  it('leaves a call site shown in a comment alone', () => {
+    const source = [
+      "// defineContract({ method: 'get', path: '/y', responses: { 200: {} }, summary: 'shown' })",
+      '/*',
+      " * defineContract({ method: 'get', path: '/z', responses: { 200: {} }, summary: 'shown' })",
+      ' */',
+    ].join('\n')
+    expect(stripContractFields(source)).toBe(source)
+  })
+
+  it('still strips a real call site that follows a quoted one', () => {
+    // The scan has to resume in code position after skipping the literal, or
+    // guarding against strings would quietly disable the transform.
+    const source = [
+      "export const sample = `defineContract({ summary: 'kept' })`",
+      "export const real = defineContract({ method: 'get', path: '/x', responses: { 200: {} }, summary: 'gone' })",
+    ].join('\n')
+    const stripped = stripContractFields(source)
+    expect(stripped).toContain("summary: 'kept'")
+    expect(stripped).not.toContain("summary: 'gone'")
+    expect(evaluateContracts(stripped)['real']).toEqual({ method: 'get', path: '/x', responses: { 200: {} } })
+  })
+
+  it('keeps scanning past an apostrophe in JSX text', () => {
+    // `.tsx` is a scannable id, and JSX text is not a string literal — a bare
+    // apostrophe there must not strand the rest of the module unstripped.
+    const source = [
+      "const label = <p>don't stop</p>",
+      "export const real = defineContract({ method: 'get', path: '/x', responses: { 200: {} }, summary: 'gone' })",
+    ].join('\n')
+    expect(stripContractFields(source)).not.toContain("summary: 'gone'")
+  })
+
+  it('strips a call site that shares a line with JSX', () => {
+    // `isScannableId` accepts `.tsx`. The `/` of a closing tag is preceded by
+    // `<`, which the regex heuristic read as "a regex starts here" — so the
+    // scan ran to the next `/` in the file (inside `path: '/x'`) and stepped
+    // over the call entirely. A skipped call site is a silent no-op that ships
+    // every schema to the bundle this transform exists to slim.
+    const source =
+      "const label = <p>hi</p>; export const real = defineContract({ method: 'get', path: '/x', responses: { 200: {} }, summary: 'gone' })"
+    const stripped = stripContractFields(source)
+
+    expect(stripped).not.toBe(source)
+    expect(stripped).not.toContain("summary: 'gone'")
+    expect(stripped).toContain('<p>hi</p>')
+  })
+
+  it('does not let a regex guess swallow a call site', () => {
+    // The `/` has to follow a character the heuristic accepts, or the regex
+    // branch is never entered and the test proves nothing. After `*` it is
+    // entered, and the scan would run to the `/` inside `path: '/y'` — spanning
+    // the call. A regex that swallows a call site is a wrong guess by
+    // construction, so the scan backs off and reads the `/` as ordinary.
+    const source =
+      "const u = 2 * / x; export const real = defineContract({ method: 'get', path: '/y', responses: { 200: {} }, summary: 'gone' })"
+    expect(stripContractFields(source)).not.toContain("summary: 'gone'")
+  })
 })

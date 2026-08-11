@@ -474,4 +474,55 @@ describe('to-node-handler', () => {
       expect(await response.json()).toEqual({ error: 'internal_error' })
     })
   })
+
+  it('answers when a body parser upstream already drained the stream', async () => {
+    // The wiring this adapter documents for Express is
+    // `app.use(express.json()); app.use(toNodeHandler(api))`, and the parser
+    // reads the stream to its end before the adapter ever sees it. Waiting on
+    // an 'end' that already fired left the request hanging forever, holding
+    // the socket until the client gave up.
+    const handler = toNodeHandler(createApi({ routes: [createUser] }))
+    const server = createServer((incoming, outgoing) => {
+      // Stand-in for express.json(): drain the stream, leave the parsed value
+      // on `req.body`, then hand off.
+      const chunks: Buffer[] = []
+      incoming.on('data', (chunk: Buffer) => chunks.push(chunk))
+      incoming.on('end', () => {
+        ;(incoming as typeof incoming & { body?: unknown }).body = JSON.parse(
+          Buffer.concat(chunks).toString('utf8'),
+        ) as unknown
+        void handler(incoming, outgoing)
+      })
+    })
+    await withServer(server, async (origin) => {
+      const response = await fetch(origin + '/users', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'ada' }),
+        signal: AbortSignal.timeout(2000),
+      })
+      expect(response.status).toBe(201)
+      expect(await response.json()).toEqual({ name: 'ada' })
+    })
+  })
+
+  it('reads a drained stream as empty when no parser left a body behind', async () => {
+    // A middleware that consumed the stream without recording what it read
+    // cannot have its body recovered — but the request still has to be
+    // answered, and a body schema then reports the miss as a 400.
+    const handler = toNodeHandler(createApi({ routes: [createUser] }))
+    const server = createServer((incoming, outgoing) => {
+      incoming.resume()
+      incoming.on('end', () => void handler(incoming, outgoing))
+    })
+    await withServer(server, async (origin) => {
+      const response = await fetch(origin + '/users', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'ada' }),
+        signal: AbortSignal.timeout(2000),
+      })
+      expect(response.status).toBe(400)
+    })
+  })
 })

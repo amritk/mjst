@@ -998,3 +998,23 @@ export const corpusErrors: ErrorFormatters = {
   }),
   payloadTooLarge: () => ({ status: 413, body: { error: 'over the corpus limit' } }),
 }
+
+/**
+ * A mount that fails synchronously. Its type admits a plain `Response`, so
+ * throwing rather than rejecting is on its ordinary path — and the unhooked
+ * dispatch both engines emit is not `async`, which is what makes the escape
+ * shape worth pinning.
+ */
+export const mountBoom = (): Response => {
+  throw new Error('mount exploded')
+}
+
+/**
+ * Formatters whose `notFound` throws. It runs before any promise exists, so
+ * it escapes the same way a synchronous mount does.
+ */
+export const throwingErrors: ErrorFormatters = {
+  notFound: () => {
+    throw new Error('formatter exploded')
+  },
+}

@@ -1,17 +1,13 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+// The pointer built here is handed back as a `$ref` fragment and
+// percent-decoded on the way in, so it has to be escaped by the same
+// function that contract is defined by. A local copy omitted the `%`
+// escape, which left an anchor under a key like `a%2Fb` unresolvable.
+import { entersSchemaMap, escapePointerSegment, isDataPosition } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
+import { readKey } from './read-key'
 import { isSchemaObject } from './schema-guards'
-
-/** Escapes a JSON Pointer segment (RFC 6901): `~` → `~0`, `/` → `~1`. */
-const escapeSegment = (segment: string): string =>
-  segment.indexOf('~') !== -1 || segment.indexOf('/') !== -1
-    ? segment.replace(/~/g, '~0').replace(/\//g, '~1')
-    : segment
-
-// Keywords whose values are data, not subschemas — an `$anchor` key inside an
-// enum member or example value is instance data and must not register.
-const NON_SCHEMA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples'])
 
 /**
  * Maps every `$anchor` name declared in a document to the JSON Pointer of the
@@ -44,26 +40,26 @@ export const buildAnchorMap = (rootSchema: JSONSchema): Record<string, string> =
   const map = Object.create(null) as Record<string, string>
   if (!isSchemaObject(rootSchema)) return map
 
-  const walk = (node: unknown, pointer: string, depth: number): void => {
+  const walk = (node: unknown, pointer: string, depth: number, inSchemaMap: boolean): void => {
     assertSchemaDepth(depth, 'buildAnchorMap')
     if (node === null || typeof node !== 'object') return
     if (Array.isArray(node)) {
-      for (let i = 0; i < node.length; i++) walk(node[i], `${pointer}/${i}`, depth + 1)
+      for (let i = 0; i < node.length; i++) walk(node[i], `${pointer}/${i}`, depth + 1, inSchemaMap)
       return
     }
 
     const record = node as Record<string, unknown>
     for (const keyword of ['$anchor', '$dynamicAnchor'] as const) {
-      const anchor = record[keyword]
+      const anchor = readKey(record, keyword)
       if (typeof anchor === 'string' && !Object.hasOwn(map, anchor)) map[anchor] = `#${pointer}`
     }
 
     for (const key of Object.keys(record)) {
-      if (NON_SCHEMA_KEYWORDS.has(key)) continue
-      walk(record[key], `${pointer}/${escapeSegment(key)}`, depth + 1)
+      if (isDataPosition(key, inSchemaMap)) continue
+      walk(record[key], `${pointer}/${escapePointerSegment(key)}`, depth + 1, entersSchemaMap(key, inSchemaMap))
     }
   }
 
-  walk(rootSchema, '', 0)
+  walk(rootSchema, '', 0, false)
   return map
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildAnchorMap } from './build-anchor-map'
+import { resolveRef } from './resolve-ref'
 
 describe('build-anchor-map', () => {
   it('maps an $anchor to the pointer of the subschema declaring it', () => {
@@ -67,5 +68,30 @@ describe('build-anchor-map', () => {
 
   it('returns an empty map for a boolean schema', () => {
     expect(buildAnchorMap(true)).toEqual({})
+  })
+
+  it('escapes a percent in a key the same way resolveRef decodes it', () => {
+    // The pointer is handed back as a `$ref` fragment and percent-decoded on
+    // the way in, so a local escaper that skipped `%` produced a pointer that
+    // decoded to a different key — leaving the anchor unresolvable.
+    const root = { $defs: { 'a%2Fb': { $anchor: 'target', type: 'string' } } }
+    expect(resolveRef('#target', root as never)).toEqual({ $anchor: 'target', type: 'string' })
+  })
+
+  it('registers an anchor under a definition named after a data keyword', () => {
+    // `$defs` maps author-chosen names to schemas, so `default` there is a
+    // name. Skipping it as a keyword skipped the whole subtree, and the anchor
+    // it declares became unresolvable.
+    const root = { $defs: { default: { $anchor: 'thing', type: 'string' }, ok: { $anchor: 'other' } } }
+    expect(buildAnchorMap(root as never)).toMatchObject({ thing: '#/$defs/default', other: '#/$defs/ok' })
+    expect(resolveRef('#thing', root as never)).toEqual({ $anchor: 'thing', type: 'string' })
+  })
+
+  it('still skips an $anchor sitting in instance data', () => {
+    // The other half of the same distinction: at a schema node those keys are
+    // keywords, and an `$anchor` inside an enum member is a value, not a
+    // declaration.
+    expect(buildAnchorMap({ enum: [{ $anchor: 'notreal' }] } as never)).toEqual({})
+    expect(buildAnchorMap({ example: { $anchor: 'notreal' } } as never)).toEqual({})
   })
 })
