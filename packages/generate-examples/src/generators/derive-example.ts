@@ -251,7 +251,11 @@ const FORMAT_EXAMPLES: Readonly<Record<string, string>> = {
 /** Returns a representative string honouring `format`, `pattern`, and length. */
 const exampleString = (schema: JSONSchema): string => {
   if (hasFormat(schema)) {
-    const formatted = FORMAT_EXAMPLES[schema.format]
+    // `Object.hasOwn`, not a bare index: `format` is schema input, and a
+    // format naming an `Object.prototype` member resolved to a `Function` —
+    // which is not a string, so the emitted `fooExample` carried `undefined`
+    // for that property and the generated file failed to type-check.
+    const formatted = Object.hasOwn(FORMAT_EXAMPLES, schema.format) ? FORMAT_EXAMPLES[schema.format] : undefined
     if (formatted !== undefined) return formatted
   }
 

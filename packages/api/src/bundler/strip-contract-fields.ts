@@ -361,6 +361,17 @@ const countNewlines = (text: string): number => {
 const NAME = 'defineContract'
 
 /**
+ * {@link REGEX_PRECEDING} minus `<` and `>`.
+ *
+ * Inside a contract literal those characters really do precede a regex more
+ * often than a comparison. At module scope in a `.tsx` file — which
+ * `isScannableId` accepts — they are overwhelmingly JSX and type arguments
+ * instead, and reading the `/` of a `</p>` as a regex opener let the scan run
+ * to the next `/` in the file and step straight over a real call site.
+ */
+const REGEX_START = new Set([...REGEX_PRECEDING].filter((char) => char !== '<' && char !== '>'))
+
+/**
  * Finds the next `defineContract` sitting in code position, starting from an
  * index that is itself in code position. Returns its start index, or -1.
  *
@@ -390,8 +401,14 @@ const nextCallSite = (source: string, from: number): number => {
     } else if (char === '`') {
       index = scanTemplate(source, index) ?? index + 1
       previous = char
-    } else if (char === '/' && (previous === '' || REGEX_PRECEDING.has(previous))) {
-      index = scanRegex(source, index) ?? index + 1
+    } else if (char === '/' && (previous === '' || REGEX_START.has(previous))) {
+      // Whether a `/` opens a regex is a guess from the preceding character,
+      // and here a wrong guess is not merely inaccurate — swallowing a call
+      // site turns the whole transform into a silent no-op, shipping every
+      // schema to the browser bundle it exists to strip. So a "regex" that
+      // spans a candidate is rejected and the `/` is read as ordinary.
+      const end = scanRegex(source, index)
+      index = end === null || source.slice(index, end).includes(NAME) ? index + 1 : end
       previous = '0'
     } else if (char === 'd' && source.startsWith(NAME, index)) {
       return index

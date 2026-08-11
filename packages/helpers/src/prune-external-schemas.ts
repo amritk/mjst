@@ -1,8 +1,8 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
-import { readKey } from './assign-key'
 import { buildDynamicRefMap } from './build-dynamic-ref-map'
 import { assertSchemaDepth } from './max-schema-depth'
+import { readKey } from './read-key'
 
 /**
  * Drops the registered documents nothing in the schema actually references.
@@ -33,9 +33,21 @@ import { assertSchemaDepth } from './max-schema-depth'
 /** The `$defs` prefix an in-document pointer to a registered document starts with. */
 const DEFS_PREFIX = '#/$defs/'
 
-/** Reverses RFC 6901's escapes, so a definition named `a/b` is matched by its real name. */
+/**
+ * Reverses `escapePointerSegment`, so a definition named `a/b` is matched by
+ * its real name.
+ *
+ * That includes the `%` escape, not only RFC 6901's `~0`/`~1`: the pointers
+ * read here are built by `escapePointerSegment`, which escapes `%` because the
+ * result travels as a URI fragment. Reversing only the tilde forms left a
+ * registered name like `https://example.com/a%20b.json` reading back as
+ * `…a%2520b.json`, which matched no external document — so the companion
+ * schema a `$dynamicRef` still bound to was pruned away.
+ */
 const unescapeSegment = (segment: string): string =>
-  segment.indexOf('~') === -1 ? segment : segment.replace(/~1/g, '/').replace(/~0/g, '~')
+  segment.indexOf('~') === -1 && segment.indexOf('%25') === -1
+    ? segment
+    : segment.replace(/~1/g, '/').replace(/~0/g, '~').replace(/%25/g, '%')
 
 /**
  * The registered document a pointer leads into, or `undefined` when it names

@@ -131,4 +131,13 @@ describe('generateExampleConst', () => {
       expect(typeof deriveExample({ type: 'string', pattern } as never)).toBe('string')
     }
   })
+
+  it('ignores a format naming a prototype member rather than emitting a function', () => {
+    // `format` is schema input. A bare index found `Function.prototype.valueOf`
+    // — not a string — so the emitted `fooExample` carried `undefined` for the
+    // property and the generated file failed to type-check.
+    for (const format of ['toString', 'valueOf', 'constructor']) {
+      expect(typeof deriveExample({ type: 'string', format } as never)).toBe('string')
+    }
+  })
 })

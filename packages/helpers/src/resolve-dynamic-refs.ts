@@ -1,7 +1,7 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
-import { readKey } from './assign-key'
 import { assertSchemaDepth } from './max-schema-depth'
+import { readKey } from './read-key'
 
 /**
  * Replaces $dynamicRef with $ref in a schema using the provided anchor-to-path map.

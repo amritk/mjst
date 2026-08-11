@@ -102,4 +102,14 @@ describe('normalize-tuples', () => {
     normalizeDraftTuples(schema)
     expect(schema.$defs.examples).toEqual({ type: 'array', prefixItems: [{ type: 'string' }] })
   })
+
+  it('leaves a draft-07 dependencies map alone', () => {
+    // `dependencies` maps a trigger property name to the names it requires.
+    // Its keys are property names, so a dependency on a property called
+    // `items` was read as a tuple keyword and the declaration destroyed.
+    const schema = { type: 'object', dependencies: { items: ['a', 'b'] } }
+    normalizeDraftTuples(schema)
+    enforceTupleLength(schema)
+    expect(schema).toEqual({ type: 'object', dependencies: { items: ['a', 'b'] } })
+  })
 })

@@ -258,11 +258,21 @@ export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandl
 /**
  * The body an upstream parser already consumed, recovered from the `body`
  * property Express/Connect middleware conventionally leaves behind.
- * `express.raw` leaves a Buffer and `express.text` a string — both go out
- * byte for byte. `express.json` / `express.urlencoded` leave the decoded
- * value, re-serialized here so `readBody` still sees what the client sent.
- * Anything else (including no `body` at all) reads as an empty body, which is
- * what the drained stream would have produced on its own.
+ *
+ * `express.raw` leaves a Buffer and `express.text` a string — both go out byte
+ * for byte. `express.json` / `express.urlencoded` leave the *decoded* value,
+ * which is re-serialized as JSON here. That makes `readBody` correct (it
+ * parses JSON either way), but it is a reconstruction, not the original
+ * request: `readText` and `readBytes` then see JSON with this process's
+ * whitespace and key order, and for `urlencoded` they see JSON where the
+ * content type says form encoding.
+ *
+ * So a route that needs the bytes the client actually sent — verifying an HMAC
+ * signature over a webhook body is the case that matters — must not have a
+ * body parser mounted in front of it. Scope the parser to the routes that need
+ * it (`app.use('/api', express.json())`) and the adapter reads the live stream
+ * as before. Anything unrecognized (including no `body` at all) reads as an
+ * empty body, which is what the drained stream would have produced on its own.
  */
 const consumedBody = (incoming: IncomingMessage): Buffer => {
   const { body } = incoming as IncomingMessage & { body?: unknown }

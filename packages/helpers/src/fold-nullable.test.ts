@@ -66,4 +66,26 @@ describe('foldNullable', () => {
     expect(Object.getOwnPropertyNames(properties).sort()).toEqual(['__proto__', 'ok'])
     expect(Object.getPrototypeOf(properties)).toBe(Object.prototype)
   })
+
+  it('folds a property whose name matches a data keyword', () => {
+    // `properties` maps author-chosen names to schemas, so `default` there is
+    // a property name and not the keyword. Skipping it by name left the
+    // subschema unfolded while the type generator still widened the emitted
+    // type with `| null` — a parser rejecting a null its own type allows.
+    const folded = foldNullable({
+      type: 'object',
+      properties: {
+        default: { type: 'string', nullable: true },
+        ok: { type: 'string', nullable: true },
+      },
+    } as never) as { properties: Record<string, { type: unknown }> }
+
+    expect(folded.properties['default']?.type).toEqual(['string', 'null'])
+    expect(folded.properties['ok']?.type).toEqual(['string', 'null'])
+  })
+
+  it('still leaves a real default value alone', () => {
+    const schema = { type: 'object', default: { type: 'string', nullable: true } }
+    expect(foldNullable(schema)).toBe(schema)
+  })
 })

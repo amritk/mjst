@@ -1061,7 +1061,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
           // A refused or unreadable document is in `docCache` (as `{}`) but the
           // loader already said why, so it is excluded here rather than
           // reported twice under a vaguer message.
-          if (docCache.has(targetLocation) && !unloadable.has(targetLocation)) {
+          if (targetLoaded) {
             errors.push({
               message: `Cannot resolve ${keyword} "${value}"`,
               path: fragment === '' || fragment.startsWith('/') ? pointerToPath(fragment) : [],

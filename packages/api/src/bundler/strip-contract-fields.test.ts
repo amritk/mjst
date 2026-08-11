@@ -330,4 +330,28 @@ describe('strip-contract-fields', () => {
     ].join('\n')
     expect(stripContractFields(source)).not.toContain("summary: 'gone'")
   })
+
+  it('strips a call site that shares a line with JSX', () => {
+    // `isScannableId` accepts `.tsx`. The `/` of a closing tag is preceded by
+    // `<`, which the regex heuristic read as "a regex starts here" — so the
+    // scan ran to the next `/` in the file (inside `path: '/x'`) and stepped
+    // over the call entirely. A skipped call site is a silent no-op that ships
+    // every schema to the bundle this transform exists to slim.
+    const source =
+      "const label = <p>hi</p>; export const real = defineContract({ method: 'get', path: '/x', responses: { 200: {} }, summary: 'gone' })"
+    const stripped = stripContractFields(source)
+
+    expect(stripped).not.toBe(source)
+    expect(stripped).not.toContain("summary: 'gone'")
+    expect(stripped).toContain('<p>hi</p>')
+  })
+
+  it('does not let a regex guess swallow a call site', () => {
+    // Even where a regex really could start, one that spans a `defineContract`
+    // is a wrong guess by construction — the scan backs off rather than
+    // silently skipping the call.
+    const source =
+      "const ratio = a / b; export const real = defineContract({ method: 'get', path: '/x', responses: { 200: {} }, summary: 'gone' })"
+    expect(stripContractFields(source)).not.toContain("summary: 'gone'")
+  })
 })

@@ -16,7 +16,18 @@ import { DATA_KEYWORDS } from '@amritk/helpers/build-resource-registry'
  * key name alone would skip that property's whole subtree and leave a real
  * tuple inside it unnormalized.
  */
-const SCHEMA_MAPS = new Set(['properties', 'patternProperties', '$defs', 'definitions', 'dependentSchemas'])
+const SCHEMA_MAPS = new Set([
+  'properties',
+  'patternProperties',
+  '$defs',
+  'definitions',
+  'dependentSchemas',
+  // Draft-07's `dependencies`, which this module exists to normalize. Its keys
+  // are trigger property names, so a dependency on a property called `items`
+  // (whose value is the array of names it requires) was rewritten into a tuple
+  // schema, destroying the declaration outright.
+  'dependencies',
+])
 
 /**
  * Walks the schema tree, applying `transform` to every schema node.

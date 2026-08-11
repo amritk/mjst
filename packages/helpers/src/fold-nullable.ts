@@ -2,6 +2,23 @@ import { assignKey } from './assign-key'
 import { DATA_KEYWORDS } from './build-resource-registry'
 
 /**
+ * Keywords whose value is a map of author-chosen names to schemas. Inside one,
+ * the keys are names — so {@link DATA_KEYWORDS} carry no keyword meaning there
+ * and every value is a schema to fold. Skipping by key name alone left a
+ * property genuinely called `default` or `examples` unfolded while the type
+ * generator still widened it with `| null`, so the emitted parser rejected a
+ * null the type declared valid.
+ */
+const SCHEMA_MAPS = new Set([
+  'properties',
+  'patternProperties',
+  '$defs',
+  'definitions',
+  'dependentSchemas',
+  'dependencies',
+])
+
+/**
  * Rewrites OpenAPI 3.0's `nullable: true` into the JSON Schema form the
  * generators already enforce: a `null` member of the node's `type`.
  *
@@ -44,17 +61,18 @@ const fold = (node: unknown): unknown => {
   // Own keys, and a guarded write: a bare `for…in` walks the prototype chain,
   // and `next[key] = …` on a `__proto__` property drops it from the output.
   //
-  // `enum`/`const`/`default`/`examples` hold instance data, so an object under
-  // one is a value the schema describes rather than a schema. Folding into it
-  // rewrote the value itself — a schema-shaped `default` came back with its
-  // `type` changed — handing consumers something other than what the author
-  // wrote, with nothing to say it changed.
+  // At a schema node the keys are keywords, so `enum`/`const`/`default`/
+  // `examples` mark instance data: an object under one is a value the schema
+  // describes rather than a schema, and folding into it rewrote the value —
+  // a schema-shaped `default` came back with its `type` changed, handed to
+  // consumers as the author's own. Inside a `properties`-style map the keys are
+  // names instead, so the same word carries no keyword meaning there.
   for (const [key, value] of Object.entries(record)) {
     if (DATA_KEYWORDS.has(key)) {
       assignKey(next, key, value)
       continue
     }
-    const folded = fold(value)
+    const folded = SCHEMA_MAPS.has(key) ? foldSchemaMap(value) : fold(value)
     if (folded !== value) changed = true
     assignKey(next, key, folded)
   }
@@ -70,5 +88,19 @@ const fold = (node: unknown): unknown => {
     }
   }
 
+  return changed ? next : node
+}
+
+/** Folds every value of a name-to-schema map; no key in one is a keyword. */
+const foldSchemaMap = (node: unknown): unknown => {
+  if (typeof node !== 'object' || node === null || Array.isArray(node)) return node
+  const record = node as Record<string, unknown>
+  let changed = false
+  const next: Record<string, unknown> = {}
+  for (const [name, value] of Object.entries(record)) {
+    const folded = fold(value)
+    if (folded !== value) changed = true
+    assignKey(next, name, folded)
+  }
   return changed ? next : node
 }
