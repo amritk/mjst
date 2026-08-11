@@ -45,6 +45,26 @@ correct and costs you a version read before you can even form the key.
 
 **Nobody gets never-stale from School A alone.** That is the central finding.
 
+### School C — automatic (dependency tracking, no declared invalidation)
+
+Neither school above removes the human from the loop; both ask someone to
+name what changed. A third lineage does not.
+
+| System | Mechanism |
+|:--|:--|
+| **Django `cachalot`** | Patches the ORM, caches every SELECT, and invalidates by tracking which *tables* a query touched. Table-granular and zero-configuration. |
+| **Shopify `identity_cache`, Laravel model-caching** | Invalidate off model lifecycle callbacks rather than explicit purges. |
+| **Apollo / Relay normalized caches** | The client records which entity ids a query returned and updates them when a mutation returns the same ids. Automatic on the read path, same shape as tracking. |
+| **RTK Query** | `providesTags` / `invalidatesTags` — the *manual* incarnation, and the thing this design deliberately does not copy. |
+| **Noria** (MIT, OSDI 2018) → **ReadySet** | Subscribes to the Postgres WAL / MySQL binlog, compiles each cached query into a partially-stateful dataflow graph, and incrementally updates results as rows change. |
+| **Materialize** | Incremental view maintenance over a CDC stream. |
+
+The pattern in that list is worth reading carefully: **the fully automatic
+systems all live at the database, and that is not a coincidence.** The
+replication stream is the only authoritative record of everything that
+changed. Everything implemented above the database is automatic only for
+writes that happen to pass through it.
+
 ### The two gaps School A cannot close
 
 **G1 — propagation lag.** A purge is a message to a global fleet. Between
@@ -113,68 +133,111 @@ all. We should not build on it.
 
 ## Strategy
 
-### Principle: the invalidation graph is part of the contract
+### Principle: nobody writes a tag
 
-`@amritk/api`'s whole thesis is that a route declares itself once and the
-framework derives everything else — types, validators, OpenAPI, client.
-Caching should be no different. Today the dependency between "this read is
-cacheable" and "this write invalidates it" lives in a developer's head, which
-is precisely why caches go stale in every codebase.
+`@amritk/api`'s thesis is that a route declares itself once and the framework
+derives the rest. Applied naively to caching, that suggests per-route tag
+declarations: reads declare what they are made of, writes declare what they
+change. That is where an earlier draft of this document landed, and it is
+wrong for the same reason every tag-based cache eventually goes stale — a
+declaration records what the author *believed* the handler reads, and a cache
+goes bad in the gap between that belief and what the code actually did.
 
-So: **read routes declare what their response is made of; write routes
-declare what they change.** One declaration, four derived outputs — the
-`Cache-Tag` header, the `Cache-Control` header, the `purge()` call, and an
-OpenAPI `x-cache` extension. And, uniquely available to us because it is
-declared data rather than imperative code: **a build-time check that the
-graph is closed.**
+The tags do not disappear; Cloudflare's purge substrate is tag-based and that
+is not negotiable. What is negotiable is whether a human ever types one. The
+relationship is an ORM's to SQL: still executed, never authored.
+
+So the invalidation graph is **observed rather than declared**, on both sides:
+
+- A **read** through the tracked store records the entities it touched. Those
+  become the response's `Cache-Tag` set.
+- A **write** through the same store records the entities it changed. Those
+  become the `purge()` call.
+
+Both sides derive their keys from one key function per entity, so they cannot
+disagree. "A tag nobody purges" stops being a bug class rather than becoming
+an unchecked one — structural beats checked.
+
+The declaration cost drops by an order of magnitude with it. Per-route tags
+cost O(routes × ancestors) hand-written strings; entity keying costs
+O(entities). That last figure is irreducible — nothing but you can say what
+makes a row *that row* — but it is one line per type, and it is knowledge you
+already have.
 
 ### The surface
+
+One store, wrapping the data layer that already exists. No classes — the
+package rule is one function per file and functional paradigms
+(`.claude/typescript.md`), so this is the same closure-bound factory form as
+`createApi`, `createETag`, and `createClient`.
+
+```typescript
+const cache = createCacheStore({
+  driver: cloudflareDriver(),
+  entities: {
+    post: (row) => `post:${row.id}`,
+    author: (row) => `author:${row.id}`,
+  },
+})
+
+const api = createApi({
+  routes,
+  context: ({ executionContext }) => ({ db: cache.track(db, executionContext) }),
+})
+```
+
+`db.posts.find(123)` records a dependency on `post:123`. `db.posts.update(123,
+…)` records a mutation and purges it on commit. Neither the read route nor the
+write route says anything about caching.
+
+What remains on the contract is only what the store cannot know: whether the
+route may be cached at all, and for whom.
 
 ```typescript
 const getPost = defineRoute({
   method: 'get',
   path: '/posts/{id}',
-  cache: {
-    tags: ['post:{id}', 'post:list'],   // templates over validated params
-    maxAge: 300,
-    scope: 'public',
-    freshness: 'purge',                 // 'purge' (default) | 'strict'
-  },
-  responses: { 200: { body: PostSchema }, 404: {} },
-  handler: /* … */,
-})
-
-const updatePost = defineRoute({
-  method: 'patch',
-  path: '/posts/{id}',
-  invalidates: ['post:{id}', 'post:list'],
+  cache: { scope: 'public', maxAge: 300, freshness: 'purge' },
   responses: { 200: { body: PostSchema }, 404: {} },
   handler: /* … */,
 })
 ```
 
-Note `cache.tags` is nested — the top-level `tags` field is already the
-OpenAPI grouping tag and must keep that meaning.
+Note `cache` is a nested object — the top-level `tags` field is already the
+OpenAPI grouping tag and must keep that meaning, which is a second reason not
+to put cache tags on the contract at all.
 
-**Tags are templates, not closures.** `'post:{id}'` interpolates from the
-already-validated, already-coerced `params`. This is the load-bearing design
-choice, and it buys four things a `(ctx) => string[]` callback cannot:
+Wrapping an arbitrary data layer generically is the hard engineering here, and
+the honest answer is one adapter per store — Drizzle, Kysely, raw SQL — which
+is the shape `@amritk/adapters` already solves for schemas.
 
-1. It is **data**, so it hashes into the existing contracts hash, serializes
-   into the compiled module, and embeds in the OpenAPI document.
-2. It is **comparable across routes**, which is what makes the static check
-   possible.
-3. It compiles to inline string concatenation in `compileToModule` — the
-   whole feature costs one header set on the hot path.
-4. It cannot accidentally depend on unvalidated input or on the response body,
-   so a tag can never be a function of something the cache key does not cover.
+### Package boundary
 
-Escape hatch for collection endpoints that genuinely need per-member tags
-(`GET /posts` tagging `post:1 … post:99` so that creating post 100 does not
-require a coarse list tag): `tagsFrom: (reply) => string[]`, which marks the
-route `unchecked` and excludes it from the static check, with the 1000-tag
-cap enforced at runtime. The default guidance stays the coarse `post:list`
-tag — slightly over-invalidating, trivially correct, and statically checkable.
+The tracking core is HTTP-agnostic: record what a unit of work read and wrote,
+produce a key set, hand it to a driver. It is equally useful from a queue
+consumer, a cron, or an SSR render, and `@amritk/api` keeps exactly one
+runtime dependency by design. So it splits the way this repo already splits
+things:
+
+- **`@amritk/cache`** — dependency tracking, the key vocabulary, drivers
+  (Cloudflare, Fastly, in-memory), purge coalescing, shadow auditing. No HTTP.
+- **`@amritk/api/cache`** — the thin seam: context wiring, `Cache-Tag` and
+  `Cache-Control` emission, scope derivation from `security` /
+  `request.headers` / `request.cookies`, and the dev-mode audit.
+
+The same relationship `runtime-validators` has to `lint` and `api`, and that
+`@amritk/lint` core has to `@amritk/lint/rules/openapi`.
+
+### What is lost by not declaring
+
+Worth stating plainly rather than discovering later. The static closure check
+goes away — with tags observed at runtime there is nothing to compare at build
+time. That is an acceptable trade because the bug it caught is now impossible
+by construction rather than merely detected, but two smaller losses are real:
+cache behaviour no longer self-documents in the OpenAPI document, and tag
+templates no longer inline into the compiled module (the tag set is built per
+request from the tracked reads). Neither is fatal; both are regressions
+against the earlier draft and should not be rediscovered as surprises.
 
 ### Hierarchies: cascade on read, not on write
 
@@ -231,14 +294,16 @@ every post is one operation; enumerating them is five hundred.
    `org:4:author:9:post:123` looks like a tree and is not — tag purge is exact
    string match and there is no `org:4:*`. Emit several flat tags instead.
    This is the most common way to get hierarchical invalidation wrong.
-2. **Ancestor tags usually cannot come from params.** `/posts/{id}` does not
-   know the author id until it has loaded the post. Templates cover
-   `post:{id}`; ancestors need the data — which is why handler-returned tags
-   are a required part of a hierarchical design rather than an escape hatch.
+2. **Ancestor tags cannot come from the route.** `/posts/{id}` does not know
+   the author id until it has loaded the post, so no declaration on the
+   contract could supply it. The tracked store gets this right for free —
+   loading the author *is* what records `author:9` — and it is the clearest
+   argument that observation has to be the source of tags rather than a
+   fallback for the cases declaration cannot reach.
 3. **Re-parenting needs both sides.** Moving post 123 from author 9 to author
-   22 must purge `author:9` *and* `author:22`, and the old parent is only
-   knowable by reading before the write. Handler-returned invalidations,
-   mirroring handler-returned tags.
+   22 must purge `author:9` *and* `author:22`. The old parent is only knowable
+   by reading before the write, which the store captures on the way past
+   provided the handler reads before it updates.
 4. **Collections blow the tag cap.** 1000 tags and 16 KB per response. A feed
    of 200 posts with three ancestors each is 600 tags — it fits, barely. The
    rule is *high fan-in, coarsen*: tag large collections with the type tag
@@ -315,6 +380,30 @@ Declaration checks observation; observation produces the tags. It also still
 drives the closure lint (every emitted tag has a purger; every purged tag has
 an emitter — a write tag no read ever emits is a silent no-op that still
 spends rate limit) and the generated cache-graph report.
+
+#### Out-of-band writes, and the CDC tier
+
+An instrumented store is automatic for writes that pass through it. It is
+blind to a migration, an admin panel, a second service sharing the database,
+or a human in `psql` — each of which produces a permanently stale cache with
+no purge issued and no error raised. This is the failure mode that School C's
+database-resident systems exist to solve, and no amount of application-level
+instrumentation reaches it.
+
+So the guarantee has two tiers:
+
+1. **Instrumented store** — automatic for application writes. Covers the
+   overwhelming majority, and needs nothing beyond the store wrapper.
+2. **Change-data-capture feed** — Postgres logical replication (or the MySQL
+   binlog) into a Worker that maps changed rows to keys through the *same*
+   entity key functions, and purges. Covers every write, whatever made it.
+
+Tier 2 is what makes "you never bust a cache" literally true rather than true
+for well-behaved callers, and it is a clean seam: just another producer of
+purge calls, with no contract involvement and no request-path cost. It should
+be optional — plenty of deployments have no out-of-band writers — but the
+design must leave room for it rather than assume the application is the only
+writer.
 
 #### Where "never bad" actually ends
 
@@ -535,12 +624,14 @@ whole network rather than a herd. And there is no cheaper *correct* epoch on
 offer — anything narrower would have to prove handler behaviour unchanged,
 which is not decidable in general.
 
-**The contracts hash does have a job here, just a different one.** When
-`cache` and `invalidates` land on the contract they must be added to
-`contractFields`. Otherwise we reproduce exactly the bug documented in that
-file's own comments about guards: a compiled module emitting the *old*
-`Cache-Tag` header against edited tag templates, with nothing to catch it.
-It is a build-staleness detector, not a cache epoch.
+**The contracts hash does have a job here, just a different one.** The `cache`
+block that stays on the contract — `scope`, `maxAge`, `freshness` — must be
+added to `contractFields`. Those values are emitted into the compiled module
+as `Cache-Control` headers, so an edited `scope` against a stale build is
+exactly the bug documented in that file's own comments about guards: the old
+value shipped with nothing to catch it. Doubly so here, since a `scope` edit
+from `public` to `private` is a leak fix, and shipping the stale `public` is
+shipping the leak. It is a build-staleness detector, not a cache epoch.
 
 **`createETag` composes underneath.** The edge cache handles the origin hop;
 ETag plus `If-None-Match` handles the last hop to the browser and turns a
@@ -549,9 +640,10 @@ revalidation into a bodyless 304. They are complementary, not alternatives.
 ### Keep it portable
 
 `@amritk/api` is framework- and platform-agnostic by design, and the caching
-layer must not quietly make Cloudflare mandatory. The contract fields
-(`cache`, `invalidates`) are pure data and stay in the browser-safe graph; the
-execution side goes behind a small driver seam:
+layer must not quietly make Cloudflare mandatory. The one contract field
+(`cache`, carrying `scope` / `maxAge` / `freshness`) is pure data and stays in
+the browser-safe graph; everything else lives in `@amritk/cache`, behind a
+small driver seam:
 
 ```typescript
 type CacheDriver = {
@@ -584,14 +676,22 @@ the same split the runtime and compiled engines already live under.
    scope covers the need until then. (The safety rules for per-user responses
    are settled — see "The second axis" — this is only about whether we also
    offer edge caching for them.)
-4. **Static check severity.** A read tag that no write route invalidates is a
-   permanently stale resource — almost certainly a build error rather than a
-   warning, but it needs an explicit `unchecked` escape hatch for tags
-   invalidated out of band (a cron, a webhook, another service).
-5. **Where the check runs.** `checkCacheGraph(routes)` inside `compileToModule`
-   is the natural home, but this repo also owns a linter, and a
-   `mjst lint`-visible finding with a `file:line:col` would be strictly better
-   developer experience.
+4. **How generic can `track()` be?** Transparently wrapping an arbitrary data
+   layer is the hard engineering in this design. A `Proxy` over a query
+   builder catches method calls but not what they *mean*; knowing that
+   `db.posts.find(123)` is a read of `post:123` needs per-store knowledge.
+   The likely answer is one adapter per store (Drizzle, Kysely, raw SQL),
+   which is the shape `@amritk/adapters` already uses — but the adapter
+   interface should be designed before the first one is written.
+5. **Is the CDC tier in scope for v1?** It is what makes "never bust a cache"
+   unconditional, and it is also a separate deployment artifact (a
+   replication consumer) rather than a library feature. Shipping tier 1 alone
+   is defensible provided the docs are explicit that out-of-band writes are
+   uncovered — silently implying otherwise would be the worst outcome.
+6. **Enforcing the tracked handle.** The type-level rule that a cacheable
+   route's context exposes only the tracked store is the strongest guarantee
+   in this document. Working out how it composes with `createApi({ context })`
+   — which today hands every route the same context type — needs design.
 
 ## Sources
 
@@ -605,3 +705,8 @@ the same split the runtime and compiled engines already live under.
 - [All cache purge methods now available for all plans (Apr 2025)](https://developers.cloudflare.com/changelog/product/cache/)
 - [Fastly surrogate keys](https://www.hward.com/varnish-cache-invalidation-with-fastly-surrogate-keys/)
 - [Next.js `revalidateTag`](https://nextjs.org/docs/app/api-reference/functions/revalidateTag)
+- [ReadySet](https://github.com/readysettech/readyset) — wire-compatible
+  Postgres/MySQL cache with automatic invalidation from the replication stream
+- [Behind the magic: streaming dataflow in ReadySet](https://readyset.io/blog/behind-the-magic-how-readyset-speeds-up-queries-with-streaming-dataflow)
+- Noria: dynamic, partially-stateful dataflow for high-performance web
+  applications (MIT, OSDI 2018) — the research ReadySet commercializes
