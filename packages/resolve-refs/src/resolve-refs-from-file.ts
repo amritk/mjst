@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { dirname, resolve as resolvePath } from 'node:path'
+import { dirname, relative as relativePath, resolve as resolvePath, sep } from 'node:path'
 
 import { assertPublicHost } from './assert-public-host'
 import { childRole, type NodeRole } from './child-role'
@@ -527,6 +527,19 @@ const detach = (node: unknown): unknown => {
       }
       continue
     }
+    // A custom `parse` can put a class instance in value position — js-yaml
+    // yields a `Date` for a YAML timestamp — and rebuilding one as a plain
+    // object empties it: `default: 2020-01-01` serialized as `default: {}`,
+    // silently, with the constraint gone. A `Date` copies cleanly; anything
+    // else has no general clone, so it is handed back by reference and keeps
+    // the aliasing this copy otherwise removes. `JSON.parse` output, the
+    // default and the only shape that aliasing can actually bite, is
+    // unaffected — it has no instances to hit this at all.
+    const prototype = Object.getPrototypeOf(src) as object | null
+    if (prototype !== Object.prototype && prototype !== null) {
+      set(src instanceof Date ? new Date(src.getTime()) : src)
+      continue
+    }
     const copy: Record<string, unknown> = {}
     seen.set(src, copy)
     set(copy)
@@ -542,6 +555,32 @@ const detach = (node: unknown): unknown => {
     }
   }
   return out.value
+}
+
+/**
+ * Re-expresses a ref that is being *kept* so it still names the same document
+ * from the output's position. The ref was written relative to the document it
+ * lives in; the output is read relative to the root, so a `./c.json` kept out
+ * of `sub/b.json` silently comes to mean the root's own `c.json` — a different
+ * file that may well exist and resolve cleanly, which is the worst shape a
+ * wrong answer can take.
+ *
+ * A ref with no file part (`#/$defs/x`) already means the same thing in both
+ * documents, and one written in the root document never moved; both are handed
+ * back untouched.
+ */
+const rebaseKeptRef = (value: string, from: string, root: string): string => {
+  if (from === root) return value
+  const { filePart, fragment } = splitRef(value)
+  if (filePart === '') return value
+  const target = joinLocation(from, filePart)
+  const suffix = value.includes('#') ? `#${fragment}` : ''
+  // A remote target is absolute already, and so is the only sane form when the
+  // root is itself remote. A local pair becomes a path relative to the root's
+  // directory, which keeps machine-specific absolute paths out of the output.
+  if (isRemote(target) || isRemote(root)) return `${target}${suffix}`
+  const relative = relativePath(dirname(root), target).split(sep).join('/')
+  return `${relative.startsWith('.') ? relative : `./${relative}`}${suffix}`
 }
 
 /** Renders a {@link JsonPath} as a `#/...` ref string. */
@@ -790,6 +829,15 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
   const hoistTaken = new Set<string>(
     rootDefs !== null && typeof rootDefs === 'object' && !Array.isArray(rootDefs) ? Object.keys(rootDefs) : [],
   )
+  // Every node carrying a `#/$defs/<name>` ref the CYCLE branch emitted, paired
+  // with the hoist it names. The seeding above reads the *source* root, but the
+  // hoists land in the *resolved* root's `$defs` — and under a pure-`$ref` root
+  // (`{"$ref": "./b.json"}`) those are two different documents, so a name free
+  // in one can already be taken in the other. The final check happens against
+  // the object actually written to, which means a name can still change after
+  // it has been emitted; these sites are how it gets rewritten instead of
+  // stranding a ref that points at nothing.
+  const hoistRefSites: { node: Record<string, unknown>; cacheKey: string }[] = []
 
   /**
    * Single-pass resolver that inlines internal and external (`$ref` to other
@@ -896,6 +944,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         // - target in ANOTHER document → `#/$defs/<name>`, and the resolved
         //   target is attached there once resolution completes.
         let keptRef: string
+        let hoisted = false
         if (scoped !== undefined && baseLocation === rootLocation) {
           keptRef = pathToRef(scoped.pointer)
         } else if (scoped === undefined && targetLocation === rootLocation) {
@@ -906,6 +955,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
             name = hoistName(targetLocation, fragment, hoistTaken)
             hoists.set(cacheKey, name)
           }
+          hoisted = true
           keptRef = `#/$defs/${name}`
         }
         const kept: Record<string, unknown> = {}
@@ -916,6 +966,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         // Always rewritten to a static `$ref`: the dynamic binding was already
         // decided when the cycle was entered.
         assignKey(kept, '$ref', keptRef)
+        if (hoisted) hoistRefSites.push({ node: kept, cacheKey })
         return kept
       }
       // Keeps the reference, with siblings resolved — the shape every other
@@ -927,7 +978,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
           if (key === keyword) continue
           assignKey(kept, key, resolveAt(obj[key], baseLocation, nodeBase, depth + 1, childRole(role, key)))
         }
-        assignKey(kept, keyword, value)
+        assignKey(kept, keyword, rebaseKeptRef(value, baseLocation, rootLocation))
         return kept
       }
       if (cached === MISSING) return keepUnresolved()
@@ -968,10 +1019,13 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         // property silently lost every constraint it had, with nothing on
         // `errors` to say so. Match `resolveRefs`: record it and keep the node.
         //
-        // Scoped only to a loaded document on purpose. When the document itself
-        // was refused or unreadable the loader has already recorded that, and
-        // the ref inlining as `undefined` is the established, tested outcome.
-        if (found === undefined && !unloadable.has(targetLocation)) {
+        // The *keep* is unconditional; only the report is scoped. A refused or
+        // unreadable document used to fall through to inlining `undefined`,
+        // which serializes to nothing inside an object — the referencing node's
+        // every constraint gone — and to `null` inside an array, so an
+        // `allOf: [{ $ref: <refused> }]` became `allOf: [null]`, not a schema at
+        // all. That is the same trade the budget case above already rejected.
+        if (found === undefined) {
           // Reported only when the target document is present and loaded fine.
           // One the prefetch never reached — because a `maxDocuments` /
           // `totalTimeoutMs` budget ran out — is absent from `docCache` and has
@@ -981,7 +1035,11 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
           // meant a budget-truncated resolve fell through to inlining
           // `undefined`, so the referencing node vanished on serialization —
           // trading a duplicate error for silent loss of every constraint on it.
-          if (docCache.has(targetLocation)) {
+          //
+          // A refused or unreadable document is in `docCache` (as `{}`) but the
+          // loader already said why, so it is excluded here rather than
+          // reported twice under a vaguer message.
+          if (docCache.has(targetLocation) && !unloadable.has(targetLocation)) {
             errors.push({
               message: `Cannot resolve ${keyword} "${value}"`,
               path: fragment === '' || fragment.startsWith('/') ? pointerToPath(fragment) : [],
@@ -1094,10 +1152,28 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         container['$defs'] !== null && typeof container['$defs'] === 'object' && !Array.isArray(container['$defs'])
           ? (container['$defs'] as Record<string, unknown>)
           : {}
+      // Settle the names against the `$defs` actually being written to. When
+      // the resolved root is the source root this changes nothing; when it is
+      // another document (a pure-`$ref` root resolves to whatever it points
+      // at), it is the only thing standing between a hoist and overwriting a
+      // definition that document already had — silently re-pointing every
+      // `#/$defs/<name>` in the output at the wrong schema.
+      const taken = new Set(Object.keys(defs))
+      const finalNames = new Map<string, string>()
+      for (const [cacheKey, name] of hoists) {
+        let unique = name
+        for (let n = 2; taken.has(unique); n++) unique = `${name}-${n}`
+        taken.add(unique)
+        finalNames.set(cacheKey, unique)
+      }
+      for (const { node, cacheKey } of hoistRefSites) {
+        const name = finalNames.get(cacheKey)
+        if (name !== undefined) assignKey(node, '$ref', `#/$defs/${name}`)
+      }
       for (const [cacheKey, name] of hoists) {
         const cached = refCache.get(cacheKey)
         const attachable = cached !== undefined && cached !== CYCLE && cached !== MISSING
-        assignKey(defs, name, attachable ? (cached.value ?? {}) : {})
+        assignKey(defs, finalNames.get(cacheKey) ?? name, attachable ? (cached.value ?? {}) : {})
       }
       assignKey(container, '$defs', defs)
     } else {

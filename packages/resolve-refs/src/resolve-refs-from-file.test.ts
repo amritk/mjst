@@ -192,10 +192,11 @@ describe('resolve-refs-from-file', () => {
 
     const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'))
 
-    // The missing document degrades to {}, so the pointer into it misses and the
-    // ref resolves to undefined — the important part is that we recorded the
-    // failure instead of throwing.
-    expect((resolved as { x: unknown }).x).toBeUndefined()
+    // The document never loaded, so there is nothing to inline. The node keeps
+    // its `$ref` rather than becoming `undefined`: an inlined `undefined`
+    // vanishes on serialization (and becomes `null` inside an array, which is
+    // not a schema at all), taking every constraint on the node with it.
+    expect((resolved as { x: unknown }).x).toEqual({ $ref: './missing.json#/Nope' })
     expect(errors.length).toBeGreaterThan(0)
   })
 
@@ -208,8 +209,9 @@ describe('resolve-refs-from-file', () => {
 
     const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'))
 
-    // The refused document degrades to {}, so the pointer into it misses.
-    expect((resolved as { x: unknown }).x).toBeUndefined()
+    // Refused, so nothing is inlined — the node keeps its `$ref` and the
+    // refusal is on `errors`.
+    expect((resolved as { x: unknown }).x).toEqual({ $ref: 'http://169.254.169.254/latest/meta-data#/foo' })
     expect(errors[0]?.message).toMatch(/Refusing to resolve remote \$ref/)
     // The guard is syntactic — we never even attempt the request.
     expect(fetchSpy).not.toHaveBeenCalled()
@@ -278,7 +280,7 @@ describe('resolve-refs-from-file', () => {
       allowedHosts: ['api.example.com'],
     })
 
-    expect((resolved as { x: unknown }).x).toBeUndefined()
+    expect((resolved as { x: unknown }).x).toEqual({ $ref: 'https://api.example.com/s.json#/Foo' })
     expect(errors[0]?.message).toMatch(/refusing to follow redirect/i)
     // The initial host was allowed, so the first request happened — but the
     // redirect target was re-checked and refused before any second request.
@@ -299,7 +301,7 @@ describe('resolve-refs-from-file', () => {
       allowedHosts: ['api.example.com'],
     })
 
-    expect((resolved as { x: unknown }).x).toBeUndefined()
+    expect((resolved as { x: unknown }).x).toEqual({ $ref: 'https://api.example.com/s.json#/Foo' })
     expect(errors[0]?.message).toMatch(/unsupported URL protocol/i)
     // Only the initial https request happened; the file:// target was refused.
     expect(fetchSpy).toHaveBeenCalledTimes(1)
@@ -339,7 +341,7 @@ describe('resolve-refs-from-file', () => {
     // A later strict call for the same URL must NOT be served from the session
     // cache — the default private-host guard has to refuse it.
     const strict = await resolveRefsFromFile(join(dir, 'api.json'))
-    expect((strict.resolved as { x: unknown }).x).toBeUndefined()
+    expect((strict.resolved as { x: unknown }).x).toEqual({ $ref: `${url}#/Foo` })
     expect(strict.errors[0]?.message).toMatch(/Refusing to resolve remote \$ref/)
     // No additional fetch was made for the refused call.
     expect(fetchSpy).toHaveBeenCalledTimes(1)
@@ -738,7 +740,7 @@ describe('resolve-refs-from-file', () => {
     // The URL omits the port, which counts as the https default of 443…
     expect(resolved).toMatchObject({ ok: { type: 'string' } })
     // …while a different port on the same host is not covered by that entry.
-    expect((resolved as { bad: unknown }).bad).toBeUndefined()
+    expect((resolved as { bad: unknown }).bad).toEqual({ $ref: 'https://example.com:8443/s.json#/Foo' })
     expect(errors[0]?.message).toMatch(/host is not in the allow-list/)
   })
 
@@ -968,5 +970,90 @@ describe('resolve-refs-from-file', () => {
     // Copied, not aliased — but still a cycle, as it was in the source.
     expect(value).not.toBe(cyclic)
     expect(value['child']).toBe(value)
+  })
+
+  it('does not let a hoisted cycle target overwrite a definition the output root already had', async () => {
+    // The root is a bare `$ref`, so the resolved output *is* b.json — and the
+    // hoist names were picked against the root's `$defs`, which is not the one
+    // being written to. `b.json` already has a `c`, and the hoist derived from
+    // `c.json` wants that same name.
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ $ref: './b.json' }))
+    writeFileSync(
+      join(dir, 'b.json'),
+      JSON.stringify({
+        $defs: { c: { const: 'B_OWN_C' } },
+        properties: { loop: { $ref: './c.json#/$defs/Node' } },
+      }),
+    )
+    writeFileSync(
+      join(dir, 'c.json'),
+      JSON.stringify({ $defs: { Node: { type: 'object', properties: { next: { $ref: '#/$defs/Node' } } } } }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'))
+    const defs = (resolved as { $defs: Record<string, unknown> }).$defs
+
+    // b.json's own definition survives, and the hoist took a free name.
+    expect(defs['c']).toEqual({ const: 'B_OWN_C' })
+    const hoistName = Object.keys(defs).find((key) => key !== 'c')
+    expect(hoistName).toBeDefined()
+    // Every kept cycle ref points at the hoist's final name, not the one it was
+    // first emitted with — a rename that missed a ref site would strand it.
+    const refs = [...JSON.stringify(resolved).matchAll(/"\$ref":"([^"]+)"/g)].map((match) => match[1])
+    expect(refs.length).toBeGreaterThan(0)
+    expect(new Set(refs)).toEqual(new Set([`#/$defs/${hoistName}`]))
+    expect(defs[hoistName as string]).toMatchObject({ type: 'object' })
+  })
+
+  it('rebases a kept relative ref so it still names the document it was written against', async () => {
+    // `sub/b.json` refers to its own sibling `c.json`. The fragment is a typo,
+    // so the ref is kept — and the output is read relative to the *root*, where
+    // a different `c.json` sits. Re-emitting the ref verbatim silently bound it
+    // to that other file, which resolves cleanly and is simply the wrong answer.
+    mkdirSync(join(dir, 'sub'))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: './sub/b.json' } }))
+    writeFileSync(join(dir, 'sub', 'b.json'), JSON.stringify({ x: { $ref: './c.json#/$defs/typo' } }))
+    writeFileSync(join(dir, 'sub', 'c.json'), JSON.stringify({ $defs: { real: { const: 'SUB_C' } } }))
+    writeFileSync(join(dir, 'c.json'), JSON.stringify({ $defs: { typo: { const: 'ROOT_C_WRONG' } } }))
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'))
+
+    expect(resolved).toEqual({ a: { x: { $ref: './sub/c.json#/$defs/typo' } } })
+  })
+
+  it('keeps a node whose document was refused rather than inlining undefined', async () => {
+    // Inside an array `undefined` serializes to `null`, so an `allOf` branch
+    // pointing at a refused document produced `allOf: [null]` — not a schema.
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ type: 'object', allOf: [{ $ref: '../outside.json#/$defs/X' }] }),
+    )
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'))
+
+    expect(resolved).toEqual({ type: 'object', allOf: [{ $ref: '../outside.json#/$defs/X' }] })
+    expect(JSON.parse(JSON.stringify(resolved))).toEqual(resolved)
+    // The loader already said why; the keep must not add a second, vaguer one.
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.message).toMatch(/Refusing to read local \$ref/)
+  })
+
+  it('preserves a class instance a custom parse put in value position', async () => {
+    // js-yaml yields a `Date` for a YAML timestamp. Copying value-position
+    // subtrees as plain objects emptied it — `default: 2020-01-01` became
+    // `default: {}` — with nothing to say the constraint had been dropped.
+    writeFileSync(join(dir, 'root.json'), 'parsed by the callback')
+    const stamp = new Date('2020-01-01T00:00:00.000Z')
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), {
+      parse: () => ({ type: 'string', default: stamp }),
+    })
+    const value = (resolved as { default: Date }).default
+
+    expect(value).toBeInstanceOf(Date)
+    expect(value.getTime()).toBe(stamp.getTime())
+    // Copied, not aliased — the session cache must stay unreachable from the
+    // caller's result, which is why value positions are detached at all.
+    expect(value).not.toBe(stamp)
   })
 })
