@@ -1,5 +1,32 @@
 # @amritk/mjst
 
+## 0.14.9
+
+### Patch Changes
+
+- 34c5eaf: Report a config option named after an `Object.prototype` member as unknown.
+  `validateConfig` indexed its known-options table directly, so a config
+  containing `"constructor"`, `"toString"` or `"valueOf"` found the prototype
+  member and type-checked the value against it — answering `expected undefined,
+received string` instead of the unknown-option message that lists the real
+  options and makes the typo obvious.
+- Updated dependencies [34c5eaf]
+- Updated dependencies [34c5eaf]
+- Updated dependencies [34c5eaf]
+- Updated dependencies [34c5eaf]
+- Updated dependencies [34c5eaf]
+- Updated dependencies [34c5eaf]
+- Updated dependencies [34c5eaf]
+- Updated dependencies [6f04ced]
+  - @amritk/adapters@0.4.4
+  - @amritk/api@0.15.2
+  - @amritk/generate-examples@0.6.4
+  - @amritk/generate-parsers@0.19.4
+  - @amritk/helpers@0.15.4
+  - @amritk/lint@0.4.8
+  - @amritk/resolve-refs@0.7.0
+  - @amritk/generate-validators@0.13.1
+
 ## 0.14.8
 
 ### Patch Changes
