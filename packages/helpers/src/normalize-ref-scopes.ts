@@ -78,7 +78,7 @@ export const normalizeRefScopes = (root: Record<string, unknown>): Record<string
     if (node === null || typeof node !== 'object') return node
 
     if (Array.isArray(node)) {
-      const mapped = node.map((item, index) => rewrite(item, `${pointer}/${index}`, enclosing, depth + 1))
+      const mapped = node.map((item, index) => rewrite(item, `${pointer}/${index}`, enclosing, depth + 1, inSchemaMap))
       return mapped.some((item, index) => item !== node[index]) ? mapped : node
     }
 

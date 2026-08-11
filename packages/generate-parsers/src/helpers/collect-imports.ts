@@ -269,13 +269,16 @@ const collectImportTargets = (
     // Traverse into if/then/else branches. `if` belongs here as much as the
     // other two — the root walk already lists it, and the two lists disagreeing
     // is what let a tuple position go unimported.
-    if ('if' in record) {
+    // `Object.hasOwn`, not `in`, for the reason the `Object.values` switch above
+    // gives: `in` walks the prototype chain, so a polluted `Object.prototype.if`
+    // would have this descend into an inherited value.
+    if (Object.hasOwn(record, 'if')) {
       collectRefsFromValue(record.if)
     }
-    if ('then' in record) {
+    if (Object.hasOwn(record, 'then')) {
       collectRefsFromValue(record.then)
     }
-    if ('else' in record) {
+    if (Object.hasOwn(record, 'else')) {
       collectRefsFromValue(record.else)
     }
   }

@@ -595,6 +595,34 @@ describe('compile-to-module', () => {
     }
   }, 20_000)
 
+  it('refuses to emit a module whose internals collide with an app export', () => {
+    // The generated module imports the app's exports unaliased and declares
+    // ~20 internals of its own, every one a plausible route name. A collision
+    // used to surface as a `SyntaxError` at load, naming an identifier the
+    // author never wrote, in a file they did not author.
+    expect(() =>
+      compileToModule({
+        routesImport: '../compile-to-module.test-utils',
+        runtimeImport: '../../index',
+        validatorsImport: '@amritk/runtime-validators',
+        routes: { notFound: corpus.health },
+        info,
+      }),
+    ).toThrow(/'notFound' is also declared by the generated module/)
+  })
+
+  it('still emits for an app export that does not collide', () => {
+    expect(() =>
+      compileToModule({
+        routesImport: '../compile-to-module.test-utils',
+        runtimeImport: '../../index',
+        validatorsImport: '@amritk/runtime-validators',
+        routes: { health: corpus.health },
+        info,
+      }),
+    ).not.toThrow()
+  })
+
   it('rejects rather than throws when app code fails synchronously, identically to the runtime', async () => {
     // Without hooks the emitted dispatch is not `async` — that is the whole
     // point of the unhooked shape — so a synchronous throw from app code

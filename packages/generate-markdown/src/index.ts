@@ -112,6 +112,7 @@ const SCHEMA_MAP_KEYWORDS: ReadonlySet<string> = new Set([
   'dependentSchemas',
   '$defs',
   'definitions',
+  'dependencies',
 ])
 
 /**

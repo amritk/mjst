@@ -242,21 +242,31 @@ const startsNewResource = (value: unknown): boolean =>
  * `hoistNestedDefs` can map them to their hoisted root-level equivalents.
  * Does NOT hoist — hoisting is done separately at the root level.
  */
-const renameNestedDefs = (obj: unknown, depth = 0): unknown => {
+const renameNestedDefs = (obj: unknown, depth = 0, inSchemaMap = false): unknown => {
   assertSchemaDepth(depth, 'upgradeDraft07Schema')
   if (typeof obj !== 'object' || obj === null) return obj
-  if (Array.isArray(obj)) return obj.map((item) => renameNestedDefs(item, depth + 1))
+  if (Array.isArray(obj)) return obj.map((item) => renameNestedDefs(item, depth + 1, inSchemaMap))
 
   const record = obj as Record<string, unknown>
   const result: Record<string, unknown> = {}
 
-  for (const [key, value] of Object.entries(record)) {
-    if (key === '$ref' && typeof value === 'string' && value.startsWith('#/definitions/')) {
+  // Copy first, then let `schemaChildren` say which children are schemas —
+  // the same guard `rewriteDefinitionsRefs` carries. Without it this rewrote
+  // `$ref`s inside `default`/`enum`/`example` values (changing the literal the
+  // author wrote) and renamed a *property* genuinely called `definitions` to
+  // `$defs`, so the declared property vanished from the emitted type and a
+  // property the schema never had appeared beside it.
+  for (const [key, value] of Object.entries(record)) assignKey(result, key, value)
+  for (const child of schemaChildren(record, inSchemaMap)) {
+    const { key, value } = child
+    if (!inSchemaMap && key === '$ref' && typeof value === 'string' && value.startsWith('#/definitions/')) {
       assignKey(result, key, value.replace('#/definitions/', '#/$defs/'))
-    } else {
-      const outKey = key === 'definitions' ? '$defs' : key
-      assignKey(result, outKey, renameNestedDefs(value, depth + 1))
+      continue
     }
+    // Only a `definitions` *keyword* is renamed; inside a name map it is a name.
+    const outKey = !inSchemaMap && key === 'definitions' ? '$defs' : key
+    if (outKey !== key) delete result[key]
+    assignKey(result, outKey, renameNestedDefs(value, depth + 1, child.inSchemaMap))
   }
 
   return result

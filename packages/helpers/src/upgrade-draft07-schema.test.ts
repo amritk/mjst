@@ -245,4 +245,29 @@ describe('upgrade-draft07-schema', () => {
     expect(Object.getOwnPropertyDescriptor(defs, '__proto__')?.value).toEqual({ type: 'string' })
     expect(resolveRef('#/$defs/__proto__', upgraded as never)).toEqual({ type: 'string' })
   })
+
+  it('leaves a definitions-shaped value and a property named definitions alone', () => {
+    // `renameNestedDefs` renamed every `definitions` key at any depth and
+    // rewrote every `#/definitions/` ref, so it rewrote the author's `default`
+    // value and renamed a declared *property* called `definitions` out of
+    // existence — the same three exemptions its sibling already honoured.
+    const schema = JSON.parse(`{
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "X": {
+          "default": { "$ref": "#/definitions/Y", "definitions": "literal value" },
+          "properties": { "definitions": { "type": "string" } }
+        },
+        "Y": { "type": "string" }
+      }
+    }`) as Record<string, unknown>
+
+    const upgraded = upgradeDraft07Schema(schema) as Record<string, Record<string, Record<string, unknown>>>
+    const x = upgraded['$defs']?.['X'] as Record<string, unknown>
+
+    // The default is a value: untouched, ref spelling and all.
+    expect(x['default']).toEqual({ $ref: '#/definitions/Y', definitions: 'literal value' })
+    // The declared property keeps its name.
+    expect(Object.keys(x['properties'] as object)).toEqual(['definitions'])
+  })
 })

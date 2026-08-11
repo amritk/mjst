@@ -507,7 +507,40 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     ),
   )
   lines.push('', 'export default { fetch }', '')
-  return lines.join('\n')
+  const source = lines.join('\n')
+  assertNoImportCollision(source, [...new Set(routeModuleImports)])
+  return source
+}
+
+/**
+ * Fails the compile when an app export shares a name with one of the module's
+ * own top-level bindings.
+ *
+ * The emitted module imports the app's exports unaliased and declares roughly
+ * twenty internals of its own — `notFound`, `toResponse`, `observed`,
+ * `stripHeadBody`, `internalError`, … — every one a plausible name for a route,
+ * mount, or hook. A collision produces a module that declares the name twice,
+ * so it fails to load with a `SyntaxError` naming an identifier the author
+ * never wrote, from a file they did not author. Saying it here instead names
+ * the export and the fix.
+ *
+ * The internal names are read back out of the emitted source rather than
+ * listed, so the check cannot drift as the emitter grows — which a hand-kept
+ * list of twenty names certainly would.
+ */
+const assertNoImportCollision = (source: string, imported: readonly string[]): void => {
+  const declared = new Set<string>()
+  for (const match of source.matchAll(/^(?:export )?(?:const|let|function|class)\s+([A-Za-z_$][A-Za-z0-9_$]*)/gm)) {
+    declared.add(match[1] as string)
+  }
+  const clashes = imported.filter((name) => declared.has(name))
+  if (clashes.length === 0) return
+  throw new Error(
+    `compileToModule: ${clashes.map((name) => `'${name}'`).join(', ')} ` +
+      `${clashes.length === 1 ? 'is' : 'are'} also declared by the generated module. ` +
+      'Rename the export in the routes module (the generated file imports it unaliased, ' +
+      'so the two names would collide and the module would not load).',
+  )
 }
 
 const assertIdentifier = (name: string | undefined, label: string): void => {

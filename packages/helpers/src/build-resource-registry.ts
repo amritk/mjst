@@ -126,9 +126,19 @@ export const escapePointerSegment = (segment: string): string =>
  * boolean through the recursion is what tells them apart, and having it in one
  * place is what keeps the eight walkers agreeing about it.
  *
+ * Arrays are the caller's to handle, since this yields object children only —
+ * and the rule there is that **an element inherits its array's position**, the
+ * same one `resolve-refs`' `childRole` applies. The walkers had split on it
+ * (some reset the flag, some propagated it), which is precisely the drift
+ * having the rule in one place is meant to prevent, so it is written down here.
+ *
  * @example
  * ```typescript
  * const walk = (node: unknown, inSchemaMap: boolean): void => {
+ *   if (Array.isArray(node)) {
+ *     for (const item of node) walk(item, inSchemaMap)
+ *     return
+ *   }
  *   if (!isObject(node)) return
  *   for (const child of schemaChildren(node, inSchemaMap)) walk(child.value, child.inSchemaMap)
  * }
@@ -198,7 +208,7 @@ export const buildResourceRegistry = (root: unknown): ResourceRegistry | null =>
     if (node === null || typeof node !== 'object') return
     if (Array.isArray(node)) {
       for (let index = 0; index < node.length; index++)
-        walk(node[index], `${pointer}/${index}`, enclosing, depth + 1, false)
+        walk(node[index], `${pointer}/${index}`, enclosing, depth + 1, inSchemaMap)
       return
     }
 

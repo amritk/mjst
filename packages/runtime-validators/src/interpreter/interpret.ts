@@ -715,10 +715,11 @@ const interpretObject = (
   if (properties && knownKeys && escapedKeys) {
     for (let i = 0; i < knownKeys.length; i++) {
       const key = knownKeys[i] as string
-      // Read the value once and reuse it; `hasProperty` is the single rule
-      // every presence-asking keyword in this file shares.
+      // One read, reused. `hasProperty` spells the same rule for callers that
+      // do not already hold the value; here the `!== undefined` half is free
+      // off `pv`, so only the `hasOwn` half is left to ask.
       const pv = obj[key]
-      const present = hasProperty(obj, key)
+      const present = pv !== undefined && Object.hasOwn(obj, key)
       if (requiredSet.has(key)) {
         if (!present) {
           if (asserts) fail(ctx, `must have required property '${key}'`, path)

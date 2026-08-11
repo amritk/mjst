@@ -43,7 +43,7 @@ export const buildAnchorMap = (rootSchema: JSONSchema): Record<string, string> =
     assertSchemaDepth(depth, 'buildAnchorMap')
     if (node === null || typeof node !== 'object') return
     if (Array.isArray(node)) {
-      for (let i = 0; i < node.length; i++) walk(node[i], `${pointer}/${i}`, depth + 1, false)
+      for (let i = 0; i < node.length; i++) walk(node[i], `${pointer}/${i}`, depth + 1, inSchemaMap)
       return
     }
 

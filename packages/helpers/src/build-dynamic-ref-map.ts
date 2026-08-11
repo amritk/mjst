@@ -42,7 +42,7 @@ export const buildDynamicRefMap = (rootSchema: JSONSchema): Record<string, strin
     assertSchemaDepth(depth, 'buildDynamicRefMap')
     if (node === null || typeof node !== 'object') return
     if (Array.isArray(node)) {
-      for (let i = 0; i < node.length; i++) walk(node[i], `${pointer}/${i}`, depth + 1, false)
+      for (let i = 0; i < node.length; i++) walk(node[i], `${pointer}/${i}`, depth + 1, inSchemaMap)
       return
     }
 

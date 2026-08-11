@@ -50,7 +50,7 @@ export const assertIdScopes = (rootSchema: JSONSchema): void => {
     if (node === null || typeof node !== 'object') return
     if (Array.isArray(node)) {
       for (let index = 0; index < node.length; index++) {
-        walk(node[index], `${pointer}/${index}`, enclosing, resource, depth + 1, false)
+        walk(node[index], `${pointer}/${index}`, enclosing, resource, depth + 1, inSchemaMap)
       }
       return
     }

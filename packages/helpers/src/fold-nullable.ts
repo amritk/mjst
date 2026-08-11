@@ -62,9 +62,12 @@ const fold = (node: unknown, inSchemaMap = false): unknown => {
     assignKey(next, child.key, folded)
   }
 
-  const type = record['type']
-  // Only at a schema node: inside a name-to-schema map, `nullable` is a name.
-  if (!inSchemaMap && record['nullable'] === true) {
+  const type = Object.hasOwn(record, 'type') ? record['type'] : undefined
+  // Own keys only, and only at a schema node: inside a name-to-schema map,
+  // `nullable` is a name. A polluted `Object.prototype.nullable` would
+  // otherwise fold every node in the document, so every generated parser
+  // accepted `null` where the schema forbids it.
+  if (!inSchemaMap && Object.hasOwn(record, 'nullable') && record['nullable'] === true) {
     if (typeof type === 'string' && type !== 'null') {
       next['type'] = [type, 'null']
       changed = true
