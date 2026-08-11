@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { resolveRef } from './resolve-ref'
 import { isDraft07Schema, upgradeDraft07Schema } from './upgrade-draft07-schema'
 
 describe('upgrade-draft07-schema', () => {
@@ -224,5 +225,24 @@ describe('upgrade-draft07-schema', () => {
     expect(Object.getOwnPropertyDescriptor(properties, '__proto__')?.value).toEqual({ type: 'string' })
     // The subschema must not have become the map's prototype.
     expect(Object.getPrototypeOf(properties)).toBe(Object.prototype)
+  })
+
+  it('keeps a definition named __proto__ and the ref that points at it', () => {
+    // The root `definitions` map was rebuilt with a plain assignment, so the
+    // definition set the map's prototype and vanished — while the `$ref` to it
+    // was still rewritten to `#/$defs/__proto__`, which now resolves to
+    // nothing, failing the build on a document that declares it right there.
+    const schema = JSON.parse(`{
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": { "__proto__": { "type": "string" }, "ok": { "type": "number" } },
+      "properties": { "a": { "$ref": "#/definitions/__proto__" } }
+    }`) as Record<string, unknown>
+
+    const upgraded = upgradeDraft07Schema(schema) as Record<string, Record<string, unknown>>
+    const defs = upgraded['$defs'] as object
+
+    expect(Object.getOwnPropertyNames(defs).sort()).toEqual(['__proto__', 'ok'])
+    expect(Object.getOwnPropertyDescriptor(defs, '__proto__')?.value).toEqual({ type: 'string' })
+    expect(resolveRef('#/$defs/__proto__', upgraded as never)).toEqual({ type: 'string' })
   })
 })

@@ -73,7 +73,7 @@ const hoistNestedDefs = (defs: Record<string, unknown>): Record<string, unknown>
 
   for (const [parentName, parentSchema] of Object.entries(defs)) {
     if (typeof parentSchema !== 'object' || parentSchema === null) {
-      hoisted[parentName] = parentSchema
+      assignKey(hoisted, parentName, parentSchema)
       continue
     }
 
@@ -81,7 +81,7 @@ const hoistNestedDefs = (defs: Record<string, unknown>): Record<string, unknown>
     const nestedDefs = parentObj['$defs'] as Record<string, unknown> | undefined
 
     if (!nestedDefs || typeof nestedDefs !== 'object') {
-      hoisted[parentName] = parentSchema
+      assignKey(hoisted, parentName, parentSchema)
       continue
     }
 
@@ -102,12 +102,12 @@ const hoistNestedDefs = (defs: Record<string, unknown>): Record<string, unknown>
     // URI-with-fragment refs (e.g. "http://foo.json#/$defs/queue") can still
     // navigate into the parent's nested defs after resolution.
     const rewrittenParent = rewriteRefs(parentObj, localToHoisted, selfRef) as Record<string, unknown>
-    hoisted[parentName] = rewrittenParent
+    assignKey(hoisted, parentName, rewrittenParent)
 
     // Hoist each nested def, rewriting its internal refs too
     for (const [localName, localSchema] of Object.entries(nestedDefs)) {
       const hoistedName = `${parentPrefix}-${toKebabCase(localName)}`
-      hoisted[hoistedName] = rewriteRefs(localSchema, localToHoisted, selfRef)
+      assignKey(hoisted, hoistedName, rewriteRefs(localSchema, localToHoisted, selfRef))
     }
   }
 
@@ -133,7 +133,11 @@ export const upgradeDraft07Schema = (schema: Record<string, unknown>): Record<st
   // so nested defs are accessible before hoisting
   const renamedDefs: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(rawDefs)) {
-    renamedDefs[key] = renameNestedDefs(value)
+    // A definition may legitimately be named `__proto__`; a plain assignment
+    // on that key sets the map's prototype and the definition disappears —
+    // while the `$ref` to it is still rewritten, so the generators then fail
+    // to resolve a definition the document declares right there.
+    assignKey(renamedDefs, key, renameNestedDefs(value))
   }
 
   // Hoist nested $defs up to root so the pipeline can resolve all refs flatly
@@ -145,8 +149,11 @@ export const upgradeDraft07Schema = (schema: Record<string, unknown>): Record<st
   for (const key of Object.keys(hoistedDefs)) {
     if (key.startsWith('http://') || key.startsWith('https://')) {
       const shortName = refToFilename(key)
-      if (shortName && !(shortName in hoistedDefs)) {
-        hoistedDefs[shortName] = hoistedDefs[key]
+      // `Object.hasOwn`, not `in`: a short name of `constructor` or
+      // `toString` matches `Object.prototype` and the alias is silently
+      // skipped, leaving the internal refs that expect it unresolvable.
+      if (shortName && !Object.hasOwn(hoistedDefs, shortName)) {
+        assignKey(hoistedDefs, shortName, hoistedDefs[key])
       }
     }
   }

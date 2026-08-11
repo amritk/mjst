@@ -60,6 +60,26 @@ export const SYNTHETIC_BASE = 'https://helpers.mjst.invalid/schema'
  */
 export const DATA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples'])
 
+/**
+ * Keywords whose value is a map of author-chosen names to schemas.
+ *
+ * The distinction {@link DATA_KEYWORDS} needs to be useful: at a schema node
+ * those four are keywords, but inside one of these maps the keys are *names*,
+ * so a property genuinely called `default` or `examples` carries no keyword
+ * meaning. A walker that skips by key name alone skips that property's whole
+ * subtree, which is how a real tuple went unnormalized and a `nullable`
+ * property went unfolded.
+ */
+export const SCHEMA_MAPS = new Set([
+  'properties',
+  'patternProperties',
+  '$defs',
+  'definitions',
+  'dependentSchemas',
+  // Draft-07's `dependencies`: its keys are trigger property names too.
+  'dependencies',
+])
+
 /** `new URL(ref, base).href`, or `undefined` when the pair does not parse. */
 export const resolveUri = (ref: string, base: string): string | undefined => {
   try {

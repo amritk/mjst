@@ -381,9 +381,18 @@ const REGEX_START = new Set([...REGEX_PRECEDING].filter((char) => char !== '<' &
  * that bites: its rendered output silently loses the very fields the sample
  * exists to show, with no error anywhere to trace it back to.
  *
- * A literal the scanners cannot follow (an apostrophe in JSX text, say) is not
- * fatal — the character is treated as ordinary and the walk continues, which
- * is exactly where `indexOf` already left things.
+ * A literal the scanners cannot follow (an apostrophe in JSX text that runs to
+ * the end of its line, say) is not fatal — the character is treated as ordinary
+ * and the walk continues, which is exactly where `indexOf` already left things.
+ *
+ * The one case with no answer here is JSX text that *does* close: a `<p>don't
+ * stop</p>` sharing a line with a call site scans from the apostrophe to the
+ * next quote and steps over it. Telling that from a genuine string holding a
+ * code sample needs a real parser — the two are the same shape, and the two
+ * requirements are opposite. The result is the module's documented failure
+ * mode, a bigger bundle rather than a broken one, and it is why the wiring in
+ * the example below tests `stripped === source`. Put a call site on its own
+ * line and it is never in question.
  */
 const nextCallSite = (source: string, from: number): number => {
   let index = from
@@ -402,11 +411,12 @@ const nextCallSite = (source: string, from: number): number => {
       index = scanTemplate(source, index) ?? index + 1
       previous = char
     } else if (char === '/' && (previous === '' || REGEX_START.has(previous))) {
-      // Whether a `/` opens a regex is a guess from the preceding character,
-      // and here a wrong guess is not merely inaccurate — swallowing a call
-      // site turns the whole transform into a silent no-op, shipping every
-      // schema to the browser bundle it exists to strip. So a "regex" that
-      // spans a candidate is rejected and the `/` is read as ordinary.
+      // Unlike a quote or a backtick, a `/` here is a *guess* — nothing else
+      // in the language wants this character skipped — so a "regex" that spans
+      // a call site is simply a wrong guess, and the `/` is read as ordinary
+      // instead. Quotes get no such check: a call site quoted inside a real
+      // string or template must be skipped, which is the opposite rule, and no
+      // single test tells the two apart (see the note above).
       const end = scanRegex(source, index)
       index = end === null || source.slice(index, end).includes(NAME) ? index + 1 : end
       previous = '0'

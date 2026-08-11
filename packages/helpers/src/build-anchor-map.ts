@@ -4,13 +4,9 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 // percent-decoded on the way in, so it has to be escaped by the same
 // function that contract is defined by. A local copy omitted the `%`
 // escape, which left an anchor under a key like `a%2Fb` unresolvable.
-import { escapePointerSegment } from './build-resource-registry'
+import { DATA_KEYWORDS, escapePointerSegment } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { isSchemaObject } from './schema-guards'
-
-// Keywords whose values are data, not subschemas — an `$anchor` key inside an
-// enum member or example value is instance data and must not register.
-const NON_SCHEMA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples'])
 
 /**
  * Maps every `$anchor` name declared in a document to the JSON Pointer of the
@@ -58,7 +54,7 @@ export const buildAnchorMap = (rootSchema: JSONSchema): Record<string, string> =
     }
 
     for (const key of Object.keys(record)) {
-      if (NON_SCHEMA_KEYWORDS.has(key)) continue
+      if (DATA_KEYWORDS.has(key)) continue
       walk(record[key], `${pointer}/${escapePointerSegment(key)}`, depth + 1)
     }
   }

@@ -1,22 +1,5 @@
 import { assignKey } from './assign-key'
-import { DATA_KEYWORDS } from './build-resource-registry'
-
-/**
- * Keywords whose value is a map of author-chosen names to schemas. Inside one,
- * the keys are names — so {@link DATA_KEYWORDS} carry no keyword meaning there
- * and every value is a schema to fold. Skipping by key name alone left a
- * property genuinely called `default` or `examples` unfolded while the type
- * generator still widened it with `| null`, so the emitted parser rejected a
- * null the type declared valid.
- */
-const SCHEMA_MAPS = new Set([
-  'properties',
-  'patternProperties',
-  '$defs',
-  'definitions',
-  'dependentSchemas',
-  'dependencies',
-])
+import { DATA_KEYWORDS, SCHEMA_MAPS } from './build-resource-registry'
 
 /**
  * Rewrites OpenAPI 3.0's `nullable: true` into the JSON Schema form the

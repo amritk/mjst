@@ -597,6 +597,34 @@ const rebaseKeptRef = (value: string, from: string, root: string): string => {
   return `${relative.startsWith('.') ? relative : `./${relative}`}${suffix}`
 }
 
+/**
+ * Rewrites every `$ref` in an already-detached subtree so it still names the
+ * document it was written against once the subtree sits in the root output.
+ * A no-op when the subtree came from the root document itself.
+ *
+ * Only for subtrees handed back wholesale — the depth limit — where no
+ * per-node resolution ran to rebase them one at a time.
+ */
+const rebaseKeptRefs = (node: unknown, from: string, root: string): unknown => {
+  if (from === root || node === null || typeof node !== 'object') return node
+  const stack: unknown[] = [node]
+  while (stack.length > 0) {
+    const current = stack.pop()
+    if (current === null || typeof current !== 'object') continue
+    if (Array.isArray(current)) {
+      for (const item of current) stack.push(item)
+      continue
+    }
+    const obj = current as Record<string, unknown>
+    for (const [key, value] of Object.entries(obj)) {
+      if ((key === '$ref' || key === '$dynamicRef') && typeof value === 'string') {
+        assignKey(obj, key, rebaseKeptRef(value, from, root))
+      } else stack.push(value)
+    }
+  }
+  return node
+}
+
 /** Renders a {@link JsonPath} as a `#/...` ref string. */
 const pathToRef = (path: JsonPath): string =>
   path.length === 0 ? '#' : `#/${path.map((segment) => escapeSegment(String(segment))).join('/')}`
@@ -876,11 +904,16 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     // cached copy every later resolve in the process would be handed.
     if (role === 'value') return detach(node)
     if (depth > maxDepth) {
-      // Past the limit we hand the subtree back untouched instead of unwinding
-      // the stack with a RangeError. Nothing is lost — the branch simply keeps
-      // its `$ref`s — and the failure is on `errors` where callers look.
+      // Past the limit we hand the subtree back instead of unwinding the stack
+      // with a RangeError. Nothing is lost — the branch simply keeps its
+      // `$ref`s — and the failure is on `errors` where callers look.
+      //
+      // Those kept refs still have to mean what they meant, though: the
+      // subtree is being lifted into a root-based output, so a relative
+      // `./c.json` written in `sub/b.json` would come to name the root's own
+      // `c.json`. Same rebasing `keepUnresolved` does, for the same reason.
       reportDepthLimit()
-      return detach(node)
+      return rebaseKeptRefs(detach(node), baseLocation, rootLocation)
     }
     if (Array.isArray(node)) {
       const items = node.map((item, index) => resolveAt(item, baseLocation, base, depth + 1, childRole(role, index)))

@@ -1,4 +1,4 @@
-import { DATA_KEYWORDS } from '@amritk/helpers/build-resource-registry'
+import { DATA_KEYWORDS, SCHEMA_MAPS } from '@amritk/helpers/build-resource-registry'
 
 /**
  * Shared tuple normalization for the adapters whose upstream converter emits
@@ -7,27 +7,6 @@ import { DATA_KEYWORDS } from '@amritk/helpers/build-resource-registry'
  * `items: [...]` array is treated as a plain array, so element types and length
  * go unvalidated downstream. Both functions walk the whole tree of *schemas*.
  */
-
-/**
- * Keywords whose values are a map of author-chosen names to schemas. The map
- * itself is not a schema, and — this is the part that matters — its keys are
- * names, not keywords. A property genuinely called `default` or `examples` is
- * ordinary in OpenAPI-adjacent documents, so skipping {@link DATA_KEYWORDS} by
- * key name alone would skip that property's whole subtree and leave a real
- * tuple inside it unnormalized.
- */
-const SCHEMA_MAPS = new Set([
-  'properties',
-  'patternProperties',
-  '$defs',
-  'definitions',
-  'dependentSchemas',
-  // Draft-07's `dependencies`, which this module exists to normalize. Its keys
-  // are trigger property names, so a dependency on a property called `items`
-  // (whose value is the array of names it requires) was rewritten into a tuple
-  // schema, destroying the declaration outright.
-  'dependencies',
-])
 
 /**
  * Walks the schema tree, applying `transform` to every schema node.

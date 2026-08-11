@@ -741,6 +741,13 @@ const interpretObject = (
       // key is a prototype member (the common case, precomputed as `safeKeys`) the
       // cheap `pv !== undefined` is equivalent — a JSON object can't inherit a
       // non-prototype-member name.
+      //
+      // Deliberately not extended to cover a *polluted* `Object.prototype`
+      // carrying an arbitrary name. Unlike the sweeps below, this loop walks
+      // the schema's declared keys rather than the instance's, so pollution
+      // only bites when a polluted name happens to equal a declared property —
+      // and paying for `Object.hasOwn` on every declared key of every object
+      // to cover that is the wrong trade on the hottest loop here.
       const pv = obj[key]
       const present = safeKeys ? pv !== undefined : Object.hasOwn(obj, key)
       if (requiredSet.has(key)) {

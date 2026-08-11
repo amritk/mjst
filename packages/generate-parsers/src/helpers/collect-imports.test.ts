@@ -577,4 +577,27 @@ describe('collect-imports', () => {
     }
     expect(collectImportTypeNames(schema)).toContain('Contact')
   })
+
+  it('imports a tuple-only $ref as a type, and a mixed one as a value', () => {
+    // The parser emitter passes a tuple element through untouched, so importing
+    // `parseContact`/`validateContactShape` beside the type leaves two bindings
+    // nothing calls — a `noUnusedLocals` error in the consumer's build. A ref
+    // used anywhere else still needs the value import.
+    const tupleOnly = {
+      type: 'object' as const,
+      properties: { pair: { type: 'array' as const, prefixItems: [{ $ref: '#/$defs/Contact' }] } },
+    }
+    expect(collectImports(tupleOnly)).toEqual(["import type { Contact } from './contact.js';"])
+
+    const mixed = {
+      type: 'object' as const,
+      properties: {
+        pair: { type: 'array' as const, prefixItems: [{ $ref: '#/$defs/Contact' }] },
+        direct: { $ref: '#/$defs/Contact' },
+      },
+    }
+    expect(collectImports(mixed)).toEqual([
+      "import { type Contact, parseContact, validateContactShape } from './contact.js';",
+    ])
+  })
 })

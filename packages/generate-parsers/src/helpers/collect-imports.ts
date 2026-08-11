@@ -101,12 +101,16 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
   const importExt = options?.importExt ?? 'js'
   const importMap = new Map<string, string>()
 
-  for (const [filename, typeName] of collectImportTargets(schema, options)) {
+  for (const [filename, { typeName, typeOnly }] of collectImportTargets(schema, options)) {
     const importPath = getImportPathForFilename(filename, importExt)
-    // In types-only mode, omit the parser function import since there is no parser to call
-    const importStatement = typesOnly
-      ? `import type { ${typeName} } from '${importPath}';`
-      : `import { type ${typeName}, parse${typeName}, validate${typeName}Shape } from '${importPath}';`
+    // In types-only mode there is no parser to call. `typeOnly` is the same
+    // conclusion reached per ref: the emitters only ever named the type, so
+    // importing `parse`/`validate…Shape` beside it would leave two bindings
+    // nothing calls — a `noUnusedLocals` error in the consumer's build.
+    const importStatement =
+      typesOnly || typeOnly
+        ? `import type { ${typeName} } from '${importPath}';`
+        : `import { type ${typeName}, parse${typeName}, validate${typeName}Shape } from '${importPath}';`
     importMap.set(filename, importStatement)
   }
 
@@ -121,16 +125,33 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
  */
 export const collectImportTypeNames = (schema: JSONSchema, options?: CollectImportsOptions): Set<string> => {
   const names = new Set<string>()
-  for (const [, typeName] of collectImportTargets(schema, options)) names.add(typeName)
+  for (const [, target] of collectImportTargets(schema, options)) names.add(target.typeName)
   return names
 }
 
-/** Shared `$ref` walk: filename → derived type name for every import target. */
-const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOptions): Map<string, string> => {
+/**
+ * Shared `$ref` walk: filename → its derived type name and whether the ref was
+ * only ever reached from a position the emitters use the *type* of.
+ *
+ * A tuple position is the only such place today: the type emitter renders it as
+ * the referenced type name, but the parser emitter passes the element through
+ * untouched, so `parseX`/`validateXShape` would be imported and never called —
+ * an unused binding, which `noUnusedLocals` makes a compile error in the
+ * consumer's build. A ref reached from anywhere else wins: the flag is cleared
+ * the first time one is.
+ */
+const collectImportTargets = (
+  schema: JSONSchema,
+  options?: CollectImportsOptions,
+): Map<string, { typeName: string; typeOnly: boolean }> => {
   const selfFilename = options?.selfFilename ?? (options?.selfRef ? refToFilename(options.selfRef) : undefined)
   const rootSchema = options?.rootSchema
   const typeSuffix = options?.typeSuffix
   const refs = new Set<string>()
+  // Refs reached from a position whose emitted code uses the value, not just
+  // the type. A ref in both kinds of position belongs here.
+  const valueRefs = new Set<string>()
+  let typeOnlyDepth = 0
 
   const collectRefsFromValue = (value: unknown): void => {
     if (typeof value !== 'object' || value === null) {
@@ -156,6 +177,7 @@ const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOption
       const isPropertyFragment = isUri && ref.includes('#/properties/')
       if (isInternal || (isUri && !isPropertyFragment)) {
         refs.add(ref)
+        if (typeOnlyDepth === 0) valueRefs.add(ref)
       }
       return // Don't traverse further into a $ref
     }
@@ -166,9 +188,11 @@ const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOption
     // `prefixItems` `$ref` as the referenced type name, so missing it produced
     // a file naming `Contact` with no import — output that does not compile.
     if (Array.isArray(record['prefixItems'])) {
+      typeOnlyDepth++
       for (const item of record['prefixItems']) {
         collectRefsFromValue(item)
       }
+      typeOnlyDepth--
     }
 
     // Check if this is an object type with additionalProperties that has a $ref
@@ -249,6 +273,9 @@ const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOption
     const isPropertyFragment = isUri && ref.includes('#/properties/')
     if (isInternal || (isUri && !isPropertyFragment)) {
       refs.add(ref)
+      // The root's own `$ref` is emitted as a value, like every position other
+      // than a tuple element.
+      valueRefs.add(ref)
     }
   }
 
@@ -307,7 +334,7 @@ const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOption
   }
 
   // Convert refs to import targets, deduplicating by filename.
-  const targets = new Map<string, string>()
+  const targets = new Map<string, { typeName: string; typeOnly: boolean }>()
 
   for (const ref of refs) {
     // For URI refs, skip if the base URI is not resolvable in the root schema.
@@ -324,7 +351,10 @@ const collectImportTargets = (schema: JSONSchema, options?: CollectImportsOption
       continue
     }
 
-    targets.set(filename, typeName)
+    // Two refs can share a filename (`#/$defs/x` and a URI spelling of it); the
+    // import is a value import if any of them needs the value.
+    const typeOnly = !valueRefs.has(ref) && (targets.get(filename)?.typeOnly ?? true)
+    targets.set(filename, { typeName, typeOnly })
   }
 
   return targets

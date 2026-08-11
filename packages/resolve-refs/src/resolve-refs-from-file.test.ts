@@ -1102,4 +1102,25 @@ describe('resolve-refs-from-file', () => {
 
     expect(resolved).toEqual({ a: { x: { $ref: 'urn:example:common#/$defs/Q' } } })
   })
+
+  it('rebases the refs inside a subtree the depth limit handed back whole', async () => {
+    // Past `maxDepth` the subtree is returned as-is rather than unwinding the
+    // stack — but it is still being lifted into a root-based output, so its
+    // relative refs need the same rebasing a resolved one gets. Left verbatim,
+    // `./c.json` came to name the root's own c.json: a different file that
+    // exists and resolves cleanly.
+    mkdirSync(join(dir, 'sub'))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: './sub/b.json' } }))
+    writeFileSync(
+      join(dir, 'sub', 'b.json'),
+      JSON.stringify({ d1: { d2: { d3: { x: { $ref: './c.json#/$defs/real' } } } } }),
+    )
+    writeFileSync(join(dir, 'sub', 'c.json'), JSON.stringify({ $defs: { real: { const: 'SUB_C' } } }))
+    writeFileSync(join(dir, 'c.json'), JSON.stringify({ $defs: { real: { const: 'ROOT_C_WRONG' } } }))
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { maxDepth: 4 })
+
+    expect(JSON.stringify(resolved)).toContain('./sub/c.json#/$defs/real')
+    expect(JSON.stringify(resolved)).not.toContain('"./c.json#/$defs/real"')
+  })
 })
