@@ -361,15 +361,20 @@ const countNewlines = (text: string): number => {
 const NAME = 'defineContract'
 
 /**
- * {@link REGEX_PRECEDING} minus `<` and `>`.
+ * {@link REGEX_PRECEDING} minus `<`.
  *
- * Inside a contract literal those characters really do precede a regex more
- * often than a comparison. At module scope in a `.tsx` file — which
- * `isScannableId` accepts — they are overwhelmingly JSX and type arguments
- * instead, and reading the `/` of a `</p>` as a regex opener let the scan run
- * to the next `/` in the file and step straight over a real call site.
+ * Inside a contract literal a `<` really does precede a regex more often than a
+ * comparison. At module scope in a `.tsx` file — which `isScannableId` accepts
+ * — it is overwhelmingly JSX, and reading the `/` of a `</p>` as a regex opener
+ * let the scan run to the next `/` in the file and step straight over a real
+ * call site.
+ *
+ * `>` stays: it is the second half of `=>`, and `=> /re/.test(x)` is ordinary
+ * code. Dropping it read that `/` as division, and a quote inside the regex
+ * body then opened a string scan that ran past the next call site — trading the
+ * JSX bug for an arrow-function one.
  */
-const REGEX_START = new Set([...REGEX_PRECEDING].filter((char) => char !== '<' && char !== '>'))
+const REGEX_START = new Set([...REGEX_PRECEDING].filter((char) => char !== '<'))
 
 /**
  * Finds the next `defineContract` sitting in code position, starting from an

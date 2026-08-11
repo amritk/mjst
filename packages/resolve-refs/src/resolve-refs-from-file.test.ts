@@ -1151,4 +1151,67 @@ describe('resolve-refs-from-file', () => {
     // …while the real reference beside them is rebased.
     expect(serialized).toContain('"not":{"$ref":"./sub/c.json"}')
   })
+
+  it('terminates on a cyclic subtree the depth limit hands back', async () => {
+    // `detach` preserves cycles on purpose, so the rebase walk needs its own
+    // visited set — and a cyclic document always trips the depth limit, which
+    // is the only way into that walk. Without the guard this never returns.
+    mkdirSync(join(dir, 'sub'))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: './sub/b.json' } }))
+    writeFileSync(join(dir, 'sub', 'b.json'), 'parsed by the callback')
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), {
+      maxDepth: 4,
+      parse: (content, location) => {
+        if (!location.endsWith('sub/b.json')) return JSON.parse(content) as unknown
+        // A YAML recursive anchor, in the shape a custom parser hands back.
+        const cyclic: Record<string, unknown> = { allOf: [{ not: { $ref: './c.json' } }] }
+        cyclic['self'] = cyclic
+        return { allOf: [{ allOf: [cyclic] }] }
+      },
+    })
+
+    expect(resolved).toBeDefined()
+  }, 5000)
+
+  it('rebases a shared subtree once, not once per parent', async () => {
+    mkdirSync(join(dir, 'sub'))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: './sub/b.json' } }))
+    writeFileSync(join(dir, 'sub', 'b.json'), 'parsed by the callback')
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), {
+      maxDepth: 4,
+      parse: (content, location) => {
+        if (!location.endsWith('sub/b.json')) return JSON.parse(content) as unknown
+        const shared = { not: { $ref: './c.json#/$defs/real' } }
+        return { allOf: [{ allOf: [{ allOf: [shared, shared] }] }] }
+      },
+    })
+
+    const serialized = JSON.stringify(resolved)
+    expect(serialized).toContain('./sub/c.json#/$defs/real')
+    expect(serialized).not.toContain('./sub/sub/')
+  })
+
+  it('points a kept bare-fragment ref back at the document that wrote it', async () => {
+    // `#/$defs/Thing` names a place inside its own document. Lifted into the
+    // root output it reads against the *root's* `$defs` — a different schema
+    // that exists and resolves cleanly.
+    mkdirSync(join(dir, 'sub'))
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ $defs: { Thing: { const: 'ROOT_THING_WRONG' } }, a: { $ref: './sub/b.json' } }),
+    )
+    writeFileSync(
+      join(dir, 'sub', 'b.json'),
+      JSON.stringify({
+        $defs: { Thing: { const: 'SUB_THING' } },
+        allOf: [{ allOf: [{ allOf: [{ not: { $ref: '#/$defs/Thing' } }] }] }],
+      }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { maxDepth: 4 })
+
+    expect(JSON.stringify(resolved)).toContain('./sub/b.json#/$defs/Thing')
+  })
 })

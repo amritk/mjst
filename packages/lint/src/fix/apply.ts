@@ -1,5 +1,3 @@
-import { readKey } from '@amritk/helpers/read-key'
-
 import type { IDiagnostic, JsonPath } from '../core/types'
 import { applyEditOpsWithChanges, type EditOp, type ParserFormat } from '../parsers'
 import type { AppliedFix, FixerRegistry, FixResult } from './types'
@@ -69,7 +67,11 @@ export const applyFixes = (
     // registry — truthy, with no `.fix` — and the unguarded call below threw out
     // of `applyFixes`, abandoning every other fix in the batch.
     const code = String(diagnostic.code)
-    const fixer = readKey(fixers, code)
+    // Spelled out rather than importing `@amritk/helpers`' `readKey`: this
+    // package deliberately depends on nothing but `@amritk/runtime-validators`
+    // and `@amritk/yaml` (see .claude/architecture.md), and one shared idiom is
+    // not worth a third.
+    const fixer = Object.hasOwn(fixers, code) ? fixers[code] : undefined
     if (!fixer) continue
     if (safeOnly && fixer.safe === false) continue
 

@@ -1,6 +1,3 @@
-import { assignKey } from '@amritk/helpers/assign-key'
-import { readKey } from '@amritk/helpers/read-key'
-
 import { DiagnosticSeverity } from '../parsers'
 import type { Format } from './formats'
 import { matchesGlob } from './glob'
@@ -48,7 +45,13 @@ const parseSeverity = (
 ): { severity: DiagnosticSeverity; enabled: boolean } => {
   if (value === undefined) return { severity: DiagnosticSeverity.Warning, enabled: true }
   if (typeof value === 'number') return { severity: value, enabled: true }
-  const mapped = SEVERITY_NAMES[value]
+  // `ownOr`, not a bare index: `severity` is ruleset input, and
+  // `severity: 'constructor'` otherwise resolved to `Object.prototype.constructor`
+  // — neither `'off'` nor `undefined`, so both fallbacks below were skipped and
+  // the rule was built carrying a Function where a `DiagnosticSeverity` number
+  // belongs. Every comparison against `DiagnosticSeverity.Error` is then false,
+  // so the CLI exits 0 on findings it should fail for.
+  const mapped = ownOr(SEVERITY_NAMES, value)
   if (mapped === 'off') return { severity: DiagnosticSeverity.Warning, enabled: false }
   // An unrecognized severity string (e.g. "warning" instead of "warn") is a
   // ruleset authoring mistake. We fall back to Warning and keep the rule enabled
@@ -145,6 +148,23 @@ type MergeContext = {
 }
 
 /**
+ * An own-property read and a `__proto__`-safe write, for maps keyed by names
+ * the ruleset supplies. `@amritk/helpers` carries both, but this package
+ * deliberately depends on nothing beyond `@amritk/runtime-validators` and
+ * `@amritk/yaml` (see .claude/architecture.md).
+ */
+const ownOr = <T>(source: Readonly<Record<string, T>>, key: string): T | undefined =>
+  Object.hasOwn(source, key) ? source[key] : undefined
+
+const assignAlias = (into: Record<string, AliasDefinition>, name: string, alias: AliasDefinition): void => {
+  if (name === '__proto__') {
+    Object.defineProperty(into, name, { value: alias, writable: true, enumerable: true, configurable: true })
+  } else {
+    into[name] = alias
+  }
+}
+
+/**
  * Resolves an alias name used by a rule against the aliases in scope for the
  * *declaring* definition, registering it in the merged table and returning the
  * key to reference it by. Colliding names from different rulesets are kept apart
@@ -163,19 +183,19 @@ const registerAlias = (
   // alias" throw was skipped and `Object` was written into the table as a real
   // own key. The guard `resolveAlias` has could not help after that: the name
   // *was* own, and the missing `.targets` threw out of the whole lint run.
-  const alias = readKey(declaringAliases, name)
+  const alias = ownOr(declaringAliases, name)
   if (!alias) throw new Error(`Rule "${ruleName}" references undefined alias "#${name}"`)
-  const existing = readKey(ctx.aliases, name)
+  const existing = ownOr(ctx.aliases, name)
   if (existing === undefined || existing === alias) {
-    assignKey(ctx.aliases, name, alias)
+    assignAlias(ctx.aliases, name, alias)
     return name
   }
   // Name collision with a different alias from another ruleset — scope it.
   for (let n = 0; ; n++) {
     const key = `${name}__${n}`
-    const at = readKey(ctx.aliases, key)
+    const at = ownOr(ctx.aliases, key)
     if (at === undefined || at === alias) {
-      assignKey(ctx.aliases, key, alias)
+      assignAlias(ctx.aliases, key, alias)
       return key
     }
   }
@@ -349,7 +369,7 @@ export const createRuleset = (definition: RulesetDefinition, options: RulesetOpt
     // ruleset, and a bare index answered `#constructor` with `Object` — not an
     // array, and with no `.targets`, so the loop below threw out of the whole
     // lint run. An alias that is merely unknown returns `[]`.
-    const alias = readKey(aliases, name)
+    const alias = ownOr(aliases, name)
     if (!alias) return []
     if (Array.isArray(alias)) return alias
     for (const target of alias.targets) {
@@ -373,7 +393,7 @@ export const createRuleset = (definition: RulesetDefinition, options: RulesetOpt
     // `"toString"` otherwise resolved to `Function.prototype.toString` and ran
     // as a rule function instead of being reported as unknown — its string
     // return value then read as an iterable of per-character diagnostics.
-    getFunction: (name) => readKey(functions, name),
+    getFunction: (name) => ownOr(functions, name),
     rulesForSource: (source) => {
       if (!source || !hasOverrides) return rules
       // Only pay for a clone when an override actually matches this source; the

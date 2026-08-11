@@ -580,7 +580,12 @@ const detach = (node: unknown): unknown => {
 const rebaseKeptRef = (value: string, from: string, root: string): string => {
   if (from === root) return value
   const { filePart, fragment } = splitRef(value)
-  if (filePart === '') return value
+  // A bare fragment names a place inside *its own* document. Once the node has
+  // been lifted into the root output, `#/$defs/Thing` reads against the root's
+  // `$defs` — a different definition, which may well exist and resolve cleanly.
+  // The document is still identified, though, so pointing the ref back at it
+  // keeps the reference meaning what it meant.
+  if (filePart === '') return `${relativeLocation(from, root)}${value}`
   // A ref carrying a scheme is absolute: it names the same thing from any
   // document, so there is nothing to rebase — and `joinLocation` would resolve
   // a non-http one like `urn:example:common` as a relative path, producing the
@@ -589,13 +594,21 @@ const rebaseKeptRef = (value: string, from: string, root: string): string => {
   if (/^[a-zA-Z][a-zA-Z0-9+.-]+:/.test(filePart)) return value
   const target = joinLocation(from, filePart)
   const suffix = value.includes('#') ? `#${fragment}` : ''
+  return `${renderLocation(target, root)}${suffix}`
+}
+
+/** How a document's location is written from the root document's position. */
+const renderLocation = (target: string, root: string): string => {
   // A remote target is absolute already, and so is the only sane form when the
   // root is itself remote. A local pair becomes a path relative to the root's
   // directory, which keeps machine-specific absolute paths out of the output.
-  if (isRemote(target) || isRemote(root)) return `${target}${suffix}`
+  if (isRemote(target) || isRemote(root)) return target
   const relative = relativePath(dirname(root), target).split(sep).join('/')
-  return `${relative.startsWith('.') ? relative : `./${relative}`}${suffix}`
+  return relative.startsWith('.') ? relative : `./${relative}`
 }
+
+/** {@link renderLocation} for a document referring to itself by bare fragment. */
+const relativeLocation = (from: string, root: string): string => renderLocation(from, root)
 
 /**
  * Rewrites every `$ref` in an already-detached subtree so it still names the
@@ -612,6 +625,12 @@ const rebaseKeptRefs = (node: unknown, from: string, root: string, role: NodeRol
   // property spelled that way, and rewriting it changes the literal the schema
   // declares. Inside a `properties`-style map the keys are names, so `$ref`
   // there is a property called `$ref`, not a reference either.
+  // `detach` preserves cycles and shared subtrees on purpose (a YAML recursive
+  // anchor is one), so this walk needs its own visited set: without it a cyclic
+  // document loops forever — and a cyclic document always trips the depth limit,
+  // which is the only way to get here — while a subtree reached from two parents
+  // has its refs rebased twice, turning `./c.json` into `./sub/sub/c.json`.
+  const seen = new Set<object>()
   const stack: { value: unknown; role: NodeRole }[] = [{ value: node, role }]
   while (stack.length > 0) {
     const current = stack.pop()
@@ -619,6 +638,8 @@ const rebaseKeptRefs = (node: unknown, from: string, root: string, role: NodeRol
     const { value: current_, role: currentRole } = current
     if (current_ === null || typeof current_ !== 'object') continue
     if (currentRole === 'value') continue
+    if (seen.has(current_)) continue
+    seen.add(current_)
     if (Array.isArray(current_)) {
       for (let index = 0; index < current_.length; index++) {
         stack.push({ value: current_[index], role: childRole(currentRole, index) })

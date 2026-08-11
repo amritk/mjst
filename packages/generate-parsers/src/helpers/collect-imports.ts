@@ -218,9 +218,12 @@ const collectImportTargets = (
 
     // Traverse nested properties regardless of whether `type` is explicitly set.
     if ('properties' in record && typeof record.properties === 'object' && record.properties !== null) {
-      const props = record.properties as Record<string, unknown>
-      for (const key in props) {
-        collectRefsFromValue(props[key])
+      // `Object.values`, not `for…in`: these are author-chosen names, and a
+      // bare `for…in` walks the prototype chain — so a polluted
+      // `Object.prototype` had this collecting a ref for a definition the
+      // document never declared.
+      for (const value of Object.values(record.properties as Record<string, unknown>)) {
+        collectRefsFromValue(value)
       }
     }
 
@@ -258,9 +261,8 @@ const collectImportTargets = (
       typeof record.patternProperties === 'object' &&
       record.patternProperties !== null
     ) {
-      const patternProps = record.patternProperties as Record<string, unknown>
-      for (const key in patternProps) {
-        collectRefsFromValue(patternProps[key])
+      for (const value of Object.values(record.patternProperties as Record<string, unknown>)) {
+        collectRefsFromValue(value)
       }
     }
 
@@ -289,9 +291,8 @@ const collectImportTargets = (
 
   // Collect refs from properties
   if (typeof schema === 'object' && schema !== null && 'properties' in schema) {
-    const properties = schema.properties as Record<string, unknown>
-    for (const key in properties) {
-      collectRefsFromValue(properties[key])
+    for (const value of Object.values(schema.properties as Record<string, unknown>)) {
+      collectRefsFromValue(value)
     }
   }
 
@@ -302,9 +303,8 @@ const collectImportTargets = (
 
   // Collect refs from root-level patternProperties
   if (typeof schema === 'object' && schema !== null && 'patternProperties' in schema) {
-    const patternProps = schema.patternProperties as Record<string, unknown>
-    for (const key in patternProps) {
-      collectRefsFromValue(patternProps[key])
+    for (const value of Object.values(schema.patternProperties as Record<string, unknown>)) {
+      collectRefsFromValue(value)
     }
   }
 
