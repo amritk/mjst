@@ -260,13 +260,42 @@ dropping them.
 
 ### Two details this repo already has the right pieces for
 
-**Cache epoch from the contracts hash.** Cloudflare puts the *Worker version*
-in the cache key by default, so every deploy is a total implicit purge — safe,
-but it throws away the whole cache on an unrelated one-line change. We
-already compute `hashContracts()`. Keying the cache epoch on the contracts
-hash instead busts precisely when the wire contract changed, which is the
-correct trigger. Worth confirming whether the Worker-version component can be
-opted out of before committing to this.
+**Keep Cloudflare's Worker-version cache epoch — do not swap in the contracts
+hash.** Cloudflare puts the Worker version in the cache key by default, so
+every deploy is a total implicit purge. It is tempting to narrow that to
+`hashContracts()`, which we already compute, on the theory that the cache
+should only bust when the contract changed. That is wrong, and the reason is
+worth writing down.
+
+The two hashes answer different questions. The Worker version identifies the
+deployed *code*; the contracts hash identifies the *wire contract*, and
+`hash-contracts.ts` deliberately excludes handler, `refine`, and guard
+**bodies** — it records only their presence. That exclusion is right for the
+job it was built for (the compiled module imports those functions and calls
+them live, so rewriting one must not make a build stale) and fatal for a
+cache epoch.
+
+A cached response is a function of handler code, guard code, backing data,
+and the request. The contracts hash covers the *type* of the response, not
+its *value*. Fix a bug in a handler — wrong field, corrected query, identical
+schema — and the contracts hash does not move, so every response cached from
+the buggy code keeps serving until TTL. That is the silent staleness this
+whole document exists to prevent.
+
+Worker version is a superset of what is needed: it over-invalidates, which is
+safe. The contracts hash is a subset: it under-invalidates, which is not.
+The cost of the blunt instrument is smaller than it looks, because tiered
+cache and request collapsing mean a cold key costs one origin fill across the
+whole network rather than a herd. And there is no cheaper *correct* epoch on
+offer — anything narrower would have to prove handler behaviour unchanged,
+which is not decidable in general.
+
+**The contracts hash does have a job here, just a different one.** When
+`cache` and `invalidates` land on the contract they must be added to
+`contractFields`. Otherwise we reproduce exactly the bug documented in that
+file's own comments about guards: a compiled module emitting the *old*
+`Cache-Tag` header against edited tag templates, with nothing to catch it.
+It is a build-staleness detector, not a cache epoch.
 
 **`createETag` composes underneath.** The edge cache handles the origin hop;
 ETag plus `If-None-Match` handles the last hop to the browser and turns a
@@ -298,8 +327,11 @@ the same split the runtime and compiled engines already live under.
    number, so it needs measuring on a real zone before we write a bound into
    the docs — and the delayed-second-purge default N should be derived from
    the measurement, not guessed.
-2. **Worker version in the cache key** — can it be opted out of in favour of a
-   contracts-hash epoch, or is it fixed?
+2. **Deploy-time hit-rate loss.** Settled in favour of keeping the Worker
+   version as the epoch (see above), so this is no longer a design question —
+   but it is worth measuring how much hit rate a deploy actually costs on a
+   real workload, since that number is what a future argument for something
+   narrower would have to beat.
 3. **`Vary` and authenticated reads.** `Authorization` bypasses the edge
    cache entirely, so per-user data is a browser-cache (`scope: 'private'`)
    or `ctx.props`-partitioned story. Probably out of scope for v1; say so
