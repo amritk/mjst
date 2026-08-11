@@ -6,6 +6,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 // escape, which left an anchor under a key like `a%2Fb` unresolvable.
 import { entersSchemaMap, escapePointerSegment, isDataPosition } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
+import { readKey } from './read-key'
 import { isSchemaObject } from './schema-guards'
 
 /**
@@ -47,7 +48,7 @@ export const buildDynamicRefMap = (rootSchema: JSONSchema): Record<string, strin
     }
 
     const record = node as Record<string, unknown>
-    const anchor = record['$dynamicAnchor']
+    const anchor = readKey(record, '$dynamicAnchor')
     if (typeof anchor === 'string' && !(`#${anchor}` in map)) {
       map[`#${anchor}`] = `#${pointer}`
     }

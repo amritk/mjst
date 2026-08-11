@@ -20,6 +20,16 @@ import { DATA_KEYWORDS, SCHEMA_MAPS } from './build-resource-registry'
  * dependency boundary that makes the copies necessary in the first place, and a
  * hand-written expected list would be a sixth copy to keep in step.
  */
+
+/**
+ * Copies that legitimately hold *more* than {@link DATA_KEYWORDS} — a walker
+ * that skips the data keywords plus some of its own. Every data keyword still
+ * has to be in there, which is the half that drifts.
+ */
+const SUPERSETS: ReadonlyArray<{ file: string; name: string }> = [
+  { file: '../../generate-examples/src/generators/schema-validation.ts', name: 'SKIP_RECURSE' },
+]
+
 const COPIES: ReadonlyArray<{ file: string; data: string; maps?: string }> = [
   {
     file: '../../resolve-refs/src/child-role.ts',
@@ -65,5 +75,12 @@ describe('keyword-set parity', () => {
         expect(readSet(source, copy.maps as string)).toEqual([...SCHEMA_MAPS].sort())
       })
     }
+  }
+
+  for (const superset of SUPERSETS) {
+    it(`${superset.file} contains every data keyword`, () => {
+      const members = readSet(readFileSync(join(here, superset.file), 'utf8'), superset.name)
+      expect(members).toEqual(expect.arrayContaining([...DATA_KEYWORDS]))
+    })
   }
 })

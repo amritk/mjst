@@ -34,6 +34,17 @@ answered true for a schema that has none and the generators emitted types,
 parsers and imports for a definition nobody declared. Fixing it in the guards
 fixes it for every consumer at once.
 
+**Reference and anchor reads are own-property reads.** The guards were fixed
+but the keyword reads inside the walkers were not, so an inherited `$ref`,
+`$anchor`, `$dynamicRef` or `$dynamicAnchor` still read as declared: with
+`Object.prototype.$dynamicRef` set, `resolveDynamicRefs` threw "Unresolvable
+$dynamicRef" on a document containing none; with `Object.prototype.$anchor`,
+`buildAnchorMap` registered a phantom anchor at the root and `$ref: '#ghost'`
+resolved to the root schema instead of failing; with `Object.prototype.$ref`,
+`assertIdScopes` failed the build on a valid document. `validateRecord` — which
+is copied into generated output and runs on untrusted input — swept with
+`for…in`, so a parsed record came back carrying properties the input never had.
+
 **Lookups no longer resolve against `Object.prototype`.** `resolveRef` returned
 `Object.prototype` for `__proto__` as though the document had declared it (and
 `walkRefGraph` emitted a file for it); `$dynamicRef: "toString"` resolved to a

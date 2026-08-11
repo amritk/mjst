@@ -8,6 +8,7 @@ import { extractRefs } from './extract-refs'
 import { graftExternalSchemas } from './graft-external-schemas'
 import { normalizeRefScopes } from './normalize-ref-scopes'
 import { pruneExternalSchemas } from './prune-external-schemas'
+import { readKey } from './read-key'
 import { refToFilename } from './ref-to-filename'
 import { refToName } from './ref-to-name'
 import { resolveDynamicRefs } from './resolve-dynamic-refs'
@@ -162,8 +163,9 @@ const SHAPE_KEYWORDS = [
 const getAliasRootRef = (schema: JSONSchema): string | null => {
   if (typeof schema !== 'object' || schema === null) return null
   const record = schema as Record<string, unknown>
-  if (typeof record['$ref'] !== 'string') return null
-  return SHAPE_KEYWORDS.some((key) => key in record) ? null : record['$ref']
+  const ref = readKey(record, '$ref')
+  if (typeof ref !== 'string') return null
+  return SHAPE_KEYWORDS.some((key) => Object.hasOwn(record, key)) ? null : ref
 }
 
 /** The keys whose value is a map of named definitions — the things a `$ref` can name. */
@@ -280,8 +282,9 @@ const referencesRoot = (value: unknown): boolean => {
   if (typeof value !== 'object' || value === null) return false
   if (Array.isArray(value)) return value.some(referencesRoot)
   const record = value as Record<string, unknown>
-  if (record['$ref'] === ROOT_POINTER || record['$ref'] === '#/') return true
-  for (const key in record) if (referencesRoot(record[key])) return true
+  const ref = readKey(record, '$ref')
+  if (ref === ROOT_POINTER || ref === '#/') return true
+  for (const key of Object.keys(record)) if (referencesRoot(record[key])) return true
   return false
 }
 
@@ -396,9 +399,9 @@ const dynamicPointerRefs = (value: unknown, into: Set<string> = new Set()): Set<
     return into
   }
   const record = value as Record<string, unknown>
-  const ref = record['$dynamicRef']
+  const ref = readKey(record, '$dynamicRef')
   if (typeof ref === 'string' && ref.startsWith('#/')) into.add(ref)
-  for (const key in record) dynamicPointerRefs(record[key], into)
+  for (const key of Object.keys(record)) dynamicPointerRefs(record[key], into)
   return into
 }
 

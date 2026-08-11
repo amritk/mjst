@@ -1,6 +1,7 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { assertSchemaDepth } from './max-schema-depth'
+import { readKey } from './read-key'
 
 /**
  * Returns true if a $ref value should be queued for processing.
@@ -61,12 +62,12 @@ export const extractRefs = (schema: JSONSchema): Set<string> => {
 
     const record = obj as Record<string, unknown>
 
-    if ('$ref' in record && typeof record['$ref'] === 'string' && isResolvableRef(record['$ref'] as string)) {
+    if (typeof readKey(record, '$ref') === 'string' && isResolvableRef(record['$ref'] as string)) {
       refs.add(record['$ref'] as string)
     }
 
     // Recursively traverse all properties using for...in to avoid intermediate array allocation
-    for (const key in record) {
+    for (const key of Object.keys(record)) {
       traverse(record[key], depth + 1)
     }
   }

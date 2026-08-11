@@ -2,6 +2,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { buildResourceRegistry, entersSchemaMap, escapePointerSegment, isDataPosition } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
+import { readKey } from './read-key'
 import { resolveRef } from './resolve-ref'
 import { resolveScopedRef } from './resolve-scoped-ref'
 
@@ -9,7 +10,7 @@ import { resolveScopedRef } from './resolve-scoped-ref'
 const declaresLocalTargets = (record: Record<string, unknown>): boolean =>
   typeof record['$defs'] === 'object' ||
   typeof record['definitions'] === 'object' ||
-  typeof record['$anchor'] === 'string'
+  typeof readKey(record, '$anchor') === 'string'
 
 /**
  * Fails a document whose `$id` scoping this package cannot honour.

@@ -52,7 +52,7 @@ export const resolveDynamicRefs = (schema: JSONSchema, dynamicRefMap: Record<str
 
     const record = obj as Record<string, unknown>
 
-    const dynamicRef = record['$dynamicRef']
+    const dynamicRef = readKey(record, '$dynamicRef')
     if (typeof dynamicRef === 'string') {
       // `readKey`, not a bare index: the map is keyed by author-chosen anchor
       // names, so `$dynamicRef: "toString"` otherwise resolved to a `Function`
@@ -68,7 +68,7 @@ export const resolveDynamicRefs = (schema: JSONSchema, dynamicRefMap: Record<str
       delete record['$dynamicRef']
     }
 
-    for (const key in record) {
+    for (const key of Object.keys(record)) {
       walk(record[key], depth + 1)
     }
   }
@@ -86,7 +86,7 @@ const containsDynamicRef = (value: unknown, depth: number): boolean => {
     return false
   }
   const record = value as Record<string, unknown>
-  if (typeof record['$dynamicRef'] === 'string') return true
-  for (const key in record) if (containsDynamicRef(record[key], depth + 1)) return true
+  if (typeof readKey(record, '$dynamicRef') === 'string') return true
+  for (const key of Object.keys(record)) if (containsDynamicRef(record[key], depth + 1)) return true
   return false
 }

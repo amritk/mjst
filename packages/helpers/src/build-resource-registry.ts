@@ -1,4 +1,5 @@
 import { assertSchemaDepth } from './max-schema-depth'
+import { readKey } from './read-key'
 
 /**
  * The `$id` base-URI machinery JSON Schema 2020-12 defines, read off a document
@@ -222,10 +223,10 @@ export const buildResourceRegistry = (root: unknown): ResourceRegistry | null =>
       if (!resources.has(base)) resources.set(base, pointer)
     }
 
-    const anchor = record['$anchor']
+    const anchor = readKey(record, '$anchor')
     if (typeof anchor === 'string' && !anchors.has(`${base}#${anchor}`)) anchors.set(`${base}#${anchor}`, pointer)
 
-    const dynamicAnchor = record['$dynamicAnchor']
+    const dynamicAnchor = readKey(record, '$dynamicAnchor')
     if (typeof dynamicAnchor === 'string') {
       const key = `${base}#${dynamicAnchor}`
       if (!dynamicAnchors.has(key)) dynamicAnchors.set(key, pointer)

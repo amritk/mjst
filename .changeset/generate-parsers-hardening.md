@@ -5,18 +5,22 @@
 Import the types a tuple position references, and compare tuple items
 structurally.
 
-`collectImports` never traversed `prefixItems` — nor draft-07's array-valued
-`items`, nor a nested `if` — but the type emitter renders a `$ref` there as the
-referenced type name. So a schema with `prefixItems: [{ $ref: '#/$defs/Contact' }]`
-produced a file whose type reads `[Contact?, …]` with no import for `Contact`:
-output that does not compile (TS2304), which is the one failure mode a
-generator must not have. Tuple positions are walked at the root and below it
-now, in both spellings.
+`collectImports` never traversed `prefixItems` — nor a nested `if` — but the
+type emitter renders a `$ref` there as the referenced type name. So a schema
+with `prefixItems: [{ $ref: '#/$defs/Contact' }]` produced a file whose type
+reads `[Contact?, …]` with no import for `Contact`: output that does not
+compile (TS2304), which is the one failure mode a generator must not have.
+Tuple positions are walked at the root and below it now.
 
-Those refs are imported as *types*. The parser emitter passes a tuple element
-through untouched, so the full value import left `parseContact` and
+A tuple-position ref is imported as a *type*. The parser emitter passes a tuple
+element through untouched, so a value import leaves `parseContact` and
 `validateContactShape` unused — a `noUnusedLocals` error in the consumer's
-build. A ref reached from anywhere else keeps its value import.
+build. **This changes the import shape for draft-07 array-valued `items`
+tuples**, which previously fell through the generic `items` branch and did get
+a value import: `import { type Contact, parseContact, validateContactShape }`
+becomes `import type { Contact }`. Nothing generated calls those two bindings
+for a tuple position, so the emitted parsers are unchanged. A ref reached from
+anywhere other than a tuple position keeps its value import.
 
 `generateValidationExpression` checked `uniqueItems` with a bare `new Set(...)`,
 which compares by reference, so `[{a:1},{a:1}]` passed as unique on that path

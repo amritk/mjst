@@ -31,7 +31,21 @@ const FILTER_KEYWORDS = new Set([
  * `$defs`/`definitions` hold *unapplied* definitions — a hard keyword there only
  * matters once referenced, and each referenced def gets its own generated file.
  */
-const SKIP_RECURSE = new Set(['enum', 'const', 'examples', 'default', '$ref', 'required', '$defs', 'definitions'])
+const SKIP_RECURSE = new Set([
+  // The data keywords, matching `@amritk/helpers`' `DATA_KEYWORDS` —
+  // `example` is OpenAPI 3.0's singular spelling and belongs with `examples`.
+  'enum',
+  'const',
+  'examples',
+  'example',
+  'default',
+  // Plus this walker's own additions, which are not data but are equally not
+  // applied here.
+  '$ref',
+  'required',
+  '$defs',
+  'definitions',
+])
 
 /**
  * Memoized per schema object. The answer is a property of the (immutable) schema

@@ -104,7 +104,7 @@ const getConditionalObjectSchema = (schema: JSONSchema): ConditionalObjectResult
   }
 
   if (hasIfProperties) {
-    for (const key in ifProperties) {
+    for (const key of Object.keys(ifProperties)) {
       required.add(key)
     }
   }
@@ -116,7 +116,7 @@ const getConditionalObjectSchema = (schema: JSONSchema): ConditionalObjectResult
   }
 
   if (hasThenProperties) {
-    for (const key in thenProperties) {
+    for (const key of Object.keys(thenProperties)) {
       required.add(key)
     }
   }
@@ -435,7 +435,7 @@ const objectTypeToTs = (schema: SchemaNode, options: TypeOptions): string => {
     // declaration indented and `;`-terminated (with its JSDoc block already
     // carrying its own indent), the compact one wants bare declarations.
     const entries: string[] = []
-    for (const key in schema.properties) {
+    for (const key of Object.keys(schema.properties)) {
       // schema.properties[key] is safe: key comes from iterating schema.properties
       const propSchema = schema.properties[key] as JSONSchema
       const isRequired = requiredSet.has(key)
@@ -749,7 +749,7 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
       isFirstProp = false
       properties += line
     }
-    for (const key in schemaProps) {
+    for (const key of Object.keys(schemaProps)) {
       // schemaProps[key] is safe: key comes from iterating schemaProps
       const propSchema = schemaProps[key]!
       const isRequired = requiredSet.has(key)
