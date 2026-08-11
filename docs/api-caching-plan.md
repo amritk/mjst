@@ -197,7 +197,7 @@ route may be cached at all, and for whom.
 const getPost = defineRoute({
   method: 'get',
   path: '/posts/{id}',
-  cache: { scope: 'public', maxAge: 300, freshness: 'purge' },
+  cache: { scope: 'public', maxAge: 300, freshness: 'tagged' },
   responses: { 200: { body: PostSchema }, 404: {} },
   handler: /* … */,
 })
@@ -521,12 +521,118 @@ in an origin-side cache instead. Whether it is worth building is a question
 about the actual route table, and should be answered by counting genuinely
 public routes before any of this ships.
 
+### The cachalot model, and the one part that does not port
+
+Cachalot is the closest working precedent, so it is worth stating precisely
+what it does:
+
+1. Every SELECT is cached under a key derived from the SQL text and params.
+2. The compiler already knows **which tables** the query touches, so the entry
+   records that set.
+3. A **per-table invalidation timestamp** lives in the same cache.
+4. A write to a table sets that table's timestamp to now. **Nothing is
+   deleted.**
+5. A read fetches the entry *and* its tables' timestamps in one `get_many`,
+   and treats the entry as a miss if any table was invalidated after it was
+   stored.
+
+The elegance is in step 4: invalidation is a single tiny write, regardless of
+how many cached entries it affects. No purge, no fan-out, no rate limit. That
+is precisely the property we want given Cloudflare's five-purges-per-minute
+floor.
+
+**Step 5 is the part that does not port.** Cachalot validates freshness *at
+read time*, which requires running code on every read. A CDN hit does not run
+your code — that is the entire point of it, and Cloudflare bills accordingly
+("CPU time is only billed when your Worker runs"). There is no hook in which
+to compare timestamps.
+
+So the version has to move from the *validation* into the **cache key**. Same
+guarantee, achieved by making stale entries unreachable rather than
+detectably-stale.
+
+#### Getting the version into the key
+
+The key is `entrypoint + path + query + Worker version + ctx.props`, computed
+from the incoming request. Something must put the version there *before* the
+lookup:
+
+| approach | how | cost |
+|:--|:--|:--|
+| **Two entrypoints** | An outer, uncached entrypoint reads the version map and re-dispatches to an inner, cached entrypoint via `ctx.exports`, overriding `cf.cacheKey` | The Worker runs on every request. You still skip the handler and all data access — just not the invocation. |
+| **Client carries it** | `createClient` fetches a small version manifest on a short TTL and appends the stamps to request URLs | Edge hits cost zero CPU. Staleness bound becomes the manifest TTL, and only browser clients benefit. |
+| **Neither** | Use tagged mode | — |
+
+This is the real price of strict freshness on a CDN, and it was under-stated
+in an earlier draft: **you buy it with a Worker invocation per request**, or
+by pushing the version into the client. It is not free, and which of the two
+is right depends on whether the caller is your own typed client.
+
+#### Granularity is the lever
+
+Cachalot is per-*table*, not per-row, and that is not a limitation — it is
+what makes the model work. The version map has to be fetched **wholesale** on
+the read path, so it must stay small. Twenty tables is twenty timestamps.
+Per-row versions are unbounded and cannot be fetched wholesale at all.
+
+That gives the two mechanisms opposite sweet spots, which is why this design
+keeps both rather than picking one:
+
+- **Versions are coarse and cheap.** Type-granular, tiny map, one read,
+  aggressively memoizable, no rate limit, never stale. Over-invalidates: one
+  post write busts every cached response derived from posts.
+- **Tags are fine and expensive.** Entity-granular, exact, but purge-based —
+  rate-limited and eventually consistent.
+
+Read-heavy, low-write routes (catalogues, published content, reference data)
+want versions. Write-heavy routes want tags. That is a per-route decision with
+real guidance behind it, not a preference.
+
+#### The chicken-and-egg, and the one declaration that fixes it
+
+Cachalot reads the table set off the SQL *before* executing it. We cannot: the
+tracked store only learns which entity types a route touched by running the
+handler, and the version lookup has to happen before that.
+
+The fix is the one small declaration this design keeps:
+
+```typescript
+cache: { entities: ['post', 'author'], scope: 'public', maxAge: 300 }
+```
+
+Entity *types*, not instance tags — a handful of stable names per route rather
+than a template per ancestor. And it is verified rather than trusted: the
+tracked store knows every type the handler actually read, so a read outside
+the declared set is a loud error in development and a **refusal to cache** in
+production.
+
+That is worth noting explicitly, because it recovers something the move to
+observed tags gave up. The missing-tag failure — a response that depends on
+something it never recorded — becomes detectable again, and it fails closed:
+an undeclared read yields an uncached response, never a wrong one.
+
+#### The version store
+
+A single Durable Object holding the whole map, `{ post: 1723400000123,
+author: 1723399000000 }`. Reads return it entire, so a route needing three
+types still costs one round trip. Writes are a single field set, driven by the
+same tracked store that records mutations. Under write pressure the DO becomes
+a serialization point and shards by type, at the cost of one read per shard —
+which is the argument for keeping the declared entity set per route narrow.
+
+Two rules are non-negotiable. **Bump after commit**, or a reader can observe
+the new version alongside the old data and cache it under a key that will
+never be invalidated again. And **fail closed**: if the version store is
+unreachable, serve uncached rather than guessing a version — a guessed version
+is exactly a stale cache with a fresh-looking key.
+
 ### The freshness tiers
 
 **Tier 0 — uncached (default).** `no-store`. Never stale because never
 cached. Costs nothing, guarantees everything.
 
-**Tier 1 — `freshness: 'purge'`.** Tag on read, purge on write. Fast, cheap,
+**Tier 1 — `freshness: 'tagged'` (default).** Tag on read, purge on write.
+Fast, cheap,
 covers the overwhelming majority of real routes. Three things make it
 materially stronger than the usual implementation:
 
@@ -548,39 +654,46 @@ materially stronger than the usual implementation:
   is silently, permanently wrong. Failures go to `onError` with the tag list
   intact, and get retried.
 
-**Tier 2 — `freshness: 'strict'`.** Never stale by construction, School B.
-The framework prefixes the cached URL with a generation token
-(`/posts/123?__g=7`) — the query string is part of the key and order-sensitive,
-so this works with no custom-cache-key machinery. A write **bumps the
-generation atomically before returning**. The old key is unreachable the
-instant the bump commits: no propagation window (G1 gone) and an in-flight
-read writes its stale response to the *old* key, where nobody will ever look
-for it (G2 gone). Old entries age out by TTL as garbage.
+**Tier 2 — `freshness: 'versioned'`.** The cachalot model, described in full
+above. Type versions ride in the cache key, a write bumps the version, and the
+old key becomes unreachable the instant the bump commits — no propagation
+window (G1 gone), and an in-flight read writes its stale response under the
+*old* key where nobody will look for it again (G2 gone). Old entries age out
+by TTL as garbage. Invalidation is one small write no matter how many entries
+it affects, so the purge rate limit never applies.
 
-The generation counter lives in a **Durable Object** — the only strongly
-consistent primitive on the platform. KV cannot serve this role; up to 60
-seconds of eventual consistency is exactly the staleness we are trying to
-eliminate.
+The version map lives in a **Durable Object** — the only strongly consistent
+primitive on the platform. KV cannot serve this role; up to sixty seconds of
+eventual consistency is precisely the staleness being eliminated.
 
-**The honest cost, stated plainly:** strict mode puts a strongly consistent
-read on the request path, in front of the cache, where the cache tier cannot
-absorb it. Mitigations — one DO per tag *namespace* rather than per resource,
-batched generation reads, an isolate-memory memo — all help throughput, but
-the memo window *is* your staleness bound. `memoMs: 0` gives a true zero and
-pays a DO round trip per request; `memoMs: 1000` gives a one-second bound for
-nearly free. We should expose that number rather than hide it, because it is
-the actual guarantee.
+**The honest cost:** a strongly consistent read on the request path, in front
+of the cache where the cache tier cannot absorb it, plus a Worker invocation
+on every request unless the client carries the version. An isolate-memory memo
+trades the guarantee back for throughput, and the memo window *is* the
+staleness bound — `memoMs: 0` is a true zero at one DO round trip per request,
+`memoMs: 1000` is a one-second bound for nearly nothing. That number should be
+exposed rather than buried, because it is the actual guarantee.
 
 ### Tier summary
 
-| | Tier 0 | Tier 1 `purge` | Tier 2 `strict` |
+| | Tier 0 | Tier 1 `tagged` | Tier 2 `versioned` |
 |:--|:--|:--|:--|
 | Staleness bound | none (uncached) | purge propagation + N ms | `memoMs` (0 = never stale) |
 | G1 propagation lag | n/a | bounded, undocumented by CF | eliminated |
 | G2 stale set | n/a | bounded by delayed second purge | eliminated |
-| Request-path cost | none | none | one DO read (memoizable) |
-| Write-path cost | none | 1–2 purge calls | one DO write |
+| **Worker runs on a cache hit** | n/a | **no — zero CPU** | **yes**, unless the client carries the version |
+| Granularity | n/a | entity — precise | type — over-invalidates |
+| Declaration | none | none | `entities: [...]`, verified at runtime |
+| Request-path cost | none | none | one version read (memoizable) |
+| Write-path cost | none | 1–2 purge calls | one DO field write |
 | Rate-limit exposure | none | **yes — the real constraint** | none |
+| Best for | anything per-user | write-heavy, precise invalidation | read-heavy, low-write |
+
+The default stays `tagged`: it preserves zero-CPU cache hits, needs no
+declaration, and its staleness bound is small and measurable. `versioned` is
+for the routes where a bounded window is genuinely unacceptable — pricing,
+entitlements, inventory — and it is worth the invocation there precisely
+because those routes are usually read-heavy and rarely written.
 
 ### Purge batching
 
