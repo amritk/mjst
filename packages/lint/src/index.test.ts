@@ -233,6 +233,19 @@ describe('fixDocument', () => {
     expect(result.remaining).toHaveLength(0)
   })
 
+  it('reports `fixed` against the document, which is what it documents', async () => {
+    // `fixed` was derived from the applied-fix list, a different question: a
+    // multi-op fix whose ops are partly deferred rewrites the text without
+    // being counted as applied, and read back as `fixed: false` on an output
+    // that had in fact changed.
+    const changed = await fixDocument('host: api.example.com/\n', { ruleset, fixers, source: 'doc.yaml' })
+    expect(changed.fixed).toBe(changed.output !== 'host: api.example.com/\n')
+
+    const untouched = await fixDocument('host: api.example.com\n', { ruleset, fixers, source: 'doc.yaml' })
+    expect(untouched.fixed).toBe(false)
+    expect(untouched.output).toBe('host: api.example.com\n')
+  })
+
   it('is a no-op with the default (empty) fixer registry', async () => {
     const input = 'host: api.example.com/\n'
     const result = await fixDocument(input, { ruleset, source: 'doc.yaml' })

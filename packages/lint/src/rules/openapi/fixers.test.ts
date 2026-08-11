@@ -193,4 +193,25 @@ describe('fixers', () => {
     }
     expect(oasFixers['oas3_1-schema-example-deprecated']).toBeDefined()
   })
+
+  it('sorts tags by the same comparator the rule judges them with', async () => {
+    // The rule compares integer-like strings numerically, so ["10", "2"] is out
+    // of order. A fixer with its own `localeCompare` comparator saw them as
+    // already sorted, produced no edit, and left the finding standing forever.
+    const doc = {
+      openapi: '3.0.0',
+      info: { title: 'T', version: '1.0.0', contact: { name: 'x' }, description: 'd' },
+      servers: [{ url: 'https://api.example.test' }],
+      tags: [
+        { name: '10', description: 'a' },
+        { name: '2', description: 'b' },
+      ],
+      paths: {},
+    }
+    const fixed = JSON.parse(await runFix(doc)) as { tags: { name: string }[] }
+    expect(fixed.tags.map((tag) => tag.name)).toEqual(['2', '10'])
+
+    const remaining = await lintWithResult(JSON.stringify(fixed, null, 2), { ruleset: built })
+    expect(remaining.diagnostics.filter((d) => d.code === 'openapi-tags-alphabetical')).toEqual([])
+  })
 })

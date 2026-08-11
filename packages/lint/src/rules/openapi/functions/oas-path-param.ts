@@ -31,7 +31,10 @@ const recordPathParam = (
       path: definitionPath,
     })
   }
-  if (name in seen) {
+  // `Object.hasOwn`, not `in`: parameter names come from the document, so a
+  // path parameter legitimately named `constructor` matched `Object.prototype`
+  // and was reported as a duplicate of itself.
+  if (Object.hasOwn(seen, name)) {
     results.push({ message: `Path parameter "${name}" must not be defined multiple times`, path: definitionPath })
     return undefined
   }

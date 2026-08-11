@@ -174,4 +174,23 @@ describe('apply', () => {
     })
     expect(result).toBeUndefined()
   })
+
+  it('ignores a rule code that names a prototype member of the fixer registry', () => {
+    // Rule codes come from the ruleset, so a rule named `toString` used to
+    // resolve to `Function.prototype.toString` — truthy, with no `.fix` — and
+    // the call threw out of `applyFixes`, abandoning every other fix queued
+    // behind it.
+    const text = JSON.stringify({ a: 1 })
+    const document = createDocument(text, 'json')
+    const diagnostic: IDiagnostic = {
+      code: 'toString',
+      path: ['a'],
+      message: 'm',
+      severity: DiagnosticSeverity.Error,
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+    }
+    const result = applyFixes(text, document.data, 'json', [diagnostic], {})
+    expect(result.applied).toEqual([])
+    expect(result.output).toBe(text)
+  })
 })

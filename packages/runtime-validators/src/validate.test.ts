@@ -1278,4 +1278,58 @@ describe('validate', () => {
       expect(validator(1)).not.toBe(true)
     })
   })
+
+  describe('keys the instance does not own', () => {
+    // Schemas and values both arrive at runtime, so neither the prototype chain
+    // nor a polluted `Object.prototype` can be assumed away.
+    const withInherited = (): Record<string, unknown> => {
+      const value = Object.create({ inherited: 'not mine' }) as Record<string, unknown>
+      value['own'] = 1
+      return value
+    }
+
+    it('does not validate an inherited key as additionalProperties', () => {
+      const validator = validate({ type: 'object', additionalProperties: { type: 'number' } })
+      expect(validator(withInherited())).toBe(true)
+    })
+
+    it('does not reject an inherited key under additionalProperties: false', () => {
+      // The shape a polluted `Object.prototype` gives every object in the
+      // process — this rejected valid input everywhere at once.
+      const validator = validate({ type: 'object', properties: { own: {} }, additionalProperties: false })
+      expect(validator(withInherited())).toBe(true)
+    })
+
+    it('does not run propertyNames over an inherited key', () => {
+      const validator = validate({ type: 'object', propertyNames: { pattern: '^own$' } })
+      expect(validator(withInherited())).toBe(true)
+    })
+
+    it('does not run unevaluatedProperties over an inherited key', () => {
+      const validator = validate({
+        type: 'object',
+        properties: { own: { type: 'number' } },
+        unevaluatedProperties: false,
+      })
+      expect(validator(withInherited())).toBe(true)
+    })
+
+    it('agrees with minProperties about how many properties there are', () => {
+      // The count says one; every sweep above has to see the same one.
+      expect(validate({ type: 'object', maxProperties: 1 })(withInherited())).toBe(true)
+    })
+  })
+
+  describe('a format naming a prototype member', () => {
+    // The spec says an unrecognized format is ignored. Reading it straight off
+    // the checks table found `Function.prototype.toString` instead — truthy,
+    // and with no `.test`, so the validator threw on a schema it should have
+    // accepted.
+    for (const format of ['toString', 'constructor', 'valueOf', 'hasOwnProperty']) {
+      it(`ignores format "${format}" rather than throwing`, () => {
+        const validator = validate({ type: 'string', format }, { formats: 'all' })
+        expect(validator('anything')).toBe(true)
+      })
+    }
+  })
 })

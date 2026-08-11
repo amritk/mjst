@@ -827,7 +827,11 @@ const interpretObject = (
   const patternEntries = meta.patternEntries
   const needsLoop = patternEntries !== null || (hasAdditional && additional !== true)
   if (needsLoop) {
-    for (const k in obj) {
+    // Own keys only, for the reason `minProperties` spells out below: a bare
+    // `for…in` walks the prototype chain, so an inherited key was validated as
+    // though the instance carried it — and a polluted `Object.prototype` made
+    // `additionalProperties: false` reject every object in the process.
+    for (const k of Object.keys(obj)) {
       // `patternProperties` applies to every matching key independently of
       // `properties` — a key declared in both must satisfy both — so it runs even
       // when `k` is also a known property. Only `additionalProperties` is the
@@ -888,7 +892,8 @@ const interpretObject = (
     // in boolean mode, and these probes cannot nest — the key is a string, so the
     // inner walk never reaches another `propertyNames` at this instance location.
     let probe: InterpreterContext | null = null
-    for (const k in obj) {
+    // Own keys only — same reason as the sweep above and `minProperties` below.
+    for (const k of Object.keys(obj)) {
       if (probe === null) probe = newBranchContext(ctx)
       else probe.failed = false
       interpret(probe, nameSchema, k, '', null, depth + 1, scope)
@@ -1064,7 +1069,11 @@ const interpretString = (ctx: InterpreterContext, s: Record<string, unknown>, va
       if (format === 'regex') {
         if (!isValidRegex(value)) fail(ctx, `must match format "${format}"`, path)
       } else {
-        const re = FORMAT_CHECKS[format]
+        // `Object.hasOwn`, not a bare index: the schema is runtime input, and
+        // `format: "toString"` otherwise read `Function.prototype.toString` off
+        // the prototype chain — truthy, with no `.test` — so an unknown format
+        // that the spec says to ignore crashed the validator instead.
+        const re = Object.hasOwn(FORMAT_CHECKS, format) ? FORMAT_CHECKS[format] : undefined
         if (re && !re.test(value)) fail(ctx, `must match format "${format}"`, path)
       }
     }
@@ -1465,7 +1474,8 @@ const interpretUnevaluated = (
     const up = s['unevaluatedProperties']
     if (!evalScope.allProps) {
       const obj = value as Record<string, unknown>
-      for (const k in obj) {
+      // Own keys only, matching every other property sweep in this file.
+      for (const k of Object.keys(obj)) {
         if (evalScope.props.has(k)) continue
         if (up === false) {
           fail(ctx, 'must NOT have unevaluated properties', childPath(ctx, path, k))

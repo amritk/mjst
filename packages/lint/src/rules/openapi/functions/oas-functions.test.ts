@@ -670,4 +670,22 @@ describe('oas-functions', () => {
     }
     expect(await has(propertyNamed, 'oas3_1-no-nullable')).toBe(false)
   })
+
+  it('does not read a path parameter named after a prototype member as a duplicate', async () => {
+    // Parameter names come from the document, so `constructor` is a legal one —
+    // and testing membership with `in` matched `Object.prototype`, reporting a
+    // single definition as a duplicate of itself.
+    const doc = {
+      ...base3(),
+      paths: {
+        '/a/{constructor}': {
+          get: {
+            parameters: [{ name: 'constructor', in: 'path', required: true, schema: { type: 'string' } }],
+            responses: { '200': { description: 'ok' } },
+          },
+        },
+      },
+    }
+    expect(await has(doc, 'path-params')).toBe(false)
+  })
 })

@@ -478,5 +478,10 @@ export const fixDocument = async (input: string, options: IFixOptions = {}): Pro
   }
 
   const remaining = (await runLint(current, ruleset, lintOptions)).diagnostics
-  return { output: current, fixed: applied.length > 0, remaining, applied, converged, passes }
+  // `fixed` is documented as "whether any fix changed the document", so it has
+  // to be measured on the document. `applied.length > 0` is a different
+  // question — a multi-op fix whose ops were partly deferred rewrites the text
+  // without being reported as applied, which read back as `fixed: false` on an
+  // output that had in fact changed.
+  return { output: current, fixed: current !== input, remaining, applied, converged, passes }
 }
