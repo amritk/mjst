@@ -573,6 +573,12 @@ const rebaseKeptRef = (value: string, from: string, root: string): string => {
   if (from === root) return value
   const { filePart, fragment } = splitRef(value)
   if (filePart === '') return value
+  // A ref carrying a scheme is absolute: it names the same thing from any
+  // document, so there is nothing to rebase — and `joinLocation` would resolve
+  // a non-http one like `urn:example:common` as a relative path, producing the
+  // nonsense `./sub/urn:example:common`. Two-plus characters before the colon,
+  // so a Windows drive letter is not mistaken for a scheme.
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]+:/.test(filePart)) return value
   const target = joinLocation(from, filePart)
   const suffix = value.includes('#') ? `#${fragment}` : ''
   // A remote target is absolute already, and so is the only sane form when the
@@ -1025,7 +1031,15 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         // every constraint gone — and to `null` inside an array, so an
         // `allOf: [{ $ref: <refused> }]` became `allOf: [null]`, not a schema at
         // all. That is the same trade the budget case above already rejected.
-        if (found === undefined) {
+        // A document that never loaded sits in `docCache` as a `{}` placeholder
+        // (or is absent, when a budget stopped the prefetch reaching it), so a
+        // *fragment-less* `$ref` into it does resolve — to an empty schema,
+        // which accepts anything. For a host the SSRF guard refused, that
+        // silently replaces a constraint with a hole, which is a worse answer
+        // than the `undefined` this branch was written to stop inlining. The
+        // node is kept for the same reason, whether or not it had a fragment.
+        const targetLoaded = docCache.has(targetLocation) && !unloadable.has(targetLocation)
+        if (found === undefined || !targetLoaded) {
           // Reported only when the target document is present and loaded fine.
           // One the prefetch never reached — because a `maxDocuments` /
           // `totalTimeoutMs` budget ran out — is absent from `docCache` and has

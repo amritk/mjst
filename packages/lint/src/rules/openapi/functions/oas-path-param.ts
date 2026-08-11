@@ -107,7 +107,10 @@ export const oasPathParam: RulesetFunction = (paths, _options, context) => {
       }
       // (a) Every `{template}` must have a matching definition on the operation.
       for (const name of templates) {
-        if (!(name in defined)) {
+        // `Object.hasOwn`, as at the duplicate check above: `in` walks the
+        // prototype chain, so a `{constructor}` or `{toString}` template read
+        // as already defined and its missing parameter went unreported.
+        if (!Object.hasOwn(defined, name)) {
           results.push({
             message: `Operation must define path parameter "{${name}}" as expected by path "${path}"`,
             path: operationPath,

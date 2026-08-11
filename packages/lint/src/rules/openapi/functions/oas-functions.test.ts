@@ -688,4 +688,18 @@ describe('oas-functions', () => {
     }
     expect(await has(doc, 'path-params')).toBe(false)
   })
+
+  it('reports a path template named after a prototype member as undefined', async () => {
+    // `!(name in defined)` walks the prototype chain, so `{constructor}` read
+    // as already defined and its missing parameter was never reported.
+    const doc = {
+      ...base3(),
+      paths: {
+        '/a/{constructor}': {
+          get: { parameters: [], responses: { '200': { description: 'ok' } } },
+        },
+      },
+    }
+    expect(await has(doc, 'path-params')).toBe(true)
+  })
 })

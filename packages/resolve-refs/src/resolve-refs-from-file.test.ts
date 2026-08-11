@@ -517,8 +517,11 @@ describe('resolve-refs-from-file', () => {
 
     const { resolved, errors } = await resolveRefsFromFile(join(sub, 'spec.json'))
 
-    // The refused document degrades to {}, so the secret never reaches the output.
-    expect(resolved).toEqual({ leak: {} })
+    // The secret never reaches the output. The node keeps its `$ref` rather
+    // than degrading to `{}` — an empty schema accepts anything, so inlining
+    // one turns a refused constraint into a hole that validates everything.
+    expect(resolved).toEqual({ leak: { $ref: '../secret.json' } })
+    expect(JSON.stringify(resolved)).not.toContain('SUPER-SECRET-VALUE')
     expect(errors[0]?.message).toMatch(/Refusing to read local \$ref/)
     // The error names the escape hatch so the fix is obvious from the message.
     expect(errors[0]?.message).toMatch(/allowedRoots/)
@@ -576,7 +579,8 @@ describe('resolve-refs-from-file', () => {
 
     const { resolved, errors } = await resolveRefsFromFile(join(sub, 'spec.json'))
 
-    expect(resolved).toEqual({ leak: {} })
+    expect(resolved).toEqual({ leak: { $ref: './link.json' } })
+    expect(JSON.stringify(resolved)).not.toContain('SUPER-SECRET-VALUE')
     expect(errors[0]?.message).toMatch(/Refusing to read local \$ref/)
   })
 
@@ -1055,5 +1059,44 @@ describe('resolve-refs-from-file', () => {
     // Copied, not aliased — the session cache must stay unreachable from the
     // caller's result, which is why value positions are detached at all.
     expect(value).not.toBe(stamp)
+  })
+
+  it('keeps a fragment-less ref into a document that never loaded', async () => {
+    // A document that was refused sits in the cache as a `{}` placeholder, so a
+    // ref with no fragment *does* resolve — to an empty schema, which accepts
+    // anything. That turns a refused constraint into a hole rather than an
+    // error, which is worse than the `undefined` the fragment case stopped
+    // inlining.
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ type: 'object', allOf: [{ $ref: '../outside.json' }] }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'))
+
+    expect(resolved).toEqual({ type: 'object', allOf: [{ $ref: '../outside.json' }] })
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.message).toMatch(/Refusing to read local \$ref/)
+  })
+
+  it('keeps a fragment-less ref to a host the SSRF guard refused', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ x: { $ref: 'http://169.254.169.254/meta' } }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'))
+
+    expect(resolved).toEqual({ x: { $ref: 'http://169.254.169.254/meta' } })
+    expect(errors[0]?.message).toMatch(/Refusing to resolve remote \$ref/)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('leaves a kept ref with a non-http scheme alone instead of rebasing it', async () => {
+    // `urn:example:common` names the same thing from any document, so there is
+    // nothing to rebase — and treating it as a relative path produced the
+    // nonsense `./sub/urn:example:common`.
+    mkdirSync(join(dir, 'sub'))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: './sub/b.json' } }))
+    writeFileSync(join(dir, 'sub', 'b.json'), JSON.stringify({ x: { $ref: 'urn:example:common#/$defs/Q' } }))
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'))
+
+    expect(resolved).toEqual({ a: { x: { $ref: 'urn:example:common#/$defs/Q' } } })
   })
 })
