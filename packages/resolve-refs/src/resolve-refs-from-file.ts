@@ -933,6 +933,42 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
    * sits in the vocabulary (see `child-role.ts`), which decides whether a `$ref`
    * key here is a reference at all.
    */
+  /**
+   * Builds a node that keeps its reference: the keyword is preserved and every
+   * sibling resolves as usual.
+   *
+   * Two branches need this — a `$dynamicRef` that binds at evaluation time, and
+   * a scope-sensitive target that inlining would re-base — and they were
+   * written out separately, so the rebase added to one of them was missing from
+   * the other for a round. A kept relative `$ref` has to be re-expressed
+   * against the root document exactly as `keepUnresolved` does it, or
+   * `./c.json` kept out of `sub/b.json` comes to name the root's own c.json.
+   * `$ref` only: an anchor-form `$dynamicRef` carries a name, not a location.
+   */
+  const keepScopedReference = (
+    obj: Record<string, unknown>,
+    keyword: string,
+    baseLocation: string,
+    nodeBase: string,
+    depth: number,
+    role: NodeRole,
+  ): Record<string, unknown> => {
+    const kept: Record<string, unknown> = {}
+    for (const key of Object.keys(obj)) {
+      const value = obj[key]
+      assignKey(
+        kept,
+        key,
+        key !== keyword
+          ? resolveAt(value, baseLocation, nodeBase, depth + 1, childRole(role, key))
+          : keyword === '$ref' && typeof value === 'string'
+            ? rebaseKeptRef(value, baseLocation, rootLocation)
+            : value,
+      )
+    }
+    return kept
+  }
+
   const resolveAt = (node: unknown, baseLocation: string, base: string, depth: number, role: NodeRole): unknown => {
     if (node === null || typeof node !== 'object') return node
     // Instance data (`enum`, `const`, `default`, `examples`): a `$ref` key in
@@ -977,23 +1013,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       // evaluated — so the keyword is kept for the validator to answer, with its
       // siblings resolved around it.
       if (bindsAtEvaluationTime(keyword, value, ambiguousDynamicAnchors)) {
-        const kept: Record<string, unknown> = {}
-        for (const key of Object.keys(obj)) {
-          assignKey(
-            kept,
-            key,
-            key === keyword
-              ? // The third site that keeps a reference, and it has to rebase
-                // like the other two: a relative `./c.json` kept out of a
-                // sub-document names the *root's* c.json once it sits in the
-                // root output. `$ref` only — an anchor-form `$dynamicRef`
-                // carries a name, not a location.
-                keyword === '$ref' && typeof obj[key] === 'string'
-                ? rebaseKeptRef(obj[key] as string, baseLocation, rootLocation)
-                : obj[key]
-              : resolveAt(obj[key], baseLocation, nodeBase, depth + 1, childRole(role, key)),
-          )
-        }
+        const kept = keepScopedReference(obj, keyword, baseLocation, nodeBase, depth, role)
         sensitive.add(kept)
         return kept
       }
@@ -1179,14 +1199,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       // under a different base the reference is kept instead — same rule as the
       // in-memory resolver (see `dynamic-scope.ts`).
       if (isScopeSensitive(sensitive, resolved) && !inliningKeepsScope(resolved, nodeBase, targetBase)) {
-        const kept: Record<string, unknown> = {}
-        for (const key of Object.keys(obj)) {
-          assignKey(
-            kept,
-            key,
-            key === keyword ? obj[key] : resolveAt(obj[key], baseLocation, nodeBase, depth + 1, childRole(role, key)),
-          )
-        }
+        const kept = keepScopedReference(obj, keyword, baseLocation, nodeBase, depth, role)
         sensitive.add(kept)
         return kept
       }
