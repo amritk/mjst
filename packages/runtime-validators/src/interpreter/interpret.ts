@@ -808,10 +808,12 @@ const interpretObject = (
     // `for…in` walks the prototype chain, so an inherited key was validated as
     // though the instance carried it — and a polluted `Object.prototype` made
     // `additionalProperties: false` reject every object in the process.
-    // Guarded rather than `Object.keys`, which would allocate a key array per
-    // object on the hottest loop in the interpreter.
-    for (const k in obj) {
-      if (!Object.hasOwn(obj, k)) continue
+    // `Object.keys`, not a guarded `for…in`: the benchmark recorded with
+    // `minProperties` below measures the three forms on a 20-key object at 92M
+    // ops/s for `Object.keys`, 19M for an unguarded `for…in` and 9.5M for a
+    // guarded one — the key array costs less than a `hasOwn` call per key on
+    // top of a prototype-chain enumeration.
+    for (const k of Object.keys(obj)) {
       // `patternProperties` applies to every matching key independently of
       // `properties` — a key declared in both must satisfy both — so it runs even
       // when `k` is also a known property. Only `additionalProperties` is the
@@ -843,7 +845,8 @@ const interpretObject = (
   }
 
   if (minProps !== undefined || maxProps !== undefined) {
-    // Own properties only, as the spec requires. A bare `for…in` also walks the
+    // Own properties only, as the spec requires — and the measurement the
+    // sweeps above cite. A bare `for…in` also walks the
     // prototype chain, so `Object.create({ inherited: 1 })` with one own key
     // counted as two and passed `minProperties: 2`. `Object.keys().length` looks
     // like the allocating option, but it measured the fastest of the three by a
@@ -872,9 +875,8 @@ const interpretObject = (
     // in boolean mode, and these probes cannot nest — the key is a string, so the
     // inner walk never reaches another `propertyNames` at this instance location.
     let probe: InterpreterContext | null = null
-    // Own keys only — same reason as the sweep above and `minProperties` below.
-    for (const k in obj) {
-      if (!Object.hasOwn(obj, k)) continue
+    // Own keys only — same reason, and the same form, as the sweep above.
+    for (const k of Object.keys(obj)) {
       if (probe === null) probe = newBranchContext(ctx)
       else probe.failed = false
       interpret(probe, nameSchema, k, '', null, depth + 1, scope)
@@ -1460,8 +1462,7 @@ const interpretUnevaluated = (
     if (!evalScope.allProps) {
       const obj = value as Record<string, unknown>
       // Own keys only, matching every other property sweep in this file.
-      for (const k in obj) {
-        if (!Object.hasOwn(obj, k)) continue
+      for (const k of Object.keys(obj)) {
         if (evalScope.props.has(k)) continue
         if (up === false) {
           fail(ctx, 'must NOT have unevaluated properties', childPath(ctx, path, k))

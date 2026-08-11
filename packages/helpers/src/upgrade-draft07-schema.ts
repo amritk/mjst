@@ -20,7 +20,7 @@
  */
 
 import { assignKey } from './assign-key'
-import { schemaChildren } from './build-resource-registry'
+import { entersSchemaMap, isDataPosition } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { refToFilename, toKebabCase } from './ref-to-filename'
 
@@ -208,20 +208,21 @@ const rewriteDefinitionsRefs = (obj: unknown, depth = 0, inSchemaMap = false): u
   const record = obj as Record<string, unknown>
   const result: Record<string, unknown> = {}
 
-  // Everything is copied through, then `schemaChildren` says which children are
+  // Everything is copied through, then the shared position rule says which children are
   // schemas to descend into. Testing the data keywords by key name alone would
   // skip a property genuinely *named* `example` or `default` — leaving its
   // `#/definitions/...` unrewritten while the block it names is renamed to
   // `$defs`, so the ref dangles and the generators stop the build.
   for (const [key, value] of Object.entries(record)) assignKey(result, key, value)
-  for (const child of schemaChildren(record, inSchemaMap)) {
-    const { key, value } = child
+  for (const key of Object.keys(record)) {
+    if (isDataPosition(key, inSchemaMap)) continue
+    const value = record[key]
     const rewritten =
       !inSchemaMap && key === '$ref' && typeof value === 'string' && value.startsWith('#/definitions/')
         ? value.replace('#/definitions/', '#/$defs/')
         : startsNewResource(value)
           ? value
-          : rewriteDefinitionsRefs(value, depth + 1, child.inSchemaMap)
+          : rewriteDefinitionsRefs(value, depth + 1, entersSchemaMap(key, inSchemaMap))
 
     assignKey(result, key, rewritten)
   }
@@ -250,15 +251,16 @@ const renameNestedDefs = (obj: unknown, depth = 0, inSchemaMap = false): unknown
   const record = obj as Record<string, unknown>
   const result: Record<string, unknown> = {}
 
-  // Copy first, then let `schemaChildren` say which children are schemas —
+  // Copy first, then rewrite only the children the shared position rule calls schemas —
   // the same guard `rewriteDefinitionsRefs` carries. Without it this rewrote
   // `$ref`s inside `default`/`enum`/`example` values (changing the literal the
   // author wrote) and renamed a *property* genuinely called `definitions` to
   // `$defs`, so the declared property vanished from the emitted type and a
   // property the schema never had appeared beside it.
   for (const [key, value] of Object.entries(record)) assignKey(result, key, value)
-  for (const child of schemaChildren(record, inSchemaMap)) {
-    const { key, value } = child
+  for (const key of Object.keys(record)) {
+    if (isDataPosition(key, inSchemaMap)) continue
+    const value = record[key]
     if (!inSchemaMap && key === '$ref' && typeof value === 'string' && value.startsWith('#/definitions/')) {
       assignKey(result, key, value.replace('#/definitions/', '#/$defs/'))
       continue
@@ -266,7 +268,7 @@ const renameNestedDefs = (obj: unknown, depth = 0, inSchemaMap = false): unknown
     // Only a `definitions` *keyword* is renamed; inside a name map it is a name.
     const outKey = !inSchemaMap && key === 'definitions' ? '$defs' : key
     if (outKey !== key) delete result[key]
-    assignKey(result, outKey, renameNestedDefs(value, depth + 1, child.inSchemaMap))
+    assignKey(result, outKey, renameNestedDefs(value, depth + 1, entersSchemaMap(key, inSchemaMap)))
   }
 
   return result

@@ -192,7 +192,9 @@ const collectImportTargets = (
     // name while the parser emitter passes the element through untouched, so
     // these are type-only positions (see `typeOnlyDepth`).
     for (const keyword of ['prefixItems', 'items'] as const) {
-      const positions = record[keyword]
+      // Own key only — a polluted `Object.prototype.prefixItems` would
+      // otherwise make every node look like a tuple.
+      const positions = Object.hasOwn(record, keyword) ? record[keyword] : undefined
       if (!Array.isArray(positions)) continue
       typeOnlyDepth++
       for (const item of positions) {
@@ -217,7 +219,10 @@ const collectImportTargets = (
     }
 
     // Traverse nested properties regardless of whether `type` is explicitly set.
-    if ('properties' in record && typeof record.properties === 'object' && record.properties !== null) {
+    // `Object.hasOwn`, not `in`: `in` walks the prototype chain, so a polluted
+    // `Object.prototype.properties` had every node read as if the document
+    // declared it — and the import that followed named a module never emitted.
+    if (Object.hasOwn(record, 'properties') && typeof record.properties === 'object' && record.properties !== null) {
       // `Object.values`, not `for…in`: these are author-chosen names, and a
       // bare `for…in` walks the prototype chain — so a polluted
       // `Object.prototype` had this collecting a ref for a definition the
@@ -257,7 +262,7 @@ const collectImportTargets = (
 
     // Traverse all patternProperties
     if (
-      'patternProperties' in record &&
+      Object.hasOwn(record, 'patternProperties') &&
       typeof record.patternProperties === 'object' &&
       record.patternProperties !== null
     ) {
@@ -298,19 +303,19 @@ const collectImportTargets = (
   }
 
   // Collect refs from properties
-  if (typeof schema === 'object' && schema !== null && 'properties' in schema) {
+  if (typeof schema === 'object' && schema !== null && Object.hasOwn(schema, 'properties')) {
     for (const value of Object.values(schema.properties as Record<string, unknown>)) {
       collectRefsFromValue(value)
     }
   }
 
   // Collect refs from root-level additionalProperties
-  if (typeof schema === 'object' && schema !== null && 'additionalProperties' in schema) {
+  if (typeof schema === 'object' && schema !== null && Object.hasOwn(schema, 'additionalProperties')) {
     collectRefsFromValue(schema.additionalProperties)
   }
 
   // Collect refs from root-level patternProperties
-  if (typeof schema === 'object' && schema !== null && 'patternProperties' in schema) {
+  if (typeof schema === 'object' && schema !== null && Object.hasOwn(schema, 'patternProperties')) {
     for (const value of Object.values(schema.patternProperties as Record<string, unknown>)) {
       collectRefsFromValue(value)
     }
@@ -328,7 +333,7 @@ const collectImportTargets = (
   if (typeof schema === 'object' && schema !== null) {
     const record = schema as Record<string, unknown>
     for (const keyword of ['prefixItems', 'items'] as const) {
-      const positions = record[keyword]
+      const positions = Object.hasOwn(record, keyword) ? record[keyword] : undefined
       if (!Array.isArray(positions)) continue
       typeOnlyDepth++
       for (const item of positions) collectRefsFromValue(item)
@@ -354,13 +359,13 @@ const collectImportTargets = (
   }
 
   // Collect refs from root-level conditional branches.
-  if (typeof schema === 'object' && schema !== null && 'if' in schema) {
+  if (typeof schema === 'object' && schema !== null && Object.hasOwn(schema, 'if')) {
     collectRefsFromValue(schema.if)
   }
-  if (typeof schema === 'object' && schema !== null && 'then' in schema) {
+  if (typeof schema === 'object' && schema !== null && Object.hasOwn(schema, 'then')) {
     collectRefsFromValue(schema.then)
   }
-  if (typeof schema === 'object' && schema !== null && 'else' in schema) {
+  if (typeof schema === 'object' && schema !== null && Object.hasOwn(schema, 'else')) {
     collectRefsFromValue(schema.else)
   }
 

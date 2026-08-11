@@ -23,9 +23,16 @@ So an `$anchor` declared under `$defs.default` never registered and `$ref:
 '#thing'` could not resolve; a `#/definitions/…` under a property named
 `example` was left dangling; a schema-shaped `default` had its `nullable`
 folded and a ref-shaped one had its literal rewritten; and a boolean inside a
-`default` was expanded from `true` to `{}`. `schemaChildren` now yields each
-child with the position it sits in, and all eight walkers go through it —
-including the array rule they had split on.
+`default` was expanded from `true` to `{}`. Two shared predicates — `isDataPosition` and
+`entersSchemaMap` — now answer that question, and all eight walkers ask
+them, including about the array rule they had split on.
+
+**Type guards ask `Object.hasOwn`, not `'key' in schema`.** All thirty-five
+guards in `schema-guards` probed with `in`, which walks the prototype chain —
+so with `Object.prototype.properties` set by any dependency, `hasProperties`
+answered true for a schema that has none and the generators emitted types,
+parsers and imports for a definition nobody declared. Fixing it in the guards
+fixes it for every consumer at once.
 
 **Lookups no longer resolve against `Object.prototype`.** `resolveRef` returned
 `Object.prototype` for `__proto__` as though the document had declared it (and

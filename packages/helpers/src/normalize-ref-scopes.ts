@@ -1,5 +1,11 @@
 import { assignKey } from './assign-key'
-import { buildResourceRegistry, escapePointerSegment, resolveUri, schemaChildren } from './build-resource-registry'
+import {
+  buildResourceRegistry,
+  entersSchemaMap,
+  escapePointerSegment,
+  isDataPosition,
+  resolveUri,
+} from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { resolveRef } from './resolve-ref'
 import { resolveScopedRef } from './resolve-scoped-ref'
@@ -89,20 +95,27 @@ export const normalizeRefScopes = (root: Record<string, unknown>): Record<string
 
     let changed = false
     const result: Record<string, unknown> = {}
-    // Copy everything, then let `schemaChildren` say which children are
-    // schemas — the same rule the sibling walkers use, sourced once. A key it
-    // does not yield holds instance data and keeps its value verbatim; the
+    // Copy everything, then rewrite only the children the shared position
+    // rule calls schemas. A key it skips holds instance data and keeps its
+    // value verbatim; the
     // `$ref` rewrites only apply at a schema node, where those keys are
     // keywords rather than author-chosen names.
     for (const [key, value] of Object.entries(record)) assignKey(result, key, value)
-    for (const child of schemaChildren(record, inSchemaMap)) {
-      const { key, value } = child
+    for (const key of Object.keys(record)) {
+      if (isDataPosition(key, inSchemaMap)) continue
+      const value = record[key]
       const next =
         !inSchemaMap && key === '$ref' && typeof value === 'string'
           ? (normalizedRef(value, base) ?? value)
           : !inSchemaMap && key === '$dynamicRef' && typeof value === 'string'
             ? (normalizedDynamicRef(value, base) ?? value)
-            : rewrite(value, `${pointer}/${escapePointerSegment(key)}`, base, depth + 1, child.inSchemaMap)
+            : rewrite(
+                value,
+                `${pointer}/${escapePointerSegment(key)}`,
+                base,
+                depth + 1,
+                entersSchemaMap(key, inSchemaMap),
+              )
       if (next !== value) changed = true
       assignKey(result, key, next)
     }

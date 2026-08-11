@@ -10,8 +10,8 @@ included — but those hold values the schema *describes*. A Zod
 `.default({ items: ['a', 'b'] })` came out as
 `default: { prefixItems: ['a','b'], minItems: 2, items: false }`: a different
 default than the author wrote, handed to consumers as theirs. The walk is
-position-aware now — `@amritk/helpers`' `schemaChildren`, so it cannot drift
-from the walkers that share it — which also means a property genuinely *named*
+position-aware now — `@amritk/helpers`' shared position predicates, so it
+cannot drift from the walkers that share them — which also means a property genuinely *named*
 `default` or `examples`, and a draft-07 `dependencies` entry named `items`, are
 treated as the names they are rather than as keywords.
 
@@ -19,6 +19,7 @@ treated as the names they are rather than as keywords.
 explicit `minItems` is the author saying which trailing positions are optional
 — Effect's `optionalElement` emits exactly that — so raising it made those
 positions required and rejected arrays the source schema accepts. Only a
-missing `minItems` is filled in. `items`/`additionalItems` are tested with
-`Object.hasOwn`, since a polluted `Object.prototype.items` made every tuple
-look like it had a rest element and `items: false` was never written.
+missing `minItems` is filled in. Every `items`/`additionalItems`/`prefixItems` read is
+an own-property read, since a polluted `Object.prototype.items` made every
+node look like a tuple — `items: false` was never written, and nodes gained a
+tuple bound they never declared.

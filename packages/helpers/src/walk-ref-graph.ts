@@ -3,7 +3,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { assertIdScopes } from './assert-id-scopes'
 import { assignKey } from './assign-key'
 import { buildDynamicRefMap } from './build-dynamic-ref-map'
-import { schemaChildren } from './build-resource-registry'
+import { entersSchemaMap, isDataPosition } from './build-resource-registry'
 import { extractRefs } from './extract-refs'
 import { graftExternalSchemas } from './graft-external-schemas'
 import { normalizeRefScopes } from './normalize-ref-scopes'
@@ -191,19 +191,20 @@ const expandBooleanDefinitions = (value: unknown, inSchemaMap = false): unknown 
   const record = value as Record<string, unknown>
   let changed = false
   const result: Record<string, unknown> = {}
-  // `schemaChildren` decides which keys are keywords. Classifying by name
+  // `isDataPosition` decides which keys are keywords. Classifying by name
   // alone expanded a `$defs` sitting inside a `default`/`enum` value — turning
   // the author's literal `true` into `{}` — and treated a property genuinely
   // named `$defs` as a definition map, which the doc above says must not
   // happen because `true` and `{}` generate different TypeScript.
   for (const [key, sub] of Object.entries(record)) assignKey(result, key, sub)
-  for (const child of schemaChildren(record, inSchemaMap)) {
+  for (const key of Object.keys(record)) {
+    if (isDataPosition(key, inSchemaMap)) continue
     const next =
-      !inSchemaMap && (DEFINITION_MAP_KEYS as readonly string[]).includes(child.key)
-        ? expandDefinitionMap(child.value)
-        : expandBooleanDefinitions(child.value, child.inSchemaMap)
-    if (next !== child.value) changed = true
-    assignKey(result, child.key, next)
+      !inSchemaMap && (DEFINITION_MAP_KEYS as readonly string[]).includes(key)
+        ? expandDefinitionMap(record[key])
+        : expandBooleanDefinitions(record[key], entersSchemaMap(key, inSchemaMap))
+    if (next !== record[key]) changed = true
+    assignKey(result, key, next)
   }
   return changed ? result : value
 }
@@ -305,14 +306,26 @@ const rewriteRootRefs = (value: unknown, rootSelfRef: string, inSchemaMap = fals
   // than aliased, because this function's contract is a fresh tree — placing
   // the caller's own object here would let a later stage mutating a `default`
   // write through to the input document and to every other emitted node.
-  for (const [key, sub] of Object.entries(record)) assignKey(out, key, copyValue(sub))
-  for (const child of schemaChildren(record, inSchemaMap)) {
+  //
+  // Only those keys. Copying every child first and then overwriting the schema
+  // ones made the walk deep-copy each subtree once per level above it — O(nodes
+  // x depth) allocations, all but the last thrown away.
+  const rewritten = new Set<string>()
+  for (const key of Object.keys(record)) {
+    if (isDataPosition(key, inSchemaMap)) continue
+    rewritten.add(key)
+  }
+  for (const [key, sub] of Object.entries(record)) {
+    if (!rewritten.has(key)) assignKey(out, key, copyValue(sub))
+  }
+  for (const key of Object.keys(record)) {
+    if (isDataPosition(key, inSchemaMap)) continue
     assignKey(
       out,
-      child.key,
-      !inSchemaMap && child.key === '$ref' && (child.value === ROOT_POINTER || child.value === '#/')
+      key,
+      !inSchemaMap && key === '$ref' && (record[key] === ROOT_POINTER || record[key] === '#/')
         ? rootSelfRef
-        : rewriteRootRefs(child.value, rootSelfRef, child.inSchemaMap),
+        : rewriteRootRefs(record[key], rootSelfRef, entersSchemaMap(key, inSchemaMap)),
     )
   }
   return out

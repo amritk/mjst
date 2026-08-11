@@ -23,6 +23,6 @@ which compares by reference, so `[{a:1},{a:1}]` passed as unique on that path
 while every other emitter rejected it. It uses the shared structural check now,
 which still emits the cheap scalar form where the item type allows it.
 
-Name-keyed maps are enumerated by own keys and probed with `Object.hasOwn`, so
-a polluted `Object.prototype` cannot make the walk register an import for a
-definition the document never declared.
+Every key probe and keyword read in the walk is an own-property one, so a
+polluted `Object.prototype` cannot make it register an import for a definition
+the document never declared — which would name a module that was never emitted.

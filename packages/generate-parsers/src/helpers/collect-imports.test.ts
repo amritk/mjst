@@ -1,5 +1,5 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import { collectImports, collectImportTypeNames } from './collect-imports'
 
@@ -627,5 +627,24 @@ describe('collect-imports', () => {
     expect(collectImports(schema)).toEqual([
       "import { type Contact, parseContact, validateContactShape } from './contact.js';",
     ])
+  })
+
+  describe('a polluted Object.prototype', () => {
+    // The walk probes and reads keys off documents the caller supplied, so an
+    // inherited one used to read as declared — and the import that followed
+    // named a module that was never emitted, so the generated output did not
+    // compile.
+    const proto = Object.prototype as unknown as Record<string, unknown>
+    afterEach(() => {
+      for (const key of ['properties', 'prefixItems', 'items', 'if']) delete proto[key]
+    })
+
+    for (const key of ['properties', 'prefixItems', 'items', 'if'] as const) {
+      it(`conjures no import from an inherited ${key}`, () => {
+        proto[key] =
+          key === 'prefixItems' || key === 'items' ? [{ $ref: '#/$defs/Ghost' }] : { g: { $ref: '#/$defs/Ghost' } }
+        expect(collectImports({ type: 'string' })).toEqual([])
+      })
+    }
   })
 })

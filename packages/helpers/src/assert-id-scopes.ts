@@ -1,6 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
-import { buildResourceRegistry, escapePointerSegment, schemaChildren } from './build-resource-registry'
+import { buildResourceRegistry, entersSchemaMap, escapePointerSegment, isDataPosition } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { resolveRef } from './resolve-ref'
 import { resolveScopedRef } from './resolve-scoped-ref'
@@ -74,8 +74,16 @@ export const assertIdScopes = (rootSchema: JSONSchema): void => {
       )
     }
 
-    for (const child of schemaChildren(record, inSchemaMap)) {
-      walk(child.value, `${pointer}/${escapePointerSegment(child.key)}`, base, scope, depth + 1, child.inSchemaMap)
+    for (const key of Object.keys(record)) {
+      if (isDataPosition(key, inSchemaMap)) continue
+      walk(
+        record[key],
+        `${pointer}/${escapePointerSegment(key)}`,
+        base,
+        scope,
+        depth + 1,
+        entersSchemaMap(key, inSchemaMap),
+      )
     }
   }
 

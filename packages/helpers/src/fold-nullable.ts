@@ -1,5 +1,5 @@
 import { assignKey } from './assign-key'
-import { schemaChildren } from './build-resource-registry'
+import { entersSchemaMap, isDataPosition } from './build-resource-registry'
 
 /**
  * Rewrites OpenAPI 3.0's `nullable: true` into the JSON Schema form the
@@ -50,16 +50,17 @@ const fold = (node: unknown, inSchemaMap = false): unknown => {
   // a schema-shaped `default` came back with its `type` changed, handed to
   // consumers as the author's own. Inside a `properties`-style map the keys are
   // names instead, so the same word carries no keyword meaning there.
-  // Everything is copied through first, then `schemaChildren` decides which
+  // Everything is copied through first, then the shared position rule decides which
   // children are schemas to fold into. Keys it does not yield are instance
   // data, which keeps their values exactly as the author wrote them — and
   // sourcing that rule from the shared generator is what stops this walker
   // drifting from its five siblings.
   for (const [key, value] of Object.entries(record)) assignKey(next, key, value)
-  for (const child of schemaChildren(record, inSchemaMap)) {
-    const folded = fold(child.value, child.inSchemaMap)
-    if (folded !== child.value) changed = true
-    assignKey(next, child.key, folded)
+  for (const key of Object.keys(record)) {
+    if (isDataPosition(key, inSchemaMap)) continue
+    const folded = fold(record[key], entersSchemaMap(key, inSchemaMap))
+    if (folded !== record[key]) changed = true
+    assignKey(next, key, folded)
   }
 
   const type = Object.hasOwn(record, 'type') ? record['type'] : undefined

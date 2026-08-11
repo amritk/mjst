@@ -112,25 +112,29 @@ export const escapePointerSegment = (segment: string): string =>
     : segment.replace(/~/g, '~0').replace(/\//g, '~1').replace(/%/g, '%25')
 
 /**
- * The children of a node to walk, each paired with the position it sits in.
+ * Whether `key` holds instance data rather than a schema, at a node whose own
+ * position is `inSchemaMap`.
  *
  * A schema walk has two kinds of object. At a **schema node** the keys are
- * keywords, so {@link DATA_KEYWORDS} mark subtrees holding instance data that
- * must not be read as schemas. Inside a {@link SCHEMA_MAPS} entry the keys are
- * author-chosen **names** instead, where those same words carry no keyword
- * meaning — a definition or property genuinely called `default` is ordinary.
+ * keywords, so {@link DATA_KEYWORDS} mark subtrees holding values the schema
+ * describes, which must not be read as schemas. Inside a {@link SCHEMA_MAPS}
+ * entry the keys are author-chosen **names**, where those same words carry no
+ * keyword meaning — a definition or property genuinely called `default` is
+ * ordinary.
  *
  * Every walker here used to test the key name alone, which conflated the two:
  * a `$defs.default` had its whole subtree skipped, so an `$anchor` inside it
  * never registered and the `$ref` naming it failed to resolve. Threading one
- * boolean through the recursion is what tells them apart, and having it in one
- * place is what keeps the eight walkers agreeing about it.
+ * boolean through the recursion is what tells them apart, and asking these two
+ * functions is what keeps the walkers agreeing about it.
  *
- * Arrays are the caller's to handle, since this yields object children only —
- * and the rule there is that **an element inherits its array's position**, the
- * same one `resolve-refs`' `childRole` applies. The walkers had split on it
- * (some reset the flag, some propagated it), which is precisely the drift
- * having the rule in one place is meant to prevent, so it is written down here.
+ * Two predicates rather than a generator over `{key, value, inSchemaMap}`
+ * objects: these are the inner loop of ten whole-document walkers, several of
+ * which document that they allocate nothing per node.
+ *
+ * Arrays are the caller's to handle, and the rule there is that **an element
+ * inherits its array's position**, the same one `resolve-refs`' `childRole`
+ * applies.
  *
  * @example
  * ```typescript
@@ -140,19 +144,17 @@ export const escapePointerSegment = (segment: string): string =>
  *     return
  *   }
  *   if (!isObject(node)) return
- *   for (const child of schemaChildren(node, inSchemaMap)) walk(child.value, child.inSchemaMap)
+ *   for (const key of Object.keys(node)) {
+ *     if (isDataPosition(key, inSchemaMap)) continue
+ *     walk(node[key], entersSchemaMap(key, inSchemaMap))
+ *   }
  * }
  * ```
  */
-export function* schemaChildren(
-  record: Record<string, unknown>,
-  inSchemaMap: boolean,
-): Generator<{ key: string; value: unknown; inSchemaMap: boolean }> {
-  for (const key of Object.keys(record)) {
-    if (!inSchemaMap && DATA_KEYWORDS.has(key)) continue
-    yield { key, value: record[key], inSchemaMap: !inSchemaMap && SCHEMA_MAPS.has(key) }
-  }
-}
+export const isDataPosition = (key: string, inSchemaMap: boolean): boolean => !inSchemaMap && DATA_KEYWORDS.has(key)
+
+/** Whether the child at `key` is a map of author-chosen names. See {@link isDataPosition}. */
+export const entersSchemaMap = (key: string, inSchemaMap: boolean): boolean => !inSchemaMap && SCHEMA_MAPS.has(key)
 
 /**
  * The base URI a subschema establishes through its `$id`, or the enclosing base
@@ -232,8 +234,9 @@ export const buildResourceRegistry = (root: unknown): ResourceRegistry | null =>
       if (!anchors.has(key)) anchors.set(key, pointer)
     }
 
-    for (const child of schemaChildren(record, inSchemaMap)) {
-      walk(child.value, `${pointer}/${escapePointerSegment(child.key)}`, base, depth + 1, child.inSchemaMap)
+    for (const key of Object.keys(record)) {
+      if (isDataPosition(key, inSchemaMap)) continue
+      walk(record[key], `${pointer}/${escapePointerSegment(key)}`, base, depth + 1, entersSchemaMap(key, inSchemaMap))
     }
   }
 

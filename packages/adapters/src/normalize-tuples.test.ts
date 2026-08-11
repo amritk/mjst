@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import { enforceTupleLength, normalizeDraftTuples } from './normalize-tuples'
 
@@ -120,5 +120,28 @@ describe('normalize-tuples', () => {
     normalizeDraftTuples(schema)
     enforceTupleLength(schema)
     expect(schema).toEqual({ type: 'object', example: { items: ['a', 'b'] } })
+  })
+
+  describe('a polluted Object.prototype', () => {
+    // Every node in the adapter's output would otherwise gain a tuple bound it
+    // never declared, so the generated parsers reject valid data.
+    const proto = Object.prototype as unknown as Record<string, unknown>
+    afterEach(() => {
+      for (const key of ['prefixItems', 'items', 'additionalItems']) delete proto[key]
+    })
+
+    it('does not add tuple bounds to every node', () => {
+      proto['prefixItems'] = [{ type: 'string' }, { type: 'number' }]
+      const schema = { type: 'object', properties: { a: { type: 'string' } } }
+      enforceTupleLength(schema)
+      expect(schema).toEqual({ type: 'object', properties: { a: { type: 'string' } } })
+    })
+
+    it('does not turn every node into a tuple', () => {
+      proto['items'] = [{ type: 'string' }]
+      const schema = { type: 'object', properties: { a: { type: 'string' } } }
+      normalizeDraftTuples(schema)
+      expect(schema).toEqual({ type: 'object', properties: { a: { type: 'string' } } })
+    })
   })
 })

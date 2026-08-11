@@ -1,4 +1,4 @@
-import { schemaChildren } from '@amritk/helpers/build-resource-registry'
+import { entersSchemaMap, isDataPosition } from '@amritk/helpers/build-resource-registry'
 
 /**
  * Shared tuple normalization for the adapters whose upstream converter emits
@@ -12,8 +12,8 @@ import { schemaChildren } from '@amritk/helpers/build-resource-registry'
  * Walks the schema tree, applying `transform` to every schema node.
  *
  * The position rule — which keys are keywords and which are author-chosen
- * names — comes from `schemaChildren`, so this traversal cannot drift from the
- * five walkers in `@amritk/helpers` that share it.
+ * names — comes from `isDataPosition`/`entersSchemaMap`, so this traversal
+ * cannot drift from the walkers in `@amritk/helpers` that share them.
  */
 const walkSchema = (node: unknown, transform: (schema: Record<string, unknown>) => void, inSchemaMap = false): void => {
   if (node === null || typeof node !== 'object') return
@@ -24,7 +24,10 @@ const walkSchema = (node: unknown, transform: (schema: Record<string, unknown>) 
   }
   const obj = node as Record<string, unknown>
   if (!inSchemaMap) transform(obj)
-  for (const child of schemaChildren(obj, inSchemaMap)) walkSchema(child.value, transform, child.inSchemaMap)
+  for (const key of Object.keys(obj)) {
+    if (isDataPosition(key, inSchemaMap)) continue
+    walkSchema(obj[key], transform, entersSchemaMap(key, inSchemaMap))
+  }
 }
 
 /**
@@ -35,7 +38,9 @@ const walkSchema = (node: unknown, transform: (schema: Record<string, unknown>) 
  */
 export const normalizeDraftTuples = (node: unknown): void => {
   walkSchema(node, (obj) => {
-    if (!Array.isArray(obj['items'])) return
+    // Own key: a polluted `Object.prototype.items` array would otherwise make
+    // every node take the tuple branch.
+    if (!Object.hasOwn(obj, 'items') || !Array.isArray(obj['items'])) return
     obj['prefixItems'] = obj['items']
     // `Object.hasOwn`, not `in`: with `Object.prototype.additionalItems` set by
     // any dependency, a closed draft-07 tuple would take the rest-element
@@ -65,8 +70,11 @@ export const normalizeDraftTuples = (node: unknown): void => {
  */
 export const enforceTupleLength = (node: unknown): void => {
   walkSchema(node, (obj) => {
-    if (!Array.isArray(obj['prefixItems'])) return
-    if (typeof obj['minItems'] !== 'number') obj['minItems'] = obj['prefixItems'].length
+    // Own key, for the same reason as `normalizeDraftTuples` above: otherwise
+    // every node gains a tuple bound it never declared.
+    if (!Object.hasOwn(obj, 'prefixItems') || !Array.isArray(obj['prefixItems'])) return
+    if (!Object.hasOwn(obj, 'minItems') || typeof obj['minItems'] !== 'number')
+      obj['minItems'] = (obj['prefixItems'] as unknown[]).length
     // No `items` keyword means no rest element: the array may not exceed the
     // fixed tuple, so forbid additional items.
     // Likewise: a polluted `items` would make every tuple look like it had a
