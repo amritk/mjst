@@ -138,7 +138,11 @@ export const resolveRef = (ref: string, rootSchema: Record<string, unknown>): Re
   if (typeof defs !== 'object' || defs === null) return undefined
 
   const defsRecord = defs as Record<string, unknown>
-  const base = defsRecord[baseUri]
+  // `Object.hasOwn`, for the same reason `navigatePointer` uses it above: a
+  // bare index answers `__proto__` and `constructor` from `Object.prototype`,
+  // handing back a "definition" the document never declared — which the
+  // generators then emit a file for.
+  const base = Object.hasOwn(defsRecord, baseUri) ? defsRecord[baseUri] : undefined
   if (typeof base !== 'object' || base === null) return undefined
 
   // No fragment — return the definition directly

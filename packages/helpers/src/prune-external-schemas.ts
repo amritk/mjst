@@ -1,5 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { readKey } from './assign-key'
 import { buildDynamicRefMap } from './build-dynamic-ref-map'
 import { assertSchemaDepth } from './max-schema-depth'
 
@@ -79,7 +80,7 @@ const referencedFrom = (
     if (typeof dynamicRef === 'string') {
       // An anchor-form `$dynamicRef` binds through the map; a pointer-form one
       // already says where it goes.
-      const target = dynamicRef.startsWith('#/') ? dynamicRef : dynamicMap[dynamicRef]
+      const target = dynamicRef.startsWith('#/') ? dynamicRef : readKey(dynamicMap, dynamicRef)
       const name = target === undefined ? undefined : externalTarget(target, external)
       if (name !== undefined) into.add(name)
     }

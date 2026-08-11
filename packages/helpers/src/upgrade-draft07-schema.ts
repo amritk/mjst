@@ -19,6 +19,7 @@
  * Only applied when the schema declares `$schema: http://json-schema.org/draft-07/schema`.
  */
 
+import { assignKey } from './assign-key'
 import { DATA_KEYWORDS } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { refToFilename, toKebabCase } from './ref-to-filename'
@@ -44,14 +45,14 @@ const rewriteRefs = (obj: unknown, refMap: ReadonlyMap<string, string>, selfRef?
   for (const [key, value] of Object.entries(record)) {
     if (key === '$ref' && typeof value === 'string') {
       if (refMap.has(value)) {
-        result[key] = refMap.get(value)
+        assignKey(result, key, refMap.get(value))
       } else if (value === '#' && selfRef) {
-        result[key] = selfRef
+        assignKey(result, key, selfRef)
       } else {
-        result[key] = value
+        assignKey(result, key, value)
       }
     } else {
-      result[key] = rewriteRefs(value, refMap, selfRef, depth + 1)
+      assignKey(result, key, rewriteRefs(value, refMap, selfRef, depth + 1))
     }
   }
 
@@ -208,11 +209,7 @@ const rewriteDefinitionsRefs = (obj: unknown, depth = 0): unknown => {
           ? value
           : rewriteDefinitionsRefs(value, depth + 1)
 
-    if (key === '__proto__') {
-      Object.defineProperty(result, key, { value: rewritten, writable: true, enumerable: true, configurable: true })
-    } else {
-      result[key] = rewritten
-    }
+    assignKey(result, key, rewritten)
   }
 
   return result
@@ -241,10 +238,10 @@ const renameNestedDefs = (obj: unknown, depth = 0): unknown => {
 
   for (const [key, value] of Object.entries(record)) {
     if (key === '$ref' && typeof value === 'string' && value.startsWith('#/definitions/')) {
-      result[key] = value.replace('#/definitions/', '#/$defs/')
+      assignKey(result, key, value.replace('#/definitions/', '#/$defs/'))
     } else {
       const outKey = key === 'definitions' ? '$defs' : key
-      result[outKey] = renameNestedDefs(value, depth + 1)
+      assignKey(result, outKey, renameNestedDefs(value, depth + 1))
     }
   }
 

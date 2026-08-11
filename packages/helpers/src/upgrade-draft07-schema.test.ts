@@ -200,4 +200,29 @@ describe('upgrade-draft07-schema', () => {
   it('drops the draft-07 $schema declaration', () => {
     expect(upgradeDraft07Schema(draft07({ type: 'string' }))).toEqual({ type: 'string', $defs: {} })
   })
+
+  it('keeps a property named __proto__ instead of setting the prototype', () => {
+    // A schema may describe a property called `__proto__`. Rebuilding the node
+    // with `result[key] = …` ran the prototype setter instead of adding a key:
+    // the property vanished from the output — every constraint on it with it —
+    // and the rebuilt object silently inherited the subschema. The input is
+    // parsed rather than written as a literal, because an object literal's
+    // `__proto__:` is the same setter and would never create the key at all.
+    const schema = JSON.parse(`{
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "definitions": {
+        "X": { "type": "object", "properties": { "__proto__": { "type": "string" }, "ok": { "type": "string" } } }
+      },
+      "properties": { "a": { "$ref": "#/definitions/X" } }
+    }`) as Record<string, unknown>
+
+    const upgraded = upgradeDraft07Schema(schema) as Record<string, Record<string, Record<string, unknown>>>
+    const properties = upgraded['$defs']?.['X']?.['properties'] as object
+
+    expect(Object.getOwnPropertyNames(properties).sort()).toEqual(['__proto__', 'ok'])
+    expect(Object.getOwnPropertyDescriptor(properties, '__proto__')?.value).toEqual({ type: 'string' })
+    // The subschema must not have become the map's prototype.
+    expect(Object.getPrototypeOf(properties)).toBe(Object.prototype)
+  })
 })

@@ -1,3 +1,4 @@
+import { assignKey } from './assign-key'
 import { buildResourceRegistry, DATA_KEYWORDS, escapePointerSegment, resolveUri } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { resolveRef } from './resolve-ref'
@@ -98,7 +99,7 @@ export const normalizeRefScopes = (root: Record<string, unknown>): Record<string
               ? value
               : rewrite(value, `${pointer}/${escapePointerSegment(key)}`, base, depth + 1)
       if (next !== value) changed = true
-      result[key] = next
+      assignKey(result, key, next)
     }
     return changed ? result : record
   }

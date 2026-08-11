@@ -1,6 +1,7 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { assertIdScopes } from './assert-id-scopes'
+import { assignKey } from './assign-key'
 import { buildDynamicRefMap } from './build-dynamic-ref-map'
 import { extractRefs } from './extract-refs'
 import { graftExternalSchemas } from './graft-external-schemas'
@@ -194,7 +195,7 @@ const expandBooleanDefinitions = (value: unknown): unknown => {
       ? expandDefinitionMap(sub)
       : expandBooleanDefinitions(sub)
     if (next !== sub) changed = true
-    result[key] = next
+    assignKey(result, key, next)
   }
   return changed ? result : value
 }
@@ -208,7 +209,7 @@ const expandDefinitionMap = (definitions: unknown): unknown => {
   for (const [name, definition] of Object.entries(record)) {
     const next = definition === true ? {} : definition === false ? { not: {} } : expandBooleanDefinitions(definition)
     if (next !== definition) changed = true
-    result[name] = next
+    assignKey(result, name, next)
   }
   return changed ? result : definitions
 }
@@ -281,8 +282,11 @@ const rewriteRootRefs = (value: unknown, rootSelfRef: string): unknown => {
   if (Array.isArray(value)) return value.map((item) => rewriteRootRefs(item, rootSelfRef))
   const out: Record<string, unknown> = {}
   for (const [key, sub] of Object.entries(value as Record<string, unknown>)) {
-    out[key] =
-      key === '$ref' && (sub === ROOT_POINTER || sub === '#/') ? rootSelfRef : rewriteRootRefs(sub, rootSelfRef)
+    assignKey(
+      out,
+      key,
+      key === '$ref' && (sub === ROOT_POINTER || sub === '#/') ? rootSelfRef : rewriteRootRefs(sub, rootSelfRef),
+    )
   }
   return out
 }

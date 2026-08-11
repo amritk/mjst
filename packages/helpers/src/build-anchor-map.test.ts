@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildAnchorMap } from './build-anchor-map'
+import { resolveRef } from './resolve-ref'
 
 describe('build-anchor-map', () => {
   it('maps an $anchor to the pointer of the subschema declaring it', () => {
@@ -67,5 +68,13 @@ describe('build-anchor-map', () => {
 
   it('returns an empty map for a boolean schema', () => {
     expect(buildAnchorMap(true)).toEqual({})
+  })
+
+  it('escapes a percent in a key the same way resolveRef decodes it', () => {
+    // The pointer is handed back as a `$ref` fragment and percent-decoded on
+    // the way in, so a local escaper that skipped `%` produced a pointer that
+    // decoded to a different key — leaving the anchor unresolvable.
+    const root = { $defs: { 'a%2Fb': { $anchor: 'target', type: 'string' } } }
+    expect(resolveRef('#target', root as never)).toEqual({ $anchor: 'target', type: 'string' })
   })
 })

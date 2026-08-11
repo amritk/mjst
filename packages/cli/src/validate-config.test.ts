@@ -101,4 +101,16 @@ describe('validate-config', () => {
     // schema has to reject typos the same way this function does.
     expect((await readConfigSchema()).additionalProperties).toBe(false)
   })
+
+  it('reports an option named after a prototype member as unknown', () => {
+    // Config keys come from the user's file, so a typo'd `constructor` found
+    // `Object.prototype.constructor` and was type-checked as a real option —
+    // reporting "expected undefined, received string" instead of the
+    // unknown-option message that lists what the real options are.
+    for (const key of ['constructor', 'toString', 'valueOf']) {
+      expect(() => validateConfig({ [key]: 'x' }, 'mjst.config.json')).toThrow(
+        new RegExp(`/${key}: unknown option\\. Known options: `),
+      )
+    }
+  })
 })

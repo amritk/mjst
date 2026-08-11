@@ -1,13 +1,12 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+// The pointer built here is handed back as a `$ref` fragment and
+// percent-decoded on the way in, so it has to be escaped by the same
+// function that contract is defined by. A local copy omitted the `%`
+// escape, which left an anchor under a key like `a%2Fb` unresolvable.
+import { escapePointerSegment } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { isSchemaObject } from './schema-guards'
-
-/** Escapes a JSON Pointer segment (RFC 6901): `~` → `~0`, `/` → `~1`. */
-const escapeSegment = (segment: string): string =>
-  segment.indexOf('~') !== -1 || segment.indexOf('/') !== -1
-    ? segment.replace(/~/g, '~0').replace(/\//g, '~1')
-    : segment
 
 // Keywords whose values are data, not subschemas — a `$dynamicAnchor` key inside
 // an enum member or example value is instance data and must not register.
@@ -59,7 +58,7 @@ export const buildDynamicRefMap = (rootSchema: JSONSchema): Record<string, strin
 
     for (const key of Object.keys(record)) {
       if (NON_SCHEMA_KEYWORDS.has(key)) continue
-      walk(record[key], `${pointer}/${escapeSegment(key)}`, depth + 1)
+      walk(record[key], `${pointer}/${escapePointerSegment(key)}`, depth + 1)
     }
   }
 

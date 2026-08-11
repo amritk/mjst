@@ -1,5 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { readKey } from './assign-key'
 import { assertSchemaDepth } from './max-schema-depth'
 
 /**
@@ -53,7 +54,10 @@ export const resolveDynamicRefs = (schema: JSONSchema, dynamicRefMap: Record<str
 
     const dynamicRef = record['$dynamicRef']
     if (typeof dynamicRef === 'string') {
-      const resolved = dynamicRefMap[dynamicRef] ?? (dynamicRef.startsWith('#/') ? dynamicRef : undefined)
+      // `readKey`, not a bare index: the map is keyed by author-chosen anchor
+      // names, so `$dynamicRef: "toString"` otherwise resolved to a `Function`
+      // and was written into `$ref` in place of the "unresolvable" error.
+      const resolved = readKey(dynamicRefMap, dynamicRef) ?? (dynamicRef.startsWith('#/') ? dynamicRef : undefined)
       if (resolved === undefined) {
         throw new Error(
           `Unresolvable $dynamicRef "${dynamicRef}": no $dynamicAnchor named "${dynamicRef.replace(/^#/, '')}" is ` +

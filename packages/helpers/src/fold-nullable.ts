@@ -1,3 +1,5 @@
+import { assignKey } from './assign-key'
+
 /**
  * Rewrites OpenAPI 3.0's `nullable: true` into the JSON Schema form the
  * generators already enforce: a `null` member of the node's `type`.
@@ -38,11 +40,12 @@ const fold = (node: unknown): unknown => {
   let changed = false
   const next: Record<string, unknown> = {}
 
-  for (const key in record) {
-    const value = record[key]
+  // Own keys, and a guarded write: a bare `for…in` walks the prototype chain,
+  // and `next[key] = …` on a `__proto__` property drops it from the output.
+  for (const [key, value] of Object.entries(record)) {
     const folded = fold(value)
     if (folded !== value) changed = true
-    next[key] = folded
+    assignKey(next, key, folded)
   }
 
   const type = record['type']

@@ -51,4 +51,19 @@ describe('foldNullable', () => {
     const schema = { type: 'string', nullable: false }
     expect(foldNullable(schema)).toBe(schema)
   })
+
+  it('keeps a property named __proto__ when a sibling folds', () => {
+    // The rebuild is only entered when something changed, so the sibling's
+    // `nullable` is what exposes the drop. Parsed rather than written as a
+    // literal: an object literal's `__proto__:` is the prototype setter.
+    const node = JSON.parse(
+      '{"type":"object","properties":{"__proto__":{"type":"string"},"ok":{"type":"string","nullable":true}}}',
+    ) as Record<string, unknown>
+
+    const folded = foldNullable(node) as Record<string, object>
+    const properties = folded['properties'] as object
+
+    expect(Object.getOwnPropertyNames(properties).sort()).toEqual(['__proto__', 'ok'])
+    expect(Object.getPrototypeOf(properties)).toBe(Object.prototype)
+  })
 })
