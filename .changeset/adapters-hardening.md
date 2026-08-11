@@ -19,7 +19,9 @@ treated as the names they are rather than as keywords.
 explicit `minItems` is the author saying which trailing positions are optional
 — Effect's `optionalElement` emits exactly that — so raising it made those
 positions required and rejected arrays the source schema accepts. Only a
-missing `minItems` is filled in. Every `items`/`additionalItems`/`prefixItems` read is
+missing `minItems` is filled in, and only for a non-empty tuple — stamping
+`minItems: 0` onto an empty one would put a keyword in the output that the
+source never declared. Every `items`/`additionalItems`/`prefixItems` read is
 an own-property read, since a polluted `Object.prototype.items` made every
 node look like a tuple — `items: false` was never written, and nodes gained a
 tuple bound they never declared.

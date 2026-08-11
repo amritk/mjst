@@ -8,8 +8,8 @@ import { resolveScopedRef } from './resolve-scoped-ref'
 
 /** True when a subschema declares targets a fragment ref could legitimately mean. */
 const declaresLocalTargets = (record: Record<string, unknown>): boolean =>
-  typeof record['$defs'] === 'object' ||
-  typeof record['definitions'] === 'object' ||
+  typeof readKey(record, '$defs') === 'object' ||
+  typeof readKey(record, 'definitions') === 'object' ||
   typeof readKey(record, '$anchor') === 'string'
 
 /**
@@ -62,7 +62,7 @@ export const assertIdScopes = (rootSchema: JSONSchema): void => {
     const scope = declared !== undefined && pointer !== '' ? record : resource
 
     for (const key of ['$ref', '$dynamicRef'] as const) {
-      const ref = record[key]
+      const ref = readKey(record, key)
       if (typeof ref !== 'string' || !ref.startsWith('#') || ref === '#') continue
       if (scope === null || !declaresLocalTargets(scope)) continue
       const target = resolveScopedRef(registry, ref, base)

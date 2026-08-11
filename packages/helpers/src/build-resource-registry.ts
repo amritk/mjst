@@ -164,7 +164,7 @@ export const entersSchemaMap = (key: string, inSchemaMap: boolean): boolean => !
  * catches.
  */
 export const baseAfterId = (node: Record<string, unknown>, enclosing: string): string => {
-  const id = node['$id']
+  const id = readKey(node, '$id')
   if (typeof id !== 'string' || id === '') return enclosing
   const resolved = resolveUri(id, enclosing)
   if (resolved === undefined) return enclosing

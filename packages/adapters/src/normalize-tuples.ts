@@ -73,8 +73,12 @@ export const enforceTupleLength = (node: unknown): void => {
     // Own key, for the same reason as `normalizeDraftTuples` above: otherwise
     // every node gains a tuple bound it never declared.
     if (!Object.hasOwn(obj, 'prefixItems') || !Array.isArray(obj['prefixItems'])) return
-    if (!Object.hasOwn(obj, 'minItems') || typeof obj['minItems'] !== 'number')
-      obj['minItems'] = (obj['prefixItems'] as unknown[]).length
+    const fixed = (obj['prefixItems'] as unknown[]).length
+    // An empty tuple needs no floor, and stamping `minItems: 0` would put a
+    // keyword in the output that the source schema never declared — visible in
+    // the generated types, parsers and docs for every empty tuple a converter
+    // emits. The previous `min < fixed` form never wrote it either.
+    if (fixed > 0 && (!Object.hasOwn(obj, 'minItems') || typeof obj['minItems'] !== 'number')) obj['minItems'] = fixed
     // No `items` keyword means no rest element: the array may not exceed the
     // fixed tuple, so forbid additional items.
     // Likewise: a polluted `items` would make every tuple look like it had a

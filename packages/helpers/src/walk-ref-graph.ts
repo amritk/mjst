@@ -303,26 +303,21 @@ const rewriteRootRefs = (value: unknown, rootSelfRef: string, inSchemaMap = fals
   if (Array.isArray(value)) return value.map((item) => rewriteRootRefs(item, rootSelfRef, inSchemaMap))
   const out: Record<string, unknown> = {}
   const record = value as Record<string, unknown>
+  // One pass, in the input's key order — the siblings fixed alongside this one
+  // all copy through and overwrite in place, and emitting the data keys first
+  // and the schema keys after reordered the output.
+  //
   // Instance data is copied, not rewritten: a `default: { "$ref": "#" }` is a
   // documented config value that happens to be ref-shaped, and rewriting its
   // literal hands consumers a pointer the author never wrote. Copied rather
   // than aliased, because this function's contract is a fresh tree — placing
   // the caller's own object here would let a later stage mutating a `default`
   // write through to the input document and to every other emitted node.
-  //
-  // Only those keys. Copying every child first and then overwriting the schema
-  // ones made the walk deep-copy each subtree once per level above it — O(nodes
-  // x depth) allocations, all but the last thrown away.
-  const rewritten = new Set<string>()
   for (const key of Object.keys(record)) {
-    if (isDataPosition(key, inSchemaMap)) continue
-    rewritten.add(key)
-  }
-  for (const [key, sub] of Object.entries(record)) {
-    if (!rewritten.has(key)) assignKey(out, key, copyValue(sub))
-  }
-  for (const key of Object.keys(record)) {
-    if (isDataPosition(key, inSchemaMap)) continue
+    if (isDataPosition(key, inSchemaMap)) {
+      assignKey(out, key, copyValue(record[key]))
+      continue
+    }
     assignKey(
       out,
       key,

@@ -53,11 +53,27 @@ const COPIES: ReadonlyArray<{ file: string; data: string; maps?: string }> = [
   },
 ]
 
-/** The string members of a `const <name> = new Set([...])` declaration. */
+/**
+ * The string members of a `const <name> = new Set([...])` declaration.
+ *
+ * Comments are stripped before the members are read. These declarations carry
+ * explanatory comments — this codebase puts one on nearly everything — and an
+ * apostrophe in one (`` `@amritk/helpers`' ``, `3.0's`) shifts every following
+ * quote pair, so a naive scan silently returned comment fragments and dropped
+ * real members. A test that mis-parses the thing it guards is worse than no
+ * test: it passed while reading nonsense.
+ */
 const readSet = (source: string, name: string): string[] => {
-  const match = new RegExp(`const ${name}[^=]*= new Set(?:<[^>]*>)?\\(\\[([^\\]]*)\\]\\)`).exec(source)
-  if (match === null) throw new Error(`${name} not found, or not a Set literal`)
-  return [...(match[1] as string).matchAll(/'([^']+)'/g)].map((entry) => entry[1] as string).sort()
+  const start = source.search(new RegExp(`const ${name}\\b`))
+  if (start === -1) throw new Error(`${name} not found`)
+  const open = source.indexOf('[', start)
+  const close = source.indexOf('])', open)
+  if (open === -1 || close === -1) throw new Error(`${name} is not a Set literal`)
+  const body = source
+    .slice(open + 1, close)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n]*/g, '')
+  return [...body.matchAll(/'([^']*)'/g)].map((entry) => entry[1] as string).sort()
 }
 
 describe('keyword-set parity', () => {
