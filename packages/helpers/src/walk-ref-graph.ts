@@ -284,17 +284,28 @@ const referencesRoot = (value: unknown): boolean => {
   return false
 }
 
+/** A structural deep copy, for the subtrees `rewriteRootRefs` must not rewrite. */
+const copyValue = (value: unknown): unknown => {
+  if (typeof value !== 'object' || value === null) return value
+  if (Array.isArray(value)) return value.map(copyValue)
+  const out: Record<string, unknown> = {}
+  for (const [key, sub] of Object.entries(value as Record<string, unknown>)) assignKey(out, key, copyValue(sub))
+  return out
+}
+
 /** Rewrites every root-pointer `$ref` to the root's `$defs` alias, deep-copying as it goes. */
 const rewriteRootRefs = (value: unknown, rootSelfRef: string, inSchemaMap = false): unknown => {
   if (typeof value !== 'object' || value === null) return value
   if (Array.isArray(value)) return value.map((item) => rewriteRootRefs(item, rootSelfRef, inSchemaMap))
   const out: Record<string, unknown> = {}
   const record = value as Record<string, unknown>
-  // Copy first, then rewrite only the children `schemaChildren` calls schemas.
-  // Structurally, a `default: { "$ref": "#" }` — a documented config value that
-  // happens to be ref-shaped — had its literal rewritten to a pointer the
-  // author never wrote, and consumers copy that value verbatim.
-  for (const [key, sub] of Object.entries(record)) assignKey(out, key, sub)
+  // Instance data is copied, not rewritten: a `default: { "$ref": "#" }` is a
+  // documented config value that happens to be ref-shaped, and rewriting its
+  // literal hands consumers a pointer the author never wrote. Copied rather
+  // than aliased, because this function's contract is a fresh tree — placing
+  // the caller's own object here would let a later stage mutating a `default`
+  // write through to the input document and to every other emitted node.
+  for (const [key, sub] of Object.entries(record)) assignKey(out, key, copyValue(sub))
   for (const child of schemaChildren(record, inSchemaMap)) {
     assignKey(
       out,

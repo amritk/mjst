@@ -526,12 +526,29 @@ export const compileToModule = (options: CompileModuleOptions): string => {
  *
  * The internal names are read back out of the emitted source rather than
  * listed, so the check cannot drift as the emitter grows — which a hand-kept
- * list of twenty names certainly would.
+ * list of twenty names certainly would. That includes the *other* import
+ * lines: the module also imports unaliased from the runtime and the validators,
+ * so an app exporting `validate`, `toResponse` or `readBodyCapped` collides
+ * there rather than with a declaration, and a check that only read
+ * declarations would miss exactly those.
  */
 const assertNoImportCollision = (source: string, imported: readonly string[]): void => {
   const declared = new Set<string>()
   for (const match of source.matchAll(/^(?:export )?(?:const|let|function|class)\s+([A-Za-z_$][A-Za-z0-9_$]*)/gm)) {
     declared.add(match[1] as string)
+  }
+  // Every *other* import line's bindings. The first is the routes module —
+  // the names being checked — so it is skipped rather than reported against
+  // itself.
+  const importLines = [...source.matchAll(/^import \{ ([^}]*) \} from /gm)].slice(1)
+  for (const line of importLines) {
+    for (const binding of (line[1] as string).split(',')) {
+      const name = binding
+        .trim()
+        .split(/\s+as\s+/)
+        .pop()
+      if (name !== undefined && name !== '') declared.add(name)
+    }
   }
   const clashes = imported.filter((name) => declared.has(name))
   if (clashes.length === 0) return

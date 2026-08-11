@@ -982,7 +982,16 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
           assignKey(
             kept,
             key,
-            key === keyword ? obj[key] : resolveAt(obj[key], baseLocation, nodeBase, depth + 1, childRole(role, key)),
+            key === keyword
+              ? // The third site that keeps a reference, and it has to rebase
+                // like the other two: a relative `./c.json` kept out of a
+                // sub-document names the *root's* c.json once it sits in the
+                // root output. `$ref` only — an anchor-form `$dynamicRef`
+                // carries a name, not a location.
+                keyword === '$ref' && typeof obj[key] === 'string'
+                ? rebaseKeptRef(obj[key] as string, baseLocation, rootLocation)
+                : obj[key]
+              : resolveAt(obj[key], baseLocation, nodeBase, depth + 1, childRole(role, key)),
           )
         }
         sensitive.add(kept)

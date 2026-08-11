@@ -611,6 +611,21 @@ describe('compile-to-module', () => {
     ).toThrow(/'notFound' is also declared by the generated module/)
   })
 
+  it('catches a collision with the runtime and validator imports too', () => {
+    // Those import lines are not declarations, so a check that only read
+    // `const`/`function` would pass and the module would fail to load with the
+    // SyntaxError this exists to replace.
+    expect(() =>
+      compileToModule({
+        routesImport: '../compile-to-module.test-utils',
+        runtimeImport: '../../index',
+        validatorsImport: '@amritk/runtime-validators',
+        routes: { readBodyCapped: corpus.health },
+        info,
+      }),
+    ).toThrow(/'readBodyCapped' is also declared by the generated module/)
+  })
+
   it('still emits for an app export that does not collide', () => {
     expect(() =>
       compileToModule({
