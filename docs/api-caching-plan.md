@@ -176,6 +176,83 @@ route `unchecked` and excludes it from the static check, with the 1000-tag
 cap enforced at runtime. The default guidance stays the coarse `post:list`
 tag — slightly over-invalidating, trivially correct, and statically checkable.
 
+### Hierarchies: cascade on read, not on write
+
+Real resources nest — a post belongs to an author belongs to an org, and the
+author page and the org dashboard both embed the post. Changing the post has
+to bust all three.
+
+The instinct is to walk the parent graph when the write lands and issue a
+purge per ancestor. That is backwards: it needs graph knowledge on the write
+path, and it spends N purge calls against a limiter that allows five per
+*minute* on Free.
+
+Invert it. **Every cached response is tagged with every entity it contains, at
+every level.** Tags are many-to-many, so one flat purge fans out for free:
+
+```
+GET /posts/123        → Cache-Tag: post:123, post, author:9, org:4
+GET /authors/9        → Cache-Tag: author:9, author, post:123, post:456, org:4
+GET /orgs/4/dashboard → Cache-Tag: org:4, author:9, author:22, post:123, …
+
+PATCH /posts/123 → purge({ tags: ['post:123'] })
+   ↳ busts /posts/123, /authors/9, and /orgs/4/dashboard — in one call
+```
+
+The author page is invalidated because *it declared that it contains post
+123*, not because anything traversed upward at write time. This is what
+Fastly surrogate keys and Rails' Russian-doll caching actually do. Both
+directions collapse into the same mechanism: rename org 4 and every post
+response already carries `org:4`, so purging that one tag reaches all of them.
+
+#### Busting a whole entity type
+
+Emit a bare type tag beside the id tag — `post:123` **and** `post`. Purging
+`post` reaches every post-bearing response, at the cost of one extra tag per
+response and no machinery at all.
+
+`purge({ pathPrefixes: ['/posts'] })` is the alternative, and is genuinely
+useful when the URL structure mirrors the entity hierarchy (`/orgs/4/…` takes
+out a subtree in one operation; tags and prefixes combine in a single call).
+But it invalidates by URL rather than by content, so a `/feed` that embeds
+posts escapes it. Tags are the accurate instrument, prefixes the blunt one.
+
+#### Bulk uid purges collapse to the parent
+
+`post:123` is the base case. The constraint is roughly 100 tags per purge
+call against the rate limits above — five hundred uids is five calls, which
+on Free is the entire minute. The coalescer therefore needs a threshold rule:
+**above N distinct child tags, purge the type tag instead.** Over-invalidating
+every post is one operation; enumerating them is five hundred.
+
+#### Four constraints that shape the tag vocabulary
+
+1. **Hierarchical tag *strings* do not give prefix purge.**
+   `org:4:author:9:post:123` looks like a tree and is not — tag purge is exact
+   string match and there is no `org:4:*`. Emit several flat tags instead.
+   This is the most common way to get hierarchical invalidation wrong.
+2. **Ancestor tags usually cannot come from params.** `/posts/{id}` does not
+   know the author id until it has loaded the post. Templates cover
+   `post:{id}`; ancestors need the data — which is why handler-returned tags
+   are a required part of a hierarchical design rather than an escape hatch.
+3. **Re-parenting needs both sides.** Moving post 123 from author 9 to author
+   22 must purge `author:9` *and* `author:22`, and the old parent is only
+   knowable by reading before the write. Handler-returned invalidations,
+   mirroring handler-returned tags.
+4. **Collections blow the tag cap.** 1000 tags and 16 KB per response. A feed
+   of 200 posts with three ancestors each is 600 tags — it fits, barely. The
+   rule is *high fan-in, coarsen*: tag large collections with the type tag
+   rather than enumerating members.
+
+#### Why not declare the entity graph
+
+`defineEntityGraph({ post: { parents: ['author'] } })` is appealing, but the
+framework cannot expand `post:123` into `author:9` without reading data it has
+no access to. The graph is worth having as a lint (does every emitted tag have
+a purger, and vice versa — a write tag no read ever emits is a silent no-op
+that still costs rate limit) and as a generated report. It is not a runtime
+mechanism. Same conclusion as the cache manifest: an output, not an input.
+
 ### Default deny
 
 A route with no `cache` block emits `Cache-Control: no-store`.
