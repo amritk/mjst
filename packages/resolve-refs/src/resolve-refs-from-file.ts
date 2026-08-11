@@ -605,21 +605,34 @@ const rebaseKeptRef = (value: string, from: string, root: string): string => {
  * Only for subtrees handed back wholesale — the depth limit — where no
  * per-node resolution ran to rebase them one at a time.
  */
-const rebaseKeptRefs = (node: unknown, from: string, root: string): unknown => {
+const rebaseKeptRefs = (node: unknown, from: string, root: string, role: NodeRole): unknown => {
   if (from === root || node === null || typeof node !== 'object') return node
-  const stack: unknown[] = [node]
+  // Role-aware, like the resolver itself: a `$ref` key inside `enum`, `const`,
+  // `default` or `examples` belongs to an instance value that merely has a
+  // property spelled that way, and rewriting it changes the literal the schema
+  // declares. Inside a `properties`-style map the keys are names, so `$ref`
+  // there is a property called `$ref`, not a reference either.
+  const stack: { value: unknown; role: NodeRole }[] = [{ value: node, role }]
   while (stack.length > 0) {
     const current = stack.pop()
-    if (current === null || typeof current !== 'object') continue
-    if (Array.isArray(current)) {
-      for (const item of current) stack.push(item)
+    if (current === undefined) break
+    const { value: current_, role: currentRole } = current
+    if (current_ === null || typeof current_ !== 'object') continue
+    if (currentRole === 'value') continue
+    if (Array.isArray(current_)) {
+      for (let index = 0; index < current_.length; index++) {
+        stack.push({ value: current_[index], role: childRole(currentRole, index) })
+      }
       continue
     }
-    const obj = current as Record<string, unknown>
+    const obj = current_ as Record<string, unknown>
+    const isSchema = currentRole !== 'schemaMap'
     for (const [key, value] of Object.entries(obj)) {
-      if ((key === '$ref' || key === '$dynamicRef') && typeof value === 'string') {
+      if (isSchema && (key === '$ref' || key === '$dynamicRef') && typeof value === 'string') {
         assignKey(obj, key, rebaseKeptRef(value, from, root))
-      } else stack.push(value)
+      } else {
+        stack.push({ value, role: childRole(currentRole, key) })
+      }
     }
   }
   return node
@@ -913,7 +926,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       // `./c.json` written in `sub/b.json` would come to name the root's own
       // `c.json`. Same rebasing `keepUnresolved` does, for the same reason.
       reportDepthLimit()
-      return rebaseKeptRefs(detach(node), baseLocation, rootLocation)
+      return rebaseKeptRefs(detach(node), baseLocation, rootLocation, role)
     }
     if (Array.isArray(node)) {
       const items = node.map((item, index) => resolveAt(item, baseLocation, base, depth + 1, childRole(role, index)))
@@ -1232,10 +1245,12 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         const name = finalNames.get(cacheKey)
         if (name !== undefined) assignKey(node, '$ref', `#/$defs/${name}`)
       }
-      for (const [cacheKey, name] of hoists) {
+      for (const [cacheKey] of hoists) {
         const cached = refCache.get(cacheKey)
         const attachable = cached !== undefined && cached !== CYCLE && cached !== MISSING
-        assignKey(defs, finalNames.get(cacheKey) ?? name, attachable ? (cached.value ?? {}) : {})
+        // `finalNames` was built from this very map a few lines up, so every
+        // key is present — no fallback to reason about.
+        assignKey(defs, finalNames.get(cacheKey) as string, attachable ? (cached.value ?? {}) : {})
       }
       assignKey(container, '$defs', defs)
     } else {

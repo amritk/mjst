@@ -1,3 +1,6 @@
+import { assignKey } from '@amritk/helpers/assign-key'
+import { readKey } from '@amritk/helpers/read-key'
+
 import { DiagnosticSeverity } from '../parsers'
 import type { Format } from './formats'
 import { matchesGlob } from './glob'
@@ -142,19 +145,6 @@ type MergeContext = {
 }
 
 /**
- * Writes an alias without letting the name `__proto__` reach the prototype
- * setter, which would drop it and leave `resolveAlias` reading the definition
- * off the table's own prototype.
- */
-const assignAlias = (into: Record<string, AliasDefinition>, name: string, alias: AliasDefinition): void => {
-  if (name === '__proto__') {
-    Object.defineProperty(into, name, { value: alias, writable: true, enumerable: true, configurable: true })
-  } else {
-    into[name] = alias
-  }
-}
-
-/**
  * Resolves an alias name used by a rule against the aliases in scope for the
  * *declaring* definition, registering it in the merged table and returning the
  * key to reference it by. Colliding names from different rulesets are kept apart
@@ -173,19 +163,19 @@ const registerAlias = (
   // alias" throw was skipped and `Object` was written into the table as a real
   // own key. The guard `resolveAlias` has could not help after that: the name
   // *was* own, and the missing `.targets` threw out of the whole lint run.
-  const alias = Object.hasOwn(declaringAliases, name) ? declaringAliases[name] : undefined
+  const alias = readKey(declaringAliases, name)
   if (!alias) throw new Error(`Rule "${ruleName}" references undefined alias "#${name}"`)
-  const existing = Object.hasOwn(ctx.aliases, name) ? ctx.aliases[name] : undefined
+  const existing = readKey(ctx.aliases, name)
   if (existing === undefined || existing === alias) {
-    assignAlias(ctx.aliases, name, alias)
+    assignKey(ctx.aliases, name, alias)
     return name
   }
   // Name collision with a different alias from another ruleset — scope it.
   for (let n = 0; ; n++) {
     const key = `${name}__${n}`
-    const at = Object.hasOwn(ctx.aliases, key) ? ctx.aliases[key] : undefined
+    const at = readKey(ctx.aliases, key)
     if (at === undefined || at === alias) {
-      assignAlias(ctx.aliases, key, alias)
+      assignKey(ctx.aliases, key, alias)
       return key
     }
   }
@@ -359,7 +349,7 @@ export const createRuleset = (definition: RulesetDefinition, options: RulesetOpt
     // ruleset, and a bare index answered `#constructor` with `Object` — not an
     // array, and with no `.targets`, so the loop below threw out of the whole
     // lint run. An alias that is merely unknown returns `[]`.
-    const alias = Object.hasOwn(aliases, name) ? aliases[name] : undefined
+    const alias = readKey(aliases, name)
     if (!alias) return []
     if (Array.isArray(alias)) return alias
     for (const target of alias.targets) {
@@ -383,7 +373,7 @@ export const createRuleset = (definition: RulesetDefinition, options: RulesetOpt
     // `"toString"` otherwise resolved to `Function.prototype.toString` and ran
     // as a rule function instead of being reported as unknown — its string
     // return value then read as an iterable of per-character diagnostics.
-    getFunction: (name) => (Object.hasOwn(functions, name) ? functions[name] : undefined),
+    getFunction: (name) => readKey(functions, name),
     rulesForSource: (source) => {
       if (!source || !hasOverrides) return rules
       // Only pay for a clone when an override actually matches this source; the

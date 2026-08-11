@@ -1,3 +1,5 @@
+import { readKey } from '@amritk/helpers/read-key'
+
 /**
  * The JSON type each config key accepts, mirroring `config.schema.json`.
  * `boolean|string` is `banner`'s `"type": ["boolean", "string"]`.
@@ -95,7 +97,7 @@ export const validateConfig = (parsed: Record<string, unknown>, configPath: stri
     // and was type-checked as an option — reporting "expected undefined,
     // received string" in place of the unknown-option message with the list of
     // real options that makes the typo obvious.
-    const spec = Object.hasOwn(CONFIG_KEYS, key) ? CONFIG_KEYS[key] : undefined
+    const spec = readKey(CONFIG_KEYS, key)
 
     if (!spec) {
       // `$schema` is how editors attach the config schema for completion; it is

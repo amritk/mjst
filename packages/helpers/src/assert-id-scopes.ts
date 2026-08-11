@@ -1,6 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
-import { buildResourceRegistry, DATA_KEYWORDS, escapePointerSegment } from './build-resource-registry'
+import { buildResourceRegistry, escapePointerSegment, schemaChildren } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { resolveRef } from './resolve-ref'
 import { resolveScopedRef } from './resolve-scoped-ref'
@@ -44,12 +44,13 @@ export const assertIdScopes = (rootSchema: JSONSchema): void => {
     enclosing: string,
     resource: Record<string, unknown> | null,
     depth: number,
+    inSchemaMap: boolean,
   ): void => {
     assertSchemaDepth(depth, 'assertIdScopes')
     if (node === null || typeof node !== 'object') return
     if (Array.isArray(node)) {
       for (let index = 0; index < node.length; index++) {
-        walk(node[index], `${pointer}/${index}`, enclosing, resource, depth + 1)
+        walk(node[index], `${pointer}/${index}`, enclosing, resource, depth + 1, false)
       }
       return
     }
@@ -73,11 +74,10 @@ export const assertIdScopes = (rootSchema: JSONSchema): void => {
       )
     }
 
-    for (const key of Object.keys(record)) {
-      if (DATA_KEYWORDS.has(key)) continue
-      walk(record[key], `${pointer}/${escapePointerSegment(key)}`, base, scope, depth + 1)
+    for (const child of schemaChildren(record, inSchemaMap)) {
+      walk(child.value, `${pointer}/${escapePointerSegment(child.key)}`, base, scope, depth + 1, child.inSchemaMap)
     }
   }
 
-  walk(rootSchema, '', registry.rootBase, null, 0)
+  walk(rootSchema, '', registry.rootBase, null, 0, false)
 }

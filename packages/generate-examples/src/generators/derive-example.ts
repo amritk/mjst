@@ -1,4 +1,5 @@
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
+import { readKey } from '@amritk/helpers/read-key'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import {
   hasAdditionalProperties,
@@ -255,7 +256,7 @@ const exampleString = (schema: JSONSchema): string => {
     // format naming an `Object.prototype` member resolved to a `Function` —
     // which is not a string, so the emitted `fooExample` carried `undefined`
     // for that property and the generated file failed to type-check.
-    const formatted = Object.hasOwn(FORMAT_EXAMPLES, schema.format) ? FORMAT_EXAMPLES[schema.format] : undefined
+    const formatted = readKey(FORMAT_EXAMPLES, schema.format)
     if (formatted !== undefined) return formatted
   }
 

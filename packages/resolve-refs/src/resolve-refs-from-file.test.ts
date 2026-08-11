@@ -1123,4 +1123,32 @@ describe('resolve-refs-from-file', () => {
     expect(JSON.stringify(resolved)).toContain('./sub/c.json#/$defs/real')
     expect(JSON.stringify(resolved)).not.toContain('"./c.json#/$defs/real"')
   })
+
+  it('does not rebase a $ref that is instance data inside a truncated subtree', async () => {
+    // An `enum` member is a value that happens to have a `$ref` key — the case
+    // the official suite files under "naive replacement of $ref with its
+    // destination is not correct". A structural walk rewrote the literal the
+    // schema declares. The nesting goes through `allOf` so the walk stays
+    // inside the vocabulary: under an unrecognized keyword the resolver itself
+    // keeps finding references, and the rebase matches it.
+    mkdirSync(join(dir, 'sub'))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ a: { $ref: './sub/b.json' } }))
+    writeFileSync(
+      join(dir, 'sub', 'b.json'),
+      JSON.stringify({
+        allOf: [
+          { allOf: [{ enum: [{ $ref: './c.json' }], default: { $ref: './c.json' }, not: { $ref: './c.json' } }] },
+        ],
+      }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { maxDepth: 4 })
+    const serialized = JSON.stringify(resolved)
+
+    // The two data positions keep the author's literal…
+    expect(serialized).toContain('"enum":[{"$ref":"./c.json"}]')
+    expect(serialized).toContain('"default":{"$ref":"./c.json"}')
+    // …while the real reference beside them is rebased.
+    expect(serialized).toContain('"not":{"$ref":"./sub/c.json"}')
+  })
 })

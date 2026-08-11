@@ -1,8 +1,17 @@
 import { assignKey } from './assign-key'
-import { buildResourceRegistry, DATA_KEYWORDS, escapePointerSegment, resolveUri } from './build-resource-registry'
+import {
+  buildResourceRegistry,
+  DATA_KEYWORDS,
+  escapePointerSegment,
+  resolveUri,
+  SCHEMA_MAPS,
+} from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { resolveRef } from './resolve-ref'
 import { resolveScopedRef } from './resolve-scoped-ref'
+
+/** Stand-in for the keyword sets inside a name-to-schema map, where no key is a keyword. */
+const EMPTY: ReadonlySet<string> = new Set()
 
 /**
  * Rewrites every `$ref` and `$dynamicRef` in a document to a plain JSON Pointer
@@ -73,7 +82,11 @@ export const normalizeRefScopes = (root: Record<string, unknown>): Record<string
     return normalizedRef(ref, base)
   }
 
-  const rewrite = (node: unknown, pointer: string, enclosing: string, depth: number): unknown => {
+  const rewrite = (node: unknown, pointer: string, enclosing: string, depth: number, inSchemaMap = false): unknown => {
+    // At a schema node the data keywords hold values, not schemas; inside a
+    // `properties`-style map the same words are just author-chosen names.
+    const dataKeys = inSchemaMap ? EMPTY : DATA_KEYWORDS
+    const mapKeys = inSchemaMap ? EMPTY : SCHEMA_MAPS
     assertSchemaDepth(depth, 'normalizeRefScopes')
     if (node === null || typeof node !== 'object') return node
 
@@ -95,9 +108,9 @@ export const normalizeRefScopes = (root: Record<string, unknown>): Record<string
           ? (normalizedRef(value, base) ?? value)
           : key === '$dynamicRef' && typeof value === 'string'
             ? (normalizedDynamicRef(value, base) ?? value)
-            : DATA_KEYWORDS.has(key)
+            : dataKeys.has(key)
               ? value
-              : rewrite(value, `${pointer}/${escapePointerSegment(key)}`, base, depth + 1)
+              : rewrite(value, `${pointer}/${escapePointerSegment(key)}`, base, depth + 1, mapKeys.has(key))
       if (next !== value) changed = true
       assignKey(result, key, next)
     }

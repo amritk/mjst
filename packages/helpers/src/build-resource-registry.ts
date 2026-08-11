@@ -58,7 +58,16 @@ export const SYNTHETIC_BASE = 'https://helpers.mjst.invalid/schema'
  * describes, not a declaration, so every walk over the `$id` graph stops at
  * these.
  */
-export const DATA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples'])
+export const DATA_KEYWORDS = new Set([
+  'enum',
+  'const',
+  'default',
+  'examples',
+  // OpenAPI 3.0's singular spelling. `foldNullable` runs specifically on 3.0
+  // documents, and the adapters take TypeBox/OpenAPI-derived input, so an
+  // `example` value was being walked as though it were a schema.
+  'example',
+])
 
 /**
  * Keywords whose value is a map of author-chosen names to schemas.
@@ -101,6 +110,39 @@ export const escapePointerSegment = (segment: string): string =>
   segment.indexOf('~') === -1 && segment.indexOf('/') === -1 && segment.indexOf('%') === -1
     ? segment
     : segment.replace(/~/g, '~0').replace(/\//g, '~1').replace(/%/g, '%25')
+
+/**
+ * The children of a node to walk, each paired with the position it sits in.
+ *
+ * A schema walk has two kinds of object. At a **schema node** the keys are
+ * keywords, so {@link DATA_KEYWORDS} mark subtrees holding instance data that
+ * must not be read as schemas. Inside a {@link SCHEMA_MAPS} entry the keys are
+ * author-chosen **names** instead, where those same words carry no keyword
+ * meaning — a definition or property genuinely called `default` is ordinary.
+ *
+ * Every walker here used to test the key name alone, which conflated the two:
+ * a `$defs.default` had its whole subtree skipped, so an `$anchor` inside it
+ * never registered and the `$ref` naming it failed to resolve. Threading one
+ * boolean through the recursion is what tells them apart, and having it in one
+ * place is what keeps the eight walkers agreeing about it.
+ *
+ * @example
+ * ```typescript
+ * const walk = (node: unknown, inSchemaMap: boolean): void => {
+ *   if (!isObject(node)) return
+ *   for (const child of schemaChildren(node, inSchemaMap)) walk(child.value, child.inSchemaMap)
+ * }
+ * ```
+ */
+export function* schemaChildren(
+  record: Record<string, unknown>,
+  inSchemaMap: boolean,
+): Generator<{ key: string; value: unknown; inSchemaMap: boolean }> {
+  for (const key of Object.keys(record)) {
+    if (!inSchemaMap && DATA_KEYWORDS.has(key)) continue
+    yield { key, value: record[key], inSchemaMap: !inSchemaMap && SCHEMA_MAPS.has(key) }
+  }
+}
 
 /**
  * The base URI a subschema establishes through its `$id`, or the enclosing base
@@ -151,11 +193,12 @@ export const buildResourceRegistry = (root: unknown): ResourceRegistry | null =>
   const baseAt = new Map<string, string>()
   let sawId = false
 
-  const walk = (node: unknown, pointer: string, enclosing: string, depth: number): void => {
+  const walk = (node: unknown, pointer: string, enclosing: string, depth: number, inSchemaMap: boolean): void => {
     assertSchemaDepth(depth, 'buildResourceRegistry')
     if (node === null || typeof node !== 'object') return
     if (Array.isArray(node)) {
-      for (let index = 0; index < node.length; index++) walk(node[index], `${pointer}/${index}`, enclosing, depth + 1)
+      for (let index = 0; index < node.length; index++)
+        walk(node[index], `${pointer}/${index}`, enclosing, depth + 1, false)
       return
     }
 
@@ -179,13 +222,12 @@ export const buildResourceRegistry = (root: unknown): ResourceRegistry | null =>
       if (!anchors.has(key)) anchors.set(key, pointer)
     }
 
-    for (const key of Object.keys(record)) {
-      if (DATA_KEYWORDS.has(key)) continue
-      walk(record[key], `${pointer}/${escapePointerSegment(key)}`, base, depth + 1)
+    for (const child of schemaChildren(record, inSchemaMap)) {
+      walk(child.value, `${pointer}/${escapePointerSegment(child.key)}`, base, depth + 1, child.inSchemaMap)
     }
   }
 
-  walk(root, '', SYNTHETIC_BASE, 0)
+  walk(root, '', SYNTHETIC_BASE, 0, false)
   if (!sawId) {
     registries.set(root, null)
     return null

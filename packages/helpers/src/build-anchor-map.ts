@@ -4,7 +4,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 // percent-decoded on the way in, so it has to be escaped by the same
 // function that contract is defined by. A local copy omitted the `%`
 // escape, which left an anchor under a key like `a%2Fb` unresolvable.
-import { DATA_KEYWORDS, escapePointerSegment } from './build-resource-registry'
+import { escapePointerSegment, schemaChildren } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { isSchemaObject } from './schema-guards'
 
@@ -39,11 +39,11 @@ export const buildAnchorMap = (rootSchema: JSONSchema): Record<string, string> =
   const map = Object.create(null) as Record<string, string>
   if (!isSchemaObject(rootSchema)) return map
 
-  const walk = (node: unknown, pointer: string, depth: number): void => {
+  const walk = (node: unknown, pointer: string, depth: number, inSchemaMap: boolean): void => {
     assertSchemaDepth(depth, 'buildAnchorMap')
     if (node === null || typeof node !== 'object') return
     if (Array.isArray(node)) {
-      for (let i = 0; i < node.length; i++) walk(node[i], `${pointer}/${i}`, depth + 1)
+      for (let i = 0; i < node.length; i++) walk(node[i], `${pointer}/${i}`, depth + 1, false)
       return
     }
 
@@ -53,12 +53,11 @@ export const buildAnchorMap = (rootSchema: JSONSchema): Record<string, string> =
       if (typeof anchor === 'string' && !Object.hasOwn(map, anchor)) map[anchor] = `#${pointer}`
     }
 
-    for (const key of Object.keys(record)) {
-      if (DATA_KEYWORDS.has(key)) continue
-      walk(record[key], `${pointer}/${escapePointerSegment(key)}`, depth + 1)
+    for (const child of schemaChildren(record, inSchemaMap)) {
+      walk(child.value, `${pointer}/${escapePointerSegment(child.key)}`, depth + 1, child.inSchemaMap)
     }
   }
 
-  walk(rootSchema, '', 0)
+  walk(rootSchema, '', 0, false)
   return map
 }

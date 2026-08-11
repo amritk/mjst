@@ -187,9 +187,15 @@ const collectImportTargets = (
     // would otherwise never reach this. The type emitter renders a
     // `prefixItems` `$ref` as the referenced type name, so missing it produced
     // a file naming `Contact` with no import — output that does not compile.
-    if (Array.isArray(record['prefixItems'])) {
+    // Both tuple spellings: 2020-12 `prefixItems` and draft-07's array-valued
+    // `items`. The type emitter renders each position as the referenced type
+    // name while the parser emitter passes the element through untouched, so
+    // these are type-only positions (see `typeOnlyDepth`).
+    for (const keyword of ['prefixItems', 'items'] as const) {
+      const positions = record[keyword]
+      if (!Array.isArray(positions)) continue
       typeOnlyDepth++
-      for (const item of record['prefixItems']) {
+      for (const item of positions) {
         collectRefsFromValue(item)
       }
       typeOnlyDepth--
@@ -203,8 +209,9 @@ const collectImportTargets = (
     }
 
     // Check if this is an array type with items that has a $ref
-    // This pattern requires validateArray
-    if (record.type === 'array' && hasItems(record) && hasRef(record.items)) {
+    // This pattern requires validateArray. An array-valued `items` is the
+    // draft-07 tuple spelling, handled with `prefixItems` above, not here.
+    if (record.type === 'array' && hasItems(record) && !Array.isArray(record.items) && hasRef(record.items)) {
       collectRefsFromValue(record.items)
       return
     }
@@ -234,8 +241,9 @@ const collectImportTargets = (
       }
     }
 
-    // Traverse into array items
-    if (hasItems(record)) {
+    // Traverse into array items — the single-schema form only; the array form
+    // is a tuple and was walked above.
+    if (hasItems(record) && !Array.isArray(record.items)) {
       collectRefsFromValue(record.items)
     }
 
@@ -301,8 +309,23 @@ const collectImportTargets = (
   }
 
   // Collect refs from root-level items (when the schema itself is an array type)
-  if (typeof schema === 'object' && schema !== null && hasItems(schema)) {
+  if (typeof schema === 'object' && schema !== null && hasItems(schema) && !Array.isArray(schema.items)) {
     collectRefsFromValue(schema.items)
+  }
+
+  // …and from a root-level tuple, in either spelling. The root enumerates its
+  // keys by hand rather than going through `collectRefsFromValue`, so a
+  // keyword missing from this list is simply never walked: a schema that *is*
+  // a tuple emitted a type naming `Contact` with no import for it at all.
+  if (typeof schema === 'object' && schema !== null) {
+    const record = schema as Record<string, unknown>
+    for (const keyword of ['prefixItems', 'items'] as const) {
+      const positions = record[keyword]
+      if (!Array.isArray(positions)) continue
+      typeOnlyDepth++
+      for (const item of positions) collectRefsFromValue(item)
+      typeOnlyDepth--
+    }
   }
 
   // Collect refs from root-level composition keywords.

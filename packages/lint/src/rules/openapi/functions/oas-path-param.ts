@@ -1,3 +1,5 @@
+import { assignKey } from '@amritk/helpers/assign-key'
+
 import type { IFunctionResult, JsonPath, RulesetFunction } from '../../../core/types'
 import { isObject, OPERATION_METHODS } from './helpers'
 
@@ -10,20 +12,12 @@ const PATH_TEMPLATE = /(\{;?\??[a-zA-Z0-9_-]+\*?\})/g
 type DefinedParams = Record<string, JsonPath | undefined>
 
 /**
- * Records a parameter name without letting `__proto__` reach the prototype
- * setter. Names come from the document, so `__proto__` is one an author may
- * write — and `defined[name] = path` on it sets the map's prototype instead of
+ * Names come from the document, so `__proto__` is one an author may write —
+ * and a plain `defined[name] = path` on it sets the map's prototype instead of
  * adding a key, so the name never registers: the duplicate check can never
  * fire for it, the "must be used in path" sweep skips it, and the
  * "must be defined" check reports a parameter that is defined right there.
  */
-const define = (into: DefinedParams, name: string, path: JsonPath): void => {
-  if (name === '__proto__') {
-    Object.defineProperty(into, name, { value: path, writable: true, enumerable: true, configurable: true })
-  } else {
-    into[name] = path
-  }
-}
 
 const namedPathParam = (param: Record<string, unknown>): string | undefined =>
   param['in'] === 'path' && typeof param['name'] === 'string' ? param['name'] : undefined
@@ -95,7 +89,7 @@ export const oasPathParam: RulesetFunction = (paths, _options, context) => {
         if (!isObject(param)) return
         const definitionPath = [...context.path, path, 'parameters', index]
         const name = recordPathParam(param, definitionPath, topParams, results)
-        if (name !== undefined) define(topParams, name, definitionPath)
+        if (name !== undefined) assignKey(topParams, name, definitionPath)
       })
     }
 
@@ -110,7 +104,7 @@ export const oasPathParam: RulesetFunction = (paths, _options, context) => {
           if (!isObject(param)) return
           const definitionPath = [...operationPath, 'parameters', index]
           const name = recordPathParam(param, definitionPath, operationParams, results)
-          if (name !== undefined) define(operationParams, name, definitionPath)
+          if (name !== undefined) assignKey(operationParams, name, definitionPath)
         })
       }
 

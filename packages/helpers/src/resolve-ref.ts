@@ -1,6 +1,7 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { buildAnchorMap } from './build-anchor-map'
+import { readKey } from './read-key'
 
 /**
  * Anchor maps are memoized per root document: `resolveRef` is called once per
@@ -142,7 +143,7 @@ export const resolveRef = (ref: string, rootSchema: Record<string, unknown>): Re
   // bare index answers `__proto__` and `constructor` from `Object.prototype`,
   // handing back a "definition" the document never declared — which the
   // generators then emit a file for.
-  const base = Object.hasOwn(defsRecord, baseUri) ? defsRecord[baseUri] : undefined
+  const base = readKey(defsRecord, baseUri)
   if (typeof base !== 'object' || base === null) return undefined
 
   // No fragment — return the definition directly

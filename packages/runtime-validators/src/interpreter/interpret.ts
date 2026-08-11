@@ -1084,6 +1084,10 @@ const interpretString = (ctx: InterpreterContext, s: Record<string, unknown>, va
         // `format: "toString"` otherwise read `Function.prototype.toString` off
         // the prototype chain — truthy, with no `.test` — so an unknown format
         // that the spec says to ignore crashed the validator instead.
+        //
+        // Spelled out rather than calling `@amritk/helpers`' `readKey`: this
+        // package takes no `@amritk/*` dependency by design, so the runtime
+        // stays slim.
         const re = Object.hasOwn(FORMAT_CHECKS, format) ? FORMAT_CHECKS[format] : undefined
         if (re && !re.test(value)) fail(ctx, `must match format "${format}"`, path)
       }

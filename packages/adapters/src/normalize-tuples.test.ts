@@ -112,4 +112,13 @@ describe('normalize-tuples', () => {
     enforceTupleLength(schema)
     expect(schema).toEqual({ type: 'object', dependencies: { items: ['a', 'b'] } })
   })
+
+  it("leaves an items array inside OpenAPI's singular example alone", () => {
+    // `example` is the 3.0 spelling and the adapters take OpenAPI-derived
+    // input, so it holds a value just as `examples` does.
+    const schema = { type: 'object', example: { items: ['a', 'b'] } }
+    normalizeDraftTuples(schema)
+    enforceTupleLength(schema)
+    expect(schema).toEqual({ type: 'object', example: { items: ['a', 'b'] } })
+  })
 })

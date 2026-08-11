@@ -1,3 +1,5 @@
+import { readKey } from '@amritk/helpers/read-key'
+
 import type { IDiagnostic, JsonPath } from '../core/types'
 import { applyEditOpsWithChanges, type EditOp, type ParserFormat } from '../parsers'
 import type { AppliedFix, FixerRegistry, FixResult } from './types'
@@ -67,7 +69,7 @@ export const applyFixes = (
     // registry — truthy, with no `.fix` — and the unguarded call below threw out
     // of `applyFixes`, abandoning every other fix in the batch.
     const code = String(diagnostic.code)
-    const fixer = Object.hasOwn(fixers, code) ? fixers[code] : undefined
+    const fixer = readKey(fixers, code)
     if (!fixer) continue
     if (safeOnly && fixer.safe === false) continue
 

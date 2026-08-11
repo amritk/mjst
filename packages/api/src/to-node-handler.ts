@@ -309,6 +309,16 @@ const readBytes = (incoming: IncomingMessage, limit: number): Promise<Buffer> =>
       else resolve(recovered)
       return
     }
+    // A stream torn down before this ran has already emitted its last event, so
+    // the listeners below would wait on events that can never come. The body is
+    // read lazily — only when a route asks — so a handler that awaits anything
+    // first leaves a window for the client to abort, and `readableEnded` is
+    // false for an aborted stream, which is why the check above does not cover
+    // it. The 'close' listener only helps while 'close' is still ahead of us.
+    if (incoming.destroyed || incoming.readableAborted) {
+      reject(new Error('Request closed before the body finished'))
+      return
+    }
     const chunks: Buffer[] = []
     let total = 0
     incoming.on('data', (chunk: Buffer) => {

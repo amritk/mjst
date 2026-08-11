@@ -600,4 +600,32 @@ describe('collect-imports', () => {
       "import { type Contact, parseContact, validateContactShape } from './contact.js';",
     ])
   })
+
+  it('imports a $ref from a root-level tuple, in either spelling', () => {
+    // The root enumerates its keywords by hand, so one missing from that list
+    // is never walked at all: a schema that *is* a tuple emitted a type naming
+    // `Contact` with no import for it.
+    for (const keyword of ['prefixItems', 'items'] as const) {
+      const schema = { type: 'array' as const, [keyword]: [{ $ref: '#/$defs/Contact' }, { type: 'string' }] }
+      expect(collectImports(schema)).toEqual(["import type { Contact } from './contact.js';"])
+    }
+  })
+
+  it('treats a draft-07 array-valued items tuple as type-only too', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { pair: { type: 'array' as const, items: [{ $ref: '#/$defs/Contact' }] } },
+    }
+    expect(collectImports(schema)).toEqual(["import type { Contact } from './contact.js';"])
+  })
+
+  it('keeps the value import for a single-schema items', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { list: { type: 'array' as const, items: { $ref: '#/$defs/Contact' } } },
+    }
+    expect(collectImports(schema)).toEqual([
+      "import { type Contact, parseContact, validateContactShape } from './contact.js';",
+    ])
+  })
 })
