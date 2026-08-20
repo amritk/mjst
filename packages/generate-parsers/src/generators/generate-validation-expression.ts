@@ -30,6 +30,7 @@ import {
   hasUniqueItems,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
+import { maxLengthPassExpr, minLengthPassExpr } from '@amritk/helpers/string-length-check'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { findDiscriminator } from '#helpers/find-discriminator'
 import { getDefaultValue } from '#helpers/get-default-value'
@@ -132,7 +133,13 @@ export const plainScalarItemCheck = (itemSchema: JSONSchema, accessor: string): 
  */
 export const isCoercibleItemSchema = (itemSchema: JSONSchema): boolean => {
   if (scalarItemTypeCheck(itemSchema, '_it') !== null) return true
-  return isSchemaObject(itemSchema) && hasEnum(itemSchema) && itemSchema.enum.length > 0
+  if (!isSchemaObject(itemSchema)) return false
+  // A `const` item is the narrowest leaf there is — one permitted value — and
+  // generateValidationExpression already coerces a non-match to it. Leaving it
+  // out meant `{ items: { const: null } }` passed every element through
+  // untouched, so the coerced array was still invalid against its own schema.
+  if (hasConst(itemSchema)) return true
+  return hasEnum(itemSchema) && itemSchema.enum.length > 0
 }
 
 /**
@@ -229,6 +236,34 @@ const getTypeArray = (schema: JSONSchema): string[] | null => {
 }
 
 /**
+ * The checks a coerced string still has to clear: its `pattern` and its length
+ * bounds. Empty when the schema constrains nothing beyond `type: 'string'`, so
+ * the common case keeps the bare `String(x)` coercion.
+ */
+const stringBoundChecks = (valueExpr: string, schema: JSONSchema): string[] => {
+  const checks: string[] = []
+  if (hasPattern(schema)) checks.push(`${regexLiteral(schema.pattern)}.test(${valueExpr})`)
+  if (hasMinLength(schema)) checks.push(minLengthPassExpr(valueExpr, schema.minLength))
+  if (hasMaxLength(schema)) checks.push(maxLengthPassExpr(valueExpr, schema.maxLength))
+  return checks
+}
+
+/**
+ * The bounds a coerced number still has to clear. Empty when the schema
+ * constrains nothing beyond its `type`, so the common case keeps the bare
+ * finite/integer test.
+ */
+const numberBoundChecks = (valueExpr: string, schema: JSONSchema): string[] => {
+  const checks: string[] = []
+  if (hasMinimum(schema)) checks.push(`${valueExpr} >= ${schema.minimum}`)
+  if (hasMaximum(schema)) checks.push(`${valueExpr} <= ${schema.maximum}`)
+  if (hasExclusiveMinimum(schema)) checks.push(`${valueExpr} > ${schema.exclusiveMinimum}`)
+  if (hasExclusiveMaximum(schema)) checks.push(`${valueExpr} < ${schema.exclusiveMaximum}`)
+  if (hasMultipleOf(schema)) checks.push(multipleOfPassExpr(valueExpr, schema.multipleOf))
+  return checks
+}
+
+/**
  * Generates a type coercion expression for converting a value to the expected type.
  */
 const getTypeCoercion = (accessor: string, schema: JSONSchema, defaultValue: string): string | null => {
@@ -237,26 +272,41 @@ const getTypeCoercion = (accessor: string, schema: JSONSchema, defaultValue: str
   }
 
   switch (schema.type) {
-    case 'string':
-      return `String(${accessor})`
-    case 'number': {
-      // Number() of a non-numeric string produces NaN, which silently poisons
-      // arithmetic. Guard with Number.isFinite and fall back to the default.
-      const n = `Number(${accessor})`
-      return `(Number.isFinite(${n}) ? ${n} : ${defaultValue})`
+    case 'string': {
+      const coerced = `String(${accessor})`
+      // `String(x)` satisfies `type: 'string'` but nothing else: it produced
+      // `""` for a missing value and `"[object Object]"` for an object, both of
+      // which a `minLength` / `maxLength` / `pattern` schema rejects — so the
+      // "repaired" value was still invalid. Bind it once and keep it only when
+      // it actually clears the bounds, exactly as the numeric cases below do.
+      const bounds = stringBoundChecks('_s', schema)
+      if (bounds.length === 0) return coerced
+      return `((_s) => ${bounds.join(' && ')} ? _s : ${defaultValue})(${coerced})`
     }
+    case 'number':
     case 'integer': {
-      // An `integer` must coerce to a whole number, or the "repaired" value still
-      // fails validation (a bare `Number.isFinite` accepts `1.5`). Require
-      // integrality and fall back to the default otherwise — matching the
-      // root-level integer parser, which yields the default for a non-integer.
+      // Number() of a non-numeric string produces NaN, which silently poisons
+      // arithmetic; an `integer` additionally has to reject `1.5`, or the
+      // "repaired" value still fails validation.
+      const wellFormed = schema.type === 'integer' ? 'Number.isInteger' : 'Number.isFinite'
+      const bounds = numberBoundChecks('_n', schema)
+      // The bounds belong here for the same reason: `Number(-1)` cleared
+      // `Number.isInteger` and was handed back as the repair for a
+      // `{ minimum: 0 }` schema it does not satisfy. They need the conversion
+      // bound to a name (it appears in every term), so an unbounded schema —
+      // the common case — keeps the allocation-free inline form instead.
       const n = `Number(${accessor})`
-      return `(Number.isInteger(${n}) ? ${n} : ${defaultValue})`
+      if (bounds.length === 0) return `(${wellFormed}(${n}) ? ${n} : ${defaultValue})`
+      return `((_n) => ${[`${wellFormed}(_n)`, ...bounds].join(' && ')} ? _n : ${defaultValue})(${n})`
     }
     case 'boolean':
       return `Boolean(${accessor})`
     case 'array':
-      return `[]`
+      // The schema's own fallback, not a bare `[]`: that ignored `minItems` (and
+      // the `prefixItems` positions below it), so the coerced value was not an
+      // instance of the schema that produced it. `getDefaultValue` builds one
+      // that is.
+      return defaultValue
     case 'object':
       // Fall back to the schema's default (which fills required properties)
       // rather than a bare `{}`, so a coerced object is a valid instance.
@@ -486,11 +536,15 @@ export const generateValidationExpression = (
         if (hasPattern(schema)) {
           checks.push(`${regexLiteral(schema.pattern)}.test(${accessor})`)
         }
+        // Code points, not UTF-16 units — see string-length-check. A bare
+        // `.length` disagreed with the strict assertions and the matcher, which
+        // both count code points, so an astral string took a different branch
+        // here than the check that decides whether it is valid at all.
         if (hasMinLength(schema)) {
-          checks.push(`${accessor}.length >= ${schema.minLength}`)
+          checks.push(minLengthPassExpr(accessor, schema.minLength))
         }
         if (hasMaxLength(schema)) {
-          checks.push(`${accessor}.length <= ${schema.maxLength}`)
+          checks.push(maxLengthPassExpr(accessor, schema.maxLength))
         }
         break
       }

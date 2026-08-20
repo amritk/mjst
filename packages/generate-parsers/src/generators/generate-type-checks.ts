@@ -31,6 +31,7 @@ import {
   isObjectSchema,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
+import { maxLengthPassExpr, minLengthPassExpr } from '@amritk/helpers/string-length-check'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { generateEnumCheck } from './generate-enum-check'
@@ -359,8 +360,12 @@ export const generatePropertyTypeCheck = (
     case 'string': {
       checks.push(`typeof ${varName} === "string"`)
       if (hasPattern(schema)) checks.push(`${regexLiteral(schema.pattern)}.test(${varName})`)
-      if (hasMinLength(schema)) checks.push(`${varName}.length >= ${schema.minLength}`)
-      if (hasMaxLength(schema)) checks.push(`${varName}.length <= ${schema.maxLength}`)
+      // Code points, not UTF-16 units (see string-length-check). A bare
+      // `.length` is not *true-sound* for an astral string: it called `"💩"`
+      // two characters long, so the guard waved a value past `minLength: 2`
+      // that the strict assertion — which counts code points — then rejects.
+      if (hasMinLength(schema)) checks.push(minLengthPassExpr(varName, schema.minLength))
+      if (hasMaxLength(schema)) checks.push(maxLengthPassExpr(varName, schema.maxLength))
       break
     }
     case 'number':

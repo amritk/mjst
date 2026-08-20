@@ -24,6 +24,7 @@ import {
   hasUniqueItems,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
+import { maxLengthPassExpr, minLengthPassExpr } from '@amritk/helpers/string-length-check'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { generateEnumCheck } from './generate-enum-check'
@@ -146,11 +147,14 @@ const generateInferredChecks = (accessor: string, schema: JSONSchema, type: Infe
       if (hasPattern(schema)) {
         checks.push(`${regexLiteral(schema.pattern)}.test(${accessor})`)
       }
+      // Code points, not UTF-16 units (see string-length-check): a bare
+      // `.length` made this branch check disagree with the matcher and the
+      // strict assertions on any string carrying a surrogate pair.
       if (hasMinLength(schema)) {
-        checks.push(`${accessor}.length >= ${schema.minLength}`)
+        checks.push(minLengthPassExpr(accessor, schema.minLength))
       }
       if (hasMaxLength(schema)) {
-        checks.push(`${accessor}.length <= ${schema.maxLength}`)
+        checks.push(maxLengthPassExpr(accessor, schema.maxLength))
       }
       break
     case 'number':

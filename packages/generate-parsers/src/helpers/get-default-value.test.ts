@@ -217,4 +217,56 @@ describe('get-default-value', () => {
       getDefaultValue({ type: 'array', items: [{ type: 'string' }, { type: 'number' }], minItems: 2 } as never),
     ).toBe('["", 0]')
   })
+
+  // A fallback is only useful if it is an instance of the schema that produced
+  // it — otherwise a coercing parser "repairs" a missing value into one the
+  // schema still rejects.
+  describe('scalar fallbacks satisfy their own constraints', () => {
+    it('pads a string up to minLength', () => {
+      expect(getDefaultValue({ type: 'string', minLength: 1 })).toBe('"x"')
+      expect(getDefaultValue({ type: 'string', minLength: 3, maxLength: 4 })).toBe('"xxx"')
+    })
+
+    it('keeps the empty string when no lower bound asks otherwise', () => {
+      expect(getDefaultValue({ type: 'string' })).toBe('""')
+      expect(getDefaultValue({ type: 'string', maxLength: 4 })).toBe('""')
+      expect(getDefaultValue({ type: 'string', minLength: 0 })).toBe('""')
+    })
+
+    it('caps the padding so a pathological minLength cannot inline a huge literal', () => {
+      expect(getDefaultValue({ type: 'string', minLength: 100_000 })).toBe(`"${'x'.repeat(256)}"`)
+    })
+
+    it("leaves a pattern's own guess alone", () => {
+      // Padding an arbitrary regex to a length is not something we can do safely.
+      expect(getDefaultValue({ type: 'string', pattern: '^[a-z]{2}$', minLength: 2 })).toBe('""')
+    })
+
+    it('moves a number inside its bounds', () => {
+      expect(getDefaultValue({ type: 'number', minimum: 5 })).toBe('5')
+      expect(getDefaultValue({ type: 'number', maximum: -5 })).toBe('-5')
+      expect(getDefaultValue({ type: 'number', exclusiveMinimum: 0 })).toBe('1')
+      expect(getDefaultValue({ type: 'number', exclusiveMaximum: 0 })).toBe('-1')
+      expect(getDefaultValue({ type: 'integer', minimum: 1 })).toBe('1')
+      expect(getDefaultValue({ type: 'integer', exclusiveMinimum: 5 })).toBe('6')
+    })
+
+    it('keeps zero when zero is already in range', () => {
+      expect(getDefaultValue({ type: 'number' })).toBe('0')
+      expect(getDefaultValue({ type: 'integer', minimum: -10, maximum: 10 })).toBe('0')
+      expect(getDefaultValue({ type: 'number', multipleOf: 3 })).toBe('0')
+    })
+
+    it('rounds up to a multiple of multipleOf', () => {
+      expect(getDefaultValue({ type: 'number', multipleOf: 3, minimum: 4 })).toBe('6')
+      expect(getDefaultValue({ type: 'integer', minimum: 1, maximum: 10, multipleOf: 4 })).toBe('4')
+    })
+
+    it('falls back to zero when the bounds cannot be satisfied', () => {
+      // An unsatisfiable schema has no right answer; the historical `0` is no
+      // worse than anything else we could invent.
+      expect(getDefaultValue({ type: 'integer', minimum: 5, maximum: 6, multipleOf: 4 })).toBe('0')
+      expect(getDefaultValue({ type: 'number', minimum: 10, maximum: 1 })).toBe('0')
+    })
+  })
 })

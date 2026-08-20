@@ -1664,7 +1664,7 @@ describe('generate-parser-function', () => {
     ...input,
     id: typeof _id === "string" ? _id : (_id !== undefined ? String(_id) : ""),
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
-    price: typeof _price === "number" && _price >= 0 ? _price : (_price !== undefined ? (Number.isFinite(Number(_price)) ? Number(_price) : 0) : 0),
+    price: typeof _price === "number" && _price >= 0 ? _price : (_price !== undefined ? ((_n) => Number.isFinite(_n) && _n >= 0 ? _n : 0)(Number(_price)) : 0),
     ...(_inStock !== undefined && { inStock: typeof _inStock === "boolean" ? _inStock : Boolean(_inStock) }),
     ...(_tags !== undefined && { tags: (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []) }),
   } as unknown as Product;
@@ -1694,8 +1694,8 @@ describe('generate-parser-function', () => {
   if ((_page === undefined || typeof _page === "number" && Number.isInteger(_page) && _page >= 1) && (_perPage === undefined || typeof _perPage === "number" && Number.isInteger(_perPage) && _perPage >= 1 && _perPage <= 100) && (_search === undefined || typeof _search === "string")) return { ...input } as PageParams;
   return {
     ...input,
-    ...(_page !== undefined && { page: typeof _page === "number" && Number.isInteger(_page) && _page >= 1 ? _page : (Number.isInteger(Number(_page)) ? Number(_page) : 0) }),
-    ...(_perPage !== undefined && { perPage: typeof _perPage === "number" && Number.isInteger(_perPage) && _perPage >= 1 && _perPage <= 100 ? _perPage : (Number.isInteger(Number(_perPage)) ? Number(_perPage) : 0) }),
+    ...(_page !== undefined && { page: typeof _page === "number" && Number.isInteger(_page) && _page >= 1 ? _page : ((_n) => Number.isInteger(_n) && _n >= 1 ? _n : 1)(Number(_page)) }),
+    ...(_perPage !== undefined && { perPage: typeof _perPage === "number" && Number.isInteger(_perPage) && _perPage >= 1 && _perPage <= 100 ? _perPage : ((_n) => Number.isInteger(_n) && _n >= 1 && _n <= 100 ? _n : 1)(Number(_perPage)) }),
     ...(_search !== undefined && { search: typeof _search === "string" ? _search : String(_search) }),
   } as unknown as PageParams;
 }`,
@@ -1747,8 +1747,8 @@ describe('generate-parser-function', () => {
   if (typeof _latitude === "number" && _latitude >= -90 && _latitude <= 90 && typeof _longitude === "number" && _longitude >= -180 && _longitude <= 180 && (_altitude === undefined || typeof _altitude === "number") && (_label === undefined || typeof _label === "string")) return { ...input } as GeoCoordinate;
   return {
     ...input,
-    latitude: typeof _latitude === "number" && _latitude >= -90 && _latitude <= 90 ? _latitude : (_latitude !== undefined ? (Number.isFinite(Number(_latitude)) ? Number(_latitude) : 0) : 0),
-    longitude: typeof _longitude === "number" && _longitude >= -180 && _longitude <= 180 ? _longitude : (_longitude !== undefined ? (Number.isFinite(Number(_longitude)) ? Number(_longitude) : 0) : 0),
+    latitude: typeof _latitude === "number" && _latitude >= -90 && _latitude <= 90 ? _latitude : (_latitude !== undefined ? ((_n) => Number.isFinite(_n) && _n >= -90 && _n <= 90 ? _n : 0)(Number(_latitude)) : 0),
+    longitude: typeof _longitude === "number" && _longitude >= -180 && _longitude <= 180 ? _longitude : (_longitude !== undefined ? ((_n) => Number.isFinite(_n) && _n >= -180 && _n <= 180 ? _n : 0)(Number(_longitude)) : 0),
     ...(_altitude !== undefined && { altitude: typeof _altitude === "number" ? _altitude : (Number.isFinite(Number(_altitude)) ? Number(_altitude) : 0) }),
     ...(_label !== undefined && { label: typeof _label === "string" ? _label : String(_label) }),
   } as unknown as GeoCoordinate;
