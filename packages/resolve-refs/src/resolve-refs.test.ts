@@ -300,4 +300,37 @@ describe('resolve-refs', () => {
     // The subtree past the limit is handed back unresolved rather than dropped.
     expect(resolved).toMatchObject({ a: { b: { c: { d: 1 } } } })
   })
+
+  it('reports an unresolvable reference at the $ref that caused it', () => {
+    const { errors } = resolveRefs({
+      $defs: { real: { type: 'string' } },
+      properties: {
+        p: { $ref: '#/$defs/nope' },
+        q: { allOf: [{ $ref: './other.json#/x' }] },
+      },
+    })
+
+    // Not the path to the target that is missing — the path to the reference,
+    // which is the node a reader has to go and fix.
+    expect(errors).toEqual([
+      { message: 'Cannot resolve internal $ref "#/$defs/nope"', path: ['properties', 'p', '$ref'] },
+      {
+        message: 'Cannot resolve external $ref "./other.json#/x": external ref requires resolveRefsFromFile',
+        path: ['properties', 'q', 'allOf', 0, '$ref'],
+      },
+    ])
+  })
+
+  it('does not mistake a $ref-shaped enum member for the failing reference', () => {
+    const { errors } = resolveRefs({
+      properties: {
+        a: { enum: [{ $ref: '#/$defs/nope' }] },
+        b: { $ref: '#/$defs/nope' },
+      },
+    })
+
+    expect(errors).toEqual([
+      { message: 'Cannot resolve internal $ref "#/$defs/nope"', path: ['properties', 'b', '$ref'] },
+    ])
+  })
 })

@@ -1,5 +1,5 @@
 import { childRole, type NodeRole } from './child-role'
-import { getByPointer, pointerToPath } from './get-by-pointer'
+import { getByPointer, isPointerFragment, pointerToPath } from './get-by-pointer'
 import { DEFAULT_MAX_DEPTH } from './max-depth'
 import type { JsonPath } from './types'
 
@@ -14,7 +14,16 @@ export type RefKeyword = '$ref' | '$dynamicRef' | '$recursiveRef'
 
 // `$ref` is listed first so that a node carrying several reference keywords
 // resolves through the static one, matching how validators treat `$ref`.
-const REF_KEYWORDS: readonly RefKeyword[] = ['$ref', '$dynamicRef', '$recursiveRef']
+export const REF_KEYWORDS: readonly RefKeyword[] = ['$ref', '$dynamicRef', '$recursiveRef']
+
+/**
+ * OpenAPI 3.1 Reference Objects allow only these annotation keywords beside a
+ * `$ref`, and they *override* the target's — an `allOf` wrapper is not valid in
+ * those positions (Path Item, Response, Parameter references). They carry no
+ * validation semantics in plain JSON Schema either, so overriding is safe there
+ * too; every other sibling keyword keeps the spec-correct `allOf` combination.
+ */
+export const ANNOTATION_ONLY_SIBLINGS = new Set(['summary', 'description'])
 
 /** A reference carried by an object: which keyword, and its string value. */
 export type Reference = { keyword: RefKeyword; value: string }
@@ -27,9 +36,6 @@ export const readReference = (obj: Record<string, unknown>): Reference | undefin
   }
   return undefined
 }
-
-/** A fragment is a JSON Pointer when it is empty or begins with `/`; otherwise a plain-name anchor. */
-const isPointerFragment = (fragment: string): boolean => fragment === '' || fragment.startsWith('/')
 
 /** The resolved target of a reference: the node and the path to it within its document. */
 export type ResolvedTarget = { value: unknown; pointer: JsonPath }

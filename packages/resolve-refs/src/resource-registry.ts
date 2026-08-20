@@ -1,7 +1,8 @@
 import { childRole, type NodeRole } from './child-role'
-import { getByPointer, pointerToPath } from './get-by-pointer'
+import { getByPointer, isPointerFragment, pointerToPath } from './get-by-pointer'
 import { DEFAULT_MAX_DEPTH } from './max-depth'
 import type { RefKeyword } from './reference'
+import { splitRef } from './split-ref'
 import type { JsonPath } from './types'
 
 /**
@@ -44,6 +45,20 @@ export type ScopedTarget = { value: unknown; pointer: JsonPath; base: string }
 export type ResourceRegistry = {
   /** Normalized absolute URI (fragment stripped) → embedded resource root. */
   resources: Map<string, { value: unknown; pointer: JsonPath }>
+  /**
+   * Embedded-resource root → the base URI its `$id` established, by node
+   * identity. This is the inverse of {@link ResourceRegistry.resources}, kept
+   * because that is the direction the resolvers ask in: they hold a node and
+   * want its base. Scanning `resources` for it made every `$id` node cost a
+   * pass over every resource in the document, which is quadratic on exactly the
+   * bundled schemas that declare an `$id` per definition.
+   *
+   * It also answers for a node `resources` never took — a second `$id`
+   * resolving to a URI already claimed — where the scan fell back to the
+   * enclosing base and disagreed with the base this walk registered that node's
+   * own anchors under.
+   */
+  bases: Map<object, string>
   /** `${base}#${name}` → target, for `$anchor` and `$dynamicAnchor` alike. */
   staticAnchors: Map<string, { value: unknown; pointer: JsonPath }>
   /** `${base}#${name}` → target, for `$dynamicAnchor` only. */
@@ -85,15 +100,6 @@ const withoutFragment = (uri: string): string => {
   return hashIdx === -1 ? uri : uri.slice(0, hashIdx)
 }
 
-/** Splits a ref string into its URI part and its fragment (pointer or anchor name). */
-export const splitFragment = (ref: string): { uriPart: string; fragment: string } => {
-  const hashIdx = ref.indexOf('#')
-  return {
-    uriPart: hashIdx === -1 ? ref : ref.slice(0, hashIdx),
-    fragment: hashIdx === -1 ? '' : ref.slice(hashIdx + 1),
-  }
-}
-
 /** The base URI a subschema establishes via `$id`, or the enclosing base. */
 export const baseAfterId = (node: Record<string, unknown>, enclosingBase: string): string => {
   const id = node['$id']
@@ -112,10 +118,16 @@ export const baseAfterId = (node: Record<string, unknown>, enclosingBase: string
  */
 export const buildResourceRegistry = (
   root: unknown,
-  initialBase: string = SYNTHETIC_BASE,
+  documentBase: string = SYNTHETIC_BASE,
   maxDepth: number = DEFAULT_MAX_DEPTH,
 ): ResourceRegistry => {
+  // A base URI never carries a fragment. Stripping it here is what keeps
+  // `rootBase` lookup-able in `resources`, which is keyed on fragment-free
+  // URIs — a root location that had one (`resolveRefsFromFile('…/y.json#f')`)
+  // registered under one spelling and was then looked up under another.
+  const initialBase = withoutFragment(documentBase)
   const resources: ResourceRegistry['resources'] = new Map()
+  const bases: ResourceRegistry['bases'] = new Map()
   const staticAnchors: ResourceRegistry['staticAnchors'] = new Map()
   const dynamicAnchors: ResourceRegistry['dynamicAnchors'] = new Map()
   // Counted by *name* rather than by `${base}#${name}`: a `$dynamicRef` binds
@@ -161,7 +173,11 @@ export const buildResourceRegistry = (
     }
     const record = node as Record<string, unknown>
     const nodeBase = role === 'schemaMap' ? base : baseAfterId(record, base)
-    if (nodeBase !== base && !resources.has(nodeBase)) resources.set(nodeBase, { value: node, pointer })
+    if (nodeBase !== base) {
+      // First declaration wins on both, matching document order.
+      if (!resources.has(nodeBase)) resources.set(nodeBase, { value: node, pointer })
+      if (!bases.has(node)) bases.set(node, nodeBase)
+    }
     if (role !== 'schemaMap') registerAnchors(record, nodeBase, pointer)
     for (const key of Object.keys(record)) {
       walk(record[key], nodeBase, [...pointer, key], depth + 1, childRole(role, key))
@@ -169,13 +185,9 @@ export const buildResourceRegistry = (
   }
 
   // The root registers under its own `$id` (when it has one) and under the
-  // initial base, so both spellings of a self-reference resolve. `$id` first:
-  // `baseOfNode` scans in insertion order, and refs inside the root must
-  // resolve against its declared base, not the synthetic one.
+  // initial base, so both spellings of a self-reference resolve.
   if (rootBase !== initialBase) resources.set(rootBase, { value: root, pointer: [] })
-  if (!resources.has(withoutFragment(initialBase))) {
-    resources.set(withoutFragment(initialBase), { value: root, pointer: [] })
-  }
+  if (!resources.has(initialBase)) resources.set(initialBase, { value: root, pointer: [] })
   walk(root, initialBase, [], 0, 'schema')
 
   const ambiguousDynamicAnchors = new Set<string>()
@@ -183,7 +195,7 @@ export const buildResourceRegistry = (
     if (count > 1) ambiguousDynamicAnchors.add(name)
   }
 
-  return { resources, staticAnchors, dynamicAnchors, ambiguousDynamicAnchors, rootBase, root }
+  return { resources, bases, staticAnchors, dynamicAnchors, ambiguousDynamicAnchors, rootBase, root }
 }
 
 /**
@@ -200,35 +212,33 @@ const getByPointerWithBase = (
   const value = getByPointer(start, fragment)
   if (value === undefined) return undefined
 
-  // Re-walk the same path for base tracking only (cheap: fragment paths are short).
+  // Re-walk the same path for base tracking only (cheap: fragment paths are
+  // short). Own properties only, exactly as `getByPointer` reads them, so this
+  // walk stands on its own rather than on the lookup above having vetted the
+  // path first.
+  const path = pointerToPath(fragment)
   let base = startBase
   let current: unknown = start
-  for (const segment of pointerToPath(fragment)) {
+  for (const segment of path) {
     if (current === null || typeof current !== 'object') break
     if (!Array.isArray(current)) base = baseAfterId(current as Record<string, unknown>, base)
+    if (!Object.hasOwn(current, segment)) break
     current = (current as Record<string, unknown>)[segment as never]
   }
   if (current !== null && typeof current === 'object' && !Array.isArray(current)) {
     base = baseAfterId(current as Record<string, unknown>, base)
   }
-  return { value, pointer: [...startPointer, ...pointerToPath(fragment)], base }
+  return { value, pointer: [...startPointer, ...path], base }
 }
-
-/** A fragment is a JSON Pointer when it is empty or begins with `/`; otherwise an anchor name. */
-const isPointerFragment = (fragment: string): boolean => fragment === '' || fragment.startsWith('/')
 
 /**
  * The base URI `node` establishes via its `$id`, as assigned during the
- * registry walk (identity lookup), or `enclosing` when it declares none that
- * registered. Resolvers call this while walking so refs inside an embedded
- * resource resolve against the right base.
+ * registry walk, or `enclosing` when its `$id` established none (a draft-07
+ * `$id: "#name"`, or one that does not parse). Resolvers call this while
+ * walking so refs inside an embedded resource resolve against the right base.
  */
-export const baseOfNode = (registry: ResourceRegistry, node: Record<string, unknown>, enclosing: string): string => {
-  for (const [uri, resource] of registry.resources) {
-    if (resource.value === node) return uri
-  }
-  return enclosing
-}
+export const baseOfNode = (registry: ResourceRegistry, node: Record<string, unknown>, enclosing: string): string =>
+  registry.bases.get(node) ?? enclosing
 
 /** Looks up an anchor name under `base`, honoring `$dynamicRef`'s preference order. */
 const lookupAnchor = (registry: ResourceRegistry, keyword: RefKeyword, base: string, name: string) => {
@@ -254,7 +264,7 @@ export const resolveRefInScope = (
   ref: string,
   currentBase: string,
 ): ScopedTarget | 'external' | undefined => {
-  const { uriPart, fragment } = splitFragment(ref)
+  const { uriPart, fragment } = splitRef(ref)
 
   if (uriPart === '') {
     if (isPointerFragment(fragment)) {
