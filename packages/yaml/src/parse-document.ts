@@ -3285,10 +3285,14 @@ export const parseAllDocuments = (source: string, options: ParseOptions = {}): Y
     state.warnings = []
     state.comments = []
     state.anchors = new Map()
-    // Anchor scope is per document, and `pendingAnchors` is part of it: a name
-    // left behind by a document whose properties were never attached to a node
-    // made the *next* document's `*name` report a recursive reference to an
-    // anchor it cannot see.
+    // Anchor scope is per document, and `pendingAnchors` is part of it. Every
+    // other piece of that scope is cleared here; this one was not. No input
+    // reaches the misreport it would cause — a name is only left behind when a
+    // block mapping ends on the property line that declared it, and the leftover
+    // line then opens the next document, which registers the anchor properly —
+    // but per-document state that outlives its document is a trap either way,
+    // and the `*name` it would mislabel is the one an author is least able to
+    // explain.
     state.pendingAnchors = null
     state.tagHandles = null
     state.yamlDirective = false

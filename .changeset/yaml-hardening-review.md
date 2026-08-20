@@ -21,6 +21,6 @@ Close four ways a document could hang, crash, or mis-report the parser.
   problems.** They were moved onto the last document with `push(...list)`, which
   V8 rejects past ~125,000 arguments.
 
-Also: an anchor left pending by one document no longer misreports the next
-document's alias as recursive, and a `!!set` no longer builds the plain object it
-immediately discards.
+Also: `pendingAnchors` is cleared per document along with the rest of anchor
+scope (hygiene — no input reaches a misreport through it), and a `!!set` no
+longer builds the plain object it immediately discards.

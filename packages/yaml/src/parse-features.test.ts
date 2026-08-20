@@ -1524,16 +1524,6 @@ describe('stream-level diagnostics at scale', () => {
   })
 })
 
-describe('anchor scope across a stream', () => {
-  it('does not carry a pending anchor into the next document', () => {
-    // An anchor whose properties never reached a node stayed listed as "being
-    // parsed", which made a *later* document's alias report a recursive
-    // reference to an anchor that document cannot even see.
-    const [, second] = parseAllDocuments('a: 1\n&x b\n---\nc: *x\n').slice(-2)
-    expect(second?.errors.map((e) => e.code)).toEqual(['UNRESOLVED_ALIAS'])
-  })
-})
-
 describe('the "..." document-end marker', () => {
   it('does not treat three dots glued to content as a marker', () => {
     // A marker has to stand alone. Matching the three dots on their own swallowed
