@@ -49,6 +49,12 @@ and the idle timer threw straight out of its `setTimeout` callback, which on
 Node is an uncaught exception. The call is wrapped so both paths see a
 rejection and report it through `onError`.
 
+**`withTimeout` rejects instead of crashing the timer.** `onTimeout` is app
+code running inside a `setTimeout` callback, where a throw has nowhere to go:
+on Node it is an uncaught exception, and the race it was meant to settle never
+settles, so the request hangs too. It now rejects, which the pipeline reports
+through `onError` like any other handler failure.
+
 **`createETag` answers a conditional GET against a handler's own etag.** A
 response that already carried an `ETag` was skipped entirely, so a client that
 had just proved it held the current version downloaded the body again. Such a

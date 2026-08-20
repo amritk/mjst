@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { withTimeout } from './with-timeout'
 
@@ -39,5 +39,26 @@ describe('with-timeout', () => {
       () => ({ status: 504 as const }),
     )
     await expect(handler({})).rejects.toThrow('boom')
+  })
+
+  it('rejects rather than crashing the timer when onTimeout throws', async () => {
+    // `onTimeout` is app code running inside a timer callback, where a throw
+    // has nowhere to go: on Node it is an uncaught exception, and the race it
+    // was meant to settle never settles, so the request hangs as well.
+    vi.useFakeTimers()
+    try {
+      const wrapped = withTimeout(
+        10,
+        () => new Promise<{ status: 504 }>(() => undefined),
+        () => {
+          throw new Error('could not build the timeout reply')
+        },
+      )
+      const running = wrapped({})
+      expect(() => vi.advanceTimersByTime(20)).not.toThrow()
+      await expect(running).rejects.toThrow('could not build the timeout reply')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
