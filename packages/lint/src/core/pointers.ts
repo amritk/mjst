@@ -34,11 +34,20 @@ const isRemote = (location: string): boolean => /^https?:\/\//i.test(location)
 /**
  * Resolves the location of `ref` (its file/URL part) relative to `base`, exactly
  * as `@amritk/resolve-refs` does, so the keys we look up in the source set match
- * the documents the resolver loaded.
+ * the documents the resolver loaded. `undefined` when the `$ref` does not form a
+ * location at all — `$ref: "//"` against a remote base is a `new URL` TypeError,
+ * and a `$ref` comes from the linted document, which is untrusted input: it has
+ * to stop the walk, not abort the lint run.
  */
-const joinLocation = (base: string, ref: string): string => {
+const joinLocation = (base: string, ref: string): string | undefined => {
   if (isRemote(ref)) return ref
-  if (isRemote(base)) return new URL(ref, base).href
+  if (isRemote(base)) {
+    try {
+      return new URL(ref, base).href
+    } catch {
+      return undefined
+    }
+  }
   return resolvePath(dirname(base), ref)
 }
 
@@ -127,6 +136,7 @@ export const resolveSourceOrigin = (registry: IDocumentRegistry, path: JsonPath)
       const { filePart, fragment } = splitRef(node['$ref'])
       if (filePart !== '') {
         const target = joinLocation(location, filePart)
+        if (target === undefined) return
         const doc = registry.get(target)
         if (!doc) return
         location = target

@@ -1,7 +1,3 @@
-import { readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
-import { dirname, isAbsolute, resolve as resolvePath, sep } from 'node:path'
-
 import {
   type BoundedCache,
   createBoundedCache,
@@ -13,10 +9,10 @@ import {
   type ResolvedExtend,
   type Ruleset,
 } from './core'
-import type { FunctionRegistry, IDiagnostic, RulesetDefinition, RulesetFunction } from './core/types'
+import type { FunctionRegistry, IDiagnostic, RulesetDefinition } from './core/types'
 import { type AppliedFix, createFixPlugin, FIX_PLUGIN_NAME, type FixerRegistry, type FixPluginData } from './fix'
 import { builtinFunctions } from './functions'
-import { parseWithPointers } from './parsers'
+import { collectCustomFunctions, type IRulesetTrustOptions, resolveRulesetFile } from './ruleset-files'
 
 // Re-export the engine, built-in functions, and fix subsystem as the package's
 // public API. `./core` also provides a low-level `createRuleset`, deliberately
@@ -105,44 +101,7 @@ export {
   xor,
 } from './functions'
 export { detectFormat, parseWithPointers } from './parsers'
-
-const require = createRequire(import.meta.url)
-
-/** Loads a ruleset definition from a file path by extension (YAML/JSON parsed, JS/CJS/MJS required). */
-const loadRulesetFile = (file: string): RulesetDefinition => {
-  if (/\.(ya?ml|json)$/i.test(file)) {
-    return parseWithPointers<RulesetDefinition>(readFileSync(file, 'utf8')).data
-  }
-  const module = require(file) as { default?: RulesetDefinition } & RulesetDefinition
-  return (module.default ?? module) as RulesetDefinition
-}
-
-/**
- * An optional directory that everything a ruleset pulls off disk — `extends`
- * targets and custom function modules — must resolve inside.
- *
- * This is opt-in and off by default, because `basePath` on its own is only a
- * *resolution origin*: an `extends` of `/etc/thing.js` or `../../../elsewhere`
- * resolves and loads exactly as written. See the "Trust boundary" section of the
- * README — a ruleset that can name a `.js` file can run code, restricted root or
- * not. This narrows *which* files it can name; it is not a sandbox.
- */
-export type IRulesetTrustOptions = {
-  /** Directory that `extends` files and custom functions must resolve under. */
-  restrictTo?: string
-}
-
-/** Enforces {@link IRulesetTrustOptions.restrictTo}, if one was configured, on a resolved file path. */
-const assertWithinRoot = (file: string, restrictTo: string | undefined, what: string): void => {
-  if (restrictTo === undefined) return
-  const root = resolvePath(restrictTo)
-  const resolved = resolvePath(file)
-  // `${root}${sep}` — a sibling directory whose name merely starts with the root
-  // ("/srv/rules-other" for a root of "/srv/rules") must not pass.
-  if (resolved !== root && !resolved.startsWith(root.endsWith(sep) ? root : `${root}${sep}`)) {
-    throw new Error(`${what} "${file}" resolves outside the permitted root ${root}`)
-  }
-}
+export type { IRulesetTrustOptions } from './ruleset-files'
 
 /**
  * Resolves an `extends` reference to a ruleset definition. Supports:
@@ -161,94 +120,23 @@ export const resolveNamedRuleset = (
   name: string,
   basePath: string = process.cwd(),
   options: IRulesetTrustOptions = {},
-): ResolvedExtend => {
-  if (name.startsWith('.') || isAbsolute(name)) {
-    const file = resolvePath(basePath, name)
-    assertWithinRoot(file, options.restrictTo, 'Extended ruleset')
-    return { definition: loadRulesetFile(file), basePath: dirname(file) }
-  }
-  let file: string
-  try {
-    file = require.resolve(name, { paths: [basePath] })
-  } catch {
-    throw new Error(`Cannot resolve extended ruleset "${name}" from ${basePath}`)
-  }
-  assertWithinRoot(file, options.restrictTo, 'Extended ruleset')
-  return { definition: loadRulesetFile(file), basePath: dirname(file) }
-}
-
-/** Loads a single custom function module (`<dir>/<name>.{js,cjs,mjs}` or a bare path). */
-const loadFunctionByName = (
-  basePath: string,
-  dir: string,
-  name: string,
-  restrictTo: string | undefined,
-): RulesetFunction => {
-  const baseFile = resolvePath(basePath, dir, name)
-  assertWithinRoot(baseFile, restrictTo, 'Custom function')
-  for (const candidate of [baseFile, `${baseFile}.js`, `${baseFile}.cjs`, `${baseFile}.mjs`]) {
-    try {
-      const resolvedFile = require.resolve(candidate)
-      const module = require(resolvedFile) as { default?: RulesetFunction } & RulesetFunction
-      const fn = module.default ?? module
-      if (typeof fn !== 'function') throw new Error(`"${name}" did not export a function`)
-      return fn as RulesetFunction
-    } catch (error) {
-      if ((error as { code?: string }).code !== 'MODULE_NOT_FOUND') throw error
-    }
-  }
-  throw new Error(`Cannot resolve custom function "${name}" from ${resolvePath(basePath, dir)}`)
-}
-
-/**
- * Walks a ruleset definition (and its string `extends`) collecting custom
- * functions declared via `functions` / `functionsDir`, each loaded relative to
- * the directory of the ruleset that declared it. YAML/JSON rulesets reference
- * functions by name; JS rulesets can instead pass direct references in `then`.
- */
-const collectCustomFunctions = (
-  definition: RulesetDefinition,
-  basePath: string,
-  into: FunctionRegistry,
-  // Keyed by (basePath, reference) for string extends and by object identity for
-  // inline ones. `loadRulesetFile` returns a fresh object per read, so object
-  // identity alone would never dedupe a file cycle — we key on the resolved edge.
-  seen: Set<unknown>,
-  restrictTo: string | undefined,
-): void => {
-  if (seen.has(definition)) return
-  seen.add(definition)
-  if (definition.extends) {
-    const entries = Array.isArray(definition.extends) ? definition.extends : [definition.extends]
-    for (const entry of entries) {
-      const target = Array.isArray(entry) ? entry[0] : entry
-      if (typeof target === 'string') {
-        const key = `${basePath}\0${target}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        const resolved = resolveNamedRuleset(target, basePath, { ...(restrictTo !== undefined ? { restrictTo } : {}) })
-        collectCustomFunctions(resolved.definition, resolved.basePath, into, seen, restrictTo)
-      } else {
-        collectCustomFunctions(target, basePath, into, seen, restrictTo)
-      }
-    }
-  }
-  if (Array.isArray(definition.functions)) {
-    const dir = definition.functionsDir ?? 'functions'
-    for (const name of definition.functions) into[name] = loadFunctionByName(basePath, dir, name, restrictTo)
-  }
-}
+): ResolvedExtend => resolveRulesetFile(name, basePath, options)
 
 const buildRuleset = (definition: RulesetDefinition, basePath?: string, restrictTo?: string): Ruleset => {
+  const trust: IRulesetTrustOptions = restrictTo !== undefined ? { restrictTo } : {}
+  const resolve = (name: string, from: string): ResolvedExtend => resolveNamedRuleset(name, from, trust)
   // Custom functions referenced by name (YAML/JSON rulesets) are loaded relative
   // to the declaring ruleset's directory and layered over the built-ins.
   let functions: FunctionRegistry = builtinFunctions
   const custom: FunctionRegistry = {}
-  collectCustomFunctions(definition, basePath ?? process.cwd(), custom, new Set(), restrictTo)
+  collectCustomFunctions(definition, basePath ?? process.cwd(), custom, new Set(), {
+    ...trust,
+    resolveExtend: resolve,
+  })
   if (Object.keys(custom).length > 0) functions = { ...builtinFunctions, ...custom }
   return createCoreRuleset(definition, {
     functions,
-    resolve: (name, from) => resolveNamedRuleset(name, from, { ...(restrictTo !== undefined ? { restrictTo } : {}) }),
+    resolve,
     ...(basePath !== undefined ? { basePath } : {}),
   })
 }

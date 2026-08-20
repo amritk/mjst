@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { lint } from '../../core'
@@ -70,6 +73,31 @@ describe('createOpenApiRuleset', () => {
         }
       }
     }
+  })
+
+  it('survives an extends cycle across two ruleset files', () => {
+    // Each file read returns a fresh object, so an object-identity cycle guard
+    // never fires on a file cycle: `a.yaml` → `b.yaml` → `a.yaml` recursed until
+    // the stack ran out. The guard keys on the resolved (basePath, reference) edge.
+    const dir = mkdtempSync(join(tmpdir(), 'oas-cycle-'))
+    writeFileSync(join(dir, 'a.yaml'), "extends: ['./b.yaml']\nrules: {}\n")
+    writeFileSync(join(dir, 'b.yaml'), "extends: ['./a.yaml']\nrules: {}\n")
+    expect(() => createOpenApiRuleset({ extends: ['./a.yaml'] }, dir)).not.toThrow()
+  })
+
+  it('confines extends resolution to restrictTo when one is given', () => {
+    // The OpenAPI entry point shares the core loader, so it enforces the same
+    // optional root; it used to carry its own copy with no fence at all.
+    const root = mkdtempSync(join(tmpdir(), 'oas-root-'))
+    const outside = mkdtempSync(join(tmpdir(), 'oas-outside-'))
+    writeFileSync(join(root, 'ok.yaml'), 'rules: {}\n')
+    writeFileSync(join(outside, 'evil.yaml'), 'rules: {}\n')
+    expect(() => createOpenApiRuleset({ extends: ['./ok.yaml'] }, root, { restrictTo: root })).not.toThrow()
+    expect(() => createOpenApiRuleset({ extends: [join(outside, 'evil.yaml')] }, root, { restrictTo: root })).toThrow(
+      /outside the permitted root/,
+    )
+    // A built-in preset name is not a file, so it is unaffected by the fence.
+    expect(() => createOpenApiRuleset({ extends: ['oas'] }, root, { restrictTo: root })).not.toThrow()
   })
 
   it('every auto-fixer targets a rule that exists in the shipped ruleset', () => {

@@ -72,7 +72,16 @@ export const applyFixes = (
     if (!fixer) continue
     if (safeOnly && fixer.safe === false) continue
 
-    const produced = fixer.fix({ diagnostic, data, format })
+    // A fixer is caller-supplied code handed a node shape it may not expect, and
+    // one that throws must not take the rest of the batch with it — the same
+    // isolation the rule runner and `applyEditOps` already give. Its finding is
+    // simply left unfixed.
+    let produced: EditOp[] | EditOp | undefined
+    try {
+      produced = fixer.fix({ diagnostic, data, format })
+    } catch {
+      continue
+    }
     if (!produced) continue
     const ops = Array.isArray(produced) ? produced : [produced]
     if (ops.length === 0) continue

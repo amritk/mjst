@@ -123,7 +123,7 @@ await lintDocument(source, {
 })
 ```
 
-`restrictTo` is off by default and narrows *which* files a ruleset can name. It is not a sandbox: a `.js` file inside the permitted root still runs with full privileges.
+`restrictTo` is off by default and narrows *which* files a ruleset can name. It is not a sandbox: a `.js` file inside the permitted root still runs with full privileges. The OpenAPI preset takes the same option — `createOpenApiRuleset(definition, basePath, { restrictTo })`.
 
 ### Auto-fix
 
@@ -233,12 +233,12 @@ const ruleset = createOpenApiRuleset()
 const findings = await lint(spec, { ruleset })
 ```
 
-`createOpenApiRuleset(definition?, basePath?)` builds a runnable `Ruleset` with the OpenAPI functions and format detectors layered over the built-ins, and with `extends` resolution that understands the `oas` / `loupe:oas` / `spectral:oas` names (the last two accepted so existing Spectral-style rulesets extend unchanged). Enable every rule with `createOpenApiRuleset({ extends: [['oas', 'all']] })`, or pass your own definition to override severities, add rules, or point `extends` at a file/npm package.
+`createOpenApiRuleset(definition?, basePath?, options?)` builds a runnable `Ruleset` with the OpenAPI functions and format detectors layered over the built-ins, and with `extends` resolution that understands the `oas` / `loupe:oas` / `spectral:oas` names (the last two accepted so existing Spectral-style rulesets extend unchanged). Enable every rule with `createOpenApiRuleset({ extends: [['oas', 'all']] })`, or pass your own definition to override severities, add rules, or point `extends` at a file/npm package. `options.restrictTo` applies the same [trust boundary](#trust-boundary--who-may-write-a-ruleset) the package root's `restrictTo` does.
 
 | Export | What it does |
 | --- | --- |
-| `createOpenApiRuleset(definition?, basePath?)` | Build a runnable OpenAPI `Ruleset` (functions + formats + `extends` resolution). |
-| `resolveOpenApiRuleset(name, basePath?)` | Resolve an `extends` reference, including the `oas` / `loupe:oas` / `spectral:oas` names. |
+| `createOpenApiRuleset(definition?, basePath?, options?)` | Build a runnable OpenAPI `Ruleset` (functions + formats + `extends` resolution). |
+| `resolveOpenApiRuleset(name, basePath?, options?)` | Resolve an `extends` reference, including the `oas` / `loupe:oas` / `spectral:oas` names. |
 | `oas` | The built-in OpenAPI ruleset definition. |
 | `oasFunctions` / `allFunctions` | The OpenAPI-specific functions; `allFunctions` = built-ins + OpenAPI. |
 | `oasFormats` | OpenAPI version detectors (`oas2`, `oas3`, `oas3.0`, `oas3.1`, `oas3.2`). |
