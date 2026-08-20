@@ -329,7 +329,11 @@ const findings = await lintDocument('version: 1\n', { ruleset, source: 'service.
    named built-in rulesets in core. String `extends` resolve relative to
    `rulesetBasePath` (or the ruleset file's own directory).
 5. **OpenAPI support is a separate subpath**, `@amritk/lint/rules/openapi`
-   (`createOpenApiRuleset`, `oas`, `oasFixers`, …) — not the package root.
+   (`createOpenApiRuleset`, `oas`, `oasFixers`, …) — not the package root. Build
+   it with `createOpenApiRuleset()` and hand the *result* to `lintDocument` /
+   `fixDocument` as `ruleset`. Passing the `oas` definition as data instead
+   silently produces nothing: its custom functions are unknown at the package
+   root, and its `formats` gate matches nothing without the OpenAPI detectors.
 6. **A ruleset is privileged; a document is not.** Linted documents cannot
    execute anything, and `[?(...)]` filters in a `given` are parsed and
    interpreted rather than evaluated as JavaScript. But `extends` follows any
@@ -344,7 +348,8 @@ const findings = await lintDocument('version: 1\n', { ruleset, source: 'service.
 
 ## Exports
 
-- `lintDocument(input, options?)` → findings only.
+- `lintDocument(input, options?)` → findings only. `options.ruleset` is either a
+  definition to build or an already-built `Ruleset`.
 - `lintDocumentWithResult(input, options?)` → `{ diagnostics, output?, pluginData }`.
 - `fixDocument(input, options?)` → `{ output, fixed, applied, remaining, converged, passes }`
   (needs `fixers`; `converged: false` means the 10-pass cap was hit with the
