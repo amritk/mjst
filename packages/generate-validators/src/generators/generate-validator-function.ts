@@ -654,7 +654,12 @@ const generateKeywordChecks = (
   if (hasRef(schema)) {
     const vName = validatorName(refToName(schema.$ref, suffix))
     const delegate = [`  const _r = ${vName}(${raw}, ${path})`, `  if (_r !== true) ${ctx.sink}.push(..._r.errors)`]
-    if (presence === '') lines.push(...delegate)
+    // The delegation result gets a block of its own, so two of them can sit in
+    // the same statement list: `{ $ref, allOf: [{ $ref }] }` is a real shape, and
+    // one `const _r` per branch in one scope is a `SyntaxError` in the emitted
+    // file. The presence-gated form has always had its `if` block for this; the
+    // bare form used to rely on there never being a second delegation beside it.
+    if (presence === '') lines.push(`  {`, ...delegate.map((line) => `  ${line}`), `  }`)
     else lines.push(`  if (${raw} !== undefined) {`, ...delegate.map((line) => `  ${line}`), `  }`)
   }
 
@@ -1005,21 +1010,42 @@ const generateConstraintChecks = (
     // empty) satisfy the lower bound. A boolean `contains` counts too:
     // `contains: true` matches every item (so only an empty array fails) and
     // `contains: false` matches none (so every array fails).
+    //
+    // The count is taken by index rather than by `filter`, for two reasons.
+    // `filter` *skips holes*, so a sparse `[, "a"]` came up one element short of
+    // what the interpreter counts — it reads the hole as `undefined`, and against
+    // `contains: { not: { type: "string" } }` that hole is the matching item.
+    // (`booleanArrayExpr` materialises with `Array.from` over the same question.)
+    // And `filter` builds a whole array to measure its length, on every call, for
+    // a number the loop already has; with no upper bound the loop can stop at the
+    // lower one rather than walk the rest.
     if (declaresKeyword(sp, 'contains')) {
       const declaredMin = ownKeyword(sp, 'minContains')
       const declaredMax = ownKeyword(sp, 'maxContains')
       const min = typeof declaredMin === 'number' ? declaredMin : 1
       const max = typeof declaredMax === 'number' ? declaredMax : undefined
-      const matchExpr = generateMatchesExpr('_c', ownKeyword(sp, 'contains') as JSONSchema, suffix, ctx)
-      const bound = max !== undefined ? `_cn < ${min} || _cn > ${max}` : `_cn < ${min}`
-      lines.push(`  if (Array.isArray(${raw})) {`)
-      lines.push(`    const _cn = (${raw} as unknown[]).filter((_c) => ${matchExpr}).length`)
-      lines.push(`    if (${bound}) {`)
-      lines.push(
-        `      ${ctx.sink}.push({ message: 'array does not contain the required matching items', path: ${path} })`,
-      )
-      lines.push(`    }`)
-      lines.push(`  }`)
+      // `minContains: 0` with no `maxContains` is satisfied by every array, empty
+      // included — so there is nothing to check, where `_cn < 0` was a test no
+      // count can fail, paid for on every call.
+      if (min > 0 || max !== undefined) {
+        const matchExpr = generateMatchesExpr('_c', ownKeyword(sp, 'contains') as JSONSchema, suffix, ctx, true)
+        const bound = max !== undefined ? `_cn < ${min} || _cn > ${max}` : `_cn < ${min}`
+        lines.push(`  if (Array.isArray(${raw})) {`)
+        lines.push(`    const _ca = ${raw} as unknown[]`)
+        lines.push(`    let _cn = 0`)
+        lines.push(`    for (let _ci = 0; _ci < _ca.length; _ci++) {`)
+        lines.push(`      const _c = _ca[_ci]`)
+        lines.push(`      if (${matchExpr}) _cn++`)
+        // Only the lower bound is in play, so the answer stops changing here.
+        if (max === undefined) lines.push(`      if (_cn >= ${min}) break`)
+        lines.push(`    }`)
+        lines.push(`    if (${bound}) {`)
+        lines.push(
+          `      ${ctx.sink}.push({ message: 'array does not contain the required matching items', path: ${path} })`,
+        )
+        lines.push(`    }`)
+        lines.push(`  }`)
+      }
     }
 
     // Tuple positions — each validated against its own subschema; a closed tail
@@ -1034,13 +1060,10 @@ const generateConstraintChecks = (
         // `Array.from` for exactly this, so leaving the tuple positions guarded
         // put the two halves of the same package on opposite answers.
         //
-        // This reaches the position's own leaf checks only. A combinator beneath
-        // it re-adds the guard, because {@link generateCombinatorChecks} does not
-        // thread `required` into its branches — so `prefixItems: [{ allOf: [...] }]`
-        // still passes a hole. Threading it is a wider change than the gap earns:
-        // `JSON.parse` cannot produce a hole or an explicit `undefined`, and the
-        // combinators are the part of the emitter most sensitive to a change in
-        // presence semantics.
+        // A combinator beneath the position answers the same way:
+        // {@link generateCombinatorChecks} judges its branches as present values
+        // too, so `prefixItems: [{ allOf: [...] }]` no longer waves a hole through
+        // the position its siblings reject.
         const itemChecks = generateValueChecks(
           '',
           `${raw}[${i}]`,
@@ -1085,9 +1108,9 @@ const generateConstraintChecks = (
  * `!== undefined`-guarded (an absent optional value is valid); pass
  * `required = true` for values that must be present (array items — a sparse hole
  * reads as `undefined` and must fail), which drops that guard for the leaf checks
- * — a combinator branch beneath re-adds it, a documented gap. `_key` is unused
- * (the location is fully encoded by `path`) but kept for positional-call parity
- * with the combinator generators.
+ * and, through {@link generateCombinatorChecks}, for the branches of any
+ * combinator beneath them. `_key` is unused (the location is fully encoded by
+ * `path`) but kept for positional-call parity with the combinator generators.
  */
 const generateValueChecks = (
   key: string,
@@ -1125,7 +1148,14 @@ const generateValueCheckLines = (
   // (and a bare `{}`) accepts everything and falls through to the `[]` below.
   if (propSchema === false) {
     const report = `${ctx.sink}.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`
-    if (required) return [`  ${report}`]
+    // Wrapped in a block, never emitted bare. The report starts with `(` — the
+    // sink is `(errors ??= [])` — and the emitted code carries no semicolons, so
+    // after a line ending in an expression ASI does not break the two apart: a
+    // `prefixItems: [false]` fused its report onto the `const _item0 = _root[_i0]`
+    // in front of it and the generated file threw `_root[_i0] is not a function`
+    // instead of reporting anything. The `!== undefined` form has always had its
+    // `if` block for the same reason.
+    if (required) return [`  {`, `    ${report}`, `  }`]
     return [`  if (${raw} !== undefined) {`, `    ${report}`, `  }`]
   }
   if (!isSchemaObject(propSchema)) return []
@@ -1168,8 +1198,21 @@ const NARROWABLE_REFERENCE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\[[A-Za-z_$
  * checks but collects their errors into a throwaway local buffer, so the same
  * logic that produces error messages also answers the yes/no question the
  * combinators (`anyOf`/`oneOf`/`not`/`if`) and `contains` need.
+ *
+ * `required` says the value is there to be judged, so its leaf checks drop the
+ * `!== undefined` guard an optional value wears. `contains` passes it: the loop
+ * hands over an array element, and a sparse hole reads as `undefined`, which an
+ * optional-mode check waves through — every branch matched, so `[, ,]` "contained"
+ * a string. The combinators leave it `false`, which is what their callers have
+ * always gated on.
  */
-const generateMatchesExpr = (raw: string, sub: JSONSchema, suffix: string, ctx: NestingContext): string => {
+const generateMatchesExpr = (
+  raw: string,
+  sub: JSONSchema,
+  suffix: string,
+  ctx: NestingContext,
+  required = false,
+): string => {
   if (sub === true) return 'true'
   if (sub === false) return 'false'
   if (!isSchemaObject(sub)) return 'true'
@@ -1183,7 +1226,7 @@ const generateMatchesExpr = (raw: string, sub: JSONSchema, suffix: string, ctx: 
   // The branch's checks report into the IIFE-local buffer rather than the
   // validator's `errors`, so the expression stays a pure yes/no answer. Each
   // nested match IIFE declares its own `_m`, so the innermost one always wins.
-  const checks = generateValueChecks('', value, '`${_path}`', sub, suffix, { ...ctx, sink: MATCH_ERROR_SINK })
+  const checks = generateValueChecks('', value, '`${_path}`', sub, suffix, { ...ctx, sink: MATCH_ERROR_SINK }, required)
   if (checks.length === 0) return 'true'
   const body = checks.join('\n')
   const binding = value === raw ? '' : `const ${value}: unknown = ${raw}\n`
@@ -1264,6 +1307,15 @@ const generateUnevaluatedChecks = (
  * Emits the combinator keywords (`allOf`, `anyOf`, `oneOf`, `not`,
  * `if`/`then`/`else`). `allOf` surfaces each branch's errors directly; the others
  * evaluate branch membership as a boolean via {@link generateMatchesExpr}.
+ *
+ * Every branch is judged in `required` mode — the value is there. That is true at
+ * each call site: the caller either knows the value is present, or has already
+ * wrapped these lines in `if (value !== undefined)`. Leaving the branches in
+ * optional mode meant a value that *was* `undefined` — an array hole, which reads
+ * as one — satisfied every leaf check inside them, so `prefixItems: [{ allOf: […] }]`
+ * waved a hole through and a `contains: { not: { type: 'string' } }` counted one as
+ * a string. The interpreter and Ajv both read a hole as a value that has to answer
+ * for itself.
  */
 const generateCombinatorChecks = (
   key: string,
@@ -1277,11 +1329,11 @@ const generateCombinatorChecks = (
   const lines: string[] = []
 
   if (hasAllOf(schema)) {
-    for (const branch of schema.allOf) lines.push(...generateValueChecks(key, raw, path, branch, suffix, ctx))
+    for (const branch of schema.allOf) lines.push(...generateValueChecks(key, raw, path, branch, suffix, ctx, true))
   }
 
   if (hasAnyOf(schema) && schema.anyOf.length > 0) {
-    const conds = schema.anyOf.map((b) => generateMatchesExpr(raw, b, suffix, ctx))
+    const conds = schema.anyOf.map((b) => generateMatchesExpr(raw, b, suffix, ctx, true))
     // A branch that matches everything (`true`, `{}`, an annotation-only schema)
     // makes the whole `anyOf` vacuous. Emitting it anyway produced
     // `if (!(… || true))`, whose body TypeScript knows is unreachable — 58
@@ -1295,7 +1347,7 @@ const generateCombinatorChecks = (
   }
 
   if (hasOneOf(schema) && schema.oneOf.length > 0) {
-    const conds = schema.oneOf.map((b) => `(${generateMatchesExpr(raw, b, suffix, ctx)} ? 1 : 0)`)
+    const conds = schema.oneOf.map((b) => `(${generateMatchesExpr(raw, b, suffix, ctx, true)} ? 1 : 0)`)
     lines.push(`  if ((${conds.join(' + ')}) !== 1) {`)
     lines.push(`    ${ctx.sink}.push({ message: 'must match exactly one schema in oneOf', path: ${path} })`)
     lines.push(`  }`)
@@ -1303,7 +1355,7 @@ const generateCombinatorChecks = (
 
   const not = ownKeyword(schema as Record<string, unknown>, 'not')
   if (not !== undefined && (isSchemaObject(not as JSONSchema) || typeof not === 'boolean')) {
-    const cond = generateMatchesExpr(raw, not as JSONSchema, suffix, ctx)
+    const cond = generateMatchesExpr(raw, not as JSONSchema, suffix, ctx, true)
     // `not: false` matches nothing, so the instance always passes and the check
     // is dead code — `if (false) { … }`, which TypeScript reports. The
     // always-matching case is NOT folded: `if (true) { … }` has a reachable body,
@@ -1325,14 +1377,14 @@ const generateCombinatorChecks = (
     const thenSchema = ownKeyword(schema as Record<string, unknown>, 'then')
     const elseSchema = ownKeyword(schema as Record<string, unknown>, 'else')
     const thenLines =
-      thenSchema !== undefined ? generateValueChecks(key, raw, path, thenSchema as JSONSchema, suffix, ctx) : []
+      thenSchema !== undefined ? generateValueChecks(key, raw, path, thenSchema as JSONSchema, suffix, ctx, true) : []
     const elseLines =
-      elseSchema !== undefined ? generateValueChecks(key, raw, path, elseSchema as JSONSchema, suffix, ctx) : []
+      elseSchema !== undefined ? generateValueChecks(key, raw, path, elseSchema as JSONSchema, suffix, ctx, true) : []
     if (thenLines.length > 0 || elseLines.length > 0) {
       // A statically-known `if` picks one arm, and emitting the other left it
       // provably unreachable. `if: true` / `if: {}` always takes `then`;
       // `if: false` always takes `else`.
-      const cond = generateMatchesExpr(raw, ifSchema as JSONSchema, suffix, ctx)
+      const cond = generateMatchesExpr(raw, ifSchema as JSONSchema, suffix, ctx, true)
       if (cond === 'true') {
         lines.push(...thenLines)
       } else if (cond === 'false') {
@@ -1408,11 +1460,26 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
     if (valueChecks.length > 0) {
       const known = Object.keys(hasProperties(schema) ? schema.properties : {})
       lines.push(`  for (const ${kv} in ${obj}) {`)
-      if (known.length > 0) lines.push(`    if (${JSON.stringify(known)}.includes(${kv})) continue`)
+      if (known.length > 0) {
+        // The declared-key test comes from the shared `unknownKeyCheck`, the same
+        // emitter the `additionalProperties: false` sweep uses: inline `===`
+        // comparisons for a normal key count, a hoisted `Set` past the point
+        // where they stop paying. The array literal that used to stand here was
+        // rebuilt on *every key of every object validated*, which is the one
+        // place in this loop where an allocation is not free.
+        const check = unknownKeyCheck(known, `_knownKeys${ctx.hoisted.length}`)
+        const knownTest = check.isKnown(kv)
+        for (const declaration of check.declarations) {
+          ctx.hoisted.push({ declaration, reference: knownTest })
+        }
+        lines.push(`    if (${knownTest}) continue`)
+      }
       for (const pattern of Object.keys(patternsRecord)) {
         lines.push(`    if (${regexLiteral(pattern)}.test(${kv})) continue`)
       }
-      lines.push(...valueChecks.map((line) => `    ${line}`))
+      // One level of indent, not two: the checks come in carrying their own, and
+      // the `continue` guards above are the loop body's real depth.
+      lines.push(...valueChecks.map((line) => `  ${line}`))
       lines.push(`  }`)
     }
   }
