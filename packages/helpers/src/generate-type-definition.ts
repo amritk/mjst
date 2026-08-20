@@ -29,6 +29,24 @@ type SchemaNode = Exclude<JSONSchema, boolean>
 const keywordOf = (schema: SchemaNode, name: string): unknown => readKey(schema as Record<string, unknown>, name)
 
 /**
+ * One keyword whose value is meant to be a map of names to schemas
+ * (`properties`, `patternProperties`), or `undefined` when the node declares
+ * something else there.
+ *
+ * The `undefined` check a caller reaches for first is not enough on its own:
+ * `typeof null === 'object'`, so a document with `{"patternProperties": null}`
+ * walked straight into `Object.keys(null)` and took the whole generation run
+ * down with a `TypeError`. Schemas come from the caller and malformed ones are
+ * ordinary input, so a keyword that is not a map is treated as absent rather
+ * than as a crash.
+ */
+const keywordMap = (schema: SchemaNode, name: string): Record<string, JSONSchema> | undefined => {
+  const value = keywordOf(schema, name)
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  return value as Record<string, JSONSchema>
+}
+
+/**
  * How deep a schema may nest before rendering gives up.
  *
  * Lower than {@link MAX_SCHEMA_DEPTH} because rendering one level costs about
@@ -755,16 +773,13 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
       jsDocDescription = topLevelComment
     }
 
-    const declaredProperties = keywordOf(normalizedSchema, 'properties') as Record<string, JSONSchema> | undefined
+    const declaredProperties = keywordMap(normalizedSchema, 'properties')
     const additionalProperties = keywordOf(normalizedSchema, 'additionalProperties')
-    const patternProperties = keywordOf(normalizedSchema, 'patternProperties') as Record<string, JSONSchema> | undefined
+    const patternProperties = keywordMap(normalizedSchema, 'patternProperties')
 
     const hasProperties = declaredProperties !== undefined && Object.keys(declaredProperties).length > 0
-    const hasAdditionalProperties = additionalProperties !== undefined && typeof additionalProperties === 'object'
-    const hasPatternProperties =
-      patternProperties !== undefined &&
-      typeof patternProperties === 'object' &&
-      Object.keys(patternProperties).length > 0
+    const hasAdditionalProperties = typeof additionalProperties === 'object' && additionalProperties !== null
+    const hasPatternProperties = patternProperties !== undefined && Object.keys(patternProperties).length > 0
 
     // Handle objects with only patternProperties (no fixed properties)
     if (!hasProperties && hasPatternProperties) {

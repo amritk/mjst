@@ -47,6 +47,25 @@ const files = await buildExampleSchema(schema, 'User') // → user.ts, index.ts
 5. **`deriveExample` memoizes each `$ref` per root document**, so the returned
    value can share sub-objects with the value derived for a sibling schema.
    Treat it as read-only.
+6. **`fooExample` is sometimes emitted as `… as Foo`.** A schema can require a
+   key the generated type never declares (`required` naming something absent from
+   `properties`, a `dependentRequired`/`dependentSchemas` dependency, a
+   `minProperties` filler on an object with no index signature). The value keeps
+   the key — dropping it would ship a fixture missing what its schema demands —
+   so the assertion is what lets the file compile. Do not "clean it up" into a
+   bare literal; TypeScript rejects the excess property, and `satisfies` runs the
+   very same check.
+7. **Derived values are capped at 10,000** characters / elements / keys, so a
+   schema with an enormous `minLength`/`minItems`/`minProperties` gets a
+   short value plus a `console.warn` rather than a file nobody can open.
+   `FooArbitrary` still honours the real bound — reach for it when the exact size
+   matters.
+
+8. **A `default`/`examples` hint that contradicts its own schema is ignored.**
+   The generated type follows the schema, so emitting the hint verbatim produced
+   a file that would not compile (`const fooExample: string = 42`). `const` is
+   always honoured — the type is its literal type. Do not "restore" a mismatched
+   hint; fix the schema instead.
 
 Exports: `buildExampleSchema`, `generateArbitrary`, `generateExampleConst`,
 `deriveExample`, `serializeValue`, `GeneratedFile`. Only the `.` entry.

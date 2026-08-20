@@ -3,7 +3,8 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { collectExampleImports } from './collect-example-imports'
 import { generateExampleConst } from './derive-example'
-import { generateArbitrary, VALIDATE_IMPORT_NAME, VALIDATE_IMPORT_STATEMENT } from './generate-arbitrary'
+import { generateArbitrary, VALIDATE_IMPORT_STATEMENT } from './generate-arbitrary'
+import { canBuildGuard, needsValidationFilter } from './schema-validation'
 
 /**
  * Options for controlling what gets generated in an example file.
@@ -76,8 +77,14 @@ export const generateExampleFile = (
   let result = `import * as fc from 'fast-check'\n`
 
   // The arbitrary embeds a runtime validator only for schemas whose keywords no
-  // `fc.*` combinator captures; import it just for those files.
-  if (arbitrary.includes(`${VALIDATE_IMPORT_NAME}(`)) {
+  // `fc.*` combinator captures *and* whose validator can actually be built. Ask
+  // both halves, exactly as `generateArbitrary` does — asking only the first
+  // earned an import nothing uses for a schema the interpreter refuses (an
+  // uncompilable `pattern`), which a consumer's `noUnusedLocals` then rejects.
+  // Searching the generated source for the validator's name is not the answer
+  // either: a schema whose own data contains it (a `const` of
+  // `'__mjstValidate('`) would match that search.
+  if (needsValidationFilter(schema) && canBuildGuard(schema, options?.rootSchema)) {
     result += VALIDATE_IMPORT_STATEMENT + '\n'
   }
 

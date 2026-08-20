@@ -163,7 +163,7 @@ compiles — but the generator prints a `console.warn` naming the type. Reach fo
 `FooArbitrary` in those cases: the arbitrary carries a runtime validating filter
 and stays correct where the static value cannot.
 
-The value falls short for two reasons:
+The value falls short for three reasons:
 
 - **The schema has no instance.** `{ pattern: '^ab$', minLength: 5 }`,
   `uniqueItems` over booleans with `minItems: 3`, a `required` key that
@@ -173,6 +173,61 @@ The value falls short for two reasons:
 - **The constraint is beyond the deriver.** `pattern` is sampled by a
   best-effort recursive-descent walk of the regex, so lookarounds and
   backreferences fall back to `"string"`; an unrecognized `format` does the same.
+- **The bound is larger than any fixture should be.** A derived string, array, or
+  object stops growing at 10,000 characters / elements / keys, so a document
+  asking for `minLength: 50000000` yields a capped value and a warning rather than
+  a 50 MB literal. `FooArbitrary` still honours the real bound.
+
+Two more shapes worth knowing about, both of which keep the generated file
+compiling rather than making it correct:
+
+- A schema can require a key its **generated type never declares** — `required`
+  naming something absent from `properties`, a `dependentRequired` /
+  `dependentSchemas` dependency, or a `minProperties` filler on an object with no
+  index signature. The example keeps the key (a fixture missing what its schema
+  demands is broken data) and is emitted as `… as Foo`, since a bare object
+  literal with an excess property fails to compile.
+- An authored `default` or `examples[0]` is used **only when it satisfies its own
+  schema**. A hint that does not (`{ type: 'string', default: 42 }` — common in
+  documents whose field types changed after the hint was written) is ignored in
+  favour of a structurally derived value, because the generated type follows the
+  schema and would reject the hint outright. `const` is always honoured: the type
+  is the const's own literal type, so the two cannot disagree.
+- An **unsatisfiable range** (`minLength: 10, maxLength: 2`) collapses onto its
+  upper bound in the arbitrary. Every bounded `fc.*` combinator asserts
+  `min <= max` and throws at *import*, which would take down every other export in
+  the file alongside it. Integer bounds are also confined to fast-check's own
+  32-bit range, and length/count bounds to non-negative integers.
+- A **recursive definition's** example has to stop somewhere and stops with
+  `null`, which the non-nullable type does not admit — so it is emitted as
+  `… as unknown as Node`. `NodeArbitrary` ties the recursion properly through
+  `fc.letrec` and needs no such escape.
+- A `pattern` that is **not a valid JavaScript regex**, or that uses a lookahead
+  or lookbehind, falls back to a plain `fc.string()`. `fc.stringMatching` compiles
+  the pattern at module scope and cannot generate from an assertion, so honouring
+  it would throw where the whole file becomes unusable rather than just that one
+  arbitrary being loose.
+- **Nesting deeper than 400 levels** is refused with an error naming the limit.
+  Building an arbitrary costs several stack frames per schema level, so a deeper
+  document exhausts the stack — the cap turns that into a message that says what
+  is wrong.
+
+Two shapes stay impossible to generate from, and the arbitrary will retry
+forever if you sample it. Both are schemas with no instance, and the example
+warns:
+
+- A `pattern` no string of the required length can match
+  (`{ pattern: '^[a-z]{2}$', minLength: 5 }`). A satisfiable-but-narrow pairing
+  (`{ pattern: '^[a-f0-9]+$', minLength: 32, maxLength: 32 }`) is slow for the
+  same reason — `fc.stringMatching` rarely lands on the exact length.
+- A `minLength`/`minItems` so large that no value of that size can be built.
+
+One more gap is not this package's to close: a `$ref` that resolves nowhere in
+the document is typed by its name (`Nope`) but never imported, because it was
+never generated as a file. The arbitrary degrades to `fc.anything()`, but the
+type still names it, so the file does not compile. Same for `{ "type": [] }`,
+which types as `export type Foo = ;`. Both come from
+`@amritk/helpers/generate-type-definition`.
 
 > [!TIP]
 > The example for a `$ref` is inlined by value, so a definition graph with wide

@@ -126,6 +126,9 @@ const evalArbitrary = (schema: JSONSchema, typeName = 'Sample'): fc.Arbitrary<un
     // constructs below are type-level only and erase at runtime, so stripping
     // them leaves the behaviour under test untouched.
     .replaceAll(' as const', '')
+    // The filtered arbitrary widens its base to `Arbitrary<unknown>` so the type
+    // guard compiles; the cast is type-level only.
+    .replaceAll(' as fc.Arbitrary<unknown>', '')
     .replace(/\(value\): value is [^=]+=>/g, '(value) =>')
     .replace(new RegExp(`export const ${typeName}Arbitrary: fc\\.Arbitrary<[^>]*> = `), 'return ')
   return new Function('fc', '__mjstValidate', js)(fc, validate) as fc.Arbitrary<unknown>

@@ -37,6 +37,10 @@ import {
 } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { assertGeneratorDepth } from './assert-generator-depth'
+import { closedValueSet } from './closed-value-set'
+import { declaresOwnShape, isObjectLike, typesConflict } from './is-object-like'
+import { satisfiesScalarConstraints } from './satisfies-scalar-constraints'
 import { makeInstanceCheck, needsValidationFilter } from './schema-validation'
 
 /** Lowercases the first character of a name. e.g. "User" → "user" */
@@ -249,6 +253,26 @@ const FORMAT_EXAMPLES: Readonly<Record<string, string>> = {
   regex: '^example$',
 }
 
+/**
+ * How many characters, elements, or properties a single derived value may carry.
+ *
+ * The `min*` keywords are schema *input*, so a document can ask for a 50-million
+ * character string or a million-key object — and the deriver would faithfully
+ * build it, then serialize it into a TypeScript file nobody can open. Worse, the
+ * cost is not always linear: synthesized property names grow with the key count,
+ * so a large `minProperties` used to cost quadratic time *and* memory
+ * (`minProperties: 6000` derived 90 MB in three seconds, and it only got worse
+ * from there). No fixture needs anything near this many, so a value past the cap
+ * is a malformed or hostile document rather than a real requirement.
+ *
+ * Capping makes the example fall short of its own `minLength`/`minItems`/
+ * `minProperties`, which is exactly the "no derivable instance" case the package
+ * already handles: {@link generateExampleConst} validates the result and warns.
+ * The generated `FooArbitrary` still honours the real bound. This is the same
+ * bargain `@amritk/helpers`' `MAX_SCHEMA_DEPTH` strikes one level down.
+ */
+const MAX_DERIVED_SIZE = 10_000
+
 /** Returns a representative string honouring `format`, `pattern`, and length. */
 const exampleString = (schema: JSONSchema): string => {
   if (hasFormat(schema)) {
@@ -260,7 +284,7 @@ const exampleString = (schema: JSONSchema): string => {
     if (formatted !== undefined) return formatted
   }
 
-  const minLength = hasMinLength(schema) ? schema.minLength : 0
+  const minLength = Math.min(hasMinLength(schema) ? schema.minLength : 0, MAX_DERIVED_SIZE)
   if (hasPattern(schema)) {
     const sampled = sampleFromPattern(schema.pattern, minLength)
     // Only trust the sampler when it actually matches *and* fits both length
@@ -294,6 +318,14 @@ const exampleString = (schema: JSONSchema): string => {
  * still short-circuits to `null`. As one shared mutable set it also drops the
  * `new Set([...seen, ref])` copy that made every node cost O(depth) on its own.
  *
+ * `needsAssertion` records that the value and its *generated type* will not line
+ * up cleanly — either an object gained a key the type does not declare, or the
+ * type declares keys the deriver had no way to produce. {@link generateExampleConst}
+ * needs the answer and cannot recompute it without re-walking the schema the way
+ * the deriver did. Like a cycle-truncated value it is a property of the
+ * derivation, so it travels with the memo rather than being recomputed on a
+ * cache hit.
+ *
  * `cycleBroken` is what makes the two safe together. A value produced by cutting
  * a cycle depends on *where* the cut fell, so it must not be memoized: any
  * short-circuit raises the flag, and a ref is only recorded in `values` when its
@@ -304,9 +336,12 @@ const exampleString = (schema: JSONSchema): string => {
  */
 type DeriveContext = {
   readonly rootSchema: Record<string, unknown> | undefined
-  readonly values: Map<string, unknown>
+  readonly values: Map<string, { value: unknown; needsAssertion: boolean }>
   readonly active: Set<string>
   cycleBroken: boolean
+  needsAssertion: boolean
+  /** Current nesting of the `derive` recursion; see the depth guard there. */
+  depth: number
 }
 
 /**
@@ -322,6 +357,8 @@ const newContext = (rootSchema: Record<string, unknown> | undefined): DeriveCont
   values: new Map(),
   active: new Set(),
   cycleBroken: false,
+  needsAssertion: false,
+  depth: 0,
 })
 
 const contextFor = (rootSchema: Record<string, unknown> | undefined): DeriveContext => {
@@ -352,24 +389,52 @@ const contextFor = (rootSchema: Record<string, unknown> | undefined): DeriveCont
  * final value and warns when that happens, rather than letting an invalid
  * example ship silently.
  */
-export const deriveExample = (schema: JSONSchema, rootSchema?: Record<string, unknown>): unknown => {
+export const deriveExample = (schema: JSONSchema, rootSchema?: Record<string, unknown>): unknown =>
+  deriveReported(schema, rootSchema).value
+
+/**
+ * {@link deriveExample} plus the two facts about *how* the value was built that
+ * the emitter needs: whether any object in it gained a key the generated type
+ * will not declare, and whether a recursive `$ref` had to be cut short.
+ */
+const deriveReported = (
+  schema: JSONSchema,
+  rootSchema?: Record<string, unknown>,
+): { value: unknown; needsAssertion: boolean; cycleBroken: boolean } => {
   const ctx = contextFor(rootSchema)
   // A previous call can only have left `active` dirty by unwinding through an
   // exception, but a stale ancestor there would silently truncate this
   // derivation — so start every top-level call from a clean path.
   ctx.active.clear()
   ctx.cycleBroken = false
-  return derive(schema, ctx)
+  ctx.needsAssertion = false
+  ctx.depth = 0
+  const value = derive(schema, ctx)
+  return { value, needsAssertion: ctx.needsAssertion, cycleBroken: ctx.cycleBroken }
 }
 
 /** The recursive entry point, threading the shared {@link DeriveContext}. */
 const derive = (schema: JSONSchema, ctx: DeriveContext): unknown => {
+  // A pathologically nested document used to die with a bare `RangeError:
+  // Maximum call stack size exceeded` from somewhere inside `deriveObject` — a
+  // trace that names nothing about the input. The shared cap says which traversal
+  // ran out and what to do about it, exactly as the walkers in `@amritk/helpers`
+  // do, and it sits far above anything a real schema reaches. The counter lives
+  // on the context because `derive` is the single recursive entry point, so
+  // nothing below it has to carry a depth argument.
+  assertGeneratorDepth(ctx.depth, 'deriveExample')
   if (!isSchemaObject(schema)) return null
-  const base = deriveBase(schema, ctx)
-  // Keywords the structural deriver can't fully honour (`if`/`then`/`else`,
-  // `not`, `oneOf` exclusivity) are reconciled by validating candidates against a
-  // real validator and picking the first that passes.
-  return needsValidationFilter(schema) ? refineExample(schema, base, ctx) : base
+
+  ctx.depth++
+  try {
+    const base = deriveBase(schema, ctx)
+    // Keywords the structural deriver can't fully honour (`if`/`then`/`else`,
+    // `not`, `oneOf` exclusivity) are reconciled by validating candidates against
+    // a real validator and picking the first that passes.
+    return needsValidationFilter(schema) ? refineExample(schema, base, ctx) : base
+  } finally {
+    ctx.depth--
+  }
 }
 
 /**
@@ -382,30 +447,61 @@ const deriveRef = (ref: string, ctx: DeriveContext): unknown => {
     ctx.cycleBroken = true
     return null
   }
-  if (ctx.values.has(ref)) return ctx.values.get(ref)
+  const memoized = ctx.values.get(ref)
+  if (memoized !== undefined) {
+    if (memoized.needsAssertion) ctx.needsAssertion = true
+    return memoized.value
+  }
   if (!ctx.rootSchema) return null
   const resolved = resolveRef(ref, ctx.rootSchema)
   if (!resolved) return null
 
   const outerBroken = ctx.cycleBroken
+  const outerUndeclared = ctx.needsAssertion
   ctx.cycleBroken = false
+  ctx.needsAssertion = false
   ctx.active.add(ref)
   try {
     const value = derive(resolved as JSONSchema, ctx)
-    if (!ctx.cycleBroken) ctx.values.set(ref, value)
+    if (!ctx.cycleBroken) ctx.values.set(ref, { value, needsAssertion: ctx.needsAssertion })
     ctx.cycleBroken = outerBroken || ctx.cycleBroken
+    ctx.needsAssertion = outerUndeclared || ctx.needsAssertion
     return value
   } finally {
     ctx.active.delete(ref)
   }
 }
 
+/**
+ * The value a schema author offers as its own example, in preference order:
+ * `examples[0]`, then `default`. Wrapped rather than returned bare, so a hint
+ * that legitimately *is* `undefined` stays distinguishable from "no hint".
+ */
+const authoredHint = (schema: JSONSchema): { value: unknown } | undefined => {
+  if (hasExamples(schema) && Array.isArray(schema.examples) && schema.examples.length > 0) {
+    return { value: schema.examples[0] }
+  }
+  if (hasDefault(schema)) return { value: schema.default }
+  return undefined
+}
+
 /** Structural derivation for a node, before any validating refinement. */
 const deriveBase = (schema: JSONSchema, ctx: DeriveContext): unknown => {
   if (!isSchemaObject(schema)) return null
+  // `const` needs no check: the generated type is the const's own literal type,
+  // so the two agree however odd the schema is.
   if (hasConst(schema)) return schema.const
-  if (hasExamples(schema) && Array.isArray(schema.examples) && schema.examples.length > 0) return schema.examples[0]
-  if (hasDefault(schema)) return schema.default
+
+  // An authored `examples`/`default` is only worth preferring when it actually
+  // satisfies the schema it sits in. Real documents carry plenty that do not —
+  // `{ type: 'string', default: 42 }`, an `examples` entry left behind by an
+  // edit, an object `default` of `{}` under a `required` — and the generated
+  // type comes from the schema, not the hint, so emitting one verbatim produced
+  // `const fooExample: string = 42`: a file that does not compile. Falling
+  // through to structural derivation gives a value that at least matches its own
+  // declared type.
+  const hint = authoredHint(schema)
+  if (hint !== undefined && makeInstanceCheck(schema, ctx.rootSchema)(hint.value)) return hint.value
   if (hasEnum(schema) && schema.enum.length > 0) {
     // Prefer the first member that also satisfies any sibling length/range
     // constraints (e.g. `enum` + `minLength`), falling back to the first member.
@@ -425,8 +521,27 @@ const deriveBase = (schema: JSONSchema, ctx: DeriveContext): unknown => {
   // one branch — picking one would ignore the others' constraints.
   if (hasAllOf(schema)) return derive(mergeAllOf(schema), ctx)
 
-  if (hasOneOf(schema) && schema.oneOf[0] !== undefined) return derive(schema.oneOf[0], ctx)
-  if (hasAnyOf(schema) && schema.anyOf[0] !== undefined) return derive(schema.anyOf[0], ctx)
+  // A `oneOf`/`anyOf` branch is a constraint *alongside* the node's own keywords,
+  // not a replacement for them, so a node that declares its own shape merges into
+  // the branch it picks. Reading the branch alone threw the node's `type` and
+  // `properties` away — `{ type: 'object', properties: …, anyOf: [{ required: … }] }`
+  // derived `null` against an object type, which does not compile.
+  const branches = hasOneOf(schema) ? schema.oneOf : hasAnyOf(schema) ? schema.anyOf : undefined
+  if (branches !== undefined && branches.length > 0) {
+    const rest = withoutCombinators(schema)
+    if (!declaresOwnShape(rest)) return derive(branches[0] as JSONSchema, ctx)
+    // Prefer a branch the node's own keywords can actually admit; fall back to
+    // the first when every branch clashes, since an unsatisfiable schema still
+    // has to produce something.
+    const chosen = branches.find((branch) => !typesConflict(rest, branch)) ?? branches[0]
+    return derive({ allOf: [rest, chosen] } as JSONSchema, ctx)
+  }
+
+  // Object-likeness is settled *before* `type` is dispatched on, because the type
+  // generator settles it first too: it calls anything carrying `properties` an
+  // object whatever `type` says. Answering `type` first emitted a string against
+  // an object type.
+  if (isObjectLike(schema)) return deriveObject(schema, ctx)
 
   if (hasType(schema)) return deriveForType(schema.type, schema, ctx)
 
@@ -437,6 +552,14 @@ const deriveBase = (schema: JSONSchema, ctx: DeriveContext): unknown => {
   }
 
   return null
+}
+
+/** A shallow copy of `schema` with `oneOf`/`anyOf` removed, leaving what the node says on its own. */
+const withoutCombinators = (schema: JSONSchema): JSONSchema => {
+  const rest = { ...(schema as Record<string, unknown>) }
+  delete rest['oneOf']
+  delete rest['anyOf']
+  return rest as JSONSchema
 }
 
 /** The applicator keywords whose satisfaction is reconciled by {@link refineExample}. */
@@ -506,25 +629,6 @@ const refineExample = (schema: JSONSchema, base: unknown, ctx: DeriveContext): u
   return base
 }
 
-/**
- * True when a candidate value (e.g. an `enum`/`const` member) satisfies the
- * node's simple string-length and numeric-range constraints. Used to pick an
- * `enum` member that also meets a sibling `minLength`/`minimum`/etc.
- */
-const satisfiesScalarConstraints = (schema: JSONSchema, value: unknown): boolean => {
-  if (typeof value === 'string') {
-    if (hasMinLength(schema) && value.length < schema.minLength) return false
-    if (hasMaxLength(schema) && value.length > schema.maxLength) return false
-  } else if (typeof value === 'number') {
-    if (hasMinimum(schema) && value < schema.minimum) return false
-    if (hasMaximum(schema) && value > schema.maximum) return false
-    if (hasExclusiveMinimum(schema) && value <= schema.exclusiveMinimum) return false
-    if (hasExclusiveMaximum(schema) && value >= schema.exclusiveMaximum) return false
-    if (hasMultipleOf(schema) && schema.multipleOf > 0 && value % schema.multipleOf !== 0) return false
-  }
-  return true
-}
-
 /** Derives a canonical value for a single declared `type`. */
 const deriveForType = (type: string, schema: JSONSchema, ctx: DeriveContext): unknown => {
   switch (type) {
@@ -592,6 +696,27 @@ const deriveObject = (schema: JSONSchema, ctx: DeriveContext): Record<string, un
   const extrasAllowed = !additionalClosed || patternEntries.length > 0
   const nameCheck = hasPropertyNames(schema) ? makeInstanceCheck(schema.propertyNames, ctx.rootSchema) : undefined
 
+  // The generated type declares exactly the `properties` keys, widened by an
+  // index signature when `additionalProperties`/`patternProperties` supply one.
+  // Every *other* key this function invents — a `required` name with no
+  // `properties` entry, a dependency key, a `minProperties` filler — is a key
+  // the type has no room for, and an object literal carrying it is an excess
+  // property TypeScript rejects outright. Note when that happens so
+  // `generateExampleConst` can emit a value that still compiles.
+  const declaredKeys = new Set(hasProperties(schema) ? Object.keys(schema.properties) : [])
+  const hasIndexSignature =
+    additionalSchema !== undefined || (hasPatternProperties(schema) && Object.keys(schema.patternProperties).length > 0)
+  const noteKey = (key: string): void => {
+    if (!hasIndexSignature && !declaredKeys.has(key)) ctx.needsAssertion = true
+  }
+
+  // The mirror image: the type generator folds an `if`/`then` pair's properties
+  // into the declared type *as required*, but nothing structural tells the
+  // deriver to produce them, so it emits `{}` against a type demanding keys.
+  // Neither side is wrong on its own; the literal just needs asserting.
+  const raw = schema as Record<string, unknown>
+  if (Object.hasOwn(raw, 'if') && Object.hasOwn(raw, 'then')) ctx.needsAssertion = true
+
   // The value schema for a key not declared in `properties`: the matching
   // `patternProperties` (intersected when several match), else `additionalProperties`.
   const valueSchemaFor = (key: string): JSONSchema | undefined => {
@@ -610,6 +735,7 @@ const deriveObject = (schema: JSONSchema, ctx: DeriveContext): Record<string, un
   const addKey = (key: string): void => {
     const sub = valueSchemaFor(key)
     if (sub === undefined && additionalClosed) return
+    noteKey(key)
     setProperty(out, key, sub !== undefined ? derive(sub, ctx) : null)
   }
 
@@ -620,7 +746,12 @@ const deriveObject = (schema: JSONSchema, ctx: DeriveContext): Record<string, un
   }
   // A required key with no `properties` entry still needs a value.
   if (hasRequired(schema)) {
-    for (const key of schema.required) if (!Object.hasOwn(out, key)) addKey(key)
+    // Only a string entry names a property; a malformed document can put
+    // anything in `required`, and a non-string leaked into the emitted
+    // `requiredKeys`, which TypeScript then rejected.
+    for (const key of schema.required) {
+      if (typeof key === 'string' && !Object.hasOwn(out, key)) addKey(key)
+    }
   }
   // `dependentRequired`: once a trigger key is present, its dependencies must be too.
   if (hasDependentRequired(schema)) {
@@ -633,17 +764,29 @@ const deriveObject = (schema: JSONSchema, ctx: DeriveContext): Record<string, un
   // satisfy the dependency subschema — apply its `properties`/`required`.
   if (hasDependentSchemas(schema)) {
     for (const [trigger, sub] of Object.entries(schema.dependentSchemas)) {
-      if (Object.hasOwn(out, trigger) && isSchemaObject(sub)) applyDependentSchema(out, sub, ctx)
+      if (Object.hasOwn(out, trigger) && isSchemaObject(sub)) applyDependentSchema(out, sub, ctx, noteKey)
     }
   }
   // Synthesize filler keys to reach `minProperties` when extras are allowed.
+  // `Object.keys(out).length` is counted once and then tracked, rather than
+  // recomputed per iteration: rebuilding the key list on every pass made filling
+  // a large `minProperties` quadratic on its own.
   if (hasMinProperties(schema) && extrasAllowed) {
+    const target = Math.min(schema.minProperties, MAX_DERIVED_SIZE)
+    let count = Object.keys(out).length
     let n = 0
-    let guard = 0
-    while (Object.keys(out).length < schema.minProperties && guard++ < schema.minProperties + 50) {
+    // Each attempt may be rejected (a duplicate, or a name `propertyNames`
+    // refuses), so allow a fixed slack of extra attempts before giving up rather
+    // than looping forever on a schema whose keys cannot be synthesized.
+    let attempts = 0
+    while (count < target && attempts++ < target + 50) {
       const key = synthKey(n++, patternEntries, schema, nameCheck)
-      if (key === undefined || Object.hasOwn(out, key)) continue
+      // No candidate name satisfies the schema's key constraints, and a larger
+      // index will not change that — stop rather than burn the attempt budget.
+      if (key === undefined) break
+      if (Object.hasOwn(out, key)) continue
       addKey(key)
+      if (Object.hasOwn(out, key)) count++
     }
   }
   // Enforce `maxProperties` by dropping keys that aren't required (directly or via
@@ -653,28 +796,52 @@ const deriveObject = (schema: JSONSchema, ctx: DeriveContext): Record<string, un
   return out
 }
 
-/** Applies a `dependentSchemas` branch's object shape (`properties`/`required`) in place. */
-const applyDependentSchema = (out: Record<string, unknown>, sub: JSONSchema, ctx: DeriveContext): void => {
+/**
+ * Applies a `dependentSchemas` branch's object shape (`properties`/`required`) in
+ * place. `noteKey` reports each added key to the parent, whose `properties` — not
+ * the branch's — are what the generated type was built from.
+ */
+const applyDependentSchema = (
+  out: Record<string, unknown>,
+  sub: JSONSchema,
+  ctx: DeriveContext,
+  noteKey: (key: string) => void,
+): void => {
+  const add = (key: string, propSchema: JSONSchema | undefined): void => {
+    noteKey(key)
+    setProperty(out, key, propSchema !== undefined ? derive(propSchema, ctx) : null)
+  }
   if (hasProperties(sub)) {
     for (const [key, propSchema] of Object.entries(sub.properties)) {
-      if (!Object.hasOwn(out, key)) setProperty(out, key, derive(propSchema, ctx))
+      if (!Object.hasOwn(out, key)) add(key, propSchema)
     }
   }
   if (hasRequired(sub)) {
     const propSchemas = hasProperties(sub) ? sub.properties : {}
     for (const key of sub.required) {
-      if (Object.hasOwn(out, key)) continue
-      const propSchema = propSchemas[key]
-      setProperty(out, key, propSchema !== undefined ? derive(propSchema, ctx) : null)
+      if (typeof key !== 'string' || Object.hasOwn(out, key)) continue
+      add(key, propSchemas[key])
     }
   }
 }
 
 /**
+ * How long a synthesized property name may get.
+ *
+ * The repetition fallback below lengthens the key by one seed per property, so
+ * without a ceiling the n-th key is n seeds long and filling a wide object costs
+ * quadratic memory. Past this length we are no longer naming a property, we are
+ * building a haystack — so {@link synthKey} gives up instead and the caller stops
+ * inventing keys. Far above any property name a real document uses.
+ */
+const MAX_SYNTH_KEY_LENGTH = 64
+
+/**
  * Produces a candidate key name for the i-th synthesized property. Prefers a key
  * matching a `patternProperties` entry (so the entry supplies its value schema),
- * then one matching `propertyNames`, then a plain `extraN`. Returns `undefined`
- * when the candidate can't satisfy a `propertyNames` constraint.
+ * then one matching `propertyNames`, then a plain `extra`. Returns `undefined`
+ * when no candidate can satisfy the schema's key constraints — the caller reads
+ * that as "this schema's key space is exhausted" and stops.
  */
 const synthKey = (
   i: number,
@@ -682,39 +849,59 @@ const synthKey = (
   schema: JSONSchema,
   nameCheck: ((value: unknown) => boolean) | undefined,
 ): string | undefined => {
-  // Distinct keys are produced by *repeating* a base seed (`x-` → `x-x-`) rather
-  // than appending a digit: repetition is far likelier to keep matching a key
-  // pattern (`^[a-z]+$`, `^x-`) that a digit suffix would break.
-  const vary = (seed: string): string => seed.repeat(i + 1)
-  const seeds: string[] = []
+  // Two ways to vary a seed into a distinct key, cheapest first. A digit suffix
+  // keeps every key the same short length, which is what makes filling a wide
+  // object linear rather than quadratic. *Repeating* the seed (`x-` → `x-x-`) is
+  // the fallback, because it is far likelier to keep matching a key pattern
+  // (`^[a-z]+$`, `^x-`) that a digit suffix would break.
+  const variants = (seed: string): string[] =>
+    i === 0 ? [seed] : [`${seed}${i}`, seed.repeat(i + 1)].filter((key) => key.length <= MAX_SYNTH_KEY_LENGTH)
+
+  // Each seed carries the key test it has to keep passing: a seed sampled from a
+  // `patternProperties` entry is only worth using while it still matches that
+  // entry, since matching is what earns the key its value schema.
+  const seeds: Array<{ seed: string; matches: (key: string) => boolean }> = []
   for (const [re] of patternEntries) {
     const sampled = sampleFromPattern(re.source, 0)
-    if (sampled !== undefined && sampled.length > 0) seeds.push(vary(sampled))
+    if (sampled !== undefined && sampled.length > 0) {
+      seeds.push({ seed: sampled, matches: (key) => re.test(key) })
+    }
   }
   const propertyNames = isSchemaObject(schema) && hasPropertyNames(schema) ? schema.propertyNames : undefined
   if (propertyNames !== undefined && isSchemaObject(propertyNames) && hasPattern(propertyNames)) {
     const sampled = sampleFromPattern(propertyNames.pattern, 0)
-    if (sampled !== undefined && sampled.length > 0) seeds.push(vary(sampled))
+    if (sampled !== undefined && sampled.length > 0) seeds.push({ seed: sampled, matches: () => true })
   }
-  seeds.push(vary('extra'))
-  for (const seed of seeds) {
-    if (!nameCheck || nameCheck(seed)) return seed
+  seeds.push({ seed: 'extra', matches: () => true })
+
+  for (const { seed, matches } of seeds) {
+    for (const key of variants(seed)) {
+      if (matches(key) && (!nameCheck || nameCheck(key))) return key
+    }
   }
   return undefined
 }
 
 /** Drops non-required keys until `out` has at most `max` properties. */
 const enforceMaxProperties = (out: Record<string, unknown>, schema: JSONSchema, max: number): void => {
-  if (Object.keys(out).length <= max) return
+  // Snapshot the keys once and track the count, rather than asking
+  // `Object.keys(out).length` again for every deletion — that rebuilt the whole
+  // key list per key removed, which is quadratic on a wide object.
+  const keys = Object.keys(out)
+  let count = keys.length
+  if (count <= max) return
+
   const protectedKeys = new Set<string>(hasRequired(schema) ? schema.required : [])
   if (hasDependentRequired(schema)) {
     for (const [trigger, deps] of Object.entries(schema.dependentRequired)) {
       if (Object.hasOwn(out, trigger)) for (const dep of deps) protectedKeys.add(dep)
     }
   }
-  for (const key of Object.keys(out)) {
-    if (Object.keys(out).length <= max) break
-    if (!protectedKeys.has(key)) delete out[key]
+  for (const key of keys) {
+    if (count <= max) break
+    if (protectedKeys.has(key)) continue
+    delete out[key]
+    count--
   }
 }
 
@@ -739,7 +926,11 @@ const deriveNumber = (schema: JSONSchema, isInteger: boolean): number => {
   let value = Number.isFinite(lo) ? lo : Number.isFinite(hi) ? Math.min(0, hi) : 0
   if (isInteger) value = Math.ceil(value)
 
-  if (hasMultipleOf(schema) && schema.multipleOf > 0) {
+  // A `multipleOf` that is not a finite positive number is not a step anything
+  // can be a multiple of: `Math.ceil(0 / Infinity) * Infinity` is `NaN`, and
+  // `serializeValue` renders that as `null` — an example the declared `number`
+  // type rejects. Ignore it, exactly as the arbitrary side does.
+  if (hasMultipleOf(schema) && Number.isFinite(schema.multipleOf) && schema.multipleOf > 0) {
     const m = schema.multipleOf
     value = Math.ceil(value / m - 1e-9) * m
     // Rounding up can overshoot the upper bound; drop to the largest multiple
@@ -801,13 +992,24 @@ const deriveArray = (schema: JSONSchema, ctx: DeriveContext): unknown[] => {
   // set (`enum: ['a', 'b']`, `type: 'boolean'`) does not contain.
   const choices = unique && contains === undefined ? closedValueSet(elem) : undefined
 
-  // Prefer a non-empty example, satisfy `minItems` and `minContains`, never exceed `maxItems`.
-  const wanted = Math.min(Math.max(min, minContains, max === 0 ? 0 : 1), max)
+  // Prefer a non-empty example, satisfy `minItems` and `minContains`, never exceed
+  // `maxItems` — and never build more elements than {@link MAX_DERIVED_SIZE}, so a
+  // document asking for a million-element array does not become a million-element
+  // TypeScript literal.
+  const wanted = Math.min(Math.max(min, minContains, max === 0 ? 0 : 1), max, MAX_DERIVED_SIZE)
   // A set of N values cannot fill more than N distinct slots. When `minItems`
   // asks for more (`minItems: 3` over booleans) the schema has no valid
   // instance; stopping at N keeps the array at least *unique*, and the final
   // check in `generateExampleConst` reports the schema.
   const count = choices !== undefined ? Math.min(wanted, choices.length) : wanted
+
+  // `items` constrains *every* element, `contains` only asks that some element
+  // additionally match. So a `contains`-derived value is only usable when `items`
+  // accepts it too: `{ items: string, contains: number }` has no instance at all,
+  // and taking the `contains` value put a number into a declared `string[]`.
+  // Falling back to `items` keeps the example typed as its own schema says, and
+  // `generateExampleConst`'s final check reports the unsatisfiable schema.
+  const itemsCheck = rest !== undefined && contains !== undefined ? makeInstanceCheck(rest, ctx.rootSchema) : undefined
 
   const result: unknown[] = []
   for (let i = 0; i < count; i++) {
@@ -816,30 +1018,17 @@ const deriveArray = (schema: JSONSchema, ctx: DeriveContext): unknown[] => {
       continue
     }
     // Make the first `minContains` items satisfy `contains`; the rest use `items`.
-    const itemSchema = contains !== undefined && i < minContains ? contains : elem
-    const base = itemSchema !== undefined ? derive(itemSchema, ctx) : null
-    result.push(unique ? distinctify(base, i, itemSchema) : base)
+    const useContains = contains !== undefined && i < minContains
+    const itemSchema = useContains ? contains : elem
+    let chosen = itemSchema
+    let base = itemSchema !== undefined ? derive(itemSchema, ctx) : null
+    if (useContains && itemsCheck !== undefined && !itemsCheck(base)) {
+      chosen = rest
+      base = rest !== undefined ? derive(rest, ctx) : null
+    }
+    result.push(unique ? distinctify(base, i, chosen) : base)
   }
   return result
-}
-
-/**
- * The complete set of values an item schema admits, when that set is finite and
- * small enough to enumerate: `const`, `enum`, `boolean`, `null`. `uniqueItems`
- * needs distinct elements, and for these schemas the {@link distinctify}
- * perturbation would step straight out of the schema, so the caller walks this
- * set instead. `undefined` means the value space is open and perturbing is fine.
- */
-const closedValueSet = (schema: JSONSchema | undefined): unknown[] | undefined => {
-  if (schema === undefined || !isSchemaObject(schema)) return undefined
-  if (hasConst(schema)) return [schema.const]
-  if (hasEnum(schema)) {
-    const fitting = schema.enum.filter((value) => satisfiesScalarConstraints(schema, value))
-    return fitting.length > 0 ? fitting : [...schema.enum]
-  }
-  if (hasType(schema) && schema.type === 'boolean') return [true, false]
-  if (hasType(schema) && schema.type === 'null') return [null]
-  return undefined
 }
 
 /**
@@ -883,10 +1072,42 @@ const TIGHTEST = new Map<string, 'max' | 'min'>([
   ['maxProperties', 'min'],
 ])
 
+/**
+ * Expands any branch that is itself an `allOf` wrapper into the branches it
+ * holds, so the merge below sees real keywords rather than a container.
+ *
+ * The merge loop skips the `allOf` key — correct for the node whose `allOf` is
+ * being expanded, but it also silently dropped a *nested* one. That shape is
+ * everywhere in real documents: a `oneOf` branch written as
+ * `{ title: 'Token Usage', allOf: [{ type: 'object', properties: … }] }` merged
+ * down to `{ title: 'Token Usage' }`, so the whole variant's properties vanished
+ * and the example came out `{}` against a type demanding them.
+ *
+ * A branch's own keywords come *after* the ones it wraps, matching the
+ * later-wins convention the merge already follows for the node itself.
+ */
+const flattenBranches = (nodes: readonly JSONSchema[], depth = 0): JSONSchema[] => {
+  assertGeneratorDepth(depth, 'mergeAllOf')
+  return nodes.flatMap((node) => {
+    if (!isSchemaObject(node) || !hasAllOf(node)) return [node]
+    const own = { ...(node as Record<string, unknown>) }
+    delete own['allOf']
+    return [...flattenBranches(node.allOf, depth + 1), own as JSONSchema]
+  })
+}
+
 export const mergeAllOf = (schema: JSONSchema): JSONSchema => {
-  const branches = hasAllOf(schema) ? schema.allOf : []
-  const merged: Record<string, unknown> = {}
-  const properties: Record<string, unknown[]> = {}
+  const branches = hasAllOf(schema) ? flattenBranches(schema.allOf) : []
+  // Null-prototype accumulators, because both of these are keyed by names a
+  // document controls. On a plain `{}`, reading `properties['__proto__']` answers
+  // `Object.prototype` — truthy, and with no `.push` — so a single `__proto__`
+  // property under any `allOf` threw `TypeError: bucket.push is not a function`
+  // out of the whole generation run. Writing it is the same trap in reverse: the
+  // assignment would reparent the accumulator instead of recording a keyword.
+  // `JSON.parse` does produce a real own `__proto__` key, so any third-party
+  // document can reach this.
+  const merged: Record<string, unknown> = Object.create(null)
+  const properties: Record<string, unknown[]> = Object.create(null)
   const required = new Set<string>()
 
   for (const branch of [...branches, schema]) {
@@ -920,7 +1141,7 @@ export const mergeAllOf = (schema: JSONSchema): JSONSchema => {
     }
   }
 
-  const mergedProps: Record<string, unknown> = {}
+  const mergedProps: Record<string, unknown> = Object.create(null)
   for (const [prop, schemas] of Object.entries(properties)) {
     mergedProps[prop] = schemas.length === 1 ? schemas[0] : { allOf: schemas }
   }
@@ -1014,7 +1235,31 @@ export const generateExampleConst = (
   typeName: string,
   rootSchema?: Record<string, unknown>,
 ): string => {
-  const value = deriveExample(schema, rootSchema)
+  const { value, needsAssertion, cycleBroken } = deriveReported(schema, rootSchema)
   warnInvalidExample(schema, typeName, value, rootSchema)
-  return `export const ${exampleName(typeName)}: ${typeName} = ${serializeValue(value)}`
+  const literal = serializeValue(value)
+  // A schema can require a key its generated type never declares — `required`
+  // naming something absent from `properties`, a `dependentRequired` /
+  // `dependentSchemas` dependency, a `minProperties` filler on an object with no
+  // index signature. Dropping the key would emit a fixture that is *invalid data*
+  // (it is missing something the schema demands); keeping it in a bare literal is
+  // an excess property, and TypeScript rejects the whole file over it. So keep
+  // the key and assert. `satisfies` would not do: it runs the very same
+  // excess-property check, which is the thing in the way.
+  //
+  // A recursive definition needs the same escape for a different reason: its
+  // example has to stop somewhere, and it stops with `null` — which is not a
+  // member of the non-nullable type the schema declares. `{ next: { next: null } }`
+  // for a `type Node = { next: Node }` is the canonical linked list, and it did
+  // not compile. That one takes the `unknown` hop: an excess property still
+  // leaves the two types *comparable*, so a single assertion settles it, but
+  // `null` where a `Node` belongs does not, and TypeScript refuses the direct
+  // conversion outright.
+  // The boolean `false` schema admits no value at all, so its generated type is
+  // `never`, and nothing overlaps `never` — not even through a single assertion.
+  const admitsNothing = schema === false
+  const assertion =
+    cycleBroken || admitsNothing ? ` as unknown as ${typeName}` : needsAssertion ? ` as ${typeName}` : ''
+  const expression = `${literal}${assertion}`
+  return `export const ${exampleName(typeName)}: ${typeName} = ${expression}`
 }

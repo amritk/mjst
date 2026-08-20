@@ -1,3 +1,4 @@
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'vitest'
 
 import { generateArbitrary } from './generate-arbitrary'
@@ -62,11 +63,136 @@ describe('generate-arbitrary', () => {
     expect(code).toContain('.filter((s) => s.length >= 3 && s.length <= 8)')
   })
 
-  it('honours integer range and multipleOf', () => {
+  it('honours integer range and multipleOf analytically', () => {
+    // The multiple is derived (`k * 2` for k in 0..5), not filtered for: filtering
+    // random integers starves fast-check as soon as the step grows.
     const schema = { type: 'integer' as const, minimum: 0, maximum: 10, multipleOf: 2 }
     const code = generateArbitrary(schema, 'Even')
-    expect(code).toContain('fc.integer({ min: 0, max: 10 })')
-    expect(code).toContain('.filter((n) => n % 2 === 0)')
+    expect(code).toContain('fc.integer({ min: 0, max: 5 }).map((k) => k * 2)')
+    expect(code).not.toContain('.filter((n) =>')
+  })
+
+  it('does not starve on a large integer multipleOf', () => {
+    // Only one integer in a million satisfies this by filtering, so a `.filter`
+    // here made the generated arbitrary throw "too many filtered values".
+    const code = generateArbitrary({ type: 'integer' as const, multipleOf: 1_000_000 }, 'Big')
+    expect(code).toContain('.map((k) => k * 1000000)')
+    expect(code).not.toContain('.filter((n) =>')
+    // `k` stays bounded so `k * multipleOf` cannot leave the safe-integer range.
+    const bound = Number(/min: (-?\d+)/.exec(code)?.[1])
+    expect(Math.abs(bound) * 1_000_000).toBeLessThanOrEqual(Number.MAX_SAFE_INTEGER)
+  })
+
+  it('drops a multipleOf of zero instead of emitting an always-false filter', () => {
+    // `n % 0` is `NaN`, so the filter rejected every candidate and the arbitrary
+    // threw the moment a value was sampled.
+    const code = generateArbitrary({ type: 'integer' as const, multipleOf: 0 }, 'Zero')
+    expect(code).not.toContain('% 0')
+    expect(code).toContain('fc.integer()')
+  })
+
+  it('does not name a $ref that resolves nowhere', () => {
+    // The import collector skips an unresolvable ref, so naming it anyway left a
+    // bare identifier nothing imports.
+    const rootSchema = { $defs: {} }
+    const code = generateArbitrary({ $ref: '#/components/schemas/Nope' } as JSONSchema, 'Z', '', new Set(), rootSchema)
+    expect(code).not.toContain('NopeArbitrary')
+    expect(code).toContain('fc.anything()')
+  })
+
+  it('asserts the arbitrary for a schema that admits nothing', () => {
+    // A `false` schema types as `never`, which nothing is assignable to.
+    expect(generateArbitrary(false as JSONSchema, 'Z')).toContain('as fc.Arbitrary<Z>')
+  })
+
+  it('clamps crossed bounds so the generated arbitrary can be constructed', () => {
+    // Every bounded `fc.*` combinator asserts `min <= max` and throws at *import*,
+    // which would take down every other export in the generated file too.
+    expect(generateArbitrary({ type: 'string' as const, minLength: 10, maxLength: 2 }, 'S')).toContain(
+      'fc.string({ minLength: 2, maxLength: 2 })',
+    )
+    expect(generateArbitrary({ type: 'integer' as const, minimum: 10, maximum: 2 }, 'I')).toContain(
+      'fc.integer({ min: 2, max: 2 })',
+    )
+    expect(generateArbitrary({ type: 'number' as const, minimum: 10, maximum: 2 }, 'N')).toContain('min: 2, max: 2')
+    expect(
+      generateArbitrary({ type: 'array' as const, minItems: 5, maxItems: 1, items: { type: 'string' as const } }, 'A'),
+    ).toContain('{ minLength: 1, maxLength: 1 }')
+    expect(
+      generateArbitrary(
+        {
+          type: 'object' as const,
+          minProperties: 5,
+          maxProperties: 1,
+          additionalProperties: { type: 'string' as const },
+        },
+        'O',
+      ),
+    ).toContain('{ minKeys: 1, maxKeys: 1 }')
+  })
+
+  it('ignores a non-finite bound instead of emitting it', () => {
+    // `1e999` is legal JSON and `JSON.parse` turns it into `Infinity`, which the
+    // `typeof === 'number'` guards accept. Emitted into an option it made the
+    // combinator throw at *import*, taking the file's other exports with it.
+    const infinity = JSON.parse('1e999') as number
+    expect(infinity).toBe(Number.POSITIVE_INFINITY)
+
+    const cases = [
+      { type: 'number' as const, minimum: infinity },
+      { type: 'integer' as const, minimum: infinity },
+      { type: 'string' as const, minLength: infinity },
+      { type: 'array' as const, minItems: infinity, items: { type: 'string' as const } },
+      { type: 'object' as const, minProperties: infinity, additionalProperties: { type: 'string' as const } },
+      { type: 'number' as const, minimum: Number.NaN },
+      { type: 'integer' as const, multipleOf: infinity },
+      { type: 'number' as const, multipleOf: infinity },
+    ]
+    for (const schema of cases) {
+      const code = generateArbitrary(schema, 'A')
+      // Match only a *value* position: `noNaN` and `noDefaultInfinity` are
+      // constant option names every `fc.double` call carries.
+      expect(code, JSON.stringify(schema)).not.toMatch(/[:*]\s*-?(Infinity|NaN)\b/)
+    }
+  })
+
+  it('degrades an empty combinator instead of emitting a zero-argument fc call', () => {
+    // `fc.oneof()` and `fc.constantFrom()` both throw on no arguments, so these
+    // schemas produced a module that died the moment it was imported.
+    for (const schema of [{ oneOf: [] }, { anyOf: [] }, { enum: [] }, { type: [] }] as const) {
+      const code = generateArbitrary(schema as JSONSchema, 'Z')
+      expect(code, JSON.stringify(schema)).toContain('fc.anything()')
+      expect(code, JSON.stringify(schema)).not.toMatch(/fc\.(oneof|constantFrom)\(\s*\)/)
+    }
+  })
+
+  it('emits a single-branch choice directly', () => {
+    expect(generateArbitrary({ type: ['string'] } as JSONSchema, 'Z')).toContain('= fc.string()')
+  })
+
+  it('rounds a fractional count bound to a satisfiable integer', () => {
+    // fast-check requires integer lengths and throws on a fractional one. Round
+    // each bound inward: up for a floor, down for a ceiling.
+    expect(generateArbitrary({ type: 'string' as const, minLength: 1.5, maxLength: 3.7 }, 'Z')).toContain(
+      'fc.string({ minLength: 2, maxLength: 3 })',
+    )
+  })
+
+  it('floors a negative count bound at zero', () => {
+    // `fc.string({ maxLength: -5 })` throws; zero is the tightest bound with
+    // any instances at all.
+    expect(generateArbitrary({ type: 'string' as const, maxLength: -5 }, 'Z')).toContain('fc.string({ maxLength: 0 })')
+    expect(
+      generateArbitrary({ type: 'array' as const, maxItems: -5, items: { type: 'string' as const } }, 'Z'),
+    ).toContain('{ maxLength: 0 }')
+  })
+
+  it('clamps a crossed exclusive bound without leaving an empty double range', () => {
+    // `min: 2, max: 2, minExcluded: true` has nothing left to draw from, so the
+    // exclusion goes when the bound collapses onto its opposite.
+    const code = generateArbitrary({ type: 'number' as const, exclusiveMinimum: 10, maximum: 2 }, 'X')
+    expect(code).toContain('min: 2, max: 2')
+    expect(code).not.toContain('minExcluded')
   })
 
   it('adjusts exclusive integer bounds', () => {

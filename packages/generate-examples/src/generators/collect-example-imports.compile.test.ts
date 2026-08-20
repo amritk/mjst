@@ -33,6 +33,10 @@ const MAIN_FILE = `${VFS_DIR}/main.ts`
 const FAST_CHECK_STUB = `
 export type Arbitrary<T> = {
   readonly __arb: T
+  // Both overloads, matching real fast-check: the generated validating filter
+  // widens its base to \`Arbitrary<unknown>\` and narrows with a type guard, which
+  // only type-checks against the refinement signature.
+  filter<U extends T>(refinement: (value: T) => value is U): Arbitrary<U>
   filter(predicate: (value: T) => boolean): Arbitrary<T>
   map<U>(mapper: (value: T) => U): Arbitrary<U>
   chain<U>(chainer: (value: T) => Arbitrary<U>): Arbitrary<U>
@@ -61,7 +65,9 @@ export const object: Comb
 export const oneof: Comb
 export const anything: Comb
 export const bigInt: Comb
-export const letrec: any
+export const letrec: <T>(
+  builder: (tie: <K extends keyof T>(key: K) => Arbitrary<T[K]>) => { [K in keyof T]: Arbitrary<T[K]> },
+) => { [K in keyof T]: Arbitrary<T[K]> }
 `
 
 /** A `@amritk/runtime-validators` stub exporting the `validate` a filtered arbitrary calls. */
@@ -189,5 +195,37 @@ describe('collect-example-imports compile check', () => {
     const code = generateExampleFile(schema, 'PatternProps', { rootSchema })
     expect(code).toContain("from './foo.js'")
     expect(compileErrors(code)).toEqual([])
+  })
+
+  it('emits an import for a $ref inside contains', { timeout: COMPILE_TIMEOUT }, () => {
+    // With no `items`, the array's elements are generated straight from
+    // `contains` — so the ref becomes a bare `FooArbitrary` in the output.
+    const schema: JSONSchema = { type: 'array', contains: { $ref: '#/$defs/foo' } }
+    const code = generateExampleFile(schema, 'WithContains', { rootSchema })
+    expect(code).toContain("from './foo.js'")
+    expect(compileErrors(code)).toEqual([])
+  })
+
+  it('emits an import for a $ref inside dependentSchemas', { timeout: COMPILE_TIMEOUT }, () => {
+    // The dependency branch's properties are folded into the record the object
+    // arbitrary builds, so its refs are emitted as identifiers as well.
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { a: { type: 'string' } },
+      required: ['a'],
+      dependentSchemas: { a: { properties: { b: { $ref: '#/$defs/foo' } }, required: ['b'] } },
+    }
+    const code = generateExampleFile(schema, 'WithDeps', { rootSchema })
+    expect(code).toContain("from './foo.js'")
+    expect(compileErrors(code)).toEqual([])
+  })
+
+  it('does not import the runtime validator for a schema that merely mentions its name', () => {
+    // The import used to be decided by searching the generated source for the
+    // validator's local name, which a schema could plant in its own data — and an
+    // import nothing uses fails a consumer's `noUnusedLocals`.
+    const schema: JSONSchema = { type: 'string', const: '__mjstValidate(' }
+    const code = generateExampleFile(schema, 'Sneaky')
+    expect(code).not.toContain('@amritk/runtime-validators')
   })
 })
