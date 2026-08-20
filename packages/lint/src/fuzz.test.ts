@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { lint } from './core'
+import { compileQuery, queryCompiled, queryMany } from './core/jsonpath'
 import type { RulesetDefinition } from './core/types'
 import { fixDocument, lintDocument } from './index'
 import { createOpenApiRuleset, oas, oasFixers } from './rules/openapi/index'
@@ -186,5 +187,105 @@ describe('shipped OpenAPI ruleset robustness (awkward documents)', () => {
       })
       expect(typeof result.output).toBe('string')
     }
+  })
+})
+
+// A `given` is a string from a ruleset, so the compiler has to survive anything.
+// Two properties matter beyond "does not throw": a path that failed to compile
+// must match *nothing* (falling back to the document root would quietly run a
+// rule against the whole file), and the fused multi-path evaluation must return
+// exactly what evaluating each path on its own does.
+const PATH_ATOMS = [
+  '$',
+  '.',
+  '..',
+  '*',
+  '[',
+  ']',
+  '(',
+  ')',
+  '?',
+  '@',
+  "'a'",
+  '"b"',
+  ',',
+  ':',
+  '-1',
+  '0',
+  '2',
+  'a',
+  'b',
+  '@.length',
+  '===',
+  '!==',
+  '&&',
+  '||',
+  '!',
+  '/re/',
+  '~',
+  '^',
+  '\\',
+  '{',
+  '}',
+  ' ',
+  '@property',
+  '@path',
+  'true',
+]
+const PATH_STEPS = ['.a', '..b', '[*]', '..*', '[0]', "..['c']", '..enum']
+const TREES: unknown[] = [
+  { a: 1 },
+  [1, 2, 3],
+  { a: { b: [{ c: 1 }, { c: 2 }] } },
+  null,
+  'str',
+  42,
+  { a: [{ b: 1 }], enum: [1, 2], constructor: 1 },
+  [],
+  {},
+]
+
+describe('JSONPath robustness (random expressions)', () => {
+  it('compiles anything, and a path that failed to compile matches nothing', () => {
+    const failures: string[] = []
+    for (let i = 0; i < 10_000; i++) {
+      let expression = ''
+      for (let part = 0, parts = 1 + rand(8); part < parts; part++) expression += pick(PATH_ATOMS)
+      const compiled = compileQuery(expression)
+      for (const tree of TREES) {
+        const matches = queryCompiled(tree, compiled)
+        // Falling back to the root here would run the rule against the whole
+        // document — the loudest possible version of a silent bug.
+        if (compiled.error !== undefined && matches.length > 0) {
+          failures.push(`errored path matched: ${JSON.stringify(expression)}`)
+        }
+      }
+      if (failures.length > 4) break
+    }
+    expect(failures.slice(0, 5)).toEqual([])
+  })
+
+  it('evaluates a batch of paths exactly as it evaluates each one alone', () => {
+    // `queryMany` fuses every `$..`-rooted path into a single tree walk, so it is
+    // the one place where two paths could contaminate each other's matches.
+    const failures: string[] = []
+    for (let i = 0; i < 3000; i++) {
+      const expressions = Array.from({ length: 1 + rand(4) }, () => {
+        let expression = '$'
+        for (let step = 0, steps = rand(4); step < steps; step++) expression += pick(PATH_STEPS)
+        return expression
+      })
+      const compiled = expressions.map(compileQuery)
+      const tree = pick(TREES)
+      const batched = queryMany(tree, compiled)
+      compiled.forEach((path, index) => {
+        const alone = queryCompiled(tree, path)
+        if (JSON.stringify(batched[index]) !== JSON.stringify(alone)) {
+          failures.push(`${expressions[index]}: batched ${JSON.stringify(batched[index])} vs ${JSON.stringify(alone)}`)
+        }
+      })
+      if (failures.length > 4) break
+    }
+    expect(failures.slice(0, 5)).toEqual([])
   })
 })

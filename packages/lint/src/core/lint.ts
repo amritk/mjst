@@ -1,11 +1,12 @@
 import { detectFormat, type ParserFormat } from '../parsers'
 import { createDocument, type Document, type IDocumentOptions } from './document'
-import { ownKey } from './own-key'
+import { bySourceThenPosition } from './order'
 import type { LintPlugin } from './plugin'
 import { runPlugins } from './plugin'
 import type { Ruleset } from './ruleset'
 import { createLinter } from './runner'
-import { DiagnosticSeverity, type IDiagnostic, type ISourceSet } from './types'
+import { severityFromName } from './severity'
+import type { DiagnosticSeverity, IDiagnostic, ISourceSet } from './types'
 
 /**
  * What a {@link LintResolver} returns: the dereferenced tree, an optional source
@@ -69,28 +70,10 @@ export type LintResult = {
 
 type ParserSeverity = DiagnosticSeverity | 'off'
 
-const PARSER_SEVERITY_NAMES: Record<string, DiagnosticSeverity> = {
-  error: DiagnosticSeverity.Error,
-  warn: DiagnosticSeverity.Warning,
-  info: DiagnosticSeverity.Information,
-  hint: DiagnosticSeverity.Hint,
-}
-
 const toParserSeverity = (value: DiagnosticSeverity | string | undefined): ParserSeverity | undefined => {
   if (value === undefined) return undefined
   if (typeof value === 'number') return value
-  if (value === 'off') return 'off'
-  // `ownKey`, not a bare index: `parserOptions.duplicateKeys` is ruleset input, so
-  // `"constructor"` otherwise resolved to `Object` itself and was handed to the
-  // parser as a severity.
-  return ownKey(PARSER_SEVERITY_NAMES, value)
-}
-
-const byPosition = (a: IDiagnostic, b: IDiagnostic): number => {
-  const sa = a.source ?? ''
-  const sb = b.source ?? ''
-  if (sa !== sb) return sa < sb ? -1 : 1
-  return a.range.start.line - b.range.start.line || a.range.start.character - b.range.start.character
+  return severityFromName(value)
 }
 
 /**
@@ -140,7 +123,7 @@ export const lintWithResult = async (input: string, options: LintOptions): Promi
     return result
   })
 
-  const diagnostics = [...parserResults, ...resolverDiagnostics, ...ruleResults].sort(byPosition)
+  const diagnostics = [...parserResults, ...resolverDiagnostics, ...ruleResults].sort(bySourceThenPosition)
 
   if (!plugins || plugins.length === 0) return { diagnostics, pluginData: {} }
 

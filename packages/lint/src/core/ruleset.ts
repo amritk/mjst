@@ -3,6 +3,7 @@ import type { Format } from './formats'
 import { matchesGlob } from './glob'
 import { compileQuery } from './jsonpath'
 import { ownKey, setOwnKey } from './own-key'
+import { severityFromName } from './severity'
 import type {
   FunctionRegistry,
   HumanReadableSeverity,
@@ -33,26 +34,12 @@ export type ExtendResolver = (name: string, basePath: string) => ResolvedExtend
 /** An alias target: either a flat list of `given`s, or per-format `given`s with an optional description. */
 export type AliasDefinition = string[] | { description?: string; targets: { formats: string[]; given: string[] }[] }
 
-const SEVERITY_NAMES: Record<HumanReadableSeverity, DiagnosticSeverity | 'off'> = {
-  error: DiagnosticSeverity.Error,
-  warn: DiagnosticSeverity.Warning,
-  info: DiagnosticSeverity.Information,
-  hint: DiagnosticSeverity.Hint,
-  off: 'off',
-}
-
 const parseSeverity = (
   value: DiagnosticSeverity | HumanReadableSeverity | undefined,
 ): { severity: DiagnosticSeverity; enabled: boolean } => {
   if (value === undefined) return { severity: DiagnosticSeverity.Warning, enabled: true }
   if (typeof value === 'number') return { severity: value, enabled: true }
-  // `ownKey`, not a bare index: `severity` is ruleset input, and
-  // `severity: 'constructor'` otherwise resolved to `Object.prototype.constructor`
-  // — neither `'off'` nor `undefined`, so both fallbacks below were skipped and
-  // the rule was built carrying a Function where a `DiagnosticSeverity` number
-  // belongs. Every comparison against `DiagnosticSeverity.Error` is then false,
-  // so the CLI exits 0 on findings it should fail for.
-  const mapped = ownKey(SEVERITY_NAMES, value)
+  const mapped = severityFromName(value)
   if (mapped === 'off') return { severity: DiagnosticSeverity.Warning, enabled: false }
   // An unrecognized severity string (e.g. "warning" instead of "warn") is a
   // ruleset authoring mistake. We fall back to Warning and keep the rule enabled

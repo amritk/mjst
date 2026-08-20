@@ -3,9 +3,11 @@ import type { Document } from './document'
 import { detectFormats } from './formats'
 import { matchesGlob } from './glob'
 import { type CompiledPath, compileQuery, query, queryMany } from './jsonpath'
+import { bySourceThenPosition } from './order'
 import { ownKey } from './own-key'
 import { pointerToPath, resolveSourcePath } from './pointers'
 import type { Ruleset } from './ruleset'
+import { severityFromName } from './severity'
 import {
   DiagnosticSeverity,
   type IDiagnostic,
@@ -15,13 +17,6 @@ import {
   type IThen,
   type ResolvedRule,
 } from './types'
-
-const SEVERITY_NAMES: Record<string, DiagnosticSeverity> = {
-  error: DiagnosticSeverity.Error,
-  warn: DiagnosticSeverity.Warning,
-  info: DiagnosticSeverity.Information,
-  hint: DiagnosticSeverity.Hint,
-}
 
 const ZERO_RANGE: IRange = { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }
 
@@ -260,13 +255,9 @@ const applyScopedOverrides = (
     let dropped = false
     for (const { path, rules } of scoped) {
       if (!isPrefix(path, diagnostic.path)) continue
-      // `ownKey` on both lookups, never a bare index or `in`: rule codes and
-      // severity names both come from the ruleset. A rule named `toString`
-      // matched `Function.prototype.toString` (so the override silently did
-      // nothing), and a severity of `constructor` passed the `in` check and
-      // assigned `Object` itself as the finding's severity — every later
-      // comparison against `DiagnosticSeverity.Error` then reads false, so the
-      // CLI exits 0 on a document it should fail.
+      // `ownKey`, not a bare index: rule codes come from the ruleset, so a rule
+      // named `toString` matched `Function.prototype.toString` and the override
+      // silently did nothing. (`severityFromName` guards the severity side.)
       const entry = ownKey(rules, String(diagnostic.code))
       if (entry === undefined) continue
       if (entry === false || entry === 'off') {
@@ -275,8 +266,9 @@ const applyScopedOverrides = (
       }
       if (typeof entry === 'number') diagnostic.severity = entry
       else if (typeof entry === 'string') {
-        const mapped = ownKey(SEVERITY_NAMES, entry)
-        if (mapped !== undefined) diagnostic.severity = mapped
+        const mapped = severityFromName(entry)
+        // `'off'` was already handled above; anything else unknown is left alone.
+        if (typeof mapped === 'number') diagnostic.severity = mapped
       }
     }
     if (!dropped) result.push(diagnostic)
@@ -366,18 +358,6 @@ const hasIntersection = (a: Set<string>, b: Set<string>): boolean => {
     if (b.has(value)) return true
   }
   return false
-}
-
-/**
- * Orders findings by source, then line, then character. Sorting by position
- * alone interleaves findings from different files once a run spans multiple
- * sources; grouping by `source` first keeps each file's findings contiguous.
- */
-const bySourceThenPosition = (a: IDiagnostic, b: IDiagnostic): number => {
-  const sa = a.source ?? ''
-  const sb = b.source ?? ''
-  if (sa !== sb) return sa < sb ? -1 : 1
-  return a.range.start.line - b.range.start.line || a.range.start.character - b.range.start.character
 }
 
 /** Creates a {@link Linter} runner bound to a normalized `ruleset`. */
