@@ -26,12 +26,6 @@ const FILTER_KEYWORDS = new Set([
 ])
 
 /**
- * Keys whose values are *data* (or reference targets), not applied subschemas, so
- * a `not`/`if`/… appearing inside them must not be mistaken for an applicator.
- * `$defs`/`definitions` hold *unapplied* definitions — a hard keyword there only
- * matters once referenced, and each referenced def gets its own generated file.
- */
-/**
  * Keywords whose value is a map of author-chosen names to schemas. Inside one
  * the keys are names, so {@link SKIP_RECURSE} and `FILTER_KEYWORDS` carry no
  * keyword meaning there. Kept in step by hand with `@amritk/helpers`'
@@ -46,6 +40,12 @@ const SCHEMA_MAPS = new Set([
   'dependencies',
 ])
 
+/**
+ * Keys whose values are *data* (or reference targets), not applied subschemas, so
+ * a `not`/`if`/… appearing inside them must not be mistaken for an applicator.
+ * `$defs`/`definitions` hold *unapplied* definitions — a hard keyword there only
+ * matters once referenced, and each referenced def gets its own generated file.
+ */
 const SKIP_RECURSE = new Set([
   // The data keywords, matching `@amritk/helpers`' `DATA_KEYWORDS` —
   // `example` is OpenAPI 3.0's singular spelling and belongs with `examples`.
@@ -303,6 +303,17 @@ const WARNING_SCHEMA_LIMIT = 240
  */
 const reportedGuardFailures = new Set<string>()
 
+/**
+ * How many distinct warnings to remember before giving up on deduplicating.
+ *
+ * The set is module-scoped, so it outlives any one generation run — in a
+ * long-lived process (a watch-mode dev server regenerating on every save) it
+ * would otherwise grow without bound, holding a schema excerpt per entry. Past
+ * this many distinct failures the deduplication has stopped earning its keep
+ * anyway: nobody is reading warning number two thousand.
+ */
+const MAX_REPORTED_GUARD_FAILURES = 1_000
+
 /** A short, recognizable rendering of a schema for a warning message. */
 const describeSchema = (schema: Record<string, unknown>): string => {
   const serialized = ((): string => {
@@ -333,6 +344,9 @@ const warnUndecidableSchema = (schema: Record<string, unknown>, reason: unknown)
   const message = reason instanceof Error ? reason.message : String(reason)
   const key = `${message}\n${described}`
   if (reportedGuardFailures.has(key)) return
+  // Start over rather than grow forever; a repeat warning is a far smaller
+  // problem than a set that never releases the schemas it has seen.
+  if (reportedGuardFailures.size >= MAX_REPORTED_GUARD_FAILURES) reportedGuardFailures.clear()
   reportedGuardFailures.add(key)
   console.warn(
     `Warning: cannot validate generated values against ${described} — ${message}. ` +

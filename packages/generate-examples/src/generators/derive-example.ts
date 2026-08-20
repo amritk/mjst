@@ -37,6 +37,7 @@ import {
 } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { satisfiesScalarConstraints } from './satisfies-scalar-constraints'
 import { makeInstanceCheck, needsValidationFilter } from './schema-validation'
 
 /** Lowercases the first character of a name. e.g. "User" → "user" */
@@ -249,6 +250,26 @@ const FORMAT_EXAMPLES: Readonly<Record<string, string>> = {
   regex: '^example$',
 }
 
+/**
+ * How many characters, elements, or properties a single derived value may carry.
+ *
+ * The `min*` keywords are schema *input*, so a document can ask for a 50-million
+ * character string or a million-key object — and the deriver would faithfully
+ * build it, then serialize it into a TypeScript file nobody can open. Worse, the
+ * cost is not always linear: synthesized property names grow with the key count,
+ * so a large `minProperties` used to cost quadratic time *and* memory
+ * (`minProperties: 6000` derived 90 MB in three seconds, and it only got worse
+ * from there). No fixture needs anything near this many, so a value past the cap
+ * is a malformed or hostile document rather than a real requirement.
+ *
+ * Capping makes the example fall short of its own `minLength`/`minItems`/
+ * `minProperties`, which is exactly the "no derivable instance" case the package
+ * already handles: {@link generateExampleConst} validates the result and warns.
+ * The generated `FooArbitrary` still honours the real bound. This is the same
+ * bargain `@amritk/helpers`' `MAX_SCHEMA_DEPTH` strikes one level down.
+ */
+const MAX_DERIVED_SIZE = 10_000
+
 /** Returns a representative string honouring `format`, `pattern`, and length. */
 const exampleString = (schema: JSONSchema): string => {
   if (hasFormat(schema)) {
@@ -260,7 +281,7 @@ const exampleString = (schema: JSONSchema): string => {
     if (formatted !== undefined) return formatted
   }
 
-  const minLength = hasMinLength(schema) ? schema.minLength : 0
+  const minLength = Math.min(hasMinLength(schema) ? schema.minLength : 0, MAX_DERIVED_SIZE)
   if (hasPattern(schema)) {
     const sampled = sampleFromPattern(schema.pattern, minLength)
     // Only trust the sampler when it actually matches *and* fits both length
@@ -294,6 +315,12 @@ const exampleString = (schema: JSONSchema): string => {
  * still short-circuits to `null`. As one shared mutable set it also drops the
  * `new Set([...seen, ref])` copy that made every node cost O(depth) on its own.
  *
+ * `undeclaredKey` records that some object gained a key its *generated type* will
+ * not declare — see {@link generateExampleConst}, which needs the answer and
+ * cannot recompute it without re-walking the schema the way the deriver did.
+ * Like a cycle-truncated value it is a property of the derivation, so it travels
+ * with the memo rather than being recomputed on a cache hit.
+ *
  * `cycleBroken` is what makes the two safe together. A value produced by cutting
  * a cycle depends on *where* the cut fell, so it must not be memoized: any
  * short-circuit raises the flag, and a ref is only recorded in `values` when its
@@ -304,9 +331,10 @@ const exampleString = (schema: JSONSchema): string => {
  */
 type DeriveContext = {
   readonly rootSchema: Record<string, unknown> | undefined
-  readonly values: Map<string, unknown>
+  readonly values: Map<string, { value: unknown; undeclaredKey: boolean }>
   readonly active: Set<string>
   cycleBroken: boolean
+  undeclaredKey: boolean
 }
 
 /**
@@ -322,6 +350,7 @@ const newContext = (rootSchema: Record<string, unknown> | undefined): DeriveCont
   values: new Map(),
   active: new Set(),
   cycleBroken: false,
+  undeclaredKey: false,
 })
 
 const contextFor = (rootSchema: Record<string, unknown> | undefined): DeriveContext => {
@@ -352,14 +381,27 @@ const contextFor = (rootSchema: Record<string, unknown> | undefined): DeriveCont
  * final value and warns when that happens, rather than letting an invalid
  * example ship silently.
  */
-export const deriveExample = (schema: JSONSchema, rootSchema?: Record<string, unknown>): unknown => {
+export const deriveExample = (schema: JSONSchema, rootSchema?: Record<string, unknown>): unknown =>
+  deriveReported(schema, rootSchema).value
+
+/**
+ * {@link deriveExample} plus the one fact about *how* the value was built that
+ * the emitter needs: whether any object in it gained a key the generated type
+ * will not declare.
+ */
+const deriveReported = (
+  schema: JSONSchema,
+  rootSchema?: Record<string, unknown>,
+): { value: unknown; undeclaredKey: boolean } => {
   const ctx = contextFor(rootSchema)
   // A previous call can only have left `active` dirty by unwinding through an
   // exception, but a stale ancestor there would silently truncate this
   // derivation — so start every top-level call from a clean path.
   ctx.active.clear()
   ctx.cycleBroken = false
-  return derive(schema, ctx)
+  ctx.undeclaredKey = false
+  const value = derive(schema, ctx)
+  return { value, undeclaredKey: ctx.undeclaredKey }
 }
 
 /** The recursive entry point, threading the shared {@link DeriveContext}. */
@@ -382,18 +424,25 @@ const deriveRef = (ref: string, ctx: DeriveContext): unknown => {
     ctx.cycleBroken = true
     return null
   }
-  if (ctx.values.has(ref)) return ctx.values.get(ref)
+  const memoized = ctx.values.get(ref)
+  if (memoized !== undefined) {
+    if (memoized.undeclaredKey) ctx.undeclaredKey = true
+    return memoized.value
+  }
   if (!ctx.rootSchema) return null
   const resolved = resolveRef(ref, ctx.rootSchema)
   if (!resolved) return null
 
   const outerBroken = ctx.cycleBroken
+  const outerUndeclared = ctx.undeclaredKey
   ctx.cycleBroken = false
+  ctx.undeclaredKey = false
   ctx.active.add(ref)
   try {
     const value = derive(resolved as JSONSchema, ctx)
-    if (!ctx.cycleBroken) ctx.values.set(ref, value)
+    if (!ctx.cycleBroken) ctx.values.set(ref, { value, undeclaredKey: ctx.undeclaredKey })
     ctx.cycleBroken = outerBroken || ctx.cycleBroken
+    ctx.undeclaredKey = outerUndeclared || ctx.undeclaredKey
     return value
   } finally {
     ctx.active.delete(ref)
@@ -506,25 +555,6 @@ const refineExample = (schema: JSONSchema, base: unknown, ctx: DeriveContext): u
   return base
 }
 
-/**
- * True when a candidate value (e.g. an `enum`/`const` member) satisfies the
- * node's simple string-length and numeric-range constraints. Used to pick an
- * `enum` member that also meets a sibling `minLength`/`minimum`/etc.
- */
-const satisfiesScalarConstraints = (schema: JSONSchema, value: unknown): boolean => {
-  if (typeof value === 'string') {
-    if (hasMinLength(schema) && value.length < schema.minLength) return false
-    if (hasMaxLength(schema) && value.length > schema.maxLength) return false
-  } else if (typeof value === 'number') {
-    if (hasMinimum(schema) && value < schema.minimum) return false
-    if (hasMaximum(schema) && value > schema.maximum) return false
-    if (hasExclusiveMinimum(schema) && value <= schema.exclusiveMinimum) return false
-    if (hasExclusiveMaximum(schema) && value >= schema.exclusiveMaximum) return false
-    if (hasMultipleOf(schema) && schema.multipleOf > 0 && value % schema.multipleOf !== 0) return false
-  }
-  return true
-}
-
 /** Derives a canonical value for a single declared `type`. */
 const deriveForType = (type: string, schema: JSONSchema, ctx: DeriveContext): unknown => {
   switch (type) {
@@ -592,6 +622,20 @@ const deriveObject = (schema: JSONSchema, ctx: DeriveContext): Record<string, un
   const extrasAllowed = !additionalClosed || patternEntries.length > 0
   const nameCheck = hasPropertyNames(schema) ? makeInstanceCheck(schema.propertyNames, ctx.rootSchema) : undefined
 
+  // The generated type declares exactly the `properties` keys, widened by an
+  // index signature when `additionalProperties`/`patternProperties` supply one.
+  // Every *other* key this function invents — a `required` name with no
+  // `properties` entry, a dependency key, a `minProperties` filler — is a key
+  // the type has no room for, and an object literal carrying it is an excess
+  // property TypeScript rejects outright. Note when that happens so
+  // `generateExampleConst` can emit a value that still compiles.
+  const declaredKeys = new Set(hasProperties(schema) ? Object.keys(schema.properties) : [])
+  const hasIndexSignature =
+    additionalSchema !== undefined || (hasPatternProperties(schema) && Object.keys(schema.patternProperties).length > 0)
+  const noteKey = (key: string): void => {
+    if (!hasIndexSignature && !declaredKeys.has(key)) ctx.undeclaredKey = true
+  }
+
   // The value schema for a key not declared in `properties`: the matching
   // `patternProperties` (intersected when several match), else `additionalProperties`.
   const valueSchemaFor = (key: string): JSONSchema | undefined => {
@@ -610,6 +654,7 @@ const deriveObject = (schema: JSONSchema, ctx: DeriveContext): Record<string, un
   const addKey = (key: string): void => {
     const sub = valueSchemaFor(key)
     if (sub === undefined && additionalClosed) return
+    noteKey(key)
     setProperty(out, key, sub !== undefined ? derive(sub, ctx) : null)
   }
 
@@ -633,17 +678,29 @@ const deriveObject = (schema: JSONSchema, ctx: DeriveContext): Record<string, un
   // satisfy the dependency subschema — apply its `properties`/`required`.
   if (hasDependentSchemas(schema)) {
     for (const [trigger, sub] of Object.entries(schema.dependentSchemas)) {
-      if (Object.hasOwn(out, trigger) && isSchemaObject(sub)) applyDependentSchema(out, sub, ctx)
+      if (Object.hasOwn(out, trigger) && isSchemaObject(sub)) applyDependentSchema(out, sub, ctx, noteKey)
     }
   }
   // Synthesize filler keys to reach `minProperties` when extras are allowed.
+  // `Object.keys(out).length` is counted once and then tracked, rather than
+  // recomputed per iteration: rebuilding the key list on every pass made filling
+  // a large `minProperties` quadratic on its own.
   if (hasMinProperties(schema) && extrasAllowed) {
+    const target = Math.min(schema.minProperties, MAX_DERIVED_SIZE)
+    let count = Object.keys(out).length
     let n = 0
-    let guard = 0
-    while (Object.keys(out).length < schema.minProperties && guard++ < schema.minProperties + 50) {
+    // Each attempt may be rejected (a duplicate, or a name `propertyNames`
+    // refuses), so allow a fixed slack of extra attempts before giving up rather
+    // than looping forever on a schema whose keys cannot be synthesized.
+    let attempts = 0
+    while (count < target && attempts++ < target + 50) {
       const key = synthKey(n++, patternEntries, schema, nameCheck)
-      if (key === undefined || Object.hasOwn(out, key)) continue
+      // No candidate name satisfies the schema's key constraints, and a larger
+      // index will not change that — stop rather than burn the attempt budget.
+      if (key === undefined) break
+      if (Object.hasOwn(out, key)) continue
       addKey(key)
+      if (Object.hasOwn(out, key)) count++
     }
   }
   // Enforce `maxProperties` by dropping keys that aren't required (directly or via
@@ -653,28 +710,52 @@ const deriveObject = (schema: JSONSchema, ctx: DeriveContext): Record<string, un
   return out
 }
 
-/** Applies a `dependentSchemas` branch's object shape (`properties`/`required`) in place. */
-const applyDependentSchema = (out: Record<string, unknown>, sub: JSONSchema, ctx: DeriveContext): void => {
+/**
+ * Applies a `dependentSchemas` branch's object shape (`properties`/`required`) in
+ * place. `noteKey` reports each added key to the parent, whose `properties` — not
+ * the branch's — are what the generated type was built from.
+ */
+const applyDependentSchema = (
+  out: Record<string, unknown>,
+  sub: JSONSchema,
+  ctx: DeriveContext,
+  noteKey: (key: string) => void,
+): void => {
+  const add = (key: string, propSchema: JSONSchema | undefined): void => {
+    noteKey(key)
+    setProperty(out, key, propSchema !== undefined ? derive(propSchema, ctx) : null)
+  }
   if (hasProperties(sub)) {
     for (const [key, propSchema] of Object.entries(sub.properties)) {
-      if (!Object.hasOwn(out, key)) setProperty(out, key, derive(propSchema, ctx))
+      if (!Object.hasOwn(out, key)) add(key, propSchema)
     }
   }
   if (hasRequired(sub)) {
     const propSchemas = hasProperties(sub) ? sub.properties : {}
     for (const key of sub.required) {
       if (Object.hasOwn(out, key)) continue
-      const propSchema = propSchemas[key]
-      setProperty(out, key, propSchema !== undefined ? derive(propSchema, ctx) : null)
+      add(key, propSchemas[key])
     }
   }
 }
 
 /**
+ * How long a synthesized property name may get.
+ *
+ * The repetition fallback below lengthens the key by one seed per property, so
+ * without a ceiling the n-th key is n seeds long and filling a wide object costs
+ * quadratic memory. Past this length we are no longer naming a property, we are
+ * building a haystack — so {@link synthKey} gives up instead and the caller stops
+ * inventing keys. Far above any property name a real document uses.
+ */
+const MAX_SYNTH_KEY_LENGTH = 64
+
+/**
  * Produces a candidate key name for the i-th synthesized property. Prefers a key
  * matching a `patternProperties` entry (so the entry supplies its value schema),
- * then one matching `propertyNames`, then a plain `extraN`. Returns `undefined`
- * when the candidate can't satisfy a `propertyNames` constraint.
+ * then one matching `propertyNames`, then a plain `extra`. Returns `undefined`
+ * when no candidate can satisfy the schema's key constraints — the caller reads
+ * that as "this schema's key space is exhausted" and stops.
  */
 const synthKey = (
   i: number,
@@ -682,39 +763,59 @@ const synthKey = (
   schema: JSONSchema,
   nameCheck: ((value: unknown) => boolean) | undefined,
 ): string | undefined => {
-  // Distinct keys are produced by *repeating* a base seed (`x-` → `x-x-`) rather
-  // than appending a digit: repetition is far likelier to keep matching a key
-  // pattern (`^[a-z]+$`, `^x-`) that a digit suffix would break.
-  const vary = (seed: string): string => seed.repeat(i + 1)
-  const seeds: string[] = []
+  // Two ways to vary a seed into a distinct key, cheapest first. A digit suffix
+  // keeps every key the same short length, which is what makes filling a wide
+  // object linear rather than quadratic. *Repeating* the seed (`x-` → `x-x-`) is
+  // the fallback, because it is far likelier to keep matching a key pattern
+  // (`^[a-z]+$`, `^x-`) that a digit suffix would break.
+  const variants = (seed: string): string[] =>
+    i === 0 ? [seed] : [`${seed}${i}`, seed.repeat(i + 1)].filter((key) => key.length <= MAX_SYNTH_KEY_LENGTH)
+
+  // Each seed carries the key test it has to keep passing: a seed sampled from a
+  // `patternProperties` entry is only worth using while it still matches that
+  // entry, since matching is what earns the key its value schema.
+  const seeds: Array<{ seed: string; matches: (key: string) => boolean }> = []
   for (const [re] of patternEntries) {
     const sampled = sampleFromPattern(re.source, 0)
-    if (sampled !== undefined && sampled.length > 0) seeds.push(vary(sampled))
+    if (sampled !== undefined && sampled.length > 0) {
+      seeds.push({ seed: sampled, matches: (key) => re.test(key) })
+    }
   }
   const propertyNames = isSchemaObject(schema) && hasPropertyNames(schema) ? schema.propertyNames : undefined
   if (propertyNames !== undefined && isSchemaObject(propertyNames) && hasPattern(propertyNames)) {
     const sampled = sampleFromPattern(propertyNames.pattern, 0)
-    if (sampled !== undefined && sampled.length > 0) seeds.push(vary(sampled))
+    if (sampled !== undefined && sampled.length > 0) seeds.push({ seed: sampled, matches: () => true })
   }
-  seeds.push(vary('extra'))
-  for (const seed of seeds) {
-    if (!nameCheck || nameCheck(seed)) return seed
+  seeds.push({ seed: 'extra', matches: () => true })
+
+  for (const { seed, matches } of seeds) {
+    for (const key of variants(seed)) {
+      if (matches(key) && (!nameCheck || nameCheck(key))) return key
+    }
   }
   return undefined
 }
 
 /** Drops non-required keys until `out` has at most `max` properties. */
 const enforceMaxProperties = (out: Record<string, unknown>, schema: JSONSchema, max: number): void => {
-  if (Object.keys(out).length <= max) return
+  // Snapshot the keys once and track the count, rather than asking
+  // `Object.keys(out).length` again for every deletion — that rebuilt the whole
+  // key list per key removed, which is quadratic on a wide object.
+  const keys = Object.keys(out)
+  let count = keys.length
+  if (count <= max) return
+
   const protectedKeys = new Set<string>(hasRequired(schema) ? schema.required : [])
   if (hasDependentRequired(schema)) {
     for (const [trigger, deps] of Object.entries(schema.dependentRequired)) {
       if (Object.hasOwn(out, trigger)) for (const dep of deps) protectedKeys.add(dep)
     }
   }
-  for (const key of Object.keys(out)) {
-    if (Object.keys(out).length <= max) break
-    if (!protectedKeys.has(key)) delete out[key]
+  for (const key of keys) {
+    if (count <= max) break
+    if (protectedKeys.has(key)) continue
+    delete out[key]
+    count--
   }
 }
 
@@ -801,8 +902,11 @@ const deriveArray = (schema: JSONSchema, ctx: DeriveContext): unknown[] => {
   // set (`enum: ['a', 'b']`, `type: 'boolean'`) does not contain.
   const choices = unique && contains === undefined ? closedValueSet(elem) : undefined
 
-  // Prefer a non-empty example, satisfy `minItems` and `minContains`, never exceed `maxItems`.
-  const wanted = Math.min(Math.max(min, minContains, max === 0 ? 0 : 1), max)
+  // Prefer a non-empty example, satisfy `minItems` and `minContains`, never exceed
+  // `maxItems` — and never build more elements than {@link MAX_DERIVED_SIZE}, so a
+  // document asking for a million-element array does not become a million-element
+  // TypeScript literal.
+  const wanted = Math.min(Math.max(min, minContains, max === 0 ? 0 : 1), max, MAX_DERIVED_SIZE)
   // A set of N values cannot fill more than N distinct slots. When `minItems`
   // asks for more (`minItems: 3` over booleans) the schema has no valid
   // instance; stopping at N keeps the array at least *unique*, and the final
@@ -1014,7 +1118,17 @@ export const generateExampleConst = (
   typeName: string,
   rootSchema?: Record<string, unknown>,
 ): string => {
-  const value = deriveExample(schema, rootSchema)
+  const { value, undeclaredKey } = deriveReported(schema, rootSchema)
   warnInvalidExample(schema, typeName, value, rootSchema)
-  return `export const ${exampleName(typeName)}: ${typeName} = ${serializeValue(value)}`
+  const literal = serializeValue(value)
+  // A schema can require a key its generated type never declares — `required`
+  // naming something absent from `properties`, a `dependentRequired` /
+  // `dependentSchemas` dependency, a `minProperties` filler on an object with no
+  // index signature. Dropping the key would emit a fixture that is *invalid data*
+  // (it is missing something the schema demands); keeping it in a bare literal is
+  // an excess property, and TypeScript rejects the whole file over it. So keep
+  // the key and assert. `satisfies` would not do: it runs the very same
+  // excess-property check, which is the thing in the way.
+  const expression = undeclaredKey ? `${literal} as ${typeName}` : literal
+  return `export const ${exampleName(typeName)}: ${typeName} = ${expression}`
 }

@@ -62,11 +62,66 @@ describe('generate-arbitrary', () => {
     expect(code).toContain('.filter((s) => s.length >= 3 && s.length <= 8)')
   })
 
-  it('honours integer range and multipleOf', () => {
+  it('honours integer range and multipleOf analytically', () => {
+    // The multiple is derived (`k * 2` for k in 0..5), not filtered for: filtering
+    // random integers starves fast-check as soon as the step grows.
     const schema = { type: 'integer' as const, minimum: 0, maximum: 10, multipleOf: 2 }
     const code = generateArbitrary(schema, 'Even')
-    expect(code).toContain('fc.integer({ min: 0, max: 10 })')
-    expect(code).toContain('.filter((n) => n % 2 === 0)')
+    expect(code).toContain('fc.integer({ min: 0, max: 5 }).map((k) => k * 2)')
+    expect(code).not.toContain('.filter((n) =>')
+  })
+
+  it('does not starve on a large integer multipleOf', () => {
+    // Only one integer in a million satisfies this by filtering, so a `.filter`
+    // here made the generated arbitrary throw "too many filtered values".
+    const code = generateArbitrary({ type: 'integer' as const, multipleOf: 1_000_000 }, 'Big')
+    expect(code).toContain('.map((k) => k * 1000000)')
+    expect(code).not.toContain('.filter((n) =>')
+    // `k` stays bounded so `k * multipleOf` cannot leave the safe-integer range.
+    const bound = Number(/min: (-?\d+)/.exec(code)?.[1])
+    expect(Math.abs(bound) * 1_000_000).toBeLessThanOrEqual(Number.MAX_SAFE_INTEGER)
+  })
+
+  it('drops a multipleOf of zero instead of emitting an always-false filter', () => {
+    // `n % 0` is `NaN`, so the filter rejected every candidate and the arbitrary
+    // threw the moment a value was sampled.
+    const code = generateArbitrary({ type: 'integer' as const, multipleOf: 0 }, 'Zero')
+    expect(code).not.toContain('% 0')
+    expect(code).toContain('fc.integer()')
+  })
+
+  it('clamps crossed bounds so the generated arbitrary can be constructed', () => {
+    // Every bounded `fc.*` combinator asserts `min <= max` and throws at *import*,
+    // which would take down every other export in the generated file too.
+    expect(generateArbitrary({ type: 'string' as const, minLength: 10, maxLength: 2 }, 'S')).toContain(
+      'fc.string({ minLength: 2, maxLength: 2 })',
+    )
+    expect(generateArbitrary({ type: 'integer' as const, minimum: 10, maximum: 2 }, 'I')).toContain(
+      'fc.integer({ min: 2, max: 2 })',
+    )
+    expect(generateArbitrary({ type: 'number' as const, minimum: 10, maximum: 2 }, 'N')).toContain('min: 2, max: 2')
+    expect(
+      generateArbitrary({ type: 'array' as const, minItems: 5, maxItems: 1, items: { type: 'string' as const } }, 'A'),
+    ).toContain('{ minLength: 1, maxLength: 1 }')
+    expect(
+      generateArbitrary(
+        {
+          type: 'object' as const,
+          minProperties: 5,
+          maxProperties: 1,
+          additionalProperties: { type: 'string' as const },
+        },
+        'O',
+      ),
+    ).toContain('{ minKeys: 1, maxKeys: 1 }')
+  })
+
+  it('clamps a crossed exclusive bound without leaving an empty double range', () => {
+    // `min: 2, max: 2, minExcluded: true` has nothing left to draw from, so the
+    // exclusion goes when the bound collapses onto its opposite.
+    const code = generateArbitrary({ type: 'number' as const, exclusiveMinimum: 10, maximum: 2 }, 'X')
+    expect(code).toContain('min: 2, max: 2')
+    expect(code).not.toContain('minExcluded')
   })
 
   it('adjusts exclusive integer bounds', () => {

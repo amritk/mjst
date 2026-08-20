@@ -37,6 +37,7 @@ import {
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { mergeAllOf } from './derive-example'
+import { satisfiesScalarConstraints } from './satisfies-scalar-constraints'
 import { needsValidationFilter, withResolvableDefs } from './schema-validation'
 
 /**
@@ -107,6 +108,19 @@ const SELF_KEY = 'self'
  */
 const safeLiteralKey = (key: string): string => (key === '__proto__' ? '["__proto__"]' : JSON.stringify(key))
 
+/**
+ * Clamps a lower bound down to its upper bound when the two cross.
+ *
+ * An unsatisfiable range (`minLength: 10, maxLength: 2`) has no value to
+ * generate — but every bounded `fc.*` combinator *asserts* `min <= max` and
+ * throws the moment the generated module is imported, taking down the whole
+ * file's exports, including the arbitraries that were perfectly fine. Emitting
+ * the degenerate-but-constructible range keeps the module usable; the schema
+ * itself is what the example's own validity check reports.
+ */
+const clampLow = (low: number | undefined, high: number | undefined): number | undefined =>
+  low !== undefined && high !== undefined && low > high ? high : low
+
 /** Builds a `fc.string({ ... })` expression honouring format and length constraints. */
 const stringExpr = (schema: JSONSchema): string => {
   if (hasFormat(schema)) {
@@ -133,6 +147,9 @@ const stringExpr = (schema: JSONSchema): string => {
     }
   }
 
+  const maxLength = hasMaxLength(schema) ? schema.maxLength : undefined
+  const minLength = clampLow(hasMinLength(schema) ? schema.minLength : undefined, maxLength)
+
   if (hasPattern(schema)) {
     // Build the regex via `new RegExp(<json-string>)` rather than inlining the
     // pattern into a `/.../ ` literal: a pattern containing `/` (e.g. `^/api/v\d+$`)
@@ -141,40 +158,92 @@ const stringExpr = (schema: JSONSchema): string => {
     // `stringMatching` takes no length bounds, so honour any min/maxLength with a
     // filter instead of silently dropping them. Only emit it when a bound exists.
     const checks: string[] = []
-    if (hasMinLength(schema)) checks.push(`s.length >= ${schema.minLength}`)
-    if (hasMaxLength(schema)) checks.push(`s.length <= ${schema.maxLength}`)
+    if (minLength !== undefined) checks.push(`s.length >= ${minLength}`)
+    if (maxLength !== undefined) checks.push(`s.length <= ${maxLength}`)
     return checks.length > 0 ? `${base}.filter((s) => ${checks.join(' && ')})` : base
   }
 
   const opts: string[] = []
-  if (hasMinLength(schema)) opts.push(`minLength: ${schema.minLength}`)
-  if (hasMaxLength(schema)) opts.push(`maxLength: ${schema.maxLength}`)
+  if (minLength !== undefined) opts.push(`minLength: ${minLength}`)
+  if (maxLength !== undefined) opts.push(`maxLength: ${maxLength}`)
   return opts.length > 0 ? `fc.string({ ${opts.join(', ')} })` : 'fc.string()'
 }
 
-/** Builds a `fc.integer({ ... })` expression honouring range and multiple-of constraints. */
-const integerExpr = (schema: JSONSchema): string => {
-  const opts: string[] = []
-  // With both `minimum` and `exclusiveMinimum` present the effective lower bound
-  // is the tighter (larger) of the two, so combine them rather than letting one
-  // shadow the other via else-if. `fc.integer` also requires integral bounds, but
-  // the schema keywords may be fractional (`minimum: 2.5`, `exclusiveMinimum: 5.5`),
-  // so round each toward the satisfiable side: the smallest integer that still
-  // meets the lower bound, and the largest that still meets the upper.
-  // `Math.floor(x) + 1` is the smallest integer strictly greater than `x` (so it
-  // also handles integral exclusives); `Math.ceil(x) - 1` is the largest strictly less.
+/**
+ * The effective integer bounds of a numeric schema, rounded toward the
+ * satisfiable side.
+ *
+ * With both `minimum` and `exclusiveMinimum` present the effective lower bound is
+ * the tighter (larger) of the two, so they combine rather than one shadowing the
+ * other via else-if. `fc.integer` also requires integral bounds, but the schema
+ * keywords may be fractional (`minimum: 2.5`, `exclusiveMinimum: 5.5`), so each
+ * rounds inward: the smallest integer that still meets the lower bound, and the
+ * largest that still meets the upper. `Math.floor(x) + 1` is the smallest integer
+ * strictly greater than `x` (so it also handles integral exclusives);
+ * `Math.ceil(x) - 1` is the largest strictly less.
+ */
+const integerBounds = (schema: JSONSchema): { min: number | undefined; max: number | undefined } => {
   const mins: number[] = []
   if (hasMinimum(schema)) mins.push(Math.ceil(Number(schema.minimum)))
   if (hasExclusiveMinimum(schema)) mins.push(Math.floor(Number(schema.exclusiveMinimum)) + 1)
-  if (mins.length > 0) opts.push(`min: ${Math.max(...mins)}`)
 
   const maxs: number[] = []
   if (hasMaximum(schema)) maxs.push(Math.floor(Number(schema.maximum)))
   if (hasExclusiveMaximum(schema)) maxs.push(Math.ceil(Number(schema.exclusiveMaximum)) - 1)
-  if (maxs.length > 0) opts.push(`max: ${Math.min(...maxs)}`)
 
+  const max = maxs.length > 0 ? Math.min(...maxs) : undefined
+  return { min: clampLow(mins.length > 0 ? Math.max(...mins) : undefined, max), max }
+}
+
+/**
+ * The magnitude an unbounded generated value is allowed to reach, matching
+ * `fc.integer()`'s own default range. The analytic `multipleOf` path picks an
+ * integer `k` and emits `k * m`, so `k` has to be bounded by `2 ** 31 / m` — an
+ * unbounded `k` would multiply straight past `Number.MAX_SAFE_INTEGER` for a
+ * large `m` and emit values that are not exact integers at all.
+ */
+const DEFAULT_INTEGER_MAGNITUDE = 2 ** 31
+
+/**
+ * Builds an integer arbitrary whose values are multiples of `m`, analytically:
+ * pick the integer `k` and emit `k * m`.
+ *
+ * The obvious `fc.integer().filter((n) => n % m === 0)` starves fast-check
+ * ("too many filtered values") the moment `m` is large — only one integer in `m`
+ * survives, so a `multipleOf: 1000000` rejected essentially every candidate —
+ * and for `m` of `0` it rejects *every* value, since `n % 0` is `NaN`. Deriving
+ * the multiple cannot fail. This mirrors {@link numberMultipleOfExpr}.
+ */
+const integerMultipleOfExpr = (m: number, min: number | undefined, max: number | undefined): string => {
+  const bound = Math.max(1, Math.floor(DEFAULT_INTEGER_MAGNITUDE / m))
+  const kMin = min !== undefined ? Math.ceil(min / m) : -bound
+  // An unsatisfiable range (no multiple fits between the bounds) would make
+  // `fc.integer` throw on `min > max`; collapse to a single best-effort value.
+  const kMax = Math.max(kMin, max !== undefined ? Math.floor(max / m) : bound)
+  return `fc.integer({ min: ${kMin}, max: ${kMax} }).map((k) => k * ${m})`
+}
+
+/** Builds a `fc.integer({ ... })` expression honouring range and multiple-of constraints. */
+const integerExpr = (schema: JSONSchema): string => {
+  const { min, max } = integerBounds(schema)
+
+  // A positive integral `multipleOf` is satisfied analytically rather than by
+  // filtering, which starves at anything but the smallest steps.
+  if (hasMultipleOf(schema) && schema.multipleOf > 0 && Number.isInteger(schema.multipleOf)) {
+    return integerMultipleOfExpr(schema.multipleOf, min, max)
+  }
+
+  const opts: string[] = []
+  if (min !== undefined) opts.push(`min: ${min}`)
+  if (max !== undefined) opts.push(`max: ${max}`)
   const base = opts.length > 0 ? `fc.integer({ ${opts.join(', ')} })` : 'fc.integer()'
-  return hasMultipleOf(schema) ? `${base}.filter((n) => n % ${schema.multipleOf} === 0)` : base
+
+  // A fractional `multipleOf` on an integer type admits only the integers that
+  // are whole multiples of it, which no simple `k * m` form picks out, so it
+  // keeps the filter. A `multipleOf` of zero or less is not a legal constraint
+  // at all — `n % 0` is `NaN`, so filtering on it rejects every candidate and
+  // the arbitrary throws at sample time — so it is dropped rather than emitted.
+  return hasMultipleOf(schema) && schema.multipleOf > 0 ? `${base}.filter((n) => n % ${schema.multipleOf} === 0)` : base
 }
 
 /**
@@ -253,22 +322,40 @@ const numberExpr = (schema: JSONSchema): string => {
   // tighter one instead of letting `minimum`/`maximum` shadow the exclusive via
   // else-if (which would emit values that violate the exclusive bound). The
   // exclusive bound wins ties, since it additionally excludes the endpoint.
+  let low: number | undefined
+  let lowExcluded = false
   if (
     hasMinimum(schema) &&
     (!hasExclusiveMinimum(schema) || Number(schema.minimum) > Number(schema.exclusiveMinimum))
   ) {
-    opts.push(`min: ${schema.minimum}`)
+    low = Number(schema.minimum)
   } else if (hasExclusiveMinimum(schema)) {
-    opts.push(`min: ${schema.exclusiveMinimum}`, 'minExcluded: true')
+    low = Number(schema.exclusiveMinimum)
+    lowExcluded = true
   }
+
+  let high: number | undefined
+  let highExcluded = false
   if (
     hasMaximum(schema) &&
     (!hasExclusiveMaximum(schema) || Number(schema.maximum) < Number(schema.exclusiveMaximum))
   ) {
-    opts.push(`max: ${schema.maximum}`)
+    high = Number(schema.maximum)
   } else if (hasExclusiveMaximum(schema)) {
-    opts.push(`max: ${schema.exclusiveMaximum}`, 'maxExcluded: true')
+    high = Number(schema.exclusiveMaximum)
+    highExcluded = true
   }
+
+  // `fc.double` asserts `min <= max`, so a crossed range has to collapse rather
+  // than throw at import — see {@link clampLow}. Collapsing onto the upper bound
+  // also drops the (now meaningless) exclusion, which would otherwise leave
+  // `fc.double` with an empty range to draw from.
+  const clamped = clampLow(low, high)
+  if (clamped !== low) lowExcluded = false
+  low = clamped
+
+  if (low !== undefined) opts.push(`min: ${low}`, ...(lowExcluded ? ['minExcluded: true'] : []))
+  if (high !== undefined) opts.push(`max: ${high}`, ...(highExcluded && low !== high ? ['maxExcluded: true'] : []))
 
   return `fc.double({ ${opts.join(', ')} })`
 }
@@ -309,9 +396,12 @@ const arrayExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
     containsSchema !== undefined ? Math.max(1, minContains) : 0,
   )
 
+  const maxLength = hasMaxItems(schema) ? schema.maxItems : undefined
+  const clampedMin = clampLow(minLength, maxLength) ?? minLength
+
   const opts: string[] = []
-  if (minLength > 0) opts.push(`minLength: ${minLength}`)
-  if (hasMaxItems(schema)) opts.push(`maxLength: ${schema.maxItems}`)
+  if (clampedMin > 0) opts.push(`minLength: ${clampedMin}`)
+  if (maxLength !== undefined) opts.push(`maxLength: ${maxLength}`)
 
   const fn = hasUniqueItems(schema) && schema.uniqueItems === true ? 'fc.uniqueArray' : 'fc.array'
   return opts.length > 0 ? `${fn}(${items}, { ${opts.join(', ')} })` : `${fn}(${items})`
@@ -351,8 +441,9 @@ const objectExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
   const minProps = hasMinProperties(schema) ? schema.minProperties : undefined
   const maxProps = hasMaxProperties(schema) ? schema.maxProperties : undefined
   const dictKeyOpts = (minKeys?: number, maxKeys?: number): string => {
+    const low = clampLow(minKeys, maxKeys)
     const opts: string[] = []
-    if (minKeys !== undefined && minKeys > 0) opts.push(`minKeys: ${minKeys}`)
+    if (low !== undefined && low > 0) opts.push(`minKeys: ${low}`)
     if (maxKeys !== undefined) opts.push(`maxKeys: ${maxKeys}`)
     return opts.length > 0 ? `, { ${opts.join(', ')} }` : ''
   }
@@ -457,28 +548,6 @@ const scalarExpr = (type: string, schema: JSONSchema, ctx: ExprCtx): string => {
   }
 }
 
-/** True when an `enum` member satisfies the node's sibling length/range/pattern constraints. */
-const enumMemberFits = (schema: JSONSchema, value: unknown): boolean => {
-  if (typeof value === 'string') {
-    if (hasMinLength(schema) && value.length < schema.minLength) return false
-    if (hasMaxLength(schema) && value.length > schema.maxLength) return false
-    if (hasPattern(schema)) {
-      try {
-        if (!new RegExp(schema.pattern).test(value)) return false
-      } catch {
-        // An invalid pattern can't reject anything.
-      }
-    }
-  } else if (typeof value === 'number') {
-    if (hasMinimum(schema) && value < schema.minimum) return false
-    if (hasMaximum(schema) && value > schema.maximum) return false
-    if (hasExclusiveMinimum(schema) && value <= schema.exclusiveMinimum) return false
-    if (hasExclusiveMaximum(schema) && value >= schema.exclusiveMaximum) return false
-    if (hasMultipleOf(schema) && schema.multipleOf > 0 && value % schema.multipleOf !== 0) return false
-  }
-  return true
-}
-
 /**
  * Recursively builds the fast-check arbitrary expression for a schema node.
  * `$ref`s resolve to the referenced file's exported arbitrary; a self-`$ref`
@@ -512,7 +581,7 @@ const arbitraryExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
     // the arbitrary never emits an out-of-range member. Keep all when none fit
     // (an unsatisfiable schema) rather than emitting an empty `constantFrom`.
     const members = schema.enum as unknown[]
-    const fitting = members.filter((value) => enumMemberFits(schema, value))
+    const fitting = members.filter((value) => satisfiesScalarConstraints(schema, value))
     const chosen = fitting.length > 0 ? fitting : members
     const values = chosen.map((value) => JSON.stringify(value)).join(', ')
     // Spread a `const`-asserted tuple instead of passing the members directly.

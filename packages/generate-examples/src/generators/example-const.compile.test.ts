@@ -5,17 +5,17 @@ import { describe, expect, it } from 'vitest'
 import { generateExampleFile } from './generate-files'
 
 /**
- * A generated example file references its `$ref` dependencies as bare `Xxx`
- * types and `XxxArbitrary` values, importing both from the ref's generated file.
- * When `$ref`s hide inside a tuple, a nested combinator, or `patternProperties`,
- * the import collector must still emit those imports — otherwise the file
- * references a name that was never imported and fails to compile.
+ * A schema can demand an object key that the generated *type* never declares: a
+ * `required` name with no `properties` entry, a `dependentRequired` /
+ * `dependentSchemas` dependency, or a `minProperties` filler on an object with no
+ * index signature. The derived example still carries the key — a fixture missing
+ * something its schema requires is broken data — so the emitted literal has an
+ * excess property, and TypeScript rejects the whole module over it.
  *
- * A syntax-only pass (`ts.transpileModule`) cannot catch that: an unimported
- * identifier is valid *syntax*. So we type-check the whole file with a real
- * program, stubbing `fast-check` and every referenced ref module, and assert it
- * reports no errors. Before the collector recursed into these surfaces the
- * generated code raised `Cannot find name 'Foo' / 'FooArbitrary'`.
+ * `expect(code).toContain(...)` cannot catch that; only a type-checker can. So
+ * these cases go through the same in-memory `ts` program the import test uses,
+ * with `fast-check` and the runtime validators stubbed, and assert the generated
+ * file reports no errors at all.
  */
 
 const VFS_DIR = '/vfs'
@@ -154,72 +154,103 @@ const rootSchema = {
   $defs: { foo: { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] } },
 }
 
-// Spinning up a real `ts` program loads the default lib files from disk, which
-// is slow on a cold CI runner (subsequent programs reuse the warm fs cache), so
-// give each case room beyond the 5s default rather than time out on the first.
+// Spinning up a real `ts` program loads the default lib files from disk, which is
+// slow on a cold CI runner, so give each case room beyond the 5s default.
 const COMPILE_TIMEOUT = 30_000
 
-describe('collect-example-imports compile check', () => {
-  it('emits an import for a $ref nested inside a tuple (prefixItems)', { timeout: COMPILE_TIMEOUT }, () => {
-    const schema: JSONSchema = {
-      type: 'array',
-      prefixItems: [{ $ref: '#/$defs/foo' }, { type: 'string' }],
-    }
-    const code = generateExampleFile(schema, 'Tuple', { rootSchema })
-    expect(code).toContain("from './foo.js'")
-    expect(compileErrors(code)).toEqual([])
-  })
-
-  it('emits an import for a $ref inside a property-level oneOf', { timeout: COMPILE_TIMEOUT }, () => {
-    const schema: JSONSchema = {
-      type: 'object',
-      properties: { pick: { oneOf: [{ $ref: '#/$defs/foo' }, { type: 'string' }] } },
-      required: ['pick'],
-    }
-    const code = generateExampleFile(schema, 'PropOneOf', { rootSchema })
-    expect(code).toContain("from './foo.js'")
-    expect(compileErrors(code)).toEqual([])
-  })
-
-  it('emits an import for a $ref inside patternProperties', { timeout: COMPILE_TIMEOUT }, () => {
-    const schema: JSONSchema = {
-      type: 'object',
-      patternProperties: { '^x-': { $ref: '#/$defs/foo' } },
-    }
-    const code = generateExampleFile(schema, 'PatternProps', { rootSchema })
-    expect(code).toContain("from './foo.js'")
-    expect(compileErrors(code)).toEqual([])
-  })
-
-  it('emits an import for a $ref inside contains', { timeout: COMPILE_TIMEOUT }, () => {
-    // With no `items`, the array's elements are generated straight from
-    // `contains` — so the ref becomes a bare `FooArbitrary` in the output.
-    const schema: JSONSchema = { type: 'array', contains: { $ref: '#/$defs/foo' } }
-    const code = generateExampleFile(schema, 'WithContains', { rootSchema })
-    expect(code).toContain("from './foo.js'")
-    expect(compileErrors(code)).toEqual([])
-  })
-
-  it('emits an import for a $ref inside dependentSchemas', { timeout: COMPILE_TIMEOUT }, () => {
-    // The dependency branch's properties are folded into the record the object
-    // arbitrary builds, so its refs are emitted as identifiers as well.
-    const schema: JSONSchema = {
+/** Schemas whose declared type cannot hold every key the example must carry. */
+const UNDECLARED_KEY_CASES: ReadonlyArray<{ name: string; schema: JSONSchema; key: string }> = [
+  {
+    name: 'a required key with no properties entry',
+    schema: { type: 'object', properties: { a: { type: 'string' } }, required: ['a', 'b'] },
+    key: 'b',
+  },
+  {
+    name: 'a dependentRequired dependency with no properties entry',
+    schema: {
       type: 'object',
       properties: { a: { type: 'string' } },
       required: ['a'],
-      dependentSchemas: { a: { properties: { b: { $ref: '#/$defs/foo' } }, required: ['b'] } },
-    }
-    const code = generateExampleFile(schema, 'WithDeps', { rootSchema })
-    expect(code).toContain("from './foo.js'")
-    expect(compileErrors(code)).toEqual([])
-  })
+      dependentRequired: { a: ['b'] },
+    },
+    key: 'b',
+  },
+  {
+    name: 'a dependentSchemas property the parent never declares',
+    schema: {
+      type: 'object',
+      properties: { a: { type: 'string' } },
+      required: ['a'],
+      dependentSchemas: { a: { properties: { b: { type: 'number' } }, required: ['b'] } },
+    },
+    key: 'b',
+  },
+  {
+    name: 'a minProperties filler on an object with no index signature',
+    schema: { type: 'object', properties: { a: { type: 'string' } }, required: ['a'], minProperties: 3 },
+    key: 'extra',
+  },
+]
 
-  it('does not import the runtime validator for a schema that merely mentions its name', () => {
-    // The import used to be decided by searching the generated source for the
-    // validator's local name, which a schema could plant in its own data — and an
-    // import nothing uses fails a consumer's `noUnusedLocals`.
-    const schema: JSONSchema = { type: 'string', const: '__mjstValidate(' }
-    const code = generateExampleFile(schema, 'Sneaky')
-    expect(code).not.toContain('@amritk/runtime-validators')
+/** Schemas whose index signature already makes room for the synthesized keys. */
+const DECLARED_KEY_CASES: ReadonlyArray<{ name: string; schema: JSONSchema }> = [
+  {
+    name: 'minProperties alongside additionalProperties',
+    schema: {
+      type: 'object',
+      properties: { a: { type: 'string' } },
+      required: ['a'],
+      minProperties: 3,
+      additionalProperties: { type: 'string' },
+    },
+  },
+  {
+    name: 'minProperties alongside patternProperties',
+    schema: {
+      type: 'object',
+      properties: { a: { type: 'string' } },
+      required: ['a'],
+      minProperties: 2,
+      patternProperties: { '^x-': { type: 'string' } },
+    },
+  },
+]
+
+describe('generated example const compiles', () => {
+  for (const { name, schema, key } of UNDECLARED_KEY_CASES) {
+    it(`keeps and asserts ${name}`, { timeout: COMPILE_TIMEOUT }, () => {
+      const code = generateExampleFile(schema, 'T', { rootSchema })
+      // The key stays in the value — dropping it would emit invalid fixture data.
+      expect(code).toContain(`export const tExample: T = `)
+      expect(code).toContain(`"${key}"`)
+      expect(code).toContain(' as T')
+      expect(compileErrors(code)).toEqual([])
+    })
+  }
+
+  for (const { name, schema } of DECLARED_KEY_CASES) {
+    it(`emits a bare literal for ${name}`, { timeout: COMPILE_TIMEOUT }, () => {
+      const code = generateExampleFile(schema, 'T', { rootSchema })
+      // An index signature covers the synthesized keys, so nothing needs asserting
+      // and the literal keeps its full excess-property checking.
+      expect(code).not.toContain(' as T')
+      expect(compileErrors(code)).toEqual([])
+    })
+  }
+
+  it('asserts a nested example whose $ref definition needs one', { timeout: COMPILE_TIMEOUT }, () => {
+    // The flag has to survive the per-ref memo: the key is invented while deriving
+    // the definition, several levels below the const being emitted.
+    const nestedRoot = {
+      $defs: { inner: { type: 'object', properties: { a: { type: 'string' } }, required: ['a', 'b'] } },
+    }
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { child: { $ref: '#/$defs/inner' } },
+      required: ['child'],
+    }
+    const code = generateExampleFile(schema, 'Outer', { rootSchema: nestedRoot })
+    expect(code).toContain(' as Outer')
+    expect(compileErrors(code)).toEqual([])
   })
 })

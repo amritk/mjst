@@ -163,7 +163,7 @@ compiles — but the generator prints a `console.warn` naming the type. Reach fo
 `FooArbitrary` in those cases: the arbitrary carries a runtime validating filter
 and stays correct where the static value cannot.
 
-The value falls short for two reasons:
+The value falls short for three reasons:
 
 - **The schema has no instance.** `{ pattern: '^ab$', minLength: 5 }`,
   `uniqueItems` over booleans with `minItems: 3`, a `required` key that
@@ -173,6 +173,24 @@ The value falls short for two reasons:
 - **The constraint is beyond the deriver.** `pattern` is sampled by a
   best-effort recursive-descent walk of the regex, so lookarounds and
   backreferences fall back to `"string"`; an unrecognized `format` does the same.
+- **The bound is larger than any fixture should be.** A derived string, array, or
+  object stops growing at 10,000 characters / elements / keys, so a document
+  asking for `minLength: 50000000` yields a capped value and a warning rather than
+  a 50 MB literal. `FooArbitrary` still honours the real bound.
+
+Two more shapes worth knowing about, both of which keep the generated file
+compiling rather than making it correct:
+
+- A schema can require a key its **generated type never declares** — `required`
+  naming something absent from `properties`, a `dependentRequired` /
+  `dependentSchemas` dependency, or a `minProperties` filler on an object with no
+  index signature. The example keeps the key (a fixture missing what its schema
+  demands is broken data) and is emitted as `… as Foo`, since a bare object
+  literal with an excess property fails to compile.
+- An **unsatisfiable range** (`minLength: 10, maxLength: 2`) collapses onto its
+  upper bound in the arbitrary. Every bounded `fc.*` combinator asserts
+  `min <= max` and throws at *import*, which would take down every other export in
+  the file alongside it.
 
 > [!TIP]
 > The example for a `$ref` is inlined by value, so a definition graph with wide

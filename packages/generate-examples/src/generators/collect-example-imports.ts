@@ -5,6 +5,8 @@ import {
   hasAdditionalProperties,
   hasAllOf,
   hasAnyOf,
+  hasContains,
+  hasDependentSchemas,
   hasOneOf,
   hasProperties,
   hasRef,
@@ -50,10 +52,16 @@ const buildImport = (ref: string, suffix: string): string => {
  * import block must cover every ref those generators emit, so this walks the
  * *same* nested surface `arbitraryExpr` (generate-arbitrary.ts) descends into —
  * combinator branches, object `properties`/`patternProperties`/
- * `additionalProperties`, and array `items`/`prefixItems` (both the single-schema
- * and tuple array forms) — not just the top level. Missing any of these emits a
- * bare `XxxArbitrary` identifier (or a bare `Xxx` type) with no matching import,
- * producing TypeScript that fails to compile.
+ * `additionalProperties`/`dependentSchemas`, and array `items`/`prefixItems`
+ * (both the single-schema and tuple array forms) plus `contains` — not just the
+ * top level. Missing any of these emits a bare `XxxArbitrary` identifier (or a
+ * bare `Xxx` type) with no matching import, producing TypeScript that fails to
+ * compile.
+ *
+ * `if`/`then`/`else`/`not`/`propertyNames` are deliberately *not* walked:
+ * `arbitraryExpr` never descends into them, so they contribute no identifier to
+ * import — a schema using them is reconciled by the embedded validating filter,
+ * which carries its `$ref` targets as inlined JSON rather than as imports.
  *
  * `$ref` nodes short-circuit (matching `arbitraryExpr`, which resolves a `$ref`
  * and ignores sibling keywords), so recursion is bounded by the schema's own
@@ -85,6 +93,10 @@ const collectRefs = (schema: JSONSchema): string[] => {
     visit(schema.additionalProperties as JSONSchema)
   }
 
+  // `objectExpr` folds each `dependentSchemas` branch's `properties` into the
+  // record it builds, so a `$ref` in one becomes a bare identifier in the output.
+  if (hasDependentSchemas(schema)) Object.values(schema.dependentSchemas).forEach(visit)
+
   const prefixItems = raw['prefixItems']
   if (Array.isArray(prefixItems)) (prefixItems as JSONSchema[]).forEach(visit)
 
@@ -92,6 +104,9 @@ const collectRefs = (schema: JSONSchema): string[] => {
   // `items` is either a tuple (draft-07 array form) or a single item schema.
   if (Array.isArray(items)) (items as JSONSchema[]).forEach(visit)
   else if (isSchemaObject(items as JSONSchema)) visit(items as JSONSchema)
+
+  // With no `items`, `arrayExpr` generates elements straight from `contains`.
+  if (hasContains(schema) && isSchemaObject(schema.contains)) visit(schema.contains)
 
   return refs
 }
