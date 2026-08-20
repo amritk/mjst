@@ -1,23 +1,11 @@
 import { FORMAT_CHECKS, isValidRegex } from '@/interpreter/format-checks'
 import { validationLimitError } from '@/interpreter/limits'
+import { own } from '@/interpreter/own'
 import { resolveDynamicRef, resolveRecursiveRef } from '@/interpreter/resolve-dynamic-ref'
 import { resolveLocalRef } from '@/interpreter/resolve-local-ref'
 import { resolveScopedDynamicRef, resolveScopedRef, type ScopedTarget } from '@/interpreter/resolve-scoped-ref'
 import type { SchemaRegistry } from '@/interpreter/schema-registry'
 import type { ValidationError } from '@/types'
-
-/**
- * A schema keyword's value, treating an inherited name as absent.
- *
- * Schemas arrive at runtime, so a bare `s['additionalProperties']` answers from
- * `Object.prototype` when a dependency has polluted it — turning a keyword on
- * for every schema in the process, so `additionalProperties: false` rejected
- * every object and `propertyNames` rejected every key. Each keyword was found
- * and fixed one at a time across several reviews; `prototype-pollution.test.ts`
- * now enumerates the whole surface, and this is the single read it relies on.
- */
-const own = (schema: Record<string, unknown>, keyword: string): unknown =>
-  Object.hasOwn(schema, keyword) ? schema[keyword] : undefined
 
 /**
  * The genuinely reusable artifacts of a validation — compiled `RegExp`s and
@@ -62,7 +50,7 @@ const enterResource = (scope: DynamicScope, base: string): DynamicScope =>
  * the lookup.
  */
 const scopeAtNode = (registry: SchemaRegistry, node: Record<string, unknown>, scope: DynamicScope): DynamicScope => {
-  if (typeof node['$id'] !== 'string') return scope
+  if (typeof own(node, '$id') !== 'string') return scope
   const base = registry.baseOf.get(node)
   return base === undefined ? scope : enterResource(scope, base)
 }
@@ -421,24 +409,46 @@ const unresolvableRef = (keyword: string, ref: string): Error =>
   )
 
 /**
- * Resolves a document-local `$ref` with no `$id` in play, caching the target.
- * Throws on an unresolvable ref — the same loud failure the generated validator
- * produced — so a bad pointer is never silently treated as "anything goes".
+ * Memoizes a resolved reference target on the validator's shared cache.
+ *
+ * All three flavours of reference share one map, so each caller prefixes its key
+ * with its own namespace — `s:` for a static `$ref`, `d:` for `$dynamicRef`,
+ * `r:` for `$recursiveRef`. Without a prefix on *every* one of them the
+ * namespaces overlapped: a `$dynamicRef: "#x"` cached under `dyn:#x` was handed
+ * straight back to a later `$ref: "dyn:#x"`, which names an unregistered URI and
+ * has to fail loudly instead.
+ *
+ * `resolve` throws when the reference names nothing, so an unresolved target is
+ * never cached — which is also why a plain `get`/`undefined` test is enough to
+ * mean "not resolved yet".
  */
-const resolvePlainRef = (ctx: InterpreterContext, ref: string): unknown => {
+const cachedRef = (ctx: InterpreterContext, key: string, resolve: () => unknown): unknown => {
   let cache = ctx.caches.ref
   if (cache === null) {
     cache = new Map()
     ctx.caches.ref = cache
   }
-  let resolved = cache.get(ref)
+  let resolved = cache.get(key)
   if (resolved === undefined) {
-    resolved = resolveLocalRef(ref, ctx.root)
-    if (resolved === undefined) throw unresolvableRef('$ref', ref)
-    cache.set(ref, resolved)
+    resolved = resolve()
+    cache.set(key, resolved)
   }
   return resolved
 }
+
+/** The resolved target, or a loud failure — a bad ref is never treated as "anything goes". */
+const orThrow = (value: unknown, keyword: string, ref: string): unknown => {
+  if (value === undefined) throw unresolvableRef(keyword, ref)
+  return value
+}
+
+/**
+ * Resolves a document-local `$ref` with no `$id` in play, caching the target.
+ * Throws on an unresolvable ref — the same loud failure the generated validator
+ * produced — so a bad pointer is never silently treated as "anything goes".
+ */
+const resolvePlainRef = (ctx: InterpreterContext, ref: string): unknown =>
+  cachedRef(ctx, `s:${ref}`, () => orThrow(resolveLocalRef(ref, ctx.root), '$ref', ref))
 
 /**
  * Resolves a `$ref` against the base URI in scope, caching the target under
@@ -473,44 +483,29 @@ const resolveScoped = (ctx: InterpreterContext, registry: SchemaRegistry, ref: s
  * keeping the referrer's base so the scope does not shift. Throws when even that
  * finds nothing, which is where an unresolvable ref finally fails loudly.
  */
-const fallbackTarget = (ctx: InterpreterContext, ref: string, base: string): ScopedTarget => {
-  const value = resolveLocalRef(ref, ctx.root)
-  if (value === undefined) throw unresolvableRef('$ref', ref)
-  return { value, base }
-}
+const fallbackTarget = (ctx: InterpreterContext, ref: string, base: string): ScopedTarget => ({
+  value: orThrow(resolveLocalRef(ref, ctx.root), '$ref', ref),
+  base,
+})
 
 /** {@link fallbackTarget} for `$dynamicRef`, which may still bind to a `$dynamicAnchor`. */
-const dynamicFallbackTarget = (ctx: InterpreterContext, ref: string, base: string): ScopedTarget => {
-  const value = resolveDynamicRef(ref, ctx.root)
-  if (value === undefined) throw unresolvableRef('$dynamicRef', ref)
-  return { value, base }
-}
+const dynamicFallbackTarget = (ctx: InterpreterContext, ref: string, base: string): ScopedTarget => ({
+  value: orThrow(resolveDynamicRef(ref, ctx.root), '$dynamicRef', ref),
+  base,
+})
 
 /**
- * Resolves a `$dynamicRef` target. Keyed separately from `$ref` (the `dyn:`
- * prefix) because the same fragment can resolve differently as a dynamic anchor
- * than as a static pointer. Throws on an unresolvable ref, the same loud failure
+ * Resolves a `$dynamicRef` target. Namespaced separately from `$ref` because the
+ * same fragment can resolve differently as a dynamic anchor than as a static
+ * pointer. Throws on an unresolvable ref, the same loud failure
  * {@link resolvePlainRef} produces.
  *
  * The `$id`-aware path is deliberately *not* cached: its answer depends on the
  * dynamic scope the reference was reached through, which is the whole point of
  * `$dynamicRef`. It is a couple of map lookups, so there is little to cache.
  */
-const resolveDyn = (ctx: InterpreterContext, ref: string): unknown => {
-  const key = `dyn:${ref}`
-  let cache = ctx.caches.ref
-  if (cache === null) {
-    cache = new Map()
-    ctx.caches.ref = cache
-  }
-  let resolved = cache.get(key)
-  if (resolved === undefined) {
-    resolved = resolveDynamicRef(ref, ctx.root)
-    if (resolved === undefined) throw unresolvableRef('$dynamicRef', ref)
-    cache.set(key, resolved)
-  }
-  return resolved
-}
+const resolveDyn = (ctx: InterpreterContext, ref: string): unknown =>
+  cachedRef(ctx, `d:${ref}`, () => orThrow(resolveDynamicRef(ref, ctx.root), '$dynamicRef', ref))
 
 /**
  * Resolves the document's `$recursiveRef` target, caching it. There is only one
@@ -518,20 +513,7 @@ const resolveDyn = (ctx: InterpreterContext, ref: string): unknown => {
  * root), so a single cache slot suffices. Never fails: the root is always a
  * valid fallback per 2019-09.
  */
-const resolveRec = (ctx: InterpreterContext): unknown => {
-  const key = 'rec:#'
-  let cache = ctx.caches.ref
-  if (cache === null) {
-    cache = new Map()
-    ctx.caches.ref = cache
-  }
-  let resolved = cache.get(key)
-  if (resolved === undefined) {
-    resolved = resolveRecursiveRef(ctx.root)
-    cache.set(key, resolved)
-  }
-  return resolved
-}
+const resolveRec = (ctx: InterpreterContext): unknown => cachedRef(ctx, 'r:', () => resolveRecursiveRef(ctx.root))
 
 /**
  * A boolean-mode child of `ctx`: same root, formats, caches, ref stack and — by

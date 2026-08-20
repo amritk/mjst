@@ -1,3 +1,5 @@
+import { DATA_KEYWORDS, SCHEMA_MAPS } from '@/interpreter/keywords'
+
 /**
  * Resolves a local JSON Schema reference against the root document. Two fragment
  * forms are supported:
@@ -87,25 +89,6 @@ export const walkJsonPointer = (start: unknown, pointer: string, visit?: (node: 
 
   return current
 }
-
-/**
- * Keywords whose value is instance data, and keywords whose value is a map of
- * author-chosen names to schemas.
- *
- * Kept in step by hand with `@amritk/helpers`' `DATA_KEYWORDS`/`SCHEMA_MAPS`:
- * this package takes no `@amritk/*` dependency by design. The parity test in
- * that package reads these declarations, so a drift fails a test.
- */
-const DATA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples', 'example'])
-
-const SCHEMA_MAPS = new Set([
-  'properties',
-  'patternProperties',
-  '$defs',
-  'definitions',
-  'dependentSchemas',
-  'dependencies',
-])
 
 /** Anchor keywords a plain `#name` fragment may bind to (see {@link resolveLocalRef}). */
 const ANCHOR_KEYWORDS = ['$anchor', '$dynamicAnchor'] as const

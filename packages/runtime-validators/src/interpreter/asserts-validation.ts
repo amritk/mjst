@@ -1,3 +1,4 @@
+import { own } from '@/interpreter/own'
 import { resolveUri, type SchemaRegistry, withoutFragment } from '@/interpreter/schema-registry'
 
 /**
@@ -32,14 +33,14 @@ const VALIDATION_VOCABULARY = 'https://json-schema.org/draft/2020-12/vocab/valid
 export const assertsValidation = (schema: unknown, registry: SchemaRegistry | null): boolean => {
   if (registry === null || schema === null || typeof schema !== 'object' || Array.isArray(schema)) return true
 
-  const dialect = (schema as Record<string, unknown>)['$schema']
+  const dialect = own(schema as Record<string, unknown>, '$schema')
   if (typeof dialect !== 'string') return true
 
   const uri = withoutFragment(resolveUri(dialect, registry.rootBase) ?? dialect)
   const metaschema = registry.resources.get(uri)
   if (metaschema === null || typeof metaschema !== 'object' || Array.isArray(metaschema)) return true
 
-  const vocabulary = (metaschema as Record<string, unknown>)['$vocabulary']
+  const vocabulary = own(metaschema as Record<string, unknown>, '$vocabulary')
   if (vocabulary === null || typeof vocabulary !== 'object' || Array.isArray(vocabulary)) return true
 
   // `$vocabulary` *enumerates* the dialect. Presence is what counts, not the
