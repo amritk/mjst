@@ -200,6 +200,23 @@ const readCapped = async (response: Response, maxBytes: number): Promise<string>
   return text + decoder.decode()
 }
 
+/**
+ * Parses a loaded document with the caller's parser, or `JSON.parse`.
+ *
+ * A leading byte-order mark is dropped first. A UTF-8 BOM is an encoding
+ * marker rather than content, but by the time the bytes have been decoded into
+ * a JS string it is a stray `U+FEFF` sitting in front of the `{` — and
+ * `JSON.parse` rejects it outright. A schema written on Windows, or served by
+ * something that prepends one, is exactly the document that carries one, and
+ * the whole resolve failed on it with an `Unrecognized token` that named an
+ * invisible character. YAML tolerates a leading BOM too, so dropping it is
+ * right for a custom `parse` as well.
+ */
+const parseDocument = (content: string, location: string, options: ResolveOptions): unknown => {
+  const text = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content
+  return options.parse === undefined ? (JSON.parse(text) as unknown) : options.parse(text, location)
+}
+
 /** The caller-supplied headers for `url`, if any. */
 const headersFor = (url: string, options: ResolveOptions): Record<string, string> | undefined => {
   if (options.headers === undefined) return undefined
@@ -310,10 +327,9 @@ const fetchRemote = async (location: string, options: ResolveOptions, deadline: 
     }
     if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`)
 
-    const parse = options.parse ?? ((c: string) => JSON.parse(c) as unknown)
     // Parse against the original request location so the caller's format sniffing
     // (e.g. `.yaml` vs `.json`) and any relative refs key off a stable identity.
-    return parse(await readCapped(response, maxBytes), location)
+    return parseDocument(await readCapped(response, maxBytes), location, options)
   }
   throw new Error(`too many redirects (>${maxRedirects}): ${location}`)
 }
@@ -469,8 +485,7 @@ const loadDoc = async (
   }
 
   try {
-    const parse = options.parse ?? ((c: string) => JSON.parse(c) as unknown)
-    docCache.set(location, parse(readFileSync(location, 'utf8'), location))
+    docCache.set(location, parseDocument(readFileSync(location, 'utf8'), location, options))
     return true
   } catch (err) {
     errors.push({ message: String(err), path: refPath })

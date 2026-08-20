@@ -430,6 +430,19 @@ describe('resolve-refs-from-file', () => {
     expect(Object.keys(fetchSpy.mock.calls[1]?.[1] ?? {})).not.toContain('headers')
   })
 
+  it('reads a document written with a UTF-8 byte-order mark', async () => {
+    // A BOM is an encoding marker, not content — but decoded it is a stray
+    // U+FEFF that `JSON.parse` refuses, and a schema authored on Windows
+    // carries one.
+    writeFileSync(join(dir, 'pet.json'), `\uFEFF${JSON.stringify({ Pet: { type: 'object' } })}`)
+    writeFileSync(join(dir, 'api.json'), `\uFEFF${JSON.stringify({ pet: { $ref: './pet.json#/Pet' } })}`)
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    expect(errors).toEqual([])
+    expect(resolved).toEqual({ pet: { type: 'object' } })
+  })
+
   it('reports a missing document at the $ref that named it', async () => {
     writeFileSync(
       join(dir, 'api.json'),

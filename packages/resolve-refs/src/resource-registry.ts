@@ -212,18 +212,23 @@ const getByPointerWithBase = (
   const value = getByPointer(start, fragment)
   if (value === undefined) return undefined
 
-  // Re-walk the same path for base tracking only (cheap: fragment paths are short).
+  // Re-walk the same path for base tracking only (cheap: fragment paths are
+  // short). Own properties only, exactly as `getByPointer` reads them, so this
+  // walk stands on its own rather than on the lookup above having vetted the
+  // path first.
+  const path = pointerToPath(fragment)
   let base = startBase
   let current: unknown = start
-  for (const segment of pointerToPath(fragment)) {
+  for (const segment of path) {
     if (current === null || typeof current !== 'object') break
     if (!Array.isArray(current)) base = baseAfterId(current as Record<string, unknown>, base)
+    if (!Object.hasOwn(current, segment)) break
     current = (current as Record<string, unknown>)[segment as never]
   }
   if (current !== null && typeof current === 'object' && !Array.isArray(current)) {
     base = baseAfterId(current as Record<string, unknown>, base)
   }
-  return { value, pointer: [...startPointer, ...pointerToPath(fragment)], base }
+  return { value, pointer: [...startPointer, ...path], base }
 }
 
 /**
