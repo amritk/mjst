@@ -454,7 +454,9 @@ type Hoisted = {
  * That is a `TS6133` where a wrong answer is a `TS2304` and a `ReferenceError`,
  * and it is also exactly what was emitted before the test existed.
  */
-const readsObjBinding = (text: string): boolean => /\bobj\b/.test(text)
+const readsBinding = (name: string, text: string): boolean => new RegExp(`\\b${name}\\b`).test(text)
+
+const readsObjBinding = (text: string): boolean => readsBinding('obj', text)
 
 const withHoisted = (hoisted: readonly Hoisted[], text: string): string => {
   // Only the function body is searched. Growing the search to include the kept
@@ -960,7 +962,11 @@ const generateConstraintChecks = (
       if (detail.length > 0) {
         lines.push(`  if (Array.isArray(${raw})) {`)
         lines.push(`    for (let ${iv} = ${firstTailIndex}; ${iv} < ${raw}.length; ${iv}++) {`)
-        lines.push(`      const ${itemVar} = ${raw}[${iv}]`)
+        // A check that looks at nothing — `items: { not: true }`, which rejects
+        // every element without reading it — leaves the binding unread, and an
+        // unread `const` is `TS6133` in the generated file wherever
+        // `noUnusedLocals` is on.
+        if (readsBinding(itemVar, detail.join('\n'))) lines.push(`      const ${itemVar} = ${raw}[${iv}]`)
         lines.push(...detail.map((l) => `    ${l}`))
         lines.push(`    }`)
         lines.push(`  }`)
@@ -1036,22 +1042,40 @@ const generateConstraintChecks = (
       // count can fail, paid for on every call.
       if (min > 0 || max !== undefined) {
         const matchExpr = generateMatchesExpr('_c', ownKeyword(sp, 'contains') as JSONSchema, suffix, ctx, true)
-        const bound = max !== undefined ? `_cn < ${min} || _cn > ${max}` : `_cn < ${min}`
-        lines.push(`  if (Array.isArray(${raw})) {`)
-        lines.push(`    const _ca = ${raw} as unknown[]`)
-        lines.push(`    let _cn = 0`)
-        lines.push(`    for (let _ci = 0; _ci < _ca.length; _ci++) {`)
-        lines.push(`      const _c = _ca[_ci]`)
-        lines.push(`      if (${matchExpr}) _cn++`)
-        // Only the lower bound is in play, so the answer stops changing here.
-        if (max === undefined) lines.push(`      if (_cn >= ${min}) break`)
-        lines.push(`    }`)
-        lines.push(`    if (${bound}) {`)
-        lines.push(
-          `      ${ctx.sink}.push({ message: 'array does not contain the required matching items', path: ${path} })`,
-        )
-        lines.push(`    }`)
-        lines.push(`  }`)
+        const report = `${ctx.sink}.push({ message: 'array does not contain the required matching items', path: ${path} })`
+        // A `contains` whose match is decidable needs no loop, and emitting one
+        // anyway left `const _c` read by nothing — `TS6133` in the generated file
+        // for any consumer with `noUnusedLocals`. `contains: true` matches every
+        // element, so the count *is* the length; `contains: false` matches none,
+        // so the count is zero and only the lower bound can fail.
+        if (matchExpr === 'true') {
+          const bound =
+            max !== undefined ? `${raw}.length < ${min} || ${raw}.length > ${max}` : `${raw}.length < ${min}`
+          lines.push(`  if (Array.isArray(${raw}) && (${bound})) {`)
+          lines.push(`    ${report}`)
+          lines.push(`  }`)
+        } else if (matchExpr === 'false') {
+          // `min` is at least 1 here: a `minContains: 0` with no `maxContains`
+          // never reaches this block, and a count of zero satisfies every `max`.
+          lines.push(`  if (Array.isArray(${raw})) {`)
+          lines.push(`    ${report}`)
+          lines.push(`  }`)
+        } else {
+          const bound = max !== undefined ? `_cn < ${min} || _cn > ${max}` : `_cn < ${min}`
+          lines.push(`  if (Array.isArray(${raw})) {`)
+          lines.push(`    const _ca = ${raw} as unknown[]`)
+          lines.push(`    let _cn = 0`)
+          lines.push(`    for (let _ci = 0; _ci < _ca.length; _ci++) {`)
+          lines.push(`      const _c = _ca[_ci]`)
+          lines.push(`      if (${matchExpr}) _cn++`)
+          // Only the lower bound is in play, so the answer stops changing here.
+          if (max === undefined) lines.push(`      if (_cn >= ${min}) break`)
+          lines.push(`    }`)
+          lines.push(`    if (${bound}) {`)
+          lines.push(`      ${report}`)
+          lines.push(`    }`)
+          lines.push(`  }`)
+        }
       }
     }
 
@@ -2025,7 +2049,10 @@ const generateObjectValidator = (
   // at runtime and is the same trick `dependentSelfBinding` plays.
   const objectCombinators = generateCombinatorChecks('', '_root', '`${_path}`', schema, suffix, ctx)
   if (objectCombinators.length > 0) {
-    propertyLines.push(`  const _root: unknown = input`)
+    // Only when something reads it: a decidable combinator (`not: true` rejects
+    // every instance without looking at one) emits its report and never touches
+    // the binding, and an unread `const` is `TS6133` in the generated file.
+    if (readsBinding('_root', objectCombinators.join('\n'))) propertyLines.push(`  const _root: unknown = input`)
     propertyLines.push(...objectCombinators)
   }
 
@@ -2788,7 +2815,7 @@ const generateScalarValidator = (
         `  if (${wrongType}) {`,
         `    return { valid: false, errors: [{ message: 'must be ${typLabel}', path: _path }] }`,
         `  }`,
-        `  const _root: unknown = input`,
+        ...(readsBinding('_root', constraintLines.join('\n')) ? [`  const _root: unknown = input`] : []),
         `  let errors: ValidationError[] | undefined`,
         constraintLines.join('\n'),
         `  return errors !== undefined ? { valid: false, errors } : true`,

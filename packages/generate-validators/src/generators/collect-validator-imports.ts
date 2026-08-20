@@ -24,20 +24,46 @@ type CollectValidatorImportsOptions = {
    * match the suffix used when generating the referenced files. Defaults to `''`.
    */
   readonly typeSuffix?: string
+  /**
+   * Whether the file being generated reads each half of a `$ref`'s import — the
+   * type, the validator, or both.
+   *
+   * The two halves come apart in both directions. A `$ref` in a position the type
+   * generator does not read (an `if` arm, whose whole node it types `unknown`) is
+   * called and never named; one in a position only the *type* reads (a tuple's
+   * rest, taken from `additionalItems`) is named and never called; and a ref
+   * inside a branch that folded away is neither. Importing a half nothing reads
+   * leaves it unused, which is `TS6133` in the generated file for any consumer
+   * with `noUnusedLocals` — this repo, and anything inheriting its flags.
+   *
+   * Defaults to "both", which is what every caller wanted before anyone asked the
+   * question.
+   */
+  readonly reads?: (names: { readonly typeName: string; readonly validatorName: string }) => {
+    readonly type: boolean
+    readonly validator: boolean
+  }
 }
 
 /**
  * Generates an import statement for a single $ref, importing both the type
  * and the validator function from the ref's generated file.
  */
-const buildImport = (ref: string, suffix: string): string => {
+const buildImport = (ref: string, suffix: string, reads: Reads): string | null => {
   const filename = refToFilename(ref)
   const typeName = refToName(ref, suffix)
   const validatorName = `validate${typeName}`
+  const { type, validator } = reads({ typeName, validatorName })
   // `.js` extension so the emitted import resolves under Node ESM (not just Bun);
   // `./x.js` → sibling `x.ts` is the standard NodeNext form.
-  return `import { type ${typeName}, ${validatorName} } from './${filename}.js'`
+  if (type && validator) return `import { type ${typeName}, ${validatorName} } from './${filename}.js'`
+  if (validator) return `import { ${validatorName} } from './${filename}.js'`
+  if (type) return `import type { ${typeName} } from './${filename}.js'`
+  return null
 }
+
+/** The question {@link CollectValidatorImportsOptions.reads} answers, named once. */
+type Reads = NonNullable<CollectValidatorImportsOptions['reads']>
 
 /**
  * Collects import statements for all $ref dependencies of a schema.
@@ -54,6 +80,7 @@ export const collectValidatorImports = (schema: JSONSchema, options?: CollectVal
   const selfFilename = options?.selfRef ? refToFilename(options.selfRef) : null
   const rootSchema = options?.rootSchema
   const typeSuffix = options?.typeSuffix ?? ''
+  const reads: Reads = options?.reads ?? (() => ({ type: true, validator: true }))
 
   // `includeTypeOnly`: the import brings in the type as well as the validator, so
   // it has to cover the positions the *type* generator reads even where the
@@ -84,8 +111,12 @@ export const collectValidatorImports = (schema: JSONSchema, options?: CollectVal
       if (!resolved) continue
     }
 
+    const statement = buildImport(ref, typeSuffix, reads)
+    // A ref whose file the emitted text neither names nor calls — a branch that
+    // folded away took both halves with it — needs no import at all. The filename
+    // is still marked seen: a second ref to it would reach the same answer.
     seen.add(filename)
-    imports.push(buildImport(ref, typeSuffix))
+    if (statement !== null) imports.push(statement)
   }
 
   return imports

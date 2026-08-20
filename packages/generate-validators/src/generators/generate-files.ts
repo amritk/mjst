@@ -25,6 +25,16 @@ type GenerateValidatorFileOptions = {
 }
 
 /**
+ * Escapes a derived type name for use inside a `RegExp`.
+ *
+ * The names `refToName` builds are identifier characters and whatever the
+ * caller's `typeSuffix` adds, and that suffix is a plain string nobody validates
+ * — a `.` or a `+` in one would otherwise be read as regex syntax and match the
+ * wrong text.
+ */
+const escapeForWordMatch = (name: string): string => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
  * Generates a complete TypeScript validator file from a JSON Schema.
  *
  * The file contains:
@@ -54,14 +64,9 @@ export const generateValidatorFile = (
   options?: GenerateValidatorFileOptions,
 ): string => {
   const typeSuffix = options?.typeSuffix ?? ''
-  const refImports = collectValidatorImports(schema, {
-    selfRef: options?.selfRef,
-    rootSchema: options?.rootSchema,
-    typeSuffix,
-  })
 
   // `rootSchema` lets the type generator name a URI `$ref` that resolves inside
-  // the document — the same rule the import collector above uses — instead of
+  // the document — the same rule the import collector below uses — instead of
   // typing it `unknown` while this file imports the generated type.
   const typeDefinition = generateTypeDefinition(schema, typeName, {
     typeSuffix,
@@ -71,6 +76,29 @@ export const generateValidatorFile = (
   const booleanGuard = generateBooleanGuard(schema, typeName, typeSuffix)
 
   const body = validatorFunction + booleanGuard
+
+  // The imports are collected last because which halves of a `$ref`'s import are
+  // needed is a question about the text that was just emitted. A `$ref` in a
+  // position the type generator does not read — an `if` arm, whose whole node it
+  // types `unknown` — is called and never named; one in a position only the type
+  // reads is named and never called; and a ref inside a branch that folded away
+  // is neither. Every half nothing reads is `TS6133` for a consumer with
+  // `noUnusedLocals`, which is this repo and anything inheriting its flags.
+  // Asking the emitted text keeps the import in step with whatever the two
+  // generators decided to write. The inexact direction is the harmless one: a
+  // schema string that happens to spell one of the names keeps a half that could
+  // have gone, which is what was emitted before anyone asked.
+  const emitted = typeDefinition + body
+  const mentions = (name: string): boolean => new RegExp(`\\b${escapeForWordMatch(name)}\\b`).test(emitted)
+  const refImports = collectValidatorImports(schema, {
+    selfRef: options?.selfRef,
+    rootSchema: options?.rootSchema,
+    typeSuffix,
+    reads: ({ typeName: name, validatorName }) => ({
+      type: mentions(name),
+      validator: mentions(validatorName),
+    }),
+  })
 
   // `ValidationResult` is every validator's return type, so it is always read.
   // `ValidationError` is only named by a body that *accumulates* errors — a
