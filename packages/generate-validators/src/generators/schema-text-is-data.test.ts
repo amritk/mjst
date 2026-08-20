@@ -80,7 +80,13 @@ describe('schema-text-is-data', () => {
         required: [spelling],
         additionalProperties: false,
       }
-      expectParity(schema, [{ [spelling]: 'ab' }, { [spelling]: 'a' }, { [spelling]: 1 }, {}, { [spelling]: 'ab', x: 1 }])
+      expectParity(schema, [
+        { [spelling]: 'ab' },
+        { [spelling]: 'a' },
+        { [spelling]: 1 },
+        {},
+        { [spelling]: 'ab', x: 1 },
+      ])
     }
   })
 

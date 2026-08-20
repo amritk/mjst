@@ -1,6 +1,7 @@
 import { regexFlagsFor, regexLiteral } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive, MJST_EXTENSION_KEY } from '@amritk/helpers/mjst-extension'
 import { multipleOfFailExpr, multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
+import { declaresKeyword, ownKeyword } from '@amritk/helpers/own-keyword'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
@@ -194,7 +195,7 @@ const SCALAR_ITEM_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'nu
  */
 const schemaIsScalarOnly = (schema: unknown): boolean => {
   if (!isSchemaObject(schema as JSONSchema)) return false
-  const t = (schema as Record<string, unknown>)['type']
+  const t = ownKeyword(schema as Record<string, unknown>, 'type')
   if (t === undefined) return false
   const types = Array.isArray(t) ? t : [t]
   return types.length > 0 && types.every((x) => typeof x === 'string' && SCALAR_ITEM_TYPES.has(x))
@@ -282,7 +283,7 @@ const objectRootIsSelfContained = (schema: JSONSchema): boolean =>
   getMjstPrimitive(schema) === undefined
 
 const getTypeArray = (schema: JSONSchema): string[] | null => {
-  if (!isSchemaObject(schema) || !('type' in schema) || !Array.isArray(schema.type)) return null
+  if (!isSchemaObject(schema) || !declaresKeyword(schema, 'type') || !Array.isArray(schema.type)) return null
   return schema.type as string[]
 }
 
@@ -373,7 +374,7 @@ const pointerSegment = (key: string): string =>
  * schema declares none. The keys of `patternProperties` are the patterns.
  */
 const patternPropertySources = (schema: JSONSchema): string[] => {
-  if (!isSchemaObject(schema) || !('patternProperties' in schema)) return []
+  if (!isSchemaObject(schema) || !declaresKeyword(schema, 'patternProperties')) return []
   const patterns = schema.patternProperties
   if (typeof patterns !== 'object' || patterns === null) return []
   return Object.keys(patterns)
@@ -841,12 +842,16 @@ const generateConstraintChecks = (
     // `allowUnreachableCode: false`. Nothing to check, so nothing is emitted.
     if (hasMinLength(propSchema) && propSchema.minLength > 0) {
       lines.push(`  if (typeof ${raw} === 'string' && ${minLengthFailExpr(raw, propSchema.minLength)}) {`)
-      lines.push(`    ${ctx.sink}.push({ message: 'must have at least ${propSchema.minLength} characters', path: ${path} })`)
+      lines.push(
+        `    ${ctx.sink}.push({ message: 'must have at least ${propSchema.minLength} characters', path: ${path} })`,
+      )
       lines.push(`  }`)
     }
     if (hasMaxLength(propSchema)) {
       lines.push(`  if (typeof ${raw} === 'string' && ${maxLengthFailExpr(raw, propSchema.maxLength)}) {`)
-      lines.push(`    ${ctx.sink}.push({ message: 'must have at most ${propSchema.maxLength} characters', path: ${path} })`)
+      lines.push(
+        `    ${ctx.sink}.push({ message: 'must have at most ${propSchema.maxLength} characters', path: ${path} })`,
+      )
       lines.push(`  }`)
     }
   }
@@ -964,7 +969,7 @@ const generateConstraintChecks = (
     hasMinItems(propSchema) ||
     hasMaxItems(propSchema) ||
     (hasUniqueItems(propSchema) && propSchema.uniqueItems === true) ||
-    'contains' in sp ||
+    declaresKeyword(sp, 'contains') ||
     tuple !== undefined ||
     (tail === false && tuple === undefined)
   ) {
@@ -1000,15 +1005,19 @@ const generateConstraintChecks = (
     // empty) satisfy the lower bound. A boolean `contains` counts too:
     // `contains: true` matches every item (so only an empty array fails) and
     // `contains: false` matches none (so every array fails).
-    if ('contains' in sp) {
-      const min = typeof sp['minContains'] === 'number' ? sp['minContains'] : 1
-      const max = typeof sp['maxContains'] === 'number' ? (sp['maxContains'] as number) : undefined
-      const matchExpr = generateMatchesExpr('_c', sp['contains'] as JSONSchema, suffix, ctx)
+    if (declaresKeyword(sp, 'contains')) {
+      const declaredMin = ownKeyword(sp, 'minContains')
+      const declaredMax = ownKeyword(sp, 'maxContains')
+      const min = typeof declaredMin === 'number' ? declaredMin : 1
+      const max = typeof declaredMax === 'number' ? declaredMax : undefined
+      const matchExpr = generateMatchesExpr('_c', ownKeyword(sp, 'contains') as JSONSchema, suffix, ctx)
       const bound = max !== undefined ? `_cn < ${min} || _cn > ${max}` : `_cn < ${min}`
       lines.push(`  if (Array.isArray(${raw})) {`)
       lines.push(`    const _cn = (${raw} as unknown[]).filter((_c) => ${matchExpr}).length`)
       lines.push(`    if (${bound}) {`)
-      lines.push(`      ${ctx.sink}.push({ message: 'array does not contain the required matching items', path: ${path} })`)
+      lines.push(
+        `      ${ctx.sink}.push({ message: 'array does not contain the required matching items', path: ${path} })`,
+      )
       lines.push(`    }`)
       lines.push(`  }`)
     }
@@ -1049,7 +1058,9 @@ const generateConstraintChecks = (
       }
       if (tailIsClosed) {
         lines.push(`    if (${raw}.length > ${tuple.length}) {`)
-        lines.push(`      ${ctx.sink}.push({ message: 'must NOT have more than ${tuple.length} items', path: ${path} })`)
+        lines.push(
+          `      ${ctx.sink}.push({ message: 'must NOT have more than ${tuple.length} items', path: ${path} })`,
+        )
         lines.push(`    }`)
       }
       lines.push(`  }`)
@@ -1219,7 +1230,7 @@ const generateUnevaluatedChecks = (
 ): string[] => {
   if (!isSchemaObject(schema)) return []
   const s = schema as Record<string, unknown>
-  if (!('unevaluatedProperties' in s) && !('unevaluatedItems' in s)) return []
+  if (!declaresKeyword(s, 'unevaluatedProperties') && !declaresKeyword(s, 'unevaluatedItems')) return []
 
   const match = unevaluatedMatcher(suffix, ctx)
   const lines: string[] = []
@@ -1290,7 +1301,7 @@ const generateCombinatorChecks = (
     lines.push(`  }`)
   }
 
-  const not = (schema as Record<string, unknown>)['not']
+  const not = ownKeyword(schema as Record<string, unknown>, 'not')
   if (not !== undefined && (isSchemaObject(not as JSONSchema) || typeof not === 'boolean')) {
     const cond = generateMatchesExpr(raw, not as JSONSchema, suffix, ctx)
     // `not: false` matches nothing, so the instance always passes and the check
@@ -1309,10 +1320,10 @@ const generateCombinatorChecks = (
     }
   }
 
-  const ifSchema = (schema as Record<string, unknown>)['if']
+  const ifSchema = ownKeyword(schema as Record<string, unknown>, 'if')
   if (ifSchema !== undefined && (isSchemaObject(ifSchema as JSONSchema) || typeof ifSchema === 'boolean')) {
-    const thenSchema = (schema as Record<string, unknown>)['then']
-    const elseSchema = (schema as Record<string, unknown>)['else']
+    const thenSchema = ownKeyword(schema as Record<string, unknown>, 'then')
+    const elseSchema = ownKeyword(schema as Record<string, unknown>, 'else')
     const thenLines =
       thenSchema !== undefined ? generateValueChecks(key, raw, path, thenSchema as JSONSchema, suffix, ctx) : []
     const elseLines =
@@ -1355,7 +1366,9 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
   const lines: string[] = []
 
   const patternsRecord =
-    'patternProperties' in schema && typeof schema.patternProperties === 'object' && schema.patternProperties !== null
+    declaresKeyword(schema, 'patternProperties') &&
+    typeof schema.patternProperties === 'object' &&
+    schema.patternProperties !== null
       ? (schema.patternProperties as Record<string, JSONSchema>)
       : {}
   const patternEntries = Object.entries(patternsRecord)
@@ -1542,7 +1555,7 @@ const dependentSelfBinding = (objVar: string, depth: number): { name: string; de
  */
 const generateDependentSchemasChecks = (schema: JSONSchema, suffix: string, ctx: NestingContext): string[] => {
   if (!isSchemaObject(schema)) return []
-  const dep = (schema as Record<string, unknown>)['dependentSchemas']
+  const dep = ownKeyword(schema as Record<string, unknown>, 'dependentSchemas')
   if (typeof dep !== 'object' || dep === null || Array.isArray(dep)) return []
 
   const obj = ctx.objVar
@@ -1583,7 +1596,7 @@ const generateDependentSchemasChecks = (schema: JSONSchema, suffix: string, ctx:
  */
 const generateDependenciesChecks = (schema: JSONSchema, suffix: string, ctx: NestingContext): string[] => {
   if (!isSchemaObject(schema)) return []
-  const dep = (schema as Record<string, unknown>)['dependencies']
+  const dep = ownKeyword(schema as Record<string, unknown>, 'dependencies')
   if (typeof dep !== 'object' || dep === null || Array.isArray(dep)) return []
 
   const obj = ctx.objVar
@@ -1673,7 +1686,13 @@ const generateMinMaxPropertiesChecks = (schema: JSONSchema, ctx: NestingContext)
  */
 const hasObjectLevelCombinator = (schema: JSONSchema): boolean => {
   if (!isSchemaObject(schema)) return false
-  return hasAllOf(schema) || hasAnyOf(schema) || hasOneOf(schema) || 'not' in schema || 'if' in schema
+  return (
+    hasAllOf(schema) ||
+    hasAnyOf(schema) ||
+    hasOneOf(schema) ||
+    declaresKeyword(schema, 'not') ||
+    declaresKeyword(schema, 'if')
+  )
 }
 
 /**
@@ -1689,8 +1708,8 @@ const carriesUnevaluated = (schema: JSONSchema): boolean => {
   if (!isSchemaObject(schema)) return false
   const s = schema as Record<string, unknown>
   return (
-    ('unevaluatedProperties' in s && s['unevaluatedProperties'] !== true) ||
-    ('unevaluatedItems' in s && s['unevaluatedItems'] !== true)
+    (declaresKeyword(s, 'unevaluatedProperties') && s['unevaluatedProperties'] !== true) ||
+    (declaresKeyword(s, 'unevaluatedItems') && s['unevaluatedItems'] !== true)
   )
 }
 
@@ -1709,8 +1728,8 @@ const guardPropConditions = (key: string, propSchema: JSONSchema, objAcc: string
     hasOneOf(propSchema) ||
     hasAnyOf(propSchema) ||
     hasAllOf(propSchema) ||
-    'not' in propSchema ||
-    'if' in propSchema ||
+    declaresKeyword(propSchema, 'not') ||
+    declaresKeyword(propSchema, 'if') ||
     getMjstInstanceOf(propSchema) !== undefined ||
     getMjstPrimitive(propSchema) !== undefined ||
     hasPattern(propSchema) ||
@@ -1802,9 +1821,10 @@ const arrayRejectedByRequiredProp = (
  */
 const guardObjectConditions = (schema: JSONSchema, raw: string, objAcc: string): string[] | null => {
   if (!isObjectSchema(schema)) return null
-  if (hasDependentRequired(schema) || hasPropertyNames(schema) || 'dependentSchemas' in schema) return null
-  if (hasMinProperties(schema) || hasMaxProperties(schema) || 'dependencies' in schema) return null
-  if (isSchemaObject(schema) && 'patternProperties' in schema) return null
+  if (hasDependentRequired(schema) || hasPropertyNames(schema) || declaresKeyword(schema, 'dependentSchemas'))
+    return null
+  if (hasMinProperties(schema) || hasMaxProperties(schema) || declaresKeyword(schema, 'dependencies')) return null
+  if (isSchemaObject(schema) && declaresKeyword(schema, 'patternProperties')) return null
   // Object-level combinators are enforced by the slow path but cannot be mirrored
   // by this flat guard, so bail — otherwise the guard's early `return true` would
   // accept documents the combinators reject.
@@ -2068,17 +2088,17 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string, narrowable = true): st
     hasRef(schema) ||
     hasConst(schema) ||
     hasOneOf(schema) ||
-    'anyOf' in schema ||
-    'allOf' in schema ||
-    'not' in schema ||
-    'if' in schema ||
-    'contains' in schema ||
-    'prefixItems' in schema ||
+    declaresKeyword(schema, 'anyOf') ||
+    declaresKeyword(schema, 'allOf') ||
+    declaresKeyword(schema, 'not') ||
+    declaresKeyword(schema, 'if') ||
+    declaresKeyword(schema, 'contains') ||
+    declaresKeyword(schema, 'prefixItems') ||
     // A draft-07 tuple: the fixed positions live in an *array* `items` and the
     // tail in `additionalItems`. Neither is expressible flat, and reading past
     // them let the guard accept tuples `validateX` rejects.
-    Array.isArray((schema as Record<string, unknown>)['items']) ||
-    'additionalItems' in schema ||
+    Array.isArray(ownKeyword(schema as Record<string, unknown>, 'items')) ||
+    declaresKeyword(schema, 'additionalItems') ||
     carriesUnevaluated(schema) ||
     getMjstInstanceOf(schema) !== undefined ||
     getMjstPrimitive(schema) !== undefined
@@ -2203,7 +2223,7 @@ const booleanArrayExpr = (schema: JSONSchema, acc: string, narrowable = true): s
   // `{ "type": "array", "items": false }` while `validateX` rejected it. (A tuple
   // never reaches here — `prefixItems` and an array `items` both bail in
   // {@link booleanLeafExpr}.)
-  if ((schema as Record<string, unknown>)['items'] === false) return `${base} && ${arr}.length === 0`
+  if (ownKeyword(schema as Record<string, unknown>, 'items') === false) return `${base} && ${arr}.length === 0`
   // `items: true`, and an absent `items`, constrain nothing.
   if (!hasItems(schema)) return base
   const items = schema.items
@@ -2233,9 +2253,10 @@ const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string, nar
   if (hasRef(schema) || hasConst(schema) || hasEnum(schema)) return null
   if (getMjstInstanceOf(schema) !== undefined || getMjstPrimitive(schema) !== undefined) return null
   // These need per-key loops or cross-references the flat form can't express.
-  if (hasDependentRequired(schema) || hasPropertyNames(schema) || 'dependentSchemas' in schema) return null
-  if (hasMinProperties(schema) || hasMaxProperties(schema) || 'dependencies' in schema) return null
-  if (isSchemaObject(schema) && 'patternProperties' in schema) return null
+  if (hasDependentRequired(schema) || hasPropertyNames(schema) || declaresKeyword(schema, 'dependentSchemas'))
+    return null
+  if (hasMinProperties(schema) || hasMaxProperties(schema) || declaresKeyword(schema, 'dependencies')) return null
+  if (isSchemaObject(schema) && declaresKeyword(schema, 'patternProperties')) return null
   // Object-level combinators change the verdict but can't be expressed flat, so
   // defer to the validator rather than emit a guard that ignores them.
   if (hasObjectLevelCombinator(schema)) return null
@@ -2339,19 +2360,25 @@ const typeDescribesEveryAcceptedValue = (schema: JSONSchema): boolean => {
   // A boolean schema has no shape to contradict: its type is `unknown`.
   if (!isSchemaObject(schema)) return true
   const s = schema as Record<string, unknown>
-  if ('type' in s || 'enum' in s || 'const' in s || '$ref' in s) return true
+  if (
+    declaresKeyword(s, 'type') ||
+    declaresKeyword(s, 'enum') ||
+    declaresKeyword(s, 'const') ||
+    declaresKeyword(s, '$ref')
+  )
+    return true
 
   // The type of a combinator is built out of its branches, so it is as honest as
   // they are — a union of `{ type: 'string' }` and `{ type: 'number' }` describes
   // every value the validator accepts, while a branch carrying only `properties`
   // does not.
   for (const keyword of ['allOf', 'anyOf', 'oneOf'] as const) {
-    const branches = s[keyword]
+    const branches = ownKeyword(s, keyword)
     if (!Array.isArray(branches)) continue
     if (!(branches as JSONSchema[]).every((branch) => typeDescribesEveryAcceptedValue(branch))) return false
   }
 
-  return !IMPLICIT_OBJECT_KEYWORDS.some((keyword) => keyword in s)
+  return !IMPLICIT_OBJECT_KEYWORDS.some((keyword) => declaresKeyword(s, keyword))
 }
 
 /**
@@ -2515,7 +2542,13 @@ const generateScalarValidator = (
   // Top-level combinators (`allOf` / `anyOf` / `oneOf` / `not` / `if`), validated
   // against the input via the shared combinator generator — correct `oneOf`
   // (exactly one) and inline branches included, not just `$ref` branches.
-  if (hasAllOf(schema) || hasAnyOf(schema) || hasOneOf(schema) || 'not' in schema || 'if' in schema) {
+  if (
+    hasAllOf(schema) ||
+    hasAnyOf(schema) ||
+    hasOneOf(schema) ||
+    declaresKeyword(schema, 'not') ||
+    declaresKeyword(schema, 'if')
+  ) {
     const ctx = createRootContext(rootSchema)
     const checks: string[] = []
     // The root path expression the shared emitters use, as a template literal body.
@@ -2829,7 +2862,7 @@ const rewriteNullable = (node: unknown): unknown => {
     }
   }
 
-  if (src['nullable'] === true) return { anyOf: [{ type: 'null' }, out] }
+  if (ownKeyword(src, 'nullable') === true) return { anyOf: [{ type: 'null' }, out] }
   return out
 }
 

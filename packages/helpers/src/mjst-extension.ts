@@ -1,5 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { ownKeyword } from './own-keyword'
 import { isSchemaObject } from './schema-guards'
 
 /**
@@ -55,7 +56,10 @@ const SAFE_BRAND = /^[\w$ -]+$/
 const readExtensionString = (schema: JSONSchema, field: keyof MjstExtension): string | undefined => {
   if (!isSchemaObject(schema)) return undefined
 
-  const extension = (schema as Record<string, unknown>)[MJST_EXTENSION_KEY]
+  // Own property only: an inherited `x-mjst` — from a polluted `Object.prototype`
+  // or a schema built over a base object — would put a runtime hint on every node
+  // in the document, and an `instanceOf` hint replaces the node's `type` check.
+  const extension = ownKeyword(schema as Record<string, unknown>, MJST_EXTENSION_KEY)
   if (typeof extension !== 'object' || extension === null) return undefined
 
   const value = (extension as Record<string, unknown>)[field]

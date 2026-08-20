@@ -1,3 +1,4 @@
+import { declaresKeyword, ownKeyword } from '@amritk/helpers/own-keyword'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { type UnevaluatedMatchFn, unevaluatedItemsExpr, unevaluatedPropertiesExpr } from './unevaluated-match'
@@ -48,7 +49,7 @@ const SUBSCHEMA_MAP_KEYS = ['properties', 'patternProperties', 'dependentSchemas
  * spelling of the very same schema generates.
  */
 const additionalItemsIsEnforced = (node: Record<string, unknown>): boolean =>
-  Array.isArray(node['items']) && !Array.isArray(node['prefixItems'])
+  Array.isArray(ownKeyword(node, 'items')) && !Array.isArray(ownKeyword(node, 'prefixItems'))
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -64,7 +65,7 @@ const check = (
   const record = node as Record<string, unknown>
   for (const keyword of ['unevaluatedProperties', 'unevaluatedItems'] as const) {
     // `true` permits everything, so it constrains nothing and cannot be wrong.
-    if (!(keyword in record) || record[keyword] === true) continue
+    if (!declaresKeyword(record, keyword) || record[keyword] === true) continue
     if (!enforced) {
       throw new Error(
         `[${typeName}] unsupported "${keyword}": it sits under "additionalItems", a subschema position this ` +
@@ -111,29 +112,30 @@ export const assertUnevaluatedGeneratable = (
   const visit = (node: unknown, enforced: boolean): void => {
     if (!isRecord(node)) return
 
-    if ('unevaluatedProperties' in node || 'unevaluatedItems' in node) {
+    if (declaresKeyword(node, 'unevaluatedProperties') || declaresKeyword(node, 'unevaluatedItems')) {
       check(node as JSONSchema, typeName, rootSchema, match, enforced)
     }
 
     for (const key of SINGLE_SUBSCHEMA_KEYS) {
-      if (key in node) visit(node[key], enforced)
+      if (declaresKeyword(node, key)) visit(node[key], enforced)
     }
     // `items` is a single subschema in 2020-12 and a tuple in the older drafts.
-    const items = node['items']
+    const items = ownKeyword(node, 'items')
     if (Array.isArray(items)) for (const entry of items) visit(entry, enforced)
     else if (items !== undefined) visit(items, enforced)
 
     for (const key of SUBSCHEMA_LIST_KEYS) {
-      const list = node[key]
+      const list = ownKeyword(node, key)
       if (Array.isArray(list)) for (const entry of list) visit(entry, enforced)
     }
     for (const key of SUBSCHEMA_MAP_KEYS) {
-      const map = node[key]
+      const map = ownKeyword(node, key)
       if (!isRecord(map)) continue
       // The array form of draft-07 `dependencies` lists required keys, not schemas.
       for (const entry of Object.values(map)) if (!Array.isArray(entry)) visit(entry, enforced)
     }
-    if ('additionalItems' in node) visit(node['additionalItems'], enforced && additionalItemsIsEnforced(node))
+    if (declaresKeyword(node, 'additionalItems'))
+      visit(node['additionalItems'], enforced && additionalItemsIsEnforced(node))
   }
 
   visit(schema, true)

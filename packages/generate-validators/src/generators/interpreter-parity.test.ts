@@ -281,7 +281,10 @@ describe('generator/interpreter verdict parity', () => {
       [0, -0],
       [1, '1', true],
       [{ a: Number.NaN }, { a: Number.NaN }],
-      [{ a: 1, b: 2 }, { b: 2, a: 1 }],
+      [
+        { a: 1, b: 2 },
+        { b: 2, a: 1 },
+      ],
       [{ a: 1 }, { a: 2 }],
     ]
     assertParity({ type: 'array', uniqueItems: true }, values)

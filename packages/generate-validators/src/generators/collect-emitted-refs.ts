@@ -1,3 +1,4 @@
+import { declaresKeyword, ownKeyword } from '@amritk/helpers/own-keyword'
 import { isSchemaObject } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
@@ -19,8 +20,8 @@ import { type UnevaluatedMatchFn, unevaluatedItemsExpr, unevaluatedPropertiesExp
  * that arm's `$ref` happened to be unresolvable.
  */
 const armsOf = (schema: Record<string, unknown>): string[] => {
-  if (!('if' in schema)) return []
-  const condition = schema['if']
+  if (!declaresKeyword(schema, 'if')) return []
+  const condition = ownKeyword(schema, 'if')
   // The emitter reads an `if` only when it is a schema object or a boolean.
   // Anything else — `if: 5`, `if: null` — and the whole keyword is skipped, both
   // arms with it, so neither is referenced by anything.
@@ -74,7 +75,10 @@ export const collectEmittedRefs = (
   // `{ $ref, unevaluatedProperties }` is a real shape, and its coverage reaches
   // past the ref the emitter delegates to, so the sweep is its own visit rather
   // than something the walk below arrives at.
-  if (rootSchema !== undefined && ('unevaluatedProperties' in schema || 'unevaluatedItems' in schema)) {
+  if (
+    rootSchema !== undefined &&
+    (declaresKeyword(schema, 'unevaluatedProperties') || declaresKeyword(schema, 'unevaluatedItems'))
+  ) {
     collectCoverageRefs(schema as JSONSchema, refs, rootSchema)
   }
 
@@ -83,8 +87,9 @@ export const collectEmittedRefs = (
   // after the delegation. So record the ref and keep walking — a
   // `{ $ref, allOf: [{ $ref }] }` emits two calls, and treating the node as a
   // leaf collected only the first, leaving the second an undefined identifier.
-  if (typeof schema['$ref'] === 'string') {
-    refs.push(schema['$ref'])
+  const ref = ownKeyword(schema, '$ref')
+  if (typeof ref === 'string') {
+    refs.push(ref)
   }
 
   // `properties` and `patternProperties` hold subschemas as object *values*; the
@@ -93,7 +98,7 @@ export const collectEmittedRefs = (
   // (dependentRequired) or a subschema (dependentSchemas) — and the string form
   // is a harmless no-op here, since this self-guards on non-objects.
   for (const mapKey of ['properties', 'patternProperties', 'dependentSchemas', 'dependencies']) {
-    const map = schema[mapKey]
+    const map = ownKeyword(schema, mapKey)
     if (typeof map === 'object' && map !== null && !Array.isArray(map)) {
       for (const sub of Object.values(map)) collectEmittedRefs(sub, refs, rootSchema, includeTypeOnly)
     }
@@ -131,8 +136,8 @@ export const collectEmittedRefs = (
   // positions from a `prefixItems` that is merely *present*, empty included — the
   // same reading `tupleShapeOf` and the interpreter make — so wherever the type
   // names those positions, `tuple` below already walks them.
-  if (includeTypeOnly && Array.isArray(schema['items'])) {
-    const additional = schema['additionalItems']
+  if (includeTypeOnly && Array.isArray(ownKeyword(schema, 'items'))) {
+    const additional = ownKeyword(schema, 'additionalItems')
     if (additional !== undefined && additional !== tail) {
       collectEmittedRefs(additional, refs, rootSchema, includeTypeOnly)
     }
@@ -158,11 +163,11 @@ export const collectEmittedRefs = (
     'unevaluatedProperties',
     'unevaluatedItems',
   ]) {
-    if (key in schema) collectEmittedRefs(schema[key], refs, rootSchema, includeTypeOnly)
+    if (declaresKeyword(schema, key)) collectEmittedRefs(schema[key], refs, rootSchema, includeTypeOnly)
   }
 
   for (const key of ['oneOf', 'anyOf', 'allOf']) {
-    const list = schema[key]
+    const list = ownKeyword(schema, key)
     if (!Array.isArray(list)) continue
     for (const sub of list) collectEmittedRefs(sub, refs, rootSchema, includeTypeOnly)
   }

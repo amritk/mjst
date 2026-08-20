@@ -1,3 +1,5 @@
+import { declaresKeyword, ownKeyword } from '@amritk/helpers/own-keyword'
+
 /**
  * How a schema spells its array positions, normalised across the two dialects
  * the generator accepts.
@@ -27,17 +29,18 @@
 export const tupleShapeOf = (
   schema: Record<string, unknown>,
 ): { tuple: unknown[] | undefined; tail: unknown; tailIsClosed: boolean } => {
-  const items = schema['items']
-  const prefix = schema['prefixItems']
+  const items = ownKeyword(schema, 'items')
+  const prefix = ownKeyword(schema, 'prefixItems')
   if (Array.isArray(prefix)) {
     return {
       tuple: prefix,
-      tail: 'items' in schema && !Array.isArray(items) ? items : undefined,
+      tail: declaresKeyword(schema, 'items') && !Array.isArray(items) ? items : undefined,
       tailIsClosed: items === false,
     }
   }
   if (Array.isArray(items)) {
-    return { tuple: items, tail: schema['additionalItems'], tailIsClosed: schema['additionalItems'] === false }
+    const additionalItems = ownKeyword(schema, 'additionalItems')
+    return { tuple: items, tail: additionalItems, tailIsClosed: additionalItems === false }
   }
-  return { tuple: undefined, tail: 'items' in schema ? items : undefined, tailIsClosed: items === false }
+  return { tuple: undefined, tail: declaresKeyword(schema, 'items') ? items : undefined, tailIsClosed: items === false }
 }
