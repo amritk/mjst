@@ -594,6 +594,53 @@ describe('keyword-composition', () => {
     expectAgreement({ type: 'array', contains: { type: 'string' } }, [1, 2], false)
   })
 
+  it('decides a `contains` whose match is constant, without a loop', () => {
+    // `contains: true` matches every element, so the count is the array's length;
+    // `contains: false` matches none, so it is zero and the bounds are decidable
+    // at generation time. Emitting the loop anyway bound an element the folded
+    // match never looked at — an unused `const` in the generated file — and
+    // reading "no match" as "always invalid" got `{ contains: false, minContains:
+    // 0 }` wrong, which every array satisfies.
+    const VALUES: readonly unknown[][] = [[], [1], [1, 2], [1, 2, 3]]
+    const cases: readonly { schema: Record<string, unknown>; accepted: readonly unknown[][] }[] = [
+      // Zero matches is inside [0, 3], so every array passes.
+      { schema: { type: 'array', contains: false, minContains: 0, maxContains: 3 }, accepted: VALUES },
+      { schema: { type: 'array', contains: false, minContains: 0 }, accepted: VALUES },
+      // The default `minContains: 1` no array can reach.
+      { schema: { type: 'array', contains: false }, accepted: [] },
+      { schema: { type: 'array', contains: false, maxContains: 2 }, accepted: [] },
+      // Every element matches, so the count is the length.
+      {
+        schema: { type: 'array', contains: true, minContains: 2 },
+        accepted: [
+          [1, 2],
+          [1, 2, 3],
+        ],
+      },
+      { schema: { type: 'array', contains: true, minContains: 0, maxContains: 1 }, accepted: [[], [1]] },
+      {
+        schema: { type: 'array', contains: {}, minContains: 2 },
+        accepted: [
+          [1, 2],
+          [1, 2, 3],
+        ],
+      },
+    ]
+
+    for (const { schema, accepted } of cases) {
+      // No loop, so no element binding: a `const` the folded match never reads is
+      // `TS6133` in the generated file.
+      expect(generateValidatorFunction(schema as never, 'Root')).not.toContain('_ca')
+      for (const value of VALUES) {
+        expectAgreement(
+          schema,
+          value,
+          accepted.some((entry) => JSON.stringify(entry) === JSON.stringify(value)),
+        )
+      }
+    }
+  })
+
   it('emits nothing for a `minContains: 0` that constrains nothing', () => {
     // Every array satisfies "at least zero matches", empty included, so the whole
     // check is dead — `_cn < 0` is a test no count can fail, and the loop that

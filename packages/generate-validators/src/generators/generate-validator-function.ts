@@ -1055,11 +1055,15 @@ const generateConstraintChecks = (
           lines.push(`    ${report}`)
           lines.push(`  }`)
         } else if (matchExpr === 'false') {
-          // `min` is at least 1 here: a `minContains: 0` with no `maxContains`
-          // never reaches this block, and a count of zero satisfies every `max`.
-          lines.push(`  if (Array.isArray(${raw})) {`)
-          lines.push(`    ${report}`)
-          lines.push(`  }`)
+          // Nothing matches, so the count is zero for every array — and whether
+          // zero is in bounds is decided here rather than emitted. It usually is
+          // not (`minContains` defaults to 1), but `{ contains: false,
+          // minContains: 0 }` is satisfied by every array, empty included.
+          if (0 < min || (max !== undefined && 0 > max)) {
+            lines.push(`  if (Array.isArray(${raw})) {`)
+            lines.push(`    ${report}`)
+            lines.push(`  }`)
+          }
         } else {
           const bound = max !== undefined ? `_cn < ${min} || _cn > ${max}` : `_cn < ${min}`
           lines.push(`  if (Array.isArray(${raw})) {`)
