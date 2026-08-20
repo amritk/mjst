@@ -1,7 +1,7 @@
 import { FORMAT_CHECKS, isValidRegex } from '@/interpreter/format-checks'
 import { validationLimitError } from '@/interpreter/limits'
-import { resolveDynamicRef, resolveRecursiveRef } from '@/interpreter/resolve-dynamic-ref'
 import { getNodeMeta, type NodeMeta } from '@/interpreter/node-meta'
+import { resolveDynamicRef, resolveRecursiveRef } from '@/interpreter/resolve-dynamic-ref'
 import { resolveLocalRef } from '@/interpreter/resolve-local-ref'
 import { resolveScopedDynamicRef, resolveScopedRef, type ScopedTarget } from '@/interpreter/resolve-scoped-ref'
 import type { SchemaRegistry } from '@/interpreter/schema-registry'
@@ -34,8 +34,13 @@ export type ValidatorCaches = {
    * slot, not a map: 2019-09 allows exactly one target per document.
    */
   recursiveRef: { value: unknown } | null
-  /** Resolved `$ref`s for a document with `$id`s, keyed by the base in scope plus the ref. */
-  scopedRef: Map<string, ScopedTarget> | null
+  /**
+   * Resolved `$ref`s for a document with `$id`s: base URI in scope → ref → target.
+   * Nested rather than keyed on a composite string because the same ref resolves
+   * differently from inside different `$id` scopes, and building `${base} ${ref}`
+   * meant allocating and hashing a fresh string on every reference followed.
+   */
+  scopedRef: Map<string, Map<string, ScopedTarget>> | null
   /**
    * Per-node keyword metadata (see `node-meta.ts`), or `null` while this
    * validator is still on its first call — a one-shot validation would only ever
@@ -486,20 +491,22 @@ const resolvePlainRef = (ctx: InterpreterContext, ref: string): unknown => {
  * a URI that does resolve in scope never reaches it.
  */
 const resolveScoped = (ctx: InterpreterContext, registry: SchemaRegistry, ref: string, base: string): ScopedTarget => {
-  // A space is an unambiguous separator here: `base` comes out of `URL.href`, so
-  // it can never contain one.
-  const key = `${base} ${ref}`
   let cache = ctx.caches.scopedRef
   if (cache === null) {
     cache = new Map()
     ctx.caches.scopedRef = cache
   }
-  const cached = cache.get(key)
+  let byRef = cache.get(base)
+  if (byRef === undefined) {
+    byRef = new Map()
+    cache.set(base, byRef)
+  }
+  const cached = byRef.get(ref)
   if (cached !== undefined) return cached
 
   const scoped = resolveScopedRef(registry, ref, base)
   const resolved = scoped ?? fallbackTarget(ctx, ref, base)
-  cache.set(key, resolved)
+  byRef.set(ref, resolved)
   return resolved
 }
 
@@ -609,7 +616,13 @@ type ObjectMeta = {
   knownKeys: string[] | undefined
   /** `knownKeys` pre-escaped for JSON Pointer, so the error-path build is a bare concat. */
   escapedKeys: string[] | undefined
-  requiredSet: Set<string>
+  /**
+   * Whether each of {@link ObjectMeta.knownKeys} is also in `required`, index
+   * for index. A parallel array of booleans rather than a `Set` lookup per
+   * declared property per validation: the loop already has the index in hand,
+   * and on a wide object that was one hash lookup per property per call.
+   */
+  requiredFlags: boolean[] | undefined
   requiredNotInProps: string[]
   patternEntries: [RegExp, unknown][] | null
   /**
@@ -680,6 +693,12 @@ const getEnumSet = (s: object, values: readonly unknown[]): Set<unknown> | null 
  */
 const objectMetaCache = new WeakMap<object, ObjectMeta>()
 
+/** {@link ObjectMeta.requiredFlags}: `required` membership, resolved per declared key. */
+const requiredFlagsFor = (required: readonly string[], knownKeys: readonly string[]): boolean[] => {
+  const set = new Set(required)
+  return knownKeys.map((key) => set.has(key))
+}
+
 const getObjectMeta = (s: Record<string, unknown>, node: NodeMeta): ObjectMeta => {
   let meta = objectMetaCache.get(s)
   if (meta === undefined) {
@@ -692,7 +711,7 @@ const getObjectMeta = (s: Record<string, unknown>, node: NodeMeta): ObjectMeta =
       properties,
       knownKeys,
       escapedKeys: knownKeys?.map(escapePointer),
-      requiredSet: new Set(required),
+      requiredFlags: knownKeys && requiredFlagsFor(required, knownKeys),
       // `Object.hasOwn`, not `k in properties`: `in` walks `Object.prototype`, so
       // `required: ['toString']` alongside any `properties` object looked already
       // covered and was dropped here — and `toString` is not in `knownKeys` either
@@ -733,7 +752,7 @@ const interpretObject = (
   const obj = value as Record<string, unknown>
 
   const meta = getObjectMeta(s, node)
-  const { properties, knownKeys, escapedKeys, requiredSet } = meta
+  const { properties, knownKeys, escapedKeys, requiredFlags } = meta
   const emitErrors = ctx.emitErrors
   // `required`, `dependentRequired` and the property-count bounds are
   // validation-vocabulary; `properties`, `patternProperties`,
@@ -746,7 +765,7 @@ const interpretObject = (
   const minProps = asserts ? node.minProperties : undefined
   const maxProps = asserts ? node.maxProperties : undefined
 
-  if (properties && knownKeys && escapedKeys) {
+  if (properties && knownKeys && escapedKeys && requiredFlags) {
     for (let i = 0; i < knownKeys.length; i++) {
       const key = knownKeys[i] as string
       // One read, reused. `hasProperty` spells the same rule for callers that
@@ -754,7 +773,7 @@ const interpretObject = (
       // off `pv`, so only the `hasOwn` half is left to ask.
       const pv = obj[key]
       const present = pv !== undefined && Object.hasOwn(obj, key)
-      if (requiredSet.has(key)) {
+      if (requiredFlags[i]) {
         if (!present) {
           if (asserts) fail(ctx, `must have required property '${key}'`, path)
         } else {

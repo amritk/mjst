@@ -459,12 +459,7 @@ export const getNodeMeta = (cache: WeakMap<object, NodeMeta> | null, schema: Rec
     minContains,
     maxContains,
     hasArrayKeywords:
-      minItems !== undefined ||
-      maxItems !== undefined ||
-      uniqueItems ||
-      tuple !== undefined ||
-      hasItems ||
-      hasContains,
+      minItems !== undefined || maxItems !== undefined || uniqueItems || tuple !== undefined || hasItems || hasContains,
     properties,
     patternProperties,
     required,
