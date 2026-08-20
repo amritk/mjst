@@ -14,7 +14,10 @@ export const oasServerVariables: RulesetFunction = (server, _options, context) =
   const results: IFunctionResult[] = []
 
   for (const template of templates) {
-    if (!(template in variables)) {
+    // `Object.hasOwn`, not `in`: variable names come from the document's server
+    // URL, so a `{constructor}` template matched `Object.prototype` and its
+    // missing variable went unreported.
+    if (!Object.hasOwn(variables, template)) {
       results.push({ message: `Server variable "${template}" is not defined`, path: [...context.path, 'variables'] })
     }
   }

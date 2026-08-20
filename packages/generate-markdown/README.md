@@ -29,10 +29,14 @@ For every property it reads the standard JSON Schema keywords:
 - `required` — the parent's `required` array drives the **Required** column
 
 Schemas built from references work too. `$ref` pointers are resolved against the
-document's `$defs` (any `#/…` JSON pointer, in fact) before rendering, recursive
+document's `$defs` (any `#/…` JSON pointer, in fact — including one that indexes
+an array, such as `#/$defs/timeout/anyOf/0`) before rendering, recursive
 definitions are detected and collapsed so generation always terminates, and
 sibling keywords on a `$ref` node — typically `description` — override the
-referenced definition. When a property describes its type through `enum`,
+referenced definition. Inlining is a tree expansion, so a definition reused at
+several levels of nesting grows exponentially; past 100,000 inlined nodes
+generation stops with an error rather than writing a README no one could read.
+When a property describes its type through `enum`,
 `const`, or `anyOf`/`oneOf`/`allOf` rather than a plain `type`, the **Type**
 column shows an inferred label (e.g. `string` or `number | string`).
 

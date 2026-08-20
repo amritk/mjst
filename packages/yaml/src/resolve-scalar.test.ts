@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { resolveDoubleQuoted, resolvePlainValue, resolveSingleQuoted } from './resolve-scalar'
+import { resolveDoubleQuoted, resolvePlainValue, resolveSingleQuoted, trimTrailingSpaces } from './resolve-scalar'
 
 describe('resolve-scalar', () => {
   it('resolves the null forms', () => {
@@ -75,5 +75,14 @@ describe('resolve-scalar', () => {
   it('folds multi-line flow scalars', () => {
     expect(resolveDoubleQuoted('one\ntwo')).toBe('one two')
     expect(resolveSingleQuoted('one\n\ntwo')).toBe('one\ntwo')
+  })
+
+  it('trims trailing spaces and tabs, and returns the same string when there are none', () => {
+    expect(trimTrailingSpaces('a b \t ')).toBe('a b')
+    expect(trimTrailingSpaces(' \t')).toBe('')
+    expect(trimTrailingSpaces('')).toBe('')
+    // Interior whitespace is content, and only the tail is trimmed.
+    const kept = 'a   b'
+    expect(trimTrailingSpaces(kept)).toBe(kept)
   })
 })

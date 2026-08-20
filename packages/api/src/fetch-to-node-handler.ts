@@ -1,5 +1,6 @@
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from 'node:http'
 
+import { defineOwnProperty } from './define-own-property'
 import { importNodeModule } from './import-node-module'
 import { waitForDrain } from './wait-for-drain'
 
@@ -82,7 +83,10 @@ const respond = async (
       // set-cookie is the one header that must not be folded (RFC 6265);
       // getSetCookie is the only un-joined view, and Node's writeHead sends
       // an array value as that many separate header lines.
-      if (name !== 'set-cookie') headers[name] = value
+      // `defineOwnProperty`, not `headers[name] = value`: `__proto__` is a
+      // valid field name that `Headers` accepts, and the plain form runs the
+      // prototype setter and drops it instead of writing a header.
+      if (name !== 'set-cookie') defineOwnProperty(headers as Record<string, unknown>, name, value)
     }
     const cookies = response.headers.getSetCookie()
     if (cookies.length > 0) headers['set-cookie'] = cookies

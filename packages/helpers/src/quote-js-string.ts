@@ -1,8 +1,20 @@
 // Characters that force the JSON.stringify escaping path below: quote,
-// backslash, C0 controls, and the JS line separators. Anything else sits
-// verbatim inside a double-quoted literal.
+// backslash, C0 controls, the JS line separators, and an *unpaired* surrogate.
+// Anything else sits verbatim inside a double-quoted literal.
+//
+// A lone surrogate is a legal JSON string (`"\ud800"`), so it is a legal
+// property name, pattern, and enum member — but it has no UTF-8 encoding, and
+// writing the generated file replaces it with U+FFFD. The literal that reached
+// disk was then a *different string* than the schema declared, so the emitted
+// check rejected the value the document says is valid. `JSON.stringify` escapes
+// exactly these to `\ud800`, which does survive. A well-formed pair is fine
+// verbatim and stays on the fast path, which is what the lookahead/lookbehind
+// are for — emoji in a property name are common enough to care.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: the C0 range is exactly the set that must never appear raw in a generated string literal
-const NEEDS_ESCAPING = /["\\\u0000-\u001f\u2028\u2029]/
+const UNESCAPABLE_RAW = /["\\\u0000-\u001f\u2028\u2029]/
+/** A high surrogate with no low after it, or a low with no high before it. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+const NEEDS_ESCAPING = new RegExp(`${UNESCAPABLE_RAW.source}|${LONE_SURROGATE.source}`)
 
 /**
  * Emits `text` as a double-quoted JS string literal for generated code.

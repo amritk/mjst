@@ -304,6 +304,23 @@ describe('oas-functions', () => {
     expect(await has(ok, 'oas2-discriminator')).toBe(false)
   })
 
+  it('oasDiscriminator flags a discriminator named after a prototype member', async () => {
+    // The discriminator name comes from the document, so `constructor` is a legal
+    // one — and `property in properties` matched `Object.prototype`, so the
+    // missing property went unreported.
+    const doc = {
+      swagger: '2.0',
+      info: { title: 'T', version: '1', contact: { name: 'x' }, description: 'd' },
+      host: 'api.test',
+      schemes: ['https'],
+      paths: {},
+      definitions: {
+        Pet: { type: 'object', discriminator: 'constructor', required: ['constructor'], properties: {} },
+      },
+    }
+    expect(await has(doc, 'oas2-discriminator')).toBe(true)
+  })
+
   // oasServerVariables -----------------------------------------------------
   it('oasServerVariables flags undefined, unused, missing-default, bad-default, and empty-enum variables', async () => {
     const undefinedVar = { ...base3(), servers: [{ url: 'https://{region}.api.test' }] }
@@ -338,6 +355,14 @@ describe('oas-functions', () => {
       servers: [{ url: 'https://{region}.api.test', variables: { region: { default: 'us', enum: ['us', 'eu'] } } }],
     }
     expect(await has(ok, 'oas3-server-variables')).toBe(false)
+  })
+
+  it('oasServerVariables flags a template named after a prototype member', async () => {
+    // Template names come from the document's server URL, so `{constructor}`
+    // satisfied `template in variables` off `Object.prototype` and the undefined
+    // variable was never reported.
+    const doc = { ...base3(), servers: [{ url: 'https://{constructor}.api.test' }] }
+    expect(await has(doc, 'oas3-server-variables')).toBe(true)
   })
 
   // oasSchemaExample -------------------------------------------------------

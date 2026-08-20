@@ -22,6 +22,15 @@ describe('is-private-host', () => {
     expect(isPrivateHost('100.64.0.1')).toBe(true)
   })
 
+  it('flags multicast, reserved and broadcast IPv4 as non-public', () => {
+    expect(isPrivateHost('224.0.0.1')).toBe(true)
+    expect(isPrivateHost('239.255.255.250')).toBe(true)
+    expect(isPrivateHost('240.0.0.1')).toBe(true)
+    expect(isPrivateHost('255.255.255.255')).toBe(true)
+    // The boundary below it is ordinary public space and stays reachable.
+    expect(isPrivateHost('223.255.255.255')).toBe(false)
+  })
+
   it('flags the cloud-metadata link-local endpoint', () => {
     expect(isPrivateHost('169.254.169.254')).toBe(true)
   })

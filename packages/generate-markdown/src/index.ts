@@ -2,18 +2,21 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
 /**
- * Describes the shape of a single property entry inside a JSON Schema object.
- * We include the x- extension fields we added so the generator can produce
- * richer output (CLI flag labels, icons) without hard-coding them here, plus the
- * reference (`$ref`) and composition (`enum`/`const`/`anyOf`/…) keywords that
- * real-world schemas lean on. `type` is optional because a property can describe
- * itself purely through those keywords; {@link displayType} fills the gap.
+ * Describes the shape of a single property entry inside a JSON Schema object,
+ * as the renderer sees it — every `$ref` is already inlined by
+ * {@link dereference}, so no reference keyword appears here. We include the x-
+ * extension fields we added so the generator can produce richer output (CLI flag
+ * labels, icons) without hard-coding them here, plus the composition
+ * (`enum`/`const`/`anyOf`/…) keywords that real-world schemas lean on. `type` is
+ * optional because a property can describe itself purely through those keywords;
+ * {@link displayType} fills the gap.
+ *
+ * Only the keywords the renderer actually reads are listed: a member here is a
+ * claim that some cell is driven by it.
  */
 type SchemaProperty = {
   readonly type?: string | readonly string[]
-  readonly $ref?: string
   readonly description?: string
-  readonly $comment?: string
   readonly default?: unknown
   readonly enum?: readonly unknown[]
   readonly const?: unknown
@@ -29,16 +32,13 @@ type SchemaProperty = {
 }
 
 /**
- * The top-level structure of our config.schema.json file. `$defs` holds the
- * reusable definitions that `$ref`s point at; they are inlined before rendering.
+ * The top-level structure of our config.schema.json file, again as the renderer
+ * sees it: `$defs` has already been inlined into the properties that referenced
+ * it, so the root is just the required list and the properties to render.
  */
 type ConfigSchema = {
-  readonly title: string
-  readonly $comment?: string
   readonly required?: readonly string[]
-  readonly properties: Readonly<Record<string, SchemaProperty>>
-  readonly $defs?: Readonly<Record<string, SchemaProperty>>
-  readonly examples?: readonly unknown[]
+  readonly properties?: Readonly<Record<string, SchemaProperty>>
 }
 
 /**
@@ -59,21 +59,45 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
 /**
+ * Decodes one JSON pointer segment: percent-decodes it (the pointer arrives as a
+ * URI fragment, so `#/$defs/a%20b` addresses the definition named `a b`), then
+ * unescapes `~1` → `/` and `~0` → `~` per RFC 6901. An invalid percent-escape is
+ * left as written rather than throwing.
+ */
+const decodeSegment = (segment: string): string => {
+  let decoded = segment
+  try {
+    decoded = decodeURIComponent(segment)
+  } catch {
+    // Not a valid escape sequence, so the segment already reads as itself.
+  }
+  return decoded.replace(/~1/g, '/').replace(/~0/g, '~')
+}
+
+/**
  * Follows a JSON pointer (the fragment after `#/`, e.g. `$defs/server`) from the
- * document root. Segments are unescaped per RFC 6901 (`~1` → `/`, `~0` → `~`).
- * Returns `undefined` when the pointer can't be resolved so a broken `$ref`
- * degrades gracefully instead of throwing.
+ * document root. Returns `undefined` when the pointer can't be resolved so a
+ * broken `$ref` degrades gracefully instead of throwing.
+ *
+ * Arrays are stepped into as well as objects. `#/$defs/timeout/anyOf/0` is an
+ * ordinary pointer that real schemas write; refusing to index an array left the
+ * referring property documented as a bare name with no type and no description.
+ *
+ * Only *own* properties are addressable. A bare `current[segment]` read let
+ * `#/constructor` resolve to `Object`'s constructor, and — on a process where
+ * anything had polluted `Object.prototype` — let an arbitrary `#/<name>` resolve
+ * to the injected value instead of being reported as unresolvable.
  */
 const resolvePointer = (root: Record<string, unknown>, ref: string): unknown => {
   if (!ref.startsWith('#/')) return undefined
-  const segments = ref
-    .slice(2)
-    .split('/')
-    .map((segment) => segment.replace(/~1/g, '/').replace(/~0/g, '~'))
+  const segments = ref.slice(2).split('/').map(decodeSegment)
   let current: unknown = root
   for (const segment of segments) {
-    if (!isObject(current)) return undefined
-    current = current[segment]
+    if (current === null || typeof current !== 'object') return undefined
+    // `Number` on an array index, so `length` and other non-index names miss.
+    const key = Array.isArray(current) ? Number(segment) : segment
+    if (!Object.hasOwn(current, key)) return undefined
+    current = (current as Record<string, unknown>)[key]
   }
   return current
 }
@@ -116,6 +140,27 @@ const SCHEMA_MAP_KEYWORDS: ReadonlySet<string> = new Set([
 ])
 
 /**
+ * How many schema nodes the inlined document may contain. Inlining is a tree
+ * expansion, so a definition reused twice at each of D nesting levels expands to
+ * 2^D nodes: a 3 KB schema nested 22 deep never finished, and one nested 16 deep
+ * quietly wrote a 29 MB README. Neither outcome is a document anyone can read,
+ * so the walk stops and says why.
+ *
+ * Real config schemas are three orders of magnitude under this — the two in this
+ * repo hold 41 and 7 nodes — so the budget only ever fires on an expansion that
+ * has already gone wrong.
+ */
+const MAX_INLINED_NODES = 100_000
+
+/**
+ * The remaining node allowance for one {@link dereference} walk. Mutable because
+ * the budget is shared across every branch of the expansion — the cost that
+ * matters is the total size of the inlined document, not the depth of any one
+ * path through it.
+ */
+type Budget = { remaining: number }
+
+/**
  * Inlines every `$ref` in the schema by resolving it against the document root
  * (typically into `$defs`) and recursing into the result. Sibling keywords on a
  * `$ref` node — most commonly `description` — win over the referenced target, as
@@ -127,19 +172,35 @@ const SCHEMA_MAP_KEYWORDS: ReadonlySet<string> = new Set([
  * values under {@link DATA_KEYWORDS} are copied through untouched, and the
  * name → schema maps in {@link SCHEMA_MAP_KEYWORDS} are stepped over so an
  * author's property named `default` is still treated as a schema.
+ *
+ * Terminating is not the same as finishing in a size anyone wants: a definition
+ * reused at several levels of nesting is acyclic and still expands
+ * exponentially, so the shared {@link Budget} caps the whole walk at
+ * {@link MAX_INLINED_NODES} and throws when it runs out.
  */
-const dereference = (node: unknown, root: Record<string, unknown>, seen: ReadonlySet<string>): unknown => {
-  if (Array.isArray(node)) return node.map((item) => dereference(item, root, seen))
+const dereference = (
+  node: unknown,
+  root: Record<string, unknown>,
+  seen: ReadonlySet<string>,
+  budget: Budget,
+): unknown => {
+  if (Array.isArray(node)) return node.map((item) => dereference(item, root, seen, budget))
   if (!isObject(node)) return node
+  if (budget.remaining-- <= 0) {
+    throw new Error(
+      `Inlining the schema's $refs produced more than ${MAX_INLINED_NODES} nodes. A definition reused at several ` +
+        'levels of nesting expands exponentially — flatten the $defs or reduce how deeply they nest.',
+    )
+  }
 
   const { $ref: ref, ...siblings } = node
   if (typeof ref === 'string') {
     if (seen.has(ref)) {
       // Recursive reference: stop here, keeping any description from the ref site.
-      return { type: 'object', ...(dereference(siblings, root, seen) as object) }
+      return { type: 'object', ...(dereference(siblings, root, seen, budget) as object) }
     }
-    const target = dereference(resolvePointer(root, ref), root, new Set(seen).add(ref))
-    return { ...(isObject(target) ? target : {}), ...(dereference(siblings, root, seen) as object) }
+    const target = dereference(resolvePointer(root, ref), root, new Set(seen).add(ref), budget)
+    return { ...(isObject(target) ? target : {}), ...(dereference(siblings, root, seen, budget) as object) }
   }
 
   const resolved: Record<string, unknown> = {}
@@ -147,9 +208,10 @@ const dereference = (node: unknown, root: Record<string, unknown>, seen: Readonl
     if (DATA_KEYWORDS.has(key)) resolved[key] = value
     else if (SCHEMA_MAP_KEYWORDS.has(key) && isObject(value)) {
       const entries: Record<string, unknown> = {}
-      for (const [name, child] of Object.entries(value)) defineOwn(entries, name, dereference(child, root, seen))
+      for (const [name, child] of Object.entries(value))
+        defineOwn(entries, name, dereference(child, root, seen, budget))
       resolved[key] = entries
-    } else defineOwn(resolved, key, dereference(value, root, seen))
+    } else defineOwn(resolved, key, dereference(value, root, seen, budget))
   }
   return resolved
 }
@@ -176,21 +238,22 @@ const displayType = (prop: SchemaProperty): string => {
   if (Array.isArray(prop.type)) return unionOf(prop.type.filter((entry): entry is string => typeof entry === 'string'))
   if (asArray(prop.enum).length > 0) return unionOf(asArray(prop.enum).map(jsonTypeOf))
   if (prop.const !== undefined) return jsonTypeOf(prop.const)
+  // A declared `type` is shown verbatim, so `["string","null"]` keeps its `null`;
+  // an *inferred* label drops it, because the branch that exists only to allow
+  // null (`anyOf: [{$ref: …}, {type: "null"}]`) is noise next to the real shape.
   for (const variants of [prop.anyOf, prop.oneOf, prop.allOf]) {
-    if (asArray(variants).length > 0 && variants) {
-      const union = unionOf(variants.map((variant) => displayType(asSchema(variant))).filter((type) => type !== 'null'))
-      if (union.length > 0) return union
-    }
+    const union = unionOf(
+      asArray(variants)
+        .map((variant) => displayType(asSchema(variant)))
+        .filter((type) => type !== 'null'),
+    )
+    if (union.length > 0) return union
   }
   if (prop.properties) return 'object'
   if (prop.items !== undefined) return 'array'
   return ''
 }
 
-/**
- * Escapes the HTML-significant characters so schema text (and CLI flags such as
- * `--schema <path>`) renders literally inside the HTML table cells.
- */
 /**
  * Collapses line endings to a single space. CommonMark counts a bare CR as a
  * line ending, so both are collapsed rather than just `\n`.
@@ -222,6 +285,11 @@ const codeSpan = (text: string): string => {
   return `${fence}${pad}${text}${pad}${fence}`
 }
 
+/**
+ * Escapes the HTML-significant characters so schema text (and CLI flags such as
+ * `--schema <path>`) renders literally inside the HTML table cells, and collapses
+ * the line endings that would end the surrounding `<table>` block mid-row.
+ */
 const escapeHtml = (value: string): string =>
   collapseLineEndings(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
@@ -251,7 +319,7 @@ const formatValue = (value: unknown): string => {
  * default uses — it is a listed value in its own right, and dropping it would
  * both contradict the Type column and leave a dangling separator.
  */
-const formatList = (values: readonly unknown[]): string =>
+const formatList = (values: readonly unknown[] | undefined): string =>
   asArray(values)
     .map((value) => (value === null ? '<code>null</code>' : formatValue(value)))
     .join(', ')
@@ -274,8 +342,8 @@ const renderDetailCell = (prop: SchemaProperty): string => {
       .split(/\n[ \t]*\n/)[0] ?? '',
   )
   const lines = [desc]
-  if (asArray(prop.enum).length > 0) lines.push(`<strong>Allowed:</strong> ${formatList(prop.enum ?? [])}`)
-  if (asArray(prop.examples).length > 0) lines.push(`<strong>Examples:</strong> ${formatList(prop.examples ?? [])}`)
+  if (asArray(prop.enum).length > 0) lines.push(`<strong>Allowed:</strong> ${formatList(prop.enum)}`)
+  if (asArray(prop.examples).length > 0) lines.push(`<strong>Examples:</strong> ${formatList(prop.examples)}`)
   return lines.filter((line) => line.length > 0).join('<br>')
 }
 
@@ -284,13 +352,10 @@ const renderDetailCell = (prop: SchemaProperty): string => {
  * satisfies the predicate. Used to decide whether an optional column has any
  * content to show across the whole schema.
  */
-const anyProperty = (
-  properties: Readonly<Record<string, SchemaProperty>> | undefined,
-  predicate: (prop: SchemaProperty) => boolean,
-): boolean =>
-  Object.values(properties ?? {}).some((entry) => {
+const anyProperty = (properties: unknown, predicate: (prop: SchemaProperty) => boolean): boolean =>
+  Object.values(asProperties(properties)).some((entry) => {
     const prop = asSchema(entry)
-    return predicate(prop) || (prop.properties ? anyProperty(prop.properties, predicate) : false)
+    return predicate(prop) || anyProperty(prop.properties, predicate)
   })
 
 /**
@@ -317,18 +382,36 @@ const asArray = <T>(value: readonly T[] | undefined): readonly T[] => (Array.isA
  */
 const asSchema = (value: unknown): SchemaProperty => (isObject(value) ? (value as SchemaProperty) : {})
 
+/**
+ * A name → schema map, defensively. Every walk over `properties` reaches it
+ * through here so they agree on what counts as a property: `Object.entries` on a
+ * string spells its characters, so `properties: "ab"` rendered two rows named
+ * `0` and `1` in the table while the column scan saw nothing to put in them.
+ */
+const asProperties = (value: unknown): Readonly<Record<string, SchemaProperty>> =>
+  isObject(value) ? (value as Readonly<Record<string, SchemaProperty>>) : {}
+
 /** The `description` keyword, defensively. See {@link asArray}. */
 const asText = (value: unknown): string => (typeof value === 'string' ? value : '')
 
 /**
- * True when the schema (or any nested object) marks at least one property as
- * required. Required-ness lives on the parent's `required` array rather than on
- * the property itself, so this walks the `required`/`properties` pairs directly.
+ * True when the schema (or any nested object) marks at least one *rendered*
+ * property as required. Required-ness lives on the parent's `required` array
+ * rather than on the property itself, so this walks the `required`/`properties`
+ * pairs directly.
+ *
+ * A name is only counted when `properties` declares it, because that is what
+ * `renderRow` ticks. Taking any non-empty `required` array gave a schema whose
+ * list names a property it does not declare — a typo, or a name left behind by
+ * an edit — a Required column that stayed blank on every row, precisely the
+ * empty column this scan exists to suppress.
  */
 const anyRequired = (input: unknown): boolean => {
-  const node = asSchema(input)
-  if (asArray(node.required).length > 0) return true
-  return isObject(node.properties) ? Object.values(node.properties).some(anyRequired) : false
+  const { properties, required } = asSchema(input)
+  if (!isObject(properties)) return false
+  const names = new Set(asArray(required))
+  if (Object.keys(properties).some((name) => names.has(name))) return true
+  return Object.values(properties).some(anyRequired)
 }
 
 /**
@@ -377,7 +460,15 @@ const renderTableHead = (columns: Columns): string => {
  */
 const anchorId = (path: string): string => `config-${path.replace(/[^A-Za-z0-9_-]/g, '-')}`
 
-const isObjectWithProperties = (prop: SchemaProperty): boolean =>
+/**
+ * A property that gets a detail table of its own: an object that actually
+ * declares fields. Narrowing rather than returning a plain boolean is what lets
+ * the callers use `prop.properties` without a second, redundant guard to satisfy
+ * the compiler.
+ */
+const isObjectWithProperties = (
+  prop: SchemaProperty,
+): prop is SchemaProperty & { readonly properties: Readonly<Record<string, SchemaProperty>> } =>
   isObject(prop.properties) && Object.keys(prop.properties).length > 0
 
 /**
@@ -389,13 +480,10 @@ const isObjectWithProperties = (prop: SchemaProperty): boolean =>
 const anchorKey = (segments: readonly string[]): string => JSON.stringify(segments)
 
 /** Every node that will get its own detail table, in render order. */
-const objectPaths = (
-  properties: Readonly<Record<string, SchemaProperty>> | undefined,
-  segments: readonly string[],
-): (readonly string[])[] =>
-  Object.entries(properties ?? {}).flatMap(([name, entry]) => {
+const objectPaths = (properties: unknown, segments: readonly string[]): (readonly string[])[] =>
+  Object.entries(asProperties(properties)).flatMap(([name, entry]) => {
     const prop = asSchema(entry)
-    if (!isObjectWithProperties(prop) || !prop.properties) return []
+    if (!isObjectWithProperties(prop)) return []
     const child = [...segments, name]
     return [child, ...objectPaths(prop.properties, child)]
   })
@@ -409,9 +497,7 @@ const objectPaths = (
  * the colliding tables was simply unreachable, every link landing on whichever
  * came first. Collisions get a `-2`, `-3`, … suffix in render order.
  */
-const buildAnchorIds = (
-  properties: Readonly<Record<string, SchemaProperty>> | undefined,
-): ReadonlyMap<string, string> => {
+const buildAnchorIds = (properties: unknown): ReadonlyMap<string, string> => {
   const used = new Set<string>()
   const ids = new Map<string, string>()
   for (const segments of objectPaths(properties, [])) {
@@ -476,28 +562,31 @@ const renderRow = (
  * link straight to the relevant table.
  */
 const renderTables = (
-  properties: Readonly<Record<string, SchemaProperty>> | undefined,
+  properties: unknown,
   required: ReadonlySet<string>,
   segments: readonly string[],
   columns: Columns,
   anchors: ReadonlyMap<string, string>,
 ): readonly string[] => {
-  const entries = Object.entries(properties ?? {})
+  const entries = Object.entries(asProperties(properties))
   const rows = entries.map(([name, prop]) =>
     renderRow(name, asSchema(prop), required, [...segments, name], columns, anchors),
   )
   const table = ['<table>', renderTableHead(columns), '<tbody>', ...rows, '</tbody>', '</table>'].join('\n')
   const path = segments.join('.')
-  // The heading is escaped for the same reason the cells are: the path is
-  // schema-controlled text, and it is the one place a property name reaches the
-  // output outside a `<td>`.
+  // The heading is the one place a property name reaches the output outside a
+  // `<td>`, and it is markdown rather than HTML — so it is contained by
+  // `codeSpan` (whose content is literal) plus `collapseLineEndings`, not by
+  // `escapeHtml`, which would display `&lt;` where the name says `<`. What a
+  // code span cannot contain — a splice marker — the guard in `generateMarkdown`
+  // catches instead, by refusing to write.
   const block = segments.length
     ? `<a id="${anchors.get(anchorKey(segments)) ?? anchorId(path)}"></a>\n#### ${codeSpan(collapseLineEndings(path))}\n\n${table}`
     : table
 
   const nested = entries.flatMap(([name, entry]) => {
     const prop = asSchema(entry)
-    if (!isObjectWithProperties(prop) || !prop.properties) return []
+    if (!isObjectWithProperties(prop)) return []
     return renderTables(prop.properties, new Set(asArray(prop.required)), [...segments, name], columns, anchors)
   })
 
@@ -542,10 +631,19 @@ const END_MARKER = '<!-- config-table-end -->'
 export const generateMarkdown = async (): Promise<void> => {
   const root = process.cwd()
 
-  const schemaRaw = await readFile(resolve(root, 'config.schema.json'), 'utf-8')
-  const parsed = JSON.parse(schemaRaw) as Record<string, unknown>
+  const schemaPath = resolve(root, 'config.schema.json')
+  const schemaRaw = await readFile(schemaPath, 'utf-8')
+  let parsed: Record<string, unknown>
+  try {
+    parsed = JSON.parse(schemaRaw) as Record<string, unknown>
+  } catch (error) {
+    // `JSON.parse` reports an offset and nothing else. The repo runs this from
+    // several package directories in one command, so the offset alone does not
+    // say which schema is malformed.
+    throw new Error(`${schemaPath} is not valid JSON: ${(error as Error).message}`, { cause: error })
+  }
   // Inline every $ref against the document's own $defs before rendering.
-  const schema = dereference(parsed, parsed, new Set()) as ConfigSchema
+  const schema = dereference(parsed, parsed, new Set(), { remaining: MAX_INLINED_NODES }) as ConfigSchema
 
   const table = renderConfigTable(schema)
   const readmePath = resolve(root, 'README.md')
@@ -600,8 +698,9 @@ export const generateMarkdown = async (): Promise<void> => {
     // fail loudly and let the user add the markers where they want the table.
     if (startIdx === -1 || endIdx === -1) {
       throw new Error(
-        `README.md exists but is missing the ${START_MARKER} / ${END_MARKER} markers. ` +
-          'Add both markers where the config table should go, then re-run — refusing to overwrite the existing README.',
+        `README.md exists without a ${START_MARKER} … ${END_MARKER} region. ` +
+          'Add both markers, in that order, where the config table should go, then re-run — refusing to overwrite ' +
+          'the existing README.',
       )
     }
     content = existing.slice(0, startIdx + START_MARKER.length) + '\n' + table + '\n' + existing.slice(endIdx)

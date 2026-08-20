@@ -120,8 +120,31 @@ const DOUBLE_ESCAPES: Record<string, string> = {
   P: ' ',
 }
 
-const lstrip = (s: string): string => s.replace(/^[ \t]+/, '')
-const rstrip = (s: string): string => s.replace(/[ \t]+$/, '')
+/** True for the two characters YAML counts as white space inside a line. */
+const isWs = (c: number): boolean => c === 32 || c === 9
+
+const lstrip = (s: string): string => {
+  let i = 0
+  while (i < s.length && isWs(s.charCodeAt(i))) i++
+  return i === 0 ? s : s.slice(i)
+}
+
+/**
+ * The string with its trailing spaces and tabs removed.
+ *
+ * A scan rather than `s.replace(/[ \t]+$/, '')`, which is quadratic: an
+ * unanchored `+$` restarts at every index, and each restart walks the whole run
+ * before failing the anchor. That is not a theoretical cost — a scalar holding
+ * an interior run of 80,000 spaces took ten seconds to fold, from a document a
+ * caller can hand us, which is the shape a denial-of-service is written in.
+ * Exported because the parser folds block and flow plain scalars by the same
+ * rule, off the same regex, and so had the same cost.
+ */
+export const trimTrailingSpaces = (s: string): string => {
+  let end = s.length
+  while (end > 0 && isWs(s.charCodeAt(end - 1))) end--
+  return end === s.length ? s : s.slice(0, end)
+}
 
 /**
  * Folds the line breaks of a multi-line flow scalar, per the YAML flow folding
@@ -140,7 +163,7 @@ const foldLines = (text: string): string => {
   const lines = text.split('\n')
   if (lines.length === 1) return text
   const last = lines.length - 1
-  let out = rstrip(lines[0] ?? '')
+  let out = trimTrailingSpaces(lines[0] ?? '')
   let i = 1
   while (i <= last) {
     if ((lines[i] ?? '').trim() === '') {
@@ -174,7 +197,7 @@ const foldLines = (text: string): string => {
 /**
  * Normalizes YAML line breaks (`\r\n` and lone `\r`) to `\n` before folding. YAML
  * treats all three as a single line break, but `foldLines` splits only on `\n`
- * and `rstrip` trims only spaces/tabs — so without this a folded CRLF line would
+ * and the trims take only spaces/tabs — so without this a folded CRLF line would
  * keep a stray `\r` in its content (`"first\r second"` instead of `"first second"`).
  * The check is a cheap `indexOf` so the common LF-only case allocates nothing.
  */
@@ -207,8 +230,6 @@ type QuotedLine = {
   /** The line ended in a `\` line continuation, which swallows the break entirely. */
   continues: boolean
 }
-
-const isWs = (c: number): boolean => c === 32 || c === 9
 
 /** Unescapes one line of a double-quoted scalar; see {@link QuotedLine}. */
 const unescapeLine = (line: string, allowContinuation: boolean): QuotedLine => {

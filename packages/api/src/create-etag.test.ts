@@ -139,4 +139,28 @@ describe('create-etag', () => {
     await result.body?.cancel()
     expect(cancelled).toBe(true)
   })
+
+  it('answers 304 against a handler-supplied etag without buffering the body', async () => {
+    // A handler that knows its own version does not need one computed, but it
+    // is still owed the conditional half — otherwise the client downloads the
+    // body it just proved it already held.
+    const etag = createETag()
+    const versioned = (): Response =>
+      new Response('{"a":1}', { headers: { 'content-type': 'application/json', etag: '"v7"' } })
+
+    const matched = (await etag(
+      versioned(),
+      new Request('http://x/', { headers: { 'if-none-match': 'W/"v7"' } }),
+      {},
+    )) as Response
+    expect(matched.status).toBe(304)
+    expect(matched.headers.get('etag')).toBe('"v7"')
+    expect(await matched.text()).toBe('')
+
+    // A non-matching (or absent) validator leaves the response exactly alone.
+    expect(
+      await etag(versioned(), new Request('http://x/', { headers: { 'if-none-match': '"v6"' } }), {}),
+    ).toBeUndefined()
+    expect(await etag(versioned(), new Request('http://x/'), {})).toBeUndefined()
+  })
 })

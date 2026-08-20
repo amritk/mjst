@@ -123,7 +123,9 @@ await lintDocument(source, {
 })
 ```
 
-`restrictTo` is off by default and narrows *which* files a ruleset can name. It is not a sandbox: a `.js` file inside the permitted root still runs with full privileges.
+`restrictTo` is off by default and narrows *which* files a ruleset can name. It is not a sandbox: a `.js` file inside the permitted root still runs with full privileges. The OpenAPI preset takes the same option — `createOpenApiRuleset(definition, basePath, { restrictTo })`.
+
+One thing `restrictTo` does not cover: a regular expression a ruleset writes — in `pattern`'s `match`/`notMatch`, or as a literal inside a `[?(...)]` filter — is compiled and run against text from the document. An ambiguous pattern (nested quantifiers over overlapping character classes) can backtrack catastrophically on an input crafted to trigger it, so a hostile *document* can hang the linter through a regex the *ruleset* provided. The built-in rules avoid such patterns deliberately (see the note in `casing`); keep the same discipline in rules you write, and prefer anchored patterns with unambiguous alternatives.
 
 ### Auto-fix
 
@@ -146,6 +148,18 @@ const { output, applied, remaining } = await fixDocument('host: api.example.com/
 ```
 
 The engine ships no built-in fixers (rule codes are yours to define), so the default registry is empty and `fixDocument` is a no-op until you supply one.
+
+`options.ruleset` takes either a definition (built here with the built-in functions) or a `Ruleset` you built yourself. Pass a built one whenever the rules need functions or format detectors the package root does not have — an OpenAPI preset, for instance, whose rules would otherwise all be skipped as unknown-function/unmatched-format:
+
+```ts
+import { fixDocument } from '@amritk/lint'
+import { createOpenApiRuleset, oasFixers } from '@amritk/lint/rules/openapi'
+
+const { output, applied } = await fixDocument(source, {
+  ruleset: createOpenApiRuleset(),
+  fixers: oasFixers,
+})
+```
 
 Fixing runs to a fixpoint, capped at 10 passes. The result reports how that ended: **`converged`** is `false` when the cap was hit while the document was still changing (usually two fixers undoing each other), and **`passes`** counts the passes that changed something. `applied` is de-duplicated by rule code and path, so a report can safely say "fixed N problems".
 
@@ -209,7 +223,7 @@ Anything outside that grammar is a ruleset error (`createRuleset` throws and nam
 
 | Export | What it does |
 | --- | --- |
-| `lintDocument(input, options?)` | Parse `input` and lint it against `options.ruleset`; returns `IDiagnostic[]`. |
+| `lintDocument(input, options?)` | Parse `input` and lint it against `options.ruleset` — a definition, or a `Ruleset` you already built; returns `IDiagnostic[]`. |
 | `lintDocumentWithResult(input, options?)` | Like `lintDocument`, but returns `{ diagnostics, output?, pluginData }` (including any plugin's rewritten `output`). |
 | `fixDocument(input, options?)` | Lint and apply `options.fixers` to a fixpoint; returns `{ output, fixed, applied, remaining, converged, passes }`. |
 | `createRuleset(definition?, basePath?, options?)` | Normalize a ruleset definition into a runnable `Ruleset`, layering the built-in functions and resolving `extends`. Memoized per `(definition object, basePath, restrictTo)` — treat a definition you have passed in as frozen. |
@@ -233,16 +247,16 @@ const ruleset = createOpenApiRuleset()
 const findings = await lint(spec, { ruleset })
 ```
 
-`createOpenApiRuleset(definition?, basePath?)` builds a runnable `Ruleset` with the OpenAPI functions and format detectors layered over the built-ins, and with `extends` resolution that understands the `oas` / `loupe:oas` / `spectral:oas` names (the last two accepted so existing Spectral-style rulesets extend unchanged). Enable every rule with `createOpenApiRuleset({ extends: [['oas', 'all']] })`, or pass your own definition to override severities, add rules, or point `extends` at a file/npm package.
+`createOpenApiRuleset(definition?, basePath?, options?)` builds a runnable `Ruleset` with the OpenAPI functions and format detectors layered over the built-ins, and with `extends` resolution that understands the `oas` / `loupe:oas` / `spectral:oas` names (the last two accepted so existing Spectral-style rulesets extend unchanged). Enable every rule with `createOpenApiRuleset({ extends: [['oas', 'all']] })`, or pass your own definition to override severities, add rules, or point `extends` at a file/npm package. `options.restrictTo` applies the same [trust boundary](#trust-boundary--who-may-write-a-ruleset) the package root's `restrictTo` does.
 
 | Export | What it does |
 | --- | --- |
-| `createOpenApiRuleset(definition?, basePath?)` | Build a runnable OpenAPI `Ruleset` (functions + formats + `extends` resolution). |
-| `resolveOpenApiRuleset(name, basePath?)` | Resolve an `extends` reference, including the `oas` / `loupe:oas` / `spectral:oas` names. |
+| `createOpenApiRuleset(definition?, basePath?, options?)` | Build a runnable OpenAPI `Ruleset` (functions + formats + `extends` resolution). |
+| `resolveOpenApiRuleset(name, basePath?, options?)` | Resolve an `extends` reference, including the `oas` / `loupe:oas` / `spectral:oas` names. |
 | `oas` | The built-in OpenAPI ruleset definition. |
 | `oasFunctions` / `allFunctions` | The OpenAPI-specific functions; `allFunctions` = built-ins + OpenAPI. |
 | `oasFormats` | OpenAPI version detectors (`oas2`, `oas3`, `oas3.0`, `oas3.1`, `oas3.2`). |
-| `oasFixers` | Auto-fixers for the mechanically-repairable OpenAPI rules (pass to `fixDocument`). |
+| `oasFixers` | Auto-fixers for the mechanically-repairable OpenAPI rules (pass to `fixDocument` alongside a built OpenAPI ruleset). |
 | `loadOasSchema(version)` | Lazily load one OpenAPI version's official structural meta-schema (`'2.0'` / `'3.0'` / `'3.1'` / `'3.2'`), vendored as raw `.json` from `spec.openapis.org` (3.0/3.1/3.2 verbatim; 2.0 with its external draft-04 metaschema refs inlined). See [`schemas/README.md`](./src/rules/openapi/schemas/README.md). |
 
 The structural rules validate against the **official `spec.openapis.org` meta-schemas, vendored as raw `.json`** ([`schemas/`](./src/rules/openapi/schemas/)). 3.0/3.1/3.2 are byte-for-byte verbatim; only 2.0 differs (its external draft-04 metaschema refs are inlined, since the offline interpreter never fetches remote refs). OpenAPI 3.1/3.2 express Schema Objects as JSON Schema 2020-12 via a local `$dynamicRef`/`$dynamicAnchor`, which `@amritk/runtime-validators` resolves natively — so the whole document envelope is validated against the official schema with no bundling or dialect engine, while Schema Object internals stay permissive.

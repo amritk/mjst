@@ -1,12 +1,22 @@
 /**
- * A path into a JSON document: object keys and array indices, in order. Errors
- * report the location of the offending `$ref` with one of these.
+ * A path into a JSON document: object keys and array indices, in order.
  */
 export type JsonPath = (string | number)[]
 
 /** A single `$ref` resolution failure (a missing file, a bad URL, a refusal). */
 export type ResolveError = {
   message: string
+  /**
+   * Where the reference that failed was written, as a path in the document you
+   * asked to resolve — ending in the reference keyword, so it points at the
+   * `$ref` line itself rather than at the schema around it. Anchor a diagnostic
+   * on it and the reader lands on the reference they have to fix.
+   *
+   * Empty when there is nowhere to point: a failure that belongs to the resolve
+   * as a whole (a depth or document budget), or a reference written in some
+   * other document rather than in the one you named. A reference used in
+   * several places is reported once, at the first.
+   */
   path: JsonPath
 }
 

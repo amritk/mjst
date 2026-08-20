@@ -48,7 +48,18 @@ const cache = new Map<OasVersion, object>()
 export const loadOasSchema = (version: OasVersion): object => {
   let schema = cache.get(version)
   if (!schema) {
-    schema = JSON.parse(SCHEMA_TEXT[version]) as object
+    // `version` reaches here from a ruleset's `functionOptions`, so it is not
+    // guaranteed to be one of the four we ship. A bare index answered
+    // `"toString"` from `String.prototype` and `"9.9"` with `undefined`, and
+    // `JSON.parse` then failed with a syntax error naming neither the option nor
+    // the versions that do exist.
+    const text = Object.hasOwn(SCHEMA_TEXT, version) ? SCHEMA_TEXT[version] : undefined
+    if (text === undefined) {
+      throw new Error(
+        `Unknown OpenAPI version "${version}". Known versions are: ${Object.keys(SCHEMA_TEXT).join(', ')}`,
+      )
+    }
+    schema = JSON.parse(text) as object
     cache.set(version, schema)
   }
   return schema

@@ -23,6 +23,12 @@
  *
  * `valueExpr` is inlined more than once, so it must be a side-effect-free
  * expression (a property read or a cached variable — all the generators pass).
+ *
+ * Every expression here is self-parenthesized, including the single-comparison
+ * fast paths, so a caller can drop one into a `&&` / `||` chain or negate it
+ * without re-bracketing — the same contract `multiple-of-check` makes. A bare
+ * `!` on the unparenthesized form parsed as `(!x.length) >= 1`, which is
+ * `false >= 1`: constant `false`, so the check silently passed everything.
  */
 const codePoints = (valueExpr: string): string => `Array.from(${valueExpr} as string).length`
 
@@ -31,7 +37,7 @@ export const minLengthPassExpr = (valueExpr: string, min: number): string => {
   if (min <= 0) return 'true'
   // A string with at least one code unit has at least one code point, so the
   // overwhelmingly common `minLength: 1` needs no band and no scan at all.
-  if (min === 1) return `${valueExpr}.length >= 1`
+  if (min === 1) return `(${valueExpr}.length >= 1)`
   return `(${valueExpr}.length >= ${min} && (${valueExpr}.length >= ${min * 2} || ${codePoints(valueExpr)} >= ${min}))`
 }
 
@@ -42,7 +48,7 @@ export const maxLengthPassExpr = (valueExpr: string, max: number): string =>
 /** Boolean expression that is TRUE when `valueExpr` has FEWER than `min` code points (the error condition). */
 export const minLengthFailExpr = (valueExpr: string, min: number): string => {
   if (min <= 0) return 'false'
-  if (min === 1) return `${valueExpr}.length < 1`
+  if (min === 1) return `(${valueExpr}.length < 1)`
   return `(${valueExpr}.length < ${min} || (${valueExpr}.length < ${min * 2} && ${codePoints(valueExpr)} < ${min}))`
 }
 

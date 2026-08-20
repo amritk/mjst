@@ -270,4 +270,18 @@ describe('upgrade-draft07-schema', () => {
     // The declared property keeps its name.
     expect(Object.keys(x['properties'] as object)).toEqual(['definitions'])
   })
+
+  // An inherited `$schema` would put every document through the draft-07
+  // rewrite — hoisting definitions and renaming refs in schemas that declare no
+  // draft at all.
+  it('ignores a $schema inherited from Object.prototype', () => {
+    const polluted = Object.prototype as Record<string, unknown>
+    try {
+      polluted['$schema'] = 'http://json-schema.org/draft-07/schema#'
+      const schema = { type: 'object', definitions: { thing: { type: 'string' } } }
+      expect(upgradeDraft07Schema(schema)).toBe(schema)
+    } finally {
+      delete polluted['$schema']
+    }
+  })
 })

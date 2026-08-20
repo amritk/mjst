@@ -83,6 +83,16 @@ describe('resolveSourceOrigin (cross-document)', () => {
     })
   })
 
+  it('stops at the last known location when a remote-relative `$ref` is not a URL', () => {
+    // `$ref` values come from the linted document, which is untrusted input, and
+    // `new URL('//', 'https://…')` is a TypeError — it must stop the walk rather
+    // than abort the whole lint run.
+    const root = { a: { $ref: '//#/foo' } }
+    const sources = registry('https://example.com/root.yaml', { 'https://example.com/root.yaml': root })
+    const origin = resolveSourceOrigin(sources, ['a'] as JsonPath)
+    expect(origin.location).toBe('https://example.com/root.yaml')
+  })
+
   it('stops at the last known location when the target file is absent', () => {
     const root = { a: { $ref: './missing.yaml#/foo' } }
     const sources = registry('/d/root.yaml', { '/d/root.yaml': root })

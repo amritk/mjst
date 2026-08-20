@@ -1,34 +1,27 @@
 import { describe, expect, it } from 'vitest'
 
 import { lintWithResult, type Ruleset } from '../../core'
-import { createFixPlugin } from '../../fix'
+import { fixDocument } from '../../index'
 import { oasFixers } from './fixers'
 import { createOpenApiRuleset, oas } from './index'
 
 // Behavioral fixer coverage: apply the `oasFixers` to a violating document and
-// assert both the concrete rewrite and that the fix loop reaches a fixpoint. The
-// package-root `fixDocument` builds its ruleset with the core `createRuleset`,
-// which does not know the OpenAPI custom functions, so we drive the same
-// lint-fix-to-fixpoint loop here with the OpenAPI-aware built ruleset.
+// assert both the concrete rewrite and that the fix loop reaches a fixpoint. This
+// drives the public `fixDocument`, handing it the OpenAPI-aware built ruleset —
+// the preset brings its own functions and format detectors, which a definition
+// alone cannot express.
 const built = createOpenApiRuleset({ extends: [[oas, 'all']] })
 
-/** Runs the fix loop to a fixpoint (mirroring `fixDocument`) and returns the final text. */
+/** Runs the fix loop to a fixpoint and returns the final text. */
 const runFix = async (doc: unknown, ruleset: Ruleset = built, safeOnly = true): Promise<string> => {
-  const plugin = createFixPlugin(oasFixers, { safeOnly })
-  let current = JSON.stringify(doc, null, 2)
-  for (let pass = 0; pass < 10; pass++) {
-    const result = await lintWithResult(current, { ruleset, plugins: [plugin] })
-    if (result.output === undefined || result.output === current) return current
-    current = result.output
-  }
-  return current
+  const { output } = await fixDocument(JSON.stringify(doc, null, 2), { ruleset, fixers: oasFixers, safeOnly })
+  return output
 }
 
 /** Asserts a further fix pass changes nothing (the loop converged). */
 const assertConverged = async (text: string, safeOnly = true): Promise<void> => {
-  const plugin = createFixPlugin(oasFixers, { safeOnly })
-  const again = await lintWithResult(text, { ruleset: built, plugins: [plugin] })
-  expect(again.output === undefined || again.output === text).toBe(true)
+  const again = await fixDocument(text, { ruleset: built, fixers: oasFixers, safeOnly })
+  expect(again.converged && again.output === text).toBe(true)
 }
 
 const base3 = (): Record<string, unknown> => ({
