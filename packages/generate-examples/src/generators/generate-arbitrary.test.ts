@@ -116,6 +116,31 @@ describe('generate-arbitrary', () => {
     ).toContain('{ minKeys: 1, maxKeys: 1 }')
   })
 
+  it('ignores a non-finite bound instead of emitting it', () => {
+    // `1e999` is legal JSON and `JSON.parse` turns it into `Infinity`, which the
+    // `typeof === 'number'` guards accept. Emitted into an option it made the
+    // combinator throw at *import*, taking the file's other exports with it.
+    const infinity = JSON.parse('1e999') as number
+    expect(infinity).toBe(Number.POSITIVE_INFINITY)
+
+    const cases = [
+      { type: 'number' as const, minimum: infinity },
+      { type: 'integer' as const, minimum: infinity },
+      { type: 'string' as const, minLength: infinity },
+      { type: 'array' as const, minItems: infinity, items: { type: 'string' as const } },
+      { type: 'object' as const, minProperties: infinity, additionalProperties: { type: 'string' as const } },
+      { type: 'number' as const, minimum: Number.NaN },
+      { type: 'integer' as const, multipleOf: infinity },
+      { type: 'number' as const, multipleOf: infinity },
+    ]
+    for (const schema of cases) {
+      const code = generateArbitrary(schema, 'A')
+      // Match only a *value* position: `noNaN` and `noDefaultInfinity` are
+      // constant option names every `fc.double` call carries.
+      expect(code, JSON.stringify(schema)).not.toMatch(/[:*]\s*-?(Infinity|NaN)\b/)
+    }
+  })
+
   it('clamps a crossed exclusive bound without leaving an empty double range', () => {
     // `min: 2, max: 2, minExcluded: true` has nothing left to draw from, so the
     // exclusion goes when the bound collapses onto its opposite.

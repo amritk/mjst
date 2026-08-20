@@ -216,7 +216,38 @@ const DECLARED_KEY_CASES: ReadonlyArray<{ name: string; schema: JSONSchema }> = 
   },
 ]
 
+/**
+ * Authored hints whose value contradicts the schema they sit in. Real documents
+ * carry these constantly — a `default` left behind by an edit, an `examples`
+ * entry for a field whose type later changed — and the generated type follows
+ * the schema, never the hint.
+ */
+const MISMATCHED_HINT_CASES: ReadonlyArray<{ name: string; schema: JSONSchema; rejected: string }> = [
+  { name: 'a default of the wrong type', schema: { type: 'string', default: 42 }, rejected: '42' },
+  { name: 'a null default on a string', schema: { type: 'string', default: null }, rejected: 'null' },
+  { name: 'an examples entry of the wrong type', schema: { type: 'number', examples: ['hello'] }, rejected: '"hello"' },
+  {
+    name: 'an object default missing a required key',
+    schema: { type: 'object', properties: { a: { type: 'string' } }, required: ['a'], default: {} },
+    rejected: '{  }',
+  },
+]
+
 describe('generated example const compiles', () => {
+  for (const { name, schema, rejected } of MISMATCHED_HINT_CASES) {
+    it(`falls back on ${name}`, { timeout: COMPILE_TIMEOUT }, () => {
+      const code = generateExampleFile(schema, 'Foo')
+      expect(code).not.toContain(`export const fooExample: Foo = ${rejected}`)
+      expect(compileErrors(code)).toEqual([])
+    })
+  }
+
+  it('still prefers an authored hint that does satisfy its schema', { timeout: COMPILE_TIMEOUT }, () => {
+    const code = generateExampleFile({ type: 'string', default: 'hi' } as JSONSchema, 'Foo')
+    expect(code).toContain('export const fooExample: Foo = "hi"')
+    expect(compileErrors(code)).toEqual([])
+  })
+
   for (const { name, schema, key } of UNDECLARED_KEY_CASES) {
     it(`keeps and asserts ${name}`, { timeout: COMPILE_TIMEOUT }, () => {
       const code = generateExampleFile(schema, 'T', { rootSchema })

@@ -61,6 +61,12 @@ const files = await buildExampleSchema(schema, 'User') // → user.ts, index.ts
    `FooArbitrary` still honours the real bound — reach for it when the exact size
    matters.
 
+8. **A `default`/`examples` hint that contradicts its own schema is ignored.**
+   The generated type follows the schema, so emitting the hint verbatim produced
+   a file that would not compile (`const fooExample: string = 42`). `const` is
+   always honoured — the type is its literal type. Do not "restore" a mismatched
+   hint; fix the schema instead.
+
 Exports: `buildExampleSchema`, `generateArbitrary`, `generateExampleConst`,
 `deriveExample`, `serializeValue`, `GeneratedFile`. Only the `.` entry.
 Install: `bun add @amritk/generate-examples`.

@@ -449,12 +449,36 @@ const deriveRef = (ref: string, ctx: DeriveContext): unknown => {
   }
 }
 
+/**
+ * The value a schema author offers as its own example, in preference order:
+ * `examples[0]`, then `default`. Wrapped rather than returned bare, so a hint
+ * that legitimately *is* `undefined` stays distinguishable from "no hint".
+ */
+const authoredHint = (schema: JSONSchema): { value: unknown } | undefined => {
+  if (hasExamples(schema) && Array.isArray(schema.examples) && schema.examples.length > 0) {
+    return { value: schema.examples[0] }
+  }
+  if (hasDefault(schema)) return { value: schema.default }
+  return undefined
+}
+
 /** Structural derivation for a node, before any validating refinement. */
 const deriveBase = (schema: JSONSchema, ctx: DeriveContext): unknown => {
   if (!isSchemaObject(schema)) return null
+  // `const` needs no check: the generated type is the const's own literal type,
+  // so the two agree however odd the schema is.
   if (hasConst(schema)) return schema.const
-  if (hasExamples(schema) && Array.isArray(schema.examples) && schema.examples.length > 0) return schema.examples[0]
-  if (hasDefault(schema)) return schema.default
+
+  // An authored `examples`/`default` is only worth preferring when it actually
+  // satisfies the schema it sits in. Real documents carry plenty that do not —
+  // `{ type: 'string', default: 42 }`, an `examples` entry left behind by an
+  // edit, an object `default` of `{}` under a `required` — and the generated
+  // type comes from the schema, not the hint, so emitting one verbatim produced
+  // `const fooExample: string = 42`: a file that does not compile. Falling
+  // through to structural derivation gives a value that at least matches its own
+  // declared type.
+  const hint = authoredHint(schema)
+  if (hint !== undefined && makeInstanceCheck(schema, ctx.rootSchema)(hint.value)) return hint.value
   if (hasEnum(schema) && schema.enum.length > 0) {
     // Prefer the first member that also satisfies any sibling length/range
     // constraints (e.g. `enum` + `minLength`), falling back to the first member.

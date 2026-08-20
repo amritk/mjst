@@ -187,6 +187,12 @@ compiling rather than making it correct:
   index signature. The example keeps the key (a fixture missing what its schema
   demands is broken data) and is emitted as `… as Foo`, since a bare object
   literal with an excess property fails to compile.
+- An authored `default` or `examples[0]` is used **only when it satisfies its own
+  schema**. A hint that does not (`{ type: 'string', default: 42 }` — common in
+  documents whose field types changed after the hint was written) is ignored in
+  favour of a structurally derived value, because the generated type follows the
+  schema and would reject the hint outright. `const` is always honoured: the type
+  is the const's own literal type, so the two cannot disagree.
 - An **unsatisfiable range** (`minLength: 10, maxLength: 2`) collapses onto its
   upper bound in the arbitrary. Every bounded `fc.*` combinator asserts
   `min <= max` and throws at *import*, which would take down every other export in

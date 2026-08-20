@@ -109,6 +109,28 @@ const SELF_KEY = 'self'
 const safeLiteralKey = (key: string): string => (key === '__proto__' ? '["__proto__"]' : JSON.stringify(key))
 
 /**
+ * A numeric keyword's value, or `undefined` when it is not a finite number.
+ *
+ * `1e999` is legal JSON, and `JSON.parse` turns it into `Infinity` — which the
+ * `typeof value === 'number'` guards happily accept. Interpolated into an
+ * option, `{ min: Infinity }` (or a `NaN` from a programmatic schema) makes the
+ * `fc.*` combinator throw the moment the generated module is imported, so the
+ * whole file's exports go down over one absurd bound. A bound nothing can
+ * satisfy tells us nothing, so drop it and generate as if it were absent.
+ */
+const finiteNumber = (value: number | undefined): number | undefined =>
+  value !== undefined && Number.isFinite(value) ? value : undefined
+
+/**
+ * A positive, finite `multipleOf`, or `undefined`. Anything else — zero, a
+ * negative step, `Infinity` — is not a constraint any value can be measured
+ * against, and every attempt to honour it produced an arbitrary that throws or
+ * starves at sample time.
+ */
+const usableMultipleOf = (schema: JSONSchema): number | undefined =>
+  hasMultipleOf(schema) && Number.isFinite(schema.multipleOf) && schema.multipleOf > 0 ? schema.multipleOf : undefined
+
+/**
  * Clamps a lower bound down to its upper bound when the two cross.
  *
  * An unsatisfiable range (`minLength: 10, maxLength: 2`) has no value to
@@ -147,8 +169,8 @@ const stringExpr = (schema: JSONSchema): string => {
     }
   }
 
-  const maxLength = hasMaxLength(schema) ? schema.maxLength : undefined
-  const minLength = clampLow(hasMinLength(schema) ? schema.minLength : undefined, maxLength)
+  const maxLength = finiteNumber(hasMaxLength(schema) ? schema.maxLength : undefined)
+  const minLength = clampLow(finiteNumber(hasMinLength(schema) ? schema.minLength : undefined), maxLength)
 
   if (hasPattern(schema)) {
     // Build the regex via `new RegExp(<json-string>)` rather than inlining the
@@ -183,13 +205,18 @@ const stringExpr = (schema: JSONSchema): string => {
  * `Math.ceil(x) - 1` is the largest strictly less.
  */
 const integerBounds = (schema: JSONSchema): { min: number | undefined; max: number | undefined } => {
+  const minimum = finiteNumber(hasMinimum(schema) ? Number(schema.minimum) : undefined)
+  const exclusiveMinimum = finiteNumber(hasExclusiveMinimum(schema) ? Number(schema.exclusiveMinimum) : undefined)
+  const maximum = finiteNumber(hasMaximum(schema) ? Number(schema.maximum) : undefined)
+  const exclusiveMaximum = finiteNumber(hasExclusiveMaximum(schema) ? Number(schema.exclusiveMaximum) : undefined)
+
   const mins: number[] = []
-  if (hasMinimum(schema)) mins.push(Math.ceil(Number(schema.minimum)))
-  if (hasExclusiveMinimum(schema)) mins.push(Math.floor(Number(schema.exclusiveMinimum)) + 1)
+  if (minimum !== undefined) mins.push(Math.ceil(minimum))
+  if (exclusiveMinimum !== undefined) mins.push(Math.floor(exclusiveMinimum) + 1)
 
   const maxs: number[] = []
-  if (hasMaximum(schema)) maxs.push(Math.floor(Number(schema.maximum)))
-  if (hasExclusiveMaximum(schema)) maxs.push(Math.ceil(Number(schema.exclusiveMaximum)) - 1)
+  if (maximum !== undefined) maxs.push(Math.floor(maximum))
+  if (exclusiveMaximum !== undefined) maxs.push(Math.ceil(exclusiveMaximum) - 1)
 
   const max = maxs.length > 0 ? Math.min(...maxs) : undefined
   return { min: clampLow(mins.length > 0 ? Math.max(...mins) : undefined, max), max }
@@ -227,10 +254,12 @@ const integerMultipleOfExpr = (m: number, min: number | undefined, max: number |
 const integerExpr = (schema: JSONSchema): string => {
   const { min, max } = integerBounds(schema)
 
+  const multipleOf = usableMultipleOf(schema)
+
   // A positive integral `multipleOf` is satisfied analytically rather than by
   // filtering, which starves at anything but the smallest steps.
-  if (hasMultipleOf(schema) && schema.multipleOf > 0 && Number.isInteger(schema.multipleOf)) {
-    return integerMultipleOfExpr(schema.multipleOf, min, max)
+  if (multipleOf !== undefined && Number.isInteger(multipleOf)) {
+    return integerMultipleOfExpr(multipleOf, min, max)
   }
 
   const opts: string[] = []
@@ -240,10 +269,9 @@ const integerExpr = (schema: JSONSchema): string => {
 
   // A fractional `multipleOf` on an integer type admits only the integers that
   // are whole multiples of it, which no simple `k * m` form picks out, so it
-  // keeps the filter. A `multipleOf` of zero or less is not a legal constraint
-  // at all — `n % 0` is `NaN`, so filtering on it rejects every candidate and
-  // the arbitrary throws at sample time — so it is dropped rather than emitted.
-  return hasMultipleOf(schema) && schema.multipleOf > 0 ? `${base}.filter((n) => n % ${schema.multipleOf} === 0)` : base
+  // keeps the filter. An unusable step is dropped rather than emitted — see
+  // {@link usableMultipleOf}.
+  return multipleOf !== undefined ? `${base}.filter((n) => n % ${multipleOf} === 0)` : base
 }
 
 /**
@@ -258,8 +286,7 @@ const integerExpr = (schema: JSONSchema): string => {
  * floating-point drift (e.g. `3 * 0.1 === 0.30000000000000004`, which would
  * otherwise slip just past a `maximum` of `0.3`).
  */
-const numberMultipleOfExpr = (schema: JSONSchema & { multipleOf: number }): string => {
-  const m = Number(schema.multipleOf)
+const numberMultipleOfExpr = (schema: JSONSchema, m: number): string => {
   const EPS = 1e-9
 
   // Effective lower bound: the tighter (larger) of minimum / exclusiveMinimum,
@@ -315,34 +342,34 @@ const numberMultipleOfExpr = (schema: JSONSchema & { multipleOf: number }): stri
 const numberExpr = (schema: JSONSchema): string => {
   // A positive `multipleOf` is satisfied analytically rather than by filtering
   // random doubles, which would starve fast-check at sample time.
-  if (hasMultipleOf(schema) && schema.multipleOf > 0) return numberMultipleOfExpr(schema)
+  const multipleOf = usableMultipleOf(schema)
+  if (multipleOf !== undefined) return numberMultipleOfExpr(schema, multipleOf)
 
   const opts: string[] = ['noNaN: true', 'noDefaultInfinity: true']
   // With both an inclusive and an exclusive bound on the same side, honour the
   // tighter one instead of letting `minimum`/`maximum` shadow the exclusive via
   // else-if (which would emit values that violate the exclusive bound). The
   // exclusive bound wins ties, since it additionally excludes the endpoint.
+  const minimum = finiteNumber(hasMinimum(schema) ? Number(schema.minimum) : undefined)
+  const exclusiveMinimum = finiteNumber(hasExclusiveMinimum(schema) ? Number(schema.exclusiveMinimum) : undefined)
+  const maximum = finiteNumber(hasMaximum(schema) ? Number(schema.maximum) : undefined)
+  const exclusiveMaximum = finiteNumber(hasExclusiveMaximum(schema) ? Number(schema.exclusiveMaximum) : undefined)
+
   let low: number | undefined
   let lowExcluded = false
-  if (
-    hasMinimum(schema) &&
-    (!hasExclusiveMinimum(schema) || Number(schema.minimum) > Number(schema.exclusiveMinimum))
-  ) {
-    low = Number(schema.minimum)
-  } else if (hasExclusiveMinimum(schema)) {
-    low = Number(schema.exclusiveMinimum)
+  if (minimum !== undefined && (exclusiveMinimum === undefined || minimum > exclusiveMinimum)) {
+    low = minimum
+  } else if (exclusiveMinimum !== undefined) {
+    low = exclusiveMinimum
     lowExcluded = true
   }
 
   let high: number | undefined
   let highExcluded = false
-  if (
-    hasMaximum(schema) &&
-    (!hasExclusiveMaximum(schema) || Number(schema.maximum) < Number(schema.exclusiveMaximum))
-  ) {
-    high = Number(schema.maximum)
-  } else if (hasExclusiveMaximum(schema)) {
-    high = Number(schema.exclusiveMaximum)
+  if (maximum !== undefined && (exclusiveMaximum === undefined || maximum < exclusiveMaximum)) {
+    high = maximum
+  } else if (exclusiveMaximum !== undefined) {
+    high = exclusiveMaximum
     highExcluded = true
   }
 
@@ -389,14 +416,13 @@ const arrayExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
         ? arbitraryExpr(containsSchema, ctx)
         : 'fc.anything()'
 
-  const minContains =
-    containsSchema !== undefined && typeof raw['minContains'] === 'number' ? (raw['minContains'] as number) : 1
+  const minContains = finiteNumber(typeof raw['minContains'] === 'number' ? raw['minContains'] : undefined) ?? 1
   const minLength = Math.max(
-    hasMinItems(schema) ? schema.minItems : 0,
+    finiteNumber(hasMinItems(schema) ? schema.minItems : undefined) ?? 0,
     containsSchema !== undefined ? Math.max(1, minContains) : 0,
   )
 
-  const maxLength = hasMaxItems(schema) ? schema.maxItems : undefined
+  const maxLength = finiteNumber(hasMaxItems(schema) ? schema.maxItems : undefined)
   const clampedMin = clampLow(minLength, maxLength) ?? minLength
 
   const opts: string[] = []
@@ -438,8 +464,8 @@ const objectExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
   const extraValueArb = additionalArb ?? patternValueArb
   const keyArb = extraKeyArb(schema, firstPattern?.[0])
 
-  const minProps = hasMinProperties(schema) ? schema.minProperties : undefined
-  const maxProps = hasMaxProperties(schema) ? schema.maxProperties : undefined
+  const minProps = finiteNumber(hasMinProperties(schema) ? schema.minProperties : undefined)
+  const maxProps = finiteNumber(hasMaxProperties(schema) ? schema.maxProperties : undefined)
   const dictKeyOpts = (minKeys?: number, maxKeys?: number): string => {
     const low = clampLow(minKeys, maxKeys)
     const opts: string[] = []
