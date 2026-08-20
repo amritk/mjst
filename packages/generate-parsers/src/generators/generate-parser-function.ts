@@ -561,27 +561,13 @@ const generateFallbackObject = (
  * then a per-type empty value.
  */
 const scalarDefaultLiteral = (schema: JSONSchema): string => {
-  if (!isSchemaObject(schema)) return '{}'
-  if (hasConst(schema)) return JSON.stringify(schema.const)
-  if (hasEnum(schema) && schema.enum.length > 0) return JSON.stringify(schema.enum[0])
-  if (hasType(schema)) {
-    switch (schema.type) {
-      case 'string':
-        return '""'
-      case 'number':
-      case 'integer':
-        return '0'
-      case 'boolean':
-        return 'false'
-      case 'null':
-        return 'null'
-      case 'array':
-        return '[]'
-      case 'object':
-        return '{}'
-    }
-  }
-  return '{}'
+  // `getDefaultValue` is the one place that knows what a valid instance of a
+  // node looks like — bounds, required properties, tuple positions and all — so
+  // this reads it rather than keeping a second, weaker per-type table beside it.
+  // Its `'undefined'` (a node that constrains nothing) is the one answer a
+  // *value* position cannot use, and `{}` is the historical stand-in for it.
+  const value = getDefaultValue(schema)
+  return value === 'undefined' ? '{}' : value
 }
 
 /**
@@ -1253,7 +1239,7 @@ const exactKeyCountOf = (schema: JSONSchema): number | null => {
  * reads each value 3-4x (typeof check, valid branch, undefined check, coerce),
  * so a single hoisted load is strictly cheaper than the inlined optional chain.
  */
-const shouldCacheVariable = (propSchema: JSONSchema, _canFastPath: boolean, _useRefImports: boolean): boolean => {
+const shouldCacheVariable = (propSchema: JSONSchema): boolean => {
   // Non-schema-object properties (true/false JSON Schema literals) generate
   // `undefined` with no value access, so caching would be wasted.
   return isSchemaObject(propSchema)
@@ -1654,7 +1640,7 @@ const generateObjectParser = (
   // read each cached value once instead of re-accessing `input`).
   const varDeclLines: string[] = []
   for (const { key, varName, propSchema } of propInfo) {
-    if (shouldCacheVariable(propSchema, canFastPath, useRefImports)) {
+    if (shouldCacheVariable(propSchema)) {
       varDeclLines.push(`  const ${varName} = ${safeAccessor('input', key)};`)
     }
   }
@@ -1700,7 +1686,7 @@ const generateObjectParser = (
     }
 
     for (const { key, varName, isRequired, propSchema } of propInfo) {
-      const shouldCache = shouldCacheVariable(propSchema, canFastPath, useRefImports)
+      const shouldCache = shouldCacheVariable(propSchema)
       const accessor = shouldCache ? varName : safeAccessor('input', key)
 
       // Handle inline nested objects via their private sub-parser, mirroring
@@ -1884,9 +1870,7 @@ const generateObjectParser = (
         }
         continue
       }
-      const accessor = shouldCacheVariable(propSchema, canFastPath, useRefImports)
-        ? varName
-        : safeAccessor('input', key)
+      const accessor = shouldCacheVariable(propSchema) ? varName : safeAccessor('input', key)
       fields.push(
         isRequired
           ? `    ${safeLiteralKey(key)}: ${accessor},`
