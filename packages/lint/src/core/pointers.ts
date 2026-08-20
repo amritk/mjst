@@ -6,6 +6,16 @@ const isContainer = (value: unknown): value is Record<string, unknown> | unknown
   typeof value === 'object' && value !== null
 
 /**
+ * Reads one path segment out of a container. `Object.hasOwn`, not a bare index:
+ * these paths are built from `$ref` pointers and finding paths, both of which
+ * come from the linted document, so a segment named `constructor` would
+ * otherwise hand back the function every object inherits instead of "no such
+ * node here".
+ */
+const childOf = (node: Record<string, unknown> | unknown[], segment: string | number): unknown =>
+  Object.hasOwn(node, segment) ? (node as Record<string | number, unknown>)[segment] : undefined
+
+/**
  * Decodes one JSON-pointer segment the way `getByPointer` does: percent-escapes
  * first (pointers arrive inside URI-reference `$ref`s), then the JSON-pointer
  * escapes `~1`/`~0`, then all-digit segments become numbers. Shared by both the
@@ -74,7 +84,7 @@ const getAtPath = (root: unknown, path: JsonPath): unknown => {
   let node: unknown = root
   for (const segment of path) {
     if (!isContainer(node)) return undefined
-    node = (node as Record<string | number, unknown>)[segment]
+    node = childOf(node, segment)
   }
   return node
 }
@@ -104,7 +114,7 @@ export const resolveSourcePath = (root: unknown, path: JsonPath): JsonPath => {
   for (const segment of path) {
     if (!isContainer(node)) break
     originalPath.push(segment)
-    node = (node as Record<string | number, unknown>)[segment]
+    node = childOf(node, segment)
     followRefs()
   }
   return originalPath
@@ -151,7 +161,7 @@ export const resolveSourceOrigin = (registry: IDocumentRegistry, path: JsonPath)
   for (const segment of path) {
     if (!isContainer(node)) break
     originalPath.push(segment)
-    node = (node as Record<string | number, unknown>)[segment]
+    node = childOf(node, segment)
     followRefs()
   }
   return { location, path: originalPath }
@@ -176,7 +186,7 @@ export const resolveSourceOriginFromMap = (
   let node: unknown = resolved
   for (const segment of path) {
     if (!isContainer(node)) break
-    node = (node as Record<string | number, unknown>)[segment]
+    node = childOf(node, segment)
     const stamp = isContainer(node) ? origins.get(node) : undefined
     if (stamp) {
       location = stamp.location

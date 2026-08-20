@@ -3,6 +3,7 @@ import { createRequire } from 'node:module'
 import { dirname, isAbsolute, resolve as resolvePath, sep } from 'node:path'
 
 import type { ResolvedExtend } from './core'
+import { setOwnKey } from './core/own-key'
 import type { FunctionRegistry, RulesetDefinition, RulesetFunction } from './core/types'
 import { parseWithPointers } from './parsers'
 
@@ -153,6 +154,12 @@ export const collectCustomFunctions = (
   }
   if (Array.isArray(definition.functions)) {
     const dir = definition.functionsDir ?? 'functions'
-    for (const name of definition.functions) into[name] = loadFunctionByName(basePath, dir, name, options.restrictTo)
+    // `setOwnKey`, not a bare assignment: a function named `__proto__` would
+    // otherwise set the registry's prototype instead of adding a key, and the
+    // spread that layers custom functions over the built-ins (own keys only)
+    // would then drop it without a word.
+    for (const name of definition.functions) {
+      setOwnKey(into, name, loadFunctionByName(basePath, dir, name, options.restrictTo))
+    }
   }
 }

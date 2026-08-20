@@ -1,11 +1,15 @@
 import type { IFunctionResult, JsonPath, RulesetFunction } from '../../../core/types'
 import { isObject, OPERATION_METHODS } from './helpers'
 
-/** Walks `path` into `root`, returning the nested value or undefined. */
+/**
+ * Walks `path` into `root`, returning the nested value or undefined. Own
+ * properties only: `schemesPath` comes from the ruleset, so a segment named
+ * `constructor` must read as "not there" rather than as `Object` itself.
+ */
 const getIn = (root: unknown, path: string[]): unknown => {
   let current: unknown = root
   for (const key of path) {
-    if (!isObject(current)) return undefined
+    if (!isObject(current) || !Object.hasOwn(current, key)) return undefined
     current = current[key]
   }
   return current

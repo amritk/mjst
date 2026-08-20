@@ -64,6 +64,43 @@ const parseSeverity = (
 
 const toArray = <T>(value: T | T[]): T[] => (Array.isArray(value) ? value : [value])
 
+/** True for the object shape a full rule definition takes (so not `null`, and not an array). */
+const isRuleDefinition = (entry: unknown): entry is IRuleDefinition =>
+  typeof entry === 'object' && entry !== null && !Array.isArray(entry)
+
+/**
+ * Rejects a `rules` entry that is none of the shapes a ruleset may write, naming
+ * the rule. Every one of these used to reach {@link normalizeRule} and fail deep
+ * inside it — a YAML rule written `my-rule:` with no body is `null`, and the
+ * author was told "Cannot read properties of null (reading 'severity')".
+ */
+const assertRuleEntry: (name: string, entry: unknown) => asserts entry is RuleEntry = (name, entry) => {
+  if (typeof entry === 'boolean' || typeof entry === 'number' || typeof entry === 'string') return
+  if (isRuleDefinition(entry)) return
+  const kind = entry === null ? 'null' : Array.isArray(entry) ? 'an array' : `\`${typeof entry}\``
+  throw new Error(`Rule "${name}" must be a rule definition, a boolean, or a severity — got ${kind}`)
+}
+
+/**
+ * Checks a rule's `given` expressions at build time so a broken one is loud here
+ * rather than silently matching nothing (or the root) at run time. Alias
+ * references are validated when they are expanded against document formats.
+ */
+const assertGiven = (name: string, given: unknown[]): void => {
+  if (given.length === 0) throw new Error(`Rule "${name}" is missing \`given\``)
+  for (const expression of given) {
+    if (typeof expression !== 'string') {
+      const kind = expression === null ? 'null' : `\`${typeof expression}\``
+      throw new Error(`Rule "${name}" has an invalid \`given\`: expected a JSONPath string, got ${kind}`)
+    }
+    if (expression.startsWith('#')) continue
+    const compiled = compileQuery(expression)
+    if (compiled.error !== undefined) {
+      throw new Error(`Rule "${name}" has an invalid \`given\` "${expression}": ${compiled.error}`)
+    }
+  }
+}
+
 /**
  * The ruleset-level context a rule inherits from the definition that declares
  * it: default `formats` (finding: ruleset-level formats stamp onto rules lacking
@@ -97,8 +134,11 @@ const normalizeRule = (
     message: def.message,
     severity,
     enabled: enabled && modifierEnabled,
-    given: toArray(def.given),
-    then: toArray(def.then),
+    // `?? []` so a definition missing either field normalizes to "nothing to do"
+    // instead of a one-element `[undefined]` that blows up further downstream;
+    // `assertGiven` is what reports a missing `given` as the authoring error it is.
+    given: toArray(def.given ?? []),
+    then: toArray(def.then ?? []),
     formats: formats ? new Set(formats) : undefined,
     recommended,
     resolved: def.resolved ?? true,
@@ -114,13 +154,17 @@ const normalizeRule = (
  * per-file toggle for an absent rule is simply ignored at run time.
  */
 const applyEntry = (rules: Map<string, ResolvedRule>, name: string, entry: RuleEntry, throwOnMissing = false): void => {
+  assertRuleEntry(name, entry)
   if (typeof entry === 'boolean') {
     const existing = rules.get(name)
     if (existing) existing.enabled = entry
     else if (throwOnMissing) throw new Error(`Cannot extend non-existing rule "${name}"`)
     return
   }
-  if (typeof entry === 'string') {
+  // A severity, spelled either as a name or as the numeric LSP level — overrides
+  // are documented to accept both, and only the pointer-scoped path understood
+  // the numeric form before.
+  if (typeof entry === 'string' || typeof entry === 'number') {
     const existing = rules.get(name)
     if (!existing) {
       if (throwOnMissing) throw new Error(`Cannot extend non-existing rule "${name}"`)
@@ -262,7 +306,8 @@ const mergeInto = (
   }
   if (definition.rules) {
     for (const [name, entry] of Object.entries(definition.rules)) {
-      if (typeof entry === 'object') {
+      // `isRuleDefinition`, not `typeof entry === 'object'`: `null` is an object.
+      if (isRuleDefinition(entry)) {
         const rule = normalizeRule(name, entry, modifier, declaring)
         rule.given = rewriteGiven(ctx, definition.aliases ?? {}, name, rule.given)
         ctx.into.set(name, rule)
@@ -335,16 +380,15 @@ export const createRuleset = (definition: RulesetDefinition, options: RulesetOpt
   const rules = [...ctx.into.values()]
   const aliases = ctx.aliases
 
-  // Surface malformed `given` expressions loudly at build time rather than
-  // letting them silently match nothing (or the root) at run time. Alias
-  // references are validated when they are expanded against document formats.
-  for (const rule of rules) {
-    for (const expression of rule.given) {
-      if (expression.startsWith('#')) continue
-      const compiled = compileQuery(expression)
-      if (compiled.error !== undefined) {
-        throw new Error(`Rule "${rule.name}" has an invalid \`given\` "${expression}": ${compiled.error}`)
-      }
+  for (const rule of rules) assertGiven(rule.name, rule.given)
+  // Overrides are applied per document, long after this point, so their entries
+  // are checked here too — a malformed one used to surface as a TypeError from
+  // the middle of a lint run instead of as a ruleset error at build time.
+  for (const override of overrides) {
+    if (!override.rules) continue
+    for (const [name, entry] of Object.entries(override.rules)) {
+      assertRuleEntry(name, entry)
+      if (isRuleDefinition(entry)) assertGiven(name, toArray(entry.given ?? []))
     }
   }
 
