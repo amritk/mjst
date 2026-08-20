@@ -1,5 +1,6 @@
 import { detectFormat, type ParserFormat } from '../parsers'
 import { createDocument, type Document, type IDocumentOptions } from './document'
+import { ownKey } from './own-key'
 import type { LintPlugin } from './plugin'
 import { runPlugins } from './plugin'
 import type { Ruleset } from './ruleset'
@@ -61,17 +62,21 @@ export type LintResult = {
 
 type ParserSeverity = DiagnosticSeverity | 'off'
 
+const PARSER_SEVERITY_NAMES: Record<string, DiagnosticSeverity> = {
+  error: DiagnosticSeverity.Error,
+  warn: DiagnosticSeverity.Warning,
+  info: DiagnosticSeverity.Information,
+  hint: DiagnosticSeverity.Hint,
+}
+
 const toParserSeverity = (value: DiagnosticSeverity | string | undefined): ParserSeverity | undefined => {
   if (value === undefined) return undefined
   if (typeof value === 'number') return value
   if (value === 'off') return 'off'
-  const names: Record<string, DiagnosticSeverity> = {
-    error: DiagnosticSeverity.Error,
-    warn: DiagnosticSeverity.Warning,
-    info: DiagnosticSeverity.Information,
-    hint: DiagnosticSeverity.Hint,
-  }
-  return names[value]
+  // `ownKey`, not a bare index: `parserOptions.duplicateKeys` is ruleset input, so
+  // `"constructor"` otherwise resolved to `Object` itself and was handed to the
+  // parser as a severity.
+  return ownKey(PARSER_SEVERITY_NAMES, value)
 }
 
 const byPosition = (a: IDiagnostic, b: IDiagnostic): number => {

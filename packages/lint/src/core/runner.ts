@@ -3,6 +3,7 @@ import type { Document } from './document'
 import { detectFormats } from './formats'
 import { matchesGlob } from './glob'
 import { type CompiledPath, compileQuery, query, queryMany } from './jsonpath'
+import { ownKey } from './own-key'
 import { pointerToPath, resolveSourcePath } from './pointers'
 import type { Ruleset } from './ruleset'
 import {
@@ -58,9 +59,13 @@ const resolveTargets = (value: unknown, path: JsonPath, field: string | undefine
   if (field.startsWith('$')) {
     return query(value, field).map((match) => ({ value: match.value, path: [...path, ...match.path] }))
   }
-  // A plain property name, or a numeric index into an array.
+  // A plain property name, or a numeric index into an array. `Object.hasOwn`, not
+  // a bare index: `field` is ruleset input, so `field: 'constructor'` otherwise
+  // handed the function every object inherits to the rule function — `defined`
+  // and `truthy` both passed on a key the document does not have.
   const key = Array.isArray(value) && /^\d+$/.test(field) ? Number(field) : field
-  return [{ value: (value as Record<string | number, unknown>)[key], path: [...path, key] }]
+  const own = Object.hasOwn(value, key) ? (value as Record<string | number, unknown>)[key] : undefined
+  return [{ value: own, path: [...path, key] }]
 }
 
 const stringify = (value: unknown): string => {
@@ -74,8 +79,12 @@ const applyTemplate = (
   ctx: { property: unknown; value: unknown; path: string; error: string; description: string },
 ): string =>
   template.replace(/\{\{([^}]+)\}\}/g, (_match, raw: string) => {
+    // `Object.hasOwn`, not `in`: the template comes from the ruleset, so
+    // `{{toString}}` otherwise resolved to `Object.prototype.toString` and
+    // rendered the literal text "undefined" where an unknown placeholder should
+    // render as nothing.
     const key = raw.trim() as keyof typeof ctx
-    return key in ctx ? stringify(ctx[key]) : ''
+    return Object.hasOwn(ctx, key) ? stringify(ctx[key]) : ''
   })
 
 /** Optional inputs to a runner's `run`: the dereferenced tree and its source documents. */
@@ -251,15 +260,23 @@ const applyScopedOverrides = (
     let dropped = false
     for (const { path, rules } of scoped) {
       if (!isPrefix(path, diagnostic.path)) continue
-      const entry = rules[String(diagnostic.code)]
+      // `ownKey` on both lookups, never a bare index or `in`: rule codes and
+      // severity names both come from the ruleset. A rule named `toString`
+      // matched `Function.prototype.toString` (so the override silently did
+      // nothing), and a severity of `constructor` passed the `in` check and
+      // assigned `Object` itself as the finding's severity — every later
+      // comparison against `DiagnosticSeverity.Error` then reads false, so the
+      // CLI exits 0 on a document it should fail.
+      const entry = ownKey(rules, String(diagnostic.code))
       if (entry === undefined) continue
       if (entry === false || entry === 'off') {
         dropped = true
         break
       }
       if (typeof entry === 'number') diagnostic.severity = entry
-      else if (typeof entry === 'string' && entry in SEVERITY_NAMES) {
-        diagnostic.severity = SEVERITY_NAMES[entry] as DiagnosticSeverity
+      else if (typeof entry === 'string') {
+        const mapped = ownKey(SEVERITY_NAMES, entry)
+        if (mapped !== undefined) diagnostic.severity = mapped
       }
     }
     if (!dropped) result.push(diagnostic)
