@@ -182,14 +182,19 @@ describe('generate-validator-function', () => {
     expect(code).toContain('!valuesEqual(obj.meta, {"a":1})')
   })
 
-  it('dedupes scalar-item uniqueItems by a JSON projection', () => {
+  it('dedupes scalar-item uniqueItems with a bare Set', () => {
     const schema = {
       type: 'object' as const,
       properties: { tags: { type: 'array' as const, items: { type: 'string' as const }, uniqueItems: true } },
     }
     const code = generateValidatorFunction(schema, 'Doc')
 
-    expect(code).toContain('map((_u) => JSON.stringify(_u))')
+    expect(code).toContain('new Set(obj.tags as unknown[]).size !== obj.tags.length')
+    // A `JSON.stringify` projection would cost a string per element and print
+    // both `NaN` and `null` as `"null"`, so `[NaN, null]` came back a duplicate
+    // pair. `Set` membership is SameValueZero, which is JSON Schema's equality
+    // for primitives exactly.
+    expect(code).not.toContain('JSON.stringify(_u)')
     expect(code).not.toContain('allUnique(')
   })
 

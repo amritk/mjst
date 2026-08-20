@@ -202,11 +202,13 @@ const schemaIsScalarOnly = (schema: unknown): boolean => {
 
 /**
  * True when an array's elements can only be JSON scalars, so a `uniqueItems`
- * check can dedupe by the cheap `JSON.stringify` projection. When items may be
- * objects or arrays this returns false, and the check must instead compare
- * structurally (the `allUnique` runtime helper): `JSON.stringify` is key-order
- * sensitive and would treat `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` as distinct,
- * disagreeing with the interpreter's order-independent deep equality.
+ * check can dedupe with a bare `Set` (SameValueZero is exactly JSON Schema's
+ * equality for primitives). When items may be objects or arrays this returns
+ * false, and the check must instead compare structurally (the `allUnique` runtime
+ * helper): a `Set` would compare those by reference, and the `JSON.stringify`
+ * projection that is the obvious alternative is key-order sensitive — it treats
+ * `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` as distinct, disagreeing with the
+ * interpreter's order-independent deep equality.
  */
 const arrayItemsAreScalarOnly = (schema: Record<string, unknown>): boolean => {
   const { tuple, tail, tailIsClosed } = tupleShapeOf(schema)
@@ -310,7 +312,35 @@ type NestingContext = {
    * cannot report that back.
    */
   rootSchema?: Record<string, unknown> | undefined
+  /**
+   * The expression every emitted check pushes its errors onto.
+   *
+   * It used to be the literal `errors.push(`, rewritten to its final form by a
+   * `replaceAll` over the finished function text — and that text carries the
+   * schema's own strings. A property named `errors.push(`, an `enum` member
+   * spelling it, a `pattern` of `errors.push(x)`: each of those landed in the
+   * output as data and was rewritten as if it were code, so the validator
+   * compared against a key nobody wrote and compiled a regex nobody asked for.
+   * (`isX` was built without the rewrite, so the two even disagreed.) Carrying
+   * the sink here means the emitters write the final spelling the first time and
+   * nothing ever rewrites generated text.
+   *
+   * {@link ROOT_ERROR_SINK} is the create-on-first-use array every validator
+   * body reports through; a match expression ({@link generateMatchesExpr})
+   * swaps in its own IIFE-local buffer.
+   */
+  sink: string
 }
+
+/**
+ * The error sink a validator body reports through: the `errors` array is
+ * allocated on the first push and stays `undefined` for a valid input, which is
+ * the allocation-free happy path the runtime interpreter also takes.
+ */
+const ROOT_ERROR_SINK = '(errors ??= [])'
+
+/** The IIFE-local buffer a match expression's checks report through. */
+const MATCH_ERROR_SINK = '_m'
 
 const createRootContext = (rootSchema?: Record<string, unknown>): NestingContext => ({
   objVar: 'obj',
@@ -318,6 +348,7 @@ const createRootContext = (rootSchema?: Record<string, unknown>): NestingContext
   depth: 0,
   hoisted: [],
   rootSchema,
+  sink: ROOT_ERROR_SINK,
 })
 
 /**
@@ -426,12 +457,20 @@ const withHoisted = (hoisted: readonly Hoisted[], text: string): string => {
   // by a substring.
   const kept = hoisted.filter((entry) => text.includes(entry.reference)).map((entry) => entry.declaration)
 
-  // The parameter list is where `input` is *declared*; only a mention outside it
-  // counts as a read. A schema string that happens to contain the word keeps the
-  // parameter as it is, which is the harmless direction — the rename is a tidy-up,
-  // and a missed one costs a lint warning where a wrong one breaks the file.
-  const reads = text.replaceAll('(input: unknown', '(')
-  const body = /\binput\b/.test(reads) ? text : text.replaceAll('(input: unknown', '(_input: unknown')
+  // The rename touches the signature line and nothing else. A `replaceAll` over
+  // the whole text would have rewritten a schema string that happens to spell
+  // `(input: unknown` — data, read as code — and the emitters take care never to
+  // do that. The signature is always the first line of an emitted function, and
+  // whether the parameter is read is a question about everything after it. (When
+  // there is a guard the text carries two signatures, but the wrapper's
+  // `return …Errors(input, _path)` always reads `input`, so nothing is renamed.)
+  // A schema string containing the bare word keeps the parameter as it is, which
+  // is the harmless direction — the rename is a tidy-up, and a missed one costs a
+  // lint warning where a wrong one breaks the file.
+  const firstBreak = text.indexOf('\n')
+  const signature = firstBreak === -1 ? text : text.slice(0, firstBreak)
+  const rest = firstBreak === -1 ? '' : text.slice(firstBreak)
+  const body = /\binput\b/.test(rest) ? text : signature.replace('(input: unknown', '(_input: unknown') + rest
 
   return kept.length > 0 ? `${kept.join('\n')}\n\n${body}` : body
 }
@@ -471,7 +510,7 @@ const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): strin
   return [
     `  for (const _key${d} in ${ctx.objVar}) {`,
     `    if (${unknownTest}${patternGuard}) {`,
-    `      errors.push({ message: 'must NOT have additional properties', path: \`${ctx.pathPrefix}/\${escapePointer(_key${d})}\` })`,
+    `      ${ctx.sink}.push({ message: 'must NOT have additional properties', path: \`${ctx.pathPrefix}/\${escapePointer(_key${d})}\` })`,
     `    }`,
     `  }`,
   ]
@@ -493,7 +532,7 @@ const generateMissingRequiredChecks = (schema: JSONSchema, ctx: NestingContext):
     if (Object.hasOwn(props, key)) continue
     lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
     lines.push(
-      `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+      `    ${ctx.sink}.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
     )
     lines.push(`  }`)
   }
@@ -528,15 +567,15 @@ const generatePropertyChecks = (
     if (isRequired) {
       return [
         `  if (${missingCheck(ctx.objVar, key)}) {`,
-        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+        `    ${ctx.sink}.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
         `  } else {`,
-        `    errors.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`,
+        `    ${ctx.sink}.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`,
         `  }`,
       ]
     }
     return [
       `  if (${hasOwnCheck(ctx.objVar, key)}) {`,
-      `    errors.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`,
+      `    ${ctx.sink}.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`,
       `  }`,
     ]
   }
@@ -613,7 +652,7 @@ const generateKeywordChecks = (
   // rather than the end of the story.
   if (hasRef(schema)) {
     const vName = validatorName(refToName(schema.$ref, suffix))
-    const delegate = [`  const _r = ${vName}(${raw}, ${path})`, `  if (_r !== true) errors.push(..._r.errors)`]
+    const delegate = [`  const _r = ${vName}(${raw}, ${path})`, `  if (_r !== true) ${ctx.sink}.push(..._r.errors)`]
     if (presence === '') lines.push(...delegate)
     else lines.push(`  if (${raw} !== undefined) {`, ...delegate.map((line) => `  ${line}`), `  }`)
   }
@@ -622,7 +661,7 @@ const generateKeywordChecks = (
   const instanceOf = getMjstInstanceOf(schema)
   if (instanceOf) {
     lines.push(`  if (${presence}!(${raw} instanceof ${instanceOf})) {`)
-    lines.push(`    errors.push({ message: 'must be ${instanceOf}', path: ${path} })`)
+    lines.push(`    ${ctx.sink}.push({ message: 'must be ${instanceOf}', path: ${path} })`)
     lines.push(`  }`)
   }
 
@@ -630,7 +669,7 @@ const generateKeywordChecks = (
   const primitive = getMjstPrimitive(schema)
   if (primitive) {
     lines.push(`  if (${presence}typeof ${raw} !== "${primitive}") {`)
-    lines.push(`    errors.push({ message: 'must be ${primitive}', path: ${path} })`)
+    lines.push(`    ${ctx.sink}.push({ message: 'must be ${primitive}', path: ${path} })`)
     lines.push(`  }`)
   }
 
@@ -639,7 +678,7 @@ const generateKeywordChecks = (
     const mismatch = constMismatchCondition(raw, schema.const)
     const msg = JSON.stringify(`must be ${JSON.stringify(schema.const)}`)
     lines.push(`  if (${presence}${mismatch}) {`)
-    lines.push(`    errors.push({ message: ${msg}, path: ${path} })`)
+    lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${path} })`)
     lines.push(`  }`)
   }
 
@@ -647,7 +686,7 @@ const generateKeywordChecks = (
   if (hasEnum(schema)) {
     const label = (schema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
     lines.push(`  if (${presence}!${enumMembershipExpr(schema.enum as unknown[], raw)}) {`)
-    lines.push(`    errors.push({ message: ${JSON.stringify(`must be one of: ${label}`)}, path: ${path} })`)
+    lines.push(`    ${ctx.sink}.push({ message: ${JSON.stringify(`must be one of: ${label}`)}, path: ${path} })`)
     lines.push(`  }`)
   }
 
@@ -662,7 +701,7 @@ const generateKeywordChecks = (
       const wrongType = wrongTypeCondition(raw, t)
       if (wrongType) {
         lines.push(`  if (${presence === '' ? wrongType : `${presence}(${wrongType})`}) {`)
-        lines.push(`    errors.push({ message: 'must be ${typeofString(t)}', path: ${path} })`)
+        lines.push(`    ${ctx.sink}.push({ message: 'must be ${typeofString(t)}', path: ${path} })`)
         lines.push(`  }`)
       }
     }
@@ -683,7 +722,7 @@ const generateKeywordChecks = (
       if (allWrong) {
         const label = typeArray.map((t) => typeofString(t)).join(' or ')
         lines.push(`  if (${presence === '' ? allWrong : `${presence}(${allWrong})`}) {`)
-        lines.push(`    errors.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${path} })`)
+        lines.push(`    ${ctx.sink}.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${path} })`)
         lines.push(`  }`)
       }
     }
@@ -724,7 +763,7 @@ const generatePropertyCheckLines = (
   const parentPath = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
   const missing = [
     `  if (${missingCheck(ctx.objVar, key)}) {`,
-    `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+    `    ${ctx.sink}.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
   ]
 
   if (!isSchemaObject(propSchema)) {
@@ -786,7 +825,7 @@ const generateConstraintChecks = (
       const re = regexLiteral(propSchema.pattern)
       const msg = JSON.stringify(`must match pattern ${propSchema.pattern}`)
       lines.push(`  if (typeof ${raw} === 'string' && !${re}.test(${raw})) {`)
-      lines.push(`    errors.push({ message: ${msg}, path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${path} })`)
       lines.push(`  }`)
     }
     // Lengths are Unicode *code point* counts, not UTF-16 code units, so both
@@ -802,12 +841,12 @@ const generateConstraintChecks = (
     // `allowUnreachableCode: false`. Nothing to check, so nothing is emitted.
     if (hasMinLength(propSchema) && propSchema.minLength > 0) {
       lines.push(`  if (typeof ${raw} === 'string' && ${minLengthFailExpr(raw, propSchema.minLength)}) {`)
-      lines.push(`    errors.push({ message: 'must have at least ${propSchema.minLength} characters', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must have at least ${propSchema.minLength} characters', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasMaxLength(propSchema)) {
       lines.push(`  if (typeof ${raw} === 'string' && ${maxLengthFailExpr(raw, propSchema.maxLength)}) {`)
-      lines.push(`    errors.push({ message: 'must have at most ${propSchema.maxLength} characters', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must have at most ${propSchema.maxLength} characters', path: ${path} })`)
       lines.push(`  }`)
     }
   }
@@ -831,29 +870,29 @@ const generateConstraintChecks = (
       const strict = hasStrictExclusiveMinimum(propSchema)
       const rel = strict ? '>' : '>='
       lines.push(`  if (typeof ${raw} === 'number' && !(${raw} ${rel} ${propSchema.minimum})) {`)
-      lines.push(`    errors.push({ message: 'must be ${rel} ${propSchema.minimum}', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must be ${rel} ${propSchema.minimum}', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasMaximum(propSchema)) {
       const strict = hasStrictExclusiveMaximum(propSchema)
       const rel = strict ? '<' : '<='
       lines.push(`  if (typeof ${raw} === 'number' && !(${raw} ${rel} ${propSchema.maximum})) {`)
-      lines.push(`    errors.push({ message: 'must be ${rel} ${propSchema.maximum}', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must be ${rel} ${propSchema.maximum}', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasExclusiveMinimum(propSchema)) {
       lines.push(`  if (typeof ${raw} === 'number' && !(${raw} > ${propSchema.exclusiveMinimum})) {`)
-      lines.push(`    errors.push({ message: 'must be > ${propSchema.exclusiveMinimum}', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must be > ${propSchema.exclusiveMinimum}', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasExclusiveMaximum(propSchema)) {
       lines.push(`  if (typeof ${raw} === 'number' && !(${raw} < ${propSchema.exclusiveMaximum})) {`)
-      lines.push(`    errors.push({ message: 'must be < ${propSchema.exclusiveMaximum}', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must be < ${propSchema.exclusiveMaximum}', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasMultipleOf(propSchema)) {
       lines.push(`  if (typeof ${raw} === 'number' && ${multipleOfFailExpr(raw, propSchema.multipleOf)}) {`)
-      lines.push(`    errors.push({ message: 'must be a multiple of ${propSchema.multipleOf}', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must be a multiple of ${propSchema.multipleOf}', path: ${path} })`)
       lines.push(`  }`)
     }
   }
@@ -895,7 +934,7 @@ const generateConstraintChecks = (
       lines.push(`  if (Array.isArray(${raw})) {`)
       lines.push(`    for (let ${iv} = ${firstTailIndex}; ${iv} < ${raw}.length; ${iv}++) {`)
       lines.push(`      const _ir = ${vName}(${raw}[${iv}], ${itemPath})`)
-      lines.push(`      if (_ir !== true) errors.push(..._ir.errors)`)
+      lines.push(`      if (_ir !== true) ${ctx.sink}.push(..._ir.errors)`)
       lines.push(`    }`)
       lines.push(`  }`)
     } else if (isSchemaObject(itemSchema)) {
@@ -912,11 +951,15 @@ const generateConstraintChecks = (
     }
   }
 
-  // Array length / uniqueness. `uniqueItems` dedupes scalar items by a cheap
-  // `JSON.stringify` projection (exact for primitives, what the type guard also
-  // uses), but falls back to the structural `allUnique` helper when items may be
-  // objects/arrays — `JSON.stringify` is key-order sensitive and would disagree
-  // with the interpreter's order-independent deep equality.
+  // Array length / uniqueness. `uniqueItems` dedupes provably-scalar items with a
+  // bare `Set`, whose SameValueZero membership is already JSON Schema's equality
+  // for primitives (`1`, `"1"` and `true` are three entries, and `NaN` matches
+  // itself). The old spelling projected through `JSON.stringify` first, which
+  // costs a string per element and, worse, prints both `NaN` and `null` as
+  // `"null"` — so `[NaN, null]` was reported as a duplicate pair that Ajv and the
+  // interpreter both call unique. Items that may be objects/arrays fall back to
+  // the structural `allUnique` helper, since `JSON.stringify` is key-order
+  // sensitive and a `Set` compares those by reference.
   if (
     hasMinItems(propSchema) ||
     hasMaxItems(propSchema) ||
@@ -930,25 +973,25 @@ const generateConstraintChecks = (
     // instead.) Without this the constraint was silently ignored.
     if (tail === false && tuple === undefined) {
       lines.push(`  if (Array.isArray(${raw}) && ${raw}.length > 0) {`)
-      lines.push(`    errors.push({ message: 'must NOT have more than 0 items', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must NOT have more than 0 items', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasMinItems(propSchema)) {
       lines.push(`  if (Array.isArray(${raw}) && ${raw}.length < ${propSchema.minItems}) {`)
-      lines.push(`    errors.push({ message: 'must have at least ${propSchema.minItems} items', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must have at least ${propSchema.minItems} items', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasMaxItems(propSchema)) {
       lines.push(`  if (Array.isArray(${raw}) && ${raw}.length > ${propSchema.maxItems}) {`)
-      lines.push(`    errors.push({ message: 'must have at most ${propSchema.maxItems} items', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must have at most ${propSchema.maxItems} items', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasUniqueItems(propSchema) && propSchema.uniqueItems === true) {
       const dupCond = arrayItemsAreScalarOnly(sp)
-        ? `new Set((${raw} as unknown[]).map((_u) => JSON.stringify(_u))).size !== ${raw}.length`
+        ? `new Set(${raw} as unknown[]).size !== ${raw}.length`
         : `!allUnique(${raw} as unknown[])`
       lines.push(`  if (Array.isArray(${raw}) && ${dupCond}) {`)
-      lines.push(`    errors.push({ message: 'must NOT have duplicate items', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must NOT have duplicate items', path: ${path} })`)
       lines.push(`  }`)
     }
 
@@ -965,7 +1008,7 @@ const generateConstraintChecks = (
       lines.push(`  if (Array.isArray(${raw})) {`)
       lines.push(`    const _cn = (${raw} as unknown[]).filter((_c) => ${matchExpr}).length`)
       lines.push(`    if (${bound}) {`)
-      lines.push(`      errors.push({ message: 'array does not contain the required matching items', path: ${path} })`)
+      lines.push(`      ${ctx.sink}.push({ message: 'array does not contain the required matching items', path: ${path} })`)
       lines.push(`    }`)
       lines.push(`  }`)
     }
@@ -1006,7 +1049,7 @@ const generateConstraintChecks = (
       }
       if (tailIsClosed) {
         lines.push(`    if (${raw}.length > ${tuple.length}) {`)
-        lines.push(`      errors.push({ message: 'must NOT have more than ${tuple.length} items', path: ${path} })`)
+        lines.push(`      ${ctx.sink}.push({ message: 'must NOT have more than ${tuple.length} items', path: ${path} })`)
         lines.push(`    }`)
       }
       lines.push(`  }`)
@@ -1070,7 +1113,7 @@ const generateValueCheckLines = (
   // all and the branch that should have failed the instance passed it. `true`
   // (and a bare `{}`) accepts everything and falls through to the `[]` below.
   if (propSchema === false) {
-    const report = `errors.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`
+    const report = `${ctx.sink}.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`
     if (required) return [`  ${report}`]
     return [`  if (${raw} !== undefined) {`, `    ${report}`, `  }`]
   }
@@ -1093,6 +1136,7 @@ const generateValueCheckLines = (
     depth: ctx.depth + 1,
     hoisted: ctx.hoisted,
     rootSchema: ctx.rootSchema,
+    sink: ctx.sink,
   }
 
   lines.push(...generateKeywordChecks('', raw, path, propSchema, suffix, valueCtx, presence))
@@ -1125,12 +1169,12 @@ const generateMatchesExpr = (raw: string, sub: JSONSchema, suffix: string, ctx: 
   // constrained check behind it emitted `.length` on `unknown` and the generated
   // file did not compile. The IIFE is somewhere to put a local, so bind it there.
   const value = NARROWABLE_REFERENCE.test(raw) ? raw : `_mv${ctx.depth}`
-  const checks = generateValueChecks('', value, '`${_path}`', sub, suffix, ctx)
+  // The branch's checks report into the IIFE-local buffer rather than the
+  // validator's `errors`, so the expression stays a pure yes/no answer. Each
+  // nested match IIFE declares its own `_m`, so the innermost one always wins.
+  const checks = generateValueChecks('', value, '`${_path}`', sub, suffix, { ...ctx, sink: MATCH_ERROR_SINK })
   if (checks.length === 0) return 'true'
-  // The checks push to `errors`; redirect them to the IIFE-local `_m`. The outer
-  // validator's `errors.push` → `(errors ??= [])` rewrite never sees these (they
-  // are already `_m.push`), and nested match IIFEs each shadow their own `_m`.
-  const body = checks.join('\n').replaceAll('errors.push(', '_m.push(')
+  const body = checks.join('\n')
   const binding = value === raw ? '' : `const ${value}: unknown = ${raw}\n`
   return `((): boolean => { const _m: ValidationError[] = []\n${binding}${body}\n    return _m.length === 0 })()`
 }
@@ -1186,7 +1230,7 @@ const generateUnevaluatedChecks = (
     lines.push(`  if (typeof ${raw} === 'object' && ${raw} !== null && !Array.isArray(${raw})) {`)
     for (const statement of properties.setup) lines.push(`    ${statement}`)
     lines.push(`    if (!(${properties.expr})) {`)
-    lines.push(`      errors.push({ message: 'must NOT have unevaluated properties', path: ${path} })`)
+    lines.push(`      ${ctx.sink}.push({ message: 'must NOT have unevaluated properties', path: ${path} })`)
     lines.push(`    }`)
     lines.push(`  }`)
   }
@@ -1197,7 +1241,7 @@ const generateUnevaluatedChecks = (
     lines.push(`  if (Array.isArray(${raw})) {`)
     for (const statement of items.setup) lines.push(`    ${statement}`)
     lines.push(`    if (!(${items.expr})) {`)
-    lines.push(`      errors.push({ message: 'must NOT have unevaluated items', path: ${path} })`)
+    lines.push(`      ${ctx.sink}.push({ message: 'must NOT have unevaluated items', path: ${path} })`)
     lines.push(`    }`)
     lines.push(`  }`)
   }
@@ -1234,7 +1278,7 @@ const generateCombinatorChecks = (
     // `allowUnreachableCode: false`.
     if (!conds.includes('true')) {
       lines.push(`  if (!(${conds.join(' || ')})) {`)
-      lines.push(`    errors.push({ message: 'must match a schema in anyOf', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must match a schema in anyOf', path: ${path} })`)
       lines.push(`  }`)
     }
   }
@@ -1242,7 +1286,7 @@ const generateCombinatorChecks = (
   if (hasOneOf(schema) && schema.oneOf.length > 0) {
     const conds = schema.oneOf.map((b) => `(${generateMatchesExpr(raw, b, suffix, ctx)} ? 1 : 0)`)
     lines.push(`  if ((${conds.join(' + ')}) !== 1) {`)
-    lines.push(`    errors.push({ message: 'must match exactly one schema in oneOf', path: ${path} })`)
+    lines.push(`    ${ctx.sink}.push({ message: 'must match exactly one schema in oneOf', path: ${path} })`)
     lines.push(`  }`)
   }
 
@@ -1260,7 +1304,7 @@ const generateCombinatorChecks = (
     // accepting an instance the schema forbids.
     if (cond !== 'false') {
       lines.push(`  if (${cond}) {`)
-      lines.push(`    errors.push({ message: 'must NOT match the schema in not', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must NOT match the schema in not', path: ${path} })`)
       lines.push(`  }`)
     }
   }
@@ -1388,6 +1432,7 @@ const generateInlineObjectChecks = (
     depth: ctx.depth + 1,
     hoisted: ctx.hoisted,
     rootSchema: ctx.rootSchema,
+    sink: ctx.sink,
   }
 
   const required = new Set(hasRequired(propSchema) ? propSchema.required : [])
@@ -1443,6 +1488,7 @@ const generatePropertyNameChecks = (nameSchema: JSONSchema, suffix: string, ctx:
     depth: ctx.depth + 1,
     hoisted: ctx.hoisted,
     rootSchema: ctx.rootSchema,
+    sink: ctx.sink,
   }
   const checks = generateValueChecks('', '_name', at, nameSchema, suffix, nameCtx, true)
   if (checks.length === 0) return []
@@ -1464,7 +1510,7 @@ const generateDependentRequiredChecks = (schema: JSONSchema, ctx: NestingContext
     for (const dep of deps) {
       const msg = JSON.stringify(`must have property '${dep}' when '${trigger}' is present`)
       lines.push(`  if (${hasOwnCheck(obj, trigger)} && ${missingCheck(obj, dep)}) {`)
-      lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
+      lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${at} })`)
       lines.push(`  }`)
     }
   }
@@ -1509,7 +1555,7 @@ const generateDependentSchemasChecks = (schema: JSONSchema, suffix: string, ctx:
     if (sub === false) {
       const msg = JSON.stringify(`must NOT have property '${trigger}'`)
       lines.push(`  if (${hasOwnCheck(obj, trigger)}) {`)
-      lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
+      lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${at} })`)
       lines.push(`  }`)
       continue
     }
@@ -1552,7 +1598,7 @@ const generateDependenciesChecks = (schema: JSONSchema, suffix: string, ctx: Nes
         if (typeof key !== 'string') continue
         const msg = JSON.stringify(`must have property '${key}' when '${trigger}' is present`)
         lines.push(`  if (${hasOwnCheck(obj, trigger)} && ${missingCheck(obj, key)}) {`)
-        lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
+        lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${at} })`)
         lines.push(`  }`)
       }
       continue
@@ -1562,7 +1608,7 @@ const generateDependenciesChecks = (schema: JSONSchema, suffix: string, ctx: Nes
     if (value === false) {
       const msg = JSON.stringify(`must NOT have property '${trigger}'`)
       lines.push(`  if (${hasOwnCheck(obj, trigger)}) {`)
-      lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
+      lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${at} })`)
       lines.push(`  }`)
       continue
     }
@@ -1598,13 +1644,13 @@ const generateMinMaxPropertiesChecks = (schema: JSONSchema, ctx: NestingContext)
   if (hasMin) {
     const msg = JSON.stringify(`must have at least ${schema.minProperties} properties`)
     lines.push(`  if (${count} < ${schema.minProperties}) {`)
-    lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
+    lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${at} })`)
     lines.push(`  }`)
   }
   if (hasMax) {
     const msg = JSON.stringify(`must have at most ${schema.maxProperties} properties`)
     lines.push(`  if (${count} > ${schema.maxProperties}) {`)
-    lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
+    lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${at} })`)
     lines.push(`  }`)
   }
   return lines
@@ -1880,14 +1926,11 @@ const generateObjectValidator = (
   }
 
   // Lazily allocate the errors array so a valid input never builds one — the same
-  // allocation-free happy path the runtime interpreter uses. Each emitted
-  // `errors.push(...)` becomes a create-on-first-use push; nothing is allocated
-  // until the first actual error, so the common valid case stays alloc-free even
-  // when the schema is too rich for the boolean guard.
-  const body = (propertyLines.length > 0 ? '\n' + propertyLines.join('\n') + '\n' : '').replaceAll(
-    'errors.push(',
-    '(errors ??= []).push(',
-  )
+  // allocation-free happy path the runtime interpreter uses. Every emitted report
+  // is already a create-on-first-use push (see {@link ROOT_ERROR_SINK}), so
+  // nothing is allocated until the first actual error and the common valid case
+  // stays alloc-free even when the schema is too rich for the boolean guard.
+  const body = propertyLines.length > 0 ? '\n' + propertyLines.join('\n') + '\n' : ''
 
   // A pure boolean guard for the happy path: when every property is present and
   // well-typed (and, for strict objects, there are no extras) it returns true
@@ -2143,10 +2186,11 @@ const booleanArrayExpr = (schema: JSONSchema, acc: string, narrowable = true): s
   if (hasMaxItems(schema)) parts.push(`${arr}.length <= ${schema.maxItems}`)
   if (hasUniqueItems(schema) && schema.uniqueItems === true) {
     // Same scalar-vs-structural split as the validator, so the guard's verdict
-    // matches the slow path's for object items in a reordered key order.
+    // matches the slow path's — for object items in a reordered key order, and
+    // for the `NaN`/`null` pair a `JSON.stringify` projection used to conflate.
     parts.push(
       arrayItemsAreScalarOnly(schema as Record<string, unknown>)
-        ? `new Set((${acc} as unknown[]).map((_u) => JSON.stringify(_u))).size === ${arr}.length`
+        ? `new Set(${acc} as unknown[]).size === ${arr}.length`
         : `allUnique(${acc} as unknown[])`,
     )
   }
@@ -2492,7 +2536,7 @@ const generateScalarValidator = (
       if (allWrong) {
         const label = rootTypeArray.map((t) => typeofString(t)).join(' or ')
         checks.push(`  if (${allWrong}) {`)
-        checks.push(`    errors.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${rootPath} })`)
+        checks.push(`    ${ctx.sink}.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${rootPath} })`)
         checks.push(`  }`)
       }
     } else if (hasType(schema)) {
@@ -2500,7 +2544,7 @@ const generateScalarValidator = (
       const wrongType = wrongTypeCondition('input', t)
       if (wrongType) {
         checks.push(`  if (${wrongType}) {`)
-        checks.push(`    errors.push({ message: 'must be ${typeofString(t)}', path: ${rootPath} })`)
+        checks.push(`    ${ctx.sink}.push({ message: 'must be ${typeofString(t)}', path: ${rootPath} })`)
         checks.push(`  }`)
       }
     }
@@ -2513,7 +2557,7 @@ const generateScalarValidator = (
     // `allOf` was ever emitted.
     checks.push(...generateConstraintChecks('', 'input', rootPath, schema, suffix, ctx))
     checks.push(...generateCombinatorChecks('', 'input', rootPath, schema, suffix, ctx))
-    const body = checks.join('\n').replaceAll('errors.push(', '(errors ??= []).push(')
+    const body = checks.join('\n')
     return withHoisted(
       ctx.hoisted,
       [
@@ -2544,7 +2588,7 @@ const generateScalarValidator = (
     if (allWrong) {
       const label = rootTypeArray.map((t) => typeofString(t)).join(' or ')
       checks.push(`  if (${allWrong}) {`)
-      checks.push(`    errors.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${rootPath} })`)
+      checks.push(`    ${ctx.sink}.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${rootPath} })`)
       checks.push(`  }`)
     }
 
@@ -2564,7 +2608,7 @@ const generateScalarValidator = (
       ].join('\n')
     }
 
-    const body = checks.join('\n').replaceAll('errors.push(', '(errors ??= []).push(')
+    const body = checks.join('\n')
     return withHoisted(
       ctx.hoisted,
       [
@@ -2629,7 +2673,7 @@ const generateScalarValidator = (
         `  }`,
         `  const _root: unknown = input`,
         `  let errors: ValidationError[] | undefined`,
-        constraintLines.join('\n').replaceAll('errors.push(', '(errors ??= []).push('),
+        constraintLines.join('\n'),
         `  return errors !== undefined ? { valid: false, errors } : true`,
         `}`,
       ].join('\n'),
@@ -2659,7 +2703,7 @@ const generateScalarValidator = (
     [
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
       `  let errors: ValidationError[] | undefined`,
-      typelessChecks.join('\n').replaceAll('errors.push(', '(errors ??= []).push('),
+      typelessChecks.join('\n'),
       `  return errors !== undefined ? { valid: false, errors } : true`,
       `}`,
     ].join('\n'),
@@ -2688,7 +2732,7 @@ const generateGeneralRootValidator = (
 ): string => {
   const ctx = createRootContext(rootSchema)
   const checks = generateValueChecks('', 'input', '`${_path}`', schema, suffix, ctx, true)
-  const body = checks.join('\n').replaceAll('errors.push(', '(errors ??= []).push(')
+  const body = checks.join('\n')
   return withHoisted(
     ctx.hoisted,
     [

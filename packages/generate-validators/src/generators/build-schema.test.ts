@@ -252,8 +252,8 @@ describe('build-schema', () => {
 
     expect(docFile?.content).toContain("import { allUnique } from './validation-result.js'")
     expect(docFile?.content).toContain('!allUnique(obj.rows as unknown[])')
-    // Scalar-item arrays keep the cheap JSON-projection dedupe.
-    expect(docFile?.content).toContain('map((_u) => JSON.stringify(_u))')
+    // Scalar-item arrays dedupe with a bare `Set`, which needs no import at all.
+    expect(docFile?.content).toContain('new Set(obj.tags as unknown[]).size !== obj.tags.length')
   })
 
   // The registry is what makes "we do no I/O" stop meaning "we cannot be told":
