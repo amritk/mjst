@@ -155,6 +155,39 @@ describe('build-schema', () => {
     )
   })
 
+  // A name the caller passes in verbatim is the one place a generated file can
+  // come out unparseable: `refToName` normalises a ref into an identifier by
+  // itself, but the root type name is used as given and the type suffix is stuck
+  // on the end of every derived name. `export type my-doc = …` is not a syntax
+  // error the caller ever sees — it lands in the consumer's build.
+  for (const name of ['my-doc', '', '123', 'class']) {
+    it(`refuses the root type name ${JSON.stringify(name)}`, async () => {
+      await expect(buildValidatorSchema({ type: 'string' }, name)).rejects.toThrow(
+        'is not a TypeScript type name, so the generated file would not parse',
+      )
+    })
+  }
+
+  it('refuses a type suffix that breaks the names it is appended to', async () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { c: { $ref: '#/$defs/contact' } },
+      $defs: { contact: { type: 'string' } },
+    }
+
+    await expect(buildValidatorSchema(schema, 'Doc', '-x')).rejects.toThrow(
+      '"Contact-x", is not a TypeScript type name',
+    )
+    // A suffix that keeps the name an identifier is fine, digits included.
+    await expect(buildValidatorSchema(schema, 'Doc', 'Object2')).resolves.toBeTruthy()
+  })
+
+  it('accepts a non-ASCII root type name, which TypeScript does too', async () => {
+    const files = await buildValidatorSchema({ type: 'string' }, '中文')
+
+    expect(files.find((file) => file.filename === '中文.ts')?.content).toContain('export type 中文')
+  })
+
   it('refuses a root type name that would overwrite index.ts', async () => {
     // The root derives its filename from the type name, so `Index` collides just
     // as a definition does — and used to leave the output with no root validator

@@ -190,6 +190,55 @@ export const escapePointer = (key: string): string =>
  */
 const RESERVED_TYPE_NAMES = new Set(['ValidationResult', 'ValidationError'])
 
+/** A name TypeScript will accept after `export type`. */
+const TYPE_NAME = /^[\p{ID_Start}_$][\p{ID_Continue}$]*$/u
+
+/**
+ * The words TypeScript will not accept as a type name. `refToName` cannot produce
+ * one — it PascalCases, and every reserved word is lower case — so this is really
+ * about the root type name and the type suffix, which are passed in verbatim.
+ */
+const RESERVED_WORDS = new Set([
+  'await',
+  'break',
+  'case',
+  'catch',
+  'class',
+  'const',
+  'continue',
+  'debugger',
+  'default',
+  'delete',
+  'do',
+  'else',
+  'enum',
+  'export',
+  'extends',
+  'false',
+  'finally',
+  'for',
+  'function',
+  'if',
+  'import',
+  'in',
+  'instanceof',
+  'new',
+  'null',
+  'return',
+  'super',
+  'switch',
+  'this',
+  'throw',
+  'true',
+  'try',
+  'typeof',
+  'var',
+  'void',
+  'while',
+  'with',
+  'yield',
+])
+
 /**
  * Builds all TypeScript validator files from a JSON Schema by traversing all
  * `$ref` / `$dynamicRef` references recursively (via the shared
@@ -251,6 +300,22 @@ export const buildValidatorSchema = async (
       throw new Error(
         `${owner} generates the file "${node.filename}.ts", which is reserved for ${purpose}. Rename the ` +
           'definition (or pass a different root type name) so it gets a file of its own.',
+      )
+    }
+
+    // A name that is not an identifier is not a name TypeScript will take. The
+    // root type name and the type suffix arrive verbatim from the caller, so
+    // `buildValidatorSchema(schema, 'my-doc')` used to emit `export type my-doc =
+    // …` — output that does not parse, discovered in the consumer's build with
+    // nothing to say about where it came from. `refToName` normalises a ref into
+    // an identifier by itself; a suffix stuck on the end of one can still break it.
+    if (!TYPE_NAME.test(node.typeName) || RESERVED_WORDS.has(node.typeName)) {
+      const owner = node.isRoot ? 'the root type name' : `the name "${node.ref}" derives`
+      const suffixNote = typeSuffix === '' ? '' : ` (with the type suffix "${typeSuffix}")`
+      throw new Error(
+        `${owner}${suffixNote}, "${node.typeName}", is not a TypeScript type name, so the generated file would ` +
+          'not parse. Pass a name that is a plain identifier — letters, digits, "_" and "$", not starting with a ' +
+          'digit, and not a reserved word.',
       )
     }
 
