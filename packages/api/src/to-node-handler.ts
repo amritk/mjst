@@ -95,7 +95,17 @@ export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandl
         queryString: () => (queryIndex === -1 ? '' : target.slice(queryIndex + 1)),
         header: (name) => {
           const value = incoming.headers[name]
-          return Array.isArray(value) ? value[0] : value
+          // `incoming.headers` is a plain object, so a lookup for a name that
+          // shadows an `Object.prototype` member ('constructor', '__proto__')
+          // hands back the inherited function or prototype instead of
+          // `undefined`. A contract may legitimately declare either as a header
+          // — `defineOwnProperty` exists so the slot can hold one — and the
+          // fetch adapter, reading through `Headers`, correctly reports it
+          // absent. Narrowing to the two shapes a real header value can take
+          // ('a, b' folded, or an array for the un-foldable ones) keeps the two
+          // adapters answering the same thing, and costs less than `hasOwn`.
+          if (typeof value === 'string') return value
+          return Array.isArray(value) ? value[0] : undefined
         },
         readBody: () => readAll().then((buffer) => JSON.parse(buffer.toString('utf8')) as unknown),
         readText: () => readAll().then((buffer) => buffer.toString('utf8')),

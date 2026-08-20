@@ -525,4 +525,26 @@ describe('to-node-handler', () => {
       expect(response.status).toBe(400)
     })
   })
+  it('reports a header that shadows an Object.prototype member as absent', async () => {
+    // `incoming.headers` is a plain object, so `headers['constructor']` hands
+    // back the inherited `Object` function rather than `undefined`. Read as a
+    // value it lands in the slot and fails the schema, 400ing every request
+    // that never sent the header — while the fetch adapter, reading through
+    // `Headers`, correctly sees nothing and answers 200.
+    const echo = defineRoute({
+      method: 'get',
+      path: '/echo',
+      request: { headers: { type: 'object', properties: { constructor: { type: 'string' } } } },
+      responses: { 200: { body: { type: 'object', properties: { ok: {} } } }, 400: {} },
+      handler: () => ({ status: 200, body: { ok: true } }),
+    })
+    const handler = toNodeHandler(createApi({ routes: [echo] }))
+    await withServer(createServer(handler), async (origin) => {
+      const absent = await fetch(origin + '/echo')
+      expect(absent.status).toBe(200)
+
+      const present = await fetch(origin + '/echo', { headers: { constructor: 'sent' } })
+      expect(present.status).toBe(200)
+    })
+  })
 })

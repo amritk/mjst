@@ -109,6 +109,32 @@ export async function* streamMultipart(
   contentType: string,
   options?: StreamMultipartOptions,
 ): AsyncGenerator<MultipartPart> {
+  const reader = body.getReader()
+  // Every exit from the parse releases the stream, whether or not the consumer
+  // reached the closing delimiter. A generator abandoned mid-iteration — a
+  // `break` once the wanted part is found, a throwing part handler, an early
+  // `return` — is resumed at its yield with a return completion, which runs
+  // this `finally` and nothing else. Without it the reader stays locked on a
+  // request body nobody will read again, so the client keeps uploading into a
+  // buffer the server has walked away from: the half-open upload
+  // `readBytesCapped` already cancels for. Cancelling after the terminator is
+  // right too — the epilogue belongs to no part, and the lock has to come off.
+  try {
+    yield* parseParts(reader, contentType, options)
+  } finally {
+    await reader.cancel().catch(() => undefined)
+  }
+}
+
+/**
+ * The parse itself, split out so {@link streamMultipart} owns exactly one
+ * thing: the reader's lifetime.
+ */
+async function* parseParts(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  contentType: string,
+  options?: StreamMultipartOptions,
+): AsyncGenerator<MultipartPart> {
   const boundary = multipartBoundary(contentType)
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
@@ -119,7 +145,6 @@ export async function* streamMultipart(
   const delimiter = encoder.encode(`\r\n--${boundary}`)
   const maxHeaderBytes = options?.maxHeaderBytes ?? 16_384
 
-  const reader = body.getReader()
   let buf: Uint8Array = new Uint8Array(0)
   let eof = false
   const pull = async (): Promise<boolean> => {
@@ -154,11 +179,20 @@ export async function* streamMultipart(
     if (buf.length >= 2 && buf[0] === 0x2d && buf[1] === 0x2d) return // "--" terminator
 
     // Read the header block (from the CRLF after the boundary up to a blank line).
-    let separator = indexOf(buf, CRLF_CRLF, 0)
+    // Each pull resumes the scan just short of where the last one ended rather
+    // than restarting at zero: the bytes already scanned cannot begin a match
+    // that is still hidden, and rescanning them turns a header block delivered
+    // in small chunks into quadratic work — up to `maxHeaderBytes` squared of
+    // comparisons for one part, which is CPU a hostile uploader gets to spend
+    // for free.
+    let searchFrom = 0
+    let separator = indexOf(buf, CRLF_CRLF, searchFrom)
     while (separator === -1) {
       if (buf.length > maxHeaderBytes) throw new Error('multipart: part headers exceed limit')
+      // `pull` only ever appends, so indices stay valid across it.
+      searchFrom = Math.max(0, buf.length - (CRLF_CRLF.length - 1))
       if (!(await pull())) throw new Error('multipart: unterminated part headers')
-      separator = indexOf(buf, CRLF_CRLF, 0)
+      separator = indexOf(buf, CRLF_CRLF, searchFrom)
     }
     const headers = parseHeaders(decoder.decode(buf.subarray(0, separator)))
     buf = buf.subarray(separator + CRLF_CRLF.length)
