@@ -430,6 +430,21 @@ describe('resolve-refs-from-file', () => {
     expect(Object.keys(fetchSpy.mock.calls[1]?.[1] ?? {})).not.toContain('headers')
   })
 
+  it('positions every one of many broken references, in document order', async () => {
+    const properties = Object.fromEntries(
+      Array.from({ length: 200 }, (_, index) => [`p${index}`, { $ref: `#/$defs/nope${index}` }]),
+    )
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ properties }))
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    // The index behind these paths is built once per resolve, not once per
+    // error — 200 broken refs is 200 lookups, not 200 document walks.
+    expect(errors).toHaveLength(200)
+    expect(errors[0]?.path).toEqual(['properties', 'p0', '$ref'])
+    expect(errors[199]?.path).toEqual(['properties', 'p199', '$ref'])
+  })
+
   it('reads a document written with a UTF-8 byte-order mark', async () => {
     // A BOM is an encoding marker, not content — but decoded it is a stray
     // U+FEFF that `JSON.parse` refuses, and a schema authored on Windows

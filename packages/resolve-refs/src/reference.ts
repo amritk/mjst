@@ -14,7 +14,7 @@ export type RefKeyword = '$ref' | '$dynamicRef' | '$recursiveRef'
 
 // `$ref` is listed first so that a node carrying several reference keywords
 // resolves through the static one, matching how validators treat `$ref`.
-const REF_KEYWORDS: readonly RefKeyword[] = ['$ref', '$dynamicRef', '$recursiveRef']
+export const REF_KEYWORDS: readonly RefKeyword[] = ['$ref', '$dynamicRef', '$recursiveRef']
 
 /**
  * OpenAPI 3.1 Reference Objects allow only these annotation keywords beside a

@@ -11,10 +11,10 @@ import {
   isScopeSensitive,
   type ScopeSensitiveNodes,
 } from './dynamic-scope'
-import { findRefPath } from './find-ref-path'
 import { isContainedPath } from './is-contained-path'
 import { isPrivateHost } from './is-private-host'
 import { DEFAULT_MAX_DEPTH, depthLimitError } from './max-depth'
+import { refPathIndex } from './ref-path-index'
 import {
   ANNOTATION_ONLY_SIBLINGS,
   type Reference,
@@ -799,6 +799,11 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     return registry
   }
 
+  // Where a reference was written in the root document, for the errors that
+  // name one. Built on first use, so a clean resolve never walks for it — and
+  // built once, so a document full of broken references stays linear.
+  const refPathAt = refPathIndex(docCache.get(rootLocation), maxDepth)
+
   // The depth limit is reported once per resolve, however many branches trip it.
   let depthLimitReported = false
   const reportDepthLimit = (): void => {
@@ -884,10 +889,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         // consumer can map back to a place in the document it handed us; one
         // inside a document we loaded on its behalf does not, so it reports
         // without a path exactly as it always has.
-        const refPath =
-          location === rootLocation
-            ? findRefPath(docCache.get(rootLocation), reference.keyword, reference.value, maxDepth)
-            : []
+        const refPath = location === rootLocation ? refPathAt(reference.keyword, reference.value) : []
         const target = joinLocation(location, filePart)
         if (target === undefined) {
           errors.push({
@@ -1215,7 +1217,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
           if (targetLoaded) {
             errors.push({
               message: `Cannot resolve ${keyword} "${value}"`,
-              path: findRefPath(docCache.get(rootLocation), keyword, value, maxDepth),
+              path: refPathAt(keyword, value),
             })
           }
           refCache.set(cacheKey, MISSING)
