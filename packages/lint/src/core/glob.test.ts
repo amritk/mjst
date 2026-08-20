@@ -49,6 +49,27 @@ describe('glob', () => {
     expect(matchesGlob('/home/user/repo/lib/api.yaml', ['src/api.yaml'])).toBe(false)
   })
 
+  it('keeps a literal brace group literal', () => {
+    // A group with no top-level comma is not an alternation (mirroring minimatch),
+    // so it matches the braces themselves rather than vanishing.
+    expect(matchesGlob('{a}.yaml', ['{a}.yaml'])).toBe(true)
+    expect(matchesGlob('a.yaml', ['{a}.yaml'])).toBe(false)
+    expect(matchesGlob('{}', ['{}'])).toBe(true)
+  })
+
+  it('compiles nested brace groups without exploding', () => {
+    // Expanding groups into a cartesian product made this 110-character pattern
+    // take ~40 seconds and build a 96 MB regex source; compiling each group in
+    // place keeps the output linear in the pattern's length.
+    const pattern = '{a,b}'.repeat(22)
+    const start = Date.now()
+    const regex = globToRegExp(pattern)
+    expect(Date.now() - start).toBeLessThan(1000)
+    expect(regex.source.length).toBeLessThan(1000)
+    expect(matchesGlob('ab'.repeat(11), [pattern])).toBe(true)
+    expect(matchesGlob('c'.repeat(22), [pattern])).toBe(false)
+  })
+
   it('caches the compiled RegExp by pattern string', () => {
     expect(globToRegExp('src/**/*.yaml')).toBe(globToRegExp('src/**/*.yaml'))
   })

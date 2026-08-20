@@ -18,6 +18,7 @@ import {
   resolveNamedRuleset,
   validateRuleset,
 } from './index'
+import { createOpenApiRuleset, oas, oasFixers } from './rules/openapi/index'
 
 const tmp = (prefix: string): string => mkdtempSync(join(tmpdir(), prefix))
 
@@ -296,6 +297,42 @@ describe('fixDocument', () => {
       { code: 'needs-slash', path: ['host'] },
     ])
     expect(result.remaining).toHaveLength(1)
+  })
+})
+
+describe('a ruleset that is already built', () => {
+  it('is used as-is, so a preset with its own functions and formats works', async () => {
+    // Handing the OpenAPI ruleset over as *data* silently produces nothing: its
+    // custom functions are unknown at the package root, and its `formats` gate
+    // matches nothing against an empty format registry. Every OpenAPI rule is
+    // format-gated, so that is the whole ruleset — and the fixers documented as
+    // "pass to fixDocument" had no findings to work from.
+    const document = [
+      'openapi: "3.0.0"',
+      'info: { title: T, version: "1", contact: { name: x, url: u, email: a@b.co }, description: d }',
+      'servers: [{ url: "https://api.test" }]',
+      'paths: {}',
+      'components: { schemas: { Unused: { type: object } } }',
+      '',
+    ].join('\n')
+
+    const asData = await lintDocument(document, { ruleset: oas })
+    expect(asData).toHaveLength(0)
+
+    const built = await lintDocument(document, { ruleset: createOpenApiRuleset({ extends: [[oas, 'all']] }) })
+    expect(built.map((finding) => finding.code)).toContain('oas3-unused-component')
+  })
+
+  it('lets fixDocument apply the OpenAPI fixers', async () => {
+    const document =
+      'openapi: "3.0.0"\ninfo: { title: T, version: "1" }\nservers:\n  - url: https://api.test/\npaths: {}\n'
+    const { output, fixed, applied } = await fixDocument(document, {
+      ruleset: createOpenApiRuleset({ extends: [[oas, 'all']] }),
+      fixers: oasFixers,
+    })
+    expect(fixed).toBe(true)
+    expect(applied.map((fix) => fix.code)).toContain('oas3-server-trailing-slash')
+    expect(output).toContain('url: https://api.test\n')
   })
 })
 

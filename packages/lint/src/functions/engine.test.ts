@@ -243,6 +243,23 @@ describe('engine', () => {
     expect(byName.find((r) => r.path.join('.') === 'soft.x')?.severity).toBe(DiagnosticSeverity.Information)
   })
 
+  it('ignores a pointer-scoped override naming a prototype member', async () => {
+    // Rule codes and severity names both come from the ruleset. Reading either
+    // off the prototype chain meant `'constructor'` passed the `in` check and
+    // `Object` itself was assigned as the finding's severity — every later
+    // comparison against `DiagnosticSeverity.Error` then reads false, so a CLI
+    // exits 0 on a document it should fail.
+    const definition: RulesetDefinition = {
+      rules: {
+        'flag-x': { given: '$..x^', then: { field: 'x', function: 'falsy' }, severity: 'error' },
+      },
+      overrides: [{ files: ['**#/soft'], rules: { 'flag-x': 'constructor' as RuleEntry } }],
+    }
+    const ruleset = createRuleset(definition, { functions: builtinFunctions })
+    const results = await createLinter(ruleset).run(createDocument('soft:\n  x: 1\n', { source: 'api.yaml' }))
+    expect(results[0]?.severity).toBe(DiagnosticSeverity.Error)
+  })
+
   it('applies overrides matching the document source', async () => {
     const definition: RulesetDefinition = {
       rules: { 'needs-x': { given: '$', then: { field: 'x', function: 'truthy' }, severity: 'error' } },

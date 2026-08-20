@@ -1,23 +1,10 @@
 import type { IFunctionResult, RulesetFunction } from '../core/types'
+import { collectReferencedPointers } from './ref-index'
 
 /** Options for {@link unreferencedReusableObject}. */
 export type IUnreferencedReusableObjectOptions = {
   /** JSON pointer to the map of reusable objects, e.g. "#/components/schemas". */
   reusableObjectsLocation: string
-}
-
-/** Collects every `$ref` string anywhere in `node` into `into`. */
-const collectRefs = (node: unknown, into: Set<string>): void => {
-  if (Array.isArray(node)) {
-    for (const item of node) collectRefs(item, into)
-    return
-  }
-  if (typeof node === 'object' && node !== null) {
-    for (const [key, value] of Object.entries(node)) {
-      if (key === '$ref' && typeof value === 'string') into.add(value)
-      else collectRefs(value, into)
-    }
-  }
 }
 
 /** Escapes a key for use in a JSON pointer segment (`~` -> `~0`, `/` -> `~1`). */
@@ -38,20 +25,17 @@ export const unreferencedReusableObject: RulesetFunction<
   const location = options?.reusableObjectsLocation
   if (!location) return []
 
-  const refs = new Set<string>()
-  collectRefs(context.document.data, refs)
+  // The index holds every `$ref` target *and* its ancestors, so a reference that
+  // points deeper into an object (`…/Pet/properties/x`) still counts as a use of
+  // the object itself.
+  const referenced = collectReferencedPointers(context.document.data)
 
   const results: IFunctionResult[] = []
   for (const key of Object.keys(input)) {
     // A key such as "a/b" appears in a pointer as "a~1b", so escape it before
     // building the expected reference. Without this a legitimately referenced
     // object with a special character in its name looks unreferenced.
-    const base = `${location}/${escapePointerSegment(key)}`
-    // A reference can point straight at the object (`base`) or deeper into it
-    // (e.g. `base/properties/x`); either counts as a use, so match the exact
-    // pointer or any pointer nested beneath it.
-    const referenced = refs.has(base) || [...refs].some((ref) => ref.startsWith(`${base}/`))
-    if (!referenced) {
+    if (!referenced.has(`${location}/${escapePointerSegment(key)}`)) {
       results.push({
         message: 'This reusable object is never referenced',
         path: [...context.path, key],
