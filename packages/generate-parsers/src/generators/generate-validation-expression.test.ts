@@ -359,11 +359,14 @@ describe('generate-validation-expression', () => {
     expect(result).toBe('input?.data ?? null')
   })
 
-  it('handles schema without type or enum for optional field', () => {
+  it('passes an optional field through when the schema has no type or enum', () => {
     const schema = { description: 'Any value' }
     const result = generateValidationExpression('data', schema, 'null', false)
 
-    expect(result).toBe('input?.data ?? null')
+    // Not `?? null`: the schema constrains nothing, so an absent optional key
+    // must stay absent rather than be conjured into the result (and an explicit
+    // `null` must survive instead of being replaced by the default).
+    expect(result).toBe('input?.data')
   })
 
   it('returns default value for required field when validation fails', () => {

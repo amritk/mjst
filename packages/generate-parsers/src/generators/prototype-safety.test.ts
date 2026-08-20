@@ -76,7 +76,10 @@ describe('a property named after an Object.prototype member', () => {
       properties: { constructor: { type: 'string' }, ok: { type: 'string' } },
     } as const
     const code = generateParserFunction(schema as never, 'Doc')
-    expect(code).toContain('      } as Doc;')
+    // `as unknown as`: a single assertion is not enough once the declared type
+    // carries an index signature, where the inherited `constructor: Function` is
+    // reported as "not comparable" rather than merely unassignable.
+    expect(code).toContain('      } as unknown as Doc;')
 
     const parse = evalParser<(i: unknown) => Record<string, unknown>>(code, 'parseDoc')
     expect(parse(undefined)).toEqual({ ok: '' })
@@ -89,7 +92,7 @@ describe('a property named after an Object.prototype member', () => {
     const schema = { type: 'object', required: ['ok'], properties: { ok: { type: 'string' } } } as const
     // An unconditional assertion would hide genuine fallback/type mismatches,
     // which is exactly what the generated-code type suite exists to catch.
-    expect(generateParserFunction(schema as never, 'Doc')).not.toContain('      } as Doc;')
+    expect(generateParserFunction(schema as never, 'Doc')).not.toContain('      } as unknown as Doc;')
   })
 })
 

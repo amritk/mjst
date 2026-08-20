@@ -105,6 +105,86 @@ const arrayFallback = (schema: JSONSchema): string => {
 }
 
 /**
+ * How long a synthesized string fallback is allowed to get. `minLength` is
+ * schema-controlled and unbounded, and a `{ minLength: 1000000 }` node would
+ * otherwise inline a megabyte-long literal into every generated file. Past the
+ * cap the fallback is merely shorter than the bound asks — the emitted
+ * TypeScript type is `string` either way, so that is a coercion imperfection
+ * rather than a compilation failure, the same trade {@link MAX_FALLBACK_ITEMS}
+ * makes for arrays.
+ */
+const MAX_FALLBACK_LENGTH = 256
+
+/**
+ * The literal for a `string` fallback, respecting the schema's own length bound.
+ *
+ * `""` is not an instance of `{ type: 'string', minLength: 1 }`, so a coercing
+ * parser "repaired" a missing value into one the schema still rejects — and the
+ * fallback object built around it was invalid for the same reason. A `pattern`
+ * keeps its {@link generateDefaultFromPattern} guess untouched: padding an
+ * arbitrary regex to a length is not something that can be done safely, and a
+ * pattern that also bounds its length almost always encodes the length itself.
+ */
+const stringFallback = (schema: JSONSchema): string => {
+  if (hasPattern(schema)) {
+    const patternDefault = generateDefaultFromPattern(schema.pattern)
+    if (patternDefault) return patternDefault
+    return '""'
+  }
+  const minLength = (schema as Record<string, unknown>)['minLength']
+  if (typeof minLength !== 'number' || !(minLength > 0)) return '""'
+  // A `maxLength` below `minLength` is an unsatisfiable schema; the lower bound
+  // wins, because it is the one a coercer can act on at all.
+  return JSON.stringify('x'.repeat(Math.min(minLength, MAX_FALLBACK_LENGTH)))
+}
+
+/** A finite numeric keyword, or `undefined` when it is absent or unusable. */
+const finiteKeyword = (schema: JSONSchema, keyword: string): number | undefined => {
+  const value = (schema as Record<string, unknown>)[keyword]
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+/**
+ * The literal for a `number` / `integer` fallback, inside the schema's own
+ * bounds.
+ *
+ * `0` is not an instance of `{ type: 'integer', minimum: 1 }`, and the coercing
+ * parser handed it back as the repair for a missing value. The candidate is
+ * nudged up to the lower bound (and up to the next multiple of `multipleOf`),
+ * then *verified* against every bound before it is used — so an unsatisfiable or
+ * awkward combination falls back to the historical `0` rather than to something
+ * new and equally wrong.
+ */
+const numberFallback = (schema: JSONSchema, integer: boolean): string => {
+  const minimum = finiteKeyword(schema, 'minimum')
+  const maximum = finiteKeyword(schema, 'maximum')
+  const exclusiveMinimum = finiteKeyword(schema, 'exclusiveMinimum')
+  const exclusiveMaximum = finiteKeyword(schema, 'exclusiveMaximum')
+  const multipleOf = finiteKeyword(schema, 'multipleOf')
+
+  // A step of 1 clears an exclusive bound for integers exactly, and for reals it
+  // is simply a value further inside the range — no float epsilon needed.
+  const low = Math.max(minimum ?? -Infinity, exclusiveMinimum !== undefined ? exclusiveMinimum + 1 : -Infinity)
+  const high = Math.min(maximum ?? Infinity, exclusiveMaximum !== undefined ? exclusiveMaximum - 1 : Infinity)
+
+  let candidate = Math.min(Math.max(0, low), high)
+  if (integer) candidate = Math.ceil(candidate)
+  if (multipleOf !== undefined && multipleOf > 0 && candidate !== 0) {
+    candidate = Math.ceil(candidate / multipleOf) * multipleOf
+  }
+
+  const satisfies =
+    Number.isFinite(candidate) &&
+    (minimum === undefined || candidate >= minimum) &&
+    (maximum === undefined || candidate <= maximum) &&
+    (exclusiveMinimum === undefined || candidate > exclusiveMinimum) &&
+    (exclusiveMaximum === undefined || candidate < exclusiveMaximum) &&
+    (!integer || Number.isInteger(candidate)) &&
+    (multipleOf === undefined || multipleOf <= 0 || Number.isInteger(candidate / multipleOf))
+  return satisfies ? String(candidate) : '0'
+}
+
+/**
  * Returns the default value for a JSON Schema property.
  * Priority order: explicit default > first enum value > first example > union first schema > pattern-based > type-based.
  * These defaults ensure that parsing never fails, even with missing data.
@@ -181,18 +261,11 @@ export const getDefaultValue = (schema: JSONSchema): string => {
   }
 
   switch (schema.type) {
-    case 'string': {
-      if (hasPattern(schema)) {
-        const patternDefault = generateDefaultFromPattern(schema.pattern)
-        if (patternDefault) {
-          return patternDefault
-        }
-      }
-      return '""'
-    }
+    case 'string':
+      return stringFallback(schema)
     case 'number':
     case 'integer':
-      return '0'
+      return numberFallback(schema, schema.type === 'integer')
     case 'boolean':
       return 'false'
     case 'null':

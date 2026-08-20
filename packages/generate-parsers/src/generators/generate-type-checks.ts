@@ -25,11 +25,13 @@ import {
   hasPattern,
   hasProperties,
   hasRef,
+  hasRequired,
   hasType,
   hasUniqueItems,
   isObjectSchema,
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
+import { maxLengthPassExpr, minLengthPassExpr } from '@amritk/helpers/string-length-check'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { generateEnumCheck } from './generate-enum-check'
@@ -37,8 +39,8 @@ import { generateUniqueItemsCheck } from './generate-unique-items-check'
 import {
   everyTailItem,
   getPrefixItems,
+  plainScalarItemCheck,
   prefixItemsCapsLength,
-  scalarItemTypeCheck,
   singleTypeCheck,
 } from './generate-validation-expression'
 import { hasConstrainingRefSibling, subschemaMatchExpr } from './subschema-match'
@@ -225,6 +227,18 @@ const CONSTRAINT_KEYWORDS = [
 ] as const
 
 /**
+ * True when a `oneOf`/`anyOf` node carries a keyword of its own that the branch
+ * disjunction does not express — its `type`, or any of the value-narrowing
+ * {@link CONSTRAINT_KEYWORDS}. Those keywords still apply to the value, so a
+ * check built from the branches alone would report a match for a value the node
+ * as a whole rejects.
+ */
+const hasBranchSiblingConstraint = (schema: JSONSchema): boolean => {
+  const record = schema as Record<string, unknown>
+  return 'type' in record || CONSTRAINT_KEYWORDS.some((keyword) => keyword in record)
+}
+
+/**
  * The membership check for an array-form `type` (the multi-type / nullable
  * idiom, e.g. `["string","null"]`): the disjunction of the per-type checks.
  * Returns `undefined` when the schema has no array `type`, and `null` when it
@@ -298,6 +312,13 @@ export const generatePropertyTypeCheck = (
   // disjunction of the branch checks.
   const branches = getUnionBranches(schema)
   if (branches) {
+    // 2020-12 applies a union node's *own* keywords alongside its branches, and
+    // the disjunction expresses none of them — so `{ type: 'object',
+    // required: ['a'], oneOf: [...] }` reported "already in shape" for a value
+    // that matched a branch but had no `a`, and the fast path returned it before
+    // the assertions could look. Bail to the slow path rather than emit a check
+    // that is not true-sound.
+    if (hasBranchSiblingConstraint(schema)) return null
     return generateUnionCheck(varName, branches, useRefImports, suffix, isExclusiveUnion(schema))
   }
 
@@ -339,8 +360,12 @@ export const generatePropertyTypeCheck = (
     case 'string': {
       checks.push(`typeof ${varName} === "string"`)
       if (hasPattern(schema)) checks.push(`${regexLiteral(schema.pattern)}.test(${varName})`)
-      if (hasMinLength(schema)) checks.push(`${varName}.length >= ${schema.minLength}`)
-      if (hasMaxLength(schema)) checks.push(`${varName}.length <= ${schema.maxLength}`)
+      // Code points, not UTF-16 units (see string-length-check). A bare
+      // `.length` is not *true-sound* for an astral string: it called `"💩"`
+      // two characters long, so the guard waved a value past `minLength: 2`
+      // that the strict assertion — which counts code points — then rejects.
+      if (hasMinLength(schema)) checks.push(minLengthPassExpr(varName, schema.minLength))
+      if (hasMaxLength(schema)) checks.push(maxLengthPassExpr(varName, schema.maxLength))
       break
     }
     case 'number':
@@ -379,7 +404,7 @@ export const generatePropertyTypeCheck = (
       if (hasItems(schema) && !Array.isArray(schema.items)) {
         const items = schema.items
         const itemCheck =
-          scalarItemTypeCheck(items, '_it') ??
+          plainScalarItemCheck(items, '_it') ??
           (isSchemaObject(items) && hasEnum(items) && items.enum.length > 0
             ? generateEnumCheck('_it', items.enum)
             : null)
@@ -416,6 +441,12 @@ export const generatePropertyTypeCheck = (
       break
     }
     case 'object':
+      // `properties` / `required` are proven by the sub-parser shape predicate
+      // the caller substitutes for this check (see collectInlineSubTypes).
+      // Reaching here with either of them means no such predicate exists — the
+      // schema was excluded from that set by a sibling keyword — so nothing
+      // would prove them and a bare `isObject` is not true-sound.
+      if (hasProperties(schema) || hasRequired(schema)) return null
       checks.push(`isObject(${varName})`)
       // A bare `isObject` is not *true-sound* under a size bound: `{}` passed it
       // while violating `minProperties: 2`, and the fast path then returned the

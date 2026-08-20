@@ -459,8 +459,26 @@ const PROTOTYPE_MEMBER_NAMES = new Set(Object.getOwnPropertyNames(Object.prototy
  * literal and the emitted type, which is exactly what the generated-code type
  * suite exists to catch.
  */
-const declaresPrototypeMemberProperty = (schema: JSONSchema): boolean =>
-  hasProperties(schema) && Object.keys(schema.properties).some((key) => PROTOTYPE_MEMBER_NAMES.has(key))
+const declaresPrototypeMemberProperty = (schema: JSONSchema, depth = 4): boolean => {
+  if (!isSchemaObject(schema) || depth < 0) return false
+  if (hasProperties(schema) && Object.keys(schema.properties).some((key) => PROTOTYPE_MEMBER_NAMES.has(key)))
+    return true
+  // The fallback literal is built recursively — a required object property
+  // contributes its own literal, an array property contributes one per element —
+  // so a prototype-member name *anywhere* under it forces the same assertion.
+  // Without the walk, `{ 'x-a': [{ '0': '' }] }` was emitted bare against an
+  // item type declaring `constructor?: true`, and the inner literal's inherited
+  // `constructor: Function` failed to assign.
+  const record = schema as Record<string, unknown>
+  const children: unknown[] = []
+  if (hasProperties(schema)) children.push(...Object.values(schema.properties))
+  const items = record['items']
+  if (Array.isArray(items)) children.push(...items)
+  else if (items !== undefined) children.push(items)
+  const prefixItems = record['prefixItems']
+  if (Array.isArray(prefixItems)) children.push(...prefixItems)
+  return children.some((child) => declaresPrototypeMemberProperty(child as JSONSchema, depth - 1))
+}
 
 /**
  * Generates a fallback object with required properties filled with default values.
@@ -526,7 +544,11 @@ const generateFallbackObject = (
     }
   }
   result += '\n      }'
-  return declaresPrototypeMemberProperty(schema) ? `${result} as ${typeName}` : result
+  // `as unknown as`, not a plain `as`: when the type carries an index signature
+  // the literal's *inherited* `constructor: Function` is compared against it
+  // ("Type 'Function' is not comparable to type 'Record<string, Alpha>'") and a
+  // single assertion is not enough to silence it.
+  return declaresPrototypeMemberProperty(schema) ? `${result} as unknown as ${typeName}` : result
 }
 
 /**
@@ -539,27 +561,13 @@ const generateFallbackObject = (
  * then a per-type empty value.
  */
 const scalarDefaultLiteral = (schema: JSONSchema): string => {
-  if (!isSchemaObject(schema)) return '{}'
-  if (hasConst(schema)) return JSON.stringify(schema.const)
-  if (hasEnum(schema) && schema.enum.length > 0) return JSON.stringify(schema.enum[0])
-  if (hasType(schema)) {
-    switch (schema.type) {
-      case 'string':
-        return '""'
-      case 'number':
-      case 'integer':
-        return '0'
-      case 'boolean':
-        return 'false'
-      case 'null':
-        return 'null'
-      case 'array':
-        return '[]'
-      case 'object':
-        return '{}'
-    }
-  }
-  return '{}'
+  // `getDefaultValue` is the one place that knows what a valid instance of a
+  // node looks like — bounds, required properties, tuple positions and all — so
+  // this reads it rather than keeping a second, weaker per-type table beside it.
+  // Its `'undefined'` (a node that constrains nothing) is the one answer a
+  // *value* position cannot use, and `{}` is the historical stand-in for it.
+  const value = getDefaultValue(schema)
+  return value === 'undefined' ? '{}' : value
 }
 
 /**
@@ -1231,7 +1239,7 @@ const exactKeyCountOf = (schema: JSONSchema): number | null => {
  * reads each value 3-4x (typeof check, valid branch, undefined check, coerce),
  * so a single hoisted load is strictly cheaper than the inlined optional chain.
  */
-const shouldCacheVariable = (propSchema: JSONSchema, _canFastPath: boolean, _useRefImports: boolean): boolean => {
+const shouldCacheVariable = (propSchema: JSONSchema): boolean => {
   // Non-schema-object properties (true/false JSON Schema literals) generate
   // `undefined` with no value access, so caching would be wasted.
   return isSchemaObject(propSchema)
@@ -1370,20 +1378,41 @@ const generateObjectParser = (
   // `strictKeys` makes an extra a hard error (the throw block further down).
   const strictKeys = hasStrictKeys(schema)
   const stripKeys = strictKeys || stripUnknown
+  // `additionalProperties: false` is answered against THIS schema object's own
+  // `properties` (2020-12 §10.3.2.3) — an `allOf`/`oneOf`/`anyOf` member's
+  // properties are a different schema's and do not count — so composition must
+  // not switch the rejection off, and `{ properties: { a }, additionalProperties:
+  // false, allOf: [{ type: 'object' }] }` accepted `{ a, zz }` where Ajv and the
+  // runtime interpreter both reject it. `hasStrictKeys` keeps its narrower
+  // definition because it also governs the *build*: a strip build drops the
+  // `...input` spread, which the `allOf` parser spread still needs.
+  // (`patternProperties` is excluded here too, but for a different reason — that
+  // shape is routed to generateStrictCombinedParser, which rejects extras itself.)
+  const rejectsUnknownKeys =
+    (strict &&
+      isSchemaObject(schema) &&
+      hasAdditionalProperties(schema) &&
+      schema.additionalProperties === false &&
+      !('patternProperties' in schema)) ||
+    false
+  // Whatever makes the parser care about undeclared keys also has to bind the
+  // fast-path guard, or a clean-looking input carrying an extra would be handed
+  // straight back before the rejection ran.
+  const guardKeys = stripKeys || rejectsUnknownKeys
   // When every declared property is required, the fast-path no-extras test is
   // the cheaper own-key count (see exactKeyCountOf) and the `_hasOnlyKnownKeys`
   // predicate is not emitted at all — the shape validator derives the same
   // decision from the schema, so the cross-function contract stays in sync.
-  const exactKeyCount = stripKeys ? exactKeyCountOf(schema) : null
+  const exactKeyCount = guardKeys ? exactKeyCountOf(schema) : null
   const strictKeyCheck = unknownKeyCheck(propertyKeys, `_knownKeys${typeName}`)
-  if (stripKeys && exactKeyCount === null) {
+  if (guardKeys && exactKeyCount === null) {
     for (const declaration of strictKeyCheck.declarations) {
       preamble.push(`${declaration};`)
     }
     preamble.push(
       `const _hasOnlyKnownKeys${typeName} = (input: Record<string, unknown>): boolean => {\n  for (const _k in input) if (${strictKeyCheck.isUnknown('_k')}) return false;\n  return true;\n};`,
     )
-  } else if (strict && strictKeys) {
+  } else if (rejectsUnknownKeys) {
     // The unknown-key throw loop below still needs the hoisted Set (when the
     // key list is long enough to use one).
     for (const declaration of strictKeyCheck.declarations) {
@@ -1511,7 +1540,7 @@ const generateObjectParser = (
   // checks through inherited properties while the own-key count still matches,
   // so non-plain inputs route to the slow path, where the for..in walk keeps
   // the historical inherited-key rejection.
-  if (stripKeys) {
+  if (guardKeys) {
     fastPathChecks.push(
       exactKeyCount !== null
         ? `Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === ${exactKeyCount}`
@@ -1611,7 +1640,7 @@ const generateObjectParser = (
   // read each cached value once instead of re-accessing `input`).
   const varDeclLines: string[] = []
   for (const { key, varName, propSchema } of propInfo) {
-    if (shouldCacheVariable(propSchema, canFastPath, useRefImports)) {
+    if (shouldCacheVariable(propSchema)) {
       varDeclLines.push(`  const ${varName} = ${safeAccessor('input', key)};`)
     }
   }
@@ -1657,7 +1686,7 @@ const generateObjectParser = (
     }
 
     for (const { key, varName, isRequired, propSchema } of propInfo) {
-      const shouldCache = shouldCacheVariable(propSchema, canFastPath, useRefImports)
+      const shouldCache = shouldCacheVariable(propSchema)
       const accessor = shouldCache ? varName : safeAccessor('input', key)
 
       // Handle inline nested objects via their private sub-parser, mirroring
@@ -1841,9 +1870,7 @@ const generateObjectParser = (
         }
         continue
       }
-      const accessor = shouldCacheVariable(propSchema, canFastPath, useRefImports)
-        ? varName
-        : safeAccessor('input', key)
+      const accessor = shouldCacheVariable(propSchema) ? varName : safeAccessor('input', key)
       fields.push(
         isRequired
           ? `    ${safeLiteralKey(key)}: ${accessor},`
@@ -1852,7 +1879,14 @@ const generateObjectParser = (
     }
     lines.push(`  if (${deepGuardExpr}) return {`)
     lines.push(fields.join('\n'))
-    lines.push(`  } as ${typeName};`)
+    // `as unknown as`, because every field here is an `unknown` read that only
+    // the guard above proves anything about. A plain assertion looked checkable
+    // and was not: `_x !== undefined` narrows `unknown` to `{} | null`, which
+    // TypeScript then refuses to convert to a `$ref` type ("Property '0' is
+    // missing in type '{}'"), and `Array.isArray(_x)` narrows to `any[]`, which
+    // it refuses to convert to a tuple. Both are generated files that do not
+    // build, for a check that could never have caught a real mismatch.
+    lines.push(`  } as unknown as ${typeName};`)
   }
 
   const lines: string[] = []
@@ -1933,7 +1967,7 @@ const generateObjectParser = (
       for (const assertionLine of assertionLines) {
         lines.push(assertionLine)
       }
-      if (strictKeys) {
+      if (rejectsUnknownKeys) {
         // for..in (not Object.keys) deliberately: this loop is cold — the fast
         // path already proved the key set — but swapping in the keys-array
         // iterator here once regressed the *hot* path several percent on CI:
@@ -2598,6 +2632,11 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
     stripUnknown,
     ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
   }
+  // The pattern-/additional-property parsers build their result with a copy
+  // loop and emit no private sub-parsers, so an inline object property there is
+  // validated by nobody unless the assertions prove its shape themselves. The
+  // object parser does emit them, and keeps the default.
+  const copyLoopContext: StrictAssertionContext = { ...context, subParsers: false }
 
   // Special case for the self-referential JSON Schema meta-schema type (e.g.
   // `Schema` / `SchemaObject`) - it can be any JSON Schema. This is an OpenAPI
@@ -2639,7 +2678,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
       strict,
       stripUnknown,
       caseInsensitive,
-      context,
+      copyLoopContext,
     )
   }
 
@@ -2742,7 +2781,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
       useRefImports,
       suffix,
       strict,
-      context,
+      copyLoopContext,
     )
   }
 
@@ -2762,7 +2801,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
       useRefImports,
       suffix,
       strict,
-      context,
+      copyLoopContext,
     )
   }
 

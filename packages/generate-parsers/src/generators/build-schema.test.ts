@@ -1014,4 +1014,30 @@ describe('build-schema', () => {
       ).rejects.toThrow(/Could not resolve \$ref/)
     })
   })
+
+  // The root type name is emitted verbatim as `export type <name>` *and*,
+  // lowercased, becomes the output filename — which the caller is told to write
+  // itself. A name derived from the document being generated (an OpenAPI
+  // `title`) is therefore schema-controlled text reaching both.
+  describe('root type name validation', () => {
+    const schema = { type: 'object', properties: { a: { type: 'string' } } } as JSONSchema
+
+    it('refuses a name that would escape the output directory', async () => {
+      await expect(buildSchema(schema, '../../escaped')).rejects.toThrow('Invalid root type name')
+    })
+
+    it('refuses a name that would break out of the emitted source', async () => {
+      await expect(buildSchema(schema, 'x`${evil()}`')).rejects.toThrow('Invalid root type name')
+      await expect(buildSchema(schema, 'A B')).rejects.toThrow('Invalid root type name')
+      await expect(buildSchema(schema, '')).rejects.toThrow('Invalid root type name')
+      await expect(buildSchema(schema, '0leading')).rejects.toThrow('Invalid root type name')
+    })
+
+    it('accepts every identifier, including the non-ASCII ones ref naming produces', async () => {
+      for (const name of ['Doc', '_private', '$Dollar', 'A1', '中文']) {
+        const files = await buildSchema(schema, name)
+        expect(files.map((file) => file.filename)).toContain(`${name.toLowerCase()}.ts`)
+      }
+    })
+  })
 })

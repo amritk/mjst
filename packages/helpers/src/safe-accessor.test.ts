@@ -38,12 +38,15 @@ describe('safe-accessor', () => {
   // input that carries neither. That made `input.constructor === undefined`
   // impossible to satisfy — `validateDocShape` returned false for every valid
   // object — and made the parser copy a `__proto__` key the input never had.
+  // The trailing `as any` is what keeps the emitted code compiling: every other
+  // accessor is a property-access path, which TypeScript narrows across repeated
+  // reads, and a conditional expression is not.
   it('guards Object.prototype member names with an own-property check', () => {
     expect(safeAccessor('input', 'constructor')).toBe(
-      '(input != null && Object.hasOwn(input, "constructor") ? input["constructor"] : undefined)',
+      '((input != null && Object.hasOwn(input, "constructor") ? input["constructor"] : undefined) as any)',
     )
     expect(safeAccessor('input', '__proto__')).toBe(
-      '(input != null && Object.hasOwn(input, "__proto__") ? input["__proto__"] : undefined)',
+      '((input != null && Object.hasOwn(input, "__proto__") ? input["__proto__"] : undefined) as any)',
     )
   })
 
@@ -57,7 +60,7 @@ describe('safe-accessor', () => {
   // `Object.hasOwn` throws on null/undefined, so it has to short-circuit anyway.
   it('drops the optional-chaining marker in favour of the null guard', () => {
     expect(safeAccessor('input?', 'toString')).toBe(
-      '(input != null && Object.hasOwn(input, "toString") ? input["toString"] : undefined)',
+      '((input != null && Object.hasOwn(input, "toString") ? input["toString"] : undefined) as any)',
     )
   })
 

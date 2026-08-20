@@ -146,7 +146,7 @@ const containsCoverage = (
   match: MatchFn,
 ): Coverage | null => {
   if (!('contains' in schema)) return NONE
-  const itemMatch = match(`(${acc} as unknown[])[${indexVar}]`, schema['contains'] as JSONSchema, nest(ctx))
+  const itemMatch = match(`(${acc} as any[])[${indexVar}]`, schema['contains'] as JSONSchema, nest(ctx))
   if (itemMatch === null) return null
   // A `contains` that matches anything evaluates every item there is.
   if (itemMatch === 'true') return { all: true, terms: [] }
@@ -316,7 +316,11 @@ export const unevaluatedItemsExpr = (
   if (coverage === null) return null
   if (coverage.all) return undefined
 
-  const elements = `(${acc} as unknown[])`
+  // `any[]`, not `unknown[]`, for the same reason as {@link recordOf}: a tuple
+  // position is read more than once (its type test, then that type's
+  // constraint) and a cast expression is not a reference, so nothing narrows
+  // between the reads and `(x as unknown[])[0].length` failed to compile.
+  const elements = `(${acc} as any[])`
   const covered = coverage.terms.length > 0 ? orJoin(coverage.terms) : null
 
   if (unevaluated === false) {
