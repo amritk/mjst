@@ -1484,6 +1484,37 @@ describe('resource exhaustion through a mapping key', () => {
   })
 })
 
+describe('the expansion budget ceiling', () => {
+  it('does not let padding buy a bigger budget', { timeout: 5_000 }, () => {
+    // The budget was `sourceLength * 100` nodes with no ceiling, so harmless
+    // padding in front of a bomb raised the bar it had to clear: 2.7 MB of keys
+    // ahead of a 600-byte bomb bought a 279-million-node budget, and the
+    // projection reached 3.5 GB of resident memory over thirteen seconds before
+    // throwing. Ten times the padding is an out-of-memory kill, which is the one
+    // failure this guard exists to rule out. Capped, the same document throws in
+    // well under a second — hence the timeout, which is the assertion.
+    const padding = Array.from({ length: 130_000 }, (_, i) => `pad${i}: value${i}`).join('\n')
+    const bomb = ['a0: &a0 [x, x, x, x, x, x, x, x, x, x]']
+    for (let level = 1; level < 12; level++) {
+      bomb.push(
+        `a${level}: &a${level} [${Array(10)
+          .fill(`*a${level - 1}`)
+          .join(', ')}]`,
+      )
+    }
+    bomb.push(`boom: [*a11, *a11]`)
+    expect(() => parseDocument(`${padding}\n${bomb.join('\n')}\n`).toJS()).toThrow(/resource-exhaustion/)
+  })
+
+  it('still projects a document that legitimately leans on aliases', () => {
+    const shared = `base: &b\n${Array.from({ length: 20 }, (_, i) => `  f${i}: value${i}`).join('\n')}\n`
+    const uses = Array.from({ length: 20_000 }, (_, i) => `u${i}: *b`).join('\n')
+    const value = parseDocument(`${shared}${uses}\n`).toJS() as Record<string, unknown>
+    expect(Object.keys(value)).toHaveLength(20_001)
+    expect(value.u19999).toEqual(value.base)
+  })
+})
+
 describe('scalar folding cost', () => {
   it('folds a scalar holding a long run of interior whitespace in linear time', { timeout: 5_000 }, () => {
     // Trailing-whitespace trimming used to be `replace(/[ \t]+$/, '')`. The

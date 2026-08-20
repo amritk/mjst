@@ -2878,14 +2878,34 @@ const setMapKey = (obj: Record<string, unknown>, key: string, value: unknown): v
 
 /**
  * Nodes an alias-free document may materialize per source byte, plus a floor for
- * small documents. Only exponential alias expansion exceeds this — an ordinary
- * document has at most ~one node per few source bytes.
+ * small documents. Only exponential alias expansion exceeds this — measured over
+ * the vendored OpenAPI specs, a real document runs between 0.03 and 0.1 nodes
+ * per byte, and even a synthetic one built to lean on aliases (a shared subtree
+ * pulled in 500 times) reaches only 4.6.
  */
 const ALIAS_NODES_PER_BYTE = 100
 const MIN_ALIAS_NODE_BUDGET = 100_000
 
+/**
+ * The ceiling the per-byte allowance is held to, whatever the source length.
+ *
+ * Without one the guard scaled with the document, so padding a bomb raised the
+ * bar it had to clear: 2.7 MB of harmless keys in front of a 600-byte alias bomb
+ * bought a 279-million-node budget, and the projection reached 3.5 GB of resident
+ * memory over thirteen seconds before the throw. Ten times the padding is an
+ * out-of-memory kill — an uncatchable crash, which is precisely what this budget
+ * exists to prevent. A guard whose own limit is unbounded is not a guard.
+ *
+ * Twenty million nodes is roughly 250 MB of projected JavaScript values, and
+ * some 250 times the largest real specification here (2.7 MB of OpenAPI, 81,537
+ * nodes). A document that genuinely needs more cannot be held as a JS value on a
+ * default heap anyway, so the trade is a clear catchable error in place of a
+ * crash.
+ */
+const MAX_ALIAS_NODE_BUDGET = 20_000_000
+
 const newExpansionBudget = (sourceLength: number): ExpansionBudget => ({
-  left: Math.max(MIN_ALIAS_NODE_BUDGET, sourceLength * ALIAS_NODES_PER_BYTE),
+  left: Math.min(MAX_ALIAS_NODE_BUDGET, Math.max(MIN_ALIAS_NODE_BUDGET, sourceLength * ALIAS_NODES_PER_BYTE)),
 })
 
 /**
