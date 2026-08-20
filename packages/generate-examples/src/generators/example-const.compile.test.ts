@@ -33,6 +33,10 @@ const MAIN_FILE = `${VFS_DIR}/main.ts`
 const FAST_CHECK_STUB = `
 export type Arbitrary<T> = {
   readonly __arb: T
+  // Both overloads, matching real fast-check: the generated validating filter
+  // widens its base to \`Arbitrary<unknown>\` and narrows with a type guard, which
+  // only type-checks against the refinement signature.
+  filter<U extends T>(refinement: (value: T) => value is U): Arbitrary<U>
   filter(predicate: (value: T) => boolean): Arbitrary<T>
   map<U>(mapper: (value: T) => U): Arbitrary<U>
   chain<U>(chainer: (value: T) => Arbitrary<U>): Arbitrary<U>
@@ -61,7 +65,9 @@ export const object: Comb
 export const oneof: Comb
 export const anything: Comb
 export const bigInt: Comb
-export const letrec: any
+export const letrec: <T>(
+  builder: (tie: <K extends keyof T>(key: K) => Arbitrary<T[K]>) => { [K in keyof T]: Arbitrary<T[K]> },
+) => { [K in keyof T]: Arbitrary<T[K]> }
 `
 
 /** A `@amritk/runtime-validators` stub exporting the `validate` a filtered arbitrary calls. */
@@ -268,6 +274,21 @@ describe('generated example const compiles', () => {
       expect(compileErrors(code)).toEqual([])
     })
   }
+
+  it('asserts a recursive definition whose example cuts the cycle', { timeout: COMPILE_TIMEOUT }, () => {
+    // The canonical linked list. The example has to stop somewhere and stops with
+    // `null`, which `type Node = { next: Node }` does not admit — so the
+    // definition's own generated file did not compile.
+    const recursiveRoot = {
+      $defs: { node: { type: 'object', properties: { next: { $ref: '#/$defs/node' } }, required: ['next'] } },
+    }
+    const code = generateExampleFile(recursiveRoot.$defs.node as JSONSchema, 'Node', {
+      rootSchema: recursiveRoot,
+      selfRef: '#/$defs/node',
+    })
+    expect(code).toContain('export const nodeExample: Node = { "next": { "next": null } } as unknown as Node')
+    expect(compileErrors(code)).toEqual([])
+  })
 
   it('asserts a nested example whose $ref definition needs one', { timeout: COMPILE_TIMEOUT }, () => {
     // The flag has to survive the per-ref memo: the key is invented while deriving

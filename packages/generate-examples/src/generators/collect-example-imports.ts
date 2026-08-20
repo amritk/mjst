@@ -14,6 +14,8 @@ import {
 } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { assertGeneratorDepth } from './assert-generator-depth'
+
 /**
  * Options for controlling how example imports are collected.
  */
@@ -67,13 +69,18 @@ const buildImport = (ref: string, suffix: string): string => {
  * and ignores sibling keywords), so recursion is bounded by the schema's own
  * structural nesting and cannot loop on a self-referential ref.
  */
-const collectRefs = (schema: JSONSchema): string[] => {
+const collectRefs = (schema: JSONSchema, depth = 0): string[] => {
+  // The same cap the arbitrary and the deriver honour. This walk is cheaper per
+  // level, so it survives deeper — but a document the other two refuse is one
+  // this package cannot generate anyway, and dying here with a bare `RangeError`
+  // would only bury the real message.
+  assertGeneratorDepth(depth, 'collectExampleImports')
   if (!isSchemaObject(schema)) return []
   if (hasRef(schema)) return [schema.$ref]
 
   const refs: string[] = []
   const visit = (sub: JSONSchema): void => {
-    refs.push(...collectRefs(sub))
+    refs.push(...collectRefs(sub, depth + 1))
   }
 
   if (hasOneOf(schema)) schema.oneOf.forEach(visit)

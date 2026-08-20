@@ -36,9 +36,16 @@ import {
 } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { assertGeneratorDepth } from './assert-generator-depth'
+
+/** A schema node that is not a boolean shorthand — what the depth guard has already proved. */
+type SchemaObject = Exclude<JSONSchema, boolean>
+
+import { closedValueSet } from './closed-value-set'
 import { mergeAllOf } from './derive-example'
+import { isObjectLike } from './is-object-like'
 import { satisfiesScalarConstraints } from './satisfies-scalar-constraints'
-import { needsValidationFilter, withResolvableDefs } from './schema-validation'
+import { canBuildGuard, needsValidationFilter, withResolvableDefs } from './schema-validation'
 
 /**
  * Derives the arbitrary const name from a type name.
@@ -82,6 +89,8 @@ type ExprCtx = {
   readonly selfArbName: string
   readonly usedTie: { value: boolean }
   readonly lazyRefFilenames: ReadonlySet<string>
+  /** Current nesting of the `arbitraryExpr` recursion; see the depth guard there. */
+  readonly depth: { value: number }
 }
 
 /**
@@ -162,6 +171,35 @@ const usableMultipleOf = (schema: JSONSchema): number | undefined =>
 const clampLow = (low: number | undefined, high: number | undefined): number | undefined =>
   low !== undefined && high !== undefined && low > high ? high : low
 
+/**
+ * Assertions `fc.stringMatching` cannot generate from. fast-check builds a value
+ * by walking the pattern, and a lookahead or lookbehind is a constraint on text
+ * it has not produced yet — it throws "Assertions of kind Lookahead not
+ * implemented yet!" the first time a value is drawn. Real specifications use
+ * these constantly (password rules, "must contain a digit"), so the arbitrary
+ * falls back to a plain string rather than shipping a module that dies on use.
+ */
+const UNSUPPORTED_ASSERTION = /\(\?<?[=!]/
+
+/**
+ * A `pattern` that `fc.stringMatching` can actually be handed, or `undefined`.
+ *
+ * The emitted `new RegExp(<pattern>)` runs at module scope, so a pattern that is
+ * not valid JavaScript regex syntax (`"["`) threw a `SyntaxError` at *import* of
+ * the generated file and took every export in it down — including the arbitraries
+ * that were fine. `deriveObject` and `matchesPattern` already treat an
+ * uncompilable pattern as simply not applying; this brings the arbitrary in line.
+ */
+const usablePattern = (pattern: string): string | undefined => {
+  if (UNSUPPORTED_ASSERTION.test(pattern)) return undefined
+  try {
+    new RegExp(pattern)
+    return pattern
+  } catch {
+    return undefined
+  }
+}
+
 /** Builds a `fc.string({ ... })` expression honouring format and length constraints. */
 const stringExpr = (schema: JSONSchema): string => {
   if (hasFormat(schema)) {
@@ -191,11 +229,12 @@ const stringExpr = (schema: JSONSchema): string => {
   const maxLength = countBound(hasMaxLength(schema) ? schema.maxLength : undefined, 'upper')
   const minLength = clampLow(countBound(hasMinLength(schema) ? schema.minLength : undefined, 'lower'), maxLength)
 
-  if (hasPattern(schema)) {
+  const pattern = hasPattern(schema) ? usablePattern(schema.pattern) : undefined
+  if (pattern !== undefined) {
     // Build the regex via `new RegExp(<json-string>)` rather than inlining the
     // pattern into a `/.../ ` literal: a pattern containing `/` (e.g. `^/api/v\d+$`)
     // would otherwise close the literal early and emit invalid TypeScript.
-    const base = `fc.stringMatching(new RegExp(${JSON.stringify(schema.pattern)}))`
+    const base = `fc.stringMatching(new RegExp(${JSON.stringify(pattern)}))`
     // `stringMatching` takes no length bounds, so honour any min/maxLength with a
     // filter instead of silently dropping them. Only emit it when a bound exists.
     const checks: string[] = []
@@ -237,8 +276,9 @@ const integerBounds = (schema: JSONSchema): { min: number | undefined; max: numb
   if (maximum !== undefined) maxs.push(Math.floor(maximum))
   if (exclusiveMaximum !== undefined) maxs.push(Math.ceil(exclusiveMaximum) - 1)
 
-  const max = maxs.length > 0 ? Math.min(...maxs) : undefined
-  return { min: clampLow(mins.length > 0 ? Math.max(...mins) : undefined, max), max }
+  const max = clampIntegerBound(maxs.length > 0 ? Math.min(...maxs) : undefined)
+  const min = clampIntegerBound(mins.length > 0 ? Math.max(...mins) : undefined)
+  return { min: clampLow(min, max), max }
 }
 
 /**
@@ -249,6 +289,20 @@ const integerBounds = (schema: JSONSchema): { min: number | undefined; max: numb
  * large `m` and emit values that are not exact integers at all.
  */
 const DEFAULT_INTEGER_MAGNITUDE = 2 ** 31
+
+/**
+ * Confines an integer bound to the range `fc.integer` actually supports.
+ *
+ * fast-check clamps its own defaults to 32 bits, so a bound beyond that is not
+ * merely large — it is *inconsistent*: `{ min: 1e30 }` leaves fast-check with a
+ * minimum above its own maximum and it throws at import, "maximum value should
+ * be equal or greater than the minimum one". The upper end is one below the
+ * magnitude, matching `fc.integer`'s own inclusive default of `2 ** 31 - 1`. A bound past the representable
+ * range cannot be honoured either way; clamping keeps the module loadable, and
+ * the example's own validity check is what reports the schema.
+ */
+const clampIntegerBound = (value: number | undefined): number | undefined =>
+  value === undefined ? undefined : Math.max(-DEFAULT_INTEGER_MAGNITUDE, Math.min(DEFAULT_INTEGER_MAGNITUDE - 1, value))
 
 /**
  * Builds an integer arbitrary whose values are multiples of `m`, analytically:
@@ -441,28 +495,55 @@ const arrayExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
     containsSchema !== undefined ? Math.max(1, minContains) : 0,
   )
 
-  const maxLength = countBound(hasMaxItems(schema) ? schema.maxItems : undefined, 'upper')
+  const unique = hasUniqueItems(schema) && schema.uniqueItems === true
+
+  // A `uniqueArray` cannot fill more slots than the item schema has distinct
+  // values, and fast-check retries forever rather than reporting it — so
+  // `{ items: { type: 'boolean' }, minItems: 5, uniqueItems: true }` produced an
+  // arbitrary that hung the moment it was sampled. Cap both bounds at the size of
+  // the value set; the schema has no instance either way, and the example's own
+  // validity check is what reports that.
+  const distinctCap = unique
+    ? closedValueSet(hasItems(schema) && isSchemaObject(schema.items) ? schema.items : containsSchema)?.length
+    : undefined
+
+  const declaredMax = countBound(hasMaxItems(schema) ? schema.maxItems : undefined, 'upper')
+  const maxLength = distinctCap !== undefined ? Math.min(declaredMax ?? distinctCap, distinctCap) : declaredMax
   const clampedMin = clampLow(minLength, maxLength) ?? minLength
 
   const opts: string[] = []
   if (clampedMin > 0) opts.push(`minLength: ${clampedMin}`)
   if (maxLength !== undefined) opts.push(`maxLength: ${maxLength}`)
 
-  const fn = hasUniqueItems(schema) && schema.uniqueItems === true ? 'fc.uniqueArray' : 'fc.array'
+  const fn = unique ? 'fc.uniqueArray' : 'fc.array'
   return opts.length > 0 ? `${fn}(${items}, { ${opts.join(', ')} })` : `${fn}(${items})`
 }
 
 /** The arbitrary for keys of the open-map (extra-property) part of an object. */
 const extraKeyArb = (schema: JSONSchema, firstPatternSource: string | undefined): string => {
   // Keys must satisfy `patternProperties` (so the value schema applies) or, failing
-  // that, a `propertyNames` pattern. Both map onto `fc.stringMatching`.
-  if (firstPatternSource !== undefined) return `fc.stringMatching(new RegExp(${JSON.stringify(firstPatternSource)}))`
+  // that, a `propertyNames` pattern. Both map onto `fc.stringMatching` — but only
+  // a pattern fast-check can use; see {@link usablePattern}.
+  const fromPattern = firstPatternSource !== undefined ? usablePattern(firstPatternSource) : undefined
+  if (fromPattern !== undefined) return `fc.stringMatching(new RegExp(${JSON.stringify(fromPattern)}))`
   const propertyNames = hasPropertyNames(schema) ? schema.propertyNames : undefined
   if (propertyNames !== undefined && isSchemaObject(propertyNames) && hasPattern(propertyNames)) {
-    return `fc.stringMatching(new RegExp(${JSON.stringify(propertyNames.pattern)}))`
+    const fromNames = usablePattern(propertyNames.pattern)
+    if (fromNames !== undefined) return `fc.stringMatching(new RegExp(${JSON.stringify(fromNames)}))`
   }
   return 'fc.string()'
 }
+
+/**
+ * The `required` entries that name an actual property.
+ *
+ * JSON Schema says `required` is an array of strings, but it is untrusted input
+ * and a malformed document can put anything there. A number leaked all the way
+ * into the generated `fc.record(…, { requiredKeys: [1] })`, where fast-check
+ * expects a key of the model and TypeScript rejects the whole file.
+ */
+const requiredKeyNames = (schema: JSONSchema): string[] =>
+  hasRequired(schema) ? schema.required.filter((key): key is string => typeof key === 'string') : []
 
 /** Builds a `fc.record(...)` / `fc.dictionary(...)` expression for an object schema. */
 const objectExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
@@ -498,7 +579,7 @@ const objectExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
   if (hasProperties(schema)) {
     for (const [key, propSchema] of Object.entries(schema.properties)) propArbs.set(key, arbitraryExpr(propSchema, ctx))
   }
-  const required = new Set(hasRequired(schema) ? schema.required : [])
+  const required = new Set(requiredKeyNames(schema))
   // The value arbitrary for a key not declared in `properties` (a dependency key).
   const openValueArb = extraValueArb ?? 'fc.anything()'
 
@@ -522,7 +603,7 @@ const objectExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
           if (!propArbs.has(key)) propArbs.set(key, arbitraryExpr(propSchema, ctx))
         }
       }
-      if (hasRequired(sub)) for (const key of sub.required) required.add(key)
+      for (const key of requiredKeyNames(sub)) required.add(key)
     }
   }
   // A `dependentSchemas`/`dependentRequired` key may be required without a declared
@@ -613,8 +694,22 @@ const scalarExpr = (type: string, schema: JSONSchema, ctx: ExprCtx): string => {
  * Everything else maps to the appropriate `fc.*` combinator.
  */
 const arbitraryExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
+  // Same guard, and same reason, as `deriveExample`'s: a deeply nested document
+  // otherwise dies with a bare `RangeError` naming nothing about the input. The
+  // counter rides on the context since this is the one recursive entry point.
+  assertGeneratorDepth(ctx.depth.value, 'generateArbitrary')
   if (!isSchemaObject(schema)) return 'fc.anything()'
 
+  ctx.depth.value++
+  try {
+    return arbitraryExprAtDepth(schema, ctx)
+  } finally {
+    ctx.depth.value--
+  }
+}
+
+/** The body of {@link arbitraryExpr}, once its depth guard has admitted the node. */
+const arbitraryExprAtDepth = (schema: SchemaObject, ctx: ExprCtx): string => {
   if (hasRef(schema)) {
     const name = arbitraryName(refToName(schema.$ref, ctx.suffix))
     // A reference back to the type being generated must be tied lazily; an eager
@@ -687,6 +782,11 @@ const arbitraryExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
     return chooseExpr(schema.type.map((type) => scalarExpr(type, schema, ctx)))
   }
 
+  // A schema can describe an object without ever saying so — `{ properties: … }`
+  // with `type` omitted is ordinary OpenAPI. The type generator infers that, so
+  // the arbitrary has to infer it too or the two disagree about the shape.
+  if (isObjectLike(schema)) return objectExpr(schema, ctx)
+
   return 'fc.anything()'
 }
 
@@ -715,7 +815,7 @@ export const generateArbitrary = (
   rootSchema?: Record<string, unknown>,
 ): string => {
   const selfArbName = arbitraryName(typeName)
-  const ctx: ExprCtx = { suffix, selfArbName, usedTie: { value: false }, lazyRefFilenames }
+  const ctx: ExprCtx = { suffix, selfArbName, usedTie: { value: false }, lazyRefFilenames, depth: { value: 0 } }
   const expr = arbitraryExpr(schema, ctx)
 
   const body = ctx.usedTie.value
@@ -726,7 +826,13 @@ export const generateArbitrary = (
   // `oneOf` exclusivity, the presence-gated object keywords) are enforced by a
   // post-generation filter: the arbitrary samples a candidate and rejects it
   // unless a runtime validator built from the same schema accepts it.
-  if (needsValidationFilter(schema)) {
+  // A filter is only worth emitting when the validator behind it can actually be
+  // built. The generated file calls `__mjstValidate(<schema>)` at module scope
+  // with nothing to catch it, so a schema the interpreter refuses — an
+  // uncompilable `pattern`, a `$ref` leading outside the fragment — threw at
+  // *import* and took every export in the file down with it. Ask here, where the
+  // failure is a warning and the arbitrary simply goes unfiltered.
+  if (needsValidationFilter(schema) && canBuildGuard(schema, rootSchema)) {
     const validatorName = `${selfArbName}Validator`
     const embedded = JSON.stringify(withResolvableDefs(schema, rootSchema))
     // The predicate is a type guard, not a plain boolean callback. A filtered
@@ -735,9 +841,20 @@ export const generateArbitrary = (
     // what narrows the samples down to the declared type. Written as
     // `(value) => …` the filter returns the wide type and the assignment fails
     // to compile; `value is T` says out loud what the runtime check does.
+    //
+    // The base is widened to `Arbitrary<unknown>` first. `filter`'s refinement
+    // overload is `filter<U extends T>`, so the guard only type-checks when the
+    // declared type extends what the base expression happens to infer — and the
+    // base is not always a supertype. It is a *different* shape: `contains`
+    // generates `number[]` for a declared `unknown[]`, `dependentRequired`
+    // promotes an optional key to required, `dependentSchemas` adds one the type
+    // never declared. Each of those raised TS2677 and broke the file. Widening
+    // says the honest thing — the combinators produce something we cannot name,
+    // and the validator is the only reason the result is a `T`.
     return (
       `const ${validatorName} = ${VALIDATE_IMPORT_NAME}(${embedded})\n` +
-      `export const ${selfArbName}: fc.Arbitrary<${typeName}> = (${body}).filter(` +
+      `export const ${selfArbName}: fc.Arbitrary<${typeName}> = ` +
+      `(${body} as fc.Arbitrary<unknown>).filter(` +
       `(value): value is ${typeName} => ${validatorName}(value) === true)`
     )
   }

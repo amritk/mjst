@@ -37,6 +37,9 @@ import {
 } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { assertGeneratorDepth } from './assert-generator-depth'
+import { closedValueSet } from './closed-value-set'
+import { isObjectLike } from './is-object-like'
 import { satisfiesScalarConstraints } from './satisfies-scalar-constraints'
 import { makeInstanceCheck, needsValidationFilter } from './schema-validation'
 
@@ -335,6 +338,8 @@ type DeriveContext = {
   readonly active: Set<string>
   cycleBroken: boolean
   undeclaredKey: boolean
+  /** Current nesting of the `derive` recursion; see the depth guard there. */
+  depth: number
 }
 
 /**
@@ -351,6 +356,7 @@ const newContext = (rootSchema: Record<string, unknown> | undefined): DeriveCont
   active: new Set(),
   cycleBroken: false,
   undeclaredKey: false,
+  depth: 0,
 })
 
 const contextFor = (rootSchema: Record<string, unknown> | undefined): DeriveContext => {
@@ -385,14 +391,14 @@ export const deriveExample = (schema: JSONSchema, rootSchema?: Record<string, un
   deriveReported(schema, rootSchema).value
 
 /**
- * {@link deriveExample} plus the one fact about *how* the value was built that
+ * {@link deriveExample} plus the two facts about *how* the value was built that
  * the emitter needs: whether any object in it gained a key the generated type
- * will not declare.
+ * will not declare, and whether a recursive `$ref` had to be cut short.
  */
 const deriveReported = (
   schema: JSONSchema,
   rootSchema?: Record<string, unknown>,
-): { value: unknown; undeclaredKey: boolean } => {
+): { value: unknown; undeclaredKey: boolean; cycleBroken: boolean } => {
   const ctx = contextFor(rootSchema)
   // A previous call can only have left `active` dirty by unwinding through an
   // exception, but a stale ancestor there would silently truncate this
@@ -400,18 +406,33 @@ const deriveReported = (
   ctx.active.clear()
   ctx.cycleBroken = false
   ctx.undeclaredKey = false
+  ctx.depth = 0
   const value = derive(schema, ctx)
-  return { value, undeclaredKey: ctx.undeclaredKey }
+  return { value, undeclaredKey: ctx.undeclaredKey, cycleBroken: ctx.cycleBroken }
 }
 
 /** The recursive entry point, threading the shared {@link DeriveContext}. */
 const derive = (schema: JSONSchema, ctx: DeriveContext): unknown => {
+  // A pathologically nested document used to die with a bare `RangeError:
+  // Maximum call stack size exceeded` from somewhere inside `deriveObject` — a
+  // trace that names nothing about the input. The shared cap says which traversal
+  // ran out and what to do about it, exactly as the walkers in `@amritk/helpers`
+  // do, and it sits far above anything a real schema reaches. The counter lives
+  // on the context because `derive` is the single recursive entry point, so
+  // nothing below it has to carry a depth argument.
+  assertGeneratorDepth(ctx.depth, 'deriveExample')
   if (!isSchemaObject(schema)) return null
-  const base = deriveBase(schema, ctx)
-  // Keywords the structural deriver can't fully honour (`if`/`then`/`else`,
-  // `not`, `oneOf` exclusivity) are reconciled by validating candidates against a
-  // real validator and picking the first that passes.
-  return needsValidationFilter(schema) ? refineExample(schema, base, ctx) : base
+
+  ctx.depth++
+  try {
+    const base = deriveBase(schema, ctx)
+    // Keywords the structural deriver can't fully honour (`if`/`then`/`else`,
+    // `not`, `oneOf` exclusivity) are reconciled by validating candidates against
+    // a real validator and picking the first that passes.
+    return needsValidationFilter(schema) ? refineExample(schema, base, ctx) : base
+  } finally {
+    ctx.depth--
+  }
 }
 
 /**
@@ -508,6 +529,11 @@ const deriveBase = (schema: JSONSchema, ctx: DeriveContext): unknown => {
   if (Array.isArray(schema.type) && schema.type.length > 0) {
     return deriveForType(schema.type[0] as string, schema, ctx)
   }
+
+  // Matches the inference the arbitrary and the type generator both make: a
+  // schema with `properties` and no `type` is still an object, and answering
+  // `null` for one produced an example its own declared type rejects.
+  if (isObjectLike(schema)) return deriveObject(schema, ctx)
 
   return null
 }
@@ -689,7 +715,12 @@ const deriveObject = (schema: JSONSchema, ctx: DeriveContext): Record<string, un
   }
   // A required key with no `properties` entry still needs a value.
   if (hasRequired(schema)) {
-    for (const key of schema.required) if (!Object.hasOwn(out, key)) addKey(key)
+    // Only a string entry names a property; a malformed document can put
+    // anything in `required`, and a non-string leaked into the emitted
+    // `requiredKeys`, which TypeScript then rejected.
+    for (const key of schema.required) {
+      if (typeof key === 'string' && !Object.hasOwn(out, key)) addKey(key)
+    }
   }
   // `dependentRequired`: once a trigger key is present, its dependencies must be too.
   if (hasDependentRequired(schema)) {
@@ -757,7 +788,7 @@ const applyDependentSchema = (
   if (hasRequired(sub)) {
     const propSchemas = hasProperties(sub) ? sub.properties : {}
     for (const key of sub.required) {
-      if (Object.hasOwn(out, key)) continue
+      if (typeof key !== 'string' || Object.hasOwn(out, key)) continue
       add(key, propSchemas[key])
     }
   }
@@ -864,7 +895,11 @@ const deriveNumber = (schema: JSONSchema, isInteger: boolean): number => {
   let value = Number.isFinite(lo) ? lo : Number.isFinite(hi) ? Math.min(0, hi) : 0
   if (isInteger) value = Math.ceil(value)
 
-  if (hasMultipleOf(schema) && schema.multipleOf > 0) {
+  // A `multipleOf` that is not a finite positive number is not a step anything
+  // can be a multiple of: `Math.ceil(0 / Infinity) * Infinity` is `NaN`, and
+  // `serializeValue` renders that as `null` — an example the declared `number`
+  // type rejects. Ignore it, exactly as the arbitrary side does.
+  if (hasMultipleOf(schema) && Number.isFinite(schema.multipleOf) && schema.multipleOf > 0) {
     const m = schema.multipleOf
     value = Math.ceil(value / m - 1e-9) * m
     // Rounding up can overshoot the upper bound; drop to the largest multiple
@@ -937,6 +972,14 @@ const deriveArray = (schema: JSONSchema, ctx: DeriveContext): unknown[] => {
   // check in `generateExampleConst` reports the schema.
   const count = choices !== undefined ? Math.min(wanted, choices.length) : wanted
 
+  // `items` constrains *every* element, `contains` only asks that some element
+  // additionally match. So a `contains`-derived value is only usable when `items`
+  // accepts it too: `{ items: string, contains: number }` has no instance at all,
+  // and taking the `contains` value put a number into a declared `string[]`.
+  // Falling back to `items` keeps the example typed as its own schema says, and
+  // `generateExampleConst`'s final check reports the unsatisfiable schema.
+  const itemsCheck = rest !== undefined && contains !== undefined ? makeInstanceCheck(rest, ctx.rootSchema) : undefined
+
   const result: unknown[] = []
   for (let i = 0; i < count; i++) {
     if (choices !== undefined) {
@@ -944,30 +987,17 @@ const deriveArray = (schema: JSONSchema, ctx: DeriveContext): unknown[] => {
       continue
     }
     // Make the first `minContains` items satisfy `contains`; the rest use `items`.
-    const itemSchema = contains !== undefined && i < minContains ? contains : elem
-    const base = itemSchema !== undefined ? derive(itemSchema, ctx) : null
-    result.push(unique ? distinctify(base, i, itemSchema) : base)
+    const useContains = contains !== undefined && i < minContains
+    const itemSchema = useContains ? contains : elem
+    let chosen = itemSchema
+    let base = itemSchema !== undefined ? derive(itemSchema, ctx) : null
+    if (useContains && itemsCheck !== undefined && !itemsCheck(base)) {
+      chosen = rest
+      base = rest !== undefined ? derive(rest, ctx) : null
+    }
+    result.push(unique ? distinctify(base, i, chosen) : base)
   }
   return result
-}
-
-/**
- * The complete set of values an item schema admits, when that set is finite and
- * small enough to enumerate: `const`, `enum`, `boolean`, `null`. `uniqueItems`
- * needs distinct elements, and for these schemas the {@link distinctify}
- * perturbation would step straight out of the schema, so the caller walks this
- * set instead. `undefined` means the value space is open and perturbing is fine.
- */
-const closedValueSet = (schema: JSONSchema | undefined): unknown[] | undefined => {
-  if (schema === undefined || !isSchemaObject(schema)) return undefined
-  if (hasConst(schema)) return [schema.const]
-  if (hasEnum(schema)) {
-    const fitting = schema.enum.filter((value) => satisfiesScalarConstraints(schema, value))
-    return fitting.length > 0 ? fitting : [...schema.enum]
-  }
-  if (hasType(schema) && schema.type === 'boolean') return [true, false]
-  if (hasType(schema) && schema.type === 'null') return [null]
-  return undefined
 }
 
 /**
@@ -1013,8 +1043,16 @@ const TIGHTEST = new Map<string, 'max' | 'min'>([
 
 export const mergeAllOf = (schema: JSONSchema): JSONSchema => {
   const branches = hasAllOf(schema) ? schema.allOf : []
-  const merged: Record<string, unknown> = {}
-  const properties: Record<string, unknown[]> = {}
+  // Null-prototype accumulators, because both of these are keyed by names a
+  // document controls. On a plain `{}`, reading `properties['__proto__']` answers
+  // `Object.prototype` — truthy, and with no `.push` — so a single `__proto__`
+  // property under any `allOf` threw `TypeError: bucket.push is not a function`
+  // out of the whole generation run. Writing it is the same trap in reverse: the
+  // assignment would reparent the accumulator instead of recording a keyword.
+  // `JSON.parse` does produce a real own `__proto__` key, so any third-party
+  // document can reach this.
+  const merged: Record<string, unknown> = Object.create(null)
+  const properties: Record<string, unknown[]> = Object.create(null)
   const required = new Set<string>()
 
   for (const branch of [...branches, schema]) {
@@ -1048,7 +1086,7 @@ export const mergeAllOf = (schema: JSONSchema): JSONSchema => {
     }
   }
 
-  const mergedProps: Record<string, unknown> = {}
+  const mergedProps: Record<string, unknown> = Object.create(null)
   for (const [prop, schemas] of Object.entries(properties)) {
     mergedProps[prop] = schemas.length === 1 ? schemas[0] : { allOf: schemas }
   }
@@ -1142,7 +1180,7 @@ export const generateExampleConst = (
   typeName: string,
   rootSchema?: Record<string, unknown>,
 ): string => {
-  const { value, undeclaredKey } = deriveReported(schema, rootSchema)
+  const { value, undeclaredKey, cycleBroken } = deriveReported(schema, rootSchema)
   warnInvalidExample(schema, typeName, value, rootSchema)
   const literal = serializeValue(value)
   // A schema can require a key its generated type never declares — `required`
@@ -1153,6 +1191,16 @@ export const generateExampleConst = (
   // an excess property, and TypeScript rejects the whole file over it. So keep
   // the key and assert. `satisfies` would not do: it runs the very same
   // excess-property check, which is the thing in the way.
-  const expression = undeclaredKey ? `${literal} as ${typeName}` : literal
+  //
+  // A recursive definition needs the same escape for a different reason: its
+  // example has to stop somewhere, and it stops with `null` — which is not a
+  // member of the non-nullable type the schema declares. `{ next: { next: null } }`
+  // for a `type Node = { next: Node }` is the canonical linked list, and it did
+  // not compile. That one takes the `unknown` hop: an excess property still
+  // leaves the two types *comparable*, so a single assertion settles it, but
+  // `null` where a `Node` belongs does not, and TypeScript refuses the direct
+  // conversion outright.
+  const assertion = cycleBroken ? ` as unknown as ${typeName}` : undeclaredKey ? ` as ${typeName}` : ''
+  const expression = `${literal}${assertion}`
   return `export const ${exampleName(typeName)}: ${typeName} = ${expression}`
 }

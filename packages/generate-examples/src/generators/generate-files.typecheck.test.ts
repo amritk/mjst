@@ -84,6 +84,7 @@ const rootSchema = {
   $defs: {
     foo: { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] },
     node: { type: 'object', properties: { next: { $ref: '#/$defs/node' } } },
+    link: { type: 'object', properties: { next: { $ref: '#/$defs/link' } }, required: ['next'] },
   },
 }
 
@@ -148,6 +149,70 @@ const cases: Array<{ name: string; schema: JSONSchema }> = [
     schema: JSON.parse(
       '{"type":"object","properties":{"__proto__":{"type":"string"},"ok":{"type":"string"}},"required":["__proto__","ok"]}',
     ) as JSONSchema,
+  },
+  // The filtered arbitrary deliberately generates a *superset* of the declared
+  // type, so its base expression is not always a supertype of it. Every case
+  // below produced a `.filter((value): value is T => …)` whose predicate
+  // TypeScript rejected outright (TS2677).
+  {
+    name: 'dependentRequired promoting an optional key',
+    schema: {
+      type: 'object',
+      properties: { a: { type: 'string' }, c: { type: 'number' } },
+      required: ['a'],
+      dependentRequired: { a: ['c'] },
+    },
+  },
+  {
+    name: 'dependentSchemas adding a property',
+    schema: {
+      type: 'object',
+      properties: { a: { type: 'string' } },
+      required: ['a'],
+      dependentSchemas: { a: { properties: { z: { type: 'number' } }, required: ['z'] } },
+    },
+  },
+  { name: 'contains without items', schema: { type: 'array', contains: { type: 'number' } } },
+  {
+    name: 'contains alongside a prefixItems tuple',
+    schema: { type: 'array', prefixItems: [{ type: 'string' }], contains: { type: 'number' } },
+  },
+  {
+    name: 'contains alongside items',
+    schema: { type: 'array', items: { type: 'string' }, contains: { type: 'number' }, minContains: 2 },
+  },
+  {
+    name: 'required key absent from properties, with a filter keyword',
+    schema: { type: 'object', properties: { a: { type: 'string' } }, required: ['a', 'b'], minProperties: 2 },
+  },
+  // OpenAPI documents omit `type: object` / `type: array` constantly, and the
+  // type generator infers the shape from `properties`/`items` — so the arbitrary
+  // and the example have to infer it too, or they answer `fc.anything()`/`null`
+  // to a type that says otherwise.
+  {
+    name: 'properties without an explicit type',
+    schema: { properties: { a: { type: 'string' } }, required: ['a'] } as JSONSchema,
+  },
+  { name: 'items without an explicit type', schema: { items: { type: 'string' } } as JSONSchema },
+  {
+    name: 'anyOf branches without an explicit type',
+    schema: { anyOf: [{ properties: { a: { type: 'string' } }, required: ['a'] }, { type: 'string' }] } as JSONSchema,
+  },
+  // A recursive definition's example has to cut the cycle somewhere, and the
+  // `null` it cuts with is not a member of the non-nullable declared type.
+  {
+    name: 'recursive $ref with a required back-edge',
+    schema: { type: 'object', properties: { next: { $ref: '#/$defs/link' } }, required: ['next'] },
+  },
+  // `1e999` is legal JSON that parses to `Infinity`; the derived number came out
+  // `NaN`, which `serializeValue` renders as `null`.
+  {
+    name: 'non-finite multipleOf',
+    schema: JSON.parse('{"type":"number","multipleOf":1e999}') as JSONSchema,
+  },
+  {
+    name: 'non-string required entry',
+    schema: JSON.parse('{"type":"object","properties":{"a":{"type":"string"}},"required":[1]}') as JSONSchema,
   },
 ]
 

@@ -371,6 +371,61 @@ const tryGuard = (
 }
 
 /**
+ * True when every regex the schema carries actually compiles.
+ *
+ * `validateGuard` builds happily and only compiles a `pattern` when it first has
+ * a value to test, so an uncompilable one (`"["`) surfaces as a `SyntaxError`
+ * from deep inside a `.filter` at sample time — long after the generator could
+ * have said anything about it. The keys of `patternProperties` are regexes too.
+ *
+ * The walk is deliberately untyped and total: it is looking for a malformed
+ * document, so it cannot rely on the document being well formed enough for a
+ * keyword-aware walk to reach the bad pattern.
+ */
+const everyPatternCompiles = (node: unknown): boolean => {
+  if (node === null || typeof node !== 'object') return true
+  if (Array.isArray(node)) return node.every(everyPatternCompiles)
+
+  const compiles = (source: string): boolean => {
+    try {
+      new RegExp(source)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (key === 'pattern' && typeof value === 'string' && !compiles(value)) return false
+    if (key === 'patternProperties' && value !== null && typeof value === 'object') {
+      if (!Object.keys(value).every(compiles)) return false
+    }
+    if (!everyPatternCompiles(value)) return false
+  }
+  return true
+}
+
+/**
+ * Whether a runtime validator can be built for `schema` at all.
+ *
+ * The arbitrary generator embeds `__mjstValidate(<schema>)` as a top-level
+ * `const` in the file it emits, and nothing there catches a throw — so a schema
+ * the interpreter refuses would kill the module at import rather than at the one
+ * call site that wanted an opinion. Asking first turns that into a warning and an
+ * unfiltered arbitrary. Failures are reported once by {@link tryGuard}, and the
+ * built guard is cached on the schema object, so asking costs nothing the
+ * eventual validation would not have paid anyway.
+ */
+export const canBuildGuard = (schema: JSONSchema, rootSchema?: Record<string, unknown>): boolean => {
+  const resolved = withResolvableDefs(schema, rootSchema)
+  if (!everyPatternCompiles(resolved)) {
+    warnUndecidableSchema(resolved, 'the schema carries a `pattern` that is not a valid regular expression')
+    return false
+  }
+  return tryGuard(resolved, false) !== undefined
+}
+
+/**
  * Compiles a boolean validator for `schema` (with the definitions its `$ref`s
  * need spliced in). Used at generation time to accept/reject candidate example
  * values for keywords the deriver can't satisfy structurally.

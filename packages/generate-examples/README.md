@@ -196,7 +196,29 @@ compiling rather than making it correct:
 - An **unsatisfiable range** (`minLength: 10, maxLength: 2`) collapses onto its
   upper bound in the arbitrary. Every bounded `fc.*` combinator asserts
   `min <= max` and throws at *import*, which would take down every other export in
-  the file alongside it.
+  the file alongside it. Integer bounds are also confined to fast-check's own
+  32-bit range, and length/count bounds to non-negative integers.
+- A **recursive definition's** example has to stop somewhere and stops with
+  `null`, which the non-nullable type does not admit — so it is emitted as
+  `… as unknown as Node`. `NodeArbitrary` ties the recursion properly through
+  `fc.letrec` and needs no such escape.
+- A `pattern` that is **not a valid JavaScript regex**, or that uses a lookahead
+  or lookbehind, falls back to a plain `fc.string()`. `fc.stringMatching` compiles
+  the pattern at module scope and cannot generate from an assertion, so honouring
+  it would throw where the whole file becomes unusable rather than just that one
+  arbitrary being loose.
+- **Nesting deeper than 400 levels** is refused with an error naming the limit.
+  Building an arbitrary costs several stack frames per schema level, so a deeper
+  document exhausts the stack — the cap turns that into a message that says what
+  is wrong.
+
+Two shapes stay impossible to generate from, and the arbitrary will retry
+forever if you sample it. Both are schemas with no instance, and the example
+warns:
+
+- A `pattern` no string of the required length can match
+  (`{ pattern: '^[a-z]{2}$', minLength: 5 }`).
+- A `minLength`/`minItems` so large that no value of that size can be built.
 
 > [!TIP]
 > The example for a `$ref` is inlined by value, so a definition graph with wide
