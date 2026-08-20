@@ -122,6 +122,25 @@ const finiteNumber = (value: number | undefined): number | undefined =>
   value !== undefined && Number.isFinite(value) ? value : undefined
 
 /**
+ * A length/count keyword normalized into something `fc.*` will accept: a
+ * non-negative integer, or `undefined` when there is no usable bound.
+ *
+ * `minLength`, `maxItems` and friends are schema input, so nothing stops a
+ * document carrying `maxLength: -5` or `minItems: 1.5`. Every counted `fc.*`
+ * option demands a non-negative integer and throws otherwise, at *import* of the
+ * generated module. Rounding toward the satisfiable side keeps the bound as
+ * close to what the schema asked for as an integer can be — the smallest integer
+ * that still clears a lower bound, the largest that still fits under an upper —
+ * and a negative count floors at zero, which is the tightest bound that has any
+ * instances at all.
+ */
+const countBound = (value: number | undefined, side: 'lower' | 'upper'): number | undefined => {
+  const finite = finiteNumber(value)
+  if (finite === undefined) return undefined
+  return Math.max(0, side === 'lower' ? Math.ceil(finite) : Math.floor(finite))
+}
+
+/**
  * A positive, finite `multipleOf`, or `undefined`. Anything else — zero, a
  * negative step, `Infinity` — is not a constraint any value can be measured
  * against, and every attempt to honour it produced an arbitrary that throws or
@@ -169,8 +188,8 @@ const stringExpr = (schema: JSONSchema): string => {
     }
   }
 
-  const maxLength = finiteNumber(hasMaxLength(schema) ? schema.maxLength : undefined)
-  const minLength = clampLow(finiteNumber(hasMinLength(schema) ? schema.minLength : undefined), maxLength)
+  const maxLength = countBound(hasMaxLength(schema) ? schema.maxLength : undefined, 'upper')
+  const minLength = clampLow(countBound(hasMinLength(schema) ? schema.minLength : undefined, 'lower'), maxLength)
 
   if (hasPattern(schema)) {
     // Build the regex via `new RegExp(<json-string>)` rather than inlining the
@@ -416,13 +435,13 @@ const arrayExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
         ? arbitraryExpr(containsSchema, ctx)
         : 'fc.anything()'
 
-  const minContains = finiteNumber(typeof raw['minContains'] === 'number' ? raw['minContains'] : undefined) ?? 1
+  const minContains = countBound(typeof raw['minContains'] === 'number' ? raw['minContains'] : undefined, 'lower') ?? 1
   const minLength = Math.max(
-    finiteNumber(hasMinItems(schema) ? schema.minItems : undefined) ?? 0,
+    countBound(hasMinItems(schema) ? schema.minItems : undefined, 'lower') ?? 0,
     containsSchema !== undefined ? Math.max(1, minContains) : 0,
   )
 
-  const maxLength = finiteNumber(hasMaxItems(schema) ? schema.maxItems : undefined)
+  const maxLength = countBound(hasMaxItems(schema) ? schema.maxItems : undefined, 'upper')
   const clampedMin = clampLow(minLength, maxLength) ?? minLength
 
   const opts: string[] = []
@@ -464,8 +483,8 @@ const objectExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
   const extraValueArb = additionalArb ?? patternValueArb
   const keyArb = extraKeyArb(schema, firstPattern?.[0])
 
-  const minProps = finiteNumber(hasMinProperties(schema) ? schema.minProperties : undefined)
-  const maxProps = finiteNumber(hasMaxProperties(schema) ? schema.maxProperties : undefined)
+  const minProps = countBound(hasMinProperties(schema) ? schema.minProperties : undefined, 'lower')
+  const maxProps = countBound(hasMaxProperties(schema) ? schema.maxProperties : undefined, 'upper')
   const dictKeyOpts = (minKeys?: number, maxKeys?: number): string => {
     const low = clampLow(minKeys, maxKeys)
     const opts: string[] = []
@@ -546,9 +565,22 @@ const objectExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
   return record
 }
 
-/** Builds a `fc.oneof(...)` expression from a list of branch schemas. */
-const oneofExpr = (branches: readonly JSONSchema[], ctx: ExprCtx): string => {
-  const exprs = branches.map((branch) => arbitraryExpr(branch, ctx))
+/**
+ * Builds a `fc.oneof(...)` expression from a list of branch schemas.
+ *
+ * `fc.oneof` needs at least one branch and throws on none, so an empty
+ * `oneOf`/`anyOf`/`type: []` degrades to `fc.anything()` the way every other
+ * keyword this generator cannot honour does — rather than emitting a module that
+ * throws the moment it is imported. A lone branch is emitted directly: wrapping
+ * one arbitrary in a choice between it and nothing else only adds noise.
+ */
+const oneofExpr = (branches: readonly JSONSchema[], ctx: ExprCtx): string =>
+  chooseExpr(branches.map((branch) => arbitraryExpr(branch, ctx)))
+
+/** Combines already-built branch expressions into a single choice. */
+const chooseExpr = (exprs: readonly string[]): string => {
+  if (exprs.length === 0) return 'fc.anything()'
+  if (exprs.length === 1) return exprs[0] as string
   return `fc.oneof(${exprs.join(', ')})`
 }
 
@@ -609,6 +641,10 @@ const arbitraryExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
     const members = schema.enum as unknown[]
     const fitting = members.filter((value) => satisfiesScalarConstraints(schema, value))
     const chosen = fitting.length > 0 ? fitting : members
+    // `fc.constantFrom` needs at least one value and throws on none, so an empty
+    // `enum` — a schema no value satisfies — degrades rather than emitting a
+    // module that throws at import.
+    if (chosen.length === 0) return 'fc.anything()'
     const values = chosen.map((value) => JSON.stringify(value)).join(', ')
     // Spread a `const`-asserted tuple instead of passing the members directly.
     // `fc.constantFrom("a", "b")` infers its overload's `T` from a *mutable*
@@ -645,10 +681,10 @@ const arbitraryExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
   if (hasType(schema)) return scalarExpr(schema.type, schema, ctx)
 
   // Multi-type schemas (`type: ['string', 'null']`) become a oneof over each
-  // member type; `hasType` only matches a single string `type`.
+  // member type; `hasType` only matches a single string `type`. An empty
+  // `type: []` falls through to `fc.anything()` inside `chooseExpr`.
   if (Array.isArray(schema.type)) {
-    const exprs = schema.type.map((type) => scalarExpr(type, schema, ctx))
-    return exprs.length === 1 ? (exprs[0] as string) : `fc.oneof(${exprs.join(', ')})`
+    return chooseExpr(schema.type.map((type) => scalarExpr(type, schema, ctx)))
   }
 
   return 'fc.anything()'

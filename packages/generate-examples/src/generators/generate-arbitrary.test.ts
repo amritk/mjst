@@ -1,3 +1,4 @@
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'vitest'
 
 import { generateArbitrary } from './generate-arbitrary'
@@ -139,6 +140,37 @@ describe('generate-arbitrary', () => {
       // constant option names every `fc.double` call carries.
       expect(code, JSON.stringify(schema)).not.toMatch(/[:*]\s*-?(Infinity|NaN)\b/)
     }
+  })
+
+  it('degrades an empty combinator instead of emitting a zero-argument fc call', () => {
+    // `fc.oneof()` and `fc.constantFrom()` both throw on no arguments, so these
+    // schemas produced a module that died the moment it was imported.
+    for (const schema of [{ oneOf: [] }, { anyOf: [] }, { enum: [] }, { type: [] }] as const) {
+      const code = generateArbitrary(schema as JSONSchema, 'Z')
+      expect(code, JSON.stringify(schema)).toContain('fc.anything()')
+      expect(code, JSON.stringify(schema)).not.toMatch(/fc\.(oneof|constantFrom)\(\s*\)/)
+    }
+  })
+
+  it('emits a single-branch choice directly', () => {
+    expect(generateArbitrary({ type: ['string'] } as JSONSchema, 'Z')).toContain('= fc.string()')
+  })
+
+  it('rounds a fractional count bound to a satisfiable integer', () => {
+    // fast-check requires integer lengths and throws on a fractional one. Round
+    // each bound inward: up for a floor, down for a ceiling.
+    expect(generateArbitrary({ type: 'string' as const, minLength: 1.5, maxLength: 3.7 }, 'Z')).toContain(
+      'fc.string({ minLength: 2, maxLength: 3 })',
+    )
+  })
+
+  it('floors a negative count bound at zero', () => {
+    // `fc.string({ maxLength: -5 })` throws; zero is the tightest bound with
+    // any instances at all.
+    expect(generateArbitrary({ type: 'string' as const, maxLength: -5 }, 'Z')).toContain('fc.string({ maxLength: 0 })')
+    expect(
+      generateArbitrary({ type: 'array' as const, maxItems: -5, items: { type: 'string' as const } }, 'Z'),
+    ).toContain('{ maxLength: 0 }')
   })
 
   it('clamps a crossed exclusive bound without leaving an empty double range', () => {
