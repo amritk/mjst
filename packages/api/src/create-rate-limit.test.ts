@@ -93,4 +93,16 @@ describe('create-rate-limit', () => {
     expect((decorated as Response).headers.get('ratelimit-limit')).toBe('10')
     expect((decorated as Response).headers.get('ratelimit-remaining')).toBe('9')
   })
+
+  it('falls through a present-but-empty proxy header to the global bucket', async () => {
+    // `??` only skips `null`, so an empty `x-real-ip` (or an `x-forwarded-for`
+    // whose first hop is blank) used to key a bucket on the empty string
+    // instead of falling through to the next source.
+    const limit = createRateLimit({ limit: 1, windowMs: 10_000 })
+    const blank = new Request('http://x/', { headers: { 'x-real-ip': '', 'x-forwarded-for': ' , 1.2.3.4' } })
+    const bare = new Request('http://x/')
+    expect(await limit.onRequest(blank, undefined, undefined, {})).toBeUndefined()
+    const second = await limit.onRequest(bare, undefined, undefined, {})
+    expect(second?.status).toBe(429)
+  })
 })

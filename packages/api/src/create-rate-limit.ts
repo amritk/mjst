@@ -136,10 +136,22 @@ export const memoryRateLimitStore = (): RateLimitStore => {
   }
 }
 
+/**
+ * A header that is present but empty (or an `x-forwarded-for` whose first hop
+ * is blank) is not an address. `??` only skips `null`, so those used to become
+ * a bucket literally keyed on the empty string instead of falling through to
+ * the next source and, ultimately, to `'global'`.
+ */
+const nonEmpty = (value: string | null | undefined): string | undefined => {
+  if (value === null || value === undefined) return undefined
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
 const defaultKey = (request: Request): string =>
-  request.headers.get('cf-connecting-ip') ??
-  request.headers.get('x-real-ip') ??
-  request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+  nonEmpty(request.headers.get('cf-connecting-ip')) ??
+  nonEmpty(request.headers.get('x-real-ip')) ??
+  nonEmpty(request.headers.get('x-forwarded-for')?.split(',')[0]) ??
   'global'
 
 /**

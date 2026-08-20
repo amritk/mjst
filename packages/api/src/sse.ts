@@ -46,7 +46,17 @@ export const formatSse = (event: SseEvent): string => {
   }
   if (event.event !== undefined) frame += `event: ${stripNewlines(event.event)}\n`
   if (event.id !== undefined) frame += `id: ${stripNewlines(event.id)}\n`
-  if (event.retry !== undefined) frame += `retry: ${event.retry}\n`
+  if (event.retry !== undefined) {
+    // The one field whose type is not a string, which is exactly why it was
+    // the one left unguarded: a value that is a `number` only to the type
+    // checker — `retry: config.reconnectMs`, read out of a JSON payload —
+    // interpolates verbatim, and a newline in it forges fields and whole
+    // events just as one in `data` would. The spec reads this field as ASCII
+    // digits and ignores anything else, so emitting only a finite integer
+    // loses nothing a browser would have honoured.
+    const retry = Math.trunc(Number(event.retry))
+    if (Number.isFinite(retry)) frame += `retry: ${retry}\n`
+  }
   if (event.data !== undefined) {
     for (const line of event.data.split(SSE_NEWLINE)) frame += `data: ${line}\n`
   }

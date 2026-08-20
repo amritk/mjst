@@ -899,6 +899,25 @@ describe('to-fetch-handler', () => {
     expect(logged.calls()).toEqual([[HOOK_ERROR_MESSAGE, 'gate exploded']])
     logged.restore()
   })
+  it('serializes a status the contract never declared, cached init or not', () => {
+    // The init table is filled once from the contracts and never written to
+    // again, so an undeclared status takes the uncached branch — it still has
+    // to produce the same reply the cached one would. (With
+    // `validateResponses` on, such a reply is a 500 instead; this is the
+    // production default, where the pipeline passes it straight through.)
+    const drift = defineRoute({
+      method: 'get',
+      path: '/drift',
+      responses: { 200: { body: { type: 'object' } } },
+      handler: () => ({ status: 299 as 200, body: { a: 1 } }),
+    })
+    const handler = toFetchHandler(createApi({ routes: [drift] }))
+    return handler(new Request('http://x/drift')).then(async (response) => {
+      expect(response.status).toBe(299)
+      expect(response.headers.get('content-type')).toBe('application/json')
+      expect(await response.json()).toEqual({ a: 1 })
+    })
+  })
 })
 
 /**

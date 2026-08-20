@@ -302,6 +302,16 @@ describe('secure-routes', () => {
     )
   })
 
+  it('reports a scheme named after an Object.prototype member as undefined, not as guardless', () => {
+    // A bare `securitySchemes[name]` lookup resolves 'constructor' to the
+    // inherited `Object` function, which then fails the *guard* check — so the
+    // build died naming the wrong mistake. Both errors fail closed; this is
+    // about the message pointing at the missing scheme.
+    expect(() => secureRoutes([roleRoute('/x', [{ constructor: [] }])], { securitySchemes: schemes })).toThrow(
+      /requires security scheme 'constructor', which is not defined/,
+    )
+  })
+
   it('strips the guard from the generated OpenAPI document', () => {
     const document = build(
       [roleRoute('/profile'), roleRoute('/admin', [{ adminAuth: [] }]), roleRoute('/health', [])],

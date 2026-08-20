@@ -223,4 +223,52 @@ describe('create-token-refresh', () => {
       vi.useRealTimers()
     }
   })
+
+  it('reports a synchronously-throwing refresh instead of letting it escape', async () => {
+    // `refresh` is documented as returning a promise, but nothing enforces it:
+    // a non-async function, or a `TypeError` from a misspelled client method,
+    // throws before a promise exists. The background paths have no `.catch` to
+    // reach then — the in-window renewal rejected `headers()` rather than
+    // handing back the token that is still perfectly valid.
+    const errors: unknown[] = []
+    let clock = 0
+    const auth = createTokenRefresh({
+      refresh: (() => {
+        throw new Error('no session')
+      }) as never,
+      initial: { token: 'seed', expiresAt: 100_000 },
+      refreshBefore: 60_000,
+      proactive: false,
+      now: () => clock,
+      onError: (error) => errors.push(error),
+    })
+
+    clock = 50_000
+    await expect(auth.headers()).resolves.toEqual({ authorization: 'Bearer seed' })
+    expect(errors).toHaveLength(1)
+    auth.dispose()
+  })
+
+  it('does not let a synchronously-throwing refresh escape the idle timer', () => {
+    // Out of a `setTimeout` callback this is an uncaught exception, which on
+    // Node takes the process with it.
+    vi.useFakeTimers()
+    try {
+      let clock = 0
+      const auth = createTokenRefresh({
+        refresh: (() => {
+          throw new Error('no session')
+        }) as never,
+        initial: { token: 'seed', expiresAt: 100_000 },
+        refreshBefore: 60_000,
+        now: () => clock,
+        onError: () => undefined,
+      })
+      clock = 40_001
+      expect(() => vi.advanceTimersByTime(40_001)).not.toThrow()
+      auth.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
