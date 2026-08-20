@@ -1,5 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { assignKey } from './assign-key'
 import { buildDynamicRefMap } from './build-dynamic-ref-map'
 import { assertSchemaDepth } from './max-schema-depth'
 import { readKey } from './read-key'
@@ -136,9 +137,14 @@ export const pruneExternalSchemas = (
 
   // The seed is the authored document: same root, same keywords, but with the
   // registered definitions taken out so they cannot vouch for themselves.
+  // `assignKey` throughout: a definition may legitimately be named `__proto__`,
+  // and a plain assignment on that key runs the prototype setter instead of
+  // adding a property — so the definition disappeared from the rebuilt map while
+  // every `$ref` to it stayed, and the map inherited the definition's own
+  // keywords on top.
   const authored: Record<string, unknown> = {}
   for (const [name, definition] of Object.entries(definitions)) {
-    if (!external.has(name)) authored[name] = definition
+    if (!external.has(name)) assignKey(authored, name, definition)
   }
   const seed: Record<string, unknown> = { ...document, $defs: authored }
 
@@ -160,7 +166,7 @@ export const pruneExternalSchemas = (
 
   const kept: Record<string, unknown> = {}
   for (const [name, definition] of Object.entries(definitions)) {
-    if (!external.has(name) || reached.has(name)) kept[name] = definition
+    if (!external.has(name) || reached.has(name)) assignKey(kept, name, definition)
   }
   return { ...document, $defs: kept }
 }

@@ -41,18 +41,39 @@ const IDENTIFIER_START = /^[\p{ID_Start}_$]/u
  * kebabToPascal('中文') // '中文'
  * ```
  */
-const kebabToPascal = (kebab: string, suffix: string): string => {
-  const words = kebab.split(WORD_SEPARATOR)
+/**
+ * Splits `text` on characters TypeScript will not accept inside an identifier
+ * and joins the words in PascalCase, keeping the rest of each word so acronyms
+ * survive. Returns `''` when nothing usable is left, leaving the emptiness
+ * policy to the caller.
+ *
+ * Shared with {@link deriveRootTypeName} rather than reimplemented there: that
+ * copy split on `[^a-zA-Z0-9]+`, which is the ASCII-only class this module's
+ * `WORD_SEPARATOR` doc describes fixing. A document titled `中文` came back
+ * empty and was named `Document`, `Café Menu` came back as `CafMenu` with the
+ * `é` deleted from the middle of a word, and `Ünïcödé Doc` as `NCDDoc` — while
+ * a `$ref` to a definition of the same name was spelled correctly, so the root
+ * type and the refs into it disagreed.
+ */
+export const toPascalWords = (text: string): string => {
   let pascalCase = ''
-  for (const word of words) {
+  for (const word of text.split(WORD_SEPARATOR)) {
     if (word === undefined || word === '') continue
     // Iterate by code point, not code unit, so an astral first character
     // (e.g. a Mathematical Alphanumeric letter) is not split mid-surrogate.
     const first = [...word][0] as string
     pascalCase += first.toUpperCase() + word.slice(first.length)
   }
+  return pascalCase
+}
+
+/** True when `name` may begin a TypeScript identifier. */
+export const isIdentifierStart = (name: string): boolean => IDENTIFIER_START.test(name)
+
+const kebabToPascal = (kebab: string, suffix: string): string => {
+  let pascalCase = toPascalWords(kebab)
   if (pascalCase === '') pascalCase = '_'
-  else if (!IDENTIFIER_START.test(pascalCase)) pascalCase = `_${pascalCase}`
+  else if (!isIdentifierStart(pascalCase)) pascalCase = `_${pascalCase}`
   return pascalCase + suffix
 }
 

@@ -1,6 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
-import { DATA_KEYWORDS, entersSchemaMap, isDataPosition } from './build-resource-registry'
+import { entersSchemaMap, isDataPosition } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
 import { readKey } from './read-key'
 
@@ -34,7 +34,7 @@ export const resolveDynamicRefs = (schema: JSONSchema, dynamicRefMap: Record<str
   // Cheap read-only pre-scan: most subschemas carry no `$dynamicRef`, so returning
   // the original untouched avoids a full deep clone (and its allocation) on every
   // node of every generator's walk when the document as a whole *does* use them.
-  if (!containsDynamicRef(schema, 0)) {
+  if (!containsDynamicRef(schema, 0, false)) {
     return schema
   }
 
@@ -82,19 +82,30 @@ export const resolveDynamicRefs = (schema: JSONSchema, dynamicRefMap: Record<str
   return clone as JSONSchema
 }
 
-/** True if `value` contains a `$dynamicRef` string anywhere in its subtree. */
-const containsDynamicRef = (value: unknown, depth: number): boolean => {
+/**
+ * True if `value` contains a `$dynamicRef` string anywhere `walk` would rewrite
+ * one.
+ *
+ * The two must agree on which keys hold instance data, which is why this asks
+ * the same shared position rule rather than testing key names alone. Testing the
+ * names skipped the subtree of a *property* genuinely called `enum` or
+ * `default` — where the word is an author-chosen name, not a keyword — so a
+ * `$dynamicRef` declared there read as "no dynamic refs in this document", the
+ * whole rewrite was skipped, and the ref survived into generation: the quiet
+ * kind of broken this module's doc describes.
+ */
+const containsDynamicRef = (value: unknown, depth: number, inSchemaMap: boolean): boolean => {
   assertSchemaDepth(depth, 'resolveDynamicRefs')
   if (typeof value !== 'object' || value === null) return false
   if (Array.isArray(value)) {
-    for (const item of value) if (containsDynamicRef(item, depth + 1)) return true
+    for (const item of value) if (containsDynamicRef(item, depth + 1, inSchemaMap)) return true
     return false
   }
   const record = value as Record<string, unknown>
-  if (typeof readKey(record, '$dynamicRef') === 'string') return true
+  if (!inSchemaMap && typeof readKey(record, '$dynamicRef') === 'string') return true
   for (const key of Object.keys(record)) {
-    if (DATA_KEYWORDS.has(key)) continue
-    if (containsDynamicRef(record[key], depth + 1)) return true
+    if (isDataPosition(key, inSchemaMap)) continue
+    if (containsDynamicRef(record[key], depth + 1, entersSchemaMap(key, inSchemaMap))) return true
   }
   return false
 }

@@ -82,4 +82,44 @@ describe('escape-regex-pattern', () => {
     const [, source, flags] = /^\/(.*)\/(\w*)$/.exec(literal) as RegExpExecArray
     expect(new RegExp(source as string, flags).test('a')).toBe(true)
   })
+
+  it('escapes an unpaired surrogate so the emitted literal survives UTF-8', () => {
+    const lone = JSON.parse('"^\\ud800$"') as string
+    const literal = regexLiteral(lone)
+
+    expect(literal).toBe('/^\\ud800$/u')
+    expect(new TextDecoder().decode(new TextEncoder().encode(literal))).toBe(literal)
+    // The escape matches the identical character, so the pattern still means
+    // what its author wrote.
+    const compiled = new Function(`return ${literal}`)() as RegExp
+    expect(compiled.test(lone.slice(1, -1))).toBe(true)
+  })
+
+  it('leaves a well-formed surrogate pair verbatim', () => {
+    expect(regexLiteral('^😀$')).toBe('/^😀$/u')
+    expect((new Function('return /^😀$/u')() as RegExp).test('😀')).toBe(true)
+  })
+
+  // The validating compile omitted the `u` flag while the emitter added it, so
+  // a pattern legal *only* in Unicode mode failed the build as an "invalid
+  // regex" — a pattern Ajv, the differential oracle, accepts.
+  it('accepts a pattern that is legal only in Unicode mode', () => {
+    for (const pattern of ['[😀-😜]', '[\\u{61}-\\u{7A}]']) {
+      expect(regexFlagsFor(pattern)).toBe('u')
+      // The emitted literal has to compile with the flags it carries.
+      expect(() => new Function(`return ${regexLiteral(pattern)}`)()).not.toThrow()
+    }
+    expect((new Function('return /[😀-😜]/u')() as RegExp).test('😀')).toBe(true)
+  })
+
+  it('still accepts a pattern that is legal only without the flag', () => {
+    // `\-` is an identity escape without `u` and a syntax error with it.
+    expect(regexFlagsFor('a\\-b')).toBe('')
+    expect(regexLiteral('a\\-b')).toBe('/a\\-b/')
+  })
+
+  it('still rejects a pattern that is a regex in neither mode', () => {
+    expect(() => escapeRegexPattern('([')).toThrow(/Invalid regex pattern/)
+    expect(regexFlagsFor('([')).toBe('')
+  })
 })
