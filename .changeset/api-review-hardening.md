@@ -40,6 +40,27 @@ later one silently overwrote the earlier and the document described half the
 API. A synthesized `operationId` already caught that pair; explicit ones
 walked past it. Give such routes distinct paths.
 
+**`createTokenRefresh` survives a `refresh` that throws synchronously.** The
+option is documented as returning a promise, but a non-async function — or a
+`TypeError` from a misspelled client method — throws before one exists, and
+neither background caller had a `.catch` to reach: the in-window renewal
+rejected `headers()` instead of handing back the token that was still valid,
+and the idle timer threw straight out of its `setTimeout` callback, which on
+Node is an uncaught exception. The call is wrapped so both paths see a
+rejection and report it through `onError`.
+
+**`createETag` answers a conditional GET against a handler's own etag.** A
+response that already carried an `ETag` was skipped entirely, so a client that
+had just proved it held the current version downloaded the body again. Such a
+response is still never buffered — it simply gets the `304` its validator
+earned.
+
+**`createRateLimit`'s default key treats an empty proxy header as absent.**
+`??` only skips `null`, so a present-but-empty `cf-connecting-ip`/`x-real-ip`,
+or an `x-forwarded-for` whose first hop is blank, keyed a bucket on the empty
+string rather than falling through to the next source and finally to
+`'global'`.
+
 `secureRoutes` also looks security schemes up as own properties, so a
 requirement naming `constructor` reports the missing scheme rather than a
 missing guard, and the fetch adapter's `ResponseInit` cache is built once from
