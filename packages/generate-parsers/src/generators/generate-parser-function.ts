@@ -459,8 +459,26 @@ const PROTOTYPE_MEMBER_NAMES = new Set(Object.getOwnPropertyNames(Object.prototy
  * literal and the emitted type, which is exactly what the generated-code type
  * suite exists to catch.
  */
-const declaresPrototypeMemberProperty = (schema: JSONSchema): boolean =>
-  hasProperties(schema) && Object.keys(schema.properties).some((key) => PROTOTYPE_MEMBER_NAMES.has(key))
+const declaresPrototypeMemberProperty = (schema: JSONSchema, depth = 4): boolean => {
+  if (!isSchemaObject(schema) || depth < 0) return false
+  if (hasProperties(schema) && Object.keys(schema.properties).some((key) => PROTOTYPE_MEMBER_NAMES.has(key)))
+    return true
+  // The fallback literal is built recursively — a required object property
+  // contributes its own literal, an array property contributes one per element —
+  // so a prototype-member name *anywhere* under it forces the same assertion.
+  // Without the walk, `{ 'x-a': [{ '0': '' }] }` was emitted bare against an
+  // item type declaring `constructor?: true`, and the inner literal's inherited
+  // `constructor: Function` failed to assign.
+  const record = schema as Record<string, unknown>
+  const children: unknown[] = []
+  if (hasProperties(schema)) children.push(...Object.values(schema.properties))
+  const items = record['items']
+  if (Array.isArray(items)) children.push(...items)
+  else if (items !== undefined) children.push(items)
+  const prefixItems = record['prefixItems']
+  if (Array.isArray(prefixItems)) children.push(...prefixItems)
+  return children.some((child) => declaresPrototypeMemberProperty(child as JSONSchema, depth - 1))
+}
 
 /**
  * Generates a fallback object with required properties filled with default values.
@@ -526,7 +544,11 @@ const generateFallbackObject = (
     }
   }
   result += '\n      }'
-  return declaresPrototypeMemberProperty(schema) ? `${result} as ${typeName}` : result
+  // `as unknown as`, not a plain `as`: when the type carries an index signature
+  // the literal's *inherited* `constructor: Function` is compared against it
+  // ("Type 'Function' is not comparable to type 'Record<string, Alpha>'") and a
+  // single assertion is not enough to silence it.
+  return declaresPrototypeMemberProperty(schema) ? `${result} as unknown as ${typeName}` : result
 }
 
 /**
@@ -1873,7 +1895,14 @@ const generateObjectParser = (
     }
     lines.push(`  if (${deepGuardExpr}) return {`)
     lines.push(fields.join('\n'))
-    lines.push(`  } as ${typeName};`)
+    // `as unknown as`, because every field here is an `unknown` read that only
+    // the guard above proves anything about. A plain assertion looked checkable
+    // and was not: `_x !== undefined` narrows `unknown` to `{} | null`, which
+    // TypeScript then refuses to convert to a `$ref` type ("Property '0' is
+    // missing in type '{}'"), and `Array.isArray(_x)` narrows to `any[]`, which
+    // it refuses to convert to a tuple. Both are generated files that do not
+    // build, for a check that could never have caught a real mismatch.
+    lines.push(`  } as unknown as ${typeName};`)
   }
 
   const lines: string[] = []

@@ -39,7 +39,7 @@ const PROTOTYPE_MEMBERS = new Set(Object.getOwnPropertyNames(Object.prototype))
  * safeAccessor("input?", "x-linkedin") // 'input?.["x-linkedin"]'
  * safeAccessor("input", "x-linkedin") // 'input["x-linkedin"]'
  * safeAccessor("input", "constructor")
- * // '(input != null && Object.hasOwn(input, "constructor") ? input["constructor"] : undefined)'
+ * // '((input != null && Object.hasOwn(input, "constructor") ? input["constructor"] : undefined) as any)'
  */
 export const safeAccessor = (variable: string, key: string): string => {
   if (PROTOTYPE_MEMBERS.has(key)) {
@@ -48,7 +48,17 @@ export const safeAccessor = (variable: string, key: string): string => {
     // null/undefined so it has to be short-circuited either way.
     const base = variable.endsWith('?') ? variable.slice(0, -1) : variable
     const literal = JSON.stringify(key)
-    return `(${base} != null && Object.hasOwn(${base}, ${literal}) ? ${base}[${literal}] : undefined)`
+    // The `as any` is what keeps the *emitted* code compiling. Every other
+    // accessor this function returns is a property-access path, which
+    // TypeScript narrows: `typeof input.a === "string" && input.a.length` is
+    // fine because the second read is the same reference as the first. A
+    // conditional expression is not a reference, so nothing narrows it and the
+    // generated `Array.isArray(<ternary>) && <ternary>.length` failed to
+    // compile with "Object is of type 'unknown'" — a code generator emitting
+    // code that does not build. Casting restores parity with the plain form; it
+    // gives up nothing real, because the value behind it is `unknown` either
+    // way, and every use site is a runtime guard that tests the value itself.
+    return `((${base} != null && Object.hasOwn(${base}, ${literal}) ? ${base}[${literal}] : undefined) as any)`
   }
 
   if (JS_IDENTIFIER.test(key)) {

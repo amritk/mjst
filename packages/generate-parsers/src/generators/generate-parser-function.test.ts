@@ -432,7 +432,7 @@ describe('generate-parser-function', () => {
   const _tags = input.tags;
   const _metadata = input.metadata;
   const _isActive = input.isActive;
-  if (typeof _id === "number" && typeof _name === "string" && (_tags === undefined || Array.isArray(_tags) && _tags.every((_it) => typeof _it === "string")) && (_metadata === undefined || isObject(_metadata)) && (_isActive === undefined || typeof _isActive === "boolean")) return { ...input } as Complex;
+  if (typeof _id === "number" && typeof _name === "string" && (_tags === undefined || Array.isArray(_tags) && _tags.every((_it: unknown) => typeof _it === "string")) && (_metadata === undefined || isObject(_metadata)) && (_isActive === undefined || typeof _isActive === "boolean")) return { ...input } as Complex;
   return {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? (Number.isFinite(Number(_id)) ? Number(_id) : 0) : 0),
@@ -550,7 +550,7 @@ describe('generate-parser-function', () => {
       `export const parseTagged = (input: unknown): Tagged => {
   if (!isObject(input)) return {} as Tagged;
   const _tags = input.tags;
-  if ((_tags === undefined || Array.isArray(_tags) && _tags.every((_it) => typeof _it === "string"))) return { ...input } as Tagged;
+  if ((_tags === undefined || Array.isArray(_tags) && _tags.every((_it: unknown) => typeof _it === "string"))) return { ...input } as Tagged;
   return {
     ...input,
     ...(_tags !== undefined && { tags: (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []) }),
@@ -1659,7 +1659,7 @@ describe('generate-parser-function', () => {
   const _price = input.price;
   const _inStock = input.inStock;
   const _tags = input.tags;
-  if (typeof _id === "string" && typeof _name === "string" && typeof _price === "number" && _price >= 0 && (_inStock === undefined || typeof _inStock === "boolean") && (_tags === undefined || Array.isArray(_tags) && _tags.every((_it) => typeof _it === "string"))) return { ...input } as Product;
+  if (typeof _id === "string" && typeof _name === "string" && typeof _price === "number" && _price >= 0 && (_inStock === undefined || typeof _inStock === "boolean") && (_tags === undefined || Array.isArray(_tags) && _tags.every((_it: unknown) => typeof _it === "string"))) return { ...input } as Product;
   return {
     ...input,
     id: typeof _id === "string" ? _id : (_id !== undefined ? String(_id) : ""),

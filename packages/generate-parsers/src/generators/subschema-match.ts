@@ -126,8 +126,19 @@ const nest = (ctx: MatchContext): MatchContext => ({ ...ctx, depth: depthOf(ctx)
 
 const isObjectExpr = (acc: string): string => `typeof ${acc} === "object" && ${acc} !== null && !Array.isArray(${acc})`
 
-/** The `Record` view of an accessor an object check has already proven. */
-const recordOf = (acc: string): string => `(${acc} as Record<string, unknown>)`
+/**
+ * The `Record` view of an accessor an object check has already proven.
+ *
+ * The value type is `any`, not `unknown`, because the matcher reads each
+ * property *twice* — once to test its type, once to apply that type's
+ * constraint — and a cast expression is not a reference, so TypeScript narrows
+ * nothing between the two. `typeof (x as Record<string, unknown>).n === "number"
+ * && (x as Record<string, unknown>).n >= 3` therefore failed to compile with
+ * "Object is of type 'unknown'", which is a code generator emitting code that
+ * does not build. Nothing real is given up: the value behind it genuinely is
+ * unknown, and every read is inside a runtime guard that tests it.
+ */
+const recordOf = (acc: string): string => `(${acc} as Record<string, any>)`
 
 /** The `patternProperties` map, or `null` when the schema declares none. */
 const patternEntriesOf = (schema: JSONSchema): [string, JSONSchema][] | null => {
@@ -183,7 +194,11 @@ const tupleShape = (schema: JSONSchema): { prefix: readonly JSONSchema[] | null;
 const arrayConstraints = (acc: string, schema: JSONSchema, ctx: MatchContext): string[] | null => {
   const c: string[] = []
   const d = depthOf(ctx)
-  const elements = `(${acc} as unknown[])`
+  // `any[]`, not `unknown[]`, for the same reason as {@link recordOf}: a tuple
+  // position is read more than once (its type test, then that type's
+  // constraint) and a cast expression is not a reference, so nothing narrows
+  // between the reads and `(x as unknown[])[0].length` failed to compile.
+  const elements = `(${acc} as any[])`
 
   if (hasMinItems(schema)) c.push(`${acc}.length >= ${schema.minItems}`)
   if (hasMaxItems(schema)) c.push(`${acc}.length <= ${schema.maxItems}`)
@@ -255,7 +270,7 @@ const containsConstraint = (acc: string, schema: JSONSchema, ctx: MatchContext):
   const el = `_c${d}`
   const match = subschemaMatchExpr(el, s['contains'] as JSONSchema, nest(ctx))
   if (match === null) return null
-  const count = `(${acc} as unknown[]).filter((${el}) => ${match}).length`
+  const count = `(${acc} as any[]).filter((${el}) => ${match}).length`
   const bounds: string[] = []
   if (min > 0) bounds.push(`${count} >= ${min}`)
   if (max !== undefined) bounds.push(`${count} <= ${max}`)

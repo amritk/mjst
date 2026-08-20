@@ -178,9 +178,14 @@ export const getPrefixItems = (schema: JSONSchema): readonly JSONSchema[] | null
 export const everyTailItem = (accessor: string, itemCheck: string, schema: JSONSchema): string => {
   const prefix = isSchemaObject(schema) ? (schema as Record<string, unknown>)['prefixItems'] : undefined
   const tailStart = Array.isArray(prefix) ? prefix.length : 0
+  // `_it` carries an explicit type because the accessor is not always something
+  // TypeScript can narrow: a property named after an `Object.prototype` member
+  // reads through a conditional expression (see safeAccessor), whose element
+  // type the compiler cannot infer — the callback parameter came out implicitly
+  // `any` and the generated file failed to build under `noImplicitAny`.
   return tailStart === 0
-    ? `${accessor}.every((_it) => ${itemCheck})`
-    : `${accessor}.every((_it, _ix) => _ix < ${tailStart} || (${itemCheck}))`
+    ? `${accessor}.every((_it: unknown) => ${itemCheck})`
+    : `${accessor}.every((_it: unknown, _ix: number) => _ix < ${tailStart} || (${itemCheck}))`
 }
 
 /**
