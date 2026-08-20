@@ -8,11 +8,18 @@
  * must be left exactly as-is (doubling `\d` to `\\d` would change it from "a
  * digit" to "a literal backslash followed by d"). Two things would otherwise
  * corrupt the surrounding literal:
- *   - an *unescaped* `/`, which would close the literal early; and
+ *   - an *unescaped* `/`, which would close the literal early;
  *   - a raw line terminator (LF, CR, U+2028, U+2029), which is not allowed
  *     inside a regex literal and would split the emitted `/…/` across lines (a
- *     syntax error). Each is rewritten to its backslash escape, which matches
- *     the identical character, so the regex's meaning is unchanged.
+ *     syntax error); and
+ *   - an *unpaired* surrogate, which is a legal JSON string and so a legal
+ *     `pattern`, but has no UTF-8 encoding: writing the generated file replaced
+ *     it with U+FFFD, so the emitted regex matched a different character than
+ *     the schema asked for. A well-formed surrogate pair encodes fine and is
+ *     left alone.
+ *
+ * Each is rewritten to its backslash escape, which matches the identical
+ * character, so the regex's meaning is unchanged.
  *
  * Additionally, an *invalid* pattern (e.g. `([`) would be emitted verbatim as
  * `/([/…` and produce output that does not parse. We compile the pattern with
@@ -23,7 +30,7 @@
  * escapeRegexPattern('\\d{4}/\\d{2}') // → '\\d{4}\\/\\d{2}'  (i.e. \d{4}\/\d{2})
  * @throws if `pattern` is not a valid regular expression.
  */
-// Line terminators, keyed by code point, and the backslash escape each maps to.
+// Line terminators, keyed by code unit, and the backslash escape each maps to.
 // These are the four characters disallowed *raw* inside a regex literal.
 const lineTerminatorEscapes: Record<number, string> = {
   10: '\\n', // LF
@@ -31,6 +38,9 @@ const lineTerminatorEscapes: Record<number, string> = {
   8232: '\\u2028', // LINE SEPARATOR
   8233: '\\u2029', // PARAGRAPH SEPARATOR
 }
+
+/** `\uXXXX` for one code unit — how an unpaired surrogate is written so it encodes. */
+const unicodeEscape = (code: number): string => `\\u${code.toString(16).padStart(4, '0')}`
 
 // Memoized results: the same schema pattern is escaped once per parser, per
 // validator, and per assertion context, on every generation — and the dominant
@@ -60,13 +70,19 @@ export const escapeRegexPattern = (pattern: string): string => {
   // itself free of the raw characters it guards against. Consuming escape pairs
   // first means the slash in `\/` is never seen as bare, so it is not
   // double-escaped.
-  const escaped = pattern.replace(/\\[\s\S]|[/\n\r\u2028\u2029]/g, (match) => {
-    if (match === '/') return '\\/'
-    const terminatorEscape = lineTerminatorEscapes[match.charCodeAt(0)]
-    if (terminatorEscape !== undefined && match.length === 1) return terminatorEscape
-    // An escape pair like `\/` or `\d`: keep exactly as authored.
-    return match
-  })
+  const escaped = pattern.replace(
+    /\\[\s\S]|[/\n\r\u2028\u2029]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+    (match) => {
+      // An escape pair like `\/` or `\d`: keep exactly as authored. (A pair
+      // whose second half is a high surrogate leaves its low half unmatched,
+      // because the lookbehind sees the high one — so an escaped astral
+      // character is still emitted verbatim.)
+      if (match.length !== 1) return match
+      if (match === '/') return '\\/'
+      const code = match.charCodeAt(0)
+      return lineTerminatorEscapes[code] ?? unicodeEscape(code)
+    },
+  )
 
   // The empty pattern is valid JSON Schema (it matches everything), but an empty
   // regex body would emit `//` \u2014 a line comment, not a literal \u2014 and break the

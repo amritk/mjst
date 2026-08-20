@@ -82,4 +82,21 @@ describe('escape-regex-pattern', () => {
     const [, source, flags] = /^\/(.*)\/(\w*)$/.exec(literal) as RegExpExecArray
     expect(new RegExp(source as string, flags).test('a')).toBe(true)
   })
+
+  it('escapes an unpaired surrogate so the emitted literal survives UTF-8', () => {
+    const lone = JSON.parse('"^\\ud800$"') as string
+    const literal = regexLiteral(lone)
+
+    expect(literal).toBe('/^\\ud800$/u')
+    expect(new TextDecoder().decode(new TextEncoder().encode(literal))).toBe(literal)
+    // The escape matches the identical character, so the pattern still means
+    // what its author wrote.
+    const compiled = new Function(`return ${literal}`)() as RegExp
+    expect(compiled.test(lone.slice(1, -1))).toBe(true)
+  })
+
+  it('leaves a well-formed surrogate pair verbatim', () => {
+    expect(regexLiteral('^😀$')).toBe('/^😀$/u')
+    expect((new Function('return /^😀$/u')() as RegExp).test('😀')).toBe(true)
+  })
 })
