@@ -1249,7 +1249,13 @@ const generateMatchesExpr = (
 const unevaluatedMatcher =
   (suffix: string, ctx: NestingContext): UnevaluatedMatchFn =>
   (accessor, schema, depth) =>
-    generateMatchesExpr(accessor, schema, suffix, { ...ctx, depth: ctx.depth + depth + 1 })
+    // Always `required`: every accessor handed to this matcher is a value the
+    // surrounding test has already established is there — the whole instance
+    // inside its type guard, or a key/index the sweep is walking. In optional
+    // mode a property whose value is `undefined` matched every branch, so
+    // `{ a: undefined }` satisfied an `unevaluatedProperties: { type: 'string' }`
+    // that Ajv and the interpreter both reject.
+    generateMatchesExpr(accessor, schema, suffix, { ...ctx, depth: ctx.depth + depth + 1 }, true)
 
 /**
  * Emits `unevaluatedProperties` / `unevaluatedItems` for one schema node.
@@ -1435,6 +1441,12 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
   for (const [pattern, sub] of patternEntries) {
     const re = regexLiteral(pattern)
     const kv = `_pk${d}`
+    // `required` mode: the key came out of the loop over the object, so its value
+    // is there to be judged. Optional mode wrote `obj[_pk0] !== undefined &&` in
+    // front of every check, and a property whose value *is* `undefined` then
+    // satisfied all of them — `{ a: undefined }` passed a
+    // `patternProperties: { "^a": { type: "string" } }` that Ajv and the
+    // interpreter both reject.
     const valueChecks = generateValueChecks(
       `\${${kv}}`,
       `${obj}[${kv}]`,
@@ -1442,6 +1454,7 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
       sub,
       suffix,
       ctx,
+      true,
     )
     if (valueChecks.length === 0) continue
     lines.push(`  for (const ${kv} in ${obj}) {`)
@@ -1456,6 +1469,7 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
   if (hasAdditionalProperties(schema) && isSchemaObject(schema.additionalProperties)) {
     const additional = schema.additionalProperties
     const kv = `_ak${d}`
+    // Present by construction, like the `patternProperties` values above.
     const valueChecks = generateValueChecks(
       `\${${kv}}`,
       `${obj}[${kv}]`,
@@ -1463,6 +1477,7 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
       additional,
       suffix,
       ctx,
+      true,
     )
     if (valueChecks.length > 0) {
       const known = Object.keys(hasProperties(schema) ? schema.properties : {})

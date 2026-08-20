@@ -430,11 +430,17 @@ export const unevaluatedItemsExpr = (
   if (coverage.all) return undefined
 
   const elements = `(${acc} as unknown[])`
+  // `every` skips the holes a sparse array has, so an index nothing evaluated
+  // went unchecked: `[<hole>]` satisfied an `unevaluatedItems: { type: 'string' }`
+  // that Ajv and the interpreter both reject. `Array.from` materialises them —
+  // the same copy `booleanArrayExpr` makes in the emitter, for the same reason —
+  // and only the sweeps need it; a bare `length` reads a hole correctly already.
+  const visited = `Array.from(${elements})`
   const covered = coverage.terms.length > 0 ? orJoin(coverage.terms) : null
 
   if (unevaluated === false) {
     const expr =
-      covered === null ? `${elements}.length === 0` : `${elements}.every((${itemVar}, ${indexVar}) => ${covered})`
+      covered === null ? `${elements}.length === 0` : `${visited}.every((${itemVar}, ${indexVar}) => ${covered})`
     return { setup: sink.setup, expr }
   }
 
@@ -442,7 +448,7 @@ export const unevaluatedItemsExpr = (
   if (valueMatch === 'true') return undefined
   const expr =
     covered === null
-      ? `${elements}.every((${itemVar}) => ${valueMatch})`
-      : `${elements}.every((${itemVar}, ${indexVar}) => ${covered} || ${valueMatch})`
+      ? `${visited}.every((${itemVar}) => ${valueMatch})`
+      : `${visited}.every((${itemVar}, ${indexVar}) => ${covered} || ${valueMatch})`
   return { setup: sink.setup, expr }
 }

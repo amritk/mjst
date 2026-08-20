@@ -310,6 +310,26 @@ describe('generator/interpreter verdict parity', () => {
     assertParity({ enum: [{ a: 1 }] }, [cyclic()])
   })
 
+  it('agrees on a key that is present with an undefined value, and on an array hole', () => {
+    // A key the sweep is walking, or an index inside the array's length, is a
+    // value to judge — but the dynamic-key checks ran in optional mode, where a
+    // leading `x !== undefined &&` waves `undefined` past every one of them, and
+    // `every` skips a hole outright. So `{ a: undefined }` satisfied an
+    // `additionalProperties: { type: 'string' }` and `[<hole>]` satisfied an
+    // `unevaluatedItems: { type: 'string' }` — both rejected by the interpreter,
+    // and by Ajv. Neither value can come out of `JSON.parse`, which is why the
+    // conformance corpus says nothing about them.
+    const hole: unknown[] = ['x']
+    delete hole[0]
+    const undefinedValue = { a: undefined }
+
+    assertParity({ type: 'object', additionalProperties: { type: 'string' } }, [undefinedValue, { a: 'x' }, { a: 1 }])
+    assertParity({ type: 'object', patternProperties: { '^a': { type: 'string' } } }, [undefinedValue, { a: 'x' }])
+    assertParity({ type: 'object', unevaluatedProperties: { type: 'string' } }, [undefinedValue, { a: 'x' }])
+    assertParity({ type: 'array', unevaluatedItems: { type: 'string' } }, [hole, ['x'], [1]])
+    assertParity({ type: 'array', prefixItems: [true], unevaluatedItems: false }, [['a', ...hole], ['a']])
+  })
+
   it('agrees on full propertyNames subschemas (beyond the pattern/length subset)', () => {
     const values = [
       {},
