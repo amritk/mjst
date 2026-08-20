@@ -129,7 +129,7 @@ if (isMap(contents)) {
 | `parseAllDocuments(source, options?)` | Parse a multi-document (`---`-separated) stream to an array of documents, each with its own anchors, problems, and comments. |
 | `nodeAtPath(root, path, closest?)` | Resolve a JSON path to its node (carrying `start`/`end`), optionally falling back to the closest ancestor. Follows an `*alias` on the way down, so a path under an aliased collection resolves to the node inside the anchored value. |
 | `lineCounter(source)` | Build an `offset → { line, col }` mapper (1-based). |
-| `keyText(node)` | The string a mapping key projects to in `toJS()` output — the same string `nodeAtPath` matches a path segment against. Use it when you walk the tree yourself and need your paths to line up with the projected data. |
+| `keyText(node)` | The string a mapping key projects to in `toJS()` output — the same string `nodeAtPath` matches a path segment against. Use it when you walk the tree yourself and need your paths to line up with the projected data. Rendering is bounded, so a key built from aliases that expand exponentially is cut short with `…` rather than run away. |
 | `isScalar` / `isMap` / `isSeq` / `isPair` / `isAlias` | Narrowing guards over the node union. |
 
 **Options**
@@ -282,7 +282,7 @@ The one thing that *does* throw is the guard against a document built to exhaust
 | `UNEXPECTED_DIRECTIVE` | a directive with no `...` before it or no `---` after it |
 | `DEPTH_LIMIT` | nesting past the parser's depth cap |
 
-Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNKNOWN_DIRECTIVE`, a malformed `%TAG` directive (`BAD_DIRECTIVE`), and `MULTIPLE_DOCUMENTS` — `parseDocument` found a second document after a `---`/`...` marker and read only the first, so switch to `parseAllDocuments` if you want the rest.
+Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNKNOWN_DIRECTIVE`, a malformed `%TAG` directive (`BAD_DIRECTIVE`), `AMBIGUOUS_ANCHOR_NAME` — an anchor or alias name ending in `:`, which YAML makes part of the name (`*x: v` names the anchor `x:` and leaves the mapping no separator) — and `MULTIPLE_DOCUMENTS`, where `parseDocument` found a second document after a `---`/`...` marker and read only the first, so switch to `parseAllDocuments` if you want the rest.
 
 ### Not supported
 

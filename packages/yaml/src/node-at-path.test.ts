@@ -143,4 +143,15 @@ describe('node-at-path with duplicated keys', () => {
     expect(nodeAtPath(doc.contents, ['paths'])).toBeUndefined()
     expect(nodeAtPath(doc.contents, ['paths'], true)?.kind).toBe('map')
   })
+
+  it('falls back to the closest node when the path runs past a dangling alias', () => {
+    // Every other dead end under `closest` yields the deepest node that does
+    // exist; a dangling alias used to yield nothing — dropping the one span a
+    // caller reporting an unresolved alias most wants to point at.
+    const doc = parseDocument('a: 1\nb: *missing\n')
+    const alias = nodeAtPath(doc.contents, ['b'])
+    expect(alias?.kind).toBe('alias')
+    expect(nodeAtPath(doc.contents, ['b', 'x'], true)).toBe(alias)
+    expect(nodeAtPath(doc.contents, ['b', 'x'])).toBeUndefined()
+  })
 })

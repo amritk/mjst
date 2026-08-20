@@ -1533,3 +1533,50 @@ describe('anchor scope across a stream', () => {
     expect(second?.errors.map((e) => e.code)).toEqual(['UNRESOLVED_ALIAS'])
   })
 })
+
+describe('the "..." document-end marker', () => {
+  it('does not treat three dots glued to content as a marker', () => {
+    // A marker has to stand alone. Matching the three dots on their own swallowed
+    // `...abc` and `....` as document ends, so `parseDocument` returned an empty
+    // document with no diagnostic at all — while `parseAllDocuments` on the very
+    // same source parsed them correctly.
+    expect(parseDocument('...abc\n').toJS()).toBe('...abc')
+    expect(parseDocument('....\n').toJS()).toBe('....')
+    expect(parseDocument('...abc: 1\n').toJS()).toEqual({ '...abc': 1 })
+    expect(parseDocument('...abc\n').errors).toEqual([])
+  })
+
+  it('still reads a marker that does stand alone as one', () => {
+    expect(parseDocument('...\n').toJS()).toBeNull()
+    expect(parseDocument('... # trailing\n').toJS()).toBeNull()
+  })
+
+  it('agrees with parseAllDocuments', () => {
+    for (const source of ['...abc\n', '....\n', '...abc: 1\n', '...\n', 'a: 1\n...\n']) {
+      const [first] = parseAllDocuments(source)
+      expect(parseDocument(source).toJS()).toEqual(first ? first.toJS() : null)
+    }
+  })
+})
+
+describe('anchor and alias names ending in ":"', () => {
+  it('warns that the ":" belongs to the name', () => {
+    // YAML makes `:` a legal anchor character, so `*x: v` names the anchor `x:`
+    // and the mapping loses its separator. The parser follows the spec, but the
+    // `UNRESOLVED_ALIAS` it earns names an anchor the author never wrote.
+    const { warnings, errors } = parseDocument('k: &x n\n*x: v\n')
+    expect(warnings.map((w) => w.code)).toEqual(['AMBIGUOUS_ANCHOR_NAME'])
+    expect(errors.map((e) => e.code)).toEqual(['UNRESOLVED_ALIAS'])
+  })
+
+  it('warns on the anchor spelling too, in block and flow context', () => {
+    expect(parseDocument('&a: key: value\n').warnings.map((w) => w.code)).toEqual(['AMBIGUOUS_ANCHOR_NAME'])
+    expect(parseDocument('{&a: 1}\n').warnings.map((w) => w.code)).toEqual(['AMBIGUOUS_ANCHOR_NAME'])
+  })
+
+  it('says nothing about an ordinary anchor or alias', () => {
+    const doc = parseDocument('a: &x 1\nb: *x\nc: [*x, &y 2]\n')
+    expect(doc.warnings).toEqual([])
+    expect(doc.errors).toEqual([])
+  })
+})

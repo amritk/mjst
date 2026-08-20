@@ -762,6 +762,7 @@ const scanPropsSlow = (state: State, flow = false): NodeProps => {
         pushError(state, 'BAD_PROPERTY', 'A node cannot carry more than one anchor', state.pos, i)
       }
       anchor = src.slice(state.pos + 1, i)
+      checkAmbiguousName(state, 'Anchor', anchor, state.pos, i)
       state.pos = i
     } else if (c === BANG) {
       const i = propTokenEnd(src, state.pos + 1, len, flow)
@@ -967,6 +968,32 @@ const scanQuoted = (state: State, quote: number, parentIndent = -1): YamlScalar 
   return { kind: 'scalar', value, source, style: quote === SQUOTE ? 'single' : 'double', start, end: i }
 }
 
+/**
+ * Warns about an anchor or alias name that ends in `:`.
+ *
+ * A `:` is a legal anchor character — YAML 1.2's `ns-anchor-char` excludes only
+ * the flow indicators — so `*x: v` names the anchor `x:` and leaves the mapping
+ * with no `: ` separator at all. This parser reads it that way because that is
+ * what the spec says, but no author writing `*x: v` means it, and the report the
+ * shape earns on its own is an `UNRESOLVED_ALIAS` naming an anchor `x:` that the
+ * document never wrote — which reads as a lie to someone who typed `*x`. `yaml`
+ * (eemeli) warns here as well; `js-yaml` rejects the document outright. A
+ * warning rather than an error, because the reading really is the spec's.
+ *
+ * One comparison on the cold property path, and only for a node that carries an
+ * anchor or is an alias.
+ */
+const checkAmbiguousName = (state: State, what: string, name: string, start: number, end: number): void => {
+  if (name.length === 0 || name.charCodeAt(name.length - 1) !== COLON) return
+  pushWarning(
+    state,
+    'AMBIGUOUS_ANCHOR_NAME',
+    `${what} name "${name}" ends in ":", which YAML reads as part of the name rather than as a mapping separator`,
+    start,
+    end,
+  )
+}
+
 /** Reads a `*alias` reference. */
 const scanAlias = (state: State): YamlNode => {
   const { src, len } = state
@@ -978,6 +1005,7 @@ const scanAlias = (state: State): YamlNode => {
     i++
   }
   const name = src.slice(start + 1, i)
+  checkAmbiguousName(state, 'Alias', name, start, i)
   state.pos = i
   // Bind to whichever anchor is currently registered under this name — the one
   // in scope at this point in the document. Capturing the node identity now (not
@@ -2714,18 +2742,7 @@ const skipDocumentHead = (state: State): number => {
       state.pos = nextLineStart(src, line.contentPos, len)
       continue
     }
-    if (
-      c === DASH &&
-      src.charCodeAt(line.contentPos + 1) === DASH &&
-      src.charCodeAt(line.contentPos + 2) === DASH &&
-      (line.contentPos + 3 >= len ||
-        isSpace(src.charCodeAt(line.contentPos + 3)) ||
-        src.charCodeAt(line.contentPos + 3) === NL ||
-        // CRLF input parks a `\r` right after `---`; without this the marker is
-        // misread as a plain scalar. `isDocMarker` (stream path) already accepts
-        // CR, so this keeps the two marker detectors in agreement.
-        src.charCodeAt(line.contentPos + 3) === CR)
-    ) {
+    if (c === DASH && isDocMarker(src, line.contentPos, len)) {
       const inline = docMarkerInlineNode(state, line.contentPos)
       if (inline >= 0) return inline
       continue
@@ -3087,11 +3104,14 @@ export const parseDocument = (source: string, options: ParseOptions = {}): YamlD
   }
   const head = peekLine(state, 0)
   if (!head.eof) {
-    // Stop a bare `...` document-end marker from being read as a scalar.
+    // Stop a bare `...` document-end marker from being read as a scalar. The
+    // test is `isDocMarker` — the same one the stream path and `checkDocumentEnd`
+    // use — because a marker has to *stand alone*: the three dots this used to
+    // look for on their own matched `...abc` and `....` too, and returned an
+    // empty document with no diagnostic. A whole mapping (`...abc: 1`) vanished
+    // silently, which `parseAllDocuments` on the same source parses correctly.
     const c = source.charCodeAt(head.contentPos)
-    const isDocEnd =
-      c === 46 /* . */ && source.charCodeAt(head.contentPos + 1) === 46 && source.charCodeAt(head.contentPos + 2) === 46
-    if (!isDocEnd) {
+    if (c !== DOT || !isDocMarker(source, head.contentPos, state.len)) {
       state.pos = head.contentPos
       contents = parseNode(state, head.indent, -1)
       checkDocumentEnd(state)
