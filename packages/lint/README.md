@@ -125,6 +125,8 @@ await lintDocument(source, {
 
 `restrictTo` is off by default and narrows *which* files a ruleset can name. It is not a sandbox: a `.js` file inside the permitted root still runs with full privileges. The OpenAPI preset takes the same option — `createOpenApiRuleset(definition, basePath, { restrictTo })`.
 
+One thing `restrictTo` does not cover: a regular expression a ruleset writes — in `pattern`'s `match`/`notMatch`, or as a literal inside a `[?(...)]` filter — is compiled and run against text from the document. An ambiguous pattern (nested quantifiers over overlapping character classes) can backtrack catastrophically on an input crafted to trigger it, so a hostile *document* can hang the linter through a regex the *ruleset* provided. The built-in rules avoid such patterns deliberately (see the note in `casing`); keep the same discipline in rules you write, and prefer anchored patterns with unambiguous alternatives.
+
 ### Auto-fix
 
 `fixDocument` runs the linter and applies a `FixerRegistry` — fixers keyed by rule `code` that map a finding to a formatting-preserving text edit — to a fixpoint, then re-lints:
