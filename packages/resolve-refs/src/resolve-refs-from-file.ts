@@ -15,7 +15,7 @@ import { pointerToPath } from './get-by-pointer'
 import { isContainedPath } from './is-contained-path'
 import { isPrivateHost } from './is-private-host'
 import { DEFAULT_MAX_DEPTH, depthLimitError } from './max-depth'
-import { type ResolvedTarget, readReference, resolveFragment } from './reference'
+import { ANNOTATION_ONLY_SIBLINGS, type ResolvedTarget, readReference, resolveFragment } from './reference'
 import {
   baseOfNode,
   buildResourceRegistry,
@@ -26,6 +26,7 @@ import {
 } from './resource-registry'
 import { roleAtPath } from './role-at-path'
 import { assignKey } from './safe-assign'
+import { splitRef } from './split-ref'
 import type { JsonPath, OriginMap, ResolveError, ResolveOptions, ResolveResult } from './types'
 
 // A ref currently mid-resolution is marked with this sentinel; revisiting it
@@ -41,9 +42,6 @@ const MISSING = Symbol('missing')
 // `$id` base it was defined under (for the scope check in `resolveAt`).
 type CacheValue = { value: unknown; pointer: JsonPath; base: string } | typeof CYCLE | typeof MISSING
 
-/** See {@link ANNOTATION_ONLY_SIBLINGS} in resolve-refs.ts — same rule here. */
-const ANNOTATION_ONLY_SIBLINGS = new Set(['summary', 'description'])
-
 // --- Document location helpers ---------------------------------------------
 //
 // A "location" is the absolute identity of a document: either an absolute file
@@ -55,20 +53,26 @@ const ANNOTATION_ONLY_SIBLINGS = new Set(['summary', 'description'])
 
 const isRemote = (location: string): boolean => /^https?:\/\//i.test(location)
 
-/** Resolves the location of `ref` (its file/URL part) relative to `base`. */
-const joinLocation = (base: string, ref: string): string => {
+/**
+ * Resolves the location of `ref` (its file/URL part) relative to `base`, or
+ * `undefined` when the pair does not name a location at all.
+ *
+ * The `undefined` is the whole point: resolving against a *remote* base goes
+ * through the URL parser, and a ref like `//[bad` throws there. That used to
+ * throw straight out of `resolveRefsFromFile` — a `TypeError` from a package
+ * whose headline contract is that a bad ref is collected on `errors`, never
+ * thrown — for any document that merely mentioned one.
+ */
+const joinLocation = (base: string, ref: string): string | undefined => {
   if (isRemote(ref)) return ref
-  if (isRemote(base)) return new URL(ref, base).href
-  return resolvePath(dirname(base), ref)
-}
-
-/** Splits a `$ref` into its document part and its fragment (pointer or anchor name). */
-const splitRef = (ref: string): { filePart: string; fragment: string } => {
-  const hashIdx = ref.indexOf('#')
-  return {
-    filePart: hashIdx === -1 ? ref : ref.slice(0, hashIdx),
-    fragment: hashIdx === -1 ? '' : ref.slice(hashIdx + 1),
+  if (isRemote(base)) {
+    try {
+      return new URL(ref, base).href
+    } catch {
+      return undefined
+    }
   }
+  return resolvePath(dirname(base), ref)
 }
 
 // --- Remote document cache -------------------------------------------------
@@ -579,7 +583,7 @@ const detach = (node: unknown): unknown => {
  */
 const rebaseKeptRef = (value: string, from: string, root: string): string => {
   if (from === root) return value
-  const { filePart, fragment } = splitRef(value)
+  const { uriPart: filePart, fragment } = splitRef(value)
   // A bare fragment names a place inside *its own* document. Once the node has
   // been lifted into the root output, `#/$defs/Thing` reads against the root's
   // `$defs` — a different definition, which may well exist and resolve cleanly.
@@ -593,6 +597,9 @@ const rebaseKeptRef = (value: string, from: string, root: string): string => {
   // so a Windows drive letter is not mistaken for a scheme.
   if (/^[a-zA-Z][a-zA-Z0-9+.-]+:/.test(filePart)) return value
   const target = joinLocation(from, filePart)
+  // A ref that names no location has nothing to rebase onto, so it is handed
+  // back exactly as the author wrote it.
+  if (target === undefined) return value
   const suffix = value.includes('#') ? `#${fragment}` : ''
   return `${renderLocation(target, root)}${suffix}`
 }
@@ -654,7 +661,7 @@ const rebaseKeptRefs = (node: unknown, from: string, root: string, role: NodeRol
     const obj = current_ as Record<string, unknown>
     const isSchema = currentRole !== 'schemaMap'
     for (const [key, value] of Object.entries(obj)) {
-      // `$ref` only: see the `keepUnresolved` path for why an anchor-form
+      // `$ref` only: see `keepScopedReference` for why an anchor-form
       // `$dynamicRef` must not be qualified with a document.
       if (isSchema && key === '$ref' && typeof value === 'string') {
         assignKey(obj, key, rebaseKeptRef(value, from, root))
@@ -807,7 +814,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     if (reference && reference.keyword !== '$recursiveRef') {
       const scoped = resolveRefInScope(registry, reference.keyword, reference.value, nodeBase)
       if (scoped === 'external') {
-        const { filePart } = splitRef(reference.value)
+        const { uriPart: filePart } = splitRef(reference.value)
         if (filePart !== '') out.add(filePart)
       }
     }
@@ -844,6 +851,10 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       collectRefTargets(docCache.get(location), location, registryFor(location).rootBase, out, 0, 'schema')
       for (const filePart of out) {
         const target = joinLocation(location, filePart)
+        if (target === undefined) {
+          errors.push({ message: `Refusing to load $ref "${filePart}": it does not name a valid location`, path: [] })
+          continue
+        }
         if (seen.has(target)) continue
         seen.add(target)
         if (loaded >= maxDocuments) {
@@ -935,15 +946,18 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
    */
   /**
    * Builds a node that keeps its reference: the keyword is preserved and every
-   * sibling resolves as usual.
+   * sibling resolves as usual. This is the one place that shape is built, for
+   * every branch that needs it — a `$dynamicRef` that binds at evaluation time,
+   * a scope-sensitive target that inlining would re-base, a ref whose target
+   * could not be resolved. They used to be written out separately, and the
+   * rebase added to one was missing from another for a round.
    *
-   * Two branches need this — a `$dynamicRef` that binds at evaluation time, and
-   * a scope-sensitive target that inlining would re-base — and they were
-   * written out separately, so the rebase added to one of them was missing from
-   * the other for a round. A kept relative `$ref` has to be re-expressed
-   * against the root document exactly as `keepUnresolved` does it, or
+   * A kept relative `$ref` has to be re-expressed against the root document, or
    * `./c.json` kept out of `sub/b.json` comes to name the root's own c.json.
-   * `$ref` only: an anchor-form `$dynamicRef` carries a name, not a location.
+   * `$ref` only: `$dynamicRef` and `$recursiveRef` carry an anchor name rather
+   * than a location — `#meta` is the whole legal spelling — so qualifying one
+   * with a document turns a soft kept reference into a value no consumer can
+   * resolve (`@amritk/helpers` throws outright).
    */
   const keepScopedReference = (
     obj: Record<string, unknown>,
@@ -988,7 +1002,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       // Those kept refs still have to mean what they meant, though: the
       // subtree is being lifted into a root-based output, so a relative
       // `./c.json` written in `sub/b.json` would come to name the root's own
-      // `c.json`. Same rebasing `keepUnresolved` does, for the same reason.
+      // `c.json`. Same rebasing `keepScopedReference` does, for the same reason.
       reportDepthLimit()
       return rebaseKeptRefs(detach(node), baseLocation, rootLocation, role)
     }
@@ -1034,8 +1048,13 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         if (inScope === 'external' || inScope === undefined) {
           const parts = splitRef(value)
           fragment = parts.fragment
-          if (inScope === 'external' && parts.filePart !== '') {
-            targetLocation = joinLocation(baseLocation, parts.filePart)
+          if (inScope === 'external' && parts.uriPart !== '') {
+            const target = joinLocation(baseLocation, parts.uriPart)
+            // A ref that names no location names no document we could load, and
+            // `prefetch` already recorded why. Keep it rather than resolving it
+            // against the referencing document by accident.
+            if (target === undefined) return keepScopedReference(obj, keyword, baseLocation, nodeBase, depth, role)
+            targetLocation = target
           }
         } else {
           scoped = inScope
@@ -1086,23 +1105,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         if (hoisted) hoistRefSites.set(kept, cacheKey)
         return kept
       }
-      // Keeps the reference, with siblings resolved — the shape every other
-      // kept-node branch produces. Returning the raw parsed node instead left
-      // resolvable sibling refs unresolved and aliased the session cache.
-      const keepUnresolved = (): unknown => {
-        const kept: Record<string, unknown> = {}
-        for (const key of Object.keys(obj)) {
-          if (key === keyword) continue
-          assignKey(kept, key, resolveAt(obj[key], baseLocation, nodeBase, depth + 1, childRole(role, key)))
-        }
-        // Only `$ref` is rebased. `$dynamicRef` and `$recursiveRef` are anchor
-        // names, not locations — `#meta` is the whole legal spelling — so
-        // qualifying one with a document turns a soft kept reference into a
-        // value no consumer can resolve (`@amritk/helpers` throws outright).
-        assignKey(kept, keyword, keyword === '$ref' ? rebaseKeptRef(value, baseLocation, rootLocation) : value)
-        return kept
-      }
-      if (cached === MISSING) return keepUnresolved()
+      if (cached === MISSING) return keepScopedReference(obj, keyword, baseLocation, nodeBase, depth, role)
       if (cached !== undefined) {
         resolved = cached.value
         pointer = cached.pointer
@@ -1175,7 +1178,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
             })
           }
           refCache.set(cacheKey, MISSING)
-          return keepUnresolved()
+          return keepScopedReference(obj, keyword, baseLocation, nodeBase, depth, role)
         }
         pointer = found?.pointer ?? []
         // The target is walked with the role it has where it is *defined*, so a

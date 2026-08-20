@@ -430,6 +430,26 @@ describe('resolve-refs-from-file', () => {
     expect(Object.keys(fetchSpy.mock.calls[1]?.[1] ?? {})).not.toContain('headers')
   })
 
+  it('collects a ref whose location does not parse instead of throwing', async () => {
+    // `//[bad` is not a URL, and resolving it against a *remote* document's
+    // location goes through the URL parser — which threw a TypeError straight
+    // out of the resolver, breaking the promise that a bad ref lands on
+    // `errors`.
+    const customFetch = vi
+      .fn<(url: string, init: object) => Promise<Response>>()
+      .mockResolvedValue(new Response(JSON.stringify({ Foo: { $ref: '//[bad' } }), { status: 200 }))
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ ok: { $ref: 'https://api.example.com/s.json#/Foo' } }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'), {
+      allowedHosts: ['api.example.com'],
+      fetch: customFetch,
+    })
+
+    expect(errors.some((e) => /does not name a valid location/.test(e.message))).toBe(true)
+    // The unresolvable reference is kept, exactly as any other one is.
+    expect(resolved).toEqual({ ok: { $ref: '//[bad' } })
+  })
+
   it('uses a custom fetch implementation while still enforcing the SSRF guard', async () => {
     const globalFetchSpy = vi.spyOn(globalThis, 'fetch')
     const customFetch = vi

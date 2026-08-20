@@ -8,7 +8,7 @@ import {
 } from './dynamic-scope'
 import { pointerToPath } from './get-by-pointer'
 import { DEFAULT_MAX_DEPTH, depthLimitError } from './max-depth'
-import { type ResolvedTarget, readReference, resolveFragment } from './reference'
+import { ANNOTATION_ONLY_SIBLINGS, type ResolvedTarget, readReference, resolveFragment } from './reference'
 import { baseOfNode, buildResourceRegistry, type ResourceRegistry, resolveRefInScope } from './resource-registry'
 import { roleAtPath } from './role-at-path'
 import { assignKey } from './safe-assign'
@@ -40,15 +40,6 @@ export type ResolveRefsOptions = {
    */
   maxDepth?: number
 }
-
-/**
- * OpenAPI 3.1 Reference Objects allow only these annotation keywords beside a
- * `$ref`, and they *override* the target's — an `allOf` wrapper is not valid in
- * those positions (Path Item, Response, Parameter references). They carry no
- * validation semantics in plain JSON Schema either, so overriding is safe there
- * too; every other sibling keyword keeps the spec-correct `allOf` combination.
- */
-const ANNOTATION_ONLY_SIBLINGS = new Set(['summary', 'description'])
 
 /**
  * The depth budget for one resolve pass, carried through the walk. `reported`

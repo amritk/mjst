@@ -29,6 +29,11 @@ const isPrivateIpv4 = (value: number): boolean => {
   // discovery, …). Only the /24, so the ordinary public space in 192.0.0.0/16
   // (TEST-NET-1 aside) stays reachable.
   if (a === 192 && b === 0 && c === 0) return true
+  // 224.0.0.0/4 multicast and 240.0.0.0/4 reserved (which is where the
+  // `255.255.255.255` broadcast address lives). Neither is a public unicast
+  // destination, so neither is somewhere a schema can be published — and this
+  // predicate's answer is "is this address public", which for these is no.
+  if (a >= 224) return true
   return false
 }
 
