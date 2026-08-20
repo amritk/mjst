@@ -99,4 +99,27 @@ describe('escape-regex-pattern', () => {
     expect(regexLiteral('^😀$')).toBe('/^😀$/u')
     expect((new Function('return /^😀$/u')() as RegExp).test('😀')).toBe(true)
   })
+
+  // The validating compile omitted the `u` flag while the emitter added it, so
+  // a pattern legal *only* in Unicode mode failed the build as an "invalid
+  // regex" — a pattern Ajv, the differential oracle, accepts.
+  it('accepts a pattern that is legal only in Unicode mode', () => {
+    for (const pattern of ['[😀-😜]', '[\\u{61}-\\u{7A}]']) {
+      expect(regexFlagsFor(pattern)).toBe('u')
+      // The emitted literal has to compile with the flags it carries.
+      expect(() => new Function(`return ${regexLiteral(pattern)}`)()).not.toThrow()
+    }
+    expect((new Function('return /[😀-😜]/u')() as RegExp).test('😀')).toBe(true)
+  })
+
+  it('still accepts a pattern that is legal only without the flag', () => {
+    // `\-` is an identity escape without `u` and a syntax error with it.
+    expect(regexFlagsFor('a\\-b')).toBe('')
+    expect(regexLiteral('a\\-b')).toBe('/a\\-b/')
+  })
+
+  it('still rejects a pattern that is a regex in neither mode', () => {
+    expect(() => escapeRegexPattern('([')).toThrow(/Invalid regex pattern/)
+    expect(regexFlagsFor('([')).toBe('')
+  })
 })
