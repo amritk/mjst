@@ -27,6 +27,22 @@ describe('runner: message templates', () => {
     expect(results[0]?.message).toBe('name "api/" -> The value must not match the pattern "/$"')
   })
 
+  it('renders an unknown placeholder as nothing, prototype members included', async () => {
+    // `key in ctx` walked the prototype chain, so `{{toString}}` resolved to
+    // `Object.prototype.toString` and printed the literal text "undefined".
+    const results = await lint('name: ""\n', {
+      rules: {
+        'no-such-key': {
+          given: '$.name',
+          severity: 'error',
+          message: 'x={{toString}}|{{nope}}',
+          then: { function: 'truthy' },
+        },
+      },
+    })
+    expect(results[0]?.message).toBe('x=|')
+  })
+
   it('interpolates {{path}} and {{description}}', async () => {
     const results = await lint('info:\n  title: Hi\n', {
       rules: {
@@ -93,6 +109,20 @@ describe('runner: field targeting on arrays', () => {
     })
     expect(results).toHaveLength(1)
     expect(results[0]?.path).toEqual(['tags', 1])
+  })
+
+  it('does not read a field that names a prototype member', async () => {
+    // `then.field` is ruleset input, so `constructor` is a name someone may write.
+    // A bare index answered it from `Object.prototype` — a function, which
+    // `defined` and `truthy` both happily passed — so the rule silently stopped
+    // firing on documents that lack the key.
+    const results = await lint('a: 1\n', {
+      rules: {
+        'need-constructor': { given: '$', severity: 'error', then: { field: 'constructor', function: 'defined' } },
+      },
+    })
+    expect(results).toHaveLength(1)
+    expect(results[0]?.message).toBe('The value must be defined')
   })
 
   it('lints a primitive match directly when a field targets a non-container', async () => {

@@ -19,11 +19,18 @@ export const MAX_SCHEMA_DEPTH = 2000
  * Call this at the top of each recursive step with the *current* depth. The
  * `walker` label is the traversal that hit the limit, so a report points at the
  * pass that failed rather than at whichever helper happened to be deepest.
+ *
+ * `limit` defaults to {@link MAX_SCHEMA_DEPTH}, which assumes the walker spends
+ * roughly one stack frame per schema level — true of every document walk here.
+ * A pass that spends several frames per level runs the stack out before the
+ * shared cap is reached, so the cap never fires and the bare `RangeError` comes
+ * back; such a pass passes its own lower limit instead, and the message names
+ * the limit that actually applied.
  */
-export const assertSchemaDepth = (depth: number, walker: string): void => {
-  if (depth > MAX_SCHEMA_DEPTH) {
+export const assertSchemaDepth = (depth: number, walker: string, limit: number = MAX_SCHEMA_DEPTH): void => {
+  if (depth > limit) {
     throw new Error(
-      `Schema nesting exceeds ${MAX_SCHEMA_DEPTH} levels while running ${walker}. ` +
+      `Schema nesting exceeds ${limit} levels while running ${walker}. ` +
         'Flatten the document (or split the deepest subschema into a $defs entry and $ref it) and try again.',
     )
   }

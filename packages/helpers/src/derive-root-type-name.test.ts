@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { deriveRootTypeName } from './derive-root-type-name'
+import { refToName } from './ref-to-name'
 
 describe('derive-root-type-name', () => {
   it('derives a PascalCase name from a single-word title', () => {
@@ -56,5 +57,33 @@ describe('derive-root-type-name', () => {
   it('falls back to Document when neither title nor filename is usable', () => {
     expect(deriveRootTypeName({ type: 'object' }, '   ')).toBe('Document')
     expect(deriveRootTypeName(true, 'spec-plan')).toBe('SpecPlan')
+  })
+
+  // The ASCII-only word split dropped every character of a CJK or Cyrillic
+  // title (so the root was named `Document`) and deleted accented letters from
+  // the middle of a word — while a `$ref` to a definition of the same name was
+  // spelled correctly, so the two disagreed.
+  it('keeps non-ASCII titles instead of mangling them away', () => {
+    expect(deriveRootTypeName({ title: '中文' })).toBe('中文')
+    expect(deriveRootTypeName({ title: 'Приложение' })).toBe('Приложение')
+    expect(deriveRootTypeName({ title: 'Café Menu' })).toBe('CaféMenu')
+    expect(deriveRootTypeName({ title: 'Ünïcödé Doc' })).toBe('ÜnïcödéDoc')
+  })
+
+  it('spells a title the same way a $ref to the same name is spelled', () => {
+    for (const name of ['中文', 'Café Menu', 'server-variable']) {
+      expect(deriveRootTypeName({ title: name })).toBe(refToName(`#/$defs/${name}`))
+    }
+  })
+
+  it('ignores a title inherited from Object.prototype', () => {
+    const polluted = Object.prototype as Record<string, unknown>
+    try {
+      polluted['title'] = 'Ghost'
+      expect(deriveRootTypeName({ type: 'object' })).toBe('Document')
+      expect(deriveRootTypeName({ type: 'object' }, 'spec-plan')).toBe('SpecPlan')
+    } finally {
+      delete polluted['title']
+    }
   })
 })

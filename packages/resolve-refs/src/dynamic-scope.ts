@@ -1,5 +1,6 @@
 import type { RefKeyword } from './reference'
-import { baseAfterId, splitFragment } from './resource-registry'
+import { baseAfterId } from './resource-registry'
+import { splitRef } from './split-ref'
 
 /**
  * The part of resolution that cannot be answered statically.
@@ -43,7 +44,7 @@ export const bindsAtEvaluationTime = (
   ambiguousAnchors: ReadonlySet<string>,
 ): boolean => {
   if (keyword !== '$dynamicRef') return false
-  const { fragment } = splitFragment(ref)
+  const { fragment } = splitRef(ref)
   if (fragment === '' || fragment.startsWith('/')) return false
   return ambiguousAnchors.has(fragment)
 }

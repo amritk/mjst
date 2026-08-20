@@ -196,7 +196,15 @@ export const createTokenRefresh = (options: TokenRefreshOptions): TokenRefresh =
   const refresh = (): Promise<AuthToken> => {
     if (inFlight !== null) return inFlight
     const startedAt = generation
-    inFlight = Promise.resolve(options.refresh(current))
+    // The call is wrapped rather than handed to `Promise.resolve`, because a
+    // `refresh` that throws *synchronously* — a non-async function, a
+    // `TypeError` from a misspelled client method — throws out of this
+    // function before there is a promise to reject. Both background callers
+    // then have no `.catch` to reach: the in-window renewal rejected
+    // `headers()` instead of handing back the token that is still valid, and
+    // the idle timer threw straight out of its `setTimeout` callback, which on
+    // Node is an uncaught exception that takes the process with it.
+    inFlight = (async () => options.refresh(current))()
       .then((result) => {
         const token = normalize(result)
         // An `invalidate`/`dispose` landed while this refresh was in flight —

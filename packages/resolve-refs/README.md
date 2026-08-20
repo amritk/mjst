@@ -75,6 +75,11 @@ const remote = await resolveRefsFromFile('https://api.example.com/schema.json', 
 Errors (a missing file, a refused host, a refused path, a bad URL, a document too
 deeply nested) are collected on `result.errors` rather than thrown; the
 corresponding ref resolves to `{}` so the rest of the document still resolves.
+Each error carries the `path` to the reference that caused it — a path in the
+document you named, ending in the keyword (`['properties', 'pet', '$ref']`) — so
+a caller can anchor a diagnostic on the `$ref` a reader has to fix. It is empty
+when there is nowhere to point: a budget the resolve as a whole overran, or a
+reference written in some other document.
 
 `clearRemoteCache()` drops every cached remote document — useful in tests or
 long-lived sessions where remote schemas may change. Pass a URL

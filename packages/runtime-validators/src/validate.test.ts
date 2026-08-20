@@ -1219,6 +1219,20 @@ describe('validate', () => {
       expect(() => validator('x')).toThrow(/schemas/)
     })
 
+    it('does not let a resolved $dynamicRef answer an unrelated, unresolvable $ref', () => {
+      // The three flavours of reference share one resolved-target cache, so each
+      // needs its own key namespace. `$dynamicRef: '#x'` was cached under
+      // `dyn:#x`, which a later `$ref: 'dyn:#x'` — a URI naming no registered
+      // document — read straight back out instead of failing loudly.
+      const validator = validate({
+        $defs: { D: { $dynamicAnchor: 'x', type: 'string' } },
+        type: 'object',
+        properties: { a: { $dynamicRef: '#x' }, b: { $ref: 'dyn:#x' } },
+      })
+
+      expect(() => validator({ a: 'ok', b: 123 })).toThrow(/Cannot resolve \$ref/)
+    })
+
     it('ignores a registered entry that is not a schema object', () => {
       // Registering junk should not corrupt the registry; the URI simply names
       // nothing, and the ref fails as loudly as if it had never been registered.

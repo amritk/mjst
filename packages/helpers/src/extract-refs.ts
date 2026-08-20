@@ -63,8 +63,9 @@ export const extractRefs = (schema: JSONSchema): Set<string> => {
 
     const record = obj as Record<string, unknown>
 
-    if (!inSchemaMap && typeof readKey(record, '$ref') === 'string' && isResolvableRef(record['$ref'] as string)) {
-      refs.add(record['$ref'] as string)
+    const ref = inSchemaMap ? undefined : readKey(record, '$ref')
+    if (typeof ref === 'string' && isResolvableRef(ref)) {
+      refs.add(ref)
     }
 
     // A `$ref` inside a `default`/`enum`/`const`/`example(s)` value belongs to

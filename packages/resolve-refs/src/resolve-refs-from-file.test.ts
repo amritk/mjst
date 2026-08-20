@@ -430,6 +430,97 @@ describe('resolve-refs-from-file', () => {
     expect(Object.keys(fetchSpy.mock.calls[1]?.[1] ?? {})).not.toContain('headers')
   })
 
+  it('positions every one of many broken references, in document order', async () => {
+    const properties = Object.fromEntries(
+      Array.from({ length: 200 }, (_, index) => [`p${index}`, { $ref: `#/$defs/nope${index}` }]),
+    )
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ properties }))
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    // The index behind these paths is built once per resolve, not once per
+    // error — 200 broken refs is 200 lookups, not 200 document walks.
+    expect(errors).toHaveLength(200)
+    expect(errors[0]?.path).toEqual(['properties', 'p0', '$ref'])
+    expect(errors[199]?.path).toEqual(['properties', 'p199', '$ref'])
+  })
+
+  it('reads a document written with a UTF-8 byte-order mark', async () => {
+    // A BOM is an encoding marker, not content — but decoded it is a stray
+    // U+FEFF that `JSON.parse` refuses, and a schema authored on Windows
+    // carries one.
+    writeFileSync(join(dir, 'pet.json'), `\uFEFF${JSON.stringify({ Pet: { type: 'object' } })}`)
+    writeFileSync(join(dir, 'api.json'), `\uFEFF${JSON.stringify({ pet: { $ref: './pet.json#/Pet' } })}`)
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    expect(errors).toEqual([])
+    expect(resolved).toEqual({ pet: { type: 'object' } })
+  })
+
+  it('reports a missing document at the $ref that named it', async () => {
+    writeFileSync(
+      join(dir, 'api.json'),
+      JSON.stringify({ properties: { pet: { allOf: [{ $ref: './missing.json#/Pet' }] } } }),
+    )
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    // The reader needs the `$ref`, not the top of the file.
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.path).toEqual(['properties', 'pet', 'allOf', 0, '$ref'])
+    expect(errors[0]?.message).toMatch(/ENOENT/)
+  })
+
+  it('reports a refused remote host at the $ref that named it', async () => {
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ meta: { $ref: 'http://169.254.169.254/latest#/x' } }))
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    expect(errors[0]?.path).toEqual(['meta', '$ref'])
+    expect(errors[0]?.message).toMatch(/Refusing to resolve remote \$ref/)
+  })
+
+  it('reports an unresolvable internal fragment at the $ref rather than at its target', async () => {
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ $defs: {}, properties: { p: { $ref: '#/$defs/nope' } } }))
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    expect(errors).toEqual([{ message: 'Cannot resolve $ref "#/$defs/nope"', path: ['properties', 'p', '$ref'] }])
+  })
+
+  it('leaves the path empty for a reference written in another document', async () => {
+    writeFileSync(join(dir, 'b.json'), JSON.stringify({ Pet: { $ref: './gone.json#/x' } }))
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ pet: { $ref: './b.json#/Pet' } }))
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    // `./gone.json` is named from b.json, so there is no position in the
+    // document the caller handed us to point at.
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.path).toEqual([])
+  })
+
+  it('collects a ref whose location does not parse instead of throwing', async () => {
+    // `//[bad` is not a URL, and resolving it against a *remote* document's
+    // location goes through the URL parser — which threw a TypeError straight
+    // out of the resolver, breaking the promise that a bad ref lands on
+    // `errors`.
+    const customFetch = vi
+      .fn<(url: string, init: object) => Promise<Response>>()
+      .mockResolvedValue(new Response(JSON.stringify({ Foo: { $ref: '//[bad' } }), { status: 200 }))
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ ok: { $ref: 'https://api.example.com/s.json#/Foo' } }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'), {
+      allowedHosts: ['api.example.com'],
+      fetch: customFetch,
+    })
+
+    expect(errors.some((e) => /does not name a valid location/.test(e.message))).toBe(true)
+    // The unresolvable reference is kept, exactly as any other one is.
+    expect(resolved).toEqual({ ok: { $ref: '//[bad' } })
+  })
+
   it('uses a custom fetch implementation while still enforcing the SSRF guard', async () => {
     const globalFetchSpy = vi.spyOn(globalThis, 'fetch')
     const customFetch = vi

@@ -32,8 +32,10 @@ const SAFE = new Set(['GET', 'HEAD'])
  * It buffers the response body to hash it, so it is opt-in per app rather than
  * always-on: skip it on routes that stream (it never touches a
  * `text/event-stream` reply), and cap it with `maxBytes` on large payloads.
- * Responses that already carry an `ETag` (a handler that knows its own version)
- * are left alone.
+ * A response that already carries an `ETag` — a handler that knows its own
+ * version — keeps it and is never buffered, but still gets the conditional
+ * half: a matching `If-None-Match` answers `304` against the handler's own
+ * validator.
  *
  * @example
  * ```typescript
@@ -46,7 +48,20 @@ export const createETag = (options?: ETagOptions): FetchOnResponse => {
 
   return async (response, request) => {
     if (response.status !== 200 || !SAFE.has(request.method)) return undefined
-    if (response.headers.has('etag')) return undefined
+    // A handler that knows its own version already set the validator, so there
+    // is nothing to compute — but the conditional half of the exchange is
+    // still owed. Answering the 304 here is what makes a hand-set etag worth
+    // setting; leaving it to "the response already has one" meant the client
+    // downloaded the body it had just proved it already held.
+    const declaredEtag = response.headers.get('etag')
+    if (declaredEtag !== null) {
+      const conditional = request.headers.get('if-none-match')
+      if (conditional === null || !matchesIfNoneMatch(conditional, declaredEtag)) return undefined
+      if (response.body !== null) void response.body.cancel().catch(() => undefined)
+      const unchanged = new Headers(response.headers)
+      unchanged.delete('content-length')
+      return new Response(null, { status: 304, headers: unchanged })
+    }
     // A streamed reply has no bytes to hash without draining it, which would
     // defeat streaming — and hashing an SSE feed is meaningless anyway.
     if (response.headers.get('content-type')?.includes('text/event-stream')) return undefined

@@ -197,8 +197,10 @@ const registries = new WeakMap<object, ResourceRegistry | null>()
  */
 export const buildResourceRegistry = (root: unknown): ResourceRegistry | null => {
   if (root === null || typeof root !== 'object') return null
-  const memoized = registries.get(root)
-  if (memoized !== undefined || registries.has(root)) return memoized ?? null
+  // `has`, not a truthiness test on `get`: a document with no `$id` memoizes
+  // `null`, which is the answer worth remembering — re-deriving it is the full
+  // walk this cache exists to avoid.
+  if (registries.has(root)) return registries.get(root) ?? null
 
   const resources = new Map<string, string>()
   const anchors = new Map<string, string>()

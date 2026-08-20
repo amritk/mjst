@@ -37,17 +37,7 @@ const COPIES: ReadonlyArray<{ file: string; data: string; maps?: string }> = [
     maps: 'SCHEMA_MAP_KEYWORDS',
   },
   {
-    file: '../../runtime-validators/src/interpreter/schema-registry.ts',
-    data: 'DATA_KEYWORDS',
-    maps: 'SCHEMA_MAPS',
-  },
-  {
-    file: '../../runtime-validators/src/interpreter/limits.ts',
-    data: 'DATA_KEYWORDS',
-    maps: 'SCHEMA_MAPS',
-  },
-  {
-    file: '../../runtime-validators/src/interpreter/resolve-local-ref.ts',
+    file: '../../runtime-validators/src/interpreter/keywords.ts',
     data: 'DATA_KEYWORDS',
     maps: 'SCHEMA_MAPS',
   },

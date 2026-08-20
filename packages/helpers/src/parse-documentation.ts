@@ -171,7 +171,11 @@ export const parseDocumentation = (
       properties,
     }
   } catch (error) {
-    console.error('Failed to fetch OpenAPI documentation:', error)
+    // Nothing here fetches — the markdown arrives as an argument. The only way
+    // out is a malformed section that the parsing above trips over, and the
+    // caller's contract is "no documentation for this URL", so it is reported
+    // rather than thrown.
+    console.error(`Failed to parse OpenAPI documentation for ${commentUrl}:`, error)
     return null
   }
 }

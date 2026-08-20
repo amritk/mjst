@@ -26,6 +26,19 @@ describe('lint pipeline', () => {
     expect(parserFinding?.severity).toBe(0)
   })
 
+  it('ignores a parserOptions severity naming a prototype member', async () => {
+    // `parserOptions` is ruleset input, so a bare index resolved `'constructor'`
+    // to `Object` itself and handed that to the parser as a severity. An
+    // unrecognized name has to fall through to the parser's own default instead.
+    const ruleset = build({
+      ...NOOP,
+      parserOptions: { duplicateKeys: 'constructor' as never },
+    })
+    const { diagnostics } = await lintWithResult('a: 1\na: 2\n', { ruleset })
+    const parserFinding = diagnostics.find((d) => d.code === 'parser')
+    expect(parserFinding?.severity).toBe(0)
+  })
+
   it('skips the whole document when the skip predicate returns true', async () => {
     const ruleset = build({
       rules: { 'needs-name': { given: '$', severity: 'error', then: { field: 'name', function: 'truthy' } } },

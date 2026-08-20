@@ -47,8 +47,8 @@ describe('string length checks', () => {
   it('collapses `minLength: 1` to the unit count, which cannot disagree', () => {
     // One code unit is at least one code point, so the most common bound in real
     // schemas pays nothing for the code-point correctness.
-    expect(minLengthPassExpr('x', 1)).toBe('x.length >= 1')
-    expect(minLengthFailExpr('x', 1)).toBe('x.length < 1')
+    expect(minLengthPassExpr('x', 1)).toBe('(x.length >= 1)')
+    expect(minLengthFailExpr('x', 1)).toBe('(x.length < 1)')
   })
 
   it('stays scan-free on the common path', () => {
@@ -56,5 +56,22 @@ describe('string length checks', () => {
     // count cannot decide, so an ASCII string never allocates.
     expect(maxLengthPassExpr('x', 5).startsWith('(x.length <= 5 ||')).toBe(true)
     expect(minLengthPassExpr('x', 5).startsWith('(x.length >= 5 &&')).toBe(true)
+  })
+
+  // A caller negating the single-comparison fast path used to get
+  // `!x.length >= 1`, which parses as `(!x.length) >= 1` — constant `false`, so
+  // the length check silently passed every string.
+  it('parenthesizes every expression so a bare `!` negates the whole check', () => {
+    for (const expr of [
+      minLengthPassExpr('x', 1),
+      minLengthPassExpr('x', 3),
+      minLengthFailExpr('x', 1),
+      minLengthFailExpr('x', 3),
+      maxLengthPassExpr('x', 2),
+      maxLengthFailExpr('x', 2),
+    ]) {
+      expect(expr.startsWith('(')).toBe(true)
+      expect(expr.endsWith(')')).toBe(true)
+    }
   })
 })

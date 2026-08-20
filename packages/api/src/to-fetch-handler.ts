@@ -127,8 +127,7 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
 
   // One ResponseInit per status code, reused across requests, so a JSON reply
   // is `new Response(string, cachedInit)` rather than `Response.json` — which
-  // constructs a Headers object per call. The map stays tiny: it can only hold
-  // statuses the app's handlers actually return.
+  // constructs a Headers object per call.
   //
   // How much that buys depends entirely on the runtime, so it is worth being
   // precise. On Node/undici it is worth about 10% on the static GET through
@@ -137,15 +136,23 @@ export const toFetchHandler = (api: Api, options?: FetchHandlerOptions): FetchHa
   // `Response.json` all land within the run-to-run noise of each other. It is
   // kept because it costs nothing anywhere and helps on one runtime, not
   // because it is load-bearing.
+  //
+  // Populated once from the contracts (plus the statuses the pipeline answers
+  // with itself) and never written to again — a status nobody declared builds
+  // a throwaway init instead of being memoized. Filling it on demand made the
+  // cache a request-shaped write: `{ status: Number(input) }` is a handler an
+  // app can write, and every distinct value it produced kept an entry alive
+  // for the life of the process. The compiled engine has always emitted its
+  // table this way, so this is also what puts the two engines back in step.
   const inits = new Map<number, ResponseInit>()
-  const initFor = (status: number): ResponseInit => {
-    let init = inits.get(status)
-    if (init === undefined) {
-      init = { status, headers: JSON_HEADERS }
-      inits.set(status, init)
+  for (const status of PIPELINE_STATUSES) inits.set(status, { status, headers: JSON_HEADERS })
+  for (const contract of api.routes) {
+    for (const declared of Object.keys(contract.responses)) {
+      const status = Number(declared)
+      if (Number.isInteger(status) && !inits.has(status)) inits.set(status, { status, headers: JSON_HEADERS })
     }
-    return init
   }
+  const initFor = (status: number): ResponseInit => inits.get(status) ?? { status, headers: JSON_HEADERS }
 
   /** The pipeline's own 500 — the shape every uncaught failure collapses to. */
   const internalError = (): Response => new Response('{"error":"internal_error"}', initFor(500))
@@ -445,6 +452,15 @@ const API_REQUEST_PROTO: ThisType<{ readonly raw: Request }> & { readonly signal
     return this.raw.signal
   },
 }
+
+/**
+ * The statuses the pipeline itself answers with, seeded into every adapter's
+ * init table alongside the contracts' own. Mirrors the set `compileToModule`
+ * bakes into `INITS`, so both engines cache exactly the same statuses. 405 is
+ * absent from both: that reply always carries an `allow` header and so never
+ * takes the shared-init path.
+ */
+const PIPELINE_STATUSES: readonly number[] = [400, 404, 413, 415, 500]
 
 /** Shared across every response with a JSON body and no custom headers. */
 const JSON_HEADERS: Readonly<Record<string, string>> = Object.freeze({ 'content-type': 'application/json' })

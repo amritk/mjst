@@ -45,6 +45,15 @@ export type ComparisonOperator = '===' | '!==' | '==' | '!=' | '<' | '<=' | '>' 
 /** A successfully parsed filter, plus whether it reads `@path` (materializing that is not free). */
 export type ParsedFilter = { node: FilterNode; usesPath: boolean }
 
+// The parser is recursive descent, so nesting depth is stack depth. Without a cap
+// a pathological expression (`'('.repeat(20000)`) fails with whatever the runtime
+// happens to do at its stack limit — a `RangeError` whose message is "Maximum call
+// stack size exceeded" and whose offset is `undefined`, and whose *threshold*
+// differs between Node, Bun, and an edge runtime, so the same ruleset can compile
+// on one and not another. A hard cap makes the refusal deterministic and says why.
+// Real filters nest a handful of levels deep.
+const MAX_FILTER_DEPTH = 100
+
 const CONTEXT_TOKENS: Record<string, ContextRef> = {
   '@': 'value',
   '@property': 'property',
@@ -232,16 +241,25 @@ const ALLOWED_METHODS = new Set([
  * < unary < member/call.
  */
 export const parseFilterExpression = (source: string): ParsedFilter | { error: string } => {
+  // The whole expression goes into the message so the author can see what failed,
+  // but a filter can be arbitrarily long and this message ends up in a thrown
+  // ruleset error — quote enough to identify it, not the entire body.
+  const quoted = source.length > 120 ? `${source.slice(0, 120)}…` : source
+  const describe = (error: unknown): { error: string } => {
+    const syntax = error as FilterSyntaxError
+    return { error: `${syntax.message} at offset ${syntax.offset} in filter "${quoted}"` }
+  }
+
   let tokens: Token[]
   try {
     tokens = tokenize(source)
   } catch (error) {
-    const syntax = error as FilterSyntaxError
-    return { error: `${syntax.message} at offset ${syntax.offset} in filter "${source}"` }
+    return describe(error)
   }
 
   let position = 0
   let usesPath = false
+  let depth = 0
   const peek = (): Token | undefined => tokens[position]
   const offsetOf = (token: Token | undefined): number => token?.start ?? source.length
   const eatPunct = (text: string): boolean => {
@@ -323,7 +341,19 @@ export const parseFilterExpression = (source: string): ParsedFilter | { error: s
     return fail(`Unexpected token "${token.text}"`, token.start)
   }
 
+  // Every nesting level — a parenthesized group, a call argument, a computed
+  // member, a chain of unary operators — reaches the grammar again through here,
+  // so this is the one place the depth has to be counted.
   const parseUnary = (): FilterNode => {
+    if (++depth > MAX_FILTER_DEPTH) {
+      fail(`Filter expression nests deeper than ${MAX_FILTER_DEPTH} levels`, offsetOf(peek()))
+    }
+    const node = parseUnaryInner()
+    depth--
+    return node
+  }
+
+  const parseUnaryInner = (): FilterNode => {
     const token = peek()
     if (token?.kind === 'punct' && (token.text === '!' || token.text === '-')) {
       position++
@@ -380,7 +410,6 @@ export const parseFilterExpression = (source: string): ParsedFilter | { error: s
     if (trailing !== undefined) fail(`Unexpected token "${'text' in trailing ? trailing.text : ''}"`, trailing.start)
     return { node, usesPath }
   } catch (error) {
-    const syntax = error as FilterSyntaxError
-    return { error: `${syntax.message} at offset ${syntax.offset} in filter "${source}"` }
+    return describe(error)
   }
 }

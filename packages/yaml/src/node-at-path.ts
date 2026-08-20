@@ -50,13 +50,20 @@ const resolveAlias = (node: YamlNode): YamlNode | undefined => {
  * points at the `*ref` the document wrote rather than at the distant anchor.
  */
 export const nodeAtPath = (root: YamlNode | null, path: NodePath, closest = false): YamlNode | undefined => {
-  let node: YamlNode | null | undefined = root
-  let matched: YamlNode | undefined = root ?? undefined
+  if (root === null) return undefined
+  let node: YamlNode = root
+  let matched: YamlNode = root
 
   for (const segment of path) {
-    if (!node) break
-    if (isAlias(node)) node = resolveAlias(node)
-    if (!node) break
+    if (isAlias(node)) {
+      const target = resolveAlias(node)
+      // A dangling alias is a dead end like a missing key is, and it has to end
+      // the walk the same way. Breaking out instead returned `undefined` even
+      // under `closest` — dropping the one span a caller reporting an
+      // unresolved alias most wants, the `*ref` the document actually wrote.
+      if (target === undefined) return closest ? matched : undefined
+      node = target
+    }
     let next: YamlNode | null | undefined
 
     if (isMap(node)) {
@@ -84,5 +91,5 @@ export const nodeAtPath = (root: YamlNode | null, path: NodePath, closest = fals
     matched = next
   }
 
-  return node ?? undefined
+  return node
 }

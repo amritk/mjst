@@ -3,8 +3,11 @@ import type { Document } from './document'
 import { detectFormats } from './formats'
 import { matchesGlob } from './glob'
 import { type CompiledPath, compileQuery, query, queryMany } from './jsonpath'
+import { bySourceThenPosition } from './order'
+import { ownKey } from './own-key'
 import { pointerToPath, resolveSourcePath } from './pointers'
 import type { Ruleset } from './ruleset'
+import { severityFromName } from './severity'
 import {
   DiagnosticSeverity,
   type IDiagnostic,
@@ -14,13 +17,6 @@ import {
   type IThen,
   type ResolvedRule,
 } from './types'
-
-const SEVERITY_NAMES: Record<string, DiagnosticSeverity> = {
-  error: DiagnosticSeverity.Error,
-  warn: DiagnosticSeverity.Warning,
-  info: DiagnosticSeverity.Information,
-  hint: DiagnosticSeverity.Hint,
-}
 
 const ZERO_RANGE: IRange = { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }
 
@@ -58,9 +54,13 @@ const resolveTargets = (value: unknown, path: JsonPath, field: string | undefine
   if (field.startsWith('$')) {
     return query(value, field).map((match) => ({ value: match.value, path: [...path, ...match.path] }))
   }
-  // A plain property name, or a numeric index into an array.
+  // A plain property name, or a numeric index into an array. `Object.hasOwn`, not
+  // a bare index: `field` is ruleset input, so `field: 'constructor'` otherwise
+  // handed the function every object inherits to the rule function — `defined`
+  // and `truthy` both passed on a key the document does not have.
   const key = Array.isArray(value) && /^\d+$/.test(field) ? Number(field) : field
-  return [{ value: (value as Record<string | number, unknown>)[key], path: [...path, key] }]
+  const own = Object.hasOwn(value, key) ? (value as Record<string | number, unknown>)[key] : undefined
+  return [{ value: own, path: [...path, key] }]
 }
 
 const stringify = (value: unknown): string => {
@@ -74,8 +74,12 @@ const applyTemplate = (
   ctx: { property: unknown; value: unknown; path: string; error: string; description: string },
 ): string =>
   template.replace(/\{\{([^}]+)\}\}/g, (_match, raw: string) => {
+    // `Object.hasOwn`, not `in`: the template comes from the ruleset, so
+    // `{{toString}}` otherwise resolved to `Object.prototype.toString` and
+    // rendered the literal text "undefined" where an unknown placeholder should
+    // render as nothing.
     const key = raw.trim() as keyof typeof ctx
-    return key in ctx ? stringify(ctx[key]) : ''
+    return Object.hasOwn(ctx, key) ? stringify(ctx[key]) : ''
   })
 
 /** Optional inputs to a runner's `run`: the dereferenced tree and its source documents. */
@@ -251,15 +255,20 @@ const applyScopedOverrides = (
     let dropped = false
     for (const { path, rules } of scoped) {
       if (!isPrefix(path, diagnostic.path)) continue
-      const entry = rules[String(diagnostic.code)]
+      // `ownKey`, not a bare index: rule codes come from the ruleset, so a rule
+      // named `toString` matched `Function.prototype.toString` and the override
+      // silently did nothing. (`severityFromName` guards the severity side.)
+      const entry = ownKey(rules, String(diagnostic.code))
       if (entry === undefined) continue
       if (entry === false || entry === 'off') {
         dropped = true
         break
       }
       if (typeof entry === 'number') diagnostic.severity = entry
-      else if (typeof entry === 'string' && entry in SEVERITY_NAMES) {
-        diagnostic.severity = SEVERITY_NAMES[entry] as DiagnosticSeverity
+      else if (typeof entry === 'string') {
+        const mapped = severityFromName(entry)
+        // `'off'` was already handled above; anything else unknown is left alone.
+        if (typeof mapped === 'number') diagnostic.severity = mapped
       }
     }
     if (!dropped) result.push(diagnostic)
@@ -349,18 +358,6 @@ const hasIntersection = (a: Set<string>, b: Set<string>): boolean => {
     if (b.has(value)) return true
   }
   return false
-}
-
-/**
- * Orders findings by source, then line, then character. Sorting by position
- * alone interleaves findings from different files once a run spans multiple
- * sources; grouping by `source` first keeps each file's findings contiguous.
- */
-const bySourceThenPosition = (a: IDiagnostic, b: IDiagnostic): number => {
-  const sa = a.source ?? ''
-  const sb = b.source ?? ''
-  if (sa !== sb) return sa < sb ? -1 : 1
-  return a.range.start.line - b.range.start.line || a.range.start.character - b.range.start.character
 }
 
 /** Creates a {@link Linter} runner bound to a normalized `ruleset`. */

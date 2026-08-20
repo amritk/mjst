@@ -36,6 +36,32 @@ const collect = async (part: { data: AsyncIterableIterator<Uint8Array> }): Promi
   return out + decoder.decode()
 }
 
+/**
+ * A body that keeps producing until it is cancelled — a client still
+ * uploading. A source that closes itself cannot observe a cancel (the stream
+ * is already closed by then), so the leak these tests are about is invisible
+ * against `streamOf`.
+ */
+const liveStream = (text: string): { stream: ReadableStream<Uint8Array>; cancelled: () => boolean } => {
+  const bytes = new TextEncoder().encode(text)
+  let offset = 0
+  let cancelled = false
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (offset < bytes.length) {
+        controller.enqueue(bytes.subarray(offset, offset + 8))
+        offset += 8
+        return
+      }
+      controller.enqueue(new TextEncoder().encode('x'.repeat(64)))
+    },
+    cancel() {
+      cancelled = true
+    },
+  })
+  return { stream, cancelled: () => cancelled }
+}
+
 describe('multipartBoundary', () => {
   it('extracts a bare and a quoted boundary', () => {
     expect(multipartBoundary('multipart/form-data; boundary=abc')).toBe('abc')
@@ -120,5 +146,46 @@ describe('streamMultipart', () => {
         // no-op
       }
     }).rejects.toThrow(/opening boundary/)
+  })
+  it('cancels the request body when the consumer stops after the part it wanted', async () => {
+    // A handler that finds its file and returns must not leave the client
+    // uploading into a buffer nobody reads: abandoning the generator has to
+    // reach the source.
+    const { stream, cancelled } = liveStream(
+      buildBody([
+        { headers: 'Content-Disposition: form-data; name="a"', body: 'AAA' },
+        { headers: 'Content-Disposition: form-data; name="b"', body: 'BBB' },
+      ]),
+    )
+    for await (const part of streamMultipart(stream, CT)) {
+      expect(part.name).toBe('a')
+      break
+    }
+    expect(cancelled()).toBe(true)
+  })
+
+  it('cancels the request body when a part handler throws', async () => {
+    const { stream, cancelled } = liveStream(
+      buildBody([{ headers: 'Content-Disposition: form-data; name="a"', body: 'AAA' }]),
+    )
+    await expect(async () => {
+      for await (const part of streamMultipart(stream, CT)) {
+        void part
+        throw new Error('upload rejected')
+      }
+    }).rejects.toThrow('upload rejected')
+    expect(cancelled()).toBe(true)
+  })
+
+  it('cancels the request body after the closing delimiter', async () => {
+    // The epilogue belongs to no part, and the lock has to come off either
+    // way — a fully-consumed body releases the stream like an abandoned one.
+    const { stream, cancelled } = liveStream(
+      buildBody([{ headers: 'Content-Disposition: form-data; name="a"', body: 'AAA' }]),
+    )
+    const seen: string[] = []
+    for await (const part of streamMultipart(stream, CT)) seen.push(`${part.name}=${await collect(part)}`)
+    expect(seen).toEqual(['a=AAA'])
+    expect(cancelled()).toBe(true)
   })
 })

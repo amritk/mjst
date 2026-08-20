@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { defineRoute } from './define-route'
 import { securityGuard } from './secure-routes'
 import { toOpenApi } from './to-open-api'
+import type { AnyRouteContract } from './types'
 
 const info = { title: 'Test API', version: '1.2.3' }
 
@@ -633,5 +634,25 @@ describe('to-open-api', () => {
     )
     const schemas = (document.components as Record<string, unknown>)['schemas'] as Record<string, unknown>
     expect(Object.keys(schemas)).toEqual(['User_Profile__v2_'])
+  })
+
+  it('rejects two routes that collapse onto one OpenAPI path and method', () => {
+    // `/files/{p}` and `/files/{p+}` are different patterns to the matcher —
+    // one segment versus one or more — and both serve. To OpenAPI they are the
+    // same operation, because the paths key drops the greedy marker, so the
+    // later one used to overwrite the earlier and the document quietly
+    // described half the API. Explicit operationIds hide the collision from
+    // the duplicate-operationId check, which is why this one exists.
+    const route = (path: string, operationId: string): AnyRouteContract =>
+      defineRoute({
+        method: 'get',
+        path,
+        operationId,
+        responses: { 200: {} },
+        handler: () => ({ status: 200 }),
+      }) as AnyRouteContract
+    expect(() => toOpenApi([route('/files/{p}', 'exact'), route('/files/{p+}', 'deep')], info)).toThrow(
+      /Duplicate OpenAPI operation 'get \/files\/\{p\}'/,
+    )
   })
 })

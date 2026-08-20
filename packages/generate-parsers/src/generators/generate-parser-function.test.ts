@@ -1351,7 +1351,7 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'Responses', { useRefImports: true })
 
     expect(result).not.toContain('...input,')
-    expect(result).toContain('if (key === "default") continue;')
+    expect(result).toContain('if ((key === "default")) continue;')
     expect(result).not.toContain('new Set')
 
     const parse = evalGenerated<(input: unknown) => Record<string, unknown>>(
@@ -1776,7 +1776,7 @@ describe('generate-parser-function', () => {
   const _name = input.name;
   const _age = input.age;
   for (const _k in input) {
-    if (_k !== "name" && _k !== "age") {
+    if ((_k !== "name" && _k !== "age")) {
       console.warn(\`[User] Unknown property "\${_k}"\`);
     }
   }

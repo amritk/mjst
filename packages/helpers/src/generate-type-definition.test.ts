@@ -1698,4 +1698,36 @@ describe('generateTypeDefinition', () => {
       expect(generateTypeDefinition(schema, 'Doc', { rootSchema: {} })).toContain('channel?: unknown;')
     })
   })
+
+  it('names the nesting limit instead of overflowing the stack', () => {
+    let node: unknown = { type: 'string' }
+    for (let i = 0; i < 500; i++) node = { type: 'object', properties: { a: node } }
+
+    expect(() => generateTypeDefinition(node as never, 'Deep')).toThrow(
+      /Schema nesting exceeds 400 levels while running generateTypeDefinition/,
+    )
+  })
+
+  // Keywords used to be read straight off the schema, so a polluted
+  // `Object.prototype` made every node in the document report keywords its
+  // author never wrote — and an inherited `if`/`then` pair recursed forever.
+  it('ignores schema keywords inherited from Object.prototype', () => {
+    const polluted = Object.prototype as Record<string, unknown>
+    const planted = ['additionalProperties', 'patternProperties', 'properties', 'items', 'enum', 'nullable']
+    try {
+      polluted['additionalProperties'] = { type: 'number' }
+      polluted['patternProperties'] = { '^a': { type: 'number' } }
+      polluted['properties'] = { ghost: { type: 'number' } }
+      polluted['items'] = { type: 'number' }
+      polluted['enum'] = ['ghost']
+      polluted['nullable'] = true
+      polluted['if'] = { properties: { a: { type: 'string' } } }
+      polluted['then'] = { properties: { b: { type: 'string' } } }
+
+      expect(generateTypeDefinition({ type: 'string' }, 'X')).toBe('export type X = string;')
+      expect(generateTypeDefinition({ type: 'array' }, 'X')).toBe('export type X = unknown[];')
+    } finally {
+      for (const key of [...planted, 'if', 'then']) delete polluted[key]
+    }
+  })
 })

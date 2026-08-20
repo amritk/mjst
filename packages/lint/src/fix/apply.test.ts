@@ -175,21 +175,38 @@ describe('apply', () => {
     expect(result).toBeUndefined()
   })
 
+  it('isolates a fixer that throws so the rest of the batch still applies', () => {
+    // A fixer is caller code handed whatever node shape the document produced;
+    // one that throws used to abandon every other fix queued behind it.
+    const text = 'host: api.test/\n'
+    const document = createDocument(text)
+    const withThrower: FixerRegistry = {
+      ...fixers,
+      explode: {
+        fix: () => {
+          throw new Error('boom')
+        },
+      },
+    }
+    const result = applyFixes(
+      text,
+      'yaml',
+      document.data,
+      [diagnostic('explode', ['host']), diagnostic('strip-slash', ['host'])],
+      withThrower,
+    )
+    expect(result.output).toBe('host: api.test\n')
+    expect(result.applied.map((fix) => fix.code)).toEqual(['strip-slash'])
+  })
+
   it('ignores a rule code that names a prototype member of the fixer registry', () => {
     // Rule codes come from the ruleset, so a rule named `toString` used to
     // resolve to `Function.prototype.toString` — truthy, with no `.fix` — and
     // the call threw out of `applyFixes`, abandoning every other fix queued
     // behind it.
     const text = JSON.stringify({ a: 1 })
-    const document = createDocument(text, 'json')
-    const diagnostic: IDiagnostic = {
-      code: 'toString',
-      path: ['a'],
-      message: 'm',
-      severity: DiagnosticSeverity.Error,
-      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
-    }
-    const result = applyFixes(text, document.data, 'json', [diagnostic], {})
+    const document = createDocument(text, { format: 'json' })
+    const result = applyFixes(text, 'json', document.data, [diagnostic('toString', ['a'])], {})
     expect(result.applied).toEqual([])
     expect(result.output).toBe(text)
   })

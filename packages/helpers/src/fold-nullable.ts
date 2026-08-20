@@ -1,5 +1,6 @@
 import { assignKey } from './assign-key'
 import { entersSchemaMap, isDataPosition } from './build-resource-registry'
+import { assertSchemaDepth } from './max-schema-depth'
 
 /**
  * Rewrites OpenAPI 3.0's `nullable: true` into the JSON Schema form the
@@ -20,15 +21,16 @@ import { entersSchemaMap, isDataPosition } from './build-resource-registry'
  * `nullable: true`, so the common case allocates nothing.
  */
 export const foldNullable = <T>(schema: T): T => {
-  const folded = fold(schema)
+  const folded = fold(schema, 0)
   return folded as T
 }
 
-const fold = (node: unknown, inSchemaMap = false): unknown => {
+const fold = (node: unknown, depth: number, inSchemaMap = false): unknown => {
+  assertSchemaDepth(depth, 'foldNullable')
   if (Array.isArray(node)) {
     let changed = false
     const next = node.map((item) => {
-      const folded = fold(item, inSchemaMap)
+      const folded = fold(item, depth + 1, inSchemaMap)
       if (folded !== item) changed = true
       return folded
     })
@@ -58,7 +60,7 @@ const fold = (node: unknown, inSchemaMap = false): unknown => {
   for (const [key, value] of Object.entries(record)) assignKey(next, key, value)
   for (const key of Object.keys(record)) {
     if (isDataPosition(key, inSchemaMap)) continue
-    const folded = fold(record[key], entersSchemaMap(key, inSchemaMap))
+    const folded = fold(record[key], depth + 1, entersSchemaMap(key, inSchemaMap))
     if (folded !== record[key]) changed = true
     assignKey(next, key, folded)
   }

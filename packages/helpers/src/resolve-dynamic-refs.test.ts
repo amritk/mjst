@@ -123,4 +123,32 @@ describe('resolve-dynamic-refs', () => {
     }
     expect(result).toEqual(expected)
   })
+
+  // The cheap pre-scan that decides whether to clone at all has to agree with
+  // the rewrite about which keys hold instance data. Testing key names alone
+  // skipped the subtree of a property genuinely *named* `enum`, so the document
+  // read as "no dynamic refs" and the ref survived into generation.
+  it('rewrites a $dynamicRef under a property named like a data keyword', () => {
+    const schema = {
+      $defs: { node: { $dynamicAnchor: 'node', type: 'string' as const } },
+      type: 'object' as const,
+      properties: {
+        enum: { $dynamicRef: '#node' },
+        default: { $dynamicRef: '#node' },
+      },
+    }
+
+    const result = resolveDynamicRefs(schema, { '#node': '#/$defs/node' }) as Record<string, never>
+
+    expect(result['properties']).toEqual({
+      enum: { $ref: '#/$defs/node' },
+      default: { $ref: '#/$defs/node' },
+    })
+  })
+
+  it('still leaves a $dynamicRef inside an actual enum value alone', () => {
+    const schema = { type: 'object' as const, enum: [{ $dynamicRef: '#node' }] }
+
+    expect(resolveDynamicRefs(schema, { '#node': '#/$defs/node' })).toBe(schema)
+  })
 })
