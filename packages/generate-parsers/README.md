@@ -82,7 +82,7 @@ Every option after the first two is **positional** — pass them in this order:
 | # | Parameter | Type | Default | Description |
 |--:|:---|:---|:---|:---|
 | 1 | `rootSchema` | `JSONSchema` | — | The root schema to traverse. `$ref` and `$dynamicRef` are resolved recursively. |
-| 2 | `rootTypeName` | `string` | — | Name used for the root type (e.g. `"Document"`). |
+| 2 | `rootTypeName` | `string` | — | Name used for the root type (e.g. `"Document"`). Must be a TypeScript identifier: it is emitted verbatim as `export type <name>` and, lowercased, becomes the output filename, so a name derived from an untrusted document is refused rather than written outside your output directory. `@amritk/helpers`' `deriveRootTypeName` always produces one. |
 | 3 | `extensions` | `SchemaExtensions` | — | Map of definition name → extra optional properties to merge in before generation. |
 | 4 | `typesOnly` | `boolean` | — | Only emit `.ts` type definitions — skip parser functions and runtime helpers. |
 | 5 | `logWarnings` | `boolean` | — | Generated parsers emit a `console.warn` for every input key not declared in the schema's properties. |

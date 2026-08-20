@@ -26,7 +26,11 @@ const files = await buildSchema(schema, 'Document')
    To set a later flag you must pass every intervening positional. (The README's
    short form omits the trailing seven.)
 2. **It returns files in memory — it does NOT write to disk.** You write the
-   `GeneratedFile[]` (`{ filename, content }`) yourself.
+   `GeneratedFile[]` (`{ filename, content }`) yourself. `rootTypeName` becomes
+   that filename (lowercased) as well as the `export type` name, so it must be a
+   TypeScript identifier — `buildSchema` throws otherwise rather than hand you a
+   path that escapes your output directory. Derive it with `@amritk/helpers`'
+   `deriveRootTypeName`, which always produces one.
 3. **Output is more than one file per `$def`:** always an `index.ts` barrel, and
    (unless `typesOnly`) runtime helper files.
 4. **Default parsers COERCE invalid input to defaults** rather than throwing;
