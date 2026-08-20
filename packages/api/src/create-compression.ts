@@ -71,8 +71,16 @@ const negotiate = (
  * `Accept-Encoding` to `Vary` so shared caches keep encodings apart.
  *
  * Skipped for: an already-encoded response, a body under `threshold`, a
- * content-type the filter rejects, a `no-transform` cache directive, and
- * `HEAD`/`304`/`204` replies (no body to compress).
+ * content-type the filter rejects, a `no-transform` cache directive,
+ * `HEAD`/`304`/`204` replies (no body to compress), and partial content — a
+ * `206` or anything carrying `content-range`, whose byte range describes the
+ * identity representation and would no longer describe the body once it is
+ * encoded.
+ *
+ * A strong `ETag` on a response it compresses is weakened to `W/`, because
+ * the entity-tag names one representation and the encoded bytes are a
+ * different one (RFC 9110 §8.8.1). Weak is the honest label: the two are
+ * semantically equivalent, not byte-identical — the same thing nginx does.
  *
  * @example
  * ```typescript
@@ -88,6 +96,10 @@ export const createCompression = (options?: CompressionOptions): FetchOnResponse
     if (response.body === null || request.method === 'HEAD') return undefined
     if (response.status === 204 || response.status === 304) return undefined
     if (response.headers.has('content-encoding')) return undefined
+    // A partial response's `content-range` counts bytes of the identity
+    // representation. Encoding the body leaves the header describing a range
+    // the payload no longer has, and the client reassembles garbage.
+    if (response.status === 206 || response.headers.has('content-range')) return undefined
 
     const contentType = response.headers.get('content-type')
     if (contentType === null || !filter(contentType)) return undefined
@@ -107,6 +119,12 @@ export const createCompression = (options?: CompressionOptions): FetchOnResponse
     headers.set('content-encoding', encoding)
     // The compressed length is not known until the stream drains.
     headers.delete('content-length')
+    // A strong validator asserts byte-for-byte identity with one
+    // representation, and this is a different one. Weakening keeps the
+    // validator usable (the two are semantically the same response) without
+    // claiming bytes that are no longer being sent.
+    const etag = headers.get('etag')
+    if (etag !== null && !etag.startsWith('W/')) headers.set('etag', 'W/' + etag)
     appendVary(headers, 'accept-encoding')
     return new Response(compressed, { status: response.status, statusText: response.statusText, headers })
   }

@@ -77,4 +77,36 @@ describe('create-compression', () => {
     const result = (await compress(jsonBody(100), get('*'), {})) as Response
     expect(result.headers.get('content-encoding')).toBe('gzip')
   })
+
+  it('skips a partial response, whose content-range counts identity bytes', async () => {
+    const compress = createCompression({ threshold: 0 })
+    const partial = new Response(JSON.stringify({ pad: 'x'.repeat(100) }), {
+      status: 206,
+      headers: { 'content-type': 'application/json', 'content-range': 'bytes 0-99/500' },
+    })
+    expect(await compress(partial, get('gzip'), {})).toBeUndefined()
+
+    // A 200 that still carries a range header is the same mistake.
+    const ranged = new Response(JSON.stringify({ pad: 'x'.repeat(100) }), {
+      headers: { 'content-type': 'application/json', 'content-range': 'bytes 0-99/500' },
+    })
+    expect(await compress(ranged, get('gzip'), {})).toBeUndefined()
+  })
+
+  it('weakens a strong ETag on the response it encodes', async () => {
+    // The entity-tag names one representation; the encoded bytes are another
+    // (RFC 9110 §8.8.1). Weak says "semantically the same", which is true.
+    const compress = createCompression({ threshold: 0 })
+    const tagged = new Response(JSON.stringify({ pad: 'x'.repeat(100) }), {
+      headers: { 'content-type': 'application/json', etag: '"abc123"' },
+    })
+    const result = (await compress(tagged, get('gzip'), {})) as Response
+    expect(result.headers.get('etag')).toBe('W/"abc123"')
+
+    const alreadyWeak = new Response(JSON.stringify({ pad: 'x'.repeat(100) }), {
+      headers: { 'content-type': 'application/json', etag: 'W/"abc123"' },
+    })
+    const second = (await compress(alreadyWeak, get('gzip'), {})) as Response
+    expect(second.headers.get('etag')).toBe('W/"abc123"')
+  })
 })
