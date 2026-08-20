@@ -31,6 +31,8 @@ encodes. It does not have to:
 | Where an embedded resource lives in a bigger response | The response schema, walked at startup |
 | A transport | `sseStream` (`src/sse.ts`) + `contentType: 'text/event-stream'` |
 | A place to publish without adding latency | `runAfterResponse` / `WaitUntilContext` (`src/after-response.ts`) |
+| Backpressure on a slow consumer | `waitForDrain` (`src/wait-for-drain.ts`), already wired into `toNodeHandler` |
+| Cheap repair fetches under a resync herd | `createETag` — conditional GETs collapse to 304 |
 | A pluggable backend seam | The `RateLimitStore` / `memoryRateLimitStore` pattern |
 
 The path is simultaneously the topic, the cache key, and the authorization
@@ -242,26 +244,72 @@ stream is open. Bounded connection lifetime (re-auth on reconnect, which SSE
 does natively) is the cheap answer; an explicit revoke event that force-closes
 is the thorough one.
 
-## Transport: SSE, not WebSocket
+## Transport is a seam
 
-Invalidation and push are both server→client, which is SSE's exact shape, and
-for this package the argument is stronger than usual:
+The frame format — a handshake carrying the resource graph, then
+`{ topic, op, seq, payload }` — has nothing SSE-specific in it. So transport is
+an interface, like `PubSub` and `ClientCache`, and SSE is merely the default:
+
+```ts
+export type RealtimeTransport = {
+  readonly connect: (url: string, signal: AbortSignal) => AsyncIterable<RealtimeFrame>
+  /** Present ⇒ the transport has an upstream channel; absent ⇒ use the POST side channel. */
+  readonly send?: (frame: ClientFrame) => void
+}
+```
+
+The presence of `send` is load-bearing: subscription updates go upstream on
+transports that have one, and fall back to a debounced POST on transports that
+do not. The side channel becomes a property of the SSE transport rather than
+machinery in the core.
+
+**SSE is the default** because it is the only transport that runs everywhere
+the rest of the package does:
 
 - It is plain HTTP, so it flows through `toFetchHandler` and `toNodeHandler`
   unchanged and inherits cookie auth, CORS, and the security middleware
-  already shipped. WebSocket upgrade differs on every runtime (`server.upgrade`
-  on Bun, `WebSocketPair` on Workers, `ws` on Node, effectively unavailable on
-  Next.js serverless) and would fracture the adapter story.
+  already shipped.
 - Reconnect and `Last-Event-ID` resume are in the protocol — exactly the
-  missed-message repair this design needs.
+  missed-message repair this design needs, for free.
 - `sseStream` already exists, so the event stream is an ordinary route.
 
-Known limits: the 6-connections-per-origin cap on HTTP/1.1 (moot on HTTP/2,
+Its limits: the 6-connections-per-origin cap on HTTP/1.1 (moot on HTTP/2,
 otherwise shareable across tabs via `BroadcastChannel`), and native
 `EventSource` cannot set headers, so bearer-token auth needs a fetch-based
-reader built on the streaming primitives already here. WebSocket becomes worth
-revisiting only when client→server realtime (presence, typing, cursors) is on
-the table.
+reader built on the streaming primitives already here.
+
+**WebSocket** buys bidirectionality at the cost of a runtime-specific upgrade
+handshake (`server.upgrade` on Bun, `WebSocketPair` on Workers, `ws` on Node,
+effectively unavailable on Next.js serverless). Worth an adapter, not worth
+being the default.
+
+**WebTransport** is the more interesting candidate, and two of its properties
+map onto real problems here: an upstream channel that deletes the subscription
+side channel outright, and QUIC connection migration, which survives a
+WiFi→cellular handoff without the reconnect-and-resync churn SSE incurs every
+time a phone changes networks. For a mobile feed that second property is
+arguably the most valuable thing on this list.
+
+It cannot be the default, for a reason specific to this package: **WebTransport
+is not expressible as a Request/Response pair.** It needs an HTTP/3 server
+exposing a session API, so it cannot ride `toFetchHandler` or `toNodeHandler`
+— and the framework plan's premise is that `handle(ApiRequest) → ApiResponse`
+*is* the whole runtime. Server-side support is also the binding constraint
+rather than browser support: no HTTP/3 in Node core, no WebTransport server API
+on Workers, Bun, or Deno, nothing on Vercel-style serverless, and many managed
+load balancers will not pass UDP/443 through at all. Adopting it wholesale
+would mean realtime works only on a self-hosted HTTP/3 server, inverting the
+package's main selling point.
+
+It is also a transport, not a protocol: SSE supplies framing, event ids,
+automatic reconnect, and `Last-Event-ID` replay, all of which this design uses.
+On WebTransport each of those is hand-rolled.
+
+The seam is the whole point. Defining it now costs nothing, pressure-tests the
+frame format against a second transport before SSE assumptions calcify into it,
+and makes WebTransport a config change rather than a rewrite for deployments
+that can terminate HTTP/3. Browser and server support should be re-checked when
+an adapter is actually written rather than taken from this document.
 
 ## Fan-out
 
@@ -269,11 +317,129 @@ The `PubSub` seam mirrors `RateLimitStore`: interface plus `memoryPubSub` in
 core, with Redis / Postgres `LISTEN NOTIFY` / Durable Objects supplied by the
 app. No new dependency enters `@amritk/api`.
 
+**The broker owns sequencing and replay, not the process.** A per-topic
+monotonic `seq` cannot be assigned in-process once there is more than one
+instance — two servers would mint the same number for different events. So the
+seam is shaped to delegate both:
+
+```ts
+export type PubSub = {
+  /** Returns the sequence the broker assigned. */
+  readonly publish: (topic: string, event: RealtimeEvent) => Promise<number>
+  readonly subscribe: (topics: readonly string[], signal: AbortSignal) => AsyncIterable<SequencedEvent>
+  /** Replay after a gap; `undefined` when the requested point has aged out. */
+  readonly replayFrom: (topic: string, seq: number) => AsyncIterable<SequencedEvent> | undefined
+}
+```
+
+Redis Streams satisfies this almost exactly as-is — monotonic entry IDs and
+`XRANGE` replay are native, so the adapter is thin and the hard part is
+someone else's solved problem. `memoryPubSub` implements the same interface
+with a counter and a fixed-size ring buffer per topic, which keeps
+single-process development honest against the same semantics.
+
 A 50-post feed subscribes to ~50 topics per client, which is fine with pattern
 or prefix subscription and bad with naive per-topic fan-out. Above a threshold,
 fall back to a single server-derived `user:{id}:feed` channel and let the
 server filter. The classic newsfeed hybrid applies: fan-out-on-write for
 ordinary posts, direct subscription for hot ones.
+
+## Performance
+
+The package's existing rule — *everything derivable is derived at startup; the
+request path never inspects a schema* — extends to the event path unchanged.
+
+**Server**
+
+- **Topic building is compiled, not parsed.** Each route's topic template
+  becomes literal chunks plus parameter names at startup, joined per event
+  exactly the way `buildParamPath` fills a path. No template parsing per
+  mutation.
+- **Encode once, fan out many.** The frame is byte-identical for every
+  subscriber of a topic, so it is serialized and `TextEncoder`-encoded exactly
+  once and the same `Uint8Array` is written to all N connections. This is the
+  single largest win over a naive implementation, which re-stringifies per
+  subscriber.
+
+  It is only available *because* authorization happens at subscribe time
+  rather than per message — per-recipient filtering would force per-recipient
+  frames. The security design and the performance design are the same
+  decision.
+- **The handshake frame is static.** The resource graph does not vary per
+  connection, so it is pre-encoded once at startup and the compiled engine
+  bakes it in as a constant, the same treatment the OpenAPI string already
+  gets. Connecting costs a write of an existing buffer.
+- **No ancestor cascade.** An earlier sketch had events on
+  `/posts/42/comments` also publish to `/posts/42` so parents could observe
+  children. That is redundant: the client already subscribes to the exact
+  embedded resource it found, and patches wherever it is embedded. Dropping it
+  removes write amplification and keeps the registry a flat
+  `Map<topic, Set<Connection>>` with O(1) lookup.
+- **No outbound revalidation.** The payload was already validated as the
+  mutation's response; validating it again on the way out would be duplicate
+  work on the hot path.
+
+**Client**
+
+- **A reverse index, not a scan.** Applying an event must not walk the cache.
+  The same pass that derives subscriptions from a cached value also records
+  `topic → [(cacheKey, pointer)]`, so applying an event is O(places embedded)
+  — normally 1 — instead of O(cache size).
+- **Targeted descent.** Extracting embedded resources follows the static
+  pointer template (`posts[*].comments`) rather than recursively scanning the
+  response, which matters because feed payloads are large and this runs on
+  every cache write.
+- **Spine-only copying.** The patch clones just the path from root to the
+  mutation point and shares every other subtree, so React re-renders the one
+  post card rather than the feed.
+- **Debounced subscription diffs.** The topic set is recomputed on cache
+  writes, debounced (~50 ms), and sent as `+`/`-` deltas against the previous
+  set rather than as a full list.
+
+## Failure modes
+
+Robustness here is mostly about what happens when the connection, the client,
+or the process misbehaves. Each of these needs a deliberate answer.
+
+- **Slow consumer.** `toNodeHandler` already honors backpressure via
+  `waitForDrain`, so a client on a bad link does not blow up the socket — the
+  pressure lands in our per-connection queue instead. That queue is bounded,
+  and overflow has a principled policy rather than a drop: **collapse the
+  pending payload frames into a single `resync` naming the affected topics.**
+  Memory per connection becomes O(distinct topics) rather than O(events), and
+  a client that falls arbitrarily far behind still recovers correctly. The
+  two-layer design *is* the overflow policy — degrading from push to
+  invalidation is exactly what backpressure needs.
+- **Process restart resets sequencing.** With an in-memory broker, `seq`
+  restarts and a client holding a higher number would silently skip events. An
+  **epoch** stamped on the handshake fixes it: epoch mismatch forces a full
+  resync. Cheap, and easy to omit until it bites.
+- **Duplicate delivery.** Brokers are at-least-once, so make application
+  idempotent and the distinction stops mattering: append checks whether the
+  entity id is already present, merge is naturally idempotent, remove is
+  idempotent. At-least-once plus idempotent apply gives effectively-once with
+  no distributed transaction.
+- **Reconnect and resync herds.** The SSE `retry:` field (already supported by
+  `formatSse`) carries a jittered backoff so a restart does not produce a
+  synchronized reconnect storm; repair fetches are jittered for the same
+  reason and collapse to 304s through `createETag`.
+
+**The honest limitation: publish is not transactional.** Auto-publishing after
+a successful response is convenient, but it is a dual write. A transaction that
+rolls back after the reply is committed can still emit a phantom event, and a
+crash between commit and publish loses one. Worse, a *lost* event does not
+self-heal — gap detection only fires when a later event arrives, so a missed
+final event on a quiet topic looks exactly like nothing having happened.
+
+Three things follow, and the plan should state all three rather than imply
+delivery guarantees the design does not make:
+
+1. Auto-publish is the convenient default, not a delivery guarantee.
+2. The seam must let an application publish from inside its own transaction —
+   a transactional outbox or CDC feed — for cases that need real guarantees.
+3. A low-frequency revalidation backstop (refetch on window focus, or a long
+   stale time) should be documented as expected practice, not treated as
+   redundant.
 
 ## Where derivation stops
 
@@ -307,9 +473,12 @@ in a typical app is a handful of routes rather than all of them.
 packages/api/src/
   realtime/                     # in '.', no new dependencies, Workers-safe
     build-resource-graph.ts     # route table → topics, keys, embedded pointers
-    pub-sub.ts                  # PubSub interface + memoryPubSub
+    build-topic.ts              # compiled chunk/param topic builder
+    pub-sub.ts                  # PubSub interface + memoryPubSub (ring buffer, epoch)
+    subscriber-registry.ts      # Map<topic, Set<Connection>> + bounded queues
     create-realtime.ts          # event-stream route factory + publish hook
-    apply-event.ts              # pure splice — shared by client and tests
+    sse-transport.ts            # the default RealtimeTransport (+ POST side channel)
+    apply-event.ts              # pure, idempotent splice — shared by client and tests
 ```
 
 Nothing lands in `./bundler` or `./dev`; both remain one-way entries so
@@ -330,16 +499,30 @@ second path.
 
 ## Roadmap / open questions
 
-- **Phase 1 — the floor.** `PubSub` seam + `memoryPubSub`, resource-graph
-  derivation, the event-stream route, publish-on-mutation via
-  `runAfterResponse`, invalidation-only delivery, `seq` + replay + resync.
-  Hard to retrofit; everything else layers on top.
+- **Phase 1 — the floor.** `PubSub` seam + `memoryPubSub`, the
+  `RealtimeTransport` seam + `sseTransport`, resource-graph derivation, the
+  event-stream route, publish-on-mutation via `runAfterResponse`,
+  invalidation-only delivery, epoch + `seq` + replay + resync, bounded
+  per-connection queues with collapse-to-resync. Hard to retrofit; everything
+  else layers on top.
 - **Phase 2 — push.** Payload events reusing the mutation's success response
-  schema, `applyEvent` splice semantics from the HTTP method, echo
-  suppression, coalescing.
-- **Phase 3 — embedding.** The embedded-resource map, data-derived
-  subscriptions, narrow-contract repair.
-- **Phase 4 — parity.** Compiled-engine constants and differential cases.
+  schema, idempotent `applyEvent` splice semantics from the HTTP method,
+  encode-once fan-out, echo suppression, coalescing.
+- **Phase 3 — embedding.** The embedded-resource map, the client reverse
+  index, data-derived subscriptions, narrow-contract repair.
+- **Phase 4 — parity.** Compiled-engine constants (topic builders, pre-encoded
+  handshake) and differential cases.
+- **Transactional publish.** A context-exposed `publish` so applications can
+  emit from inside their own transaction or outbox, rather than only through
+  the after-response default. Needed before anyone can claim delivery
+  guarantees.
+- **Further transports.** `webSocketTransport`, and `webTransportTransport`
+  for deployments that terminate HTTP/3 — both as adapters outside the
+  `handle()` pipeline. Re-verify browser and server support at the time; the
+  survey in this document will be stale.
+- **Benchmarks.** The package benches the request path (`bench/run.ts`); the
+  event path wants the same treatment — fan-out cost per subscriber, and the
+  encode-once win measured rather than asserted.
 - **Compression interaction.** `createCompression` must skip
   `text/event-stream`; a compressor that buffers silently breaks streaming.
   Needs verifying either way before Phase 1 ships.
