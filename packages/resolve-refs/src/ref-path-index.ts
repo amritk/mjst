@@ -31,8 +31,8 @@ const buildIndex = (root: unknown, maxDepth: number): Map<string, JsonPath> => {
     if (Array.isArray(node)) {
       // Reversed so the LIFO stack pops them in document order, which is what
       // makes "the first one" mean the first one a reader would find.
-      for (let index_ = node.length - 1; index_ >= 0; index_--) {
-        stack.push({ node: node[index_], path: [...path, index_], role: childRole(role, index_) })
+      for (let at = node.length - 1; at >= 0; at--) {
+        stack.push({ node: node[at], path: [...path, at], role: childRole(role, at) })
       }
       continue
     }
@@ -46,8 +46,8 @@ const buildIndex = (root: unknown, maxDepth: number): Map<string, JsonPath> => {
         if (!index.has(entry)) index.set(entry, [...path, keyword])
       }
     }
-    for (let index_ = keys.length - 1; index_ >= 0; index_--) {
-      const key = keys[index_] as string
+    for (let at = keys.length - 1; at >= 0; at--) {
+      const key = keys[at] as string
       stack.push({ node: obj[key], path: [...path, key], role: childRole(role, key) })
     }
   }

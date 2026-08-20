@@ -118,14 +118,14 @@ export const baseAfterId = (node: Record<string, unknown>, enclosingBase: string
  */
 export const buildResourceRegistry = (
   root: unknown,
-  base: string = SYNTHETIC_BASE,
+  documentBase: string = SYNTHETIC_BASE,
   maxDepth: number = DEFAULT_MAX_DEPTH,
 ): ResourceRegistry => {
   // A base URI never carries a fragment. Stripping it here is what keeps
   // `rootBase` lookup-able in `resources`, which is keyed on fragment-free
   // URIs — a root location that had one (`resolveRefsFromFile('…/y.json#f')`)
   // registered under one spelling and was then looked up under another.
-  const initialBase = withoutFragment(base)
+  const initialBase = withoutFragment(documentBase)
   const resources: ResourceRegistry['resources'] = new Map()
   const bases: ResourceRegistry['bases'] = new Map()
   const staticAnchors: ResourceRegistry['staticAnchors'] = new Map()
