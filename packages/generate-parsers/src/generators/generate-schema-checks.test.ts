@@ -80,11 +80,14 @@ describe('generate-schema-checks', () => {
     expect(result).toEqual(['typeof value === "number"', 'value % 5 === 0'])
   })
 
-  it('infers boolean type from const boolean value', () => {
+  // A `const` pins the value to one literal, so the equality *is* the check —
+  // the type test it used to stand in for accepted every other boolean too, and
+  // as a union branch that made the branch match values it rejects.
+  it('checks a const boolean by equality, not by its inferred type', () => {
     const result = generateSchemaChecks('value', {
       const: true,
     })
-    expect(result).toEqual(['typeof value === "boolean"'])
+    expect(result).toEqual(['value === true'])
   })
 
   it('infers null type from const null value', () => {

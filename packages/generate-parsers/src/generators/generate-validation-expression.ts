@@ -134,6 +134,18 @@ export const plainScalarItemCheck = (itemSchema: JSONSchema, accessor: string): 
 export const isCoercibleItemSchema = (itemSchema: JSONSchema): boolean => {
   if (scalarItemTypeCheck(itemSchema, '_it') !== null) return true
   if (!isSchemaObject(itemSchema)) return false
+  // An array-form `type` whose members are all scalars is as coercible as a
+  // single one — generateValidationExpression checks it as a disjunction and
+  // falls back to the first listed type. `scalarItemTypeCheck` is false for it
+  // (`hasType` wants a string), so `{ items: { type: ['string','null'] } }`
+  // passed every element through untouched and the coerced array kept whatever
+  // it was given.
+  const itemTypes = (itemSchema as Record<string, unknown>)['type']
+  if (Array.isArray(itemTypes) && itemTypes.length > 0) {
+    return itemTypes.every(
+      (type) => typeof type === 'string' && scalarItemTypeCheck({ type } as JSONSchema, '_it') !== null,
+    )
+  }
   // A `const` item is the narrowest leaf there is — one permitted value — and
   // generateValidationExpression already coerces a non-match to it. Leaving it
   // out meant `{ items: { const: null } }` passed every element through

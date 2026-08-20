@@ -27,6 +27,7 @@ import {
 import { maxLengthPassExpr, minLengthPassExpr } from '@amritk/helpers/string-length-check'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { generateDeepEqualCheck } from './generate-deep-equal-check'
 import { generateEnumCheck } from './generate-enum-check'
 import { generateUniqueItemsCheck } from './generate-unique-items-check'
 
@@ -207,6 +208,15 @@ export const generateSchemaChecks = (accessor: string, schema: JSONSchema): stri
   const primitive = getMjstPrimitive(schema)
   if (primitive) {
     return [`typeof ${accessor} === "${primitive}"`]
+  }
+
+  // A `const` pins the value to one literal, so the structural equality *is* the
+  // check — the type test it used to stand in for is implied by it. Without the
+  // equality a `{ const: 'a' }` union branch reduced to `typeof x === "string"`
+  // and matched every string, so the union reported a hit for `""` and the
+  // coercing parser left an invalid value alone.
+  if (hasConst(schema)) {
+    return [generateDeepEqualCheck(accessor, schema.const)]
   }
 
   // An array-form `type` (the multi-type / nullable idiom, e.g.
