@@ -88,4 +88,13 @@ describe('foldNullable', () => {
     const schema = { type: 'object', default: { type: 'string', nullable: true } }
     expect(foldNullable(schema)).toBe(schema)
   })
+
+  // Without the guard a pathologically nested document died with a bare
+  // `RangeError` from inside a `fold` frame, which says nothing about the input.
+  it('names the nesting limit instead of overflowing the stack', () => {
+    let node: unknown = { type: 'string' }
+    for (let i = 0; i < 2100; i++) node = { type: 'object', properties: { a: node } }
+
+    expect(() => foldNullable(node)).toThrow(/Schema nesting exceeds 2000 levels while running foldNullable/)
+  })
 })

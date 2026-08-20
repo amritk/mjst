@@ -6,6 +6,7 @@ import { buildDynamicRefMap } from './build-dynamic-ref-map'
 import { entersSchemaMap, isDataPosition } from './build-resource-registry'
 import { extractRefs } from './extract-refs'
 import { graftExternalSchemas } from './graft-external-schemas'
+import { assertSchemaDepth } from './max-schema-depth'
 import { normalizeRefScopes } from './normalize-ref-scopes'
 import { pruneExternalSchemas } from './prune-external-schemas'
 import { readKey } from './read-key'
@@ -183,10 +184,11 @@ const DEFINITION_MAP_KEYS = ['$defs', 'definitions'] as const
  * `additionalProperties: true` and `additionalProperties: {}` mean the same thing
  * to a validator but generate different *types*, so those are left alone.
  */
-const expandBooleanDefinitions = (value: unknown, inSchemaMap = false): unknown => {
+const expandBooleanDefinitions = (value: unknown, depth: number, inSchemaMap = false): unknown => {
+  assertSchemaDepth(depth, 'walkRefGraph')
   if (typeof value !== 'object' || value === null) return value
   if (Array.isArray(value)) {
-    const mapped = value.map((item) => expandBooleanDefinitions(item, inSchemaMap))
+    const mapped = value.map((item) => expandBooleanDefinitions(item, depth + 1, inSchemaMap))
     return mapped.some((item, index) => item !== value[index]) ? mapped : value
   }
 
@@ -203,8 +205,8 @@ const expandBooleanDefinitions = (value: unknown, inSchemaMap = false): unknown 
     if (isDataPosition(key, inSchemaMap)) continue
     const next =
       !inSchemaMap && (DEFINITION_MAP_KEYS as readonly string[]).includes(key)
-        ? expandDefinitionMap(record[key])
-        : expandBooleanDefinitions(record[key], entersSchemaMap(key, inSchemaMap))
+        ? expandDefinitionMap(record[key], depth + 1)
+        : expandBooleanDefinitions(record[key], depth + 1, entersSchemaMap(key, inSchemaMap))
     if (next !== record[key]) changed = true
     assignKey(result, key, next)
   }
@@ -212,13 +214,15 @@ const expandBooleanDefinitions = (value: unknown, inSchemaMap = false): unknown 
 }
 
 /** Replaces each boolean entry of one `$defs`/`definitions` map with its object equivalent. */
-const expandDefinitionMap = (definitions: unknown): unknown => {
+const expandDefinitionMap = (definitions: unknown, depth: number): unknown => {
+  assertSchemaDepth(depth, 'walkRefGraph')
   if (typeof definitions !== 'object' || definitions === null || Array.isArray(definitions)) return definitions
   const record = definitions as Record<string, unknown>
   let changed = false
   const result: Record<string, unknown> = {}
   for (const [name, definition] of Object.entries(record)) {
-    const next = definition === true ? {} : definition === false ? { not: {} } : expandBooleanDefinitions(definition)
+    const next =
+      definition === true ? {} : definition === false ? { not: {} } : expandBooleanDefinitions(definition, depth + 1)
     if (next !== definition) changed = true
     assignKey(result, name, next)
   }
@@ -250,7 +254,7 @@ const getRootCache = (rootSchema: JSONSchema, schemas: Readonly<Record<string, u
   const grafted =
     registry === undefined ? undefined : graftExternalSchemas(rootSchema as Record<string, unknown>, registry)
   const combined = grafted?.document ?? (rootSchema as Record<string, unknown>)
-  const expanded = expandBooleanDefinitions(upgradeDraft07Schema(combined)) as Record<string, unknown>
+  const expanded = expandBooleanDefinitions(upgradeDraft07Schema(combined), 0) as Record<string, unknown>
   assertIdScopes(expanded as JSONSchema)
   // Applying `$id` as a base URI *once*, here, is what lets everything
   // downstream — ref resolution, naming, the emitted import graph — keep
@@ -278,9 +282,10 @@ const getRootCache = (rootSchema: JSONSchema, schemas: Readonly<Record<string, u
 }
 
 /** True when the document points at its own root — `$ref: "#"` (or `"#/"`) anywhere inside it. */
-const referencesRoot = (value: unknown, inSchemaMap = false): boolean => {
+const referencesRoot = (value: unknown, depth: number, inSchemaMap = false): boolean => {
+  assertSchemaDepth(depth, 'walkRefGraph')
   if (typeof value !== 'object' || value === null) return false
-  if (Array.isArray(value)) return value.some((item) => referencesRoot(item, inSchemaMap))
+  if (Array.isArray(value)) return value.some((item) => referencesRoot(item, depth + 1, inSchemaMap))
   const record = value as Record<string, unknown>
   // Instance data is skipped: a `default: { "$ref": "#" }` is a documented
   // config value, and counting it grafted a full self-copy of the root
@@ -291,24 +296,28 @@ const referencesRoot = (value: unknown, inSchemaMap = false): boolean => {
   }
   for (const key of Object.keys(record)) {
     if (isDataPosition(key, inSchemaMap)) continue
-    if (referencesRoot(record[key], entersSchemaMap(key, inSchemaMap))) return true
+    if (referencesRoot(record[key], depth + 1, entersSchemaMap(key, inSchemaMap))) return true
   }
   return false
 }
 
 /** A structural deep copy, for the subtrees `rewriteRootRefs` must not rewrite. */
-const copyValue = (value: unknown): unknown => {
+const copyValue = (value: unknown, depth: number): unknown => {
+  assertSchemaDepth(depth, 'walkRefGraph')
   if (typeof value !== 'object' || value === null) return value
-  if (Array.isArray(value)) return value.map(copyValue)
+  if (Array.isArray(value)) return value.map((item) => copyValue(item, depth + 1))
   const out: Record<string, unknown> = {}
-  for (const [key, sub] of Object.entries(value as Record<string, unknown>)) assignKey(out, key, copyValue(sub))
+  for (const [key, sub] of Object.entries(value as Record<string, unknown>)) {
+    assignKey(out, key, copyValue(sub, depth + 1))
+  }
   return out
 }
 
 /** Rewrites every root-pointer `$ref` to the root's `$defs` alias, deep-copying as it goes. */
-const rewriteRootRefs = (value: unknown, rootSelfRef: string, inSchemaMap = false): unknown => {
+const rewriteRootRefs = (value: unknown, rootSelfRef: string, depth: number, inSchemaMap = false): unknown => {
+  assertSchemaDepth(depth, 'walkRefGraph')
   if (typeof value !== 'object' || value === null) return value
-  if (Array.isArray(value)) return value.map((item) => rewriteRootRefs(item, rootSelfRef, inSchemaMap))
+  if (Array.isArray(value)) return value.map((item) => rewriteRootRefs(item, rootSelfRef, depth + 1, inSchemaMap))
   const out: Record<string, unknown> = {}
   const record = value as Record<string, unknown>
   // One pass, in the input's key order — the siblings fixed alongside this one
@@ -323,7 +332,7 @@ const rewriteRootRefs = (value: unknown, rootSelfRef: string, inSchemaMap = fals
   // write through to the input document and to every other emitted node.
   for (const key of Object.keys(record)) {
     if (isDataPosition(key, inSchemaMap)) {
-      assignKey(out, key, copyValue(record[key]))
+      assignKey(out, key, copyValue(record[key], depth + 1))
       continue
     }
     assignKey(
@@ -331,7 +340,7 @@ const rewriteRootRefs = (value: unknown, rootSelfRef: string, inSchemaMap = fals
       key,
       !inSchemaMap && key === '$ref' && (record[key] === ROOT_POINTER || record[key] === '#/')
         ? rootSelfRef
-        : rewriteRootRefs(record[key], rootSelfRef, entersSchemaMap(key, inSchemaMap)),
+        : rewriteRootRefs(record[key], rootSelfRef, depth + 1, entersSchemaMap(key, inSchemaMap)),
     )
   }
   return out
@@ -353,12 +362,20 @@ const rewriteRootRefs = (value: unknown, rootSelfRef: string, inSchemaMap = fals
  * holds the root *without* its `$defs`, so the document stays acyclic and still
  * survives the structured clone in `resolveDynamicRefs`.
  */
-const rootAnchoredCache = (base: RootCache, rootFilename: string, rootSelfRef: string): RootCache => {
+const rootAnchoredCache = (
+  base: RootCache,
+  rootFilename: string,
+  rootSelfRef: string,
+  selfReferenced: boolean,
+): RootCache => {
   const cached = base.rootAnchored.get(rootFilename)
   if (cached) return cached
 
-  const rewritten = referencesRoot(base.upgraded)
-    ? (rewriteRootRefs(base.upgraded, rootSelfRef) as Record<string, unknown>)
+  // `selfReferenced` is the caller's already-computed answer: deciding it here
+  // meant a second full walk of the document for the one shape that needs this
+  // cache at all.
+  const rewritten = selfReferenced
+    ? (rewriteRootRefs(base.upgraded, rootSelfRef, 0) as Record<string, unknown>)
     : base.upgraded
   const { $defs, ...rootBody } = rewritten
   const defs = (typeof $defs === 'object' && $defs !== null ? $defs : {}) as Record<string, unknown>
@@ -394,17 +411,34 @@ const rootAnchoredCache = (base: RootCache, rootFilename: string, rootSelfRef: s
  * queued the target, so a definition reached only that way went ungenerated and
  * the file that referenced it imported a module the walk never emitted. The
  * anchor form needs none of this: it is seeded from the `$dynamicAnchor` map.
+ *
+ * Instance data is skipped, for the same reason {@link referencesRoot} skips it:
+ * a `default: { "$dynamicRef": "#/$defs/x" }` is a documented config value that
+ * happens to be ref-shaped, not a reference. `resolveDynamicRefs` leaves such a
+ * literal alone, so seeding it emitted a whole extra file for a definition
+ * nothing in the schema actually reaches.
  */
-const dynamicPointerRefs = (value: unknown, into: Set<string> = new Set()): Set<string> => {
+const dynamicPointerRefs = (
+  value: unknown,
+  depth: number,
+  into: Set<string> = new Set(),
+  inSchemaMap = false,
+): Set<string> => {
+  assertSchemaDepth(depth, 'walkRefGraph')
   if (typeof value !== 'object' || value === null) return into
   if (Array.isArray(value)) {
-    for (const item of value) dynamicPointerRefs(item, into)
+    for (const item of value) dynamicPointerRefs(item, depth + 1, into, inSchemaMap)
     return into
   }
   const record = value as Record<string, unknown>
-  const ref = readKey(record, '$dynamicRef')
-  if (typeof ref === 'string' && ref.startsWith('#/')) into.add(ref)
-  for (const key of Object.keys(record)) dynamicPointerRefs(record[key], into)
+  if (!inSchemaMap) {
+    const ref = readKey(record, '$dynamicRef')
+    if (typeof ref === 'string' && ref.startsWith('#/')) into.add(ref)
+  }
+  for (const key of Object.keys(record)) {
+    if (isDataPosition(key, inSchemaMap)) continue
+    dynamicPointerRefs(record[key], depth + 1, into, entersSchemaMap(key, inSchemaMap))
+  }
   return into
 }
 
@@ -480,7 +514,7 @@ export const walkRefGraph = (
   // A plain `$ref: "#"` needs the same alias for the same reason (see
   // rootAnchoredCache) — without it the recursive property was typed and parsed
   // through a module nothing ever emitted.
-  const rootIsSelfReferenced = referencesRoot(baseCache.upgraded)
+  const rootIsSelfReferenced = referencesRoot(baseCache.upgraded, 0)
   const needsRootAlias = rootIsAnchored || rootIsSelfReferenced
   if (needsRootAlias && refToName(rootSelfRef, typeSuffix) !== rootTypeName) {
     throw new Error(
@@ -491,7 +525,9 @@ export const walkRefGraph = (
     )
   }
 
-  const cache = needsRootAlias ? rootAnchoredCache(baseCache, rootFilename, rootSelfRef) : baseCache
+  const cache = needsRootAlias
+    ? rootAnchoredCache(baseCache, rootFilename, rootSelfRef, rootIsSelfReferenced)
+    : baseCache
   const { upgraded, dynamicRefMap } = cache
 
   const processedRefs = new Set<string>()
@@ -555,7 +591,7 @@ export const walkRefGraph = (
   const queue: string[] = [
     ...cachedExtractRefs(cache, upgraded as JSONSchema),
     ...Object.values(dynamicRefMap),
-    ...[...dynamicPointerRefs(upgraded)].filter((ref) => cachedResolveRef(cache, ref) !== undefined),
+    ...[...dynamicPointerRefs(upgraded, 0)].filter((ref) => cachedResolveRef(cache, ref) !== undefined),
   ]
 
   // Advance a read cursor instead of `queue.shift()`, whose O(n) element move

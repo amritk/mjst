@@ -72,10 +72,7 @@ export const escapeRegexPattern = (pattern: string): string => {
   // regex body would emit `//` \u2014 a line comment, not a literal \u2014 and break the
   // generated file. Emit `(?:)` instead, exactly what `new RegExp('').source`
   // yields: an empty non-capturing group that still matches everything.
-  if (escaped === '') {
-    escapeCache.set(pattern, '(?:)')
-    return '(?:)'
-  }
+  const result = escaped === '' ? '(?:)' : escaped
 
   if (escapeCache.size >= ESCAPE_CACHE_LIMIT) {
     // Evict the single oldest entry (Maps iterate in insertion order) instead
@@ -83,8 +80,8 @@ export const escapeRegexPattern = (pattern: string): string => {
     // set instead of collapsing to a 0% hit rate every pass.
     escapeCache.delete(escapeCache.keys().next().value as string)
   }
-  escapeCache.set(pattern, escaped)
-  return escaped
+  escapeCache.set(pattern, result)
+  return result
 }
 
 /**
