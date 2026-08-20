@@ -34,14 +34,34 @@ export type ValidationError = {
 export type ValidationResult = true | { valid: false; errors: ValidationError[] }
 
 /**
+ * How deep a structural comparison walks before it gives up and answers "not
+ * equal".
+ *
+ * JSON data is acyclic, but a generated validator is a plain function applied to
+ * whatever in-memory value a caller hands it — and a self-referential object
+ * reaching a \`const\` / \`enum\` / \`uniqueItems\` check used to recurse until the
+ * stack overflowed, so \`validateFoo\` threw a \`RangeError\` instead of returning
+ * the \`ValidationResult\` its signature promises. The cap turns that into an
+ * ordinary "these are different" without ever coming near real data;
+ * \`@amritk/runtime-validators\` guards its own \`deepEqual\` at the same depth.
+ */
+const MAX_EQUAL_DEPTH = 512
+
+/**
  * Structural deep equality used by generated \`const\` checks. Objects compare by
  * their key sets rather than serialization, so \`{ a: 1, b: 2 }\` and
  * \`{ b: 2, a: 1 }\` are equal — unlike \`JSON.stringify\`, which is key-order
  * sensitive and would reject a reordered-but-equal value.
  */
-export const valuesEqual = (a: unknown, b: unknown): boolean => {
-  if (a === b) return true
+export const valuesEqual = (a: unknown, b: unknown, depth = 0): boolean => {
+  // SameValueZero: \`===\` settles every primitive except \`NaN\`, which counts as
+  // equal to itself here. That is what the native \`Set\` in {@link allUnique} does,
+  // what Ajv does, and what the interpreter's \`deepEqual\` does — leaving it out
+  // made a \`NaN\` nested inside an object compare unequal to itself, so the same
+  // array was "unique" here and "duplicated" everywhere else.
+  if (a === b || (Number.isNaN(a) && Number.isNaN(b))) return true
   if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  if (depth >= MAX_EQUAL_DEPTH) return false
   const aArray = Array.isArray(a)
   const bArray = Array.isArray(b)
   if (aArray !== bArray) return false
@@ -49,7 +69,7 @@ export const valuesEqual = (a: unknown, b: unknown): boolean => {
     const aa = a as unknown[]
     const bb = b as unknown[]
     if (aa.length !== bb.length) return false
-    for (let i = 0; i < aa.length; i++) if (!valuesEqual(aa[i], bb[i])) return false
+    for (let i = 0; i < aa.length; i++) if (!valuesEqual(aa[i], bb[i], depth + 1)) return false
     return true
   }
   const ao = a as Record<string, unknown>
@@ -57,9 +77,52 @@ export const valuesEqual = (a: unknown, b: unknown): boolean => {
   const keys = Object.keys(ao)
   if (keys.length !== Object.keys(bo).length) return false
   for (const key of keys) {
-    if (!Object.hasOwn(bo, key) || !valuesEqual(ao[key], bo[key])) return false
+    if (!Object.hasOwn(bo, key) || !valuesEqual(ao[key], bo[key], depth + 1)) return false
   }
   return true
+}
+
+/**
+ * A cheap, order-independent structural hash consistent with {@link valuesEqual}:
+ * equal values always hash the same. It buckets candidate-equal elements in
+ * {@link allUnique} so the exact comparison only ever runs inside a bucket.
+ *
+ * Object keys are folded commutatively (XOR) so key order does not change the
+ * hash, and \`NaN\` / \`-0\` collapse the way SameValueZero does. Depth-capped like
+ * {@link valuesEqual}: an over-deep value simply shares a bucket and is settled by
+ * the (also capped) comparison, so the cap can cost a little time and never a
+ * wrong answer. This is the same hash \`@amritk/runtime-validators\` uses.
+ */
+const structuralHash = (value: unknown, depth = 0): number => {
+  if (value === null) return 0x1a2b3c
+  const t = typeof value
+  if (t === 'number') {
+    const n = value as number
+    return Number.isNaN(n) ? 0x7ff8 : n === 0 ? 0 : Math.trunc(n * 2654435761) | 0
+  }
+  if (t === 'string') {
+    const s = value as string
+    let h = 0x811c9dc5
+    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193)
+    return h | 0
+  }
+  if (t === 'boolean') return value ? 1 : 2
+  if (t !== 'object') return 0x5eed
+  if (depth >= MAX_EQUAL_DEPTH) return 0xdee9
+  if (Array.isArray(value)) {
+    let h = 0x12345 ^ value.length
+    for (let i = 0; i < value.length; i++) h = (Math.imul(h, 31) + structuralHash(value[i], depth + 1)) | 0
+    return h | 0
+  }
+  const obj = value as Record<string, unknown>
+  const keys = Object.keys(obj)
+  let h = 0xabcde ^ keys.length
+  for (const k of keys) {
+    let kh = 0x811c9dc5
+    for (let i = 0; i < k.length; i++) kh = Math.imul(kh ^ k.charCodeAt(i), 0x01000193)
+    h = (h ^ (Math.imul(kh, 0x9e3779b1) + structuralHash(obj[k], depth + 1))) | 0
+  }
+  return h | 0
 }
 
 /**
@@ -67,9 +130,14 @@ export const valuesEqual = (a: unknown, b: unknown): boolean => {
  * ({@link valuesEqual}). Backs generated \`uniqueItems\` checks whose items may be
  * objects or arrays, where a \`JSON.stringify\` dedupe key would be key-order
  * sensitive and let a reordered-but-equal duplicate (\`{ a: 1, b: 2 }\` vs
- * \`{ b: 2, a: 1 }\`) slip through. A native \`Set\` dedupes the all-primitive case
- * in one linear pass; object/array elements fall back to an exact pairwise
- * structural comparison.
+ * \`{ b: 2, a: 1 }\`) slip through.
+ *
+ * A native \`Set\` dedupes the all-primitive case in one linear pass. Object and
+ * array elements are bucketed by {@link structuralHash} first, so the exact
+ * comparison runs only against elements that could actually be equal: an array of
+ * distinct objects costs ~O(n) instead of the O(n²) an exhaustive pairwise sweep
+ * charged — 4 000 rows took over half a second of pure comparison before, which
+ * is a lot to hand an unauthenticated caller.
  */
 export const allUnique = (arr: readonly unknown[]): boolean => {
   const len = arr.length
@@ -83,10 +151,17 @@ export const allUnique = (arr: readonly unknown[]): boolean => {
     }
   }
   if (allPrimitive) return new Set(arr).size === len
+  const buckets = new Map<number, unknown[]>()
   for (let i = 0; i < len; i++) {
-    for (let j = i + 1; j < len; j++) {
-      if (valuesEqual(arr[i], arr[j])) return false
+    const item = arr[i]
+    const hash = structuralHash(item)
+    const bucket = buckets.get(hash)
+    if (bucket === undefined) {
+      buckets.set(hash, [item])
+      continue
     }
+    for (const seen of bucket) if (valuesEqual(seen, item)) return false
+    bucket.push(item)
   }
   return true
 }
@@ -107,6 +182,62 @@ export const allUnique = (arr: readonly unknown[]): boolean => {
 export const escapePointer = (key: string): string =>
   key.indexOf('/') !== -1 || key.indexOf('~') !== -1 ? key.replace(/~/g, '~0').replace(/\\//g, '~1') : key
 `
+
+/**
+ * The type names {@link VALIDATION_RESULT_CONTENT} exports, which every generated
+ * file imports. A definition that generates one of them would be imported twice
+ * under one name, so generation refuses rather than emit a file that cannot load.
+ */
+const RESERVED_TYPE_NAMES = new Set(['ValidationResult', 'ValidationError'])
+
+/** A name TypeScript will accept after `export type`. */
+const TYPE_NAME = /^[\p{ID_Start}_$][\p{ID_Continue}$]*$/u
+
+/**
+ * The words TypeScript will not accept as a type name. `refToName` cannot produce
+ * one — it PascalCases, and every reserved word is lower case — so this is really
+ * about the root type name and the type suffix, which are passed in verbatim.
+ */
+const RESERVED_WORDS = new Set([
+  'await',
+  'break',
+  'case',
+  'catch',
+  'class',
+  'const',
+  'continue',
+  'debugger',
+  'default',
+  'delete',
+  'do',
+  'else',
+  'enum',
+  'export',
+  'extends',
+  'false',
+  'finally',
+  'for',
+  'function',
+  'if',
+  'import',
+  'in',
+  'instanceof',
+  'new',
+  'null',
+  'return',
+  'super',
+  'switch',
+  'this',
+  'throw',
+  'true',
+  'try',
+  'typeof',
+  'var',
+  'void',
+  'while',
+  'with',
+  'yield',
+])
 
 /**
  * Builds all TypeScript validator files from a JSON Schema by traversing all
@@ -169,6 +300,43 @@ export const buildValidatorSchema = async (
       throw new Error(
         `${owner} generates the file "${node.filename}.ts", which is reserved for ${purpose}. Rename the ` +
           'definition (or pass a different root type name) so it gets a file of its own.',
+      )
+    }
+
+    // A name that is not an identifier is not a name TypeScript will take. The
+    // root type name and the type suffix arrive verbatim from the caller, so
+    // `buildValidatorSchema(schema, 'my-doc')` used to emit `export type my-doc =
+    // …` — output that does not parse, discovered in the consumer's build with
+    // nothing to say about where it came from. `refToName` normalises a ref into
+    // an identifier by itself; a suffix stuck on the end of one can still break it.
+    if (!TYPE_NAME.test(node.typeName) || RESERVED_WORDS.has(node.typeName)) {
+      const owner = node.isRoot ? 'the root type name' : `the name "${node.ref}" derives`
+      const suffixNote = typeSuffix === '' ? '' : ` (with the type suffix "${typeSuffix}")`
+      throw new Error(
+        `${owner}${suffixNote}, "${node.typeName}", is not a TypeScript type name, so the generated file would ` +
+          'not parse. Pass a name that is a plain identifier — letters, digits, "_" and "$", not starting with a ' +
+          'digit, and not a reserved word.',
+      )
+    }
+
+    // The same collision one level down, in the *names* rather than the files.
+    // Every generated file opens with `import type { ValidationResult,
+    // ValidationError } from './validation-result.js'`, so a definition whose type
+    // name is one of those puts the name in the file twice — once imported, once
+    // imported from its own module — which is a `TS2300` and, under Node ESM, a
+    // duplicate binding the module never loads past. `ValidationResult` was caught
+    // by the filename rule above only because its kebab form happens to be the
+    // reserved file; `ValidationError` (or anything else that PascalCases onto
+    // one, like a `$defs.validation_error`) went straight through and emitted a
+    // file that does not compile. The type name is what the emitted code says, so
+    // it is what to ask about — and a `typeSuffix` that moves it clear (a
+    // `ValidationErrorObject`) is no collision at all.
+    if (RESERVED_TYPE_NAMES.has(node.typeName)) {
+      const owner = node.isRoot ? `the root type name "${node.typeName}"` : `"${node.ref}"`
+      throw new Error(
+        `${owner} generates the type "${node.typeName}", which every generated file already imports from ` +
+          '"validation-result.ts". Rename the definition (or pass a different root type name or type suffix) so ' +
+          'the two names do not collide.',
       )
     }
 

@@ -112,6 +112,82 @@ describe('build-schema', () => {
     })
   }
 
+  // The same collision one level down: `ValidationError` is not a reserved
+  // *filename*, so a definition named after it sailed past the rule above and
+  // emitted a file importing that name twice — once from the runtime contract
+  // every file imports, once from its own module. That is a `TS2300` for anyone
+  // building the output and a duplicate binding Node ESM never loads past.
+  for (const named of ['ValidationError', 'validation-error', 'validation_error'] as const) {
+    it(`refuses a $defs entry whose type name is ValidationError (as "${named}")`, async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { failure: { $ref: `#/$defs/${named}` } },
+        $defs: { [named]: { type: 'object' } },
+      }
+
+      await expect(buildValidatorSchema(schema, 'Document')).rejects.toThrow(
+        'generates the type "ValidationError", which every generated file already imports',
+      )
+    })
+  }
+
+  it('refuses a root type name that collides with the runtime contract', async () => {
+    await expect(buildValidatorSchema({ type: 'string' }, 'ValidationError')).rejects.toThrow(
+      'the root type name "ValidationError" generates the type "ValidationError"',
+    )
+  })
+
+  it('allows a colliding name that a type suffix moves clear', async () => {
+    // The collision is in the emitted *name*, so a suffix that changes it is no
+    // collision at all — refusing on the filename alone would have turned this
+    // schema down for a clash it does not have.
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { failure: { $ref: '#/$defs/validation-error' } },
+      $defs: { 'validation-error': { type: 'object', properties: { message: { type: 'string' } } } },
+    }
+
+    const files = await buildValidatorSchema(schema, 'Document', 'Object')
+
+    expect(files.map((file) => file.filename)).toContain('validation-error.ts')
+    expect(files.find((file) => file.filename === 'document.ts')?.content).toContain(
+      "import { type ValidationErrorObject, validateValidationErrorObject } from './validation-error.js'",
+    )
+  })
+
+  // A name the caller passes in verbatim is the one place a generated file can
+  // come out unparseable: `refToName` normalises a ref into an identifier by
+  // itself, but the root type name is used as given and the type suffix is stuck
+  // on the end of every derived name. `export type my-doc = …` is not a syntax
+  // error the caller ever sees — it lands in the consumer's build.
+  for (const name of ['my-doc', '', '123', 'class']) {
+    it(`refuses the root type name ${JSON.stringify(name)}`, async () => {
+      await expect(buildValidatorSchema({ type: 'string' }, name)).rejects.toThrow(
+        'is not a TypeScript type name, so the generated file would not parse',
+      )
+    })
+  }
+
+  it('refuses a type suffix that breaks the names it is appended to', async () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { c: { $ref: '#/$defs/contact' } },
+      $defs: { contact: { type: 'string' } },
+    }
+
+    await expect(buildValidatorSchema(schema, 'Doc', '-x')).rejects.toThrow(
+      '"Contact-x", is not a TypeScript type name',
+    )
+    // A suffix that keeps the name an identifier is fine, digits included.
+    await expect(buildValidatorSchema(schema, 'Doc', 'Object2')).resolves.toBeTruthy()
+  })
+
+  it('accepts a non-ASCII root type name, which TypeScript does too', async () => {
+    const files = await buildValidatorSchema({ type: 'string' }, '中文')
+
+    expect(files.find((file) => file.filename === '中文.ts')?.content).toContain('export type 中文')
+  })
+
   it('refuses a root type name that would overwrite index.ts', async () => {
     // The root derives its filename from the type name, so `Index` collides just
     // as a definition does — and used to leave the output with no root validator
@@ -252,8 +328,8 @@ describe('build-schema', () => {
 
     expect(docFile?.content).toContain("import { allUnique } from './validation-result.js'")
     expect(docFile?.content).toContain('!allUnique(obj.rows as unknown[])')
-    // Scalar-item arrays keep the cheap JSON-projection dedupe.
-    expect(docFile?.content).toContain('map((_u) => JSON.stringify(_u))')
+    // Scalar-item arrays dedupe with a bare `Set`, which needs no import at all.
+    expect(docFile?.content).toContain('new Set(obj.tags as unknown[]).size !== obj.tags.length')
   })
 
   // The registry is what makes "we do no I/O" stop meaning "we cannot be told":

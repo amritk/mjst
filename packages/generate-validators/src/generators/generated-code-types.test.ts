@@ -276,6 +276,14 @@ const CASES: ReadonlyArray<readonly [string, JSONSchema]> = [
  */
 const OPTIONS: ts.CompilerOptions = {
   strict: true,
+  // On, and every case above holds to them. They used to be off: the output
+  // carried unused symbols by design — the type half of an `if`-arm import, the
+  // validator half of a type-only one, a `const` bound for a check that turned
+  // out to look at nothing — and pinning that would have pinned a gap rather than
+  // guarded anything. Each of those is now decided from the emitted text, so the
+  // flags a consumer actually compiles with are the flags this suite uses.
+  noUnusedLocals: true,
+  noUnusedParameters: true,
   exactOptionalPropertyTypes: true,
   noUncheckedIndexedAccess: true,
   noImplicitOverride: true,
@@ -409,16 +417,10 @@ describe('generated-code-types', () => {
     expect(typeErrors(sources)).toEqual([])
   })
 
-  // `noUnusedLocals` / `noUnusedParameters` are on in the repo's own
-  // `tsconfig.json`, and a consumer inherits them. They are off in `OPTIONS`
-  // above because the output still carries one known unused symbol — the type
-  // half of an `if`-arm import — so turning them on for every case would pin a
-  // gap rather than guard anything.
-  //
-  // They are exactly the flags the hoist pruning exists to satisfy, though, and
-  // the corpora are no help: 3 of their 4,242 generated files hoist anything at
-  // all, so "both corpora byte-identical" says almost nothing about a change
-  // here. These shapes hoist, and they are checked under the real flags.
+  // The unused-symbol flags are exactly what the hoist pruning exists to satisfy,
+  // and the corpora are no help: 3 of their 4,242 generated files hoist anything
+  // at all, so "both corpora byte-identical" says almost nothing about a change
+  // here. These shapes hoist.
   it('emits no unused local for a shape that hoists a declaration', { timeout: 120_000 }, async () => {
     const wide = Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`w${i}`, { type: 'string' as const }]))
     const strictPatterns: JSONSchema = {
@@ -465,7 +467,7 @@ describe('generated-code-types', () => {
       for (const file of files) sources.set(`/hoist-${name}/${file.filename}`, file.content)
     }
 
-    expect(typeErrors(sources, { noUnusedLocals: true, noUnusedParameters: true })).toEqual([])
+    expect(typeErrors(sources)).toEqual([])
   })
 
   // The other two symbols a file can declare and not read, both found by
@@ -501,7 +503,61 @@ describe('generated-code-types', () => {
       for (const file of files) sources.set(`/unused-${name}/${file.filename}`, file.content)
     }
 
-    expect(typeErrors(sources, { noUnusedLocals: true, noUnusedParameters: true })).toEqual([])
+    expect(typeErrors(sources)).toEqual([])
+  })
+
+  // The two halves of a `$ref` import come apart in both directions, and a half
+  // nothing reads is `TS6133` under the flags above. Each shape here reads a
+  // different set of them.
+  it('imports only the halves of a $ref the emitted file reads', { timeout: 120_000 }, async () => {
+    const defs = { $defs: { a: { type: 'string' as const }, b: { type: 'number' as const } } }
+    const shapes: ReadonlyArray<readonly [string, JSONSchema, (content: string) => boolean]> = [
+      // Called and named: an ordinary property.
+      [
+        'both',
+        { type: 'object', properties: { p: { $ref: '#/$defs/a' } }, ...defs },
+        (content) => content.includes("import { type A, validateA } from './a.js'"),
+      ],
+      // Called, never named: the type generator types an `if`-carrying node
+      // `unknown` and names neither arm.
+      [
+        'validator-only',
+        { if: { type: 'string' }, then: { $ref: '#/$defs/a' }, ...defs },
+        (content) => content.includes("import { validateA } from './a.js'"),
+      ],
+      // Named, never called. With `prefixItems` present the array `items` beside
+      // it is ignored and `additionalItems` describes no position the emitter
+      // validates — but `renderTuple` still takes the tuple's rest from it, so the
+      // type names `B` and nothing calls `validateB`.
+      [
+        'type-only',
+        {
+          type: 'array',
+          prefixItems: [{ type: 'string' }],
+          items: [{ type: 'string' }],
+          additionalItems: { $ref: '#/$defs/b' },
+          ...defs,
+        },
+        (content) => content.includes("import type { B } from './b.js'"),
+      ],
+      // A folded branch drops the *call* and the type generator still names the
+      // branch's type, so this is the validator half going and the type staying.
+      [
+        'folded-branch-keeps-the-type',
+        { anyOf: [{ type: 'object', properties: { p: { $ref: '#/$defs/a' } } }, true], ...defs },
+        (content) => content.includes("import type { A } from './a.js'"),
+      ],
+    ]
+
+    const sources = new Map<string, string>()
+    for (const [name, schema, expectation] of shapes) {
+      const files = await buildValidatorSchema(schema, 'Doc')
+      const doc = files.find((file) => file.filename === 'doc.ts')?.content ?? ''
+      expect(expectation(doc), `${name} imported the wrong halves:\n${doc}`).toBe(true)
+      for (const file of files) sources.set(`/halves-${name}/${file.filename}`, file.content)
+    }
+
+    expect(typeErrors(sources)).toEqual([])
   })
 
   it('imports every $ref the emitted file names, from any position', { timeout: 120_000 }, async () => {

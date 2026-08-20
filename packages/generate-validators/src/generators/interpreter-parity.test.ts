@@ -267,6 +267,69 @@ describe('generator/interpreter verdict parity', () => {
     assertParity({ type: 'array', prefixItems: [{ type: 'string' }], items: false }, [[], ['a'], ['a', 'b'], [1]])
   })
 
+  it('agrees on uniqueItems for the values a JSON corpus cannot hold', () => {
+    // `NaN` is where the two dedupe strategies part company. A `JSON.stringify`
+    // projection prints it — and `null` — as `"null"`, so `[NaN, null]` came back
+    // a duplicate pair; SameValueZero (what a `Set`, Ajv and the interpreter all
+    // use) says they are two different values, and that `NaN` does duplicate
+    // itself. None of it can show up in the conformance suite, whose corpus is
+    // JSON.
+    const values: unknown[] = [
+      [Number.NaN, null],
+      [Number.NaN, Number.NaN],
+      [null, null],
+      [0, -0],
+      [1, '1', true],
+      [{ a: Number.NaN }, { a: Number.NaN }],
+      [
+        { a: 1, b: 2 },
+        { b: 2, a: 1 },
+      ],
+      [{ a: 1 }, { a: 2 }],
+    ]
+    assertParity({ type: 'array', uniqueItems: true }, values)
+    // The scalar-only spelling — a declared primitive `items` — takes the `Set`
+    // path, so it has to reach the same verdict as the structural one.
+    assertParity({ type: 'array', items: { type: ['number', 'null'] }, uniqueItems: true }, values)
+  })
+
+  it('answers rather than overflowing the stack on a self-referential value', () => {
+    // A generated validator is a plain function applied to whatever a caller
+    // hands it, and `const` / `enum` / `uniqueItems` compare structurally. Two
+    // cyclic objects of the same shape used to recurse until the stack blew,
+    // throwing a `RangeError` out of a function whose signature promises a
+    // `ValidationResult`. The interpreter caps its own walk, so parity here is
+    // also the fix.
+    const cyclic = (): Record<string, unknown> => {
+      const node: Record<string, unknown> = { a: 1 }
+      node['self'] = node
+      return node
+    }
+    assertParity({ type: 'array', uniqueItems: true }, [[cyclic(), cyclic()], [cyclic()]])
+    assertParity({ const: { a: 1 } }, [cyclic()])
+    assertParity({ enum: [{ a: 1 }] }, [cyclic()])
+  })
+
+  it('agrees on a key that is present with an undefined value, and on an array hole', () => {
+    // A key the sweep is walking, or an index inside the array's length, is a
+    // value to judge — but the dynamic-key checks ran in optional mode, where a
+    // leading `x !== undefined &&` waves `undefined` past every one of them, and
+    // `every` skips a hole outright. So `{ a: undefined }` satisfied an
+    // `additionalProperties: { type: 'string' }` and `[<hole>]` satisfied an
+    // `unevaluatedItems: { type: 'string' }` — both rejected by the interpreter,
+    // and by Ajv. Neither value can come out of `JSON.parse`, which is why the
+    // conformance corpus says nothing about them.
+    const hole: unknown[] = ['x']
+    delete hole[0]
+    const undefinedValue = { a: undefined }
+
+    assertParity({ type: 'object', additionalProperties: { type: 'string' } }, [undefinedValue, { a: 'x' }, { a: 1 }])
+    assertParity({ type: 'object', patternProperties: { '^a': { type: 'string' } } }, [undefinedValue, { a: 'x' }])
+    assertParity({ type: 'object', unevaluatedProperties: { type: 'string' } }, [undefinedValue, { a: 'x' }])
+    assertParity({ type: 'array', unevaluatedItems: { type: 'string' } }, [hole, ['x'], [1]])
+    assertParity({ type: 'array', prefixItems: [true], unevaluatedItems: false }, [['a', ...hole], ['a']])
+  })
+
   it('agrees on full propertyNames subschemas (beyond the pattern/length subset)', () => {
     const values = [
       {},

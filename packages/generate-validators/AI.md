@@ -32,8 +32,9 @@ const files = await buildValidatorSchema(schema, 'Document')
    (you write them).
 3. **Output includes a shared `validation-result.ts`** (`ValidationError`,
    `ValidationResult`, helpers) plus the `index.ts` barrel.
-4. **`NaN` satisfies numeric bounds** (`minimum`/`maximum`/`multipleOf`) — differs
-   from Ajv. Draft-07 schemas are auto-upgraded to 2020-12.
+4. **`NaN` fails a *constrained* number** (`minimum`/`maximum`/`multipleOf` all
+   reject it) and satisfies a bare `{ "type": "number" }`, which is Ajv's answer
+   too. Draft-07 schemas are auto-upgraded to 2020-12.
 5. **`format` emits no check.** It stays an annotation, like the interpreter's
    default — but *not* like the interpreter run with `{ formats: 'all' }`
    (`@amritk/lint`, `createApi({ formats })`), which rejects strings a generated

@@ -95,6 +95,18 @@ if (!result.valid) {
 
 Returns: `Promise<GeneratedFile[]>` where `GeneratedFile = { filename: string; content: string }`.
 
+#### Names it will not emit
+
+Both name arguments are used as written — the root type name verbatim, the suffix
+appended to every `$ref`-derived name — so both can name something the output
+cannot say. Generation stops with the name and the reason rather than writing a
+file that fails in your build: a name that is not a plain TypeScript identifier
+(`'my-doc'`, `''`, `'123'`, `'class'`); a definition that would claim the
+`validation-result.ts` or `index.ts` filename; and one whose type name comes out
+as `ValidationResult` or `ValidationError`, which every generated file already
+imports. A type suffix that moves such a name clear — `ValidationErrorObject` — is
+no collision, and non-ASCII identifiers are fine, because TypeScript takes them.
+
 #### Referencing another document
 
 A `$ref` to a URI is resolvable once you hand over the document behind it:
@@ -143,6 +155,19 @@ The verdict is the contract and it matches the interpreter exactly; for that one
 shape `isX` is a weaker type guard than the type it names. Declare a `type` — as
 almost every real schema does — and the guard is exact again.
 
+**Values JSON cannot hold get an answer, not a surprise.** A generated validator
+is a plain function applied to whatever you hand it, so it can meet things
+`JSON.parse` never produces — and it answers each the way the interpreter and Ajv
+do. A key present with an `undefined` value is a value to judge, not an absent
+one, wherever a sweep found the key (`patternProperties`, a schema-form
+`additionalProperties`, `unevaluatedProperties`). A hole in a sparse array is an
+element that has to answer for itself, in the item loops, the tuple positions,
+`contains` and `unevaluatedItems` alike. `NaN` equals itself under `const`,
+`enum` and `uniqueItems`, so `[NaN, NaN]` is a duplicate pair while `[NaN, null]`
+is not. And a self-referential object reaches a verdict — the structural
+comparison stops at 512 levels — where it used to throw a `RangeError` out of a
+function whose signature promises a `ValidationResult`.
+
 **`format` emits no check.** JSON Schema treats `format` as an annotation, and so
 does this generator: `{ type: 'string', format: 'uuid' }` produces the `typeof`
 check and nothing more. That matches the interpreter's default, but *not* the
@@ -163,7 +188,10 @@ unresolvable or cyclic `$ref` at the same instance location, a walk deeper than
 eight applicators, and a node under an *inert* `additionalItems` — one with no
 array `items` to be the tail of, or with a `prefixItems` that took the positions
 out from under it. The draft-07 tail itself is validated, so the draft-07
-spelling of a schema whose 2020-12 spelling generates is accepted too.
+spelling of a schema whose 2020-12 spelling generates is accepted too. One
+difference worth knowing: the check is a single sweep, so its error is reported at
+the object or array — the shape Ajv reports too — where the interpreter names the
+individual key or index. The verdict is identical either way.
 
 One edge worth calling out: **`NaN` fails a constrained number but satisfies an
 unconstrained one.** Every bound is emitted as the negated *pass* condition

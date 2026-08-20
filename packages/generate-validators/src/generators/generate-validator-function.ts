@@ -1,6 +1,7 @@
 import { regexFlagsFor, regexLiteral } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive, MJST_EXTENSION_KEY } from '@amritk/helpers/mjst-extension'
 import { multipleOfFailExpr, multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
+import { declaresKey, readKey } from '@amritk/helpers/read-key'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
 import {
@@ -194,7 +195,7 @@ const SCALAR_ITEM_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'nu
  */
 const schemaIsScalarOnly = (schema: unknown): boolean => {
   if (!isSchemaObject(schema as JSONSchema)) return false
-  const t = (schema as Record<string, unknown>)['type']
+  const t = readKey(schema as Record<string, unknown>, 'type')
   if (t === undefined) return false
   const types = Array.isArray(t) ? t : [t]
   return types.length > 0 && types.every((x) => typeof x === 'string' && SCALAR_ITEM_TYPES.has(x))
@@ -202,11 +203,13 @@ const schemaIsScalarOnly = (schema: unknown): boolean => {
 
 /**
  * True when an array's elements can only be JSON scalars, so a `uniqueItems`
- * check can dedupe by the cheap `JSON.stringify` projection. When items may be
- * objects or arrays this returns false, and the check must instead compare
- * structurally (the `allUnique` runtime helper): `JSON.stringify` is key-order
- * sensitive and would treat `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` as distinct,
- * disagreeing with the interpreter's order-independent deep equality.
+ * check can dedupe with a bare `Set` (SameValueZero is exactly JSON Schema's
+ * equality for primitives). When items may be objects or arrays this returns
+ * false, and the check must instead compare structurally (the `allUnique` runtime
+ * helper): a `Set` would compare those by reference, and the `JSON.stringify`
+ * projection that is the obvious alternative is key-order sensitive — it treats
+ * `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` as distinct, disagreeing with the
+ * interpreter's order-independent deep equality.
  */
 const arrayItemsAreScalarOnly = (schema: Record<string, unknown>): boolean => {
   const { tuple, tail, tailIsClosed } = tupleShapeOf(schema)
@@ -280,7 +283,7 @@ const objectRootIsSelfContained = (schema: JSONSchema): boolean =>
   getMjstPrimitive(schema) === undefined
 
 const getTypeArray = (schema: JSONSchema): string[] | null => {
-  if (!isSchemaObject(schema) || !('type' in schema) || !Array.isArray(schema.type)) return null
+  if (!isSchemaObject(schema) || !declaresKey(schema, 'type') || !Array.isArray(schema.type)) return null
   return schema.type as string[]
 }
 
@@ -310,7 +313,35 @@ type NestingContext = {
    * cannot report that back.
    */
   rootSchema?: Record<string, unknown> | undefined
+  /**
+   * The expression every emitted check pushes its errors onto.
+   *
+   * It used to be the literal `errors.push(`, rewritten to its final form by a
+   * `replaceAll` over the finished function text — and that text carries the
+   * schema's own strings. A property named `errors.push(`, an `enum` member
+   * spelling it, a `pattern` of `errors.push(x)`: each of those landed in the
+   * output as data and was rewritten as if it were code, so the validator
+   * compared against a key nobody wrote and compiled a regex nobody asked for.
+   * (`isX` was built without the rewrite, so the two even disagreed.) Carrying
+   * the sink here means the emitters write the final spelling the first time and
+   * nothing ever rewrites generated text.
+   *
+   * {@link ROOT_ERROR_SINK} is the create-on-first-use array every validator
+   * body reports through; a match expression ({@link generateMatchesExpr})
+   * swaps in its own IIFE-local buffer.
+   */
+  sink: string
 }
+
+/**
+ * The error sink a validator body reports through: the `errors` array is
+ * allocated on the first push and stays `undefined` for a valid input, which is
+ * the allocation-free happy path the runtime interpreter also takes.
+ */
+const ROOT_ERROR_SINK = '(errors ??= [])'
+
+/** The IIFE-local buffer a match expression's checks report through. */
+const MATCH_ERROR_SINK = '_m'
 
 const createRootContext = (rootSchema?: Record<string, unknown>): NestingContext => ({
   objVar: 'obj',
@@ -318,6 +349,7 @@ const createRootContext = (rootSchema?: Record<string, unknown>): NestingContext
   depth: 0,
   hoisted: [],
   rootSchema,
+  sink: ROOT_ERROR_SINK,
 })
 
 /**
@@ -326,23 +358,30 @@ const createRootContext = (rootSchema?: Record<string, unknown>): NestingContext
  * The name is appended to a backtick template-literal path (`` `${_path}/…` ``),
  * so two independent escapings apply. First the JSON Pointer escape (`~`→`~0`,
  * `/`→`~1`, `~` first) so a key containing `/` or `~` reads back unambiguously —
- * matching the paths the runtime-validators interpreter emits. Then a
- * template-literal escape of `` ` ``, `\`, and `$`, so a key like `` a`b `` or
- * `${x}` cannot terminate the literal (a build failure) or inject an
- * interpolation (a runtime `ReferenceError` / arbitrary expression).
+ * matching the paths the runtime-validators interpreter emits.
+ *
+ * Then the source escape, which is JSON's own: it covers the backslash, the
+ * quote, and — the reason to prefer it over a hand-written list — every control
+ * character. A raw carriage return survived the old list into the emitted
+ * literal, where a template normalises `<CR>` to `<LF>`, so the error for a
+ * `"foo\rbar"` property pointed at `"foo\nbar"` — a different property, and one
+ * the same document is free to declare. A raw newline or tab merely broke the
+ * emitted line in half. The two characters JSON does not care about but a
+ * template literal does, `` ` `` and `$`, are escaped after it, so a key like
+ * `` a`b `` or `${x}` can neither terminate the literal nor inject an
+ * interpolation.
  */
-const pointerSegment = (key: string): string =>
-  key
-    .replace(/~/g, '~0')
-    .replace(/\//g, '~1')
-    .replace(/[\\`$]/g, '\\$&')
+const pointerSegment = (key: string): string => {
+  const pointer = key.replace(/~/g, '~0').replace(/\//g, '~1')
+  return JSON.stringify(pointer).slice(1, -1).replace(/[`$]/g, '\\$&')
+}
 
 /**
  * Returns the `patternProperties` regex sources, or an empty array when the
  * schema declares none. The keys of `patternProperties` are the patterns.
  */
 const patternPropertySources = (schema: JSONSchema): string[] => {
-  if (!isSchemaObject(schema) || !('patternProperties' in schema)) return []
+  if (!isSchemaObject(schema) || !declaresKey(schema, 'patternProperties')) return []
   const patterns = schema.patternProperties
   if (typeof patterns !== 'object' || patterns === null) return []
   return Object.keys(patterns)
@@ -415,7 +454,9 @@ type Hoisted = {
  * That is a `TS6133` where a wrong answer is a `TS2304` and a `ReferenceError`,
  * and it is also exactly what was emitted before the test existed.
  */
-const readsObjBinding = (text: string): boolean => /\bobj\b/.test(text)
+const readsBinding = (name: string, text: string): boolean => new RegExp(`\\b${name}\\b`).test(text)
+
+const readsObjBinding = (text: string): boolean => readsBinding('obj', text)
 
 const withHoisted = (hoisted: readonly Hoisted[], text: string): string => {
   // Only the function body is searched. Growing the search to include the kept
@@ -426,12 +467,20 @@ const withHoisted = (hoisted: readonly Hoisted[], text: string): string => {
   // by a substring.
   const kept = hoisted.filter((entry) => text.includes(entry.reference)).map((entry) => entry.declaration)
 
-  // The parameter list is where `input` is *declared*; only a mention outside it
-  // counts as a read. A schema string that happens to contain the word keeps the
-  // parameter as it is, which is the harmless direction — the rename is a tidy-up,
-  // and a missed one costs a lint warning where a wrong one breaks the file.
-  const reads = text.replaceAll('(input: unknown', '(')
-  const body = /\binput\b/.test(reads) ? text : text.replaceAll('(input: unknown', '(_input: unknown')
+  // The rename touches the signature line and nothing else. A `replaceAll` over
+  // the whole text would have rewritten a schema string that happens to spell
+  // `(input: unknown` — data, read as code — and the emitters take care never to
+  // do that. The signature is always the first line of an emitted function, and
+  // whether the parameter is read is a question about everything after it. (When
+  // there is a guard the text carries two signatures, but the wrapper's
+  // `return …Errors(input, _path)` always reads `input`, so nothing is renamed.)
+  // A schema string containing the bare word keeps the parameter as it is, which
+  // is the harmless direction — the rename is a tidy-up, and a missed one costs a
+  // lint warning where a wrong one breaks the file.
+  const firstBreak = text.indexOf('\n')
+  const signature = firstBreak === -1 ? text : text.slice(0, firstBreak)
+  const rest = firstBreak === -1 ? '' : text.slice(firstBreak)
+  const body = /\binput\b/.test(rest) ? text : signature.replace('(input: unknown', '(_input: unknown') + rest
 
   return kept.length > 0 ? `${kept.join('\n')}\n\n${body}` : body
 }
@@ -471,7 +520,7 @@ const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): strin
   return [
     `  for (const _key${d} in ${ctx.objVar}) {`,
     `    if (${unknownTest}${patternGuard}) {`,
-    `      errors.push({ message: 'must NOT have additional properties', path: \`${ctx.pathPrefix}/\${escapePointer(_key${d})}\` })`,
+    `      ${ctx.sink}.push({ message: 'must NOT have additional properties', path: \`${ctx.pathPrefix}/\${escapePointer(_key${d})}\` })`,
     `    }`,
     `  }`,
   ]
@@ -493,7 +542,7 @@ const generateMissingRequiredChecks = (schema: JSONSchema, ctx: NestingContext):
     if (Object.hasOwn(props, key)) continue
     lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
     lines.push(
-      `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+      `    ${ctx.sink}.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
     )
     lines.push(`  }`)
   }
@@ -528,15 +577,15 @@ const generatePropertyChecks = (
     if (isRequired) {
       return [
         `  if (${missingCheck(ctx.objVar, key)}) {`,
-        `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+        `    ${ctx.sink}.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
         `  } else {`,
-        `    errors.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`,
+        `    ${ctx.sink}.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`,
         `  }`,
       ]
     }
     return [
       `  if (${hasOwnCheck(ctx.objVar, key)}) {`,
-      `    errors.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`,
+      `    ${ctx.sink}.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`,
       `  }`,
     ]
   }
@@ -613,8 +662,13 @@ const generateKeywordChecks = (
   // rather than the end of the story.
   if (hasRef(schema)) {
     const vName = validatorName(refToName(schema.$ref, suffix))
-    const delegate = [`  const _r = ${vName}(${raw}, ${path})`, `  if (_r !== true) errors.push(..._r.errors)`]
-    if (presence === '') lines.push(...delegate)
+    const delegate = [`  const _r = ${vName}(${raw}, ${path})`, `  if (_r !== true) ${ctx.sink}.push(..._r.errors)`]
+    // The delegation result gets a block of its own, so two of them can sit in
+    // the same statement list: `{ $ref, allOf: [{ $ref }] }` is a real shape, and
+    // one `const _r` per branch in one scope is a `SyntaxError` in the emitted
+    // file. The presence-gated form has always had its `if` block for this; the
+    // bare form used to rely on there never being a second delegation beside it.
+    if (presence === '') lines.push(`  {`, ...delegate.map((line) => `  ${line}`), `  }`)
     else lines.push(`  if (${raw} !== undefined) {`, ...delegate.map((line) => `  ${line}`), `  }`)
   }
 
@@ -622,7 +676,7 @@ const generateKeywordChecks = (
   const instanceOf = getMjstInstanceOf(schema)
   if (instanceOf) {
     lines.push(`  if (${presence}!(${raw} instanceof ${instanceOf})) {`)
-    lines.push(`    errors.push({ message: 'must be ${instanceOf}', path: ${path} })`)
+    lines.push(`    ${ctx.sink}.push({ message: 'must be ${instanceOf}', path: ${path} })`)
     lines.push(`  }`)
   }
 
@@ -630,7 +684,7 @@ const generateKeywordChecks = (
   const primitive = getMjstPrimitive(schema)
   if (primitive) {
     lines.push(`  if (${presence}typeof ${raw} !== "${primitive}") {`)
-    lines.push(`    errors.push({ message: 'must be ${primitive}', path: ${path} })`)
+    lines.push(`    ${ctx.sink}.push({ message: 'must be ${primitive}', path: ${path} })`)
     lines.push(`  }`)
   }
 
@@ -639,7 +693,7 @@ const generateKeywordChecks = (
     const mismatch = constMismatchCondition(raw, schema.const)
     const msg = JSON.stringify(`must be ${JSON.stringify(schema.const)}`)
     lines.push(`  if (${presence}${mismatch}) {`)
-    lines.push(`    errors.push({ message: ${msg}, path: ${path} })`)
+    lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${path} })`)
     lines.push(`  }`)
   }
 
@@ -647,7 +701,7 @@ const generateKeywordChecks = (
   if (hasEnum(schema)) {
     const label = (schema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
     lines.push(`  if (${presence}!${enumMembershipExpr(schema.enum as unknown[], raw)}) {`)
-    lines.push(`    errors.push({ message: ${JSON.stringify(`must be one of: ${label}`)}, path: ${path} })`)
+    lines.push(`    ${ctx.sink}.push({ message: ${JSON.stringify(`must be one of: ${label}`)}, path: ${path} })`)
     lines.push(`  }`)
   }
 
@@ -662,7 +716,7 @@ const generateKeywordChecks = (
       const wrongType = wrongTypeCondition(raw, t)
       if (wrongType) {
         lines.push(`  if (${presence === '' ? wrongType : `${presence}(${wrongType})`}) {`)
-        lines.push(`    errors.push({ message: 'must be ${typeofString(t)}', path: ${path} })`)
+        lines.push(`    ${ctx.sink}.push({ message: 'must be ${typeofString(t)}', path: ${path} })`)
         lines.push(`  }`)
       }
     }
@@ -683,7 +737,7 @@ const generateKeywordChecks = (
       if (allWrong) {
         const label = typeArray.map((t) => typeofString(t)).join(' or ')
         lines.push(`  if (${presence === '' ? allWrong : `${presence}(${allWrong})`}) {`)
-        lines.push(`    errors.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${path} })`)
+        lines.push(`    ${ctx.sink}.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${path} })`)
         lines.push(`  }`)
       }
     }
@@ -724,7 +778,7 @@ const generatePropertyCheckLines = (
   const parentPath = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
   const missing = [
     `  if (${missingCheck(ctx.objVar, key)}) {`,
-    `    errors.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+    `    ${ctx.sink}.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
   ]
 
   if (!isSchemaObject(propSchema)) {
@@ -786,7 +840,7 @@ const generateConstraintChecks = (
       const re = regexLiteral(propSchema.pattern)
       const msg = JSON.stringify(`must match pattern ${propSchema.pattern}`)
       lines.push(`  if (typeof ${raw} === 'string' && !${re}.test(${raw})) {`)
-      lines.push(`    errors.push({ message: ${msg}, path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${path} })`)
       lines.push(`  }`)
     }
     // Lengths are Unicode *code point* counts, not UTF-16 code units, so both
@@ -802,12 +856,16 @@ const generateConstraintChecks = (
     // `allowUnreachableCode: false`. Nothing to check, so nothing is emitted.
     if (hasMinLength(propSchema) && propSchema.minLength > 0) {
       lines.push(`  if (typeof ${raw} === 'string' && ${minLengthFailExpr(raw, propSchema.minLength)}) {`)
-      lines.push(`    errors.push({ message: 'must have at least ${propSchema.minLength} characters', path: ${path} })`)
+      lines.push(
+        `    ${ctx.sink}.push({ message: 'must have at least ${propSchema.minLength} characters', path: ${path} })`,
+      )
       lines.push(`  }`)
     }
     if (hasMaxLength(propSchema)) {
       lines.push(`  if (typeof ${raw} === 'string' && ${maxLengthFailExpr(raw, propSchema.maxLength)}) {`)
-      lines.push(`    errors.push({ message: 'must have at most ${propSchema.maxLength} characters', path: ${path} })`)
+      lines.push(
+        `    ${ctx.sink}.push({ message: 'must have at most ${propSchema.maxLength} characters', path: ${path} })`,
+      )
       lines.push(`  }`)
     }
   }
@@ -831,29 +889,29 @@ const generateConstraintChecks = (
       const strict = hasStrictExclusiveMinimum(propSchema)
       const rel = strict ? '>' : '>='
       lines.push(`  if (typeof ${raw} === 'number' && !(${raw} ${rel} ${propSchema.minimum})) {`)
-      lines.push(`    errors.push({ message: 'must be ${rel} ${propSchema.minimum}', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must be ${rel} ${propSchema.minimum}', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasMaximum(propSchema)) {
       const strict = hasStrictExclusiveMaximum(propSchema)
       const rel = strict ? '<' : '<='
       lines.push(`  if (typeof ${raw} === 'number' && !(${raw} ${rel} ${propSchema.maximum})) {`)
-      lines.push(`    errors.push({ message: 'must be ${rel} ${propSchema.maximum}', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must be ${rel} ${propSchema.maximum}', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasExclusiveMinimum(propSchema)) {
       lines.push(`  if (typeof ${raw} === 'number' && !(${raw} > ${propSchema.exclusiveMinimum})) {`)
-      lines.push(`    errors.push({ message: 'must be > ${propSchema.exclusiveMinimum}', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must be > ${propSchema.exclusiveMinimum}', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasExclusiveMaximum(propSchema)) {
       lines.push(`  if (typeof ${raw} === 'number' && !(${raw} < ${propSchema.exclusiveMaximum})) {`)
-      lines.push(`    errors.push({ message: 'must be < ${propSchema.exclusiveMaximum}', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must be < ${propSchema.exclusiveMaximum}', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasMultipleOf(propSchema)) {
       lines.push(`  if (typeof ${raw} === 'number' && ${multipleOfFailExpr(raw, propSchema.multipleOf)}) {`)
-      lines.push(`    errors.push({ message: 'must be a multiple of ${propSchema.multipleOf}', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must be a multiple of ${propSchema.multipleOf}', path: ${path} })`)
       lines.push(`  }`)
     }
   }
@@ -895,7 +953,7 @@ const generateConstraintChecks = (
       lines.push(`  if (Array.isArray(${raw})) {`)
       lines.push(`    for (let ${iv} = ${firstTailIndex}; ${iv} < ${raw}.length; ${iv}++) {`)
       lines.push(`      const _ir = ${vName}(${raw}[${iv}], ${itemPath})`)
-      lines.push(`      if (_ir !== true) errors.push(..._ir.errors)`)
+      lines.push(`      if (_ir !== true) ${ctx.sink}.push(..._ir.errors)`)
       lines.push(`    }`)
       lines.push(`  }`)
     } else if (isSchemaObject(itemSchema)) {
@@ -904,7 +962,11 @@ const generateConstraintChecks = (
       if (detail.length > 0) {
         lines.push(`  if (Array.isArray(${raw})) {`)
         lines.push(`    for (let ${iv} = ${firstTailIndex}; ${iv} < ${raw}.length; ${iv}++) {`)
-        lines.push(`      const ${itemVar} = ${raw}[${iv}]`)
+        // A check that looks at nothing — `items: { not: true }`, which rejects
+        // every element without reading it — leaves the binding unread, and an
+        // unread `const` is `TS6133` in the generated file wherever
+        // `noUnusedLocals` is on.
+        if (readsBinding(itemVar, detail.join('\n'))) lines.push(`      const ${itemVar} = ${raw}[${iv}]`)
         lines.push(...detail.map((l) => `    ${l}`))
         lines.push(`    }`)
         lines.push(`  }`)
@@ -912,16 +974,20 @@ const generateConstraintChecks = (
     }
   }
 
-  // Array length / uniqueness. `uniqueItems` dedupes scalar items by a cheap
-  // `JSON.stringify` projection (exact for primitives, what the type guard also
-  // uses), but falls back to the structural `allUnique` helper when items may be
-  // objects/arrays — `JSON.stringify` is key-order sensitive and would disagree
-  // with the interpreter's order-independent deep equality.
+  // Array length / uniqueness. `uniqueItems` dedupes provably-scalar items with a
+  // bare `Set`, whose SameValueZero membership is already JSON Schema's equality
+  // for primitives (`1`, `"1"` and `true` are three entries, and `NaN` matches
+  // itself). The old spelling projected through `JSON.stringify` first, which
+  // costs a string per element and, worse, prints both `NaN` and `null` as
+  // `"null"` — so `[NaN, null]` was reported as a duplicate pair that Ajv and the
+  // interpreter both call unique. Items that may be objects/arrays fall back to
+  // the structural `allUnique` helper, since `JSON.stringify` is key-order
+  // sensitive and a `Set` compares those by reference.
   if (
     hasMinItems(propSchema) ||
     hasMaxItems(propSchema) ||
     (hasUniqueItems(propSchema) && propSchema.uniqueItems === true) ||
-    'contains' in sp ||
+    declaresKey(sp, 'contains') ||
     tuple !== undefined ||
     (tail === false && tuple === undefined)
   ) {
@@ -930,25 +996,25 @@ const generateConstraintChecks = (
     // instead.) Without this the constraint was silently ignored.
     if (tail === false && tuple === undefined) {
       lines.push(`  if (Array.isArray(${raw}) && ${raw}.length > 0) {`)
-      lines.push(`    errors.push({ message: 'must NOT have more than 0 items', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must NOT have more than 0 items', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasMinItems(propSchema)) {
       lines.push(`  if (Array.isArray(${raw}) && ${raw}.length < ${propSchema.minItems}) {`)
-      lines.push(`    errors.push({ message: 'must have at least ${propSchema.minItems} items', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must have at least ${propSchema.minItems} items', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasMaxItems(propSchema)) {
       lines.push(`  if (Array.isArray(${raw}) && ${raw}.length > ${propSchema.maxItems}) {`)
-      lines.push(`    errors.push({ message: 'must have at most ${propSchema.maxItems} items', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must have at most ${propSchema.maxItems} items', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasUniqueItems(propSchema) && propSchema.uniqueItems === true) {
       const dupCond = arrayItemsAreScalarOnly(sp)
-        ? `new Set((${raw} as unknown[]).map((_u) => JSON.stringify(_u))).size !== ${raw}.length`
+        ? `new Set(${raw} as unknown[]).size !== ${raw}.length`
         : `!allUnique(${raw} as unknown[])`
       lines.push(`  if (Array.isArray(${raw}) && ${dupCond}) {`)
-      lines.push(`    errors.push({ message: 'must NOT have duplicate items', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must NOT have duplicate items', path: ${path} })`)
       lines.push(`  }`)
     }
 
@@ -957,17 +1023,64 @@ const generateConstraintChecks = (
     // empty) satisfy the lower bound. A boolean `contains` counts too:
     // `contains: true` matches every item (so only an empty array fails) and
     // `contains: false` matches none (so every array fails).
-    if ('contains' in sp) {
-      const min = typeof sp['minContains'] === 'number' ? sp['minContains'] : 1
-      const max = typeof sp['maxContains'] === 'number' ? (sp['maxContains'] as number) : undefined
-      const matchExpr = generateMatchesExpr('_c', sp['contains'] as JSONSchema, suffix, ctx)
-      const bound = max !== undefined ? `_cn < ${min} || _cn > ${max}` : `_cn < ${min}`
-      lines.push(`  if (Array.isArray(${raw})) {`)
-      lines.push(`    const _cn = (${raw} as unknown[]).filter((_c) => ${matchExpr}).length`)
-      lines.push(`    if (${bound}) {`)
-      lines.push(`      errors.push({ message: 'array does not contain the required matching items', path: ${path} })`)
-      lines.push(`    }`)
-      lines.push(`  }`)
+    //
+    // The count is taken by index rather than by `filter`, for two reasons.
+    // `filter` *skips holes*, so a sparse `[, "a"]` came up one element short of
+    // what the interpreter counts — it reads the hole as `undefined`, and against
+    // `contains: { not: { type: "string" } }` that hole is the matching item.
+    // (`booleanArrayExpr` materialises with `Array.from` over the same question.)
+    // And `filter` builds a whole array to measure its length, on every call, for
+    // a number the loop already has; with no upper bound the loop can stop at the
+    // lower one rather than walk the rest.
+    if (declaresKey(sp, 'contains')) {
+      const declaredMin = readKey(sp, 'minContains')
+      const declaredMax = readKey(sp, 'maxContains')
+      const min = typeof declaredMin === 'number' ? declaredMin : 1
+      const max = typeof declaredMax === 'number' ? declaredMax : undefined
+      // `minContains: 0` with no `maxContains` is satisfied by every array, empty
+      // included — so there is nothing to check, where `_cn < 0` was a test no
+      // count can fail, paid for on every call.
+      if (min > 0 || max !== undefined) {
+        const matchExpr = generateMatchesExpr('_c', readKey(sp, 'contains') as JSONSchema, suffix, ctx, true)
+        const report = `${ctx.sink}.push({ message: 'array does not contain the required matching items', path: ${path} })`
+        // A `contains` whose match is decidable needs no loop, and emitting one
+        // anyway left `const _c` read by nothing — `TS6133` in the generated file
+        // for any consumer with `noUnusedLocals`. `contains: true` matches every
+        // element, so the count *is* the length; `contains: false` matches none,
+        // so the count is zero and only the lower bound can fail.
+        if (matchExpr === 'true') {
+          const bound =
+            max !== undefined ? `${raw}.length < ${min} || ${raw}.length > ${max}` : `${raw}.length < ${min}`
+          lines.push(`  if (Array.isArray(${raw}) && (${bound})) {`)
+          lines.push(`    ${report}`)
+          lines.push(`  }`)
+        } else if (matchExpr === 'false') {
+          // Nothing matches, so the count is zero for every array — and whether
+          // zero is in bounds is decided here rather than emitted. It usually is
+          // not (`minContains` defaults to 1), but `{ contains: false,
+          // minContains: 0 }` is satisfied by every array, empty included.
+          if (0 < min || (max !== undefined && 0 > max)) {
+            lines.push(`  if (Array.isArray(${raw})) {`)
+            lines.push(`    ${report}`)
+            lines.push(`  }`)
+          }
+        } else {
+          const bound = max !== undefined ? `_cn < ${min} || _cn > ${max}` : `_cn < ${min}`
+          lines.push(`  if (Array.isArray(${raw})) {`)
+          lines.push(`    const _ca = ${raw} as unknown[]`)
+          lines.push(`    let _cn = 0`)
+          lines.push(`    for (let _ci = 0; _ci < _ca.length; _ci++) {`)
+          lines.push(`      const _c = _ca[_ci]`)
+          lines.push(`      if (${matchExpr}) _cn++`)
+          // Only the lower bound is in play, so the answer stops changing here.
+          if (max === undefined) lines.push(`      if (_cn >= ${min}) break`)
+          lines.push(`    }`)
+          lines.push(`    if (${bound}) {`)
+          lines.push(`      ${report}`)
+          lines.push(`    }`)
+          lines.push(`  }`)
+        }
+      }
     }
 
     // Tuple positions — each validated against its own subschema; a closed tail
@@ -982,13 +1095,10 @@ const generateConstraintChecks = (
         // `Array.from` for exactly this, so leaving the tuple positions guarded
         // put the two halves of the same package on opposite answers.
         //
-        // This reaches the position's own leaf checks only. A combinator beneath
-        // it re-adds the guard, because {@link generateCombinatorChecks} does not
-        // thread `required` into its branches — so `prefixItems: [{ allOf: [...] }]`
-        // still passes a hole. Threading it is a wider change than the gap earns:
-        // `JSON.parse` cannot produce a hole or an explicit `undefined`, and the
-        // combinators are the part of the emitter most sensitive to a change in
-        // presence semantics.
+        // A combinator beneath the position answers the same way:
+        // {@link generateCombinatorChecks} judges its branches as present values
+        // too, so `prefixItems: [{ allOf: [...] }]` no longer waves a hole through
+        // the position its siblings reject.
         const itemChecks = generateValueChecks(
           '',
           `${raw}[${i}]`,
@@ -1006,7 +1116,9 @@ const generateConstraintChecks = (
       }
       if (tailIsClosed) {
         lines.push(`    if (${raw}.length > ${tuple.length}) {`)
-        lines.push(`      errors.push({ message: 'must NOT have more than ${tuple.length} items', path: ${path} })`)
+        lines.push(
+          `      ${ctx.sink}.push({ message: 'must NOT have more than ${tuple.length} items', path: ${path} })`,
+        )
         lines.push(`    }`)
       }
       lines.push(`  }`)
@@ -1031,9 +1143,9 @@ const generateConstraintChecks = (
  * `!== undefined`-guarded (an absent optional value is valid); pass
  * `required = true` for values that must be present (array items — a sparse hole
  * reads as `undefined` and must fail), which drops that guard for the leaf checks
- * — a combinator branch beneath re-adds it, a documented gap. `_key` is unused
- * (the location is fully encoded by `path`) but kept for positional-call parity
- * with the combinator generators.
+ * and, through {@link generateCombinatorChecks}, for the branches of any
+ * combinator beneath them. `_key` is unused (the location is fully encoded by
+ * `path`) but kept for positional-call parity with the combinator generators.
  */
 const generateValueChecks = (
   key: string,
@@ -1070,8 +1182,15 @@ const generateValueCheckLines = (
   // all and the branch that should have failed the instance passed it. `true`
   // (and a bare `{}`) accepts everything and falls through to the `[]` below.
   if (propSchema === false) {
-    const report = `errors.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`
-    if (required) return [`  ${report}`]
+    const report = `${ctx.sink}.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`
+    // Wrapped in a block, never emitted bare. The report starts with `(` — the
+    // sink is `(errors ??= [])` — and the emitted code carries no semicolons, so
+    // after a line ending in an expression ASI does not break the two apart: a
+    // `prefixItems: [false]` fused its report onto the `const _item0 = _root[_i0]`
+    // in front of it and the generated file threw `_root[_i0] is not a function`
+    // instead of reporting anything. The `!== undefined` form has always had its
+    // `if` block for the same reason.
+    if (required) return [`  {`, `    ${report}`, `  }`]
     return [`  if (${raw} !== undefined) {`, `    ${report}`, `  }`]
   }
   if (!isSchemaObject(propSchema)) return []
@@ -1093,6 +1212,7 @@ const generateValueCheckLines = (
     depth: ctx.depth + 1,
     hoisted: ctx.hoisted,
     rootSchema: ctx.rootSchema,
+    sink: ctx.sink,
   }
 
   lines.push(...generateKeywordChecks('', raw, path, propSchema, suffix, valueCtx, presence))
@@ -1113,8 +1233,21 @@ const NARROWABLE_REFERENCE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\[[A-Za-z_$
  * checks but collects their errors into a throwaway local buffer, so the same
  * logic that produces error messages also answers the yes/no question the
  * combinators (`anyOf`/`oneOf`/`not`/`if`) and `contains` need.
+ *
+ * `required` says the value is there to be judged, so its leaf checks drop the
+ * `!== undefined` guard an optional value wears. `contains` passes it: the loop
+ * hands over an array element, and a sparse hole reads as `undefined`, which an
+ * optional-mode check waves through — every branch matched, so `[, ,]` "contained"
+ * a string. The combinators leave it `false`, which is what their callers have
+ * always gated on.
  */
-const generateMatchesExpr = (raw: string, sub: JSONSchema, suffix: string, ctx: NestingContext): string => {
+const generateMatchesExpr = (
+  raw: string,
+  sub: JSONSchema,
+  suffix: string,
+  ctx: NestingContext,
+  required = false,
+): string => {
   if (sub === true) return 'true'
   if (sub === false) return 'false'
   if (!isSchemaObject(sub)) return 'true'
@@ -1125,12 +1258,12 @@ const generateMatchesExpr = (raw: string, sub: JSONSchema, suffix: string, ctx: 
   // constrained check behind it emitted `.length` on `unknown` and the generated
   // file did not compile. The IIFE is somewhere to put a local, so bind it there.
   const value = NARROWABLE_REFERENCE.test(raw) ? raw : `_mv${ctx.depth}`
-  const checks = generateValueChecks('', value, '`${_path}`', sub, suffix, ctx)
+  // The branch's checks report into the IIFE-local buffer rather than the
+  // validator's `errors`, so the expression stays a pure yes/no answer. Each
+  // nested match IIFE declares its own `_m`, so the innermost one always wins.
+  const checks = generateValueChecks('', value, '`${_path}`', sub, suffix, { ...ctx, sink: MATCH_ERROR_SINK }, required)
   if (checks.length === 0) return 'true'
-  // The checks push to `errors`; redirect them to the IIFE-local `_m`. The outer
-  // validator's `errors.push` → `(errors ??= [])` rewrite never sees these (they
-  // are already `_m.push`), and nested match IIFEs each shadow their own `_m`.
-  const body = checks.join('\n').replaceAll('errors.push(', '_m.push(')
+  const body = checks.join('\n')
   const binding = value === raw ? '' : `const ${value}: unknown = ${raw}\n`
   return `((): boolean => { const _m: ValidationError[] = []\n${binding}${body}\n    return _m.length === 0 })()`
 }
@@ -1144,7 +1277,13 @@ const generateMatchesExpr = (raw: string, sub: JSONSchema, suffix: string, ctx: 
 const unevaluatedMatcher =
   (suffix: string, ctx: NestingContext): UnevaluatedMatchFn =>
   (accessor, schema, depth) =>
-    generateMatchesExpr(accessor, schema, suffix, { ...ctx, depth: ctx.depth + depth + 1 })
+    // Always `required`: every accessor handed to this matcher is a value the
+    // surrounding test has already established is there — the whole instance
+    // inside its type guard, or a key/index the sweep is walking. In optional
+    // mode a property whose value is `undefined` matched every branch, so
+    // `{ a: undefined }` satisfied an `unevaluatedProperties: { type: 'string' }`
+    // that Ajv and the interpreter both reject.
+    generateMatchesExpr(accessor, schema, suffix, { ...ctx, depth: ctx.depth + depth + 1 }, true)
 
 /**
  * Emits `unevaluatedProperties` / `unevaluatedItems` for one schema node.
@@ -1175,7 +1314,7 @@ const generateUnevaluatedChecks = (
 ): string[] => {
   if (!isSchemaObject(schema)) return []
   const s = schema as Record<string, unknown>
-  if (!('unevaluatedProperties' in s) && !('unevaluatedItems' in s)) return []
+  if (!declaresKey(s, 'unevaluatedProperties') && !declaresKey(s, 'unevaluatedItems')) return []
 
   const match = unevaluatedMatcher(suffix, ctx)
   const lines: string[] = []
@@ -1186,7 +1325,7 @@ const generateUnevaluatedChecks = (
     lines.push(`  if (typeof ${raw} === 'object' && ${raw} !== null && !Array.isArray(${raw})) {`)
     for (const statement of properties.setup) lines.push(`    ${statement}`)
     lines.push(`    if (!(${properties.expr})) {`)
-    lines.push(`      errors.push({ message: 'must NOT have unevaluated properties', path: ${path} })`)
+    lines.push(`      ${ctx.sink}.push({ message: 'must NOT have unevaluated properties', path: ${path} })`)
     lines.push(`    }`)
     lines.push(`  }`)
   }
@@ -1197,7 +1336,7 @@ const generateUnevaluatedChecks = (
     lines.push(`  if (Array.isArray(${raw})) {`)
     for (const statement of items.setup) lines.push(`    ${statement}`)
     lines.push(`    if (!(${items.expr})) {`)
-    lines.push(`      errors.push({ message: 'must NOT have unevaluated items', path: ${path} })`)
+    lines.push(`      ${ctx.sink}.push({ message: 'must NOT have unevaluated items', path: ${path} })`)
     lines.push(`    }`)
     lines.push(`  }`)
   }
@@ -1209,6 +1348,15 @@ const generateUnevaluatedChecks = (
  * Emits the combinator keywords (`allOf`, `anyOf`, `oneOf`, `not`,
  * `if`/`then`/`else`). `allOf` surfaces each branch's errors directly; the others
  * evaluate branch membership as a boolean via {@link generateMatchesExpr}.
+ *
+ * Every branch is judged in `required` mode — the value is there. That is true at
+ * each call site: the caller either knows the value is present, or has already
+ * wrapped these lines in `if (value !== undefined)`. Leaving the branches in
+ * optional mode meant a value that *was* `undefined` — an array hole, which reads
+ * as one — satisfied every leaf check inside them, so `prefixItems: [{ allOf: […] }]`
+ * waved a hole through and a `contains: { not: { type: 'string' } }` counted one as
+ * a string. The interpreter and Ajv both read a hole as a value that has to answer
+ * for itself.
  */
 const generateCombinatorChecks = (
   key: string,
@@ -1222,11 +1370,11 @@ const generateCombinatorChecks = (
   const lines: string[] = []
 
   if (hasAllOf(schema)) {
-    for (const branch of schema.allOf) lines.push(...generateValueChecks(key, raw, path, branch, suffix, ctx))
+    for (const branch of schema.allOf) lines.push(...generateValueChecks(key, raw, path, branch, suffix, ctx, true))
   }
 
   if (hasAnyOf(schema) && schema.anyOf.length > 0) {
-    const conds = schema.anyOf.map((b) => generateMatchesExpr(raw, b, suffix, ctx))
+    const conds = schema.anyOf.map((b) => generateMatchesExpr(raw, b, suffix, ctx, true))
     // A branch that matches everything (`true`, `{}`, an annotation-only schema)
     // makes the whole `anyOf` vacuous. Emitting it anyway produced
     // `if (!(… || true))`, whose body TypeScript knows is unreachable — 58
@@ -1234,21 +1382,21 @@ const generateCombinatorChecks = (
     // `allowUnreachableCode: false`.
     if (!conds.includes('true')) {
       lines.push(`  if (!(${conds.join(' || ')})) {`)
-      lines.push(`    errors.push({ message: 'must match a schema in anyOf', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must match a schema in anyOf', path: ${path} })`)
       lines.push(`  }`)
     }
   }
 
   if (hasOneOf(schema) && schema.oneOf.length > 0) {
-    const conds = schema.oneOf.map((b) => `(${generateMatchesExpr(raw, b, suffix, ctx)} ? 1 : 0)`)
+    const conds = schema.oneOf.map((b) => `(${generateMatchesExpr(raw, b, suffix, ctx, true)} ? 1 : 0)`)
     lines.push(`  if ((${conds.join(' + ')}) !== 1) {`)
-    lines.push(`    errors.push({ message: 'must match exactly one schema in oneOf', path: ${path} })`)
+    lines.push(`    ${ctx.sink}.push({ message: 'must match exactly one schema in oneOf', path: ${path} })`)
     lines.push(`  }`)
   }
 
-  const not = (schema as Record<string, unknown>)['not']
+  const not = readKey(schema as Record<string, unknown>, 'not')
   if (not !== undefined && (isSchemaObject(not as JSONSchema) || typeof not === 'boolean')) {
-    const cond = generateMatchesExpr(raw, not as JSONSchema, suffix, ctx)
+    const cond = generateMatchesExpr(raw, not as JSONSchema, suffix, ctx, true)
     // `not: false` matches nothing, so the instance always passes and the check
     // is dead code — `if (false) { … }`, which TypeScript reports. The
     // always-matching case is NOT folded: `if (true) { … }` has a reachable body,
@@ -1260,24 +1408,24 @@ const generateCombinatorChecks = (
     // accepting an instance the schema forbids.
     if (cond !== 'false') {
       lines.push(`  if (${cond}) {`)
-      lines.push(`    errors.push({ message: 'must NOT match the schema in not', path: ${path} })`)
+      lines.push(`    ${ctx.sink}.push({ message: 'must NOT match the schema in not', path: ${path} })`)
       lines.push(`  }`)
     }
   }
 
-  const ifSchema = (schema as Record<string, unknown>)['if']
+  const ifSchema = readKey(schema as Record<string, unknown>, 'if')
   if (ifSchema !== undefined && (isSchemaObject(ifSchema as JSONSchema) || typeof ifSchema === 'boolean')) {
-    const thenSchema = (schema as Record<string, unknown>)['then']
-    const elseSchema = (schema as Record<string, unknown>)['else']
+    const thenSchema = readKey(schema as Record<string, unknown>, 'then')
+    const elseSchema = readKey(schema as Record<string, unknown>, 'else')
     const thenLines =
-      thenSchema !== undefined ? generateValueChecks(key, raw, path, thenSchema as JSONSchema, suffix, ctx) : []
+      thenSchema !== undefined ? generateValueChecks(key, raw, path, thenSchema as JSONSchema, suffix, ctx, true) : []
     const elseLines =
-      elseSchema !== undefined ? generateValueChecks(key, raw, path, elseSchema as JSONSchema, suffix, ctx) : []
+      elseSchema !== undefined ? generateValueChecks(key, raw, path, elseSchema as JSONSchema, suffix, ctx, true) : []
     if (thenLines.length > 0 || elseLines.length > 0) {
       // A statically-known `if` picks one arm, and emitting the other left it
       // provably unreachable. `if: true` / `if: {}` always takes `then`;
       // `if: false` always takes `else`.
-      const cond = generateMatchesExpr(raw, ifSchema as JSONSchema, suffix, ctx)
+      const cond = generateMatchesExpr(raw, ifSchema as JSONSchema, suffix, ctx, true)
       if (cond === 'true') {
         lines.push(...thenLines)
       } else if (cond === 'false') {
@@ -1308,59 +1456,80 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
   if (!isSchemaObject(schema)) return []
   const obj = ctx.objVar
   const d = ctx.depth
-  const lines: string[] = []
 
   const patternsRecord =
-    'patternProperties' in schema && typeof schema.patternProperties === 'object' && schema.patternProperties !== null
+    declaresKey(schema, 'patternProperties') &&
+    typeof schema.patternProperties === 'object' &&
+    schema.patternProperties !== null
       ? (schema.patternProperties as Record<string, JSONSchema>)
       : {}
-  const patternEntries = Object.entries(patternsRecord)
+  const patterns = Object.keys(patternsRecord)
 
-  for (const [pattern, sub] of patternEntries) {
-    const re = regexLiteral(pattern)
-    const kv = `_pk${d}`
-    const valueChecks = generateValueChecks(
+  // One key variable, because there is one sweep. Every one of these keywords
+  // asks its question of the same keys, and each used to open a `for…in` of its
+  // own: three patterns beside an `additionalProperties` schema walked the object
+  // four times over, for a body that is a handful of `if`s.
+  const kv = `_pk${d}`
+  const valueChecksFor = (sub: JSONSchema): string[] =>
+    // `required` mode: the key came out of the loop over the object, so its value
+    // is there to be judged. Optional mode wrote `obj[_pk0] !== undefined &&` in
+    // front of every check, and a property whose value *is* `undefined` then
+    // satisfied all of them — `{ a: undefined }` passed a
+    // `patternProperties: { "^a": { type: "string" } }` that Ajv and the
+    // interpreter both reject.
+    generateValueChecks(
       `\${${kv}}`,
       `${obj}[${kv}]`,
       `\`${ctx.pathPrefix}/\${escapePointer(${kv})}\``,
       sub,
       suffix,
       ctx,
+      true,
     )
+
+  const body: string[] = []
+
+  for (const [pattern, sub] of Object.entries(patternsRecord)) {
+    const valueChecks = valueChecksFor(sub)
     if (valueChecks.length === 0) continue
-    lines.push(`  for (const ${kv} in ${obj}) {`)
-    lines.push(`    if (${re}.test(${kv})) {`)
-    lines.push(...valueChecks.map((line) => `    ${line}`))
-    lines.push(`    }`)
-    lines.push(`  }`)
+    body.push(`    if (${regexLiteral(pattern)}.test(${kv})) {`)
+    body.push(...valueChecks.map((line) => `    ${line}`))
+    body.push(`    }`)
   }
 
   // Schema-form `additionalProperties` validates every key reached by neither a
-  // declared property nor any `patternProperties` regex.
+  // declared property nor any `patternProperties` regex. It goes last in the
+  // body, which is what lets its guards stay `continue`s: there is nothing after
+  // them to skip.
   if (hasAdditionalProperties(schema) && isSchemaObject(schema.additionalProperties)) {
-    const additional = schema.additionalProperties
-    const kv = `_ak${d}`
-    const valueChecks = generateValueChecks(
-      `\${${kv}}`,
-      `${obj}[${kv}]`,
-      `\`${ctx.pathPrefix}/\${escapePointer(${kv})}\``,
-      additional,
-      suffix,
-      ctx,
-    )
+    const valueChecks = valueChecksFor(schema.additionalProperties)
     if (valueChecks.length > 0) {
       const known = Object.keys(hasProperties(schema) ? schema.properties : {})
-      lines.push(`  for (const ${kv} in ${obj}) {`)
-      if (known.length > 0) lines.push(`    if (${JSON.stringify(known)}.includes(${kv})) continue`)
-      for (const pattern of Object.keys(patternsRecord)) {
-        lines.push(`    if (${regexLiteral(pattern)}.test(${kv})) continue`)
+      if (known.length > 0) {
+        // The declared-key test comes from the shared `unknownKeyCheck`, the same
+        // emitter the `additionalProperties: false` sweep uses: inline `===`
+        // comparisons for a normal key count, a hoisted `Set` past the point
+        // where they stop paying. The array literal that used to stand here was
+        // rebuilt on *every key of every object validated*, which is the one
+        // place in this loop where an allocation is not free.
+        const check = unknownKeyCheck(known, `_knownKeys${ctx.hoisted.length}`)
+        const knownTest = check.isKnown(kv)
+        for (const declaration of check.declarations) {
+          ctx.hoisted.push({ declaration, reference: knownTest })
+        }
+        body.push(`    if (${knownTest}) continue`)
       }
-      lines.push(...valueChecks.map((line) => `    ${line}`))
-      lines.push(`  }`)
+      for (const pattern of patterns) {
+        body.push(`    if (${regexLiteral(pattern)}.test(${kv})) continue`)
+      }
+      // One level of indent, not two: the checks come in carrying their own, and
+      // the `continue` guards above are the loop body's real depth.
+      body.push(...valueChecks.map((line) => `  ${line}`))
     }
   }
 
-  return lines
+  if (body.length === 0) return []
+  return [`  for (const ${kv} in ${obj}) {`, ...body, `  }`]
 }
 
 /**
@@ -1388,6 +1557,7 @@ const generateInlineObjectChecks = (
     depth: ctx.depth + 1,
     hoisted: ctx.hoisted,
     rootSchema: ctx.rootSchema,
+    sink: ctx.sink,
   }
 
   const required = new Set(hasRequired(propSchema) ? propSchema.required : [])
@@ -1443,6 +1613,7 @@ const generatePropertyNameChecks = (nameSchema: JSONSchema, suffix: string, ctx:
     depth: ctx.depth + 1,
     hoisted: ctx.hoisted,
     rootSchema: ctx.rootSchema,
+    sink: ctx.sink,
   }
   const checks = generateValueChecks('', '_name', at, nameSchema, suffix, nameCtx, true)
   if (checks.length === 0) return []
@@ -1464,7 +1635,7 @@ const generateDependentRequiredChecks = (schema: JSONSchema, ctx: NestingContext
     for (const dep of deps) {
       const msg = JSON.stringify(`must have property '${dep}' when '${trigger}' is present`)
       lines.push(`  if (${hasOwnCheck(obj, trigger)} && ${missingCheck(obj, dep)}) {`)
-      lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
+      lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${at} })`)
       lines.push(`  }`)
     }
   }
@@ -1496,7 +1667,7 @@ const dependentSelfBinding = (objVar: string, depth: number): { name: string; de
  */
 const generateDependentSchemasChecks = (schema: JSONSchema, suffix: string, ctx: NestingContext): string[] => {
   if (!isSchemaObject(schema)) return []
-  const dep = (schema as Record<string, unknown>)['dependentSchemas']
+  const dep = readKey(schema as Record<string, unknown>, 'dependentSchemas')
   if (typeof dep !== 'object' || dep === null || Array.isArray(dep)) return []
 
   const obj = ctx.objVar
@@ -1509,7 +1680,7 @@ const generateDependentSchemasChecks = (schema: JSONSchema, suffix: string, ctx:
     if (sub === false) {
       const msg = JSON.stringify(`must NOT have property '${trigger}'`)
       lines.push(`  if (${hasOwnCheck(obj, trigger)}) {`)
-      lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
+      lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${at} })`)
       lines.push(`  }`)
       continue
     }
@@ -1537,7 +1708,7 @@ const generateDependentSchemasChecks = (schema: JSONSchema, suffix: string, ctx:
  */
 const generateDependenciesChecks = (schema: JSONSchema, suffix: string, ctx: NestingContext): string[] => {
   if (!isSchemaObject(schema)) return []
-  const dep = (schema as Record<string, unknown>)['dependencies']
+  const dep = readKey(schema as Record<string, unknown>, 'dependencies')
   if (typeof dep !== 'object' || dep === null || Array.isArray(dep)) return []
 
   const obj = ctx.objVar
@@ -1552,7 +1723,7 @@ const generateDependenciesChecks = (schema: JSONSchema, suffix: string, ctx: Nes
         if (typeof key !== 'string') continue
         const msg = JSON.stringify(`must have property '${key}' when '${trigger}' is present`)
         lines.push(`  if (${hasOwnCheck(obj, trigger)} && ${missingCheck(obj, key)}) {`)
-        lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
+        lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${at} })`)
         lines.push(`  }`)
       }
       continue
@@ -1562,7 +1733,7 @@ const generateDependenciesChecks = (schema: JSONSchema, suffix: string, ctx: Nes
     if (value === false) {
       const msg = JSON.stringify(`must NOT have property '${trigger}'`)
       lines.push(`  if (${hasOwnCheck(obj, trigger)}) {`)
-      lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
+      lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${at} })`)
       lines.push(`  }`)
       continue
     }
@@ -1598,13 +1769,13 @@ const generateMinMaxPropertiesChecks = (schema: JSONSchema, ctx: NestingContext)
   if (hasMin) {
     const msg = JSON.stringify(`must have at least ${schema.minProperties} properties`)
     lines.push(`  if (${count} < ${schema.minProperties}) {`)
-    lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
+    lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${at} })`)
     lines.push(`  }`)
   }
   if (hasMax) {
     const msg = JSON.stringify(`must have at most ${schema.maxProperties} properties`)
     lines.push(`  if (${count} > ${schema.maxProperties}) {`)
-    lines.push(`    errors.push({ message: ${msg}, path: ${at} })`)
+    lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${at} })`)
     lines.push(`  }`)
   }
   return lines
@@ -1627,7 +1798,9 @@ const generateMinMaxPropertiesChecks = (schema: JSONSchema, ctx: NestingContext)
  */
 const hasObjectLevelCombinator = (schema: JSONSchema): boolean => {
   if (!isSchemaObject(schema)) return false
-  return hasAllOf(schema) || hasAnyOf(schema) || hasOneOf(schema) || 'not' in schema || 'if' in schema
+  return (
+    hasAllOf(schema) || hasAnyOf(schema) || hasOneOf(schema) || declaresKey(schema, 'not') || declaresKey(schema, 'if')
+  )
 }
 
 /**
@@ -1643,8 +1816,8 @@ const carriesUnevaluated = (schema: JSONSchema): boolean => {
   if (!isSchemaObject(schema)) return false
   const s = schema as Record<string, unknown>
   return (
-    ('unevaluatedProperties' in s && s['unevaluatedProperties'] !== true) ||
-    ('unevaluatedItems' in s && s['unevaluatedItems'] !== true)
+    (declaresKey(s, 'unevaluatedProperties') && s['unevaluatedProperties'] !== true) ||
+    (declaresKey(s, 'unevaluatedItems') && s['unevaluatedItems'] !== true)
   )
 }
 
@@ -1663,8 +1836,8 @@ const guardPropConditions = (key: string, propSchema: JSONSchema, objAcc: string
     hasOneOf(propSchema) ||
     hasAnyOf(propSchema) ||
     hasAllOf(propSchema) ||
-    'not' in propSchema ||
-    'if' in propSchema ||
+    declaresKey(propSchema, 'not') ||
+    declaresKey(propSchema, 'if') ||
     getMjstInstanceOf(propSchema) !== undefined ||
     getMjstPrimitive(propSchema) !== undefined ||
     hasPattern(propSchema) ||
@@ -1756,9 +1929,9 @@ const arrayRejectedByRequiredProp = (
  */
 const guardObjectConditions = (schema: JSONSchema, raw: string, objAcc: string): string[] | null => {
   if (!isObjectSchema(schema)) return null
-  if (hasDependentRequired(schema) || hasPropertyNames(schema) || 'dependentSchemas' in schema) return null
-  if (hasMinProperties(schema) || hasMaxProperties(schema) || 'dependencies' in schema) return null
-  if (isSchemaObject(schema) && 'patternProperties' in schema) return null
+  if (hasDependentRequired(schema) || hasPropertyNames(schema) || declaresKey(schema, 'dependentSchemas')) return null
+  if (hasMinProperties(schema) || hasMaxProperties(schema) || declaresKey(schema, 'dependencies')) return null
+  if (isSchemaObject(schema) && declaresKey(schema, 'patternProperties')) return null
   // Object-level combinators are enforced by the slow path but cannot be mirrored
   // by this flat guard, so bail — otherwise the guard's early `return true` would
   // accept documents the combinators reject.
@@ -1875,19 +2048,19 @@ const generateObjectValidator = (
   // at runtime and is the same trick `dependentSelfBinding` plays.
   const objectCombinators = generateCombinatorChecks('', '_root', '`${_path}`', schema, suffix, ctx)
   if (objectCombinators.length > 0) {
-    propertyLines.push(`  const _root: unknown = input`)
+    // Only when something reads it: a decidable combinator (`not: true` rejects
+    // every instance without looking at one) emits its report and never touches
+    // the binding, and an unread `const` is `TS6133` in the generated file.
+    if (readsBinding('_root', objectCombinators.join('\n'))) propertyLines.push(`  const _root: unknown = input`)
     propertyLines.push(...objectCombinators)
   }
 
   // Lazily allocate the errors array so a valid input never builds one — the same
-  // allocation-free happy path the runtime interpreter uses. Each emitted
-  // `errors.push(...)` becomes a create-on-first-use push; nothing is allocated
-  // until the first actual error, so the common valid case stays alloc-free even
-  // when the schema is too rich for the boolean guard.
-  const body = (propertyLines.length > 0 ? '\n' + propertyLines.join('\n') + '\n' : '').replaceAll(
-    'errors.push(',
-    '(errors ??= []).push(',
-  )
+  // allocation-free happy path the runtime interpreter uses. Every emitted report
+  // is already a create-on-first-use push (see {@link ROOT_ERROR_SINK}), so
+  // nothing is allocated until the first actual error and the common valid case
+  // stays alloc-free even when the schema is too rich for the boolean guard.
+  const body = propertyLines.length > 0 ? '\n' + propertyLines.join('\n') + '\n' : ''
 
   // A pure boolean guard for the happy path: when every property is present and
   // well-typed (and, for strict objects, there are no extras) it returns true
@@ -2025,17 +2198,17 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string, narrowable = true): st
     hasRef(schema) ||
     hasConst(schema) ||
     hasOneOf(schema) ||
-    'anyOf' in schema ||
-    'allOf' in schema ||
-    'not' in schema ||
-    'if' in schema ||
-    'contains' in schema ||
-    'prefixItems' in schema ||
+    declaresKey(schema, 'anyOf') ||
+    declaresKey(schema, 'allOf') ||
+    declaresKey(schema, 'not') ||
+    declaresKey(schema, 'if') ||
+    declaresKey(schema, 'contains') ||
+    declaresKey(schema, 'prefixItems') ||
     // A draft-07 tuple: the fixed positions live in an *array* `items` and the
     // tail in `additionalItems`. Neither is expressible flat, and reading past
     // them let the guard accept tuples `validateX` rejects.
-    Array.isArray((schema as Record<string, unknown>)['items']) ||
-    'additionalItems' in schema ||
+    Array.isArray(readKey(schema as Record<string, unknown>, 'items')) ||
+    declaresKey(schema, 'additionalItems') ||
     carriesUnevaluated(schema) ||
     getMjstInstanceOf(schema) !== undefined ||
     getMjstPrimitive(schema) !== undefined
@@ -2143,10 +2316,11 @@ const booleanArrayExpr = (schema: JSONSchema, acc: string, narrowable = true): s
   if (hasMaxItems(schema)) parts.push(`${arr}.length <= ${schema.maxItems}`)
   if (hasUniqueItems(schema) && schema.uniqueItems === true) {
     // Same scalar-vs-structural split as the validator, so the guard's verdict
-    // matches the slow path's for object items in a reordered key order.
+    // matches the slow path's — for object items in a reordered key order, and
+    // for the `NaN`/`null` pair a `JSON.stringify` projection used to conflate.
     parts.push(
       arrayItemsAreScalarOnly(schema as Record<string, unknown>)
-        ? `new Set((${acc} as unknown[]).map((_u) => JSON.stringify(_u))).size === ${arr}.length`
+        ? `new Set(${acc} as unknown[]).size === ${arr}.length`
         : `allUnique(${acc} as unknown[])`,
     )
   }
@@ -2159,7 +2333,7 @@ const booleanArrayExpr = (schema: JSONSchema, acc: string, narrowable = true): s
   // `{ "type": "array", "items": false }` while `validateX` rejected it. (A tuple
   // never reaches here — `prefixItems` and an array `items` both bail in
   // {@link booleanLeafExpr}.)
-  if ((schema as Record<string, unknown>)['items'] === false) return `${base} && ${arr}.length === 0`
+  if (readKey(schema as Record<string, unknown>, 'items') === false) return `${base} && ${arr}.length === 0`
   // `items: true`, and an absent `items`, constrain nothing.
   if (!hasItems(schema)) return base
   const items = schema.items
@@ -2189,9 +2363,9 @@ const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string, nar
   if (hasRef(schema) || hasConst(schema) || hasEnum(schema)) return null
   if (getMjstInstanceOf(schema) !== undefined || getMjstPrimitive(schema) !== undefined) return null
   // These need per-key loops or cross-references the flat form can't express.
-  if (hasDependentRequired(schema) || hasPropertyNames(schema) || 'dependentSchemas' in schema) return null
-  if (hasMinProperties(schema) || hasMaxProperties(schema) || 'dependencies' in schema) return null
-  if (isSchemaObject(schema) && 'patternProperties' in schema) return null
+  if (hasDependentRequired(schema) || hasPropertyNames(schema) || declaresKey(schema, 'dependentSchemas')) return null
+  if (hasMinProperties(schema) || hasMaxProperties(schema) || declaresKey(schema, 'dependencies')) return null
+  if (isSchemaObject(schema) && declaresKey(schema, 'patternProperties')) return null
   // Object-level combinators change the verdict but can't be expressed flat, so
   // defer to the validator rather than emit a guard that ignores them.
   if (hasObjectLevelCombinator(schema)) return null
@@ -2295,19 +2469,19 @@ const typeDescribesEveryAcceptedValue = (schema: JSONSchema): boolean => {
   // A boolean schema has no shape to contradict: its type is `unknown`.
   if (!isSchemaObject(schema)) return true
   const s = schema as Record<string, unknown>
-  if ('type' in s || 'enum' in s || 'const' in s || '$ref' in s) return true
+  if (declaresKey(s, 'type') || declaresKey(s, 'enum') || declaresKey(s, 'const') || declaresKey(s, '$ref')) return true
 
   // The type of a combinator is built out of its branches, so it is as honest as
   // they are — a union of `{ type: 'string' }` and `{ type: 'number' }` describes
   // every value the validator accepts, while a branch carrying only `properties`
   // does not.
   for (const keyword of ['allOf', 'anyOf', 'oneOf'] as const) {
-    const branches = s[keyword]
+    const branches = readKey(s, keyword)
     if (!Array.isArray(branches)) continue
     if (!(branches as JSONSchema[]).every((branch) => typeDescribesEveryAcceptedValue(branch))) return false
   }
 
-  return !IMPLICIT_OBJECT_KEYWORDS.some((keyword) => keyword in s)
+  return !IMPLICIT_OBJECT_KEYWORDS.some((keyword) => declaresKey(s, keyword))
 }
 
 /**
@@ -2471,7 +2645,13 @@ const generateScalarValidator = (
   // Top-level combinators (`allOf` / `anyOf` / `oneOf` / `not` / `if`), validated
   // against the input via the shared combinator generator — correct `oneOf`
   // (exactly one) and inline branches included, not just `$ref` branches.
-  if (hasAllOf(schema) || hasAnyOf(schema) || hasOneOf(schema) || 'not' in schema || 'if' in schema) {
+  if (
+    hasAllOf(schema) ||
+    hasAnyOf(schema) ||
+    hasOneOf(schema) ||
+    declaresKey(schema, 'not') ||
+    declaresKey(schema, 'if')
+  ) {
     const ctx = createRootContext(rootSchema)
     const checks: string[] = []
     // The root path expression the shared emitters use, as a template literal body.
@@ -2492,7 +2672,7 @@ const generateScalarValidator = (
       if (allWrong) {
         const label = rootTypeArray.map((t) => typeofString(t)).join(' or ')
         checks.push(`  if (${allWrong}) {`)
-        checks.push(`    errors.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${rootPath} })`)
+        checks.push(`    ${ctx.sink}.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${rootPath} })`)
         checks.push(`  }`)
       }
     } else if (hasType(schema)) {
@@ -2500,7 +2680,7 @@ const generateScalarValidator = (
       const wrongType = wrongTypeCondition('input', t)
       if (wrongType) {
         checks.push(`  if (${wrongType}) {`)
-        checks.push(`    errors.push({ message: 'must be ${typeofString(t)}', path: ${rootPath} })`)
+        checks.push(`    ${ctx.sink}.push({ message: 'must be ${typeofString(t)}', path: ${rootPath} })`)
         checks.push(`  }`)
       }
     }
@@ -2513,7 +2693,7 @@ const generateScalarValidator = (
     // `allOf` was ever emitted.
     checks.push(...generateConstraintChecks('', 'input', rootPath, schema, suffix, ctx))
     checks.push(...generateCombinatorChecks('', 'input', rootPath, schema, suffix, ctx))
-    const body = checks.join('\n').replaceAll('errors.push(', '(errors ??= []).push(')
+    const body = checks.join('\n')
     return withHoisted(
       ctx.hoisted,
       [
@@ -2544,7 +2724,7 @@ const generateScalarValidator = (
     if (allWrong) {
       const label = rootTypeArray.map((t) => typeofString(t)).join(' or ')
       checks.push(`  if (${allWrong}) {`)
-      checks.push(`    errors.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${rootPath} })`)
+      checks.push(`    ${ctx.sink}.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${rootPath} })`)
       checks.push(`  }`)
     }
 
@@ -2564,7 +2744,7 @@ const generateScalarValidator = (
       ].join('\n')
     }
 
-    const body = checks.join('\n').replaceAll('errors.push(', '(errors ??= []).push(')
+    const body = checks.join('\n')
     return withHoisted(
       ctx.hoisted,
       [
@@ -2627,9 +2807,9 @@ const generateScalarValidator = (
         `  if (${wrongType}) {`,
         `    return { valid: false, errors: [{ message: 'must be ${typLabel}', path: _path }] }`,
         `  }`,
-        `  const _root: unknown = input`,
+        ...(readsBinding('_root', constraintLines.join('\n')) ? [`  const _root: unknown = input`] : []),
         `  let errors: ValidationError[] | undefined`,
-        constraintLines.join('\n').replaceAll('errors.push(', '(errors ??= []).push('),
+        constraintLines.join('\n'),
         `  return errors !== undefined ? { valid: false, errors } : true`,
         `}`,
       ].join('\n'),
@@ -2659,7 +2839,7 @@ const generateScalarValidator = (
     [
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
       `  let errors: ValidationError[] | undefined`,
-      typelessChecks.join('\n').replaceAll('errors.push(', '(errors ??= []).push('),
+      typelessChecks.join('\n'),
       `  return errors !== undefined ? { valid: false, errors } : true`,
       `}`,
     ].join('\n'),
@@ -2688,7 +2868,7 @@ const generateGeneralRootValidator = (
 ): string => {
   const ctx = createRootContext(rootSchema)
   const checks = generateValueChecks('', 'input', '`${_path}`', schema, suffix, ctx, true)
-  const body = checks.join('\n').replaceAll('errors.push(', '(errors ??= []).push(')
+  const body = checks.join('\n')
   return withHoisted(
     ctx.hoisted,
     [
@@ -2785,7 +2965,7 @@ const rewriteNullable = (node: unknown): unknown => {
     }
   }
 
-  if (src['nullable'] === true) return { anyOf: [{ type: 'null' }, out] }
+  if (readKey(src, 'nullable') === true) return { anyOf: [{ type: 'null' }, out] }
   return out
 }
 

@@ -228,6 +228,22 @@ describe('collect-validator-imports', () => {
     ).toEqual(['B'])
   })
 
+  it('imports only the halves the caller says it reads', () => {
+    // The two halves come apart in both directions: a `$ref` in a position the
+    // type generator does not read is called and never named, one in a position
+    // only the type reads is named and never called, and a ref inside a branch
+    // that folded away is neither. Each half nothing reads is `TS6133` in the
+    // generated file for a consumer with `noUnusedLocals`.
+    const schema = { properties: { p: { $ref: '#/$defs/contact' } } } as never
+    const halves = (type: boolean, validator: boolean): string[] =>
+      collectValidatorImports(schema, { reads: () => ({ type, validator }) })
+
+    expect(halves(true, true)).toEqual(["import { type Contact, validateContact } from './contact.js'"])
+    expect(halves(false, true)).toEqual(["import { validateContact } from './contact.js'"])
+    expect(halves(true, false)).toEqual(["import type { Contact } from './contact.js'"])
+    expect(halves(false, false)).toEqual([])
+  })
+
   it('imports a `-or-reference` def from its own file, under its own names', () => {
     // `walkRefGraph` writes a file per `$defs` entry, and both the emitter and the
     // type generator name this one in full — so rewriting the ref to `parameter`

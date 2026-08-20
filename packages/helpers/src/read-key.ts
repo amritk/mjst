@@ -12,3 +12,16 @@
  */
 export const readKey = <T>(source: Readonly<Record<string, T>>, key: string): T | undefined =>
   Object.hasOwn(source, key) ? source[key] : undefined
+
+/**
+ * True when `source` declares `key` itself — the presence half of the same
+ * question {@link readKey} answers by value.
+ *
+ * A caller that only needs to know whether a keyword is *there* would otherwise
+ * write `'items' in schema`, and `in` walks the prototype chain: with
+ * `Object.prototype.items` set, every node in a document declares a keyword none
+ * of them wrote, and what the generators emit from that is a different validator
+ * — an inherited `items: false` capping every array at zero, an inherited `if`
+ * sending a walk into unbounded recursion.
+ */
+export const declaresKey = (source: object, key: string): boolean => Object.hasOwn(source, key)

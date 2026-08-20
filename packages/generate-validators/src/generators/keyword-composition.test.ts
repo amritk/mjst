@@ -564,6 +564,124 @@ describe('keyword-composition', () => {
     }
     expectAgreement({ type: 'array', prefixItems: [{ type: 'string' }] }, ['a'], true)
     expectAgreement({ type: 'array', items: [{ type: 'string' }] }, ['a'], true)
+
+    // A combinator beneath the position used to re-add the optional guard, so the
+    // hole its plain sibling rejected went through here.
+    for (const schema of [
+      { type: 'array', prefixItems: [{ allOf: [{ type: 'string' }] }] },
+      { type: 'array', prefixItems: [{ anyOf: [{ type: 'string' }, { type: 'number' }] }] },
+      { type: 'array', prefixItems: [{ if: { type: 'string' }, then: true, else: false }] },
+      { type: 'array', items: { allOf: [{ type: 'string' }] } },
+    ]) {
+      expectAgreement(schema, sparse, false)
+      expectAgreement(schema, ['a'], true)
+    }
+  })
+
+  it('counts contains by index, so a hole is an element like any other', () => {
+    // `filter` skips holes, so a sparse array was one element short of what the
+    // interpreter counts: it reads the hole as `undefined`, which against
+    // `contains: { not: { type: 'string' } }` is the matching item, and against
+    // `contains: { type: 'string' }` is not.
+    const sparse: unknown[] = ['x', 'y']
+    delete sparse[0]
+
+    expectAgreement({ type: 'array', contains: { not: { type: 'string' } } }, sparse, true)
+    expectAgreement({ type: 'array', contains: { type: 'string' } }, sparse, true)
+    expectAgreement({ type: 'array', contains: { type: 'string' } }, [undefined, undefined], false)
+    expectAgreement({ type: 'array', contains: { type: 'string' }, minContains: 2 }, sparse, false)
+    expectAgreement({ type: 'array', contains: { type: 'string' }, maxContains: 1 }, ['a', 'b'], false)
+    expectAgreement({ type: 'array', contains: { type: 'string' } }, [1, 2], false)
+  })
+
+  it('decides a `contains` whose match is constant, without a loop', () => {
+    // `contains: true` matches every element, so the count is the array's length;
+    // `contains: false` matches none, so it is zero and the bounds are decidable
+    // at generation time. Emitting the loop anyway bound an element the folded
+    // match never looked at — an unused `const` in the generated file — and
+    // reading "no match" as "always invalid" got `{ contains: false, minContains:
+    // 0 }` wrong, which every array satisfies.
+    const VALUES: readonly unknown[][] = [[], [1], [1, 2], [1, 2, 3]]
+    const cases: readonly { schema: Record<string, unknown>; accepted: readonly unknown[][] }[] = [
+      // Zero matches is inside [0, 3], so every array passes.
+      { schema: { type: 'array', contains: false, minContains: 0, maxContains: 3 }, accepted: VALUES },
+      { schema: { type: 'array', contains: false, minContains: 0 }, accepted: VALUES },
+      // The default `minContains: 1` no array can reach.
+      { schema: { type: 'array', contains: false }, accepted: [] },
+      { schema: { type: 'array', contains: false, maxContains: 2 }, accepted: [] },
+      // Every element matches, so the count is the length.
+      {
+        schema: { type: 'array', contains: true, minContains: 2 },
+        accepted: [
+          [1, 2],
+          [1, 2, 3],
+        ],
+      },
+      { schema: { type: 'array', contains: true, minContains: 0, maxContains: 1 }, accepted: [[], [1]] },
+      {
+        schema: { type: 'array', contains: {}, minContains: 2 },
+        accepted: [
+          [1, 2],
+          [1, 2, 3],
+        ],
+      },
+    ]
+
+    for (const { schema, accepted } of cases) {
+      // No loop, so no element binding: a `const` the folded match never reads is
+      // `TS6133` in the generated file.
+      expect(generateValidatorFunction(schema as never, 'Root')).not.toContain('_ca')
+      for (const value of VALUES) {
+        expectAgreement(
+          schema,
+          value,
+          accepted.some((entry) => JSON.stringify(entry) === JSON.stringify(value)),
+        )
+      }
+    }
+  })
+
+  it('emits nothing for a `minContains: 0` that constrains nothing', () => {
+    // Every array satisfies "at least zero matches", empty included, so the whole
+    // check is dead — `_cn < 0` is a test no count can fail, and the loop that
+    // fed it ran on every call.
+    const code = generateValidatorFunction(
+      { type: 'array', contains: { type: 'string' }, minContains: 0 } as never,
+      'Root',
+    )
+    expect(code).not.toContain('_cn')
+    const validateRoot = evaluateValidator(code)
+    expect(validateRoot([])).toBe(true)
+    expect(validateRoot([1])).toBe(true)
+    // An upper bound still has to be counted for.
+    expect(
+      generateValidatorFunction({ type: 'array', contains: { type: 'string' }, maxContains: 1 } as never, 'Root'),
+    ).toContain('_cn')
+  })
+
+  it('tests a declared key without rebuilding an array for every key', () => {
+    // The schema-form `additionalProperties` sweep used to open with
+    // `["a","b"].includes(_ak0)`, allocating that array on every key of every
+    // object validated. `unknownKeyCheck` is what the `additionalProperties:
+    // false` sweep beside it already used.
+    const code = generateValidatorFunction(
+      {
+        type: 'object',
+        properties: { a: { type: 'string' }, b: { type: 'string' } },
+        additionalProperties: { type: 'number' },
+      } as never,
+      'Root',
+    )
+
+    expect(code).not.toContain('.includes(')
+    // The parenthesisation is `unknownKeyCheck`'s, which wraps its chain so it
+    // composes as a single term; what matters here is that the test is a chain of
+    // comparisons rather than a rebuilt array.
+    expect(code).toContain('_pk0 === "a" || _pk0 === "b"')
+    expect(code).toContain(') continue')
+    const validateRoot = evaluateValidator(code)
+    expect(validateRoot({ a: 'x', b: 'y', c: 1 })).toBe(true)
+    expect(validateRoot({ a: 'x', c: 'no' })).not.toBe(true)
   })
 
   it('emits nothing for a `minLength: 0` that constrains nothing', () => {

@@ -107,6 +107,29 @@ describe('generate-validator-function', () => {
     })
   })
 
+  it('keeps a control character in a property name out of the emitted source', () => {
+    // A template literal normalises a raw `<CR>` to `<LF>`, so a `"foo\rbar"`
+    // property reported its error at `"foo\nbar"` — a different property, and one
+    // the same document is free to declare beside it. A raw newline or tab simply
+    // broke the emitted line in half.
+    const schema = JSON.parse(
+      '{"type":"object","properties":{"foo\\rbar":{"type":"number"},"foo\\nbar":{"type":"number"},"tab\\tx":{"type":"number"}}}',
+    )
+    const code = generateValidatorFunction(schema, 'Control')
+
+    for (const raw of ['\r', '\n', '\t']) expect(code.includes(`/foo${raw}`) || code.includes(`/tab${raw}`)).toBe(false)
+
+    const validate = evalValidator(code)
+    expect(validate(JSON.parse('{"foo\\rbar":"x","foo\\nbar":"x","tab\\tx":"x"}'))).toEqual({
+      valid: false,
+      errors: [
+        { message: 'must be number', path: '/foo\rbar' },
+        { message: 'must be number', path: '/foo\nbar' },
+        { message: 'must be number', path: '/tab\tx' },
+      ],
+    })
+  })
+
   it('JSON-Pointer-escapes ~ and / in error paths to match the interpreter', () => {
     const schema = {
       type: 'object' as const,
@@ -182,14 +205,19 @@ describe('generate-validator-function', () => {
     expect(code).toContain('!valuesEqual(obj.meta, {"a":1})')
   })
 
-  it('dedupes scalar-item uniqueItems by a JSON projection', () => {
+  it('dedupes scalar-item uniqueItems with a bare Set', () => {
     const schema = {
       type: 'object' as const,
       properties: { tags: { type: 'array' as const, items: { type: 'string' as const }, uniqueItems: true } },
     }
     const code = generateValidatorFunction(schema, 'Doc')
 
-    expect(code).toContain('map((_u) => JSON.stringify(_u))')
+    expect(code).toContain('new Set(obj.tags as unknown[]).size !== obj.tags.length')
+    // A `JSON.stringify` projection would cost a string per element and print
+    // both `NaN` and `null` as `"null"`, so `[NaN, null]` came back a duplicate
+    // pair. `Set` membership is SameValueZero, which is JSON Schema's equality
+    // for primitives exactly.
+    expect(code).not.toContain('JSON.stringify(_u)')
     expect(code).not.toContain('allUnique(')
   })
 
