@@ -3,9 +3,11 @@
 Contract-first, framework-agnostic API layer built on [mjst](../../README.md)'s
 JSON Schema tooling. Declare each route once — method, path, request schemas, response
 schemas, handler — and get typed handlers, fast request/response validation,
-and an OpenAPI 3.1 document with **no extra code**. Thin adapters connect the
-same API to Hono, Next.js, Bun, Cloudflare Workers, Deno (fetch), and
-Express, Fastify, or raw `node:http` (Node).
+and an OpenAPI 3.1 document with **no extra code**. Two thin adapters connect
+the same API to every JavaScript server framework — Bun, Cloudflare Workers,
+Deno, Hono, Next.js, SvelteKit, Nitro/Nuxt, Elysia (fetch), and `node:http`,
+Express, Fastify, Koa, NestJS (Node) — with a
+[recipe for each](#serving-it).
 
 - **One contract, everything derived.** The JSON Schemas in a route type the
   handler (via `FromSchema`), validate requests at runtime, and embed verbatim
@@ -38,6 +40,34 @@ Express, Fastify, or raw `node:http` (Node).
 - **One dependency, many integrations.** Drizzle, Better Auth, Sentry, and
   typed clients connect through seams — `context`, `mounts`, `onError`,
   `locals`, OpenAPI — not bundled SDKs. Recipes below.
+
+## Contents
+
+**Getting started**
+- [Usage](#usage) · [Contracts without handlers (browser-safe)](#contracts-without-handlers-browser-safe) · [Typed client: `createClient`](#typed-client-createclient)
+
+**[Serving it](#serving-it)** — one `Api`, two adapters, a recipe per framework
+- fetch: [Bun](#bun) · [Cloudflare Workers](#cloudflare-workers) · [Deno](#deno) · [Hono](#hono) · [Next.js](#nextjs-app-router) · [SvelteKit](#sveltekit) · [Nitro / Nuxt](#nitro--nuxt) · [Elysia](#elysia)
+- Node: [`node:http`](#nodehttp) · [Express](#express) · [Fastify](#fastify) · [Koa](#koa) · [NestJS](#nestjs) · [anything else](#anything-else)
+
+**Requests and responses**
+- [Options (`createApi`)](#options-createapi) · [Validation semantics](#validation-semantics) · [String formats](#string-formats) · [Branded IDs](#branded-ids-nominal-types-for-params) · [Cross-field refinement](#cross-field-refinement)
+- [Form and multipart bodies](#form-and-multipart-bodies) · [Raw text and binary bodies](#raw-text-and-binary-bodies) · [Raw request bodies and size limits](#raw-request-bodies-and-size-limits)
+- [Streaming and raw responses](#streaming-and-raw-responses) · [Returning a raw `Response`](#returning-a-raw-response-escape-hatch) · [Multiple `set-cookie` headers](#multiple-set-cookie-headers) · [The platform request: `request.raw`](#the-platform-request-requestraw)
+
+**Middleware, security, state**
+- [Hooks: CORS, rate limits, security headers](#hooks-cors-rate-limits-security-headers) · [Built-in security hooks](#built-in-security-hooks) · [Signed cookies](#signed-cookies)
+- [Framework-parity helpers](#framework-parity-helpers) · [Client-side auth refresh](#client-side-auth-refresh) · [Per-request state: `locals`](#per-request-state-locals)
+
+**Engines**
+- [Plugging in generated validators](#plugging-in-generated-validators) · [Development: hot reloading](#development-hot-reloading) · [Production: the compiled engine](#production-the-compiled-engine)
+
+**Integration recipes**
+- [App context: Drizzle, sessions](#app-context-drizzle-sessions-anything-per-request) · [Guards](#guards-authorize-once-declare-the-outcome) · [Deny-by-default: `secureRoutes`](#deny-by-default-secureroutes) · [Auth: Better Auth](#auth-better-auth) · [Sessions: a production setup](#sessions-a-production-setup)
+- [Observability](#observability-metrics-and-request-logs) · [OpenAPI: servers, auth schemes, components](#openapi-servers-auth-schemes-shared-components) · [Error reporting: Sentry](#error-reporting-sentry) · [Typed client for external consumers: Hey API](#typed-client-for-external-consumers-hey-api) · [Schemas from Zod, TypeBox, Valibot, Effect](#schemas-from-zod-typebox-valibot-effect)
+
+**About**
+- [Integration philosophy](#integration-philosophy) · [Requirements and stability](#requirements-and-stability) · [Scope notes](#scope-notes)
 
 ## Usage
 
@@ -430,27 +460,249 @@ handling are no longer bundled unless the app registers them.
 
 ### Serving it
 
+`createApi` returns an `Api`, not a server: `handle(ApiRequest) → ApiResponse`
+is the entire runtime. Two adapters bridge it onto the only two HTTP ABIs
+JavaScript has, and every framework below is one of the two — there is no
+per-framework plugin to install, and no framework-specific code in the package.
+
+| Adapter | Signature | Frameworks |
+|:---|:---|:---|
+| `toFetchHandler(api, options?)` | `(Request, env?, executionContext?) => Promise<Response>` | [Bun](#bun) · [Cloudflare Workers](#cloudflare-workers) · [Deno](#deno) · [Hono](#hono) · [Next.js](#nextjs-app-router) · [SvelteKit](#sveltekit) · [Nitro / Nuxt](#nitro--nuxt) · [Elysia](#elysia) |
+| `toNodeHandler(api, options?)` | `(IncomingMessage, ServerResponse, next?) => Promise<void>` | [`node:http`](#nodehttp) · [Express](#express) · [Fastify](#fastify) · [Koa](#koa) · [NestJS](#nestjs) |
+
+Three things every recipe shares:
+
+- **`mounts`, `onRequest`/`onResponse`, and the
+  [built-in security hooks](#built-in-security-hooks) are fetch-adapter
+  features.** `toNodeHandler` deliberately omits them: every Node framework
+  below already has a middleware chain for CORS, rate limits, and security
+  headers, and that chain runs before the handler.
+- **The second argument the host passes becomes `env`** in
+  `createApi({ context })` — Workers bindings on Workers, but the `Server` on
+  Bun and the route context under Next.js. When the context factory needs your
+  own config, pass it explicitly: `(request) => handler(request, config)`.
+- **Contract paths are the full request path.** There is no base-path option
+  on `createApi`, so a route declaring `/users/{id}` matches exactly that.
+  Under a host that serves the handler from `/api/…`, either declare
+  `/api/users/{id}` in the contract or mount somewhere that strips the prefix
+  first (Express's `app.use('/api', …)` does).
+
+#### Bun
+
 ```ts
-// Bun / Cloudflare Workers / Deno — a Web-standard fetch handler
-const handler = toFetchHandler(api)
-Bun.serve({ fetch: handler })
+import { createApi, toFetchHandler } from '@amritk/api'
+import { getUser } from './routes'
 
-// Hono
-app.mount('/', handler)
+const api = createApi({ routes: [getUser] })
 
-// Next.js app router (app/[...route]/route.ts)
-export const GET = handler
-export const POST = handler
-
-// node:http / Express / Connect
-import { toNodeHandler } from '@amritk/api'
-http.createServer(toNodeHandler(api)).listen(3000)
-app.use(toNodeHandler(api)) // unmatched paths fall through to the rest of the app
+Bun.serve({ port: 3000, fetch: toFetchHandler(api) })
 ```
 
-Writing an adapter for anything else is ~15 lines: construct one
+#### Cloudflare Workers
+
+```ts
+const handler = toFetchHandler(api)
+
+export default { fetch: handler } satisfies ExportedHandler<Env>
+```
+
+Bindings arrive as `env`, and the `ExecutionContext` — `waitUntil`,
+`passThroughOnException` — as `executionContext`; both reach the
+`createApi({ context })` factory untouched. For production Workers, prefer
+the [compiled engine](#production-the-compiled-engine) — same contracts, a
+fused handler with inlined guards.
+
+#### Deno
+
+```ts
+Deno.serve(toFetchHandler(api))
+```
+
+#### Hono
+
+```ts
+const app = new Hono()
+
+app.get('/health', (c) => c.text('ok'))
+app.mount('/', toFetchHandler(api)) // register last: '/' matches everything
+
+export default app
+```
+
+Hono forwards its own `env` and `executionCtx` to the mounted handler, so
+Workers bindings still reach `createApi({ context })`. Routes registered
+*before* the mount keep winning — that is how a Hono app adopts contracts one
+slice at a time.
+
+#### Next.js (App Router)
+
+```ts
+// app/api/[[...path]]/route.ts
+import { createApi, toFetchHandler } from '@amritk/api'
+import { routes } from '@/server/routes'
+
+const handler = toFetchHandler(createApi({ routes }))
+
+// Next calls route handlers as (request, { params }); passing `env` explicitly
+// keeps Next's route context out of the context factory.
+const route = (request: Request): Promise<Response> => handler(request, process.env)
+
+export { route as GET, route as POST, route as PUT, route as PATCH, route as DELETE }
+```
+
+The file's own path is part of the URL, so contracts declare `/api/...`. Use
+`@amritk/api/bundler` to strip contract schemas from anything the client
+bundle imports.
+
+#### SvelteKit
+
+```ts
+// src/hooks.server.ts
+import { createApi, toFetchHandler } from '@amritk/api'
+import type { Handle } from '@sveltejs/kit'
+import { routes } from '$lib/server/routes'
+
+const handler = toFetchHandler(createApi({ routes }))
+
+export const handle: Handle = ({ event, resolve }) =>
+  event.url.pathname.startsWith('/api/') ? handler(event.request, event.platform) : resolve(event)
+```
+
+A `src/routes/api/[...path]/+server.ts` file works too — export
+`({ request, platform }) => handler(request, platform)` as `GET`/`POST`/… —
+but the hook keeps every contract path in one place.
+
+#### Nitro / Nuxt
+
+```ts
+// server/routes/api/[...].ts (Nuxt) — routes/api/[...].ts (standalone Nitro)
+import { fromWebHandler } from 'h3'
+
+export default fromWebHandler(toFetchHandler(api))
+```
+
+`fromWebHandler` exists in both h3 v1 (Nitro 2 / Nuxt 3) and h3 v2 (Nitro 3 /
+Nuxt 4). Use `server/routes/api/…` rather than `server/api/…`: the latter
+prefixes `/api` itself, which would double the prefix your contracts declare.
+
+#### Elysia
+
+```ts
+const app = new Elysia()
+  .get('/health', () => 'ok')
+  .mount(toFetchHandler(api)) // WinterCG mount — raw Request in, Response out
+  .listen(3000)
+```
+
+#### `node:http`
+
+```ts
+import { createServer } from 'node:http'
+import { toNodeHandler } from '@amritk/api'
+
+createServer(toNodeHandler(api)).listen(3000)
+```
+
+With no `next` callback the adapter is terminal: unmatched paths get the
+pipeline's own 404. Wrap the returned listener to add cross-cutting behavior
+(the fetch adapter's hooks have no counterpart here).
+
+#### Express
+
+```ts
+const app = express()
+
+app.use(toNodeHandler(api)) // unmatched paths fall through to the rest of the app
+app.get('/legacy/report', legacyReport)
+
+app.listen(3000)
+```
+
+Called as middleware, the adapter checks `api.matches` first and calls `next()`
+when nothing matches, so mounting it early costs unmatched routes one map
+lookup. You do **not** need `express.json()` — the pipeline parses and
+validates declared bodies itself — but an app-wide parser is safe: the adapter
+detects the already-drained stream and reads what the parser left on
+`req.body` instead of hanging.
+
+Mounting under a prefix works too — `app.use('/api', toNodeHandler(api))` —
+because Express strips the mount path from `req.url` before the handler sees
+it, so contracts stay written as `/users/{id}`.
+
+Express 5 changed wildcard syntax: a catch-all is `'/api/auth/*splat'`, not
+`'/api/auth/*'`, which now throws at registration.
+
+#### Fastify
+
+Fastify routes before it runs hooks, so the adapter attaches as a global
+`onRequest` hook — the last point where the body stream is still untouched by
+Fastify's content-type parser. `reply.hijack()` hands the socket over so
+Fastify will not also try to answer:
+
+```ts
+const nodeHandler = toNodeHandler(api)
+
+app.addHook('onRequest', async (request, reply) => {
+  const path = request.url.split('?')[0] ?? '/'
+  // Not ours — returning lets Fastify's router, hooks, and 404 handler take over.
+  if (!api.matches(request.method, path)) return
+  reply.hijack()
+  void nodeHandler(request.raw, reply.raw)
+})
+
+app.get('/health', async () => ({ ok: true }))
+```
+
+Global `onRequest` hooks run even when Fastify's own router has no match, which
+is what lets contracts serve paths Fastify never heard of. `void` is safe here:
+the adapter never rejects — it answers a 500 while the status line is unsent,
+and destroys the socket once bytes are on the wire. Requests handled this way
+bypass Fastify's router, per-route hooks, and serializer by design; its
+`onRequest` hooks registered *before* this one still run, which is where
+Fastify-side CORS and rate limits belong.
+
+#### Koa
+
+Koa has no router of its own, so the adapter is just middleware — but
+`ctx.respond = false` is required, or Koa overwrites the reply after the
+adapter has already written it:
+
+```ts
+const nodeHandler = toNodeHandler(api)
+
+app.use(async (ctx, next) => {
+  if (!api.matches(ctx.method, ctx.path)) {
+    await next()
+    return
+  }
+  ctx.respond = false
+  await nodeHandler(ctx.req, ctx.res)
+})
+```
+
+#### NestJS
+
+On the default Express platform the adapter is ordinary middleware:
+
+```ts
+// main.ts
+const app = await NestFactory.create(AppModule)
+app.use(toNodeHandler(api))
+await app.listen(3000)
+```
+
+On `FastifyAdapter`, use the [Fastify recipe](#fastify) against
+`app.getHttpAdapter().getInstance()`.
+
+#### Anything else
+
+Writing an adapter is ~15 lines: construct one
 [`ApiRequest`](./src/types.ts) per incoming request and serialize the
-`ApiResponse` that `api.handle` resolves with.
+`ApiResponse` that `api.handle` resolves with. If the host already speaks
+`Request`/`Response`, `toFetchHandler` is that adapter;
+[`fetchToNodeHandler`](#production-the-compiled-engine) goes the other way,
+running a fetch handler (including a compiled module's `fetch` export) on
+`node:http`.
 
 ### Options (`createApi`)
 
@@ -1647,7 +1899,8 @@ const handler = toFetchHandler(api, {
 const workerHandler = toFetchHandler(api, {
   mounts: { '/api/auth': (request, env) => makeAuth(env as Env).handler(request) },
 })
-// Express instead: app.all('/api/auth/*', toNodeHandler(auth)); app.use(toNodeHandler(api))
+// Express instead: app.all('/api/auth/*splat', toNodeHandler(auth)); app.use(toNodeHandler(api))
+// (Express 4: '/api/auth/*' — the bare '*' throws under Express 5's path parser.)
 // Compiled: compileToModule({ ..., mounts: { '/api/auth': 'authMountHandler' } })
 ```
 

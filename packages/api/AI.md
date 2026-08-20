@@ -66,9 +66,18 @@ Bun.serve({ fetch: handler })      // or: export default { fetch: handler } on W
 3. **Hooks / `mounts` / CORS are fetch-adapter only.** `toNodeHandler` has no
    `onRequest`/`onResponse`/`mounts`/`createCors` by design — use the Node
    framework's own middleware. `createApi` does not accept them either.
-4. **`maxBodyBytes` defaults to 1 MiB** (413 above it). Set it on the *adapter*,
+4. **There is no framework plugin — pick the adapter by ABI.** `toFetchHandler`
+   for anything speaking `Request`/`Response` (Bun, Workers, Deno, Hono,
+   Next.js, SvelteKit, Nitro/Nuxt, Elysia), `toNodeHandler` for `req`/`res`
+   (`node:http`, Express, Koa, NestJS, Fastify). Frameworks that own the reply
+   need to be told to let go: Fastify wants `reply.hijack()` inside a **global
+   `onRequest` hook** (it routes before hooks, and the body is still unread
+   there), Koa wants `ctx.respond = false`. Guard both with `api.matches` so
+   unmatched paths stay with the framework. Contract paths are the full request
+   path — `createApi` has no base-path option. Recipes: README "Serving it".
+5. **`maxBodyBytes` defaults to 1 MiB** (413 above it). Set it on the *adapter*,
    not `createApi`; uncap with `maxBodyBytes: Infinity`.
-5. **Typed client needs opt-in pieces.** `createClient(contracts, baseUrl, options)`:
+6. **Typed client needs opt-in pieces.** `createClient(contracts, baseUrl, options)`:
    pass `serializers: [formBodySerializer, multipartBodySerializer]` for
    form/multipart, `pathParams: buildParamPath` for any `{param}` path,
    `queryParams: toSearchParams` for any call that sends `query`, and
@@ -84,7 +93,7 @@ Bun.serve({ fetch: handler })      // or: export default { fetch: handler } on W
    Frontends import from the **`@amritk/api/client`** subpath —
    same client surface, guaranteed free of server modules, no bundler
    `node:*` externalization warnings.
-6. **Guards authorize; attach them in the `guards` field.** Add `guards: [...]`
+7. **Guards authorize; attach them in the `guards` field.** Add `guards: [...]`
    to the route (`defineRoute`/`implementRoute`/`routeFactory`/`routeImplementer`
    — never `defineContract`, which stays browser-safe data). A guard
    `(ctx) => reply | undefined` runs after the context factory, before the
@@ -116,7 +125,7 @@ Bun.serve({ fetch: handler })      // or: export default { fetch: handler } on W
    document; the guard is stripped from it. The document endpoint itself is
    served before matching, so gate it with `openApiGuards` if the schema is not
    public.
-7. **Brand ids with `x-mjst` for nominal params.** A param/query/body property
+8. **Brand ids with `x-mjst` for nominal params.** A param/query/body property
    `{ type: 'string', 'x-mjst': { brand: 'UserId' } }` makes the handler (and the
    typed client) see `string & { readonly __brand: 'UserId' }` instead of a plain
    `string`, so a `UserId` can't be passed where an `OrderId` is expected — the
@@ -124,7 +133,7 @@ Bun.serve({ fetch: handler })      // or: export default { fetch: handler } on W
    type-level only (no extra runtime check beyond the base type). Keep the schema
    literal so the brand survives inference, and define your app-side id to the
    same `{ readonly __brand: 'UserId' }` shape.
-8. **`format` is not asserted unless you ask.** Like JSON Schema itself and Ajv,
+9. **`format` is not asserted unless you ask.** Like JSON Schema itself and Ajv,
    `format: 'uuid'` is documentation — the route accepts any string. Pass
    `formats: 'all'` (or a list, `['uuid', 'email']`) to `createApi` *and* to
    `compileToModule`, or the compiled module and the dev server disagree. A
