@@ -188,7 +188,10 @@ unresolvable or cyclic `$ref` at the same instance location, a walk deeper than
 eight applicators, and a node under an *inert* `additionalItems` — one with no
 array `items` to be the tail of, or with a `prefixItems` that took the positions
 out from under it. The draft-07 tail itself is validated, so the draft-07
-spelling of a schema whose 2020-12 spelling generates is accepted too.
+spelling of a schema whose 2020-12 spelling generates is accepted too. One
+difference worth knowing: the check is a single sweep, so its error is reported at
+the object or array — the shape Ajv reports too — where the interpreter names the
+individual key or index. The verdict is identical either way.
 
 One edge worth calling out: **`NaN` fails a constrained number but satisfies an
 unconstrained one.** Every bound is emitted as the negated *pass* condition
