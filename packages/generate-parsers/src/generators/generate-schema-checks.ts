@@ -205,6 +205,27 @@ export const generateSchemaChecks = (accessor: string, schema: JSONSchema): stri
     return [`typeof ${accessor} === "${primitive}"`]
   }
 
+  // An array-form `type` (the multi-type / nullable idiom, e.g.
+  // `["string","null"]`) is false for `hasType`, so it used to fall through to
+  // the keyword inference below — which finds nothing on a bare
+  // `{ type: ["string","null"] }` and returned NO checks at all. As a union
+  // branch that made the branch contribute nothing, so a perfectly valid
+  // `null`/string value matched no case and the coercing build dropped the
+  // property. Each listed type is checked with its own family's constraints
+  // (`{ type: ["string","null"], minLength: 1 }` bounds the string branch only)
+  // and the branches are ORed, which is exactly what the keyword means.
+  if (isSchemaObject(schema) && Array.isArray(schema.type)) {
+    const branches: string[] = []
+    for (const type of schema.type as unknown[]) {
+      if (typeof type !== 'string') continue
+      const branch = generateSchemaChecks(accessor, { ...(schema as object), type } as JSONSchema)
+      if (branch.length === 0) continue
+      branches.push(branch.length === 1 ? (branch[0] as string) : `(${branch.join(' && ')})`)
+    }
+    if (branches.length === 0) return checks
+    return [branches.length === 1 ? (branches[0] as string) : `(${branches.join(' || ')})`]
+  }
+
   // Without an explicit `type`, a branch's keywords still imply one. Inferring
   // it lets union discrimination reject the branch instead of matching anything.
   if (!hasType(schema)) {
@@ -260,6 +281,13 @@ export const generateSchemaChecks = (accessor: string, schema: JSONSchema): stri
       break
     case 'boolean':
       checks.push(`typeof ${accessor} === "boolean"`)
+      break
+    // Without this the `null` branch of a union produced NO check, which reads
+    // as "this branch matches nothing": `{ anyOf: [{ type: 'string' },
+    // { type: 'null' }] }` rejected `null` — the one value the branch exists to
+    // admit — and the coercing build dropped the property instead of keeping it.
+    case 'null':
+      checks.push(`${accessor} === null`)
       break
     case 'array':
       checks.push(`Array.isArray(${accessor})`)

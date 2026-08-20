@@ -1370,20 +1370,41 @@ const generateObjectParser = (
   // `strictKeys` makes an extra a hard error (the throw block further down).
   const strictKeys = hasStrictKeys(schema)
   const stripKeys = strictKeys || stripUnknown
+  // `additionalProperties: false` is answered against THIS schema object's own
+  // `properties` (2020-12 §10.3.2.3) — an `allOf`/`oneOf`/`anyOf` member's
+  // properties are a different schema's and do not count — so composition must
+  // not switch the rejection off, and `{ properties: { a }, additionalProperties:
+  // false, allOf: [{ type: 'object' }] }` accepted `{ a, zz }` where Ajv and the
+  // runtime interpreter both reject it. `hasStrictKeys` keeps its narrower
+  // definition because it also governs the *build*: a strip build drops the
+  // `...input` spread, which the `allOf` parser spread still needs.
+  // (`patternProperties` is excluded here too, but for a different reason — that
+  // shape is routed to generateStrictCombinedParser, which rejects extras itself.)
+  const rejectsUnknownKeys =
+    (strict &&
+      isSchemaObject(schema) &&
+      hasAdditionalProperties(schema) &&
+      schema.additionalProperties === false &&
+      !('patternProperties' in schema)) ||
+    false
+  // Whatever makes the parser care about undeclared keys also has to bind the
+  // fast-path guard, or a clean-looking input carrying an extra would be handed
+  // straight back before the rejection ran.
+  const guardKeys = stripKeys || rejectsUnknownKeys
   // When every declared property is required, the fast-path no-extras test is
   // the cheaper own-key count (see exactKeyCountOf) and the `_hasOnlyKnownKeys`
   // predicate is not emitted at all — the shape validator derives the same
   // decision from the schema, so the cross-function contract stays in sync.
-  const exactKeyCount = stripKeys ? exactKeyCountOf(schema) : null
+  const exactKeyCount = guardKeys ? exactKeyCountOf(schema) : null
   const strictKeyCheck = unknownKeyCheck(propertyKeys, `_knownKeys${typeName}`)
-  if (stripKeys && exactKeyCount === null) {
+  if (guardKeys && exactKeyCount === null) {
     for (const declaration of strictKeyCheck.declarations) {
       preamble.push(`${declaration};`)
     }
     preamble.push(
       `const _hasOnlyKnownKeys${typeName} = (input: Record<string, unknown>): boolean => {\n  for (const _k in input) if (${strictKeyCheck.isUnknown('_k')}) return false;\n  return true;\n};`,
     )
-  } else if (strict && strictKeys) {
+  } else if (rejectsUnknownKeys) {
     // The unknown-key throw loop below still needs the hoisted Set (when the
     // key list is long enough to use one).
     for (const declaration of strictKeyCheck.declarations) {
@@ -1511,7 +1532,7 @@ const generateObjectParser = (
   // checks through inherited properties while the own-key count still matches,
   // so non-plain inputs route to the slow path, where the for..in walk keeps
   // the historical inherited-key rejection.
-  if (stripKeys) {
+  if (guardKeys) {
     fastPathChecks.push(
       exactKeyCount !== null
         ? `Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === ${exactKeyCount}`
@@ -1933,7 +1954,7 @@ const generateObjectParser = (
       for (const assertionLine of assertionLines) {
         lines.push(assertionLine)
       }
-      if (strictKeys) {
+      if (rejectsUnknownKeys) {
         // for..in (not Object.keys) deliberately: this loop is cold — the fast
         // path already proved the key set — but swapping in the keys-array
         // iterator here once regressed the *hot* path several percent on CI:
@@ -2598,6 +2619,11 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
     stripUnknown,
     ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
   }
+  // The pattern-/additional-property parsers build their result with a copy
+  // loop and emit no private sub-parsers, so an inline object property there is
+  // validated by nobody unless the assertions prove its shape themselves. The
+  // object parser does emit them, and keeps the default.
+  const copyLoopContext: StrictAssertionContext = { ...context, subParsers: false }
 
   // Special case for the self-referential JSON Schema meta-schema type (e.g.
   // `Schema` / `SchemaObject`) - it can be any JSON Schema. This is an OpenAPI
@@ -2639,7 +2665,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
       strict,
       stripUnknown,
       caseInsensitive,
-      context,
+      copyLoopContext,
     )
   }
 
@@ -2742,7 +2768,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
       useRefImports,
       suffix,
       strict,
-      context,
+      copyLoopContext,
     )
   }
 
@@ -2762,7 +2788,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
       useRefImports,
       suffix,
       strict,
-      context,
+      copyLoopContext,
     )
   }
 

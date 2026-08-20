@@ -46,8 +46,8 @@ import { generateUniqueItemsCheck } from './generate-unique-items-check'
 import {
   everyTailItem,
   getPrefixItems,
+  plainScalarItemCheck,
   prefixItemsCapsLength,
-  scalarItemTypeCheck,
 } from './generate-validation-expression'
 import { hasConstrainingRefSibling, type MatchContext, subschemaMatchExpr } from './subschema-match'
 
@@ -65,7 +65,27 @@ export type StrictAssertionContext = {
   readonly suffix?: string
   readonly rootSchema?: Record<string, unknown>
   readonly stripUnknown?: boolean
+  /**
+   * Whether the parser these assertions run inside also emits the private
+   * sub-parsers for its inline object properties (and inline-object array
+   * items). `generateObjectParser` does, so the shape of such a property is
+   * proven by the call it delegates to and asserting it here would be
+   * redundant. The pattern-property parsers do NOT — they build their result
+   * with a copy loop — so a nested object property there is proven by nobody
+   * unless these assertions prove it. Defaults to true, the historical
+   * assumption.
+   */
+  readonly subParsers?: boolean
 }
+
+/**
+ * True when a property's (or array item's) own shape is validated by a parser
+ * the builder delegates to, rather than by the assertions here. Only the
+ * sub-parser-emitting parsers can make that promise, which is what
+ * {@link StrictAssertionContext.subParsers} records.
+ */
+const shapeIsDelegated = (schema: JSONSchema, context: StrictAssertionContext): boolean =>
+  (context.subParsers ?? true) && isInlineObjectProperty(schema)
 
 /** The matcher's view of an assertion context: just the document its `$ref`s resolve against. */
 const matchContext = (context: StrictAssertionContext): MatchContext =>
@@ -446,7 +466,7 @@ const generateItemCheck = (
     return { check: generateEnumCheck('_it', items.enum), message: `items must be one of: ${label}` }
   }
 
-  const scalarCheck = scalarItemTypeCheck(items, '_it')
+  const scalarCheck = plainScalarItemCheck(items, '_it')
   if (scalarCheck !== null && isSchemaObject(items) && hasType(items)) {
     return { check: scalarCheck, message: `items expected ${typeLabel(items.type as string)}` }
   }
@@ -455,7 +475,7 @@ const generateItemCheck = (
   // when this build imports those parsers. Without ref imports nothing else
   // checks the elements, so `{ type: 'array', items: { $ref: … } }` accepted an
   // array of anything.
-  if ((hasRef(items) && context.useRefImports === true) || isInlineObjectProperty(items)) return null
+  if ((hasRef(items) && context.useRefImports === true) || shapeIsDelegated(items, context)) return null
   const match = subschemaMatchExpr('_it', items, matchContext(context))
   if (match === null || match === 'true') return null
   return { check: match, message: 'items do not match the item schema' }
@@ -484,6 +504,70 @@ const nullableObjectShapeChecks = (
   if (match === null || match === 'true') return []
   const presence = optional ? `${acc} !== undefined && ${acc} !== null` : `${acc} !== null`
   return [`  if (${presence} && !(${match})) ${throwError(`${label} does not match the declared object shape`)};`]
+}
+
+/**
+ * The `properties` / `required` keywords a property schema declares, lifted into
+ * a standalone object schema — or `null` when nothing here needs proving.
+ *
+ * A nested object property is normally deep-validated by the private sub-parser
+ * the parent parser synthesizes for it, which is why the assertions here never
+ * looked at its shape. But that sub-parser exists only for
+ * {@link isInlineObjectProperty} schemas emitted by a parser that generates them
+ * (see {@link shapeIsDelegated}), and a sibling keyword — `allOf`, `not`, `if`,
+ * `patternProperties`, a schema-valued `additionalProperties`, a union — takes a
+ * schema out of that set. Everything else about such a property was checked and
+ * its own `properties` / `required` were checked by nobody, so
+ * `{ c: { type: 'object', properties: { a: { type: 'number' } }, required: ['a'],
+ * additionalProperties: { type: 'string' } } }` accepted `{ c: {} }` — and
+ * `{ c: { a: 'no' } }` with it.
+ *
+ * Only the `properties` / `required` residual is lifted: every sibling keyword
+ * that excluded the schema keeps its own specialized check (with a better
+ * message), and leaving them out keeps the residual small enough for the matcher
+ * to prove.
+ */
+const objectShapeResidual = (schema: JSONSchema, context: StrictAssertionContext): JSONSchema | null => {
+  if (!isSchemaObject(schema) || !hasType(schema) || schema.type !== 'object') return null
+  if (shapeIsDelegated(schema, context)) return null
+  const record = schema as Record<string, unknown>
+  const residual: Record<string, unknown> = { type: 'object' }
+  if (hasProperties(schema)) residual['properties'] = record['properties']
+  if (hasRequired(schema)) residual['required'] = record['required']
+  // `additionalProperties: false` is a question about the key *set*, which only
+  // the declared names and patterns can answer — so those three travel together
+  // or not at all. Nothing else covers it here: generateKeyedValueChecks reads
+  // `additionalProperties` only as a value schema, and the unknown-key rejection
+  // the parsers emit is the *parent* object's, not this property's. A
+  // schema-valued `additionalProperties` stays out: it is checked per key, with
+  // a better message, by generateKeyedValueChecks.
+  if (record['additionalProperties'] === false) {
+    residual['additionalProperties'] = false
+    if ('patternProperties' in record) residual['patternProperties'] = record['patternProperties']
+  }
+  return 'properties' in residual || 'required' in residual || 'additionalProperties' in residual
+    ? (residual as JSONSchema)
+    : null
+}
+
+/**
+ * The single-`type` counterpart of {@link nullableObjectShapeChecks}: proves the
+ * object shape {@link objectShapeResidual} lifted out, for a property no
+ * sub-parser will validate.
+ */
+const declaredObjectShapeChecks = (
+  acc: string,
+  schema: JSONSchema,
+  label: string,
+  optional: boolean,
+  context: StrictAssertionContext,
+): string[] => {
+  const residual = objectShapeResidual(schema, context)
+  if (residual === null) return []
+  const match = subschemaMatchExpr(acc, residual, matchContext(context))
+  if (match === null || match === 'true') return []
+  const presence = optional ? `${acc} !== undefined && ` : ''
+  return [`  if (${presence}!(${match})) ${throwError(`${label} does not match the declared object shape`)};`]
 }
 
 /**
@@ -1015,6 +1099,10 @@ const generatePropertyAssertion = (
   lines.push(...generateAllOfChecks(acc, propSchema, field, !isRequired, context))
   lines.push(...generateUnionMatchChecks(acc, propSchema, field, !isRequired, context))
   lines.push(...generateConditionalChecks(acc, propSchema, field, context))
+  // Emitted here, ahead of every branch below, because most of them return
+  // early — a union / `const` / `enum` property can carry an object shape too,
+  // and the branch that handles it would otherwise take the shape with it.
+  lines.push(...declaredObjectShapeChecks(acc, propSchema, field, !isRequired, context))
 
   // Union properties: enforce membership when every branch check is
   // false-sound (canEnforceUnion), so a value matching no variant throws

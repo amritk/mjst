@@ -83,6 +83,48 @@ export const scalarItemTypeCheck = (itemSchema: JSONSchema, accessor: string): s
 }
 
 /**
+ * Keywords that narrow a scalar item beyond its `type`.
+ * {@link scalarItemTypeCheck} renders the `typeof` test and nothing else, so an
+ * item schema carrying one of these has to go through the full subschema matcher
+ * instead — otherwise `{ items: { type: 'string', minLength: 1 } }` accepts
+ * `[""]` on the fast path *and* in the strict assertion, where the bound is the
+ * whole point of the schema.
+ */
+const SCALAR_ITEM_CONSTRAINTS: readonly string[] = [
+  'pattern',
+  'minLength',
+  'maxLength',
+  'minimum',
+  'maximum',
+  'exclusiveMinimum',
+  'exclusiveMaximum',
+  'multipleOf',
+  'const',
+  '$ref',
+  'not',
+  'allOf',
+  'anyOf',
+  'oneOf',
+  'if',
+]
+
+/**
+ * {@link scalarItemTypeCheck}, but only for an item schema whose `type` is the
+ * *whole* constraint — the one case where the bare `typeof` test is an exact
+ * match rather than a weakening of it. Emit sites that need a check they can
+ * trust in both directions (a true-sound fast-path guard, a strict assertion
+ * that throws) take this one; the coercion path keeps the looser
+ * {@link isCoercibleItemSchema}, which coerces each element through the full
+ * per-element expression and so applies the constraints anyway.
+ */
+export const plainScalarItemCheck = (itemSchema: JSONSchema, accessor: string): string | null => {
+  if (!isSchemaObject(itemSchema)) return null
+  const record = itemSchema as Record<string, unknown>
+  if (SCALAR_ITEM_CONSTRAINTS.some((keyword) => keyword in record)) return null
+  return scalarItemTypeCheck(itemSchema, accessor)
+}
+
+/**
  * True when an array's `items` schema can be coerced element-by-element by the
  * mapping slow path: single scalar types (via {@link scalarItemTypeCheck}) and
  * enums (whose validation expression coerces a non-member to the first member).
@@ -335,9 +377,14 @@ export const generateValidationExpression = (
       for (let i = 1; i < allChecks.length; i++) {
         combinedCheck += ' && ' + allChecks[i]
       }
-      return `${combinedCheck} ? ${accessor} : ${defaultValue}`
+      // An *optional* property falls back to `undefined`, not to the schema's
+      // default: this branch ran for an absent key too, so a coercing parser
+      // invented `{ id: {} }` on input that never carried an `id` — and the
+      // strict combined parser, which builds from these same expressions,
+      // returned a value that did not equal the one it had just accepted.
+      return `${combinedCheck} ? ${accessor} : ${isRequired ? defaultValue : 'undefined'}`
     }
-    return `${accessor} ?? ${defaultValue}`
+    return isRequired ? `${accessor} ?? ${defaultValue}` : accessor
   }
 
   // Handle not (negation - value must NOT match this schema)
@@ -348,7 +395,8 @@ export const generateValidationExpression = (
       for (let i = 1; i < notChecks.length; i++) {
         combinedNotCheck += ' && ' + notChecks[i]
       }
-      return `!(${combinedNotCheck}) ? ${accessor} : ${defaultValue}`
+      // Same optional-property rule as the `allOf` branch above.
+      return `!(${combinedNotCheck}) ? ${accessor} : ${isRequired ? defaultValue : 'undefined'}`
     }
   }
 
@@ -376,7 +424,11 @@ export const generateValidationExpression = (
   }
 
   if (!hasType(schema) && !hasEnum(schema)) {
-    return `${accessor} ?? ${defaultValue}`
+    // A type-less schema constrains nothing this expression can check, so an
+    // optional property is passed through untouched — `?? default` would have
+    // conjured a value for a key the input never had (and replaced an explicit
+    // `null` with the default).
+    return isRequired ? `${accessor} ?? ${defaultValue}` : accessor
   }
 
   // Tuple `prefixItems`: coerce each declared position through its own subschema
