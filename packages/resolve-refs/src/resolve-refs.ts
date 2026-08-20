@@ -6,7 +6,7 @@ import {
   isScopeSensitive,
   type ScopeSensitiveNodes,
 } from './dynamic-scope'
-import { pointerToPath } from './get-by-pointer'
+import { findRefPath } from './find-ref-path'
 import { DEFAULT_MAX_DEPTH, depthLimitError } from './max-depth'
 import { ANNOTATION_ONLY_SIBLINGS, type ResolvedTarget, readReference, resolveFragment } from './reference'
 import { baseOfNode, buildResourceRegistry, type ResourceRegistry, resolveRefInScope } from './resource-registry'
@@ -186,7 +186,7 @@ const resolveInternal = (
     const externalRef = (): unknown => {
       errors.push({
         message: `Cannot resolve external ${keyword} "${ref}": external ref requires resolveRefsFromFile`,
-        path: [],
+        path: findRefPath(root, keyword, ref, limits.maxDepth),
       })
       return obj
     }
@@ -239,10 +239,9 @@ const resolveInternal = (
         // A reference that resolves to nothing (a typo'd pointer or a missing
         // anchor) was previously inlined as literal `undefined` with no trace.
         // Record it and keep the original node so the failure is visible.
-        const fragment = ref.startsWith('#') ? ref.slice(1) : ref
         errors.push({
           message: `Cannot resolve internal ${keyword} "${ref}"`,
-          path: fragment === '' || fragment.startsWith('/') ? pointerToPath(fragment) : [],
+          path: findRefPath(root, keyword, ref, limits.maxDepth),
         })
         cache.set(cacheKey, MISSING)
         return obj

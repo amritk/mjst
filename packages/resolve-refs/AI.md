@@ -30,6 +30,11 @@ const remote = await resolveRefsFromFile('https://api.example.com/schema.json', 
    Use `resolveRefsFromFile` for cross-file/remote.
 2. **Errors are collected, never thrown.** A missing file, refused host, or bad
    URL lands on `result.errors` while the rest still resolves. Always check it.
+   Each error's `path` is where the offending reference was written in the
+   document you passed in, ending in the keyword (`['properties','p','$ref']`),
+   so you can point a diagnostic straight at it. It is empty when there is
+   nowhere to point — a budget the whole resolve overran, or a reference living
+   in some other document.
 3. **Default-deny SSRF guard.** Remote refs to loopback / private / link-local /
    `169.254.169.254` / metadata hosts by name (`metadata.google.internal`,
    `*.internal`) are refused unless `allowPrivateHosts: true` or an explicit

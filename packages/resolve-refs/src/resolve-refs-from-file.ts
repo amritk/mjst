@@ -11,11 +11,17 @@ import {
   isScopeSensitive,
   type ScopeSensitiveNodes,
 } from './dynamic-scope'
-import { pointerToPath } from './get-by-pointer'
+import { findRefPath } from './find-ref-path'
 import { isContainedPath } from './is-contained-path'
 import { isPrivateHost } from './is-private-host'
 import { DEFAULT_MAX_DEPTH, depthLimitError } from './max-depth'
-import { ANNOTATION_ONLY_SIBLINGS, type ResolvedTarget, readReference, resolveFragment } from './reference'
+import {
+  ANNOTATION_ONLY_SIBLINGS,
+  type Reference,
+  type ResolvedTarget,
+  readReference,
+  resolveFragment,
+} from './reference'
 import {
   baseOfNode,
   buildResourceRegistry,
@@ -383,6 +389,12 @@ const needsDnsVerification = (options: ResolveOptions): boolean => {
  * `cache: false`). On failure an error is recorded and the location is cached
  * as `{}` so that pointer lookups degrade gracefully instead of throwing.
  * Returns whether the document loaded successfully.
+ *
+ * `refPath` is where the reference that first named this document was written
+ * in the root document, so a refusal or a missing file is reported *at the
+ * `$ref`* rather than at the document start. It is empty when there is no such
+ * place to point at — the root document itself, or a reference that lives in
+ * some other document.
  */
 const loadDoc = async (
   location: string,
@@ -390,6 +402,7 @@ const loadDoc = async (
   options: ResolveOptions,
   errors: ResolveError[],
   deadline: number,
+  refPath: JsonPath,
 ): Promise<boolean> => {
   if (docCache.has(location)) return true
 
@@ -401,7 +414,7 @@ const loadDoc = async (
     // a stricter `allowedHosts`, no `allowPrivateHosts`) would refuse it.
     const reason = denialReason(location, options)
     if (reason !== null) {
-      errors.push({ message: `Refusing to resolve remote $ref (${reason}): ${location}`, path: [] })
+      errors.push({ message: `Refusing to resolve remote $ref (${reason}): ${location}`, path: refPath })
       docCache.set(location, {})
       return false
     }
@@ -426,7 +439,7 @@ const loadDoc = async (
         docCache.set(location, doc)
         return true
       } catch (err) {
-        errors.push({ message: `Failed to fetch ${location}: ${String(err)}`, path: [] })
+        errors.push({ message: `Failed to fetch ${location}: ${String(err)}`, path: refPath })
         docCache.set(location, {})
         return false
       }
@@ -447,7 +460,7 @@ const loadDoc = async (
       docCache.set(location, doc)
       return true
     } catch (err) {
-      errors.push({ message: `Failed to fetch ${location}: ${String(err)}`, path: [] })
+      errors.push({ message: `Failed to fetch ${location}: ${String(err)}`, path: refPath })
       docCache.set(location, {})
       return false
     } finally {
@@ -460,7 +473,7 @@ const loadDoc = async (
     docCache.set(location, parse(readFileSync(location, 'utf8'), location))
     return true
   } catch (err) {
-    errors.push({ message: String(err), path: [] })
+    errors.push({ message: String(err), path: refPath })
     docCache.set(location, {})
     return false
   }
@@ -755,7 +768,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
 
   // The root document is what the caller explicitly named, so it is never
   // subject to the confinement it defines.
-  if (!(await loadDoc(rootLocation, docCache, options, errors, deadline))) {
+  if (!(await loadDoc(rootLocation, docCache, options, errors, deadline, []))) {
     return { resolved: {}, errors }
   }
 
@@ -791,7 +804,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     node: unknown,
     location: string,
     base: string,
-    out: Set<string>,
+    out: Map<string, Reference>,
     depth: number,
     role: NodeRole,
   ): void => {
@@ -815,7 +828,9 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       const scoped = resolveRefInScope(registry, reference.keyword, reference.value, nodeBase)
       if (scoped === 'external') {
         const { uriPart: filePart } = splitRef(reference.value)
-        if (filePart !== '') out.add(filePart)
+        // First reference wins: it is the one a reader finds first, and it is
+        // the one whose position a load failure is reported at.
+        if (filePart !== '' && !out.has(filePart)) out.set(filePart, reference)
       }
     }
     // Recurse into every key — including a reference node's siblings, which apply
@@ -847,12 +862,23 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     let loaded = 1
     while (queue.length > 0) {
       const location = queue.shift() as string
-      const out = new Set<string>()
+      const out = new Map<string, Reference>()
       collectRefTargets(docCache.get(location), location, registryFor(location).rootBase, out, 0, 'schema')
-      for (const filePart of out) {
+      for (const [filePart, reference] of out) {
+        // Only a reference written in the root document has a position a
+        // consumer can map back to a place in the document it handed us; one
+        // inside a document we loaded on its behalf does not, so it reports
+        // without a path exactly as it always has.
+        const refPath =
+          location === rootLocation
+            ? findRefPath(docCache.get(rootLocation), reference.keyword, reference.value, maxDepth)
+            : []
         const target = joinLocation(location, filePart)
         if (target === undefined) {
-          errors.push({ message: `Refusing to load $ref "${filePart}": it does not name a valid location`, path: [] })
+          errors.push({
+            message: `Refusing to load $ref "${filePart}": it does not name a valid location`,
+            path: refPath,
+          })
           continue
         }
         if (seen.has(target)) continue
@@ -874,14 +900,14 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         if (!isRemote(target)) {
           const reason = localDenialReason(target)
           if (reason !== null) {
-            errors.push({ message: `Refusing to read local $ref (${reason}): ${target}`, path: [] })
+            errors.push({ message: `Refusing to read local $ref (${reason}): ${target}`, path: refPath })
             docCache.set(target, {})
             unloadable.add(target)
             continue
           }
         }
         loaded++
-        if (!(await loadDoc(target, docCache, options, errors, deadline))) unloadable.add(target)
+        if (!(await loadDoc(target, docCache, options, errors, deadline, refPath))) unloadable.add(target)
         queue.push(target)
       }
     }
@@ -1174,7 +1200,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
           if (targetLoaded) {
             errors.push({
               message: `Cannot resolve ${keyword} "${value}"`,
-              path: fragment === '' || fragment.startsWith('/') ? pointerToPath(fragment) : [],
+              path: findRefPath(docCache.get(rootLocation), keyword, value, maxDepth),
             })
           }
           refCache.set(cacheKey, MISSING)

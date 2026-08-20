@@ -430,6 +430,49 @@ describe('resolve-refs-from-file', () => {
     expect(Object.keys(fetchSpy.mock.calls[1]?.[1] ?? {})).not.toContain('headers')
   })
 
+  it('reports a missing document at the $ref that named it', async () => {
+    writeFileSync(
+      join(dir, 'api.json'),
+      JSON.stringify({ properties: { pet: { allOf: [{ $ref: './missing.json#/Pet' }] } } }),
+    )
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    // The reader needs the `$ref`, not the top of the file.
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.path).toEqual(['properties', 'pet', 'allOf', 0, '$ref'])
+    expect(errors[0]?.message).toMatch(/ENOENT/)
+  })
+
+  it('reports a refused remote host at the $ref that named it', async () => {
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ meta: { $ref: 'http://169.254.169.254/latest#/x' } }))
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    expect(errors[0]?.path).toEqual(['meta', '$ref'])
+    expect(errors[0]?.message).toMatch(/Refusing to resolve remote \$ref/)
+  })
+
+  it('reports an unresolvable internal fragment at the $ref rather than at its target', async () => {
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ $defs: {}, properties: { p: { $ref: '#/$defs/nope' } } }))
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    expect(errors).toEqual([{ message: 'Cannot resolve $ref "#/$defs/nope"', path: ['properties', 'p', '$ref'] }])
+  })
+
+  it('leaves the path empty for a reference written in another document', async () => {
+    writeFileSync(join(dir, 'b.json'), JSON.stringify({ Pet: { $ref: './gone.json#/x' } }))
+    writeFileSync(join(dir, 'api.json'), JSON.stringify({ pet: { $ref: './b.json#/Pet' } }))
+
+    const { errors } = await resolveRefsFromFile(join(dir, 'api.json'))
+
+    // `./gone.json` is named from b.json, so there is no position in the
+    // document the caller handed us to point at.
+    expect(errors).toHaveLength(1)
+    expect(errors[0]?.path).toEqual([])
+  })
+
   it('collects a ref whose location does not parse instead of throwing', async () => {
     // `//[bad` is not a URL, and resolving it against a *remote* document's
     // location goes through the URL parser — which threw a TypeError straight
