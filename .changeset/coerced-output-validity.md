@@ -27,8 +27,9 @@ bare `[]`, ignoring `minItems`; it uses the schema's own fallback now.
 An array of `const` items passed every element through untouched, so
 `{ items: { const: null } }` left `["a"]` as it found it.
 
-`minLength` / `maxLength` are counted in Unicode code points on the coercion and
-fast-path branches too, matching the strict assertions and the subschema matcher
-(which already did). A bare `.length` disagreed with them on any string carrying
-a surrogate pair — and on the fast path that meant a value the strict assertions
-reject was waved through as "already in shape".
+`minLength` / `maxLength` are counted in Unicode code points on every branch that
+reads them — the coercion path, the fast-path guard, and the union-branch check —
+matching the strict assertions and the subschema matcher, which already did. A
+bare `.length` disagreed with them on any string carrying a surrogate pair, and
+on the fast path that meant a value the strict assertions reject was waved
+through as "already in shape".

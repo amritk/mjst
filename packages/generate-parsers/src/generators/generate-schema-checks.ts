@@ -262,11 +262,15 @@ export const generateSchemaChecks = (accessor: string, schema: JSONSchema): stri
       if (hasPattern(schema)) {
         checks.push(`${regexLiteral(schema.pattern)}.test(${accessor})`)
       }
+      // Code points, not UTF-16 units, exactly as the inferred-type path above
+      // does: an explicit `type: 'string'` is the same string, and a bare
+      // `.length` made this branch disagree with the matcher and the strict
+      // assertions on anything carrying a surrogate pair.
       if (hasMinLength(schema)) {
-        checks.push(`${accessor}.length >= ${schema.minLength}`)
+        checks.push(minLengthPassExpr(accessor, schema.minLength))
       }
       if (hasMaxLength(schema)) {
-        checks.push(`${accessor}.length <= ${schema.maxLength}`)
+        checks.push(maxLengthPassExpr(accessor, schema.maxLength))
       }
       break
     }

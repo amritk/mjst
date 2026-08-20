@@ -56,7 +56,7 @@ describe('generate-schema-checks', () => {
     const result = generateSchemaChecks('value', {
       minLength: 1,
     })
-    expect(result).toEqual(['typeof value === "string"', 'value.length >= 1'])
+    expect(result).toEqual(['typeof value === "string"', '(value.length >= 1)'])
   })
 
   it('infers string type from pattern keyword', () => {
@@ -154,17 +154,24 @@ describe('generate-schema-checks', () => {
 
   it('generates string check with minLength', () => {
     const result = generateSchemaChecks('value', { type: 'string', minLength: 1 })
-    expect(result).toEqual(['typeof value === "string"', 'value.length >= 1'])
+    expect(result).toEqual(['typeof value === "string"', '(value.length >= 1)'])
   })
 
   it('generates string check with maxLength', () => {
     const result = generateSchemaChecks('value', { type: 'string', maxLength: 100 })
-    expect(result).toEqual(['typeof value === "string"', 'value.length <= 100'])
+    expect(result).toEqual([
+      'typeof value === "string"',
+      '(value.length <= 100 || Array.from(value as string).length <= 100)',
+    ])
   })
 
   it('generates string check with both min and max length', () => {
     const result = generateSchemaChecks('value', { type: 'string', minLength: 1, maxLength: 50 })
-    expect(result).toEqual(['typeof value === "string"', 'value.length >= 1', 'value.length <= 50'])
+    expect(result).toEqual([
+      'typeof value === "string"',
+      '(value.length >= 1)',
+      '(value.length <= 50 || Array.from(value as string).length <= 50)',
+    ])
   })
 
   it('generates typeof check for number type', () => {
@@ -341,7 +348,7 @@ describe('generate-schema-checks', () => {
 
   it('uses the provided accessor in all checks', () => {
     const result = generateSchemaChecks('input?.name', { type: 'string', minLength: 1 })
-    expect(result).toEqual(['typeof input?.name === "string"', 'input?.name.length >= 1'])
+    expect(result).toEqual(['typeof input?.name === "string"', '(input?.name.length >= 1)'])
   })
 
   it('returns an instanceof check for an x-mjst instanceOf node', () => {
