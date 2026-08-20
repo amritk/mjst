@@ -15,7 +15,9 @@ export const xor: RulesetFunction<Record<string, unknown>, IXorOptions> = (input
   // silence rather than push an error: an empty or single-element list would
   // otherwise flag every node with a message that names nothing useful.
   if (!Array.isArray(properties) || properties.length < 2) return []
-  const present = properties.filter((property) => property in input)
+  // `Object.hasOwn`, not `in`: a rule that lists `constructor` (or `toString`)
+  // means the document's own key, and `in` answers it from `Object.prototype`.
+  const present = properties.filter((property) => Object.hasOwn(input, property))
   if (present.length !== 1) {
     return [{ message: `Exactly one of ${properties.map((p) => `"${p}"`).join(', ')} must be defined` }]
   }

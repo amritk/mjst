@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { IFunctionContext } from '../core/types'
-import { alphabetical, casing, enumeration, schema, typedEnum, xor } from './index'
+import { alphabetical, casing, enumeration, or, schema, typedEnum, xor } from './index'
 
 const ctx = (path: (string | number)[] = []): IFunctionContext =>
   ({ path, rule: {} as never, document: { data: {} } as never }) as IFunctionContext
@@ -45,6 +45,15 @@ describe('xor', () => {
     expect(xor({ a: 1 }, { properties: ['a', 'b'] }, ctx())).toHaveLength(0)
     expect(xor({ a: 1, b: 2 }, { properties: ['a', 'b'] }, ctx())).toHaveLength(1)
     expect(xor({}, { properties: ['a', 'b'] }, ctx())).toHaveLength(1)
+  })
+
+  it('counts only own properties, so an inherited name is not "present"', () => {
+    // A rule listing `constructor` means the document's own key; `in` answered it
+    // from `Object.prototype`, so `xor` saw one property where there were none
+    // and `or` stayed quiet on an object that satisfies nothing.
+    expect(xor({}, { properties: ['constructor', 'b'] }, ctx())).toHaveLength(1)
+    expect(or({}, { properties: ['constructor', 'b'] }, ctx())).toHaveLength(1)
+    expect(or({ constructor: 1 } as never, { properties: ['constructor', 'b'] }, ctx())).toHaveLength(0)
   })
 })
 
@@ -94,5 +103,15 @@ describe('typedEnum', () => {
   it('skips non-object input', () => {
     expect(typedEnum('nope' as never, undefined as never, ctx())).toHaveLength(0)
     expect(typedEnum(null as never, undefined as never, ctx())).toHaveLength(0)
+  })
+
+  it('ignores a declared type that names a prototype member', () => {
+    // `type` comes from the linted document. A bare index resolved `valueOf` to
+    // `Object.prototype.valueOf`, which throws when called with no receiver —
+    // surfacing as a bogus error-severity "rule threw" finding — while
+    // `constructor` returned an object for every value and disabled the check.
+    expect(() => typedEnum({ type: 'valueOf', enum: ['a'] }, undefined as never, ctx())).not.toThrow()
+    expect(typedEnum({ type: 'valueOf', enum: ['a'] }, undefined as never, ctx())).toHaveLength(0)
+    expect(typedEnum({ type: ['string', 'constructor'], enum: ['a', 2] }, undefined as never, ctx())).toHaveLength(1)
   })
 })

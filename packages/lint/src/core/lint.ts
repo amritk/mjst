@@ -26,6 +26,13 @@ export type LintResolverResult = {
  * example wrapping `@amritk/resolve-refs`). Returning no `sources` means
  * findings map back to the root document only; `diagnostics` reports refs that
  * failed to resolve.
+ *
+ * The `resolved` tree must be **acyclic**. Rules are evaluated by walking it, and
+ * the walk is depth-unbounded by design (document depth is attacker-controlled,
+ * so it keeps its own stack rather than recursing) — which means a cycle is an
+ * infinite loop, not a `RangeError`. Shared subtrees are fine and expected;
+ * `@amritk/resolve-refs` keeps the `$ref` node in place when a chain would close
+ * a cycle, which is what makes its output safe here.
  */
 export type LintResolver = (
   document: Document,
