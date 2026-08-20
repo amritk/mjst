@@ -39,7 +39,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { assertGeneratorDepth } from './assert-generator-depth'
 import { closedValueSet } from './closed-value-set'
-import { isObjectLike } from './is-object-like'
+import { declaresOwnShape, isObjectLike, typesConflict } from './is-object-like'
 import { satisfiesScalarConstraints } from './satisfies-scalar-constraints'
 import { makeInstanceCheck, needsValidationFilter } from './schema-validation'
 
@@ -318,11 +318,13 @@ const exampleString = (schema: JSONSchema): string => {
  * still short-circuits to `null`. As one shared mutable set it also drops the
  * `new Set([...seen, ref])` copy that made every node cost O(depth) on its own.
  *
- * `undeclaredKey` records that some object gained a key its *generated type* will
- * not declare — see {@link generateExampleConst}, which needs the answer and
- * cannot recompute it without re-walking the schema the way the deriver did.
- * Like a cycle-truncated value it is a property of the derivation, so it travels
- * with the memo rather than being recomputed on a cache hit.
+ * `needsAssertion` records that the value and its *generated type* will not line
+ * up cleanly — either an object gained a key the type does not declare, or the
+ * type declares keys the deriver had no way to produce. {@link generateExampleConst}
+ * needs the answer and cannot recompute it without re-walking the schema the way
+ * the deriver did. Like a cycle-truncated value it is a property of the
+ * derivation, so it travels with the memo rather than being recomputed on a
+ * cache hit.
  *
  * `cycleBroken` is what makes the two safe together. A value produced by cutting
  * a cycle depends on *where* the cut fell, so it must not be memoized: any
@@ -334,10 +336,10 @@ const exampleString = (schema: JSONSchema): string => {
  */
 type DeriveContext = {
   readonly rootSchema: Record<string, unknown> | undefined
-  readonly values: Map<string, { value: unknown; undeclaredKey: boolean }>
+  readonly values: Map<string, { value: unknown; needsAssertion: boolean }>
   readonly active: Set<string>
   cycleBroken: boolean
-  undeclaredKey: boolean
+  needsAssertion: boolean
   /** Current nesting of the `derive` recursion; see the depth guard there. */
   depth: number
 }
@@ -355,7 +357,7 @@ const newContext = (rootSchema: Record<string, unknown> | undefined): DeriveCont
   values: new Map(),
   active: new Set(),
   cycleBroken: false,
-  undeclaredKey: false,
+  needsAssertion: false,
   depth: 0,
 })
 
@@ -398,17 +400,17 @@ export const deriveExample = (schema: JSONSchema, rootSchema?: Record<string, un
 const deriveReported = (
   schema: JSONSchema,
   rootSchema?: Record<string, unknown>,
-): { value: unknown; undeclaredKey: boolean; cycleBroken: boolean } => {
+): { value: unknown; needsAssertion: boolean; cycleBroken: boolean } => {
   const ctx = contextFor(rootSchema)
   // A previous call can only have left `active` dirty by unwinding through an
   // exception, but a stale ancestor there would silently truncate this
   // derivation — so start every top-level call from a clean path.
   ctx.active.clear()
   ctx.cycleBroken = false
-  ctx.undeclaredKey = false
+  ctx.needsAssertion = false
   ctx.depth = 0
   const value = derive(schema, ctx)
-  return { value, undeclaredKey: ctx.undeclaredKey, cycleBroken: ctx.cycleBroken }
+  return { value, needsAssertion: ctx.needsAssertion, cycleBroken: ctx.cycleBroken }
 }
 
 /** The recursive entry point, threading the shared {@link DeriveContext}. */
@@ -447,7 +449,7 @@ const deriveRef = (ref: string, ctx: DeriveContext): unknown => {
   }
   const memoized = ctx.values.get(ref)
   if (memoized !== undefined) {
-    if (memoized.undeclaredKey) ctx.undeclaredKey = true
+    if (memoized.needsAssertion) ctx.needsAssertion = true
     return memoized.value
   }
   if (!ctx.rootSchema) return null
@@ -455,15 +457,15 @@ const deriveRef = (ref: string, ctx: DeriveContext): unknown => {
   if (!resolved) return null
 
   const outerBroken = ctx.cycleBroken
-  const outerUndeclared = ctx.undeclaredKey
+  const outerUndeclared = ctx.needsAssertion
   ctx.cycleBroken = false
-  ctx.undeclaredKey = false
+  ctx.needsAssertion = false
   ctx.active.add(ref)
   try {
     const value = derive(resolved as JSONSchema, ctx)
-    if (!ctx.cycleBroken) ctx.values.set(ref, { value, undeclaredKey: ctx.undeclaredKey })
+    if (!ctx.cycleBroken) ctx.values.set(ref, { value, needsAssertion: ctx.needsAssertion })
     ctx.cycleBroken = outerBroken || ctx.cycleBroken
-    ctx.undeclaredKey = outerUndeclared || ctx.undeclaredKey
+    ctx.needsAssertion = outerUndeclared || ctx.needsAssertion
     return value
   } finally {
     ctx.active.delete(ref)
@@ -519,8 +521,27 @@ const deriveBase = (schema: JSONSchema, ctx: DeriveContext): unknown => {
   // one branch — picking one would ignore the others' constraints.
   if (hasAllOf(schema)) return derive(mergeAllOf(schema), ctx)
 
-  if (hasOneOf(schema) && schema.oneOf[0] !== undefined) return derive(schema.oneOf[0], ctx)
-  if (hasAnyOf(schema) && schema.anyOf[0] !== undefined) return derive(schema.anyOf[0], ctx)
+  // A `oneOf`/`anyOf` branch is a constraint *alongside* the node's own keywords,
+  // not a replacement for them, so a node that declares its own shape merges into
+  // the branch it picks. Reading the branch alone threw the node's `type` and
+  // `properties` away — `{ type: 'object', properties: …, anyOf: [{ required: … }] }`
+  // derived `null` against an object type, which does not compile.
+  const branches = hasOneOf(schema) ? schema.oneOf : hasAnyOf(schema) ? schema.anyOf : undefined
+  if (branches !== undefined && branches.length > 0) {
+    const rest = withoutCombinators(schema)
+    if (!declaresOwnShape(rest)) return derive(branches[0] as JSONSchema, ctx)
+    // Prefer a branch the node's own keywords can actually admit; fall back to
+    // the first when every branch clashes, since an unsatisfiable schema still
+    // has to produce something.
+    const chosen = branches.find((branch) => !typesConflict(rest, branch)) ?? branches[0]
+    return derive({ allOf: [rest, chosen] } as JSONSchema, ctx)
+  }
+
+  // Object-likeness is settled *before* `type` is dispatched on, because the type
+  // generator settles it first too: it calls anything carrying `properties` an
+  // object whatever `type` says. Answering `type` first emitted a string against
+  // an object type.
+  if (isObjectLike(schema)) return deriveObject(schema, ctx)
 
   if (hasType(schema)) return deriveForType(schema.type, schema, ctx)
 
@@ -530,12 +551,15 @@ const deriveBase = (schema: JSONSchema, ctx: DeriveContext): unknown => {
     return deriveForType(schema.type[0] as string, schema, ctx)
   }
 
-  // Matches the inference the arbitrary and the type generator both make: a
-  // schema with `properties` and no `type` is still an object, and answering
-  // `null` for one produced an example its own declared type rejects.
-  if (isObjectLike(schema)) return deriveObject(schema, ctx)
-
   return null
+}
+
+/** A shallow copy of `schema` with `oneOf`/`anyOf` removed, leaving what the node says on its own. */
+const withoutCombinators = (schema: JSONSchema): JSONSchema => {
+  const rest = { ...(schema as Record<string, unknown>) }
+  delete rest['oneOf']
+  delete rest['anyOf']
+  return rest as JSONSchema
 }
 
 /** The applicator keywords whose satisfaction is reconciled by {@link refineExample}. */
@@ -683,8 +707,15 @@ const deriveObject = (schema: JSONSchema, ctx: DeriveContext): Record<string, un
   const hasIndexSignature =
     additionalSchema !== undefined || (hasPatternProperties(schema) && Object.keys(schema.patternProperties).length > 0)
   const noteKey = (key: string): void => {
-    if (!hasIndexSignature && !declaredKeys.has(key)) ctx.undeclaredKey = true
+    if (!hasIndexSignature && !declaredKeys.has(key)) ctx.needsAssertion = true
   }
+
+  // The mirror image: the type generator folds an `if`/`then` pair's properties
+  // into the declared type *as required*, but nothing structural tells the
+  // deriver to produce them, so it emits `{}` against a type demanding keys.
+  // Neither side is wrong on its own; the literal just needs asserting.
+  const raw = schema as Record<string, unknown>
+  if (Object.hasOwn(raw, 'if') && Object.hasOwn(raw, 'then')) ctx.needsAssertion = true
 
   // The value schema for a key not declared in `properties`: the matching
   // `patternProperties` (intersected when several match), else `additionalProperties`.
@@ -1041,8 +1072,32 @@ const TIGHTEST = new Map<string, 'max' | 'min'>([
   ['maxProperties', 'min'],
 ])
 
+/**
+ * Expands any branch that is itself an `allOf` wrapper into the branches it
+ * holds, so the merge below sees real keywords rather than a container.
+ *
+ * The merge loop skips the `allOf` key — correct for the node whose `allOf` is
+ * being expanded, but it also silently dropped a *nested* one. That shape is
+ * everywhere in real documents: a `oneOf` branch written as
+ * `{ title: 'Token Usage', allOf: [{ type: 'object', properties: … }] }` merged
+ * down to `{ title: 'Token Usage' }`, so the whole variant's properties vanished
+ * and the example came out `{}` against a type demanding them.
+ *
+ * A branch's own keywords come *after* the ones it wraps, matching the
+ * later-wins convention the merge already follows for the node itself.
+ */
+const flattenBranches = (nodes: readonly JSONSchema[], depth = 0): JSONSchema[] => {
+  assertGeneratorDepth(depth, 'mergeAllOf')
+  return nodes.flatMap((node) => {
+    if (!isSchemaObject(node) || !hasAllOf(node)) return [node]
+    const own = { ...(node as Record<string, unknown>) }
+    delete own['allOf']
+    return [...flattenBranches(node.allOf, depth + 1), own as JSONSchema]
+  })
+}
+
 export const mergeAllOf = (schema: JSONSchema): JSONSchema => {
-  const branches = hasAllOf(schema) ? schema.allOf : []
+  const branches = hasAllOf(schema) ? flattenBranches(schema.allOf) : []
   // Null-prototype accumulators, because both of these are keyed by names a
   // document controls. On a plain `{}`, reading `properties['__proto__']` answers
   // `Object.prototype` — truthy, and with no `.push` — so a single `__proto__`
@@ -1180,7 +1235,7 @@ export const generateExampleConst = (
   typeName: string,
   rootSchema?: Record<string, unknown>,
 ): string => {
-  const { value, undeclaredKey, cycleBroken } = deriveReported(schema, rootSchema)
+  const { value, needsAssertion, cycleBroken } = deriveReported(schema, rootSchema)
   warnInvalidExample(schema, typeName, value, rootSchema)
   const literal = serializeValue(value)
   // A schema can require a key its generated type never declares — `required`
@@ -1200,7 +1255,11 @@ export const generateExampleConst = (
   // leaves the two types *comparable*, so a single assertion settles it, but
   // `null` where a `Node` belongs does not, and TypeScript refuses the direct
   // conversion outright.
-  const assertion = cycleBroken ? ` as unknown as ${typeName}` : undeclaredKey ? ` as ${typeName}` : ''
+  // The boolean `false` schema admits no value at all, so its generated type is
+  // `never`, and nothing overlaps `never` — not even through a single assertion.
+  const admitsNothing = schema === false
+  const assertion =
+    cycleBroken || admitsNothing ? ` as unknown as ${typeName}` : needsAssertion ? ` as ${typeName}` : ''
   const expression = `${literal}${assertion}`
   return `export const ${exampleName(typeName)}: ${typeName} = ${expression}`
 }

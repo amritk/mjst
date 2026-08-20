@@ -91,6 +91,20 @@ describe('generate-arbitrary', () => {
     expect(code).toContain('fc.integer()')
   })
 
+  it('does not name a $ref that resolves nowhere', () => {
+    // The import collector skips an unresolvable ref, so naming it anyway left a
+    // bare identifier nothing imports.
+    const rootSchema = { $defs: {} }
+    const code = generateArbitrary({ $ref: '#/components/schemas/Nope' } as JSONSchema, 'Z', '', new Set(), rootSchema)
+    expect(code).not.toContain('NopeArbitrary')
+    expect(code).toContain('fc.anything()')
+  })
+
+  it('asserts the arbitrary for a schema that admits nothing', () => {
+    // A `false` schema types as `never`, which nothing is assignable to.
+    expect(generateArbitrary(false as JSONSchema, 'Z')).toContain('as fc.Arbitrary<Z>')
+  })
+
   it('clamps crossed bounds so the generated arbitrary can be constructed', () => {
     // Every bounded `fc.*` combinator asserts `min <= max` and throws at *import*,
     // which would take down every other export in the generated file too.

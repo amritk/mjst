@@ -214,6 +214,47 @@ const cases: Array<{ name: string; schema: JSONSchema }> = [
     name: 'non-string required entry',
     schema: JSON.parse('{"type":"object","properties":{"a":{"type":"string"}},"required":[1]}') as JSONSchema,
   },
+  // `oneOf`/`anyOf` is a constraint *alongside* the node's own keywords, not a
+  // replacement for them. Taking the branch alone threw away the node's `type`
+  // and `properties` and answered `null` / `fc.anything()`.
+  {
+    name: 'anyOf beside the node’s own type and properties',
+    schema: { type: 'object', properties: { a: { type: 'string' } }, anyOf: [{ required: ['a'] }] },
+  },
+  {
+    name: 'oneOf beside the node’s own type and properties',
+    schema: { type: 'object', properties: { a: { type: 'string' } }, oneOf: [{ required: ['a'] }] },
+  },
+  {
+    name: 'allOf branch narrowing a property that carries anyOf',
+    schema: {
+      allOf: [
+        { type: 'object', properties: { x: { anyOf: [{ type: 'integer' }, { type: 'null' }] } } },
+        { type: 'object', properties: { x: { type: 'integer' } } },
+      ],
+    },
+  },
+  // The type generator calls a schema object-like on `'patternProperties' in
+  // schema` — the *key*, whatever its value — and on `properties` regardless of
+  // what `type` says. Both generators have to agree with it or the file breaks.
+  { name: 'non-object patternProperties', schema: JSON.parse('{"patternProperties":null}') as JSONSchema },
+  { name: 'string-valued patternProperties', schema: JSON.parse('{"patternProperties":"x"}') as JSONSchema },
+  {
+    name: 'properties beside a scalar type',
+    schema: { type: 'string', properties: { a: { type: 'string' } } } as JSONSchema,
+  },
+  {
+    name: 'properties beside an array type',
+    schema: { type: 'array', properties: { a: { type: 'string' } }, items: { type: 'string' } } as JSONSchema,
+  },
+  // The type generator folds `if`/`then` properties in as required; the deriver
+  // produces none of them, so the literal needs an assertion.
+  {
+    name: 'if/then-only object',
+    schema: { if: { properties: { a: { const: 'x' } } }, then: { properties: { b: { type: 'string' } } } },
+  },
+  // The boolean `false` schema admits no value at all, so its type is `never`.
+  { name: 'boolean false schema', schema: false },
 ]
 
 /** The repo's own flags — `strict` alone hides two of the failures we care about. */

@@ -217,8 +217,17 @@ forever if you sample it. Both are schemas with no instance, and the example
 warns:
 
 - A `pattern` no string of the required length can match
-  (`{ pattern: '^[a-z]{2}$', minLength: 5 }`).
+  (`{ pattern: '^[a-z]{2}$', minLength: 5 }`). A satisfiable-but-narrow pairing
+  (`{ pattern: '^[a-f0-9]+$', minLength: 32, maxLength: 32 }`) is slow for the
+  same reason — `fc.stringMatching` rarely lands on the exact length.
 - A `minLength`/`minItems` so large that no value of that size can be built.
+
+One more gap is not this package's to close: a `$ref` that resolves nowhere in
+the document is typed by its name (`Nope`) but never imported, because it was
+never generated as a file. The arbitrary degrades to `fc.anything()`, but the
+type still names it, so the file does not compile. Same for `{ "type": [] }`,
+which types as `export type Foo = ;`. Both come from
+`@amritk/helpers/generate-type-definition`.
 
 > [!TIP]
 > The example for a `$ref` is inlined by value, so a definition graph with wide

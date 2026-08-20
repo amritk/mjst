@@ -1,6 +1,7 @@
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { refToFilename } from '@amritk/helpers/ref-to-filename'
 import { refToName } from '@amritk/helpers/ref-to-name'
+import { resolveRef } from '@amritk/helpers/resolve-ref'
 import {
   hasAdditionalProperties,
   hasAllOf,
@@ -43,7 +44,7 @@ type SchemaObject = Exclude<JSONSchema, boolean>
 
 import { closedValueSet } from './closed-value-set'
 import { mergeAllOf } from './derive-example'
-import { isObjectLike } from './is-object-like'
+import { declaresOwnShape, isObjectLike, typesConflict } from './is-object-like'
 import { satisfiesScalarConstraints } from './satisfies-scalar-constraints'
 import { canBuildGuard, needsValidationFilter, withResolvableDefs } from './schema-validation'
 
@@ -91,6 +92,8 @@ type ExprCtx = {
   readonly lazyRefFilenames: ReadonlySet<string>
   /** Current nesting of the `arbitraryExpr` recursion; see the depth guard there. */
   readonly depth: { value: number }
+  /** The root document, used to tell a resolvable `$ref` from a dangling one. */
+  readonly rootSchema: Record<string, unknown> | undefined
 }
 
 /**
@@ -315,7 +318,10 @@ const clampIntegerBound = (value: number | undefined): number | undefined =>
  * the multiple cannot fail. This mirrors {@link numberMultipleOfExpr}.
  */
 const integerMultipleOfExpr = (m: number, min: number | undefined, max: number | undefined): string => {
-  const bound = Math.max(1, Math.floor(DEFAULT_INTEGER_MAGNITUDE / m))
+  // `DEFAULT_INTEGER_MAGNITUDE - 1` because `fc.integer`'s default maximum is
+  // inclusive: for a `multipleOf` of 1 the whole magnitude gave `max: 2147483648`,
+  // one past what it accepts.
+  const bound = Math.max(1, Math.floor((DEFAULT_INTEGER_MAGNITUDE - 1) / m))
   const kMin = min !== undefined ? Math.ceil(min / m) : -bound
   // An unsatisfiable range (no multiple fits between the bounds) would make
   // `fc.integer` throw on `min > max`; collapse to a single best-effort value.
@@ -447,15 +453,22 @@ const numberExpr = (schema: JSONSchema): string => {
   }
 
   // `fc.double` asserts `min <= max`, so a crossed range has to collapse rather
-  // than throw at import — see {@link clampLow}. Collapsing onto the upper bound
-  // also drops the (now meaningless) exclusion, which would otherwise leave
-  // `fc.double` with an empty range to draw from.
-  const clamped = clampLow(low, high)
-  if (clamped !== low) lowExcluded = false
-  low = clamped
+  // than throw at import — see {@link clampLow}.
+  low = clampLow(low, high)
+
+  // Once the two bounds meet, the single value they admit is the only one left,
+  // so any exclusion on either side empties the range entirely — and an empty
+  // range is exactly what `fc.double` refuses. `{ exclusiveMinimum: 5, maximum: 5 }`
+  // reached the output as `min: 5, minExcluded: true, max: 5`. Keeping the
+  // endpoint is the best-effort answer; the example's own validity check reports
+  // the schema.
+  if (low !== undefined && low === high) {
+    lowExcluded = false
+    highExcluded = false
+  }
 
   if (low !== undefined) opts.push(`min: ${low}`, ...(lowExcluded ? ['minExcluded: true'] : []))
-  if (high !== undefined) opts.push(`max: ${high}`, ...(highExcluded && low !== high ? ['maxExcluded: true'] : []))
+  if (high !== undefined) opts.push(`max: ${high}`, ...(highExcluded ? ['maxExcluded: true'] : []))
 
   return `fc.double({ ${opts.join(', ')} })`
 }
@@ -482,12 +495,25 @@ const arrayExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
   // generate from it (and guarantee at least one such element via `minLength`) —
   // otherwise an empty array would fail `contains`.
   const containsSchema = hasContains(schema) && isSchemaObject(schema.contains) ? schema.contains : undefined
+  const unique = hasUniqueItems(schema) && schema.uniqueItems === true
+
+  // Under `uniqueItems` the `contains` schema alone is not enough to draw from:
+  // `contains` asks that *some* element match, so a closed one (a `const`, a
+  // short `enum`) cannot fill more than a slot or two, and
+  // `{ contains: { const: 'x' }, minItems: 5, uniqueItems: true }` had no way to
+  // reach five distinct elements — fast-check retried forever. Widening to "that
+  // value, or anything" restores the freedom the schema actually grants (every
+  // element but one is unconstrained), and a draw of several almost always
+  // includes the one that counts.
+  const containsExpr = containsSchema !== undefined ? arbitraryExpr(containsSchema, ctx) : undefined
   const items =
     hasItems(schema) && isSchemaObject(schema.items)
       ? arbitraryExpr(schema.items, ctx)
-      : containsSchema
-        ? arbitraryExpr(containsSchema, ctx)
-        : 'fc.anything()'
+      : containsExpr === undefined
+        ? 'fc.anything()'
+        : unique
+          ? `fc.oneof(${containsExpr}, fc.anything())`
+          : containsExpr
 
   const minContains = countBound(typeof raw['minContains'] === 'number' ? raw['minContains'] : undefined, 'lower') ?? 1
   const minLength = Math.max(
@@ -495,17 +521,19 @@ const arrayExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
     containsSchema !== undefined ? Math.max(1, minContains) : 0,
   )
 
-  const unique = hasUniqueItems(schema) && schema.uniqueItems === true
-
-  // A `uniqueArray` cannot fill more slots than the item schema has distinct
+  // A `uniqueArray` cannot fill more slots than its item schema has distinct
   // values, and fast-check retries forever rather than reporting it — so
   // `{ items: { type: 'boolean' }, minItems: 5, uniqueItems: true }` produced an
   // arbitrary that hung the moment it was sampled. Cap both bounds at the size of
-  // the value set; the schema has no instance either way, and the example's own
-  // validity check is what reports that.
-  const distinctCap = unique
-    ? closedValueSet(hasItems(schema) && isSchemaObject(schema.items) ? schema.items : containsSchema)?.length
-    : undefined
+  // that set; the schema has no instance either way, and the example's own
+  // validity check is what reports it. Only `items` counts here: `contains`
+  // constrains some element rather than every one, so its value set says nothing
+  // about how long the array may be, and capping on it shrank a legitimate array
+  // to a single element. `deriveArray` draws the same distinction.
+  const distinctCap =
+    unique && containsSchema === undefined
+      ? closedValueSet(hasItems(schema) && isSchemaObject(schema.items) ? schema.items : undefined)?.length
+      : undefined
 
   const declaredMax = countBound(hasMaxItems(schema) ? schema.maxItems : undefined, 'upper')
   const maxLength = distinctCap !== undefined ? Math.min(declaredMax ?? distinctCap, distinctCap) : declaredMax
@@ -711,6 +739,12 @@ const arbitraryExpr = (schema: JSONSchema, ctx: ExprCtx): string => {
 /** The body of {@link arbitraryExpr}, once its depth guard has admitted the node. */
 const arbitraryExprAtDepth = (schema: SchemaObject, ctx: ExprCtx): string => {
   if (hasRef(schema)) {
+    // A ref that resolves nowhere in this document was never generated as a file,
+    // so `collectExampleImports` deliberately skips it — and emitting its name
+    // anyway left a bare identifier nothing imports (`Cannot find name 'Nope'`).
+    // An external `#/components/schemas/…` pointer in a bare fragment is the
+    // usual way this arrives. Degrade instead, as every unhonourable keyword does.
+    if (ctx.rootSchema !== undefined && !resolveRef(schema.$ref, ctx.rootSchema)) return 'fc.anything()'
     const name = arbitraryName(refToName(schema.$ref, ctx.suffix))
     // A reference back to the type being generated must be tied lazily; an eager
     // identifier would touch a still-uninitialized const (TDZ) at import time.
@@ -770,8 +804,26 @@ const arbitraryExprAtDepth = (schema: SchemaObject, ctx: ExprCtx): string => {
   // (tightest bounds, unioned required, merged properties) and generate from it.
   if (hasAllOf(schema)) return arbitraryExpr(mergeAllOf(schema), ctx)
 
-  if (hasOneOf(schema)) return oneofExpr(schema.oneOf, ctx)
-  if (hasAnyOf(schema)) return oneofExpr(schema.anyOf, ctx)
+  // A `oneOf`/`anyOf` branch constrains the node *alongside* its own keywords, not
+  // instead of them, so a node that declares its own shape is merged into every
+  // branch. Reading the branches alone dropped the node's `type` and
+  // `properties` and answered `fc.anything()` against an object type.
+  const branches = hasOneOf(schema) ? schema.oneOf : hasAnyOf(schema) ? schema.anyOf : undefined
+  if (branches !== undefined) {
+    const rest = withoutCombinators(schema)
+    if (!declaresOwnShape(rest)) return oneofExpr(branches, ctx)
+    // Keep every branch when they all clash, rather than emitting no choice at
+    // all: an unsatisfiable schema still has to produce *something*.
+    const viable = branches.filter((branch) => !typesConflict(rest, branch))
+    const kept = viable.length > 0 ? viable : branches
+    return chooseExpr(kept.map((branch) => arbitraryExpr({ allOf: [rest, branch] } as JSONSchema, ctx)))
+  }
+
+  // Object-likeness is settled *before* `type` is dispatched on, because the type
+  // generator settles it first too: it calls anything carrying `properties` an
+  // object whatever `type` says. Answering `type` first emitted `fc.string()`
+  // against an object type.
+  if (isObjectLike(schema)) return objectExpr(schema, ctx)
 
   if (hasType(schema)) return scalarExpr(schema.type, schema, ctx)
 
@@ -782,12 +834,15 @@ const arbitraryExprAtDepth = (schema: SchemaObject, ctx: ExprCtx): string => {
     return chooseExpr(schema.type.map((type) => scalarExpr(type, schema, ctx)))
   }
 
-  // A schema can describe an object without ever saying so — `{ properties: … }`
-  // with `type` omitted is ordinary OpenAPI. The type generator infers that, so
-  // the arbitrary has to infer it too or the two disagree about the shape.
-  if (isObjectLike(schema)) return objectExpr(schema, ctx)
-
   return 'fc.anything()'
+}
+
+/** A shallow copy of `schema` with `oneOf`/`anyOf` removed, leaving what the node says on its own. */
+const withoutCombinators = (schema: JSONSchema): JSONSchema => {
+  const rest = { ...(schema as Record<string, unknown>) }
+  delete rest['oneOf']
+  delete rest['anyOf']
+  return rest as JSONSchema
 }
 
 /**
@@ -815,7 +870,14 @@ export const generateArbitrary = (
   rootSchema?: Record<string, unknown>,
 ): string => {
   const selfArbName = arbitraryName(typeName)
-  const ctx: ExprCtx = { suffix, selfArbName, usedTie: { value: false }, lazyRefFilenames, depth: { value: 0 } }
+  const ctx: ExprCtx = {
+    suffix,
+    selfArbName,
+    usedTie: { value: false },
+    lazyRefFilenames,
+    depth: { value: 0 },
+    rootSchema,
+  }
   const expr = arbitraryExpr(schema, ctx)
 
   const body = ctx.usedTie.value
@@ -857,6 +919,12 @@ export const generateArbitrary = (
       `(${body} as fc.Arbitrary<unknown>).filter(` +
       `(value): value is ${typeName} => ${validatorName}(value) === true)`
     )
+  }
+
+  // The boolean `false` schema admits no value, so its generated type is `never`
+  // and no arbitrary can be assigned to it without saying so out loud.
+  if (schema === false) {
+    return `export const ${selfArbName}: fc.Arbitrary<${typeName}> = ${body} as fc.Arbitrary<${typeName}>`
   }
 
   return `export const ${selfArbName}: fc.Arbitrary<${typeName}> = ${body}`

@@ -36,6 +36,13 @@ const cases: Array<[string, JSONSchema]> = [
   ['uniqueItems over booleans', { type: 'array', items: { type: 'boolean' }, minItems: 5, uniqueItems: true }],
   ['uniqueItems over a 2-enum', { type: 'array', items: { enum: ['a', 'b'] }, minItems: 4, uniqueItems: true }],
   ['large integer multipleOf', { type: 'integer', multipleOf: 1_000_000 }],
+  // An exclusion on a bound equal to its opposite leaves an empty range.
+  ['exclusiveMinimum equal to maximum', { type: 'number', exclusiveMinimum: 5, maximum: 5 }],
+  ['exclusiveMaximum equal to minimum', { type: 'number', minimum: 5, exclusiveMaximum: 5 }],
+  // `k * multipleOf` must stay inside fc.integer's inclusive 32-bit maximum.
+  ['multipleOf of one', { type: 'integer', multipleOf: 1 }],
+  // `contains` constrains only some element, so it must not cap the array length.
+  ['uniqueItems with contains', { type: 'array', uniqueItems: true, contains: { const: 'x' }, minItems: 5 }],
 ] as Array<[string, JSONSchema]>
 
 describe('generated arbitraries load and sample', () => {
