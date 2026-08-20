@@ -1,3 +1,4 @@
+import { ownKey } from '../core/own-key'
 import type { IFunctionResult, RulesetFunction } from '../core/types'
 
 const JS_TYPES: Record<string, (value: unknown) => boolean> = {
@@ -24,9 +25,14 @@ export const typedEnum: RulesetFunction<Record<string, unknown>, never> = (input
   if ((input['nullable'] === true || input['x-nullable'] === true) && !types.includes('null')) {
     types.push('null')
   }
+  // `ownKey`, not a bare index: `type` comes from the linted document, so
+  // `type: valueOf` resolved to `Object.prototype.valueOf` and calling it with no
+  // receiver threw — surfacing as a bogus error-severity "rule threw" finding —
+  // while `type: constructor` returned an object for every value and quietly
+  // disabled the check.
   const checkers = types
-    .map((type) => JS_TYPES[String(type)])
-    .filter((fn): fn is (v: unknown) => boolean => Boolean(fn))
+    .map((type) => ownKey(JS_TYPES, String(type)))
+    .filter((fn): fn is (v: unknown) => boolean => fn !== undefined)
   if (checkers.length === 0) return []
 
   const results: IFunctionResult[] = []

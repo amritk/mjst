@@ -126,6 +126,22 @@ describe('filter', () => {
     if ('error' in compiled) expect(compiled.error).toContain('offset')
   })
 
+  it('refuses an expression nested past the depth cap, deterministically', () => {
+    // The parser is recursive descent, so nesting depth is stack depth. Left
+    // uncapped, `'('.repeat(20000)` failed with "Maximum call stack size
+    // exceeded at offset undefined" — a message that says nothing, at a
+    // threshold that differs between Node, Bun, and an edge runtime.
+    const nested = compileFilter(`${'('.repeat(20_000)}@${')'.repeat(20_000)}`)
+    expect(nested).toHaveProperty('error')
+    if ('error' in nested) {
+      expect(nested.error).toContain('nests deeper than')
+      // The whole expression would otherwise be echoed into a thrown ruleset error.
+      expect(nested.error.length).toBeLessThan(300)
+    }
+    // Anything a real filter would write still compiles.
+    expect(compileFilter(`${'('.repeat(99)}@${')'.repeat(99)}`)).not.toHaveProperty('error')
+  })
+
   it('memoizes compilation by source', () => {
     expect(compileFilter('@.type')).toBe(compileFilter('@.type'))
   })

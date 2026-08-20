@@ -8,7 +8,10 @@ export const oasDiscriminator: RulesetFunction = (schema, _options, context) => 
   const required = Array.isArray(schema['required']) ? schema['required'] : []
   const properties = isObject(schema['properties']) ? schema['properties'] : {}
   const results: IFunctionResult[] = []
-  if (!(property in properties)) {
+  // `Object.hasOwn`, not `in`: the discriminator name comes from the document, so
+  // `discriminator: constructor` matched `Object.prototype` and the missing
+  // property went unreported.
+  if (!Object.hasOwn(properties, property)) {
     results.push({
       message: `Discriminator "${property}" must be defined in properties`,
       path: [...context.path, 'discriminator'],

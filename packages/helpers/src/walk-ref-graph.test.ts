@@ -464,4 +464,34 @@ describe('walk-ref-graph', () => {
 
     expect((root?.schema as Record<string, unknown>)['default']).toEqual({ $defs: { a: true }, b: false })
   })
+
+  // `expandBooleanDefinitions` runs before any guarded walker, so an unguarded
+  // one blew the stack before the depth cap could report anything.
+  it('names the nesting limit instead of overflowing the stack', () => {
+    let node: Record<string, unknown> = { type: 'string' }
+    for (let i = 0; i < 2100; i++) node = { type: 'object', properties: { a: node } }
+
+    expect(() => walkRefGraph(node as never, 'Doc', {}, () => {})).toThrow(
+      /Schema nesting exceeds 2000 levels while running walkRefGraph/,
+    )
+  })
+
+  // A `default` holding a ref-shaped literal is a config value, not a
+  // reference — seeding it emitted a whole extra file for a definition nothing
+  // in the schema reaches.
+  it('does not generate a file for a $dynamicRef inside a default value', () => {
+    const filenames: string[] = []
+    walkRefGraph(
+      {
+        type: 'object',
+        default: { $dynamicRef: '#/$defs/onlyInDefault' },
+        $defs: { onlyInDefault: { type: 'string' } },
+      } as never,
+      'Doc',
+      {},
+      (node) => filenames.push(node.filename),
+    )
+
+    expect(filenames).toEqual(['doc'])
+  })
 })

@@ -1,3 +1,4 @@
+import { assignKey } from './assign-key'
 import { resolveUri, SYNTHETIC_BASE } from './build-resource-registry'
 import { refToFilename } from './ref-to-filename'
 
@@ -194,14 +195,19 @@ export const graftExternalSchemas = (
     const plan = planFor(resource, uri)
     const name = claim(refToFilename(uri), uri)
 
-    defs[name] = plan.kind === 'adopt-uri' ? { $id: uri, ...resource } : resource
+    // `assignKey`, not `defs[name] = …`: a URI whose last segment is `__proto__`
+    // reduces to that definition name, and a plain assignment there runs the
+    // prototype setter — the registered document vanishes from `$defs` while
+    // `names` still reports it, and `defs` starts inheriting the document's own
+    // keys, so a later `defs.type` reads a value the map never had.
+    assignKey(defs, name, plan.kind === 'adopt-uri' ? { $id: uri, ...resource } : resource)
 
     if (plan.kind === 'aliased') {
       // The document answers to its own `$id`; this makes the retrieval URI name
       // it too, which is the whole point of registering it under a URI. An alias
       // *resource* rather than a rewritten `$id` because both spellings stay
       // live: another registered document may well reference the `$id` one.
-      defs[claim(`${name}-retrieved`, uri)] = { $id: uri, $ref: plan.id }
+      assignKey(defs, claim(`${name}-retrieved`, uri), { $id: uri, $ref: plan.id })
     }
   }
 

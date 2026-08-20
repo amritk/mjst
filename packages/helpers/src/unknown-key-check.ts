@@ -19,12 +19,15 @@ export type UnknownKeyCheck = {
    * Builds the boolean expression that is true when `keyVar` is NOT one of the
    * known keys — an inline chain of `!==` comparisons, a `Set.has` miss, or the
    * constant `true` when there are no known keys (every key is undeclared).
+   *
+   * Self-parenthesized, so it drops into a `&&` / `||` chain or under a `!`
+   * as one term.
    */
   readonly isUnknown: (keyVar: string) => string
   /**
    * The complement of {@link isUnknown}: true when `keyVar` IS a known key — an
    * inline chain of `===` comparisons, a `Set.has` hit, or the constant `false`
-   * when there are no known keys.
+   * when there are no known keys. Self-parenthesized, like {@link isUnknown}.
    */
   readonly isKnown: (keyVar: string) => string
 }
@@ -39,11 +42,19 @@ export type UnknownKeyCheck = {
  * TypeBox compile to. Above `inlineLimit` the chain grows long enough that the
  * `Set`'s O(1) lookup wins, so a `Set` named `setName` is hoisted instead.
  *
+ * Both expressions are parenthesized whichever form they take. Only the inline
+ * chains need it, but they are the ones that need it *invisibly*: `isKnown`
+ * returns `a || b` inline and an atomic `set.has(k)` above the limit, so a
+ * caller writing `x && check.isKnown(k)` got `(x && a) || b` for a 16-key object
+ * and correct code for a 17-key one — a precedence bug that appears and
+ * disappears with a performance threshold. Parenthesizing both makes the two
+ * forms interchangeable, which is what a caller already assumes they are.
+ *
  * @example
  * const check = unknownKeyCheck(['id', 'name'], '_knownKeys0')
  * check.declarations          // []
- * check.isUnknown('_k')       // '_k !== "id" && _k !== "name"'
- * check.isKnown('_k')         // '_k === "id" || _k === "name"'
+ * check.isUnknown('_k')       // '(_k !== "id" && _k !== "name")'
+ * check.isKnown('_k')         // '(_k === "id" || _k === "name")'
  */
 export const unknownKeyCheck = (
   knownKeys: readonly string[],
@@ -56,8 +67,8 @@ export const unknownKeyCheck = (
   if (knownKeys.length <= inlineLimit) {
     return {
       declarations: [],
-      isUnknown: (keyVar) => knownKeys.map((key) => `${keyVar} !== ${JSON.stringify(key)}`).join(' && '),
-      isKnown: (keyVar) => knownKeys.map((key) => `${keyVar} === ${JSON.stringify(key)}`).join(' || '),
+      isUnknown: (keyVar) => `(${knownKeys.map((key) => `${keyVar} !== ${JSON.stringify(key)}`).join(' && ')})`,
+      isKnown: (keyVar) => `(${knownKeys.map((key) => `${keyVar} === ${JSON.stringify(key)}`).join(' || ')})`,
     }
   }
   return {

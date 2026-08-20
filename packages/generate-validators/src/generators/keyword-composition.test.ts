@@ -674,7 +674,11 @@ describe('keyword-composition', () => {
     )
 
     expect(code).not.toContain('.includes(')
-    expect(code).toContain('if (_pk0 === "a" || _pk0 === "b") continue')
+    // The parenthesisation is `unknownKeyCheck`'s, which wraps its chain so it
+    // composes as a single term; what matters here is that the test is a chain of
+    // comparisons rather than a rebuilt array.
+    expect(code).toContain('_pk0 === "a" || _pk0 === "b"')
+    expect(code).toContain(') continue')
     const validateRoot = evaluateValidator(code)
     expect(validateRoot({ a: 'x', b: 'y', c: 1 })).toBe(true)
     expect(validateRoot({ a: 'x', c: 'no' })).not.toBe(true)

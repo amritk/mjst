@@ -36,7 +36,12 @@ import { isSchemaObject } from './schema-guards'
  * // Returns: { "#meta": "#/$defs/schema" }
  */
 export const buildDynamicRefMap = (rootSchema: JSONSchema): Record<string, string> => {
-  const map: Record<string, string> = {}
+  // Null-prototype, matching `buildAnchorMap`: the keys are `#` plus an
+  // author-chosen anchor name. The `#` prefix happens to keep them clear of
+  // `Object.prototype`'s own names today, but the two maps are read the same way
+  // by the same callers and only one of them should not have to be reasoned
+  // about character by character.
+  const map = Object.create(null) as Record<string, string>
   if (!isSchemaObject(rootSchema)) return map
 
   const walk = (node: unknown, pointer: string, depth: number, inSchemaMap: boolean): void => {
@@ -49,7 +54,7 @@ export const buildDynamicRefMap = (rootSchema: JSONSchema): Record<string, strin
 
     const record = node as Record<string, unknown>
     const anchor = readKey(record, '$dynamicAnchor')
-    if (typeof anchor === 'string' && !(`#${anchor}` in map)) {
+    if (typeof anchor === 'string' && !Object.hasOwn(map, `#${anchor}`)) {
       map[`#${anchor}`] = `#${pointer}`
     }
 

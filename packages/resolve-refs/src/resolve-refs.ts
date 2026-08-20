@@ -6,9 +6,15 @@ import {
   isScopeSensitive,
   type ScopeSensitiveNodes,
 } from './dynamic-scope'
-import { pointerToPath } from './get-by-pointer'
 import { DEFAULT_MAX_DEPTH, depthLimitError } from './max-depth'
-import { type ResolvedTarget, readReference, resolveFragment } from './reference'
+import { refPathIndex } from './ref-path-index'
+import {
+  ANNOTATION_ONLY_SIBLINGS,
+  type RefKeyword,
+  type ResolvedTarget,
+  readReference,
+  resolveFragment,
+} from './reference'
 import { baseOfNode, buildResourceRegistry, type ResourceRegistry, resolveRefInScope } from './resource-registry'
 import { roleAtPath } from './role-at-path'
 import { assignKey } from './safe-assign'
@@ -22,6 +28,27 @@ const CYCLE = Symbol('cycle')
 const MISSING = Symbol('missing')
 // The inlined target plus the in-document path it came from (for `origins`).
 type CacheValue = { target: unknown; pointer: JsonPath } | typeof CYCLE | typeof MISSING
+
+/**
+ * Everything one resolve pass carries but never varies as the walk descends.
+ * The walk itself only moves through `node`, `base`, `depth` and `role`; bundling
+ * the rest keeps those four visible at each call instead of buried among eleven
+ * positional arguments that were identical every time.
+ */
+type ResolveContext = {
+  root: unknown
+  registry: ResourceRegistry
+  /** Each unique ref, resolved once per scope. Keyed by keyword, base and ref. */
+  cache: Map<string, CacheValue>
+  origins: OriginMap | undefined
+  errors: ResolveError[]
+  /** Output nodes that must not be relocated across an `$id` boundary. */
+  sensitive: ScopeSensitiveNodes
+  maxDepth: number
+  /** Where a reference was written, for the errors that name one. */
+  refPathAt: (keyword: RefKeyword, ref: string) => JsonPath
+  reportDepthLimit: () => void
+}
 
 /** Options for the in-memory resolver. */
 export type ResolveRefsOptions = {
@@ -40,22 +67,6 @@ export type ResolveRefsOptions = {
    */
   maxDepth?: number
 }
-
-/**
- * OpenAPI 3.1 Reference Objects allow only these annotation keywords beside a
- * `$ref`, and they *override* the target's — an `allOf` wrapper is not valid in
- * those positions (Path Item, Response, Parameter references). They carry no
- * validation semantics in plain JSON Schema either, so overriding is safe there
- * too; every other sibling keyword keeps the spec-correct `allOf` combination.
- */
-const ANNOTATION_ONLY_SIBLINGS = new Set(['summary', 'description'])
-
-/**
- * The depth budget for one resolve pass, carried through the walk. `reported`
- * is mutable on purpose: it is how the walk records the limit exactly once
- * instead of once per branch that trips it.
- */
-type DepthLimits = { maxDepth: number; reported: boolean }
 
 /**
  * Single-pass internal `$ref` resolver. Each unique ref string is resolved
@@ -84,55 +95,26 @@ type DepthLimits = { maxDepth: number; reported: boolean }
  * schema position carries references, so a `$ref` inside an `enum` member stays
  * the data it is.
  *
- * `sensitive` collects the output nodes that must not be relocated across an
- * `$id` boundary — the kept references and the `$dynamicAnchor`s they may reach.
+ * `context` carries the rest of the pass — among it `sensitive`, the set of
+ * output nodes that must not be relocated across an `$id` boundary: the kept
+ * references and the `$dynamicAnchor`s they may reach.
  */
-const resolveInternal = (
-  node: unknown,
-  root: unknown,
-  registry: ResourceRegistry,
-  base: string,
-  cache: Map<string, CacheValue>,
-  origins: OriginMap | undefined,
-  errors: ResolveError[],
-  limits: DepthLimits,
-  depth: number,
-  role: NodeRole,
-  sensitive: ScopeSensitiveNodes,
-): unknown => {
+const resolveNode = (node: unknown, base: string, depth: number, role: NodeRole, context: ResolveContext): unknown => {
+  const { root, registry, cache, origins, errors, sensitive, maxDepth, refPathAt, reportDepthLimit } = context
   if (node === null || typeof node !== 'object') return node
   // Instance data: `enum`, `const`, `default` and `examples` hold values, so
   // whatever keys they contain are part of the value. Hand the subtree back
   // untouched rather than reading a `$ref` (or an `$id`) out of a literal.
   if (role === 'value') return node
-  if (depth > limits.maxDepth) {
+  if (depth > maxDepth) {
     // Past the limit we hand the subtree back untouched instead of unwinding the
     // stack with a RangeError. Nothing is lost — the branch simply keeps its
-    // `$ref`s — and the failure is on `errors` where callers look. Reported once
-    // per resolve: a document that is wide *and* deep would otherwise push an
-    // error per branch and turn the error array into its own memory problem.
-    if (!limits.reported) {
-      limits.reported = true
-      errors.push(depthLimitError(limits.maxDepth))
-    }
+    // `$ref`s — and the failure is on `errors` where callers look.
+    reportDepthLimit()
     return node
   }
   if (Array.isArray(node)) {
-    const items = node.map((item, index) =>
-      resolveInternal(
-        item,
-        root,
-        registry,
-        base,
-        cache,
-        origins,
-        errors,
-        limits,
-        depth + 1,
-        childRole(role, index),
-        sensitive,
-      ),
-    )
+    const items = node.map((item, index) => resolveNode(item, base, depth + 1, childRole(role, index), context))
     if (items.some((item) => isScopeSensitive(sensitive, item))) sensitive.add(items)
     return items
   }
@@ -160,21 +142,7 @@ const resolveInternal = (
         assignKey(
           kept,
           key,
-          key === keyword
-            ? obj[key]
-            : resolveInternal(
-                obj[key],
-                root,
-                registry,
-                nodeBase,
-                cache,
-                origins,
-                errors,
-                limits,
-                depth + 1,
-                childRole(role, key),
-                sensitive,
-              ),
+          key === keyword ? obj[key] : resolveNode(obj[key], nodeBase, depth + 1, childRole(role, key), context),
         )
       }
       sensitive.add(kept)
@@ -195,7 +163,7 @@ const resolveInternal = (
     const externalRef = (): unknown => {
       errors.push({
         message: `Cannot resolve external ${keyword} "${ref}": external ref requires resolveRefsFromFile`,
-        path: [],
+        path: refPathAt(keyword, ref),
       })
       return obj
     }
@@ -248,10 +216,9 @@ const resolveInternal = (
         // A reference that resolves to nothing (a typo'd pointer or a missing
         // anchor) was previously inlined as literal `undefined` with no trace.
         // Record it and keep the original node so the failure is visible.
-        const fragment = ref.startsWith('#') ? ref.slice(1) : ref
         errors.push({
           message: `Cannot resolve internal ${keyword} "${ref}"`,
-          path: fragment === '' || fragment.startsWith('/') ? pointerToPath(fragment) : [],
+          path: refPathAt(keyword, ref),
         })
         cache.set(cacheKey, MISSING)
         return obj
@@ -259,19 +226,7 @@ const resolveInternal = (
       pointer = found.pointer
       // The target is walked with the role it has where it is *defined*, so the
       // same ref resolves the same way whoever points at it (see roleAtPath).
-      target = resolveInternal(
-        found.value,
-        root,
-        registry,
-        targetBase,
-        cache,
-        origins,
-        errors,
-        limits,
-        depth + 1,
-        roleAtPath(pointer),
-        sensitive,
-      )
+      target = resolveNode(found.value, targetBase, depth + 1, roleAtPath(pointer), context)
       cache.set(cacheKey, { target, pointer })
       // Stamp the inlined node with the path it was defined at (see resolveAt).
       // First-write-wins so the deepest definition stamps before any outer ref that
@@ -295,19 +250,7 @@ const resolveInternal = (
     const siblings: Record<string, unknown> = {}
     let siblingIsSensitive = false
     for (const key of siblingKeys) {
-      const child = resolveInternal(
-        obj[key],
-        root,
-        registry,
-        nodeBase,
-        cache,
-        origins,
-        errors,
-        limits,
-        depth + 1,
-        childRole(role, key),
-        sensitive,
-      )
+      const child = resolveNode(obj[key], nodeBase, depth + 1, childRole(role, key), context)
       assignKey(siblings, key, child)
       if (isScopeSensitive(sensitive, child)) siblingIsSensitive = true
     }
@@ -352,19 +295,7 @@ const resolveInternal = (
 
   const result: Record<string, unknown> = {}
   for (const key of Object.keys(obj)) {
-    const child = resolveInternal(
-      obj[key],
-      root,
-      registry,
-      nodeBase,
-      cache,
-      origins,
-      errors,
-      limits,
-      depth + 1,
-      childRole(role, key),
-      sensitive,
-    )
+    const child = resolveNode(obj[key], nodeBase, depth + 1, childRole(role, key), context)
     assignKey(result, key, child)
     if (isScopeSensitive(sensitive, child)) sensitive.add(result)
   }
@@ -415,21 +346,27 @@ const resolveInternal = (
 export const resolveRefs = (data: unknown, options: ResolveRefsOptions = {}): ResolveResult => {
   const origins: OriginMap | undefined = options.trackOrigins ? new Map() : undefined
   const errors: ResolveError[] = []
-  const limits: DepthLimits = { maxDepth: options.maxDepth ?? DEFAULT_MAX_DEPTH, reported: false }
-  const registry = buildResourceRegistry(data, undefined, limits.maxDepth)
-  // The document root is a schema; every other role follows from its keys.
-  const resolved = resolveInternal(
-    data,
-    data,
-    registry,
-    registry.rootBase,
-    new Map(),
+  const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH
+  // Reported once per resolve, however many branches trip it: a document that is
+  // wide *and* deep would otherwise push an error per branch and turn the error
+  // array into its own memory problem.
+  let depthLimitReported = false
+  const context: ResolveContext = {
+    root: data,
+    registry: buildResourceRegistry(data, undefined, maxDepth),
+    cache: new Map(),
     origins,
     errors,
-    limits,
-    0,
-    'schema',
-    new WeakSet(),
-  )
+    sensitive: new WeakSet(),
+    maxDepth,
+    refPathAt: refPathIndex(data, maxDepth),
+    reportDepthLimit: () => {
+      if (depthLimitReported) return
+      depthLimitReported = true
+      errors.push(depthLimitError(maxDepth))
+    },
+  }
+  // The document root is a schema; every other role follows from its keys.
+  const resolved = resolveNode(data, context.registry.rootBase, 0, 'schema', context)
   return origins ? { resolved, errors, origins } : { resolved, errors }
 }

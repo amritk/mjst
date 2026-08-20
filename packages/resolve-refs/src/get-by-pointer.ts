@@ -35,6 +35,13 @@ export const pointerToPath = (pointer: string): JsonPath => {
 }
 
 /**
+ * Whether a reference fragment is a JSON Pointer rather than a plain-name
+ * anchor. RFC 6901 pointers are empty or start with `/`; anything else names an
+ * `$anchor`.
+ */
+export const isPointerFragment = (fragment: string): boolean => fragment === '' || fragment.startsWith('/')
+
+/**
  * Walks a JSON Pointer string (RFC 6901) to the value it points to within
  * `root`. A bare `''` or `'/'` returns the root document. Segment escapes are
  * decoded (`~1` → `/`, `~0` → `~`). Returns `undefined` when any segment along

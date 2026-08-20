@@ -85,4 +85,17 @@ describe('prune-external-schemas', () => {
 
     expect(keptDefs(pruneExternalSchemas(document, new Set(['a/b', 'other'])))).toEqual(['a/b'])
   })
+
+  // Rebuilding the map with a plain assignment drops a definition the author
+  // wrote — it is not even one of the registered ones.
+  it('keeps an authored definition named __proto__ while pruning', () => {
+    const document = JSON.parse(
+      '{"$ref":"#/$defs/keep","$defs":{"keep":{"type":"string"},"__proto__":{"type":"number"},"unused":{}}}',
+    ) as Record<string, unknown>
+
+    const defs = pruneExternalSchemas(document, new Set(['unused']))['$defs'] as Record<string, unknown>
+
+    expect(Object.keys(defs).sort()).toEqual(['__proto__', 'keep'])
+    expect(Object.hasOwn(defs, '__proto__')).toBe(true)
+  })
 })

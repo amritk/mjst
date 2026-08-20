@@ -254,6 +254,71 @@ describe('string extends via a resolver', () => {
     expect(ruleset.getFunction('constructor')).toBeUndefined()
   })
 
+  it('names the rule when its entry is not a definition, a boolean, or a severity', () => {
+    // `my-rule:` with no body is the everyday version of this — YAML reads it as
+    // `null`, which reached `normalizeRule` and told the author "Cannot read
+    // properties of null (reading 'severity')".
+    expect(() => createRuleset({ rules: { 'my-rule': null } } as never)).toThrow(
+      /Rule "my-rule" must be a rule definition, a boolean, or a severity — got null/,
+    )
+    expect(() => createRuleset({ rules: { 'my-rule': [] } } as never)).toThrow(/got an array/)
+    // A malformed *override* entry used to surface as a TypeError from the middle
+    // of a lint run, because overrides are applied per document; it is caught here.
+    expect(() =>
+      createRuleset({
+        rules: { ok: { given: '$', then: { function: 'truthy' } } },
+        overrides: [{ files: ['**'], rules: { ok: null } }],
+      } as never),
+    ).toThrow(/Rule "ok" must be a rule definition/)
+  })
+
+  it('names the rule when its `given` is missing or is not a JSONPath string', () => {
+    expect(() => createRuleset({ rules: { 'my-rule': { then: { function: 'truthy' } } } } as never)).toThrow(
+      /Rule "my-rule" is missing `given`/,
+    )
+    expect(() => createRuleset({ rules: { 'my-rule': { given: 5, then: { function: 'truthy' } } } } as never)).toThrow(
+      /expected a JSONPath string, got `number`/,
+    )
+  })
+
+  it('names the malformed part of a ruleset rather than failing deep inside', () => {
+    // Each of these used to surface as a TypeError from wherever the value was
+    // first touched — "number 5 is not iterable", "overrides is not iterable",
+    // "Invalid value used as weak map key" — naming neither the field nor the rule.
+    const rules = { r: { given: '$', then: { function: 'truthy' } } }
+    expect(() => createRuleset(5 as never)).toThrow(/A ruleset must be an object/)
+    expect(() => createRuleset([] as never)).toThrow(/A ruleset must be an object/)
+    expect(() => createRuleset({ rules, overrides: {} } as never)).toThrow(/`overrides` must be an array/)
+    expect(() => createRuleset({ rules, formats: 5 } as never)).toThrow(/Rule "r" has an invalid `formats`/)
+    expect(() => createRuleset({ extends: [null], rules } as never)).toThrow(
+      /`extends` entry must be a ruleset object or a reference string/,
+    )
+  })
+
+  it('rejects an override with no `files` globs at build time', () => {
+    // `files` is read once per linted document, so a missing one used to fail
+    // per document — "Cannot read properties of undefined (reading 'filter')" —
+    // rather than when the ruleset was built.
+    expect(() =>
+      createRuleset({
+        rules: { r: { given: '$', then: { function: 'truthy' } } },
+        overrides: [{ rules: { r: 'off' } }],
+      } as never),
+    ).toThrow(/Override at index 0 must have a `files` array of globs/)
+  })
+
+  it('accepts a numeric severity as an override shorthand', () => {
+    // Overrides are documented to take a severity by name or by LSP number, but
+    // only the pointer-scoped path understood the numeric form — a file-glob
+    // override with `1` was treated as a full definition and built a broken rule.
+    const ruleset = createRuleset({
+      rules: { 'my-rule': { given: '$', severity: 'error', then: { function: 'truthy' } } },
+      overrides: [{ files: ['legacy/**'], rules: { 'my-rule': 1 } }] as never,
+    })
+    const scoped = ruleset.rulesForSource('legacy/api.yaml')
+    expect(scoped.find((rule) => rule.name === 'my-rule')?.severity).toBe(DiagnosticSeverity.Warning)
+  })
+
   it('rejects an alias that names a prototype member instead of registering it', () => {
     // The alias grammar accepts `#constructor`. Reading the definition off
     // `Object.prototype` made the "undefined alias" throw look satisfied, and

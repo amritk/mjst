@@ -5,11 +5,17 @@ import type { EditOp, Fixer, FixerRegistry } from '../../fix'
 // judges by either never converges or never fires at all.
 import { compareAlphabetically } from '../../functions/alphabetical'
 
-/** Reads the value at `path` in the parsed document, or `undefined` if absent. */
+/**
+ * Reads the value at `path` in the parsed document, or `undefined` if absent.
+ * Own properties only — a finding's path is built from document keys, so a
+ * segment named `constructor` must not resolve to the inherited function and
+ * have a fixer derive an edit from it.
+ */
 const getAtPath = (data: unknown, path: JsonPath): unknown => {
   let current: unknown = data
   for (const segment of path) {
     if (current == null || typeof current !== 'object') return undefined
+    if (!Object.hasOwn(current, segment)) return undefined
     current = (current as Record<string | number, unknown>)[segment as string]
   }
   return current
@@ -230,8 +236,12 @@ const schemaExampleDeprecated: Fixer = {
 }
 
 /**
- * Auto-fixers for the mechanically-repairable OpenAPI rules, keyed by rule
- * code. Pass these to `@amritk/lint`'s `fixDocument` (as its `fixers`), or wrap
+ * Auto-fixers for the mechanically-repairable OpenAPI rules, keyed by rule code.
+ *
+ * Pass these to `@amritk/lint`'s `fixDocument` as its `fixers`, together with a
+ * ruleset built by `createOpenApiRuleset` — the OpenAPI rules need that
+ * preset's functions and format detectors, so handing `fixDocument` the `oas`
+ * definition as plain data produces no findings and therefore no fixes. Or wrap
  * them with `createFixPlugin` for a lower-level plugin.
  */
 export const oasFixers: FixerRegistry = {

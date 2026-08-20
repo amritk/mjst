@@ -1,10 +1,12 @@
 import { detectFormat, type ParserFormat } from '../parsers'
 import { createDocument, type Document, type IDocumentOptions } from './document'
+import { bySourceThenPosition } from './order'
 import type { LintPlugin } from './plugin'
 import { runPlugins } from './plugin'
 import type { Ruleset } from './ruleset'
 import { createLinter } from './runner'
-import { DiagnosticSeverity, type IDiagnostic, type ISourceSet } from './types'
+import { severityFromName } from './severity'
+import type { DiagnosticSeverity, IDiagnostic, ISourceSet } from './types'
 
 /**
  * What a {@link LintResolver} returns: the dereferenced tree, an optional source
@@ -25,6 +27,13 @@ export type LintResolverResult = {
  * example wrapping `@amritk/resolve-refs`). Returning no `sources` means
  * findings map back to the root document only; `diagnostics` reports refs that
  * failed to resolve.
+ *
+ * The `resolved` tree must be **acyclic**. Rules are evaluated by walking it, and
+ * the walk is depth-unbounded by design (document depth is attacker-controlled,
+ * so it keeps its own stack rather than recursing) — which means a cycle is an
+ * infinite loop, not a `RangeError`. Shared subtrees are fine and expected;
+ * `@amritk/resolve-refs` keeps the `$ref` node in place when a chain would close
+ * a cycle, which is what makes its output safe here.
  */
 export type LintResolver = (
   document: Document,
@@ -64,21 +73,7 @@ type ParserSeverity = DiagnosticSeverity | 'off'
 const toParserSeverity = (value: DiagnosticSeverity | string | undefined): ParserSeverity | undefined => {
   if (value === undefined) return undefined
   if (typeof value === 'number') return value
-  if (value === 'off') return 'off'
-  const names: Record<string, DiagnosticSeverity> = {
-    error: DiagnosticSeverity.Error,
-    warn: DiagnosticSeverity.Warning,
-    info: DiagnosticSeverity.Information,
-    hint: DiagnosticSeverity.Hint,
-  }
-  return names[value]
-}
-
-const byPosition = (a: IDiagnostic, b: IDiagnostic): number => {
-  const sa = a.source ?? ''
-  const sb = b.source ?? ''
-  if (sa !== sb) return sa < sb ? -1 : 1
-  return a.range.start.line - b.range.start.line || a.range.start.character - b.range.start.character
+  return severityFromName(value)
 }
 
 /**
@@ -128,7 +123,7 @@ export const lintWithResult = async (input: string, options: LintOptions): Promi
     return result
   })
 
-  const diagnostics = [...parserResults, ...resolverDiagnostics, ...ruleResults].sort(byPosition)
+  const diagnostics = [...parserResults, ...resolverDiagnostics, ...ruleResults].sort(bySourceThenPosition)
 
   if (!plugins || plugins.length === 0) return { diagnostics, pluginData: {} }
 

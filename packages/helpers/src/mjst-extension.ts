@@ -1,6 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
-import { ownKeyword } from './own-keyword'
+import { readKey } from './read-key'
 import { isSchemaObject } from './schema-guards'
 
 /**
@@ -53,16 +53,20 @@ const warnedInstanceClasses = new Set<string>()
 // output, so we only allow characters that cannot break out of the literal.
 const SAFE_BRAND = /^[\w$ -]+$/
 
+/**
+ * Own-property reads throughout: a bare index walks the prototype chain, so an
+ * `Object.prototype['x-mjst']` set by any dependency made *every* schema in the
+ * document report the same hint — a whole API's worth of properties typed
+ * `Date`, or intersected with a brand nobody declared. This is the same question
+ * `schema-guards` asks of the keywords it guards.
+ */
 const readExtensionString = (schema: JSONSchema, field: keyof MjstExtension): string | undefined => {
   if (!isSchemaObject(schema)) return undefined
 
-  // Own property only: an inherited `x-mjst` — from a polluted `Object.prototype`
-  // or a schema built over a base object — would put a runtime hint on every node
-  // in the document, and an `instanceOf` hint replaces the node's `type` check.
-  const extension = ownKeyword(schema as Record<string, unknown>, MJST_EXTENSION_KEY)
+  const extension = readKey(schema as Record<string, unknown>, MJST_EXTENSION_KEY)
   if (typeof extension !== 'object' || extension === null) return undefined
 
-  const value = (extension as Record<string, unknown>)[field]
+  const value = readKey(extension as Record<string, unknown>, field)
   return typeof value === 'string' ? value : undefined
 }
 

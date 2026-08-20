@@ -17,7 +17,9 @@ export const or: RulesetFunction<Record<string, unknown>, IOrOptions> = (input, 
   // that is not the case, so we skip in silence rather than flag every node.
   if (!Array.isArray(properties) || properties.length < 2) return []
 
-  const present = properties.filter((property) => property in input)
+  // `Object.hasOwn`, not `in`: a rule that lists `constructor` (or `toString`)
+  // means the document's own key, and `in` answers it from `Object.prototype`.
+  const present = properties.filter((property) => Object.hasOwn(input, property))
   if (present.length > 0) return []
 
   // Match Spectral's message: a long list is abbreviated to the first three

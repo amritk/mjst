@@ -183,4 +183,20 @@ describe('graft-external-schemas', () => {
       graftExternalSchemas({ $defs: { thing: { type: 'string' } } }, { 'http://localhost:1234/thing.json': {} }),
     ).toThrow(/the root document already declares/)
   })
+
+  // A plain `defs[name] = …` on this name runs the prototype setter: the
+  // document vanishes from $defs while `names` still reports it, and the map
+  // starts inheriting the document's own keywords.
+  it('embeds a document whose URI reduces to the definition name __proto__', () => {
+    const { document, names } = graftExternalSchemas(
+      { $ref: 'https://example.com/__proto__.json' },
+      { 'https://example.com/__proto__.json': { type: 'object' } },
+    )
+
+    const defs = document['$defs'] as Record<string, unknown>
+    expect([...names]).toEqual(['__proto__'])
+    expect(Object.hasOwn(defs, '__proto__')).toBe(true)
+    expect(Object.keys(defs)).toEqual(['__proto__'])
+    expect((defs as Record<string, never>)['type']).toBeUndefined()
+  })
 })

@@ -22,13 +22,19 @@
 import { assignKey } from './assign-key'
 import { entersSchemaMap, isDataPosition } from './build-resource-registry'
 import { assertSchemaDepth } from './max-schema-depth'
+import { readKey } from './read-key'
 import { refToFilename, toKebabCase } from './ref-to-filename'
 
 /**
  * Returns true if the schema is a draft-07 document that needs upgrading.
  */
-export const isDraft07Schema = (schema: Record<string, unknown>): boolean =>
-  typeof schema['$schema'] === 'string' && schema['$schema'].includes('draft-07')
+export const isDraft07Schema = (schema: Record<string, unknown>): boolean => {
+  // `readKey`: read straight off the object, an `Object.prototype.$schema` set
+  // by any dependency would put *every* document through the draft-07 rewrite —
+  // hoisting definitions and renaming refs in schemas that declare no draft.
+  const declared = readKey(schema, '$schema')
+  return typeof declared === 'string' && declared.includes('draft-07')
+}
 
 /**
  * Rewrites `$ref` values in a schema tree using an explicit string→string map.
@@ -90,7 +96,7 @@ const hoistNestedDefs = (defs: Record<string, unknown>): Record<string, unknown>
     }
 
     const parentObj = parentSchema as Record<string, unknown>
-    const nestedDefs = parentObj['$defs'] as Record<string, unknown> | undefined
+    const nestedDefs = readKey(parentObj, '$defs') as Record<string, unknown> | undefined
 
     if (!nestedDefs || typeof nestedDefs !== 'object') {
       assignKey(hoisted, parentName, parentSchema)

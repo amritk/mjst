@@ -40,7 +40,7 @@ bun run --filter='@amritk/generate-validators' types:check
   whose type name is `ValidationResult` / `ValidationError` (every generated file
   imports those), and any type name that is not a plain TypeScript identifier —
   which the root type name and the type suffix, both passed in verbatim, can be.
-- Schema keywords are read with `@amritk/helpers/own-keyword`, never `'x' in
+- Schema keywords are read with `@amritk/helpers/read-key`, never `'x' in
   schema`: an inherited keyword makes a different validator, and
   `polluted-prototype.test.ts` pins that it cannot.
 - Nothing rewrites emitted text. A schema's own strings land in the output as

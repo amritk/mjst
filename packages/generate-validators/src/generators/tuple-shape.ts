@@ -1,4 +1,4 @@
-import { declaresKeyword, ownKeyword } from '@amritk/helpers/own-keyword'
+import { declaresKey, readKey } from '@amritk/helpers/read-key'
 
 /**
  * How a schema spells its array positions, normalised across the two dialects
@@ -29,18 +29,18 @@ import { declaresKeyword, ownKeyword } from '@amritk/helpers/own-keyword'
 export const tupleShapeOf = (
   schema: Record<string, unknown>,
 ): { tuple: unknown[] | undefined; tail: unknown; tailIsClosed: boolean } => {
-  const items = ownKeyword(schema, 'items')
-  const prefix = ownKeyword(schema, 'prefixItems')
+  const items = readKey(schema, 'items')
+  const prefix = readKey(schema, 'prefixItems')
   if (Array.isArray(prefix)) {
     return {
       tuple: prefix,
-      tail: declaresKeyword(schema, 'items') && !Array.isArray(items) ? items : undefined,
+      tail: declaresKey(schema, 'items') && !Array.isArray(items) ? items : undefined,
       tailIsClosed: items === false,
     }
   }
   if (Array.isArray(items)) {
-    const additionalItems = ownKeyword(schema, 'additionalItems')
+    const additionalItems = readKey(schema, 'additionalItems')
     return { tuple: items, tail: additionalItems, tailIsClosed: additionalItems === false }
   }
-  return { tuple: undefined, tail: declaresKeyword(schema, 'items') ? items : undefined, tailIsClosed: items === false }
+  return { tuple: undefined, tail: declaresKey(schema, 'items') ? items : undefined, tailIsClosed: items === false }
 }

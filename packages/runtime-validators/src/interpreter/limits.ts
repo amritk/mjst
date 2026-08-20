@@ -1,3 +1,5 @@
+import { DATA_KEYWORDS, SCHEMA_MAPS } from '@/interpreter/keywords'
+
 /**
  * Resource limits that keep a single validation from turning into a
  * denial-of-service. The interpreter walks arbitrary (and possibly untrusted)
@@ -134,6 +136,18 @@ export const isValidationLimitError = (value: unknown): value is Error =>
 // does (it is dead alternation). The tempting broader test — overlapping first
 // characters — is not sound: `(ab|ac)+` shares a first character yet is linear,
 // because the branches diverge before the group can repeat.
+//
+// The screen runs on an untrusted `pattern`, so it also has to be cheap *on*
+// one: a screen that can be made to pin a CPU is the very thing it exists to
+// prevent. Two bounds keep it so, and both are named below —
+// {@link MAX_GROUP_DEPTH} (rule 1's descent, which would otherwise recurse on
+// the native stack) and {@link MAX_AMBIGUITY_COMPARISONS} (rule 2's pairwise
+// scan, which is quadratic in the number of branches). Rule 2 giving up early is
+// one more entry on the known-gaps list above; running out of depth is not, and
+// fails the pattern loudly instead.
+
+/** `{n}` / `{n,}` / `{n,m}`, matched in place at an offset. Sticky, so `lastIndex` selects the offset. */
+const BOUNDED_QUANTIFIER = /\{(\d+)(,(\d*))?\}/y
 
 /** Reads a quantifier at `i`, returning whether it is an unbounded repetition and the index after it. */
 const readQuantifier = (source: string, i: number): { repetition: boolean; next: number } | null => {
@@ -148,7 +162,10 @@ const readQuantifier = (source: string, i: number): { repetition: boolean; next:
     return { repetition: false, next: source[j] === '?' || source[j] === '+' ? j + 1 : j }
   }
   if (c === '{') {
-    const m = /^\{(\d+)(,(\d*))?\}/.exec(source.slice(i))
+    // Sticky rather than `^…` against `source.slice(i)`: the slice would copy the
+    // rest of the pattern at every `{` in it.
+    BOUNDED_QUANTIFIER.lastIndex = i
+    const m = BOUNDED_QUANTIFIER.exec(source)
     if (m) {
       // `{n,}` (comma, no max) is unbounded; `{n}` and `{n,m}` are bounded and do
       // not drive exponential backtracking.
@@ -225,19 +242,38 @@ const branchMatchesChar = (branch: string, ch: string): boolean => {
 }
 
 /**
+ * How many branch pairs rule 2 will compare across one whole pattern.
+ *
+ * The test is pairwise, so a single quantified group with n branches costs
+ * n²/2 comparisons — and a `(a|b|c|…)+` with a few thousand branches is a couple
+ * of kilobytes of schema that took the screen minutes, turning the ReDoS guard
+ * into its own CPU sink. The budget is shared by every alternation in the
+ * pattern, so total screening work is bounded no matter how the branches are
+ * spread out. It is generous enough to compare every pair of an alternation up
+ * to ~200 branches, which is far past anything a person writes; beyond it the
+ * screen simply stops looking, which is the same "we found nothing" answer the
+ * known gaps already produce.
+ */
+const MAX_AMBIGUITY_COMPARISONS = 20_000
+
+/**
  * Whether two of `branches` provably match the same input, which under an
  * unbounded quantifier means an n-character input has 2^n parses. Two cases
  * qualify: branches with identical source (identical language, trivially), and
  * a single-literal-character branch that another branch also accepts. See the
  * module doc for why the broader "overlapping first characters" test is not
  * used — it is not sound.
+ *
+ * `budget` is the shared comparison allowance; running out ends the scan with
+ * `false`, so an adversarially wide alternation costs bounded work.
  */
-const hasAmbiguousAlternation = (branches: readonly string[]): boolean => {
+const hasAmbiguousAlternation = (branches: readonly string[], budget: { comparisons: number }): boolean => {
   if (branches.length < 2) return false
   for (let a = 0; a < branches.length; a++) {
     const x = branches[a] as string
     const xChar = singleLiteralChar(x)
     for (let b = a + 1; b < branches.length; b++) {
+      if (--budget.comparisons < 0) return false
       const y = branches[b] as string
       if (x === y) return true
       if (xChar !== null && branchMatchesChar(y, xChar)) return true
@@ -254,6 +290,8 @@ type RegionScan = {
   height: number
   /** Whether the region contains a quantified, provably ambiguous alternation. */
   ambiguous: boolean
+  /** Whether the region nests groups past {@link MAX_GROUP_DEPTH}, so it was never fully read. */
+  tooDeep: boolean
   /** The region's own top-level alternation branches, so a quantifier on it can be judged. */
   branches: string[]
   /** Index just past the region (at the unmatched `)`, or the end of the source). */
@@ -261,14 +299,29 @@ type RegionScan = {
 }
 
 /**
- * Scans `source` from `i` until the end or an unmatched `)`, collecting both
+ * How deep the group nesting may go before the scan stops descending.
+ *
+ * {@link scanRegion} recurses per `(`, on the native stack, and the pattern is
+ * untrusted — so `'('.repeat(30000)` overflowed it with a `RangeError`, which is
+ * neither a {@link isValidationLimitError} nor anything a caller of `validate`
+ * expects to catch. The cap turns that into a loud, ordinary rejection. No real
+ * pattern comes close: a hundred nested groups is already unreadable.
+ */
+const MAX_GROUP_DEPTH = 100
+
+/**
+ * Scans `source` from `i` until the end or an unmatched `)`, collecting the
  * signals the screen needs. Robust to malformed input — it never throws, and a
  * source it cannot parse simply scores as safe.
+ *
+ * `depth` is the group nesting of this region, bounded by {@link MAX_GROUP_DEPTH};
+ * `budget` is the shared allowance for rule 2's pairwise comparisons.
  */
-const scanRegion = (source: string, i: number): RegionScan => {
+const scanRegion = (source: string, i: number, depth: number, budget: { comparisons: number }): RegionScan => {
   let height = 0 // max over the alternation branches seen so far
   let branchHeight = 0 // max over the atoms of the branch being scanned
   let ambiguous = false
+  let tooDeep = false
   const branches: string[] = []
   let branchStart = i
   let pos = i
@@ -287,9 +340,15 @@ const scanRegion = (source: string, i: number): RegionScan => {
     let after: number
     let inner: RegionScan | null = null
     if (c === '(') {
-      inner = scanRegion(source, groupInnerStart(source, pos))
+      if (depth >= MAX_GROUP_DEPTH) {
+        // Stop descending rather than overflow the stack. The pattern is
+        // reported unanalysable, which fails it — see MAX_GROUP_DEPTH.
+        return { height, ambiguous, tooDeep: true, branches, next: source.length }
+      }
+      inner = scanRegion(source, groupInnerStart(source, pos), depth + 1, budget)
       atomHeight = inner.height
       if (inner.ambiguous) ambiguous = true
+      if (inner.tooDeep) tooDeep = true
       after = source[inner.next] === ')' ? inner.next + 1 : inner.next
     } else if (c === '[') {
       after = skipClass(source, pos)
@@ -304,7 +363,7 @@ const scanRegion = (source: string, i: number): RegionScan => {
         atomHeight += 1
         // Only an *unbounded* repetition turns an ambiguous alternation into
         // exponential backtracking: `(a|a){1,10}` tops out at 2^10 parses.
-        if (inner !== null && hasAmbiguousAlternation(inner.branches)) ambiguous = true
+        if (inner !== null && hasAmbiguousAlternation(inner.branches, budget)) ambiguous = true
       }
       after = q.next
     }
@@ -313,49 +372,23 @@ const scanRegion = (source: string, i: number): RegionScan => {
   }
   branches.push(source.slice(branchStart, pos))
   if (branchHeight > height) height = branchHeight
-  return { height, ambiguous, branches, next: pos }
+  return { height, ambiguous, tooDeep, branches, next: pos }
 }
 
 /**
  * Best-effort test for a regex source prone to catastrophic backtracking:
  * nested unbounded repetition, or a provably ambiguous alternation under an
- * unbounded quantifier. A `false` here means "we found nothing", not "this is
- * safe" — see the module doc for the known gaps.
+ * unbounded quantifier. A source nested too deeply to read is reported unsafe
+ * as well, since "we could not analyse it" is not "we found nothing". A `false`
+ * here means the latter, not "this is safe" — see the module doc for the known
+ * gaps.
  */
 export const hasUnsafeRegex = (source: string): boolean => {
-  const scan = scanRegion(source, 0)
-  return scan.height >= 2 || scan.ambiguous
+  const scan = scanRegion(source, 0, 0, { comparisons: MAX_AMBIGUITY_COMPARISONS })
+  return scan.height >= 2 || scan.ambiguous || scan.tooDeep
 }
 
 // --- Schema pattern walk ---------------------------------------------------
-
-/**
- * Keywords whose value is arbitrary *data*, not a subschema. The walk below
- * stops at these, because a schema is allowed to carry any JSON there — so
- * `{ const: { pattern: '(a+)+' } }` describes a literal object with a `pattern`
- * property, not a regex the validator will ever compile. Everything else is
- * descended into unconditionally.
- */
-const DATA_KEYWORDS = new Set(['const', 'enum', 'default', 'examples', 'example'])
-
-/**
- * Keywords whose value is a map of author-chosen names to schemas.
- *
- * Inside one the keys are names, so {@link DATA_KEYWORDS} carry no keyword
- * meaning there. Without the distinction a definition named `default` was
- * skipped outright — its `$id` never registered, and its `pattern` was never
- * screened, so a catastrophic-backtracking regex compiled with no opt-in.
- * Kept in step by hand with `@amritk/helpers`' `SCHEMA_MAPS`: this package
- * takes no `@amritk/*` dependency by design.
- */
-const SCHEMA_MAPS = new Set([
-  'properties',
-  'patternProperties',
-  '$defs',
-  'definitions',
-  'dependentSchemas',
-  'dependencies',
-])
 
 /**
  * What one build-time walk of the schema tells {@link screenSchema}'s caller
@@ -474,8 +507,9 @@ export const screenSchema = (schema: unknown, allowUnsafePatterns: boolean): Sch
           if (hasUnsafeRegex(source)) {
             throw validationLimitError(
               `Unsafe regular expression in schema "pattern": ${JSON.stringify(source)} is prone to catastrophic ` +
-                'backtracking (ReDoS risk) — it nests unbounded quantifiers, or repeats an ambiguous alternation. ' +
-                'Rewrite it, or pass `limits: { allowUnsafePatterns: true }` if the schema is trusted.',
+                'backtracking (ReDoS risk) — it nests unbounded quantifiers, repeats an ambiguous alternation, or ' +
+                'nests groups too deeply to analyse. Rewrite it, or pass ' +
+                '`limits: { allowUnsafePatterns: true }` if the schema is trusted.',
             )
           }
         },

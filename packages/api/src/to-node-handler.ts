@@ -1,5 +1,6 @@
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from 'node:http'
 
+import { defineOwnProperty } from './define-own-property'
 import { importNodeModule } from './import-node-module'
 import { DEFAULT_MAX_BODY_BYTES, payloadTooLargeError } from './payload-too-large'
 import type { Api, ApiRequest, RequestLocals } from './types'
@@ -95,7 +96,17 @@ export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandl
         queryString: () => (queryIndex === -1 ? '' : target.slice(queryIndex + 1)),
         header: (name) => {
           const value = incoming.headers[name]
-          return Array.isArray(value) ? value[0] : value
+          // `incoming.headers` is a plain object, so a lookup for a name that
+          // shadows an `Object.prototype` member ('constructor', '__proto__')
+          // hands back the inherited function or prototype instead of
+          // `undefined`. A contract may legitimately declare either as a header
+          // — `defineOwnProperty` exists so the slot can hold one — and the
+          // fetch adapter, reading through `Headers`, correctly reports it
+          // absent. Narrowing to the two shapes a real header value can take
+          // ('a, b' folded, or an array for the un-foldable ones) keeps the two
+          // adapters answering the same thing, and costs less than `hasOwn`.
+          if (typeof value === 'string') return value
+          return Array.isArray(value) ? value[0] : undefined
         },
         readBody: () => readAll().then((buffer) => JSON.parse(buffer.toString('utf8')) as unknown),
         readText: () => readAll().then((buffer) => buffer.toString('utf8')),
@@ -126,7 +137,12 @@ export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandl
         const raw = response.raw
         const rawHeaders: OutgoingHttpHeaders = {}
         raw.headers.forEach((value, name) => {
-          rawHeaders[name] = value
+          // `__proto__` is a valid HTTP field name and `Headers` accepts it, so
+          // a plain assignment here runs the prototype setter and drops the
+          // header the handler deliberately set — the same silent loss
+          // `defineOwnProperty` exists for on the request side. The fetch
+          // adapter sends it; this one has to as well.
+          defineOwnProperty(rawHeaders as Record<string, unknown>, name, value)
         })
         const setCookie = raw.headers.getSetCookie()
         if (setCookie.length > 0) rawHeaders['set-cookie'] = setCookie

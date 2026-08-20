@@ -294,7 +294,12 @@ const guardFor = (
   options: SecureRoutesOptions,
   route: AnyRouteContract,
 ): ErasedGuard => {
-  const scheme = options.securitySchemes[name]
+  // `Object.hasOwn`, not a bare lookup: a requirement naming 'constructor' or
+  // '__proto__' would otherwise resolve to the inherited `Object.prototype`
+  // member and report the wrong startup error — "has no 'x-guard' guard" for a
+  // scheme that was never defined at all. Both errors fail the build, so this
+  // is about the message naming the real mistake, not about the gate.
+  const scheme = Object.hasOwn(options.securitySchemes, name) ? options.securitySchemes[name] : undefined
   if (scheme === undefined) {
     throw new Error(
       `secureRoutes: ${where(route)} requires security scheme '${name}', which is not defined in securitySchemes.`,

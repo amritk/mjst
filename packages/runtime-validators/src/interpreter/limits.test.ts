@@ -123,6 +123,38 @@ describe('limits', () => {
     expect(validate({ type: 'object', default: { pattern: '(a+)+' } })({})).toBe(true)
   })
 
+  it('rejects a pattern whose groups nest past the native stack limit, as a limit error', () => {
+    // The screen recurses per `(`, on the native stack, and the pattern is
+    // untrusted — so a deeply nested one used to surface as a `RangeError` that
+    // `isValidationLimitError` does not recognize. It has to fail the same loud,
+    // catchable way every other rejected pattern does.
+    const nestedGroups = `${'('.repeat(30_000)}a${')'.repeat(30_000)}`
+    let thrown: unknown
+    try {
+      validate({ type: 'string', pattern: nestedGroups })
+    } catch (error) {
+      thrown = error
+    }
+    expect(isValidationLimitError(thrown)).toBe(true)
+    expect((thrown as Error).message).toMatch(/nests groups too deeply/i)
+    expect(hasUnsafeRegex(nestedGroups)).toBe(true)
+  })
+
+  it('screens a very wide alternation in bounded time', () => {
+    // Rule 2's pairwise scan is quadratic in the branch count, so a couple of
+    // kilobytes of `(a|b|c|…)+` used to pin a CPU inside the very screen that
+    // exists to stop a pattern pinning a CPU. The shared comparison budget caps
+    // it; ordinary alternations are far too small to notice.
+    const wide = Array.from({ length: 20_000 }, (_, i) => `[\\u${(0x0400 + i).toString(16).padStart(4, '0')}]`).join(
+      '|',
+    )
+    const started = performance.now()
+    // Distinct branches, so nothing here is genuinely ambiguous — the point is
+    // only that answering takes bounded work.
+    expect(hasUnsafeRegex(`(${wide})+`)).toBe(false)
+    expect(performance.now() - started).toBeLessThan(2_000)
+  })
+
   it('rejects a schema nested far past the native stack limit without a RangeError', () => {
     // The pattern screen and the anchor search both run before `maxDepth` applies,
     // so a recursive walk there surfaced as an uncatchable `RangeError` —

@@ -58,6 +58,8 @@ const KEYWORDS = [
   '$dynamicRef',
   '$dynamicAnchor',
   '$defs',
+  '$schema',
+  '$vocabulary',
 ] as const
 
 /** A value chosen to be maximally disruptive if the keyword is read at all. */
@@ -103,6 +105,13 @@ const POLLUTANT: Partial<Record<(typeof KEYWORDS)[number], unknown>> = {
   $dynamicRef: '#ghost',
   $dynamicAnchor: 'ghost',
   $defs: { Ghost: { type: 'number' } },
+  // Together these two turned *every* assertion off: an inherited `$schema`
+  // named a document already in the registry (the schema itself), and an
+  // inherited `$vocabulary` listing no vocabularies said that dialect drops the
+  // validation one — so `type`, `enum`, `required` and the bounds all became
+  // annotations and the validator accepted anything.
+  $schema: 'https://runtime-validators.invalid/schema',
+  $vocabulary: {},
 }
 
 const proto = Object.prototype as unknown as Record<string, unknown>
@@ -127,6 +136,16 @@ describe('a polluted Object.prototype', () => {
     expect(() => validate({ type: 'object', properties: { a: { $dynamicRef: '#ghost' } } } as never)({ a: 1 })).toThrow(
       /Cannot resolve \$dynamicRef/,
     )
+  })
+
+  it('does not let an inherited $vocabulary turn the validation vocabulary off', () => {
+    // The verdict cases below are written to *pass*, so a keyword that stops
+    // asserting changes nothing in them. This is the shape that exposes it: an
+    // instance the schema must reject has to keep being rejected.
+    proto['$schema'] = 'https://runtime-validators.invalid/schema'
+    proto['$vocabulary'] = {}
+    // An `$id` anywhere is what builds the registry the dialect is read from.
+    expect(validate({ $id: 'https://real.example/root', type: 'string' } as never)(42)).not.toBe(true)
   })
 
   for (const keyword of KEYWORDS) {

@@ -1003,7 +1003,7 @@ describe('generate-readme', () => {
       writeFileMock.mockImplementation(async () => {})
 
       // Clobbering a hand-written README would lose content, so we error instead.
-      await expect(generateMarkdown()).rejects.toThrow(/missing the .* markers/)
+      await expect(generateMarkdown()).rejects.toThrow(/without a .* region/)
       expect(writeFileMock).not.toHaveBeenCalled()
     })
 
@@ -1019,7 +1019,7 @@ describe('generate-readme', () => {
       })
       writeFileMock.mockImplementation(async () => {})
 
-      await expect(generateMarkdown()).rejects.toThrow(/missing the .* markers/)
+      await expect(generateMarkdown()).rejects.toThrow(/without a .* region/)
       expect(writeFileMock).not.toHaveBeenCalled()
     })
 
@@ -1472,6 +1472,165 @@ describe('generate-readme', () => {
       const [, content] = writeFileMock.mock.calls[0] ?? []
       expect(content).toContain('KEEP ME')
       expect(content).toContain('```\n<!-- config-table-start -->\n```')
+    })
+  })
+  describe('round-4 hardening', () => {
+    it('resolves a $ref that points into an array', async () => {
+      // `#/$defs/x/anyOf/0` is an ordinary pointer; refusing to index the array
+      // documented the property as a bare name with no type and no description.
+      mockFs({
+        title: 'T',
+        $defs: { holder: { anyOf: [{ type: 'string', description: 'From the first branch.' }, { type: 'number' }] } },
+        properties: { p: { $ref: '#/$defs/holder/anyOf/0' } },
+      })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).toContain('<code>string</code>')
+      expect(content).toContain('From the first branch.')
+    })
+
+    it('resolves a $ref whose segment carries a percent escape', async () => {
+      // The pointer arrives as a URI fragment, so a space is written `%20`.
+      mockFs({
+        title: 'T',
+        $defs: { 'a b': { type: 'string', description: 'Spaced definition.' } },
+        properties: { p: { $ref: '#/$defs/a%20b' } },
+      })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).toContain('Spaced definition.')
+    })
+
+    it('leaves a pointer segment alone when its percent escape is invalid', async () => {
+      mockFs({
+        title: 'T',
+        $defs: { 'a%zz': { type: 'string', description: 'Literal percent.' } },
+        properties: { p: { $ref: '#/$defs/a%zz' } },
+      })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).toContain('Literal percent.')
+    })
+
+    it('does not resolve a pointer through the prototype chain', async () => {
+      // Only own properties are addressable. A bare `current[segment]` read let
+      // an arbitrary `#/<name>` resolve to whatever had polluted the prototype.
+      const proto = Object.prototype as unknown as Record<string, unknown>
+      Object.defineProperty(proto, 'polluted', {
+        value: { type: 'string', description: 'INJECTED' },
+        configurable: true,
+      })
+      try {
+        mockFs({ title: 'T', $defs: {}, properties: { p: { $ref: '#/polluted' } } })
+
+        await expect(generateMarkdown()).resolves.toBeUndefined()
+        const [, content] = writeFileMock.mock.calls[0] ?? []
+        expect(content).toContain('<code>p</code>')
+        expect(content).not.toContain('INJECTED')
+      } finally {
+        delete proto['polluted']
+      }
+    })
+
+    it('does not index an array through a non-index name', async () => {
+      mockFs({
+        title: 'T',
+        $defs: { holder: { anyOf: [{ type: 'string' }] } },
+        properties: { p: { $ref: '#/$defs/holder/anyOf/length' } },
+      })
+
+      await expect(generateMarkdown()).resolves.toBeUndefined()
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).not.toContain('<code>1</code>')
+    })
+
+    it('omits the Required column when the required list names no declared property', async () => {
+      // The column would render and then stay blank on every row - exactly the
+      // empty column the whole-schema scan exists to suppress.
+      mockFs({
+        title: 'T',
+        properties: {
+          a: { type: 'string' },
+          nest: { type: 'object', required: ['ghost'], properties: { b: { type: 'string' } } },
+        },
+      })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).not.toContain('<th align="center">Required</th>')
+    })
+
+    it('keeps the Required column when only a nested list names a declared property', async () => {
+      mockFs({
+        title: 'T',
+        properties: {
+          nest: { type: 'object', required: ['b'], properties: { b: { type: 'string' } } },
+        },
+      })
+
+      await generateMarkdown()
+
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).toContain('<th align="center">Required</th>')
+      expect(content).toContain('✅')
+    })
+    it('refuses a schema whose $refs expand past the node budget', async () => {
+      // A definition reused twice per level doubles with depth: 3 KB of schema
+      // used to spin forever, or quietly write a README no one could open.
+      const $defs: Record<string, unknown> = { a0: { type: 'string' } }
+      for (let level = 1; level <= 24; level++) {
+        $defs[`a${level}`] = {
+          type: 'object',
+          properties: { x: { $ref: `#/$defs/a${level - 1}` }, y: { $ref: `#/$defs/a${level - 1}` } },
+        }
+      }
+      mockFs({ title: 'T', $defs, properties: { root: { $ref: '#/$defs/a24' } } })
+
+      await expect(generateMarkdown()).rejects.toThrow(/expand/i)
+      expect(writeFileMock).not.toHaveBeenCalled()
+    })
+
+    it('does not spell a non-object properties map into rows', async () => {
+      // Object.entries on a string yields its characters, which rendered rows
+      // named 0 and 1 that the column scan had nothing to fill.
+      mockFs({ title: 'T', properties: 'ab' })
+
+      await expect(generateMarkdown()).resolves.toBeUndefined()
+      const [, content] = writeFileMock.mock.calls[0] ?? []
+      expect(content).not.toContain('<code>0</code>')
+      expect(content).not.toContain('<code>1</code>')
+    })
+
+    it('names the schema file when it does not hold valid JSON', async () => {
+      readFileMock.mockImplementation(async (path) => {
+        if (typeof path === 'string' && path.includes('config.schema.json')) return '{ nope'
+        throw new Error('Unexpected file path')
+      })
+
+      await expect(generateMarkdown()).rejects.toThrow(/config\.schema\.json is not valid JSON/)
+      expect(writeFileMock).not.toHaveBeenCalled()
+    })
+    it('refuses when the markers are present but out of order', async () => {
+      // Both markers are in the file, so the message says "region", not
+      // "missing" - splicing backwards would duplicate the span between them.
+      readFileMock.mockImplementation(async (path) => {
+        if (typeof path === 'string') {
+          if (path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
+          if (path.includes('README.md')) return '<!-- config-table-end -->\nKEEP\n<!-- config-table-start -->\n'
+        }
+        throw new Error('Unexpected file path')
+      })
+      writeFileMock.mockImplementation(async () => {})
+
+      await expect(generateMarkdown()).rejects.toThrow(/in that order/)
+      expect(writeFileMock).not.toHaveBeenCalled()
     })
   })
 })

@@ -1,16 +1,25 @@
 import { isObject } from './is-object'
+import { readKey } from './read-key'
+import { isIdentifierStart, toPascalWords } from './ref-to-name'
 
 /**
  * Converts an arbitrary title string into a PascalCase TypeScript identifier.
- * Splits on any run of non-alphanumeric characters, capitalizes the first
- * letter of each word while preserving the rest (so acronyms like "API" or
- * "JSON" survive intact), and drops leading digits since an identifier may not
- * start with a number.
+ *
+ * Word splitting and capitalization come from {@link toPascalWords}, the same
+ * pass `refToName` uses, so a root type and a `$ref` to a definition of the
+ * same name cannot be spelled differently — and so a non-ASCII title survives
+ * rather than being mangled away.
+ *
+ * Leading digits are *dropped* rather than prefixed with `_` the way `refToName`
+ * does: a title is prose, so "3 amigos" reads as `Amigos`. Anything else that
+ * cannot begin an identifier (a leading combining mark, say) gets the `_`
+ * prefix, and an empty result is handed back empty so the caller can fall
+ * through to its own fallback instead of being given `_`.
  */
 const titleToPascalCase = (title: string): string => {
-  const words = title.split(/[^a-zA-Z0-9]+/).filter(Boolean)
-  const pascal = words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join('')
-  return pascal.replace(/^\d+/, '')
+  const pascal = toPascalWords(title).replace(/^\d+/, '')
+  if (pascal === '' || isIdentifierStart(pascal)) return pascal
+  return `_${pascal}`
 }
 
 /**
@@ -40,8 +49,11 @@ const titleToPascalCase = (title: string): string => {
  * ```
  */
 export const deriveRootTypeName = (schema: unknown, fallbackName?: string): string => {
-  if (isObject(schema) && typeof schema['title'] === 'string') {
-    const fromTitle = titleToPascalCase(schema['title'])
+  // `readKey`: `title` read straight off the object answers from a polluted
+  // `Object.prototype` too, which would name every generated root after it.
+  const title = isObject(schema) ? readKey(schema, 'title') : undefined
+  if (typeof title === 'string') {
+    const fromTitle = titleToPascalCase(title)
     if (fromTitle) return fromTitle
   }
 

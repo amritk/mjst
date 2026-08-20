@@ -13,7 +13,11 @@ export const oasMutuallyExclusive: RulesetFunction<Record<string, unknown>, { pr
   context,
 ) => {
   if (!isObject(input)) return []
-  const present = (options?.properties ?? []).filter((property) => input[property] !== undefined)
+  // `Object.hasOwn`, not a bare index: a rule listing `constructor` means the
+  // document's own key, which every object would otherwise appear to carry.
+  const present = (options?.properties ?? []).filter(
+    (property) => Object.hasOwn(input, property) && input[property] !== undefined,
+  )
   if (present.length <= 1) return []
   // The first present property is the "anchor"; flag every later one as the conflict.
   const [anchor, ...conflicts] = present

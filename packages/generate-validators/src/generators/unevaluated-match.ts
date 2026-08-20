@@ -1,5 +1,5 @@
 import { regexLiteral } from '@amritk/helpers/escape-regex-pattern'
-import { declaresKeyword, ownKeyword } from '@amritk/helpers/own-keyword'
+import { declaresKey, readKey } from '@amritk/helpers/read-key'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { isSchemaObject } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
@@ -126,25 +126,25 @@ const ownPropertyCoverage = (
   // `additionalProperties` (in any form) is the fallback for every key no
   // `properties` name and no pattern claims, so its mere presence sweeps the
   // object — the same reason the interpreter sets `allProps` for it.
-  if (declaresKeyword(schema, 'additionalProperties')) return ALL
+  if (declaresKey(schema, 'additionalProperties')) return ALL
   // An `unevaluatedProperties` that is not `false` sweeps the leftovers itself,
   // so an outer one sees nothing. A `false` one sweeps nothing: it only asserts
   // that the terms below already cover every key.
   if (
     !ignoreOwnUnevaluated &&
-    declaresKeyword(schema, 'unevaluatedProperties') &&
+    declaresKey(schema, 'unevaluatedProperties') &&
     schema['unevaluatedProperties'] !== false
   ) {
     return ALL
   }
 
   const terms: string[] = []
-  const properties = ownKeyword(schema, 'properties')
+  const properties = readKey(schema, 'properties')
   if (typeof properties === 'object' && properties !== null && !Array.isArray(properties)) {
     const keys = Object.keys(properties as Record<string, unknown>)
     if (keys.length > 0) terms.push(`${JSON.stringify(keys)}.includes(${keyVar})`)
   }
-  const patterns = ownKeyword(schema, 'patternProperties')
+  const patterns = readKey(schema, 'patternProperties')
   if (typeof patterns === 'object' && patterns !== null && !Array.isArray(patterns)) {
     for (const pattern of Object.keys(patterns as Record<string, unknown>)) {
       terms.push(`${regexLiteral(pattern)}.test(${keyVar})`)
@@ -171,19 +171,19 @@ const ownItemCoverage = (
   // `items: false` can only succeed when there is no such index — either way the
   // array ends up fully evaluated. The draft-07 spelling puts the tail in
   // `additionalItems`, with `items` holding the tuple.
-  const tupleItems = Array.isArray(ownKeyword(schema, 'items'))
-  if (!tupleItems && declaresKeyword(schema, 'items')) return ALL
-  if (tupleItems && declaresKeyword(schema, 'additionalItems')) return ALL
-  if (!ignoreOwnUnevaluated && declaresKeyword(schema, 'unevaluatedItems') && schema['unevaluatedItems'] !== false) {
+  const tupleItems = Array.isArray(readKey(schema, 'items'))
+  if (!tupleItems && declaresKey(schema, 'items')) return ALL
+  if (tupleItems && declaresKey(schema, 'additionalItems')) return ALL
+  if (!ignoreOwnUnevaluated && declaresKey(schema, 'unevaluatedItems') && schema['unevaluatedItems'] !== false) {
     return ALL
   }
 
   const terms: string[] = []
-  const declaredPrefix = ownKeyword(schema, 'prefixItems')
+  const declaredPrefix = readKey(schema, 'prefixItems')
   const prefix = Array.isArray(declaredPrefix)
     ? declaredPrefix
     : tupleItems
-      ? (ownKeyword(schema, 'items') as unknown[])
+      ? (readKey(schema, 'items') as unknown[])
       : null
   if (prefix && prefix.length > 0) terms.push(`${indexVar} < ${prefix.length}`)
 
@@ -193,8 +193,8 @@ const ownItemCoverage = (
   // Ajv (which marks everything) part company. When the count falls outside
   // `minContains`/`maxContains` nothing is published, but the array is invalid
   // anyway, so the term does not have to say so.
-  if (declaresKeyword(schema, 'contains')) {
-    const contained = match(itemVar, ownKeyword(schema, 'contains') as JSONSchema, ctx.depth)
+  if (declaresKey(schema, 'contains')) {
+    const contained = match(itemVar, readKey(schema, 'contains') as JSONSchema, ctx.depth)
     // A `contains` that matches everything annotates every index, so there is
     // nothing left for `unevaluatedItems` to police; one that matches nothing
     // annotates none. Pushing either as a term inlined the constant into the
@@ -234,7 +234,7 @@ const coverageOf = (
 
   // A `$dynamicRef` late-binds to whatever `$dynamicAnchor` is in the dynamic
   // scope at runtime, so there is no single target to read annotations off.
-  if (typeof ownKeyword(s, '$dynamicRef') === 'string') return null
+  if (typeof readKey(s, '$dynamicRef') === 'string') return null
 
   let coverage =
     kind === 'properties'
@@ -243,7 +243,7 @@ const coverageOf = (
 
   // `$ref` and `allOf` must both succeed for the value to be valid, so their
   // annotations always count (see the module note).
-  const ref = ownKeyword(s, '$ref')
+  const ref = readKey(s, '$ref')
   if (typeof ref === 'string') {
     if (ctx.rootSchema === undefined || ctx.seen.has(ref)) return null
     const target = resolveRef(ref, ctx.rootSchema)
@@ -264,7 +264,7 @@ const coverageOf = (
     coverage = merge(coverage, refCoverage)
   }
 
-  const allOf = ownKeyword(s, 'allOf')
+  const allOf = readKey(s, 'allOf')
   if (Array.isArray(allOf)) {
     for (const member of allOf as JSONSchema[]) {
       const memberCoverage = coverageOf(kind, member, indexVar, itemVar, acc, nest(ctx), sink, match)
@@ -276,7 +276,7 @@ const coverageOf = (
   // A branch annotates only when it validates, so its coverage rides on its own
   // match expression.
   for (const keyword of ['anyOf', 'oneOf'] as const) {
-    const branches = ownKeyword(s, keyword)
+    const branches = readKey(s, keyword)
     if (!Array.isArray(branches)) continue
     for (const branch of branches as JSONSchema[]) {
       const branchCoverage = coverageOf(kind, branch, indexVar, itemVar, acc, nest(ctx), sink, match)
@@ -291,17 +291,17 @@ const coverageOf = (
   // inner schema means failure, so it never publishes anything. The condition is
   // only bound to a local once something actually depends on it, so an `if` that
   // evaluates nothing leaves no dead declaration behind.
-  if (declaresKeyword(s, 'if')) {
+  if (declaresKey(s, 'if')) {
     const branches: { readonly coverage: Coverage; readonly negated: boolean }[] = []
     for (const [keyword, negated] of [
       ['if', false],
       ['then', false],
       ['else', true],
     ] as const) {
-      if (!declaresKeyword(s, keyword)) continue
+      if (!declaresKey(s, keyword)) continue
       const branchCoverage = coverageOf(
         kind,
-        ownKeyword(s, keyword) as JSONSchema,
+        readKey(s, keyword) as JSONSchema,
         indexVar,
         itemVar,
         acc,
@@ -314,7 +314,7 @@ const coverageOf = (
       branches.push({ coverage: branchCoverage, negated })
     }
     if (branches.length > 0) {
-      const ifMatch = hoistCondition(sink, match(acc, ownKeyword(s, 'if') as JSONSchema, ctx.depth))
+      const ifMatch = hoistCondition(sink, match(acc, readKey(s, 'if') as JSONSchema, ctx.depth))
       for (const branch of branches) {
         coverage = merge(coverage, conditioned(branch.coverage, branch.negated ? `!${ifMatch}` : ifMatch))
       }
@@ -325,7 +325,7 @@ const coverageOf = (
   // place whenever their trigger key is present, so their coverage carries that
   // presence test.
   for (const keyword of ['dependentSchemas', 'dependencies'] as const) {
-    const dependents = ownKeyword(s, keyword)
+    const dependents = readKey(s, keyword)
     if (typeof dependents !== 'object' || dependents === null || Array.isArray(dependents)) continue
     for (const [trigger, sub] of Object.entries(dependents as Record<string, unknown>)) {
       // The array form of `dependencies` lists required keys — data, not a schema.
@@ -359,8 +359,8 @@ export const unevaluatedPropertiesExpr = (
 ): UnevaluatedExpression | null | undefined => {
   if (!isSchemaObject(schema)) return undefined
   const s = schema as Record<string, unknown>
-  if (!declaresKeyword(s, 'unevaluatedProperties')) return undefined
-  const unevaluated = ownKeyword(s, 'unevaluatedProperties')
+  if (!declaresKey(s, 'unevaluatedProperties')) return undefined
+  const unevaluated = readKey(s, 'unevaluatedProperties')
   if (unevaluated === true) return undefined
 
   const keyVar = `_uk${depth}`
@@ -417,8 +417,8 @@ export const unevaluatedItemsExpr = (
 ): UnevaluatedExpression | null | undefined => {
   if (!isSchemaObject(schema)) return undefined
   const s = schema as Record<string, unknown>
-  if (!declaresKeyword(s, 'unevaluatedItems')) return undefined
-  const unevaluated = ownKeyword(s, 'unevaluatedItems')
+  if (!declaresKey(s, 'unevaluatedItems')) return undefined
+  const unevaluated = readKey(s, 'unevaluatedItems')
   if (unevaluated === true) return undefined
 
   const indexVar = `_un${depth}`

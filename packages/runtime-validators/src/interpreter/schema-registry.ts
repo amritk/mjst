@@ -1,3 +1,6 @@
+import { DATA_KEYWORDS, SCHEMA_MAPS } from '@/interpreter/keywords'
+import { own } from '@/interpreter/own'
+
 /**
  * The `$id` registry — JSON Schema 2020-12's base-URI machinery, built once per
  * validator and consulted whenever a `$ref` needs resolving.
@@ -56,36 +59,6 @@ export type SchemaRegistry = {
  */
 export const SYNTHETIC_BASE = 'https://runtime-validators.invalid/schema'
 
-/**
- * Keywords whose value is arbitrary *data* rather than a subschema. An `$id` or
- * `$anchor` sitting inside an `enum` member is part of an instance the schema
- * describes, not a declaration, so the walk stops at these.
- *
- * Kept in step by hand with `@amritk/helpers`' `DATA_KEYWORDS`: this package
- * takes no `@amritk/*` dependency by design, so the set is restated rather than
- * imported. `example` is OpenAPI 3.0's singular spelling and belongs with
- * `examples`.
- */
-const DATA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples', 'example'])
-
-/**
- * Keywords whose value is a map of author-chosen names to schemas.
- *
- * Inside one of these the keys are *names*, so {@link DATA_KEYWORDS} carry no
- * keyword meaning there — a property or definition genuinely called `example`
- * or `default` is ordinary, and skipping its subtree would leave an `$id` or
- * `$anchor` declared inside it unregistered, turning a `$ref` to it into a
- * hard "cannot resolve" throw. Restated here for the same reason as above.
- */
-const SCHEMA_MAPS = new Set([
-  'properties',
-  'patternProperties',
-  '$defs',
-  'definitions',
-  'dependentSchemas',
-  'dependencies',
-])
-
 /** `new URL(ref, base).href`, or `undefined` when the pair does not parse. */
 export const resolveUri = (ref: string, base: string): string | undefined => {
   try {
@@ -100,19 +73,6 @@ export const withoutFragment = (uri: string): string => {
   const hash = uri.indexOf('#')
   return hash === -1 ? uri : uri.slice(0, hash)
 }
-
-/**
- * A schema keyword's value, treating an inherited name as absent.
- *
- * Schemas arrive at runtime, so a bare `node['$anchor']` answers from
- * `Object.prototype` when a dependency has polluted it — registering a phantom
- * anchor at the root, so a `$ref` naming nothing silently bound to the root
- * schema instead of failing to resolve. Spelled out rather than importing
- * `@amritk/helpers`' `readKey`: this package takes no `@amritk/*` dependency
- * by design.
- */
-const own = (schema: Record<string, unknown>, keyword: string): unknown =>
-  Object.hasOwn(schema, keyword) ? schema[keyword] : undefined
 
 /**
  * The base URI a subschema establishes through its `$id`, or the enclosing base
