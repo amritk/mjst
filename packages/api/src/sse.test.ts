@@ -80,4 +80,18 @@ describe('sse', () => {
     await reader.cancel()
     expect(cleaned).toBe(true)
   })
+
+  it('drops a retry value that is not a finite number', () => {
+    // `retry` is the one field typed as a number, which is why it was the one
+    // left uninterpolated-unsafely: a value that is a number only to the type
+    // checker (read out of a JSON payload, say) would otherwise carry its
+    // newlines straight into the frame and forge fields and whole events.
+    const forged = formatSse({ retry: '1\ndata: injected\n\nevent: forged' as unknown as number, data: 'real' })
+    expect(forged).toBe('data: real\n\n')
+  })
+
+  it('keeps a retry value the spec can read, truncated to an integer', () => {
+    expect(formatSse({ retry: 3000 })).toBe('retry: 3000\n\n')
+    expect(formatSse({ retry: 2500.75 })).toBe('retry: 2500\n\n')
+  })
 })

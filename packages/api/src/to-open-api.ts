@@ -115,6 +115,20 @@ export const toOpenApi = (
     // must use plain `{name}` templates or the document is invalid.
     const pathKey = toPathsKey(route.path)
     const pathItem = paths[pathKey] ?? {}
+    // Two routes can be distinct to the matcher and identical to OpenAPI:
+    // `/files/{p}` and `/files/{p+}` are different patterns (one segment
+    // versus one-or-more), but the paths key drops the `+`, so both want the
+    // same `paths['/files/{p}'].get`. Left alone the later one overwrote the
+    // earlier and the document quietly described half the API. A synthesized
+    // operationId catches this pair already; explicit ones slip straight past,
+    // which is why the collision is checked here rather than only there.
+    if (pathItem[route.method] !== undefined) {
+      throw new Error(
+        `Duplicate OpenAPI operation '${route.method} ${pathKey}': '${routeName}' and an earlier route both ` +
+          'document it. Path templates that differ only in a greedy marker or a parameter name are the same ' +
+          'operation to OpenAPI — give them distinct paths.',
+      )
+    }
     pathItem[route.method] = operation
     paths[pathKey] = pathItem
   }
