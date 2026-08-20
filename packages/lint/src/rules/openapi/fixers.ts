@@ -236,8 +236,12 @@ const schemaExampleDeprecated: Fixer = {
 }
 
 /**
- * Auto-fixers for the mechanically-repairable OpenAPI rules, keyed by rule
- * code. Pass these to `@amritk/lint`'s `fixDocument` (as its `fixers`), or wrap
+ * Auto-fixers for the mechanically-repairable OpenAPI rules, keyed by rule code.
+ *
+ * Pass these to `@amritk/lint`'s `fixDocument` as its `fixers`, together with a
+ * ruleset built by `createOpenApiRuleset` — the OpenAPI rules need that
+ * preset's functions and format detectors, so handing `fixDocument` the `oas`
+ * definition as plain data produces no findings and therefore no fixes. Or wrap
  * them with `createFixPlugin` for a lower-level plugin.
  */
 export const oasFixers: FixerRegistry = {

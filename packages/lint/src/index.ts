@@ -196,10 +196,30 @@ export const createRuleset = (
   return built
 }
 
+/**
+ * Decides whether a caller handed us a definition to build or a ruleset that is
+ * already built. A {@link Ruleset} carries methods; a {@link RulesetDefinition}
+ * is JSON-shaped data and never does.
+ */
+const isBuiltRuleset = (ruleset: RulesetDefinition | Ruleset): ruleset is Ruleset =>
+  typeof (ruleset as Ruleset).getFunction === 'function'
+
 /** Options for {@link lintDocument}: the document options plus ruleset controls. */
 export type ILintOptions = IDocumentOptions & {
-  /** The ruleset definition to evaluate. When omitted, no rules run. */
-  ruleset?: RulesetDefinition
+  /**
+   * The rules to evaluate: either a definition to build with the built-in
+   * functions, or a {@link Ruleset} that is already built. When omitted, no rules
+   * run.
+   *
+   * Pass a built one to use a preset that brings its own functions and format
+   * detectors — `createOpenApiRuleset()` from `@amritk/lint/rules/openapi`, say.
+   * A definition alone cannot express those, so an OpenAPI ruleset handed over as
+   * data would have every rule skipped: its functions are unknown here, and its
+   * `formats` gate matches nothing against an empty format registry.
+   * `rulesetBasePath` and `restrictTo` only apply while *building*, so they are
+   * ignored for a ruleset that already is.
+   */
+  ruleset?: RulesetDefinition | Ruleset
   /** Directory that the ruleset's string `extends` references resolve relative to. */
   rulesetBasePath?: string
   /**
@@ -259,11 +279,18 @@ export const lintDocument = async (input: string, options: ILintOptions = {}): P
  * rewritten `output`).
  */
 export const lintDocumentWithResult = async (input: string, options: ILintOptions = {}): Promise<ILintResult> => {
-  const { ruleset: rulesetDefinition, rulesetBasePath, restrictTo, ...rest } = options
-  const ruleset = createRuleset(rulesetDefinition, rulesetBasePath, {
-    ...(restrictTo !== undefined ? { restrictTo } : {}),
-  })
-  return runLint(input, ruleset, rest)
+  const { ruleset, rulesetBasePath, restrictTo, ...rest } = options
+  return runLint(input, toRuleset(ruleset, rulesetBasePath, restrictTo), rest)
+}
+
+/** Builds a definition into a {@link Ruleset}, or passes an already-built one straight through. */
+const toRuleset = (
+  ruleset: RulesetDefinition | Ruleset | undefined,
+  basePath: string | undefined,
+  restrictTo: string | undefined,
+): Ruleset => {
+  if (ruleset !== undefined && isBuiltRuleset(ruleset)) return ruleset
+  return createRuleset(ruleset, basePath, { ...(restrictTo !== undefined ? { restrictTo } : {}) })
 }
 
 /** The lint options minus the three that only exist to *build* a ruleset. */
@@ -331,14 +358,12 @@ const MAX_FIX_PASSES = 10
  * no-op that just returns the findings.
  */
 export const fixDocument = async (input: string, options: IFixOptions = {}): Promise<IFixResult> => {
-  const { fixers = {}, safeOnly, ruleset: rulesetDefinition, rulesetBasePath, restrictTo, ...lintOptions } = options
+  const { fixers = {}, safeOnly, ruleset: rulesetOption, rulesetBasePath, restrictTo, ...lintOptions } = options
   const plugin = createFixPlugin(fixers, { safeOnly: safeOnly !== false })
   // One ruleset for the whole loop: every pass lints the same document against
   // the same rules, so rebuilding it per pass only bought us the chance of the
   // rules changing underneath us mid-fix.
-  const ruleset = createRuleset(rulesetDefinition, rulesetBasePath, {
-    ...(restrictTo !== undefined ? { restrictTo } : {}),
-  })
+  const ruleset = toRuleset(rulesetOption, rulesetBasePath, restrictTo)
 
   let current = input
   let passes = 0
