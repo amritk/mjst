@@ -68,6 +68,15 @@ const assertRuleEntry: (name: string, entry: unknown) => asserts entry is RuleEn
   throw new Error(`Rule "${name}" must be a rule definition, a boolean, or a severity — got ${kind}`)
 }
 
+/** Rejects a `formats` gate that is not a list of names, naming the rule that carries it. */
+const assertFormats = (name: string, formats: unknown): void => {
+  if (formats === undefined || Array.isArray(formats)) return
+  // `new Set(5)` is "number 5 is not iterable", which names neither the rule nor
+  // the field. A ruleset-level `formats` is inherited by every rule that has none
+  // of its own, so it surfaces here too.
+  throw new Error(`Rule "${name}" has an invalid \`formats\`: expected an array of format names`)
+}
+
 /**
  * Checks a rule's `given` expressions at build time so a broken one is loud here
  * rather than silently matching nothing (or the root) at run time. Alias
@@ -112,6 +121,7 @@ const normalizeRule = (
   // A rule without its own `formats` inherits the declaring ruleset's, so a
   // ruleset-level `formats` actually gates its rules (matching Spectral).
   const formats = def.formats ?? declaring.formats
+  assertFormats(name, formats)
   // Derive a per-rule docs anchor from the declaring ruleset's `documentationUrl`.
   const documentationUrl =
     def.documentationUrl ?? (declaring.documentationUrl ? `${declaring.documentationUrl}#${name}` : undefined)
@@ -248,6 +258,10 @@ const collectExtends = (
     } else {
       target = entry
     }
+    if (typeof target !== 'string' && (typeof target !== 'object' || target === null)) {
+      const kind = target === null ? 'null' : `\`${typeof target}\``
+      throw new Error(`An \`extends\` entry must be a ruleset object or a reference string — got ${kind}`)
+    }
     if (typeof target === 'string') {
       // Key the edge by (basePath, reference) so a cycle in the extends graph is
       // detected even though each file load returns a fresh object.
@@ -347,9 +361,16 @@ export type Ruleset = {
 
 /** Normalizes a ruleset definition into a {@link Ruleset} ready to run. */
 export const createRuleset = (definition: RulesetDefinition, options: RulesetOptions = {}): Ruleset => {
+  // Everything below reads fields off the definition; a primitive or an array
+  // otherwise fails somewhere deep and unhelpfully (`createRuleset(null)` used to
+  // be "Invalid value used as weak map key", from the memoization layer above).
+  if (typeof definition !== 'object' || definition === null || Array.isArray(definition)) {
+    throw new Error('A ruleset must be an object')
+  }
   const functions = options.functions ?? {}
   const formats = options.formats ?? {}
   const overrides = definition.overrides ?? []
+  if (!Array.isArray(overrides)) throw new Error('`overrides` must be an array')
   const ctx: MergeContext = {
     into: new Map<string, ResolvedRule>(),
     resolve: options.resolve,
@@ -371,7 +392,12 @@ export const createRuleset = (definition: RulesetDefinition, options: RulesetOpt
   // Overrides are applied per document, long after this point, so their entries
   // are checked here too — a malformed one used to surface as a TypeError from
   // the middle of a lint run instead of as a ruleset error at build time.
-  for (const override of overrides) {
+  for (const [index, override] of overrides.entries()) {
+    // `files` is read on every linted document, so a missing or non-array one
+    // used to fail per document rather than here.
+    if (!Array.isArray(override?.files)) {
+      throw new Error(`Override at index ${index} must have a \`files\` array of globs`)
+    }
     if (!override.rules) continue
     for (const [name, entry] of Object.entries(override.rules)) {
       assertRuleEntry(name, entry)

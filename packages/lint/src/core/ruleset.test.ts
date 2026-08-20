@@ -281,6 +281,32 @@ describe('string extends via a resolver', () => {
     )
   })
 
+  it('names the malformed part of a ruleset rather than failing deep inside', () => {
+    // Each of these used to surface as a TypeError from wherever the value was
+    // first touched — "number 5 is not iterable", "overrides is not iterable",
+    // "Invalid value used as weak map key" — naming neither the field nor the rule.
+    const rules = { r: { given: '$', then: { function: 'truthy' } } }
+    expect(() => createRuleset(5 as never)).toThrow(/A ruleset must be an object/)
+    expect(() => createRuleset([] as never)).toThrow(/A ruleset must be an object/)
+    expect(() => createRuleset({ rules, overrides: {} } as never)).toThrow(/`overrides` must be an array/)
+    expect(() => createRuleset({ rules, formats: 5 } as never)).toThrow(/Rule "r" has an invalid `formats`/)
+    expect(() => createRuleset({ extends: [null], rules } as never)).toThrow(
+      /`extends` entry must be a ruleset object or a reference string/,
+    )
+  })
+
+  it('rejects an override with no `files` globs at build time', () => {
+    // `files` is read once per linted document, so a missing one used to fail
+    // per document — "Cannot read properties of undefined (reading 'filter')" —
+    // rather than when the ruleset was built.
+    expect(() =>
+      createRuleset({
+        rules: { r: { given: '$', then: { function: 'truthy' } } },
+        overrides: [{ rules: { r: 'off' } }],
+      } as never),
+    ).toThrow(/Override at index 0 must have a `files` array of globs/)
+  })
+
   it('accepts a numeric severity as an override shorthand', () => {
     // Overrides are documented to take a severity by name or by LSP number, but
     // only the pointer-scoped path understood the numeric form — a file-glob

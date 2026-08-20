@@ -177,6 +177,12 @@ export const createRuleset = (
 ): Ruleset => {
   const { restrictTo } = options
   const key = `${restrictTo ?? ''}\0${basePath ?? process.cwd()}`
+  // A definition that is not an object cannot key the WeakMap below — and is not
+  // a ruleset either. Hand it to the builder, which names the problem instead of
+  // failing as "Invalid value used as weak map key".
+  if (definition !== undefined && (typeof definition !== 'object' || definition === null)) {
+    return buildRuleset(definition, basePath, restrictTo)
+  }
   if (definition === undefined) {
     const cached = emptyRulesets.get(key)
     if (cached) return cached

@@ -135,6 +135,10 @@ export const collectCustomFunctions = (
   seen: Set<unknown>,
   options: ICollectOptions,
 ): void => {
+  // A definition that is not an object carries no `extends` and no `functions`.
+  // Reporting it is `createRuleset`'s job — this walker runs first, so it just
+  // has to not fail on the way there.
+  if (typeof definition !== 'object' || definition === null) return
   if (seen.has(definition)) return
   seen.add(definition)
   if (definition.extends) {
