@@ -56,6 +56,39 @@ const readHelperSource = async (helper: RuntimeHelperName, importExt: ImportExte
 }
 
 /**
+ * A TypeScript identifier, in the same terms `refToName` produces one: an
+ * `ID_Start` (or `_`/`$`) followed by `ID_Continue` characters, so a non-ASCII
+ * definition name is as welcome here as `Document`.
+ */
+const ROOT_TYPE_NAME = /^[\p{ID_Start}_$][\p{ID_Continue}$]*$/u
+
+/**
+ * Refuses a root type name that is not an identifier.
+ *
+ * The name is used verbatim twice: as `export type <name>` in the emitted
+ * source, and — lowercased — as the output *filename*. A caller that derives it
+ * from the document it is generating (an OpenAPI `title`, say) therefore hands
+ * schema-controlled text to both. `'x`${evil()}`'` lands inside the template
+ * literals the parsers throw with, and `'../../escaped'` makes `buildSchema`
+ * return `{ filename: '../../escaped.ts' }` — which writes outside the output
+ * directory as soon as the caller does what this function's contract tells it to
+ * and writes the files itself.
+ *
+ * The `mjst` CLI already refuses `--root-type` for exactly these two reasons,
+ * but the check belongs where the name becomes a path, so every consumer of the
+ * library inherits it rather than only the one that happens to ship a CLI.
+ */
+const assertRootTypeName = (rootTypeName: string): void => {
+  if (ROOT_TYPE_NAME.test(rootTypeName)) return
+  throw new Error(
+    `Invalid root type name ${JSON.stringify(rootTypeName)}: expected a TypeScript identifier. The name is emitted ` +
+      `as \`export type <name>\` and, lowercased, used as the output filename, so anything else either fails to ` +
+      `compile or escapes the output directory. Derive it with @amritk/helpers' \`deriveRootTypeName\`, which ` +
+      `always produces one.`,
+  )
+}
+
+/**
  * Represents a generated file with its filename and content.
  */
 export type GeneratedFile = {
@@ -73,7 +106,10 @@ export type GeneratedFile = {
  * TypeScript file, then emits an `index.ts` barrel re-exporting them all.
  *
  * @param rootSchema - The root JSON Schema to build from
- * @param rootTypeName - The name for the root type (e.g., "Document")
+ * @param rootTypeName - The name for the root type (e.g., "Document"). Must be a TypeScript
+ *   identifier: it is emitted verbatim as `export type <name>` and, lowercased, becomes the
+ *   output filename, so a name derived from an untrusted document is refused rather than
+ *   written outside the output directory.
  * @param extensions - Optional map of custom extension properties to add to specific definitions.
  *   Keys are definition names (matching $defs keys), values are records of extension property
  *   names to their JSON Schema definitions. Extensions are merged as optional properties before
@@ -169,6 +205,7 @@ export const buildSchema = async (
   caseInsensitive = false,
   schemas?: Readonly<Record<string, unknown>>,
 ): Promise<GeneratedFile[]> => {
+  assertRootTypeName(rootTypeName)
   const files: GeneratedFile[] = []
   const usedHelpers = new Set<RuntimeHelperName>()
 
