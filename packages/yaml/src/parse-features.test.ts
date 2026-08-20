@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseAllDocuments, parseDocument } from './parse-document'
+import { keyText, parseAllDocuments, parseDocument } from './parse-document'
+import type { YamlAlias, YamlNode } from './types'
 
 describe('core-schema tags', () => {
   it('forces a number to a string with !!str (keeping the raw text)', () => {
@@ -1421,5 +1422,182 @@ describe('scanning cost on colon-free documents', () => {
     const source = `${Array.from({ length: entries }, () => '- alpha beta gamma').join('\n')}\n`
     const value = parseDocument(source).toJS()
     expect(Array.isArray(value) && value.length).toBe(entries)
+  })
+})
+
+describe('resource exhaustion through a mapping key', () => {
+  it('parses a key built from exponentially expanding aliases without hanging', { timeout: 10_000 }, () => {
+    // The "billion laughs" shape, reaching the *parser* rather than `toJS`: each
+    // level names the one below it ten times, so rendering the final key expands
+    // to 10^11 nodes from 600 bytes of source. Duplicate-key tracking renders
+    // every key it sees, so `parseDocument` itself hung — on a document small
+    // enough to arrive in a request body.
+    const lines = ['a0: &a0 [x, x, x, x, x, x, x, x, x, x]']
+    for (let level = 1; level < 12; level++) {
+      lines.push(
+        `a${level}: &a${level} [${Array(10)
+          .fill(`*a${level - 1}`)
+          .join(', ')}]`,
+      )
+    }
+    lines.push('[*a11, *a11]: boom')
+    const doc = parseDocument(`${lines.join('\n')}\n`)
+    expect(doc.errors).toEqual([])
+    // Parsing renders every key, to track duplicates — so the key it produced for
+    // the last entry has to be a bounded string rather than an expansion.
+    const last = doc.contents?.kind === 'map' ? doc.contents.items.at(-1)?.key : undefined
+    const rendered = keyText(last as YamlNode)
+    expect(rendered.startsWith('[ ')).toBe(true)
+    expect(rendered.length).toBeLessThan(8_192)
+    // Projecting it is the documented resource-exhaustion throw, not a hang.
+    expect(() => doc.toJS()).toThrow(/resource-exhaustion/)
+  })
+
+  it('cuts short a key holding a very long list', () => {
+    const items = Array.from({ length: 50_000 }, (_, i) => i).join(', ')
+    const doc = parseDocument(`[${items}]: v\n`)
+    const [key] = Object.keys(doc.toJS() as object)
+    expect(key?.length).toBeLessThan(8_192)
+    expect(key?.endsWith('… ]')).toBe(true)
+  })
+
+  it('renders a deeply chained alias key without overflowing the stack', () => {
+    // An alias chain is not bounded by the parser's nesting cap — every link sits
+    // at the same depth — so the key renderer needs a bound of its own, and it
+    // has to stop well before the stack does.
+    const leaf = { kind: 'scalar', value: 'leaf', source: 'leaf', style: 'plain', start: 0, end: 4 } as YamlNode
+    let chain: YamlNode = leaf
+    for (let i = 0; i < 50_000; i++) chain = { kind: 'alias', source: 'x', start: 0, end: 0, target: chain }
+    expect(keyText(chain)).toBe('…')
+    // A chain short enough to afford still resolves through to the value it names.
+    let short: YamlNode = leaf
+    for (let i = 0; i < 100; i++) short = { kind: 'alias', source: 'x', start: 0, end: 0, target: short }
+    expect(keyText(short)).toBe('leaf')
+  })
+
+  it('does not loop forever on a hand-built cyclic alias', () => {
+    // `keyText` is exported and `nodeAtPath` hands it whatever tree a caller
+    // built, so a cycle no parser would produce still has to terminate.
+    const cyclic = { kind: 'alias', source: 'x', start: 0, end: 0 } as YamlAlias
+    cyclic.target = cyclic
+    expect(keyText(cyclic)).toBe('…')
+  })
+})
+
+describe('the expansion budget ceiling', () => {
+  it('does not let padding buy a bigger budget', { timeout: 5_000 }, () => {
+    // The budget was `sourceLength * 100` nodes with no ceiling, so harmless
+    // padding in front of a bomb raised the bar it had to clear: 2.7 MB of keys
+    // ahead of a 600-byte bomb bought a 279-million-node budget, and the
+    // projection reached 3.5 GB of resident memory over thirteen seconds before
+    // throwing. Ten times the padding is an out-of-memory kill, which is the one
+    // failure this guard exists to rule out. Capped, the same document throws in
+    // well under a second — hence the timeout, which is the assertion.
+    const padding = Array.from({ length: 130_000 }, (_, i) => `pad${i}: value${i}`).join('\n')
+    const bomb = ['a0: &a0 [x, x, x, x, x, x, x, x, x, x]']
+    for (let level = 1; level < 12; level++) {
+      bomb.push(
+        `a${level}: &a${level} [${Array(10)
+          .fill(`*a${level - 1}`)
+          .join(', ')}]`,
+      )
+    }
+    bomb.push(`boom: [*a11, *a11]`)
+    expect(() => parseDocument(`${padding}\n${bomb.join('\n')}\n`).toJS()).toThrow(/resource-exhaustion/)
+  })
+
+  it('still projects a document that legitimately leans on aliases', () => {
+    const shared = `base: &b\n${Array.from({ length: 20 }, (_, i) => `  f${i}: value${i}`).join('\n')}\n`
+    const uses = Array.from({ length: 20_000 }, (_, i) => `u${i}: *b`).join('\n')
+    const value = parseDocument(`${shared}${uses}\n`).toJS() as Record<string, unknown>
+    expect(Object.keys(value)).toHaveLength(20_001)
+    expect(value.u19999).toEqual(value.base)
+  })
+})
+
+describe('scalar folding cost', () => {
+  it('folds a scalar holding a long run of interior whitespace in linear time', { timeout: 5_000 }, () => {
+    // Trailing-whitespace trimming used to be `replace(/[ \t]+$/, '')`. The
+    // unanchored `+$` restarts at every index and walks the whole run before
+    // failing the anchor, so folding was quadratic in the length of the run: an
+    // 80 KB scalar took ten seconds, from input a caller hands straight in.
+    const run = ' '.repeat(120_000)
+    for (const source of [`a: x${run}y\n  tail\n`, `a: 'x${run}y\n  tail'\n`, `[ x${run}y\n  tail ]\n`]) {
+      expect(parseDocument(source).errors).toEqual([])
+    }
+  })
+})
+
+describe('spans of an unterminated quoted scalar', () => {
+  it('keeps a scalar ending in a backslash inside the source', () => {
+    // The escape scan stepped over two characters even when only one was left,
+    // putting the scalar's `end` — and every enclosing node's — one past the end
+    // of the input.
+    const source = 'a: "b\\'
+    const doc = parseDocument(source)
+    const value = doc.contents?.kind === 'map' ? doc.contents.items[0]?.value : undefined
+    expect(value?.end).toBe(source.length)
+    expect(doc.contents?.end).toBe(source.length)
+    expect(doc.errors.map((e) => [e.code, e.end])).toEqual([['UNTERMINATED_QUOTE', source.length]])
+  })
+})
+
+describe('stream-level diagnostics at scale', () => {
+  it('collects more tail problems than an argument list can hold', { timeout: 10_000 }, () => {
+    // The trailing problems were moved onto the last document with
+    // `push(...list)`, which passes one argument per element — V8 throws a
+    // `RangeError` somewhere past 125,000 of them. A megabyte of directives after
+    // the final document reaches that, and this parser does not throw.
+    const source = `a: 1\n...\n${'%FOO\n'.repeat(200_000)}`
+    const docs = parseAllDocuments(source)
+    expect(docs).toHaveLength(1)
+    expect(docs[0]?.warnings.length).toBe(200_000)
+  })
+})
+
+describe('the "..." document-end marker', () => {
+  it('does not treat three dots glued to content as a marker', () => {
+    // A marker has to stand alone. Matching the three dots on their own swallowed
+    // `...abc` and `....` as document ends, so `parseDocument` returned an empty
+    // document with no diagnostic at all — while `parseAllDocuments` on the very
+    // same source parsed them correctly.
+    expect(parseDocument('...abc\n').toJS()).toBe('...abc')
+    expect(parseDocument('....\n').toJS()).toBe('....')
+    expect(parseDocument('...abc: 1\n').toJS()).toEqual({ '...abc': 1 })
+    expect(parseDocument('...abc\n').errors).toEqual([])
+  })
+
+  it('still reads a marker that does stand alone as one', () => {
+    expect(parseDocument('...\n').toJS()).toBeNull()
+    expect(parseDocument('... # trailing\n').toJS()).toBeNull()
+  })
+
+  it('agrees with parseAllDocuments', () => {
+    for (const source of ['...abc\n', '....\n', '...abc: 1\n', '...\n', 'a: 1\n...\n']) {
+      const [first] = parseAllDocuments(source)
+      expect(parseDocument(source).toJS()).toEqual(first ? first.toJS() : null)
+    }
+  })
+})
+
+describe('anchor and alias names ending in ":"', () => {
+  it('warns that the ":" belongs to the name', () => {
+    // YAML makes `:` a legal anchor character, so `*x: v` names the anchor `x:`
+    // and the mapping loses its separator. The parser follows the spec, but the
+    // `UNRESOLVED_ALIAS` it earns names an anchor the author never wrote.
+    const { warnings, errors } = parseDocument('k: &x n\n*x: v\n')
+    expect(warnings.map((w) => w.code)).toEqual(['AMBIGUOUS_ANCHOR_NAME'])
+    expect(errors.map((e) => e.code)).toEqual(['UNRESOLVED_ALIAS'])
+  })
+
+  it('warns on the anchor spelling too, in block and flow context', () => {
+    expect(parseDocument('&a: key: value\n').warnings.map((w) => w.code)).toEqual(['AMBIGUOUS_ANCHOR_NAME'])
+    expect(parseDocument('{&a: 1}\n').warnings.map((w) => w.code)).toEqual(['AMBIGUOUS_ANCHOR_NAME'])
+  })
+
+  it('says nothing about an ordinary anchor or alias', () => {
+    const doc = parseDocument('a: &x 1\nb: *x\nc: [*x, &y 2]\n')
+    expect(doc.warnings).toEqual([])
+    expect(doc.errors).toEqual([])
   })
 })

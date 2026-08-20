@@ -1,4 +1,4 @@
-import { resolveDoubleQuoted, resolvePlainValue, resolveSingleQuoted } from './resolve-scalar'
+import { resolveDoubleQuoted, resolvePlainValue, resolveSingleQuoted, trimTrailingSpaces } from './resolve-scalar'
 import type {
   ParseOptions,
   YamlAlias,
@@ -762,6 +762,7 @@ const scanPropsSlow = (state: State, flow = false): NodeProps => {
         pushError(state, 'BAD_PROPERTY', 'A node cannot carry more than one anchor', state.pos, i)
       }
       anchor = src.slice(state.pos + 1, i)
+      checkAmbiguousName(state, 'Anchor', anchor, state.pos, i)
       state.pos = i
     } else if (c === BANG) {
       const i = propTokenEnd(src, state.pos + 1, len, flow)
@@ -922,6 +923,15 @@ const scanQuoted = (state: State, quote: number, parentIndent = -1): YamlScalar 
     while (i < len) {
       const c = src.charCodeAt(i)
       if (c === 92 /* \ */) {
+        // A `\` as the very last character of the input has nothing to escape.
+        // Stepping over two characters regardless put `i` — and with it the
+        // scalar's `end`, every enclosing node's `end`, and the cursor — one past
+        // the end of the source, so a package whose whole promise is exact source
+        // positions handed back a span that does not exist.
+        if (i + 1 >= len) {
+          i = len
+          break
+        }
         const e = src.charCodeAt(i + 1)
         if (e < 128 && VALID_ESCAPE[e] === 0) reportBadEscape(state, i)
         i += 2
@@ -958,6 +968,32 @@ const scanQuoted = (state: State, quote: number, parentIndent = -1): YamlScalar 
   return { kind: 'scalar', value, source, style: quote === SQUOTE ? 'single' : 'double', start, end: i }
 }
 
+/**
+ * Warns about an anchor or alias name that ends in `:`.
+ *
+ * A `:` is a legal anchor character — YAML 1.2's `ns-anchor-char` excludes only
+ * the flow indicators — so `*x: v` names the anchor `x:` and leaves the mapping
+ * with no `: ` separator at all. This parser reads it that way because that is
+ * what the spec says, but no author writing `*x: v` means it, and the report the
+ * shape earns on its own is an `UNRESOLVED_ALIAS` naming an anchor `x:` that the
+ * document never wrote — which reads as a lie to someone who typed `*x`. `yaml`
+ * (eemeli) warns here as well; `js-yaml` rejects the document outright. A
+ * warning rather than an error, because the reading really is the spec's.
+ *
+ * One comparison on the cold property path, and only for a node that carries an
+ * anchor or is an alias.
+ */
+const checkAmbiguousName = (state: State, what: string, name: string, start: number, end: number): void => {
+  if (name.length === 0 || name.charCodeAt(name.length - 1) !== COLON) return
+  pushWarning(
+    state,
+    'AMBIGUOUS_ANCHOR_NAME',
+    `${what} name "${name}" ends in ":", which YAML reads as part of the name rather than as a mapping separator`,
+    start,
+    end,
+  )
+}
+
 /** Reads a `*alias` reference. */
 const scanAlias = (state: State): YamlNode => {
   const { src, len } = state
@@ -969,6 +1005,7 @@ const scanAlias = (state: State): YamlNode => {
     i++
   }
   const name = src.slice(start + 1, i)
+  checkAmbiguousName(state, 'Alias', name, start, i)
   state.pos = i
   // Bind to whichever anchor is currently registered under this name — the one
   // in scope at this point in the document. Capturing the node identity now (not
@@ -1213,7 +1250,7 @@ const scanPlainScalar = (state: State, parentIndent: number): YamlScalar => {
 
 /** Folds plain-scalar continuation lines: single break → space, blank line → newline. */
 const foldSegments = (segments: string[]): string => {
-  let out = (segments[0] ?? '').replace(/[ \t]+$/, '')
+  let out = trimTrailingSpaces(segments[0] ?? '')
   let i = 1
   while (i < segments.length) {
     const seg = (segments[i] ?? '').trim()
@@ -2108,18 +2145,55 @@ export const keyText = (node: YamlNode): string => {
     // an empty quoted string produce, which is what a JS object can express.
     return v === null ? '' : String(v)
   }
-  return keyTextSlow(node)
+  return keyTextSlow(node, { left: MAX_KEY_TEXT_WORK })
 }
+
+/**
+ * How much work rendering one key may do: every node visited costs one unit, as
+ * does every character of scalar text emitted.
+ *
+ * An alias is re-expanded wherever it appears, so a key that holds aliases to
+ * collections that hold aliases grows its rendering exponentially from a few
+ * lines of source — the "billion laughs" shape {@link ExpansionBudget} guards
+ * `toJS` against, reaching the *parser* instead through the duplicate-key check,
+ * which renders every key it sees. A 613-byte document was enough to hang
+ * `parseDocument` outright, and `parseDocument` is the call this package
+ * promises does not throw and does not hang.
+ *
+ * The budget also ends the one walk that need not terminate at all: `keyText` is
+ * exported, `nodeAtPath` hands it whatever tree a caller built, and an alias
+ * cycle in a hand-made tree looped forever. `nodeAtPath` bounds its own alias
+ * hops for exactly that reason.
+ *
+ * Four figures of key text is far past anything a document means — the spec caps
+ * an *implicit* key at 1024 characters — so a real key is never cut short. One
+ * that is renders as much as it can afford and then {@link TRUNCATED}.
+ */
+const MAX_KEY_TEXT_WORK = 4096
+
+/** Remaining {@link MAX_KEY_TEXT_WORK} units for one key's rendering. */
+type TextBudget = { left: number }
+
+/** Stands in for the rest of a key rendering that ran past {@link MAX_KEY_TEXT_WORK}. */
+const TRUNCATED = '…'
 
 /**
  * The non-scalar half of {@link keyText}, split out for the same reason
  * `scanPropsSlow` is: duplicate-key tracking calls `keyText` for every mapping
  * key, and keeping the scalar case in a small non-recursive function leaves it
- * inlinable at that call site.
+ * inlinable at that call site. A scalar reached *through* an alias comes back
+ * here rather than to `keyText`, so that its text is charged to the budget.
  */
-const keyTextSlow = (node: YamlNode): string => {
-  if (node.kind === 'alias') return node.target ? keyText(node.target) : '*' + node.source
-  return stringifyFlow(node)
+const keyTextSlow = (node: YamlNode, budget: TextBudget): string => {
+  if (budget.left-- <= 0) return TRUNCATED
+  if (node.kind === 'scalar') {
+    const v = node.value
+    const text = typeof v === 'string' ? v : v === null ? '' : String(v)
+    budget.left -= text.length
+    return text
+  }
+  if (node.kind === 'alias') return node.target ? keyTextSlow(node.target, budget) : '*' + node.source
+  return stringifyFlow(node, budget)
 }
 
 /**
@@ -2129,42 +2203,49 @@ const keyTextSlow = (node: YamlNode): string => {
  * here it reads as `null`, because `{ a: null }` is what the source said and
  * `{ a:  }` is not a rendering of anything.
  */
-const flowText = (node: YamlNode): string => {
+const flowText = (node: YamlNode, budget: TextBudget): string => {
+  if (budget.left-- <= 0) return TRUNCATED
   if (node.kind === 'scalar') {
     const v = node.value
-    return typeof v === 'string' ? v : v === null ? 'null' : String(v)
+    const text = typeof v === 'string' ? v : v === null ? 'null' : String(v)
+    budget.left -= text.length
+    return text
   }
-  if (node.kind === 'alias') return node.target ? flowText(node.target) : '*' + node.source
-  return stringifyFlow(node)
+  if (node.kind === 'alias') return node.target ? flowText(node.target, budget) : '*' + node.source
+  return stringifyFlow(node, budget)
 }
 
 /**
  * Renders a collection used as a mapping key in flow style, so distinct keys get
- * distinct strings. Recursion is bounded by the same nesting the parser accepted
- * ({@link MAX_PARSE_DEPTH}), and only runs for the rare document that keys a
- * mapping by a collection.
+ * distinct strings. Only runs for the rare document that keys a mapping by a
+ * collection, and only ever reached from the two functions above, which have
+ * already dispatched the scalar and alias cases — hence the narrowed parameter.
+ *
+ * The budget is re-checked per item as well as per node so that a key holding a
+ * long list is cut short at the list, rather than emitting one
+ * {@link TRUNCATED} per remaining entry.
  */
-const stringifyFlow = (node: YamlNode): string => {
+const stringifyFlow = (node: YamlMap | YamlSeq, budget: TextBudget): string => {
   if (node.kind === 'seq') {
     if (node.items.length === 0) return '[]'
     let out = '[ '
     for (let i = 0; i < node.items.length; i++) {
+      if (budget.left <= 0) return out + TRUNCATED + ' ]'
       const item = node.items[i]
-      out += (i > 0 ? ', ' : '') + (item ? flowText(item) : 'null')
+      out += (i > 0 ? ', ' : '') + (item ? flowText(item, budget) : 'null')
     }
     return out + ' ]'
   }
-  if (node.kind === 'map') {
-    if (node.items.length === 0) return '{}'
-    let out = '{ '
-    for (let i = 0; i < node.items.length; i++) {
-      const pair = node.items[i]
-      if (pair === undefined) continue
-      out += (i > 0 ? ', ' : '') + flowText(pair.key) + ': ' + (pair.value ? flowText(pair.value) : 'null')
-    }
-    return out + ' }'
+  if (node.items.length === 0) return '{}'
+  let out = '{ '
+  for (let i = 0; i < node.items.length; i++) {
+    if (budget.left <= 0) return out + TRUNCATED + ' }'
+    const pair = node.items[i]
+    if (pair === undefined) continue
+    out +=
+      (i > 0 ? ', ' : '') + flowText(pair.key, budget) + ': ' + (pair.value ? flowText(pair.value, budget) : 'null')
   }
-  return flowText(node)
+  return out + ' }'
 }
 
 /**
@@ -2661,18 +2742,7 @@ const skipDocumentHead = (state: State): number => {
       state.pos = nextLineStart(src, line.contentPos, len)
       continue
     }
-    if (
-      c === DASH &&
-      src.charCodeAt(line.contentPos + 1) === DASH &&
-      src.charCodeAt(line.contentPos + 2) === DASH &&
-      (line.contentPos + 3 >= len ||
-        isSpace(src.charCodeAt(line.contentPos + 3)) ||
-        src.charCodeAt(line.contentPos + 3) === NL ||
-        // CRLF input parks a `\r` right after `---`; without this the marker is
-        // misread as a plain scalar. `isDocMarker` (stream path) already accepts
-        // CR, so this keeps the two marker detectors in agreement.
-        src.charCodeAt(line.contentPos + 3) === CR)
-    ) {
+    if (c === DASH && isDocMarker(src, line.contentPos, len)) {
       const inline = docMarkerInlineNode(state, line.contentPos)
       if (inline >= 0) return inline
       continue
@@ -2808,14 +2878,34 @@ const setMapKey = (obj: Record<string, unknown>, key: string, value: unknown): v
 
 /**
  * Nodes an alias-free document may materialize per source byte, plus a floor for
- * small documents. Only exponential alias expansion exceeds this — an ordinary
- * document has at most ~one node per few source bytes.
+ * small documents. Only exponential alias expansion exceeds this — measured over
+ * the vendored OpenAPI specs, a real document runs between 0.03 and 0.1 nodes
+ * per byte, and even a synthetic one built to lean on aliases (a shared subtree
+ * pulled in 500 times) reaches only 4.6.
  */
 const ALIAS_NODES_PER_BYTE = 100
 const MIN_ALIAS_NODE_BUDGET = 100_000
 
+/**
+ * The ceiling the per-byte allowance is held to, whatever the source length.
+ *
+ * Without one the guard scaled with the document, so padding a bomb raised the
+ * bar it had to clear: 2.7 MB of harmless keys in front of a 600-byte alias bomb
+ * bought a 279-million-node budget, and the projection reached 3.5 GB of resident
+ * memory over thirteen seconds before the throw. Ten times the padding is an
+ * out-of-memory kill — an uncatchable crash, which is precisely what this budget
+ * exists to prevent. A guard whose own limit is unbounded is not a guard.
+ *
+ * Twenty million nodes is roughly 250 MB of projected JavaScript values, and
+ * some 250 times the largest real specification here (2.7 MB of OpenAPI, 81,537
+ * nodes). A document that genuinely needs more cannot be held as a JS value on a
+ * default heap anyway, so the trade is a clear catchable error in place of a
+ * crash.
+ */
+const MAX_ALIAS_NODE_BUDGET = 20_000_000
+
 const newExpansionBudget = (sourceLength: number): ExpansionBudget => ({
-  left: Math.max(MIN_ALIAS_NODE_BUDGET, sourceLength * ALIAS_NODES_PER_BYTE),
+  left: Math.min(MAX_ALIAS_NODE_BUDGET, Math.max(MIN_ALIAS_NODE_BUDGET, sourceLength * ALIAS_NODES_PER_BYTE)),
 })
 
 /**
@@ -2860,8 +2950,19 @@ const toJsValue = (node: YamlNode | null, merge: boolean, budget: ExpansionBudge
     return out
   }
 
-  const obj: Record<string, unknown> = {}
   const items = node.items
+  // `!!set` is a mapping whose keys are the members; project to a `Set`. Tested
+  // before the object is built rather than after — the object was assembled in
+  // full, merge keys and all, only to be dropped on the next line.
+  if (node.tag === 'set') {
+    const set = new Set<unknown>()
+    for (let i = 0; i < items.length; i++) {
+      const pair = items[i]
+      if (pair) set.add(toJsValue(pair.key, merge, budget, depth + 1))
+    }
+    return set
+  }
+  const obj: Record<string, unknown> = {}
   for (let i = 0; i < items.length; i++) {
     const pair = items[i]
     if (pair === undefined) continue
@@ -2871,15 +2972,6 @@ const toJsValue = (node: YamlNode | null, merge: boolean, budget: ExpansionBudge
       continue
     }
     setMapKey(obj, keyText(key), pair.value ? toJsValue(pair.value, merge, budget, depth + 1) : null)
-  }
-  // `!!set` is a mapping whose keys are the members; project to a `Set`.
-  if (node.tag === 'set') {
-    const set = new Set<unknown>()
-    for (let i = 0; i < items.length; i++) {
-      const pair = items[i]
-      if (pair) set.add(toJsValue(pair.key, merge, budget, depth + 1))
-    }
-    return set
   }
   return obj
 }
@@ -3032,11 +3124,14 @@ export const parseDocument = (source: string, options: ParseOptions = {}): YamlD
   }
   const head = peekLine(state, 0)
   if (!head.eof) {
-    // Stop a bare `...` document-end marker from being read as a scalar.
+    // Stop a bare `...` document-end marker from being read as a scalar. The
+    // test is `isDocMarker` — the same one the stream path and `checkDocumentEnd`
+    // use — because a marker has to *stand alone*: the three dots this used to
+    // look for on their own matched `...abc` and `....` too, and returned an
+    // empty document with no diagnostic. A whole mapping (`...abc: 1`) vanished
+    // silently, which `parseAllDocuments` on the same source parses correctly.
     const c = source.charCodeAt(head.contentPos)
-    const isDocEnd =
-      c === 46 /* . */ && source.charCodeAt(head.contentPos + 1) === 46 && source.charCodeAt(head.contentPos + 2) === 46
-    if (!isDocEnd) {
+    if (c !== DOT || !isDocMarker(source, head.contentPos, state.len)) {
       state.pos = head.contentPos
       contents = parseNode(state, head.indent, -1)
       checkDocumentEnd(state)
@@ -3210,6 +3305,15 @@ export const parseAllDocuments = (source: string, options: ParseOptions = {}): Y
     state.warnings = []
     state.comments = []
     state.anchors = new Map()
+    // Anchor scope is per document, and `pendingAnchors` is part of it. Every
+    // other piece of that scope is cleared here; this one was not. No input
+    // reaches the misreport it would cause — a name is only left behind when a
+    // block mapping ends on the property line that declared it, and the leftover
+    // line then opens the next document, which registers the anchor properly —
+    // but per-document state that outlives its document is a trap either way,
+    // and the `*name` it would mislabel is the one an author is least able to
+    // explain.
+    state.pendingAnchors = null
     state.tagHandles = null
     state.yamlDirective = false
   }
@@ -3220,9 +3324,15 @@ export const parseAllDocuments = (source: string, options: ParseOptions = {}): Y
     const tail = docs[docs.length - 1]
     if (tail === undefined) docs.push(finishDocument(state, null))
     else {
-      tail.errors.push(...state.errors)
-      tail.warnings.push(...state.warnings)
-      tail.comments.push(...state.comments)
+      // Appended one at a time rather than spread: `push(...list)` passes every
+      // element as an argument, and V8 gives up somewhere past 125,000 of them
+      // with a `RangeError`. A stream can reach that — a megabyte of `%FOO`
+      // lines after its last document is 200,000 warnings — and crashing on it
+      // would break the promise this parser is built on, that problems come back
+      // on `doc.errors` instead of being thrown.
+      for (const error of state.errors) tail.errors.push(error)
+      for (const warning of state.warnings) tail.warnings.push(warning)
+      for (const comment of state.comments) tail.comments.push(comment)
     }
   }
   return docs

@@ -45,7 +45,9 @@ for (const error of doc.errors) {
    `BAD_INDENT` / `BAD_IMPLICIT_KEY` / `BAD_PROPERTY` /
    `BAD_SCALAR_CONTENT` (a `: ` inside a plain scalar). A misplaced or malformed
    directive is an **error**; an unknown directive, a non-1.2 `%YAML` version,
-   and `MULTIPLE_DOCUMENTS` are warnings. A document with errors still parses —
+   `AMBIGUOUS_ANCHOR_NAME` (an anchor or alias name ending in `:` — YAML makes
+   the `:` part of the name, so `*x: v` aliases `x:` and the mapping keeps no
+   separator), and `MULTIPLE_DOCUMENTS` are warnings. A document with errors still parses —
    check `doc.errors` rather than assuming a throw. Problems arrive in **source
    order**. The one exception to "never throws" is `toJS()` / `parse()` on a
    resource-exhaustion document — runaway alias expansion or nesting too deep to
@@ -57,7 +59,11 @@ for (const error of doc.errors) {
    becomes `{ '[ a, b ]': 'v' }`, and an empty key becomes `''` (not `'null'`),
    because a JS object key can only be a string. `keyText(node)` is exported so
    you can compute that string yourself — `nodeAtPath` matches path segments
-   against it, so a path built any other way will not find the node.
+   against it, so a path built any other way will not find the node. The
+   rendering is **bounded**: a key whose aliases expand past a few thousand
+   characters ends in `…` instead of running away, so two pathological keys can
+   render alike (and get reported as duplicates). No key a document means is
+   affected.
 8. **All three YAML line breaks work**: `\n`, `\r\n`, and a lone `\r`, in both
    the parser and `lineCounter`.
 9. **Two aliases to one anchored collection project to two copies**, not one
