@@ -627,7 +627,7 @@ describe('keyword-composition', () => {
     )
 
     expect(code).not.toContain('.includes(')
-    expect(code).toContain('if (_ak0 === "a" || _ak0 === "b") continue')
+    expect(code).toContain('if (_pk0 === "a" || _pk0 === "b") continue')
     const validateRoot = evaluateValidator(code)
     expect(validateRoot({ a: 'x', b: 'y', c: 1 })).toBe(true)
     expect(validateRoot({ a: 'x', c: 'no' })).not.toBe(true)

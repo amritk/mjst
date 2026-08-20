@@ -1428,7 +1428,6 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
   if (!isSchemaObject(schema)) return []
   const obj = ctx.objVar
   const d = ctx.depth
-  const lines: string[] = []
 
   const patternsRecord =
     declaresKeyword(schema, 'patternProperties') &&
@@ -1436,18 +1435,21 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
     schema.patternProperties !== null
       ? (schema.patternProperties as Record<string, JSONSchema>)
       : {}
-  const patternEntries = Object.entries(patternsRecord)
+  const patterns = Object.keys(patternsRecord)
 
-  for (const [pattern, sub] of patternEntries) {
-    const re = regexLiteral(pattern)
-    const kv = `_pk${d}`
+  // One key variable, because there is one sweep. Every one of these keywords
+  // asks its question of the same keys, and each used to open a `for…in` of its
+  // own: three patterns beside an `additionalProperties` schema walked the object
+  // four times over, for a body that is a handful of `if`s.
+  const kv = `_pk${d}`
+  const valueChecksFor = (sub: JSONSchema): string[] =>
     // `required` mode: the key came out of the loop over the object, so its value
     // is there to be judged. Optional mode wrote `obj[_pk0] !== undefined &&` in
     // front of every check, and a property whose value *is* `undefined` then
     // satisfied all of them — `{ a: undefined }` passed a
     // `patternProperties: { "^a": { type: "string" } }` that Ajv and the
     // interpreter both reject.
-    const valueChecks = generateValueChecks(
+    generateValueChecks(
       `\${${kv}}`,
       `${obj}[${kv}]`,
       `\`${ctx.pathPrefix}/\${escapePointer(${kv})}\``,
@@ -1456,32 +1458,25 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
       ctx,
       true,
     )
+
+  const body: string[] = []
+
+  for (const [pattern, sub] of Object.entries(patternsRecord)) {
+    const valueChecks = valueChecksFor(sub)
     if (valueChecks.length === 0) continue
-    lines.push(`  for (const ${kv} in ${obj}) {`)
-    lines.push(`    if (${re}.test(${kv})) {`)
-    lines.push(...valueChecks.map((line) => `    ${line}`))
-    lines.push(`    }`)
-    lines.push(`  }`)
+    body.push(`    if (${regexLiteral(pattern)}.test(${kv})) {`)
+    body.push(...valueChecks.map((line) => `    ${line}`))
+    body.push(`    }`)
   }
 
   // Schema-form `additionalProperties` validates every key reached by neither a
-  // declared property nor any `patternProperties` regex.
+  // declared property nor any `patternProperties` regex. It goes last in the
+  // body, which is what lets its guards stay `continue`s: there is nothing after
+  // them to skip.
   if (hasAdditionalProperties(schema) && isSchemaObject(schema.additionalProperties)) {
-    const additional = schema.additionalProperties
-    const kv = `_ak${d}`
-    // Present by construction, like the `patternProperties` values above.
-    const valueChecks = generateValueChecks(
-      `\${${kv}}`,
-      `${obj}[${kv}]`,
-      `\`${ctx.pathPrefix}/\${escapePointer(${kv})}\``,
-      additional,
-      suffix,
-      ctx,
-      true,
-    )
+    const valueChecks = valueChecksFor(schema.additionalProperties)
     if (valueChecks.length > 0) {
       const known = Object.keys(hasProperties(schema) ? schema.properties : {})
-      lines.push(`  for (const ${kv} in ${obj}) {`)
       if (known.length > 0) {
         // The declared-key test comes from the shared `unknownKeyCheck`, the same
         // emitter the `additionalProperties: false` sweep uses: inline `===`
@@ -1494,19 +1489,19 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
         for (const declaration of check.declarations) {
           ctx.hoisted.push({ declaration, reference: knownTest })
         }
-        lines.push(`    if (${knownTest}) continue`)
+        body.push(`    if (${knownTest}) continue`)
       }
-      for (const pattern of Object.keys(patternsRecord)) {
-        lines.push(`    if (${regexLiteral(pattern)}.test(${kv})) continue`)
+      for (const pattern of patterns) {
+        body.push(`    if (${regexLiteral(pattern)}.test(${kv})) continue`)
       }
       // One level of indent, not two: the checks come in carrying their own, and
       // the `continue` guards above are the loop body's real depth.
-      lines.push(...valueChecks.map((line) => `  ${line}`))
-      lines.push(`  }`)
+      body.push(...valueChecks.map((line) => `  ${line}`))
     }
   }
 
-  return lines
+  if (body.length === 0) return []
+  return [`  for (const ${kv} in ${obj}) {`, ...body, `  }`]
 }
 
 /**
