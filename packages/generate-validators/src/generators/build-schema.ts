@@ -184,6 +184,13 @@ export const escapePointer = (key: string): string =>
 `
 
 /**
+ * The type names {@link VALIDATION_RESULT_CONTENT} exports, which every generated
+ * file imports. A definition that generates one of them would be imported twice
+ * under one name, so generation refuses rather than emit a file that cannot load.
+ */
+const RESERVED_TYPE_NAMES = new Set(['ValidationResult', 'ValidationError'])
+
+/**
  * Builds all TypeScript validator files from a JSON Schema by traversing all
  * `$ref` / `$dynamicRef` references recursively (via the shared
  * `@amritk/helpers/walk-ref-graph` walker).
@@ -244,6 +251,27 @@ export const buildValidatorSchema = async (
       throw new Error(
         `${owner} generates the file "${node.filename}.ts", which is reserved for ${purpose}. Rename the ` +
           'definition (or pass a different root type name) so it gets a file of its own.',
+      )
+    }
+
+    // The same collision one level down, in the *names* rather than the files.
+    // Every generated file opens with `import type { ValidationResult,
+    // ValidationError } from './validation-result.js'`, so a definition whose type
+    // name is one of those puts the name in the file twice — once imported, once
+    // imported from its own module — which is a `TS2300` and, under Node ESM, a
+    // duplicate binding the module never loads past. `ValidationResult` was caught
+    // by the filename rule above only because its kebab form happens to be the
+    // reserved file; `ValidationError` (or anything else that PascalCases onto
+    // one, like a `$defs.validation_error`) went straight through and emitted a
+    // file that does not compile. The type name is what the emitted code says, so
+    // it is what to ask about — and a `typeSuffix` that moves it clear (a
+    // `ValidationErrorObject`) is no collision at all.
+    if (RESERVED_TYPE_NAMES.has(node.typeName)) {
+      const owner = node.isRoot ? `the root type name "${node.typeName}"` : `"${node.ref}"`
+      throw new Error(
+        `${owner} generates the type "${node.typeName}", which every generated file already imports from ` +
+          '"validation-result.ts". Rename the definition (or pass a different root type name or type suffix) so ' +
+          'the two names do not collide.',
       )
     }
 

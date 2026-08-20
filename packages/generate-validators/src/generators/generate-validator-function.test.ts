@@ -107,6 +107,29 @@ describe('generate-validator-function', () => {
     })
   })
 
+  it('keeps a control character in a property name out of the emitted source', () => {
+    // A template literal normalises a raw `<CR>` to `<LF>`, so a `"foo\rbar"`
+    // property reported its error at `"foo\nbar"` — a different property, and one
+    // the same document is free to declare beside it. A raw newline or tab simply
+    // broke the emitted line in half.
+    const schema = JSON.parse(
+      '{"type":"object","properties":{"foo\\rbar":{"type":"number"},"foo\\nbar":{"type":"number"},"tab\\tx":{"type":"number"}}}',
+    )
+    const code = generateValidatorFunction(schema, 'Control')
+
+    for (const raw of ['\r', '\n', '\t']) expect(code.includes(`/foo${raw}`) || code.includes(`/tab${raw}`)).toBe(false)
+
+    const validate = evalValidator(code)
+    expect(validate(JSON.parse('{"foo\\rbar":"x","foo\\nbar":"x","tab\\tx":"x"}'))).toEqual({
+      valid: false,
+      errors: [
+        { message: 'must be number', path: '/foo\rbar' },
+        { message: 'must be number', path: '/foo\nbar' },
+        { message: 'must be number', path: '/tab\tx' },
+      ],
+    })
+  })
+
   it('JSON-Pointer-escapes ~ and / in error paths to match the interpreter', () => {
     const schema = {
       type: 'object' as const,

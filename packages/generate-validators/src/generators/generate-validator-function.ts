@@ -358,16 +358,23 @@ const createRootContext = (rootSchema?: Record<string, unknown>): NestingContext
  * The name is appended to a backtick template-literal path (`` `${_path}/…` ``),
  * so two independent escapings apply. First the JSON Pointer escape (`~`→`~0`,
  * `/`→`~1`, `~` first) so a key containing `/` or `~` reads back unambiguously —
- * matching the paths the runtime-validators interpreter emits. Then a
- * template-literal escape of `` ` ``, `\`, and `$`, so a key like `` a`b `` or
- * `${x}` cannot terminate the literal (a build failure) or inject an
- * interpolation (a runtime `ReferenceError` / arbitrary expression).
+ * matching the paths the runtime-validators interpreter emits.
+ *
+ * Then the source escape, which is JSON's own: it covers the backslash, the
+ * quote, and — the reason to prefer it over a hand-written list — every control
+ * character. A raw carriage return survived the old list into the emitted
+ * literal, where a template normalises `<CR>` to `<LF>`, so the error for a
+ * `"foo\rbar"` property pointed at `"foo\nbar"` — a different property, and one
+ * the same document is free to declare. A raw newline or tab merely broke the
+ * emitted line in half. The two characters JSON does not care about but a
+ * template literal does, `` ` `` and `$`, are escaped after it, so a key like
+ * `` a`b `` or `${x}` can neither terminate the literal nor inject an
+ * interpolation.
  */
-const pointerSegment = (key: string): string =>
-  key
-    .replace(/~/g, '~0')
-    .replace(/\//g, '~1')
-    .replace(/[\\`$]/g, '\\$&')
+const pointerSegment = (key: string): string => {
+  const pointer = key.replace(/~/g, '~0').replace(/\//g, '~1')
+  return JSON.stringify(pointer).slice(1, -1).replace(/[`$]/g, '\\$&')
+}
 
 /**
  * Returns the `patternProperties` regex sources, or an empty array when the

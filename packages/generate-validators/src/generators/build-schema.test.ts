@@ -112,6 +112,49 @@ describe('build-schema', () => {
     })
   }
 
+  // The same collision one level down: `ValidationError` is not a reserved
+  // *filename*, so a definition named after it sailed past the rule above and
+  // emitted a file importing that name twice — once from the runtime contract
+  // every file imports, once from its own module. That is a `TS2300` for anyone
+  // building the output and a duplicate binding Node ESM never loads past.
+  for (const named of ['ValidationError', 'validation-error', 'validation_error'] as const) {
+    it(`refuses a $defs entry whose type name is ValidationError (as "${named}")`, async () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { failure: { $ref: `#/$defs/${named}` } },
+        $defs: { [named]: { type: 'object' } },
+      }
+
+      await expect(buildValidatorSchema(schema, 'Document')).rejects.toThrow(
+        'generates the type "ValidationError", which every generated file already imports',
+      )
+    })
+  }
+
+  it('refuses a root type name that collides with the runtime contract', async () => {
+    await expect(buildValidatorSchema({ type: 'string' }, 'ValidationError')).rejects.toThrow(
+      'the root type name "ValidationError" generates the type "ValidationError"',
+    )
+  })
+
+  it('allows a colliding name that a type suffix moves clear', async () => {
+    // The collision is in the emitted *name*, so a suffix that changes it is no
+    // collision at all — refusing on the filename alone would have turned this
+    // schema down for a clash it does not have.
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { failure: { $ref: '#/$defs/validation-error' } },
+      $defs: { 'validation-error': { type: 'object', properties: { message: { type: 'string' } } } },
+    }
+
+    const files = await buildValidatorSchema(schema, 'Document', 'Object')
+
+    expect(files.map((file) => file.filename)).toContain('validation-error.ts')
+    expect(files.find((file) => file.filename === 'document.ts')?.content).toContain(
+      "import { type ValidationErrorObject, validateValidationErrorObject } from './validation-error.js'",
+    )
+  })
+
   it('refuses a root type name that would overwrite index.ts', async () => {
     // The root derives its filename from the type name, so `Index` collides just
     // as a definition does — and used to leave the output with no root validator
