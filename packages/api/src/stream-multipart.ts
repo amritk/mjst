@@ -69,8 +69,14 @@ const parseHeaders = (block: string): Record<string, string> => {
   return headers
 }
 
-const attribute = (disposition: string, name: string): string | undefined => {
-  const match = new RegExp(`;\\s*${name}=(?:"([^"]*)"|([^";]+))`, 'i').exec(disposition)
+// Built once rather than per call: `attribute` runs twice for every part, and
+// only ever with these two names. `exec` on a non-global regex keeps no state,
+// so sharing them across parts is safe.
+const DISPOSITION_NAME = /;\s*name=(?:"([^"]*)"|([^";]+))/i
+const DISPOSITION_FILENAME = /;\s*filename=(?:"([^"]*)"|([^";]+))/i
+
+const attribute = (disposition: string, pattern: RegExp): string | undefined => {
+  const match = pattern.exec(disposition)
   return match?.[1] ?? match?.[2]
 }
 
@@ -198,8 +204,8 @@ async function* parseParts(
     buf = buf.subarray(separator + CRLF_CRLF.length)
 
     const disposition = headers['content-disposition'] ?? ''
-    const name = attribute(disposition, 'name') ?? ''
-    const filename = attribute(disposition, 'filename')
+    const name = attribute(disposition, DISPOSITION_NAME) ?? ''
+    const filename = attribute(disposition, DISPOSITION_FILENAME)
     const partContentType = headers['content-type']
 
     let partDone = false

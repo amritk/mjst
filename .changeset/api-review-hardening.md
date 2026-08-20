@@ -67,6 +67,12 @@ or an `x-forwarded-for` whose first hop is blank, keyed a bucket on the empty
 string rather than falling through to the next source and finally to
 `'global'`.
 
+Both Node adapters also write outgoing headers with `defineOwnProperty`.
+`__proto__` is a valid HTTP field name that `Headers` accepts, and copying it
+into the plain `OutgoingHttpHeaders` object with an assignment ran the
+prototype setter and dropped a header the handler had deliberately set — the
+fetch adapter sent it, these two did not.
+
 `secureRoutes` also looks security schemes up as own properties, so a
 requirement naming `constructor` reports the missing scheme rather than a
 missing guard, and the fetch adapter's `ResponseInit` cache is built once from

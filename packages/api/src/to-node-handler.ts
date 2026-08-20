@@ -1,5 +1,6 @@
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from 'node:http'
 
+import { defineOwnProperty } from './define-own-property'
 import { importNodeModule } from './import-node-module'
 import { DEFAULT_MAX_BODY_BYTES, payloadTooLargeError } from './payload-too-large'
 import type { Api, ApiRequest, RequestLocals } from './types'
@@ -136,7 +137,12 @@ export const toNodeHandler = (api: Api, options?: NodeHandlerOptions): NodeHandl
         const raw = response.raw
         const rawHeaders: OutgoingHttpHeaders = {}
         raw.headers.forEach((value, name) => {
-          rawHeaders[name] = value
+          // `__proto__` is a valid HTTP field name and `Headers` accepts it, so
+          // a plain assignment here runs the prototype setter and drops the
+          // header the handler deliberately set — the same silent loss
+          // `defineOwnProperty` exists for on the request side. The fetch
+          // adapter sends it; this one has to as well.
+          defineOwnProperty(rawHeaders as Record<string, unknown>, name, value)
         })
         const setCookie = raw.headers.getSetCookie()
         if (setCookie.length > 0) rawHeaders['set-cookie'] = setCookie
