@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { defineRoute } from './define-route'
 import { securityGuard } from './secure-routes'
+import { sseItemSchema } from './sse-item-schema'
 import { toOpenApi } from './to-open-api'
 import type { AnyRouteContract } from './types'
 
@@ -205,6 +206,26 @@ describe('to-open-api', () => {
     const componentSchemas = (document.components as Record<string, Record<string, unknown>>)['schemas']
     // Exactly the one schema that is actually referenced.
     expect(Object.keys(componentSchemas ?? {})).toEqual(['Shared'])
+  })
+
+  it('keeps a recursive SSE payload resolving after hoisting', () => {
+    // End to end: `sseItemSchema` re-aims the payload's `#` at
+    // `#/properties/data`, then hoisting re-roots that at the component. Both
+    // steps have to agree or the document carries a ref pointing at the SSE
+    // envelope — describing a tree node as `{ event, data, retry }`.
+    const node = { type: 'object', properties: { child: { $ref: '#' }, name: { type: 'string' } } }
+    const feed = defineRoute({
+      method: 'get',
+      path: '/feed',
+      responses: { 200: { contentType: 'text/event-stream', itemSchema: sseItemSchema(node) } },
+      handler: () => ({ status: 200, body: '' }),
+    })
+    const document = toOpenApi([feed], info)
+    const componentSchemas = (document.components as Record<string, Record<string, unknown>>)['schemas']
+    const key = Object.keys(componentSchemas ?? {})[0] as string
+    const hoisted = componentSchemas?.[key] as Record<string, Record<string, Record<string, unknown>>>
+    const child = hoisted['properties']?.['data']?.['properties'] as Record<string, Record<string, unknown>>
+    expect(child['child']).toEqual({ $ref: `#/components/schemas/${key}/properties/data` })
   })
 
   it('hoists a titled itemSchema shared across routes into components', () => {

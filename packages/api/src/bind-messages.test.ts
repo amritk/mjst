@@ -207,12 +207,11 @@ describe('bindMessages', () => {
 
   it('delivers binary frames on their own iterator', async () => {
     const socket = pushSocket()
-    const channel = bindMessages(chat, socket)
-    // Subscribe first: buffering starts on first read, so a channel nobody
-    // reads binary from does not grow an unbounded queue.
-    const binary = channel.binary
+    // Opt in: buffering is off by default, so a channel nobody reads binary
+    // from cannot grow an unbounded queue.
+    const channel = bindMessages(chat, socket, { receiveBinary: true })
     channel.accept(new Uint8Array([1, 2, 3]))
-    expect(await next(binary)).toEqual(new Uint8Array([1, 2, 3]))
+    expect(await next(channel.binary)).toEqual(new Uint8Array([1, 2, 3]))
     // And the socket stays open for contract messages alongside them.
     channel.accept(JSON.stringify({ type: 'say', text: 'hi' }))
     expect(await next(channel.messages)).toEqual({ type: 'say', text: 'hi' })
@@ -223,24 +222,22 @@ describe('bindMessages', () => {
     // A runtime that fires `error` without a following `close` would otherwise
     // leave every consumer parked forever — one leaked loop per connection.
     const socket = eventSocket()
-    const channel = bindMessages(chat, socket)
+    const channel = bindMessages(chat, socket, { receiveBinary: true })
     const binary = channel.binary
     socket.emit('error', {})
     expect(await channel.messages.next()).toEqual({ value: undefined, done: true })
     expect(await binary.next()).toEqual({ value: undefined, done: true })
   })
 
-  it('does not buffer binary frames nobody is reading', async () => {
+  it('drops binary frames unless receiveBinary asked for them', async () => {
     const socket = pushSocket()
     const channel = bindMessages(chat, socket)
     // Dropped, not queued: the queue is unbounded by design, which is wrong
     // for a stream no consumer asked for.
     for (let i = 0; i < 100; i++) channel.accept(new Uint8Array([i]))
-    const raced = await Promise.race([
-      next(channel.binary).then(() => 'yielded'),
-      new Promise((resolve) => setTimeout(() => resolve('empty'), 0)),
-    ])
-    expect(raced).toBe('empty')
+    // Already ended, so a caller who forgot the option finishes immediately
+    // rather than parking forever on an iterator that will never yield.
+    expect(await channel.binary.next()).toEqual({ value: undefined, done: true })
   })
 
   it('closes with a code the WHATWG socket API will actually send', () => {

@@ -63,9 +63,11 @@ reachable on the raw socket.
 Outbound messages are typed at compile time and validated only under
 `validateOutbound`, matching what `validateResponses` does for handler replies.
 
-Binary frames arrive on `channel.binary`, on both ends — nothing in a JSON
-contract describes them, but a peer may legitimately send them alongside
-contract messages.
+Binary frames arrive on `channel.binary`, on both ends, behind an explicit
+`receiveBinary` flag — nothing in a JSON contract describes them, but a peer
+may legitimately send them alongside contract messages. The flag rather than a
+first read, because frames arrive before a caller could subscribe and the queue
+underneath is unbounded.
 
 `messages` has no OpenAPI representation — OpenAPI has no vocabulary for a
 bidirectional message union — so it never appears in the document, and it is

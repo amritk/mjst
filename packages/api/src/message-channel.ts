@@ -50,6 +50,21 @@ export type MessageChannelOptions = {
    * little in production. Turn it on in development and tests.
    */
   readonly validateOutbound?: boolean
+  /**
+   * Buffers binary frames for `channel.binary`. Off by default.
+   *
+   * The queue underneath is deliberately unbounded, which is right for
+   * messages a consumer is draining and wrong for a stream nobody asked for:
+   * most channels never read `binary`, and a peer sending binary at one of
+   * those would grow the heap until the connection closed. Gating it on a flag
+   * rather than on first read is what makes it raceless — frames start
+   * arriving the moment the connection opens, before any caller could have
+   * subscribed.
+   *
+   * With this off, `channel.binary` is an iterator that has already ended, so
+   * reading it finishes immediately rather than hanging.
+   */
+  readonly receiveBinary?: boolean
 }
 
 /**
@@ -84,8 +99,8 @@ export const INVALID_MESSAGE_CLOSE_CODE = 4007
  */
 export const closeQuietly = (
   socket: { close: (code?: number, reason?: string) => unknown },
-  code: number,
-  reason: string,
+  code?: number,
+  reason?: string,
 ): void => {
   try {
     socket.close(code, reason)
@@ -224,8 +239,6 @@ export const createIngest = <T>(
   readonly accept: (raw: string | Uint8Array) => void
   readonly queue: ReturnType<typeof createMessageQueue<T>>
   readonly binary: ReturnType<typeof createMessageQueue<Uint8Array>>
-  /** Starts buffering binary frames. Called when a channel's `binary` is first read. */
-  readonly subscribeBinary: () => AsyncIterableIterator<Uint8Array>
 } => {
   const queue = createMessageQueue<T>()
   // Binary frames get their own queue rather than being handed back through
@@ -234,13 +247,13 @@ export const createIngest = <T>(
   // unreachable — a documented escape hatch that never yields is worse than
   // none. See `ClientMessageChannel.binary`.
   //
-  // Nothing is buffered until something subscribes. The queue is deliberately
-  // unbounded (see `createMessageQueue`), which is right for messages a
-  // consumer is reading and wrong for a stream nobody asked for: most channels
-  // never touch `binary`, and a peer sending binary at one of those would grow
-  // the heap until the connection closed, with no signal anywhere.
+  // Buffering is opt-in (`receiveBinary`). See that option for why it is a flag
+  // rather than something inferred from a first read.
   const binary = createMessageQueue<Uint8Array>()
-  let binarySubscribed = false
+  const receiveBinary = options?.receiveBinary === true
+  // Ended up front when unwanted, so a caller that reads `binary` without the
+  // option gets an immediate clean finish instead of parking forever.
+  if (!receiveBinary) binary.end()
   const accept = (raw: string | Uint8Array): void => {
     const result = parseMessage(raw, validators, discriminator)
     if (result.ok) {
@@ -257,14 +270,9 @@ export const createIngest = <T>(
       close(INVALID_MESSAGE_CLOSE_CODE, failure.message)
       return
     }
-    if (binarySubscribed && failure.reason === 'binary' && typeof raw !== 'string') binary.push(raw)
+    if (receiveBinary && failure.reason === 'binary' && typeof raw !== 'string') binary.push(raw)
   }
-  const subscribeBinary = (): AsyncIterableIterator<Uint8Array> => {
-    binarySubscribed = true
-    return binary.stream
-  }
-
-  return { accept, queue, binary, subscribeBinary }
+  return { accept, queue, binary }
 }
 
 /**

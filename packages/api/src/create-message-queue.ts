@@ -27,7 +27,13 @@ export type MessageQueue<T> = {
  */
 export const createMessageQueue = <T>(): MessageQueue<T> => {
   const buffered: T[] = []
-  const waiting: ((result: IteratorResult<T>) => void)[] = []
+  // Both halves of each parked consumer's promise. `resolve` alone was not
+  // enough: a consumer sitting in `for await` — which is the normal state, not
+  // an edge case — was released with `{ done: true }` on `end(error)` and
+  // never saw the error at all, so a transport failure read as a clean
+  // end-of-stream. The rejection path below only fired for a consumer that
+  // happened to call `next()` *after* the end, which is the rarer case.
+  const waiting: { resolve: (result: IteratorResult<T>) => void; reject: (error: unknown) => void }[] = []
   let failure: { error: unknown } | undefined
   let ended = false
 
@@ -35,7 +41,7 @@ export const createMessageQueue = <T>(): MessageQueue<T> => {
     if (ended) return
     const next = waiting.shift()
     if (next === undefined) buffered.push(value)
-    else next({ value, done: false })
+    else next.resolve({ value, done: false })
   }
 
   const end = (error?: unknown): void => {
@@ -45,7 +51,12 @@ export const createMessageQueue = <T>(): MessageQueue<T> => {
     // Only consumers parked right now are released here. Anything still
     // buffered is drained first by `next` below, so a close that races the
     // last message does not swallow it.
-    while (waiting.length > 0) waiting.shift()?.({ value: undefined, done: true })
+    while (waiting.length > 0) {
+      const next = waiting.shift()
+      if (next === undefined) continue
+      if (failure !== undefined) next.reject(failure.error)
+      else next.resolve({ value: undefined, done: true })
+    }
   }
 
   const stream: AsyncIterableIterator<T> = {
@@ -59,7 +70,7 @@ export const createMessageQueue = <T>(): MessageQueue<T> => {
         if (failure !== undefined) return Promise.reject(failure.error)
         return Promise.resolve({ value: undefined, done: true })
       }
-      return new Promise<IteratorResult<T>>((resolve) => waiting.push(resolve))
+      return new Promise<IteratorResult<T>>((resolve, reject) => waiting.push({ resolve, reject }))
     },
     return: (): Promise<IteratorResult<T>> => {
       // `break` out of a `for await` lands here, and it means the consumer is

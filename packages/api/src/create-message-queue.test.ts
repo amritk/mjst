@@ -82,4 +82,22 @@ describe('create-message-queue', () => {
     }
     expect(await queue.stream.next()).toEqual({ value: undefined, done: true })
   })
+
+  it('rejects a consumer parked in for-await when the producer errors', async () => {
+    // The normal shape: a loop is already awaiting when the transport fails.
+    // Resolving it with `{ done: true }` reported a clean end of stream and
+    // dropped the error entirely.
+    const queue = createMessageQueue<string>()
+    const pending = queue.stream.next()
+    queue.end(new Error('transport gone'))
+    await expect(pending).rejects.toThrow('transport gone')
+  })
+
+  it('still delivers buffered messages before surfacing the error', async () => {
+    const queue = createMessageQueue<string>()
+    queue.push('first')
+    queue.end(new Error('transport gone'))
+    expect(await queue.stream.next()).toEqual({ value: 'first', done: false })
+    await expect(queue.stream.next()).rejects.toThrow('transport gone')
+  })
 })

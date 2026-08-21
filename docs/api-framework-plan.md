@@ -404,8 +404,13 @@ carries two independent flows of interchangeable frames.
   return `'ignore'`.
 - **Binary frames default to `ignore`, not `close`.** Nothing in a JSON
   contract describes them, but a peer may legitimately send them alongside
-  contract messages; closing would make the two uses exclusive. They stay
-  reachable on the raw socket / `channel.connection`.
+  contract messages; closing would make the two uses exclusive. They reach
+  `channel.binary` behind an explicit `receiveBinary` flag — not the underlying
+  connection, whose iterator the channel drains to feed its own (the queue does
+  not tee, so a documented escape hatch there could never yield), and not a
+  first-read subscription, which loses the race against frames that arrive as
+  soon as the connection opens. The queue is unbounded by design, so buffering
+  a stream nobody drains would grow the heap until the connection closed.
 - **`bindMessages` is a wrapper, not a pipeline stage.** A socket outlives the
   request that created it: by the first frame the handler has returned and the
   `ApiRequest` is gone, and on Bun the message handler is not even in the same

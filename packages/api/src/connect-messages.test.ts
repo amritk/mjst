@@ -141,11 +141,17 @@ describe('connectMessages', () => {
 
   it('delivers binary frames on their own iterator, not the drained connection', async () => {
     const socket = fakeWebSocket()
-    const channel = await connect(socket)
-    const binary = channel.binary
+    // The option, not a first read: `pump` starts before this resolves, so a
+    // frame can arrive before any caller could have subscribed.
+    const channel = await connectMessages(chat, {
+      url: 'wss://api.example.com/ws/lobby',
+      transports: ['websocket'],
+      webSocket: socket.Fake,
+      receiveBinary: true,
+    })
     socket.current()?.emit('message', { data: new Uint8Array([7, 8]).buffer })
     await flush()
-    expect(await next(binary)).toEqual(new Uint8Array([7, 8]))
+    expect(await next(channel.binary)).toEqual(new Uint8Array([7, 8]))
     // And this is why `binary` exists rather than a pointer at the underlying
     // connection: the channel drains `connection.messages` to feed itself and
     // the queue does not tee, so reading it parks forever. Raced against a

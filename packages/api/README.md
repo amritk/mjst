@@ -1365,10 +1365,24 @@ bindMessages(chatMessages, socket, {
 
 Binary frames are the one refusal that defaults to `ignore` rather than
 `close`: nothing in a JSON contract describes them, but a peer may legitimately
-be sending them alongside contract messages. They arrive on `channel.binary`,
-on both ends. Not on `channel.connection.messages`: the client channel drains
-that iterator to feed its own and the queue underneath does not tee, so
-anything left there would never be read.
+be sending them alongside contract messages. Opt in with `receiveBinary` and
+they arrive on `channel.binary`, on both ends:
+
+```ts
+const channel = bindMessages(chatMessages, socket, { receiveBinary: true })
+for await (const bytes of channel.binary) store(bytes)
+```
+
+It is a flag rather than something inferred from reading `channel.binary`,
+for two reasons: the queue underneath is unbounded, so a stream nobody drains
+would grow until the connection closed; and frames start arriving the moment
+the connection opens, before any caller could have subscribed. Without the
+option, `channel.binary` is an iterator that has already ended, so reading it
+finishes immediately rather than hanging.
+
+Not `channel.connection.messages`, either: the client channel drains that
+iterator to feed its own and the queue underneath does not tee, so anything
+left there would never be read.
 
 Outbound messages are typed at compile time and validated only under
 `validateOutbound`, the same trade `validateResponses` makes for handler

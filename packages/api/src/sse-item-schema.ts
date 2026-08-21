@@ -41,23 +41,17 @@ export const sseItemSchema = (
     readonly id?: boolean
   },
 ): Record<string, unknown> => {
-  // A self-contained payload schema keeps its definitions at its own root and
-  // refers to them as `#/$defs/…`, which is resolved against the *document*
-  // root. Nesting it under `properties.data` therefore breaks every one of
-  // those refs — and `toOpenApi`'s hoisting re-roots them at the component,
-  // which is still not where they now live, so the document ends up carrying a
-  // dangling `$ref` and no error. Lifting the definitions to the envelope root
-  // puts them back where `#/$defs/…` points.
-  const { $defs: payloadDefs, ...payload } = (
-    typeof dataSchema === 'object' && dataSchema !== null && !Array.isArray(dataSchema)
-      ? dataSchema
-      : { $defs: undefined }
-  ) as Record<string, unknown>
-  const lifted = typeof dataSchema === 'object' && dataSchema !== null && !Array.isArray(dataSchema)
+  // A self-contained payload schema resolves its internal `$ref`s against the
+  // *document* root — `#` for itself, `#/$defs/…` for its definitions. Nesting
+  // it under `properties.data` moves everything it points at, so each of those
+  // pointers has to be re-aimed, or the document ends up carrying a dangling
+  // `$ref` (or worse, a recursive `#` that now resolves to the SSE envelope
+  // rather than to the payload) with no error anywhere.
+  const { schema: nested, $defs: liftedDefs } = nestPayload(dataSchema)
 
   const properties: Record<string, unknown> = {
     event: options?.event === undefined ? { type: 'string' } : { type: 'string', const: options.event },
-    data: lifted && payloadDefs !== undefined ? payload : dataSchema,
+    data: nested,
     // The reconnection hint is part of the envelope the grammar defines, so a
     // schema claiming to describe an SSE item describes it too.
     retry: { type: 'integer' },
@@ -67,11 +61,63 @@ export const sseItemSchema = (
   // not know, so `additionalProperties: false` would describe a stricter
   // stream than the protocol actually is.
   const item: Record<string, unknown> = { type: 'object', properties }
-  if (payloadDefs !== undefined) item['$defs'] = payloadDefs
+  if (liftedDefs !== undefined) item['$defs'] = liftedDefs
   // Never `required: ['data']`: a keep-alive comment frame carries no data,
   // and a `retry:`-only frame carries neither data nor event. Requiring them
   // would make the document reject frames the stream legitimately sends. A
   // pinned `event` is the one field every frame of such a stream does carry.
   if (options?.event !== undefined) item['required'] = ['event']
   return item
+}
+
+/** Where the payload ends up inside the envelope, as a JSON Pointer fragment. */
+const DATA_POINTER = '#/properties/data'
+
+/**
+ * Re-aims a payload schema's local `$ref`s for life under `properties.data`,
+ * lifting its `$defs` to the envelope root.
+ *
+ * `$defs` are lifted rather than re-pointed because `#/$defs/…` is by far the
+ * common form and lifting keeps those refs correct verbatim. Everything else
+ * local gains the `properties/data` prefix, and a bare `#` — the recursive
+ * self-reference — becomes a pointer at the payload instead of at the
+ * envelope, which is what it meant before the nesting.
+ *
+ * External refs are left alone: they resolve somewhere else entirely, and this
+ * package does not follow them (that is `@amritk/resolve-refs`' job).
+ */
+const nestPayload = (schema: unknown): { schema: unknown; $defs: unknown } => {
+  if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) return { schema, $defs: undefined }
+  const { $defs, ...rest } = schema as Record<string, unknown>
+  // Nothing local to move: hand the original back untouched, so a plain
+  // payload keeps its identity and its object graph is not needlessly cloned.
+  if ($defs === undefined && !hasLocalRef(schema)) return { schema, $defs: undefined }
+  return { schema: rewriteLocalRefs(rest), $defs: $defs === undefined ? undefined : rewriteLocalRefs($defs) }
+}
+
+/** Whether a schema contains any `$ref` resolved against the document root. */
+const hasLocalRef = (node: unknown): boolean => {
+  if (Array.isArray(node)) return node.some(hasLocalRef)
+  if (typeof node !== 'object' || node === null) return false
+  const record = node as Record<string, unknown>
+  if (typeof record['$ref'] === 'string' && record['$ref'].startsWith('#')) return true
+  return Object.values(record).some(hasLocalRef)
+}
+
+const rewriteLocalRefs = (node: unknown): unknown => {
+  if (Array.isArray(node)) return node.map(rewriteLocalRefs)
+  if (typeof node !== 'object' || node === null) return node
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    out[key] = key === '$ref' && typeof value === 'string' ? rewriteRef(value) : rewriteLocalRefs(value)
+  }
+  return out
+}
+
+const rewriteRef = (ref: string): string => {
+  if (!ref.startsWith('#')) return ref
+  // Lifted to the envelope root, so these still resolve exactly as written.
+  if (ref.startsWith('#/$defs/') || ref === '#/$defs') return ref
+  if (ref === '#' || ref === '#/') return DATA_POINTER
+  return `${DATA_POINTER}${ref.slice(1)}`
 }
