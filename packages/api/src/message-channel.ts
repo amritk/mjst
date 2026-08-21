@@ -53,12 +53,50 @@ export type MessageChannelOptions = {
 }
 
 /**
- * The close code for a frame that broke the contract: RFC 6455's 1007,
- * "invalid frame payload data". 1008 (policy violation) is the other
- * candidate; 1007 is the more specific of the two and is what a peer's own
- * validation layer will be looking for.
+ * The close code for a frame that broke the contract.
+ *
+ * RFC 6455's 1007 ("invalid frame payload data") is the semantically right
+ * code and is what a peer's own validation layer looks for — but a JavaScript
+ * caller is not allowed to send it. The WHATWG `WebSocket.close()` algorithm
+ * accepts only 1000 and the private 3000–4999 range, and throws
+ * `InvalidAccessError` for anything else; the 1xxx codes are reserved for the
+ * implementation to send on its own behalf. Workers and Deno expose exactly
+ * that interface for a server-role socket, so closing with 1007 threw from
+ * inside the message listener — after the queues had already ended, which left
+ * the consumer loop finished, the socket open, and every later frame silently
+ * swallowed. (Verified: Node's WHATWG `WebSocket` rejects 1007 and accepts
+ * 4007. Bun's `ServerWebSocket` is not the WHATWG interface and would take
+ * either, but one portable code beats a per-runtime one.)
+ *
+ * 4007 keeps 1007's last three digits so the intent is still legible on the
+ * wire, inside the range every implementation permits.
  */
-export const INVALID_MESSAGE_CLOSE_CODE = 1007
+export const INVALID_MESSAGE_CLOSE_CODE = 4007
+
+/**
+ * Closes a socket without letting a rejected close code escape.
+ *
+ * `close()` throws for a code the runtime will not send, and it is called from
+ * inside a message listener where a throw is nobody's to catch — the socket
+ * would stay open with its consumer already ended. A close that cannot carry
+ * its reason is still better than no close, so the code is dropped and the
+ * connection goes down either way.
+ */
+export const closeQuietly = (
+  socket: { close: (code?: number, reason?: string) => unknown },
+  code: number,
+  reason: string,
+): void => {
+  try {
+    socket.close(code, reason)
+  } catch {
+    try {
+      socket.close()
+    } catch {
+      // Already closing or already gone; there is nothing further to try.
+    }
+  }
+}
 
 /**
  * RFC 6455 caps a close reason at 123 **bytes** of UTF-8. Overrunning it is
@@ -186,6 +224,8 @@ export const createIngest = <T>(
   readonly accept: (raw: string | Uint8Array) => void
   readonly queue: ReturnType<typeof createMessageQueue<T>>
   readonly binary: ReturnType<typeof createMessageQueue<Uint8Array>>
+  /** Starts buffering binary frames. Called when a channel's `binary` is first read. */
+  readonly subscribeBinary: () => AsyncIterableIterator<Uint8Array>
 } => {
   const queue = createMessageQueue<T>()
   // Binary frames get their own queue rather than being handed back through
@@ -193,7 +233,14 @@ export const createIngest = <T>(
   // this one and the queue does not tee, so anything left there is
   // unreachable — a documented escape hatch that never yields is worse than
   // none. See `ClientMessageChannel.binary`.
+  //
+  // Nothing is buffered until something subscribes. The queue is deliberately
+  // unbounded (see `createMessageQueue`), which is right for messages a
+  // consumer is reading and wrong for a stream nobody asked for: most channels
+  // never touch `binary`, and a peer sending binary at one of those would grow
+  // the heap until the connection closed, with no signal anywhere.
   const binary = createMessageQueue<Uint8Array>()
+  let binarySubscribed = false
   const accept = (raw: string | Uint8Array): void => {
     const result = parseMessage(raw, validators, discriminator)
     if (result.ok) {
@@ -210,9 +257,14 @@ export const createIngest = <T>(
       close(INVALID_MESSAGE_CLOSE_CODE, failure.message)
       return
     }
-    if (failure.reason === 'binary' && typeof raw !== 'string') binary.push(raw)
+    if (binarySubscribed && failure.reason === 'binary' && typeof raw !== 'string') binary.push(raw)
   }
-  return { accept, queue, binary }
+  const subscribeBinary = (): AsyncIterableIterator<Uint8Array> => {
+    binarySubscribed = true
+    return binary.stream
+  }
+
+  return { accept, queue, binary, subscribeBinary }
 }
 
 /**

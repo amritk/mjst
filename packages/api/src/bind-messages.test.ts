@@ -208,8 +208,11 @@ describe('bindMessages', () => {
   it('delivers binary frames on their own iterator', async () => {
     const socket = pushSocket()
     const channel = bindMessages(chat, socket)
+    // Subscribe first: buffering starts on first read, so a channel nobody
+    // reads binary from does not grow an unbounded queue.
+    const binary = channel.binary
     channel.accept(new Uint8Array([1, 2, 3]))
-    expect(await next(channel.binary)).toEqual(new Uint8Array([1, 2, 3]))
+    expect(await next(binary)).toEqual(new Uint8Array([1, 2, 3]))
     // And the socket stays open for contract messages alongside them.
     channel.accept(JSON.stringify({ type: 'say', text: 'hi' }))
     expect(await next(channel.messages)).toEqual({ type: 'say', text: 'hi' })
@@ -221,9 +224,52 @@ describe('bindMessages', () => {
     // leave every consumer parked forever — one leaked loop per connection.
     const socket = eventSocket()
     const channel = bindMessages(chat, socket)
+    const binary = channel.binary
     socket.emit('error', {})
     expect(await channel.messages.next()).toEqual({ value: undefined, done: true })
-    expect(await channel.binary.next()).toEqual({ value: undefined, done: true })
+    expect(await binary.next()).toEqual({ value: undefined, done: true })
+  })
+
+  it('does not buffer binary frames nobody is reading', async () => {
+    const socket = pushSocket()
+    const channel = bindMessages(chat, socket)
+    // Dropped, not queued: the queue is unbounded by design, which is wrong
+    // for a stream no consumer asked for.
+    for (let i = 0; i < 100; i++) channel.accept(new Uint8Array([i]))
+    const raced = await Promise.race([
+      next(channel.binary).then(() => 'yielded'),
+      new Promise((resolve) => setTimeout(() => resolve('empty'), 0)),
+    ])
+    expect(raced).toBe('empty')
+  })
+
+  it('closes with a code the WHATWG socket API will actually send', () => {
+    const socket = pushSocket()
+    bindMessages(chat, socket).accept('not json')
+    // 1007 is the right RFC 6455 code and JavaScript may not send it: the
+    // WHATWG `close()` algorithm permits only 1000 and 3000-4999, so a 1xxx
+    // code threw from inside the message listener on Workers and Deno — after
+    // the queues had ended, leaving the socket open and every later frame
+    // swallowed.
+    expect(INVALID_MESSAGE_CLOSE_CODE).toBe(4007)
+    expect(socket.closes).toEqual([[4007, 'malformed: not JSON']])
+  })
+
+  it('still closes when the runtime rejects the close code', () => {
+    const rejections: string[] = []
+    const strict: BindableSocket = {
+      send: () => {},
+      close: (code) => {
+        // Stands in for the WHATWG algorithm, which throws for a 1xxx code.
+        if (code !== undefined && code !== 1000 && (code < 3000 || code > 4999))
+          throw new DOMException('invalid code', 'InvalidAccessError')
+        rejections.push(code === undefined ? 'bare' : String(code))
+      },
+    }
+    const channel = bindMessages(chat, strict)
+    channel.close(1007, 'nope')
+    // The reason is lost, the close is not.
+    expect(rejections).toEqual(['bare'])
   })
 
   it('truncates a close reason to the RFC 6455 budget, on a character boundary', () => {

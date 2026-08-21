@@ -32,6 +32,30 @@ describe('sseItemSchema', () => {
     expect(sseItemSchema({ type: 'string' }, { event: 'token' })['required']).not.toContain('data')
   })
 
+  it("lifts a payload schema's $defs to the envelope root", () => {
+    // `#/$defs/Node` resolves against the document root, so nesting a
+    // self-contained schema under `properties.data` would leave every internal
+    // ref dangling — and `toOpenApi`'s hoisting re-roots them at the component,
+    // which is still not where they would live.
+    const payload = {
+      type: 'object',
+      properties: { node: { $ref: '#/$defs/Node' } },
+      $defs: { Node: { type: 'object', properties: { id: { type: 'string' } } } },
+    }
+    const item = sseItemSchema(payload)
+    expect(item['$defs']).toEqual(payload.$defs)
+    const data = (item['properties'] as Record<string, unknown>)['data'] as Record<string, unknown>
+    expect(data['$defs']).toBeUndefined()
+    expect(data['properties']).toEqual({ node: { $ref: '#/$defs/Node' } })
+  })
+
+  it('leaves a payload without $defs untouched', () => {
+    const payload = { type: 'object', properties: { a: { type: 'string' } } }
+    const item = sseItemSchema(payload)
+    expect(item).not.toHaveProperty('$defs')
+    expect((item['properties'] as Record<string, unknown>)['data']).toBe(payload)
+  })
+
   it('leaves the envelope open, as the SSE grammar does', () => {
     expect(sseItemSchema({ type: 'string' })).not.toHaveProperty('additionalProperties')
   })

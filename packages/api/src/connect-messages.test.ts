@@ -142,8 +142,10 @@ describe('connectMessages', () => {
   it('delivers binary frames on their own iterator, not the drained connection', async () => {
     const socket = fakeWebSocket()
     const channel = await connect(socket)
+    const binary = channel.binary
     socket.current()?.emit('message', { data: new Uint8Array([7, 8]).buffer })
-    expect(await next(channel.binary)).toEqual(new Uint8Array([7, 8]))
+    await flush()
+    expect(await next(binary)).toEqual(new Uint8Array([7, 8]))
     // And this is why `binary` exists rather than a pointer at the underlying
     // connection: the channel drains `connection.messages` to feed itself and
     // the queue does not tee, so reading it parks forever. Raced against a

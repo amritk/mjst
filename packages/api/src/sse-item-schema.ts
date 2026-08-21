@@ -41,9 +41,23 @@ export const sseItemSchema = (
     readonly id?: boolean
   },
 ): Record<string, unknown> => {
+  // A self-contained payload schema keeps its definitions at its own root and
+  // refers to them as `#/$defs/…`, which is resolved against the *document*
+  // root. Nesting it under `properties.data` therefore breaks every one of
+  // those refs — and `toOpenApi`'s hoisting re-roots them at the component,
+  // which is still not where they now live, so the document ends up carrying a
+  // dangling `$ref` and no error. Lifting the definitions to the envelope root
+  // puts them back where `#/$defs/…` points.
+  const { $defs: payloadDefs, ...payload } = (
+    typeof dataSchema === 'object' && dataSchema !== null && !Array.isArray(dataSchema)
+      ? dataSchema
+      : { $defs: undefined }
+  ) as Record<string, unknown>
+  const lifted = typeof dataSchema === 'object' && dataSchema !== null && !Array.isArray(dataSchema)
+
   const properties: Record<string, unknown> = {
     event: options?.event === undefined ? { type: 'string' } : { type: 'string', const: options.event },
-    data: dataSchema,
+    data: lifted && payloadDefs !== undefined ? payload : dataSchema,
     // The reconnection hint is part of the envelope the grammar defines, so a
     // schema claiming to describe an SSE item describes it too.
     retry: { type: 'integer' },
@@ -53,6 +67,7 @@ export const sseItemSchema = (
   // not know, so `additionalProperties: false` would describe a stricter
   // stream than the protocol actually is.
   const item: Record<string, unknown> = { type: 'object', properties }
+  if (payloadDefs !== undefined) item['$defs'] = payloadDefs
   // Never `required: ['data']`: a keep-alive comment frame carries no data,
   // and a `retry:`-only frame carries neither data nor event. Requiring them
   // would make the document reject frames the stream legitimately sends. A

@@ -1346,10 +1346,13 @@ The directions swap and nothing else does: the browser's `send` is exactly the
 server's `messages`, checked against the same schema.
 
 **When a frame breaks the contract** — not JSON, no discriminator, an unknown
-name, or a payload failing its schema — the default is to close with `1007`
-(invalid frame payload data) carrying a one-line reason, truncated to RFC
-6455's 123-byte budget on a character boundary. `onInvalid` sees every refusal
-and can override:
+name, or a payload failing its schema — the default is to close with `4007`
+carrying a one-line reason, truncated to RFC 6455's 123-byte budget on a
+character boundary. (RFC 6455's own "invalid frame payload data" code is 1007,
+but JavaScript may not send it: the WHATWG `close()` algorithm accepts only
+1000 and the private 3000–4999 range, so a 1xxx code throws on Workers and
+Deno. `4007` keeps the last three digits inside the range every runtime
+permits.) `onInvalid` sees every refusal and can override:
 
 ```ts
 bindMessages(chatMessages, socket, {

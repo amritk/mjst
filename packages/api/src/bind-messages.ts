@@ -1,5 +1,5 @@
 import type { MessageChannelOptions } from './message-channel'
-import { assertOutbound, createIngest } from './message-channel'
+import { assertOutbound, closeQuietly, createIngest } from './message-channel'
 import type { AnyMessagesContract, ClientToServerMessage, ServerToClientMessage } from './message-contracts'
 import { prepareMessages } from './message-contracts'
 
@@ -32,6 +32,10 @@ export type ServerMessageChannel<M extends AnyMessagesContract> = {
    * Binary frames, which no JSON contract describes. They are never contract
    * messages, but a peer may legitimately send them alongside — this is where
    * they arrive, rather than on the socket, which the channel is reading.
+   *
+   * Buffering starts on first read: a channel that never touches this drops
+   * binary frames rather than growing an unbounded queue nobody drains, so
+   * subscribe before the frames you care about arrive.
    */
   readonly binary: AsyncIterableIterator<Uint8Array>
   /** Ends iteration. Call from the runtime's close handler. */
@@ -100,14 +104,14 @@ export const bindMessages = <const M extends AnyMessagesContract>(
 ): ServerMessageChannel<M> => {
   const { discriminator, clientToServer, serverToClient } = prepareMessages(contract)
 
-  const { accept, queue, binary } = createIngest<ClientToServerMessage<M>>(
+  const { accept, queue, binary, subscribeBinary } = createIngest<ClientToServerMessage<M>>(
     clientToServer,
     discriminator,
     options,
     (code, reason) => {
       queue.end()
       binary.end()
-      socket.close(code, reason)
+      closeQuietly(socket, code, reason)
     },
   )
 
@@ -138,11 +142,16 @@ export const bindMessages = <const M extends AnyMessagesContract>(
     send,
     accept,
     messages: queue.stream,
-    binary: binary.stream,
+    // A getter, so buffering starts only when something reads it. See the
+    // note in `createIngest`.
+    get binary() {
+      return subscribeBinary()
+    },
     end: endAll,
     close: (code, reason) => {
       endAll()
-      socket.close(code, reason)
+      if (code === undefined) socket.close()
+      else closeQuietly(socket, code, reason ?? '')
     },
   }
 }

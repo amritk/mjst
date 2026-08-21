@@ -27,6 +27,9 @@ export type ClientMessageChannel<M extends AnyMessagesContract> = {
    * Binary frames, which no JSON contract describes. Read them here rather
    * than from `connection.messages`: the channel drains that iterator to feed
    * this one and the underlying queue does not tee, so nothing is left there.
+   *
+   * Buffering starts on first read, so a channel that never touches this drops
+   * them rather than growing a queue nobody drains.
    */
   readonly binary: AsyncIterableIterator<Uint8Array>
   /** Closes the connection. Idempotent. */
@@ -77,7 +80,7 @@ export const connectMessages = async <const M extends AnyMessagesContract>(
   const { discriminator, clientToServer, serverToClient } = prepareMessages(contract)
   const connection = await connectRealtime(options)
 
-  const { accept, queue, binary } = createIngest<ServerToClientMessage<M>>(
+  const { accept, queue, binary, subscribeBinary } = createIngest<ServerToClientMessage<M>>(
     serverToClient,
     discriminator,
     options,
@@ -118,7 +121,10 @@ export const connectMessages = async <const M extends AnyMessagesContract>(
     transport: connection.transport,
     send,
     messages: queue.stream,
-    binary: binary.stream,
+    // A getter, so buffering starts only when something reads it.
+    get binary() {
+      return subscribeBinary()
+    },
     close: () => {
       endAll()
       connection.close()

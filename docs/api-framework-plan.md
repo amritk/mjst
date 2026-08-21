@@ -384,15 +384,22 @@ carries two independent flows of interchangeable frames.
   instead, which held only for a plain object schema — a `$ref`, or an `allOf`
   branch carrying `additionalProperties: false`, closes over properties this
   layer cannot reach, so the injected tag was rejected by the very schema it
-  was injected into and a valid frame closed the socket with 1007. No
+  was injected into and a valid frame closed the socket. No
   schema-level trick fixes that, since a closed subschema will always refuse an
   extra property, so the tag stays out of the payload entirely and the cost is
   one shallow copy per inbound frame. A schema declaring the discriminator
   itself is refused at setup time, being unsatisfiable.
-- **Invalid frames close with 1007** (invalid frame payload data) and a
-  one-line reason, truncated to RFC 6455's 123-byte budget *on a UTF-8
-  boundary* — overrunning it or splitting a character makes implementations
-  throw, turning a clean close into an exception. `onInvalid` sees every
+- **Invalid frames close with 4007** and a one-line reason, truncated to RFC
+  6455's 123-byte budget *on a UTF-8 boundary* — overrunning it or splitting a
+  character makes implementations throw, turning a clean close into an
+  exception. The code is *not* RFC 6455's own 1007 ("invalid frame payload
+  data"), which would be the right one: the WHATWG `close()` algorithm reserves
+  the 1xxx codes for the implementation and accepts only 1000 and 3000–4999
+  from a caller, so on Workers and Deno — which expose that interface for a
+  server-role socket — closing with 1007 threw from inside the message
+  listener, after the queues had ended, leaving the socket open and every later
+  frame silently swallowed. The call is also wrapped, so a code some runtime
+  still refuses costs the reason rather than the close. `onInvalid` sees every
   refusal (`malformed` / `binary` / `unknown-type` / `invalid-payload`) and can
   return `'ignore'`.
 - **Binary frames default to `ignore`, not `close`.** Nothing in a JSON

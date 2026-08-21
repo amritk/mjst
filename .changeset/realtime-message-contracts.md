@@ -49,9 +49,11 @@ The directions swap and nothing else does. It is exported from the browser-safe
 it is eval-free and pulls in no `node:` built-in, and tree-shakes out of bundles
 that do not use it.
 
-**Invalid frames close with `1007`** and a one-line reason, truncated to RFC
+**Invalid frames close with `4007`** and a one-line reason, truncated to RFC
 6455's 123-byte budget on a UTF-8 character boundary (overrunning it or
-splitting a character makes implementations throw). `onInvalid` sees every
+splitting a character makes implementations throw). Not RFC 6455's own 1007:
+the WHATWG `close()` algorithm accepts only 1000 and 3000–4999 from a caller,
+so a 1xxx code throws on Workers and Deno. `onInvalid` sees every
 refusal — `malformed`, `binary`, `unknown-type`, `invalid-payload` — and may
 return `'ignore'` to keep the connection open. Binary frames default to
 `ignore` rather than `close`: nothing in a JSON contract describes them, but a
