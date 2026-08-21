@@ -530,6 +530,7 @@ const runTail = (
   if (
     route.contract.refine !== undefined ||
     route.contract.guards !== undefined ||
+    route.contract.onResponse !== undefined ||
     (!contextBuilt && internals.createContext !== undefined)
   ) {
     return runTailAsync(
@@ -635,6 +636,18 @@ const runTailAsync = async (
       }
     }
     reply = denied ?? (await route.contract.handler(routeContext))
+    // Response hooks run after the handler and after a guard denial — a denial
+    // is a reply like any other, so a hook that stamps a header or records a
+    // timing should see it too. Their result still falls through to the same
+    // response validation below, so a hook cannot return an undeclared status
+    // that the handler could not have returned itself.
+    const responseHooks = route.contract.onResponse
+    if (responseHooks !== undefined) {
+      // `reply as never` for the same reason the context is cast: the erased
+      // hook type widens its parameters to `never` so concretely-typed hooks
+      // remain assignable. The value really is this route's reply union.
+      for (const hook of responseHooks) reply = (await hook(reply as never, routeContext)) ?? reply
+    }
   } catch (error) {
     return routeError(internals, error, route, request, env, executionContext)
   }

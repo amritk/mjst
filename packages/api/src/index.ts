@@ -1,3 +1,5 @@
+export type { AcceptedWebSocket, ServerWebSocket } from './accept-web-socket'
+export { acceptWebSocket } from './accept-web-socket'
 export type { WaitUntilContext } from './after-response'
 export { createBackground, runAfterResponse } from './after-response'
 export { appendCookies } from './append-cookies'
@@ -17,6 +19,14 @@ export {
 export { coercePrimitive } from './coerce-primitive'
 export type { CompileModuleOptions } from './compile/compile-to-module'
 export { compileToModule } from './compile/compile-to-module'
+export type {
+  ConnectRealtimeOptions,
+  RealtimeConnection,
+  RealtimeTransport,
+  WebSocketLike,
+  WebTransportLike,
+} from './connect-realtime'
+export { connectRealtime } from './connect-realtime'
 export { createApi } from './create-api'
 export type { BearerSession, BearerSessionOptions, BearerTokenStorage } from './create-bearer-session'
 export { createBearerSession } from './create-bearer-session'
@@ -59,6 +69,8 @@ export type { ETagOptions } from './create-etag'
 export { createETag } from './create-etag'
 export type { HealthCheck, HealthOptions } from './create-health'
 export { createHealth } from './create-health'
+export type { MessageQueue } from './create-message-queue'
+export { createMessageQueue } from './create-message-queue'
 export type {
   RateLimit,
   RateLimitOptions,
@@ -74,6 +86,8 @@ export type { SecurityHeadersOptions } from './create-security-headers'
 export { createSecurityHeaders } from './create-security-headers'
 export type { ErrorCaptureInfo, SentryOptions } from './create-sentry'
 export { createSentry } from './create-sentry'
+export type { StaticFile, StaticOptions, StaticReader } from './create-static'
+export { createStatic } from './create-static'
 export type { AuthToken, TokenRefresh, TokenRefreshOptions } from './create-token-refresh'
 export { createTokenRefresh } from './create-token-refresh'
 export { decodeJwtExpiry } from './decode-jwt-expiry'
@@ -99,8 +113,12 @@ export { isPayloadTooLargeError, payloadTooLargeError } from './payload-too-larg
 export { raw } from './raw'
 export { readBodyCapped } from './read-body-capped'
 export { readBytesCapped } from './read-bytes-capped'
+export type { RealtimeMessage } from './realtime-framing'
+export { DEFAULT_MAX_MESSAGE_BYTES, decodeRealtimeFrames, encodeRealtimeFrame } from './realtime-framing'
 export { refinementFailure } from './refinement-failure'
 export { requireContext } from './require-context'
+export type { DotfilePolicy, ResolveStaticPathOptions } from './resolve-static-path'
+export { resolveStaticPath } from './resolve-static-path'
 export { routeFactory } from './route-factory'
 export { routeImplementer } from './route-implementer'
 export type { SecureRoutesOptions, SecurityGuard, SecurityScheme } from './secure-routes'
@@ -108,6 +126,7 @@ export { secureRoutes, securityGuard } from './secure-routes'
 export { createSignedCookies, signCookie, unsignCookie } from './sign-cookie'
 export type { SseEvent, SseStreamOptions } from './sse'
 export { formatSse, sseStream } from './sse'
+export { STATIC_CONTENT_TYPES, staticContentType } from './static-content-type'
 export type { MultipartPart, StreamMultipartOptions } from './stream-multipart'
 export { multipartBoundary, streamMultipart } from './stream-multipart'
 export type { FetchHandler, FetchHandlerOptions, FetchOnRequest, FetchOnResponse } from './to-fetch-handler'
@@ -171,6 +190,8 @@ export type {
   ValidationFailureBody,
   ValidatorCompiler,
 } from './types'
+export type { UpgradeWebSocketOptions, WebSocketUpgrader } from './upgrade-web-socket'
+export { upgradeWebSocket } from './upgrade-web-socket'
 export { versionRoutes } from './version-routes'
 export { withTimeout } from './with-timeout'
 export { writableResponse } from './writable-response'

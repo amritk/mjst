@@ -16,6 +16,14 @@ export {
   malformedBodyError,
   unexpectedStatusError,
 } from './client-errors'
+export type {
+  ConnectRealtimeOptions,
+  RealtimeConnection,
+  RealtimeTransport,
+  WebSocketLike,
+  WebTransportLike,
+} from './connect-realtime'
+export { connectRealtime } from './connect-realtime'
 export type { BearerSession, BearerSessionOptions, BearerTokenStorage } from './create-bearer-session'
 export { createBearerSession } from './create-bearer-session'
 export type {
@@ -45,6 +53,8 @@ export type {
 export { createClient } from './create-client'
 export type { CsrfHeaderOptions } from './create-csrf-header'
 export { createCsrfHeader } from './create-csrf-header'
+export type { MessageQueue } from './create-message-queue'
+export { createMessageQueue } from './create-message-queue'
 export type { RefreshFetchOptions } from './create-refresh-fetch'
 export { createRefreshFetch } from './create-refresh-fetch'
 export type { AuthToken, TokenRefresh, TokenRefreshOptions } from './create-token-refresh'
@@ -53,6 +63,8 @@ export { decodeJwtExpiry } from './decode-jwt-expiry'
 export { defineContract } from './define-contract'
 export { formBodySerializer } from './form-body-serializer'
 export { multipartBodySerializer } from './multipart-body-serializer'
+export type { RealtimeMessage } from './realtime-framing'
+export { DEFAULT_MAX_MESSAGE_BYTES, decodeRealtimeFrames, encodeRealtimeFrame } from './realtime-framing'
 export { toSearchParams } from './to-search-params'
 export type {
   AnyContract,

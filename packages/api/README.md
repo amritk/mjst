@@ -1021,6 +1021,7 @@ changing the request pipeline — so nothing costs anything until you wire it in
 | `sseStream(source, options?)` · `formatSse(event)` | Server-Sent Events as a streaming body for a raw `contentType` route. | `contentType` reply |
 | `streamMultipart(body, contentType, options?)` · `multipartBoundary(contentType)` | Async-iterate multipart parts off the raw body stream instead of buffering the whole upload. | `request.raw` |
 | `negotiateMediaType(accept, offers)` · `parseAccept(header)` | Server-driven content negotiation with RFC 9110 media-range specificity and `q=0` handling. | handler |
+| `createStatic(options)` · `resolveStaticPath(options)` | Static files from a document root, with content types, `etag`/`last-modified`, conditional `304`s, and HEAD. Path resolution rejects the percent-encoded traversals that survive client normalization, and denies dotfiles by default. Reading is injected, since no one filesystem call works on Bun, Node, and Workers alike. | `onRequest` |
 
 ```ts
 import { createCompression, createDocs, createETag, createHealth, createRequestId } from '@amritk/api'
@@ -1036,6 +1037,179 @@ const handler = toFetchHandler(api, {
   onRequest: [requestId.onRequest],
   onResponse: [requestId.onResponse, createETag(), createCompression()],
 })
+```
+
+#### Static files
+
+`createStatic` needs a reader because there is no filesystem call that works on
+Bun, Node, and Workers alike, and importing `node:fs` to serve the first would
+break the Workers build for everyone. A missing file must come back as
+`undefined` rather than a thrown `ENOENT` — a throw is an error the pipeline
+reports as a 500, which is not what "not found" means.
+
+```ts
+import { createStatic, type StaticReader } from '@amritk/api'
+
+const read: StaticReader = async (path) => {
+  const file = Bun.file(path)
+  return (await file.exists())
+    ? { body: file.stream(), size: file.size, type: file.type, lastModified: file.lastModified }
+    : undefined
+}
+
+const handler = toFetchHandler(api, {
+  onRequest: [createStatic({ root: './public', prefix: '/assets', read })],
+  onResponse: [createSecurityHeaders()],
+})
+```
+
+Anything it does not serve returns `undefined` and falls through to routing —
+a path outside the prefix, an unsafe method, a missing file — so a client sees
+the API's own 404 envelope rather than a second error shape, and a request that
+is not for a file allocates no promise.
+
+The path resolution is the part worth reading the source of. Serving files
+next to an API is one route today (`/assets/{path+}` plus a raw reply), and
+that route is wrong in a way its own tests will not catch: the tail parameter
+decodes each segment individually, so `/assets/%2e%2e%2f%2e%2e%2fetc/passwd`
+arrives at the handler as `../../etc/passwd`. A literal `../` never gets that
+far — clients and proxies normalize it away — so the obvious
+`path.includes('..')` guard passes every test anyone writes for it and stops
+nothing. `resolveStaticPath` splits first, decodes each segment second, and
+judges third, rejecting anything that after decoding means more than one level
+down; containment is by construction rather than by comparing a resolved path
+against the root afterwards. Dotfiles are denied by default, since a document
+root routinely sits beside `.env` and `.git`.
+
+Two limits, stated rather than half-implemented: `Range` is not handled, so a
+media file served through this cannot be seeked (put a CDN or the platform's
+own file serving in front of video); and a symlink inside the root pointing
+outside it is invisible here, since seeing it needs a `realpath` the reader
+seam does not expose.
+
+### Realtime: WebTransport with a WebSocket fallback
+
+`connectRealtime` prefers WebTransport and drops down to WebSocket when
+WebTransport is unavailable, refused, or hung. Both arms hand back the same
+message channel, so nothing above it branches on which one won — a fallback the
+caller has to branch on is not a fallback, it is two code paths, one of which
+only runs on the networks the developer does not have.
+
+```ts
+import { connectRealtime } from '@amritk/api/client'
+
+const connection = await connectRealtime({
+  // One endpoint. The scheme each transport needs is derived from the other,
+  // so both attempts always address the same place.
+  url: 'https://api.example.com/ws/lobby',
+  connectTimeoutMs: 3000,
+  onFallback: (transport, reason) => metrics.increment(`realtime.fallback.${transport}`),
+})
+
+connection.send('hello')
+for await (const message of connection.messages) render(message)
+```
+
+The deadline is what makes the fallback work on the networks that need it. A
+WebTransport attempt where UDP is silently dropped — corporate egress filters,
+some mobile carriers, a fair number of hotel networks — does not fail. It
+hangs, because QUIC cannot tell a blackhole from a slow path, and without a
+bound the fallback never runs and the user simply waits. `onFallback` exists
+for the same reason in reverse: a silent fallback hides exactly the signal you
+want, and "WebTransport worked in testing and fails for 40% of production" is
+invisible until someone reports it.
+
+Pin one transport with `transports: ['websocket']`, and reach the live
+`WebTransport` or `WebSocket` through `connection.session` when you need
+datagrams, extra streams, or `bufferedAmount`.
+
+#### What the server side actually is
+
+Being precise about this matters, because the client half above is portable and
+the server half is not:
+
+| Runtime | WebSocket | WebTransport |
+|:--|:--|:--|
+| Bun 1.4 | `upgradeWebSocket(server, request)` | none |
+| Cloudflare Workers | `acceptWebSocket()` | none — workerd ships no QUIC/HTTP-3 implementation |
+| Deno | `raw(Deno.upgradeWebSocket(request).response)` | `Deno.upgradeWebTransport` exists, but on a raw QUIC listener rather than `Deno.serve` |
+| Node | not through this adapter — upgrades ride the server's `'upgrade'` event | none stable |
+
+**This package cannot serve WebTransport, and that is a deliberate stop rather
+than a gap to be filled.** It needs a QUIC stack, no runtime the adapters
+target exposes one through a fetch handler, and supplying one would mean a
+native addon dependency — which would cost the Workers and React Native support
+that staying dependency-light buys. So today the WebTransport arm connects to a
+separate quic-go, wtransport, or `@fails-components/webtransport` process
+speaking the framing in `realtime-framing` (a kind byte, a 32-bit big-endian
+length, the payload — about ten lines to reproduce), and the WebSocket arm is
+what `upgradeWebSocket` serves. The negotiation is written now so that the day
+a runtime does ship server WebTransport, clients already prefer it and no
+application code changes.
+
+#### Serving the WebSocket arm
+
+The handshake is an ordinary routed request, so the contract still applies to
+it: path params are validated and coerced, guards run, and `onRequest` gates
+(rate limits, origin checks) have already had their say. An upgrade that
+skipped the contract would be a hole in every policy the app configured.
+
+```ts
+import { createApi, routeFactory, toFetchHandler, upgradeWebSocket } from '@amritk/api'
+
+const route = routeFactory<{ server: Bun.Server }>()
+
+const chat = route({
+  method: 'get',
+  path: '/ws/{room}',
+  request: { params: { type: 'object', properties: { room: { type: 'string' } }, required: ['room'] } },
+  responses: { 426: {} },
+  handler: ({ params, request, context }) =>
+    // `data` is how validated params and the resolved session reach the
+    // `websocket` handlers, which run outside the request and see neither.
+    upgradeWebSocket(context.server, request, { data: { room: params.room } }) ?? { status: 426 as const },
+})
+
+const api = createApi({ routes: [chat], info, context: ({ env }) => ({ server: env as Bun.Server }) })
+const handler = toFetchHandler(api)
+
+Bun.serve({
+  fetch: (request, server) => handler(request, server), // Bun passes the server as `env`
+  websocket: {
+    open: (ws) => ws.send(`joined:${(ws.data as { room: string }).room}`),
+    message: (ws, message) => ws.send(`echo:${message}`),
+  },
+})
+```
+
+The `?? { status: 426 }` is not a formality. Bun's HTTP/3 listener does not
+implement RFC 9220 WebSocket bootstrapping, so `server.upgrade()` returns
+`false` for every request that arrived over QUIC — with `http3: true` set, the
+*same route* succeeds over TCP and is refused over UDP, decided by which
+transport the client happened to pick. Requiring the caller to supply the
+refusal keeps that outcome in the contract and in the OpenAPI document instead
+of collapsing it to a 500. Measured against Bun 1.4: `101` over TCP, the
+declared `426` over QUIC.
+
+Do not bother pairing that 426 with the `upgrade:` and `connection:` headers
+RFC 9110 suggests. Both are connection-specific headers that HTTP/2 and HTTP/3
+forbid (RFC 9114 §4.2), so an H3 listener strips them on the way out — the
+client learns nothing in exactly the case they were added for. The status is
+the portable signal, and `connectRealtime` treats any non-101 as "fall back".
+
+On Workers, `acceptWebSocket()` replaces the upgrade call and hides two things
+the raw API gets wrong for callers: `WebSocketPair` is an object keyed `0` and
+`1` rather than an array, and a missed `server.accept()` produces a connection
+that opens and then silently drops every message.
+
+```ts
+import { acceptWebSocket } from '@amritk/api'
+
+handler: ({ params }) => {
+  const { socket, reply } = acceptWebSocket()
+  socket.addEventListener('message', (event) => socket.send(`${params.room}: ${event.data}`))
+  return reply
+}
 ```
 
 ### Client-side auth refresh
@@ -1518,6 +1692,53 @@ skip `requireContext` and write the guard inline — it is just
 `(ctx) => reply | undefined`. Both engines run guards identically (the compiled
 module threads the live `contract.guards` through the same order), pinned by the
 differential corpus.
+
+### Route-scoped response hooks
+
+`guards` cover the request side of a route group. `onResponse` covers the reply
+side: per-route timing, a header stamped on one group of routes, an audit
+record written from the reply — the wrap-around seam, without a middleware
+onion.
+
+```ts
+const withTiming = defineRoute({
+  method: 'get',
+  path: '/reports/{id}',
+  request: { params: reportParams },
+  responses: { 200: { body: reportSchema } },
+  onResponse: [
+    (reply, { params, context }) => {
+      // The context is the validated one the handler saw — coerced params, the
+      // resolved session — which is what makes an audit hook worth having.
+      context.audit.record({ report: params.id, status: reply.status })
+      return undefined // keep the handler's reply as it stands
+    },
+  ],
+  handler: ({ params, context }) => ({ status: 200 as const, body: context.reports.get(params.id) }),
+})
+```
+
+Hooks run in order, each seeing the previous one's result; returning
+`undefined` keeps the reply, and returning a reply replaces it. A replacement
+goes through the same response validation the handler's would have, so a hook
+cannot smuggle out an undeclared status. A thrown hook takes the handler-error
+path (`onError`) exactly like a throwing handler. Guard denials reach the hooks
+too — a denial is a reply like any other.
+
+Two things they deliberately do not do. They do **not** run on a
+*security*-guard denial: those fire before validation and before the context
+factory precisely so an unauthenticated request never reaches app code, which
+means the `RequestContext` a hook expects does not exist yet — use the
+adapter's `onResponse` for decoration that must cover every reply. And they are
+**not** an onion. An onion decides what runs around what by nesting, so the
+answer depends on registration order across unrelated modules; these are a list
+on the route, which is also what lets `compileToModule` emit them as
+straight-line code.
+
+The cost is the point of the shape. A route that declares no hooks pays one
+`undefined` check in the runtime engine and nothing at all in the compiled one,
+where the branch is resolved at emit time — a hookless route emits exactly the
+code it always did, with no wrapper and no extra frame.
 
 ### Deny-by-default: `secureRoutes`
 
