@@ -1,0 +1,64 @@
+---
+'@amritk/api': minor
+---
+
+Message contracts for realtime connections — typing and validating what flows
+after the 101.
+
+The WebSocket handshake was already contract-covered (it is an ordinary routed
+request: params validated, guards run, `onRequest` gates applied, the 426
+declared), but the contract stopped there. `socket.send` took anything, frames
+arrived as `string | Uint8Array`, and nothing was validated — so validation,
+typing, and the whole contract-first premise ended at the handshake.
+
+**`defineMessages(contract)`**, or a `messages` field on a route contract,
+declares what flows over the connection. Two things a request/response contract
+cannot express, and a socket needs: **direction** and **message identity**.
+
+```ts
+const chatMessages = defineMessages({
+  clientToServer: { say: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
+  serverToClient: { said: { type: 'object', properties: { from: { type: 'string' } }, required: ['from'] } },
+})
+```
+
+Directions are named for their endpoints rather than for the reader —
+`send`/`receive` and `inbound`/`outbound` invert depending on which side reads
+them, and both sides read this same declaration.
+
+Messages are identified by a discriminator, `type` unless `discriminator` says
+otherwise. You declare the *payload*; the discriminator is folded into the
+schema before validation, so `additionalProperties: false` keeps working rather
+than rejecting the property that named the message.
+
+**`bindMessages(contract, socket, options?)`** wraps a server-side socket:
+inbound frames validated against `clientToServer` and narrowed to a tagged
+union, outbound `send` typed and serialized. It covers Bun, Workers, and Deno —
+`accept(raw)` is the ingest seam for Bun, whose message handlers live outside
+the request on `Bun.serve({ websocket })`, and sockets with `addEventListener`
+are wired automatically.
+
+**`connectMessages(contract, options)`** is the mirror image on the client,
+over `connectRealtime` (WebTransport with the WebSocket fallback, unchanged).
+The directions swap and nothing else does. It is exported from the browser-safe
+`@amritk/api/client` entry; that entry's only external stays
+`@amritk/runtime-validators`, now imported as a value rather than types alone —
+it is eval-free and pulls in no `node:` built-in, and tree-shakes out of bundles
+that do not use it.
+
+**Invalid frames close with `1007`** and a one-line reason, truncated to RFC
+6455's 123-byte budget on a UTF-8 character boundary (overrunning it or
+splitting a character makes implementations throw). `onInvalid` sees every
+refusal — `malformed`, `binary`, `unknown-type`, `invalid-payload` — and may
+return `'ignore'` to keep the connection open. Binary frames default to
+`ignore` rather than `close`: nothing in a JSON contract describes them, but a
+peer may legitimately send them alongside contract messages, and they stay
+reachable on the raw socket.
+
+Outbound messages are typed at compile time and validated only under
+`validateOutbound`, matching what `validateResponses` does for handler replies.
+
+`messages` has no OpenAPI representation — OpenAPI has no vocabulary for a
+bidirectional message union — so it never appears in the document. It is
+included in the contracts hash, since message schemas are data a compiled
+module embeds and editing one must invalidate a stale module.

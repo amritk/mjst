@@ -358,6 +358,71 @@ one schema, one direction, on a response body; a socket needs two independent
 flows and a discriminated union of message types per direction, and OpenAPI
 has no vocabulary for either. See the realtime note in the roadmap.
 
+## Shipped: realtime message contracts (2026-08)
+
+The handshake was already contract-covered; the contract now covers the rest of
+the conversation. `messages` on a route contract (or a standalone
+`defineMessages`) declares what flows over the connection, and one declaration
+drives both ends: `bindMessages` on the server, `connectMessages` on the client.
+
+What a socket needs said that a request/response contract cannot say is
+**direction** and **message identity**. HTTP answers both structurally — a
+request is a request, `method + path` names the operation — while a socket
+carries two independent flows of interchangeable frames.
+
+- **Directions are named for their endpoints**, `clientToServer` /
+  `serverToClient`, not `send`/`receive` or `inbound`/`outbound`. The same
+  declaration is read from both ends, and every reader-relative name inverts
+  between them. AsyncAPI renamed its `publish`/`subscribe` pair in 3.0 over
+  exactly this.
+- **A discriminator is mandatory, defaulting to `type`.** AsyncAPI lists a
+  channel's possible messages and stops; code cannot, because "validate against
+  one of five schemas" has no answer for which failure to report when none
+  match. The declared schema describes the *payload* and the discriminator is
+  folded in before validation, so `additionalProperties: false` keeps working
+  rather than rejecting the property that named the message.
+- **Invalid frames close with 1007** (invalid frame payload data) and a
+  one-line reason, truncated to RFC 6455's 123-byte budget *on a UTF-8
+  boundary* — overrunning it or splitting a character makes implementations
+  throw, turning a clean close into an exception. `onInvalid` sees every
+  refusal (`malformed` / `binary` / `unknown-type` / `invalid-payload`) and can
+  return `'ignore'`.
+- **Binary frames default to `ignore`, not `close`.** Nothing in a JSON
+  contract describes them, but a peer may legitimately send them alongside
+  contract messages; closing would make the two uses exclusive. They stay
+  reachable on the raw socket / `channel.connection`.
+- **`bindMessages` is a wrapper, not a pipeline stage.** A socket outlives the
+  request that created it: by the first frame the handler has returned and the
+  `ApiRequest` is gone, and on Bun the message handler is not even in the same
+  function. `accept(raw)` is the portable ingest seam; sockets with
+  `addEventListener` (Workers, Deno) are wired automatically.
+- **Outbound validation is opt-in** (`validateOutbound`), the trade
+  `validateResponses` already makes.
+- **No OpenAPI representation.** OpenAPI has no vocabulary for a bidirectional
+  message union, so `messages` never reaches the document. It *is* in the
+  contracts hash — message schemas are data the compiled module embeds, and
+  editing one has to invalidate a stale module.
+
+A parallel `defineChannel` DSL was set aside for the reason `protectedRoute`
+was: a second calling convention the typed client cannot keep in sync. The
+seams (context, guards, mounts, `onError`) hang off routes, so channels would
+duplicate them or be second-class. An AsyncAPI *document* projection stays
+deferred — one more projector beside `to-open-api`, addable without touching a
+contract, and AsyncAPI's default dialect is a draft-07 superset rather than
+2020-12, so schemas would not embed verbatim the way OpenAPI's do. (Its
+WebSocket binding is also empty: server, operation and message bindings "MUST
+NOT contain any properties", and the channel binding describes only the HTTP
+handshake — the half already covered here, and covered better, since a route
+contract validates it rather than only documenting it.)
+
+One type-level trap worth recording, because it fails silently: deriving the
+tagged union with the usual `{ [N in keyof S]: … }[keyof S]` lookup does *not*
+force per-key evaluation here. `FromSchema` ends up applied to the union of the
+schemas, every field a message does not share collapses to `never`, and the
+result is one merged object that narrows to nothing — while still passing every
+runtime test, since type assertions are compile-time only. `MessageUnion`
+distributes over the key with an explicit conditional instead.
+
 ## Roadmap / open questions
 
 - **Generated-validator integration sugar.** `mjst compile-api` now wraps
@@ -373,23 +438,6 @@ has no vocabulary for either. See the realtime note in the roadmap.
   per-route design); webpack/Turbopack strip plugin (the exported
   `stripContractFields` covers it via a ~5-line loader); compiled-module
   source maps; watch mode for `compile-api`.
-- **Realtime message contracts.** The WebSocket handshake is fully
-  contract-covered (it is an ordinary routed request: params validated, guards
-  run, `onRequest` gates applied, the 426 declared), but the contract says
-  nothing past the 101 — `socket.send` takes anything and
-  `connection.messages` yields `string | Uint8Array`, so validation, docs, and
-  typed clients all stop at the handshake. The shape under consideration is a
-  `messages` slot on the existing route contract (a discriminator plus a
-  per-direction map of schemas) rather than a parallel channel DSL: one
-  calling convention, and the seams (context, guards, mounts, `onError`)
-  already hang off routes. A `defineChannel` was considered and set aside for
-  the reason `protectedRoute` was — a second calling convention the typed
-  client cannot keep in sync. An AsyncAPI *document* projection stays
-  deliberately deferred: it would be one more projector beside `to-open-api`,
-  addable without touching a contract, and AsyncAPI's default dialect is a
-  draft-07 superset rather than 2020-12, so the schemas would not embed
-  verbatim the way OpenAPI's do. SSE is the degenerate outbound-only case and
-  is covered today by `itemSchema`.
 - **Content negotiation, inbound.** Raw *outbound* statuses shipped
   (`contentType` above); multipart/form-data request bodies remain manual
   via `readBytes`.

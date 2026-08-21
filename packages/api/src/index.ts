@@ -3,6 +3,8 @@ export { acceptWebSocket } from './accept-web-socket'
 export type { WaitUntilContext } from './after-response'
 export { createBackground, runAfterResponse } from './after-response'
 export { appendCookies } from './append-cookies'
+export type { BindableSocket, ServerMessageChannel } from './bind-messages'
+export { bindMessages } from './bind-messages'
 export { buildCoercionPlan } from './build-coercion-plan'
 export { buildCookiesObject } from './build-cookies-object'
 export { buildHeadersObject } from './build-headers-object'
@@ -19,6 +21,8 @@ export {
 export { coercePrimitive } from './coerce-primitive'
 export type { CompileModuleOptions } from './compile/compile-to-module'
 export { compileToModule } from './compile/compile-to-module'
+export type { ClientMessageChannel, ConnectMessagesOptions } from './connect-messages'
+export { connectMessages } from './connect-messages'
 export type {
   ConnectRealtimeOptions,
   RealtimeConnection,
@@ -104,6 +108,23 @@ export type { RouteImplementation } from './implement-route'
 export { implementRoute } from './implement-route'
 export type { RouteMatch } from './match-route'
 export { matchRoute } from './match-route'
+export type {
+  MessageChannelOptions,
+  MessageFailure,
+  MessageFailureAction,
+  MessageFailureReason,
+} from './message-channel'
+export { INVALID_MESSAGE_CLOSE_CODE, parseMessage, truncateCloseReason } from './message-channel'
+export type {
+  AnyMessagesContract,
+  ClientToServerMessage,
+  DiscriminatorOf,
+  MessageSchemas,
+  MessagesContract,
+  MessageUnion,
+  ServerToClientMessage,
+} from './message-contracts'
+export { composeMessageSchema, DEFAULT_DISCRIMINATOR, defineMessages, prepareMessages } from './message-contracts'
 export { multipartBodySerializer } from './multipart-body-serializer'
 export type { AcceptEntry } from './negotiate'
 export { negotiateMediaType, parseAccept } from './negotiate'

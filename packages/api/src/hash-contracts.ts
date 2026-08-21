@@ -69,6 +69,10 @@ const contractFields = (contract: HashableContract): Record<string, unknown> => 
             cookies: request.cookies,
           },
     responses: contract.responses,
+    // Message schemas are data the compiled module embeds, like every other
+    // schema here — editing one has to invalidate the fingerprint, or a stale
+    // module keeps validating frames against the shape they used to have.
+    messages: contract.messages,
     guards: contract.guards?.length ?? 0,
     securityGuards: contract.securityGuards?.length ?? 0,
     refine: contract.refine !== undefined,

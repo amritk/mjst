@@ -1055,6 +1055,7 @@ changing the request pipeline — so nothing costs anything until you wire it in
 | `runAfterResponse(executionContext, task, onError?)` · `createBackground(executionContext, onError?)` | Work that outlives the response — registered through `waitUntil` where the platform has it (Workers), detached elsewhere. A rejected task goes to `onError` instead of becoming an unhandled rejection. | `executionContext` |
 | `sseStream(source, options?)` · `formatSse(event)` | Server-Sent Events as a streaming body for a raw `contentType` route. | `contentType` reply |
 | `sseItemSchema(dataSchema, options?)` | Builds the `itemSchema` for a `text/event-stream` response — wraps a payload schema in the SSE event envelope. | response contract |
+| `defineMessages(contract)` · `bindMessages(contract, socket, options?)` · `connectMessages(contract, options)` | Typed, validated messages over a realtime connection — one declaration, both ends. | after the 101 |
 | `streamMultipart(body, contentType, options?)` · `multipartBoundary(contentType)` | Async-iterate multipart parts off the raw body stream instead of buffering the whole upload. | `request.raw` |
 | `negotiateMediaType(accept, offers)` · `parseAccept(header)` | Server-driven content negotiation with RFC 9110 media-range specificity and `q=0` handling. | handler |
 | `createStatic(options)` · `resolveStaticPath(options)` | Static files from a document root, with content types, `etag`/`last-modified`, conditional `304`s, and HEAD. Path resolution rejects the percent-encoded traversals that survive client normalization, and denies dotfiles by default. Reading is injected, since no one filesystem call works on Bun, Node, and Workers alike. | `onRequest` |
@@ -1247,6 +1248,112 @@ handler: ({ params }) => {
   return reply
 }
 ```
+
+#### Message contracts: typing what flows after the 101
+
+The upgrade is contract-covered — params validated, guards run, the 426
+declared — but the contract stops at the 101: `socket.send` takes anything and
+frames arrive as `string | Uint8Array`. A `messages` contract covers the rest
+of the conversation, and one declaration drives both ends.
+
+```ts
+import { defineMessages } from '@amritk/api'
+
+export const chatMessages = defineMessages({
+  clientToServer: {
+    say: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+  },
+  serverToClient: {
+    said: {
+      type: 'object',
+      properties: { from: { type: 'string' }, text: { type: 'string' } },
+      required: ['from', 'text'],
+    },
+  },
+})
+```
+
+Directions are named for their endpoints, not for the reader. `send`/`receive`
+and `inbound`/`outbound` inverts depending on which side is reading it, and the
+whole point is that both sides read the same declaration. (AsyncAPI renamed its
+`publish`/`subscribe` pair in 3.0 over exactly this.)
+
+Each message is identified by a **discriminator** — `type` unless you set
+`discriminator`. Declare the *payload*; the discriminator is folded into the
+schema for validation, so `additionalProperties: false` keeps working instead
+of rejecting the very property that named the message.
+
+**Server** — `bindMessages` wraps any runtime's socket:
+
+```ts
+import { acceptWebSocket, bindMessages } from '@amritk/api'
+
+const { socket, reply } = acceptWebSocket()
+const channel = bindMessages(chatMessages, socket)
+for await (const message of channel.messages) {
+  // message is { type: 'say'; text: string } — narrowed, already validated
+  if (message.type === 'say') channel.send({ type: 'said', from: user, text: message.text })
+}
+return reply
+```
+
+On Workers and Deno the socket is an `EventTarget` and frames are wired up for
+you. Bun's message handlers live outside the request on `Bun.serve({ websocket })`
+and see only `ws.data`, so carry the channel there and feed it:
+
+```ts
+Bun.serve({
+  websocket: {
+    message: (ws, raw) => ws.data.channel.accept(raw),
+    close: (ws) => ws.data.channel.end(),
+  },
+})
+```
+
+**Client** — `connectMessages` is the mirror image, over `connectRealtime`:
+
+```ts
+import { connectMessages } from '@amritk/api/client'
+
+const channel = await connectMessages(chatMessages, { url: 'https://api.example.com/ws/lobby' })
+channel.send({ type: 'say', text: 'hello' })
+for await (const message of channel.messages) {
+  if (message.type === 'said') render(message.from, message.text)
+}
+```
+
+The directions swap and nothing else does: the browser's `send` is exactly the
+server's `messages`, checked against the same schema.
+
+**When a frame breaks the contract** — not JSON, no discriminator, an unknown
+name, or a payload failing its schema — the default is to close with `1007`
+(invalid frame payload data) carrying a one-line reason, truncated to RFC
+6455's 123-byte budget on a character boundary. `onInvalid` sees every refusal
+and can override:
+
+```ts
+bindMessages(chatMessages, socket, {
+  onInvalid: (failure) => {
+    metrics.increment(`ws.invalid.${failure.reason}`) // 'malformed' | 'binary' | 'unknown-type' | 'invalid-payload'
+    return 'ignore' // or 'close', or nothing for the default
+  },
+})
+```
+
+Binary frames are the one refusal that defaults to `ignore` rather than
+`close`: nothing in a JSON contract describes them, but a peer may legitimately
+be sending them alongside contract messages. Read them off the raw socket — or
+`channel.connection` on the client.
+
+Outbound messages are typed at compile time and validated only under
+`validateOutbound`, the same trade `validateResponses` makes for handler
+replies.
+
+**What this does not do:** there is no OpenAPI representation. OpenAPI has no
+vocabulary for a bidirectional message union, so `messages` never appears in
+the document — the contract stays the single source of truth, and an AsyncAPI
+projection remains a separate question. See the plan doc for why a parallel
+channel DSL was set aside.
 
 ### Client-side auth refresh
 

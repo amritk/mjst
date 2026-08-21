@@ -1,5 +1,7 @@
 import type { FromSchema, Guard, ValidateOptions, ValidationError, Validator } from '@amritk/runtime-validators'
 
+import type { AnyMessagesContract } from './message-contracts'
+
 /**
  * The HTTP methods a route contract can declare. Lowercase on purpose — these
  * double as the operation keys in the generated OpenAPI document, which the
@@ -435,6 +437,19 @@ export type Contract<
    * an API-level default `security` exists.
    */
   readonly security?: SecurityRequirements
+  /**
+   * What flows over this route's realtime connection, once it has been
+   * upgraded. Declared here rather than on a separate channel object because a
+   * WebSocket handshake *is* this route — the upgrade is an ordinary routed
+   * request, and the messages are the rest of the same conversation.
+   *
+   * It describes what happens after the 101, so nothing in the HTTP pipeline
+   * reads it: `bindMessages` applies it to the server's socket and
+   * `connectMessages` to the client's. It has no OpenAPI representation —
+   * OpenAPI has no vocabulary for a bidirectional message union — so it does
+   * not appear in the document.
+   */
+  readonly messages?: AnyMessagesContract
   readonly request?: {
     /** JSON Schema (object) for path parameters. Values are coerced from strings first. */
     readonly params?: Params
@@ -625,6 +640,7 @@ export type AnyContract = {
   readonly operationId?: string
   readonly deprecated?: boolean
   readonly security?: SecurityRequirements
+  readonly messages?: AnyMessagesContract
   readonly request?: {
     readonly params?: unknown
     readonly query?: unknown

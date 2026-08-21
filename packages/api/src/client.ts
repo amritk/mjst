@@ -16,6 +16,8 @@ export {
   malformedBodyError,
   unexpectedStatusError,
 } from './client-errors'
+export type { ClientMessageChannel, ConnectMessagesOptions } from './connect-messages'
+export { connectMessages } from './connect-messages'
 export type {
   ConnectRealtimeOptions,
   RealtimeConnection,
@@ -62,6 +64,23 @@ export { createTokenRefresh } from './create-token-refresh'
 export { decodeJwtExpiry } from './decode-jwt-expiry'
 export { defineContract } from './define-contract'
 export { formBodySerializer } from './form-body-serializer'
+export type {
+  MessageChannelOptions,
+  MessageFailure,
+  MessageFailureAction,
+  MessageFailureReason,
+} from './message-channel'
+export { INVALID_MESSAGE_CLOSE_CODE, parseMessage, truncateCloseReason } from './message-channel'
+export type {
+  AnyMessagesContract,
+  ClientToServerMessage,
+  DiscriminatorOf,
+  MessageSchemas,
+  MessagesContract,
+  MessageUnion,
+  ServerToClientMessage,
+} from './message-contracts'
+export { composeMessageSchema, DEFAULT_DISCRIMINATOR, defineMessages, prepareMessages } from './message-contracts'
 export { multipartBodySerializer } from './multipart-body-serializer'
 export type { RealtimeMessage } from './realtime-framing'
 export { DEFAULT_MAX_MESSAGE_BYTES, decodeRealtimeFrames, encodeRealtimeFrame } from './realtime-framing'
