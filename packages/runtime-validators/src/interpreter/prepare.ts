@@ -123,7 +123,19 @@ const makeValidator = (
   // nothing here beyond this tiny holder.
   const caches = newValidatorCaches()
 
+  // Whether this validator has been called before. The per-node keyword caches
+  // (see `node-meta.ts`) only start filling on the second call: a one-shot
+  // validation — the CLI path this package is built for — would write an entry
+  // per schema node and never read one back, and building that metadata is
+  // already cheaper than the scan it replaces. A validator that is being reused
+  // says so by being called twice, and from there on every node is read from the
+  // cache.
+  let called = false
+
   return (input: unknown): unknown => {
+    if (called) caches.nodeMeta ??= new WeakMap()
+    else called = true
+
     const ctx: InterpreterContext = {
       root: schema,
       registry,

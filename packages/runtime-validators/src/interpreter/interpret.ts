@@ -1,6 +1,6 @@
 import { FORMAT_CHECKS, isValidRegex } from '@/interpreter/format-checks'
 import { validationLimitError } from '@/interpreter/limits'
-import { own } from '@/interpreter/own'
+import { getNodeMeta, type NodeMeta } from '@/interpreter/node-meta'
 import { resolveDynamicRef, resolveRecursiveRef } from '@/interpreter/resolve-dynamic-ref'
 import { resolveLocalRef } from '@/interpreter/resolve-local-ref'
 import { resolveScopedDynamicRef, resolveScopedRef, type ScopedTarget } from '@/interpreter/resolve-scoped-ref'
@@ -34,8 +34,19 @@ export type ValidatorCaches = {
    * slot, not a map: 2019-09 allows exactly one target per document.
    */
   recursiveRef: { value: unknown } | null
-  /** Resolved `$ref`s for a document with `$id`s, keyed by the base in scope plus the ref. */
-  scopedRef: Map<string, ScopedTarget> | null
+  /**
+   * Resolved `$ref`s for a document with `$id`s: base URI in scope → ref → target.
+   * Nested rather than keyed on a composite string because the same ref resolves
+   * differently from inside different `$id` scopes, and building `${base} ${ref}`
+   * meant allocating and hashing a fresh string on every reference followed.
+   */
+  scopedRef: Map<string, Map<string, ScopedTarget>> | null
+  /**
+   * Per-node keyword metadata (see `node-meta.ts`), or `null` while this
+   * validator is still on its first call — a one-shot validation would only ever
+   * write to it. `prepare.ts` allocates it once the validator is called again.
+   */
+  nodeMeta: WeakMap<object, NodeMeta> | null
 }
 
 export const newValidatorCaches = (): ValidatorCaches => ({
@@ -44,6 +55,7 @@ export const newValidatorCaches = (): ValidatorCaches => ({
   dynamicRef: null,
   recursiveRef: null,
   scopedRef: null,
+  nodeMeta: null,
 })
 
 /**
@@ -69,11 +81,11 @@ const enterResource = (scope: DynamicScope, base: string): DynamicScope =>
 
 /**
  * The scope in effect *at* `node`, accounting for an `$id` it declares. Called
- * only for documents that have a registry, so `$id`-free schemas never pay for
- * the lookup.
+ * only for a document that has a registry *and* a node that declares an `$id`
+ * (both tested by the caller off cheap flags), so an ordinary schema never pays
+ * for the lookup.
  */
 const scopeAtNode = (registry: SchemaRegistry, node: Record<string, unknown>, scope: DynamicScope): DynamicScope => {
-  if (typeof own(node, '$id') !== 'string') return scope
   const base = registry.baseOf.get(node)
   return base === undefined ? scope : enterResource(scope, base)
 }
@@ -479,20 +491,22 @@ const resolvePlainRef = (ctx: InterpreterContext, ref: string): unknown => {
  * a URI that does resolve in scope never reaches it.
  */
 const resolveScoped = (ctx: InterpreterContext, registry: SchemaRegistry, ref: string, base: string): ScopedTarget => {
-  // A space is an unambiguous separator here: `base` comes out of `URL.href`, so
-  // it can never contain one.
-  const key = `${base} ${ref}`
   let cache = ctx.caches.scopedRef
   if (cache === null) {
     cache = new Map()
     ctx.caches.scopedRef = cache
   }
-  const cached = cache.get(key)
+  let byRef = cache.get(base)
+  if (byRef === undefined) {
+    byRef = new Map()
+    cache.set(base, byRef)
+  }
+  const cached = byRef.get(ref)
   if (cached !== undefined) return cached
 
   const scoped = resolveScopedRef(registry, ref, base)
   const resolved = scoped ?? fallbackTarget(ctx, ref, base)
-  cache.set(key, resolved)
+  byRef.set(ref, resolved)
   return resolved
 }
 
@@ -602,7 +616,13 @@ type ObjectMeta = {
   knownKeys: string[] | undefined
   /** `knownKeys` pre-escaped for JSON Pointer, so the error-path build is a bare concat. */
   escapedKeys: string[] | undefined
-  requiredSet: Set<string>
+  /**
+   * Whether each of {@link ObjectMeta.knownKeys} is also in `required`, index
+   * for index. A parallel array of booleans rather than a `Set` lookup per
+   * declared property per validation: the loop already has the index in hand,
+   * and on a wide object that was one hash lookup per property per call.
+   */
+  requiredFlags: boolean[] | undefined
   requiredNotInProps: string[]
   patternEntries: [RegExp, unknown][] | null
   /**
@@ -646,10 +666,14 @@ const hasProperty = (obj: Record<string, unknown>, key: string): boolean =>
  * the caller falls back to `deepEqual`. Keyed on the schema node so the scan runs
  * once per node rather than once per validation. `null` set means "not all
  * primitive"; an entry is always present after the first touch.
+ *
+ * Unlike the node's {@link NodeMeta} this is memoized from the first call on: the
+ * scan is O(enum length) and a node under `items` is revisited once per array
+ * element, so a single cold validation would otherwise rebuild it per element.
  */
 const enumSetCache = new WeakMap<object, Set<unknown> | null>()
 
-const getEnumSet = (s: object, values: unknown[]): Set<unknown> | null => {
+const getEnumSet = (s: object, values: readonly unknown[]): Set<unknown> | null => {
   let set = enumSetCache.get(s)
   if (set === undefined) {
     set = values.every(isPrimitiveEnumValue) ? new Set(values) : null
@@ -669,26 +693,25 @@ const getEnumSet = (s: object, values: unknown[]): Set<unknown> | null => {
  */
 const objectMetaCache = new WeakMap<object, ObjectMeta>()
 
-const getObjectMeta = (s: Record<string, unknown>): ObjectMeta => {
+/** {@link ObjectMeta.requiredFlags}: `required` membership, resolved per declared key. */
+const requiredFlagsFor = (required: readonly string[], knownKeys: readonly string[]): boolean[] => {
+  const set = new Set(required)
+  return knownKeys.map((key) => set.has(key))
+}
+
+const getObjectMeta = (s: Record<string, unknown>, node: NodeMeta): ObjectMeta => {
   let meta = objectMetaCache.get(s)
   if (meta === undefined) {
-    const rawProperties = own(s, 'properties')
-    const properties = isPlainObject(rawProperties) ? rawProperties : undefined
-    const rawPatternProperties = own(s, 'patternProperties')
-    const patternProperties = isPlainObject(rawPatternProperties) ? rawPatternProperties : undefined
-    const required = Array.isArray(own(s, 'required')) ? (own(s, 'required') as string[]) : []
+    // Every keyword here was already read (and type-narrowed) when the node's
+    // {@link NodeMeta} was built, so this only does the allocating work.
+    const { properties, patternProperties, dependentRequired, dependentSchemas, dependencies } = node
+    const required = node.required ?? []
     const knownKeys = properties ? Object.keys(properties) : undefined
-    const rawDependentRequired = own(s, 'dependentRequired')
-    const dependentRequired = isPlainObject(rawDependentRequired) ? rawDependentRequired : undefined
-    const rawDependentSchemas = own(s, 'dependentSchemas')
-    const dependentSchemas = isPlainObject(rawDependentSchemas) ? rawDependentSchemas : undefined
-    const rawDependencies = own(s, 'dependencies')
-    const dependencies = isPlainObject(rawDependencies) ? rawDependencies : undefined
     meta = {
       properties,
       knownKeys,
       escapedKeys: knownKeys?.map(escapePointer),
-      requiredSet: new Set(required),
+      requiredFlags: knownKeys && requiredFlagsFor(required, knownKeys),
       // `Object.hasOwn`, not `k in properties`: `in` walks `Object.prototype`, so
       // `required: ['toString']` alongside any `properties` object looked already
       // covered and was dropped here — and `toString` is not in `knownKeys` either
@@ -718,6 +741,7 @@ const getObjectMeta = (s: Record<string, unknown>): ObjectMeta => {
 const interpretObject = (
   ctx: InterpreterContext,
   s: Record<string, unknown>,
+  node: NodeMeta,
   value: unknown,
   path: string,
   evalScope: Evaluation | null,
@@ -727,8 +751,8 @@ const interpretObject = (
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return
   const obj = value as Record<string, unknown>
 
-  const meta = getObjectMeta(s)
-  const { properties, knownKeys, escapedKeys, requiredSet } = meta
+  const meta = getObjectMeta(s, node)
+  const { properties, knownKeys, escapedKeys, requiredFlags } = meta
   const emitErrors = ctx.emitErrors
   // `required`, `dependentRequired` and the property-count bounds are
   // validation-vocabulary; `properties`, `patternProperties`,
@@ -736,14 +760,12 @@ const interpretObject = (
   // applicators and always apply.
   const asserts = ctx.assertsValidation
 
-  const hasAdditional = Object.hasOwn(s, 'additionalProperties')
-  const additional = own(s, 'additionalProperties')
-  const rawMinProps = own(s, 'minProperties')
-  const minProps = asserts && typeof rawMinProps === 'number' ? rawMinProps : undefined
-  const rawMaxProps = own(s, 'maxProperties')
-  const maxProps = asserts && typeof rawMaxProps === 'number' ? rawMaxProps : undefined
+  const hasAdditional = node.hasAdditionalProperties
+  const additional = node.additionalProperties
+  const minProps = asserts ? node.minProperties : undefined
+  const maxProps = asserts ? node.maxProperties : undefined
 
-  if (properties && knownKeys && escapedKeys) {
+  if (properties && knownKeys && escapedKeys && requiredFlags) {
     for (let i = 0; i < knownKeys.length; i++) {
       const key = knownKeys[i] as string
       // One read, reused. `hasProperty` spells the same rule for callers that
@@ -751,7 +773,7 @@ const interpretObject = (
       // off `pv`, so only the `hasOwn` half is left to ask.
       const pv = obj[key]
       const present = pv !== undefined && Object.hasOwn(obj, key)
-      if (requiredSet.has(key)) {
+      if (requiredFlags[i]) {
         if (!present) {
           if (asserts) fail(ctx, `must have required property '${key}'`, path)
         } else {
@@ -896,8 +918,8 @@ const interpretObject = (
   }
 
   // `propertyNames` — every property *key* (as a string) must match the schema.
-  if (Object.hasOwn(s, 'propertyNames')) {
-    const nameSchema = own(s, 'propertyNames')
+  if (node.hasPropertyNames) {
+    const nameSchema = node.propertyNames
     // One scratch context for the whole key loop instead of the fresh nine-field
     // one `matchesSchema` builds per call — on a 20-key object that was 20
     // context allocations for what is usually a one-keyword string check.
@@ -922,7 +944,7 @@ const interpretObject = (
 /** Emits the array-applicator keywords, inert for non-arrays. */
 const interpretArray = (
   ctx: InterpreterContext,
-  s: Record<string, unknown>,
+  node: NodeMeta,
   value: unknown,
   path: string,
   evalScope: Evaluation | null,
@@ -933,29 +955,16 @@ const interpretArray = (
   const arr = value as unknown[]
 
   // The count bounds and `uniqueItems` are validation-vocabulary; `prefixItems`,
-  // `items` and `contains` are applicators and always apply.
+  // `items` and `contains` are applicators and always apply. The positional
+  // schemas and their tail were sorted out once, when the node's
+  // {@link NodeMeta} was built.
   const asserts = ctx.assertsValidation
-  const rawMinItems = own(s, 'minItems')
-  const minItems = asserts && typeof rawMinItems === 'number' ? rawMinItems : undefined
-  const rawMaxItems = own(s, 'maxItems')
-  const maxItems = asserts && typeof rawMaxItems === 'number' ? rawMaxItems : undefined
-  const uniqueRequired = asserts && own(s, 'uniqueItems') === true
+  const minItems = asserts ? node.minItems : undefined
+  const maxItems = asserts ? node.maxItems : undefined
+  const uniqueRequired = asserts && node.uniqueItems
 
-  let tuple: unknown[] | undefined
-  let rest: unknown
-  // Each keyword read once — `own` is a call plus an `Object.hasOwn` call, and
-  // this runs per array validated.
-  const prefixItems = own(s, 'prefixItems')
-  const items = own(s, 'items')
-  if (Array.isArray(prefixItems)) {
-    tuple = prefixItems
-    rest = items
-  } else if (Array.isArray(items)) {
-    tuple = items
-    rest = own(s, 'additionalItems')
-  } else {
-    rest = items
-  }
+  const tuple = node.tuple
+  const rest = node.rest
   const start = tuple ? tuple.length : 0
 
   if (minItems !== undefined && arr.length < minItems) {
@@ -1003,14 +1012,12 @@ const interpretArray = (
   // items must match the subschema. `minContains: 0` makes the lower bound
   // trivially satisfied (even for an empty array) while any `maxContains` still
   // applies. Branch matches are evaluated as booleans so they never leak errors.
-  if (Object.hasOwn(s, 'contains')) {
-    const containsSchema = own(s, 'contains')
+  if (node.hasContains) {
+    const containsSchema = node.contains
     // `minContains`/`maxContains` are validation-vocabulary; `contains` itself is
     // an applicator, and its own "at least one match" assertion stands either way.
-    const rawMin = own(s, 'minContains')
-    const min = asserts && typeof rawMin === 'number' ? rawMin : 1
-    const rawMax = own(s, 'maxContains')
-    const max = asserts && typeof rawMax === 'number' ? rawMax : undefined
+    const min = asserts ? (node.minContains ?? 1) : 1
+    const max = asserts ? node.maxContains : undefined
     // `maxContains` needs the exact total (it is an upper bound), and an active
     // annotation scope needs every match (not just the first `min`) — so only
     // when neither is in play can we stop early. Without this a 1000-element
@@ -1046,7 +1053,7 @@ const interpretArray = (
 }
 
 /** Emits the string constraints, inert for non-strings. */
-const interpretString = (ctx: InterpreterContext, s: Record<string, unknown>, value: unknown, path: string): void => {
+const interpretString = (ctx: InterpreterContext, node: NodeMeta, value: unknown, path: string): void => {
   if (typeof value !== 'string') return
 
   // The length and pattern bounds are validation-vocabulary; `format` below is
@@ -1057,8 +1064,8 @@ const interpretString = (ctx: InterpreterContext, s: Record<string, unknown>, va
     // pair. So the cheap unit count is authoritative except in a narrow band near
     // each bound, and the exact `codePointLength` scan is only paid there. This
     // keeps the common ASCII / short-string path allocation- and scan-free.
-    const minLength = own(s, 'minLength')
-    if (typeof minLength === 'number') {
+    const minLength = node.minLength
+    if (minLength !== undefined) {
       const units = value.length
       // units < min ⇒ code points < min (fail). units >= 2·min ⇒ code points >= min
       // (each point is ≤ 2 units), so only the band [min, 2·min) needs the exact count.
@@ -1067,8 +1074,8 @@ const interpretString = (ctx: InterpreterContext, s: Record<string, unknown>, va
         if (ctx.failed) return
       }
     }
-    const maxLength = own(s, 'maxLength')
-    if (typeof maxLength === 'number') {
+    const maxLength = node.maxLength
+    if (maxLength !== undefined) {
       // units <= max ⇒ code points <= max (pass); only an over-long unit count needs
       // the exact scan, where surrogate pairs may still bring it within bounds.
       if (value.length > maxLength && codePointLength(value) > maxLength) {
@@ -1076,15 +1083,15 @@ const interpretString = (ctx: InterpreterContext, s: Record<string, unknown>, va
         if (ctx.failed) return
       }
     }
-    const pattern = own(s, 'pattern')
-    if (typeof pattern === 'string' && !getRegex(ctx, pattern).test(value)) {
+    const pattern = node.pattern
+    if (pattern !== undefined && !getRegex(ctx, pattern).test(value)) {
       fail(ctx, `must match pattern ${pattern}`, path)
       if (ctx.failed) return
     }
   }
 
-  const format = own(s, 'format')
-  if (typeof format === 'string') {
+  const format = node.format
+  if (format !== undefined) {
     const enabled = ctx.formats === 'all' || ctx.formats.has(format)
     if (enabled) {
       // `regex` is the one format whose check is a compile, not a pattern match.
@@ -1107,7 +1114,7 @@ const interpretString = (ctx: InterpreterContext, s: Record<string, unknown>, va
 }
 
 /** Emits the numeric constraints, inert for non-numbers. */
-const interpretNumber = (ctx: InterpreterContext, s: Record<string, unknown>, value: unknown, path: string): void => {
+const interpretNumber = (ctx: InterpreterContext, node: NodeMeta, value: unknown, path: string): void => {
   if (typeof value !== 'number') return
 
   // Bounds are written as *pass* conditions and negated so `NaN` — which compares
@@ -1116,37 +1123,37 @@ const interpretNumber = (ctx: InterpreterContext, s: Record<string, unknown>, va
   // still accepts non-finite numbers, as Ajv does; only a bound (or `multipleOf`)
   // rejects them. `±Infinity` follows the ordinary comparison (e.g. `Infinity`
   // passes `minimum: 0` but fails `maximum: 10`), again matching Ajv.
-  const minimum = own(s, 'minimum')
-  if (typeof minimum === 'number') {
+  const minimum = node.minimum
+  if (minimum !== undefined) {
     // Draft-04 used a boolean `exclusiveMinimum: true` alongside `minimum` to
     // make the bound strict; draft-06+ replaced it with a standalone numeric
     // keyword (handled below). Honour both forms.
-    const strict = own(s, 'exclusiveMinimum') === true
+    const strict = node.strictMinimum
     if (!(strict ? value > minimum : value >= minimum)) {
       fail(ctx, strict ? `must be > ${minimum}` : `must be >= ${minimum}`, path)
       if (ctx.failed) return
     }
   }
-  const maximum = own(s, 'maximum')
-  if (typeof maximum === 'number') {
-    const strict = own(s, 'exclusiveMaximum') === true
+  const maximum = node.maximum
+  if (maximum !== undefined) {
+    const strict = node.strictMaximum
     if (!(strict ? value < maximum : value <= maximum)) {
       fail(ctx, strict ? `must be < ${maximum}` : `must be <= ${maximum}`, path)
       if (ctx.failed) return
     }
   }
-  const exclusiveMinimum = own(s, 'exclusiveMinimum')
-  if (typeof exclusiveMinimum === 'number' && !(value > exclusiveMinimum)) {
+  const exclusiveMinimum = node.exclusiveMinimum
+  if (exclusiveMinimum !== undefined && !(value > exclusiveMinimum)) {
     fail(ctx, `must be > ${exclusiveMinimum}`, path)
     if (ctx.failed) return
   }
-  const exclusiveMaximum = own(s, 'exclusiveMaximum')
-  if (typeof exclusiveMaximum === 'number' && !(value < exclusiveMaximum)) {
+  const exclusiveMaximum = node.exclusiveMaximum
+  if (exclusiveMaximum !== undefined && !(value < exclusiveMaximum)) {
     fail(ctx, `must be < ${exclusiveMaximum}`, path)
     if (ctx.failed) return
   }
-  const multipleOf = own(s, 'multipleOf')
-  if (typeof multipleOf === 'number' && multipleOf > 0) {
+  const multipleOf = node.multipleOf
+  if (multipleOf !== undefined && multipleOf > 0) {
     let ok: boolean
     if (Number.isInteger(multipleOf)) {
       // For an integer divisor `%` on doubles is exact, so this accepts huge true
@@ -1277,61 +1284,69 @@ export const interpret = (
   if (!isPlainObject(schema)) return
 
   const s = schema
+  // Every keyword this node carries, read once and memoized on the node itself —
+  // see `node-meta.ts`. Everything below is a fixed-offset field load off `node`
+  // instead of a dynamic-key lookup into the schema.
+  const node = getNodeMeta(ctx.caches.nodeMeta, s)
 
   // OpenAPI 3.0 `nullable: true` — a `null` value is accepted regardless of the
   // declared `type` (and short-circuits every other keyword), matching how Ajv
   // is configured for OpenAPI schemas.
-  if (own(s, 'nullable') === true && value === null) return
+  if (node.nullable && value === null) return
 
   // An `$id` here opens a new schema resource: refs written below resolve
   // against its URI, and it joins the dynamic scope a `$dynamicRef` searches.
   // Gated on the registry so a document without a single `$id` — nearly all of
   // them — pays one null check per node and nothing else.
   const registry = ctx.registry
-  const scope = registry === null ? dynamicScope : scopeAtNode(registry, s, dynamicScope)
+  const scope = registry !== null && node.hasId ? scopeAtNode(registry, s, dynamicScope) : dynamicScope
 
   // `unevaluated*` consults annotations gathered by every other keyword applied
   // to this same instance. Inherit the ancestor's tracker when one is in scope;
   // otherwise start one only if this node carries an `unevaluated*` keyword, so
   // schemas that never use them allocate nothing.
-  const nodeUnevaluated = Object.hasOwn(s, 'unevaluatedProperties') || Object.hasOwn(s, 'unevaluatedItems')
-  const evalScope: Evaluation | null = evaluation ?? (nodeUnevaluated ? newEvaluation() : null)
+  const evalScope: Evaluation | null = evaluation ?? (node.hasUnevaluated ? newEvaluation() : null)
 
-  // $ref — validate against the resolved target. {@link interpretRef} breaks
-  // reference cycles so a self- or mutually-recursive `$ref` cannot recurse
-  // forever. Sibling keywords still apply per 2020-12, so we do not stop here.
-  const ref = own(s, '$ref')
-  if (typeof ref === 'string') {
-    const base = registry === null ? undefined : scope[scope.length - 1]
-    if (registry === null || base === undefined) {
-      interpretRef(ctx, resolvePlainRef(ctx, ref), value, path, evalScope, depth, scope)
-    } else {
-      const target = resolveScoped(ctx, registry, ref, base)
-      interpretRef(ctx, target.value, value, path, evalScope, depth, enterResource(scope, target.base))
+  // The three reference keywords, behind one flag: a node that carries none of
+  // them — which is most of them — skips the whole block on a single test.
+  if (node.hasRefs) {
+    // $ref — validate against the resolved target. {@link interpretRef} breaks
+    // reference cycles so a self- or mutually-recursive `$ref` cannot recurse
+    // forever. Sibling keywords still apply per 2020-12, so we do not stop here.
+    const ref = node.ref
+    if (ref !== undefined) {
+      const base = registry === null ? undefined : scope[scope.length - 1]
+      if (registry === null || base === undefined) {
+        interpretRef(ctx, resolvePlainRef(ctx, ref), value, path, evalScope, depth, scope)
+      } else {
+        const target = resolveScoped(ctx, registry, ref, base)
+        interpretRef(ctx, target.value, value, path, evalScope, depth, enterResource(scope, target.base))
+      }
+      if (ctx.failed) return
     }
-    if (ctx.failed) return
-  }
 
-  // `$dynamicRef` (2020-12) — late-binds to a matching `$dynamicAnchor`. Like
-  // `$ref`, sibling keywords still apply, so we do not stop here.
-  const dynRef = own(s, '$dynamicRef')
-  if (typeof dynRef === 'string') {
-    const base = registry === null ? undefined : scope[scope.length - 1]
-    if (registry === null || base === undefined) {
-      interpretRef(ctx, resolveDyn(ctx, dynRef), value, path, evalScope, depth, scope)
-    } else {
-      const target = resolveScopedDynamicRef(registry, dynRef, base, scope) ?? dynamicFallbackTarget(ctx, dynRef, base)
-      interpretRef(ctx, target.value, value, path, evalScope, depth, enterResource(scope, target.base))
+    // `$dynamicRef` (2020-12) — late-binds to a matching `$dynamicAnchor`. Like
+    // `$ref`, sibling keywords still apply, so we do not stop here.
+    const dynRef = node.dynamicRef
+    if (dynRef !== undefined) {
+      const base = registry === null ? undefined : scope[scope.length - 1]
+      if (registry === null || base === undefined) {
+        interpretRef(ctx, resolveDyn(ctx, dynRef), value, path, evalScope, depth, scope)
+      } else {
+        const target =
+          resolveScopedDynamicRef(registry, dynRef, base, scope) ?? dynamicFallbackTarget(ctx, dynRef, base)
+        interpretRef(ctx, target.value, value, path, evalScope, depth, enterResource(scope, target.base))
+      }
+      if (ctx.failed) return
     }
-    if (ctx.failed) return
-  }
 
-  // `$recursiveRef` (2019-09) — the predecessor of `$dynamicRef`. Its only legal
-  // value is `"#"`: late-binds to the `$recursiveAnchor: true` subschema,
-  // falling back to the document root.
-  if (typeof own(s, '$recursiveRef') === 'string') {
-    interpretRef(ctx, resolveRec(ctx), value, path, evalScope, depth, scope)
-    if (ctx.failed) return
+    // `$recursiveRef` (2019-09) — the predecessor of `$dynamicRef`. Its only legal
+    // value is `"#"`: late-binds to the `$recursiveAnchor: true` subschema,
+    // falling back to the document root.
+    if (node.hasRecursiveRef) {
+      interpretRef(ctx, resolveRec(ctx), value, path, evalScope, depth, scope)
+      if (ctx.failed) return
+    }
   }
 
   // `const`, `enum` and `type` below belong to the validation vocabulary, as do
@@ -1341,8 +1356,8 @@ export const interpret = (
   // `true` for every ordinary schema, so this costs one boolean read.
   const asserts = ctx.assertsValidation
 
-  if (asserts && Object.hasOwn(s, 'const')) {
-    const c = own(s, 'const')
+  if (asserts && node.hasConst) {
+    const c = node.constValue
     if (isPrimitiveEnumValue(c)) {
       if (value !== c) fail(ctx, `must be equal to ${JSON.stringify(c)}`, path)
     } else if (!deepEqual(value, c)) {
@@ -1351,8 +1366,8 @@ export const interpret = (
     if (ctx.failed) return
   }
 
-  const enumValues = own(s, 'enum')
-  if (asserts && Array.isArray(enumValues)) {
+  const enumValues = node.enumValues
+  if (asserts && enumValues !== undefined) {
     const values = enumValues
     // Membership is memoized per schema node: an all-primitive enum resolves to a
     // `Set` for O(1) lookup instead of re-scanning `every(isPrimitiveEnumValue)`
@@ -1385,15 +1400,15 @@ export const interpret = (
     }
   }
 
-  const rawType = asserts ? own(s, 'type') : undefined
-  if (typeof rawType === 'string') {
+  const singleType = asserts ? node.type : undefined
+  const types = asserts ? node.types : undefined
+  if (singleType !== undefined) {
     // The common single-type case: check it directly without wrapping it in a
     // throwaway one-element array (which this hot path would otherwise allocate
     // on every typed node — exactly the cold-path cost we want to avoid).
-    if (!matchesType(rawType, value)) fail(ctx, `must be ${rawType}`, path)
+    if (!matchesType(singleType, value)) fail(ctx, `must be ${singleType}`, path)
     if (ctx.failed) return
-  } else if (Array.isArray(rawType) && rawType.length > 0) {
-    const types = rawType as string[]
+  } else if (types !== undefined) {
     let ok = false
     for (const t of types) {
       if (matchesType(t, value)) {
@@ -1412,77 +1427,94 @@ export const interpret = (
   // schema analysis, no allocation), so it costs the cold one-shot path nothing.
   if (typeof value === 'object') {
     if (value !== null) {
-      if (Array.isArray(value)) interpretArray(ctx, s, value, path, evalScope, depth, scope)
-      else interpretObject(ctx, s, value, path, evalScope, depth, scope)
-      if (ctx.failed) return
+      // Each block is also skipped outright when the node declares none of its
+      // keywords, which is the ordinary case for a leaf: a bare `{ type: 'string' }`
+      // reaches no keyword block at all.
+      if (Array.isArray(value)) {
+        if (node.hasArrayKeywords) {
+          interpretArray(ctx, node, value, path, evalScope, depth, scope)
+          if (ctx.failed) return
+        }
+      } else if (node.hasObjectKeywords) {
+        interpretObject(ctx, s, node, value, path, evalScope, depth, scope)
+        if (ctx.failed) return
+      }
     }
   } else if (typeof value === 'string') {
-    interpretString(ctx, s, value, path)
-    if (ctx.failed) return
+    if (node.hasStringKeywords) {
+      interpretString(ctx, node, value, path)
+      if (ctx.failed) return
+    }
   } else if (typeof value === 'number') {
     // Every keyword `interpretNumber` reads is validation-vocabulary, so a
     // dialect without it skips the call outright.
-    if (asserts) interpretNumber(ctx, s, value, path)
-    if (ctx.failed) return
-  }
-
-  const allOf = own(s, 'allOf')
-  if (Array.isArray(allOf)) {
-    for (const sub of allOf) {
-      interpretInPlace(ctx, sub, value, path, evalScope, depth, scope)
+    if (asserts && node.hasNumberKeywords) {
+      interpretNumber(ctx, node, value, path)
       if (ctx.failed) return
     }
   }
 
-  const anyOf = own(s, 'anyOf')
-  if (Array.isArray(anyOf) && anyOf.length > 0) {
-    let ok = false
-    for (const sub of anyOf) {
-      // When tracking annotations, evaluate every branch (each match contributes
-      // its evaluated keys); otherwise short-circuit on the first match.
-      if (matchesSchema(ctx, sub, value, depth, scope, evalScope)) {
-        ok = true
-        if (!evalScope) break
+  // The branching applicators, behind one flag for the same reason as the
+  // reference block above: a leaf node skips all five on a single test.
+  if (node.hasBranches) {
+    const allOf = node.allOf
+    if (allOf !== undefined) {
+      for (const sub of allOf) {
+        interpretInPlace(ctx, sub, value, path, evalScope, depth, scope)
+        if (ctx.failed) return
       }
     }
-    if (!ok) {
-      fail(ctx, 'must match a schema in anyOf', path)
-      if (ctx.failed) return
-    }
-  }
 
-  const oneOf = own(s, 'oneOf')
-  if (Array.isArray(oneOf) && oneOf.length > 0) {
-    let count = 0
-    for (const sub of oneOf) {
-      if (matchesSchema(ctx, sub, value, depth, scope, evalScope)) count++
+    const anyOf = node.anyOf
+    if (anyOf !== undefined) {
+      let ok = false
+      for (const sub of anyOf) {
+        // When tracking annotations, evaluate every branch (each match contributes
+        // its evaluated keys); otherwise short-circuit on the first match.
+        if (matchesSchema(ctx, sub, value, depth, scope, evalScope)) {
+          ok = true
+          if (!evalScope) break
+        }
+      }
+      if (!ok) {
+        fail(ctx, 'must match a schema in anyOf', path)
+        if (ctx.failed) return
+      }
     }
-    if (count !== 1) {
-      fail(ctx, 'must match exactly one schema in oneOf', path)
-      if (ctx.failed) return
-    }
-  }
 
-  if (Object.hasOwn(s, 'not')) {
-    // `not` produces no annotations — a passing inner schema means failure.
-    if (matchesSchema(ctx, own(s, 'not'), value, depth, scope)) {
-      fail(ctx, 'must not match schema', path)
-      if (ctx.failed) return
+    const oneOf = node.oneOf
+    if (oneOf !== undefined) {
+      let count = 0
+      for (const sub of oneOf) {
+        if (matchesSchema(ctx, sub, value, depth, scope, evalScope)) count++
+      }
+      if (count !== 1) {
+        fail(ctx, 'must match exactly one schema in oneOf', path)
+        if (ctx.failed) return
+      }
     }
-  }
 
-  if (Object.hasOwn(s, 'if')) {
-    if (matchesSchema(ctx, own(s, 'if'), value, depth, scope, evalScope)) {
-      if (Object.hasOwn(s, 'then')) interpretInPlace(ctx, own(s, 'then'), value, path, evalScope, depth, scope)
-    } else if (Object.hasOwn(s, 'else')) {
-      interpretInPlace(ctx, own(s, 'else'), value, path, evalScope, depth, scope)
+    if (node.hasNot) {
+      // `not` produces no annotations — a passing inner schema means failure.
+      if (matchesSchema(ctx, node.not, value, depth, scope)) {
+        fail(ctx, 'must not match schema', path)
+        if (ctx.failed) return
+      }
+    }
+
+    if (node.hasIf) {
+      if (matchesSchema(ctx, node.ifSchema, value, depth, scope, evalScope)) {
+        if (node.hasThen) interpretInPlace(ctx, node.thenSchema, value, path, evalScope, depth, scope)
+      } else if (node.hasElse) {
+        interpretInPlace(ctx, node.elseSchema, value, path, evalScope, depth, scope)
+      }
     }
   }
 
   // `unevaluatedProperties` / `unevaluatedItems` (2020-12) run last: every other
   // keyword above has recorded what it evaluated into `evalScope`, so these act
   // on exactly what is left over.
-  if (nodeUnevaluated && evalScope) interpretUnevaluated(ctx, s, value, path, evalScope, depth, scope)
+  if (node.hasUnevaluated && evalScope) interpretUnevaluated(ctx, node, value, path, evalScope, depth, scope)
 }
 
 /**
@@ -1493,20 +1525,15 @@ export const interpret = (
  */
 const interpretUnevaluated = (
   ctx: InterpreterContext,
-  s: Record<string, unknown>,
+  node: NodeMeta,
   value: unknown,
   path: string,
   evalScope: Evaluation,
   depth: number,
   scope: DynamicScope,
 ): void => {
-  if (
-    Object.hasOwn(s, 'unevaluatedProperties') &&
-    typeof value === 'object' &&
-    value !== null &&
-    !Array.isArray(value)
-  ) {
-    const up = own(s, 'unevaluatedProperties')
+  if (node.hasUnevaluatedProperties && typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    const up = node.unevaluatedProperties
     if (!evalScope.allProps) {
       const obj = value as Record<string, unknown>
       // Own keys only, matching every other property sweep in this file.
@@ -1524,8 +1551,8 @@ const interpretUnevaluated = (
     }
   }
 
-  if (Object.hasOwn(s, 'unevaluatedItems') && Array.isArray(value)) {
-    const ui = own(s, 'unevaluatedItems')
+  if (node.hasUnevaluatedItems && Array.isArray(value)) {
+    const ui = node.unevaluatedItems
     if (!evalScope.allItems) {
       const arr = value as unknown[]
       for (let i = 0; i < arr.length; i++) {

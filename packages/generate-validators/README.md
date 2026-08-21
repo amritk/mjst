@@ -251,25 +251,26 @@ Keeping the hot function tiny lets V8 optimise it aggressively, so a valid-input
 check beats every other library measured — including the build-time transformer
 typia — while still emitting full JSON-Pointer errors for invalid input, and
 emitting the validator stays far cheaper than compiling a schema at startup.
-Measured on Bun 1.3 (Linux x64), validating valid input at steady state:
+Measured on Bun 1.4 (Linux x64), validating valid input at steady state:
 
 | schema | mjst (generated) | typia (transformed) | ajv (compiled) | typebox (compiled) | zod |
 |:--|--:|--:|--:|--:|--:|
-| small (4 fields) | **~49M** ops/s | ~6.4M ops/s | ~11M ops/s | ~5.7M ops/s | ~2.4M ops/s |
-| order (nested + array) | **~11M** ops/s | ~2.5M ops/s | ~4M ops/s | ~2.4M ops/s | ~0.52M ops/s |
-| assert-loose | **~177M** ops/s | ~162M ops/s | ~46M ops/s | ~70M ops/s | ~3.9M ops/s |
-| assert-strict | **~164M** ops/s | ~146M ops/s | ~20M ops/s | ~44M ops/s | ~1.5M ops/s |
+| small (4 fields) | **~59M** ops/s | ~5.8M ops/s | ~10M ops/s | ~7.6M ops/s | ~2.2M ops/s |
+| order (nested + array) | **~9.5M** ops/s | ~2M ops/s | ~3.9M ops/s | ~3.3M ops/s | ~0.54M ops/s |
+| assert-loose | **~189M** ops/s | ~170M ops/s | ~44M ops/s | ~78M ops/s | ~5M ops/s |
+| assert-strict | **~104M** ops/s | ~68M ops/s | ~21M ops/s | ~42M ops/s | ~1.8M ops/s |
 
 The `assert-loose` / `assert-strict` rows are the exact shape used by
 [`moltar/typescript-runtime-type-benchmarks`](https://github.com/moltar/typescript-runtime-type-benchmarks)
 (seven scalar roots plus a nested object): the boolean guard keeps mjst ahead of
-typia on both, by ~10% on `assert-loose` and ~12% on `assert-strict` (with
-`additionalProperties: false`) — close enough that the two can trade the lead
-run-to-run. (typia and TypeBox still win the *invalid* path, where they bail on
-the first error rather than collecting a full error list.)
+typia on both, by ~11% on `assert-loose` — close enough that the two can trade
+the lead run-to-run — and by ~52% on `assert-strict` (with
+`additionalProperties: false`), where mjst counts keys once and typia does not.
+(typia and TypeBox still win the *invalid* path, where they bail on the first
+error rather than collecting a full error list.)
 
-Preparing a validator costs ~0.3–0.7 ms for mjst codegen and ~0.04–0.3 ms for a
-TypeBox `TypeCompiler` compile, versus ~7–11 ms for an Ajv compile. Every library
+Preparing a validator costs ~0.3–0.7 ms for mjst codegen and ~0.05–0.2 ms for a
+TypeBox `TypeCompiler` compile, versus ~13–17 ms for an Ajv compile. Every library
 agrees on every verdict; parity is asserted before timing.
 
 One caveat on the first two rows: their schemas declare `format` (`uuid`,

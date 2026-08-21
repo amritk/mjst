@@ -31,7 +31,13 @@ export type IQueryMatch = {
 // ---------------------------------------------------------------------------
 
 type Selector =
-  | { kind: 'child'; name: string }
+  /**
+   * `.name` / `['name']`. `index` is the same name read as an array index, or
+   * `undefined` when it is not all digits — precomputed here because the check
+   * used to run as a regex against the *same* name on every array node the
+   * descent reached.
+   */
+  | { kind: 'child'; name: string; index: number | undefined }
   | { kind: 'index'; index: number }
   | { kind: 'wildcard' }
   | { kind: 'union'; names: (string | number)[] }
@@ -68,13 +74,35 @@ export type CompiledPath = {
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
+/**
+ * True for a non-empty run of ASCII digits — what `/^\d+$/` matched, without
+ * the regex. It is asked once per segment of every match's path, which on a
+ * large dereferenced spec is hundreds of thousands of calls, and almost all of
+ * them are settled by the first character.
+ */
+const isDigits = (value: string): boolean => {
+  const length = value.length
+  if (length === 0) return false
+  for (let i = 0; i < length; i++) {
+    const code = value.charCodeAt(i)
+    if (code < 48 || code > 57) return false
+  }
+  return true
+}
+
+/** A `.name` selector, with the array-index reading of `name` worked out once. */
+const childSelector = (name: string): Selector => ({
+  kind: 'child',
+  name,
+  index: isDigits(name) ? Number(name) : undefined,
+})
+
 // jsonpath-plus emits numeric array indices as strings and Linter historically
 // normalized *any* all-digit segment (including object keys like "200") to a
 // number. Replicate that exactly so source-map lookups are unchanged.
 const normalizeSegment = (segment: string | number): string | number => {
   if (typeof segment === 'number') return segment
-  if (segment.length > 0 && /^\d+$/.test(segment)) return Number(segment)
-  return segment
+  return isDigits(segment) ? Number(segment) : segment
 }
 
 const normalizePath = (path: (string | number)[]): JsonPath => path.map(normalizeSegment)
@@ -232,7 +260,7 @@ const bracketSelector = (content: string, onError: (message: string) => void): S
   }
   if (names.length === 1) {
     const only = names[0] as string | number
-    return typeof only === 'number' ? { kind: 'index', index: only } : { kind: 'child', name: only }
+    return typeof only === 'number' ? { kind: 'index', index: only } : childSelector(only)
   }
   return { kind: 'union', names }
 }
@@ -305,7 +333,7 @@ export const compileQuery = (expression: string): CompiledPath => {
         continue
       }
       const { name, end } = readName(expression, i)
-      steps.push({ recursive, selector: { kind: 'child', name } })
+      steps.push({ recursive, selector: childSelector(name) })
       recursive = false
       i = end
       continue
@@ -346,7 +374,7 @@ export const compileQuery = (expression: string): CompiledPath => {
     if (recursive) {
       const { name, end } = readName(expression, i)
       if (end > i) {
-        steps.push({ recursive: true, selector: { kind: 'child', name } })
+        steps.push({ recursive: true, selector: childSelector(name) })
         recursive = false
         i = end
         continue
@@ -400,8 +428,8 @@ const applySelector = (node: Node, selector: Selector, root: unknown, out: Node[
       if (isObject(value)) {
         if (Object.hasOwn(value, selector.name))
           out.push({ value: value[selector.name], parent: node, key: selector.name })
-      } else if (Array.isArray(value) && /^\d+$/.test(selector.name)) {
-        const idx = Number(selector.name)
+      } else if (Array.isArray(value) && selector.index !== undefined) {
+        const idx = selector.index
         if (idx < value.length) out.push({ value: value[idx], parent: node, key: idx })
       }
       return
@@ -588,17 +616,9 @@ export const queryMany = (data: unknown, compiled: CompiledPath[]): IQueryMatch[
   }
 
   if (recursive.length > 0) {
-    // Walk the whole tree exactly once, applying every descent path's first
-    // selector at each visited node in the same pass (fused descent), so the
-    // ~15k-node resolved tree is traversed a single time rather than once per
-    // `$..` given. Each path's surviving seeds then run its remaining steps.
     const firsts = recursive.map((i) => (compiled[i] as CompiledPath).steps[0] as Step)
     const seeds: Node[][] = recursive.map(() => [])
-    const root: Node = { value: data, parent: undefined, key: undefined }
-    walkDescendants(root, (node) => {
-      for (let r = 0; r < recursive.length; r++)
-        applySelector(node, (firsts[r] as Step).selector, data, seeds[r] as Node[])
-    })
+    seedDescents(data, firsts, seeds)
     for (let r = 0; r < recursive.length; r++) {
       const c = compiled[recursive[r] as number] as CompiledPath
       out[recursive[r] as number] = toMatches(applySteps(data, seeds[r] as Node[], c.steps.slice(1)))
@@ -606,6 +626,73 @@ export const queryMany = (data: unknown, compiled: CompiledPath[]): IQueryMatch[
   }
 
   return out
+}
+
+/**
+ * Walks the whole tree once and collects, for every `$..` path, the nodes its
+ * first selector matches — the seeds its remaining steps then run from.
+ *
+ * The traversal is shared across paths (a ruleset has a dozen-odd descent
+ * `given`s, and the dereferenced tree is large), and the *matching* is inverted
+ * on top of that. Nearly every descent `given` opens with a plain name —
+ * `$..parameters`, `$..enum`, `$..$ref` — so asking each path in turn whether
+ * this node has its name meant a dozen `Object.hasOwn` calls per node. Instead
+ * we look at each own key the node already has and ask which paths wanted *it*:
+ * one map lookup per key, and a node whose keys nobody named costs nothing.
+ *
+ * The children are being materialized for the walk anyway, so a seeded child
+ * reuses that node rather than allocating a second one for the match.
+ *
+ * Everything else (`$..*`, `$..[?(...)]`, unions, slices) keeps the general
+ * per-path call. Seed order stays document order, which is the order findings
+ * come out in.
+ */
+const seedDescents = (data: unknown, firsts: readonly Step[], seeds: Node[][]): void => {
+  /** Own key → the descent paths whose first selector names it. */
+  const byName = new Map<string, number[]>()
+  /** Paths whose name can also index an array, which `byName` cannot answer for. */
+  const numericChild: number[] = []
+  /** Paths whose first selector is not a plain name, applied one by one. */
+  const others: number[] = []
+  for (let r = 0; r < firsts.length; r++) {
+    const selector = (firsts[r] as Step).selector
+    if (selector.kind !== 'child') {
+      others.push(r)
+      continue
+    }
+    const existing = byName.get(selector.name)
+    if (existing === undefined) byName.set(selector.name, [r])
+    else existing.push(r)
+    if (selector.index !== undefined) numericChild.push(r)
+  }
+
+  // The same explicit stack as {@link walkDescendants}, and for the same reason:
+  // document depth is attacker-controlled, so recursion is not an option.
+  const stack: Node[] = [{ value: data, parent: undefined, key: undefined }]
+  while (stack.length > 0) {
+    const current = stack.pop() as Node
+    const value = current.value
+    if (Array.isArray(value)) {
+      for (let idx = value.length - 1; idx >= 0; idx--) stack.push({ value: value[idx], parent: current, key: idx })
+      for (const r of numericChild) applySelector(current, (firsts[r] as Step).selector, data, seeds[r] as Node[])
+    } else if (isObject(value)) {
+      // Children are pushed in document order (so a seeded one is collected in
+      // that order too), then reversed in place so they still pop preorder.
+      const base = stack.length
+      for (const key of Object.keys(value)) {
+        const child: Node = { value: value[key], parent: current, key }
+        stack.push(child)
+        const interested = byName.get(key)
+        if (interested !== undefined) for (const r of interested) (seeds[r] as Node[]).push(child)
+      }
+      for (let i = base, j = stack.length - 1; i < j; i++, j--) {
+        const held = stack[i] as Node
+        stack[i] = stack[j] as Node
+        stack[j] = held
+      }
+    }
+    for (const r of others) applySelector(current, (firsts[r] as Step).selector, data, seeds[r] as Node[])
+  }
 }
 
 /** Runs a JSONPath expression and returns each match with its concrete path. */
