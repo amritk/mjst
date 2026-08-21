@@ -62,11 +62,12 @@ export const sseItemSchema = (
   // stream than the protocol actually is.
   const item: Record<string, unknown> = { type: 'object', properties }
   if (liftedDefs !== undefined) item['$defs'] = liftedDefs
-  // Never `required: ['data']`: a keep-alive comment frame carries no data,
-  // and a `retry:`-only frame carries neither data nor event. Requiring them
-  // would make the document reject frames the stream legitimately sends. A
-  // pinned `event` is the one field every frame of such a stream does carry.
-  if (options?.event !== undefined) item['required'] = ['event']
+  // No `required`, ever. A keep-alive comment frame carries no data, and a
+  // `retry:`-only frame carries neither data nor event — so there is no field
+  // every frame of a stream is guaranteed to have, including a pinned `event`.
+  // An earlier version required `event` when it was pinned, which contradicted
+  // exactly this and made the document reject frames the stream legitimately
+  // sends. Pinning still documents the name through the property's `const`.
   return item
 }
 

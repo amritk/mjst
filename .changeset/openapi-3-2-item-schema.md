@@ -36,9 +36,10 @@ The package description advertises 3.2 generation now, matching the emitter.
 the item is the event *envelope* (`event`, `id`, `data`, `retry`) with the
 payload inside `data` rather than the payload itself. `data` is typed as the
 schema given, `{ event: 'token' }` pins the event name as a `const`, and
-`{ id: true }` marks a resumable stream. Neither `data` nor `id` is ever
-required: a keep-alive frame carries no data, and requiring it would make the
-document reject frames the stream legitimately sends.
+`{ id: true }` marks a resumable stream. Nothing is ever required: a keep-alive
+frame carries no data and a `retry:`-only frame carries neither data nor event,
+so there is no field every frame is guaranteed to have — requiring one would
+make the document reject frames the stream legitimately sends.
 
 **Removed: the Hey API (`@hey-api/openapi-ts`) integration test** and its
 devDependency. It was never a dependency of the package — only a test

@@ -113,15 +113,36 @@ describe('bindMessages', () => {
     expect(await next(channel.messages)).toEqual({ type: 'say', text: 'hi' })
   })
 
+  it('normalizes whatever shape a runtime hands accept', async () => {
+    // Bun delivers a Buffer, workerd an ArrayBuffer; `binary` promises
+    // Uint8Array either way, and the push path never went through the
+    // listener's normalization.
+    const socket = pushSocket()
+    const channel = bindMessages(chat, socket, { receiveBinary: true })
+    channel.accept(new Uint8Array([1, 2]).buffer)
+    const first = await next(channel.binary)
+    expect(first).toBeInstanceOf(Uint8Array)
+    expect(first).toEqual(new Uint8Array([1, 2]))
+  })
+
+  it('does not touch binaryType on a push-model socket', () => {
+    // Bun's handler is the app's, and forwards to `accept`; flipping the
+    // socket off its `nodebuffer` default would change what that handler gets.
+    const socket: BindableSocket & { binaryType: string } = {
+      binaryType: 'nodebuffer',
+      send: () => {},
+      close: () => {},
+    }
+    bindMessages(chat, socket)
+    expect(socket.binaryType).toBe('nodebuffer')
+  })
+
   it('asks for arraybuffer frames where the socket lets it', () => {
     // Deno's WHATWG socket defaults to 'blob', and a Blob converts to bytes
     // only asynchronously — which the message listener cannot await — so every
     // binary frame would have reached the app as an empty buffer.
-    const socket: BindableSocket & { binaryType: string } = {
-      binaryType: 'blob',
-      send: () => {},
-      close: () => {},
-    }
+    const socket = eventSocket() as ReturnType<typeof eventSocket> & { binaryType: string }
+    socket.binaryType = 'blob'
     bindMessages(chat, socket)
     expect(socket.binaryType).toBe('arraybuffer')
   })

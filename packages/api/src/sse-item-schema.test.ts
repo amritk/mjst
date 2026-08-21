@@ -14,10 +14,12 @@ describe('sseItemSchema', () => {
     })
   })
 
-  it('pins the event name as a const and requires it', () => {
+  it('pins the event name as a const, without requiring it', () => {
     const item = sseItemSchema({ type: 'string' }, { event: 'token' })
     expect(item['properties']).toMatchObject({ event: { type: 'string', const: 'token' } })
-    expect(item['required']).toEqual(['event'])
+    // Not required: a keep-alive or `retry:`-only frame carries no event, and
+    // requiring one would make the document reject frames the stream sends.
+    expect(item).not.toHaveProperty('required')
   })
 
   it('adds id only for a resumable stream', () => {
@@ -25,11 +27,11 @@ describe('sseItemSchema', () => {
     expect(sseItemSchema({ type: 'string' }, { id: true })['properties']).toMatchObject({ id: { type: 'string' } })
   })
 
-  it('never requires data — a keep-alive frame carries none', () => {
+  it('never requires anything — no field is on every frame', () => {
     // `required` is omitted entirely rather than emitted empty: an empty
     // `required` array is legal JSON Schema but says nothing.
     expect(sseItemSchema({ type: 'string' })).not.toHaveProperty('required')
-    expect(sseItemSchema({ type: 'string' }, { event: 'token' })['required']).not.toContain('data')
+    expect(sseItemSchema({ type: 'string' }, { event: 'token', id: true })).not.toHaveProperty('required')
   })
 
   it("lifts a payload schema's $defs to the envelope root", () => {

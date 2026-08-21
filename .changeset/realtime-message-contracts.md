@@ -52,10 +52,12 @@ that do not use it.
 A throwing `onInvalid` is swallowed and treated as "no opinion", so a broken
 metrics call cannot stop a contract violation from being answered.
 
-`bindMessages` sets `binaryType = 'arraybuffer'` on sockets that expose it.
-Deno's defaults to `'blob'`, and a Blob only converts to bytes asynchronously —
-which the message listener cannot await — so binary frames would have reached
-`channel.binary` as empty buffers.
+`bindMessages` sets `binaryType = 'arraybuffer'` on the sockets whose listener
+it owns (Workers, Deno). Deno's defaults to `'blob'`, and a Blob converts to
+bytes only asynchronously — which the listener cannot await — so binary frames
+would have arrived empty. Push-model sockets (Bun) are left alone, since their
+handler belongs to the app; `channel.accept` normalizes any shape a runtime
+hands it — `Buffer`, `ArrayBuffer`, typed array — to `Uint8Array` instead.
 
 **Invalid frames close with `4007`** and a one-line reason, truncated to RFC
 6455's 123-byte budget on a UTF-8 character boundary (overrunning it or

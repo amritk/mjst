@@ -26,8 +26,12 @@ export type ServerMessageChannel<M extends AnyMessagesContract> = {
   /**
    * Hands one raw frame to the channel. Call this from whatever the runtime
    * gives you; on a socket with `addEventListener` it is already wired up.
+   *
+   * Binary is accepted in whatever shape the runtime uses — Bun delivers a
+   * `Buffer`, workerd an `ArrayBuffer` — and normalized to `Uint8Array` here,
+   * so `binary` yields one type whichever path a frame arrived by.
    */
-  readonly accept: (raw: string | Uint8Array) => void
+  readonly accept: (raw: string | Uint8Array | ArrayBuffer | ArrayBufferView) => void
   /** Validated `clientToServer` messages, in order. */
   readonly messages: AsyncIterableIterator<ClientToServerMessage<M>>
   /**
@@ -107,38 +111,49 @@ export const bindMessages = <const M extends AnyMessagesContract>(
 ): ServerMessageChannel<M> => {
   const { discriminator, clientToServer, serverToClient } = prepareMessages(contract)
 
-  const { accept, queue, binary } = createIngest<ClientToServerMessage<M>>(
-    clientToServer,
-    discriminator,
-    options,
-    (code, reason) => {
-      queue.end()
-      binary.end()
-      closeQuietly(socket, code, reason)
-    },
-  )
+  const {
+    accept: acceptFrame,
+    queue,
+    binary,
+  } = createIngest<ClientToServerMessage<M>>(clientToServer, discriminator, options, (code, reason) => {
+    queue.end()
+    binary.end()
+    closeQuietly(socket, code, reason)
+  })
+
+  /**
+   * The public ingest seam. Every runtime hands binary a different way — Bun a
+   * `Buffer`, workerd an `ArrayBuffer`, Deno a `Blob` unless asked otherwise —
+   * so the shape is normalized here rather than in each caller.
+   */
+  const accept = (raw: string | Uint8Array | ArrayBuffer | ArrayBufferView): void => {
+    acceptFrame(typeof raw === 'string' ? raw : toBytes(raw))
+  }
 
   const endAll = (error?: unknown): void => {
     queue.end(error)
     binary.end(error)
   }
 
-  // Deno's WHATWG socket defaults to `'blob'`, and a Blob only converts to
-  // bytes asynchronously — which this listener cannot await — so every binary
-  // frame would reach the app as an empty buffer, silently. `connectRealtime`
-  // sets this on the client half for the same reason; leaving it unset here
-  // made the two ends of `channel.binary` disagree. Guarded because some
-  // runtimes expose the property read-only.
-  try {
-    if (socket.binaryType !== undefined && socket.binaryType !== 'arraybuffer') socket.binaryType = 'arraybuffer'
-  } catch {
-    // Read-only or unsupported; `toBytes` still handles what does arrive.
-  }
-
   if (socket.addEventListener !== undefined) {
+    // Only on the branch that owns the listener. Deno's WHATWG socket defaults
+    // to `'blob'`, and a Blob converts to bytes only asynchronously — which
+    // the listener cannot await — so binary frames would arrive empty.
+    //
+    // Not on the push branch: Bun hands frames to a handler the *app* wrote
+    // and forwards to `accept`, and flipping its `ServerWebSocket` off the
+    // `nodebuffer` default would change what that handler receives — an
+    // `ArrayBuffer` instead of the `Buffer` (already a `Uint8Array`) it
+    // expects. Reaching into a socket whose delivery path belongs to the
+    // caller is not this function's business; `accept` normalizes instead.
+    try {
+      if (socket.binaryType !== undefined && socket.binaryType !== 'arraybuffer') socket.binaryType = 'arraybuffer'
+    } catch {
+      // Read-only or unsupported; `toBytes` still handles what does arrive.
+    }
+
     socket.addEventListener('message', ((event: { data: unknown }) => {
-      const data = event.data
-      accept(typeof data === 'string' ? data : toBytes(data))
+      accept(event.data as string | ArrayBuffer)
     }) as never)
     socket.addEventListener('close', (() => endAll()) as never)
     // A socket that errors without a following `close` — which runtimes differ
