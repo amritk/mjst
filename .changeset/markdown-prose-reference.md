@@ -20,4 +20,11 @@ overrides a label JSON Schema cannot spell (`(heading: Heading) => string`),
 schema supplies no example, one is derived from `examples` and wrapped back into
 the shape of the config file.
 
+Three details that a real published schema (`@scalar/schemas/sdk-config`) turned
+up: an `x-doc` on a `$ref` site merges with the one on the definition it points
+at rather than replacing it, a property whose object shape sits in an
+`anyOf`/`oneOf` branch (`boolean | object`, the usual "switch it on or configure
+it" spelling) documents that branch's children, and an `x-doc.description` of
+`""` is honoured as a deliberate silence.
+
 `generateMarkdown()` — the README table — is unchanged.

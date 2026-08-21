@@ -85,6 +85,12 @@ describe('read-doc-meta', () => {
     expect(readDocMeta(null).hidden).toBe(false)
   })
 
+  // A node that only passes a page down to its children would otherwise print
+  // its parent's sentence a second time.
+  it('honours an empty x-doc description as a deliberate silence', () => {
+    expect(readDescription({ description: 'From the schema', 'x-doc': { description: '' } })).toBe('')
+  })
+
   it('prefers an x-doc description over the schema keyword', () => {
     expect(readDescription({ description: 'From the schema', 'x-doc': { description: 'For the docs' } })).toBe(
       'For the docs',

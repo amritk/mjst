@@ -1,4 +1,5 @@
 import { isObject } from '#helpers/guards'
+import { DOC_KEY } from '#helpers/read-doc-meta'
 
 /**
  * Decodes one JSON pointer segment: percent-decodes it (the pointer arrives as a
@@ -103,6 +104,24 @@ export const MAX_INLINED_NODES = 100_000
 type Budget = { remaining: number }
 
 /**
+ * Merges the `x-doc` keyword of a `$ref` site with the one on the definition it
+ * points at, rather than letting the ref site replace it wholesale.
+ *
+ * Every other keyword is replaced, which is what JSON Schema means by a sibling
+ * winning. `x-doc` is different because it is a namespace rather than a value:
+ * a definition carries the documentation that is true wherever it is used (its
+ * examples, how its children lay out), and the ref site adds where *this* use is
+ * documented (`page`, `section`). Replacing the whole object silently dropped a
+ * definition's examples the moment a ref site assigned it to a page.
+ */
+const mergedDoc = (target: Record<string, unknown>, siblings: Record<string, unknown>): Record<string, unknown> => {
+  const targetDoc = target[DOC_KEY]
+  const siblingDoc = siblings[DOC_KEY]
+  if (!isObject(targetDoc) || !isObject(siblingDoc)) return {}
+  return { [DOC_KEY]: { ...targetDoc, ...siblingDoc } }
+}
+
+/**
  * Inlines every `$ref` in the schema by resolving it against the document root
  * (typically into `$defs`) and recursing into the result. Sibling keywords on a
  * `$ref` node — most commonly `description` — win over the referenced target, as
@@ -142,7 +161,9 @@ export const dereference = (
       return { type: 'object', ...(dereference(siblings, root, seen, budget) as object) }
     }
     const target = dereference(resolvePointer(root, ref), root, new Set(seen).add(ref), budget)
-    return { ...(isObject(target) ? target : {}), ...(dereference(siblings, root, seen, budget) as object) }
+    const resolvedTarget = isObject(target) ? target : {}
+    const resolvedSiblings = dereference(siblings, root, seen, budget) as Record<string, unknown>
+    return { ...resolvedTarget, ...resolvedSiblings, ...mergedDoc(resolvedTarget, resolvedSiblings) }
   }
 
   const resolved: Record<string, unknown> = {}

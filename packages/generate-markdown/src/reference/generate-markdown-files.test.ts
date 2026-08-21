@@ -431,6 +431,60 @@ describe('generate-markdown-files', () => {
     expect(content).toContain('"pagination": [\n    {\n      "name": "cursor"\n    }\n  ]')
   })
 
+  // "Switch it on, or configure it" is how a config schema spells an option with
+  // defaults, and the shape lives in the object branch.
+  it('documents the object branch of a boolean-or-object property', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          publish: {
+            anyOf: [
+              { type: 'boolean' },
+              { type: 'object', properties: { authMethod: { type: 'string', description: 'How to authenticate.' } } },
+            ],
+          },
+        },
+      }),
+    )
+    expect(content).toContain('**Type:** `boolean | object`')
+    expect(content).toContain('### authMethod')
+  })
+
+  // The definition documents what is true wherever it is used; the ref site adds
+  // where this use is documented. Replacing the whole `x-doc` dropped the first.
+  it('merges the x-doc of a $ref site with the definition it points at', () => {
+    const files = generateMarkdownFiles({
+      'x-doc': { pages: [{ id: 'ts', file: 'ts.md', title: 'TypeScript' }] },
+      properties: {
+        typescript: { $ref: '#/$defs/target', 'x-doc': { page: 'ts' } },
+      },
+      $defs: {
+        target: {
+          type: 'object',
+          'x-doc': { heading: false, layout: 'table', example: 'targets.typescript = {}' },
+          properties: { packageName: { type: 'string', description: 'Package name.' } },
+        },
+      },
+    })
+    const page = files.find((file) => file.filename === 'ts.md')?.content ?? ''
+    // `page` came from the ref site, `example` and `layout` from the definition.
+    expect(page).toContain('# TypeScript')
+    expect(page).toContain('```json\ntargets.typescript = {}\n```')
+    expect(page).toContain('| `packageName` | `string` | Package name. |')
+  })
+
+  it('lets a $ref site override one x-doc member without losing the rest', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { a: { $ref: '#/$defs/thing', 'x-doc': { title: 'Renamed' } } },
+        $defs: { thing: { type: 'string', 'x-doc': { type: 'Thing', note: 'Careful.' } } },
+      }),
+    )
+    expect(content).toContain('## Renamed')
+    expect(content).toContain('**Type:** `Thing`')
+    expect(content).toContain('> Careful.')
+  })
+
   it('documents the value shape of a map-like object', () => {
     const content = only(
       generateMarkdownFiles({

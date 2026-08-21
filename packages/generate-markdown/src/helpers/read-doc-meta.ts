@@ -79,9 +79,17 @@ export const readDocMeta = (node: unknown): DocMeta => {
   }
 }
 
-/** Reads a description from either the `x-doc` override or the schema keyword. */
+/**
+ * The prose for a node: the `x-doc` override when there is one, and the schema's
+ * own `description` otherwise.
+ *
+ * An override of `""` is honoured rather than treated as absent. A node that
+ * only exists to pass a page or a section down to its children ends up printing
+ * its parent's sentence a second time, and an empty override is how an author
+ * says "the section above already said this".
+ */
 export const readDescription = (node: unknown): string => {
   const doc = isObject(node) && isObject(node[DOC_KEY]) ? node[DOC_KEY] : {}
-  const override = asText(doc['description'])
-  return override.length > 0 ? override : asText(isObject(node) ? node['description'] : undefined)
+  if (typeof doc['description'] === 'string') return doc['description']
+  return asText(isObject(node) ? node['description'] : undefined)
 }
