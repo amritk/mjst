@@ -182,6 +182,50 @@ describe('bindMessages', () => {
     expect(strict.sent).toEqual([])
   })
 
+  it('validates an outbound message without its tag, so a closed schema passes', () => {
+    // The inbound half stripped the discriminator before validating; the
+    // outbound half did not, so under a self-closing schema every valid `send`
+    // threw `/type must NOT have additional properties`. Both now go through
+    // one implementation, which is the only way they stay in step.
+    const closed = defineMessages({
+      serverToClient: {
+        said: {
+          type: 'object',
+          properties: { from: { type: 'string' } },
+          required: ['from'],
+          additionalProperties: false,
+        },
+      },
+    })
+    const socket = pushSocket()
+    const channel = bindMessages(closed, socket, { validateOutbound: true })
+    expect(() => channel.send({ type: 'said', from: 'ada' })).not.toThrow()
+    expect(socket.sent).toEqual([JSON.stringify({ type: 'said', from: 'ada' })])
+    // Still enforced on the payload itself.
+    expect(() => channel.send({ type: 'said' } as never)).toThrow(/failed its schema/)
+  })
+
+  it('delivers binary frames on their own iterator', async () => {
+    const socket = pushSocket()
+    const channel = bindMessages(chat, socket)
+    channel.accept(new Uint8Array([1, 2, 3]))
+    expect(await next(channel.binary)).toEqual(new Uint8Array([1, 2, 3]))
+    // And the socket stays open for contract messages alongside them.
+    channel.accept(JSON.stringify({ type: 'say', text: 'hi' }))
+    expect(await next(channel.messages)).toEqual({ type: 'say', text: 'hi' })
+    expect(socket.closes).toEqual([])
+  })
+
+  it('ends iteration on a socket error, not only on close', async () => {
+    // A runtime that fires `error` without a following `close` would otherwise
+    // leave every consumer parked forever — one leaked loop per connection.
+    const socket = eventSocket()
+    const channel = bindMessages(chat, socket)
+    socket.emit('error', {})
+    expect(await channel.messages.next()).toEqual({ value: undefined, done: true })
+    expect(await channel.binary.next()).toEqual({ value: undefined, done: true })
+  })
+
   it('truncates a close reason to the RFC 6455 budget, on a character boundary', () => {
     const long = truncateCloseReason('é'.repeat(200))
     expect(new TextEncoder().encode(long).byteLength).toBeLessThanOrEqual(MAX_CLOSE_REASON_BYTES)

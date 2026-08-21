@@ -1,7 +1,7 @@
 import type { ConnectRealtimeOptions, RealtimeConnection, RealtimeTransport } from './connect-realtime'
 import { connectRealtime } from './connect-realtime'
 import type { MessageChannelOptions } from './message-channel'
-import { createIngest } from './message-channel'
+import { assertOutbound, createIngest } from './message-channel'
 import type { AnyMessagesContract, ClientToServerMessage, ServerToClientMessage } from './message-contracts'
 import { prepareMessages } from './message-contracts'
 
@@ -23,11 +23,23 @@ export type ClientMessageChannel<M extends AnyMessagesContract> = {
   readonly send: (message: ClientToServerMessage<M>) => void
   /** Validated `serverToClient` messages, in order. */
   readonly messages: AsyncIterableIterator<ServerToClientMessage<M>>
+  /**
+   * Binary frames, which no JSON contract describes. Read them here rather
+   * than from `connection.messages`: the channel drains that iterator to feed
+   * this one and the underlying queue does not tee, so nothing is left there.
+   */
+  readonly binary: AsyncIterableIterator<Uint8Array>
   /** Closes the connection. Idempotent. */
   readonly close: () => void
   /** Resolves when the connection closes, for whatever reason. */
   readonly closed: Promise<void>
-  /** The underlying untyped connection — binary frames, `session`, transport escape hatches. */
+  /**
+   * The underlying connection, for `session` and the transport escape hatches.
+   *
+   * Its `messages` iterator is **drained by this channel** and will not yield
+   * — read {@link ClientMessageChannel.messages} or
+   * {@link ClientMessageChannel.binary} instead.
+   */
   readonly connection: RealtimeConnection
 }
 
@@ -52,9 +64,11 @@ export type ClientMessageChannel<M extends AnyMessagesContract> = {
  * argument for validating a fetch response body — with more force here, because
  * a socket stays open across a deploy that changes what the other end sends.
  *
- * The raw connection stays reachable through `connection`: binary frames never
- * become contract messages (nothing in a JSON contract describes them), so
- * anything sending both reads them there.
+ * Binary frames never become contract messages — nothing in a JSON contract
+ * describes them — so they arrive on `channel.binary`. Not on
+ * `connection.messages`: this channel drains that iterator to feed its own and
+ * the queue underneath does not tee, so anything left there is unreachable.
+ * `connection` remains exposed for `session` and the transport escape hatches.
  */
 export const connectMessages = async <const M extends AnyMessagesContract>(
   contract: M,
@@ -63,17 +77,22 @@ export const connectMessages = async <const M extends AnyMessagesContract>(
   const { discriminator, clientToServer, serverToClient } = prepareMessages(contract)
   const connection = await connectRealtime(options)
 
-  const { accept, queue } = createIngest<ServerToClientMessage<M>>(
+  const { accept, queue, binary } = createIngest<ServerToClientMessage<M>>(
     serverToClient,
     discriminator,
     options,
     // The client closes its own end; there is no code/reason to hand a peer,
     // and `RealtimeConnection.close` takes none.
     () => {
-      queue.end()
+      endAll()
       connection.close()
     },
   )
+
+  const endAll = (error?: unknown): void => {
+    queue.end(error)
+    binary.end(error)
+  }
 
   // `connectRealtime` already delivers a queue, so this drains it rather than
   // attaching a listener — the transports differ underneath and it has already
@@ -81,27 +100,17 @@ export const connectMessages = async <const M extends AnyMessagesContract>(
   const pump = async (): Promise<void> => {
     try {
       for await (const raw of connection.messages) accept(raw)
-      queue.end()
+      endAll()
     } catch (error) {
-      queue.end(error)
+      endAll(error)
     }
   }
   void pump()
-  void connection.closed.then(() => queue.end())
+  void connection.closed.then(() => endAll())
 
   const send = (message: ClientToServerMessage<M>): void => {
-    if (options.validateOutbound === true) {
-      const record = message as unknown as Record<string, unknown>
-      const name = record[discriminator]
-      const validator = typeof name === 'string' ? clientToServer.get(name) : undefined
-      if (validator === undefined) throw new Error(`connectMessages: '${String(name)}' is not a clientToServer message`)
-      const result = validator(message)
-      if (result !== true)
-        throw new Error(
-          `connectMessages: outbound '${String(name)}' failed its schema: ` +
-            (result.errors[0] === undefined ? 'unknown' : `${result.errors[0].path} ${result.errors[0].message}`),
-        )
-    }
+    if (options.validateOutbound === true)
+      assertOutbound(message, clientToServer, discriminator, 'connectMessages', 'clientToServer')
     connection.send(JSON.stringify(message))
   }
 
@@ -109,8 +118,9 @@ export const connectMessages = async <const M extends AnyMessagesContract>(
     transport: connection.transport,
     send,
     messages: queue.stream,
+    binary: binary.stream,
     close: () => {
-      queue.end()
+      endAll()
       connection.close()
     },
     closed: connection.closed,

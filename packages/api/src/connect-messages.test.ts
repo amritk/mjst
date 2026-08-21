@@ -133,13 +133,49 @@ describe('connectMessages', () => {
     expect(await channel.messages.next()).toEqual({ value: undefined, done: true })
   })
 
-  it('reports the transport and keeps the raw connection reachable', async () => {
+  it('reports the transport', async () => {
     const socket = fakeWebSocket()
     const channel = await connect(socket)
     expect(channel.transport).toBe('websocket')
-    // Binary frames never become contract messages, so the escape hatch is
-    // how anything sending both reads them.
-    expect(channel.connection.messages).toBeDefined()
+  })
+
+  it('delivers binary frames on their own iterator, not the drained connection', async () => {
+    const socket = fakeWebSocket()
+    const channel = await connect(socket)
+    socket.current()?.emit('message', { data: new Uint8Array([7, 8]).buffer })
+    expect(await next(channel.binary)).toEqual(new Uint8Array([7, 8]))
+    // And this is why `binary` exists rather than a pointer at the underlying
+    // connection: the channel drains `connection.messages` to feed itself and
+    // the queue does not tee, so reading it parks forever. Raced against a
+    // tick, because asserting "never resolves" cannot be awaited directly.
+    const raced = await Promise.race([
+      next(channel.connection.messages).then(() => 'yielded'),
+      flush().then(() => 'parked'),
+    ])
+    expect(raced).toBe('parked')
+  })
+
+  it('validates an outbound message without its tag, so a closed schema passes', async () => {
+    const closed = defineMessages({
+      clientToServer: {
+        say: {
+          type: 'object',
+          properties: { text: { type: 'string' } },
+          required: ['text'],
+          additionalProperties: false,
+        },
+      },
+    })
+    const socket = fakeWebSocket()
+    const channel = await connectMessages(closed, {
+      url: 'wss://api.example.com/ws/lobby',
+      transports: ['websocket'],
+      webSocket: socket.Fake,
+      validateOutbound: true,
+    })
+    expect(() => channel.send({ type: 'say', text: 'hi' })).not.toThrow()
+    expect(socket.sent).toEqual([JSON.stringify({ type: 'say', text: 'hi' })])
+    expect(() => channel.send({ type: 'say' } as never)).toThrow(/failed its schema/)
   })
 
   it('ends iteration when the connection closes', async () => {

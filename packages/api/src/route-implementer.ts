@@ -1,4 +1,5 @@
 import type { RouteImplementation } from './implement-route'
+import type { AnyMessagesContract } from './message-contracts'
 import type { Contract, ResponseContracts, RouteContract } from './types'
 
 /**
@@ -29,10 +30,11 @@ export const routeImplementer = <Context>() => {
     const Headers = undefined,
     const Cookies = undefined,
     const Responses extends ResponseContracts = ResponseContracts,
+    const Messages extends AnyMessagesContract = AnyMessagesContract,
   >(
-    contract: Contract<Params, Query, Body, Headers, Cookies, Responses>,
+    contract: Contract<Params, Query, Body, Headers, Cookies, Responses, Messages>,
     implementation: RouteImplementation<Params, Query, Body, Headers, Cookies, Responses, Context>,
-  ): RouteContract<Params, Query, Body, Headers, Cookies, Responses, Context> =>
+  ): RouteContract<Params, Query, Body, Headers, Cookies, Responses, Context, Messages> =>
     typeof implementation === 'function'
       ? { ...contract, handler: implementation }
       : // Conditional spread keeps `guards` absent (not `undefined`) when

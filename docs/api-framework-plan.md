@@ -407,9 +407,17 @@ carries two independent flows of interchangeable frames.
 - **Outbound validation is opt-in** (`validateOutbound`), the trade
   `validateResponses` already makes.
 - **No OpenAPI representation.** OpenAPI has no vocabulary for a bidirectional
-  message union, so `messages` never reaches the document. It *is* in the
-  contracts hash — message schemas are data the compiled module embeds, and
-  editing one has to invalidate a stale module.
+  message union, so `messages` never reaches the document. It is *not* in the
+  contracts hash either: that fingerprint answers "does this compiled module
+  still match its contracts", and `compileToModule` never emits message
+  schemas — they are read live, like `handler` and `guards`. Hashing them
+  reported a stale module for an edit that cannot stale one.
+- **`messages` is a generic slot on the contract**, not an erased
+  `AnyMessagesContract`. Erased, a route-attached contract does not narrow and
+  `send({ type: 'anything' })` type-checks, failing only at runtime; and an
+  undeclared direction defaults to an empty key set rather than
+  `MessageSchemas`, whose string index signature would make its union
+  `{ type: string }` instead of `never`.
 
 A parallel `defineChannel` DSL was set aside for the reason `protectedRoute`
 was: a second calling convention the typed client cannot keep in sync. The

@@ -51,6 +51,17 @@ export type MessagesContract<
 export type AnyMessagesContract = MessagesContract<MessageSchemas, MessageSchemas, string>
 
 /**
+ * The default for a direction a contract does not declare.
+ *
+ * Not `MessageSchemas`: that carries a string index signature, so its `keyof`
+ * is `string` and the direction's union resolves to `{ type: string }` — on a
+ * one-way contract, `send({ type: 'anything' })` would type-check and fail
+ * only at runtime. An empty key set makes the union `never`, so the direction
+ * has no callable shape at all, which is the truth.
+ */
+export type NoMessages = Record<never, never>
+
+/**
  * The discriminator a contract uses — its declared one, or `'type'`.
  *
  * The tuple wrapper keeps the conditional from distributing, and makes an
@@ -125,8 +136,8 @@ export type ServerToClientMessage<M extends AnyMessagesContract> = MessageUnion<
  * ```
  */
 export const defineMessages = <
-  const ClientToServer extends MessageSchemas = MessageSchemas,
-  const ServerToClient extends MessageSchemas = MessageSchemas,
+  const ClientToServer extends MessageSchemas = NoMessages,
+  const ServerToClient extends MessageSchemas = NoMessages,
   const Discriminator extends string = 'type',
 >(
   contract: MessagesContract<ClientToServer, ServerToClient, Discriminator>,

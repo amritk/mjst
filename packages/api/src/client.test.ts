@@ -118,6 +118,7 @@ describe('client', () => {
       'message-contracts.ts',
       'multipart-body-serializer.ts',
       'realtime-framing.ts',
+      'sse-item-schema.ts',
       'to-search-params.ts',
       'types.ts',
     ])

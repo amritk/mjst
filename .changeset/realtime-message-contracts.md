@@ -61,7 +61,11 @@ reachable on the raw socket.
 Outbound messages are typed at compile time and validated only under
 `validateOutbound`, matching what `validateResponses` does for handler replies.
 
+Binary frames arrive on `channel.binary`, on both ends — nothing in a JSON
+contract describes them, but a peer may legitimately send them alongside
+contract messages.
+
 `messages` has no OpenAPI representation — OpenAPI has no vocabulary for a
-bidirectional message union — so it never appears in the document. It is
-included in the contracts hash, since message schemas are data a compiled
-module embeds and editing one must invalidate a stale module.
+bidirectional message union — so it never appears in the document, and it is
+not part of the contracts hash either: `compileToModule` never emits message
+schemas, so an edit to one cannot stale a compiled module.

@@ -185,8 +185,15 @@ export const createIngest = <T>(
 ): {
   readonly accept: (raw: string | Uint8Array) => void
   readonly queue: ReturnType<typeof createMessageQueue<T>>
+  readonly binary: ReturnType<typeof createMessageQueue<Uint8Array>>
 } => {
   const queue = createMessageQueue<T>()
+  // Binary frames get their own queue rather than being handed back through
+  // the underlying connection. The channel drains that connection to feed
+  // this one and the queue does not tee, so anything left there is
+  // unreachable — a documented escape hatch that never yields is worse than
+  // none. See `ClientMessageChannel.binary`.
+  const binary = createMessageQueue<Uint8Array>()
   const accept = (raw: string | Uint8Array): void => {
     const result = parseMessage(raw, validators, discriminator)
     if (result.ok) {
@@ -195,11 +202,47 @@ export const createIngest = <T>(
     }
     const failure = result.failure
     // A binary frame is not a broken contract — it is traffic this contract
-    // does not describe, which a peer may legitimately be sending on the raw
-    // socket alongside it. Closing on it would make the two uses exclusive.
+    // does not describe, which a peer may legitimately be sending alongside
+    // contract messages. Closing on it would make the two uses exclusive.
     const fallback: MessageFailureAction = failure.reason === 'binary' ? 'ignore' : 'close'
     const action = options?.onInvalid?.(failure) ?? fallback
-    if (action === 'close') close(INVALID_MESSAGE_CLOSE_CODE, failure.message)
+    if (action === 'close') {
+      close(INVALID_MESSAGE_CLOSE_CODE, failure.message)
+      return
+    }
+    if (failure.reason === 'binary' && typeof raw !== 'string') binary.push(raw)
   }
-  return { accept, queue }
+  return { accept, queue, binary }
+}
+
+/**
+ * Validates one outbound message, throwing when it does not match its schema.
+ *
+ * Shared by both ends deliberately. The two `send` implementations are
+ * otherwise identical, and when they were written separately they *both*
+ * validated the message with its discriminator still attached — the same
+ * mistake `parseMessage` had inbound, where a self-closing schema rejects a
+ * property it never declared. One implementation cannot drift from itself.
+ */
+export const assertOutbound = (
+  message: unknown,
+  validators: PreparedDirection,
+  discriminator: string,
+  label: string,
+  direction: string,
+): void => {
+  const record = message as Record<string, unknown>
+  const name = record[discriminator]
+  const validator = typeof name === 'string' ? validators.get(name) : undefined
+  if (validator === undefined) throw new Error(`${label}: '${String(name)}' is not a ${direction} message`)
+  // Stripped exactly as an inbound frame is: the schema describes the payload,
+  // and the tag is this layer's framing.
+  const { [discriminator]: _tag, ...payload } = record
+  const result = validator(payload)
+  if (result === true) return
+  const first = result.errors[0]
+  throw new Error(
+    `${label}: outbound '${String(name)}' failed its schema: ` +
+      (first === undefined ? 'unknown' : `${first.path} ${first.message}`),
+  )
 }

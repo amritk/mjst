@@ -1362,12 +1362,20 @@ bindMessages(chatMessages, socket, {
 
 Binary frames are the one refusal that defaults to `ignore` rather than
 `close`: nothing in a JSON contract describes them, but a peer may legitimately
-be sending them alongside contract messages. Read them off the raw socket — or
-`channel.connection` on the client.
+be sending them alongside contract messages. They arrive on `channel.binary`,
+on both ends. Not on `channel.connection.messages`: the client channel drains
+that iterator to feed its own and the queue underneath does not tee, so
+anything left there would never be read.
 
 Outbound messages are typed at compile time and validated only under
 `validateOutbound`, the same trade `validateResponses` makes for handler
 replies.
+
+A contract can also be attached to the route it belongs to
+(`defineRoute({ ..., messages: chatMessages })`), which colocates it and carries
+it to any consumer importing the contract. The field is optional, so reading it
+back off a route gives `… | undefined` — pass the standalone constant to
+`bindMessages` / `connectMessages` and the types come through unchanged.
 
 **What this does not do:** there is no OpenAPI representation. OpenAPI has no
 vocabulary for a bidirectional message union, so `messages` never appears in

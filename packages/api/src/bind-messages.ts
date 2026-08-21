@@ -1,5 +1,5 @@
 import type { MessageChannelOptions } from './message-channel'
-import { createIngest } from './message-channel'
+import { assertOutbound, createIngest } from './message-channel'
 import type { AnyMessagesContract, ClientToServerMessage, ServerToClientMessage } from './message-contracts'
 import { prepareMessages } from './message-contracts'
 
@@ -28,6 +28,12 @@ export type ServerMessageChannel<M extends AnyMessagesContract> = {
   readonly accept: (raw: string | Uint8Array) => void
   /** Validated `clientToServer` messages, in order. */
   readonly messages: AsyncIterableIterator<ClientToServerMessage<M>>
+  /**
+   * Binary frames, which no JSON contract describes. They are never contract
+   * messages, but a peer may legitimately send them alongside — this is where
+   * they arrive, rather than on the socket, which the channel is reading.
+   */
+  readonly binary: AsyncIterableIterator<Uint8Array>
   /** Ends iteration. Call from the runtime's close handler. */
   readonly end: (error?: unknown) => void
   /** Closes the connection and ends iteration. */
@@ -48,7 +54,7 @@ export type ServerMessageChannel<M extends AnyMessagesContract> = {
  * ```typescript
  * // Workers / Deno — the socket is an EventTarget, so frames are wired for you.
  * const { socket, reply } = acceptWebSocket()
- * const channel = bindMessages(chat.messages, socket)
+ * const channel = bindMessages(chatMessages, socket)
  *
  * // Drive the loop *without* awaiting it. Nothing arrives until the client
  * // sees the 101, so awaiting the iteration here would hold the handshake
@@ -71,7 +77,7 @@ export type ServerMessageChannel<M extends AnyMessagesContract> = {
  * Bun.serve({
  *   websocket: {
  *     open: (ws) => {
- *       ws.data.channel = bindMessages(chat.messages, ws)
+ *       ws.data.channel = bindMessages(chatMessages, ws)
  *       void (async () => {
  *         for await (const message of ws.data.channel.messages) handle(ws.data.room, message)
  *       })()
@@ -94,37 +100,37 @@ export const bindMessages = <const M extends AnyMessagesContract>(
 ): ServerMessageChannel<M> => {
   const { discriminator, clientToServer, serverToClient } = prepareMessages(contract)
 
-  const { accept, queue } = createIngest<ClientToServerMessage<M>>(
+  const { accept, queue, binary } = createIngest<ClientToServerMessage<M>>(
     clientToServer,
     discriminator,
     options,
     (code, reason) => {
       queue.end()
+      binary.end()
       socket.close(code, reason)
     },
   )
+
+  const endAll = (error?: unknown): void => {
+    queue.end(error)
+    binary.end(error)
+  }
 
   if (socket.addEventListener !== undefined) {
     socket.addEventListener('message', ((event: { data: unknown }) => {
       const data = event.data
       accept(typeof data === 'string' ? data : toBytes(data))
     }) as never)
-    socket.addEventListener('close', (() => queue.end()) as never)
+    socket.addEventListener('close', (() => endAll()) as never)
+    // A socket that errors without a following `close` — which runtimes differ
+    // on — would otherwise leave every consumer parked on `messages` forever,
+    // leaking one pending loop per connection.
+    socket.addEventListener('error', (() => endAll()) as never)
   }
 
   const send = (message: ServerToClientMessage<M>): void => {
-    if (options?.validateOutbound === true) {
-      const record = message as unknown as Record<string, unknown>
-      const name = record[discriminator]
-      const validator = typeof name === 'string' ? serverToClient.get(name) : undefined
-      if (validator === undefined) throw new Error(`bindMessages: '${String(name)}' is not a serverToClient message`)
-      const result = validator(message)
-      if (result !== true)
-        throw new Error(
-          `bindMessages: outbound '${String(name)}' failed its schema: ` +
-            (result.errors[0] === undefined ? 'unknown' : `${result.errors[0].path} ${result.errors[0].message}`),
-        )
-    }
+    if (options?.validateOutbound === true)
+      assertOutbound(message, serverToClient, discriminator, 'bindMessages', 'serverToClient')
     socket.send(JSON.stringify(message))
   }
 
@@ -132,9 +138,10 @@ export const bindMessages = <const M extends AnyMessagesContract>(
     send,
     accept,
     messages: queue.stream,
-    end: queue.end,
+    binary: binary.stream,
+    end: endAll,
     close: (code, reason) => {
-      queue.end()
+      endAll()
       socket.close(code, reason)
     },
   }

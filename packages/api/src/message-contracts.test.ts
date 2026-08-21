@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 
+import { defineRoute } from './define-route'
 import type { ClientToServerMessage, ServerToClientMessage } from './message-contracts'
 import { assertMessageSchema, defineMessages, prepareMessages } from './message-contracts'
 
@@ -35,6 +36,29 @@ describe('defineMessages', () => {
       clientToServer: { ping: { type: 'object', properties: {}, required: [] } },
     })
     expectTypeOf<ClientToServerMessage<typeof custom>>().toEqualTypeOf<{ readonly kind: 'ping' }>()
+  })
+})
+
+describe('route-attached messages', () => {
+  it('keeps the contract types through defineRoute', () => {
+    // `messages` has to be a generic slot on the route contract, not an erased
+    // `AnyMessagesContract`: erased, it does not narrow, and
+    // `send({ type: 'anything' })` type-checks and fails only at runtime.
+    const route = defineRoute({
+      method: 'get',
+      path: '/ws',
+      messages: chat,
+      responses: { 426: {} },
+      handler: () => ({ status: 426 as const }),
+    })
+    expectTypeOf<NonNullable<(typeof route)['messages']>>().toEqualTypeOf<typeof chat>()
+  })
+
+  it('gives an undeclared direction no shape at all', () => {
+    const oneWay = defineMessages({ serverToClient: { tick: { type: 'object', properties: {} } } })
+    // `never`, not `{ type: string }` — nothing may be sent up a contract that
+    // declares no clientToServer messages.
+    expectTypeOf<ClientToServerMessage<typeof oneWay>>().toEqualTypeOf<never>()
   })
 })
 

@@ -38,7 +38,7 @@ const createUser = defineRoute({
 })
 
 describe('to-open-api', () => {
-  it('emits a 3.1 document with the 2020-12 dialect', () => {
+  it('emits a 3.2 document with the 2020-12 dialect', () => {
     const document = toOpenApi([getUser], info)
     expect(document.openapi).toBe('3.2.0')
     expect(document.jsonSchemaDialect).toBe('https://json-schema.org/draft/2020-12/schema')

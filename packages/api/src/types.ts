@@ -417,6 +417,7 @@ export type Contract<
   Headers = undefined,
   Cookies = undefined,
   Responses extends ResponseContracts = ResponseContracts,
+  Messages extends AnyMessagesContract = AnyMessagesContract,
 > = {
   readonly method: HttpMethod
   readonly path: string
@@ -449,7 +450,7 @@ export type Contract<
    * OpenAPI has no vocabulary for a bidirectional message union — so it does
    * not appear in the document.
    */
-  readonly messages?: AnyMessagesContract
+  readonly messages?: Messages
   readonly request?: {
     /** JSON Schema (object) for path parameters. Values are coerced from strings first. */
     readonly params?: Params
@@ -525,6 +526,7 @@ export type RouteContract<
   Cookies = undefined,
   Responses extends ResponseContracts = ResponseContracts,
   Context = undefined,
+  Messages extends AnyMessagesContract = AnyMessagesContract,
 > = {
   readonly method: HttpMethod
   readonly path: string
@@ -540,6 +542,8 @@ export type RouteContract<
   readonly deprecated?: boolean
   /** OpenAPI security requirements for this operation. See {@link Contract.security}. */
   readonly security?: SecurityRequirements
+  /** Realtime message contract. See {@link Contract.messages}. */
+  readonly messages?: Messages
   /** Request schemas. See {@link Contract.request} for per-slot semantics. */
   readonly request?: {
     readonly params?: Params

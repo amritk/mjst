@@ -84,6 +84,7 @@ export { assertMessageSchema, DEFAULT_DISCRIMINATOR, defineMessages, prepareMess
 export { multipartBodySerializer } from './multipart-body-serializer'
 export type { RealtimeMessage } from './realtime-framing'
 export { DEFAULT_MAX_MESSAGE_BYTES, decodeRealtimeFrames, encodeRealtimeFrame } from './realtime-framing'
+export { sseItemSchema } from './sse-item-schema'
 export { toSearchParams } from './to-search-params'
 export type {
   AnyContract,

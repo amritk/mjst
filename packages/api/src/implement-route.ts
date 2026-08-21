@@ -1,3 +1,4 @@
+import type { AnyMessagesContract } from './message-contracts'
 import type { Contract, ResponseContracts, RouteContract, RouteGuard, RouteHandler } from './types'
 
 /**
@@ -46,10 +47,11 @@ export const implementRoute = <
   const Headers = undefined,
   const Cookies = undefined,
   const Responses extends ResponseContracts = ResponseContracts,
+  const Messages extends AnyMessagesContract = AnyMessagesContract,
 >(
-  contract: Contract<Params, Query, Body, Headers, Cookies, Responses>,
+  contract: Contract<Params, Query, Body, Headers, Cookies, Responses, Messages>,
   implementation: RouteImplementation<Params, Query, Body, Headers, Cookies, Responses, undefined>,
-): RouteContract<Params, Query, Body, Headers, Cookies, Responses> =>
+): RouteContract<Params, Query, Body, Headers, Cookies, Responses, undefined, Messages> =>
   typeof implementation === 'function'
     ? { ...contract, handler: implementation }
     : // Conditional spread keeps `guards` absent (not `undefined`) when omitted,
