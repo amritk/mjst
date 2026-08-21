@@ -67,7 +67,7 @@ Install: `bun add -d @amritk/mjst` (or `npx mjst …`).
 
 Contract-first, framework-agnostic HTTP API layer: declare each route once as
 JSON Schema and get a typed handler, runtime request/response validation,
-OpenAPI 3.1, and a derived typed client. Fast path for an LLM; full reference is
+OpenAPI 3.2, and a derived typed client. Fast path for an LLM; full reference is
 [README.md](./README.md).
 
 > Pre-alpha: breaking changes land in **minor** versions. ESM-only (no CJS
@@ -397,7 +397,11 @@ const files = await buildSchema(schema, 'Document')
    To set a later flag you must pass every intervening positional. (The README's
    short form omits the trailing seven.)
 2. **It returns files in memory — it does NOT write to disk.** You write the
-   `GeneratedFile[]` (`{ filename, content }`) yourself.
+   `GeneratedFile[]` (`{ filename, content }`) yourself. `rootTypeName` becomes
+   that filename (lowercased) as well as the `export type` name, so it must be a
+   TypeScript identifier — `buildSchema` throws otherwise rather than hand you a
+   path that escapes your output directory. Derive it with `@amritk/helpers`'
+   `deriveRootTypeName`, which always produces one.
 3. **Output is more than one file per `$def`:** always an `index.ts` barrel, and
    (unless `typesOnly`) runtime helper files.
 4. **Default parsers COERCE invalid input to defaults** rather than throwing;
@@ -518,6 +522,25 @@ const files = await buildExampleSchema(schema, 'User') // → user.ts, index.ts
 5. **`deriveExample` memoizes each `$ref` per root document**, so the returned
    value can share sub-objects with the value derived for a sibling schema.
    Treat it as read-only.
+6. **`fooExample` is sometimes emitted as `… as Foo`.** A schema can require a
+   key the generated type never declares (`required` naming something absent from
+   `properties`, a `dependentRequired`/`dependentSchemas` dependency, a
+   `minProperties` filler on an object with no index signature). The value keeps
+   the key — dropping it would ship a fixture missing what its schema demands —
+   so the assertion is what lets the file compile. Do not "clean it up" into a
+   bare literal; TypeScript rejects the excess property, and `satisfies` runs the
+   very same check.
+7. **Derived values are capped at 10,000** characters / elements / keys, so a
+   schema with an enormous `minLength`/`minItems`/`minProperties` gets a
+   short value plus a `console.warn` rather than a file nobody can open.
+   `FooArbitrary` still honours the real bound — reach for it when the exact size
+   matters.
+
+8. **A `default`/`examples` hint that contradicts its own schema is ignored.**
+   The generated type follows the schema, so emitting the hint verbatim produced
+   a file that would not compile (`const fooExample: string = 42`). `const` is
+   always honoured — the type is its literal type. Do not "restore" a mismatched
+   hint; fix the schema instead.
 
 Exports: `buildExampleSchema`, `generateArbitrary`, `generateExampleConst`,
 `deriveExample`, `serializeValue`, `GeneratedFile`. Only the `.` entry.
@@ -693,6 +716,11 @@ const remote = await resolveRefsFromFile('https://api.example.com/schema.json', 
    Use `resolveRefsFromFile` for cross-file/remote.
 2. **Errors are collected, never thrown.** A missing file, refused host, or bad
    URL lands on `result.errors` while the rest still resolves. Always check it.
+   Each error's `path` is where the offending reference was written in the
+   document you passed in, ending in the keyword (`['properties','p','$ref']`),
+   so you can point a diagnostic straight at it. It is empty when there is
+   nowhere to point — a budget the whole resolve overran, or a reference living
+   in some other document.
 3. **Default-deny SSRF guard.** Remote refs to loopback / private / link-local /
    `169.254.169.254` / metadata hosts by name (`metadata.google.internal`,
    `*.internal`) are refused unless `allowPrivateHosts: true` or an explicit
@@ -766,7 +794,9 @@ for (const error of doc.errors) {
    `BAD_INDENT` / `BAD_IMPLICIT_KEY` / `BAD_PROPERTY` /
    `BAD_SCALAR_CONTENT` (a `: ` inside a plain scalar). A misplaced or malformed
    directive is an **error**; an unknown directive, a non-1.2 `%YAML` version,
-   and `MULTIPLE_DOCUMENTS` are warnings. A document with errors still parses —
+   `AMBIGUOUS_ANCHOR_NAME` (an anchor or alias name ending in `:` — YAML makes
+   the `:` part of the name, so `*x: v` aliases `x:` and the mapping keeps no
+   separator), and `MULTIPLE_DOCUMENTS` are warnings. A document with errors still parses —
    check `doc.errors` rather than assuming a throw. Problems arrive in **source
    order**. The one exception to "never throws" is `toJS()` / `parse()` on a
    resource-exhaustion document — runaway alias expansion or nesting too deep to
@@ -778,7 +808,11 @@ for (const error of doc.errors) {
    becomes `{ '[ a, b ]': 'v' }`, and an empty key becomes `''` (not `'null'`),
    because a JS object key can only be a string. `keyText(node)` is exported so
    you can compute that string yourself — `nodeAtPath` matches path segments
-   against it, so a path built any other way will not find the node.
+   against it, so a path built any other way will not find the node. The
+   rendering is **bounded**: a key whose aliases expand past a few thousand
+   characters ends in `…` instead of running away, so two pathological keys can
+   render alike (and get reported as duplicates). No key a document means is
+   affected.
 8. **All three YAML line breaks work**: `\n`, `\r\n`, and a lone `\r`, in both
    the parser and `lineCounter`.
 9. **Two aliases to one anchored collection project to two copies**, not one

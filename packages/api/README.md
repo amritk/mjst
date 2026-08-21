@@ -3,13 +3,13 @@
 Contract-first, framework-agnostic API layer built on [mjst](../../README.md)'s
 JSON Schema tooling. Declare each route once — method, path, request schemas, response
 schemas, handler — and get typed handlers, fast request/response validation,
-and an OpenAPI 3.1 document with **no extra code**. Thin adapters connect the
+and an OpenAPI 3.2 document with **no extra code**. Thin adapters connect the
 same API to Hono, Next.js, Bun, Cloudflare Workers, Deno (fetch), and
 Express, Fastify, or raw `node:http` (Node).
 
 - **One contract, everything derived.** The JSON Schemas in a route type the
   handler (via `FromSchema`), validate requests at runtime, and embed verbatim
-  into the OpenAPI document — OpenAPI 3.1's schema dialect *is* JSON Schema
+  into the OpenAPI document — OpenAPI 3.2's schema dialect *is* JSON Schema
   Draft 2020-12, so there is no conversion layer to drift.
 - **Fast by structure.** All schema work (validator preparation, coercion
   planning, path parsing) happens once at startup. Per request: an O(1) map hit
@@ -246,10 +246,9 @@ if (reply.status === 404) /* declared, typed, no body */;
   export type DemoChatInput = RequestBodyOf<typeof contracts.demoChat>
   ```
 
-The OpenAPI → [Hey API](https://heyapi.dev) route still works for external
-consumers who want a standalone generated SDK (`bunx @hey-api/openapi-ts -i
-http://localhost:3000/openapi.json -o src/client`); `createClient` is the
-lighter path for monorepo-internal frontends.
+For consumers outside the monorepo, the generated OpenAPI document feeds
+whichever SDK generator they already use; `createClient` is the lighter path
+for monorepo-internal frontends, and needs no codegen at all.
 
 #### Browser bundle size: the contract strip
 
@@ -607,6 +606,42 @@ const chat = defineRoute({
   handler: /* ... */,
 })
 ```
+
+### Streaming responses: documenting each item
+
+A raw `contentType` says what the stream *is*; OpenAPI 3.2's `itemSchema` says
+what each item in it looks like. Declare it on the response contract beside
+`contentType` and it lands in the document next to `schema`:
+
+```ts
+import { sseItemSchema, sseStream } from '@amritk/api'
+
+const tokens = defineRoute({
+  method: 'get',
+  path: '/chat/{id}/stream',
+  request: { params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  responses: {
+    200: {
+      contentType: 'text/event-stream',
+      // One SSE event, not the whole stream.
+      itemSchema: sseItemSchema({ type: 'string' }, { event: 'token' }),
+    },
+  },
+  handler: ({ request }) => ({ status: 200, body: sseStream(stream(), { signal: request.signal }) }),
+})
+```
+
+The sequential media types OpenAPI recognizes are `text/event-stream`,
+`application/jsonl`, `application/json-seq`, and `multipart/mixed`. For the
+JSON-lines family the item is your record, so pass the schema directly
+(`itemSchema: recordSchema`). For SSE the item is the **event envelope** —
+`{ event, id, data, retry }` — with your payload inside `data`, which is what
+`sseItemSchema` builds so you do not hand-write the wrapper at every route.
+
+`itemSchema` is documentation only, exactly like a `body` schema on a raw
+status: adapters pass the stream through untouched, so nothing here is
+validated at runtime. It does take part in `components.schemas` hoisting, so a
+titled event schema shared across routes appears once and is `$ref`erenced.
 
 ### Form and multipart bodies
 
@@ -1019,6 +1054,7 @@ changing the request pipeline — so nothing costs anything until you wire it in
 | `withTimeout(ms, handler, onTimeout)` | Wall-clock deadline on one handler; past `ms`, `onTimeout` produces the reply (a status the route declares) and the slow result is discarded. Bounds pipeline occupancy, not work already handed to the platform. | route `handler` |
 | `runAfterResponse(executionContext, task, onError?)` · `createBackground(executionContext, onError?)` | Work that outlives the response — registered through `waitUntil` where the platform has it (Workers), detached elsewhere. A rejected task goes to `onError` instead of becoming an unhandled rejection. | `executionContext` |
 | `sseStream(source, options?)` · `formatSse(event)` | Server-Sent Events as a streaming body for a raw `contentType` route. | `contentType` reply |
+| `sseItemSchema(dataSchema, options?)` | Builds the `itemSchema` for a `text/event-stream` response — wraps a payload schema in the SSE event envelope. | response contract |
 | `streamMultipart(body, contentType, options?)` · `multipartBoundary(contentType)` | Async-iterate multipart parts off the raw body stream instead of buffering the whole upload. | `request.raw` |
 | `negotiateMediaType(accept, offers)` · `parseAccept(header)` | Server-driven content negotiation with RFC 9110 media-range specificity and `q=0` handling. | handler |
 | `createStatic(options)` · `resolveStaticPath(options)` | Static files from a document root, with content types, `etag`/`last-modified`, conditional `304`s, and HEAD. Path resolution rejects the percent-encoded traversals that survive client normalization, and denies dotfiles by default. Reading is injected, since no one filesystem call works on Bun, Node, and Workers alike. | `onRequest` |
@@ -2332,26 +2368,16 @@ const api = createApi({ routes, onError: sentry.onError })
 A throwing capture is swallowed (the client still gets its 500), and
 validation failures are not captured — those are the caller's bug.
 
-### Typed client for external consumers: Hey API
+### Typed client for external consumers
 
-For consumers outside the monorepo (who cannot import your contracts), the
-generated OpenAPI document is verified [Hey API](https://heyapi.dev) input,
-which turns it into a standalone typed fetch SDK:
+Consumers outside the monorepo cannot import your contracts, so they generate
+from the document instead — it is served at `/openapi.json` and is ordinary
+OpenAPI 3.2, which any SDK generator reads.
 
-```bash
-bunx @hey-api/openapi-ts -i http://localhost:3000/openapi.json -o src/client
-```
-
-```ts
-import { getUser } from './client/sdk.gen'
-const { data } = await getUser({ path: { id: 7 } }) // data: { id: number; name: string }
-```
-
-Client and server both derive from the same schemas, so they cannot drift —
-this package's integration test generates a client from `toOpenApi` output
-and asserts the contract types (typed path params, required headers, error
-variants) come through. Monorepo-internal frontends should prefer
-[`createClient`](#typed-client-createclient), which needs no codegen at all.
+Monorepo-internal frontends should prefer
+[`createClient`](#typed-client-createclient): it derives its types from the
+contracts directly, so there is no generated artifact to keep in sync and no
+codegen step in the build.
 
 ### Schemas from Zod, TypeBox, Valibot, Effect
 
@@ -2375,7 +2401,7 @@ yours:
 | Security headers, CORS | `onResponse` decorators / `createCors` |
 | Auth ↔ handler state (resolved tenants, counters) | per-request `locals` bag |
 | Platform data (Workers `request.cf` geo/ASN) | `request.raw` escape hatch |
-| Typed clients | `createClient` from shared contracts; Hey API from OpenAPI for external consumers |
+| Typed clients | `createClient` from shared contracts; the OpenAPI document for external consumers |
 
 ## Requirements and stability
 

@@ -40,7 +40,7 @@ const createUser = defineRoute({
 describe('to-open-api', () => {
   it('emits a 3.1 document with the 2020-12 dialect', () => {
     const document = toOpenApi([getUser], info)
-    expect(document.openapi).toBe('3.1.0')
+    expect(document.openapi).toBe('3.2.0')
     expect(document.jsonSchemaDialect).toBe('https://json-schema.org/draft/2020-12/schema')
     expect(document.info).toEqual(info)
   })
@@ -135,6 +135,67 @@ describe('to-open-api', () => {
     expect(operation?.['parameters']).toEqual([
       { name: 'session', in: 'cookie', required: true, schema: { type: 'string' } },
     ])
+  })
+
+  it('documents a sequential response with itemSchema beside schema', () => {
+    const stream = defineRoute({
+      method: 'get',
+      path: '/events',
+      responses: {
+        200: {
+          contentType: 'text/event-stream',
+          itemSchema: { type: 'object', properties: { data: { type: 'string' } } },
+        },
+        206: {
+          contentType: 'application/jsonl',
+          body: { type: 'array' },
+          itemSchema: { type: 'object', properties: { line: { type: 'integer' } } },
+        },
+      },
+      handler: () => ({ status: 200, body: 'x' }),
+    })
+    const document = toOpenApi([stream], info)
+    const operation = (document.paths['/events'] as Record<string, Record<string, unknown>>)['get']
+    const responses = operation?.['responses'] as Record<string, Record<string, unknown>>
+    expect(responses['200']).toEqual({
+      description: 'Status 200',
+      content: { 'text/event-stream': { itemSchema: { type: 'object', properties: { data: { type: 'string' } } } } },
+    })
+    // Both may be declared: the payload as a whole and the shape of one item.
+    expect(responses['206']).toEqual({
+      description: 'Status 206',
+      content: {
+        'application/jsonl': {
+          schema: { type: 'array' },
+          itemSchema: { type: 'object', properties: { line: { type: 'integer' } } },
+        },
+      },
+    })
+  })
+
+  it('hoists a titled itemSchema shared across routes into components', () => {
+    const event = { title: 'FeedEvent', type: 'object', properties: { at: { type: 'string' } } }
+    const lobby = defineRoute({
+      method: 'get',
+      path: '/lobby/events',
+      responses: { 200: { contentType: 'text/event-stream', itemSchema: event } },
+      handler: () => ({ status: 200, body: 'x' }),
+    })
+    const room = defineRoute({
+      method: 'get',
+      path: '/room/events',
+      responses: { 200: { contentType: 'text/event-stream', itemSchema: event } },
+      handler: () => ({ status: 200, body: 'x' }),
+    })
+    const document = toOpenApi([lobby, room], info)
+    const componentSchemas = (document.components as Record<string, Record<string, unknown>>)['schemas']
+    expect(componentSchemas?.['FeedEvent']).toEqual(event)
+    for (const path of ['/lobby/events', '/room/events']) {
+      const operation = (document.paths[path] as Record<string, Record<string, unknown>>)['get']
+      const responses = operation?.['responses'] as Record<string, Record<string, unknown>>
+      const content = (responses['200'] as Record<string, Record<string, unknown>>)['content']
+      expect(content?.['text/event-stream']).toEqual({ itemSchema: { $ref: '#/components/schemas/FeedEvent' } })
+    }
   })
 
   it('documents raw statuses under their content type, without media parameters', () => {

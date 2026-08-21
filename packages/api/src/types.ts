@@ -35,6 +35,25 @@ export type ResponseContract = {
    * check.
    */
   readonly contentType?: string
+  /**
+   * JSON Schema for **one item** of a sequential (streaming) response —
+   * OpenAPI 3.2's `itemSchema`. Where `body` describes the payload as a whole,
+   * this describes each item as it arrives, which is what a consumer reading
+   * the stream incrementally actually needs.
+   *
+   * Declare it alongside a sequential `contentType`: `text/event-stream`,
+   * `application/jsonl`, `application/json-seq`, or `multipart/mixed`. For
+   * `text/event-stream` the item is the SSE **event envelope**, not the parsed
+   * payload — `{ event, id, data, retry }`, with `data` typed as the event
+   * carries it. {@link sseItemSchema} builds that envelope from a payload
+   * schema so the common case needs no hand-written wrapper.
+   *
+   * Documentation only, like `body` on a raw status: the adapters pass the
+   * stream through untouched, so nothing here is validated at runtime. The
+   * schema is embedded verbatim and takes part in `components.schemas`
+   * hoisting like any other.
+   */
+  readonly itemSchema?: unknown
 }
 
 /**
@@ -817,7 +836,7 @@ export type OpenApiContact = {
 
 /**
  * The `license` object of the OpenAPI `info` block. `identifier` is the
- * OpenAPI 3.1 SPDX expression field (e.g. `'MIT'`); it and `url` are mutually
+ * OpenAPI 3.1+ SPDX expression field (e.g. `'MIT'`); it and `url` are mutually
  * exclusive per the spec, but that is left to the author — everything passes
  * through verbatim.
  */
@@ -878,7 +897,7 @@ export type OpenApiExtras = {
   /**
    * Named Security Scheme Objects, emitted under `components.securitySchemes`
    * (e.g. `{ bearerAuth: { type: 'http', scheme: 'bearer' } }`). Passed
-   * through verbatim — any scheme OpenAPI 3.1 supports works.
+   * through verbatim — any scheme OpenAPI 3.2 supports works.
    */
   readonly securitySchemes?: Readonly<Record<string, unknown>> | undefined
   /**
@@ -896,13 +915,13 @@ export type OpenApiExtras = {
 }
 
 /**
- * The generated OpenAPI 3.1 document. Route schemas pass through verbatim —
- * OpenAPI 3.1's schema dialect *is* JSON Schema Draft 2020-12, which is why no
+ * The generated OpenAPI 3.2 document. Route schemas pass through verbatim —
+ * OpenAPI 3.2's schema dialect *is* JSON Schema Draft 2020-12, which is why no
  * conversion layer exists here. Schemas carrying a `title` that are reused
  * across contracts are hoisted into `components.schemas` and referenced.
  */
 export type OpenApiDocument = {
-  readonly openapi: '3.1.0'
+  readonly openapi: '3.2.0'
   readonly jsonSchemaDialect: string
   readonly info: OpenApiInfo
   readonly servers?: readonly OpenApiServer[]
@@ -1155,7 +1174,7 @@ export type Api = {
    * instead of answering 404.
    */
   readonly matches: (method: string, path: string) => boolean
-  /** The OpenAPI 3.1 document, built on first call and cached. */
+  /** The OpenAPI 3.2 document, built on first call and cached. */
   readonly openApi: () => OpenApiDocument
   /** The contracts this API was built from. */
   readonly routes: ReadonlyArray<AnyRouteContract>

@@ -145,7 +145,7 @@ describe('create-api', () => {
     // cached string instead of re-stringifying per request.
     expect(response.contentType).toBe('application/json')
     expect(JSON.parse(response.body as string)).toMatchObject({
-      openapi: '3.1.0',
+      openapi: '3.2.0',
       info: { title: 'Users', version: '1.0.0' },
     })
     // Same cached string instance on the next request — no re-serialization.

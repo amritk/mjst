@@ -58,7 +58,7 @@ describe('open-api-guards', () => {
     const allowed = await api.handle(request('GET', '/openapi.json', { 'x-role': 'admin' }))
     expect(allowed.status).toBe(200)
     expect(allowed.contentType).toBe('application/json')
-    expect(JSON.parse(allowed.body as string)).toMatchObject({ openapi: '3.1.0' })
+    expect(JSON.parse(allowed.body as string)).toMatchObject({ openapi: '3.2.0' })
   })
 
   it('runs guards in order and stops at the first denial', async () => {

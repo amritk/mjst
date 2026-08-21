@@ -2,8 +2,8 @@ import { securityGuard } from './secure-routes'
 import type { AnyRouteContract, OpenApiDocument, OpenApiExtras, OpenApiInfo } from './types'
 
 /**
- * Builds an OpenAPI 3.1 document from route contracts — no annotations, no
- * decorators, no second source of truth. This works because OpenAPI 3.1's
+ * Builds an OpenAPI 3.2 document from route contracts — no annotations, no
+ * decorators, no second source of truth. This works because OpenAPI 3.2's
  * schema dialect *is* JSON Schema Draft 2020-12: every schema in a contract is
  * embedded verbatim, byte for byte, so whatever the validators enforce is
  * exactly what the document promises.
@@ -25,6 +25,10 @@ import type { AnyRouteContract, OpenApiDocument, OpenApiExtras, OpenApiInfo } fr
  * Every operation gets an `operationId`: the contract's explicit one, or a
  * deterministic camelCase synthesis from method + path. Duplicates — explicit
  * or synthesized — throw at build time, naming both routes.
+ *
+ * A response declaring `itemSchema` alongside a sequential `contentType`
+ * (`text/event-stream`, `application/jsonl`, …) documents the shape of each
+ * streamed item under OpenAPI 3.2's `itemSchema`, beside `schema`.
  *
  * Params/query object schemas are unrolled into per-property Parameter
  * Objects (`in: 'path'` / `in: 'query'`). Object-level keywords on those
@@ -98,7 +102,13 @@ export const toOpenApi = (
         // parameters (`; charset=utf-8`) are stripped: OpenAPI keys content
         // by media type alone.
         const mediaType = contract.contentType.split(';')[0]?.trim() ?? contract.contentType
-        response['content'] = { [mediaType]: contract.body !== undefined ? { schema: embed(contract.body) } : {} }
+        const mediaTypeObject: Record<string, unknown> = {}
+        if (contract.body !== undefined) mediaTypeObject['schema'] = embed(contract.body)
+        // `itemSchema` (OpenAPI 3.2) describes one item of a sequential
+        // stream. It is a sibling of `schema`, not a replacement: a contract
+        // may declare both — the whole payload and the shape of each item.
+        if (contract.itemSchema !== undefined) mediaTypeObject['itemSchema'] = embed(contract.itemSchema)
+        response['content'] = { [mediaType]: mediaTypeObject }
       } else if (contract.body !== undefined) {
         response['content'] = { 'application/json': { schema: embed(contract.body) } }
       }
@@ -134,7 +144,7 @@ export const toOpenApi = (
   }
 
   const document: Record<string, unknown> = {
-    openapi: '3.1.0',
+    openapi: '3.2.0',
     jsonSchemaDialect: 'https://json-schema.org/draft/2020-12/schema',
     info,
   }
@@ -265,7 +275,10 @@ const collectComponentSchemas = (routes: ReadonlyArray<AnyRouteContract>): Compo
         occurrences.push({ schema, syntheticKey: operationName + slot })
     }
     push(route.request?.body, 'Body')
-    for (const [status, response] of Object.entries(route.responses)) push(response.body, 'Response' + status)
+    for (const [status, response] of Object.entries(route.responses)) {
+      push(response.body, 'Response' + status)
+      push(response.itemSchema, 'Item' + status)
+    }
   }
 
   type Entry = { json: string; objects: object[]; conflict: boolean }
