@@ -1,0 +1,61 @@
+import { displayType } from '#helpers/display-type'
+import { formatInlineLiteral } from '#helpers/format-literal'
+import { asArray, asSchema, isObject } from '#helpers/guards'
+import { readDocMeta } from '#helpers/read-doc-meta'
+import type { SchemaProperty } from '#types/schema'
+
+/** Joins type labels into a `a | b` union, dropping blanks and duplicates. */
+const unionOf = (parts: readonly string[]): string => [...new Set(parts.filter((part) => part.length > 0))].join(' | ')
+
+/**
+ * The **Type:** label for the prose reference style.
+ *
+ * It differs from the table renderer's {@link displayType} in two ways that
+ * matter for a hand-written-looking reference:
+ *
+ * - an `enum` renders as a literal union (`'json' | 'yaml'`) rather than the
+ *   flattened `string`, because the allowed values *are* the type a reader
+ *   needs to know, and
+ * - a typed array renders as `string[]` rather than `array`.
+ *
+ * `x-doc.type` wins over everything. Plenty of real config types — a callback
+ * signature, a named TypeScript type — have no JSON Schema spelling at all, and
+ * a docs generator that cannot say `(heading: Heading) => string` would just
+ * push those properties back into a hand-maintained file.
+ */
+export const referenceType = (prop: SchemaProperty, language: string, depth = 0): string => {
+  const override = readDocMeta(prop).type
+  if (override !== undefined) return override
+  // Guards a self-referential schema that survived dereferencing as a stub.
+  if (depth > 8) return ''
+
+  const values = asArray(prop.enum)
+  if (values.length > 0) return unionOf(values.map((value) => formatInlineLiteral(value, language)))
+  if (prop.const !== undefined) return formatInlineLiteral(prop.const, language)
+
+  if (typeof prop.type === 'string') {
+    if (prop.type !== 'array') return prop.type
+    const items = Array.isArray(prop.items) ? prop.items[0] : prop.items
+    const item = isObject(items) ? referenceType(asSchema(items), language, depth + 1) : ''
+    // A union item needs brackets — `string | number[]` would read as the wrong
+    // thing, so it becomes `(string | number)[]`.
+    if (item.length === 0) return 'array'
+    return item.includes(' | ') ? `(${item})[]` : `${item}[]`
+  }
+  if (Array.isArray(prop.type)) {
+    return unionOf(prop.type.filter((entry): entry is string => typeof entry === 'string'))
+  }
+
+  for (const variants of [prop.anyOf, prop.oneOf, prop.allOf]) {
+    const union = unionOf(asArray(variants).map((variant) => referenceType(asSchema(variant), language, depth + 1)))
+    if (union.length > 0) return union
+  }
+  return displayType(prop)
+}
+
+/**
+ * True when {@link referenceType} already spells out every allowed value, so a
+ * separate **Allowed values:** line would just say it twice.
+ */
+export const typeShowsEnum = (prop: SchemaProperty): boolean =>
+  readDocMeta(prop).type === undefined && asArray(prop.enum).length > 0

@@ -1,7 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-import { generateMarkdown } from '.'
+import { generateMarkdown } from '#table/generate-markdown'
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
@@ -36,7 +35,7 @@ const mockFs = (schema: unknown) => {
   writeFileMock.mockImplementation(async () => {})
 }
 
-describe('generate-readme', () => {
+describe('generate-markdown', () => {
   beforeEach(() => {
     readFileMock.mockReset()
     writeFileMock.mockReset()

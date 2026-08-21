@@ -16,7 +16,7 @@ mjst/
 │   ├── generate-validators/   # @amritk/generate-validators — predicate validator generator
 │   ├── runtime-validators/    # @amritk/runtime-validators — eval-free runtime schema interpreter
 │   ├── generate-examples/     # @amritk/generate-examples — fast-check arbitrary + example generator
-│   ├── generate-markdown/     # @amritk/generate-markdown — README table generator
+│   ├── generate-markdown/     # @amritk/generate-markdown — schema → markdown docs (README table + prose reference)
 │   ├── adapters/              # @amritk/adapters — convert external schemas (TypeBox, …) to JSON Schema
 │   ├── resolve-refs/          # @amritk/resolve-refs — inline internal/cross-file/remote $refs
 │   ├── yaml/                  # @amritk/yaml — tiny YAML parser with exact source positions
@@ -91,7 +91,10 @@ Generates **test data** from a schema. For each schema node it emits a type defi
 
 ### `@amritk/generate-markdown` (`packages/generate-markdown`)
 
-Renders a single configuration-reference table from a `config.schema.json` into a `README.md`. Used to keep the CLI / generator READMEs in sync with their config schemas. Reads `x-cli-flag` and `x-icon` extension keywords.
+Renders a `config.schema.json` as documentation, in two shapes:
+
+- **The README table** (`generateMarkdown`) — one HTML `<table>` of the config reference, spliced into a `README.md` between marker comments. Used to keep the CLI / generator READMEs in sync with their config schemas. Reads the `x-cli-flag` and `x-icon` extension keywords.
+- **A prose reference** (`generateMarkdownFiles` → `GeneratedFile[]`, `generateDocs` for the filesystem) — a heading, a **Type:**, the description and a code example per property, split across as many markdown files as the schema asks for. Driven by one `x-doc` vendor extension: `pages` and `sections` place a property, `example`/`note`/`footer` carry the prose a JSON Schema keyword has nowhere to put, `type` overrides a label JSON Schema cannot spell (`(heading: Heading) => string`), and `layout` picks headings, a table, or nothing for a property's children. Examples are derived from a property's `examples` and wrapped back into the shape of the config file when the schema does not supply one. Golden output for two realistic schemas lives in `packages/generate-markdown/fixtures/expected/` and is regenerated with `bun run generate-fixtures`.
 
 ### `@amritk/adapters` (`packages/adapters`)
 
