@@ -44,6 +44,7 @@ Express, Fastify, Koa, NestJS (Node) — with a
 ## Contents
 
 **Getting started**
+- [How this compares to a web framework](#how-this-compares-to-a-web-framework) · [what it deliberately does not do](#what-this-deliberately-does-not-do)
 - [Usage](#usage) · [Contracts without handlers (browser-safe)](#contracts-without-handlers-browser-safe) · [Typed client: `createClient`](#typed-client-createclient)
 
 **[Serving it](#serving-it)** — one `Api`, two adapters, a recipe per framework
@@ -68,6 +69,67 @@ Express, Fastify, Koa, NestJS (Node) — with a
 
 **About**
 - [Integration philosophy](#integration-philosophy) · [Requirements and stability](#requirements-and-stability) · [Scope notes](#scope-notes)
+
+## How this compares to a web framework
+
+`@amritk/api` is not a server — `handle(ApiRequest) → ApiResponse` is the whole
+runtime, and a framework hosts it ([`app.mount('/', toFetchHandler(api))`](#hono)
+under Hono, [middleware](#express) under Express). So the question is rarely
+"this **or** Hono"; it is this *inside* whatever you already run, weighed against
+the stack you would otherwise assemble for a validated, documented API — a
+framework plus a validator middleware plus an OpenAPI plugin plus an RPC client
+(`hono` + `@hono/zod-validator` + `@hono/zod-openapi` + `hc`, or the
+Express/Fastify equivalents).
+
+Against that stack:
+
+| | framework + validator + OpenAPI plugin | `@amritk/api` |
+|:--|:--|:--|
+| Declaring a route | a chain — `app.get(path, zValidator('param', schema), handler)` — and the OpenAPI plugin adds a *second* way to declare the same route | one [`defineRoute`](#usage) object: method, path, request schemas, `responses`, handler |
+| Schema language | Zod / Valibot / TypeBox, converted for the document | JSON Schema Draft 2020-12 — or author in [Zod/TypeBox/Valibot/Effect](#schemas-from-zod-typebox-valibot-effect) and convert once, at build time |
+| OpenAPI | a conversion layer between what runs and what is published | OpenAPI 3.1's schema dialect **is** Draft 2020-12, so contract schemas embed verbatim — no conversion to drift |
+| Responses | inferred from whatever the handler returned, and usually unvalidated | [declared](#validation-semantics): an undeclared status is a compile error, and `validateResponses` catches shape drift in dev/test |
+| Typed client | `hc` (coupled to the framework) or codegen from the document | [`createClient`](#typed-client-createclient) from the same literals — no codegen, no round-trip, [browser-safe subpath](#typed-client-createclient) |
+| Authorization | middleware, invisible to the document | [`guards`](#guards-authorize-once-declare-the-outcome) can only deny with a status the contract *declares*, so the 401 is in the OpenAPI output and in the client's union |
+| Production build | none | [`compileToModule`](#production-the-compiled-engine) emits a fused handler — inlined guards, schema-derived serializers, a precomputed document |
+
+The through-line: elsewhere a route is a chain of functions and the document is
+derived by a second mechanism; here the contract is data, and the handler types,
+the runtime validation, the OpenAPI document, the typed client, and the compiled
+module are all projections of it. There is one place to edit and nothing to keep
+in sync.
+
+On speed, the [benchmark tables](#production-the-compiled-engine) measure the
+same three routes through the same web-standard `Request` objects on workerd,
+Node, and Bun. Against `hono + zod` — the other column that actually validates —
+the compiled engine leads every case on all three runtimes. Against *unvalidated*
+bare Hono it leads or matches the GET cases and trails on the POST case, which is
+dominated by body parsing that every column pays.
+
+### What this deliberately does not do
+
+A framework is still a framework. This package has no:
+
+- **Middleware onion.** Pre-routing gates (`onRequest`), response decorators
+  (`onResponse`), and per-route [`guards`](#guards-authorize-once-declare-the-outcome)
+  cover the same ground with a flatter model — and on the Node adapter there are
+  no hooks at all, [by design](#serving-it): you use the host framework's chain.
+- **WebSockets.** Server-sent events are first class (`sseStream`, `formatSse`,
+  and [streaming responses](#streaming-and-raw-responses)); socket upgrades are
+  the host's job.
+- **Static file serving, JSX/SSR, or template rendering.** Nothing here renders
+  HTML except the Scalar docs page [`createDocs`](#framework-parity-helpers)
+  serves.
+- **A plugin ecosystem.** CORS, CSRF, rate limiting, security headers, ETag,
+  compression, request IDs, and health checks ship as
+  [hook factories](#built-in-security-hooks); beyond those you write it or take
+  it from the framework you mounted into.
+- **A router for anything but contracts.** A path with no contract is a 404, or
+  falls through to the host — this serves your API surface, not your whole app.
+
+Which is the point: run Hono, Express, or Fastify for the app, and let contracts
+own the API surface. The [recipes](#serving-it) mount into either side of an
+existing app, so adoption is per route, not per repository.
 
 ## Usage
 
