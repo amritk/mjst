@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { createStatic } from './create-static'
 import type { StaticFile, StaticReader } from './create-static'
+import { createStatic } from './create-static'
 
 const FILES: Readonly<Record<string, StaticFile>> = {
   './public/app.css': { body: 'body { color: red }', size: 19, lastModified: 1_700_000_000_000 },

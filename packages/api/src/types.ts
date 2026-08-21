@@ -290,6 +290,44 @@ export type RouteGuard<
 ) => RouteReply<Responses> | RawReply | undefined | Promise<RouteReply<Responses> | RawReply | undefined>
 
 /**
+ * A per-route response hook: runs after the handler (or a guard denial) has
+ * produced a reply, before that reply is validated and serialized.
+ *
+ * This is the wrap-around seam — per-route timing, a header stamped on one
+ * route group, an audit record written from the reply — without a middleware
+ * onion. The difference that matters is ordering: an onion decides what runs
+ * around what by nesting, so the answer depends on registration order across
+ * unrelated modules, while these are a list on the route that the compiled
+ * engine can emit as straight-line code. Routes that declare none pay one
+ * `undefined` check in the runtime engine and nothing at all in the compiled
+ * one, where the branch is resolved at emit time.
+ *
+ * Return a reply to replace the handler's, or `undefined` to keep it. Hooks
+ * run in order, each seeing the previous one's result. A thrown hook takes the
+ * handler-error path (`onError`), exactly like a throwing handler, and the
+ * replacement is validated against the contract just as the original was — so
+ * a hook cannot smuggle out an undeclared status.
+ *
+ * These do **not** run on a security-guard denial. Those guards fire before
+ * validation and before the context factory precisely so an unauthenticated
+ * request never reaches app code, which means the {@link RequestContext} a
+ * hook expects does not exist yet. Use the adapter's `onResponse` for
+ * decoration that must cover every reply including those.
+ */
+export type RouteResponseHook<
+  Params,
+  Query,
+  Body,
+  Headers,
+  Cookies,
+  Responses extends ResponseContracts,
+  Context = undefined,
+> = (
+  reply: RouteReply<Responses> | RawReply,
+  context: RequestContext<Params, Query, Body, Headers, Cookies, Context>,
+) => RouteReply<Responses> | RawReply | undefined | Promise<RouteReply<Responses> | RawReply | undefined>
+
+/**
  * The context a **reusable** guard sees — the shape a `requireSession` or
  * `requireRole` written once and applied to many routes accepts. The request
  * slots are `unknown` (a guard that gates on the session has no business
@@ -489,20 +527,27 @@ export type RouteContract<
    * denial statuses are already declared in `responses`. See {@link RouteGuard}.
    */
   readonly guards?: readonly RouteGuard<Params, Query, Body, Headers, Cookies, Responses, Context>[]
+  /**
+   * Response hooks run in order after the handler, before reply validation.
+   * Server concern, so it lives here rather than on the browser-safe
+   * {@link Contract}. See {@link RouteResponseHook}.
+   */
+  readonly onResponse?: readonly RouteResponseHook<Params, Query, Body, Headers, Cookies, Responses, Context>[]
   readonly responses: Responses
   readonly handler: RouteHandler<Params, Query, Body, Headers, Cookies, Responses, Context>
 }
 
 /**
  * Compile-time guard that {@link RouteContract} carries exactly
- * {@link Contract}'s fields plus the server-only `handler` and `guards` — the
+ * {@link Contract}'s fields plus the server-only `handler`, `guards`, and
+ * `onResponse` — the
  * price of the deliberate duplication documented on RouteContract. Drift makes
  * the `Expect` constraints below fail to compile.
  */
 type Expect<T extends true> = T
 export type ContractFieldsStayInSync = [
-  Expect<Omit<RouteContract, 'handler' | 'guards'> extends Contract ? true : false>,
-  Expect<Contract extends Omit<RouteContract, 'handler' | 'guards'> ? true : false>,
+  Expect<Omit<RouteContract, 'handler' | 'guards' | 'onResponse'> extends Contract ? true : false>,
+  Expect<Contract extends Omit<RouteContract, 'handler' | 'guards' | 'onResponse'> ? true : false>,
 ]
 
 /**
@@ -595,8 +640,26 @@ export type AnyRouteContract = AnyContract & {
    * Written only by `secureRoutes`; hand-authored routes use `guards`.
    */
   readonly securityGuards?: readonly ErasedGuard[]
+  /**
+   * Response hooks, run in order after the handler. See
+   * {@link RouteResponseHook}.
+   */
+  readonly onResponse?: readonly ErasedResponseHook[]
   readonly handler: (context: ErasedRequestContext) => RouteReplyValue | RawReply | Promise<RouteReplyValue | RawReply>
 }
+
+/**
+ * A response hook with its types erased — what
+ * {@link AnyRouteContract.onResponse} holds. Both the `reply` parameter and the
+ * context slots are `never` for the same assignability reason
+ * {@link ErasedRequestContext} uses: a parameter is contravariant, so only
+ * `never` lets a hook typed over one route's concrete reply union sit in the
+ * erased array every route shares.
+ */
+export type ErasedResponseHook = (
+  reply: never,
+  context: ErasedRequestContext,
+) => RouteReplyValue | RawReply | undefined | Promise<RouteReplyValue | RawReply | undefined>
 
 /**
  * A guard with its context type erased — the element type both

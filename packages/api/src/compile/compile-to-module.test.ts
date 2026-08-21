@@ -41,6 +41,9 @@ const routes: Record<string, AnyRouteContract> = {
   optionsProbe: corpus.optionsProbe,
   localsEcho: corpus.localsEcho,
   guardedResource: corpus.guardedResource,
+  hookedResource: corpus.hookedResource,
+  hookedDenial: corpus.hookedDenial,
+  hookBoom: corpus.hookBoom,
   guardBoom: corpus.guardBoom,
   rawErrorBoom: corpus.rawErrorBoom,
   secureNote: corpus.secureNote,
@@ -115,6 +118,14 @@ describe('compile-to-module', () => {
     expect(source).toContain('const runGuards =')
     expect(source).toContain('runGuards(guardedResource.guards, context, 0)')
     expect(source).not.toContain('runGuards(health.guards')
+    // Response hooks are shaped in the same way: a hooked route gets the shared
+    // loop and a `replyWith` wrapper in front of respond_*, while a route
+    // without them emits exactly the code it always did — straight to respond_*,
+    // no wrapper, no extra frame.
+    expect(source).toContain('const runResponseHooks =')
+    expect(source).toContain('runResponseHooks(hookedResource.onResponse, reply, context, 0)')
+    expect(source).toContain('respond_health(reply)')
+    expect(source).not.toContain('runResponseHooks(health.onResponse')
     // No eval anywhere in the output.
     expect(source).not.toMatch(/\beval\(|new Function\(/)
   })
@@ -281,6 +292,14 @@ describe('compile-to-module', () => {
         () => new Request('http://localhost/guarded', { headers: { 'x-key': 'secret', 'x-role': 'admin' } }),
         () => new Request('http://localhost/guarded', { headers: { 'x-key': 'wrong', 'x-role': 'admin' } }),
         () => new Request('http://localhost/guard-boom'),
+        // Route-scoped response hooks: ordering, an async hop, a hook that
+        // replaces the status outright, a hook running on a guard denial, and a
+        // hook that throws.
+        () => new Request('http://localhost/hooked/keep'),
+        () => new Request('http://localhost/hooked/swap'),
+        () => new Request('http://localhost/hooked/keep', { method: 'HEAD' }),
+        () => new Request('http://localhost/hooked-denial'),
+        () => new Request('http://localhost/hook-boom'),
         // The raw escape hatch on the cold paths: an onError and a notFound
         // formatter that answer with a built Response must reach the wire
         // verbatim — body included — in both engines.
@@ -980,7 +999,7 @@ describe('compile-to-module', () => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
       try {
         await expect(import(join(fixtureDir, 'generated-guard-drift.ts'))).rejects.toThrow(
-          /guards, security guards, or refine hooks/,
+          /guards, security guards, refine hooks, or response hooks/,
         )
         expect(String(errorSpy.mock.calls[0]?.[0])).toMatch(/[Ss]tale/)
       } finally {

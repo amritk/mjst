@@ -469,6 +469,69 @@ export const guardBoom = defineRoute({
   handler: () => ({ status: 200, body: { ok: true } }),
 })
 
+/**
+ * Route-scoped response hooks: one sync, one async, running in order and each
+ * seeing the previous one's reply. The async one is what forces both engines to
+ * await before responding, and the ordering is what proves the compiled
+ * engine's emitted loop matches the runtime's.
+ */
+export const hookedResource = defineRoute({
+  method: 'get',
+  path: '/hooked/{mode}',
+  security: [],
+  request: { params: { type: 'object', properties: { mode: { type: 'string' } }, required: ['mode'] } },
+  responses: {
+    200: { body: { type: 'object', properties: { trail: { type: 'string' } }, required: ['trail'] } },
+    202: { body: { type: 'object', properties: { trail: { type: 'string' } }, required: ['trail'] } },
+  },
+  onResponse: [
+    (reply) =>
+      'body' in reply && reply.body !== undefined
+        ? { ...reply, body: { trail: `${(reply.body as { trail: string }).trail}>sync` } }
+        : undefined,
+    async (reply, { params }) => {
+      await Promise.resolve()
+      const trail = `${(reply as { body: { trail: string } }).body.trail}>async`
+      // Replacing the status proves a hook can change the reply wholesale, and
+      // that the replacement is still validated against the contract.
+      return params.mode === 'swap'
+        ? { status: 202 as const, body: { trail } }
+        : { status: 200 as const, body: { trail } }
+    },
+  ],
+  handler: () => ({ status: 200 as const, body: { trail: 'handler' } }),
+})
+
+/** A guard denial must reach the response hooks too — it is a reply like any other. */
+export const hookedDenial = defineRoute({
+  method: 'get',
+  path: '/hooked-denial',
+  security: [],
+  responses: {
+    200: { body: { type: 'object', properties: { trail: { type: 'string' } }, required: ['trail'] } },
+    401: { body: { type: 'object', properties: { trail: { type: 'string' } }, required: ['trail'] } },
+  },
+  guards: [() => ({ status: 401 as const, body: { trail: 'denied' } })],
+  onResponse: [
+    (reply) => ({ ...reply, body: { trail: `${(reply as { body: { trail: string } }).body.trail}>hooked` } }),
+  ],
+  handler: () => ({ status: 200 as const, body: { trail: 'handler' } }),
+})
+
+/** A throwing hook takes the handler-error path in both engines. */
+export const hookBoom = defineRoute({
+  method: 'get',
+  path: '/hook-boom',
+  security: [],
+  responses: { 200: { body: { type: 'object' } } },
+  onResponse: [
+    () => {
+      throw new Error('hook exploded')
+    },
+  ],
+  handler: () => ({ status: 200 as const, body: { ok: true } }),
+})
+
 /** Reads the shared locals bag the gate populated; writes its own note for the decorator. */
 export const localsEcho = defineRoute({
   method: 'get',

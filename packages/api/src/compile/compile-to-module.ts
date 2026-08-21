@@ -261,6 +261,7 @@ export const compileToModule = (options: CompileModuleOptions): string => {
     unsupportedMediaType: false,
     refine: false,
     guards: false,
+    responseHooks: false,
   }
   // The document gate runs its guards through the same shared loop a route's
   // do, so it has to exist even when no route declares a guard of its own.
@@ -364,16 +365,16 @@ export const compileToModule = (options: CompileModuleOptions): string => {
   // keeps warning and keeps serving, exactly as before.
   const guardShapes = routes.map(
     (route) =>
-      `${route.contract.guards?.length ?? 0}/${route.contract.securityGuards?.length ?? 0}/${route.contract.refine !== undefined ? 1 : 0}`,
+      `${route.contract.guards?.length ?? 0}/${route.contract.securityGuards?.length ?? 0}/${route.contract.refine !== undefined ? 1 : 0}/${route.contract.onResponse?.length ?? 0}`,
   )
-  const guardError = `[@amritk/api] Stale compiled module: the guards, security guards, or refine hooks in ${options.routesImport} no longer match the ones this module was generated against, so they would not be enforced — re-run compileToModule to regenerate it.`
+  const guardError = `[@amritk/api] Stale compiled module: the guards, security guards, refine hooks, or response hooks in ${options.routesImport} no longer match the ones this module was generated against, so they would not be enforced — re-run compileToModule to regenerate it.`
   lines.push(
     '',
     `export const contractsHash = '${contractsHash}'`,
     `if (hashContracts([${routes.map((route) => route.name).join(', ')}]) !== contractsHash) {`,
     `  console.error(${JSON.stringify(staleWarning)})`,
     '}',
-    `const guardShape = (route) => \`\${route.guards?.length ?? 0}/\${route.securityGuards?.length ?? 0}/\${route.refine !== undefined ? 1 : 0}\``,
+    `const guardShape = (route) => \`\${route.guards?.length ?? 0}/\${route.securityGuards?.length ?? 0}/\${route.refine !== undefined ? 1 : 0}/\${route.onResponse?.length ?? 0}\``,
     `if ([${routes.map((route) => route.name).join(', ')}].map(guardShape).join(',') !== ${JSON.stringify(guardShapes.join(','))}) {`,
     `  throw new Error(${JSON.stringify(guardError)})`,
     '}',
@@ -455,6 +456,24 @@ export const compileToModule = (options: CompileModuleOptions): string => {
       '    if (result !== undefined) return result',
       '  }',
       '  return undefined',
+      '}',
+    )
+  }
+  if (used['responseHooks']) {
+    // The emitted twin of the runtime pipeline's response-hook loop: each hook
+    // sees the previous one's result, `undefined` keeps the reply as it stands,
+    // and the whole thing stays synchronous until a hook actually returns a
+    // promise.
+    lines.push(
+      'const runResponseHooks = (hooks, reply, context, i) => {',
+      '  while (i < hooks.length) {',
+      '    const result = hooks[i++](reply, context)',
+      "    if (result != null && typeof result.then === 'function') {",
+      '      return result.then((value) => runResponseHooks(hooks, value !== undefined ? value : reply, context, i))',
+      '    }',
+      '    if (result !== undefined) reply = result',
+      '  }',
+      '  return reply',
       '}',
     )
   }
@@ -1270,14 +1289,38 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
   const guards = route.contract.guards
   const hasGuards = guards !== undefined && guards.length > 0
   if (hasGuards) used['guards'] = true
+  const responseHooks = route.contract.onResponse
+  const hasResponseHooks = responseHooks !== undefined && responseHooks.length > 0
+  if (hasResponseHooks) used['responseHooks'] = true
   const invokeLines = (bodyValue: string, appContextValue: string, indent: string): string[] => {
     const context = `${indent}const context = { params: ${paramsValue}, query: ${queryValue}, body: ${bodyValue}, headers: ${headersValue}, cookies: ${cookiesValue}, context: ${appContextValue}, request: apiRequest }`
+    // Routes without hooks emit exactly the code they always did — the reply
+    // still goes straight to respond_*, with no wrapper and no extra frame.
+    // Where hooks exist, `replyWith` sits in front of it: it needs the request
+    // context and the thrown() arguments, both of which only exist inside this
+    // per-request function, which is why it is not hoisted to module scope.
+    const replyTo = hasResponseHooks ? 'replyWith' : `respond_${route.name}`
+    const hookLines = hasResponseHooks
+      ? [
+          `${indent}const replyWith = (reply) => {`,
+          `${indent}  try {`,
+          `${indent}    const hooked = runResponseHooks(${route.name}.onResponse, reply, context, 0)`,
+          `${indent}    return hooked != null && typeof hooked.then === 'function'`,
+          `${indent}      ? hooked.then(respond_${route.name}, (error) => thrown(error, ${thrownArguments}))`,
+          `${indent}      : respond_${route.name}(hooked)`,
+          `${indent}  } catch (error) {`,
+          `${indent}    return thrown(error, ${thrownArguments})`,
+          `${indent}  }`,
+          `${indent}}`,
+        ]
+      : []
     if (!hasGuards) {
       return [
         context,
+        ...hookLines,
         `${indent}try {`,
         `${indent}  const reply = ${route.name}.handler(context)`,
-        `${indent}  return typeof reply?.then === 'function' ? reply.then(respond_${route.name}, (error) => thrown(error, ${thrownArguments})) : respond_${route.name}(reply)`,
+        `${indent}  return typeof reply?.then === 'function' ? reply.then(${replyTo}, (error) => thrown(error, ${thrownArguments})) : ${replyTo}(reply)`,
         `${indent}} catch (error) {`,
         `${indent}  return thrown(error, ${thrownArguments})`,
         `${indent}}`,
@@ -1291,10 +1334,11 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
     // inside the async continuation too, matching the runtime's single try.
     return [
       context,
+      ...hookLines,
       `${indent}const runHandler = () => {`,
       `${indent}  try {`,
       `${indent}    const reply = ${route.name}.handler(context)`,
-      `${indent}    return typeof reply?.then === 'function' ? reply.then(respond_${route.name}, (error) => thrown(error, ${thrownArguments})) : respond_${route.name}(reply)`,
+      `${indent}    return typeof reply?.then === 'function' ? reply.then(${replyTo}, (error) => thrown(error, ${thrownArguments})) : ${replyTo}(reply)`,
       `${indent}  } catch (error) {`,
       `${indent}    return thrown(error, ${thrownArguments})`,
       `${indent}  }`,
@@ -1302,9 +1346,9 @@ const emitRouteFunction = (route: CompiledEntry, used: Record<string, boolean>, 
       `${indent}try {`,
       `${indent}  const guarded = runGuards(${route.name}.guards, context, 0)`,
       `${indent}  if (guarded != null && typeof guarded.then === 'function') {`,
-      `${indent}    return guarded.then((early) => (early !== undefined ? respond_${route.name}(early) : runHandler()), (error) => thrown(error, ${thrownArguments}))`,
+      `${indent}    return guarded.then((early) => (early !== undefined ? ${replyTo}(early) : runHandler()), (error) => thrown(error, ${thrownArguments}))`,
       `${indent}  }`,
-      `${indent}  return guarded !== undefined ? respond_${route.name}(guarded) : runHandler()`,
+      `${indent}  return guarded !== undefined ? ${replyTo}(guarded) : runHandler()`,
       `${indent}} catch (error) {`,
       `${indent}  return thrown(error, ${thrownArguments})`,
       `${indent}}`,
