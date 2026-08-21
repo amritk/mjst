@@ -1,5 +1,20 @@
 # @amritk/adapters
 
+## 0.4.5
+
+### Patch Changes
+
+- Updated dependencies [1c328af]
+- Updated dependencies [1fd154c]
+- Updated dependencies [3557eb5]
+- Updated dependencies [11a280f]
+- Updated dependencies [e091f22]
+- Updated dependencies [3a54baf]
+- Updated dependencies [543fbe8]
+- Updated dependencies [c6a1f16]
+- Updated dependencies [261f650]
+  - @amritk/helpers@0.16.0
+
 ## 0.4.4
 
 ### Patch Changes

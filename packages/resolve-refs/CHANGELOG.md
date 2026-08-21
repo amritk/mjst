@@ -1,5 +1,84 @@
 # @amritk/resolve-refs
 
+## 0.7.1
+
+### Patch Changes
+
+- 0f27eeb: Re-measure every published benchmark table on Bun 1.4.
+
+  The tables were labelled Bun 1.3 and predate both the runtime upgrade and this
+  release's interpreter work, so every one of them was re-run rather than
+  relabelled. All measurements come from one Linux x64 box with nothing else on
+  it, each package's own `bun run bench`, and the machine is named in each table's
+  caption — compare columns within a table, not against a figure you remember.
+
+  Three of them changed in ways a version label would have hidden:
+
+  - **`@amritk/lint`** — Spectral's JSONPath engine used to throw on the 2.8 MB
+    OpenAI spec under Bun, so that row was published as mjst-only. It no longer
+    throws, and the row is a real comparison now (~0.73 s against ~7.4 s). The
+    bench keeps its guard, since that failure was runtime-specific.
+  - **`@amritk/api`** — Bun 1.4 made web-standard `Request`/`Response`
+    construction far cheaper, which lifted every column of the Bun table (bare
+    Hono went ~185k → ~503k ops/s). The compiled engine still leads the
+    like-for-like `hono + zod` column on Bun and Node, but it no longer leads
+    _unvalidated_ Hono on the GET cases, and under workerd it now trails
+    `hono + zod` on the static GET. The prose says so.
+  - **`@amritk/runtime-validators`** — the interpreter is much faster than when
+    the ratios against Ajv were written, so the cold-path win narrows to ~96–870×
+    (from ~90–1600×) and the steady-state loss narrows to ~6–11× (from ~15–25×).
+
+  `@amritk/generate-parsers`, `@amritk/generate-validators`, `@amritk/resolve-refs`
+  and `@amritk/yaml` keep the same shape and conclusions with refreshed numbers.
+
+- a12b888: Read documents that start with a UTF-8 byte-order mark.
+
+  A BOM is an encoding marker, but once the bytes are decoded it is a stray
+  `U+FEFF` in front of the `{`, and `JSON.parse` refuses it — so a schema written
+  on Windows failed the whole resolve with an `Unrecognized token` naming an
+  invisible character. It is now dropped before parsing, for the default parser
+  and any custom `parse` alike.
+
+- 8af6bb0: Report each resolve error at the `$ref` that caused it.
+
+  `ResolveError.path` promised "the location of the offending `$ref`" and never
+  delivered one: it was empty for a missing file, a refused host, or an external
+  ref, and for an unresolvable internal ref it held the path to the _target_ — a
+  node the document by definition does not contain. A caller anchoring a
+  diagnostic on it (the CLI does) sent the reader to the top of the file, or to
+  whichever node sat nearest the hole.
+
+  It is now the path to the reference as written in the document you named, ending
+  in the keyword, so `['properties', 'pet', '$ref']` points at the `$ref` line
+  itself. It stays empty where there is genuinely nowhere to point: a budget the
+  whole resolve overran, or a reference living in another document.
+
+- 9a2510f: Fix a `TypeError` escaping `resolveRefsFromFile`, speed up `$id` scope lookup, and
+  widen the non-public address check.
+
+  - A `$ref` whose location does not parse (`//[bad`) inside a document reached
+    remotely threw `TypeError [ERR_INVALID_URL]` straight out of the resolver,
+    breaking the package's contract that a bad ref is collected on `errors` and
+    never thrown. It is now reported and the reference kept, like any other
+    unresolvable one.
+  - Looking up the base URI a node's `$id` establishes scanned every registered
+    resource, which is quadratic in the number of `$id`s — the shape bundled
+    schemas have. It is an identity lookup now: a document with 8,000 `$id`s
+    resolves in ~42ms instead of ~772ms.
+  - `isPrivateHost` now also refuses IPv4 multicast (`224.0.0.0/4`) and reserved
+    (`240.0.0.0/4`, which is where `255.255.255.255` lives). Neither is a public
+    unicast destination.
+
+- d8ceda5: A "Cannot resolve" error for a ref in a sub-document no longer reports a
+  position from the root document.
+
+  `refPathAt` indexes the root document only, so it can answer for a ref that
+  lives there and nothing else. Called unguarded, it matched a ref in a
+  sub-document against the root's index and handed back the position of an
+  identical ref there — pointing a diagnostic at a line that is not the offending
+  one. The prefetch loop already guarded this the same way; the error path now
+  does too, reporting an empty path when there is no position to give.
+
 ## 0.7.0
 
 ### Minor Changes

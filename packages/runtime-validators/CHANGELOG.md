@@ -1,5 +1,71 @@
 # @amritk/runtime-validators
 
+## 0.12.0
+
+### Minor Changes
+
+- dcfe9a9: Harden the interpreter against hostile schemas, and share one copy of the keyword sets.
+
+  - `$schema`/`$vocabulary` are now read as own keys. A polluted `Object.prototype.$vocabulary` alongside a `$schema` naming a registered document turned the whole 2020-12 validation vocabulary into annotations, so `type`, `enum`, `required` and the bounds stopped asserting and every value validated.
+  - The ReDoS screen no longer becomes a denial of service itself. Its group descent is depth-capped (a deeply nested pattern raised an uncatchable `RangeError` instead of a `ValidationLimitError`), and its pairwise ambiguity scan runs on a shared comparison budget (a few kilobytes of `(a|b|c|…)+` pinned a CPU for minutes at build time).
+  - `$ref`, `$dynamicRef` and `$recursiveRef` each resolve through their own target cache. They shared one map under prefixed keys, so a `$ref` to an unregistered URI spelled `dyn:#x` read back the target of an earlier `$dynamicRef: '#x'` instead of failing loudly.
+
+### Patch Changes
+
+- 0f27eeb: Re-measure every published benchmark table on Bun 1.4.
+
+  The tables were labelled Bun 1.3 and predate both the runtime upgrade and this
+  release's interpreter work, so every one of them was re-run rather than
+  relabelled. All measurements come from one Linux x64 box with nothing else on
+  it, each package's own `bun run bench`, and the machine is named in each table's
+  caption — compare columns within a table, not against a figure you remember.
+
+  Three of them changed in ways a version label would have hidden:
+
+  - **`@amritk/lint`** — Spectral's JSONPath engine used to throw on the 2.8 MB
+    OpenAI spec under Bun, so that row was published as mjst-only. It no longer
+    throws, and the row is a real comparison now (~0.73 s against ~7.4 s). The
+    bench keeps its guard, since that failure was runtime-specific.
+  - **`@amritk/api`** — Bun 1.4 made web-standard `Request`/`Response`
+    construction far cheaper, which lifted every column of the Bun table (bare
+    Hono went ~185k → ~503k ops/s). The compiled engine still leads the
+    like-for-like `hono + zod` column on Bun and Node, but it no longer leads
+    _unvalidated_ Hono on the GET cases, and under workerd it now trails
+    `hono + zod` on the static GET. The prose says so.
+  - **`@amritk/runtime-validators`** — the interpreter is much faster than when
+    the ratios against Ajv were written, so the cold-path win narrows to ~96–870×
+    (from ~90–1600×) and the steady-state loss narrows to ~6–11× (from ~15–25×).
+
+  `@amritk/generate-parsers`, `@amritk/generate-validators`, `@amritk/resolve-refs`
+  and `@amritk/yaml` keep the same shape and conclusions with refreshed numbers.
+
+- c6a1f16: Read each schema node's keywords once, compile lint filters, and match descents by key.
+
+  - **`@amritk/runtime-validators`** — the interpreter walked the schema afresh for
+    every value and asked each node for every keyword it might carry on every one of
+    those walks: about two dozen `Object.hasOwn` plus dynamic-key reads per node, per
+    validation. A CPU profile of the steady-state benchmark put 31% of the whole run
+    inside that one reader. A node's keywords are now read once into a fixed-shape
+    record and reused, which makes each read a fixed-offset field load instead of a
+    megamorphic dictionary lookup, moves the `typeof` narrowing off the hot path, and
+    lets group flags skip the reference, branching and type-specific blocks outright.
+    Steady-state throughput is 2.1–3.6× on the benchmark cases. Building the record
+    walks the node's own keys — three or four, rather than two dozen questions — so it
+    is cheaper than a single old scan, and the cache only starts filling on a
+    validator's _second_ call, leaving the cold one-shot path unchanged-to-better.
+    `@amritk/api`'s runtime engine and `@amritk/lint`'s `schema` rule both run this
+    interpreter, so both inherit it.
+  - **`@amritk/helpers`** — `generateIndexBarrel` read every character of every
+    generated file looking for `export` at a line start, which was ~18% of a
+    generation run. It now jumps between `export ` occurrences with `indexOf`, taking
+    roughly a quarter off generation time per parser.
+  - **`@amritk/lint`** — `[?(...)]` filter bodies compile to closures once instead of
+    being walked as an AST on every document node (still no `eval`/`new Function`;
+    these are ordinary closures over the parsed tree), recursive descents ask which
+    paths wanted each key the node has rather than asking every path in turn, and two
+    `/^\d+$/` tests moved off the hot path. Linting the vendored real-world specs:
+    petstore 11.1 → 7.4 ms, openai 1780 → 1110 ms.
+
 ## 0.11.0
 
 ### Minor Changes

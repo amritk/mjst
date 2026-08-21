@@ -1,5 +1,391 @@
 # @amritk/api
 
+## 0.16.0
+
+### Minor Changes
+
+- 2b7901f: Robustness and security fixes from a review pass over the package.
+
+  **`streamMultipart` releases the request body.** A consumer that stopped early
+  — `break` once it found the part it wanted, a throwing part handler, an early
+  return — left the reader locked and the source uncancelled, so the client kept
+  uploading into a buffer the server had walked away from. Every exit now
+  cancels, abandoned or complete. The same parser rescanned its whole pending
+  buffer for the header terminator after every chunk, which made a header block
+  delivered in small pieces cost up to `maxHeaderBytes` squared byte
+  comparisons; the scan now resumes where the last one ended.
+
+  **`toNodeHandler` reads request headers as own properties.** A contract
+  declaring a header named `constructor` or `__proto__` got the inherited
+  function or prototype instead of `undefined`, filled the slot with it, and
+  `400`ed every request that never sent the header — while the fetch adapter,
+  reading through `Headers`, answered `200`. The two adapters now agree.
+
+  **`formatSse` sanitizes `retry`.** `data`, `comment`, `event`, and `id` were
+  already guarded against a value carrying its own newlines; `retry` was not,
+  because it is typed as a number — and the type is the only thing saying so. A
+  handler passing a value that came out of a JSON payload could forge fields and
+  whole events. Only a finite integer is emitted now, which is all the SSE
+  grammar reads from the field.
+
+  **`createCompression` leaves partial responses alone and weakens strong
+  etags.** A `206` (or anything carrying `content-range`) describes a byte range
+  of the identity representation, so encoding the body left the header
+  describing a payload that was no longer being sent. And an `ETag` names one
+  representation: on a response it encodes, a strong tag is now weakened to
+  `W/`, the same thing nginx does.
+
+  **Breaking:** `toOpenApi` now throws when two routes claim the same OpenAPI
+  path and method. `/files/{p}` and `/files/{p+}` are distinct patterns to the
+  matcher and both serve, but the paths key drops the greedy marker, so the
+  later one silently overwrote the earlier and the document described half the
+  API. A synthesized `operationId` already caught that pair; explicit ones
+  walked past it. Give such routes distinct paths.
+
+  **`createTokenRefresh` survives a `refresh` that throws synchronously.** The
+  option is documented as returning a promise, but a non-async function — or a
+  `TypeError` from a misspelled client method — throws before one exists, and
+  neither background caller had a `.catch` to reach: the in-window renewal
+  rejected `headers()` instead of handing back the token that was still valid,
+  and the idle timer threw straight out of its `setTimeout` callback, which on
+  Node is an uncaught exception. The call is wrapped so both paths see a
+  rejection and report it through `onError`.
+
+  **`withTimeout` rejects instead of crashing the timer.** `onTimeout` is app
+  code running inside a `setTimeout` callback, where a throw has nowhere to go:
+  on Node it is an uncaught exception, and the race it was meant to settle never
+  settles, so the request hangs too. It now rejects, which the pipeline reports
+  through `onError` like any other handler failure.
+
+  **`createETag` answers a conditional GET against a handler's own etag.** A
+  response that already carried an `ETag` was skipped entirely, so a client that
+  had just proved it held the current version downloaded the body again. Such a
+  response is still never buffered — it simply gets the `304` its validator
+  earned.
+
+  **`createRateLimit`'s default key treats an empty proxy header as absent.**
+  `??` only skips `null`, so a present-but-empty `cf-connecting-ip`/`x-real-ip`,
+  or an `x-forwarded-for` whose first hop is blank, keyed a bucket on the empty
+  string rather than falling through to the next source and finally to
+  `'global'`.
+
+  Both Node adapters also write outgoing headers with `defineOwnProperty`.
+  `__proto__` is a valid HTTP field name that `Headers` accepts, and copying it
+  into the plain `OutgoingHttpHeaders` object with an assignment ran the
+  prototype setter and dropped a header the handler had deliberately set — the
+  fetch adapter sent it, these two did not.
+
+  `secureRoutes` also looks security schemes up as own properties, so a
+  requirement naming `constructor` reports the missing scheme rather than a
+  missing guard, and the fetch adapter's `ResponseInit` cache is built once from
+  the contracts instead of filling itself with whatever status a handler
+  returned — the table `compileToModule` has always emitted.
+
+- d8f08b9: `createMessageQueue` now rejects a consumer that is parked when the producer
+  ends with an error.
+
+  **Breaking:** a `for await` loop that was already awaiting when the stream
+  failed used to exit cleanly and now throws. That is the point — the error was
+  being dropped entirely, so a transport failure read as a clean end of stream —
+  but code that relied on the loop simply finishing needs a `try`/`catch`, and a
+  detached loop (`void (async () => { for await … })()`, the shape this package's
+  own docs show) needs a `.catch` or the rejection is unhandled. The affected
+  iterators are `connectRealtime`'s `messages` and the `messages`/`binary`
+  streams of `bindMessages` / `connectMessages`.
+
+  A consumer that happened to call `next()` _after_ the end already saw the
+  error; only the parked case — which is the normal one, not an edge case — was
+  losing it. Buffered messages are still delivered first, so a stream that
+  errored after producing values still yields them before surfacing the failure.
+
+- bce4aa6: Generate OpenAPI 3.2 documents, and document streaming responses per item.
+
+  **The document now declares `openapi: '3.2.0'`** (was `'3.1.0'`). The schema
+  dialect is unchanged — 3.2 still embeds JSON Schema Draft 2020-12 verbatim —
+  so no contract or schema has to move. `OpenApiDocument['openapi']` is typed
+  `'3.2.0'`, which is the breaking part: code asserting the literal `'3.1.0'`
+  stops compiling, and a consumer pinned to a 3.1-only validator or SDK
+  generator will need one that reads 3.2.
+
+  **`itemSchema` on a response contract.** A raw `contentType` says what a
+  stream _is_; `itemSchema` says what each item in it looks like, which is what
+  a consumer reading the stream incrementally needs. Declare it beside
+  `contentType` on a sequential media type — `text/event-stream`,
+  `application/jsonl`, `application/json-seq`, `multipart/mixed` — and it lands
+  next to `schema` in the media type object. Both may be declared: the payload
+  as a whole and the shape of one item.
+
+  Like a `body` schema on a raw status it is documentation only — adapters pass
+  the stream through untouched, so nothing here is validated at runtime — but it
+  does take part in `components.schemas` hoisting, so a titled event schema
+  shared across routes appears once and is `$ref`erenced.
+
+  Declaring `itemSchema` without a `contentType` now throws at document-build
+  time. It described a sequential media type the status never named, so the
+  emitter silently dropped it while hoisting still collected it — leaving an
+  orphan in `components.schemas`, and letting a title collision from a schema
+  that never reached the document un-hoist a real shared one back inline.
+
+  The package description advertises 3.2 generation now, matching the emitter.
+
+  **`sseItemSchema(dataSchema, options?)`** builds that schema for SSE, where
+  the item is the event _envelope_ (`event`, `id`, `data`, `retry`) with the
+  payload inside `data` rather than the payload itself. `data` is typed as the
+  schema given, `{ event: 'token' }` pins the event name as a `const`, and
+  `{ id: true }` marks a resumable stream. Nothing is ever required: a keep-alive
+  frame carries no data and a `retry:`-only frame carries neither data nor event,
+  so there is no field every frame is guaranteed to have — requiring one would
+  make the document reject frames the stream legitimately sends.
+
+  **Removed: the Hey API (`@hey-api/openapi-ts`) integration test** and its
+  devDependency. It was never a dependency of the package — only a test
+  asserting the generated document was valid input to one SDK generator — and
+  holding the document at 3.1 to keep that generator happy is the wrong trade
+  when `createClient` already derives the first-party typed client from the
+  contracts with no codegen. External consumers still generate from the served
+  document with whatever tooling they use.
+
+- ea377c7: Message contracts for realtime connections — typing and validating what flows
+  after the 101.
+
+  The WebSocket handshake was already contract-covered (it is an ordinary routed
+  request: params validated, guards run, `onRequest` gates applied, the 426
+  declared), but the contract stopped there. `socket.send` took anything, frames
+  arrived as `string | Uint8Array`, and nothing was validated — so validation,
+  typing, and the whole contract-first premise ended at the handshake.
+
+  **`defineMessages(contract)`**, or a `messages` field on a route contract,
+  declares what flows over the connection. Two things a request/response contract
+  cannot express, and a socket needs: **direction** and **message identity**.
+
+  ```ts
+  const chatMessages = defineMessages({
+    clientToServer: {
+      say: {
+        type: "object",
+        properties: { text: { type: "string" } },
+        required: ["text"],
+      },
+    },
+    serverToClient: {
+      said: {
+        type: "object",
+        properties: { from: { type: "string" } },
+        required: ["from"],
+      },
+    },
+  });
+  ```
+
+  Directions are named for their endpoints rather than for the reader —
+  `send`/`receive` and `inbound`/`outbound` invert depending on which side reads
+  them, and both sides read this same declaration.
+
+  Messages are identified by a discriminator, `type` unless `discriminator` says
+  otherwise. Your schema describes the _payload_, and the tag is not part of it:
+  it is read to select the message, then removed before the payload is validated.
+  That keeps `additionalProperties: false` working, and composed schemas too — an
+  `allOf` branch or a `$ref` target that closes itself never sees a property it
+  did not declare. A schema that declares the discriminator itself is refused at
+  setup time, since it could only ever fail.
+
+  **`bindMessages(contract, socket, options?)`** wraps a server-side socket:
+  inbound frames validated against `clientToServer` and narrowed to a tagged
+  union, outbound `send` typed and serialized. It covers Bun, Workers, and Deno —
+  `accept(raw)` is the ingest seam for Bun, whose message handlers live outside
+  the request on `Bun.serve({ websocket })`, and sockets with `addEventListener`
+  are wired automatically.
+
+  **`connectMessages(contract, options)`** is the mirror image on the client,
+  over `connectRealtime` (WebTransport with the WebSocket fallback, unchanged).
+  The directions swap and nothing else does. It is exported from the browser-safe
+  `@amritk/api/client` entry; that entry's only external stays
+  `@amritk/runtime-validators`, now imported as a value rather than types alone —
+  it is eval-free and pulls in no `node:` built-in, and tree-shakes out of bundles
+  that do not use it.
+
+  A throwing `onInvalid` is swallowed and treated as "no opinion", so a broken
+  metrics call cannot stop a contract violation from being answered.
+
+  `bindMessages` sets `binaryType = 'arraybuffer'` on the sockets whose listener
+  it owns (Workers, Deno). Deno's defaults to `'blob'`, and a Blob converts to
+  bytes only asynchronously — which the listener cannot await — so binary frames
+  would have arrived empty. Push-model sockets (Bun) are left alone, since their
+  handler belongs to the app; `channel.accept` normalizes any shape a runtime
+  hands it — `Buffer`, `ArrayBuffer`, typed array — to `Uint8Array` instead.
+
+  **Invalid frames close with `4007`** and a one-line reason, truncated to RFC
+  6455's 123-byte budget on a UTF-8 character boundary (overrunning it or
+  splitting a character makes implementations throw). Not RFC 6455's own 1007:
+  the WHATWG `close()` algorithm accepts only 1000 and 3000–4999 from a caller,
+  so a 1xxx code throws on Workers and Deno. `onInvalid` sees every
+  refusal — `malformed`, `binary`, `unknown-type`, `invalid-payload` — and may
+  return `'ignore'` to keep the connection open. Binary frames default to
+  `ignore` rather than `close`: nothing in a JSON contract describes them, but a
+  peer may legitimately send them alongside contract messages, and they stay
+  reachable on the raw socket.
+
+  Outbound messages are typed at compile time and validated only under
+  `validateOutbound`, matching what `validateResponses` does for handler replies.
+
+  Binary frames arrive on `channel.binary`, on both ends, behind an explicit
+  `receiveBinary` flag — nothing in a JSON contract describes them, but a peer
+  may legitimately send them alongside contract messages. The flag rather than a
+  first read, because frames arrive before a caller could subscribe and the queue
+  underneath is unbounded.
+
+  `messages` has no OpenAPI representation — OpenAPI has no vocabulary for a
+  bidirectional message union — so it never appears in the document, and it is
+  not part of the contracts hash either: `compileToModule` never emits message
+  schemas, so an edit to one cannot stale a compiled module.
+
+- f97fac4: Realtime transports, static file serving, and route-scoped response hooks.
+
+  **`connectRealtime` prefers WebTransport and drops down to WebSocket.** The
+  fallback fires when WebTransport is unavailable (Node, Bun, any browser without
+  the API), refused, or hung — and the last of those is the one that matters. A
+  WebTransport attempt on a network that silently drops UDP does not fail, it
+  hangs, because QUIC cannot tell a blackhole from a slow path; without the
+  connect deadline the fallback never runs and the user simply waits. Both arms
+  hand back the same message channel, so nothing above it branches on which won,
+  and `onFallback` reports the choice, because a silent fallback hides exactly
+  the signal you want. Ships in the browser-safe `@amritk/api/client` entry.
+
+  **Server-side WebTransport is deliberately absent.** It needs a QUIC stack, and
+  no runtime the adapters target exposes one through a fetch handler: workerd has
+  no HTTP/3 implementation at all, Bun 1.4 serves HTTP/3 but ships no WebTransport
+  API, and Deno's `upgradeWebTransport` lives on a raw QUIC listener rather than
+  on `Deno.serve`. Supplying one would mean a native addon dependency, which would
+  cost the Workers and React Native support that staying dependency-light buys.
+  The negotiation is written now so that when a runtime does ship it, clients
+  already prefer it and no application code changes.
+
+  **`upgradeWebSocket` routes a Bun handshake through the ordinary pipeline**, so
+  path params, guards, and `onRequest` gates all apply to it — an upgrade that
+  skipped the contract would be a hole in every policy the app configured. It
+  returns `undefined` when the runtime refuses, which is not a formality: Bun's
+  HTTP/3 listener does not implement RFC 9220, so `server.upgrade()` returns
+  `false` for every request that arrived over QUIC and the same route succeeds
+  over TCP. Requiring the caller to supply the refusal keeps that in the contract
+  rather than collapsing it to a 500. Measured against Bun 1.4 with `http3: true`:
+  `101` over TCP, the declared `426` over QUIC. `acceptWebSocket` covers workerd,
+  hiding the `WebSocketPair` object-keyed-`0`-and-`1` wart and the silent message
+  drop that follows a missed `accept()`.
+
+  **`createStatic` serves a document root, traversal-safe.** Doing this by hand is
+  one route today, and that route is wrong in a way its own tests will not catch:
+  the tail parameter decodes each segment individually, so
+  `/assets/%2e%2e%2f%2e%2e%2fetc/passwd` reaches the handler as
+  `../../etc/passwd`. A literal `../` never gets that far — clients and proxies
+  normalize it away — so the obvious `path.includes('..')` guard passes every test
+  anyone writes for it and stops nothing. `resolveStaticPath` splits first,
+  decodes each segment second, and judges third, so containment holds by
+  construction; dotfiles are denied by default, since a document root routinely
+  sits beside `.env` and `.git`. Content types, `etag`/`last-modified`,
+  conditional `304`s, and HEAD are handled; `Range` is not, and a symlink pointing
+  out of the root is invisible without a `realpath` the reader seam does not
+  expose. Reading is injected, because no one filesystem call works on Bun, Node,
+  and Workers alike.
+
+  **Route contracts take `onResponse` hooks.** Per-route timing, a header stamped
+  on one route group, an audit record written from the reply — the wrap-around
+  seam, without a middleware onion. Hooks run in order after the handler (and
+  after a guard denial, which is a reply like any other), each seeing the previous
+  one's result, and a replacement is validated against the contract just as the
+  handler's would have been. They do not run on a security-guard denial, which
+  fires before validation and before the context factory precisely so an
+  unauthenticated request never reaches app code. A route that declares none pays
+  one `undefined` check in the runtime engine and nothing in the compiled one,
+  where the branch resolves at emit time and a hookless route emits exactly the
+  code it always did. `compileToModule` emits the same ordering, and the staleness
+  shape check now covers response hooks, so a hook added after compilation fails
+  the deploy rather than being silently skipped.
+
+### Patch Changes
+
+- 0f27eeb: Re-measure every published benchmark table on Bun 1.4.
+
+  The tables were labelled Bun 1.3 and predate both the runtime upgrade and this
+  release's interpreter work, so every one of them was re-run rather than
+  relabelled. All measurements come from one Linux x64 box with nothing else on
+  it, each package's own `bun run bench`, and the machine is named in each table's
+  caption — compare columns within a table, not against a figure you remember.
+
+  Three of them changed in ways a version label would have hidden:
+
+  - **`@amritk/lint`** — Spectral's JSONPath engine used to throw on the 2.8 MB
+    OpenAI spec under Bun, so that row was published as mjst-only. It no longer
+    throws, and the row is a real comparison now (~0.73 s against ~7.4 s). The
+    bench keeps its guard, since that failure was runtime-specific.
+  - **`@amritk/api`** — Bun 1.4 made web-standard `Request`/`Response`
+    construction far cheaper, which lifted every column of the Bun table (bare
+    Hono went ~185k → ~503k ops/s). The compiled engine still leads the
+    like-for-like `hono + zod` column on Bun and Node, but it no longer leads
+    _unvalidated_ Hono on the GET cases, and under workerd it now trails
+    `hono + zod` on the static GET. The prose says so.
+  - **`@amritk/runtime-validators`** — the interpreter is much faster than when
+    the ratios against Ajv were written, so the cold-path win narrows to ~96–870×
+    (from ~90–1600×) and the steady-state loss narrows to ~6–11× (from ~15–25×).
+
+  `@amritk/generate-parsers`, `@amritk/generate-validators`, `@amritk/resolve-refs`
+  and `@amritk/yaml` keep the same shape and conclusions with refreshed numbers.
+
+- d8ceda5: `connectRealtime` no longer leaks a connection when an attempt is abandoned.
+
+  When the connect deadline or the caller's `signal` won the race, both arms threw
+  without closing what they had opened — the abort listener that would have closed
+  it is registered only after the await. The socket or session kept connecting,
+  could open, and then stayed open and unread on both ends: one leak per fallback
+  attempt, on the path the fallback exists to take.
+
+  The WebTransport arm also left its `closed` promise unclaimed on that path. It
+  rejects when the session dies, and the return object carrying its handler is
+  never built when the attempt fails, so the rejection was unhandled — a crash in
+  Node, a console error in a browser. It is claimed as soon as the session is
+  constructed now. This is the transport tried _first_ by default, and its
+  deadline exists precisely for QUIC that hangs rather than fails, so this was the
+  common path.
+
+- 69ca72b: Document a serving recipe for every major server framework, and add a table of
+  contents to the README that links to each one.
+
+  The package already reaches every JavaScript server through two adapters —
+  `toFetchHandler` for hosts speaking `Request`/`Response` and `toNodeHandler`
+  for `req`/`res` — but only a few of them had wiring written down. The README's
+  "Serving it" section now covers Bun, Cloudflare Workers, Deno, Hono, Next.js,
+  SvelteKit, Nitro/Nuxt, Elysia, `node:http`, Express, Fastify, Koa, and NestJS,
+  each with the details that are easy to get wrong: Fastify needs a global
+  `onRequest` hook plus `reply.hijack()` (it routes before hooks, and the body is
+  still unread at that point), Koa needs `ctx.respond = false`, Express 5 changed
+  its wildcard syntax, and whatever the host passes as its second argument lands
+  in `createApi({ context })` as `env`. A new integration test runs the Express,
+  Fastify, and Koa recipes against the real packages so they cannot rot.
+
+  Also adds a "How this compares to a web framework" section near the top. The
+  README already carried the benchmark tables against `hono` and `hono + zod` but
+  never said what the package _is_ next to a framework, nor what it gives up — so
+  it now states that this mounts inside a framework rather than replacing one,
+  contrasts the contract with a validator-middleware-plus-OpenAPI-plugin stack,
+  and lists what it deliberately does not do (no middleware onion, no WebSockets,
+  no static files or SSR, no plugin ecosystem, no router for non-contract paths).
+
+  No runtime code changed.
+
+- d8ceda5: `staticContentType` reads its extension table as an own property.
+
+  A bare index returned an inherited `Object.prototype` member for a file whose
+  extension named one, and the result is not nullish, so the
+  `application/octet-stream` fallback never fired: `x.constructor` was served with
+  a `content-type` of the entire `Object` function source, and `x.__proto__` with
+  `[object Object]`. Only all-lowercase members were reachable (the extension is
+  lowercased first), which is why `constructor` and `__proto__` were the two that
+  got through.
+
+- Updated dependencies [0f27eeb]
+- Updated dependencies [c6a1f16]
+- Updated dependencies [dcfe9a9]
+  - @amritk/runtime-validators@0.12.0
+
 ## 0.15.2
 
 ### Patch Changes

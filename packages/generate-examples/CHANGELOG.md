@@ -1,5 +1,165 @@
 # @amritk/generate-examples
 
+## 0.7.0
+
+### Minor Changes
+
+- cb7b35a: Fix several ways a generated example file could fail to compile, and bound the
+  generator's work on hostile schemas.
+
+  - A `$ref` inside `contains` or `dependentSchemas` was emitted as a bare
+    `FooArbitrary` identifier with no matching import, so the generated file did
+    not compile. The import collector now walks both surfaces.
+  - An example carrying a key its generated type never declares — `required`
+    naming something absent from `properties`, a `dependentRequired` /
+    `dependentSchemas` dependency, a `minProperties` filler on an object with no
+    index signature — was an excess property TypeScript rejected. The key stays
+    (dropping it would ship a fixture missing what its schema demands) and the
+    literal is now emitted as `… as Foo`.
+  - An integer `multipleOf` was enforced with `.filter((n) => n % m === 0)`, which
+    starved fast-check for anything but the smallest steps and rejected _every_
+    value when `m` was `0` (`n % 0` is `NaN`). Positive integral steps are now
+    derived analytically, as the `number` path already did; a non-positive one is
+    dropped.
+  - A crossed range (`minLength: 10, maxLength: 2`, and the equivalents for
+    numbers, arrays, and dictionaries) was emitted verbatim, and every bounded
+    `fc.*` combinator asserts `min <= max` — so the generated module threw at
+    import, taking its other exports with it. Crossed bounds now collapse.
+  - A large `minProperties` cost quadratic time and memory (synthesized key names
+    grew with the key count), and a large `minLength`/`minItems` was honoured
+    literally. Derived values are now capped at 10,000 characters / elements /
+    keys, with the usual warning; the arbitrary still honours the real bound.
+  - The runtime-validator import was decided by searching the generated source for
+    the validator's name, which a schema could plant in its own data — earning an
+    import nothing uses, which a consumer's `noUnusedLocals` rejects.
+
+- 53651a1: Closes out the generated-file compile failures: a sweep of all 982
+  `components.schemas` entries in the vendored OpenAPI corpus now type-checks with
+  **0 failures** against the real `fast-check` declarations under the repo's strict
+  flags, down from 13% at the start of the review and 2.33% one round ago. That
+  sweep is now a test, so the number cannot drift back silently.
+
+  Fixes, all reproduced against the corpus or a schema reduced from it:
+
+  - **`oneOf`/`anyOf` replaced the node's own keywords instead of constraining them
+    alongside.** `{ type: 'object', properties: …, anyOf: [{ required: … }] }` read
+    the branch alone and answered `null` / `fc.anything()` against an object type.
+    The node's own shape is now merged into each branch, and a branch whose `type`
+    contradicts the node is dropped rather than re-admitting a value the type
+    excludes.
+  - **`mergeAllOf` silently dropped a nested `allOf`.** A `oneOf` branch written as
+    `{ title: 'Token Usage', allOf: [{ properties: … }] }` — the shape OpenAPI
+    documents use for discriminated unions — merged down to just its `title`, so
+    the whole variant's properties vanished and the example came out `{}`.
+  - **Object-likeness disagreed with the type generator.** It calls a schema an
+    object on the _presence_ of `patternProperties`/`additionalProperties`, and on
+    `properties` whatever `type` says; this package tested the value's shape and
+    dispatched on `type` first. Both now match it exactly.
+  - **`if`/`then`-only objects** get an assertion: the type generator folds the
+    branch's properties in as required, and nothing structural tells the deriver to
+    produce them.
+  - **An unresolvable `$ref` is no longer named by the arbitrary**, since the import
+    collector deliberately skips it.
+  - **A `false` schema** types as `never`, which nothing is assignable to; both the
+    arbitrary and the example now say so explicitly.
+  - **An exclusive bound equal to its opposite** (`exclusiveMinimum: 5, maximum: 5`)
+    emptied the range `fc.double` had to draw from.
+  - **`k * multipleOf`** could exceed `fc.integer`'s inclusive 32-bit maximum by one.
+  - **`uniqueItems` with a closed `contains`** could not reach the required length
+    and retried forever; elements now widen to "that value, or anything", which is
+    the freedom the schema actually grants.
+  - **The runtime-validator import** was decided by a weaker condition than the one
+    that emits the validator, so a schema the interpreter refuses earned an import
+    nothing used.
+
+- 1e77678: A round of fixes for generated files that did not compile, threw at import, or
+  hung when sampled. Measured against a real OpenAPI corpus, 13% of schemas
+  produced a file that failed to type-check before these.
+
+  **Files that did not compile**
+
+  - The validating filter's type guard (`(value): value is T`) requires the
+    declared type to extend what the base expression infers, but a filtered
+    arbitrary deliberately builds a _different_ shape — `contains` generates
+    `number[]` for a declared `unknown[]`, `dependentRequired` promotes an optional
+    key to required, `dependentSchemas` adds one the type never declared. Each
+    raised TS2677. The base is now widened to `Arbitrary<unknown>` first.
+  - A schema with `properties` and no `type: object` — ordinary in OpenAPI — got a
+    type of `{ … }` but an arbitrary of `fc.anything()` and an example of `null`.
+    Both now infer the object shape the same way the type generator does.
+  - A recursive definition's example cuts the cycle with `null`, which its
+    non-nullable type rejects. It is now emitted with an assertion.
+  - `contains` alongside `items` put a `contains`-typed value into an
+    `items`-typed array. `items` constrains every element, so a `contains` value is
+    used only when `items` accepts it too.
+  - A non-finite `multipleOf` derived `NaN`, which serialized as `null`.
+  - A non-string `required` entry reached the emitted `requiredKeys`.
+
+  **Modules that threw at import, or hung when sampled**
+
+  - An uncompilable `pattern` (`"["`) or one using a lookahead/lookbehind made
+    `fc.stringMatching` throw — at import for the first, at sample time for the
+    second — taking every export in the file with it. Both now fall back to
+    `fc.string()`. The embedded runtime validator is likewise only emitted when it
+    can actually be built.
+  - An integer bound beyond fast-check's 32-bit range left it with a minimum above
+    its own maximum, and threw. Bounds are now confined to that range.
+  - `uniqueItems` over a closed value set (`items: { type: 'boolean' }`,
+    `minItems: 5`) asked for more distinct values than exist, and fast-check
+    retries forever. The length is now capped at the size of the set.
+
+  **Crashes and resource use**
+
+  - A property named `__proto__` under any `allOf` threw
+    `TypeError: bucket.push is not a function` out of the whole generation run:
+    `mergeAllOf` read its accumulator with a bare index, which answers
+    `Object.prototype` for that key. Its accumulators are now null-prototype.
+  - A deeply nested document died with a bare `RangeError` from whichever helper
+    was deepest. The three recursions here now refuse past 400 levels with a
+    message naming the limit.
+
+### Patch Changes
+
+- 6771a4f: Degenerate keywords no longer produce an arbitrary that throws at import.
+
+  - An empty `oneOf`, `anyOf`, `enum`, or `type: []` emitted `fc.oneof()` /
+    `fc.constantFrom()` with no arguments, and both throw. They now degrade to
+    `fc.anything()`, as every other keyword this generator cannot honour does. A
+    single-branch choice is emitted directly instead of being wrapped.
+  - A fractional or negative length/count bound (`minItems: 1.5`,
+    `maxLength: -5`) was passed straight to fast-check, which requires a
+    non-negative integer and throws otherwise. Each bound now rounds toward the
+    satisfiable side and floors at zero.
+
+- c90143f: Two more ways a generated file could fail to compile or throw at import.
+
+  - A non-finite numeric bound was emitted verbatim. `1e999` is legal JSON and
+    `JSON.parse` turns it into `Infinity`, which the numeric keyword guards accept
+    — so `{ minimum: 1e999 }` produced `fc.double({ …, min: Infinity })`, and every
+    bounded `fc.*` combinator throws on that the moment the module is imported.
+    Non-finite bounds (and a non-finite or non-positive `multipleOf`) are now
+    treated as absent.
+  - An authored `default` / `examples[0]` was emitted verbatim even when it
+    contradicted its own schema. The generated type follows the schema, not the
+    hint, so `{ type: 'string', default: 42 }` produced
+    `const fooExample: string = 42`. A hint is now used only when it validates;
+    otherwise the value is derived structurally. `const` is unaffected — the type
+    is the const's own literal type, so the two cannot disagree.
+
+- Updated dependencies [0f27eeb]
+- Updated dependencies [1c328af]
+- Updated dependencies [1fd154c]
+- Updated dependencies [3557eb5]
+- Updated dependencies [11a280f]
+- Updated dependencies [e091f22]
+- Updated dependencies [3a54baf]
+- Updated dependencies [543fbe8]
+- Updated dependencies [c6a1f16]
+- Updated dependencies [261f650]
+- Updated dependencies [dcfe9a9]
+  - @amritk/runtime-validators@0.12.0
+  - @amritk/helpers@0.16.0
+
 ## 0.6.4
 
 ### Patch Changes

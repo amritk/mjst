@@ -1,5 +1,186 @@
 # @amritk/generate-parsers
 
+## 0.19.5
+
+### Patch Changes
+
+- 0f27eeb: Re-measure every published benchmark table on Bun 1.4.
+
+  The tables were labelled Bun 1.3 and predate both the runtime upgrade and this
+  release's interpreter work, so every one of them was re-run rather than
+  relabelled. All measurements come from one Linux x64 box with nothing else on
+  it, each package's own `bun run bench`, and the machine is named in each table's
+  caption — compare columns within a table, not against a figure you remember.
+
+  Three of them changed in ways a version label would have hidden:
+
+  - **`@amritk/lint`** — Spectral's JSONPath engine used to throw on the 2.8 MB
+    OpenAI spec under Bun, so that row was published as mjst-only. It no longer
+    throws, and the row is a real comparison now (~0.73 s against ~7.4 s). The
+    bench keeps its guard, since that failure was runtime-specific.
+  - **`@amritk/api`** — Bun 1.4 made web-standard `Request`/`Response`
+    construction far cheaper, which lifted every column of the Bun table (bare
+    Hono went ~185k → ~503k ops/s). The compiled engine still leads the
+    like-for-like `hono + zod` column on Bun and Node, but it no longer leads
+    _unvalidated_ Hono on the GET cases, and under workerd it now trails
+    `hono + zod` on the static GET. The prose says so.
+  - **`@amritk/runtime-validators`** — the interpreter is much faster than when
+    the ratios against Ajv were written, so the cold-path win narrows to ~96–870×
+    (from ~90–1600×) and the steady-state loss narrows to ~6–11× (from ~15–25×).
+
+  `@amritk/generate-parsers`, `@amritk/generate-validators`, `@amritk/resolve-refs`
+  and `@amritk/yaml` keep the same shape and conclusions with refreshed numbers.
+
+- 1a74eaa: Make a coercing parser's repair an instance of the schema it repaired against.
+
+  A coercing parser exists to hand back a valid value, and in six cases it handed
+  back one the schema still rejects. Found by a new differential fuzz that asks Ajv
+  one question the strict fuzzers cannot: is the parser's _output_ valid?
+
+  The type-based fallbacks ignored the constraints of the very schema they were
+  defaulting for. `{ type: 'string', minLength: 1 }` fell back to `""`, and
+  `{ type: 'integer', minimum: 1 }` to `0`. A string fallback is now padded to
+  `minLength` (capped, so a pathological bound cannot inline a huge literal, and a
+  `pattern` keeps its own guess), and a numeric one is moved inside `minimum` /
+  `maximum` / `exclusiveMinimum` / `exclusiveMaximum` and up to the next multiple
+  of `multipleOf` — verified against every bound before it is used, so an
+  unsatisfiable combination still falls back to `0`.
+
+  The coercions had the same gap: `String(x)` cleared `type: 'string'` but not the
+  schema's `pattern` or length bounds, so a missing value was "repaired" into `""`
+  and an object into `"[object Object]"`; `Number(x)` cleared `Number.isInteger`
+  but not `minimum`. Both now keep the converted value only when it satisfies the
+  schema, and fall back to the default otherwise. An `array` coercion produced a
+  bare `[]`, ignoring `minItems`; it uses the schema's own fallback now.
+
+  An array of `const` items passed every element through untouched, so
+  `{ items: { const: null } }` left `["a"]` as it found it.
+
+  `minLength` / `maxLength` are counted in Unicode code points on every branch that
+  reads them — the coercion path, the fast-path guard, and the union-branch check —
+  matching the strict assertions and the subschema matcher, which already did. A
+  bare `.length` disagreed with them on any string carrying a surrogate pair, and
+  on the fast path that meant a value the strict assertions reject was waved
+  through as "already in shape".
+
+- 1fd154c: Fix five shape combinations where the generated TypeScript did not compile.
+
+  Found by a new fuzz suite that type-checks _fuzzed_ documents — `$defs`, `$ref`s,
+  embedded helpers and the index barrel compiled as one program, the way a consumer
+  compiles them — across every option the generator exposes. The existing
+  `generated-code-types` corpus is hand-picked, and none of these shapes were in it.
+
+  Four of the five have one cause: an expression TypeScript cannot narrow, read
+  twice. A property named after an `Object.prototype` member is read through a
+  conditional (`Object.hasOwn(input, "constructor") ? … : undefined`), so
+  `Array.isArray(<expr>) && <expr>.length` reported "Object is of type 'unknown'";
+  the subschema matcher's record view (`x as Record<string, unknown>`) and its
+  tuple-element view (`x as unknown[]`) are cast expressions with the same problem.
+  Each now carries a type the repeated read can use — nothing real is given up,
+  since the value behind it genuinely is unknown and every read sits inside a
+  runtime guard that tests it. The `.every` callbacks that hang off those accessors
+  carry an explicit parameter type, so they cannot come out implicitly `any`.
+
+  The fast path's object literal was asserted with a plain `as T`. That looked
+  checkable and was not: `_x !== undefined` narrows an `unknown` read to
+  `{} | null`, which TypeScript then refuses to convert to a `$ref` type, and
+  `Array.isArray(_x)` narrows it to `any[]`, which it refuses to convert to a
+  tuple. It is `as unknown as T` now — the guard above it is what proves the shape.
+
+  Finally, the non-object fallback literal is asserted whenever a prototype-member
+  name appears anywhere in the subtree it builds, not only at the top level: a
+  nested `{ "0": "" }` against an item type declaring `constructor?: true` carries
+  an inherited `constructor: Function` that does not assign. The assertion is
+  `as unknown as T` for the same index-signature reason.
+
+- 892f306: Refuse a root type name that is not a TypeScript identifier.
+
+  `buildSchema` uses the name twice, verbatim: as `export type <name>` in the
+  emitted source, and — lowercased — as the `filename` of the returned
+  `GeneratedFile`. Since the documented contract is that the caller writes those
+  files itself, a name derived from the document being generated (an OpenAPI
+  `title`, say) was schema-controlled text reaching both: `x` + a backtick lands
+  inside the template literals the parsers throw with, and `'../../escaped'`
+  returned `{ filename: '../../escaped.ts' }`, which writes outside the output
+  directory.
+
+  The `mjst` CLI already refused `--root-type` for exactly these two reasons. The
+  check now lives where the name becomes a path, so every consumer of the library
+  inherits it rather than only the one that ships a CLI. Every identifier is still
+  accepted, including the non-ASCII ones `$ref` naming produces.
+
+- 637684a: Fold the top-level union's fallback into `getDefaultValue`.
+
+  `scalarDefaultLiteral` carried a second, weaker per-type table beside the real
+  one: it answered `[]` for an array with `minItems` and `{}` for an object with
+  required properties, so the value a top-level union coerced an unmatched input to
+  was not itself an instance of the branch it was built from. It reads
+  `getDefaultValue` now — one place that knows what a valid instance looks like,
+  bounds and required properties and tuple positions included.
+
+- 4f12bad: Close six holes where a _strict_ parser accepted a document its schema rejects,
+  or altered a document it accepted. Each was reduced from a differential fuzz run
+  against Ajv, and each is now covered by a test asserted against Ajv rather than
+  against a hand-written verdict.
+
+  A nested object property's own `properties` and `required` were enforced only by
+  the private sub-parser the parent synthesizes for it — and that sub-parser is
+  emitted only for a plain inline object, and only by the object parser. A sibling
+  keyword (`allOf`, `not`, `if`, `patternProperties`, a schema-valued
+  `additionalProperties`, a union) took the property out of that set, and the
+  pattern-property parsers never emit sub-parsers at all, so
+  `{ c: { type: 'object', properties: { a: { type: 'number' } }, required: ['a'],
+additionalProperties: { type: 'string' } } }` accepted `{ c: {} }` and
+  `{ c: { a: 'no' } }` alike. The assertions now prove such a property's shape
+  themselves.
+
+  The fast-path guard reported "already in shape" for values the schema rejects:
+  an object property carrying `required` was proven with a bare `isObject`, and a
+  union property's guard was the branch disjunction alone, with the node's own
+  `type` / `required` / `properties` left out. Both now decline, so the value takes
+  the slow path where the real assertions run.
+
+  `additionalProperties: false` stopped rejecting undeclared keys as soon as the
+  schema also carried `allOf` / `oneOf` / `anyOf`. 2020-12 answers that keyword
+  against the schema object's own `properties`, so composition has no say in it.
+
+  A scalar `items` schema was checked with a bare `typeof`, dropping its
+  constraints: `{ items: { type: 'string', minLength: 1 } }` accepted `[""]`.
+
+  A union branch spelled `{ type: ['string', 'null'] }`, or `{ type: 'null' }`,
+  produced no check at all — so it matched nothing, and a valid `null` was coerced
+  away rather than kept.
+
+  An optional property whose schema was an `allOf`, a `not`, or had no `type` fell
+  back to the schema's default when the key was _absent_, conjuring a property the
+  input never had into the parser's result.
+
+- ae4f785: Two more repairs a coercing parser was not making, both found by re-running the
+  output-validity fuzz on fresh seeds.
+
+  A `const` union branch was checked by its _inferred type_ rather than by its
+  value: `{ anyOf: [{ const: 'a' }, { type: 'boolean' }] }` compiled the first
+  branch to `typeof x === "string"`, so the union reported a match for `""` and the
+  parser handed back a value the schema rejects. A `const` pins the value to one
+  literal, so the structural equality is now the whole check — which is also
+  smaller output, since the type test it stood in for is implied by it.
+
+  Array `items` declared with an array-form `type` (`{ items: { type: ['string',
+'null'] } }`) were passed through untouched, because the "can this element be
+  coerced?" test only recognised a single `type`. A multi-type item whose members
+  are all scalars is coerced element-wise like any other.
+
+- Updated dependencies [1c328af]
+- Updated dependencies [1fd154c]
+- Updated dependencies [3557eb5]
+- Updated dependencies [11a280f]
+- Updated dependencies [e091f22]
+- Updated dependencies [3a54baf]
+- Updated dependencies [543fbe8]
+- Updated dependencies [c6a1f16]
+- Updated dependencies [261f650]
+  - @amritk/helpers@0.16.0
+
 ## 0.19.4
 
 ### Patch Changes
