@@ -82,7 +82,7 @@ Most tools in this space pick a single lane — types **or** validation **or** d
 
 ### Benchmarks
 
-mjst's validators are *generated* TypeScript — straight-line, monomorphic code with no generic dispatch. The exported `validateX` runs a tiny inlined boolean guard on the happy path and falls back to a separate error-collecting function only when input is actually invalid, so a valid-input check matches or beats every other library measured — running clear of the build-time transformer typia on most shapes, and close enough to trade the lead run-to-run on the flat `assert` cases. The numbers below compare a generated mjst validator against typia, an Ajv-compiled function, a TypeBox-compiled checker, and a hand-written Zod schema on the same data.
+mjst's validators are *generated* TypeScript — straight-line, monomorphic code with no generic dispatch. The exported `validateX` runs a tiny inlined boolean guard on the happy path and falls back to a separate error-collecting function only when input is actually invalid, so a valid-input check matches or beats every other library measured — running clear of the build-time transformer typia on every shape measured — comfortably on the object schemas and on `assert-strict`, and by a margin on `assert-loose` small enough that the two can trade the lead run-to-run. The numbers below compare a generated mjst validator against typia, an Ajv-compiled function, a TypeBox-compiled checker, and a hand-written Zod schema on the same data.
 
 Each schema also generates a boolean type-guard `isX(input): input is X` — a single flat predicate (no error array, no cold-path call) returning the same verdict as `validateX`. It is the inline-friendly equivalent of TypeBox's compiled `check` / typia's `is`, for the common "is this valid?" question where you don't need the error list; `validateX` remains the rich, error-collecting form.
 
@@ -90,10 +90,10 @@ Each schema also generates a boolean type-guard `isX(input): input is X` — a s
 
 | schema | mjst (generated) | typia (transformed) | ajv (compiled) | typebox (compiled) | zod |
 |:--|--:|--:|--:|--:|--:|
-| small (4 fields) | **~49M** ops/s | ~6.4M ops/s | ~11M ops/s | ~5.7M ops/s | ~2.4M ops/s |
-| order (nested + array) | **~11M** ops/s | ~2.5M ops/s | ~4M ops/s | ~2.4M ops/s | ~0.52M ops/s |
-| assert-loose | **~177M** ops/s | ~162M ops/s | ~46M ops/s | ~70M ops/s | ~3.9M ops/s |
-| assert-strict | **~164M** ops/s | ~146M ops/s | ~20M ops/s | ~44M ops/s | ~1.5M ops/s |
+| small (4 fields) | **~59M** ops/s | ~5.8M ops/s | ~10M ops/s | ~7.6M ops/s | ~2.2M ops/s |
+| order (nested + array) | **~9.5M** ops/s | ~2M ops/s | ~3.9M ops/s | ~3.3M ops/s | ~0.54M ops/s |
+| assert-loose | **~189M** ops/s | ~170M ops/s | ~44M ops/s | ~78M ops/s | ~5M ops/s |
+| assert-strict | **~104M** ops/s | ~68M ops/s | ~21M ops/s | ~42M ops/s | ~1.8M ops/s |
 
 The `assert-loose` / `assert-strict` rows are the exact shape used by [`moltar/typescript-runtime-type-benchmarks`](https://github.com/moltar/typescript-runtime-type-benchmarks).
 
@@ -101,10 +101,10 @@ The `assert-loose` / `assert-strict` rows are the exact shape used by [`moltar/t
 
 | | mjst (codegen) | ajv (compile) | typebox (compile) | zod |
 |:--|--:|--:|--:|--:|
-| small | ~0.4 ms | ~10 ms | ~0.09 ms | n/a — authored in code |
-| order | ~0.67 ms | ~10.5 ms | ~0.24 ms | n/a — authored in code |
+| small | ~0.47 ms | ~14 ms | ~0.13 ms | n/a — authored in code |
+| order | ~0.66 ms | ~17 ms | ~0.17 ms | n/a — authored in code |
 
-<sub>Measured on Bun 1.3 (Linux x64); micro-benchmark figures vary by machine and runtime. Each library is timed in an isolated process over a pool of distinct inputs, reporting the median of many trials (so the optimiser can't hoist or eliminate the work). Every library agrees on each valid/invalid verdict — parity is asserted before timing — and TypeBox is given uuid/email format checkers so every library does the same work. Reproduce with `cd packages/generate-validators && bun run bench`.</sub>
+<sub>Measured on Bun 1.4 (Linux x64); micro-benchmark figures vary by machine and runtime. Each library is timed in an isolated process over a pool of distinct inputs, reporting the median of many trials (so the optimiser can't hoist or eliminate the work). Every library agrees on each valid/invalid verdict — parity is asserted before timing — and TypeBox is given uuid/email format checkers so every library does the same work. Reproduce with `cd packages/generate-validators && bun run bench`.</sub>
 
 **Parsing** replicates both parse modes of the same benchmark over the libraries
 with a pure (non-mutating) parse operation. *parseSafe* asserts the types and
@@ -114,13 +114,13 @@ and **rejects** undeclared keys (zod's `.strict()`):
 | schema | mjst (generated) | zod (`.parse`) | typebox (`Value.Parse`) |
 |:--|--:|--:|--:|
 | **parseSafe** — strip extras | | | |
-| small (4 fields) | **~18M** ops/s | ~3M ops/s | ~1.6M ops/s |
-| order (nested + array) | **~7.2M** ops/s | ~0.59M ops/s | ~0.18M ops/s |
-| assert (moltar shape) | **~97M** ops/s | ~3.8M ops/s | ~0.78M ops/s |
+| small (4 fields) | **~18M** ops/s | ~3.7M ops/s | ~1.6M ops/s |
+| order (nested + array) | **~6.9M** ops/s | ~0.71M ops/s | ~0.24M ops/s |
+| assert (moltar shape) | **~127M** ops/s | ~4.7M ops/s | ~0.78M ops/s |
 | **parseStrict** — reject extras | | | |
-| small (4 fields) | **~15M** ops/s | ~2M ops/s | ~2.05M ops/s |
-| order (nested + array) | **~8.5M** ops/s | ~0.38M ops/s | ~0.29M ops/s |
-| assert (moltar shape) | **~44M** ops/s | ~1.47M ops/s | ~1.17M ops/s |
+| small (4 fields) | **~14M** ops/s | ~2.3M ops/s | ~2.04M ops/s |
+| order (nested + array) | **~7M** ops/s | ~0.43M ops/s | ~0.36M ops/s |
+| assert (moltar shape) | **~51M** ops/s | ~1.74M ops/s | ~1.18M ops/s |
 
 <sub>mjst parses in `strict` mode throughout (throwing on a type mismatch like the others), adding `stripUnknown` for parseSafe and `additionalProperties: false` for parseStrict; zod uses `.object`/`.strictObject` and TypeBox a `Clean+Assert`/`Assert` pipeline. Parity — identical parsed output, and rejection of every wrong-typed (and, in strict mode, extra-keyed) sample — is asserted before timing. ajv (`removeAdditional`) and typia (`assertPrune`) are excluded because they strip by mutating the input in place rather than returning a new value, which a reused input pool can't measure fairly. Reproduce with `cd packages/generate-parsers && bun run bench`.</sub>
 

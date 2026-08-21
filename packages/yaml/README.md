@@ -169,24 +169,24 @@ apply your own rule.
 ## Performance
 
 Run it yourself with `bun run bench`. Numbers below are a median of three runs
-on one Linux x64 machine under Bun — treat the ratios as the durable part and
-the absolute throughput as a property of that box.
+on one Linux x64 machine under Bun 1.4 — treat the ratios as the durable part
+and the absolute throughput as a property of that box.
 
 **Parse to a source-mapped tree** — the job this package exists for. `js-yaml` cannot produce positions, so it is not a candidate here.
 
 | fixture | @amritk/yaml | yaml (eemeli) | speedup |
 | --- | --- | --- | --- |
-| small (155 B) | 329k ops/s | 11.3k ops/s | **29.1×** |
-| medium (2 KB) | 35.3k ops/s | 899 ops/s | **39.3×** |
-| large (100 KB) | 659 ops/s | 20.5 ops/s | **32.1×** |
+| small (155 B) | 455k ops/s | 15.4k ops/s | **29.9×** |
+| medium (2 KB) | 37.0k ops/s | 1.0k ops/s | **35.6×** |
+| large (100 KB) | 628 ops/s | 19.4 ops/s | **32.3×** |
 
 **Parse to plain data** — all three can do this.
 
 | fixture | @amritk/yaml | yaml | js-yaml | vs yaml | vs js-yaml |
 | --- | --- | --- | --- | --- | --- |
-| small | 255k | 12.4k | 136k | 20.6× | 1.88× |
-| medium | 23.1k | 965 | 12.2k | 23.9× | 1.89× |
-| large | 416 | 22.7 | 250 | 18.3× | 1.66× |
+| small | 258k | 14.6k | 124k | 17.1× | 2.01× |
+| medium | 21.9k | 1.2k | 10.7k | 18.7× | 2.10× |
+| large | 403 | 23.3 | 227 | 17.0× | 1.70× |
 
 **Bundle size** (minified + gzipped) — what each parser adds to an application
 that imports it. The bench bundles a small consumer of each library rather than
@@ -197,9 +197,9 @@ equivalent to import.
 
 | | size | |
 | --- | --- | --- |
-| **@amritk/yaml** | **10.8 KB** | — |
-| yaml | 35.5 KB | 3.3× larger |
-| js-yaml | 14.4 KB | 1.3× larger |
+| **@amritk/yaml** | **11.1 KB** | — |
+| yaml | 35.4 KB | 3.2× larger |
+| js-yaml | 14.5 KB | 1.3× larger |
 
 Correctness is pinned three ways: a differential test suite (`src/differential.test.ts`) parses a battery of documents — including full OpenAPI specs — and asserts byte-identical data output against `yaml`; `src/json-superset.test.ts` holds a generated JSON corpus to `JSON.parse` exactly; and `src/conformance.test.ts` measures the parser against the official YAML test suite (see [Conformance, measured](#conformance-measured)). Where `js-yaml` diverges (its `!!timestamp` type turns ISO strings into `Date`s, which is wrong for a JSON superset), we instead agree with `yaml`.
 

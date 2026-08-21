@@ -267,19 +267,23 @@ The structural rules validate against the **official `spec.openapis.org` meta-sc
 
 ## Benchmarks
 
-The `bench/` suite pits `@amritk/lint` head-to-head against **[Spectral](https://github.com/stoplightio/spectral)** — the OpenAPI linter this package is modelled on (hence the `spectral:oas` alias) — over the real-world specs the test suite lints: Swagger's petstore, the DigitalOcean API, and the OpenAI API (~17 KB to ~2.8 MB, spanning a small config and a genuinely large document). Both do the same job: **parse → dereference internal `$ref`s → run their recommended OpenAPI ruleset** (mjst dereferences in memory with [`@amritk/resolve-refs`](../resolve-refs), exactly as the CLI does; Spectral uses its own default resolver). Representative numbers (Bun 1.3, Linux x64 — your hardware will differ, run `bun run bench` yourself):
+The `bench/` suite pits `@amritk/lint` head-to-head against **[Spectral](https://github.com/stoplightio/spectral)** — the OpenAPI linter this package is modelled on (hence the `spectral:oas` alias) — over the real-world specs the test suite lints: Swagger's petstore, the DigitalOcean API, and the OpenAI API (~17 KB to ~2.8 MB, spanning a small config and a genuinely large document). Both do the same job: **parse → dereference internal `$ref`s → run their recommended OpenAPI ruleset** (mjst dereferences in memory with [`@amritk/resolve-refs`](../resolve-refs), exactly as the CLI does; Spectral uses its own default resolver). Representative numbers (Bun 1.4, Linux x64 — your hardware will differ, run `bun run bench` yourself):
 
 | document | size | mjst | Spectral | speedup | findings (mjst / Spectral) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| petstore (Swagger) | 17 KB | ~8 ms | ~93 ms | **~11×** | 2 / 2 |
-| digitalocean | 105 KB | ~31 ms | ~351 ms | **~11×** | 2411 / 4319 |
-| openai | 2.8 MB | ~1.4 s | errored¹ | — | 1278 / — |
+| petstore (Swagger) | 17 KB | ~5 ms | ~95 ms | **~19×** | 2 / 2 |
+| digitalocean | 105 KB | ~27 ms | ~375 ms | **~14×** | 2411 / 4319 |
+| openai | 2.8 MB | ~0.73 s | ~7.4 s | **~10×** | 1278 / 474 |
 
-¹ Spectral's JSONPath engine (`nimma`) throws on the 2.8 MB OpenAI spec under Bun, so that row is mjst-only; mjst lints it end to end.
+An earlier revision of this table reported the OpenAI row as mjst-only, because
+Spectral's JSONPath engine (`nimma`) threw on that spec under Bun. It no longer
+does, so the row is a real comparison now. The bench still guards the Spectral
+side and reports `errored` rather than aborting the run, since that failure was
+runtime-specific and may come back.
 
 Each `lint` figure is the mean wall time of one whole pass — **every rule, not a subset** — dominated by real work: JSONPath matching, the rule functions, and the dereference pass. A fresh document is parsed on every iteration on both sides, matching how the tools are actually called. The finding counts differ because the two rulesets are not byte-identical (different rule implementations and `$ref` resolution), so this is a **throughput** comparison rather than a correctness parity check — but on petstore both land on the same two findings.
 
-**Assembling the ruleset** is timed separately, because a process pays it once and then lints many documents: `createOpenApiRuleset` (compiling every rule's JSONPath and wiring up functions and format detectors) measures **~0.07 ms**, versus **~0.27 ms** for `new Spectral()` + `setRuleset(oas)`. The benchmark warms up before timing and reports the mean over a fixed time budget; micro-benchmark figures vary by machine and runtime.
+**Assembling the ruleset** is timed separately, because a process pays it once and then lints many documents: `createOpenApiRuleset` (compiling every rule's JSONPath and wiring up functions and format detectors) measures **~0.07 ms**, versus **~0.28 ms** for `new Spectral()` + `setRuleset(oas)`. The benchmark warms up before timing and reports the mean over a fixed time budget; micro-benchmark figures vary by machine and runtime.
 
 ---
 

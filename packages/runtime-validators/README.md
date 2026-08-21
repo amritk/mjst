@@ -133,15 +133,15 @@ const isTree = validateGuard({
 
 Pick the right tool for the shape of your workload. There are two regimes, and they have opposite winners.
 
-**Cold one-shot — schema to first result.** This is the path this package is built for: you have a schema and a value or two, in a fresh process, and you want an answer. There is no compile step, so the cost is essentially one walk of the data. Ajv must compile the schema (build and JIT a function) before it can validate even once. Representative numbers from `bun run bench` (your hardware will differ — run it yourself):
+**Cold one-shot — schema to first result.** This is the path this package is built for: you have a schema and a value or two, in a fresh process, and you want an answer. There is no compile step, so the cost is essentially one walk of the data. Ajv must compile the schema (build and JIT a function) before it can validate even once. Representative numbers from `bun run bench` (Bun 1.4, Linux x64 — your hardware will differ, run it yourself):
 
 | schema | `validate` (cold) | Ajv (compile + run) | speedup |
 |:---|---:|---:|---:|
-| small | ~0.014 ms | ~10 ms | **~720×** |
-| wide (40 props) | ~0.049 ms | ~13 ms | **~270×** |
-| deep (`$ref`) | ~0.13 ms | ~12 ms | **~97×** |
+| small | ~0.016 ms | ~14 ms | **~870×** |
+| wide (40 props) | ~0.031 ms | ~16 ms | **~530×** |
+| deep (`$ref`) | ~0.17 ms | ~17 ms | **~96×** |
 
-**Steady state — one schema, many values.** Here Ajv wins, and it is not close: once compiled, its JIT'd function outruns a tree-walking interpreter by roughly **6–10×** per call. If you validate the same schema against a high-throughput stream, compile it once with Ajv (or use this repo's build-time [`@amritk/generate-validators`](../generate-validators)) — an interpreter is the wrong tool for that job, and this package does not pretend otherwise.
+**Steady state — one schema, many values.** Here Ajv wins, and it is not close: once compiled, its JIT'd function outruns a tree-walking interpreter by roughly **6–11×** per call. If you validate the same schema against a high-throughput stream, compile it once with Ajv (or use this repo's build-time [`@amritk/generate-validators`](../generate-validators)) — an interpreter is the wrong tool for that job, and this package does not pretend otherwise.
 
 So the rule of thumb: **few values per schema → interpret** (no compile cost to amortize, and it runs eval-free anywhere); **many values per schema → compile**.
 

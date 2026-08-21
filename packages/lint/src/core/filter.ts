@@ -165,78 +165,163 @@ const compareRelational = (operator: '<' | '<=' | '>' | '>=', left: unknown, rig
   }
 }
 
-/** The values a filter can read from the node under test. */
-type EvaluationContext = {
-  value: unknown
-  property: string | number | undefined
-  parent: unknown
-  parentProperty: string | number | undefined
-  path: string
-  root: unknown
-}
+/**
+ * One compiled expression node. It takes the six values a filter can read
+ * positionally rather than in a context object: this runs once per node of the
+ * document — on a large dereferenced spec, hundreds of thousands of times per
+ * lint — so the object the old walker built per call was pure garbage.
+ */
+type Thunk = (
+  value: unknown,
+  property: string | number | undefined,
+  parent: unknown,
+  parentProperty: string | number | undefined,
+  path: string,
+  root: unknown,
+) => unknown
 
-const evaluate = (node: FilterNode, context: EvaluationContext): unknown => {
+/**
+ * Turns one parsed node into a closure that computes it.
+ *
+ * The predecessor walked the AST on every evaluation, re-reading `node.kind`
+ * and re-dispatching through a `switch` at each node — the same decisions, for
+ * the same expression, once per document node. Compiling those decisions into
+ * closures makes each evaluation a chain of direct calls, and it lifts the
+ * per-operator branches (`&&` vs `||`, `===` vs `<`) out of the hot path too.
+ * A CPU profile of a full lint of a 2.8 MB OpenAPI spec put ~15% of the run in
+ * the old walker.
+ *
+ * Still no `eval` and no `new Function`: these are ordinary closures over a
+ * parsed tree, so a ruleset — which is data, often written by someone other
+ * than the person running the linter — still cannot execute code here.
+ */
+const compileNode = (node: FilterNode): Thunk => {
   switch (node.kind) {
     case 'literal':
-      return node.value
-    case 'regex':
-      return node.value
-    case 'context':
-      return context[node.ref]
-    case 'member':
-      return readMember(evaluate(node.object, context), node.name)
-    case 'computed': {
-      const index = evaluate(node.index, context)
-      if (typeof index !== 'string' && typeof index !== 'number') {
-        throw filterRuntimeError('A computed member must be a string or a number')
-      }
-      return readMember(evaluate(node.object, context), index)
+    case 'regex': {
+      const constant = node.value
+      return () => constant
     }
-    case 'call':
-      return callMethod(
-        evaluate(node.object, context),
-        node.name,
-        node.args.map((argument) => evaluate(argument, context)),
-      )
-    case 'unary': {
-      if (node.operator === '!') return !evaluate(node.operand, context)
-      if (node.operator === 'void') {
-        evaluate(node.operand, context)
-        return undefined
+    case 'context': {
+      switch (node.ref) {
+        case 'value':
+          return (value) => value
+        case 'property':
+          return (_value, property) => property
+        case 'parent':
+          return (_value, _property, parent) => parent
+        case 'parentProperty':
+          return (_value, _property, _parent, parentProperty) => parentProperty
+        case 'path':
+          return (_value, _property, _parent, _parentProperty, path) => path
+        default:
+          return (_value, _property, _parent, _parentProperty, _path, root) => root
       }
-      return -Number(evaluate(node.operand, context))
+    }
+    case 'member': {
+      const object = compileNode(node.object)
+      const name = node.name
+      return (value, property, parent, parentProperty, path, root) =>
+        readMember(object(value, property, parent, parentProperty, path, root), name)
+    }
+    case 'computed': {
+      const object = compileNode(node.object)
+      const index = compileNode(node.index)
+      return (value, property, parent, parentProperty, path, root) => {
+        const key = index(value, property, parent, parentProperty, path, root)
+        if (typeof key !== 'string' && typeof key !== 'number') {
+          throw filterRuntimeError('A computed member must be a string or a number')
+        }
+        return readMember(object(value, property, parent, parentProperty, path, root), key)
+      }
+    }
+    case 'call': {
+      const object = compileNode(node.object)
+      const name = node.name
+      const args = node.args.map(compileNode)
+      const arity = args.length
+      return (value, property, parent, parentProperty, path, root) => {
+        const values = new Array<unknown>(arity)
+        for (let i = 0; i < arity; i++) {
+          values[i] = (args[i] as Thunk)(value, property, parent, parentProperty, path, root)
+        }
+        return callMethod(object(value, property, parent, parentProperty, path, root), name, values)
+      }
+    }
+    case 'unary': {
+      const operand = compileNode(node.operand)
+      if (node.operator === '!') {
+        return (value, property, parent, parentProperty, path, root) =>
+          !operand(value, property, parent, parentProperty, path, root)
+      }
+      if (node.operator === 'void') {
+        return (value, property, parent, parentProperty, path, root) => {
+          operand(value, property, parent, parentProperty, path, root)
+          return undefined
+        }
+      }
+      return (value, property, parent, parentProperty, path, root) =>
+        -Number(operand(value, property, parent, parentProperty, path, root))
     }
     case 'logical': {
-      const left = evaluate(node.left, context)
+      const left = compileNode(node.left)
+      const right = compileNode(node.right)
       // `&&`/`||` yield the operand value, not a boolean, because rulesets chain
       // them (`@ && @.type === 'array'`) and rely on the JavaScript semantics.
-      if (node.operator === '&&') return left ? evaluate(node.right, context) : left
-      return left ? left : evaluate(node.right, context)
+      if (node.operator === '&&') {
+        return (value, property, parent, parentProperty, path, root) => {
+          const outcome = left(value, property, parent, parentProperty, path, root)
+          return outcome ? right(value, property, parent, parentProperty, path, root) : outcome
+        }
+      }
+      return (value, property, parent, parentProperty, path, root) => {
+        const outcome = left(value, property, parent, parentProperty, path, root)
+        return outcome ? outcome : right(value, property, parent, parentProperty, path, root)
+      }
     }
     case 'comparison': {
-      const left = evaluate(node.left, context)
-      const right = evaluate(node.right, context)
+      const left = compileNode(node.left)
+      const right = compileNode(node.right)
       switch (node.operator) {
         case '===':
-          return left === right
+          return (value, property, parent, parentProperty, path, root) =>
+            left(value, property, parent, parentProperty, path, root) ===
+            right(value, property, parent, parentProperty, path, root)
         case '!==':
-          return left !== right
+          return (value, property, parent, parentProperty, path, root) =>
+            left(value, property, parent, parentProperty, path, root) !==
+            right(value, property, parent, parentProperty, path, root)
         case '==':
-          return looseEquals(left, right)
+          return (value, property, parent, parentProperty, path, root) =>
+            looseEquals(
+              left(value, property, parent, parentProperty, path, root),
+              right(value, property, parent, parentProperty, path, root),
+            )
         case '!=':
-          return !looseEquals(left, right)
-        default:
-          return compareRelational(node.operator, left, right)
+          return (value, property, parent, parentProperty, path, root) =>
+            !looseEquals(
+              left(value, property, parent, parentProperty, path, root),
+              right(value, property, parent, parentProperty, path, root),
+            )
+        default: {
+          const operator = node.operator
+          return (value, property, parent, parentProperty, path, root) =>
+            compareRelational(
+              operator,
+              left(value, property, parent, parentProperty, path, root),
+              right(value, property, parent, parentProperty, path, root),
+            )
+        }
       }
     }
   }
 }
 
 const toFilterFn = (parsed: ParsedFilter): FilterFn => {
-  const { node } = parsed
+  const test = compileNode(parsed.node)
   return (value, property, parent, root, path, parentProperty) => {
     try {
-      return Boolean(evaluate(node, { value, property, parent, parentProperty, path, root }))
+      return Boolean(test(value, property, parent, parentProperty, path, root))
     } catch {
       // A filter that cannot be evaluated against *this* node (a member of null,
       // a method on the wrong type) does not match it — the same outcome the

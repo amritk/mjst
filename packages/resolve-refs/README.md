@@ -191,14 +191,14 @@ registry, no scoping, no diagnostics — and re-resolves each ref on every
 encounter, so the gap is the production resolver's *total* per-call cost against
 the cheapest thing that produces the same inlined shape. Both are asserted to
 produce byte-identical output before either is timed. Representative numbers
-(Bun 1.3, Linux x64 — your hardware will differ, run `bun run bench` yourself):
+(Bun 1.4, Linux x64 — your hardware will differ, run `bun run bench` yourself):
 
 | schema | cached | naive | speedup |
 |:---|---:|---:|---:|
-| chain (40 `$ref` → `$ref` links) | ~2.7k ops/s | ~0.77k ops/s | **~3.6×** |
-| reuse-heavy (50 refs → 1 def) | ~4.2k ops/s | ~8.9k ops/s | ~0.47× |
-| cyclic tree | ~32k ops/s | ~99k ops/s | ~0.32× |
-| wide-distinct (60 defs, each used once) | ~2.3k ops/s | ~7.7k ops/s | ~0.29× |
+| chain (40 `$ref` → `$ref` links) | ~5.4k ops/s | ~1.2k ops/s | **~4.5×** |
+| reuse-heavy (50 refs → 1 def) | ~8.2k ops/s | ~12.6k ops/s | ~0.65× |
+| cyclic tree | ~47k ops/s | ~210k ops/s | ~0.22× |
+| wide-distinct (60 defs, each used once) | ~3.4k ops/s | ~10.2k ops/s | ~0.34× |
 
 Memoization overtakes the naive walk only on the **chain** shape, where a long
 indirection path is expensive to re-resolve and the cache collapses it to one
@@ -211,5 +211,6 @@ result rather than re-resolving. The `reuse-heavy`, `cyclic`, and `wide-distinct
 rows are kept in the table precisely to show that trade honestly rather than
 cherry-picking the one shape the cache wins.
 
-Opting into `trackOrigins` (which records where each inlined value came from) adds
-roughly **0–15%** on top, within run-to-run noise on these small schemas.
+Opting into `trackOrigins` (which records where each inlined value came from)
+costs nothing measurable on these small schemas: the four rows land between −24%
+and +16%, straddling zero, which is run-to-run noise rather than a price.

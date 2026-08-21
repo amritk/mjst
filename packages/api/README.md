@@ -3,9 +3,11 @@
 Contract-first, framework-agnostic API layer built on [mjst](../../README.md)'s
 JSON Schema tooling. Declare each route once — method, path, request schemas, response
 schemas, handler — and get typed handlers, fast request/response validation,
-and an OpenAPI 3.2 document with **no extra code**. Thin adapters connect the
-same API to Hono, Next.js, Bun, Cloudflare Workers, Deno (fetch), and
-Express, Fastify, or raw `node:http` (Node).
+and an OpenAPI 3.2 document with **no extra code**. Two thin adapters connect
+the same API to every JavaScript server framework — Bun, Cloudflare Workers,
+Deno, Hono, Next.js, SvelteKit, Nitro/Nuxt, Elysia (fetch), and `node:http`,
+Express, Fastify, Koa, NestJS (Node) — with a
+[recipe for each](#serving-it).
 
 - **One contract, everything derived.** The JSON Schemas in a route type the
   handler (via `FromSchema`), validate requests at runtime, and embed verbatim
@@ -38,6 +40,96 @@ Express, Fastify, or raw `node:http` (Node).
 - **One dependency, many integrations.** Drizzle, Better Auth, Sentry, and
   typed clients connect through seams — `context`, `mounts`, `onError`,
   `locals`, OpenAPI — not bundled SDKs. Recipes below.
+
+## Contents
+
+**Getting started**
+- [How this compares to a web framework](#how-this-compares-to-a-web-framework) · [what it deliberately does not do](#what-this-deliberately-does-not-do)
+- [Usage](#usage) · [Contracts without handlers (browser-safe)](#contracts-without-handlers-browser-safe) · [Typed client: `createClient`](#typed-client-createclient)
+
+**[Serving it](#serving-it)** — one `Api`, two adapters, a recipe per framework
+- fetch: [Bun](#bun) · [Cloudflare Workers](#cloudflare-workers) · [Deno](#deno) · [Hono](#hono) · [Next.js](#nextjs-app-router) · [SvelteKit](#sveltekit) · [Nitro / Nuxt](#nitro--nuxt) · [Elysia](#elysia)
+- Node: [`node:http`](#nodehttp) · [Express](#express) · [Fastify](#fastify) · [Koa](#koa) · [NestJS](#nestjs) · [anything else](#anything-else)
+
+**Requests and responses**
+- [Options (`createApi`)](#options-createapi) · [Validation semantics](#validation-semantics) · [String formats](#string-formats) · [Branded IDs](#branded-ids-nominal-types-for-params) · [Cross-field refinement](#cross-field-refinement)
+- [Form and multipart bodies](#form-and-multipart-bodies) · [Raw text and binary bodies](#raw-text-and-binary-bodies) · [Raw request bodies and size limits](#raw-request-bodies-and-size-limits)
+- [Streaming and raw responses](#streaming-and-raw-responses) · [Returning a raw `Response`](#returning-a-raw-response-escape-hatch) · [Multiple `set-cookie` headers](#multiple-set-cookie-headers) · [The platform request: `request.raw`](#the-platform-request-requestraw)
+
+**Middleware, security, state**
+- [Hooks: CORS, rate limits, security headers](#hooks-cors-rate-limits-security-headers) · [Built-in security hooks](#built-in-security-hooks) · [Signed cookies](#signed-cookies)
+- [Framework-parity helpers](#framework-parity-helpers) · [Client-side auth refresh](#client-side-auth-refresh) · [Per-request state: `locals`](#per-request-state-locals)
+
+**Engines**
+- [Plugging in generated validators](#plugging-in-generated-validators) · [Development: hot reloading](#development-hot-reloading) · [Production: the compiled engine](#production-the-compiled-engine)
+
+**Integration recipes**
+- [App context: Drizzle, sessions](#app-context-drizzle-sessions-anything-per-request) · [Guards](#guards-authorize-once-declare-the-outcome) · [Deny-by-default: `secureRoutes`](#deny-by-default-secureroutes) · [Auth: Better Auth](#auth-better-auth) · [Sessions: a production setup](#sessions-a-production-setup)
+- [Observability](#observability-metrics-and-request-logs) · [OpenAPI: servers, auth schemes, components](#openapi-servers-auth-schemes-shared-components) · [Error reporting: Sentry](#error-reporting-sentry) · [Typed client for external consumers: Hey API](#typed-client-for-external-consumers-hey-api) · [Schemas from Zod, TypeBox, Valibot, Effect](#schemas-from-zod-typebox-valibot-effect)
+
+**About**
+- [Integration philosophy](#integration-philosophy) · [Requirements and stability](#requirements-and-stability) · [Scope notes](#scope-notes)
+
+## How this compares to a web framework
+
+`@amritk/api` is not a server — `handle(ApiRequest) → ApiResponse` is the whole
+runtime, and a framework hosts it ([`app.mount('/', toFetchHandler(api))`](#hono)
+under Hono, [middleware](#express) under Express). So the question is rarely
+"this **or** Hono"; it is this *inside* whatever you already run, weighed against
+the stack you would otherwise assemble for a validated, documented API — a
+framework plus a validator middleware plus an OpenAPI plugin plus an RPC client
+(`hono` + `@hono/zod-validator` + `@hono/zod-openapi` + `hc`, or the
+Express/Fastify equivalents).
+
+Against that stack:
+
+| | framework + validator + OpenAPI plugin | `@amritk/api` |
+|:--|:--|:--|
+| Declaring a route | a chain — `app.get(path, zValidator('param', schema), handler)` — and the OpenAPI plugin adds a *second* way to declare the same route | one [`defineRoute`](#usage) object: method, path, request schemas, `responses`, handler |
+| Schema language | Zod / Valibot / TypeBox, converted for the document | JSON Schema Draft 2020-12 — or author in [Zod/TypeBox/Valibot/Effect](#schemas-from-zod-typebox-valibot-effect) and convert once, at build time |
+| OpenAPI | a conversion layer between what runs and what is published | OpenAPI 3.2's schema dialect **is** Draft 2020-12, so contract schemas embed verbatim — no conversion to drift |
+| Responses | inferred from whatever the handler returned, and usually unvalidated | [declared](#validation-semantics): an undeclared status is a compile error, and `validateResponses` catches shape drift in dev/test |
+| Typed client | `hc` (coupled to the framework) or codegen from the document | [`createClient`](#typed-client-createclient) from the same literals — no codegen, no round-trip, [browser-safe subpath](#typed-client-createclient) |
+| Authorization | middleware, invisible to the document | [`guards`](#guards-authorize-once-declare-the-outcome) can only deny with a status the contract *declares*, so the 401 is in the OpenAPI output and in the client's union |
+| Production build | none | [`compileToModule`](#production-the-compiled-engine) emits a fused handler — inlined guards, schema-derived serializers, a precomputed document |
+
+The through-line: elsewhere a route is a chain of functions and the document is
+derived by a second mechanism; here the contract is data, and the handler types,
+the runtime validation, the OpenAPI document, the typed client, and the compiled
+module are all projections of it. There is one place to edit and nothing to keep
+in sync.
+
+On speed, the [benchmark tables](#production-the-compiled-engine) measure the
+same three routes through the same web-standard `Request` objects on workerd,
+Node, and Bun. Against `hono + zod` — the other column that actually validates —
+the compiled engine leads every case on all three runtimes. Against *unvalidated*
+bare Hono it leads or matches the GET cases and trails on the POST case, which is
+dominated by body parsing that every column pays.
+
+### What this deliberately does not do
+
+A framework is still a framework. This package has no:
+
+- **Middleware onion.** Pre-routing gates (`onRequest`), response decorators
+  (`onResponse`), and per-route [`guards`](#guards-authorize-once-declare-the-outcome)
+  cover the same ground with a flatter model — and on the Node adapter there are
+  no hooks at all, [by design](#serving-it): you use the host framework's chain.
+- **WebSockets.** Server-sent events are first class (`sseStream`, `formatSse`,
+  and [streaming responses](#streaming-and-raw-responses)); socket upgrades are
+  the host's job.
+- **Static file serving, JSX/SSR, or template rendering.** Nothing here renders
+  HTML except the Scalar docs page [`createDocs`](#framework-parity-helpers)
+  serves.
+- **A plugin ecosystem.** CORS, CSRF, rate limiting, security headers, ETag,
+  compression, request IDs, and health checks ship as
+  [hook factories](#built-in-security-hooks); beyond those you write it or take
+  it from the framework you mounted into.
+- **A router for anything but contracts.** A path with no contract is a 404, or
+  falls through to the host — this serves your API surface, not your whole app.
+
+Which is the point: run Hono, Express, or Fastify for the app, and let contracts
+own the API surface. The [recipes](#serving-it) mount into either side of an
+existing app, so adoption is per route, not per repository.
 
 ## Usage
 
@@ -429,27 +521,249 @@ handling are no longer bundled unless the app registers them.
 
 ### Serving it
 
+`createApi` returns an `Api`, not a server: `handle(ApiRequest) → ApiResponse`
+is the entire runtime. Two adapters bridge it onto the only two HTTP ABIs
+JavaScript has, and every framework below is one of the two — there is no
+per-framework plugin to install, and no framework-specific code in the package.
+
+| Adapter | Signature | Frameworks |
+|:---|:---|:---|
+| `toFetchHandler(api, options?)` | `(Request, env?, executionContext?) => Promise<Response>` | [Bun](#bun) · [Cloudflare Workers](#cloudflare-workers) · [Deno](#deno) · [Hono](#hono) · [Next.js](#nextjs-app-router) · [SvelteKit](#sveltekit) · [Nitro / Nuxt](#nitro--nuxt) · [Elysia](#elysia) |
+| `toNodeHandler(api, options?)` | `(IncomingMessage, ServerResponse, next?) => Promise<void>` | [`node:http`](#nodehttp) · [Express](#express) · [Fastify](#fastify) · [Koa](#koa) · [NestJS](#nestjs) |
+
+Three things every recipe shares:
+
+- **`mounts`, `onRequest`/`onResponse`, and the
+  [built-in security hooks](#built-in-security-hooks) are fetch-adapter
+  features.** `toNodeHandler` deliberately omits them: every Node framework
+  below already has a middleware chain for CORS, rate limits, and security
+  headers, and that chain runs before the handler.
+- **The second argument the host passes becomes `env`** in
+  `createApi({ context })` — Workers bindings on Workers, but the `Server` on
+  Bun and the route context under Next.js. When the context factory needs your
+  own config, pass it explicitly: `(request) => handler(request, config)`.
+- **Contract paths are the full request path.** There is no base-path option
+  on `createApi`, so a route declaring `/users/{id}` matches exactly that.
+  Under a host that serves the handler from `/api/…`, either declare
+  `/api/users/{id}` in the contract or mount somewhere that strips the prefix
+  first (Express's `app.use('/api', …)` does).
+
+#### Bun
+
 ```ts
-// Bun / Cloudflare Workers / Deno — a Web-standard fetch handler
-const handler = toFetchHandler(api)
-Bun.serve({ fetch: handler })
+import { createApi, toFetchHandler } from '@amritk/api'
+import { getUser } from './routes'
 
-// Hono
-app.mount('/', handler)
+const api = createApi({ routes: [getUser] })
 
-// Next.js app router (app/[...route]/route.ts)
-export const GET = handler
-export const POST = handler
-
-// node:http / Express / Connect
-import { toNodeHandler } from '@amritk/api'
-http.createServer(toNodeHandler(api)).listen(3000)
-app.use(toNodeHandler(api)) // unmatched paths fall through to the rest of the app
+Bun.serve({ port: 3000, fetch: toFetchHandler(api) })
 ```
 
-Writing an adapter for anything else is ~15 lines: construct one
+#### Cloudflare Workers
+
+```ts
+const handler = toFetchHandler(api)
+
+export default { fetch: handler } satisfies ExportedHandler<Env>
+```
+
+Bindings arrive as `env`, and the `ExecutionContext` — `waitUntil`,
+`passThroughOnException` — as `executionContext`; both reach the
+`createApi({ context })` factory untouched. For production Workers, prefer
+the [compiled engine](#production-the-compiled-engine) — same contracts, a
+fused handler with inlined guards.
+
+#### Deno
+
+```ts
+Deno.serve(toFetchHandler(api))
+```
+
+#### Hono
+
+```ts
+const app = new Hono()
+
+app.get('/health', (c) => c.text('ok'))
+app.mount('/', toFetchHandler(api)) // register last: '/' matches everything
+
+export default app
+```
+
+Hono forwards its own `env` and `executionCtx` to the mounted handler, so
+Workers bindings still reach `createApi({ context })`. Routes registered
+*before* the mount keep winning — that is how a Hono app adopts contracts one
+slice at a time.
+
+#### Next.js (App Router)
+
+```ts
+// app/api/[[...path]]/route.ts
+import { createApi, toFetchHandler } from '@amritk/api'
+import { routes } from '@/server/routes'
+
+const handler = toFetchHandler(createApi({ routes }))
+
+// Next calls route handlers as (request, { params }); passing `env` explicitly
+// keeps Next's route context out of the context factory.
+const route = (request: Request): Promise<Response> => handler(request, process.env)
+
+export { route as GET, route as POST, route as PUT, route as PATCH, route as DELETE }
+```
+
+The file's own path is part of the URL, so contracts declare `/api/...`. Use
+`@amritk/api/bundler` to strip contract schemas from anything the client
+bundle imports.
+
+#### SvelteKit
+
+```ts
+// src/hooks.server.ts
+import { createApi, toFetchHandler } from '@amritk/api'
+import type { Handle } from '@sveltejs/kit'
+import { routes } from '$lib/server/routes'
+
+const handler = toFetchHandler(createApi({ routes }))
+
+export const handle: Handle = ({ event, resolve }) =>
+  event.url.pathname.startsWith('/api/') ? handler(event.request, event.platform) : resolve(event)
+```
+
+A `src/routes/api/[...path]/+server.ts` file works too — export
+`({ request, platform }) => handler(request, platform)` as `GET`/`POST`/… —
+but the hook keeps every contract path in one place.
+
+#### Nitro / Nuxt
+
+```ts
+// server/routes/api/[...].ts (Nuxt) — routes/api/[...].ts (standalone Nitro)
+import { fromWebHandler } from 'h3'
+
+export default fromWebHandler(toFetchHandler(api))
+```
+
+`fromWebHandler` exists in both h3 v1 (Nitro 2 / Nuxt 3) and h3 v2 (Nitro 3 /
+Nuxt 4). Use `server/routes/api/…` rather than `server/api/…`: the latter
+prefixes `/api` itself, which would double the prefix your contracts declare.
+
+#### Elysia
+
+```ts
+const app = new Elysia()
+  .get('/health', () => 'ok')
+  .mount(toFetchHandler(api)) // WinterCG mount — raw Request in, Response out
+  .listen(3000)
+```
+
+#### `node:http`
+
+```ts
+import { createServer } from 'node:http'
+import { toNodeHandler } from '@amritk/api'
+
+createServer(toNodeHandler(api)).listen(3000)
+```
+
+With no `next` callback the adapter is terminal: unmatched paths get the
+pipeline's own 404. Wrap the returned listener to add cross-cutting behavior
+(the fetch adapter's hooks have no counterpart here).
+
+#### Express
+
+```ts
+const app = express()
+
+app.use(toNodeHandler(api)) // unmatched paths fall through to the rest of the app
+app.get('/legacy/report', legacyReport)
+
+app.listen(3000)
+```
+
+Called as middleware, the adapter checks `api.matches` first and calls `next()`
+when nothing matches, so mounting it early costs unmatched routes one map
+lookup. You do **not** need `express.json()` — the pipeline parses and
+validates declared bodies itself — but an app-wide parser is safe: the adapter
+detects the already-drained stream and reads what the parser left on
+`req.body` instead of hanging.
+
+Mounting under a prefix works too — `app.use('/api', toNodeHandler(api))` —
+because Express strips the mount path from `req.url` before the handler sees
+it, so contracts stay written as `/users/{id}`.
+
+Express 5 changed wildcard syntax: a catch-all is `'/api/auth/*splat'`, not
+`'/api/auth/*'`, which now throws at registration.
+
+#### Fastify
+
+Fastify routes before it runs hooks, so the adapter attaches as a global
+`onRequest` hook — the last point where the body stream is still untouched by
+Fastify's content-type parser. `reply.hijack()` hands the socket over so
+Fastify will not also try to answer:
+
+```ts
+const nodeHandler = toNodeHandler(api)
+
+app.addHook('onRequest', async (request, reply) => {
+  const path = request.url.split('?')[0] ?? '/'
+  // Not ours — returning lets Fastify's router, hooks, and 404 handler take over.
+  if (!api.matches(request.method, path)) return
+  reply.hijack()
+  void nodeHandler(request.raw, reply.raw)
+})
+
+app.get('/health', async () => ({ ok: true }))
+```
+
+Global `onRequest` hooks run even when Fastify's own router has no match, which
+is what lets contracts serve paths Fastify never heard of. `void` is safe here:
+the adapter never rejects — it answers a 500 while the status line is unsent,
+and destroys the socket once bytes are on the wire. Requests handled this way
+bypass Fastify's router, per-route hooks, and serializer by design; its
+`onRequest` hooks registered *before* this one still run, which is where
+Fastify-side CORS and rate limits belong.
+
+#### Koa
+
+Koa has no router of its own, so the adapter is just middleware — but
+`ctx.respond = false` is required, or Koa overwrites the reply after the
+adapter has already written it:
+
+```ts
+const nodeHandler = toNodeHandler(api)
+
+app.use(async (ctx, next) => {
+  if (!api.matches(ctx.method, ctx.path)) {
+    await next()
+    return
+  }
+  ctx.respond = false
+  await nodeHandler(ctx.req, ctx.res)
+})
+```
+
+#### NestJS
+
+On the default Express platform the adapter is ordinary middleware:
+
+```ts
+// main.ts
+const app = await NestFactory.create(AppModule)
+app.use(toNodeHandler(api))
+await app.listen(3000)
+```
+
+On `FastifyAdapter`, use the [Fastify recipe](#fastify) against
+`app.getHttpAdapter().getInstance()`.
+
+#### Anything else
+
+Writing an adapter is ~15 lines: construct one
 [`ApiRequest`](./src/types.ts) per incoming request and serialize the
-`ApiResponse` that `api.handle` resolves with.
+`ApiResponse` that `api.handle` resolves with. If the host already speaks
+`Request`/`Response`, `toFetchHandler` is that adapter;
+[`fetchToNodeHandler`](#production-the-compiled-engine) goes the other way,
+running a fetch handler (including a compiled module's `fetch` export) on
+`node:http`.
 
 ### Options (`createApi`)
 
@@ -1662,12 +1976,13 @@ Workers stack, on the same three routes, on all three runtimes this package
 targets. Reproduce with `bun run bench:workerd`, `bun run bench:vs` (Node), or
 `bun run bench:vs:bun`.
 
-Every table below was re-measured together on one machine (Bun 1.3.11 /
-Node 22, Linux x64, workerd 1.20260722), after the pipeline changes described
-below. That machine is slower than the one earlier revisions of this table were
-taken on — bare Hono reads ~148k ops/s on Node here against ~173k there — so
-the absolute numbers sit lower across every column at once. Compare columns
-within a table, not against a figure you remember.
+Every table below was re-measured together on one machine (Bun 1.4.0 /
+Node 22.22, Linux x64, workerd 1.20260730). Both the box and the runtimes differ
+from the ones earlier revisions were taken on, and Bun 1.4 in particular made
+web-standard `Request`/`Response` construction far cheaper — bare Hono reads
+~503k ops/s on Bun here against ~185k on the previous revision — so the whole Bun
+column moved for reasons that have nothing to do with this package. Compare
+columns within a table, not against a figure you remember.
 
 Under **workerd**, the runtime `compileToModule` exists for, measured inside a
 real isolate (Miniflare, one fresh isolate per cell) rather than in a stand-in
@@ -1676,17 +1991,17 @@ isolates differ from one another by more than trials within one isolate do:
 
 | case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
 |:--|--:|--:|--:|--:|
-| static GET | ~104k ops/s ¹ | ~98k | ~93k | **~105k** |
-| dynamic GET, params validated | ~93k ¹ | ~65k | ~69k | **~104k** |
-| POST, body validated | **~31k** ¹ | ~25k | ~25k | ~29k |
+| static GET | **~136k ops/s** ¹ | ~132k | ~62k | ~110k |
+| dynamic GET, params validated | **~117k** ¹ | ~68k | ~58k | ~98k |
+| POST, body validated | **~34k** ¹ | ~28k | ~25k | ~29k |
 
 Under **Node/V8** — the same engine workerd runs, without workerd around it:
 
 | case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
 |:--|--:|--:|--:|--:|
-| static GET | ~148k ops/s ¹ | ~143k | ~109k | **~151k** |
-| dynamic GET, params validated | **~123k** ¹ | ~58k | ~81k | **~123k** |
-| POST, body validated | **~53k** ¹ | ~43k | ~36k | ~46k |
+| static GET | **~164k ops/s** ¹ | ~152k | ~112k | ~155k |
+| dynamic GET, params validated | **~137k** ¹ | ~62k | ~80k | ~124k |
+| POST, body validated | **~56k** ¹ | ~48k | ~40k | ~53k |
 
 Under **Bun/JavaScriptCore**, where web-standard `Request`/`Response` objects
 are far cheaper to build than undici's and more of the difference is the
@@ -1694,9 +2009,9 @@ framework rather than the runtime:
 
 | case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
 |:--|--:|--:|--:|--:|
-| static GET | ~185k ops/s ¹ | ~159k | ~272k | **~349k** |
-| dynamic GET, params validated | ~144k ¹ | ~61k | ~145k | **~245k** |
-| POST, body validated | **~146k** ¹ | ~80k | ~100k | ~131k |
+| static GET | ~503k ops/s ¹ | ~518k | ~418k | **~561k** |
+| dynamic GET, params validated | **~393k** ¹ | ~143k | ~210k | ~348k |
+| POST, body validated | **~224k** ¹ | ~149k | ~140k | ~195k |
 
 <sub>¹ hono-bare does no validation; every @amritk/api column validates, and
 the runtime column validates responses too (`validateResponses: true`, the
@@ -1705,16 +2020,26 @@ every case before it is timed.</sub>
 
 Read the ratios, not the absolutes. Against the like-for-like column —
 `hono + zod`, the other stack that actually validates — the compiled engine
-leads every case on Bun (1.6–4.0×), Node (1.1–2.1×), and workerd (1.1–1.6×),
-widest wherever params and query have to be coerced and checked. Against
-*unvalidated* Hono it leads the GET cases on Bun (1.7–1.9×) and on workerd
-(1.0–1.1×), matches on Node's, and trails on the POST case everywhere
-(0.87–0.94×) — that case is dominated by reading and parsing the body, which
-every column pays and none of the compiler's work removes. The runtime
-(development) engine — no build step, response validation on — now lands level
-with `hono + zod` under workerd (0.95–1.06×), well above it on Bun
-(1.25–2.38×), and mixed on Node, where it trails on the static GET and the POST
-but leads the dynamic one (0.76–1.40×).
+leads on Bun (1.1–2.4×) and on Node (1.0–2.0×), and is mixed under workerd
+(0.83–1.44×): widest wherever params and query have to be coerced and checked,
+narrowest (and on workerd, behind) on the static GET, where there is no
+validation work to win back.
+
+Against *unvalidated* Hono it now leads only Bun's static GET (1.12×) and trails
+everywhere else — 0.87–0.89× on Bun's other two cases, 0.91–0.95× across Node,
+0.81–0.85× across workerd. That is a change from the previous revision, which
+had it level with or ahead of bare Hono on the GET cases, and the cause is the
+runtimes rather than this package: bare Hono skips the validation every other
+column performs, and it now skips it fast enough that compiling the validation
+away no longer closes the gap. The POST case still trails everywhere for the
+older reason — it is dominated by reading and parsing the body, which every
+column pays and none of the compiler's work removes.
+
+The runtime (development) engine — no build step, response validation on — lands
+at 0.81–1.47× of `hono + zod` on Bun, 0.74–1.29× on Node, and 0.47–0.89× under
+workerd. Its workerd static-GET cell is also the least trustworthy number in
+these tables: the five isolates spread from 31k to 88k around a 62k median,
+which is the pause behaviour described next rather than a throughput figure.
 
 **On the pauses this table used to warn about.** An earlier revision reported
 that workerd stalled the `@amritk/api` columns far more often than Hono, and
@@ -1723,9 +2048,9 @@ wrong, and measuring it is what found the real defect. `bun run
 bench:workerd:allocations` reads the isolate's heap over the inspector either
 side of a run of exactly N requests and regresses the delta against N; on the
 static GET the compiled engine allocated **852 bytes per request against bare
-Hono's 1220**, and turned a batch of 2048 requests around *faster* than Hono.
-It allocated less and ran quicker, then periodically got stopped — so volume
-was never the story.
+Hono's 1220** at the time, and turned a batch of 2048 requests around *faster*
+than Hono. It allocated less and ran quicker, then periodically got stopped —
+so volume was never the story.
 
 The cause was two allocations of the wrong *kind*, both ours. Both engines
 built their per-request object with `signal: request.signal`, read eagerly;
@@ -1735,8 +2060,10 @@ behind a getter fixed that and exposed the second: an *own* accessor pushes
 the object out of V8's in-object slots, taking the compiled engine from 852 to
 1276 bytes per request. Inheriting the getter from a shared prototype keeps
 the deferral and gives the layout back. The compiled engine now allocates
-**816 bytes per request and stalls on 0 of 60 batches**, matching both Hono
-columns, where before it stalled on 5 and lost 29% of its wall clock to them.
+**816 bytes per request against both Hono columns' 1196**, and its slow batches
+have stopped standing out: p95 sits at **1.11× its median**, tighter than bare
+Hono's 1.16× and `hono + zod`'s 1.31×, where before it stalled on 5 batches in
+60 and lost 29% of its wall clock to them.
 
 The runtime engine had a second, unrelated cost: it ran the whole request
 through an `async` pipeline even when nothing in it suspended. A route with no
@@ -1744,23 +2071,25 @@ declared body, no `refine`, no context factory, no guards, and a synchronous
 handler never needs to yield, and the frame and promise were pure overhead.
 `Api.handle` now returns `ApiResponse | Promise<ApiResponse>` and the pipeline
 stays synchronous until something genuinely asynchronous appears. On the static
-GET that took it from 2115 to 1510 bytes per request and from ~69k to ~93k
-ops/s — from 0.80× bare Hono to level with it.
+GET that took it from 2115 to 1510 bytes per request, and from ~69k to ~93k
+ops/s on the machine that change was measured on. It still allocates 1510 bytes
+per request here.
 
 What that did *not* fix is the pause. The runtime engine's batch times under
-workerd are still bimodal: a p95 around 3.3× its median, a discrete ~40 ms
-event rather than a broad spread. Removing the async machinery did not move it
-and neither did turning response validation off, so it is a major collection
-driven by something still unaccounted for. The compiled engine — the production
-path — does not show it, and its p95 sits within a few percent of its median.
+workerd are still bimodal: a p95 around **2.6× its median** (86 ms against
+33 ms), a discrete event rather than a broad spread, and the same instability
+shows up as the 31k–88k spread across isolates in its static-GET cell above.
+Removing the async machinery did not move it and neither did turning response
+validation off, so it is a major collection driven by something still
+unaccounted for. The compiled engine — the production path — does not show it.
 That one is open work, and the medians above are what to plan against.
 
 One more thing the measurements settled. The body read is the POST case's
 dominant cost, and `bun run bench:workerd:body` compares four ways of doing it,
 paired inside each round so machine drift cancels. Reading through workerd's
-native `text()` and parsing in JS is worth 1.20–1.23× over the `arrayBuffer` +
+native `text()` and parsing in JS is worth 1.22× over the `arrayBuffer` +
 `TextDecoder` route both engines take today; native `json()`, which is what
-Hono uses, is worth only 1.11–1.12× — it loses to `text()` plus a JS parse.
+Hono uses, is worth only 1.11× — it loses to `text()` plus a JS parse.
 Neither is free: the engines buffer bytes so that `readBody`, `readText`, and
 `readBytes` all stay available on the same request, which is what a webhook
 handler verifying an HMAC over the exact bytes needs, and a native read
@@ -2056,7 +2385,8 @@ const handler = toFetchHandler(api, {
 const workerHandler = toFetchHandler(api, {
   mounts: { '/api/auth': (request, env) => makeAuth(env as Env).handler(request) },
 })
-// Express instead: app.all('/api/auth/*', toNodeHandler(auth)); app.use(toNodeHandler(api))
+// Express instead: app.all('/api/auth/*splat', toNodeHandler(auth)); app.use(toNodeHandler(api))
+// (Express 4: '/api/auth/*' — the bare '*' throws under Express 5's path parser.)
 // Compiled: compileToModule({ ..., mounts: { '/api/auth': 'authMountHandler' } })
 ```
 
