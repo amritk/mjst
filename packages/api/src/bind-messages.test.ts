@@ -113,6 +113,30 @@ describe('bindMessages', () => {
     expect(await next(channel.messages)).toEqual({ type: 'say', text: 'hi' })
   })
 
+  it('asks for arraybuffer frames where the socket lets it', () => {
+    // Deno's WHATWG socket defaults to 'blob', and a Blob converts to bytes
+    // only asynchronously — which the message listener cannot await — so every
+    // binary frame would have reached the app as an empty buffer.
+    const socket: BindableSocket & { binaryType: string } = {
+      binaryType: 'blob',
+      send: () => {},
+      close: () => {},
+    }
+    bindMessages(chat, socket)
+    expect(socket.binaryType).toBe('arraybuffer')
+  })
+
+  it('survives a socket whose binaryType is read-only', () => {
+    const socket = { send: () => {}, close: () => {} } as BindableSocket
+    Object.defineProperty(socket, 'binaryType', {
+      get: () => 'blob',
+      set: () => {
+        throw new TypeError('read-only')
+      },
+    })
+    expect(() => bindMessages(chat, socket)).not.toThrow()
+  })
+
   it('still closes when onInvalid throws', () => {
     // The hook runs inside a socket's message listener, where a throw has
     // nowhere to go — it escaped before the close/ignore decision, so nothing

@@ -1302,7 +1302,7 @@ void (async () => {
     // message is { type: 'say'; text: string } — narrowed, already validated
     if (message.type === 'say') channel.send({ type: 'said', from: user, text: message.text })
   }
-})()
+})().catch(report) // the iterator rejects when the transport fails — catch, or it is unhandled
 
 return reply
 ```
@@ -1322,7 +1322,7 @@ Bun.serve({
       ws.data.channel = bindMessages(chatMessages, ws)
       void (async () => {
         for await (const message of ws.data.channel.messages) handle(ws.data.room, message)
-      })()
+      })().catch(report)
     },
     message: (ws, raw) => ws.data.channel.accept(raw),
     close: (ws) => ws.data.channel.end(),

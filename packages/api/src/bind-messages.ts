@@ -13,6 +13,8 @@ export type BindableSocket = {
   close: (code?: number, reason?: string) => unknown
   /** Present on workerd and Deno sockets, absent on Bun's. See {@link bindMessages}. */
   addEventListener?: (type: string, listener: (event: never) => void) => void
+  /** How binary frames are delivered. Set to `'arraybuffer'` when present — see {@link bindMessages}. */
+  binaryType?: string
 }
 
 /**
@@ -68,7 +70,7 @@ export type ServerMessageChannel<M extends AnyMessagesContract> = {
  *   for await (const message of channel.messages) {
  *     if (message.type === 'say') channel.send({ type: 'said', from: user, text: message.text })
  *   }
- * })()
+ * })().catch(report) // the iterator rejects when the transport fails
  *
  * return reply
  * ```
@@ -85,7 +87,7 @@ export type ServerMessageChannel<M extends AnyMessagesContract> = {
  *       ws.data.channel = bindMessages(chatMessages, ws)
  *       void (async () => {
  *         for await (const message of ws.data.channel.messages) handle(ws.data.room, message)
- *       })()
+ *       })().catch(report)
  *     },
  *     message: (ws, raw) => ws.data.channel.accept(raw),
  *     close: (ws) => ws.data.channel.end(),
@@ -119,6 +121,18 @@ export const bindMessages = <const M extends AnyMessagesContract>(
   const endAll = (error?: unknown): void => {
     queue.end(error)
     binary.end(error)
+  }
+
+  // Deno's WHATWG socket defaults to `'blob'`, and a Blob only converts to
+  // bytes asynchronously — which this listener cannot await — so every binary
+  // frame would reach the app as an empty buffer, silently. `connectRealtime`
+  // sets this on the client half for the same reason; leaving it unset here
+  // made the two ends of `channel.binary` disagree. Guarded because some
+  // runtimes expose the property read-only.
+  try {
+    if (socket.binaryType !== undefined && socket.binaryType !== 'arraybuffer') socket.binaryType = 'arraybuffer'
+  } catch {
+    // Read-only or unsupported; `toBytes` still handles what does arrive.
   }
 
   if (socket.addEventListener !== undefined) {
