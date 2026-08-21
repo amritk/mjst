@@ -64,12 +64,23 @@ const globSource = (glob: string, braces: boolean): string => {
       if (close === -1) return source + globSource(glob.slice(i), false)
       const body = glob.slice(i + 1, close)
       const options = splitTopLevel(body)
-      source +=
-        options.length === 1
-          ? // No alternation — keep the braces as literal characters.
-            `\\{${globSource(body, false)}\\}`
-          : `(?:${options.map((option) => globSource(option, true)).join('|')})`
-      i = close
+      if (options.length === 1) {
+        // No alternation — keep the braces as literal characters.
+        source += `\\{${globSource(body, false)}\\}`
+        i = close
+        continue
+      }
+      // A `/` right after the group is folded into every option instead of
+      // being emitted after it. `**` only collapses to `(?:.*/)?` when it can
+      // see the slash that follows, and compiling each option in isolation
+      // hides it — so `{**,dist}/x.yaml` produced `(?:.*|dist)/x\.yaml`, which
+      // demands a slash and no longer matched `x.yaml`, though the expansion
+      // this replaced (`**/x.yaml`) did. Folding gives each option its own
+      // answer: `**/` collapses, `dist/` keeps its literal slash.
+      const followedBySlash = glob[close + 1] === '/'
+      const compile = (option: string): string => globSource(followedBySlash ? `${option}/` : option, true)
+      source += `(?:${options.map(compile).join('|')})`
+      i = followedBySlash ? close + 1 : close
       continue
     }
     if (char === '*') {

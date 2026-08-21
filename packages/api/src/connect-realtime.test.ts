@@ -13,6 +13,7 @@ const fakeWebTransport = (behaviour: 'open' | 'reject' | 'hang') => {
   const toServer = new TransformStream<Uint8Array, Uint8Array>()
   const toClient = new TransformStream<Uint8Array, Uint8Array>()
   const urls: string[] = []
+  let live: Fake | undefined
 
   class Fake implements WebTransportLike {
     readonly ready: Promise<void>
@@ -21,6 +22,7 @@ const fakeWebTransport = (behaviour: 'open' | 'reject' | 'hang') => {
 
     constructor(url: string) {
       urls.push(url)
+      live = this
       this.ready =
         behaviour === 'open'
           ? Promise.resolve()
@@ -42,6 +44,7 @@ const fakeWebTransport = (behaviour: 'open' | 'reject' | 'hang') => {
   return {
     Fake,
     urls,
+    current: () => live,
     /** Sends a framed message from the "server" to the client. */
     serverSend: async (message: RealtimeMessage) => {
       const writer = toClient.writable.getWriter()
@@ -69,6 +72,7 @@ const fakeWebSocket = (behaviour: 'open' | 'refuse' | 'hang') => {
   const urls: string[] = []
   const sent: unknown[] = []
   let live: Fake | undefined
+  const state = { closed: false }
 
   class Fake implements WebSocketLike {
     binaryType = 'blob'
@@ -87,7 +91,10 @@ const fakeWebSocket = (behaviour: 'open' | 'refuse' | 'hang') => {
     send = (data: unknown) => {
       sent.push(data)
     }
-    close = () => this.emit('close', { code: 1000 })
+    close = () => {
+      state.closed = true
+      this.emit('close', { code: 1000 })
+    }
     addEventListener = (type: string, listener: (event: never) => void) => {
       const existing = this.listeners.get(type) ?? []
       existing.push(listener as (event: unknown) => void)
@@ -98,7 +105,15 @@ const fakeWebSocket = (behaviour: 'open' | 'refuse' | 'hang') => {
     }
   }
 
-  return { Fake, urls, sent, current: () => live }
+  return {
+    Fake,
+    urls,
+    sent,
+    current: () => live,
+    get closed() {
+      return state.closed
+    },
+  }
 }
 
 const nextMessage = async (messages: AsyncIterableIterator<RealtimeMessage>): Promise<RealtimeMessage | undefined> =>
@@ -282,5 +297,60 @@ describe('connect-realtime', () => {
         signal: AbortSignal.abort(new Error('caller gave up')),
       }),
     ).rejects.toThrow(/caller gave up/)
+  })
+
+  it('closes a WebTransport session the deadline abandoned', async () => {
+    // Without this the session keeps connecting, may open, and stays open
+    // unread — one leaked session per fallback attempt, on the transport that
+    // is tried first and whose deadline exists precisely for hung QUIC.
+    const transport = fakeWebTransport('hang')
+    const socket = fakeWebSocket('open')
+    await connectRealtime({
+      url: 'https://api.example.com/ws/lobby',
+      connectTimeoutMs: 5,
+      webTransport: transport.Fake,
+      webSocket: socket.Fake,
+    })
+    expect(transport.current()?.closeCalls).toBe(1)
+  })
+
+  it("claims a WebTransport session's closed promise even when the attempt fails", async () => {
+    // `closed` rejects when the session dies. On the throw path the return
+    // object that would have handled it is never built, so the rejection was
+    // unhandled — a crash in Node, a console error in a browser.
+    let rejectClosed: (error: unknown) => void = () => undefined
+    class Hanging implements WebTransportLike {
+      readonly ready = new Promise<void>(() => undefined)
+      readonly closed = new Promise<unknown>((_, reject) => {
+        rejectClosed = reject
+      })
+      createBidirectionalStream = () => Promise.reject(new Error('never'))
+      close = () => undefined
+    }
+    const socket = fakeWebSocket('open')
+    await connectRealtime({
+      url: 'https://api.example.com/ws/lobby',
+      connectTimeoutMs: 5,
+      webTransport: Hanging,
+      webSocket: socket.Fake,
+    })
+    // Would surface as an unhandled rejection if nothing had claimed it.
+    rejectClosed(new Error('session died'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+
+  it('closes a WebSocket the deadline abandoned', async () => {
+    // The abort listener that would close it is registered only after the
+    // await, so a timed-out handshake left the socket connecting.
+    const socket = fakeWebSocket('hang')
+    await expect(
+      connectRealtime({
+        url: 'wss://api.example.com/ws/lobby',
+        transports: ['websocket'],
+        connectTimeoutMs: 5,
+        webSocket: socket.Fake,
+      }),
+    ).rejects.toThrow(/no transport connected/)
+    expect(socket.closed).toBe(true)
   })
 })

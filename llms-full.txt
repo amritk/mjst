@@ -67,7 +67,7 @@ Install: `bun add -d @amritk/mjst` (or `npx mjst …`).
 
 Contract-first, framework-agnostic HTTP API layer: declare each route once as
 JSON Schema and get a typed handler, runtime request/response validation,
-OpenAPI 3.1, and a derived typed client. Fast path for an LLM; full reference is
+OpenAPI 3.2, and a derived typed client. Fast path for an LLM; full reference is
 [README.md](./README.md).
 
 > Pre-alpha: breaking changes land in **minor** versions. ESM-only (no CJS

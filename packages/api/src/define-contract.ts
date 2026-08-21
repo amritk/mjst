@@ -1,3 +1,4 @@
+import type { AnyMessagesContract } from './message-contracts'
 import type { Contract, ResponseContracts } from './types'
 
 /**
@@ -39,6 +40,7 @@ export const defineContract = <
   const Headers = undefined,
   const Cookies = undefined,
   const Responses extends ResponseContracts = ResponseContracts,
+  const Messages extends AnyMessagesContract = AnyMessagesContract,
 >(
-  contract: Contract<Params, Query, Body, Headers, Cookies, Responses>,
-): Contract<Params, Query, Body, Headers, Cookies, Responses> => contract
+  contract: Contract<Params, Query, Body, Headers, Cookies, Responses, Messages>,
+): Contract<Params, Query, Body, Headers, Cookies, Responses, Messages> => contract

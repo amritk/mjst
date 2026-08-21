@@ -90,8 +90,11 @@ describe('client', () => {
 
   it('keeps the transitive import graph free of node built-ins and server modules', () => {
     const { files, externals } = walkImportGraph('client')
-    // The only external is the (type-only) schema-inference import; anything
-    // else — above all a `node:` built-in — would break browser bundles.
+    // The only external is the validator package — type-only for schema
+    // inference, and a real import for `connectMessages`, which validates
+    // inbound frames in the browser. It is eval-free and depends on no
+    // `node:` built-in, so it bundles; anything else here — above all a
+    // `node:` built-in — would break browser bundles.
     expect(externals).toEqual(['@amritk/runtime-validators'])
     // The exact reachable set, so a new import that pulls in the server half
     // of the package shows up as a diff here rather than as a bundler warning.
@@ -100,6 +103,7 @@ describe('client', () => {
       'build-param-path.ts',
       'client-errors.ts',
       'client.ts',
+      'connect-messages.ts',
       'connect-realtime.ts',
       'create-bearer-session.ts',
       'create-client.ts',
@@ -110,8 +114,11 @@ describe('client', () => {
       'decode-jwt-expiry.ts',
       'define-contract.ts',
       'form-body-serializer.ts',
+      'message-channel.ts',
+      'message-contracts.ts',
       'multipart-body-serializer.ts',
       'realtime-framing.ts',
+      'sse-item-schema.ts',
       'to-search-params.ts',
       'types.ts',
     ])

@@ -39,8 +39,16 @@ const STRIP_TOP_LEVEL = new Set(['summary', 'description', 'tags', 'operationId'
 /** Request slots the client only echoes values into — their schemas are server freight. */
 const STRIP_REQUEST = new Set(['params', 'query', 'headers', 'cookies'])
 
-/** Response fields only OpenAPI generation and server-side validation read. */
-const STRIP_RESPONSE = new Set(['description', 'headers'])
+/**
+ * Response fields only OpenAPI generation and server-side validation read.
+ *
+ * `itemSchema` is here for the same reason `description` and `headers` are: it
+ * is documentation-only by construction — adapters pass a stream through
+ * untouched, so nothing validates against it at runtime — and an SSE envelope
+ * plus its payload schema is exactly the kind of freight that scales with route
+ * count and never reaches the browser.
+ */
+const STRIP_RESPONSE = new Set(['description', 'headers', 'itemSchema'])
 
 /**
  * Characters after which a `/` starts a regex literal rather than division.

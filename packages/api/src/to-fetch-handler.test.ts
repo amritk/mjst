@@ -86,7 +86,7 @@ describe('to-fetch-handler', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toContain('application/json')
     const document = (await response.json()) as { openapi: string }
-    expect(document.openapi).toBe('3.1.0')
+    expect(document.openapi).toBe('3.2.0')
   })
 
   it('serves the OpenAPI document with an etag and honors if-none-match with a 304', async () => {

@@ -23,7 +23,7 @@ mjst already contains every hard piece; none of them knows about HTTP yet:
 | Handler typing from a schema literal | `FromSchema` (type-level mirror of the interpreter) |
 | Maximum steady-state throughput | `@amritk/generate-validators` build-time codegen |
 | Schemas authored in Zod/TypeBox/Valibot/Effect | `@amritk/adapters` |
-| OpenAPI documents | **free**: OpenAPI 3.1's schema dialect *is* JSON Schema Draft 2020-12, so contract schemas embed verbatim |
+| OpenAPI documents | **free**: OpenAPI 3.1+'s schema dialect *is* JSON Schema Draft 2020-12, so contract schemas embed verbatim |
 
 So the framework is a thin composition layer: a route contract type, a
 startup compiler, a request pipeline, an OpenAPI projector, and per-framework
@@ -125,7 +125,7 @@ far above what a single Node/Bun process serves in practice.
 
 ## OpenAPI generation
 
-`toOpenApi(routes, info)` projects contracts into a 3.1 document:
+`toOpenApi(routes, info)` projects contracts into a 3.2 document:
 
 - `path` strings are already OpenAPI templates — no rewriting.
 - `params` / `query` object schemas unroll into per-property Parameter
@@ -260,12 +260,14 @@ both engines (every feature below is exercised by the differential test):
 - **Header schemas.** `request.headers` validates like params/query (declared
   names only, string coercion, `source: 'headers'` failures) and unrolls into
   `in: 'header'` OpenAPI parameters.
-- **Typed client via Hey API.** The OpenAPI document is verified as
-  [openapi-ts](https://heyapi.dev) input: `hey-api-client.test.ts` generates
-  a fetch SDK from `toOpenApi` output and asserts the contract's types come
-  through (typed path params, required headers, per-status responses). This
-  replaces framework-coupled RPC clients (Hono's `hc`) — the client is
-  generated from the same schemas that validate requests.
+- **Typed client.** `createClient` derives its types from the contracts
+  directly — no codegen, no generated artifact to keep in sync — replacing
+  framework-coupled RPC clients (Hono's `hc`). External consumers, who cannot
+  import the contracts, generate from the served document instead. (A
+  `hey-api-client.test.ts` once pinned the document as openapi-ts input; it
+  was dropped alongside the move to 3.2 rather than pinning the document's
+  version to one generator's support. The generator was never a dependency of
+  this package — only of that test.)
 
 ## Shipped: release hardening (2026-07, second pass)
 
@@ -284,7 +286,7 @@ both engines (every feature below is exercised by the differential test):
   params+query case went **~355k → ~519k ops/s (+46%)**; other cases
   unchanged.
 - **README.** `packages/api/README.md` now covers the full surface with
-  integration recipes (Drizzle, Better Auth, Sentry, Hey API) — the
+  integration recipes (Drizzle, Better Auth, Sentry) — the
   integration philosophy is *recipes over plugins*: the core keeps its single
   dependency and third parties connect through `context`/`mounts`/hooks/
   `onError` seams rather than bundled SDKs.
@@ -321,6 +323,133 @@ in both engines, pinned by the differential corpus:
   `fetchToNodeHandler` bridge, and the `mjst compile-api` CLI subcommand.
 - **Bundler**: esbuild + Rollup strip plugins; line-preserving transform.
 - **CORS**: setup-time throw on `'*'` + credentials.
+
+## Shipped: OpenAPI 3.2 (2026-08)
+
+The document now declares `openapi: '3.2.0'`. The schema dialect is unchanged
+— 3.2 still embeds Draft 2020-12 verbatim — so nothing about how contracts
+project had to move; what 3.2 adds is vocabulary this package had no way to
+express before.
+
+- **`itemSchema` on a response contract.** Sequential media types
+  (`text/event-stream`, `application/jsonl`, `application/json-seq`,
+  `multipart/mixed`) can now document *one item* of the stream rather than
+  only its media type, which is what a consumer reading it incrementally
+  needs. It sits beside `schema` in the media type object, and both may be
+  declared. Documentation only, like a `body` schema on a raw status — the
+  adapters pass the stream through untouched — but it takes part in
+  `components.schemas` hoisting like any other schema.
+- **`sseItemSchema(dataSchema, options?)`.** For SSE the item is the event
+  *envelope* (`event`, `id`, `data`, `retry`) with the payload inside `data`,
+  not the payload itself. This builds that envelope so the wrapper is not
+  hand-written per route: `data` is typed as the schema given, a named stream
+  pins `event` as a `const`, and neither `data` nor `id` is required (a
+  keep-alive frame carries no data).
+- **openapi-ts dropped.** `hey-api-client.test.ts` and the
+  `@hey-api/openapi-ts` devDependency are gone. It was never a dependency of
+  the package — only a test asserting the document was valid generator input —
+  and holding the document at 3.1 to keep one generator happy is the wrong
+  trade when `createClient` already covers the first-party path from contracts
+  with no codegen at all. External consumers still generate from the served
+  document with whatever tooling they use.
+
+Not covered by 3.2, and still open: **WebSocket messages.** `itemSchema` is
+one schema, one direction, on a response body; a socket needs two independent
+flows and a discriminated union of message types per direction, and OpenAPI
+has no vocabulary for either. See the realtime note in the roadmap.
+
+## Shipped: realtime message contracts (2026-08)
+
+The handshake was already contract-covered; the contract now covers the rest of
+the conversation. `messages` on a route contract (or a standalone
+`defineMessages`) declares what flows over the connection, and one declaration
+drives both ends: `bindMessages` on the server, `connectMessages` on the client.
+
+What a socket needs said that a request/response contract cannot say is
+**direction** and **message identity**. HTTP answers both structurally — a
+request is a request, `method + path` names the operation — while a socket
+carries two independent flows of interchangeable frames.
+
+- **Directions are named for their endpoints**, `clientToServer` /
+  `serverToClient`, not `send`/`receive` or `inbound`/`outbound`. The same
+  declaration is read from both ends, and every reader-relative name inverts
+  between them. AsyncAPI renamed its `publish`/`subscribe` pair in 3.0 over
+  exactly this.
+- **A discriminator is mandatory, defaulting to `type`.** AsyncAPI lists a
+  channel's possible messages and stops; code cannot, because "validate against
+  one of five schemas" has no answer for which failure to report when none
+  match. The declared schema describes the *payload*, and the tag is not part
+  of it: it is read to select the message, then removed before the payload is
+  validated. An earlier design folded the tag into a copy of the schema
+  instead, which held only for a plain object schema — a `$ref`, or an `allOf`
+  branch carrying `additionalProperties: false`, closes over properties this
+  layer cannot reach, so the injected tag was rejected by the very schema it
+  was injected into and a valid frame closed the socket. No
+  schema-level trick fixes that, since a closed subschema will always refuse an
+  extra property, so the tag stays out of the payload entirely and the cost is
+  one shallow copy per inbound frame. A schema declaring the discriminator
+  itself is refused at setup time, being unsatisfiable.
+- **Invalid frames close with 4007** and a one-line reason, truncated to RFC
+  6455's 123-byte budget *on a UTF-8 boundary* — overrunning it or splitting a
+  character makes implementations throw, turning a clean close into an
+  exception. The code is *not* RFC 6455's own 1007 ("invalid frame payload
+  data"), which would be the right one: the WHATWG `close()` algorithm reserves
+  the 1xxx codes for the implementation and accepts only 1000 and 3000–4999
+  from a caller, so on Workers and Deno — which expose that interface for a
+  server-role socket — closing with 1007 threw from inside the message
+  listener, after the queues had ended, leaving the socket open and every later
+  frame silently swallowed. The call is also wrapped, so a code some runtime
+  still refuses costs the reason rather than the close. `onInvalid` sees every
+  refusal (`malformed` / `binary` / `unknown-type` / `invalid-payload`) and can
+  return `'ignore'`.
+- **Binary frames default to `ignore`, not `close`.** Nothing in a JSON
+  contract describes them, but a peer may legitimately send them alongside
+  contract messages; closing would make the two uses exclusive. They reach
+  `channel.binary` behind an explicit `receiveBinary` flag — not the underlying
+  connection, whose iterator the channel drains to feed its own (the queue does
+  not tee, so a documented escape hatch there could never yield), and not a
+  first-read subscription, which loses the race against frames that arrive as
+  soon as the connection opens. The queue is unbounded by design, so buffering
+  a stream nobody drains would grow the heap until the connection closed.
+- **`bindMessages` is a wrapper, not a pipeline stage.** A socket outlives the
+  request that created it: by the first frame the handler has returned and the
+  `ApiRequest` is gone, and on Bun the message handler is not even in the same
+  function. `accept(raw)` is the portable ingest seam; sockets with
+  `addEventListener` (Workers, Deno) are wired automatically.
+- **Outbound validation is opt-in** (`validateOutbound`), the trade
+  `validateResponses` already makes.
+- **No OpenAPI representation.** OpenAPI has no vocabulary for a bidirectional
+  message union, so `messages` never reaches the document. It is *not* in the
+  contracts hash either: that fingerprint answers "does this compiled module
+  still match its contracts", and `compileToModule` never emits message
+  schemas — they are read live, like `handler` and `guards`. Hashing them
+  reported a stale module for an edit that cannot stale one.
+- **`messages` is a generic slot on the contract**, not an erased
+  `AnyMessagesContract`. Erased, a route-attached contract does not narrow and
+  `send({ type: 'anything' })` type-checks, failing only at runtime; and an
+  undeclared direction defaults to an empty key set rather than
+  `MessageSchemas`, whose string index signature would make its union
+  `{ type: string }` instead of `never`.
+
+A parallel `defineChannel` DSL was set aside for the reason `protectedRoute`
+was: a second calling convention the typed client cannot keep in sync. The
+seams (context, guards, mounts, `onError`) hang off routes, so channels would
+duplicate them or be second-class. An AsyncAPI *document* projection stays
+deferred — one more projector beside `to-open-api`, addable without touching a
+contract, and AsyncAPI's default dialect is a draft-07 superset rather than
+2020-12, so schemas would not embed verbatim the way OpenAPI's do. (Its
+WebSocket binding is also empty: server, operation and message bindings "MUST
+NOT contain any properties", and the channel binding describes only the HTTP
+handshake — the half already covered here, and covered better, since a route
+contract validates it rather than only documenting it.)
+
+One type-level trap worth recording, because it fails silently: deriving the
+tagged union with the usual `{ [N in keyof S]: … }[keyof S]` lookup does *not*
+force per-key evaluation here. `FromSchema` ends up applied to the union of the
+schemas, every field a message does not share collapses to `never`, and the
+result is one merged object that narrows to nothing — while still passing every
+runtime test, since type assertions are compile-time only. `MessageUnion`
+distributes over the key with an explicit conditional instead.
 
 ## Roadmap / open questions
 

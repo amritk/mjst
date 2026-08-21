@@ -1,3 +1,4 @@
+import type { AnyMessagesContract } from './message-contracts'
 import type { ResponseContracts, RouteContract } from './types'
 
 /**
@@ -31,7 +32,8 @@ export const routeFactory = <Context>() => {
     const Headers = undefined,
     const Cookies = undefined,
     const Responses extends ResponseContracts = ResponseContracts,
+    const Messages extends AnyMessagesContract = AnyMessagesContract,
   >(
-    route: RouteContract<Params, Query, Body, Headers, Cookies, Responses, Context>,
-  ): RouteContract<Params, Query, Body, Headers, Cookies, Responses, Context> => route
+    route: RouteContract<Params, Query, Body, Headers, Cookies, Responses, Context, Messages>,
+  ): RouteContract<Params, Query, Body, Headers, Cookies, Responses, Context, Messages> => route
 }

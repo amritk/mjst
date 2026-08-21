@@ -69,6 +69,11 @@ const contractFields = (contract: HashableContract): Record<string, unknown> => 
             cookies: request.cookies,
           },
     responses: contract.responses,
+    // `messages` is deliberately absent. The fingerprint answers one question —
+    // "does this compiled module still match the contracts it was built from?"
+    // — and `compileToModule` never emits message schemas: they are read live
+    // by `bindMessages`/`connectMessages`, like `handler` and `guards`.
+    // Including them reported a stale module for an edit that cannot stale one.
     guards: contract.guards?.length ?? 0,
     securityGuards: contract.securityGuards?.length ?? 0,
     refine: contract.refine !== undefined,

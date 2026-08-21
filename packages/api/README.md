@@ -3,7 +3,7 @@
 Contract-first, framework-agnostic API layer built on [mjst](../../README.md)'s
 JSON Schema tooling. Declare each route once — method, path, request schemas, response
 schemas, handler — and get typed handlers, fast request/response validation,
-and an OpenAPI 3.1 document with **no extra code**. Two thin adapters connect
+and an OpenAPI 3.2 document with **no extra code**. Two thin adapters connect
 the same API to every JavaScript server framework — Bun, Cloudflare Workers,
 Deno, Hono, Next.js, SvelteKit, Nitro/Nuxt, Elysia (fetch), and `node:http`,
 Express, Fastify, Koa, NestJS (Node) — with a
@@ -11,7 +11,7 @@ Express, Fastify, Koa, NestJS (Node) — with a
 
 - **One contract, everything derived.** The JSON Schemas in a route type the
   handler (via `FromSchema`), validate requests at runtime, and embed verbatim
-  into the OpenAPI document — OpenAPI 3.1's schema dialect *is* JSON Schema
+  into the OpenAPI document — OpenAPI 3.2's schema dialect *is* JSON Schema
   Draft 2020-12, so there is no conversion layer to drift.
 - **Fast by structure.** All schema work (validator preparation, coercion
   planning, path parsing) happens once at startup. Per request: an O(1) map hit
@@ -87,7 +87,7 @@ Against that stack:
 |:--|:--|:--|
 | Declaring a route | a chain — `app.get(path, zValidator('param', schema), handler)` — and the OpenAPI plugin adds a *second* way to declare the same route | one [`defineRoute`](#usage) object: method, path, request schemas, `responses`, handler |
 | Schema language | Zod / Valibot / TypeBox, converted for the document | JSON Schema Draft 2020-12 — or author in [Zod/TypeBox/Valibot/Effect](#schemas-from-zod-typebox-valibot-effect) and convert once, at build time |
-| OpenAPI | a conversion layer between what runs and what is published | OpenAPI 3.1's schema dialect **is** Draft 2020-12, so contract schemas embed verbatim — no conversion to drift |
+| OpenAPI | a conversion layer between what runs and what is published | OpenAPI 3.2's schema dialect **is** Draft 2020-12, so contract schemas embed verbatim — no conversion to drift |
 | Responses | inferred from whatever the handler returned, and usually unvalidated | [declared](#validation-semantics): an undeclared status is a compile error, and `validateResponses` catches shape drift in dev/test |
 | Typed client | `hc` (coupled to the framework) or codegen from the document | [`createClient`](#typed-client-createclient) from the same literals — no codegen, no round-trip, [browser-safe subpath](#typed-client-createclient) |
 | Authorization | middleware, invisible to the document | [`guards`](#guards-authorize-once-declare-the-outcome) can only deny with a status the contract *declares*, so the 401 is in the OpenAPI output and in the client's union |
@@ -338,10 +338,9 @@ if (reply.status === 404) /* declared, typed, no body */;
   export type DemoChatInput = RequestBodyOf<typeof contracts.demoChat>
   ```
 
-The OpenAPI → [Hey API](https://heyapi.dev) route still works for external
-consumers who want a standalone generated SDK (`bunx @hey-api/openapi-ts -i
-http://localhost:3000/openapi.json -o src/client`); `createClient` is the
-lighter path for monorepo-internal frontends.
+For consumers outside the monorepo, the generated OpenAPI document feeds
+whichever SDK generator they already use; `createClient` is the lighter path
+for monorepo-internal frontends, and needs no codegen at all.
 
 #### Browser bundle size: the contract strip
 
@@ -922,6 +921,42 @@ const chat = defineRoute({
 })
 ```
 
+### Streaming responses: documenting each item
+
+A raw `contentType` says what the stream *is*; OpenAPI 3.2's `itemSchema` says
+what each item in it looks like. Declare it on the response contract beside
+`contentType` and it lands in the document next to `schema`:
+
+```ts
+import { sseItemSchema, sseStream } from '@amritk/api'
+
+const tokens = defineRoute({
+  method: 'get',
+  path: '/chat/{id}/stream',
+  request: { params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  responses: {
+    200: {
+      contentType: 'text/event-stream',
+      // One SSE event, not the whole stream.
+      itemSchema: sseItemSchema({ type: 'string' }, { event: 'token' }),
+    },
+  },
+  handler: ({ request }) => ({ status: 200, body: sseStream(stream(), { signal: request.signal }) }),
+})
+```
+
+The sequential media types OpenAPI recognizes are `text/event-stream`,
+`application/jsonl`, `application/json-seq`, and `multipart/mixed`. For the
+JSON-lines family the item is your record, so pass the schema directly
+(`itemSchema: recordSchema`). For SSE the item is the **event envelope** —
+`{ event, id, data, retry }` — with your payload inside `data`, which is what
+`sseItemSchema` builds so you do not hand-write the wrapper at every route.
+
+`itemSchema` is documentation only, exactly like a `body` schema on a raw
+status: adapters pass the stream through untouched, so nothing here is
+validated at runtime. It does take part in `components.schemas` hoisting, so a
+titled event schema shared across routes appears once and is `$ref`erenced.
+
 ### Form and multipart bodies
 
 `bodyType` selects how the declared body schema arrives on the wire — the
@@ -1333,6 +1368,8 @@ changing the request pipeline — so nothing costs anything until you wire it in
 | `withTimeout(ms, handler, onTimeout)` | Wall-clock deadline on one handler; past `ms`, `onTimeout` produces the reply (a status the route declares) and the slow result is discarded. Bounds pipeline occupancy, not work already handed to the platform. | route `handler` |
 | `runAfterResponse(executionContext, task, onError?)` · `createBackground(executionContext, onError?)` | Work that outlives the response — registered through `waitUntil` where the platform has it (Workers), detached elsewhere. A rejected task goes to `onError` instead of becoming an unhandled rejection. | `executionContext` |
 | `sseStream(source, options?)` · `formatSse(event)` | Server-Sent Events as a streaming body for a raw `contentType` route. | `contentType` reply |
+| `sseItemSchema(dataSchema, options?)` | Builds the `itemSchema` for a `text/event-stream` response — wraps a payload schema in the SSE event envelope. | response contract |
+| `defineMessages(contract)` · `bindMessages(contract, socket, options?)` · `connectMessages(contract, options)` | Typed, validated messages over a realtime connection — one declaration, both ends. | after the 101 |
 | `streamMultipart(body, contentType, options?)` · `multipartBoundary(contentType)` | Async-iterate multipart parts off the raw body stream instead of buffering the whole upload. | `request.raw` |
 | `negotiateMediaType(accept, offers)` · `parseAccept(header)` | Server-driven content negotiation with RFC 9110 media-range specificity and `q=0` handling. | handler |
 | `createStatic(options)` · `resolveStaticPath(options)` | Static files from a document root, with content types, `etag`/`last-modified`, conditional `304`s, and HEAD. Path resolution rejects the percent-encoded traversals that survive client normalization, and denies dotfiles by default. Reading is injected, since no one filesystem call works on Bun, Node, and Workers alike. | `onRequest` |
@@ -1525,6 +1562,157 @@ handler: ({ params }) => {
   return reply
 }
 ```
+
+#### Message contracts: typing what flows after the 101
+
+The upgrade is contract-covered — params validated, guards run, the 426
+declared — but the contract stops at the 101: `socket.send` takes anything and
+frames arrive as `string | Uint8Array`. A `messages` contract covers the rest
+of the conversation, and one declaration drives both ends.
+
+```ts
+import { defineMessages } from '@amritk/api'
+
+export const chatMessages = defineMessages({
+  clientToServer: {
+    say: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+  },
+  serverToClient: {
+    said: {
+      type: 'object',
+      properties: { from: { type: 'string' }, text: { type: 'string' } },
+      required: ['from', 'text'],
+    },
+  },
+})
+```
+
+Directions are named for their endpoints, not for the reader. `send`/`receive`
+and `inbound`/`outbound` inverts depending on which side is reading it, and the
+whole point is that both sides read the same declaration. (AsyncAPI renamed its
+`publish`/`subscribe` pair in 3.0 over exactly this.)
+
+Each message is identified by a **discriminator** — `type` unless you set
+`discriminator`. Your schema describes the **payload**, and the discriminator is
+not part of it: the tag is read to pick the message, then removed before the
+payload is validated. So `additionalProperties: false` keeps working, and so do
+composed schemas — an `allOf` branch or a `$ref` target that closes itself never
+sees a property it did not declare. A schema that declares the discriminator
+itself is refused at setup time, since it could only ever fail.
+
+**Server** — `bindMessages` wraps any runtime's socket:
+
+```ts
+import { acceptWebSocket, bindMessages } from '@amritk/api'
+
+const { socket, reply } = acceptWebSocket()
+const channel = bindMessages(chatMessages, socket)
+
+// Drive the loop without awaiting it: nothing arrives until the client sees
+// the 101, so awaiting here would hold back the very response that starts the
+// conversation, and the connection would deadlock.
+void (async () => {
+  for await (const message of channel.messages) {
+    // message is { type: 'say'; text: string } — narrowed, already validated
+    if (message.type === 'say') channel.send({ type: 'said', from: user, text: message.text })
+  }
+})().catch(report) // the iterator rejects when the transport fails — catch, or it is unhandled
+
+return reply
+```
+
+On Workers and Deno the socket is an `EventTarget` and frames are wired up for
+you. Bun's message handlers live outside the request on `Bun.serve({ websocket })`
+and see only `ws.data`. The socket does not exist until the upgrade completes,
+so build the channel in `open` and stash it there for the other handlers —
+`upgradeWebSocket(server, request, { data })` seeds `ws.data` with the
+request-scoped values (validated params, the resolved session), but it cannot
+carry the channel itself, because there is no socket to bind yet:
+
+```ts
+Bun.serve({
+  websocket: {
+    open: (ws) => {
+      ws.data.channel = bindMessages(chatMessages, ws)
+      void (async () => {
+        for await (const message of ws.data.channel.messages) handle(ws.data.room, message)
+      })().catch(report)
+    },
+    message: (ws, raw) => ws.data.channel.accept(raw),
+    close: (ws) => ws.data.channel.end(),
+  },
+})
+```
+
+**Client** — `connectMessages` is the mirror image, over `connectRealtime`:
+
+```ts
+import { connectMessages } from '@amritk/api/client'
+
+const channel = await connectMessages(chatMessages, { url: 'https://api.example.com/ws/lobby' })
+channel.send({ type: 'say', text: 'hello' })
+for await (const message of channel.messages) {
+  if (message.type === 'said') render(message.from, message.text)
+}
+```
+
+The directions swap and nothing else does: the browser's `send` is exactly the
+server's `messages`, checked against the same schema.
+
+**When a frame breaks the contract** — not JSON, no discriminator, an unknown
+name, or a payload failing its schema — the default is to close with `4007`
+carrying a one-line reason, truncated to RFC 6455's 123-byte budget on a
+character boundary. (RFC 6455's own "invalid frame payload data" code is 1007,
+but JavaScript may not send it: the WHATWG `close()` algorithm accepts only
+1000 and the private 3000–4999 range, so a 1xxx code throws on Workers and
+Deno. `4007` keeps the last three digits inside the range every runtime
+permits.) `onInvalid` sees every refusal and can override:
+
+```ts
+bindMessages(chatMessages, socket, {
+  onInvalid: (failure) => {
+    metrics.increment(`ws.invalid.${failure.reason}`) // 'malformed' | 'binary' | 'unknown-type' | 'invalid-payload'
+    return 'ignore' // or 'close', or nothing for the default
+  },
+})
+```
+
+Binary frames are the one refusal that defaults to `ignore` rather than
+`close`: nothing in a JSON contract describes them, but a peer may legitimately
+be sending them alongside contract messages. Opt in with `receiveBinary` and
+they arrive on `channel.binary`, on both ends:
+
+```ts
+const channel = bindMessages(chatMessages, socket, { receiveBinary: true })
+for await (const bytes of channel.binary) store(bytes)
+```
+
+It is a flag rather than something inferred from reading `channel.binary`,
+for two reasons: the queue underneath is unbounded, so a stream nobody drains
+would grow until the connection closed; and frames start arriving the moment
+the connection opens, before any caller could have subscribed. Without the
+option, `channel.binary` is an iterator that has already ended, so reading it
+finishes immediately rather than hanging.
+
+Not `channel.connection.messages`, either: the client channel drains that
+iterator to feed its own and the queue underneath does not tee, so anything
+left there would never be read.
+
+Outbound messages are typed at compile time and validated only under
+`validateOutbound`, the same trade `validateResponses` makes for handler
+replies.
+
+A contract can also be attached to the route it belongs to
+(`defineRoute({ ..., messages: chatMessages })`), which colocates it and carries
+it to any consumer importing the contract. The field is optional, so reading it
+back off a route gives `… | undefined` — pass the standalone constant to
+`bindMessages` / `connectMessages` and the types come through unchanged.
+
+**What this does not do:** there is no OpenAPI representation. OpenAPI has no
+vocabulary for a bidirectional message union, so `messages` never appears in
+the document — the contract stays the single source of truth, and an AsyncAPI
+projection remains a separate question. See the plan doc for why a parallel
+channel DSL was set aside.
 
 ### Client-side auth refresh
 
@@ -2662,26 +2850,16 @@ const api = createApi({ routes, onError: sentry.onError })
 A throwing capture is swallowed (the client still gets its 500), and
 validation failures are not captured — those are the caller's bug.
 
-### Typed client for external consumers: Hey API
+### Typed client for external consumers
 
-For consumers outside the monorepo (who cannot import your contracts), the
-generated OpenAPI document is verified [Hey API](https://heyapi.dev) input,
-which turns it into a standalone typed fetch SDK:
+Consumers outside the monorepo cannot import your contracts, so they generate
+from the document instead — it is served at `/openapi.json` and is ordinary
+OpenAPI 3.2, which any SDK generator reads.
 
-```bash
-bunx @hey-api/openapi-ts -i http://localhost:3000/openapi.json -o src/client
-```
-
-```ts
-import { getUser } from './client/sdk.gen'
-const { data } = await getUser({ path: { id: 7 } }) // data: { id: number; name: string }
-```
-
-Client and server both derive from the same schemas, so they cannot drift —
-this package's integration test generates a client from `toOpenApi` output
-and asserts the contract types (typed path params, required headers, error
-variants) come through. Monorepo-internal frontends should prefer
-[`createClient`](#typed-client-createclient), which needs no codegen at all.
+Monorepo-internal frontends should prefer
+[`createClient`](#typed-client-createclient): it derives its types from the
+contracts directly, so there is no generated artifact to keep in sync and no
+codegen step in the build.
 
 ### Schemas from Zod, TypeBox, Valibot, Effect
 
@@ -2705,7 +2883,7 @@ yours:
 | Security headers, CORS | `onResponse` decorators / `createCors` |
 | Auth ↔ handler state (resolved tenants, counters) | per-request `locals` bag |
 | Platform data (Workers `request.cf` geo/ASN) | `request.raw` escape hatch |
-| Typed clients | `createClient` from shared contracts; Hey API from OpenAPI for external consumers |
+| Typed clients | `createClient` from shared contracts; the OpenAPI document for external consumers |
 
 ## Requirements and stability
 
