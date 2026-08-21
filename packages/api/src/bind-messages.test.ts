@@ -113,6 +113,20 @@ describe('bindMessages', () => {
     expect(await next(channel.messages)).toEqual({ type: 'say', text: 'hi' })
   })
 
+  it('still closes when onInvalid throws', () => {
+    // The hook runs inside a socket's message listener, where a throw has
+    // nowhere to go — it escaped before the close/ignore decision, so nothing
+    // closed and the contract violation went unanswered.
+    const socket = pushSocket()
+    const channel = bindMessages(chat, socket, {
+      onInvalid: () => {
+        throw new Error('metrics backend down')
+      },
+    })
+    channel.accept('not json')
+    expect(socket.closes).toEqual([[INVALID_MESSAGE_CLOSE_CODE, 'malformed: not JSON']])
+  })
+
   it('ignores a binary frame by default instead of closing', () => {
     const socket = pushSocket()
     const failures: MessageFailure[] = []

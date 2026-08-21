@@ -265,7 +265,19 @@ export const createIngest = <T>(
     // does not describe, which a peer may legitimately be sending alongside
     // contract messages. Closing on it would make the two uses exclusive.
     const fallback: MessageFailureAction = failure.reason === 'binary' ? 'ignore' : 'close'
-    const action = options?.onInvalid?.(failure) ?? fallback
+    // The hook is app code running inside a socket's `message` listener, where
+    // a throw has nowhere to go: it would escape before the close/ignore
+    // decision, so nothing would close, nothing would end the queues, and the
+    // default close on a contract violation would simply not happen. Swallowed
+    // and treated as "no opinion", the same way a throwing `createSentry`
+    // capture is.
+    let chosen: MessageFailureAction | undefined
+    try {
+      chosen = options?.onInvalid?.(failure) ?? undefined
+    } catch {
+      chosen = undefined
+    }
+    const action = chosen ?? fallback
     if (action === 'close') {
       close(INVALID_MESSAGE_CLOSE_CODE, failure.message)
       return

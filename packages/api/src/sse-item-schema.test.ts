@@ -99,6 +99,23 @@ describe('sseItemSchema', () => {
     expect(props['kin']).toEqual({ $ref: '#/$defs/Node' })
   })
 
+  it('leaves an $anchor reference alone', () => {
+    // `#node` resolves by name within the schema resource, not by position, so
+    // nesting does not move it. Prefixing it as though it were a pointer
+    // spliced the name onto the path (`#/properties/datanode`) and dangled.
+    const item = sseItemSchema({
+      type: 'object',
+      properties: { self: { $ref: '#node' }, child: { $ref: '#' } },
+      $anchor: 'node',
+    })
+    const props = ((item['properties'] as Record<string, unknown>)['data'] as Record<string, unknown>)[
+      'properties'
+    ] as Record<string, Record<string, unknown>>
+    expect(props['self']).toEqual({ $ref: '#node' })
+    // The pointer beside it still moves.
+    expect(props['child']).toEqual({ $ref: '#/properties/data' })
+  })
+
   it('leaves the envelope open, as the SSE grammar does', () => {
     expect(sseItemSchema({ type: 'string' })).not.toHaveProperty('additionalProperties')
   })

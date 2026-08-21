@@ -49,6 +49,9 @@ The directions swap and nothing else does. It is exported from the browser-safe
 it is eval-free and pulls in no `node:` built-in, and tree-shakes out of bundles
 that do not use it.
 
+A throwing `onInvalid` is swallowed and treated as "no opinion", so a broken
+metrics call cannot stop a contract violation from being answered.
+
 **Invalid frames close with `4007`** and a one-line reason, truncated to RFC
 6455's 123-byte budget on a UTF-8 character boundary (overrunning it or
 splitting a character makes implementations throw). Not RFC 6455's own 1007:

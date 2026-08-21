@@ -95,12 +95,17 @@ const nestPayload = (schema: unknown): { schema: unknown; $defs: unknown } => {
   return { schema: rewriteLocalRefs(rest), $defs: $defs === undefined ? undefined : rewriteLocalRefs($defs) }
 }
 
-/** Whether a schema contains any `$ref` resolved against the document root. */
+/**
+ * Whether a schema carries a `$ref` that nesting would actually move — a
+ * document-root JSON Pointer. An `$anchor` reference resolves by name and
+ * stays valid, so a payload carrying only those needs no rewrite and no clone.
+ */
 const hasLocalRef = (node: unknown): boolean => {
   if (Array.isArray(node)) return node.some(hasLocalRef)
   if (typeof node !== 'object' || node === null) return false
   const record = node as Record<string, unknown>
-  if (typeof record['$ref'] === 'string' && record['$ref'].startsWith('#')) return true
+  const ref = record['$ref']
+  if (typeof ref === 'string' && (ref === '#' || ref === '#/' || ref.startsWith('#/'))) return true
   return Object.values(record).some(hasLocalRef)
 }
 
@@ -115,9 +120,13 @@ const rewriteLocalRefs = (node: unknown): unknown => {
 }
 
 const rewriteRef = (ref: string): string => {
-  if (!ref.startsWith('#')) return ref
+  if (ref === '#' || ref === '#/') return DATA_POINTER
+  // Only JSON Pointers move. `#node` is an `$anchor` reference, which resolves
+  // by name within the schema resource rather than by position — nesting does
+  // not change where it lands, and prefixing it would splice the name onto the
+  // pointer (`#/properties/datanode`) and dangle.
+  if (!ref.startsWith('#/')) return ref
   // Lifted to the envelope root, so these still resolve exactly as written.
   if (ref.startsWith('#/$defs/') || ref === '#/$defs') return ref
-  if (ref === '#' || ref === '#/') return DATA_POINTER
   return `${DATA_POINTER}${ref.slice(1)}`
 }

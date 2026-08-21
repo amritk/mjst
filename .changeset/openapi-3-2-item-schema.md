@@ -30,6 +30,8 @@ emitter silently dropped it while hoisting still collected it — leaving an
 orphan in `components.schemas`, and letting a title collision from a schema
 that never reached the document un-hoist a real shared one back inline.
 
+The package description advertises 3.2 generation now, matching the emitter.
+
 **`sseItemSchema(dataSchema, options?)`** builds that schema for SSE, where
 the item is the event *envelope* (`event`, `id`, `data`, `retry`) with the
 payload inside `data` rather than the payload itself. `data` is typed as the
