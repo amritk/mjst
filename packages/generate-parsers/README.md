@@ -296,23 +296,23 @@ keys) and `parseStrict` (assert + reject undeclared keys) halves of
 [`moltar/typescript-runtime-type-benchmarks`](https://github.com/moltar/typescript-runtime-type-benchmarks)
 against the other *pure* parsers — the ones that return a new typed value rather
 than mutating in place — [zod](https://zod.dev) and
-[TypeBox](https://github.com/sinclairzx81/typebox). Measured on Bun 1.3 (Linux
+[TypeBox](https://github.com/sinclairzx81/typebox). Measured on Bun 1.4 (Linux
 x64), parsing valid input at steady state:
 
 | case | mode | mjst (generated) | zod | typebox |
 |:--|:--|--:|--:|--:|
-| user (4 fields) | parseSafe | **~18M** ops/s | ~3M ops/s | ~1.6M ops/s |
-| order (nested + array) | parseSafe | **~7.2M** ops/s | ~0.59M ops/s | ~0.18M ops/s |
-| user (4 fields) | parseStrict | **~15M** ops/s | ~2M ops/s | ~2.05M ops/s |
-| order (nested + array) | parseStrict | **~8.5M** ops/s | ~0.38M ops/s | ~0.29M ops/s |
+| user (4 fields) | parseSafe | **~18M** ops/s | ~3.7M ops/s | ~1.6M ops/s |
+| order (nested + array) | parseSafe | **~6.9M** ops/s | ~0.71M ops/s | ~0.24M ops/s |
+| user (4 fields) | parseStrict | **~14M** ops/s | ~2.3M ops/s | ~2.04M ops/s |
+| order (nested + array) | parseStrict | **~7M** ops/s | ~0.43M ops/s | ~0.36M ops/s |
 
 The upstream `assert` case (seven scalar roots plus a nested object) runs faster
-still — ~44M ops/s strict, ~97M safe — but at that size the numbers swing enough
+still — ~51M ops/s strict, ~127M safe — but at that size the numbers swing enough
 run-to-run that the ratio, not the absolute, is the honest signal: mjst lands
-~6–30× ahead of zod across every case above.
+~5–29× ahead of zod across every case above.
 
 The trade is a one-shot **prepare** cost that only mjst pays — generating the
-parser source — which measures **~0.15–1 ms** per schema here (zod and TypeBox
+parser source — which measures **~0.2–0.8 ms** per schema here (zod and TypeBox
 author or interpret their parsers with no separate build step, so there is
 nothing to time). That is trivially amortized: you generate once at build time
 and run the emitted code forever.

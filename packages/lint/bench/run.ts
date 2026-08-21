@@ -32,9 +32,10 @@ import { createOpenApiRuleset } from '../src/rules/openapi/index'
  * The two rulesets are *not* byte-identical — rule implementations and `$ref`
  * resolution differ — so the finding counts differ and this is a **throughput**
  * comparison, not a correctness parity check. Each count is printed so the work
- * each tool did is visible. Spectral's JSONPath engine (`nimma`) currently
- * throws on the 2.8 MB OpenAI spec under Bun, so that row is mjst-only; the
- * Spectral side is guarded and reports `errored` rather than aborting the run.
+ * each tool did is visible. Spectral's JSONPath engine (`nimma`) used to throw
+ * on the 2.8 MB OpenAI spec under Bun; it no longer does, but the Spectral side
+ * stays guarded and reports `errored` rather than aborting the run, because that
+ * failure was runtime-specific and may come back.
  *
  * Each measurement warms up (to let V8 optimise the hot paths), times a single
  * run to size the sample, then reports the mean over a fixed time budget.
