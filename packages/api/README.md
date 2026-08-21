@@ -1279,9 +1279,12 @@ whole point is that both sides read the same declaration. (AsyncAPI renamed its
 `publish`/`subscribe` pair in 3.0 over exactly this.)
 
 Each message is identified by a **discriminator** — `type` unless you set
-`discriminator`. Declare the *payload*; the discriminator is folded into the
-schema for validation, so `additionalProperties: false` keeps working instead
-of rejecting the very property that named the message.
+`discriminator`. Your schema describes the **payload**, and the discriminator is
+not part of it: the tag is read to pick the message, then removed before the
+payload is validated. So `additionalProperties: false` keeps working, and so do
+composed schemas — an `allOf` branch or a `$ref` target that closes itself never
+sees a property it did not declare. A schema that declares the discriminator
+itself is refused at setup time, since it could only ever fail.
 
 **Server** — `bindMessages` wraps any runtime's socket:
 
@@ -1290,20 +1293,37 @@ import { acceptWebSocket, bindMessages } from '@amritk/api'
 
 const { socket, reply } = acceptWebSocket()
 const channel = bindMessages(chatMessages, socket)
-for await (const message of channel.messages) {
-  // message is { type: 'say'; text: string } — narrowed, already validated
-  if (message.type === 'say') channel.send({ type: 'said', from: user, text: message.text })
-}
+
+// Drive the loop without awaiting it: nothing arrives until the client sees
+// the 101, so awaiting here would hold back the very response that starts the
+// conversation, and the connection would deadlock.
+void (async () => {
+  for await (const message of channel.messages) {
+    // message is { type: 'say'; text: string } — narrowed, already validated
+    if (message.type === 'say') channel.send({ type: 'said', from: user, text: message.text })
+  }
+})()
+
 return reply
 ```
 
 On Workers and Deno the socket is an `EventTarget` and frames are wired up for
 you. Bun's message handlers live outside the request on `Bun.serve({ websocket })`
-and see only `ws.data`, so carry the channel there and feed it:
+and see only `ws.data`. The socket does not exist until the upgrade completes,
+so build the channel in `open` and stash it there for the other handlers —
+`upgradeWebSocket(server, request, { data })` seeds `ws.data` with the
+request-scoped values (validated params, the resolved session), but it cannot
+carry the channel itself, because there is no socket to bind yet:
 
 ```ts
 Bun.serve({
   websocket: {
+    open: (ws) => {
+      ws.data.channel = bindMessages(chatMessages, ws)
+      void (async () => {
+        for await (const message of ws.data.channel.messages) handle(ws.data.room, message)
+      })()
+    },
     message: (ws, raw) => ws.data.channel.accept(raw),
     close: (ws) => ws.data.channel.end(),
   },

@@ -24,6 +24,12 @@ the stream through untouched, so nothing here is validated at runtime — but it
 does take part in `components.schemas` hoisting, so a titled event schema
 shared across routes appears once and is `$ref`erenced.
 
+Declaring `itemSchema` without a `contentType` now throws at document-build
+time. It described a sequential media type the status never named, so the
+emitter silently dropped it while hoisting still collected it — leaving an
+orphan in `components.schemas`, and letting a title collision from a schema
+that never reached the document un-hoist a real shared one back inline.
+
 **`sseItemSchema(dataSchema, options?)`** builds that schema for SSE, where
 the item is the event *envelope* (`event`, `id`, `data`, `retry`) with the
 payload inside `data` rather than the payload itself. `data` is typed as the

@@ -49,17 +49,33 @@ export type ServerMessageChannel<M extends AnyMessagesContract> = {
  * // Workers / Deno — the socket is an EventTarget, so frames are wired for you.
  * const { socket, reply } = acceptWebSocket()
  * const channel = bindMessages(chat.messages, socket)
- * for await (const message of channel.messages) {
- *   if (message.type === 'say') channel.send({ type: 'said', from: user, text: message.text })
- * }
+ *
+ * // Drive the loop *without* awaiting it. Nothing arrives until the client
+ * // sees the 101, so awaiting the iteration here would hold the handshake
+ * // response back and deadlock the connection that is meant to feed it.
+ * void (async () => {
+ *   for await (const message of channel.messages) {
+ *     if (message.type === 'say') channel.send({ type: 'said', from: user, text: message.text })
+ *   }
+ * })()
+ *
  * return reply
  * ```
  *
  * ```typescript
- * // Bun — handlers live outside the request, so carry the channel on ws.data
- * // and feed it. `upgradeWebSocket(server, request, { data })` puts it there.
+ * // Bun — the socket does not exist until the upgrade completes, so the channel
+ * // is built in `open` and stashed on `ws.data` for the other handlers. The
+ * // route's `upgradeWebSocket(server, request, { data })` seeds that object
+ * // with the request-scoped values (validated params, the session); it cannot
+ * // carry the channel itself, since there is no socket to bind yet.
  * Bun.serve({
  *   websocket: {
+ *     open: (ws) => {
+ *       ws.data.channel = bindMessages(chat.messages, ws)
+ *       void (async () => {
+ *         for await (const message of ws.data.channel.messages) handle(ws.data.room, message)
+ *       })()
+ *     },
  *     message: (ws, raw) => ws.data.channel.accept(raw),
  *     close: (ws) => ws.data.channel.end(),
  *   },

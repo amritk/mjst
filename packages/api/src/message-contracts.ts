@@ -150,18 +150,18 @@ export type PreparedMessages = {
 }
 
 // Keyed on the contract object, so a thousand sockets sharing one contract
-// prepare one set of validators. The interpreter memoizes per schema object
-// too, but the *composed* schemas below are built here and would otherwise be
-// rebuilt — and re-prepared — on every connection.
+// walk the schemas once. The interpreter memoizes per schema object underneath,
+// so this mostly saves the per-connection map building and the setup-time
+// checks below.
 const prepared = new WeakMap<object, PreparedMessages>()
 
 /**
  * Prepares a contract's validators, memoized per contract object.
  *
- * Throws on a message schema that is not an object schema. A discriminator has
- * to live somewhere, and only an object has somewhere to put it — so a
- * `{ type: 'string' }` message is not a contract this can enforce, and saying
- * so at setup time beats failing on the first frame in production.
+ * Throws on a schema this cannot enforce as a message — one that is not an
+ * object schema, or one that declares the discriminator itself. Both are
+ * caught at setup time, because the alternative is a socket that opens fine
+ * and closes on its first frame in production.
  */
 export const prepareMessages = (contract: AnyMessagesContract): PreparedMessages => {
   const cached = prepared.get(contract)
@@ -185,45 +185,55 @@ const prepareDirection = (
   const validators = new Map<string, Validator>()
   if (schemas === undefined) return validators
   for (const [name, schema] of Object.entries(schemas)) {
-    validators.set(name, validate(composeMessageSchema(schema, discriminator, name, direction)))
+    assertMessageSchema(schema, discriminator, name, direction)
+    validators.set(name, validate(schema))
   }
   return validators
 }
 
 /**
- * Folds the discriminator into a message's schema, so one validator checks the
- * whole frame.
+ * Refuses, at setup time, a schema that cannot describe a message.
  *
- * The alternative — validate the payload, check the tag separately — breaks on
- * the schema people actually write: `additionalProperties: false` would reject
- * the very property that named the message. Composing instead means the
- * declared schema describes the payload (which is what an author is thinking
- * about) while the validated schema describes the frame (which is what arrives).
+ * A message schema describes the **payload**; the discriminator is not part of
+ * it and is stripped before validation (see `parseMessage`). That split is what
+ * lets a composed schema work at all. The earlier design folded the tag into a
+ * copy of the schema instead, which held only for a plain object schema: a
+ * `$ref`, or an `allOf` branch carrying `additionalProperties: false`, closes
+ * over properties this layer cannot reach, so the injected tag was rejected by
+ * the very schema it was injected into and a valid frame closed the socket
+ * with 1007. No schema-level trick fixes that — a closed subschema will always
+ * refuse an extra property — so the tag stays out of the payload entirely.
  *
- * Exported for tests and for anyone projecting these contracts into a
- * document, where the composed schema is the one that describes the wire.
+ * What is still refusable here is a schema that could never match an object,
+ * and one that declares the discriminator itself: the latter is now
+ * unsatisfiable, since the property it describes is removed before the
+ * validator ever sees the value.
  */
-export const composeMessageSchema = (
+export const assertMessageSchema = (
   schema: unknown,
   discriminator: string,
   name: string,
   direction = 'messages',
-): Record<string, unknown> => {
+): void => {
   if (typeof schema !== 'object' || schema === null || Array.isArray(schema))
     throw new Error(`${direction}.${name}: a message schema must be an object schema, so the discriminator has a home`)
   const source = schema as Record<string, unknown>
   if (source['type'] !== undefined && source['type'] !== 'object')
     throw new Error(`${direction}.${name}: a message schema must be type 'object', not '${String(source['type'])}'`)
 
-  const properties =
-    typeof source['properties'] === 'object' && source['properties'] !== null ? source['properties'] : {}
-  const required = Array.isArray(source['required']) ? (source['required'] as unknown[]) : []
-  return {
-    ...source,
-    type: 'object',
-    properties: { ...properties, [discriminator]: { const: name } },
-    // The tag is always required: a frame that does not carry it is not this
-    // message, and the caller has already decided it is by looking the name up.
-    required: required.includes(discriminator) ? required : [...required, discriminator],
-  }
+  // Only the top level is checked. A `$ref` or `allOf` branch declaring the
+  // discriminator is unreachable from here without resolving refs, which this
+  // package leaves to `@amritk/resolve-refs` — and such a schema fails safe:
+  // the stripped payload simply misses a property it required, which surfaces
+  // as an ordinary `invalid-payload` naming the field.
+  const properties = source['properties']
+  const declaresProperty =
+    typeof properties === 'object' && properties !== null && Object.hasOwn(properties, discriminator)
+  const required = Array.isArray(source['required']) ? source['required'] : []
+  if (declaresProperty || required.includes(discriminator))
+    throw new Error(
+      `${direction}.${name}: a message schema must not declare '${discriminator}' — it is the discriminator, ` +
+        'supplied by the message name and removed before the payload is validated. Describe the payload only, ' +
+        "or rename the property with `discriminator: '…'`.",
+    )
 }

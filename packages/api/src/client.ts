@@ -80,7 +80,7 @@ export type {
   MessageUnion,
   ServerToClientMessage,
 } from './message-contracts'
-export { composeMessageSchema, DEFAULT_DISCRIMINATOR, defineMessages, prepareMessages } from './message-contracts'
+export { assertMessageSchema, DEFAULT_DISCRIMINATOR, defineMessages, prepareMessages } from './message-contracts'
 export { multipartBodySerializer } from './multipart-body-serializer'
 export type { RealtimeMessage } from './realtime-framing'
 export { DEFAULT_MAX_MESSAGE_BYTES, decodeRealtimeFrames, encodeRealtimeFrame } from './realtime-framing'

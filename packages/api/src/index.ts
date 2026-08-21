@@ -124,7 +124,7 @@ export type {
   MessageUnion,
   ServerToClientMessage,
 } from './message-contracts'
-export { composeMessageSchema, DEFAULT_DISCRIMINATOR, defineMessages, prepareMessages } from './message-contracts'
+export { assertMessageSchema, DEFAULT_DISCRIMINATOR, defineMessages, prepareMessages } from './message-contracts'
 export { multipartBodySerializer } from './multipart-body-serializer'
 export type { AcceptEntry } from './negotiate'
 export { negotiateMediaType, parseAccept } from './negotiate'

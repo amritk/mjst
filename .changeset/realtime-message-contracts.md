@@ -27,9 +27,12 @@ Directions are named for their endpoints rather than for the reader —
 them, and both sides read this same declaration.
 
 Messages are identified by a discriminator, `type` unless `discriminator` says
-otherwise. You declare the *payload*; the discriminator is folded into the
-schema before validation, so `additionalProperties: false` keeps working rather
-than rejecting the property that named the message.
+otherwise. Your schema describes the *payload*, and the tag is not part of it:
+it is read to select the message, then removed before the payload is validated.
+That keeps `additionalProperties: false` working, and composed schemas too — an
+`allOf` branch or a `$ref` target that closes itself never sees a property it
+did not declare. A schema that declares the discriminator itself is refused at
+setup time, since it could only ever fail.
 
 **`bindMessages(contract, socket, options?)`** wraps a server-side socket:
 inbound frames validated against `clientToServer` and narrowed to a tagged

@@ -138,7 +138,20 @@ export const parseMessage = (
       failure: { reason: 'unknown-type', raw, name: tag, message: failureMessage('unknown-type', tag) },
     }
 
-  const result = validator(parsed)
+  // Validate the payload *without* the tag. The message schema describes the
+  // payload, and the discriminator is this layer's framing, not the author's
+  // field — so a schema that closes itself (`additionalProperties: false`,
+  // directly or inside an `allOf`/`$ref`) stays satisfiable. Folding the tag
+  // into a copy of the schema instead only worked for a plain object schema:
+  // a closed subschema rejected the injected property and a valid frame closed
+  // the socket with 1007.
+  //
+  // The shallow copy is the cost of that, one per inbound frame. Deleting and
+  // restoring the key in place would avoid it, but mutating a value while a
+  // validator reads it — and reordering its keys for anything that re-serializes
+  // it afterwards — is not worth the allocation on a latency-bound path.
+  const { [discriminator]: _tag, ...payload } = parsed as Record<string, unknown>
+  const result = validator(payload)
   if (result !== true) {
     const first = result.errors[0]
     return {

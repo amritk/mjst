@@ -97,6 +97,12 @@ export const toOpenApi = (
         // OpenAPI requires a description on every response object.
         description: contract.description ?? 'Status ' + status,
       }
+      if (contract.itemSchema !== undefined && contract.contentType === undefined)
+        throw new Error(
+          `Response ${status} of '${routeName}' declares an itemSchema without a contentType. ` +
+            'itemSchema describes one item of a sequential media type (text/event-stream, application/jsonl, ' +
+            'application/json-seq, multipart/mixed), so the status has to declare which one it streams.',
+        )
       if (contract.contentType !== undefined) {
         // Raw statuses document under their declared content type. Media-type
         // parameters (`; charset=utf-8`) are stripped: OpenAPI keys content
@@ -277,7 +283,12 @@ const collectComponentSchemas = (routes: ReadonlyArray<AnyRouteContract>): Compo
     push(route.request?.body, 'Body')
     for (const [status, response] of Object.entries(route.responses)) {
       push(response.body, 'Response' + status)
-      push(response.itemSchema, 'Item' + status)
+      // Only when the emitter will actually write it. Collecting an
+      // `itemSchema` the document never references hoists an orphan into
+      // `components.schemas`, and — worse — lets a title collision from a
+      // schema that is never emitted mark a *real* shared schema conflicted,
+      // silently un-hoisting it back inline everywhere it was used.
+      if (response.contentType !== undefined) push(response.itemSchema, 'Item' + status)
     }
   }
 

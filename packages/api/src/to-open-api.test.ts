@@ -173,6 +173,40 @@ describe('to-open-api', () => {
     })
   })
 
+  it('refuses an itemSchema without a contentType', () => {
+    // Otherwise it is a silent no-op: the emitter writes `itemSchema` only for
+    // a raw status, so the declaration vanishes from the document while still
+    // being collected for hoisting — leaving an orphan component, and letting a
+    // title collision from a schema that is never emitted un-hoist a real one.
+    const orphan = defineRoute({
+      method: 'get',
+      path: '/events',
+      responses: { 200: { itemSchema: { type: 'object' } } },
+      handler: () => ({ status: 200 }),
+    })
+    expect(() => toOpenApi([orphan], info)).toThrow(/itemSchema without a contentType/)
+  })
+
+  it('does not hoist an itemSchema the document never references', () => {
+    const shared = { title: 'Shared', type: 'object', properties: { real: { type: 'string' } } }
+    const a = defineRoute({
+      method: 'get',
+      path: '/a',
+      responses: { 200: { body: shared } },
+      handler: () => ({ status: 200, body: {} }),
+    })
+    const b = defineRoute({
+      method: 'get',
+      path: '/b',
+      responses: { 200: { body: shared } },
+      handler: () => ({ status: 200, body: {} }),
+    })
+    const document = toOpenApi([a, b], info)
+    const componentSchemas = (document.components as Record<string, Record<string, unknown>>)['schemas']
+    // Exactly the one schema that is actually referenced.
+    expect(Object.keys(componentSchemas ?? {})).toEqual(['Shared'])
+  })
+
   it('hoists a titled itemSchema shared across routes into components', () => {
     const event = { title: 'FeedEvent', type: 'object', properties: { at: { type: 'string' } } }
     const lobby = defineRoute({

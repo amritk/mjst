@@ -378,9 +378,17 @@ carries two independent flows of interchangeable frames.
 - **A discriminator is mandatory, defaulting to `type`.** AsyncAPI lists a
   channel's possible messages and stops; code cannot, because "validate against
   one of five schemas" has no answer for which failure to report when none
-  match. The declared schema describes the *payload* and the discriminator is
-  folded in before validation, so `additionalProperties: false` keeps working
-  rather than rejecting the property that named the message.
+  match. The declared schema describes the *payload*, and the tag is not part
+  of it: it is read to select the message, then removed before the payload is
+  validated. An earlier design folded the tag into a copy of the schema
+  instead, which held only for a plain object schema — a `$ref`, or an `allOf`
+  branch carrying `additionalProperties: false`, closes over properties this
+  layer cannot reach, so the injected tag was rejected by the very schema it
+  was injected into and a valid frame closed the socket with 1007. No
+  schema-level trick fixes that, since a closed subschema will always refuse an
+  extra property, so the tag stays out of the payload entirely and the cost is
+  one shallow copy per inbound frame. A schema declaring the discriminator
+  itself is refused at setup time, being unsatisfiable.
 - **Invalid frames close with 1007** (invalid frame payload data) and a
   one-line reason, truncated to RFC 6455's 123-byte budget *on a UTF-8
   boundary* — overrunning it or splitting a character makes implementations

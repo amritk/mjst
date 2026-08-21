@@ -134,6 +134,35 @@ describe('bindMessages', () => {
     expect(await channel.messages.next()).toEqual({ value: undefined, done: true })
   })
 
+  it('accepts a valid frame under a composed, closed schema', () => {
+    // The regression this guards: folding the discriminator into a copy of the
+    // schema worked only for a plain object schema. A closed `allOf` branch
+    // rejected the injected property, so a perfectly valid frame failed with
+    // `must NOT have additional properties` and closed the socket with 1007.
+    const composed = defineMessages({
+      clientToServer: {
+        say: {
+          allOf: [
+            {
+              type: 'object',
+              properties: { text: { type: 'string' } },
+              required: ['text'],
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
+    })
+    const socket = pushSocket()
+    const channel = bindMessages(composed, socket)
+    channel.accept(JSON.stringify({ type: 'say', text: 'hi' }))
+    expect(socket.closes).toEqual([])
+
+    // Still enforced — the payload is checked, only the tag is exempt.
+    channel.accept(JSON.stringify({ type: 'say', text: 'hi', extra: 1 }))
+    expect(socket.closes[0]?.[0]).toBe(INVALID_MESSAGE_CLOSE_CODE)
+  })
+
   it('does not read a message name off the prototype', () => {
     const socket = pushSocket()
     bindMessages(chat, socket).accept('{"__proto__":"say"}')
