@@ -1217,7 +1217,14 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
           if (targetLoaded) {
             errors.push({
               message: `Cannot resolve ${keyword} "${value}"`,
-              path: refPathAt(keyword, value),
+              // `refPathAt` indexes the *root* document only, so it can only
+              // speak for a ref that lives there. Called unguarded it answered
+              // for a ref in a sub-document by handing back the position of an
+              // identical ref in the root — pointing a diagnostic at a line
+              // that is not the offending one. The prefetch loop above already
+              // guards this the same way; an empty path means "no position to
+              // give", which is honest.
+              path: baseLocation === rootLocation ? refPathAt(keyword, value) : [],
             })
           }
           refCache.set(cacheKey, MISSING)

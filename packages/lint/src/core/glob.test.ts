@@ -73,4 +73,25 @@ describe('glob', () => {
   it('caches the compiled RegExp by pattern string', () => {
     expect(globToRegExp('src/**/*.yaml')).toBe(globToRegExp('src/**/*.yaml'))
   })
+
+  it('lets a `**` alternative collapse the slash that follows the group', () => {
+    // `**` only becomes `(?:.*/)?` when it can see the slash after it, and an
+    // option compiled in isolation cannot — so this produced `(?:.*|dist)/…`,
+    // which demands a slash and stopped matching a root-level file, though the
+    // brace expansion this replaced (`**/x.yaml`) matched it.
+    const pattern = globToRegExp('{**,dist}/x.yaml')
+    expect(pattern.test('x.yaml')).toBe(true)
+    expect(pattern.test('dist/x.yaml')).toBe(true)
+    expect(pattern.test('a/b/x.yaml')).toBe(true)
+    // The literal alternative keeps its slash, so it still anchors.
+    expect(globToRegExp('{dist,build}/x.yaml').test('x.yaml')).toBe(false)
+  })
+
+  it('agrees with the equivalent expanded globs', () => {
+    for (const path of ['x.yaml', 'dist/x.yaml', 'a/b/x.yaml']) {
+      expect(globToRegExp('{**,dist}/x.yaml').test(path)).toBe(
+        globToRegExp('**/x.yaml').test(path) || globToRegExp('dist/x.yaml').test(path),
+      )
+    }
+  })
 })

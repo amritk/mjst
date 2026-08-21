@@ -53,5 +53,13 @@ export const staticContentType = (path: string): string => {
   // A dot before the last slash belongs to a directory name, not the file, and
   // a leading dot (`.gitignore`) is the whole name rather than an extension.
   if (dot === -1 || dot < slash + 2) return 'application/octet-stream'
-  return STATIC_CONTENT_TYPES[path.slice(dot + 1).toLowerCase()] ?? 'application/octet-stream'
+  const extension = path.slice(dot + 1).toLowerCase()
+  // `Object.hasOwn`, not a bare lookup: an extension that names an inherited
+  // member reads it off `Object.prototype` instead of missing, and the result
+  // is not nullish so `??` never fires. A file called `x.constructor` served a
+  // `content-type` of the entire `Object` function source, and `x.__proto__`
+  // one of `[object Object]`. The same reason `buildCookiesObject` and
+  // `secureRoutes` read their maps this way.
+  const known = Object.hasOwn(STATIC_CONTENT_TYPES, extension) ? STATIC_CONTENT_TYPES[extension] : undefined
+  return known ?? 'application/octet-stream'
 }

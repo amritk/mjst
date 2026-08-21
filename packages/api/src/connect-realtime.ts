@@ -202,12 +202,34 @@ const connectWebTransport = async (options: ConnectRealtimeOptions, timeoutMs: n
   if (Transport === undefined) throw new Error('WebTransport is not available in this runtime')
 
   const session = new Transport(withScheme(options.url, 'https'))
-  const stream = await withDeadline(
-    session.ready.then(() => session.createBidirectionalStream()),
-    timeoutMs,
-    'WebTransport',
-    options.signal,
-  )
+  // Claimed immediately, not only in the return object below. `closed` rejects
+  // when the session dies, and on the throw path below that object is never
+  // built — leaving a rejected promise nobody handles, which is an
+  // unhandled-rejection crash in Node and a console error in a browser. This
+  // is the *default first* transport and the deadline exists precisely for
+  // QUIC that hangs, so that path is the common one, not an edge case.
+  void session.closed.catch(() => undefined)
+
+  let stream: Awaited<ReturnType<WebTransportLike['createBidirectionalStream']>>
+  try {
+    stream = await withDeadline(
+      session.ready.then(() => session.createBidirectionalStream()),
+      timeoutMs,
+      'WebTransport',
+      options.signal,
+    )
+  } catch (error) {
+    // The deadline or the caller's signal won the race, so nothing here owns
+    // the session any more — but it is still connecting, and left alone it may
+    // open and stay open, unread, for as long as the peer keeps it. One leaked
+    // session per fallback attempt.
+    try {
+      session.close()
+    } catch {
+      // Already gone; the throw below is the outcome that matters.
+    }
+    throw error
+  }
 
   const queue = createMessageQueue<RealtimeMessage>()
   const writer = stream.writable.getWriter()
@@ -283,18 +305,32 @@ const connectWebSocket = async (options: ConnectRealtimeOptions, timeoutMs: numb
     resolveClosed = resolve
   })
 
-  await withDeadline(
-    new Promise<void>((resolve, reject) => {
-      socket.addEventListener('open', (() => resolve()) as never)
-      // A refused handshake fires `error` and then `close`; either is enough
-      // to move on to the next transport.
-      socket.addEventListener('error', ((event: unknown) => reject(errorFrom(event))) as never)
-      socket.addEventListener('close', ((event: unknown) => reject(errorFrom(event))) as never)
-    }),
-    timeoutMs,
-    'WebSocket',
-    options.signal,
-  )
+  try {
+    await withDeadline(
+      new Promise<void>((resolve, reject) => {
+        socket.addEventListener('open', (() => resolve()) as never)
+        // A refused handshake fires `error` and then `close`; either is enough
+        // to move on to the next transport.
+        socket.addEventListener('error', ((event: unknown) => reject(errorFrom(event))) as never)
+        socket.addEventListener('close', ((event: unknown) => reject(errorFrom(event))) as never)
+      }),
+      timeoutMs,
+      'WebSocket',
+      options.signal,
+    )
+  } catch (error) {
+    // Same leak as the WebTransport arm: when the deadline or the signal wins,
+    // the abort listener that would have closed this is registered further
+    // down and never runs. Closing a CONNECTING socket aborts the handshake,
+    // and closing an already-closed one is a no-op, so this is safe on every
+    // path that lands here — including the refused handshake.
+    try {
+      socket.close()
+    } catch {
+      // Already closing or gone.
+    }
+    throw error
+  }
 
   socket.addEventListener('message', ((event: { data: unknown }) => {
     const data = event.data

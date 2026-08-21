@@ -38,4 +38,13 @@ describe('static-content-type', () => {
     // `.css` is a file named `.css`, not a stylesheet extension on an empty name.
     expect(staticContentType('/public/.css')).toBe('application/octet-stream')
   })
+
+  it('does not read an extension off Object.prototype', () => {
+    // A bare index returns the inherited member — not nullish, so the `??`
+    // fallback never fires: `x.constructor` served the whole `Object` function
+    // as a content type, `x.__proto__` served `[object Object]`.
+    for (const name of ['file.constructor', 'file.__proto__', 'file.toString', 'file.hasOwnProperty']) {
+      expect(staticContentType(name)).toBe('application/octet-stream')
+    }
+  })
 })
