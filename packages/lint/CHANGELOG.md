@@ -1,5 +1,215 @@
 # @amritk/lint
 
+## 0.5.0
+
+### Minor Changes
+
+- 118aca9: `lintDocument`, `lintDocumentWithResult`, and `fixDocument` now accept a
+  `Ruleset` you have already built, not only a definition to build.
+
+  Without this there was no way to use a preset that brings its own functions and
+  format detectors through the package-root entry points. Handing them the `oas`
+  definition as plain data produced _nothing_: its custom functions are unknown
+  there, and — since every OpenAPI rule is format-gated — its `formats` gate
+  matched nothing against an empty format registry. The README and `oasFixers`
+  both told you to pass the fixers to `fixDocument`, which had no findings to work
+  from.
+
+  ```ts
+  import { fixDocument } from "@amritk/lint";
+  import { createOpenApiRuleset, oasFixers } from "@amritk/lint/rules/openapi";
+
+  const { output, applied } = await fixDocument(source, {
+    ruleset: createOpenApiRuleset(),
+    fixers: oasFixers,
+  });
+  ```
+
+  Passing a definition behaves exactly as before. `rulesetBasePath` and
+  `restrictTo` only apply while building, so they are ignored for a ruleset that
+  already is one.
+
+### Patch Changes
+
+- 0f27eeb: Re-measure every published benchmark table on Bun 1.4.
+
+  The tables were labelled Bun 1.3 and predate both the runtime upgrade and this
+  release's interpreter work, so every one of them was re-run rather than
+  relabelled. All measurements come from one Linux x64 box with nothing else on
+  it, each package's own `bun run bench`, and the machine is named in each table's
+  caption — compare columns within a table, not against a figure you remember.
+
+  Three of them changed in ways a version label would have hidden:
+
+  - **`@amritk/lint`** — Spectral's JSONPath engine used to throw on the 2.8 MB
+    OpenAI spec under Bun, so that row was published as mjst-only. It no longer
+    throws, and the row is a real comparison now (~0.73 s against ~7.4 s). The
+    bench keeps its guard, since that failure was runtime-specific.
+  - **`@amritk/api`** — Bun 1.4 made web-standard `Request`/`Response`
+    construction far cheaper, which lifted every column of the Bun table (bare
+    Hono went ~185k → ~503k ops/s). The compiled engine still leads the
+    like-for-like `hono + zod` column on Bun and Node, but it no longer leads
+    _unvalidated_ Hono on the GET cases, and under workerd it now trails
+    `hono + zod` on the static GET. The prose says so.
+  - **`@amritk/runtime-validators`** — the interpreter is much faster than when
+    the ratios against Ajv were written, so the cold-path win narrows to ~96–870×
+    (from ~90–1600×) and the steady-state loss narrows to ~6–11× (from ~15–25×).
+
+  `@amritk/generate-parsers`, `@amritk/generate-validators`, `@amritk/resolve-refs`
+  and `@amritk/yaml` keep the same shape and conclusions with refreshed numbers.
+
+- d8ceda5: A `**` inside a brace alternation collapses the slash that follows the group
+  again.
+
+  `**` only becomes `(?:.*/)?` when it can see the `/` after it, and compiling
+  each alternative in isolation hid that slash — so `{**,dist}/x.yaml` produced
+  `(?:.*|dist)/x\.yaml`, which demands a slash and no longer matched a root-level
+  `x.yaml`. The brace _expansion_ this replaced (for being exponential in the
+  number of groups) did match it. A `/` immediately after a group is now folded
+  into each alternative, so `**/` collapses while `dist/` keeps its literal slash.
+
+- 06261b1: Report a malformed ruleset entry by name instead of crashing with a `TypeError`.
+
+  A rule written `my-rule:` with no body is `null` in YAML, and the author was told
+  "Cannot read properties of null (reading 'severity')". Seven more shapes failed
+  the same way — a rule entry that is a number or an array, an override entry that
+  is `null`/`undefined`/a number, a rule with no `given`, a `given` that is not a
+  string. Each is now a named error raised while the ruleset is built:
+
+  - `Rule "my-rule" must be a rule definition, a boolean, or a severity — got null`
+  - `Rule "my-rule" is missing \`given\``
+  - `Rule "my-rule" has an invalid \`given\`: expected a JSONPath string, got \`number\``
+
+  Malformed _override_ entries are checked at build time too; because overrides
+  apply per document, they previously surfaced from the middle of a lint run.
+
+  A file-glob override may now also give a severity as its numeric LSP level
+  (`{ 'my-rule': 1 }`), which is what the pointer-scoped override path already
+  accepted; it used to be misread as a full rule definition.
+
+  Also adds a seeded fuzz sweep that crosses random rulesets with awkward
+  documents and asserts the engine never fails in a way it cannot explain.
+
+- eb58f18: Name the malformed part of a ruleset instead of failing deep inside it.
+
+  Following on from the malformed-rule-entry fix, five more shapes surfaced as a
+  `TypeError` from wherever the value was first touched: `overrides` that is not an
+  array ("overrides is not iterable"), an override with no `files` globs ("Cannot
+  read properties of undefined (reading 'filter')" — once per linted document,
+  because `files` is read per document), a `formats` gate that is not an array
+  ("number 5 is not iterable"), an `extends` entry that is neither a string nor a
+  ruleset object, and a definition that is not an object at all ("Invalid value
+  used as weak map key", from the memoization layer). Each is now a named error
+  raised while the ruleset is built.
+
+- be45c14: Harden the engine against names that collide with `Object.prototype` members, and stop brace globs from exploding.
+
+  - A pointer-scoped override could set a finding's severity to a _function_: both
+    the rule code and the severity name were read off the prototype chain, so
+    `'constructor'` passed the membership check. Every later comparison against
+    `DiagnosticSeverity.Error` then read false, so a CLI would exit 0 on a document
+    it should fail. Rule codes, severity names, `then.field`, `{{template}}`
+    placeholders, and `parserOptions` severities are now all own-property reads.
+  - `oasDiscriminator` and `oasServerVariables` tested membership with `in`, so a
+    discriminator named `constructor` or a `{constructor}` server-URL template read
+    as already defined and the finding went unreported.
+  - An override `files` glob compiled its brace groups into a cartesian product of
+    concrete globs: `'{a,b}'.repeat(22)` — 110 characters — took ~40 seconds and
+    built a 96 MB regex source. Groups now compile in place as regex alternations,
+    which is linear in the pattern's length, and the compiled-pattern cache is
+    bounded like the engine's other memoization maps.
+
+- 178eab0: Document the one thing `restrictTo` does not cover: a regular expression a
+  ruleset writes (in `pattern`'s `match`/`notMatch`, or as a literal inside a
+  `[?(...)]` filter) is run against text from the document, so an ambiguous pattern
+  can backtrack catastrophically on input crafted to trigger it — a hostile
+  _document_ hanging the linter through a regex the _ruleset_ provided.
+- 5563205: Index `$ref` targets once instead of rescanning per component, and cap filter nesting.
+
+  - `unreferencedReusableObject` and `oasUnusedComponent` each rescanned the whole
+    `$ref` set for every component — and the former copied that set into a fresh
+    array on each one. Both now share one index of every ref and its ancestors: on
+    a document with 5,000 refs and 3,000 components the check drops from ~810 ms to
+    ~10 ms, and the duplicated ref walk is gone.
+  - `or`, `xor`, and `typedEnum` read through the prototype chain. A rule listing
+    `constructor` counted it as present on every object, and a schema written
+    `type: valueOf` produced a bogus error-severity "rule threw" finding.
+  - A deeply nested `[?(...)]` filter failed with "Maximum call stack size exceeded
+    at offset undefined", at a threshold that varies by runtime. Filters now refuse
+    to nest past 100 levels with a message that says so, and an error no longer
+    echoes an unbounded expression body.
+
+- 7ca3bd8: Share one ruleset-file loader between the package root and the OpenAPI preset, and isolate three more failure paths.
+
+  `@amritk/lint/rules/openapi` carried its own copy of the `extends`/custom-function
+  loader, and the copies had drifted:
+
+  - `createOpenApiRuleset` crashed with a stack overflow on a two-file `extends`
+    cycle (`a.yaml` → `b.yaml` → `a.yaml`). Each file read returns a fresh object,
+    so an object-identity cycle guard never fires; the shared loader keys on the
+    resolved `(basePath, reference)` edge.
+  - `createOpenApiRuleset(definition, basePath, { restrictTo })` and
+    `resolveOpenApiRuleset(name, basePath, { restrictTo })` now accept the same
+    trust boundary the package root has had.
+
+  Also:
+
+  - A `$ref` that is not a URL relative to a remote document (`$ref: "//"`) threw a
+    `TypeError` out of the whole lint run; it now stops the origin walk, like any
+    other `$ref` that cannot be followed.
+  - A fixer that throws no longer abandons every other fix queued behind it.
+  - `loadOasSchema` reports an unknown OpenAPI version by name instead of failing
+    inside `JSON.parse`.
+
+- 41f8173: One severity table and one finding comparator, instead of three and two.
+
+  The severity-name mapping was written out in three places (rule normalization,
+  pointer-scoped overrides, and parser options) and the finding-order comparator in
+  two. Nothing was wrong with any individual copy after the preceding fixes, but a
+  severity added to one of them would have been silently missing from the others.
+  Both now live in one module each.
+
+  Also extends the fuzz sweep to the JSONPath compiler: a path that fails to
+  compile must match nothing (falling back to the document root would run a rule
+  against the whole file), and evaluating a batch of paths must return exactly what
+  evaluating each one alone does.
+
+- c6a1f16: Read each schema node's keywords once, compile lint filters, and match descents by key.
+
+  - **`@amritk/runtime-validators`** — the interpreter walked the schema afresh for
+    every value and asked each node for every keyword it might carry on every one of
+    those walks: about two dozen `Object.hasOwn` plus dynamic-key reads per node, per
+    validation. A CPU profile of the steady-state benchmark put 31% of the whole run
+    inside that one reader. A node's keywords are now read once into a fixed-shape
+    record and reused, which makes each read a fixed-offset field load instead of a
+    megamorphic dictionary lookup, moves the `typeof` narrowing off the hot path, and
+    lets group flags skip the reference, branching and type-specific blocks outright.
+    Steady-state throughput is 2.1–3.6× on the benchmark cases. Building the record
+    walks the node's own keys — three or four, rather than two dozen questions — so it
+    is cheaper than a single old scan, and the cache only starts filling on a
+    validator's _second_ call, leaving the cold one-shot path unchanged-to-better.
+    `@amritk/api`'s runtime engine and `@amritk/lint`'s `schema` rule both run this
+    interpreter, so both inherit it.
+  - **`@amritk/helpers`** — `generateIndexBarrel` read every character of every
+    generated file looking for `export` at a line start, which was ~18% of a
+    generation run. It now jumps between `export ` occurrences with `indexOf`, taking
+    roughly a quarter off generation time per parser.
+  - **`@amritk/lint`** — `[?(...)]` filter bodies compile to closures once instead of
+    being walked as an AST on every document node (still no `eval`/`new Function`;
+    these are ordinary closures over the parsed tree), recursive descents ask which
+    paths wanted each key the node has rather than asking every path in turn, and two
+    `/^\d+$/` tests moved off the hot path. Linting the vendored real-world specs:
+    petstore 11.1 → 7.4 ms, openai 1780 → 1110 ms.
+
+- Updated dependencies [0f27eeb]
+- Updated dependencies [c6a1f16]
+- Updated dependencies [dcfe9a9]
+- Updated dependencies [b3364fd]
+- Updated dependencies [7e452e1]
+- Updated dependencies [b957e36]
+  - @amritk/runtime-validators@0.12.0
+  - @amritk/yaml@0.7.2
+
 ## 0.4.8
 
 ### Patch Changes
