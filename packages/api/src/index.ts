@@ -1,3 +1,5 @@
+export type { AcceptedWebSocket, ServerWebSocket } from './accept-web-socket'
+export { acceptWebSocket } from './accept-web-socket'
 export type { WaitUntilContext } from './after-response'
 export { createBackground, runAfterResponse } from './after-response'
 export { appendCookies } from './append-cookies'
@@ -17,6 +19,14 @@ export {
 export { coercePrimitive } from './coerce-primitive'
 export type { CompileModuleOptions } from './compile/compile-to-module'
 export { compileToModule } from './compile/compile-to-module'
+export type {
+  ConnectRealtimeOptions,
+  RealtimeConnection,
+  RealtimeTransport,
+  WebSocketLike,
+  WebTransportLike,
+} from './connect-realtime'
+export { connectRealtime } from './connect-realtime'
 export { createApi } from './create-api'
 export type { BearerSession, BearerSessionOptions, BearerTokenStorage } from './create-bearer-session'
 export { createBearerSession } from './create-bearer-session'
@@ -59,6 +69,8 @@ export type { ETagOptions } from './create-etag'
 export { createETag } from './create-etag'
 export type { HealthCheck, HealthOptions } from './create-health'
 export { createHealth } from './create-health'
+export type { MessageQueue } from './create-message-queue'
+export { createMessageQueue } from './create-message-queue'
 export type {
   RateLimit,
   RateLimitOptions,
@@ -99,6 +111,8 @@ export { isPayloadTooLargeError, payloadTooLargeError } from './payload-too-larg
 export { raw } from './raw'
 export { readBodyCapped } from './read-body-capped'
 export { readBytesCapped } from './read-bytes-capped'
+export type { RealtimeMessage } from './realtime-framing'
+export { DEFAULT_MAX_MESSAGE_BYTES, decodeRealtimeFrames, encodeRealtimeFrame } from './realtime-framing'
 export { refinementFailure } from './refinement-failure'
 export { requireContext } from './require-context'
 export { routeFactory } from './route-factory'
@@ -171,6 +185,8 @@ export type {
   ValidationFailureBody,
   ValidatorCompiler,
 } from './types'
+export type { UpgradeWebSocketOptions, WebSocketUpgrader } from './upgrade-web-socket'
+export { upgradeWebSocket } from './upgrade-web-socket'
 export { versionRoutes } from './version-routes'
 export { withTimeout } from './with-timeout'
 export { writableResponse } from './writable-response'
