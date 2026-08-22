@@ -444,19 +444,57 @@ describe('asyncApiMessageExamples', () => {
 
 describe('asyncApiPayload', () => {
   const document = { asyncapi: '2.6.0' }
+  /** The rule hands this function the whole message, not the payload. */
+  const message = (payload: unknown, rest: Record<string, unknown> = {}): Record<string, unknown> => ({
+    payload,
+    ...rest,
+  })
 
   it('reports a payload that is not a valid AsyncAPI Schema object', () => {
-    expect(run(asyncApiPayload, { type: 'nope' }, null, contextFor(document))).not.toEqual([])
+    expect(run(asyncApiPayload, message({ type: 'nope' }), null, contextFor(document))).not.toEqual([])
   })
 
   it('accepts a valid payload', () => {
     expect(
-      run(asyncApiPayload, { type: 'object', properties: { a: { type: 'string' } } }, null, contextFor(document)),
+      run(
+        asyncApiPayload,
+        message({ type: 'object', properties: { a: { type: 'string' } } }),
+        null,
+        contextFor(document),
+      ),
     ).toEqual([])
   })
 
+  it('reports against the payload, not the message', () => {
+    const found = asyncApiPayload(
+      message({ type: 'nope' }),
+      null as never,
+      contextFor(document, ['components', 'messages', 'M']),
+    )
+    expect(found?.[0]?.path?.slice(0, 4)).toEqual(['components', 'messages', 'M', 'payload'])
+  })
+
+  it('leaves a payload alone when a trait declares a foreign schemaFormat', () => {
+    // The `schemaFormat` gate used to live in the rule's `given`, which cannot
+    // fold traits in, so an Avro payload was judged as an AsyncAPI Schema Object.
+    const avro = message(
+      { type: 'record', name: 'P', fields: [] },
+      {
+        traits: [{ schemaFormat: 'application/vnd.apache.avro;version=1.9.0' }],
+      },
+    )
+    expect(run(asyncApiPayload, avro, null, contextFor(document))).toEqual([])
+    // The same payload with no such trait is still judged.
+    expect(run(asyncApiPayload, message({ type: 'record' }), null, contextFor(document))).not.toEqual([])
+  })
+
+  it('says nothing for a message with no payload', () => {
+    expect(run(asyncApiPayload, { messageId: 'm' }, null, contextFor(document))).toEqual([])
+    expect(run(asyncApiPayload, 'not-a-message', null, contextFor(document))).toEqual([])
+  })
+
   it('says nothing when the document declares a version it has no schema for', () => {
-    expect(run(asyncApiPayload, { type: 'nope' }, null, contextFor({ asyncapi: '2.7.0' }))).toEqual([])
+    expect(run(asyncApiPayload, message({ type: 'nope' }), null, contextFor({ asyncapi: '2.7.0' }))).toEqual([])
   })
 
   it('finds the Schema Object definition in every bundled version', () => {
@@ -465,8 +503,8 @@ describe('asyncApiPayload', () => {
     // nothing, so check each one actually judges a payload.
     for (const version of ASYNCAPI_VERSIONS) {
       const context = contextFor({ asyncapi: `${version}.0` })
-      expect(run(asyncApiPayload, { type: 'object' }, null, context), version).toEqual([])
-      expect(run(asyncApiPayload, { type: 'nope' }, null, context), version).not.toEqual([])
+      expect(run(asyncApiPayload, { payload: { type: 'object' } }, null, context), version).toEqual([])
+      expect(run(asyncApiPayload, { payload: { type: 'nope' } }, null, context), version).not.toEqual([])
     }
   })
 })

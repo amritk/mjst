@@ -16,7 +16,14 @@ const MESSAGE = 'Headers schema type must be "object"'
  * schema language are left alone, exactly as a non-AsyncAPI payload is.
  */
 export const asyncApiHeadersObject: RulesetFunction = (headers, _options, context): IFunctionResult[] => {
+  // A boolean is a valid JSON Schema — and `false` rejects every message that
+  // carries headers at all, which is never what an author meant. The structural
+  // meta-schema accepts it, so this rule is the only thing that reports it.
+  if (typeof headers === 'boolean') return [{ message: MESSAGE, path: [...context.path] }]
   if (!isObject(headers)) return []
+  // A Reference Object reaches here only when no resolver was injected; the
+  // target is where the type lives, so there is nothing to judge.
+  if (typeof headers['$ref'] === 'string') return []
 
   if (Object.hasOwn(headers, 'schema')) {
     if (!isAsyncApiSchemaFormat(headers['schemaFormat'])) return []

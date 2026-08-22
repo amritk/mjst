@@ -428,3 +428,143 @@ describe('reusable channels and pointer escapes', () => {
     expect(findings.filter((finding) => finding.code === 'asyncapi-message-examples')).toHaveLength(1)
   })
 })
+
+describe('references inside a message', () => {
+  const v2 = (extra: Record<string, unknown>): Record<string, unknown> => ({
+    asyncapi: '2.6.0',
+    info: { title: 'T', version: '1.0.0' },
+    ...extra,
+  })
+
+  it("says nothing about an example that matches a $ref'd payload schema", async () => {
+    // Unresolved, the raw `{$ref: …}` reached the validator and every document
+    // using the commonest AsyncAPI idiom drew "Cannot resolve $ref" at error
+    // severity — a validator-internal message, on a valid document.
+    const doc = v2({
+      channels: {
+        c: {
+          subscribe: {
+            operationId: 'op',
+            message: { messageId: 'm', payload: { $ref: '#/components/schemas/S' }, examples: [{ payload: { a: 1 } }] },
+          },
+        },
+      },
+      components: { schemas: { S: { type: 'object' } } },
+    })
+    expect((await codesFor(doc, { resolve: true })).has('asyncapi-message-examples')).toBe(false)
+  })
+
+  it("checks the examples a $ref'd message trait supplies", async () => {
+    // Reachable from neither direction for a while: the declaration was not in
+    // the given, and the use site could not see through the reference.
+    const doc = v2({
+      channels: {
+        c: {
+          subscribe: {
+            operationId: 'op',
+            message: {
+              messageId: 'm',
+              payload: { type: 'object' },
+              traits: [{ $ref: '#/components/messageTraits/T' }],
+            },
+          },
+        },
+      },
+      components: {
+        messageTraits: {
+          T: {
+            headers: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+            examples: [{ headers: { id: 42 } }],
+          },
+        },
+      },
+    })
+    expect((await codesFor(doc, { resolve: true })).has('asyncapi-message-examples')).toBe(true)
+  })
+
+  it("says nothing about $ref'd headers, resolver or not", async () => {
+    const doc = v2({
+      channels: {
+        c: {
+          subscribe: {
+            operationId: 'o',
+            message: { messageId: 'm', headers: { $ref: '#/components/schemas/H' }, payload: { type: 'object' } },
+          },
+        },
+      },
+      components: { schemas: { H: { type: 'object' } } },
+    })
+    expect((await codesFor(doc, { resolve: true })).has('asyncapi-headers-schema-type-object')).toBe(false)
+    expect((await codesFor(doc)).has('asyncapi-headers-schema-type-object')).toBe(false)
+  })
+
+  it('reports headers written as a boolean schema', async () => {
+    // `false` rejects every message that carries headers, and the structural
+    // meta-schema accepts it, so this rule is the only thing that reports it.
+    for (const headers of [true, false]) {
+      const doc = v2({
+        channels: {
+          c: { subscribe: { operationId: 'o', message: { messageId: 'm', headers, payload: { type: 'object' } } } },
+        },
+      })
+      expect((await codesFor(doc)).has('asyncapi-headers-schema-type-object'), String(headers)).toBe(true)
+    }
+  })
+
+  it('leaves a payload alone when a trait declares a foreign schemaFormat', async () => {
+    // The gate used to live in the rule's `given`, which cannot fold traits in.
+    const doc = v2({
+      channels: {
+        c: {
+          subscribe: {
+            operationId: 'o',
+            description: 'd',
+            message: {
+              messageId: 'm',
+              traits: [{ schemaFormat: 'application/vnd.apache.avro;version=1.9.0' }],
+              payload: { type: 'record', name: 'P', fields: [] },
+            },
+          },
+        },
+      },
+    })
+    const codes = await codesFor(doc, { resolve: true })
+    expect(codes.has('asyncapi-payload')).toBe(false)
+    expect(codes.has('asyncapi-payload-unsupported-schemaFormat')).toBe(true)
+  })
+
+  it('reports one finding for one mistake reached by several references', async () => {
+    const doc = v2({
+      channels: {
+        a: { subscribe: { operationId: 'a', description: 'd', message: { $ref: '#/components/messages/M' } } },
+        b: { subscribe: { operationId: 'b', description: 'd', message: { $ref: '#/components/messages/M' } } },
+      },
+      components: {
+        messages: {
+          M: { messageId: 'm', payload: { type: 'not-a-type' }, tags: [{ name: 'dup' }, { name: 'dup' }] },
+        },
+      },
+    })
+    const findings = await lint(JSON.stringify(doc, null, 2), { ruleset: allRules, resolve })
+    for (const code of ['asyncapi-payload', 'asyncapi-tags-uniqueness']) {
+      expect(
+        findings.filter((finding) => finding.code === code),
+        code,
+      ).toHaveLength(1)
+    }
+  })
+
+  it('checks the servers of a reusable 2.x channel exactly once', async () => {
+    const doc = v2({
+      servers: { s: { url: 'wss://api.test', protocol: 'wss' } },
+      channels: { a: { $ref: '#/components/channels/R' }, b: { $ref: '#/components/channels/R' } },
+      components: {
+        channels: {
+          R: { servers: ['nope'], subscribe: { operationId: 'o', message: { payload: { type: 'object' } } } },
+        },
+      },
+    })
+    const findings = await lint(JSON.stringify(doc, null, 2), { ruleset: allRules, resolve })
+    expect(findings.filter((finding) => finding.code === 'asyncapi-channel-servers')).toHaveLength(1)
+  })
+})

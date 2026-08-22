@@ -1,7 +1,8 @@
 import type { IFunctionResult, RulesetFunction } from '../../../core/types'
 import { schema as schemaFunction } from '../../../functions'
 import { type AsyncApiVersion, asyncApiSchemaVersion, loadAsyncApiSchema } from '../schemas'
-import { isObject } from './helpers'
+import { isObject, mergeTraits } from './helpers'
+import { isAsyncApiSchemaFormat } from './schema-format'
 
 // The AsyncAPI Schema Object is defined inside each version's own meta-schema,
 // as a subschema with its own `$id`. Validating a payload against it means
@@ -30,16 +31,31 @@ const payloadSchema = (version: AsyncApiVersion): object => {
 }
 
 /**
- * Validates a message `payload` against the AsyncAPI Schema Object definition of
- * the document's own version — the check that catches a payload using a JSON
+ * Validates a message's `payload` against the AsyncAPI Schema Object definition
+ * of the document's own version — the check that catches a payload using a JSON
  * Schema keyword AsyncAPI does not allow, or a `type` that is not a type.
  *
- * The rule that calls this is gated to messages with no `schemaFormat`, because
- * a payload in Avro or Protobuf is not an AsyncAPI Schema Object at all
- * (`asyncapi-payload-unsupported-schemaFormat` reports those separately).
+ * Takes the whole message rather than the payload so that traits are folded in
+ * before the `schemaFormat` is read. A payload in Avro or Protobuf is not an
+ * AsyncAPI Schema Object at all, and a `schemaFormat` naming one of those can be
+ * contributed by a trait — invisible to a `given` filter, which is how an Avro
+ * payload came to be judged as JSON Schema and reported at error severity.
+ * `asyncapi-payload-unsupported-schemaFormat` reports those separately.
  */
-export const asyncApiPayload: RulesetFunction = (payload, _options, context): IFunctionResult[] => {
+export const asyncApiPayload: RulesetFunction = (message, _options, context): IFunctionResult[] => {
+  if (!isObject(message)) return []
+  const merged = mergeTraits(message)
+  if (!isAsyncApiSchemaFormat(merged['schemaFormat'])) return []
+  const payload = merged['payload']
+  if (payload === undefined) return []
+
   const version = asyncApiSchemaVersion(isObject(context.document.data) ? context.document.data['asyncapi'] : undefined)
   if (version === undefined) return []
-  return schemaFunction(payload, { schema: payloadSchema(version), allErrors: true }, context) ?? []
+  return (
+    schemaFunction(
+      payload,
+      { schema: payloadSchema(version), allErrors: true },
+      { ...context, path: [...context.path, 'payload'] },
+    ) ?? []
+  )
 }

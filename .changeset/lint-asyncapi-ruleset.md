@@ -44,12 +44,19 @@ Three things worth knowing:
   re-vendored schema reintroduces an upstream pattern.
 - **Structural validation runs once, against the document as written.** There is
   one meta-schema rule per major and it is `resolved: false`, matching the
-  `oas*-schema` rules. Validating the dereferenced tree instead re-checks every
-  `components` entry once per `$ref` that reaches it, so one mistake in a
-  reusable message reported three times in a document that used it twice. The
-  trade-off is what a `$ref` hides: content from another file goes unchecked, as
-  does a same-file reference aimed at the wrong kind of object — the reference
-  itself is well-formed either way. The OpenAPI preset has the same gap.
+  `oas*-schema` rules. The trade-off is what a `$ref` hides: content from another
+  file goes unchecked, as does a same-file reference aimed at the wrong kind of
+  object — the reference itself is well-formed either way. The OpenAPI preset has
+  the same gap.
+
+- **Which tree each rule sees is chosen per rule, and pinned by a test.** A rule
+  that reads what the author wrote — channel addresses, server variables, tag
+  names, reference targets — runs unresolved, so a reusable definition is read at
+  its declaration and nowhere else. A rule that validates schema *content* —
+  payloads, headers, examples — must see the dereferenced tree, or a
+  `$ref`'d schema is an opaque `{$ref: …}` it cannot judge (and, briefly, wrongly
+  flagged). `ruleset-manifest.test.ts` pins the choice for all 54 rules alongside
+  severity and gating.
 - **The structural rules skip a version they have no schema for.** A future
   `2.7.0` document keeps getting the style rules, but is never judged against
   2.6's meta-schema.
