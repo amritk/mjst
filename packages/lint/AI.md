@@ -34,12 +34,15 @@ const findings = await lintDocument('version: 1\n', { ruleset, source: 'service.
 4. **`extends` targets are file paths or npm packages only** — there are no
    named built-in rulesets in core. String `extends` resolve relative to
    `rulesetBasePath` (or the ruleset file's own directory).
-5. **OpenAPI support is a separate subpath**, `@amritk/lint/rules/openapi`
-   (`createOpenApiRuleset`, `oas`, `oasFixers`, …) — not the package root. Build
-   it with `createOpenApiRuleset()` and hand the *result* to `lintDocument` /
-   `fixDocument` as `ruleset`. Passing the `oas` definition as data instead
-   silently produces nothing: its custom functions are unknown at the package
-   root, and its `formats` gate matches nothing without the OpenAPI detectors.
+5. **OpenAPI and AsyncAPI support are separate subpaths**,
+   `@amritk/lint/rules/openapi` (`createOpenApiRuleset`, `oas`, `oasFixers`, …)
+   and `@amritk/lint/rules/asyncapi` (`createAsyncApiRuleset`, `asyncapi`, …) —
+   not the package root. Build one with `createOpenApiRuleset()` /
+   `createAsyncApiRuleset()` and hand the *result* to `lintDocument` /
+   `fixDocument` as `ruleset`. Passing the `oas` or `asyncapi` definition as data
+   instead silently produces nothing: its custom functions are unknown at the
+   package root, and its `formats` gate matches nothing without that spec's
+   detectors.
 6. **A ruleset is privileged; a document is not.** Linted documents cannot
    execute anything, and `[?(...)]` filters in a `given` are parsed and
    interpreted rather than evaluated as JavaScript. But `extends` follows any
@@ -51,6 +54,13 @@ const findings = await lintDocument('version: 1\n', { ruleset, source: 'service.
 7. **`createRuleset` is memoized** per `(definition object, basePath,
    restrictTo)`. Mutating a definition you already passed in will not rebuild the
    ruleset — pass a fresh object instead.
+8. **AsyncAPI rules are gated per major.** The 3.x rules are named with an
+   `asyncapi-3-` prefix (`asyncapi-3-operation-description`) and the 2.x ones are
+   not, because 3.0 moved operations to the top level and tags under `info`.
+   Re-severitying `asyncapi-operation-description` does nothing to a 3.0
+   document. The structural rules pick their meta-schema from the `asyncapi`
+   field, and a version with no bundled schema (a future `2.7`, say) reports
+   nothing rather than being judged against a neighbouring version's.
 
 ## Exports
 
@@ -70,5 +80,6 @@ const findings = await lintDocument('version: 1\n', { ruleset, source: 'service.
 |---|---|
 | `@amritk/lint` | core engine, `lintDocument`/`fixDocument`, built-in functions |
 | `@amritk/lint/rules/openapi` | ready-made OpenAPI preset (`createOpenApiRuleset`, `oas`) |
+| `@amritk/lint/rules/asyncapi` | ready-made AsyncAPI 2.x/3.x preset (`createAsyncApiRuleset`, `asyncapi`) |
 
 Install: `bun add @amritk/lint`.

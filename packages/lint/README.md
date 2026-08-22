@@ -21,7 +21,7 @@
 
 It is **format-agnostic**: the core engine ships no built-in ruleset and knows nothing about OpenAPI or any other schema — you bring the rules. This is JSON/YAML style-guide linting with JSON Schema and custom rules at its core.
 
-For OpenAPI specifically, the `@amritk/lint/rules/openapi` subpath ships a ready-made preset on top of that engine — see [OpenAPI ruleset](#openapi-ruleset) below.
+For OpenAPI and AsyncAPI specifically, the `@amritk/lint/rules/openapi` and `@amritk/lint/rules/asyncapi` subpaths ship ready-made presets on top of that engine — see [OpenAPI ruleset](#openapi-ruleset) and [AsyncAPI ruleset](#asyncapi-ruleset) below.
 
 The CLI lives in the [`mjst`](../cli) binary as `mjst lint`; this package is the programmatic library behind it.
 
@@ -262,6 +262,39 @@ const findings = await lint(spec, { ruleset })
 The structural rules validate against the **official `spec.openapis.org` meta-schemas, vendored as raw `.json`** ([`schemas/`](./src/rules/openapi/schemas/)). 3.0/3.1/3.2 are byte-for-byte verbatim; only 2.0 differs (its external draft-04 metaschema refs are inlined, since the offline interpreter never fetches remote refs). OpenAPI 3.1/3.2 express Schema Objects as JSON Schema 2020-12 via a local `$dynamicRef`/`$dynamicAnchor`, which `@amritk/runtime-validators` resolves natively — so the whole document envelope is validated against the official schema with no bundling or dialect engine, while Schema Object internals stay permissive.
 
 `$ref` resolution stays the caller's job: the preset doesn't pull in a resolver, so for rules that need the dereferenced document (`resolved: true`) pass a `resolve` function to the core `lintWithResult` (for example wrapping [`@amritk/resolve-refs`](../resolve-refs)). The `mjst lint` CLI already wires one up.
+
+---
+
+## AsyncAPI ruleset
+
+The same treatment for event-driven APIs. The **`@amritk/lint/rules/asyncapi`** subpath ships a preset covering **AsyncAPI 2.0–2.6 and 3.0**, layered on the same engine and adding **no dependencies**.
+
+```ts
+import { lint } from '@amritk/lint'
+import { createAsyncApiRuleset } from '@amritk/lint/rules/asyncapi'
+
+// Defaults to `extends: [asyncapi]` (recommended rules only, like `spectral:asyncapi`).
+const ruleset = createAsyncApiRuleset()
+const findings = await lint(document, { ruleset })
+```
+
+`createAsyncApiRuleset(definition?, basePath?, options?)` mirrors its OpenAPI counterpart: functions and format detectors layered over the built-ins, and `extends` resolution that understands the `asyncapi` / `loupe:asyncapi` / `spectral:asyncapi` names (the last two so existing Spectral-style rulesets extend unchanged). Enable every rule with `createAsyncApiRuleset({ extends: [['asyncapi', 'all']] })`. `options.restrictTo` applies the same [trust boundary](#trust-boundary--who-may-write-a-ruleset).
+
+| Export | What it does |
+| --- | --- |
+| `createAsyncApiRuleset(definition?, basePath?, options?)` | Build a runnable AsyncAPI `Ruleset` (functions + formats + `extends` resolution). |
+| `resolveAsyncApiRuleset(name, basePath?, options?)` | Resolve an `extends` reference, including the `asyncapi` / `loupe:asyncapi` / `spectral:asyncapi` names. |
+| `asyncapi` | The built-in AsyncAPI ruleset definition. |
+| `aasFunctions` / `allFunctions` | The AsyncAPI-specific functions; `allFunctions` = built-ins + AsyncAPI. |
+| `aasFormats` | AsyncAPI version detectors (`aas2`, `aas2.0`–`aas2.6`, `aas3`, `aas3.0`). |
+| `loadAsyncApiSchema(version)` | Lazily load one version's official structural meta-schema (`'2.0'`–`'2.6'`, `'3.0'`). See [`schemas/README.md`](./src/rules/asyncapi/schemas/README.md). |
+| `loadResolvedAsyncApiSchema(version)` | The same schema, widened at the four 3.0 positions that mandate a `$ref`, for validating a dereferenced document. |
+
+Both majors are covered, and the rules are gated by format so a 2.x document never picks up a 3.x rule. The 3.0-specific ones carry an `asyncapi-3-` prefix, matching Spectral's names so a `.spectral.yml` that re-severities individual rules keeps working.
+
+The structural rules validate against the **official [`asyncapi/spec-json-schemas`](https://github.com/asyncapi/spec-json-schemas) meta-schemas, vendored as raw `.json`** ([`schemas/`](./src/rules/asyncapi/schemas/)). These are draft-07 documents that reference their own subschemas by absolute `$id` URI rather than by JSON Pointer — nothing is fetched, because every target is declared inside the same document. Each file is byte-for-byte upstream apart from **three regular expressions**, one of which is genuinely exponential on a failing input; each is replaced by a provably equivalent pattern with a single unambiguous quantifier, and the test suite asserts the equivalence over a generated corpus. See the [schemas README](./src/rules/asyncapi/schemas/README.md).
+
+AsyncAPI 3.0 needs one extra step for `resolved: true` rules. The published schema does not merely *allow* a `$ref` for a channel's servers and an operation's channel and messages — it **requires** one, so a dereferenced document stops matching the schema its own spec calls valid. `loadResolvedAsyncApiSchema` widens exactly those four positions to "a Reference Object *or* the object it points at", which lets the resolved pass check the inlined content while still tolerating a `$ref` the resolver deliberately left in place (`@amritk/resolve-refs` does that for any chain that would close a cycle). With no resolver injected, `asyncapi-3-document-resolved` recognises that it was handed the raw tree and stays silent rather than duplicating every finding of its unresolved twin.
 
 ---
 
