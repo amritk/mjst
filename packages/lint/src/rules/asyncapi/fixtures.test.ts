@@ -153,4 +153,21 @@ describe('asyncapi fixtures', () => {
     const codes = (await lint(doc, { ruleset: allRules, resolve })).map((finding) => finding.code)
     expect(codes).not.toContain('asyncapi-message-messageId-uniqueness')
   })
+
+  it('never reports the same finding twice on a vendored document', async () => {
+    // A rule that walks the dereferenced tree sees a `$ref`'d component once per
+    // reference site *and* once at its declaration, so one authored mistake was
+    // printed two, three or four times at byte-identical line:column. The rules
+    // whose givens already span both locations therefore run unresolved.
+    for (const fixture of fixtures) {
+      const findings = await lint(fixture.source, { ruleset: allRules, resolve })
+      const seen = new Map<string, number>()
+      for (const finding of findings) {
+        const key = `${finding.code} ${finding.range.start.line}:${finding.range.start.character} ${finding.message}`
+        seen.set(key, (seen.get(key) ?? 0) + 1)
+      }
+      const duplicated = [...seen].filter(([, count]) => count > 1)
+      expect(duplicated, fixture.name).toEqual([])
+    }
+  })
 })

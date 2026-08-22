@@ -37,8 +37,12 @@ describe('createAsyncApiRuleset', () => {
     // A 2.x rule backed by an AsyncAPI-specific function (`asyncApiPayload`),
     // as opposed to the two above, which both run the core `truthy`.
     expect(codes.has('asyncapi-payload')).toBe(true)
-    // Every finding carries an exact source range.
-    for (const finding of findings) expect(finding.range.start.line).toBeGreaterThanOrEqual(0)
+    // Every finding carries a real range. `start.line >= 0` would be
+    // unfalsifiable — lines are 0-based and never negative.
+    for (const finding of findings) {
+      expect(finding.range.end.character, String(finding.code)).toBeGreaterThan(0)
+      expect(finding.range.end.line, String(finding.code)).toBeGreaterThanOrEqual(finding.range.start.line)
+    }
   })
 
   it('lints YAML and JSON to the same findings', async () => {

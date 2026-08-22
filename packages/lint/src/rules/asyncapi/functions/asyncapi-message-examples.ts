@@ -1,6 +1,7 @@
 import type { IFunctionResult, JsonPath, RulesetFunction } from '../../../core/types'
 import { schema as schemaFunction } from '../../../functions'
 import { isObject, mergeTraits } from './helpers'
+import { isAsyncApiSchemaFormat } from './schema-format'
 
 /**
  * Where the message's effective `examples` array was actually written.
@@ -37,11 +38,19 @@ export const asyncApiMessageExamples: RulesetFunction = (input, _options, contex
   if (!Array.isArray(examples)) return []
   const origin = examplesOrigin(input)
 
+  // A payload in Avro or Protobuf is not a JSON Schema, so an example cannot be
+  // judged against it. Checking anyway compiled the foreign schema and surfaced
+  // the validator's own complaints ("unknown type \"record\"") as error-level
+  // findings on a valid document. Headers are always an AsyncAPI Schema Object,
+  // so they stay checked either way.
+  const payloadIsSchema = isAsyncApiSchemaFormat(message['schemaFormat'])
+
   const results: IFunctionResult[] = []
   examples.forEach((example, index) => {
     if (!isObject(example)) return
     for (const part of ['payload', 'headers'] as const) {
       if (example[part] === undefined) continue
+      if (part === 'payload' && !payloadIsSchema) continue
       const findings = schemaFunction(
         example[part],
         { schema: isObject(message[part]) ? message[part] : {}, allErrors: true },

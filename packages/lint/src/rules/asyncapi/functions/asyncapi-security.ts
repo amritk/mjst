@@ -1,5 +1,6 @@
 import type { IFunctionResult, RulesetFunction } from '../../../core/types'
 import { isObject } from './helpers'
+import { pointerSegment } from './pointer'
 
 /** Options for {@link asyncApiSecurity}: which object the requirement hangs off, for the message. */
 export type IAsyncApiSecurityOptions = {
@@ -26,24 +27,6 @@ const declaredScopes = (flows: unknown): ReadonlySet<string> => {
     for (const scope of Object.keys(flow['scopes'])) scopes.add(scope)
   }
   return scopes
-}
-
-/**
- * Decodes one JSON Pointer segment of a `$ref`: percent-escapes first (the
- * fragment is a URI), then `~1`/`~0`. The `$ref` is document text, so a
- * malformed escape like `%zz` is something an author can write, and
- * `decodeURIComponent` throws `URIError` on it — which replaced a real finding
- * with an internal-error diagnostic on the wrong node. An undecodable segment is
- * compared as written instead.
- */
-const pointerSegment = (segment: string): string => {
-  let decoded = segment
-  try {
-    decoded = decodeURIComponent(segment)
-  } catch {
-    // Not valid percent-encoding — compare the segment literally.
-  }
-  return decoded.replace(/~1/g, '/').replace(/~0/g, '~')
 }
 
 /** The `components.securitySchemes` map of the raw document, or an empty one. */

@@ -1,4 +1,5 @@
 import type { RuleEntry, RulesetDefinition } from '../../core/types'
+import { ASYNCAPI_SCHEMA_FORMAT_FILTER } from './functions/schema-format'
 import { LATEST_ASYNCAPI_VERSION } from './schemas'
 
 // AsyncAPI 2.x hangs its two operations off each channel as fixed fields. The
@@ -41,8 +42,8 @@ const V2_ALL_MESSAGES = [...V2_MESSAGES, ...V2_MESSAGE_TRAITS]
  */
 const defaultFormatOnly = (given: string): string =>
   given.endsWith('.message')
-    ? `${given.slice(0, -'.message'.length)}[?(@property === 'message' && @.schemaFormat === void 0)]`
-    : `${given.slice(0, -'[*]'.length)}[?(@.schemaFormat === void 0)]`
+    ? `${given.slice(0, -'.message'.length)}[?(@property === 'message' && (${ASYNCAPI_SCHEMA_FORMAT_FILTER}))]`
+    : `${given.slice(0, -'[*]'.length)}[?(${ASYNCAPI_SCHEMA_FORMAT_FILTER})]`
 
 const V2_DEFAULT_FORMAT_PAYLOADS = V2_ALL_MESSAGES.map((given) => `${defaultFormatOnly(given)}.payload`)
 
@@ -52,12 +53,14 @@ const V2_DEFAULT_FORMAT_PAYLOADS = V2_ALL_MESSAGES.map((given) => `${defaultForm
 const payloadSiblings = (keyword: 'default' | 'examples'): string[] =>
   V2_DEFAULT_FORMAT_PAYLOADS.map((given) => `${given}.${keyword}^`)
 
-const HEADERS_OBJECT_SCHEMA = { type: 'object', properties: { type: { enum: ['object'] } }, required: ['type'] }
-
 /** Rules that apply to every AsyncAPI version. */
 const sharedRules: Record<string, RuleEntry> = {
   'asyncapi-channel-parameters': {
     description: 'Channel parameters must be defined, and none may be redundant.',
+    // Unresolved: this given already covers both the served location and the
+    // reusable one, so on a dereferenced tree a `$ref`'d component matched at
+    // every reference site as well as at its declaration and printed the same
+    // finding once per reference.
     given: ['$.channels[*]', '$.components.channels[*]'],
     severity: 'error',
     then: { function: 'asyncApiChannelParameters' },
@@ -171,6 +174,10 @@ const v2Rules: Record<string, RuleEntry> = {
   'asyncapi-channel-servers': {
     description: 'Channel servers must be defined in the servers object.',
     formats: ['aas2'],
+    // Unresolved: this given already covers both the served location and the
+    // reusable one, so on a dereferenced tree a `$ref`'d component matched at
+    // every reference site as well as at its declaration and printed the same
+    // finding once per reference.
     given: '$',
     severity: 'error',
     then: { function: 'asyncApiChannelServers' },
@@ -180,13 +187,18 @@ const v2Rules: Record<string, RuleEntry> = {
     formats: ['aas2'],
     given: V2_ALL_MESSAGES.map((given) => `${given}.headers`),
     severity: 'error',
-    then: { function: 'schema', functionOptions: { schema: HEADERS_OBJECT_SCHEMA, allErrors: true } },
+    resolved: false,
+    then: { function: 'asyncApiHeadersObject' },
   },
   'asyncapi-message-examples': {
     description: 'Message examples must be valid against the payload and headers schemas.',
     formats: ['aas2'],
-    given: V2_ALL_MESSAGES,
+    // Messages only, not trait locations: the message-level pass folds traits in
+    // and reports against whichever array the merge took, so also matching each
+    // trait printed the identical finding twice.
+    given: V2_MESSAGES,
     severity: 'error',
+    resolved: false,
     then: { function: 'asyncApiMessageExamples' },
   },
   'asyncapi-message-messageId-uniqueness': {
@@ -234,6 +246,10 @@ const v2Rules: Record<string, RuleEntry> = {
   'asyncapi-payload': {
     description: 'Payloads must be valid against the AsyncAPI Schema object.',
     formats: ['aas2'],
+    // Unresolved: this given already covers both the served location and the
+    // reusable one, so on a dereferenced tree a `$ref`'d component matched at
+    // every reference site as well as at its declaration and printed the same
+    // finding once per reference.
     given: V2_DEFAULT_FORMAT_PAYLOADS,
     severity: 'error',
     then: { function: 'asyncApiPayload' },
@@ -241,6 +257,10 @@ const v2Rules: Record<string, RuleEntry> = {
   'asyncapi-payload-default': {
     description: 'Payload default must be valid against its schema.',
     formats: ['aas2'],
+    // Unresolved: this given already covers both the served location and the
+    // reusable one, so on a dereferenced tree a `$ref`'d component matched at
+    // every reference site as well as at its declaration and printed the same
+    // finding once per reference.
     given: payloadSiblings('default'),
     severity: 'error',
     then: { function: 'asyncApiSchemaValidation', functionOptions: { type: 'default' } },
@@ -248,6 +268,10 @@ const v2Rules: Record<string, RuleEntry> = {
   'asyncapi-payload-examples': {
     description: 'Payload examples must be valid against their schema.',
     formats: ['aas2'],
+    // Unresolved: this given already covers both the served location and the
+    // reusable one, so on a dereferenced tree a `$ref`'d component matched at
+    // every reference site as well as at its declaration and printed the same
+    // finding once per reference.
     given: payloadSiblings('examples'),
     severity: 'error',
     then: { function: 'asyncApiSchemaValidation', functionOptions: { type: 'examples' } },
@@ -257,7 +281,14 @@ const v2Rules: Record<string, RuleEntry> = {
     formats: ['aas2'],
     given: V2_ALL_MESSAGES,
     severity: 'info',
-    then: { field: 'schemaFormat', function: 'undefined' },
+    resolved: false,
+    // Only a format this package cannot validate is worth a note; naming the
+    // AsyncAPI dialect explicitly is not "unsupported".
+    then: {
+      field: 'schemaFormat',
+      function: 'pattern',
+      functionOptions: { match: '^application/vnd\\.aai\\.asyncapi([+;])' },
+    },
   },
   'asyncapi-schema': {
     description: 'Validate structure of AsyncAPI v2 specification.',
@@ -270,6 +301,10 @@ const v2Rules: Record<string, RuleEntry> = {
   'asyncapi-schema-default': {
     description: 'Schema default must be valid against its schema.',
     formats: ['aas2'],
+    // Unresolved: this given already covers both the served location and the
+    // reusable one, so on a dereferenced tree a `$ref`'d component matched at
+    // every reference site as well as at its declaration and printed the same
+    // finding once per reference.
     given: [
       '$.components.schemas[*].default^',
       '$.components.parameters[*].schema.default^',
@@ -281,6 +316,10 @@ const v2Rules: Record<string, RuleEntry> = {
   'asyncapi-schema-examples': {
     description: 'Schema examples must be valid against their schema.',
     formats: ['aas2'],
+    // Unresolved: this given already covers both the served location and the
+    // reusable one, so on a dereferenced tree a `$ref`'d component matched at
+    // every reference site as well as at its declaration and printed the same
+    // finding once per reference.
     given: [
       '$.components.schemas[*].examples^',
       '$.components.parameters[*].schema.examples^',
@@ -321,6 +360,10 @@ const v2Rules: Record<string, RuleEntry> = {
   'asyncapi-server-variables': {
     description: 'Server variables must be defined, and none may be redundant.',
     formats: ['aas2'],
+    // Unresolved: this given already covers both the served location and the
+    // reusable one, so on a dereferenced tree a `$ref`'d component matched at
+    // every reference site as well as at its declaration and printed the same
+    // finding once per reference.
     given: ['$.servers[*]', '$.components.servers[*]'],
     severity: 'error',
     then: { function: 'aasServerVariables' },
@@ -351,6 +394,10 @@ const v2Rules: Record<string, RuleEntry> = {
   'asyncapi-tags-uniqueness': {
     description: 'Tag names must be unique within each tags array.',
     formats: ['aas2'],
+    // Unresolved: this given already covers both the served location and the
+    // reusable one, so on a dereferenced tree a `$ref`'d component matched at
+    // every reference site as well as at its declaration and printed the same
+    // finding once per reference.
     given: [
       '$.tags',
       '$.servers[*].tags',
@@ -433,7 +480,8 @@ const v3Rules: Record<string, RuleEntry> = {
     formats: ['aas3'],
     given: V3_ALL_MESSAGES.map((given) => `${given}.headers`),
     severity: 'error',
-    then: { function: 'schema', functionOptions: { schema: HEADERS_OBJECT_SCHEMA, allErrors: true } },
+    resolved: false,
+    then: { function: 'asyncApiHeadersObject' },
   },
   'asyncapi-3-operation-description': {
     description: 'Operation must have a description.',
@@ -454,7 +502,12 @@ const v3Rules: Record<string, RuleEntry> = {
     formats: ['aas3'],
     given: V3_ALL_MESSAGES.map((given) => `${given}.payload`),
     severity: 'info',
-    then: { field: 'schemaFormat', function: 'undefined' },
+    resolved: false,
+    then: {
+      field: 'schemaFormat',
+      function: 'pattern',
+      functionOptions: { match: '^application/vnd\\.aai\\.asyncapi([+;])' },
+    },
   },
   'asyncapi-3-server-no-empty-variable': {
     // 3.0 split the 2.x `url` into `host` and `pathname`, and either may be
@@ -507,6 +560,10 @@ const v3Rules: Record<string, RuleEntry> = {
   'asyncapi-3-tags-uniqueness': {
     description: 'Tag names must be unique within each tags array.',
     formats: ['aas3'],
+    // Unresolved: this given already covers both the served location and the
+    // reusable one, so on a dereferenced tree a `$ref`'d component matched at
+    // every reference site as well as at its declaration and printed the same
+    // finding once per reference.
     given: [
       '$.info.tags',
       '$.servers[*].tags',

@@ -47,8 +47,9 @@ Three things worth knowing:
   `oas*-schema` rules. Validating the dereferenced tree instead re-checks every
   `components` entry once per `$ref` that reaches it, so one mistake in a
   reusable message reported three times in a document that used it twice. The
-  trade-off is that content pulled in from another file is not structurally
-  checked — the same gap the OpenAPI preset has.
+  trade-off is what a `$ref` hides: content from another file goes unchecked, as
+  does a same-file reference aimed at the wrong kind of object — the reference
+  itself is well-formed either way. The OpenAPI preset has the same gap.
 - **The structural rules skip a version they have no schema for.** A future
   `2.7.0` document keeps getting the style rules, but is never judged against
   2.6's meta-schema.

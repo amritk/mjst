@@ -1,5 +1,6 @@
 import type { IFunctionResult, JsonPath, RulesetFunction } from '../../../core/types'
 import { isObject } from './helpers'
+import { pointerSegment } from './pointer'
 
 const SERVERS_REF = '#/servers/'
 
@@ -27,7 +28,7 @@ const readEntry = (entry: unknown): ServerEntry => {
   const ref = entry['$ref']
   if (typeof ref !== 'string') return undefined
   if (!ref.startsWith(SERVERS_REF)) return { kind: 'misdirected', ref, path: ['$ref'] }
-  const name = ref.slice(SERVERS_REF.length).replace(/~1/g, '/').replace(/~0/g, '~')
+  const name = pointerSegment(ref.slice(SERVERS_REF.length))
   return { kind: 'named', name, path: ['$ref'] }
 }
 
@@ -40,27 +41,36 @@ const readEntry = (entry: unknown): ServerEntry => {
  */
 export const asyncApiChannelServers: RulesetFunction = (document, _options, _context): IFunctionResult[] => {
   if (!isObject(document)) return []
-  const channels = document['channels']
-  if (!isObject(channels)) return []
   // A `Set`: both lists are document-sized, and a linear scan per entry made
   // this quadratic on a document declaring many servers.
   const declared = new Set(isObject(document['servers']) ? Object.keys(document['servers']) : [])
+  const components = isObject(document['components']) ? document['components'] : undefined
+  // A reusable channel names servers the same way a served one does, and the
+  // rule runs unresolved — so without walking `components.channels` a channel
+  // written there and `$ref`'d in was never checked at all.
+  const roots: { path: JsonPath; channels: unknown }[] = [
+    { path: ['channels'], channels: document['channels'] },
+    { path: ['components', 'channels'], channels: components?.['channels'] },
+  ]
 
   const results: IFunctionResult[] = []
-  for (const [address, channel] of Object.entries(channels)) {
-    if (!isObject(channel)) continue
-    const servers = channel['servers']
-    if (!Array.isArray(servers)) continue
-    servers.forEach((entry, index) => {
-      const read = readEntry(entry)
-      if (read === undefined) return
-      const at = (): JsonPath => ['channels', address, 'servers', index, ...read.path]
-      if (read.kind === 'misdirected') {
-        results.push({ message: `Channel server must reference "${SERVERS_REF}…", not "${read.ref}"`, path: at() })
-      } else if (!declared.has(read.name)) {
-        results.push({ message: `Channel server "${read.name}" is not defined in the "servers" object`, path: at() })
-      }
-    })
+  for (const root of roots) {
+    if (!isObject(root.channels)) continue
+    for (const [address, channel] of Object.entries(root.channels)) {
+      if (!isObject(channel)) continue
+      const servers = channel['servers']
+      if (!Array.isArray(servers)) continue
+      servers.forEach((entry, index) => {
+        const read = readEntry(entry)
+        if (read === undefined) return
+        const at = (): JsonPath => [...root.path, address, 'servers', index, ...read.path]
+        if (read.kind === 'misdirected') {
+          results.push({ message: `Channel server must reference "${SERVERS_REF}…", not "${read.ref}"`, path: at() })
+        } else if (!declared.has(read.name)) {
+          results.push({ message: `Channel server "${read.name}" is not defined in the "servers" object`, path: at() })
+        }
+      })
+    }
   }
   return results
 }

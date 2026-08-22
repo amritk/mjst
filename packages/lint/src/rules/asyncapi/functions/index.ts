@@ -4,6 +4,7 @@ import { aasTagsUnique } from './aas-tags-unique'
 import { asyncApiChannelParameters } from './asyncapi-channel-parameters'
 import { asyncApiChannelServers } from './asyncapi-channel-servers'
 import { asyncApiDocumentSchema } from './asyncapi-document-schema'
+import { asyncApiHeadersObject } from './asyncapi-headers-object'
 import { asyncApiMessageExamples } from './asyncapi-message-examples'
 import { asyncApiMessageIdUnique } from './asyncapi-message-id-unique'
 import { asyncApiOperationIdUnique } from './asyncapi-operation-id-unique'
@@ -16,6 +17,7 @@ export { aasTagsUnique } from './aas-tags-unique'
 export { asyncApiChannelParameters } from './asyncapi-channel-parameters'
 export { asyncApiChannelServers } from './asyncapi-channel-servers'
 export { asyncApiDocumentSchema } from './asyncapi-document-schema'
+export { asyncApiHeadersObject } from './asyncapi-headers-object'
 export { asyncApiMessageExamples } from './asyncapi-message-examples'
 export { asyncApiMessageIdUnique } from './asyncapi-message-id-unique'
 export { asyncApiOperationIdUnique } from './asyncapi-operation-id-unique'
@@ -30,6 +32,7 @@ export const aasFunctions: FunctionRegistry = {
   asyncApiChannelParameters,
   asyncApiChannelServers,
   asyncApiDocumentSchema: asyncApiDocumentSchema as RulesetFunction,
+  asyncApiHeadersObject,
   asyncApiMessageExamples,
   asyncApiMessageIdUnique,
   asyncApiOperationIdUnique,

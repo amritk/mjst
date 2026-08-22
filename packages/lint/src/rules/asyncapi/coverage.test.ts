@@ -313,3 +313,118 @@ describe('custom functions in a user ruleset', () => {
     expect(codes).toContain('no-shouting')
   })
 })
+
+describe('schema languages other than the AsyncAPI dialect', () => {
+  const withPayload = (message: Record<string, unknown>): Record<string, unknown> => ({
+    asyncapi: '2.6.0',
+    info: { title: 'T', version: '1.0.0' },
+    channels: { a: { subscribe: { operationId: 'o', description: 'd', message } } },
+  })
+
+  it('validates a payload that names the AsyncAPI dialect explicitly', async () => {
+    // Stating the spec's own default used to switch payload checking off, and the
+    // "only supported with an unspecified schemaFormat" note was untrue for these.
+    for (const schemaFormat of [
+      undefined,
+      'application/vnd.aai.asyncapi;version=2.6.0',
+      'application/vnd.aai.asyncapi+json;version=2.6.0',
+      'application/vnd.aai.asyncapi+yaml;version=2.6.0',
+    ]) {
+      const message: Record<string, unknown> = { messageId: 'm', payload: { type: 'not-a-type' } }
+      if (schemaFormat !== undefined) message['schemaFormat'] = schemaFormat
+      const codes = await codesFor(withPayload(message))
+      expect(codes.has('asyncapi-payload'), String(schemaFormat)).toBe(true)
+      expect(codes.has('asyncapi-payload-unsupported-schemaFormat'), String(schemaFormat)).toBe(false)
+    }
+  })
+
+  it('leaves an Avro payload alone, and says so once', async () => {
+    const message = {
+      messageId: 'm',
+      schemaFormat: 'application/vnd.apache.avro;version=1.9.0',
+      payload: { type: 'record', name: 'P', fields: [] },
+      examples: [{ payload: { age: 3 } }],
+    }
+    const codes = await codesFor(withPayload(message))
+    expect(codes.has('asyncapi-payload-unsupported-schemaFormat')).toBe(true)
+    expect(codes.has('asyncapi-payload')).toBe(false)
+    // Judging an Avro schema as JSON Schema surfaced the validator's own
+    // complaints ("unknown type \"record\"") as error-level findings.
+    expect(codes.has('asyncapi-message-examples')).toBe(false)
+  })
+
+  it('still checks an example against headers when the payload is foreign', async () => {
+    const message = {
+      messageId: 'm',
+      schemaFormat: 'application/vnd.apache.avro;version=1.9.0',
+      payload: { type: 'record', name: 'P', fields: [] },
+      headers: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      examples: [{ headers: { id: 42 } }],
+    }
+    expect((await codesFor(withPayload(message))).has('asyncapi-message-examples')).toBe(true)
+  })
+
+  it('accepts 3.0 headers written as a Multi Format Schema Object', async () => {
+    const headers = (schema: unknown): Record<string, unknown> => ({
+      asyncapi: '3.0.0',
+      info: { title: 'T', version: '1.0.0' },
+      channels: { c: { address: 'a/b', messages: { m: { headers: schema, payload: { type: 'object' } } } } },
+    })
+    const wrapped = { schemaFormat: 'application/vnd.aai.asyncapi;version=3.0.0', schema: { type: 'object' } }
+    // The bundled meta-schema accepts this shape, so the style rule must too.
+    expect((await codesFor(headers(wrapped))).has('asyncapi-3-headers-schema-type-object')).toBe(false)
+    // ...but the wrapper must not become a way to smuggle a non-object through.
+    const wrongInner = { ...wrapped, schema: { type: 'string' } }
+    expect((await codesFor(headers(wrongInner))).has('asyncapi-3-headers-schema-type-object')).toBe(true)
+    // Headers in another schema language are left alone, like a foreign payload.
+    const foreign = { schemaFormat: 'application/vnd.apache.avro;version=1.9.0', schema: { type: 'record' } }
+    expect((await codesFor(headers(foreign))).has('asyncapi-3-headers-schema-type-object')).toBe(false)
+  })
+})
+
+describe('reusable channels and pointer escapes', () => {
+  const v3 = (extra: Record<string, unknown>): Record<string, unknown> => ({
+    asyncapi: '3.0.0',
+    info: { title: 'T', version: '1.0.0' },
+    servers: { 'a b': { host: 'x.test', protocol: 'kafka' } },
+    ...extra,
+  })
+
+  it('checks the servers of a channel written under components', async () => {
+    const doc = v3({
+      channels: { c: { $ref: '#/components/channels/cc' } },
+      components: { channels: { cc: { address: 'a/b', servers: [{ $ref: '#/servers/nope' }] } } },
+    })
+    expect((await codesFor(doc, { resolve: true })).has('asyncapi-3-channel-servers')).toBe(true)
+  })
+
+  it('resolves a percent-encoded server pointer', async () => {
+    // RFC 6901 requires percent-encoding in a pointer carried in a URI fragment;
+    // comparing the encoded spelling flagged a valid document.
+    const doc = v3({ channels: { c: { address: 'a', servers: [{ $ref: '#/servers/a%20b' }] } } })
+    expect((await codesFor(doc)).has('asyncapi-3-channel-servers')).toBe(false)
+  })
+
+  it('reports a message-example failure once, not once per trait location', async () => {
+    // The message-level pass folds traits in and reports against whichever array
+    // the merge took; also matching each trait printed the identical finding twice.
+    const doc = {
+      asyncapi: '2.6.0',
+      info: { title: 'T', version: '1.0.0' },
+      components: {
+        messages: {
+          X: {
+            traits: [
+              {
+                headers: { type: 'object', properties: { id: { type: 'string' } } },
+                examples: [{ headers: { id: 42 } }],
+              },
+            ],
+          },
+        },
+      },
+    }
+    const findings = await lint(JSON.stringify(doc, null, 2), { ruleset: allRules })
+    expect(findings.filter((finding) => finding.code === 'asyncapi-message-examples')).toHaveLength(1)
+  })
+})
