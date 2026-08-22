@@ -47,10 +47,13 @@ and takes 94 ms on 22 characters where its body alone takes none.
 (`(a+)+`, `(a*)*`, `(a|a)+`).
 
 The screen remains a best-effort filter rather than a proof of safety, with the
-same known gaps, and it stays cheap on a hostile pattern: the new analysis is
-capped by its own shared budget, charged per character examined and per
-character-class comparison, and the worst adversarial source found screens in
-about 40 ms.
+same known gaps. The new analysis is capped by its own shared budget, charged per
+character examined and per character-class comparison, and the worst source found
+against *it* screens in about 15 ms. That is not a claim about the screen as a
+whole: the pre-existing ambiguous-alternation rule spends its budget per branch
+pair while each comparison may compile a character class, so a 176 KB alternation
+of literals and long classes costs ~200 ms to screen. Unchanged here, and
+unchanged by this release.
 
 `@amritk/generate-examples` only retargets a test fixture that had used
 `^(repeat+)+once$` to stand for a refused pattern — that one is admitted now,

@@ -124,13 +124,14 @@ export const isValidationLimitError = (value: unknown): value is Error =>
 // Known gaps: multi-character ambiguous branches (`(a|aa)+`), ambiguity across
 // concatenated quantifiers (`a*a*$`), two overlapping *classes* with no literal
 // side to pivot on (`([0-9]|\d)+`, `(\s|\n)+`), two *spellings* of one character
-// that rule 2 cannot equate (`(\u{0061}|\u{61})+` is `(a|a)+`), and a nullable
-// body under
-// *bounded* quantifiers — `^((?:a){0,3}[^/]{0,3}\.)*$` never reaches star height
-// 2, since `{0,3}` is not a repetition, yet it runs 251 seconds on 49
-// characters. That last one is the widest of them: rule 1 counts only unbounded
-// quantifiers, so an attacker who spells the blow-up with bounded ones walks
-// past both rules.
+// that rule 2 cannot equate (`(\u{0061}|\u{61})+` is `(a|a)+`), an ambiguous
+// alternation one group deeper than the quantifier (rule 2 only reads the
+// branches of the group the quantifier is *on*, so `^(\/(a|a))*$` is admitted
+// and is 2^(n/2)), and nullable *units* under *bounded* quantifiers —
+// `^((?:a){0,3}[^/]{0,3}\.)*$` never reaches star height 2, since `{0,3}` is not
+// a repetition, yet it runs over 250 seconds on 49 characters. That last one is
+// the widest of them: rule 1 counts only unbounded quantifiers, so an attacker
+// who spells the blow-up with bounded ones walks past both rules.
 //
 // Rule 1's exemption is scoped accordingly: all it establishes is that the
 // *outer* loop adds no ambiguity of its own. It says nothing about the body,
@@ -158,10 +159,16 @@ export const isValidationLimitError = (value: unknown): value is Error =>
 // {@link MAX_GROUP_DEPTH} (rule 1's descent, which would otherwise recurse on
 // the native stack), {@link MAX_AMBIGUITY_COMPARISONS} (rule 2's pairwise scan,
 // which is quadratic in the number of branches), and {@link MAX_ANCHOR_SCAN}
-// (rule 1's exemption, which re-reads a group body). Rule 2 giving up early is
-// one more entry on the known-gaps list above; the anchor scan giving up early
-// only costs an exemption, so it fails safe; running out of depth is neither,
-// and fails the pattern loudly instead.
+// (rule 1's exemption, which re-reads a group body and compares classes). Rule 2
+// giving up early is one more entry on the known-gaps list above; the anchor scan
+// giving up early only costs an exemption, so it fails safe; running out of depth
+// is neither, and fails the pattern loudly instead.
+//
+// "Cheap" is relative to rule 2, which is the expensive one and always has been:
+// its budget is spent per branch *pair*, while each comparison may compile a
+// character class, so a 176 KB alternation of literals and long classes screens
+// in ~200 ms and a 632 KB one in ~730 ms. That predates rule 1's exemption and is
+// unchanged by it — the exemption's own worst case is ~15 ms.
 
 /** `{n}` / `{n,}` / `{n,m}`, matched in place at an offset. Sticky, so `lastIndex` selects the offset. */
 const BOUNDED_QUANTIFIER = /\{(\d+)(,(\d*))?\}/y
@@ -336,8 +343,8 @@ const branchMatchesChar = (branch: string, ch: string): boolean => {
 const MAX_AMBIGUITY_COMPARISONS = 20_000
 
 /**
- * How many characters of group body rule 1's anchor exemption will re-read
- * across one whole pattern.
+ * How much work rule 1's anchor exemption will do across one whole pattern —
+ * group-body characters re-read, plus each character-class comparison it makes.
  *
  * {@link isAnchoredRepetition} scans a quantified group's body a second time, so
  * a pattern of nested anchored groups could re-read the same text once per level
@@ -352,7 +359,7 @@ const MAX_ANCHOR_SCAN = 20_000
 type ScreenBudget = {
   /** Remaining branch-pair comparisons for rule 2. */
   comparisons: number
-  /** Remaining group-body characters for rule 1's anchor exemption. */
+  /** Remaining work units for rule 1's anchor exemption: body characters and class comparisons alike. */
   anchorChars: number
 }
 
@@ -463,9 +470,14 @@ const atomMayMatchChar = (atom: string, ch: string): boolean => {
  * argument above, which it does.
  *
  * The residual case is Annex B, where a `{` or `}` beginning no valid quantifier
- * is a literal — raw, yet consuming. {@link readUnits} refuses any body carrying
- * a raw metacharacter, and the exemption needs that pass to agree as well, so
- * `(\{a*{)*` comes out rejected rather than mis-analysed.
+ * is a literal — raw, yet consuming. What covers it is {@link readUnits}, which
+ * refuses a raw metacharacter in *atom* position (its trailing-alternation branch
+ * loop applies the same test), and that is exactly where such a literal sits; the
+ * exemption needs that pass to agree too, so `(\{a*{)*` comes out rejected rather
+ * than mis-analysed. Note the narrower phrasing is load-bearing: `readUnits` does
+ * *not* refuse a raw metacharacter outright — it reads raw `(`, `|` and `)` as
+ * group structure and raw `*`/`+` as quantifiers, which is how the AsyncAPI
+ * pointer body `\/(([^\/~])|(~[01]))*` is admitted at all.
  */
 const NON_CONSUMING_CHARS = new Set([')', '|', '^', '$', '*', '+', '?', '{', '}'])
 

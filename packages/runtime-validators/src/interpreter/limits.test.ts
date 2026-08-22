@@ -533,15 +533,26 @@ describe('limits', () => {
     // per *comparison* undercounted that by the branch count: distinct literals
     // in front of a 2,600-branch alternation forced ~300,000 compiles for 20,000
     // budget, and screening this one pattern took 294 ms — against 0.27 ms
-    // before the exemption existed. Now the budget stops it.
+    // before the exemption existed. Now the budget stops it, at about 15 ms.
+    //
+    // The threshold has to sit *below* the bug it documents or it guards
+    // nothing: an earlier 2,000 ms bound left the exact 294 ms regression green.
+    // 150 ms is an order of magnitude above the median here and half the cost of
+    // the bug, and the median of five suppresses the occasional GC outlier that
+    // a single reading picks up.
     const literals = Array.from({ length: 120 }, (_, i) => `${String.fromCharCode(0x100 + i)}*`).join('')
     const branches = Array.from({ length: 2_643 }, (_, i) => `[${String.fromCharCode(0x3000 + i)}]`).join('|')
     const source = `^(\\.${literals}(${branches}))*$`
 
-    const started = performance.now()
-    // Genuinely unsafe — the point is only that answering costs bounded work.
-    expect(hasUnsafeRegex(source)).toBe(true)
-    expect(performance.now() - started).toBeLessThan(2_000)
+    const timings: number[] = []
+    for (let run = 0; run < 5; run++) {
+      const started = performance.now()
+      // Genuinely unsafe — the point is only that answering costs bounded work.
+      expect(hasUnsafeRegex(source)).toBe(true)
+      timings.push(performance.now() - started)
+    }
+    const median = timings.sort((a, b) => a - b)[2] as number
+    expect(median, `screening took ${median.toFixed(0)}ms`).toBeLessThan(150)
   })
 
   it('screens a very wide alternation in bounded time', () => {
