@@ -242,3 +242,61 @@ describe('oas', () => {
     expect(paths(mediaExample)).toEqual(['paths./pets.get.responses.200'])
   })
 })
+
+describe('server variables stay scoped to the url field', () => {
+  it('says nothing about a host or pathname reached by the recursive links given', async () => {
+    // `oas3-server-variables` runs under `$..links[*].server`, so teaching the
+    // shared check to read AsyncAPI 3.0's `host`/`pathname` turned any object
+    // with those keys — an example payload, say — into an error about undefined
+    // server variables. The fields are opt-in per caller now.
+    const doc = JSON.stringify({
+      openapi: '3.0.3',
+      info: { title: 'T', version: '1', description: 'd', contact: { name: 'n' } },
+      servers: [{ url: 'https://a.test' }],
+      tags: [{ name: 't', description: 'd' }],
+      paths: {
+        '/p': {
+          get: {
+            operationId: 'g',
+            description: 'd',
+            tags: ['t'],
+            responses: {
+              '200': {
+                description: 'OK',
+                content: {
+                  'application/json': {
+                    example: { links: { next: { server: { host: 'api.{region}.test', pathname: '/{ver}' } } } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+    const ruleset = createOpenApiRuleset({ extends: [[oas, 'all']] })
+    const codes = (await lint(doc, { ruleset })).map((finding) => String(finding.code))
+    expect(codes.filter((code) => code.includes('server-variables'))).toEqual([])
+  })
+})
+
+describe('server variable wording', () => {
+  it('calls the address a URL, which is the field OpenAPI reads', async () => {
+    // The shared implementation is also AsyncAPI 3.0's, where the address lives
+    // in `host`/`pathname` and "URL" would name no field. Generalising the noun
+    // for everyone silently changed a message this preset has always emitted.
+    const doc = JSON.stringify({
+      openapi: '3.0.0',
+      info: { title: 'T', version: '1', description: 'd', contact: { name: 'n' } },
+      servers: [
+        { url: 'https://{region}.api.test', variables: { region: { default: 'us' }, unused: { default: 'x' } } },
+      ],
+      paths: {},
+    })
+    const ruleset = createOpenApiRuleset({ extends: [[oas, 'all']] })
+    const messages = (await lint(doc, { ruleset }))
+      .filter((finding) => String(finding.code).includes('server-variables'))
+      .map((finding) => finding.message)
+    expect(messages).toContain('Server variable "unused" is not used in the URL')
+  })
+})

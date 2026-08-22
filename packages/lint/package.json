@@ -63,6 +63,11 @@
       "development": "./src/rules/openapi/index.ts",
       "types": "./dist/rules/openapi/index.d.ts",
       "default": "./dist/rules/openapi/index.js"
+    },
+    "./rules/asyncapi": {
+      "development": "./src/rules/asyncapi/index.ts",
+      "types": "./dist/rules/asyncapi/index.d.ts",
+      "default": "./dist/rules/asyncapi/index.js"
     }
   },
   "dependencies": {

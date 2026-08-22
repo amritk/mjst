@@ -1,0 +1,21 @@
+import type { IFunctionResult, RulesetFunction } from '../../core/types'
+import { isObject } from './helpers'
+
+/**
+ * Flags duplicate tag names within one tags array. Both specs carry Tag Objects
+ * with a `name`, and both require those names to be unique within the array they
+ * sit in — see `oasTagsUnique` and `aasTagsUnique`.
+ */
+export const tagsUnique: RulesetFunction = (tags, _options, context) => {
+  if (!Array.isArray(tags)) return []
+  const seen = new Set<string>()
+  const results: IFunctionResult[] = []
+  tags.forEach((tag, index) => {
+    if (!isObject(tag) || typeof tag['name'] !== 'string') return
+    if (seen.has(tag['name'])) {
+      results.push({ message: `Duplicate tag name "${tag['name']}"`, path: [...context.path, index, 'name'] })
+    }
+    seen.add(tag['name'])
+  })
+  return results
+}
