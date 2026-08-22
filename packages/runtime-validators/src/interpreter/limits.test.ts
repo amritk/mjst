@@ -96,6 +96,68 @@ describe('limits', () => {
     }
   })
 
+  it('admits a separator-anchored repetition, whose split no input can vary', () => {
+    // Star height 2, and linear anyway: every repetition has to begin (or end)
+    // with a character the body cannot otherwise produce, so the positions of
+    // that character are the word boundaries and there is no second way to
+    // split the input. The first two are the AsyncAPI meta-schemas' own; both
+    // had to be hand-rewritten before the screen would load them.
+    for (const safe of [
+      '^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$',
+      '^\\$message\\.(header|payload)#(\\/(([^\\/~])|(~[01]))*)*',
+      '(\\.a*)*',
+      '(/[^/]*)*',
+      '(-\\w+)*',
+      '(:\\d+)*',
+      '(\\.a*)+',
+      '(\\.a*){2,}',
+      // The separator-last spelling of the same idea.
+      '^(\\w+\\.)*\\w+$',
+      '^([a-z0-9]+-)*[a-z0-9]+$',
+    ]) {
+      expect(hasUnsafeRegex(safe), safe).toBe(false)
+    }
+  })
+
+  it('keeps flagging a repetition whose body can produce its own separator', () => {
+    // The exemption above turns entirely on "no other atom can make that
+    // character". Each of these puts the separator back within the body's reach
+    // — `\W`, `.` and `[^a]` all match a dot; the second dot in `\.a*\.b*` is
+    // literal — so the split stops being forced and the pattern goes back to
+    // being read as nested repetition.
+    for (const unsafe of ['(\\.\\W*)*', '(\\..*)*', '(\\.[^a]*)*', '(\\.a*\\.b*)*', '^(\\w+a)*\\w+$']) {
+      expect(hasUnsafeRegex(unsafe), unsafe).toBe(true)
+    }
+    // A separator that is optional, repeatable, or not at a boundary marks no
+    // boundary at all: `(a*\.a*)*` puts exactly one dot in every word and still
+    // splits `a.aa.a` three ways, because the run of `a`s around a dot can go to
+    // either neighbour.
+    for (const unsafe of ['(\\.?a*)*', '(\\.+a*)*', '(a*\\.a*)*', '((\\.a*)*)*']) {
+      expect(hasUnsafeRegex(unsafe), unsafe).toBe(true)
+    }
+  })
+
+  it('keeps flagging an anchored repetition whose body derives one word two ways', () => {
+    // A forced split is *not* sufficient, which is the trap in the whole idea: a
+    // backtracking engine explores derivations, not splits, so a body that can
+    // match its own substring k ways costs k^n over n repetitions even with
+    // every boundary pinned. `^(\.((\w[a-z]?|b\w+)?|(a*[a-z0-9]?)?))*$` is
+    // anchored by `.` and takes 94 ms on 22 characters where its body alone
+    // takes none — every iteration matches the empty tail two ways.
+    for (const unsafe of [
+      '^(\\.((\\w[a-z]?|b\\w+)?|(a*[a-z0-9]?)?))*$',
+      '^(\\.(a?(b?|[a-z])?)+)*$',
+      '^(\\.(\\w?a*a*)?)*$',
+      '^(\\.[a-z]*(([a-z]?a?)?(\\d\\w{1,})?)?)*$',
+      // Two branches of different lengths starting alike: `.aaa` parses three ways.
+      '(\\.(a|aa)*)*',
+      // Adjacent repetitions over the same characters: `.aa` parses three ways.
+      '(\\.a*a*)*',
+    ]) {
+      expect(hasUnsafeRegex(unsafe), unsafe).toBe(true)
+    }
+  })
+
   it('screens a pattern that is only reachable through a $ref into an unfamiliar container', () => {
     // OpenAPI parks its subschemas under `components/schemas` and reaches them by
     // `$ref`. A screen that walks a fixed list of subschema keywords never sees
@@ -138,6 +200,57 @@ describe('limits', () => {
     expect(isValidationLimitError(thrown)).toBe(true)
     expect((thrown as Error).message).toMatch(/nests groups too deeply/i)
     expect(hasUnsafeRegex(nestedGroups)).toBe(true)
+  })
+
+  it('admits nothing that actually backtracks, measured rather than asserted', () => {
+    // The booleans above encode today's answers; this encodes the property they
+    // are supposed to stand for, so a future refinement that widens the screen
+    // is caught by the clock even if nobody thinks to add its pattern above.
+    //
+    // Every entry is a pattern paired with an input built to make a backtracking
+    // engine work: a long run the body can chew on, then one character that
+    // fails the match, which is what forces every alternative to be explored.
+    // The rule is one-sided — a *flagged* pattern may be as slow as it likes,
+    // an *admitted* one may not — so loosening the screen onto any of the
+    // exponential entries fails here.
+    //
+    // 28 characters keeps the cost of a genuine regression near two seconds
+    // rather than the nine a 30-character input costs on the dotted-identifier
+    // chain, and the admitted patterns all finish in under a millisecond, so the
+    // separation is four orders of magnitude wide and needs no tight threshold.
+    const run = 'a'.repeat(28)
+    const corpus: readonly (readonly [string, string])[] = [
+      // Anchored repetitions the screen now admits.
+      ['^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$', `${run}-`],
+      ['^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$', `${'a.'.repeat(14)}-`],
+      ['^\\$message\\.(header|payload)#(\\/(([^\\/~])|(~[01]))*)*$', `$message.header#${'/a'.repeat(14)}~`],
+      ['^(\\.a*)*$', `${'.a'.repeat(14)}!`],
+      ['^(\\.a*b*)*$', `.${run}!`],
+      ['^(\\w+\\.)*\\w+$', `${'a.'.repeat(14)}!`],
+      ['^([a-z0-9]+-)*[a-z0-9]+$', `${'a-'.repeat(14)}!`],
+      ['^(/[^/]*)*$', `${'/a'.repeat(14)}~`],
+      // Genuinely exponential: these must stay flagged, and the clock says why.
+      ['^([A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*)*$', `${run}-`],
+      ['^(\\.((\\w[a-z]?|b\\w+)?|(a*[a-z0-9]?)?))*$', `${'.'.repeat(28)}!`],
+      ['^(\\.(a?(b?|[a-z])?)+)*$', `${'.a'.repeat(14)}!`],
+      ['^(\\.(a|aa)*)*$', `.${run}!`],
+      ['^(a+)+$', `${run}!`],
+      ['^(a|a)+$', `${run}!`],
+    ]
+
+    for (const [source, input] of corpus) {
+      if (hasUnsafeRegex(source)) continue
+      const regex = new RegExp(source)
+      // The first call compiles, and timing that reports the compiler.
+      regex.test('warmup')
+      const started = performance.now()
+      regex.test(input)
+      const elapsed = performance.now() - started
+      expect(
+        elapsed,
+        `${source} was admitted but took ${elapsed.toFixed(0)}ms on ${input.length} characters`,
+      ).toBeLessThan(300)
+    }
   })
 
   it('screens a very wide alternation in bounded time', () => {

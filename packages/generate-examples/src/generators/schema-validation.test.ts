@@ -123,11 +123,16 @@ describe('schema-validation', () => {
   })
 
   it('reports the same undecidable schema only once', () => {
-    const schema = { type: 'string', pattern: '^(repeat+)+once$' } satisfies JSONSchema
+    // A class under the nested quantifier, not a literal: `^(repeat+)+once$` —
+    // the obvious spelling — is not refused, because every repetition has to
+    // start with the `r` that nothing else in `repeat+` can produce, so the
+    // screen can see the split is forced and admits it as the linear pattern it
+    // measures as. `[a-z]+` gives the outer `+` nothing to pivot on.
+    const schema = { type: 'string', pattern: '^([a-z]+)+once$' } satisfies JSONSchema
     const { warnings } = captureWarnings(() => {
       makeInstanceCheck(schema)('a')
       makeInstanceCheck(schema)('b')
-      makeInstanceCheck({ type: 'string', pattern: '^(repeat+)+once$' } satisfies JSONSchema)('c')
+      makeInstanceCheck({ type: 'string', pattern: '^([a-z]+)+once$' } satisfies JSONSchema)('c')
     })
 
     expect(warnings).toHaveLength(1)
