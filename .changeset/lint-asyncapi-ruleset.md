@@ -69,4 +69,7 @@ Three things worth knowing:
 Internally, the Server Object `variables` check and tag-name uniqueness moved to
 a shared `rules/shared` module, since OpenAPI and AsyncAPI model both the same
 way. `oasServerVariables` and `oasTagsUnique` keep their names, behaviour and
-messages.
+messages — verified by a finding-for-finding diff of the whole OpenAPI fixture
+corpus. The shared check now takes the address fields to read as an option,
+defaulting to `url`, because AsyncAPI 3.0 splits the address into `host` and
+`pathname`; OpenAPI stays on the default and its wording with it.

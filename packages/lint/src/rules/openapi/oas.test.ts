@@ -279,3 +279,24 @@ describe('server variables stay scoped to the url field', () => {
     expect(codes.filter((code) => code.includes('server-variables'))).toEqual([])
   })
 })
+
+describe('server variable wording', () => {
+  it('calls the address a URL, which is the field OpenAPI reads', async () => {
+    // The shared implementation is also AsyncAPI 3.0's, where the address lives
+    // in `host`/`pathname` and "URL" would name no field. Generalising the noun
+    // for everyone silently changed a message this preset has always emitted.
+    const doc = JSON.stringify({
+      openapi: '3.0.0',
+      info: { title: 'T', version: '1', description: 'd', contact: { name: 'n' } },
+      servers: [
+        { url: 'https://{region}.api.test', variables: { region: { default: 'us' }, unused: { default: 'x' } } },
+      ],
+      paths: {},
+    })
+    const ruleset = createOpenApiRuleset({ extends: [[oas, 'all']] })
+    const messages = (await lint(doc, { ruleset }))
+      .filter((finding) => String(finding.code).includes('server-variables'))
+      .map((finding) => finding.message)
+    expect(messages).toContain('Server variable "unused" is not used in the URL')
+  })
+})

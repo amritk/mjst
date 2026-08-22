@@ -711,3 +711,40 @@ describe('references and templates that are not what they look like', () => {
     expect((await codesFor(doc, { resolve: true })).has('asyncapi-3-server-security')).toBe(true)
   })
 })
+
+describe('server variable wording per major', () => {
+  it('says URL for 2.x and address for 3.0', async () => {
+    const v2 = {
+      asyncapi: '2.6.0',
+      info: { title: 'T', version: '1.0.0' },
+      servers: {
+        p: {
+          url: 'wss://{region}.test',
+          protocol: 'wss',
+          variables: { region: { default: 'us' }, unused: { default: 'x' } },
+        },
+      },
+      channels: {},
+    }
+    const v3 = {
+      asyncapi: '3.0.0',
+      info: { title: 'T', version: '1.0.0' },
+      servers: {
+        p: {
+          host: '{region}.test',
+          protocol: 'wss',
+          variables: { region: { default: 'us' }, unused: { default: 'x' } },
+        },
+      },
+      channels: {},
+    }
+    const messagesFor = async (doc: unknown): Promise<string[]> =>
+      (await lint(JSON.stringify(doc), { ruleset: allRules }))
+        .filter((finding) => String(finding.code).includes('server-variables'))
+        .map((finding) => finding.message)
+
+    expect(await messagesFor(v2)).toContain('Server variable "unused" is not used in the URL')
+    // 3.0 has no `url`; the address is `host` plus `pathname`.
+    expect(await messagesFor(v3)).toContain('Server variable "unused" is not used in the address')
+  })
+})

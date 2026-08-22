@@ -29,6 +29,15 @@ export type IServerVariablesOptions = {
 
 const DEFAULT_ADDRESS_FIELDS = ['url'] as const
 
+/**
+ * What to call the address in a finding. OpenAPI and AsyncAPI 2.x put it in
+ * `url` and their users call it that; only 3.0 splits it into `host`/`pathname`,
+ * where "URL" would name no field at all. Generalising the wording to "address"
+ * for everyone changed a message the OpenAPI preset has always emitted.
+ */
+const addressNoun = (fields: readonly string[]): string =>
+  fields.length === 1 && fields[0] === 'url' ? 'URL' : 'address'
+
 export const serverVariables: RulesetFunction<unknown, IServerVariablesOptions | undefined> = (
   server,
   options,
@@ -60,7 +69,7 @@ export const serverVariables: RulesetFunction<unknown, IServerVariablesOptions |
   for (const [name, variable] of Object.entries(variables)) {
     if (!templateNames.has(name)) {
       results.push({
-        message: `Server variable "${name}" is not used in the address`,
+        message: `Server variable "${name}" is not used in the ${addressNoun(fields)}`,
         path: [...context.path, 'variables', name],
       })
     }
