@@ -1084,9 +1084,10 @@ describe('generate-markdown-files', () => {
     expect(content).not.toContain('FROM THE DEFINITION')
   })
 
-  // A node that declares both named properties and a container documents the
-  // names — and its derived examples must not gain a phantom map-key hop.
-  it('prefers a node own properties over its container keywords', () => {
+  // A node that declares both named properties and a container documents both,
+  // its own names first — and the named ones must not gain the container's
+  // map-key hop in their derived examples.
+  it('lists a node own properties before its container ones', () => {
     const content = only(
       generateMarkdownFiles({
         properties: {
@@ -1098,9 +1099,27 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('### named')
-    expect(content).not.toContain('<name>')
+    expect(content.indexOf('### named')).toBeLessThan(content.indexOf('### extra'))
     expect(content).toContain('"a": {\n    "named": "v"\n  }')
+  })
+
+  // Two sources describing one name are describing one field, and the node's
+  // own declaration is the one that wins.
+  it('documents a name two sources share once, from the first of them', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          a: {
+            type: 'object',
+            properties: { shared: { type: 'string', description: 'FROM THE NODE' } },
+            additionalProperties: { properties: { shared: { type: 'string', description: 'FROM THE MAP' } } },
+          },
+        },
+      }),
+    )
+    expect(content.match(/### shared/g)).toHaveLength(1)
+    expect(content).toContain('FROM THE NODE')
+    expect(content).not.toContain('FROM THE MAP')
   })
 
   // RFC 6901 array indices have no leading zeros, so `01` addresses nothing.
@@ -1306,6 +1325,152 @@ describe('generate-markdown-files', () => {
     expect(content).toContain('| `b` | `object` | B. |')
     expect(content.match(/B\./g)).toHaveLength(1)
     expect(content).toContain('| `c` | `string` | C. |')
+  })
+
+  // The row above carries the shape; everything a row cannot hold still has to
+  // be here, or a table layout quietly loses half of what the schema says.
+  it('keeps everything a table row cannot hold in the block beneath it', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          outer: {
+            type: 'object',
+            properties: {
+              child: {
+                type: 'object',
+                deprecated: true,
+                default: { a: 1 },
+                enum: [{ a: 1 }, { a: 2 }],
+                minProperties: 1,
+                pattern: '^x$',
+                'x-doc': { type: 'ChildShape', note: 'A note.', example: 'child = {}', footer: 'Afterwards.' },
+                properties: { leaf: { type: 'string', description: 'Leaf.' } },
+              },
+            },
+          },
+        },
+      }),
+    )
+    // In the row, not repeated below it.
+    expect(content).toContain('| `child` | `ChildShape` | `{"a": 1}` |')
+    expect(content.match(/\*\*Default:\*\*/g)).toBeNull()
+    // Below the row, because no row could carry them.
+    expect(content).toContain('> **Deprecated**')
+    expect(content).toContain('**Allowed values:**')
+    expect(content).toContain('**Constraints:** `pattern: ^x$`')
+    expect(content).toContain('> A note.')
+    expect(content).toContain('```json\nchild = {}\n```')
+    expect(content).toContain('Afterwards.')
+    expect(content).toContain('| `leaf` | `string` | Leaf. |')
+  })
+
+  // `$anchor` is most often declared inside a composition branch, which is an
+  // array — a walk that only stepped into objects never found it.
+  it('resolves an $anchor declared inside a composition branch', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { a: { $ref: '#inner' } },
+        $defs: {
+          wrapper: {
+            anyOf: [
+              { type: 'null' },
+              { $anchor: 'inner', type: 'object', properties: { anchored: { type: 'string' } } },
+            ],
+          },
+        },
+      }),
+    )
+    expect(content).toContain('### anchored')
+  })
+
+  it('resolves a $dynamicAnchor by name too', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { a: { $ref: '#node' } },
+        $defs: { node: { $dynamicAnchor: 'node', type: 'string', description: 'Dynamic.' } },
+      }),
+    )
+    expect(content).toContain('Dynamic.')
+  })
+
+  it('accepts the punctuation an anchor name may hold', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { a: { $ref: '#my.anchor-name_2' } },
+        $defs: { node: { $anchor: 'my.anchor-name_2', type: 'string', description: 'Punctuated.' } },
+      }),
+    )
+    expect(content).toContain('Punctuated.')
+  })
+
+  // An anchor name never starts with a digit, so `#0` is not one — and treating
+  // it as one would resolve it against an unrelated node.
+  it('does not read a fragment starting with a digit as an anchor', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { a: { $ref: '#0' } },
+        $defs: { node: { $anchor: '0', type: 'string', description: 'WRONG TARGET' } },
+      }),
+    )
+    expect(content).not.toContain('WRONG TARGET')
+  })
+
+  it('documents every position of a draft-07 tuple', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          pair: {
+            type: 'array',
+            items: [
+              { type: 'object', properties: { firstItem: { type: 'string' } } },
+              { type: 'object', properties: { secondItem: { type: 'string' } } },
+            ],
+          },
+        },
+      }),
+    )
+    expect(content).toContain('### firstItem')
+    expect(content).toContain('### secondItem')
+  })
+
+  it('finds a container an allOf or a oneOf branch declares', () => {
+    const viaAllOf = only(
+      generateMarkdownFiles({
+        properties: { a: { allOf: [{ type: 'array', items: { properties: { fromAllOf: {} } } }] } },
+      }),
+    )
+    expect(viaAllOf).toContain('### fromAllOf')
+
+    const viaOneOf = only(
+      generateMarkdownFiles({
+        properties: { a: { oneOf: [{ type: 'object', additionalProperties: { properties: { fromOneOf: {} } } }] } },
+      }),
+    )
+    expect(viaOneOf).toContain('### fromOneOf')
+  })
+
+  it('documents the properties an else branch adds', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          a: {
+            type: 'object',
+            properties: { kind: { enum: ['x'] } },
+            else: { properties: { otherwiseNeeded: { type: 'string' } } },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('### otherwiseNeeded')
+  })
+
+  it('refuses an absolute page file and a bare parent segment', () => {
+    for (const file of ['/etc/passwd.md', '..']) {
+      expect(() => generateMarkdownFiles({ 'x-doc': { pages: [{ id: 'p', file }] }, properties: {} })).toThrow(
+        /outside the output directory|no file to be written to/,
+      )
+    }
   })
 
   it('matches the checked-in docs for the API reference fixture', () => {

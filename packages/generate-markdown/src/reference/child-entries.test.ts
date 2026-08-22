@@ -3,6 +3,7 @@ import {
   ARRAY_ITEM,
   childEntries,
   childSchema,
+  childSources,
   formatPath,
   MAP_KEY,
   MAP_KEY_PLACEHOLDER,
@@ -34,6 +35,18 @@ describe('child-entries', () => {
   it('reads children off additionalProperties for a map-like object', () => {
     const values = { type: 'object', properties: { url: { type: 'string' } } }
     expect(childSchema({ type: 'object', additionalProperties: values })).toEqual({ node: values, hop: MAP_KEY })
+  })
+
+  // Several sources can describe one node's children; `childSchema` is the
+  // first of them, which is what a root falls back to when it has no names.
+  it('returns every source, the node own properties first', () => {
+    const items = { type: 'object', properties: { fromItems: {} } }
+    const prop = { type: 'array', properties: { own: {} }, items }
+    expect(childSources(prop)).toEqual([
+      { node: prop, hop: undefined },
+      { node: items, hop: ARRAY_ITEM },
+    ])
+    expect(childSchema(prop)).toEqual({ node: prop, hop: undefined })
   })
 
   it('reads no children from a scalar', () => {
