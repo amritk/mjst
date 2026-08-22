@@ -136,4 +136,16 @@ describe('format-literal', () => {
     expect(formatInlineLiteral(nest(33), 'json')).not.toContain('leaf')
     expect(formatInlineLiteral(nest(33), 'json')).toContain('null')
   })
+
+  // The API takes `unknown`, so a caller-built cyclic object reaches here. The
+  // depth cap is what keeps it from blowing the stack with a bare `RangeError`.
+  it('survives a cyclic value rather than exhausting the stack', () => {
+    const cyclic: Record<string, unknown> = {}
+    cyclic['self'] = cyclic
+    expect(() => formatInlineLiteral(cyclic, 'json')).not.toThrow()
+    expect(formatInlineLiteral(cyclic, 'json')).toContain('null')
+    // And the multi-line form a code fence uses, which counts its own depth.
+    expect(() => formatLiteral(cyclic, 'json')).not.toThrow()
+    expect(formatLiteral(cyclic, 'json')).toContain('null')
+  })
 })

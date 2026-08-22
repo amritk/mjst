@@ -65,4 +65,18 @@ describe('render-examples', () => {
     expect(renderExamples([{ value: null }], 'json')[0]).toBe('```json\nnull\n```')
     expect(renderExamples([{ caption: 'Nothing to show.' }], 'json')).toEqual([])
   })
+
+  // CommonMark lets a fence be indented up to three spaces, so an indented one
+  // inside a sample closes the block just as surely as a flush one.
+  it('outruns a fence the sample indents', () => {
+    const blocks = renderExamples([{ code: 'a\n   ```\nb' }], 'json')
+    expect(blocks[0]?.startsWith('````json\n')).toBe(true)
+  })
+
+  // A language name can hold a dot or an underscore — `objective-c`, `f#`,
+  // `foo.bar` — and dropping one labelled the block as a different language.
+  it('keeps a dot or an underscore in a language name', () => {
+    expect(renderExamples([{ code: 'x', language: 'foo.bar' }], 'json')[0]).toContain('```foo.bar')
+    expect(renderExamples([{ code: 'x', language: 'foo_bar' }], 'json')[0]).toContain('```foo_bar')
+  })
 })

@@ -100,6 +100,10 @@ const couldBe = (
   // A stub stands for an object definition, so it is one — it just votes with
   // the requirements it carries rather than with the empty set it looks like.
   if (stubRequired(node) !== undefined) return settled(true)
+  // `true` for the same reason a cycle answers `true`: keeping a branch in an
+  // intersection loses a marker, dropping one invents a marker. A backstop
+  // rather than a guard anyone reaches — the inliner refuses a document this
+  // deep before the reading starts — so it stays unexercised on purpose.
   if (depth > MAX_SCHEMA_DEPTH) return settled(true)
   if (context !== undefined && context.budget.remaining-- <= 0) {
     throw new Error(

@@ -120,4 +120,15 @@ describe('read-doc-config', () => {
     expect(readDocConfig({}, { headingLevel: Number.NaN }).headingLevel).toBe(1)
     expect(readDocConfig({}, { headingLevel: 2.7 }).headingLevel).toBe(2)
   })
+
+  // "The schema wins on content and the caller wins on placement": a build that
+  // writes the same schema somewhere else should not have to edit the schema.
+  it('lets the caller beat a declared index page on title and file', () => {
+    const config = readDocConfig(
+      { 'x-doc': { pages: [{ id: 'index', file: 'from-schema.md', title: 'From schema' }] } },
+      { title: 'From caller', file: 'from-caller.md' },
+    )
+    expect(config.pages[0]?.title).toBe('From caller')
+    expect(config.pages[0]?.file).toBe('from-caller.md')
+  })
 })

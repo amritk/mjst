@@ -46,8 +46,11 @@ export const generateDocs = async (options: GenerateDocsOptions = {}): Promise<r
     // The filenames come from the schema, so they are input: `../../etc/passwd`
     // (or an absolute path) must not be able to write outside the output
     // directory the caller chose.
-    // The page model refuses these already; this is the last check before a
-    // write, for a file that reaches here another way.
+    // The page model refuses every spelling of this already — `normalizeDocPath`
+    // and `buildPages` between them — so nothing reaching here today can fail
+    // the check. It stays because it is the last thing between a schema and a
+    // write outside the directory the caller named, and because the reasoning
+    // that makes it unreachable lives in another file.
     if (!isInsideDirectory(targetDir, file.filename)) {
       throw new Error(
         `The page file "${file.filename}" resolves outside the output directory. Use a path relative to it.`,

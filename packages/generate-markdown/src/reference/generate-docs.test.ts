@@ -91,9 +91,11 @@ describe('generate-docs', () => {
     expect(written()[0]?.[0]).toBe(`${process.cwd()}/documentation/index.md`)
   })
 
-  // The filenames come from the schema, which makes them input. The page model
-  // refuses these before anything is written; the path check in `generateDocs`
-  // stays as the last line of defence for a page that reaches it another way.
+  // The filenames come from the schema, which makes them input. What refuses
+  // them is the page model, before anything is written — these three tests
+  // exercise that, not the `isInsideDirectory` check in `generateDocs`, which
+  // nothing reaching it today can fail. What matters to a caller is the same
+  // either way: the write does not happen.
   it('refuses a page that would be written outside the output directory', async () => {
     mockSchema({ 'x-doc': { file: '../../etc/passwd' } })
 

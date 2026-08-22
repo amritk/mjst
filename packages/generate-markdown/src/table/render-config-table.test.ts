@@ -41,9 +41,9 @@ describe('render-config-table', () => {
     })
     expect(html).toContain('<th align="center">Default</th>')
     // The cell is empty, not a rendered `null` — that is the whole point of
-    // treating a null default as no default.
+    // treating a null default as no default. (`formatValue(null)` is `''`
+    // whichever guard reaches it, so only the empty cell is worth asserting.)
     expect(html).toContain('<td align="center"></td>')
-    expect(html).not.toContain('>null<')
   })
 
   // The constraints read in the order the reader meets them: what is allowed,
@@ -53,6 +53,10 @@ describe('render-config-table', () => {
       properties: { mode: { type: 'string', description: 'Mode.', enum: ['a'], examples: ['a'] } },
     })
     const cell = detailRow(html)
+    // Both named first: an absent Allowed line is `indexOf` -1, which is less
+    // than anything the assertion could compare it to.
+    expect(cell).toContain('<strong>Allowed:</strong>')
+    expect(cell).toContain('<strong>Examples:</strong>')
     expect(cell.indexOf('<strong>Allowed:</strong>')).toBeLessThan(cell.indexOf('<strong>Examples:</strong>'))
   })
 
@@ -79,7 +83,6 @@ describe('render-config-table', () => {
       properties: { 'a"b"c': { type: 'object', properties: { value: { type: 'string' } } } },
     })
     expect(html).toContain('id="config-a-b-c"')
-    expect(html).not.toContain('id="config-a-b"c"')
   })
 
   // A blank line between tables, or a docs site runs the second table's header

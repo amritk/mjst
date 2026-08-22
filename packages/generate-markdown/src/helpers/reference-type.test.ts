@@ -95,6 +95,27 @@ describe('reference-type', () => {
     expect(referenceType(prop, 'json')).toBe('object | string')
   })
 
+  // A pipe inside a quoted literal is part of the value; split on it, the
+  // dedupe swallows one of the halves.
+  it('does not split a union member that carries its own pipe', () => {
+    expect(referenceType({ enum: [' | ', 'z'] }, 'json')).toBe('" | " | "z"')
+  })
+
+  // A branch with nothing to say contributes nothing, not a blank member with
+  // a separator on each side.
+  it('drops a branch that has no label at all', () => {
+    expect(referenceType({ anyOf: [{}, { type: 'string' }] }, 'json')).toBe('string')
+  })
+
+  // The guard against a self-referential stub, at its edge: eight levels of
+  // array still name their element, the ninth gives up.
+  it('gives up on a label exactly as deep as it says it will', () => {
+    const arrays = (levels: number): Record<string, unknown> =>
+      levels === 0 ? { type: 'string' } : { type: 'array', items: arrays(levels - 1) }
+    expect(referenceType(arrays(8), 'json')).toBe('string[][][][][][][][]')
+    expect(referenceType(arrays(9), 'json')).toBe('array[][][][][][][][]')
+  })
+
   // Two things a part may hold that a naive split would take apart: an array
   // whose item is a union, and an enum literal with a pipe in it.
   it('does not take a bracketed item or a quoted literal apart', () => {

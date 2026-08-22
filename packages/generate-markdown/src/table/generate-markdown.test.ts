@@ -1038,12 +1038,17 @@ describe('generate-markdown', () => {
       expect(writeFileMock).not.toHaveBeenCalled()
     })
 
+    // What Node actually throws, `code` included — an `Error` without one is a
+    // different path, and testing that one left the real missing-file case
+    // unexercised.
     it('falls back to table-only when README does not exist', async () => {
       readFileMock.mockImplementation(async (path) => {
         if (typeof path === 'string' && path.includes('config.schema.json')) {
           return JSON.stringify(minimalSchema)
         }
-        throw new Error('ENOENT: no such file or directory')
+        const error = new Error('ENOENT: no such file or directory') as NodeJS.ErrnoException
+        error.code = 'ENOENT'
+        throw error
       })
       writeFileMock.mockImplementation(async () => {})
 
