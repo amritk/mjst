@@ -1996,24 +1996,89 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect((content.match(/\*\*Required\*\*/g) ?? []).length).toBeGreaterThanOrEqual(2)
+    // Both `kind` headings carry it, and nothing else does.
+    const sections = content.split('### ').filter((section) => section.startsWith('kind'))
+    expect(sections).toHaveLength(2)
+    for (const section of sections) expect(section).toContain('**Required**')
+    expect(content.match(/\*\*Required\*\*/g)).toHaveLength(2)
   })
 
   // The marker spreads with every other key, and a ref site that declares its
-  // own fields is a real object however it was reached.
+  // own fields is a real object however it was reached. The alias has to be
+  // reached from inside the recursive definition — from the root it inlines in
+  // full and there is no marker to carry.
   it('does not carry the truncation marker onto a branch that declares fields', () => {
     const content = only(
       generateMarkdownFiles({
-        properties: {
-          p: { anyOf: [{ $ref: '#/$defs/alias', type: 'object', properties: { x: {} }, required: ['x'] }] },
-        },
+        properties: { root: { $ref: '#/$defs/self' } },
         $defs: {
           alias: { $ref: '#/$defs/self' },
-          self: { type: 'object', properties: { self: { $ref: '#/$defs/self' } } },
+          self: {
+            type: 'object',
+            properties: {
+              branch: { anyOf: [{ $ref: '#/$defs/alias', type: 'object', properties: { x: {} }, required: ['x'] }] },
+            },
+          },
         },
       }),
     )
     expect(content).toContain('**Required**')
+  })
+
+  // A recursive ref site that writes its own `required` is describing that use.
+  // Substituting the definition's list for it makes the two alternatives
+  // disagree, and the field they both require loses its marker.
+  it('keeps a recursive ref site own required list', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/self' } },
+        $defs: {
+          self: {
+            type: 'object',
+            required: ['fromDefinition'],
+            properties: {
+              fromDefinition: {},
+              again: {
+                anyOf: [
+                  // Only `required` here: with `properties` too, the marker is
+                  // dropped for a second reason and this proves nothing.
+                  { $ref: '#/$defs/self', required: ['shared'] },
+                  { type: 'object', properties: { shared: {} }, required: ['shared'] },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    )
+    const shared = content.slice(content.indexOf('### shared'))
+    expect(shared).toContain('**Required**')
+  })
+
+  // A collapsed reference keeps what the ref site says it is.
+  it('lets a recursive ref site type beat the stub own', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/self' } },
+        $defs: {
+          self: { type: 'object', properties: { again: { $ref: '#/$defs/self', type: 'string' } } },
+        },
+      }),
+    )
+    expect(content).toContain('**Type:** `string`')
+  })
+
+  // A union with one object alternative can be an object, so it votes.
+  it('lets a union that admits an object vote on what an alternative requires', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          auth: { anyOf: [{ $ref: '#/$defs/tok' }, { type: 'object', properties: { user: {} }, required: ['user'] }] },
+        },
+        $defs: { tok: { anyOf: [{ type: 'object', properties: { t: {} } }, { type: 'string' }] } },
+      }),
+    )
+    expect(content).not.toContain('**Required**')
   })
 
   // A row suppresses the derived block, and slicing the first example off

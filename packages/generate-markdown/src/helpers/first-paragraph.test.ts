@@ -30,9 +30,32 @@ describe('first-paragraph', () => {
 
   // Four spaces is what makes an indented code block code; trimming them turned
   // a sample of HTML into live markup on the page.
-  it('keeps an indented code block indented, and whole', () => {
+  it('keeps an indented code block indented', () => {
     const value = 'The template.\n\n    <div>\n      hi\n\n      there\n    </div>\n\nUse it verbatim.'
     expect(remainingParagraphs(value)).toBe('    <div>\n      hi\n\n      there\n    </div>\n\nUse it verbatim.')
+  })
+
+  // The blank line inside the block is part of it, so the block does not end
+  // there. Asserting this through `remainingParagraphs` proves nothing — it
+  // rejoins paragraphs with a blank line, so a torn block comes back identical.
+  it('keeps an indented code block whole', () => {
+    expect(firstParagraph('    code a\n\n    code b\n\nAfter.')).toBe('code a\n\n    code b')
+    expect(remainingParagraphs('    code a\n\n    code b\n\nAfter.')).toBe('After.')
+  })
+
+  // A tab indents a code block as surely as four spaces do. (`firstParagraph`
+  // trims its own leading whitespace — its result is destined for a one-line
+  // table cell — so the indentation itself is checked on the remainder.)
+  it('reads a tab-indented block as code too', () => {
+    expect(firstParagraph('\tcode a\n\n\tcode b\n\nAfter.')).toBe('code a\n\n\tcode b')
+    expect(remainingParagraphs('Intro.\n\n\t<div>')).toBe('\t<div>')
+  })
+
+  // Three spaces is not code in CommonMark, so the blank line ends the
+  // paragraph and the indentation carries no meaning worth keeping.
+  it('does not read three spaces as code', () => {
+    expect(firstParagraph('   lazy a\n\n   lazy b')).toBe('lazy a')
+    expect(remainingParagraphs('Intro.\n\n  two spaces')).toBe('two spaces')
   })
 
   // CommonMark closes a fence on a run at least as long as the opener, so a
@@ -45,6 +68,12 @@ describe('first-paragraph', () => {
 
   it('reads nothing after a single paragraph', () => {
     expect(remainingParagraphs('Only one.')).toBe('')
+  })
+
+  // An unclosed fence runs to the end of the value, trailing blank lines and
+  // all, and those would otherwise leak into the block below a table row.
+  it('drops the trailing blank lines of the last paragraph', () => {
+    expect(remainingParagraphs('A.\n\nIntro.\n```\ncode\n\n')).toBe('Intro.\n```\ncode')
   })
 
   // The paragraphs stay paragraphs: joining them with one newline would run
@@ -86,8 +115,11 @@ describe('first-paragraph', () => {
     expect(remainingParagraphs('Intro.\n    ```\n\nAfter.')).toBe('After.')
   })
 
+  // Two backticks at the start of a line are a code span, not a fence, so the
+  // blank line after them still ends the paragraph.
   it('needs three markers to open a fence', () => {
-    expect(remainingParagraphs('Intro ``code``.\n\nAfter.')).toBe('After.')
+    expect(remainingParagraphs('Intro.\n``\n\nAfter.')).toBe('After.')
+    expect(firstParagraph('Intro.\n``\n\nAfter.')).toBe('Intro.\n``')
   })
 
   // An unclosed fence runs to the end, so nothing after it is a new paragraph.

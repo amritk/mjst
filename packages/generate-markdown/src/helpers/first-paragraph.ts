@@ -54,8 +54,10 @@ const splitParagraphs = (value: string): readonly string[] => {
  * page. One to three spaces mean nothing to markdown, so they go.
  */
 const trimBlankLines = (value: string): string => {
-  const trimmed = value.replace(/^(?:[ \t]*\n)+/, '').replace(/\s+$/, '')
-  return /^(?: {4}|\t)/.test(trimmed) ? trimmed : trimmed.replace(/^[ \t]+/, '')
+  // No leading blank lines to strip: a paragraph never starts with one, because
+  // a blank line is what ends the paragraph before it.
+  const trimmed = value.replace(/\s+$/, '')
+  return isIndentedCode(trimmed) ? trimmed : trimmed.replace(/^[ \t]+/, '')
 }
 
 /**
