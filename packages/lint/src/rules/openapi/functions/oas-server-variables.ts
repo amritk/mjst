@@ -1,4 +1,4 @@
-import { serverVariables } from '../../shared/server-variables'
+import { type IServerVariablesOptions, serverVariables } from '../../shared/server-variables'
 
 /**
  * Validates a Server Object's `variables`. The OpenAPI and AsyncAPI Server
@@ -6,3 +6,5 @@ import { serverVariables } from '../../shared/server-variables'
  * {@link serverVariables}.
  */
 export const oasServerVariables = serverVariables
+
+export type { IServerVariablesOptions }

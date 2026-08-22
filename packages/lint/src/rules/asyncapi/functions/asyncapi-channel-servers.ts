@@ -38,13 +38,16 @@ const readEntry = (entry: unknown): ServerEntry => {
  * else", while a channel in the Components Object "MAY point to a Server Object
  * in any location".
  *
- * So in 3.0 only root channels are checked: a reusable channel pointing at
- * `#/components/servers/staging` is explicitly permitted, and reporting it —
- * which this rule briefly did, at error severity, on a document the bundled
- * meta-schema accepts — put the ruleset at odds with both the spec and its own
- * structural rule. 2.x has no such carve-out (a channel's `servers` is a list of
- * names from the root Servers Object, wherever the channel is written), so its
- * reusable channels are checked too.
+ * The carve-out excuses only references pointing *outside* `#/servers`, so it
+ * suspends one of the two checks and not the other. A reusable 3.0 channel
+ * pointing at `#/components/servers/staging` is permitted and must stay silent;
+ * one pointing at `#/servers/nope` still names the root Servers Object and must
+ * still exist there. Skipping reusable channels altogether lost that second
+ * check, and reporting them lost the first.
+ *
+ * 2.x has no carve-out at all — a channel's `servers` is a list of names from
+ * the root Servers Object wherever the channel is written — so both checks apply
+ * to both locations there.
  *
  * Given the whole document (`$`), because the check needs the top-level
  * `servers` map as well as each channel. Runs unresolved, so a 3.0 `$ref` is
@@ -58,8 +61,12 @@ export const asyncApiChannelServers: RulesetFunction = (document, _options, _con
   const version = document['asyncapi']
   const isV2 = typeof version === 'string' && version.startsWith('2.')
   const components = isObject(document['components']) ? document['components'] : undefined
-  const roots: { path: JsonPath; channels: unknown }[] = [{ path: ['channels'], channels: document['channels'] }]
-  if (isV2) roots.push({ path: ['components', 'channels'], channels: components?.['channels'] })
+  const roots: { path: JsonPath; channels: unknown; mustPointAtRootServers: boolean }[] = [
+    { path: ['channels'], channels: document['channels'], mustPointAtRootServers: true },
+    // Reusable channels: in 3.0 they may reference a server anywhere, so only the
+    // "does it exist" half applies to the ones that do name `#/servers`.
+    { path: ['components', 'channels'], channels: components?.['channels'], mustPointAtRootServers: isV2 },
+  ]
 
   const results: IFunctionResult[] = []
   for (const root of roots) {
@@ -73,6 +80,7 @@ export const asyncApiChannelServers: RulesetFunction = (document, _options, _con
         if (read === undefined) return
         const at = (): JsonPath => [...root.path, address, 'servers', index, ...read.path]
         if (read.kind === 'elsewhere') {
+          if (!root.mustPointAtRootServers) return
           results.push({
             message: `A root channel's server must reference "${SERVERS_REF}…", not "${read.ref}"`,
             path: at(),

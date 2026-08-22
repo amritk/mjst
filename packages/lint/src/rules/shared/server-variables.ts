@@ -12,18 +12,33 @@ import { isObject } from './helpers'
  * (see {@link TEMPLATED_FIELDS}), so they run this one implementation. See
  * `oasServerVariables` and `aasServerVariables`.
  */
-/**
- * The fields of a Server Object that may carry `{variable}` templates. OpenAPI
- * and AsyncAPI 2.x put the whole address in `url`; AsyncAPI 3.0 split it into
- * `host` and `pathname`, either of which may be templated.
- */
-const TEMPLATED_FIELDS = ['url', 'host', 'pathname'] as const
+/** Options for {@link serverVariables}: which fields of the Server Object carry the address. */
+export type IServerVariablesOptions = {
+  /**
+   * The address fields to read templates from. Defaults to `['url']`, which is
+   * where OpenAPI and AsyncAPI 2.x put the whole address; AsyncAPI 3.0 split it
+   * into `host` and `pathname` and passes those instead.
+   *
+   * Not a union of all three: OpenAPI's `oas3-server-variables` runs under a
+   * recursive `$..links[*].server` given, so reading `host`/`pathname` there
+   * turned any object with those keys — an example payload, say — into an
+   * error-severity finding about undefined server variables.
+   */
+  addressFields?: readonly string[]
+}
 
-export const serverVariables: RulesetFunction = (server, _options, context) => {
+const DEFAULT_ADDRESS_FIELDS = ['url'] as const
+
+export const serverVariables: RulesetFunction<unknown, IServerVariablesOptions | undefined> = (
+  server,
+  options,
+  context,
+) => {
   if (!isObject(server)) return []
-  const templated = TEMPLATED_FIELDS.map((field) => server[field]).filter(
-    (value): value is string => typeof value === 'string',
-  )
+  const fields = options?.addressFields ?? DEFAULT_ADDRESS_FIELDS
+  const templated = fields
+    .map((field) => (Object.hasOwn(server, field) ? server[field] : undefined))
+    .filter((value): value is string => typeof value === 'string')
   if (templated.length === 0) return []
   // A `Set` alongside the list: the address's template count and the `variables`
   // map are both document-sized, so a linear membership scan per variable was

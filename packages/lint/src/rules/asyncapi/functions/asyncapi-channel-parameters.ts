@@ -38,6 +38,11 @@ const channelAddress = (
  */
 export const asyncApiChannelParameters: RulesetFunction = (channel, _options, context): IFunctionResult[] => {
   if (!isObject(channel)) return []
+  // `$ref` is a fixed field of the 2.x Channel Item Object, and this rule runs
+  // unresolved, so the matched value can be the reference itself. The channel it
+  // names carries the parameters; asking this node for them reported every
+  // referenced channel as undescribed.
+  if (typeof channel['$ref'] === 'string') return []
   // An absent `parameters` object is treated as an empty one. Requiring the key
   // to exist before checking meant `parameters: {}` was reported and omitting it
   // entirely was not — the same undescribed parameter, silent in the form an

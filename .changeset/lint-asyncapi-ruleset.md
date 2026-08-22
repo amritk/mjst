@@ -56,10 +56,12 @@ Three things worth knowing:
   that reads what the author wrote — channel addresses, server variables, tag
   names, reference targets — runs unresolved, so a reusable definition is read at
   its declaration and nowhere else. A rule that validates schema *content* —
-  payloads, headers, examples — must see the dereferenced tree, or a
-  `$ref`'d schema is an opaque `{$ref: …}` it cannot judge (and, briefly, wrongly
-  flagged). `ruleset-manifest.test.ts` pins the choice for all 56 rules alongside
-  severity and gating.
+  payloads, headers, examples — must see the dereferenced tree, or a `$ref`'d
+  schema is an opaque `{$ref: …}` it cannot judge. The consequence, shared with
+  the OpenAPI preset and with Spectral, is that a resolved rule reports a mistake
+  in a reusable definition once per `$ref` that reaches it.
+  `ruleset-manifest.test.ts` pins the choice for all 56 rules alongside severity
+  and gating.
 - **The structural rules skip a version they have no schema for.** A future
   `2.7.0` document keeps getting the style rules, but is never judged against
   2.6's meta-schema.

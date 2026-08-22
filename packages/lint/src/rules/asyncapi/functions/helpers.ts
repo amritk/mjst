@@ -18,12 +18,16 @@ export type LocatedMessage = { path: JsonPath; message: Record<string, unknown> 
 
 /**
  * Every `{variable}` name in a channel address or server URL, in order. A name
- * is anything between braces, so `{}` yields nothing (the dedicated
- * `*-no-empty-parameter` rules report that) and a nested brace is left to the
- * structural schema.
+ * is a run of non-`}` characters, so `{}` yields nothing (the dedicated
+ * `*-no-empty-parameter` rules report that).
+ *
+ * The character class matters: a lazy `.+?` swallowed the closing brace of `{}`
+ * and ran on to the next one, so `a/{}/b/{id}` yielded the single name
+ * `}/b/{id` — a parameter nobody wrote, while the one that really was
+ * undescribed went unnamed.
  */
 export const parseUrlVariables = (value: unknown): string[] =>
-  typeof value !== 'string' ? [] : [...value.matchAll(/\{(.+?)\}/g)].map((match) => match[1] as string)
+  typeof value !== 'string' ? [] : [...value.matchAll(/\{([^}]+)\}/g)].map((match) => match[1] as string)
 
 /** The `components` map of a document, or `undefined`. */
 const componentsOf = (document: unknown): Record<string, unknown> | undefined => {

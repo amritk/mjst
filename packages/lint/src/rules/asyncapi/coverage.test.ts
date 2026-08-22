@@ -548,7 +548,15 @@ describe('references inside a message', () => {
     expect(codes.has('asyncapi-payload-unsupported-schemaFormat')).toBe(true)
   })
 
-  it('reports one finding for one mistake reached by several references', async () => {
+  it('reports a rule over authored structure once, however many $refs reach it', async () => {
+    // Rules that read what the author wrote run unresolved, so a reusable
+    // definition is read at its declaration and nowhere else.
+    //
+    // Rules that validate schema *content* must see the dereferenced tree, and
+    // there one `components` entry appears once per `$ref` reaching it. Every
+    // resolved rule in this package behaves that way, the OpenAPI preset
+    // included, so `asyncapi-payload` below reports per reference site. This
+    // pins the difference rather than pretending it away.
     const doc = v2({
       channels: {
         a: { subscribe: { operationId: 'a', description: 'd', message: { $ref: '#/components/messages/M' } } },
@@ -561,12 +569,8 @@ describe('references inside a message', () => {
       },
     })
     const findings = await lint(JSON.stringify(doc, null, 2), { ruleset: allRules, resolve })
-    for (const code of ['asyncapi-payload', 'asyncapi-tags-uniqueness']) {
-      expect(
-        findings.filter((finding) => finding.code === code),
-        code,
-      ).toHaveLength(1)
-    }
+    expect(findings.filter((finding) => finding.code === 'asyncapi-tags-uniqueness')).toHaveLength(1)
+    expect(findings.filter((finding) => finding.code === 'asyncapi-payload').length).toBeGreaterThan(0)
   })
 
   it('checks the servers of a reusable 2.x channel exactly once', async () => {
@@ -640,5 +644,70 @@ describe('the 3.0 Server Object', () => {
       },
     }
     expect((await codesFor(doc)).has('asyncapi-channel-parameters')).toBe(true)
+  })
+})
+
+describe('references and templates that are not what they look like', () => {
+  it('says nothing about a 2.x channel item written as a $ref', async () => {
+    // `$ref` is a fixed field of the 2.x Channel Item Object and this rule runs
+    // unresolved, so the matched value is the reference itself. Treating an
+    // absent `parameters` as empty made it demand what the target declares.
+    const doc = {
+      asyncapi: '2.6.0',
+      info: { title: 'T', version: '1.0.0' },
+      channels: { 'user/{userId}/signup': { $ref: '#/components/channels/u' } },
+      components: {
+        channels: {
+          u: {
+            parameters: { userId: { description: 'd', schema: { type: 'string' } } },
+            subscribe: { operationId: 'o', description: 'd', message: { messageId: 'm', payload: { type: 'object' } } },
+          },
+        },
+      },
+    }
+    expect((await codesFor(doc, { resolve: true })).has('asyncapi-channel-parameters')).toBe(false)
+  })
+
+  it('names the real parameter in an address that also contains {}', async () => {
+    // A lazy `.+?` swallowed the closing brace of `{}` and ran on to the next,
+    // so `a/{}/b/{id}` yielded the name `}/b/{id` and never mentioned `id`.
+    const doc = {
+      asyncapi: '3.0.0',
+      info: { title: 'T', version: '1.0.0' },
+      channels: { c: { address: 'a/{}/b/{id}' } },
+    }
+    const findings = await lint(JSON.stringify(doc, null, 2), { ruleset: allRules })
+    const messages = findings.filter((f) => f.code === 'asyncapi-channel-parameters').map((f) => f.message)
+    expect(messages).toEqual(['Channel parameters must be described: id'])
+  })
+
+  it('checks a dangling #/servers reference from a reusable 3.0 channel', async () => {
+    // The spec carve-out excuses references pointing *outside* `#/servers`; one
+    // that names the root Servers Object must still exist there.
+    const base = {
+      asyncapi: '3.0.0',
+      info: { title: 'T', version: '1.0.0' },
+      servers: { prod: { host: 'b.org', protocol: 'kafka' } },
+    }
+    const dangling = {
+      ...base,
+      channels: { live: { $ref: '#/components/channels/r' } },
+      components: { channels: { r: { address: 'a', servers: [{ $ref: '#/servers/nope' }], messages: {} } } },
+    }
+    expect((await codesFor(dangling, { resolve: true })).has('asyncapi-3-channel-servers')).toBe(true)
+  })
+
+  it('reaches server security on a reusable 3.0 server', async () => {
+    const doc = {
+      asyncapi: '3.0.0',
+      info: { title: 'T', version: '1.0.0' },
+      servers: { prod: { $ref: '#/components/servers/p' } },
+      channels: {},
+      components: {
+        servers: { p: { host: 'b.org', protocol: 'kafka', security: [{ $ref: '#/components/securitySchemes/nope' }] } },
+        securitySchemes: { real: { type: 'userPassword' } },
+      },
+    }
+    expect((await codesFor(doc, { resolve: true })).has('asyncapi-3-server-security')).toBe(true)
   })
 })

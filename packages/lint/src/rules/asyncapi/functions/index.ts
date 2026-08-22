@@ -27,7 +27,7 @@ export { asyncApiSecurity, type IAsyncApiSecurityOptions } from './asyncapi-secu
 
 /** The AsyncAPI-specific custom functions, keyed by name for ruleset `then` references. */
 export const aasFunctions: FunctionRegistry = {
-  aasServerVariables,
+  aasServerVariables: aasServerVariables as RulesetFunction,
   aasTagsUnique,
   asyncApiChannelParameters,
   asyncApiChannelServers,

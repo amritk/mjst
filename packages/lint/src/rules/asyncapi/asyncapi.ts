@@ -192,12 +192,12 @@ const v2Rules: Record<string, RuleEntry> = {
   'asyncapi-message-examples': {
     description: 'Message examples must be valid against the payload and headers schemas.',
     formats: ['aas2'],
-    // Every message location, traits included: a `components.messageTraits`
-    // entry carries its own `examples` and is reachable from nowhere else. The
-    // message-level pass folds traits in and reports against whichever array the
-    // merge took, so it collides with the trait-level pass on exactly the same
-    // finding — which the core collapses.
-    given: V2_ALL_MESSAGES,
+    // Messages only. The pass folds traits in — including a `$ref`'d one, since
+    // this runs resolved — and reports against whichever array the merge took,
+    // so matching each trait location as well printed the identical finding
+    // twice. The one thing this misses is a `components.messageTraits` entry no
+    // message ever references, which is an unused component.
+    given: V2_MESSAGES,
     severity: 'error',
     then: { function: 'asyncApiMessageExamples' },
   },
@@ -497,7 +497,7 @@ const v3Rules: Record<string, RuleEntry> = {
     description: 'Server security must reference a defined security scheme.',
     formats: ['aas3'],
     resolved: false,
-    given: '$.servers[*].security[*]',
+    given: ['$.servers[*].security[*]', '$.components.servers[*].security[*]'],
     severity: 'error',
     then: { function: 'asyncApiSecurity', functionOptions: { objectType: 'Server' } },
   },
@@ -509,7 +509,7 @@ const v3Rules: Record<string, RuleEntry> = {
     resolved: false,
     given: ['$.servers[*]', '$.components.servers[*]'],
     severity: 'error',
-    then: { function: 'aasServerVariables' },
+    then: { function: 'aasServerVariables', functionOptions: { addressFields: ['host', 'pathname'] } },
   },
   'asyncapi-3-server-no-empty-variable': {
     // 3.0 split the 2.x `url` into `host` and `pathname`, and either may be

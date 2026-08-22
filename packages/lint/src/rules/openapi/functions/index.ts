@@ -59,7 +59,7 @@ export const oasFunctions: FunctionRegistry = {
   oasOpSecurityDefined: oasOpSecurityDefined as RulesetFunction,
   oasOpFormDataConsumeCheck,
   oasDiscriminator,
-  oasServerVariables,
+  oasServerVariables: oasServerVariables as RulesetFunction,
   oasSchemaExample,
   oasMediaExample: oasMediaExample as RulesetFunction,
   oasUnusedComponent,
